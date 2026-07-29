@@ -117,8 +117,7 @@ function startAdminServer(url) {
       url.hostname,
       '--port',
       url.port,
-      '--strictPort',
-      '--force'
+      '--strictPort'
     ],
     {
       cwd: rootDir,
