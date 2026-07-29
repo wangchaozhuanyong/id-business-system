@@ -80,6 +80,8 @@ let browser = null;
 
 try {
   if (!configuredAdminUrl) {
+    await buildSharedPackage();
+    await optimizeAdminDependencies();
     adminServer = startAdminServer(adminUrl);
   }
   await waitForServer(adminUrl, adminServer);
@@ -101,6 +103,47 @@ try {
 } finally {
   await browser?.close().catch(() => undefined);
   await stopAdminServer(adminServer);
+}
+
+async function buildSharedPackage() {
+  await runNpmCommand(
+    ['run', 'build', '--workspace', '@apple-business/shared'],
+    '共享包构建',
+    process.env
+  );
+}
+
+async function optimizeAdminDependencies() {
+  await runNpmCommand(
+    ['exec', '--workspace', '@apple-business/admin', '--', 'vite', 'optimize', '--force'],
+    '管理端依赖预构建',
+    {
+      ...process.env,
+      NODE_ENV: 'development'
+    }
+  );
+}
+
+async function runNpmCommand(args, label, env) {
+  const output = [];
+  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
+    cwd: rootDir,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => output.push(String(chunk)));
+  }
+
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+  if (exitCode !== 0) {
+    throw new Error(`${label}失败（${exitCode}）：\n${output.join('')}`);
+  }
 }
 
 function startAdminServer(url) {
