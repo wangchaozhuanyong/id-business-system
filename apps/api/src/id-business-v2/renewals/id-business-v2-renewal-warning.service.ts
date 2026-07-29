@@ -128,7 +128,7 @@ export class IdBusinessV2RenewalWarningService {
 
   async getSummary(now = new Date()) {
     const settings = await this.getSettings();
-    const [counts, upcoming, expired] = await Promise.all([
+    const [counts, upcoming, expired, nextTimedActivation] = await Promise.all([
       this.getWarningCounts({}, now, settings.warningDays),
       this.prisma.idBusinessV2Activation.findMany({
         where: this.buildUpcomingWarningWhere(now, settings.warningDays),
@@ -141,6 +141,28 @@ export class IdBusinessV2RenewalWarningService {
         select: SUMMARY_ITEM_SELECT,
         orderBy: [{ dueAt: 'desc' }, { id: 'asc' }],
         take: 5
+      }),
+      this.prisma.idBusinessV2Activation.findFirst({
+        where: {
+          renewedBy: {
+            is: null
+          },
+          status: 'active',
+          dueAt: {
+            gt: now
+          },
+          account: {
+            is: {
+              soldByOrderId: null
+            }
+          }
+        },
+        select: {
+          dueAt: true
+        },
+        orderBy: {
+          dueAt: 'asc'
+        }
       })
     ]);
     const items = [...upcoming, ...expired].slice(0, 5).map((item) => ({
@@ -156,8 +178,27 @@ export class IdBusinessV2RenewalWarningService {
       ...settings,
       ...counts,
       items,
-      evaluatedAt: now
+      evaluatedAt: now,
+      revalidateAt: this.getNextRevalidateAt(
+        nextTimedActivation?.dueAt ?? null,
+        now,
+        settings.warningDays
+      )
     };
+  }
+
+  private getNextRevalidateAt(dueAt: Date | null, now: Date, warningDays: number) {
+    if (!dueAt) return null;
+    const nextBoundary = [
+      dueAt.getTime() - warningDays * DAY_MS,
+      dueAt.getTime() - 7 * DAY_MS,
+      dueAt.getTime() - 23 * 60 * 60 * 1000,
+      dueAt.getTime() - 60 * 60 * 1000,
+      dueAt.getTime()
+    ]
+      .filter((timestamp) => timestamp > now.getTime())
+      .sort((left, right) => left - right)[0];
+    return nextBoundary === undefined ? null : new Date(nextBoundary);
   }
 
   async getWarningCounts(

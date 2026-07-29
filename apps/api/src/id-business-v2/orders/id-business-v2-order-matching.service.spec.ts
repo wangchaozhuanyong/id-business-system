@@ -65,6 +65,9 @@ describe('IdBusinessV2OrderMatchingService', () => {
     idBusinessV2Account: {
       count: vi.fn(),
       findMany: vi.fn()
+    },
+    idBusinessV2AccountLock: {
+      findFirst: vi.fn()
     }
   };
   const balanceCalculator = {
@@ -89,6 +92,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
       .mockResolvedValueOnce(3)
       .mockResolvedValueOnce(2);
     prisma.idBusinessV2Account.findMany.mockResolvedValue([makeAccount()]);
+    prisma.idBusinessV2AccountLock.findFirst.mockResolvedValue(null);
     prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
       Promise.all(operations)
     );
@@ -147,6 +151,32 @@ describe('IdBusinessV2OrderMatchingService', () => {
         }
       ]
     });
+  });
+
+  it('serializes the required balance before subtracting from a Cloudflare runtime decimal', async () => {
+    const runtimeCurrentBalance = {
+      toString: () => '25',
+      minus: vi.fn((value: unknown) => {
+        if (typeof value !== 'string') {
+          throw new Error(`[DecimalError] Invalid argument: ${String(value)}`);
+        }
+        return decimal('25').minus(value);
+      })
+    };
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([
+      {
+        ...makeAccount(),
+        currentBalance: runtimeCurrentBalance
+      }
+    ]);
+
+    const result = await service.findCandidates({
+      serviceOptionId,
+      balanceAmount: '20'
+    });
+
+    expect(runtimeCurrentBalance.minus).toHaveBeenCalledWith('20');
+    expect(result.items[0]?.balanceAfterMatch).toBe('5');
   });
 
   it('searches eligible candidates manually without selecting one automatically', async () => {

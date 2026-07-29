@@ -40,6 +40,7 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('100'),
     platformFeeAmount: decimal('3'),
+    accountDisposition: 'sold',
     accountCostAmount: decimal('25'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('60'),

@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException
+} from '@nestjs/common';
 import type {
   IdBusinessV2BalanceLedgerEntryType,
   IdBusinessV2GiftCardStatus,
@@ -7,8 +12,15 @@ import type {
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
 import { IdBusinessV2OptionsService } from '../options/public-api';
 import type { UpdateIdBusinessV2GiftCardMetadataDto } from './dto/update-id-business-v2-gift-card-metadata.dto';
+import {
+  BALANCE_LEDGER_INCLUDE,
+  GIFT_CARD_RECORD_INCLUDE,
+  type BalanceLedgerRecord,
+  type GiftCardRecord
+} from './id-business-v2-gift-card-record-includes';
 
 export interface ListIdBusinessV2GiftCardRecordsQuery extends PaginationQuery {
   keyword?: string;
@@ -36,130 +48,6 @@ export interface ListIdBusinessV2BalanceLedgerQuery extends PaginationQuery {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-const GIFT_CARD_RECORD_INCLUDE = {
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true,
-      countryOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  supplierOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  createdBy: {
-    select: {
-      id: true,
-      username: true,
-      displayName: true
-    }
-  },
-  updatedBy: {
-    select: {
-      id: true,
-      username: true,
-      displayName: true
-    }
-  },
-  ledgerEntries: {
-    where: {
-      entryType: 'gift_card_credit'
-    },
-    select: {
-      id: true,
-      balanceBefore: true,
-      balanceAfter: true,
-      costBefore: true,
-      costAfter: true,
-      averageCostBefore: true,
-      averageCostAfter: true,
-      createdAt: true,
-      reversedByEntry: {
-        select: {
-          id: true,
-          entryType: true,
-          balanceAmount: true,
-          costAmount: true,
-          remark: true,
-          createdAt: true
-        }
-      }
-    },
-    take: 1
-  }
-} satisfies Prisma.IdBusinessV2GiftCardInclude;
-
-type GiftCardRecord = Prisma.IdBusinessV2GiftCardGetPayload<{
-  include: typeof GIFT_CARD_RECORD_INCLUDE;
-}>;
-
-const BALANCE_LEDGER_INCLUDE = {
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true,
-      countryOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  giftCard: {
-    select: {
-      id: true,
-      codeMasked: true,
-      codeTail: true,
-      faceValue: true,
-      status: true,
-      supplierOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  reversalOfEntry: {
-    select: {
-      id: true,
-      entryType: true,
-      createdAt: true
-    }
-  },
-  reversedByEntry: {
-    select: {
-      id: true,
-      entryType: true,
-      createdAt: true
-    }
-  },
-  createdBy: {
-    select: {
-      id: true,
-      username: true,
-      displayName: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2BalanceLedgerInclude;
-
-type BalanceLedgerRecord = Prisma.IdBusinessV2BalanceLedgerGetPayload<{
-  include: typeof BALANCE_LEDGER_INCLUDE;
-}>;
 
 const GIFT_CARD_SORT_FIELDS: Record<
   string,
@@ -362,11 +250,19 @@ export class IdBusinessV2GiftCardRecordsService {
           id: true,
           codeMasked: true,
           supplierOptionId: true,
-          remark: true
+          remark: true,
+          account: {
+            select: {
+              lossReportedAt: true
+            }
+          }
         }
       });
       if (!existing) {
         throw new NotFoundException('礼品卡记录不存在');
+      }
+      if (existing.account.lossReportedAt) {
+        throw new ConflictException('已报损 ID 永久冻结，不能修改加卡记录');
       }
 
       const updated = await tx.idBusinessV2GiftCard.update({
@@ -408,13 +304,16 @@ export class IdBusinessV2GiftCardRecordsService {
       id: item.id,
       codeMasked: item.codeMasked,
       codeTail: item.codeTail,
-      faceValue: item.faceValue.toString(),
-      exchangeRate: item.exchangeRate.toString(),
+      faceValue: toV2DecimalString(item.faceValue),
+      exchangeRate: toV2DecimalString(item.exchangeRate),
       exchangeRateSource: item.exchangeRateSource,
       exchangeRateSnapshotId: item.exchangeRateSnapshotId,
-      exchangeRatePrefilledValue: item.exchangeRatePrefilledValue?.toString() ?? null,
+      exchangeRatePrefilledValue:
+        item.exchangeRatePrefilledValue == null
+          ? null
+          : toV2DecimalString(item.exchangeRatePrefilledValue),
       exchangeRateWasOverridden: item.exchangeRateWasOverridden,
-      costAmount: item.costAmount.toString(),
+      costAmount: toV2DecimalString(item.costAmount),
       status: item.status,
       statusChangedAt: item.statusChangedAt,
       supplierOptionId: item.supplierOptionId,
@@ -422,17 +321,19 @@ export class IdBusinessV2GiftCardRecordsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
+        lossStatus: item.account.lossReportedAt ? ('reported' as const) : ('active' as const),
+        lossReportedAt: item.account.lossReportedAt,
         country: item.account.countryOption
       },
       creditedLedger: creditedLedger
         ? {
             id: creditedLedger.id,
-            balanceBefore: creditedLedger.balanceBefore.toString(),
-            balanceAfter: creditedLedger.balanceAfter.toString(),
-            costBefore: creditedLedger.costBefore.toString(),
-            costAfter: creditedLedger.costAfter.toString(),
-            averageCostBefore: creditedLedger.averageCostBefore.toString(),
-            averageCostAfter: creditedLedger.averageCostAfter.toString(),
+            balanceBefore: toV2DecimalString(creditedLedger.balanceBefore),
+            balanceAfter: toV2DecimalString(creditedLedger.balanceAfter),
+            costBefore: toV2DecimalString(creditedLedger.costBefore),
+            costAfter: toV2DecimalString(creditedLedger.costAfter),
+            averageCostBefore: toV2DecimalString(creditedLedger.averageCostBefore),
+            averageCostAfter: toV2DecimalString(creditedLedger.averageCostAfter),
             createdAt: creditedLedger.createdAt
           }
         : null,
@@ -440,8 +341,8 @@ export class IdBusinessV2GiftCardRecordsService {
         ? {
             id: creditedLedger.reversedByEntry.id,
             entryType: creditedLedger.reversedByEntry.entryType,
-            balanceAmount: creditedLedger.reversedByEntry.balanceAmount.toString(),
-            costAmount: creditedLedger.reversedByEntry.costAmount.toString(),
+            balanceAmount: toV2DecimalString(creditedLedger.reversedByEntry.balanceAmount),
+            costAmount: toV2DecimalString(creditedLedger.reversedByEntry.costAmount),
             reason: creditedLedger.reversedByEntry.remark,
             createdAt: creditedLedger.reversedByEntry.createdAt
           }
@@ -460,16 +361,16 @@ export class IdBusinessV2GiftCardRecordsService {
       id: item.id,
       entryType: item.entryType,
       direction: item.direction,
-      balanceAmount: item.balanceAmount.toString(),
-      costAmount: item.costAmount.toString(),
-      balanceDelta: item.balanceAfter.minus(item.balanceBefore).toString(),
-      costDelta: item.costAfter.minus(item.costBefore).toString(),
-      balanceBefore: item.balanceBefore.toString(),
-      balanceAfter: item.balanceAfter.toString(),
-      costBefore: item.costBefore.toString(),
-      costAfter: item.costAfter.toString(),
-      averageCostBefore: item.averageCostBefore.toString(),
-      averageCostAfter: item.averageCostAfter.toString(),
+      balanceAmount: toV2DecimalString(item.balanceAmount),
+      costAmount: toV2DecimalString(item.costAmount),
+      balanceDelta: toV2DecimalString(item.balanceAfter.minus(item.balanceBefore)),
+      costDelta: toV2DecimalString(item.costAfter.minus(item.costBefore)),
+      balanceBefore: toV2DecimalString(item.balanceBefore),
+      balanceAfter: toV2DecimalString(item.balanceAfter),
+      costBefore: toV2DecimalString(item.costBefore),
+      costAfter: toV2DecimalString(item.costAfter),
+      averageCostBefore: toV2DecimalString(item.averageCostBefore),
+      averageCostAfter: toV2DecimalString(item.averageCostAfter),
       reason: item.remark,
       account: {
         id: item.account.id,
@@ -481,7 +382,7 @@ export class IdBusinessV2GiftCardRecordsService {
             id: item.giftCard.id,
             codeMasked: item.giftCard.codeMasked,
             codeTail: item.giftCard.codeTail,
-            faceValue: item.giftCard.faceValue.toString(),
+            faceValue: toV2DecimalString(item.giftCard.faceValue),
             status: item.giftCard.status,
             supplier: item.giftCard.supplierOption
           }
@@ -508,7 +409,8 @@ export class IdBusinessV2GiftCardRecordsService {
     if (
       normalized === 'gift_card_credit' ||
       normalized === 'gift_card_redeemed' ||
-      normalized === 'gift_card_withdrawal'
+      normalized === 'gift_card_withdrawal' ||
+      normalized === 'account_loss'
     ) {
       return normalized;
     }

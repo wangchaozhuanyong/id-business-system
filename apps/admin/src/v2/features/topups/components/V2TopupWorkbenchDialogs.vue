@@ -95,15 +95,15 @@
             <dl>
               <div>
                 <dt>买入</dt>
-                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantBuyRateToRmb, 8) }}</dd>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantBuyRateToRmb) }}</dd>
               </div>
               <div>
                 <dt>卖出</dt>
-                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantSellRateToRmb, 8) }}</dd>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantSellRateToRmb) }}</dd>
               </div>
               <div>
                 <dt>中间价</dt>
-                <dd>¥{{ page.formatDecimal(page.usdtRateReference.midRateToRmb, 8) }}</dd>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.midRateToRmb) }}</dd>
               </div>
             </dl>
           </section>
@@ -225,7 +225,7 @@
               </div>
               <div>
                 <dt>卡片汇率</dt>
-                <dd>{{ page.formatDecimal(giftCard.exchangeRate, 8) }}</dd>
+                <dd>{{ page.formatDecimal(giftCard.exchangeRate) }}</dd>
               </div>
               <div>
                 <dt>入账时间</dt>

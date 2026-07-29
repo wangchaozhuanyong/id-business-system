@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma as PrismaNamespace } from '@prisma/client';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
 
 export interface IdBusinessV2BalanceSnapshotInput {
   currentBalance: PrismaNamespace.Decimal.Value;
@@ -27,12 +28,12 @@ export interface IdBusinessV2GiftCardCreditSnapshot extends IdBusinessV2BalanceM
   exchangeRate: PrismaNamespace.Decimal;
 }
 
-const AMOUNT_SCALE = 4;
-const RATE_SCALE = 8;
-const AVERAGE_COST_SCALE = 8;
+const AMOUNT_SCALE = V2_DECIMAL_PLACES;
+const RATE_SCALE = V2_DECIMAL_PLACES;
+const AVERAGE_COST_SCALE = V2_DECIMAL_PLACES;
 const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
 const MAX_RATE = new PrismaNamespace.Decimal('9999999999.99999999');
-const ROUNDING_MODE = PrismaNamespace.Decimal.ROUND_HALF_UP;
+const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
 
 @Injectable()
 export class IdBusinessV2BalanceCalculatorService {

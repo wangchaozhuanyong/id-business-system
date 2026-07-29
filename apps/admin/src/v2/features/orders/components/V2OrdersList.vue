@@ -48,6 +48,28 @@
             <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '-' }}</strong>
           </template>
         </el-table-column>
+        <el-table-column
+          prop="accountDisposition"
+          label="ID 处理状态"
+          min-width="118"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            <el-tag :type="page.accountDispositionMeta(row.accountDisposition).type" effect="plain">
+              {{ page.accountDispositionMeta(row.accountDisposition).label }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="accountCostAmount"
+          label="本单 ID 成本"
+          min-width="128"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            ¥{{ page.formatDecimal(row.appliedAccountCostAmount) }}
+          </template>
+        </el-table-column>
         <el-table-column label="客户网站账号" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ row.maskedWebsiteAccount || '-' }}</template>
         </el-table-column>
@@ -74,85 +96,83 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="212" fixed="right">
+        <V2TableActionColumn layout="wide">
           <template #default="{ row }">
-            <div class="v2-order-row-actions">
+            <AppButton
+              v-if="page.canConsumeOrders && row.operations.canConsume"
+              size="small"
+              variant="primary"
+              :loading="page.consumingOrderId === row.id"
+              @click="page.consumeOrderBalance(row)"
+            >
+              <el-icon><Coin /></el-icon>
+              扣减
+            </AppButton>
+            <AppButton
+              v-if="page.canUpdateOrders && row.operations.canComplete"
+              size="small"
+              variant="primary"
+              :loading="page.completingOrderId === row.id"
+              @click="page.completeOrder(row)"
+            >
+              <el-icon><CircleCheck /></el-icon>
+              确认开通
+            </AppButton>
+            <AppButton size="small" variant="ghost" @click="page.openDetail(row)">
+              <el-icon><View /></el-icon>
+              详情
+            </AppButton>
+            <AppButton
+              v-if="page.canUpdateOrders && row.operations.canEdit"
+              size="small"
+              variant="ghost"
+              icon-only
+              title="修改订单"
+              @click="page.openEdit(row)"
+            >
+              <el-icon><Edit /></el-icon>
+            </AppButton>
+            <el-dropdown
+              v-if="page.hasLifecycleActions(row)"
+              trigger="click"
+              @command="page.handleLifecycleCommand($event, row)"
+            >
               <AppButton
-                v-if="page.canConsumeOrders && row.operations.canConsume"
-                size="small"
-                variant="primary"
-                :loading="page.consumingOrderId === row.id"
-                @click="page.consumeOrderBalance(row)"
-              >
-                <el-icon><Coin /></el-icon>
-                扣减
-              </AppButton>
-              <AppButton
-                v-if="page.canUpdateOrders && row.operations.canComplete"
-                size="small"
-                variant="primary"
-                :loading="page.completingOrderId === row.id"
-                @click="page.completeOrder(row)"
-              >
-                <el-icon><CircleCheck /></el-icon>
-                确认开通
-              </AppButton>
-              <AppButton size="small" variant="ghost" @click="page.openDetail(row)">
-                <el-icon><View /></el-icon>
-                详情
-              </AppButton>
-              <AppButton
-                v-if="page.canUpdateOrders && row.operations.canEdit"
                 size="small"
                 variant="ghost"
                 icon-only
-                title="修改订单"
-                @click="page.openEdit(row)"
+                title="更多订单操作"
+                :loading="page.lifecycleBusyOrderId === row.id"
               >
-                <el-icon><Edit /></el-icon>
+                <el-icon><MoreFilled /></el-icon>
               </AppButton>
-              <el-dropdown
-                v-if="page.hasLifecycleActions(row)"
-                trigger="click"
-                @command="page.handleLifecycleCommand($event, row)"
-              >
-                <AppButton
-                  size="small"
-                  variant="ghost"
-                  icon-only
-                  title="更多订单操作"
-                  :loading="page.lifecycleBusyOrderId === row.id"
-                >
-                  <el-icon><MoreFilled /></el-icon>
-                </AppButton>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && row.operations.canRefund"
-                      command="refund"
-                    >
-                      退款
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canUpdateOrders && row.operations.canCancel"
-                      command="cancel"
-                    >
-                      取消订单
-                    </el-dropdown-item>
-                    <el-dropdown-item
-                      v-if="page.canDeleteOrders && row.operations.canDelete"
-                      command="delete"
-                      divided
-                      class="v2-order-action-danger"
-                    >
-                      删除记录
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-if="page.canUpdateOrders && row.operations.canRefund"
+                    command="refund"
+                  >
+                    退款
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="page.canUpdateOrders && row.operations.canCancel"
+                    command="cancel"
+                  >
+                    取消订单
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="page.canDeleteOrders && row.operations.canDelete"
+                    command="delete"
+                    divided
+                    class="v2-order-action-danger"
+                  >
+                    删除记录
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
-        </el-table-column>
+        </V2TableActionColumn>
       </el-table>
 
       <div class="v2-records-mobile-list">
@@ -170,6 +190,14 @@
             <div>
               <dt>使用 ID</dt>
               <dd>{{ item.account?.appleIdMasked || '-' }}</dd>
+            </div>
+            <div>
+              <dt>ID 处理状态</dt>
+              <dd>{{ page.accountDispositionMeta(item.accountDisposition).label }}</dd>
+            </div>
+            <div>
+              <dt>本单 ID 成本</dt>
+              <dd>{{ page.formatDecimal(item.appliedAccountCostAmount) }}</dd>
             </div>
             <div>
               <dt>结算平台</dt>
@@ -300,6 +328,7 @@
 import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useOrdersPage } from '../useOrdersPage';
 

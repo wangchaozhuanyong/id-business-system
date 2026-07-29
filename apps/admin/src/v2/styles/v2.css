@@ -1258,6 +1258,26 @@
   white-space: nowrap;
 }
 
+.v2-table-actions {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.v2-table-actions .el-button,
+.v2-table-actions .el-dropdown {
+  flex: 0 0 auto;
+}
+
+.v2-table-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
 .v2-shell .el-tag {
   border-radius: 4px;
   font-size: var(--v3-font-size-small);

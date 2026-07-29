@@ -8,14 +8,14 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(10);
+    expect(v2FeatureRegistry).toHaveLength(11);
   });
 
   it('keeps routing, permissions and loading behavior in each feature manifest', () => {
     for (const feature of v2FeatureRegistry) {
       expect(feature.route).toMatch(/^\/v2(?:\/|$)/);
       expect(feature.loadView).toBeTypeOf('function');
-      expect(['critical', 'operational', 'reference', 'live']).toContain(feature.loadingTier);
+      expect(['event-driven', 'event-with-deadline']).toContain(feature.freshnessPolicy);
       expect(feature.permission).toBeTruthy();
     }
   });

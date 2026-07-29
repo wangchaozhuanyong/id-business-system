@@ -9,7 +9,8 @@ describe('order entry pricing', () => {
   it('calculates a no-fee recommendation and rounds it up to cents', () => {
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '10.0001',
+        targetProfit: '10.001',
+        appliedAccountCostAmount: '0',
         estimatedBalanceCostAmount: '120',
         fixedFee: '0',
         percentageFee: '0'
@@ -25,6 +26,7 @@ describe('order entry pricing', () => {
   it('supports fixed and percentage fees with exact decimal arithmetic', () => {
     const suggestion = calculateSuggestedReceivedAmount({
       targetProfit: '20',
+      appliedAccountCostAmount: '0',
       estimatedBalanceCostAmount: '100',
       fixedFee: '1',
       percentageFee: '2.5'
@@ -38,9 +40,10 @@ describe('order entry pricing', () => {
   it('keeps the recommended profit at or above the requested target after fee rounding', () => {
     const suggestion = calculateSuggestedReceivedAmount({
       targetProfit: '1',
+      appliedAccountCostAmount: '0',
       estimatedBalanceCostAmount: '1',
       fixedFee: '0',
-      percentageFee: '99.9999'
+      percentageFee: '99.999'
     });
 
     expect(suggestion.error).toBe('');
@@ -51,6 +54,7 @@ describe('order entry pricing', () => {
     expect(
       calculateSuggestedReceivedAmount({
         targetProfit: '10',
+        appliedAccountCostAmount: '0',
         estimatedBalanceCostAmount: '20',
         fixedFee: '0',
         percentageFee: '100'
@@ -58,7 +62,8 @@ describe('order entry pricing', () => {
     ).toContain('100%');
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '99999999999999.9999',
+        targetProfit: '99999999999999.999',
+        appliedAccountCostAmount: '0',
         estimatedBalanceCostAmount: '1',
         fixedFee: '0',
         percentageFee: '0'
@@ -68,6 +73,22 @@ describe('order entry pricing', () => {
 
   it('calculates fee and signed estimated profit without floating point', () => {
     expect(calculatePlatformFeeAmount('100.01', '1', '2.25')).toBe('3.2502');
-    expect(calculateEstimatedProfitAmount('100.01', '3.2502', '120')).toBe('-23.2402');
+    expect(calculateEstimatedProfitAmount('100.01', '3.25', '0', '120')).toBe('-23.24');
+  });
+
+  it('includes sold ID cost in recommendation and estimated profit', () => {
+    expect(
+      calculateSuggestedReceivedAmount({
+        targetProfit: '10',
+        appliedAccountCostAmount: '35.1234',
+        estimatedBalanceCostAmount: '20',
+        fixedFee: '0',
+        percentageFee: '0'
+      })
+    ).toMatchObject({
+      amount: '65.13',
+      estimatedProfit: '10.0066'
+    });
+    expect(calculateEstimatedProfitAmount('65.13', '0', '35.1234', '20')).toBe('10.0066');
   });
 });

@@ -41,6 +41,7 @@ export class IdBusinessV2AccountsController {
     @Query('statusOptionId') statusOptionId?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
+    @Query('saleState') saleState?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
@@ -52,6 +53,7 @@ export class IdBusinessV2AccountsController {
       statusOptionId,
       supplierOptionId,
       recordStatus,
+      saleState,
       sortBy,
       sortOrder
     });
@@ -67,6 +69,7 @@ export class IdBusinessV2AccountsController {
     @Query('statusOptionId') statusOptionId?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
+    @Query('saleState') saleState?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
@@ -79,6 +82,7 @@ export class IdBusinessV2AccountsController {
         statusOptionId,
         supplierOptionId,
         recordStatus,
+        saleState,
         sortBy,
         sortOrder
       }),
@@ -105,6 +109,7 @@ export class IdBusinessV2AccountsController {
     @Query('statusOptionId') statusOptionId?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
+    @Query('saleState') saleState?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
     @CurrentUser() operator?: AuthenticatedUser
@@ -116,6 +121,7 @@ export class IdBusinessV2AccountsController {
         statusOptionId,
         supplierOptionId,
         recordStatus,
+        saleState,
         sortBy,
         sortOrder
       },

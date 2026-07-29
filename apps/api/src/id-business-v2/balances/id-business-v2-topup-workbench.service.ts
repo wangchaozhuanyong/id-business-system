@@ -3,6 +3,7 @@ import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
 import { IdBusinessV2BalanceCalculatorService } from './id-business-v2-balance-calculator.service';
 
 type TopupWorkbenchBalancePreset = 'zero' | 'positive_under_20' | 'custom';
@@ -105,6 +106,8 @@ export class IdBusinessV2TopupWorkbenchService {
     const where: Prisma.IdBusinessV2AccountWhereInput = {
       deletedAt: null,
       recordStatus: 'active',
+      lossReportedAt: null,
+      soldByOrderId: null,
       countryOptionId: countryOptionId ?? undefined,
       currentBalance: balanceRange,
       statusOption: onlyNormal
@@ -194,8 +197,8 @@ export class IdBusinessV2TopupWorkbenchService {
   private parseOptionalBalance(value: unknown, label: string) {
     const normalized = this.normalizeNullableString(value);
     if (!normalized) return null;
-    if (!/^\d+(\.\d{1,4})?$/.test(normalized)) {
-      throw new BadRequestException(`${label}必须是最多 4 位小数的非负数字`);
+    if (!V2_DECIMAL_PATTERN.test(normalized)) {
+      throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数字`);
     }
 
     const balance = new PrismaNamespace.Decimal(normalized);
@@ -251,11 +254,14 @@ export class IdBusinessV2TopupWorkbenchService {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
       country: account.countryOption,
-      currentBalance: account.currentBalance.toString(),
-      balanceCostAmount: account.balanceCostAmount.toString(),
-      averageCost: this.balanceCalculator
-        .calculateAverageCost(account.currentBalance, account.balanceCostAmount)
-        .toString(),
+      currentBalance: toV2DecimalString(account.currentBalance),
+      balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
+      averageCost: toV2DecimalString(
+        this.balanceCalculator.calculateAverageCost(
+          account.currentBalance,
+          account.balanceCostAmount
+        )
+      ),
       topupRecordCount: account._count.giftCards,
       balanceChangeCount: account._count.balanceLedger,
       lastTopupAt: account.giftCards[0]?.createdAt ?? null,

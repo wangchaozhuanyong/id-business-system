@@ -63,7 +63,8 @@ describe('IdBusinessV2RenewalsService', () => {
     $transaction: vi.fn(),
     idBusinessV2Activation: {
       findMany: vi.fn(),
-      count: vi.fn()
+      count: vi.fn(),
+      findFirst: vi.fn()
     },
     idBusinessV2Customer: {
       findMany: vi.fn()
@@ -88,6 +89,7 @@ describe('IdBusinessV2RenewalsService', () => {
     vi.setSystemTime(now);
     prisma.idBusinessV2Activation.findMany.mockResolvedValue([makeRenewal()]);
     prisma.idBusinessV2Activation.count.mockResolvedValue(1);
+    prisma.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     prisma.idBusinessV2RenewalWarningSetting.findUnique.mockResolvedValue(null);
     prisma.idBusinessV2Customer.findMany.mockResolvedValue([{ id: customerId, name: '测试客户' }]);
     prisma.idBusinessV2Account.findMany.mockResolvedValue([
@@ -199,7 +201,12 @@ describe('IdBusinessV2RenewalsService', () => {
       expect.objectContaining({
         customerId,
         accountId,
-        serviceOptionId
+        serviceOptionId,
+        account: {
+          is: {
+            soldByOrderId: null
+          }
+        }
       })
     );
     expect(call.where.AND[1]).toEqual({

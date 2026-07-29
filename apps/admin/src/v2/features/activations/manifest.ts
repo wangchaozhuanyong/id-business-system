@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const activationsFeature = defineV2Feature({
@@ -8,7 +9,7 @@ export const activationsFeature = defineV2Feature({
   sourceSheet: '开通记录',
   permission: 'apple.activation.view',
   kind: 'list',
-  loadingTier: 'critical',
+  freshnessPolicy: 'event-with-deadline',
   filters: [
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '订单、客户、ID账号' },
     {
@@ -28,7 +29,12 @@ export const activationsFeature = defineV2Feature({
     { key: 'openedAt', label: '开通日期', minWidth: 150 },
     { key: 'dueAt', label: '到期日期', minWidth: 150 },
     { key: 'status', label: '状态', minWidth: 130 },
-    { key: 'actions', label: '操作', minWidth: 120, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2ActivationsView.vue')
 });

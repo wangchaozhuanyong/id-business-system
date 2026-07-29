@@ -88,13 +88,20 @@
           />
         </el-select>
       </el-form-item>
+      <el-alert
+        v-if="page.editingItem?.saleState === 'sold'"
+        type="warning"
+        title="该 ID 已卖出，余额、人民币成本、加卡和续费均已锁定"
+        :closable="false"
+        show-icon
+      />
       <div class="v2-record-form-grid">
         <el-form-item label="余额" :error="page.balanceInputError">
           <el-input
             v-model="page.form.currentBalance"
             inputmode="decimal"
             placeholder="0"
-            :disabled="!page.canAdjustBalance"
+            :disabled="!page.canAdjustBalance || page.editingItem?.saleState === 'sold'"
             @input="page.updateBalanceCostFromRate"
           />
         </el-form-item>
@@ -103,7 +110,7 @@
             v-model="page.form.exchangeRate"
             inputmode="decimal"
             placeholder="例如 5.7"
-            :disabled="!page.canAdjustBalance"
+            :disabled="!page.canAdjustBalance || page.editingItem?.saleState === 'sold'"
             @input="page.updateBalanceCostFromRate"
           />
         </el-form-item>
@@ -120,8 +127,8 @@
             v-model="page.form.purchaseCost"
             :min="0"
             :max="99999999"
-            :precision="4"
-            :step="1"
+            :precision="V2_DECIMAL_PLACES"
+            :step="Number(V2_DECIMAL_STEP)"
             controls-position="right"
           />
         </el-form-item>
@@ -267,6 +274,69 @@
   </el-dialog>
 
   <V2ConfirmDialog
+    v-model="page.lossDialogVisible"
+    title="永久报损 ID"
+    message=""
+    confirm-text="确认永久报损"
+    danger
+    :confirm-loading="page.lossSubmitting"
+    :confirm-disabled="!page.lossFormReady"
+    @confirm="page.confirmReportLoss"
+  >
+    <div v-if="page.lossTarget" class="v2-account-loss-dialog">
+      <dl>
+        <div>
+          <dt>ID 账号</dt>
+          <dd>{{ page.lossTarget.appleIdMasked }}</dd>
+        </div>
+        <div>
+          <dt>损失余额</dt>
+          <dd>{{ page.formatDecimal(page.lossTarget.currentBalance) }}</dd>
+        </div>
+        <div>
+          <dt>人民币亏损</dt>
+          <dd>¥{{ page.formatDecimal(page.lossTarget.balanceCostAmount) }}</dd>
+        </div>
+      </dl>
+      <el-alert
+        type="error"
+        title="报损后余额与人民币成本会永久清零，ID 将冻结且无法恢复。"
+        :closable="false"
+        show-icon
+      />
+      <el-form
+        class="v2-horizontal-form"
+        label-position="left"
+        label-width="88px"
+        require-asterisk-position="right"
+      >
+        <el-form-item
+          label="报损原因"
+          required
+          :error="
+            page.lossReason.trim().length > 0 && page.lossReason.trim().length < 2
+              ? '至少输入 2 个字符'
+              : ''
+          "
+        >
+          <el-input
+            v-model="page.lossReason"
+            type="textarea"
+            :rows="3"
+            minlength="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="说明 ID 死亡、冻结或无法继续使用的原因"
+          />
+        </el-form-item>
+      </el-form>
+      <el-checkbox v-model="page.lossConfirmed">
+        我确认永久清零余额并冻结该 ID，操作无法撤销
+      </el-checkbox>
+    </div>
+  </V2ConfirmDialog>
+
+  <V2ConfirmDialog
     v-model="page.deleteDialogVisible"
     title="删除 ID"
     :message="`确认删除“${page.deletingItem?.appleIdMasked || ''}”？该操作会软删除资料。`"
@@ -282,6 +352,7 @@ import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import type { useAccountsPage } from '../useAccountsPage';
 
 type AccountsPage = UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
@@ -290,3 +361,34 @@ defineProps<{
   page: AccountsPage;
 }>();
 </script>
+
+<style scoped>
+.v2-account-loss-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.v2-account-loss-dialog dl {
+  display: grid;
+  margin: 0;
+  gap: 8px;
+}
+
+.v2-account-loss-dialog dl > div {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.v2-account-loss-dialog dt {
+  color: var(--v2-text-soft);
+}
+
+.v2-account-loss-dialog dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+  text-align: right;
+}
+</style>

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
-import type { IdBusinessV2OrderStatus } from '@prisma/client';
+import type { IdBusinessV2OrderAccountDisposition, IdBusinessV2OrderStatus } from '@prisma/client';
+import { toV2DecimalString } from '../decimal-policy';
 
 export interface LockedOrderRow {
   id: string;
@@ -10,6 +11,7 @@ export interface LockedOrderRow {
   receivedAmount: PrismaNamespace.Decimal;
   platformFeeAmount: PrismaNamespace.Decimal;
   accountCostAmount: PrismaNamespace.Decimal;
+  accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
   refundCostAmount: PrismaNamespace.Decimal | null;
@@ -23,6 +25,8 @@ export interface LockedAccountRow {
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
   purchaseCost: PrismaNamespace.Decimal;
+  soldByOrderId: string | null;
+  lossReportedAt: Date | null;
   countryOptionId: string;
   statusCode: string;
 }
@@ -95,8 +99,8 @@ export function toReservationResponse(
     account: {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
-      currentBalance: account.currentBalance.toString(),
-      balanceCostAmount: account.balanceCostAmount.toString()
+      currentBalance: toV2DecimalString(account.currentBalance),
+      balanceCostAmount: toV2DecimalString(account.balanceCostAmount)
     },
     lock: toLockSummary(lock),
     idempotentReplay

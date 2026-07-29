@@ -1,3 +1,9 @@
+import {
+  divideDecimalStrings,
+  isV2UnsignedDecimal,
+  multiplyDecimalStrings
+} from '@/v2/utils/decimal';
+
 export interface AccountFormState {
   appleId: string;
   password: string;
@@ -35,13 +41,11 @@ export function emptyAccountForm(): AccountFormState {
 }
 
 export function isNonNegativeDecimal(value: unknown) {
-  const normalized = String(value ?? '').trim();
-  return /^\d+(\.\d{1,4})?$/.test(normalized);
+  return isV2UnsignedDecimal(value);
 }
 
 export function isNonNegativeExchangeRate(value: unknown) {
-  const normalized = String(value ?? '').trim();
-  return /^\d+(\.\d{1,8})?$/.test(normalized);
+  return isV2UnsignedDecimal(value);
 }
 
 export function normalizeDecimalInput(value: unknown) {
@@ -59,39 +63,11 @@ export function isZeroDecimal(value: unknown) {
 
 export function calculateBalanceCost(balance: unknown, exchangeRate: unknown) {
   if (!isNonNegativeDecimal(balance) || !isNonNegativeExchangeRate(exchangeRate)) return null;
-
-  const balanceUnits = decimalToScaledInteger(balance, 4);
-  const exchangeRateUnits = decimalToScaledInteger(exchangeRate, 8);
-  const costUnits = roundHalfUp(balanceUnits * exchangeRateUnits, 10n ** 8n);
-  return scaledIntegerToDecimal(costUnits, 4);
+  return multiplyDecimalStrings(String(balance), String(exchangeRate));
 }
 
 export function calculateExchangeRate(balance: unknown, balanceCostAmount: unknown) {
   if (!isNonNegativeDecimal(balance) || !isNonNegativeDecimal(balanceCostAmount)) return null;
-
-  const balanceUnits = decimalToScaledInteger(balance, 4);
-  if (balanceUnits === 0n) return '0';
-
-  const costUnits = decimalToScaledInteger(balanceCostAmount, 4);
-  const exchangeRateUnits = roundHalfUp(costUnits * 10n ** 8n, balanceUnits);
-  return scaledIntegerToDecimal(exchangeRateUnits, 8);
-}
-
-function decimalToScaledInteger(value: unknown, scale: number) {
-  const [integerPart = '0', fractionalPart = ''] = normalizeDecimalInput(value).split('.');
-  const digits = `${integerPart}${fractionalPart.padEnd(scale, '0')}`;
-  return BigInt(digits);
-}
-
-function roundHalfUp(value: bigint, divisor: bigint) {
-  const quotient = value / divisor;
-  const remainder = value % divisor;
-  return remainder * 2n >= divisor ? quotient + 1n : quotient;
-}
-
-function scaledIntegerToDecimal(value: bigint, scale: number) {
-  const digits = value.toString().padStart(scale + 1, '0');
-  const integerPart = digits.slice(0, -scale);
-  const fractionalPart = digits.slice(-scale).replace(/0+$/, '');
-  return fractionalPart ? `${integerPart}.${fractionalPart}` : integerPart;
+  if (isZeroDecimal(balance)) return '0';
+  return divideDecimalStrings(String(balanceCostAmount), String(balance));
 }

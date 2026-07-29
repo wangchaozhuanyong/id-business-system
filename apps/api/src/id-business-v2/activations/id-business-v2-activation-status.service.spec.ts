@@ -3,6 +3,17 @@ import { IdBusinessV2ActivationStatusService } from './id-business-v2-activation
 
 describe('IdBusinessV2ActivationStatusService', () => {
   const service = new IdBusinessV2ActivationStatusService();
+
+  it('returns the nearest future semantic boundary without creating a polling interval', () => {
+    const now = new Date('2026-07-29T12:00:00.000Z');
+    const dueAt = new Date('2026-08-06T12:00:00.000Z');
+
+    expect(service.getNextRevalidateAt(dueAt, now)).toEqual(new Date('2026-07-30T12:00:00.000Z'));
+    expect(service.getNextRevalidateAt(new Date('2026-08-18T12:00:00.000Z'), now, 10)).toEqual(
+      new Date('2026-08-08T12:00:00.000Z')
+    );
+    expect(service.getNextRevalidateAt(null, now)).toBeNull();
+  });
   const now = new Date('2026-07-26T12:00:00.000Z');
   const hourMs = 60 * 60 * 1000;
 

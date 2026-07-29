@@ -4,6 +4,7 @@ import {
   IdBusinessV2OtcAverageService,
   type IdBusinessV2OtcAverageResult
 } from './id-business-v2-otc-average.service';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
 
 export interface IdBusinessV2OtcMidRateResult extends IdBusinessV2OtcAverageResult {
   midRateToRmb: Prisma.Decimal;
@@ -21,7 +22,7 @@ export class IdBusinessV2OtcMidRateService {
     if (
       result.asset !== 'USDT' ||
       result.fiat !== 'CNY' ||
-      result.policy.decimalPlaces !== 8 ||
+      result.policy.decimalPlaces !== V2_DECIMAL_PLACES ||
       result.combinedMerchantBuyAverageRateToRmb.lte(0) ||
       result.combinedMerchantSellAverageRateToRmb.lte(0)
     ) {
@@ -32,7 +33,7 @@ export class IdBusinessV2OtcMidRateService {
       midRateToRmb: result.combinedMerchantBuyAverageRateToRmb
         .plus(result.combinedMerchantSellAverageRateToRmb)
         .div(2)
-        .toDecimalPlaces(8, Prisma.Decimal.ROUND_HALF_UP)
+        .toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE)
     };
   }
 }

@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { toV2DecimalString } from '../decimal-policy';
 import { ID_BUSINESS_V2_OPTION_TYPE_MAP } from './id-business-v2-options.constants';
 
 export const OPTION_INCLUDE = {
@@ -55,13 +56,14 @@ export function toOptionResponse(option: OptionWithRelations) {
     parent: option.parent,
     countryOptionId: option.countryOptionId,
     country: option.countryOption,
-    businessAmount: option.businessAmount?.toString() ?? null,
+    businessAmount:
+      option.businessAmount === null ? null : toV2DecimalString(option.businessAmount),
     currencyCode:
       option.type === 'service'
         ? (option.countryOption?.currencyCode ?? null)
         : option.currencyCode,
-    fixedFee: option.fixedFee.toString(),
-    percentageFee: option.percentageFee.toString(),
+    fixedFee: toV2DecimalString(option.fixedFee),
+    percentageFee: toV2DecimalString(option.percentageFee),
     sortOrder: option.sortOrder,
     status: option.status,
     isSystem: option.isSystem,

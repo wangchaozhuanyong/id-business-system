@@ -131,7 +131,8 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         id: accountId,
         appleIdMasked: 'us***@example.com',
         currentBalance: decimal('20'),
-        balanceCostAmount: decimal('50')
+        balanceCostAmount: decimal('50'),
+        soldByOrderId: null
       }
     ]);
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
@@ -238,6 +239,24 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('X123456789ABCDEF');
+  });
+
+  it('rejects a new gift-card credit when the target ID has been sold', async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        currentBalance: decimal('20'),
+        balanceCostAmount: decimal('50'),
+        soldByOrderId: '99999999-9999-4999-8999-999999999999'
+      }
+    ]);
+
+    await expect(service.confirmCredit(accountId, makeDto(), operator)).rejects.toThrow(
+      '该 ID 已卖出，不能继续加卡'
+    );
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
   });
 
   it('records a renewal-workbench source context without logging the gift-card plaintext', async () => {

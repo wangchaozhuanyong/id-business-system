@@ -3,6 +3,8 @@ import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
   CreateV2AccountInput,
   ImportV2AccountRowInput,
+  ReportV2AccountLossInput,
+  ReportV2AccountLossResult,
   UpdateV2AccountInput,
   V2Account,
   V2AccountExportResult,
@@ -79,6 +81,26 @@ export const idBusinessV2AccountsApi = {
         'order-entry-matching',
         'renewals',
         'renewals-options'
+      ]
+    );
+  },
+  reportLoss(id: string, payload: ReportV2AccountLossInput) {
+    return withV2QueryInvalidation(
+      request<ReportV2AccountLossResult>(
+        http.post(`/id-business-v2/accounts/${id}/report-loss`, payload)
+      ),
+      [
+        'account-losses',
+        'accounts',
+        'balances',
+        'balance-records',
+        'orders',
+        'activations',
+        'order-entry-options',
+        'order-entry-matching',
+        'renewals',
+        'renewals-options',
+        'renewal-warning-summary'
       ]
     );
   },

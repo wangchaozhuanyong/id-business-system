@@ -63,6 +63,7 @@ describe('IdBusinessV2ActivationsService', () => {
     idBusinessV2Activation: {
       findMany: vi.fn(),
       count: vi.fn(),
+      findFirst: vi.fn(),
       findUnique: vi.fn()
     }
   };
@@ -75,6 +76,7 @@ describe('IdBusinessV2ActivationsService', () => {
     vi.clearAllMocks();
     prisma.idBusinessV2Activation.findMany.mockResolvedValue([makeActivation()]);
     prisma.idBusinessV2Activation.count.mockResolvedValue(1);
+    prisma.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     prisma.idBusinessV2Activation.findUnique.mockResolvedValue(makeActivation());
     prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
       Promise.all(operations)

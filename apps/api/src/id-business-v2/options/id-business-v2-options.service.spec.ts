@@ -341,8 +341,8 @@ describe('IdBusinessV2OptionsService', () => {
     const result = await service.create({
       type: 'settlement_platform',
       name: '平台A',
-      fixedFee: '0.5000',
-      percentageFee: '1.2500'
+      fixedFee: '0.500',
+      percentageFee: '1.250'
     });
 
     expect(prisma.idBusinessV2Option.create).toHaveBeenCalledWith(

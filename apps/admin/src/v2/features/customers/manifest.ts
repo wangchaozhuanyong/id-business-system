@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const customersFeature = defineV2Feature({
@@ -8,7 +9,7 @@ export const customersFeature = defineV2Feature({
   sourceSheet: '客户记录',
   permission: 'customer.view',
   kind: 'list',
-  loadingTier: 'operational',
+  freshnessPolicy: 'event-driven',
   filters: [
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '客户名称、手机、微信' },
     {
@@ -33,7 +34,12 @@ export const customersFeature = defineV2Feature({
     { key: 'frequentService', label: '常开业务', minWidth: 150 },
     { key: 'status', label: '状态', minWidth: 100 },
     { key: 'updatedAt', label: '更新时间', minWidth: 160 },
-    { key: 'actions', label: '操作', minWidth: 160, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.triple,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2CustomersView.vue')
 });

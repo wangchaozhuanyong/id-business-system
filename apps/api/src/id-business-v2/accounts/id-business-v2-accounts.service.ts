@@ -18,6 +18,10 @@ import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-a
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
 import type { RevealIdBusinessV2AccountSecretDto } from './dto/reveal-id-business-v2-account-secret.dto';
 import type { UpdateIdBusinessV2AccountDto } from './dto/update-id-business-v2-account.dto';
+import {
+  assertAccountLossNotReported,
+  type LockedAccountBalanceRow
+} from './id-business-v2-account-balance-guard';
 import { importAccountRows } from './id-business-v2-account-import';
 import {
   ACCOUNT_INCLUDE,
@@ -38,6 +42,7 @@ import {
   normalizePhone,
   normalizeRevealReason,
   parseRecordStatus,
+  parseSaleState,
   parseSecretField,
   requireBalanceSnapshotValue,
   toAccountResponse,
@@ -47,16 +52,9 @@ import {
 } from './id-business-v2-account-support';
 
 export type ListIdBusinessV2AccountsQuery = AccountListQuery;
-
 export interface AuditRequestMeta {
   ip?: string | null;
   userAgent?: string | null;
-}
-
-interface LockedAccountBalanceRow {
-  id: string;
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
 }
 
 const MAX_ACCOUNT_EXPORT_ROWS = 10_000;
@@ -129,7 +127,8 @@ export class IdBusinessV2AccountsService {
           countryOptionId: normalizeNullableString(query.countryOptionId),
           statusOptionId: normalizeNullableString(query.statusOptionId),
           supplierOptionId: normalizeNullableString(query.supplierOptionId),
-          recordStatus: parseRecordStatus(query.recordStatus, false)
+          recordStatus: parseRecordStatus(query.recordStatus, false),
+          saleState: parseSaleState(query.saleState)
         }
       }),
       remark: `导出 V2 ID 脱敏资料：${items.length} 条`
@@ -259,6 +258,7 @@ export class IdBusinessV2AccountsService {
 
   async update(id: string, dto: UpdateIdBusinessV2AccountDto, operator?: AuthenticatedUser) {
     const existing = await this.findAccountOrThrow(id);
+    assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 永久冻结，不能再修改');
     const appleId = dto.appleId === undefined ? undefined : normalizeAppleId(dto.appleId, true)!;
     const appleIdHash =
       appleId === undefined ? undefined : this.fieldEncryptionService.hash(appleId)!;
@@ -318,11 +318,7 @@ export class IdBusinessV2AccountsService {
     const adjustsBalance = dto.currentBalance !== undefined || dto.balanceCostAmount !== undefined;
     const account = adjustsBalance
       ? await this.updateWithBalanceAdjustment(existing.id, dto, updateData, operator)
-      : await this.prisma.idBusinessV2Account.update({
-          where: { id: existing.id },
-          data: updateData,
-          include: ACCOUNT_INCLUDE
-        });
+      : await this.updateActiveAccount(existing.id, updateData);
 
     const response = toAccountResponse(account);
     await this.auditLogsService.create({
@@ -341,14 +337,21 @@ export class IdBusinessV2AccountsService {
 
   async remove(id: string, operator?: AuthenticatedUser) {
     const existing = await this.findAccountOrThrow(id);
-    await this.prisma.idBusinessV2Account.update({
-      where: { id: existing.id },
+    assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 必须保留历史记录，不能删除');
+    if (existing.soldByOrderId) {
+      throw new ConflictException('已卖出的 ID 不能删除，请先通过退款流程确认收回');
+    }
+    const result = await this.prisma.idBusinessV2Account.updateMany({
+      where: { id: existing.id, lossReportedAt: null },
       data: {
         deletedAt: new Date(),
         recordStatus: 'disabled',
         updatedByUserId: operator?.id
       }
     });
+    if (result.count !== 1) {
+      throw new ConflictException('该 ID 已报损，不能删除');
+    }
 
     await this.auditLogsService.create({
       userId: operator?.id,
@@ -464,10 +467,18 @@ export class IdBusinessV2AccountsService {
           include: ACCOUNT_INCLUDE
         });
         if (!replayedAccount) throw new NotFoundException('ID 资料不存在');
+        assertAccountLossNotReported(
+          replayedAccount.lossReportedAt,
+          '已报损 ID 永久冻结，不能调整余额'
+        );
         return replayedAccount;
       }
 
       const locked = await this.lockAccountBalance(tx, accountId);
+      assertAccountLossNotReported(locked.lossReportedAt, '已报损 ID 永久冻结，不能调整余额');
+      if (locked.soldByOrderId) {
+        throw new ConflictException('该 ID 已卖出，不能调整余额或人民币成本');
+      }
       if (
         !locked.currentBalance.equals(expected.currentBalance) ||
         !locked.balanceCostAmount.equals(expected.balanceCostAmount)
@@ -528,7 +539,9 @@ export class IdBusinessV2AccountsService {
       SELECT
         "id",
         "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount"
+        "balance_cost_amount" AS "balanceCostAmount",
+        "sold_by_order_id" AS "soldByOrderId",
+        "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE
         "id" = CAST(${accountId} AS UUID)
@@ -538,6 +551,24 @@ export class IdBusinessV2AccountsService {
     const account = rows[0];
     if (!account) throw new NotFoundException('ID 资料不存在');
     return account;
+  }
+
+  private async updateActiveAccount(
+    accountId: string,
+    updateData: Prisma.IdBusinessV2AccountUncheckedUpdateInput
+  ) {
+    const result = await this.prisma.idBusinessV2Account.updateMany({
+      where: {
+        id: accountId,
+        deletedAt: null,
+        lossReportedAt: null
+      },
+      data: updateData
+    });
+    if (result.count !== 1) {
+      throw new ConflictException('该 ID 已报损，不能修改');
+    }
+    return this.findAccountOrThrow(accountId);
   }
 
   private async findAccountOrThrow(id: string): Promise<AccountWithRelations> {

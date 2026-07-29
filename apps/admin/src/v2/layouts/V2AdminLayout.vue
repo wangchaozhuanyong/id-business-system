@@ -326,6 +326,7 @@ import {
 } from '@/v2/router/routes';
 import { clearV2QueryCache, useV2Query, v2QueryActivity } from '@/v2/composables/useV2Query';
 import { createV2RoutePrefetchController } from '@/v2/runtime/routePrefetch';
+import { startV2ChangeSync, stopV2ChangeSync } from '@/v2/runtime/changeSync';
 import '@/v2/styles/v2.css';
 
 const V2_PAGE_CACHE_LIMIT = Math.max(
@@ -370,7 +371,6 @@ const queryActivityLabel = computed(() => {
 });
 const scrollPositions = new Map<string, number>();
 let keyboardNavigation = false;
-let renewalWarningRefreshTimer: number | undefined;
 const visibleNavigationSections = computed(() =>
   v2NavigationSections
     .map((section) => ({
@@ -405,7 +405,8 @@ const canViewRenewalWarnings = computed(() =>
 const renewalWarningQuery = useV2Query<V2RenewalWarningSummary>({
   scope: 'renewal-warning-summary',
   key: 'global',
-  tier: 'live',
+  freshnessPolicy: 'event-with-deadline',
+  getRevalidateAt: (result) => result.revalidateAt,
   query: ({ signal }) => idBusinessV2RenewalsApi.getWarningSummary({ signal })
 });
 const renewalWarningSummary = computed(() => renewalWarningQuery.data.value);
@@ -581,27 +582,24 @@ function retryCurrentRoute() {
 }
 
 async function logout() {
+  stopV2ChangeSync();
   clearV2QueryCache();
   await authStore.logout();
   await router.replace('/login');
 }
 
 onMounted(() => {
+  startV2ChangeSync();
   window.addEventListener('keydown', handleKeydown);
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener(RENEWAL_WARNING_REFRESH_EVENT, handleRenewalWarningRefresh);
   refreshRenewalWarnings();
-  renewalWarningRefreshTimer = window.setInterval(() => {
-    refreshRenewalWarnings(true);
-  }, 60_000);
 });
 onBeforeUnmount(() => {
+  stopV2ChangeSync();
   routePrefetch.dispose();
   window.removeEventListener('keydown', handleKeydown);
   window.removeEventListener('focus', handleWindowFocus);
   window.removeEventListener(RENEWAL_WARNING_REFRESH_EVENT, handleRenewalWarningRefresh);
-  if (renewalWarningRefreshTimer !== undefined) {
-    window.clearInterval(renewalWarningRefreshTimer);
-  }
 });
 </script>

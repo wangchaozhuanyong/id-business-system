@@ -1,10 +1,9 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
-import { useAuthStore } from '@/stores/auth';
-import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2AccountsApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { parseCsv } from '@/v2/utils/csv';
+import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
 import {
   calculateBalanceCost,
   calculateExchangeRate,
@@ -23,6 +22,8 @@ import {
   prepareAccountImport,
   type AccountImportFailure
 } from './account-import';
+import { useAccountLossReporting } from './useAccountLossReporting';
+import { useAccountPermissions } from './useAccountPermissions';
 import type {
   CreateV2AccountInput,
   ImportV2AccountRowInput,
@@ -34,7 +35,6 @@ import type {
 } from './contracts';
 
 export function useAccountsPage() {
-  const authStore = useAuthStore();
   const items = ref<V2Account[]>([]);
   const total = ref(0);
   const countryOptions = ref<V2OptionSelector[]>([]);
@@ -68,6 +68,7 @@ export function useAccountsPage() {
     statusOptionId: '',
     supplierOptionId: '',
     recordStatus: '' as V2RecordStatus | '',
+    saleState: '' as 'available' | 'sold' | '',
     sortBy: 'updatedAt' as
       | 'appleId'
       | 'currentBalance'
@@ -87,40 +88,10 @@ export function useAccountsPage() {
     value: ''
   });
 
-  const canCreate = computed(() => hasUserPermission(authStore.user, 'apple.account.create'));
-  const canUpdate = computed(() => hasUserPermission(authStore.user, 'apple.account.update'));
-  const canDelete = computed(() => hasUserPermission(authStore.user, 'apple.account.delete'));
-  const canImport = computed(() => hasUserPermission(authStore.user, 'apple.account.import'));
-  const canAdjustBalance = computed(() =>
-    hasUserPermission(authStore.user, 'apple.balance.adjust')
-  );
-  const canRevealAppleId = computed(() =>
-    hasUserPermission(authStore.user, 'apple.account.view_full')
-  );
-  const canRevealPassword = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_password')
-  );
-  const canRevealPhone = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_phone')
-  );
-  const canRevealSecurity = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_security')
-  );
-  const revealFieldOptions = computed<Array<{ value: V2AccountSecretField; label: string }>>(() => {
-    const target = revealTarget.value;
-    if (!target) return [];
-    return [
-      canRevealAppleId.value ? { value: 'appleId' as const, label: 'ID 账号' } : null,
-      target.hasPassword && canRevealPassword.value
-        ? { value: 'password' as const, label: 'ID 密码' }
-        : null,
-      target.hasPhone && canRevealPhone.value
-        ? { value: 'phone' as const, label: '手机号码' }
-        : null,
-      target.hasSecurityInfo && canRevealSecurity.value
-        ? { value: 'securityInfo' as const, label: '密保资料' }
-        : null
-    ].filter((option): option is { value: V2AccountSecretField; label: string } => Boolean(option));
+  const accountPermissions = useAccountPermissions(revealTarget);
+  const lossReporting = useAccountLossReporting({
+    canReportLoss: accountPermissions.canReportLoss,
+    refreshAccounts: loadAccounts
   });
   const formStatusOptions = computed(() =>
     [...statusOptions.value].sort((left, right) => {
@@ -131,14 +102,18 @@ export function useAccountsPage() {
     })
   );
   const balanceInputError = computed(() =>
-    isNonNegativeDecimal(form.currentBalance) ? '' : '请输入最多 4 位小数的非负金额'
+    isNonNegativeDecimal(form.currentBalance)
+      ? ''
+      : `请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`
   );
   const exchangeRateInputError = computed(() =>
-    isNonNegativeExchangeRate(form.exchangeRate) ? '' : '请输入最多 8 位小数的非负汇率'
+    isNonNegativeExchangeRate(form.exchangeRate)
+      ? ''
+      : `请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负汇率`
   );
   const balanceCostInputError = computed(() => {
     if (!isNonNegativeDecimal(form.balanceCostAmount)) {
-      return '请输入最多 4 位小数的非负金额';
+      return `请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`;
     }
     if (isZeroDecimal(form.currentBalance) && !isZeroDecimal(form.balanceCostAmount)) {
       return '余额为 0 时人民币成本也必须为 0';
@@ -163,11 +138,12 @@ export function useAccountsPage() {
       Boolean(exchangeRateInputError.value) ||
       Boolean(balanceCostInputError.value) ||
       (!editingItem.value &&
-        !canAdjustBalance.value &&
+        !accountPermissions.canAdjustBalance.value &&
         (!isZeroDecimal(form.currentBalance) || !isZeroDecimal(form.balanceCostAmount))) ||
       (Boolean(editingItem.value) &&
         balanceChanged.value &&
-        (!canAdjustBalance.value || form.balanceAdjustmentReason.trim().length < 2))
+        (!accountPermissions.canAdjustBalance.value ||
+          form.balanceAdjustmentReason.trim().length < 2))
   );
 
   const accountsQuery = useAccountsListQuery(() => normalizeAccountsListQuery(query));
@@ -313,6 +289,7 @@ export function useAccountsPage() {
         statusOptionId: query.statusOptionId || undefined,
         supplierOptionId: query.supplierOptionId || undefined,
         recordStatus: query.recordStatus || undefined,
+        saleState: query.saleState || undefined,
         sortBy: query.sortBy,
         sortOrder: query.sortOrder
       });
@@ -358,6 +335,10 @@ export function useAccountsPage() {
   }
 
   function openEdit(item: V2Account) {
+    if (item.lossStatus === 'reported') {
+      ElMessage.warning('已报损 ID 永久冻结，不能编辑');
+      return;
+    }
     editingItem.value = item;
     Object.assign(form, {
       appleId: '',
@@ -454,11 +435,11 @@ export function useAccountsPage() {
 
   function openSensitiveAccess(item: V2Account) {
     const field: V2AccountSecretField =
-      item.hasPassword && canRevealPassword.value
+      item.hasPassword && accountPermissions.canRevealPassword.value
         ? 'password'
-        : item.hasPhone && canRevealPhone.value
+        : item.hasPhone && accountPermissions.canRevealPhone.value
           ? 'phone'
-          : item.hasSecurityInfo && canRevealSecurity.value
+          : item.hasSecurityInfo && accountPermissions.canRevealSecurity.value
             ? 'securityInfo'
             : 'appleId';
     openReveal(item, field);
@@ -486,6 +467,10 @@ export function useAccountsPage() {
   }
 
   async function toggleStatus(item: V2Account) {
+    if (item.lossStatus === 'reported') {
+      ElMessage.warning('已报损 ID 永久冻结，不能启用或停用');
+      return;
+    }
     try {
       await idBusinessV2AccountsApi.update(item.id, {
         recordStatus: item.recordStatus === 'active' ? 'disabled' : 'active'
@@ -498,6 +483,10 @@ export function useAccountsPage() {
   }
 
   function openDelete(item: V2Account) {
+    if (item.lossStatus === 'reported') {
+      ElMessage.warning('已报损 ID 必须保留历史记录，不能删除');
+      return;
+    }
     deletingItem.value = item;
     deleteDialogVisible.value = true;
   }
@@ -545,19 +534,11 @@ export function useAccountsPage() {
     revealTarget,
     revealDialogVisible,
     revealing,
+    ...lossReporting,
     query,
     form,
     revealForm,
-    canCreate,
-    canUpdate,
-    canDelete,
-    canImport,
-    canAdjustBalance,
-    canRevealAppleId,
-    canRevealPassword,
-    canRevealPhone,
-    canRevealSecurity,
-    revealFieldOptions,
+    ...accountPermissions,
     formStatusOptions,
     balanceInputError,
     exchangeRateInputError,

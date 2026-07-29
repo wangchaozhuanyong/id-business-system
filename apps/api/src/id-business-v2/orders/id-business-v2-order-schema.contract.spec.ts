@@ -8,6 +8,10 @@ const migration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260729000000_current_system_baseline/migration.sql'),
   'utf8'
 );
+const accountDispositionMigration = readFileSync(
+  resolve(apiRoot, 'prisma/migrations/20260729070000_order_account_disposition/migration.sql'),
+  'utf8'
+);
 
 function prismaModel(name: string) {
   const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
@@ -99,5 +103,23 @@ describe('V2501 order schema contract', () => {
     expect(migration).toContain("'credit'");
     expect(activation).toMatch(/orderId\s+String\s+@unique/);
     expect(migration).toContain('id_business_v2_activations_due_at_check');
+  });
+
+  it('adds the ID sale lifecycle in an incremental migration without rewriting history', () => {
+    const order = prismaModel('IdBusinessV2Order');
+    const account = prismaModel('IdBusinessV2Account');
+
+    expect(order).toContain('accountDisposition');
+    expect(account).toContain('soldByOrderId');
+    expect(account).toContain('soldAt');
+    expect(accountDispositionMigration).toContain(
+      'CREATE TYPE "IdBusinessV2OrderAccountDisposition"'
+    );
+    expect(accountDispositionMigration).toContain(
+      'ADD COLUMN "account_disposition" "IdBusinessV2OrderAccountDisposition" NOT NULL DEFAULT \'retained\''
+    );
+    expect(accountDispositionMigration).toContain('"sold_by_order_id" UUID');
+    expect(accountDispositionMigration).toContain('id_business_v2_accounts_sale_evidence_check');
+    expect(migration).not.toContain('account_disposition');
   });
 });

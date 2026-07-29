@@ -57,6 +57,7 @@
         <el-option label="礼品卡入账" value="gift_card_credit" />
         <el-option label="被赎回扣减" value="gift_card_redeemed" />
         <el-option label="撤回扣减" value="gift_card_withdrawal" />
+        <el-option label="ID 永久报损" value="account_loss" />
       </el-select>
       <V2FilterDisclosure>
         <el-select
@@ -208,6 +209,16 @@
           show-icon
           :closable="false"
         />
+        <el-checkbox v-if="showAccountLossOption" v-model="reportAccountLoss">
+          同时报损该 ID（永久冻结）
+        </el-checkbox>
+        <el-alert
+          v-if="showAccountLossOption && reportAccountLoss"
+          title="系统会先扣除当前卡片，再永久清零该 ID 的剩余余额和人民币成本；报损后无法撤销或恢复"
+          type="error"
+          show-icon
+          :closable="false"
+        />
         <label>
           <span>处理原因</span>
           <el-input
@@ -254,6 +265,8 @@ const {
   reversalDialogVisible,
   reversalSubmitting,
   reversalReason,
+  reportAccountLoss,
+  showAccountLossOption,
   filters,
   giftCardQuery,
   ledgerQuery,

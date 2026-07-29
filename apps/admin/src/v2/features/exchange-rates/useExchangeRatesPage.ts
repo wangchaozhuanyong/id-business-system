@@ -1,10 +1,18 @@
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import {
+  V2_DECIMAL_PLACES,
+  addDecimalStrings,
+  divideDecimalStrings,
+  formatV2Decimal,
+  isV2UnsignedDecimal,
+  multiplyDecimalStrings
+} from '@/v2/utils/decimal';
 import type {
   V2ExchangeRateEntry,
   V2ExchangeRateListResult,
@@ -22,7 +30,6 @@ interface ExchangeRatePageSnapshot {
   manualEntries?: V2ExchangeRateListResult;
 }
 
-const RATE_PATTERN = /^\d{1,10}(?:\.\d{1,8})?$/;
 const defaultIntervals = [5, 15, 30, 60, 180, 360, 720, 1440];
 const failureReasonByCode: Record<string, string> = {
   binance_otc_http_error: '平台接口返回异常',
@@ -70,7 +77,6 @@ export function useExchangeRatesPage() {
   const manualCreating = ref(false);
   const manualDetailVisible = ref(false);
   const manualDetail = ref<V2ExchangeRateEntry | null>(null);
-  let pollingTimer: number | null = null;
 
   const canCollect = computed(() =>
     hasUserPermission(authStore.user, 'apple.exchange_rate.collect')
@@ -114,8 +120,8 @@ export function useExchangeRatesPage() {
       manualForm.okxMerchantSellRateToRmb
     ].map(parseRate);
     if (values.some((value) => value === null)) return '-';
-    const [binanceBuy, binanceSell, okxBuy, okxSell] = values as number[];
-    return (((binanceBuy + okxBuy) / 2 + (binanceSell + okxSell) / 2) / 2).toFixed(8);
+    const total = (values as string[]).reduce((sum, value) => addDecimalStrings(sum, value), '0');
+    return divideDecimalStrings(total, '4');
   });
 
   function getRunRequest() {
@@ -168,6 +174,8 @@ export function useExchangeRatesPage() {
     scope: 'exchange-rates',
     key: () => getPageKey(),
     keepPreviousData: true,
+    getRevalidateAt: (snapshot) =>
+      snapshot.overview.effective.expiresAt ?? snapshot.overview.lastSuccess?.expiresAt ?? null,
     query: async ({ signal }) => {
       if (isDefaultAutomaticRequest()) {
         const result = await idBusinessV2ExchangeRatesApi.bootstrap(
@@ -308,8 +316,14 @@ export function useExchangeRatesPage() {
 
   async function saveSettings() {
     const amount = Number(settingsForm.targetAmountRmb);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
-      ElMessage.warning('目标成交额必须大于 0 且不超过 1,000,000 元');
+    if (
+      !isV2UnsignedDecimal(settingsForm.targetAmountRmb, { allowZero: false }) ||
+      !Number.isFinite(amount) ||
+      amount > 1_000_000
+    ) {
+      ElMessage.warning(
+        `目标成交额必须大于 0、不超过 1,000,000 元且最多 ${V2_DECIMAL_PLACES} 位小数`
+      );
       return;
     }
     settingsSaving.value = true;
@@ -368,7 +382,7 @@ export function useExchangeRatesPage() {
       manualForm.okxMerchantSellRateToRmb
     ];
     if (values.some((value) => parseRate(value) === null)) {
-      ElMessage.warning('四项汇率都必须是大于 0、最多 8 位小数的数字');
+      ElMessage.warning(`四项汇率都必须是大于 0、最多 ${V2_DECIMAL_PLACES} 位小数的数字`);
       return;
     }
     manualCreating.value = true;
@@ -398,19 +412,14 @@ export function useExchangeRatesPage() {
   }
 
   function parseRate(value: string) {
-    if (!RATE_PATTERN.test(value.trim())) return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    const normalized = value.trim();
+    return isV2UnsignedDecimal(normalized, { allowZero: false }) ? normalized : null;
   }
   function formatRate(value: string | null | undefined) {
-    if (!value) return '-';
-    const [integer, fraction = ''] = value.split('.');
-    const trimmed = fraction.replace(/0+$/, '');
-    return trimmed ? `${integer}.${trimmed}` : integer;
+    return formatV2Decimal(value);
   }
   function formatAmount(value: string | null | undefined) {
-    if (!value) return '-';
-    return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(Number(value));
+    return formatV2Decimal(value);
   }
   function formatDate(value: string | null | undefined) {
     if (!value) return '-';
@@ -426,7 +435,7 @@ export function useExchangeRatesPage() {
   }
   function formatPercent(value: string | null | undefined) {
     if (!value) return '-';
-    return `${(Number(value) * 100).toFixed(1)}%`;
+    return `${formatV2Decimal(multiplyDecimalStrings(value, '100'))}%`;
   }
   function intervalLabel(minutes: number | undefined) {
     if (!minutes) return '-';
@@ -471,21 +480,6 @@ export function useExchangeRatesPage() {
   watch(activeTab, () => {
     void exchangeRateQuery.ensureFresh();
   });
-  function startPolling() {
-    stopPolling();
-    pollingTimer = window.setInterval(() => {
-      if (activeTab.value === 'automatic') void exchangeRateQuery.refresh();
-    }, 30_000);
-  }
-
-  function stopPolling() {
-    if (pollingTimer === null) return;
-    window.clearInterval(pollingTimer);
-    pollingTimer = null;
-  }
-
-  onMounted(startPolling);
-  onBeforeUnmount(stopPolling);
 
   return {
     defaultIntervals,

@@ -16,6 +16,7 @@ import type {
   IdBusinessV2OtcSide,
   IdBusinessV2OtcSideCollection
 } from './id-business-v2-otc.types';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, roundV2Decimal } from '../decimal-policy';
 
 export type IdBusinessV2OtcExclusionReason =
   | 'missing_tradable_amount'
@@ -85,7 +86,7 @@ const POLICY: IdBusinessV2OtcPolicy = {
   minCompletionRate: new Prisma.Decimal('0.9'),
   maxPriceDeviationRate: new Prisma.Decimal('0.03'),
   minValidAdsPerSide: 3,
-  decimalPlaces: 8
+  decimalPlaces: V2_DECIMAL_PLACES
 };
 
 const EXCLUSION_REASONS: IdBusinessV2OtcExclusionReason[] = [
@@ -248,9 +249,9 @@ export class IdBusinessV2OtcAverageService {
       validAdCount: validQuotes.length,
       filteredAdCount: collection.acceptedAdCount - validQuotes.length,
       excludedByReason,
-      medianRateToRmb: median!,
-      lowestValidRateToRmb: sorted[0]!,
-      highestValidRateToRmb: sorted[sorted.length - 1]!,
+      medianRateToRmb: roundV2Decimal(median!),
+      lowestValidRateToRmb: roundV2Decimal(sorted[0]!),
+      highestValidRateToRmb: roundV2Decimal(sorted[sorted.length - 1]!),
       averageRateToRmb: this.averageDecimals(prices),
       validSamples: validQuotes.map((quote) => ({
         sourceAdId: quote.sourceAdId,
@@ -281,7 +282,7 @@ export class IdBusinessV2OtcAverageService {
     return values
       .reduce((sum, value) => sum.plus(value), new Prisma.Decimal(0))
       .div(values.length)
-      .toDecimalPlaces(POLICY.decimalPlaces, Prisma.Decimal.ROUND_HALF_UP);
+      .toDecimalPlaces(POLICY.decimalPlaces, V2_DECIMAL_ROUNDING_MODE);
   }
 
   private median(values: Prisma.Decimal[]) {

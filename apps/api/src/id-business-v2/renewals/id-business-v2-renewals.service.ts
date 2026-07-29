@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
 import {
   IdBusinessV2ActivationStatusService,
   type IdBusinessV2ActivationDueStatus
@@ -55,6 +56,7 @@ const RENEWAL_INCLUDE = {
       appleIdMasked: true,
       currentBalance: true,
       recordStatus: true,
+      soldByOrderId: true,
       countryOption: {
         select: {
           id: true,
@@ -119,6 +121,11 @@ export class IdBusinessV2RenewalsService {
       customerId: this.normalizeOptionalUuid(query.customerId, '客户') ?? undefined,
       serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务') ?? undefined,
       accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID') ?? undefined,
+      account: {
+        is: {
+          soldByOrderId: null
+        }
+      },
       AND: [
         ...(keyword
           ? [
@@ -166,7 +173,7 @@ export class IdBusinessV2RenewalsService {
       ]
     };
 
-    const [items, total, warningCounts] = await Promise.all([
+    const [items, total, warningCounts, nextTimedActivation] = await Promise.all([
       this.prisma.idBusinessV2Activation.findMany({
         where,
         include: RENEWAL_INCLUDE,
@@ -175,7 +182,29 @@ export class IdBusinessV2RenewalsService {
         orderBy: this.buildOrderBy(query)
       }),
       this.prisma.idBusinessV2Activation.count({ where }),
-      this.renewalWarningService.getWarningCounts(baseWhere, now, warningSettings.warningDays)
+      this.renewalWarningService.getWarningCounts(baseWhere, now, warningSettings.warningDays),
+      this.prisma.idBusinessV2Activation.findFirst({
+        where: {
+          AND: [
+            baseWhere,
+            {
+              renewedBy: {
+                is: null
+              },
+              status: 'active',
+              dueAt: {
+                gt: now
+              }
+            }
+          ]
+        },
+        select: {
+          dueAt: true
+        },
+        orderBy: {
+          dueAt: 'asc'
+        }
+      })
     ]);
 
     return {
@@ -187,7 +216,12 @@ export class IdBusinessV2RenewalsService {
         warningDays: warningSettings.warningDays,
         ...warningCounts
       },
-      evaluatedAt: now
+      evaluatedAt: now,
+      revalidateAt: this.activationStatusService.getNextRevalidateAt(
+        nextTimedActivation?.dueAt ?? null,
+        now,
+        warningSettings.warningDays
+      )
     };
   }
 
@@ -208,6 +242,7 @@ export class IdBusinessV2RenewalsService {
       }),
       this.prisma.idBusinessV2Account.findMany({
         where: {
+          soldByOrderId: null,
           activations: {
             some: actionableWhere
           }
@@ -343,7 +378,7 @@ export class IdBusinessV2RenewalsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
-        currentBalance: item.account.currentBalance.toString(),
+        currentBalance: toV2DecimalString(item.account.currentBalance),
         recordStatus: item.account.recordStatus,
         country: item.account.countryOption
       },

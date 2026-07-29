@@ -4,6 +4,7 @@ import type { Prisma } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
 
 export interface FindIdBusinessV2OrderCandidatesQuery {
@@ -85,7 +86,9 @@ export class IdBusinessV2OrderMatchingService {
     const activeInCountryWhere: Prisma.IdBusinessV2AccountWhereInput = {
       deletedAt: null,
       recordStatus: 'active',
-      countryOptionId: context.country.id
+      lossReportedAt: null,
+      countryOptionId: context.country.id,
+      soldByOrderId: null
     };
     const normalStatusWhere: Prisma.IdBusinessV2AccountWhereInput = {
       ...activeInCountryWhere,
@@ -141,7 +144,7 @@ export class IdBusinessV2OrderMatchingService {
         }
       : availableWhere;
 
-    const [activeInCountry, normalStatus, sufficientBalance, available, accounts] =
+    const [activeInCountry, normalStatus, sufficientBalance, available, accounts, nextLock] =
       await this.prisma.$transaction([
         this.prisma.idBusinessV2Account.count({
           where: activeInCountryWhere
@@ -170,6 +173,32 @@ export class IdBusinessV2OrderMatchingService {
               id: 'asc'
             }
           ]
+        }),
+        this.prisma.idBusinessV2AccountLock.findFirst({
+          where: {
+            status: 'active',
+            expiresAt: {
+              gt: evaluatedAt
+            },
+            OR: [
+              {
+                lockScope: 'global'
+              },
+              {
+                lockScope: 'by_service',
+                serviceOptionId
+              }
+            ],
+            account: {
+              is: sufficientBalanceWhere
+            }
+          },
+          select: {
+            expiresAt: true
+          },
+          orderBy: {
+            expiresAt: 'asc'
+          }
         })
       ]);
 
@@ -178,7 +207,7 @@ export class IdBusinessV2OrderMatchingService {
         service: context.service,
         category: context.category,
         country: context.country,
-        requiredBalance: requiredBalance.toString(),
+        requiredBalance: toV2DecimalString(requiredBalance),
         requiredStatusCode: 'normal',
         evaluatedAt
       },
@@ -188,6 +217,7 @@ export class IdBusinessV2OrderMatchingService {
         sufficientBalance,
         available
       },
+      revalidateAt: nextLock?.expiresAt ?? null,
       selectedCandidateId: autoSelect ? (accounts[0]?.id ?? null) : null,
       items: accounts.map((account) => this.toCandidateResponse(account, requiredBalance))
     };
@@ -265,8 +295,8 @@ export class IdBusinessV2OrderMatchingService {
 
   private normalizeRequiredBalance(value: unknown) {
     const normalized = this.normalizeNullableString(value);
-    if (!normalized || !/^\d+(\.\d{1,4})?$/.test(normalized)) {
-      throw new BadRequestException('消耗余额必须是最多 4 位小数的正数');
+    if (!normalized || !V2_DECIMAL_PATTERN.test(normalized)) {
+      throw new BadRequestException(`消耗余额必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
     }
     const balance = new PrismaNamespace.Decimal(normalized);
     if (balance.lessThanOrEqualTo(0)) {
@@ -325,14 +355,19 @@ export class IdBusinessV2OrderMatchingService {
       appleIdMasked: account.appleIdMasked,
       country: account.countryOption,
       status: account.statusOption,
-      currentBalance: account.currentBalance.toString(),
-      balanceCostAmount: account.balanceCostAmount.toString(),
-      estimatedBalanceCostAmount: consumption.costAmount.toString(),
-      averageCost: this.balanceCalculator
-        .calculateAverageCost(account.currentBalance, account.balanceCostAmount)
-        .toString(),
-      purchaseCost: account.purchaseCost.toString(),
-      balanceAfterMatch: account.currentBalance.minus(requiredBalance).toString(),
+      currentBalance: toV2DecimalString(account.currentBalance),
+      balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
+      estimatedBalanceCostAmount: toV2DecimalString(consumption.costAmount),
+      averageCost: toV2DecimalString(
+        this.balanceCalculator.calculateAverageCost(
+          account.currentBalance,
+          account.balanceCostAmount
+        )
+      ),
+      purchaseCost: toV2DecimalString(account.purchaseCost),
+      balanceAfterMatch: toV2DecimalString(
+        account.currentBalance.minus(requiredBalance.toString())
+      ),
       updatedAt: account.updatedAt
     };
   }

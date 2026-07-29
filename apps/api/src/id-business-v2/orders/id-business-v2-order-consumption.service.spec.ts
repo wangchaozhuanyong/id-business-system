@@ -28,6 +28,7 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     accountId,
     receivedAmount: decimal('100'),
     platformFeeAmount: decimal('3'),
+    accountDisposition: 'retained',
     accountCostAmount: decimal('0'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('0'),
@@ -45,6 +46,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     currentBalance: decimal('30'),
     balanceCostAmount: decimal('90'),
     purchaseCost: decimal('25'),
+    soldByOrderId: null,
     countryOptionId: '77777777-7777-4777-8777-777777777777',
     statusCode: 'normal',
     ...overrides
@@ -212,7 +214,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         id: orderId
       },
       data: {
-        accountCostAmount: decimal('25'),
+        accountCostAmount: decimal('0'),
         balanceCostAmount: decimal('60'),
         profitAmount: decimal('37'),
         status: 'processing',
@@ -240,7 +242,19 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     });
   });
 
-  it('stores ID purchase cost as an asset snapshot without charging it again in every order profit', async () => {
+  it('keeps a retained ID purchase-cost snapshot without charging it in order profit', async () => {
+    orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
+      idempotentReplay: false,
+      idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
+      order: makeOrder({
+        accountCostAmount: decimal('25')
+      }),
+      account: makeAccount(),
+      activeLock: {
+        id: lockId
+      },
+      existingEntry: null
+    });
     await service.consume(orderId, {
       idempotencyKey: 'consume-request-1'
     });
@@ -249,6 +263,32 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     expect(orderUpdate.data.accountCostAmount.toString()).toBe('25');
     expect(orderUpdate.data.profitAmount.toString()).toBe('37');
     expect(orderUpdate.data.profitAmount.toString()).not.toBe('12');
+  });
+
+  it('charges the stored ID purchase-cost snapshot when the ID is sold', async () => {
+    orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
+      idempotentReplay: false,
+      idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
+      order: makeOrder({
+        accountDisposition: 'sold',
+        accountCostAmount: decimal('25')
+      }),
+      account: makeAccount({
+        soldByOrderId: orderId
+      }),
+      activeLock: {
+        id: lockId
+      },
+      existingEntry: null
+    });
+
+    await service.consume(orderId, {
+      idempotencyKey: 'consume-request-1'
+    });
+
+    const orderUpdate = tx.idBusinessV2Order.update.mock.calls[0]?.[0];
+    expect(orderUpdate.data.accountCostAmount.toString()).toBe('25');
+    expect(orderUpdate.data.profitAmount.toString()).toBe('12');
   });
 
   it('allows a real negative profit and records it instead of claiming success with zero', async () => {

@@ -23,6 +23,7 @@ function createDeferred<T>() {
 
 afterEach(() => {
   clearV2QueryCache();
+  vi.useRealTimers();
 });
 
 describe('V2 query cache', () => {
@@ -36,9 +37,9 @@ describe('V2 query cache', () => {
     const deferred = createDeferred<{ items: string[] }>();
     const query = vi.fn(() => deferred.promise);
     const options = {
-      scope: 'orders',
+      scope: 'orders' as const,
       key: 'page-1',
-      tier: 'critical' as const,
+      freshnessPolicy: 'event-driven' as const,
       query
     };
 
@@ -67,7 +68,7 @@ describe('V2 query cache', () => {
       useV2Query({
         scope: 'orders',
         key: () => key.value,
-        tier: 'critical',
+        freshnessPolicy: 'event-driven',
         query,
         keepPreviousData: true
       })
@@ -97,7 +98,7 @@ describe('V2 query cache', () => {
     const pending = fetchV2Query({
       scope: 'renewals',
       key: 'page-1',
-      tier: 'critical',
+      freshnessPolicy: 'event-driven',
       query: () => deferred.promise
     });
     await Promise.resolve();
@@ -111,7 +112,7 @@ describe('V2 query cache', () => {
       fetchV2Query({
         scope: 'renewals',
         key: 'page-1',
-        tier: 'critical',
+        freshnessPolicy: 'event-driven',
         query: async () => 'fresh-result'
       })
     ).resolves.toBe('fresh-result');
@@ -146,7 +147,7 @@ describe('V2 query cache', () => {
       useV2Query({
         scope: 'customers',
         key: 'page-1',
-        tier: 'operational',
+        freshnessPolicy: 'event-driven',
         query
       })
     );
@@ -169,5 +170,120 @@ describe('V2 query cache', () => {
     notifyAuthIdentityChanged('identity-switched');
 
     expect(getV2QueryData('orders', 'page-1')).toBeUndefined();
+  });
+
+  it('keeps a clean cache hit indefinitely instead of expiring after the old TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-29T00:00:00.000Z'));
+    const query = vi.fn(async () => ({ items: ['order-1'] }));
+    const options = {
+      scope: 'orders' as const,
+      key: 'page-1',
+      freshnessPolicy: 'event-driven' as const,
+      query
+    };
+
+    await fetchV2Query(options);
+    vi.setSystemTime(new Date('2026-07-29T01:00:00.000Z'));
+    await fetchV2Query(options);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('refreshes an active invalidated scope but only marks an inactive scope dirty', async () => {
+    vi.useFakeTimers();
+    const activeQuery = vi.fn(async () => ({ items: ['active'] }));
+    const inactiveQuery = vi.fn(async () => ({ items: ['inactive'] }));
+    const scope = effectScope();
+    const active = scope.run(() =>
+      useV2Query({
+        scope: 'orders',
+        key: 'active',
+        freshnessPolicy: 'event-driven',
+        query: activeQuery
+      })
+    );
+    await active?.ensureFresh();
+    await fetchV2Query({
+      scope: 'customers',
+      key: 'inactive',
+      freshnessPolicy: 'event-driven',
+      query: inactiveQuery
+    });
+
+    invalidateV2Queries(['orders', 'customers']);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(activeQuery).toHaveBeenCalledTimes(2);
+    expect(inactiveQuery).toHaveBeenCalledTimes(1);
+
+    await fetchV2Query({
+      scope: 'customers',
+      key: 'inactive',
+      freshnessPolicy: 'event-driven',
+      query: inactiveQuery
+    });
+    expect(inactiveQuery).toHaveBeenCalledTimes(2);
+    scope.stop();
+    vi.useRealTimers();
+  });
+
+  it('invalidates an active deadline query only when revalidateAt arrives', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-29T00:00:00.000Z'));
+    const query = vi.fn(async () => ({
+      items: ['renewal'],
+      revalidateAt: new Date(Date.now() + 1_000).toISOString()
+    }));
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({
+        scope: 'renewals',
+        key: 'deadline',
+        freshnessPolicy: 'event-with-deadline',
+        getRevalidateAt: (data) => data.revalidateAt,
+        query
+      })
+    );
+    await result?.ensureFresh();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(query).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(query).toHaveBeenCalledTimes(2);
+
+    scope.stop();
+    vi.useRealTimers();
+  });
+
+  it('keeps stale data after a refresh failure without entering an automatic retry loop', async () => {
+    vi.useFakeTimers();
+    primeV2Query({
+      scope: 'orders',
+      key: 'failed-refresh',
+      data: { items: ['last-success'] }
+    });
+    const query = vi.fn(async () => {
+      throw new Error('network failed');
+    });
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({
+        scope: 'orders',
+        key: 'failed-refresh',
+        freshnessPolicy: 'event-driven',
+        query
+      })
+    );
+
+    invalidateV2Queries('orders');
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(result?.data.value).toEqual({ items: ['last-success'] });
+    expect(result?.error.value).toBeInstanceOf(Error);
+    scope.stop();
+    vi.useRealTimers();
   });
 });

@@ -1,4 +1,5 @@
 import { accountsFeature } from '@/v2/features/accounts/manifest';
+import { accountLossesFeature } from '@/v2/features/account-losses/manifest';
 import { activationsFeature } from '@/v2/features/activations/manifest';
 import { customersFeature } from '@/v2/features/customers/manifest';
 import { exchangeRatesFeature } from '@/v2/features/exchange-rates/manifest';
@@ -18,6 +19,7 @@ export const v2FeatureRegistry = [
   ordersFeature,
   customersFeature,
   topupRecordsFeature,
+  accountLossesFeature,
   activationsFeature,
   exchangeRatesFeature,
   optionsFeature

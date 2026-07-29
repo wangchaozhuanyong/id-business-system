@@ -1,14 +1,15 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const topupWorkbenchFeature = defineV2Feature({
   key: 'topup-workbench',
-  title: '加卡',
+  title: 'ID加额',
   group: '工作台',
   route: '/v2/workbench/topups',
   sourceSheet: '工作台-加卡',
   permission: 'apple.balance.view',
   kind: 'list',
-  loadingTier: 'critical',
+  freshnessPolicy: 'event-driven',
   filters: [
     { key: 'country', label: '国家', kind: 'select', options: ['美国', '马来西亚'] },
     {
@@ -30,7 +31,12 @@ export const topupWorkbenchFeature = defineV2Feature({
     { key: 'updatedAt', label: '更新时间', minWidth: 160 },
     { key: 'currentServices', label: '当前业务', minWidth: 160 },
     { key: 'status', label: 'ID 状态', minWidth: 110 },
-    { key: 'actions', label: '操作', minWidth: 100, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2TopupWorkbenchView.vue')
 });

@@ -4,4 +4,5 @@ export interface ReverseIdBusinessV2GiftCardDto {
   action: IdBusinessV2GiftCardReversalAction;
   reason: string;
   idempotencyKey: string;
+  reportAccountLoss?: boolean;
 }

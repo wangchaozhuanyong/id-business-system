@@ -77,4 +77,5 @@ export interface V2ActivationListQuery extends V2PageQuery {
 
 export interface V2ActivationListResult extends PaginatedResult<V2Activation> {
   evaluatedAt: string;
+  revalidateAt: string | null;
 }

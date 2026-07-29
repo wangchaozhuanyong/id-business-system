@@ -1,14 +1,20 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
+import {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderAccountDisposition,
+  Prisma as PrismaNamespace
+} from '@prisma/client';
 import type { IdBusinessV2AccountLock, IdBusinessV2Order, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
+import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
 
 export interface NormalizedCreateOrderInput {
   customerId: string;
   serviceOptionId: string;
   accountId: string;
+  accountDisposition: IdBusinessV2OrderAccountDisposition;
   settlementPlatformOptionId: string | null;
   platformOrderNo: string | null;
   websiteAccount: string | null;
@@ -36,7 +42,6 @@ export interface OrderEntryLockSummary {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const DECIMAL_PATTERN = /^\d+(\.\d{1,4})?$/;
 const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
 
 export function normalizeCreateOrderInput(
@@ -46,6 +51,7 @@ export function normalizeCreateOrderInput(
   const customerId = normalizeUuid(dto.customerId, '客户');
   const serviceOptionId = normalizeUuid(dto.serviceOptionId, '业务');
   const accountId = normalizeUuid(dto.accountId, '使用 ID');
+  const accountDisposition = normalizeAccountDisposition(dto.accountDisposition);
   const settlementPlatformOptionId = normalizeOptionalUuid(
     dto.settlementPlatformOptionId,
     '结算平台'
@@ -71,6 +77,7 @@ export function normalizeCreateOrderInput(
     customerId,
     serviceOptionId,
     accountId,
+    accountDisposition,
     settlementPlatformOptionId,
     platformOrderNo,
     websiteAccount,
@@ -79,7 +86,10 @@ export function normalizeCreateOrderInput(
     balanceAmount,
     openedAt,
     dueAt,
-    lockScope: normalizeLockScope(dto.lockScope),
+    lockScope:
+      accountDisposition === IdBusinessV2OrderAccountDisposition.sold
+        ? IdBusinessV2AccountLockScope.global
+        : normalizeLockScope(dto.lockScope),
     idempotencyKey: buildIdempotencyKey(normalizeIdempotencyKey(dto.idempotencyKey)),
     remark: normalizeOptionalString(dto.remark, '备注', 2000)
   };
@@ -95,7 +105,7 @@ export function calculatePlatformFee(
   if (!platform) return new PrismaNamespace.Decimal(0);
   const platformFeeAmount = platform.fixedFee
     .plus(receivedAmount.mul(platform.percentageFee).div(100))
-    .toDecimalPlaces(4);
+    .toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE);
   if (platformFeeAmount.greaterThan(MAX_AMOUNT)) {
     throw new BadRequestException('平台手续费数值过大');
   }
@@ -114,6 +124,7 @@ export function assertOrderEntryReplayMatches(
     order.customerId !== input.customerId ||
     order.serviceOptionId !== input.serviceOptionId ||
     order.accountId !== input.accountId ||
+    order.accountDisposition !== input.accountDisposition ||
     order.settlementPlatformOptionId !== input.settlementPlatformOptionId ||
     order.platformOrderNo !== input.platformOrderNo ||
     order.websiteAccountHash !== input.websiteAccountHash ||
@@ -153,6 +164,8 @@ export async function writeOrderEntryAuditLog(
         customerId: input.customerId,
         serviceOptionId: input.serviceOptionId,
         accountId: input.accountId,
+        accountDisposition: input.accountDisposition,
+        accountCostAmount: order.accountCostAmount.toString(),
         settlementPlatformOptionId: input.settlementPlatformOptionId,
         platformOrderNo: input.platformOrderNo,
         websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
@@ -240,8 +253,8 @@ function normalizeOptionalUuid(value: unknown, label: string) {
 function normalizeAmount(value: unknown, label: string, allowZero: boolean) {
   const normalized =
     typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-  if (!DECIMAL_PATTERN.test(normalized)) {
-    throw new BadRequestException(`${label}必须是最多 4 位小数的非负数`);
+  if (!V2_DECIMAL_PATTERN.test(normalized)) {
+    throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
   }
   const amount = new PrismaNamespace.Decimal(normalized);
   if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {
@@ -271,6 +284,16 @@ function normalizeLockScope(value: unknown): IdBusinessV2AccountLockScope {
     return value;
   }
   throw new BadRequestException('锁定范围无效');
+}
+
+function normalizeAccountDisposition(value: unknown): IdBusinessV2OrderAccountDisposition {
+  if (value === IdBusinessV2OrderAccountDisposition.retained) {
+    return IdBusinessV2OrderAccountDisposition.retained;
+  }
+  if (value === IdBusinessV2OrderAccountDisposition.sold) {
+    return IdBusinessV2OrderAccountDisposition.sold;
+  }
+  throw new BadRequestException('ID 处理方式必须选择保留或卖出');
 }
 
 function normalizeIdempotencyKey(value: unknown) {

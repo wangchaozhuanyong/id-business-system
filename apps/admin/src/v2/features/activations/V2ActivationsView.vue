@@ -109,16 +109,14 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="112" fixed="right">
+          <V2TableActionColumn layout="single">
             <template #default="{ row }">
-              <div class="v2-record-actions">
-                <AppButton size="small" variant="ghost" @click="openDetail(row)">
-                  <el-icon><View /></el-icon>
-                  详情
-                </AppButton>
-              </div>
+              <AppButton size="small" variant="ghost" @click="openDetail(row)">
+                <el-icon><View /></el-icon>
+                详情
+              </AppButton>
             </template>
-          </el-table-column>
+          </V2TableActionColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -261,6 +259,7 @@ import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query'
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2StatusStrip, { type V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import type {
   V2Activation,
   V2ActivationDueStatus,
@@ -308,6 +307,7 @@ const activationQuery = useV2ModuleQuery<V2ActivationListResult>({
   scope: 'activations',
   key: () => createV2QueryKey(getActivationListQuery()),
   keepPreviousData: true,
+  getRevalidateAt: (result) => result.revalidateAt,
   query: ({ signal }) => idBusinessV2ActivationsApi.list(getActivationListQuery(), { signal })
 });
 const items = computed(() => activationQuery.data.value?.items ?? []);

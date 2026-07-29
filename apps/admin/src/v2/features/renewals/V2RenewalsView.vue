@@ -180,7 +180,7 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="126" fixed="right">
+          <V2TableActionColumn layout="single">
             <template #default="{ row }">
               <el-tooltip
                 :disabled="!renewalActionDisabledReason(row)"
@@ -202,7 +202,7 @@
                 </span>
               </el-tooltip>
             </template>
-          </el-table-column>
+          </V2TableActionColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -380,6 +380,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2StatusStrip from '@/v2/components/V2StatusStrip.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2RenewalOrderDrawer from './components/V2RenewalOrderDrawer.vue';
 import { useRenewalsPage } from './useRenewalsPage';
 import '@/v2/styles/records.css';

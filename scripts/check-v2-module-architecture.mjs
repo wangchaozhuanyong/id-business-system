@@ -8,6 +8,7 @@ const backendRoot = 'apps/api/src/id-business-v2';
 const issues = [];
 
 const expectedFeatures = [
+  'account-losses',
   'accounts',
   'activations',
   'customers',
@@ -23,6 +24,7 @@ const expectedBackendDomains = [
   'accounts',
   'activations',
   'balances',
+  'change-sync',
   'customers',
   'exchange-rates',
   'gift-cards',
@@ -119,7 +121,7 @@ function checkFrontendFeatures() {
       'group',
       'sourceSheet',
       'kind',
-      'loadingTier',
+      'freshnessPolicy',
       'filters',
       'columns'
     ]) {

@@ -32,6 +32,7 @@ function makeDto(overrides: Record<string, unknown> = {}) {
     platformOrderNo: 'PLATFORM-1001',
     websiteAccount: 'customer@example.com',
     receivedAmount: '100',
+    accountDisposition: 'retained',
     balanceAmount: '20',
     openedAt: openedAt.toISOString(),
     dueAt: dueAt.toISOString(),
@@ -78,6 +79,7 @@ function makeStoredOrder(overrides: Record<string, unknown> = {}) {
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('100'),
     platformFeeAmount: decimal('3'),
+    accountDisposition: 'retained',
     accountCostAmount: decimal('0'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('0'),
@@ -100,6 +102,7 @@ function makeStoredOrder(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2OrderEntryService', () => {
   const tx = {
+    $queryRaw: vi.fn(),
     idBusinessV2Customer: {
       findFirst: vi.fn()
     },
@@ -108,7 +111,13 @@ describe('IdBusinessV2OrderEntryService', () => {
     },
     idBusinessV2Order: {
       findUnique: vi.fn(),
-      create: vi.fn()
+      findUniqueOrThrow: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn()
+    },
+    idBusinessV2Account: {
+      findUnique: vi.fn(),
+      update: vi.fn()
     },
     auditLog: {
       create: vi.fn()
@@ -165,6 +174,20 @@ describe('IdBusinessV2OrderEntryService', () => {
       }
     );
     tx.idBusinessV2Order.create.mockResolvedValue(makeStoredOrder({ accountId: null }));
+    tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValue(makeStoredOrder());
+    tx.$queryRaw.mockResolvedValue([
+      {
+        id: accountId,
+        purchaseCost: decimal('25'),
+        soldByOrderId: null
+      }
+    ]);
+    tx.idBusinessV2Account.findUnique.mockResolvedValue({
+      purchaseCost: decimal('25'),
+      soldByOrderId: null
+    });
+    tx.idBusinessV2Account.update.mockResolvedValue({});
+    tx.idBusinessV2Order.update.mockResolvedValue({});
     orderLockService.reserveAccountForOrderInTransaction.mockResolvedValue({
       order: {
         id: orderId,
@@ -215,6 +238,7 @@ describe('IdBusinessV2OrderEntryService', () => {
         websiteAccountMasked: 'cu***@example.com',
         receivedAmount: decimal('100'),
         platformFeeAmount: decimal('3'),
+        accountDisposition: 'retained',
         accountCostAmount: 0,
         balanceAmount: decimal('20'),
         balanceCostAmount: 0,
@@ -237,6 +261,14 @@ describe('IdBusinessV2OrderEntryService', () => {
       },
       operator
     );
+    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith({
+      where: { id: orderId },
+      data: expect.objectContaining({
+        accountDisposition: 'retained',
+        accountCostAmount: 0
+      })
+    });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
     const auditPayload = tx.auditLog.create.mock.calls[0]?.[0];
     expect(JSON.stringify(auditPayload)).not.toContain('customer@example.com');
@@ -254,6 +286,66 @@ describe('IdBusinessV2OrderEntryService', () => {
       },
       idempotentReplay: false,
       nextStep: 'waiting_balance_consumption'
+    });
+  });
+
+  it('globally occupies a sold ID and snapshots its purchase cost in the same transaction', async () => {
+    tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValueOnce(
+      makeStoredOrder({
+        accountDisposition: 'sold',
+        accountCostAmount: decimal('25')
+      })
+    );
+    orderLockService.reserveAccountForOrderInTransaction.mockResolvedValueOnce({
+      order: {
+        id: orderId,
+        orderNo: 'V220300726ABCDEF123456',
+        serviceOptionId
+      },
+      account: {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        currentBalance: '30',
+        balanceCostAmount: '180'
+      },
+      lock: {
+        id: lockId,
+        serviceOptionId: null,
+        lockScope: 'global',
+        status: 'active',
+        lockedAt: openedAt,
+        expiresAt: dueAt,
+        endedAt: null,
+        endReason: null,
+        reason: '订单录入'
+      },
+      idempotentReplay: false
+    });
+
+    await service.create(makeDto({ accountDisposition: 'sold' }), operator);
+
+    expect(orderLockService.reserveAccountForOrderInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        orderId,
+        accountId,
+        lockScope: 'global'
+      }),
+      operator
+    );
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
+      where: { id: accountId },
+      data: expect.objectContaining({
+        soldByOrderId: orderId,
+        soldAt: expect.any(Date)
+      })
+    });
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith({
+      where: { id: orderId },
+      data: expect.objectContaining({
+        accountDisposition: 'sold',
+        accountCostAmount: decimal('25')
+      })
     });
   });
 
@@ -329,7 +421,7 @@ describe('IdBusinessV2OrderEntryService', () => {
     await expect(
       service.create(
         makeDto({
-          receivedAmount: '99999999999999.9999'
+          receivedAmount: '99999999999999.999'
         }),
         operator
       )

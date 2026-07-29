@@ -29,11 +29,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Chromium for layout acceptance
+        run: npx playwright install --with-deps chromium
+
       - name: Check formatting
         run: npm run format:check
 
       - name: Lint
         run: npm run lint
+
+      - name: Check admin UI guardrails
+        run: npm run check:admin-ui
+
+      - name: Check V2 table standard
+        run: npm run check:v2-table-standard
+
+      - name: Verify V2 table action layouts
+        run: npm run acceptance:v2-table-layout
 
       - name: Check V2 loading standard
         run: npm run check:v2-loading-standard

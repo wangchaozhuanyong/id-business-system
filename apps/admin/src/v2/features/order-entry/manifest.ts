@@ -8,7 +8,7 @@ export const orderEntryFeature = defineV2Feature({
   sourceSheet: '工作台-订单录入',
   permission: 'apple.order.create',
   kind: 'form',
-  loadingTier: 'reference',
+  freshnessPolicy: 'event-with-deadline',
   keepAlive: true,
   filters: [],
   columns: [],

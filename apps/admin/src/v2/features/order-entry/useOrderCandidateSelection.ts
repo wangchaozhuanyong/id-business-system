@@ -58,7 +58,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
         balanceAmount: form.balanceAmount.trim(),
         limit: 50
       }),
-    tier: 'critical',
+    freshnessPolicy: 'event-with-deadline',
+    getRevalidateAt: (result) => result.revalidateAt,
     keepPreviousData: false,
     query: ({ signal }) =>
       idBusinessV2OrdersApi.findMatchingCandidates(
@@ -79,7 +80,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
         keyword: manualSearchKeyword.value.trim(),
         limit: 50
       }),
-    tier: 'critical',
+    freshnessPolicy: 'event-with-deadline',
+    getRevalidateAt: (result) => result.revalidateAt,
     keepPreviousData: true,
     query: ({ signal }) =>
       idBusinessV2OrdersApi.searchManualCandidates(

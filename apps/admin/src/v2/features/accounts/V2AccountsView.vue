@@ -37,6 +37,16 @@
           :value="option.id"
         />
       </el-select>
+      <el-select
+        v-model="page.query.saleState"
+        clearable
+        placeholder="全部销售状态"
+        aria-label="筛选销售状态"
+        @change="page.handleFilterChange"
+      >
+        <el-option label="可用" value="available" />
+        <el-option label="已卖出" value="sold" />
+      </el-select>
       <V2FilterDisclosure>
         <el-select
           v-model="page.query.supplierOptionId"
@@ -143,6 +153,16 @@
               <strong class="v2-table-cell">{{ row.appleIdMasked }}</strong>
             </template>
           </el-table-column>
+          <el-table-column label="销售状态" min-width="130">
+            <template #default="{ row }">
+              <el-tag :type="row.saleState === 'sold' ? 'danger' : 'success'" effect="plain">
+                {{ row.saleState === 'sold' ? '已卖出' : '可用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源订单" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.soldByOrder?.orderNo || '-' }}</template>
+          </el-table-column>
           <el-table-column label="国家" min-width="110">
             <template #default="{ row }">{{ row.country.name }}</template>
           </el-table-column>
@@ -165,8 +185,17 @@
           </el-table-column>
           <el-table-column label="ID 状态" min-width="110">
             <template #default="{ row }">
-              <el-tag :type="row.status.code === 'normal' ? 'success' : 'warning'" effect="plain">
-                {{ row.status.name }}
+              <el-tag
+                :type="
+                  row.lossStatus === 'reported'
+                    ? 'danger'
+                    : row.status.code === 'normal'
+                      ? 'success'
+                      : 'warning'
+                "
+                effect="plain"
+              >
+                {{ row.lossStatus === 'reported' ? '已报损（冻结）' : row.status.name }}
               </el-tag>
             </template>
           </el-table-column>
@@ -180,20 +209,23 @@
           <el-table-column prop="updatedAt" label="更新时间" min-width="165" sortable="custom">
             <template #default="{ row }">{{ page.formatDate(row.updatedAt) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="232" fixed="right">
+          <V2TableActionColumn layout="triple">
             <template #default="{ row }">
               <V2AccountRowActions
                 :record-status="row.recordStatus"
+                :loss-reported="row.lossStatus === 'reported'"
                 :can-view-sensitive="canOpenSensitiveAccess(row)"
-                :can-update="page.canUpdate"
-                :can-delete="page.canDelete"
+                :can-update="page.canUpdate && row.lossStatus !== 'reported'"
+                :can-delete="page.canDelete && row.lossStatus !== 'reported'"
+                :can-report-loss="page.canReportLoss"
                 @view-sensitive="page.openSensitiveAccess(row)"
                 @edit="page.openEdit(row)"
                 @toggle-status="page.toggleStatus(row)"
+                @report-loss="page.openReportLoss(row)"
                 @delete="page.openDelete(row)"
               />
             </template>
-          </el-table-column>
+          </V2TableActionColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -203,14 +235,39 @@
                 <strong>{{ item.appleIdMasked }}</strong>
                 <span>{{ item.country.name }} / {{ item.supplier?.name || '未设置供应商' }}</span>
               </div>
-              <el-tag :type="item.recordStatus === 'active' ? 'success' : 'info'" effect="plain">
-                {{ item.recordStatus === 'active' ? '启用' : '停用' }}
+              <el-tag
+                :type="
+                  item.lossStatus === 'reported'
+                    ? 'danger'
+                    : item.recordStatus === 'active'
+                      ? 'success'
+                      : 'info'
+                "
+                effect="plain"
+              >
+                {{
+                  item.lossStatus === 'reported'
+                    ? '已报损（冻结）'
+                    : item.recordStatus === 'active'
+                      ? '启用'
+                      : '停用'
+                }}
               </el-tag>
             </header>
             <dl>
               <div>
                 <dt>ID 状态</dt>
-                <dd>{{ item.status.name }}</dd>
+                <dd>
+                  {{ item.lossStatus === 'reported' ? '已报损（冻结）' : item.status.name }}
+                </dd>
+              </div>
+              <div>
+                <dt>销售状态</dt>
+                <dd>{{ item.saleState === 'sold' ? '已卖出' : '可用' }}</dd>
+              </div>
+              <div>
+                <dt>来源订单</dt>
+                <dd>{{ item.soldByOrder?.orderNo || '-' }}</dd>
               </div>
               <div>
                 <dt>手机号</dt>
@@ -250,12 +307,15 @@
             <footer>
               <V2AccountRowActions
                 :record-status="item.recordStatus"
+                :loss-reported="item.lossStatus === 'reported'"
                 :can-view-sensitive="canOpenSensitiveAccess(item)"
-                :can-update="page.canUpdate"
-                :can-delete="page.canDelete"
+                :can-update="page.canUpdate && item.lossStatus !== 'reported'"
+                :can-delete="page.canDelete && item.lossStatus !== 'reported'"
+                :can-report-loss="page.canReportLoss"
                 @view-sensitive="page.openSensitiveAccess(item)"
                 @edit="page.openEdit(item)"
                 @toggle-status="page.toggleStatus(item)"
+                @report-loss="page.openReportLoss(item)"
                 @delete="page.openDelete(item)"
               />
             </footer>
@@ -296,6 +356,7 @@ import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
 import V2AccountRowActions from './components/V2AccountRowActions.vue';
 import { useAccountsPage } from './useAccountsPage';

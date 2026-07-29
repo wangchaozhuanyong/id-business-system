@@ -113,7 +113,7 @@
                 {{ row.error ? page.failureLabel(row) : '-' }}
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="76" fixed="right">
+            <V2TableActionColumn layout="icon">
               <template #default="{ row }">
                 <AppButton
                   icon-only
@@ -125,7 +125,7 @@
                   <el-icon><View /></el-icon>
                 </AppButton>
               </template>
-            </el-table-column>
+            </V2TableActionColumn>
           </el-table>
 
           <div class="v2-exchange-mobile-list">
@@ -275,7 +275,7 @@
               <template #default="{ row }">{{ page.operatorName(row) }}</template>
             </el-table-column>
             <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
-            <el-table-column label="操作" width="76" fixed="right">
+            <V2TableActionColumn layout="icon">
               <template #default="{ row }">
                 <AppButton
                   icon-only
@@ -287,7 +287,7 @@
                   <el-icon><View /></el-icon>
                 </AppButton>
               </template>
-            </el-table-column>
+            </V2TableActionColumn>
           </el-table>
 
           <div class="v2-exchange-mobile-list">
@@ -366,6 +366,7 @@
 import { Search, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
 

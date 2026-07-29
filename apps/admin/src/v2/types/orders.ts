@@ -8,6 +8,8 @@ export type V2OrderStatus =
   | 'cancelled'
   | 'failed';
 
+export type V2OrderAccountDisposition = 'retained' | 'sold' | 'recovered';
+
 export interface V2OrderOption {
   id: string;
   code: string;
@@ -42,7 +44,9 @@ export interface V2Order {
   hasWebsiteAccount: boolean;
   receivedAmount: string;
   platformFeeAmount: string;
+  accountDisposition: V2OrderAccountDisposition;
   accountCostAmount: string;
+  appliedAccountCostAmount: string;
   balanceAmount: string;
   balanceCostAmount: string;
   refundCostAmount: string | null;
@@ -75,6 +79,7 @@ export interface V2OrderListQuery extends V2PageQuery {
   accountId?: string;
   settlementPlatformOptionId?: string;
   status?: V2OrderStatus | '';
+  accountDisposition?: V2OrderAccountDisposition | '';
   openedFrom?: string;
   openedTo?: string;
   sortBy?:
@@ -87,6 +92,7 @@ export interface V2OrderListQuery extends V2PageQuery {
     | 'profitAmount'
     | 'balanceAmount'
     | 'status'
+    | 'accountDisposition'
     | 'openedAt'
     | 'dueAt'
     | 'createdAt'
@@ -157,6 +163,7 @@ export interface V2OrderMatchingResult {
   };
   selectedCandidateId: string | null;
   items: V2OrderCandidate[];
+  revalidateAt: string | null;
 }
 
 export interface SearchV2OrderCandidatesInput {
@@ -174,6 +181,7 @@ export interface CreateV2OrderInput {
   platformOrderNo?: string | null;
   websiteAccount?: string | null;
   receivedAmount: string;
+  accountDisposition: Exclude<V2OrderAccountDisposition, 'recovered'>;
   balanceAmount: string;
   openedAt: string;
   dueAt: string;
@@ -247,6 +255,7 @@ export interface UpdateV2OrderInput {
   customerId?: string;
   serviceOptionId?: string;
   accountId?: string;
+  accountDisposition?: Exclude<V2OrderAccountDisposition, 'recovered'>;
   settlementPlatformOptionId?: string | null;
   platformOrderNo?: string | null;
   websiteAccount?: string | null;
@@ -264,6 +273,7 @@ export interface RefundV2OrderInput {
   refundCostAmount: string;
   reason: string;
   restoreBalance?: boolean;
+  accountReturned?: boolean;
   idempotencyKey: string;
 }
 

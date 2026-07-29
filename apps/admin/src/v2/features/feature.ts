@@ -8,12 +8,13 @@ export type V2ModuleKey =
   | 'orders'
   | 'customers'
   | 'topup-records'
+  | 'account-losses'
   | 'activation-records'
   | 'exchange-rates'
   | 'options';
 
 export type V2ModuleKind = 'list' | 'form';
-export type V2QueryTier = 'critical' | 'operational' | 'reference' | 'live';
+export type V2FreshnessPolicy = 'event-driven' | 'event-with-deadline';
 export type V2FilterKind = 'search' | 'select' | 'date-range' | 'number-range';
 export type V2ViewLoader = () => Promise<{ default: Component }>;
 
@@ -40,7 +41,7 @@ export interface V2FeatureManifest {
   sourceSheet: string;
   permission?: string;
   kind: V2ModuleKind;
-  loadingTier: V2QueryTier;
+  freshnessPolicy: V2FreshnessPolicy;
   keepAlive?: boolean;
   filters: readonly V2FilterDefinition[];
   columns: readonly V2TableColumnDefinition[];

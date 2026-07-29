@@ -18,6 +18,17 @@
   font-size: 12px;
 }
 
+.v2-order-edit-disposition {
+  display: grid;
+  gap: 3px;
+}
+
+.v2-order-edit-disposition small {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .v2-order-edit-clear {
   margin-top: 8px;
 }

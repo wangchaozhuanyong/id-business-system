@@ -71,10 +71,14 @@ export const idBusinessV2BalancesApi = {
         'balances',
         'balance-records',
         'accounts',
+        'account-losses',
+        'activations',
         'orders',
         'renewals',
+        'renewal-warning-summary',
         'order-entry-options',
-        'order-entry-matching'
+        'order-entry-matching',
+        'order-entry-manual-candidates'
       ]
     );
   },

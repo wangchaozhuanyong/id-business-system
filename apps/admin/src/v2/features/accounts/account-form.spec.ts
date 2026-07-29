@@ -12,7 +12,7 @@ describe('account balance exchange rate calculations', () => {
   });
 
   it('rounds RMB cost half up to four decimal places without floating point arithmetic', () => {
-    expect(calculateBalanceCost('1', '1.23455')).toBe('1.2346');
+    expect(calculateBalanceCost('1.0001', '1.5')).toBe('1.5002');
   });
 
   it('derives the exchange rate from an existing balance and RMB cost', () => {
@@ -20,8 +20,8 @@ describe('account balance exchange rate calculations', () => {
     expect(calculateExchangeRate('0', '0')).toBe('0');
   });
 
-  it('accepts at most eight decimal places for exchange rates', () => {
-    expect(isNonNegativeExchangeRate('5.70000001')).toBe(true);
-    expect(isNonNegativeExchangeRate('5.700000001')).toBe(false);
+  it('accepts at most four decimal places for exchange rates', () => {
+    expect(isNonNegativeExchangeRate('5.7001')).toBe(true);
+    expect(isNonNegativeExchangeRate('5.70001')).toBe(false);
   });
 });

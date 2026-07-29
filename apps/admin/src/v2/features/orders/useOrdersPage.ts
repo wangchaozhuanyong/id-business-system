@@ -1,7 +1,6 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { computed, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import type { TagProps } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from './api';
 import {
@@ -19,24 +18,22 @@ import type {
   V2OrderListQuery,
   V2OrderListResult,
   V2OptionSelector,
+  V2OrderAccountDisposition,
   V2OrderStatus
 } from './contracts';
 import { hasUserPermission } from '@/utils/permissions';
-
-const statusOptions: Array<{
-  value: V2OrderStatus;
-  label: string;
-  type: TagProps['type'];
-}> = [
-  { value: 'draft', label: '草稿', type: 'info' },
-  { value: 'pending', label: '待处理', type: 'warning' },
-  { value: 'waiting_external', label: '等待 Apple 执行', type: 'warning' },
-  { value: 'processing', label: '处理中', type: 'primary' },
-  { value: 'completed', label: '已完成', type: 'success' },
-  { value: 'refunded', label: '已退款', type: 'warning' },
-  { value: 'cancelled', label: '已取消', type: 'info' },
-  { value: 'failed', label: '失败', type: 'danger' }
-];
+import {
+  accountDispositionMeta,
+  accountDispositionOptions,
+  formatDate,
+  formatDecimal,
+  formatNullableDecimal,
+  lockScopeLabel,
+  profitClass,
+  selectorLabel,
+  statusMeta,
+  statusOptions
+} from './order-presentation';
 
 interface OrdersReferenceOptions {
   services: V2OptionSelector[];
@@ -81,6 +78,7 @@ export function useOrdersPage() {
     serviceOptionId: '',
     settlementPlatformOptionId: '',
     status: '' as V2OrderStatus | '',
+    accountDisposition: '' as V2OrderAccountDisposition | '',
     sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
@@ -92,6 +90,7 @@ export function useOrdersPage() {
       serviceOptionId: query.serviceOptionId || undefined,
       settlementPlatformOptionId: query.settlementPlatformOptionId || undefined,
       status: query.status || undefined,
+      accountDisposition: query.accountDisposition || undefined,
       openedFrom: openedRange.value[0] || undefined,
       openedTo: openedRange.value[1] || undefined
     };
@@ -107,7 +106,7 @@ export function useOrdersPage() {
       const cachedOptions = getV2QueryData<OrdersReferenceOptions>(
         ORDERS_OPTIONS_SCOPE,
         ORDERS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         return {
@@ -181,6 +180,7 @@ export function useOrdersPage() {
       'profitAmount',
       'balanceAmount',
       'status',
+      'accountDisposition',
       'openedAt',
       'dueAt',
       'createdAt',
@@ -249,14 +249,22 @@ export function useOrdersPage() {
     const order = refundingOrder.value;
     if (!order || !canUpdateOrders.value) return;
 
-    if (payload.restoreBalance) {
+    if (payload.restoreBalance || payload.accountReturned) {
       try {
         await ElMessageBox.confirm(
-          '该操作会真实增加 ID 余额并写入原消费的反向流水。只有确认业务没有开通时才能继续。',
-          `确认恢复订单 ${order.orderNo} 的余额`,
+          [
+            payload.restoreBalance ? '该操作会真实增加 ID 余额并写入原消费的反向流水。' : '',
+            payload.accountReturned
+              ? '该操作会解除 ID 的已卖出占用，并从本单利润中撤销 ID 成本。'
+              : '',
+            '请确认实际退款与 ID 收回情况一致。'
+          ]
+            .filter(Boolean)
+            .join(''),
+          `确认处理订单 ${order.orderNo} 的退款`,
           {
             type: 'warning',
-            confirmButtonText: '确认恢复并退款',
+            confirmButtonText: '确认退款',
             cancelButtonText: '返回核对'
           }
         );
@@ -485,53 +493,9 @@ export function useOrdersPage() {
     return key;
   }
 
-  function statusMeta(status: V2OrderStatus) {
-    return (
-      statusOptions.find((option) => option.value === status) ?? {
-        value: status,
-        label: status,
-        type: 'info' as const
-      }
-    );
-  }
-
-  function lockScopeLabel(value: 'by_service' | 'global') {
-    return value === 'global' ? '整个 ID' : '当前业务';
-  }
-
-  function selectorLabel(option: V2OptionSelector) {
-    return [option.country?.name, option.parent?.name, option.name].filter(Boolean).join(' / ');
-  }
-
-  function formatDecimal(value: string) {
-    const [integer, fraction = ''] = value.split('.');
-    const trimmedFraction = fraction.replace(/0+$/, '');
-    return trimmedFraction ? `${integer}.${trimmedFraction}` : integer;
-  }
-
-  function formatNullableDecimal(value: string | null) {
-    return value === null ? '-' : formatDecimal(value);
-  }
-
-  function profitClass(value: string | null) {
-    if (value === null || Number(value) === 0) return 'v2-order-money';
-    return Number(value) > 0 ? 'v2-order-profit--positive' : 'v2-order-profit--negative';
-  }
-
-  function formatDate(value: string | null) {
-    if (!value) return '-';
-    return new Intl.DateTimeFormat('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  }
-
   return {
     statusOptions,
+    accountDispositionOptions,
     items,
     total,
     loading,
@@ -576,6 +540,7 @@ export function useOrdersPage() {
     consumeOrderBalance,
     completeOrder,
     statusMeta,
+    accountDispositionMeta,
     lockScopeLabel,
     selectorLabel,
     formatDecimal,

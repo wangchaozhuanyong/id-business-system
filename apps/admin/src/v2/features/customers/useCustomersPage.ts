@@ -125,7 +125,7 @@ export function useCustomersPage() {
       const cachedOptions = getV2QueryData<CustomersReferenceOptions>(
         CUSTOMERS_OPTIONS_SCOPE,
         CUSTOMERS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         return {

@@ -10,6 +10,7 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2BalancesApi } from './api';
 import type {
   V2BalanceLedgerEntryType,
@@ -22,9 +23,9 @@ import type {
   V2GiftCardRecordListResult,
   V2GiftCardRecordSortBy,
   V2GiftCardRecordStatus,
-  V2GiftCardReversalAction,
   V2OptionSelector
 } from './contracts';
+import { useGiftCardReversal } from './useGiftCardReversal';
 
 type RecordsTab = 'giftCards' | 'ledger';
 
@@ -59,6 +60,9 @@ export function useTopupRecordsPage() {
   const canAdjustBalance = computed(() =>
     hasUserPermission(authStore.user, 'apple.balance.adjust')
   );
+  const canReportAccountLoss = computed(
+    () => canAdjustBalance.value && hasUserPermission(authStore.user, 'apple.account.update')
+  );
   const activeTab = ref<RecordsTab>(readRecordsTab(route.query.tab));
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2OptionSelector[]>([]);
@@ -71,14 +75,6 @@ export function useTopupRecordsPage() {
   const metadataDrawerVisible = ref(false);
   const metadataSubmitting = ref(false);
   const selectedGiftCard = ref<V2GiftCardRecord | null>(null);
-  const reversalDialogVisible = ref(false);
-  const reversalSubmitting = ref(false);
-  const pendingReversal = ref<{
-    giftCard: V2GiftCardRecord;
-    action: V2GiftCardReversalAction;
-  } | null>(null);
-  const reversalReason = ref('');
-  const reversalIdempotencyKey = ref('');
 
   const filters = reactive({
     keyword: '',
@@ -147,7 +143,7 @@ export function useTopupRecordsPage() {
       const cachedOptions = getV2QueryData<RecordsReferenceOptions>(
         RECORDS_OPTIONS_SCOPE,
         RECORDS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (!cachedOptions) {
         const result = await idBusinessV2BalancesApi.bootstrapRecords(params, { signal });
@@ -206,25 +202,16 @@ export function useTopupRecordsPage() {
     activeTab.value === 'giftCards' ? giftCardResolved.value : ledgerResolved.value
   );
   const { isInitialLoading } = recordsQuery;
-  const reversalDialogTitle = computed(() =>
-    pendingReversal.value?.action === 'redeemed' ? '确认标记被赎回' : '确认撤回礼品卡'
-  );
-  const reversalConfirmText = computed(() =>
-    pendingReversal.value?.action === 'redeemed' ? '确认被赎回并扣减' : '确认撤回并扣减'
-  );
-  const reversalMessage = computed(() => {
-    const pending = pendingReversal.value;
-    if (!pending) return '';
-    const actionLabel = pending.action === 'redeemed' ? '标记为被赎回' : '撤回';
-    return `确认将 ${pending.giftCard.codeMasked} ${actionLabel}，并从 ${
-      pending.giftCard.account.appleIdMasked
-    } 扣减余额 ${formatDecimal(pending.giftCard.faceValue)}。`;
-  });
 
   async function loadGiftCards() {
     if (activeTab.value !== 'giftCards') return;
     await recordsQuery.refresh();
   }
+  const giftCardReversal = useGiftCardReversal({
+    canAdjustBalance,
+    canReportAccountLoss,
+    reloadGiftCards: loadGiftCards
+  });
 
   async function loadBalanceLedger() {
     if (activeTab.value !== 'ledger') return;
@@ -378,43 +365,6 @@ export function useTopupRecordsPage() {
     }
   }
 
-  function openReversalConfirmation(giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction) {
-    if (!canAdjustBalance.value || giftCard.status !== 'credited') return;
-    pendingReversal.value = { giftCard, action };
-    reversalReason.value = '';
-    reversalIdempotencyKey.value = globalThis.crypto.randomUUID();
-    reversalDialogVisible.value = true;
-  }
-
-  async function submitReversal() {
-    const pending = pendingReversal.value;
-    const reason = reversalReason.value.trim();
-    if (!pending || reason.length < 2 || reversalSubmitting.value) return;
-
-    reversalSubmitting.value = true;
-    try {
-      const result = await idBusinessV2BalancesApi.reverseGiftCard(pending.giftCard.id, {
-        action: pending.action,
-        reason,
-        idempotencyKey: reversalIdempotencyKey.value
-      });
-      ElMessage.success(
-        result.idempotentReplay
-          ? '该反向请求已经完成，未重复扣减'
-          : result.action === 'redeemed'
-            ? '礼品卡已标记被赎回，反向流水已生成'
-            : '礼品卡已撤回，反向流水已生成'
-      );
-      reversalDialogVisible.value = false;
-      pendingReversal.value = null;
-      await loadGiftCards();
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      reversalSubmitting.value = false;
-    }
-  }
-
   function giftCardRowNumber(index: number) {
     return (giftCardQuery.page - 1) * giftCardQuery.pageSize + index + 1;
   }
@@ -443,11 +393,13 @@ export function useTopupRecordsPage() {
       order_consumption: '订单扣减',
       order_consumption_reversal: '订单退款恢复',
       opening_balance: '期初余额',
-      manual_adjustment: '手工修正'
+      manual_adjustment: '手工修正',
+      account_loss: 'ID 永久报损'
     }[entryType];
   }
 
   function ledgerTypeTag(entryType: V2BalanceLedgerEntryType) {
+    if (entryType === 'account_loss') return 'danger';
     return entryType === 'gift_card_credit' || entryType === 'opening_balance'
       ? 'success'
       : entryType === 'gift_card_redeemed' || entryType === 'order_consumption'
@@ -477,11 +429,8 @@ export function useTopupRecordsPage() {
     return value === undefined ? '-' : formatDecimal(value);
   }
 
-  function formatDecimal(value: string, maximumFractionDigits = 4) {
-    const number = Number(value);
-    return Number.isFinite(number)
-      ? number.toLocaleString('zh-CN', { maximumFractionDigits })
-      : value;
+  function formatDecimal(value: string) {
+    return formatV2Decimal(value);
   }
 
   function formatDate(value: string) {
@@ -528,9 +477,6 @@ export function useTopupRecordsPage() {
     metadataDrawerVisible,
     metadataSubmitting,
     selectedGiftCard,
-    reversalDialogVisible,
-    reversalSubmitting,
-    reversalReason,
     filters,
     giftCardQuery,
     ledgerQuery,
@@ -538,9 +484,6 @@ export function useTopupRecordsPage() {
     activeLoading,
     activeError,
     activeResolved,
-    reversalDialogTitle,
-    reversalConfirmText,
-    reversalMessage,
     isInitialLoading,
     loadGiftCards,
     loadBalanceLedger,
@@ -558,8 +501,7 @@ export function useTopupRecordsPage() {
     handleLedgerSortChange,
     openMetadataDrawer,
     submitMetadata,
-    openReversalConfirmation,
-    submitReversal,
+    ...giftCardReversal,
     giftCardRowNumber,
     ledgerRowNumber,
     giftCardStatusLabel,

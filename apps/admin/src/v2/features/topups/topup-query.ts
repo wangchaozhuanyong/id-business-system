@@ -35,7 +35,7 @@ export function useTopupListQuery(getParams: () => V2TopupWorkbenchListQuery) {
       const cachedOptions = getV2QueryData<TopupReferenceOptions>(
         TOPUP_OPTIONS_SCOPE,
         TOPUP_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         return {

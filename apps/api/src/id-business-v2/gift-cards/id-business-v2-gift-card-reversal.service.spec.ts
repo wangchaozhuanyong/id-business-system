@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
@@ -43,6 +48,18 @@ function makeLockedGiftCard(overrides: Record<string, unknown> = {}) {
     costAmount: decimal('108'),
     status: 'credited',
     createdAt,
+    ...overrides
+  };
+}
+
+function makeLockedAccount(overrides: Record<string, unknown> = {}) {
+  return {
+    id: accountId,
+    appleIdMasked: 'us***@example.com',
+    currentBalance: decimal('150'),
+    balanceCostAmount: decimal('840'),
+    recordStatus: 'active',
+    lossReportedAt: null,
     ...overrides
   };
 }
@@ -99,6 +116,9 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     idBusinessV2Account: {
       update: vi.fn()
     },
+    idBusinessV2AccountLoss: {
+      findUnique: vi.fn()
+    },
     auditLog: {
       create: vi.fn()
     }
@@ -112,9 +132,13 @@ describe('IdBusinessV2GiftCardReversalService', () => {
       findMany: vi.fn()
     }
   };
+  const accountLossesService = {
+    reportLossInTransaction: vi.fn()
+  };
   const service = new IdBusinessV2GiftCardReversalService(
     prisma as never,
-    new IdBusinessV2BalanceCalculatorService()
+    new IdBusinessV2BalanceCalculatorService(),
+    accountLossesService as never
   );
 
   beforeEach(() => {
@@ -127,15 +151,9 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     prisma.idBusinessV2GiftCard.findMany.mockResolvedValue([]);
     tx.idBusinessV2GiftCard.findUnique.mockResolvedValue({ accountId });
     tx.$queryRaw
-      .mockResolvedValueOnce([
-        {
-          id: accountId,
-          appleIdMasked: 'us***@example.com',
-          currentBalance: decimal('150'),
-          balanceCostAmount: decimal('840')
-        }
-      ])
+      .mockResolvedValueOnce([makeLockedAccount()])
       .mockResolvedValueOnce([makeLockedGiftCard()]);
+    tx.idBusinessV2AccountLoss.findUnique.mockResolvedValue(null);
     tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
       if (where.giftCardId_entryType) return { id: originalEntryId };
       return null;
@@ -159,6 +177,21 @@ describe('IdBusinessV2GiftCardReversalService', () => {
       balanceCostAmount: data.balanceCostAmount
     }));
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
+    accountLossesService.reportLossInTransaction.mockResolvedValue({
+      lossRecord: {
+        id: '77777777-7777-4777-8777-777777777777',
+        ledgerEntryId: '88888888-8888-4888-8888-888888888888'
+      },
+      account: {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        lossStatus: 'reported',
+        lossReportedAt: statusChangedAt.toISOString(),
+        currentBalance: '0',
+        balanceCostAmount: '0'
+      },
+      idempotentReplay: false
+    });
   });
 
   it('lists only masked credited gift cards needed by the reversal workbench', async () => {
@@ -279,9 +312,126 @@ describe('IdBusinessV2GiftCardReversalService', () => {
         currentBalance: '130',
         balanceCostAmount: '728'
       },
+      accountLoss: null,
       idempotentReplay: false
     });
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('X123456789ABCDEF');
+  });
+
+  it('atomically reports the remaining ID balance as lost after marking the card redeemed', async () => {
+    const result = await service.reverse(
+      giftCardId,
+      makeDto({ reportAccountLoss: true }),
+      operator
+    );
+
+    expect(accountLossesService.reportLossInTransaction).toHaveBeenCalledWith(
+      tx,
+      accountId,
+      expect.objectContaining({
+        reason: '供应商确认卡片已被其他账号赎回',
+        expectedCurrentBalance: '130',
+        expectedBalanceCostAmount: '728',
+        idempotencyKey: expect.stringMatching(/^gc-loss-[a-f0-9]{64}$/)
+      }),
+      operator,
+      {
+        source: 'gift_card_redeemed',
+        giftCardId,
+        giftCardMasked: 'X123****CDEF',
+        reversalLedgerEntryId: '55555555-5555-4555-8555-555555555555'
+      }
+    );
+    expect(result).toMatchObject({
+      action: 'redeemed',
+      account: {
+        currentBalance: '0',
+        balanceCostAmount: '0'
+      },
+      accountLoss: {
+        lossRecord: {
+          id: '77777777-7777-4777-8777-777777777777'
+        }
+      }
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        afterData: expect.objectContaining({
+          accountLossRecordId: '77777777-7777-4777-8777-777777777777',
+          accountLossLedgerEntryId: '88888888-8888-4888-8888-888888888888'
+        })
+      })
+    });
+  });
+
+  it('still reports a zero-value ID loss when the redeemed card uses the remaining balance', async () => {
+    tx.$queryRaw.mockReset();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        makeLockedAccount({
+          currentBalance: decimal('20'),
+          balanceCostAmount: decimal('112')
+        })
+      ])
+      .mockResolvedValueOnce([makeLockedGiftCard()]);
+
+    await service.reverse(giftCardId, makeDto({ reportAccountLoss: true }), operator);
+
+    expect(accountLossesService.reportLossInTransaction).toHaveBeenCalledWith(
+      tx,
+      accountId,
+      expect.objectContaining({
+        expectedCurrentBalance: '0',
+        expectedBalanceCostAmount: '0'
+      }),
+      operator,
+      expect.any(Object)
+    );
+  });
+
+  it('rejects the whole transaction when the linked ID loss cannot be completed', async () => {
+    accountLossesService.reportLossInTransaction.mockRejectedValue(
+      new ConflictException('该 ID 有未释放的订单锁')
+    );
+
+    await expect(
+      service.reverse(giftCardId, makeDto({ reportAccountLoss: true }), operator)
+    ).rejects.toThrow('该 ID 有未释放的订单锁');
+
+    expect(accountLossesService.reportLossInTransaction).toHaveBeenCalledWith(
+      tx,
+      accountId,
+      expect.any(Object),
+      operator,
+      expect.any(Object)
+    );
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('requires account update permission for the optional permanent ID loss', async () => {
+    await expect(
+      service.reverse(giftCardId, makeDto({ reportAccountLoss: true }), {
+        ...operator,
+        roles: [],
+        permissions: ['apple.balance.adjust']
+      })
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects the account-loss option for withdrawal actions', async () => {
+    await expect(
+      service.reverse(
+        giftCardId,
+        makeDto({
+          action: 'withdrawn',
+          reason: '录入目标错误，需要撤回',
+          reportAccountLoss: true
+        }),
+        operator
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('uses a distinct withdrawal status and ledger type', async () => {
@@ -328,6 +478,74 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
+  it('returns both linked results for an idempotent combined replay after the ID is frozen', async () => {
+    const replayEntry = {
+      ...makeReversalLedger(),
+      giftCard: makeStoredGiftCard({ status: 'redeemed' })
+    };
+    tx.$queryRaw.mockReset();
+    tx.$queryRaw.mockResolvedValueOnce([
+      makeLockedAccount({
+        currentBalance: decimal('0'),
+        balanceCostAmount: decimal('0'),
+        recordStatus: 'disabled',
+        lossReportedAt: statusChangedAt
+      })
+    ]);
+    tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
+      if (where.idempotencyKey) return replayEntry;
+      return null;
+    });
+    tx.idBusinessV2AccountLoss.findUnique.mockResolvedValue({
+      id: '77777777-7777-4777-8777-777777777777'
+    });
+    accountLossesService.reportLossInTransaction.mockResolvedValue({
+      lossRecord: {
+        id: '77777777-7777-4777-8777-777777777777',
+        ledgerEntryId: '88888888-8888-4888-8888-888888888888'
+      },
+      account: {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        lossStatus: 'reported',
+        lossReportedAt: statusChangedAt.toISOString(),
+        currentBalance: '0',
+        balanceCostAmount: '0'
+      },
+      idempotentReplay: true
+    });
+
+    const result = await service.reverse(
+      giftCardId,
+      makeDto({ reportAccountLoss: true }),
+      operator
+    );
+
+    expect(result.idempotentReplay).toBe(true);
+    expect(result.accountLoss?.idempotentReplay).toBe(true);
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects changing the account-loss option while reusing a reversal idempotency key', async () => {
+    tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
+      if (where.idempotencyKey) {
+        return {
+          ...makeReversalLedger(),
+          giftCard: makeStoredGiftCard({ status: 'redeemed' })
+        };
+      }
+      return null;
+    });
+    tx.idBusinessV2AccountLoss.findUnique.mockResolvedValue({
+      id: '77777777-7777-4777-8777-777777777777'
+    });
+
+    await expect(service.reverse(giftCardId, makeDto(), operator)).rejects.toBeInstanceOf(
+      ConflictException
+    );
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+  });
+
   it('rejects reusing an idempotency key for another action or reason', async () => {
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue({
       ...makeReversalLedger({
@@ -346,14 +564,7 @@ describe('IdBusinessV2GiftCardReversalService', () => {
   it('rejects a gift card that is already redeemed or withdrawn', async () => {
     tx.$queryRaw.mockReset();
     tx.$queryRaw
-      .mockResolvedValueOnce([
-        {
-          id: accountId,
-          appleIdMasked: 'us***@example.com',
-          currentBalance: decimal('150'),
-          balanceCostAmount: decimal('840')
-        }
-      ])
+      .mockResolvedValueOnce([makeLockedAccount()])
       .mockResolvedValueOnce([makeLockedGiftCard({ status: 'redeemed' })]);
 
     await expect(service.reverse(giftCardId, makeDto(), operator)).rejects.toBeInstanceOf(
@@ -384,12 +595,10 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     tx.$queryRaw.mockReset();
     tx.$queryRaw
       .mockResolvedValueOnce([
-        {
-          id: accountId,
-          appleIdMasked: 'us***@example.com',
+        makeLockedAccount({
           currentBalance: decimal('10'),
           balanceCostAmount: decimal('56')
-        }
+        })
       ])
       .mockResolvedValueOnce([makeLockedGiftCard()]);
 

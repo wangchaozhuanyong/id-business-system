@@ -14,11 +14,11 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       '5.4'
     );
 
-    expect(result.costAmount.toFixed(4)).toBe('270.0000');
-    expect(result.balanceAfter.toFixed(4)).toBe('50.0000');
-    expect(result.costAfter.toFixed(4)).toBe('270.0000');
-    expect(result.averageCostBefore.toFixed(8)).toBe('0.00000000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('5.40000000');
+    expect(result.costAmount.toFixed(3)).toBe('270.000');
+    expect(result.balanceAfter.toFixed(3)).toBe('50.000');
+    expect(result.costAfter.toFixed(3)).toBe('270.000');
+    expect(result.averageCostBefore.toFixed(3)).toBe('0.000');
+    expect(result.averageCostAfter.toFixed(3)).toBe('5.400');
   });
 
   it('calculates the moving weighted average after a second gift card credit', () => {
@@ -31,27 +31,27 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       '5.7'
     );
 
-    expect(result.balanceBefore.toFixed(4)).toBe('50.0000');
-    expect(result.costBefore.toFixed(4)).toBe('270.0000');
-    expect(result.costAmount.toFixed(4)).toBe('570.0000');
-    expect(result.balanceAfter.toFixed(4)).toBe('150.0000');
-    expect(result.costAfter.toFixed(4)).toBe('840.0000');
-    expect(result.averageCostBefore.toFixed(8)).toBe('5.40000000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('5.60000000');
+    expect(result.balanceBefore.toFixed(3)).toBe('50.000');
+    expect(result.costBefore.toFixed(3)).toBe('270.000');
+    expect(result.costAmount.toFixed(3)).toBe('570.000');
+    expect(result.balanceAfter.toFixed(3)).toBe('150.000');
+    expect(result.costAfter.toFixed(3)).toBe('840.000');
+    expect(result.averageCostBefore.toFixed(3)).toBe('5.400');
+    expect(result.averageCostAfter.toFixed(3)).toBe('5.600');
   });
 
-  it('rounds the card RMB cost to four decimal places', () => {
+  it('rounds the card RMB cost half up to three decimal places', () => {
     const result = service.calculateGiftCardCredit(
       {
         currentBalance: '0',
         balanceCostAmount: '0'
       },
-      '1',
-      '1.23455'
+      '1.005',
+      '1.5'
     );
 
-    expect(result.costAmount.toFixed(4)).toBe('1.2346');
-    expect(result.averageCostAfter.toFixed(8)).toBe('1.23460000');
+    expect(result.costAmount.toFixed(3)).toBe('1.508');
+    expect(result.averageCostAfter.toFixed(3)).toBe('1.500');
   });
 
   it('calculates consumption cost using the current moving average', () => {
@@ -63,26 +63,26 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       '20'
     );
 
-    expect(result.costAmount.toFixed(4)).toBe('112.0000');
-    expect(result.balanceAfter.toFixed(4)).toBe('130.0000');
-    expect(result.costAfter.toFixed(4)).toBe('728.0000');
-    expect(result.averageCostBefore.toFixed(8)).toBe('5.60000000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('5.60000000');
+    expect(result.costAmount.toFixed(3)).toBe('112.000');
+    expect(result.balanceAfter.toFixed(3)).toBe('130.000');
+    expect(result.costAfter.toFixed(3)).toBe('728.000');
+    expect(result.averageCostBefore.toFixed(3)).toBe('5.600');
+    expect(result.averageCostAfter.toFixed(3)).toBe('5.600');
   });
 
   it('clears all remaining cost when the full balance is consumed', () => {
     const result = service.calculateConsumption(
       {
-        currentBalance: '0.0001',
-        balanceCostAmount: '0.0001'
+        currentBalance: '0.001',
+        balanceCostAmount: '0.001'
       },
-      '0.0001'
+      '0.001'
     );
 
-    expect(result.costAmount.toFixed(4)).toBe('0.0001');
-    expect(result.balanceAfter.toFixed(4)).toBe('0.0000');
-    expect(result.costAfter.toFixed(4)).toBe('0.0000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('0.00000000');
+    expect(result.costAmount.toFixed(3)).toBe('0.001');
+    expect(result.balanceAfter.toFixed(3)).toBe('0.000');
+    expect(result.costAfter.toFixed(3)).toBe('0.000');
+    expect(result.averageCostAfter.toFixed(3)).toBe('0.000');
   });
 
   it('allows a zero-cost balance and keeps consumption cost at zero', () => {
@@ -94,9 +94,9 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       '2'
     );
 
-    expect(result.costAmount.toFixed(4)).toBe('0.0000');
-    expect(result.costAfter.toFixed(4)).toBe('0.0000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('0.00000000');
+    expect(result.costAmount.toFixed(3)).toBe('0.000');
+    expect(result.costAfter.toFixed(3)).toBe('0.000');
+    expect(result.averageCostAfter.toFixed(3)).toBe('0.000');
   });
 
   it('restores the exact balance and cost from an immutable consumption ledger', () => {
@@ -109,24 +109,24 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       '60'
     );
 
-    expect(result.balanceAmount.toFixed(4)).toBe('20.0000');
-    expect(result.costAmount.toFixed(4)).toBe('60.0000');
-    expect(result.balanceBefore.toFixed(4)).toBe('10.0000');
-    expect(result.balanceAfter.toFixed(4)).toBe('30.0000');
-    expect(result.costBefore.toFixed(4)).toBe('30.0000');
-    expect(result.costAfter.toFixed(4)).toBe('90.0000');
-    expect(result.averageCostBefore.toFixed(8)).toBe('3.00000000');
-    expect(result.averageCostAfter.toFixed(8)).toBe('3.00000000');
+    expect(result.balanceAmount.toFixed(3)).toBe('20.000');
+    expect(result.costAmount.toFixed(3)).toBe('60.000');
+    expect(result.balanceBefore.toFixed(3)).toBe('10.000');
+    expect(result.balanceAfter.toFixed(3)).toBe('30.000');
+    expect(result.costBefore.toFixed(3)).toBe('30.000');
+    expect(result.costAfter.toFixed(3)).toBe('90.000');
+    expect(result.averageCostBefore.toFixed(3)).toBe('3.000');
+    expect(result.averageCostAfter.toFixed(3)).toBe('3.000');
   });
 
   it('rejects a reversal credit that would overflow the database amount range', () => {
     expect(() =>
       service.calculateReversalCredit(
         {
-          currentBalance: '99999999999999.9999',
+          currentBalance: '99999999999999.999',
           balanceCostAmount: '0'
         },
-        '0.0001',
+        '0.001',
         '0'
       )
     ).toThrow(BadRequestException);
@@ -151,7 +151,7 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
         service.calculateGiftCardCredit(
           { currentBalance: '0', balanceCostAmount: '0' },
           '50',
-          '5.123456789'
+          '5.12345'
         )
     ],
     ['inconsistent zero balance cost', () => service.calculateAverageCost('0', '1')],
@@ -163,7 +163,7 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
       'database amount overflow',
       () =>
         service.calculateGiftCardCredit(
-          { currentBalance: '99999999999999.9999', balanceCostAmount: '0' },
+          { currentBalance: '99999999999999.999', balanceCostAmount: '0' },
           '1',
           '1'
         )

@@ -132,6 +132,12 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
       service.update({ autoEnabled: true, intervalMinutes: 15, targetAmountRmb: '0' }, operator)
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
+      service.update(
+        { autoEnabled: true, intervalMinutes: 15, targetAmountRmb: '5000.12345' },
+        operator
+      )
+    ).rejects.toThrow('最多 4 位小数');
+    await expect(
       service.update({ autoEnabled: true, intervalMinutes: 15, targetAmountRmb: '5000' }, undefined)
     ).rejects.toBeInstanceOf(BadRequestException);
   });

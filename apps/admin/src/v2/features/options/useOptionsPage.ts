@@ -13,6 +13,7 @@ import {
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, getV2QueryData, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2OptionsApi } from './api';
 import type {
   CreateV2OptionInput,
@@ -179,7 +180,7 @@ export function useOptionsPage() {
       const cachedTypes = getV2QueryData<V2OptionTypesResult>(
         OPTIONS_TYPES_SCOPE,
         OPTIONS_TYPES_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (!cachedTypes) {
         const result = await idBusinessV2OptionsApi.bootstrap(params, { signal });
@@ -439,10 +440,7 @@ export function useOptionsPage() {
   }
 
   function formatDecimal(value: string) {
-    const number = Number(value);
-    return Number.isFinite(number)
-      ? number.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
-      : value;
+    return formatV2Decimal(value);
   }
 
   function formatDate(value: string) {

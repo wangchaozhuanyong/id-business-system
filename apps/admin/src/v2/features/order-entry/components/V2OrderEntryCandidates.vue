@@ -27,12 +27,29 @@
         <dd>{{ formatDecimal(selectedCandidate?.currentBalance ?? '0') }}</dd>
       </div>
       <div class="is-divider">
-        <dt>预计消耗成本</dt>
-        <dd>¥{{ formatDecimal(selectedCandidate?.estimatedBalanceCostAmount ?? '0') }}</dd>
+        <dt>ID 处理方式</dt>
+        <dd>{{ accountDisposition === 'sold' ? '卖出 ID' : '保留 ID' }}</dd>
+      </div>
+      <div>
+        <dt>ID 购买成本</dt>
+        <dd>
+          ¥{{ formatDecimal(appliedAccountCostPreview) }}
+          <small v-if="accountDisposition === 'retained'">
+            （快照 ¥{{ formatDecimal(accountPurchaseCostPreview) }}，本单不计）
+          </small>
+        </dd>
+      </div>
+      <div>
+        <dt>余额成本</dt>
+        <dd>¥{{ formatDecimal(estimatedBalanceCostPreview) }}</dd>
       </div>
       <div>
         <dt>平台手续费</dt>
         <dd>¥{{ formatDecimal(platformFeePreview) }}</dd>
+      </div>
+      <div>
+        <dt>总成本</dt>
+        <dd>¥{{ formatDecimal(totalCostPreview) }}</dd>
       </div>
       <div class="is-profit">
         <dt>预计利润</dt>
@@ -85,6 +102,7 @@
               <strong>{{ candidate.appleIdMasked }}</strong>
               <small>{{ candidate.country.name }} / {{ candidate.status.name }}</small>
               <small>平均成本 ¥{{ formatDecimal(candidate.averageCost) }}</small>
+              <small>ID 购买成本 ¥{{ formatDecimal(candidate.purchaseCost) }}</small>
             </span>
             <span class="v2-order-entry-candidate-balance">
               <strong>{{ formatDecimal(candidate.currentBalance) }}</strong>
@@ -107,6 +125,11 @@ defineProps<{
   idSelectionMode: IdSelectionMode;
   selectedCandidate: V2OrderCandidate | null;
   selectedCountryName: string;
+  accountDisposition: 'retained' | 'sold';
+  accountPurchaseCostPreview: string;
+  appliedAccountCostPreview: string;
+  estimatedBalanceCostPreview: string;
+  totalCostPreview: string;
   platformFeePreview: string;
   estimatedProfitPreview: string;
   canMatch: boolean;

@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const exchangeRatesFeature = defineV2Feature({
@@ -8,7 +9,7 @@ export const exchangeRatesFeature = defineV2Feature({
   sourceSheet: '汇率采集',
   permission: 'apple.exchange_rate.view',
   kind: 'list',
-  loadingTier: 'live',
+  freshnessPolicy: 'event-with-deadline',
   filters: [
     { key: 'keyword', label: '搜索', kind: 'search', placeholder: '备注、操作人' },
     { key: 'recordedAt', label: '记录时间', kind: 'date-range' }
@@ -24,7 +25,12 @@ export const exchangeRatesFeature = defineV2Feature({
     { key: 'midRate', label: '中间价', minWidth: 120 },
     { key: 'operator', label: '操作人', minWidth: 120 },
     { key: 'remark', label: '备注', minWidth: 180 },
-    { key: 'actions', label: '操作', minWidth: 90, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.icon,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2ExchangeRatesView.vue')
 });

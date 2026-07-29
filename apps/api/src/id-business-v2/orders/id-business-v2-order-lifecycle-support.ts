@@ -9,12 +9,18 @@ import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-ord
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
 import type { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import type { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
-
+import {
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  V2_DECIMAL_ROUNDING_MODE,
+  toV2DecimalString
+} from '../decimal-policy';
 interface LockedAccountRow {
   id: string;
   appleIdMasked: string;
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
+  lossReportedAt: Date | null;
 }
 
 export interface LifecycleTransactionResult {
@@ -27,9 +33,8 @@ export interface LifecycleTransactionResult {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const DECIMAL_PATTERN = /^\d+(\.\d{1,4})?$/;
 const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
-const ROUNDING_MODE = PrismaNamespace.Decimal.ROUND_HALF_UP;
+const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
 const DELETABLE_STATUSES = new Set(['refunded', 'cancelled', 'failed']);
 
 export class IdBusinessV2OrderLifecycleSupport {
@@ -139,6 +144,9 @@ export class IdBusinessV2OrderLifecycleSupport {
     }
 
     const account = await this.lockAccount(tx, order.accountId);
+    if (account.lossReportedAt) {
+      throw new ConflictException('已报损 ID 永久冻结，不能恢复余额');
+    }
     const movement = this.balanceCalculator.calculateReversalCredit(
       {
         currentBalance: account.currentBalance,
@@ -220,7 +228,8 @@ export class IdBusinessV2OrderLifecycleSupport {
         "id",
         "apple_id_masked" AS "appleIdMasked",
         "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount"
+        "balance_cost_amount" AS "balanceCostAmount",
+        "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE
         "id" = CAST(${accountId} AS UUID)
@@ -329,7 +338,7 @@ export class IdBusinessV2OrderLifecycleSupport {
     if (!platform) return new PrismaNamespace.Decimal(0);
     const fee = platform.fixedFee
       .plus(receivedAmount.mul(platform.percentageFee).div(100))
-      .toDecimalPlaces(4, ROUNDING_MODE);
+      .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
     if (fee.greaterThan(MAX_AMOUNT)) {
       throw new BadRequestException('平台手续费数值过大');
     }
@@ -339,14 +348,16 @@ export class IdBusinessV2OrderLifecycleSupport {
   calculateProfit(
     receivedAmount: PrismaNamespace.Decimal,
     platformFeeAmount: PrismaNamespace.Decimal,
+    accountCostAmount: PrismaNamespace.Decimal,
     balanceCostAmount: PrismaNamespace.Decimal,
     refundCostAmount: PrismaNamespace.Decimal | null
   ) {
     const profit = receivedAmount
       .minus(platformFeeAmount)
+      .minus(accountCostAmount)
       .minus(balanceCostAmount)
       .minus(refundCostAmount ?? 0)
-      .toDecimalPlaces(4, ROUNDING_MODE);
+      .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
     if (profit.abs().greaterThan(MAX_AMOUNT)) {
       throw new BadRequestException('订单利润数值超出数据库范围');
     }
@@ -419,6 +430,7 @@ export class IdBusinessV2OrderLifecycleSupport {
       websiteAccountMasked: order.websiteAccountMasked,
       receivedAmount: order.receivedAmount.toString(),
       platformFeeAmount: order.platformFeeAmount.toString(),
+      accountDisposition: order.accountDisposition,
       accountCostAmount: order.accountCostAmount.toString(),
       balanceAmount: order.balanceAmount.toString(),
       balanceCostAmount: order.balanceCostAmount.toString(),
@@ -439,14 +451,14 @@ export class IdBusinessV2OrderLifecycleSupport {
       accountId: entry.accountId,
       entryType: entry.entryType,
       direction: entry.direction,
-      balanceAmount: entry.balanceAmount.toString(),
-      costAmount: entry.costAmount.toString(),
-      balanceBefore: entry.balanceBefore.toString(),
-      balanceAfter: entry.balanceAfter.toString(),
-      costBefore: entry.costBefore.toString(),
-      costAfter: entry.costAfter.toString(),
-      averageCostBefore: entry.averageCostBefore.toString(),
-      averageCostAfter: entry.averageCostAfter.toString(),
+      balanceAmount: toV2DecimalString(entry.balanceAmount),
+      costAmount: toV2DecimalString(entry.costAmount),
+      balanceBefore: toV2DecimalString(entry.balanceBefore),
+      balanceAfter: toV2DecimalString(entry.balanceAfter),
+      costBefore: toV2DecimalString(entry.costBefore),
+      costAfter: toV2DecimalString(entry.costAfter),
+      averageCostBefore: toV2DecimalString(entry.averageCostBefore),
+      averageCostAfter: toV2DecimalString(entry.averageCostAfter),
       reversalOfEntryId: entry.reversalOfEntryId,
       createdAt: entry.createdAt
     };
@@ -463,6 +475,7 @@ export class IdBusinessV2OrderLifecycleSupport {
       'clearWebsiteAccount',
       'receivedAmount',
       'balanceAmount',
+      'accountDisposition',
       'openedAt',
       'dueAt',
       'lockScope',
@@ -479,6 +492,7 @@ export class IdBusinessV2OrderLifecycleSupport {
       dto.serviceOptionId,
       dto.accountId,
       dto.balanceAmount,
+      dto.accountDisposition,
       dto.lockScope
     ].some((value) => value !== undefined);
   }
@@ -511,8 +525,8 @@ export class IdBusinessV2OrderLifecycleSupport {
   normalizeAmount(value: unknown, label: string, allowZero: boolean) {
     const normalized =
       typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-    if (!DECIMAL_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}必须是最多 4 位小数的非负数`);
+    if (!V2_DECIMAL_PATTERN.test(normalized)) {
+      throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
     }
     const amount = new PrismaNamespace.Decimal(normalized);
     if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {
@@ -553,24 +567,12 @@ export class IdBusinessV2OrderLifecycleSupport {
     return normalized;
   }
 
-  normalizeBoolean(value: unknown, label: string) {
-    if (value === undefined || value === null) return false;
-    if (typeof value !== 'boolean') {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return value;
-  }
-
   normalizeIdempotencyKey(value: unknown) {
     const normalized = typeof value === 'string' ? value.trim() : '';
     if (!IDEMPOTENCY_KEY_PATTERN.test(normalized)) {
       throw new BadRequestException('幂等键必须是 8 至 100 位字母、数字或 ._:-');
     }
     return normalized;
-  }
-
-  buildReversalIdempotencyKey(orderId: string, value: string) {
-    return `order_reversal:${orderId}:${value}`;
   }
 
   maskWebsiteAccount(value: string | null) {

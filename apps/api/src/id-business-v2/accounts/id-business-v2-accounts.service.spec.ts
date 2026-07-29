@@ -34,6 +34,9 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     currentBalance: new Prisma.Decimal(0),
     balanceCostAmount: new Prisma.Decimal(0),
     purchaseCost: new Prisma.Decimal(35),
+    soldByOrderId: null,
+    soldAt: null,
+    lossReportedAt: null,
     recordStatus: 'active',
     remark: null,
     createdByUserId: operator.id,
@@ -44,6 +47,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     countryOption: country,
     statusOption: status,
     supplierOption: supplier,
+    soldByOrder: null,
     ...overrides
   };
 }
@@ -56,7 +60,8 @@ describe('IdBusinessV2AccountsService', () => {
       count: vi.fn(),
       findFirst: vi.fn(),
       create: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      updateMany: vi.fn()
     },
     idBusinessV2BalanceLedger: {
       create: vi.fn(),
@@ -110,6 +115,7 @@ describe('IdBusinessV2AccountsService', () => {
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(supplier);
     auditLogsService.create.mockResolvedValue({ id: 'audit-1' });
+    prisma.idBusinessV2Account.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it('lists IDs by stable business order without exposing a numeric sort value', async () => {
@@ -211,7 +217,9 @@ describe('IdBusinessV2AccountsService', () => {
       {
         id: existing.id,
         currentBalance: existing.currentBalance,
-        balanceCostAmount: existing.balanceCostAmount
+        balanceCostAmount: existing.balanceCostAmount,
+        soldByOrderId: null,
+        lossReportedAt: null
       }
     ]);
     prisma.idBusinessV2Account.update.mockResolvedValue(updated);
@@ -244,6 +252,46 @@ describe('IdBusinessV2AccountsService', () => {
         })
       })
     );
+  });
+
+  it('rejects balance adjustments for a sold ID', async () => {
+    const existing = makeAccount({
+      currentBalance: new Prisma.Decimal(20),
+      balanceCostAmount: new Prisma.Decimal(70),
+      soldByOrderId: '99999999-9999-4999-8999-999999999999',
+      soldAt: new Date('2026-07-26T01:00:00.000Z'),
+      soldByOrder: {
+        id: '99999999-9999-4999-8999-999999999999',
+        orderNo: 'V220260726SOLD001'
+      }
+    });
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(existing);
+    prisma.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: existing.id,
+        currentBalance: existing.currentBalance,
+        balanceCostAmount: existing.balanceCostAmount,
+        soldByOrderId: existing.soldByOrderId,
+        lossReportedAt: null
+      }
+    ]);
+
+    await expect(
+      service.update(
+        existing.id,
+        {
+          currentBalance: '15',
+          balanceCostAmount: '45',
+          expectedCurrentBalance: '20',
+          expectedBalanceCostAmount: '70',
+          balanceAdjustmentReason: '尝试调整',
+          balanceAdjustmentIdempotencyKey: 'account-adjustment-sold-0001'
+        },
+        operator
+      )
+    ).rejects.toThrow('该 ID 已卖出，不能调整余额或人民币成本');
+    expect(prisma.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
   });
 
   it('rejects a duplicate encrypted Apple ID hash', async () => {
@@ -294,12 +342,8 @@ describe('IdBusinessV2AccountsService', () => {
 
   it('soft deletes and disables an ID record', async () => {
     prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
-    prisma.idBusinessV2Account.update.mockResolvedValue(
-      makeAccount({ deletedAt: new Date(), recordStatus: 'disabled' })
-    );
-
     await expect(service.remove('account-1', operator)).resolves.toEqual({ deleted: true });
-    expect(prisma.idBusinessV2Account.update).toHaveBeenCalledWith(
+    expect(prisma.idBusinessV2Account.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           deletedAt: expect.any(Date),

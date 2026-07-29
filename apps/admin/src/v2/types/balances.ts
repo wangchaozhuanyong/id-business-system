@@ -1,5 +1,6 @@
 import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
 import type { V2OptionSelector } from './options';
+import type { ReportV2AccountLossResult } from './records';
 
 export type V2TopupBalancePreset = '' | 'zero' | 'positive_under_20' | 'custom';
 export type V2TopupWorkbenchSortBy =
@@ -137,6 +138,7 @@ export interface V2GiftCardReversalPayload {
   action: V2GiftCardReversalAction;
   reason: string;
   idempotencyKey: string;
+  reportAccountLoss?: boolean;
 }
 
 export interface V2GiftCardReversalResult {
@@ -171,6 +173,7 @@ export interface V2GiftCardReversalResult {
     currentBalance: string;
     balanceCostAmount: string;
   };
+  accountLoss: ReportV2AccountLossResult | null;
   idempotentReplay: boolean;
 }
 
@@ -198,6 +201,8 @@ export interface V2GiftCardRecord {
   account: {
     id: string;
     appleIdMasked: string;
+    lossStatus: 'active' | 'reported';
+    lossReportedAt: string | null;
     country: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
   };
   creditedLedger: {
@@ -252,7 +257,8 @@ export type V2BalanceLedgerEntryType =
   | 'order_consumption'
   | 'order_consumption_reversal'
   | 'opening_balance'
-  | 'manual_adjustment';
+  | 'manual_adjustment'
+  | 'account_loss';
 export type V2BalanceLedgerSortBy =
   | 'balanceAmount'
   | 'costAmount'

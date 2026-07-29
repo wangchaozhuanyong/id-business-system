@@ -28,6 +28,7 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('99.9'),
     platformFeeAmount: decimal('2.5'),
+    accountDisposition: 'retained',
     accountCostAmount: decimal('10'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('50'),
@@ -116,7 +117,9 @@ describe('IdBusinessV2OrdersService', () => {
           orderNo: 'V2-20260726-0001',
           receivedAmount: '99.9',
           platformFeeAmount: '2.5',
+          accountDisposition: 'retained',
           accountCostAmount: '10',
+          appliedAccountCostAmount: '0',
           balanceAmount: '20',
           balanceCostAmount: '50',
           profitAmount: '47.4',
@@ -198,8 +201,34 @@ describe('IdBusinessV2OrdersService', () => {
     );
   });
 
+  it('filters by ID handling status and returns sold ID cost as applied', async () => {
+    prisma.idBusinessV2Order.findMany.mockResolvedValue([
+      makeOrder({
+        accountDisposition: 'sold'
+      })
+    ]);
+
+    const result = await service.list({ accountDisposition: 'sold' });
+
+    expect(prisma.idBusinessV2Order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          accountDisposition: 'sold'
+        })
+      })
+    );
+    expect(result.items[0]).toMatchObject({
+      accountDisposition: 'sold',
+      accountCostAmount: '10',
+      appliedAccountCostAmount: '10'
+    });
+  });
+
   it('rejects invalid status, UUID, and date ranges before querying', async () => {
     await expect(service.list({ status: 'success' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.list({ accountDisposition: 'unknown' })).rejects.toBeInstanceOf(
+      BadRequestException
+    );
     await expect(service.list({ customerId: 'invalid' })).rejects.toBeInstanceOf(
       BadRequestException
     );

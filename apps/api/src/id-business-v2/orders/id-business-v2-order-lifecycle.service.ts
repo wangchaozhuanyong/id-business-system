@@ -1,5 +1,9 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
+import {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderAccountDisposition,
+  Prisma as PrismaNamespace
+} from '@prisma/client';
 import type { IdBusinessV2BalanceLedger, IdBusinessV2OrderStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -9,12 +13,19 @@ import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-ord
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
+import {
+  applyUpdatedOrderAccountDisposition,
+  normalizeOrderAccountDisposition,
+  releaseSoldOrderAccount
+} from './id-business-v2-order-account-disposition';
+import { buildOrderReversalIdempotencyKey } from './id-business-v2-order-lifecycle-input';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import {
   IdBusinessV2OrderLifecycleSupport,
   type LifecycleTransactionResult
 } from './id-business-v2-order-lifecycle-support';
+import { refundIdBusinessV2Order } from './id-business-v2-order-refund';
 
 const FULLY_EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['draft', 'pending']);
 const EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
@@ -30,7 +41,6 @@ const CANCELLABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'processing',
   'failed'
 ]);
-const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
 
 @Injectable()
 export class IdBusinessV2OrderLifecycleService {
@@ -114,6 +124,10 @@ export class IdBusinessV2OrderLifecycleService {
         if (!accountId) {
           throw new ConflictException('订单没有绑定 ID，不能修改');
         }
+        const accountDisposition =
+          dto.accountDisposition === undefined
+            ? order.accountDisposition
+            : normalizeOrderAccountDisposition(dto.accountDisposition);
         const settlementPlatformOptionId =
           dto.settlementPlatformOptionId === undefined
             ? order.settlementPlatformOptionId
@@ -147,13 +161,18 @@ export class IdBusinessV2OrderLifecycleService {
           throw new BadRequestException('到期时间必须晚于开通时间');
         }
 
-        const lockScope =
+        const requestedLockScope =
           dto.lockScope === undefined
             ? (activeLock?.lockScope ?? IdBusinessV2AccountLockScope.by_service)
             : this.support.normalizeLockScope(dto.lockScope);
+        const lockScope =
+          accountDisposition === IdBusinessV2OrderAccountDisposition.sold
+            ? IdBusinessV2AccountLockScope.global
+            : requestedLockScope;
         const reservationChanged =
           order.serviceOptionId !== serviceOptionId ||
           order.accountId !== accountId ||
+          order.accountDisposition !== accountDisposition ||
           !order.balanceAmount.equals(balanceAmount) ||
           order.dueAt?.getTime() !== dueAt.getTime() ||
           activeLock?.lockScope !== lockScope;
@@ -182,10 +201,20 @@ export class IdBusinessV2OrderLifecycleService {
           receivedAmount,
           settlementPlatform
         );
+        const accountCostAmount = await applyUpdatedOrderAccountDisposition(
+          tx,
+          order,
+          accountId,
+          accountDisposition,
+          operator
+        );
         const profitAmount = consumption
           ? this.support.calculateProfit(
               receivedAmount,
               platformFeeAmount,
+              accountDisposition === IdBusinessV2OrderAccountDisposition.sold
+                ? accountCostAmount
+                : new PrismaNamespace.Decimal(0),
               order.balanceCostAmount,
               order.refundCostAmount
             )
@@ -223,6 +252,8 @@ export class IdBusinessV2OrderLifecycleService {
             receivedAmount,
             platformFeeAmount,
             balanceAmount,
+            accountDisposition,
+            accountCostAmount,
             profitAmount,
             openedAt,
             dueAt,
@@ -305,6 +336,8 @@ export class IdBusinessV2OrderLifecycleService {
               receivedAmount: receivedAmount.toString(),
               platformFeeAmount: platformFeeAmount.toString(),
               balanceAmount: balanceAmount.toString(),
+              accountDisposition,
+              accountCostAmount: accountCostAmount.toString(),
               profitAmount: profitAmount?.toString() ?? null,
               openedAt,
               dueAt,
@@ -332,7 +365,7 @@ export class IdBusinessV2OrderLifecycleService {
   ) {
     const orderId = this.support.normalizeUuid(orderIdValue, '订单');
     const reason = this.support.normalizeReason(dto.reason);
-    const idempotencyKey = this.support.buildReversalIdempotencyKey(
+    const idempotencyKey = buildOrderReversalIdempotencyKey(
       orderId,
       this.support.normalizeIdempotencyKey(dto.idempotencyKey)
     );
@@ -392,8 +425,15 @@ export class IdBusinessV2OrderLifecycleService {
             order.receivedAmount,
             order.platformFeeAmount,
             new PrismaNamespace.Decimal(0),
+            new PrismaNamespace.Decimal(0),
             order.refundCostAmount
           );
+        }
+
+        const accountRecovered =
+          order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold;
+        if (accountRecovered) {
+          await releaseSoldOrderAccount(tx, order, operator);
         }
 
         const release = await this.orderLockService.releaseOrderLockInTransaction(
@@ -411,6 +451,9 @@ export class IdBusinessV2OrderLifecycleService {
             status: 'cancelled',
             statusChangedAt,
             balanceCostAmount: balanceRestored ? 0 : order.balanceCostAmount,
+            accountDisposition: accountRecovered
+              ? IdBusinessV2OrderAccountDisposition.recovered
+              : order.accountDisposition,
             profitAmount,
             updatedByUserId: operator?.id
           }
@@ -424,6 +467,11 @@ export class IdBusinessV2OrderLifecycleService {
             statusChangedAt,
             reason,
             balanceRestored,
+            accountRecovered,
+            accountDisposition: accountRecovered
+              ? IdBusinessV2OrderAccountDisposition.recovered
+              : order.accountDisposition,
+            appliedAccountCostAmount: '0',
             reversalLedgerId: reversalLedger?.id ?? null,
             profitAmount: profitAmount?.toString() ?? null,
             lockReleased: release.released
@@ -444,134 +492,14 @@ export class IdBusinessV2OrderLifecycleService {
     return this.support.buildLifecycleResponse(result);
   }
 
-  async refund(
-    orderIdValue: string,
-    dto: RefundIdBusinessV2OrderDto,
-    operator?: AuthenticatedUser
-  ) {
-    const orderId = this.support.normalizeUuid(orderIdValue, '订单');
-    const refundCostAmount = this.support.normalizeAmount(dto.refundCostAmount, '退款成本', true);
-    const reason = this.support.normalizeReason(dto.reason);
-    const restoreBalance = this.support.normalizeBoolean(dto.restoreBalance, '是否恢复余额');
-    const idempotencyKey = this.support.buildReversalIdempotencyKey(
-      orderId,
-      this.support.normalizeIdempotencyKey(dto.idempotencyKey)
+  refund(orderIdValue: string, dto: RefundIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
+    return refundIdBusinessV2Order(
+      this.support,
+      this.orderLockService,
+      orderIdValue,
+      dto,
+      operator
     );
-
-    const result = await this.support.runLifecycleTransaction(
-      async (tx): Promise<LifecycleTransactionResult> => {
-        const order = await this.support.lockOrder(tx, orderId);
-        const existingReversal = await this.support.findReversal(tx, order.id);
-        if (order.status === 'refunded') {
-          if (
-            order.refundCostAmount === null ||
-            !order.refundCostAmount.equals(refundCostAmount) ||
-            Boolean(existingReversal) !== restoreBalance
-          ) {
-            throw new ConflictException('订单已经按其他退款内容处理，请刷新后核对');
-          }
-          this.support.assertReversalReplay(existingReversal, idempotencyKey);
-          return {
-            orderId: order.id,
-            reversalLedger: existingReversal,
-            balanceRestored: Boolean(existingReversal),
-            lockReleased: false,
-            idempotentReplay: true
-          };
-        }
-        if (!REFUNDABLE_STATUSES.has(order.status)) {
-          throw new ConflictException('只有处理中或已完成订单可以退款');
-        }
-
-        const consumption = await this.support.findConsumption(tx, order.id);
-        if (!consumption) {
-          throw new ConflictException('订单缺少真实消费流水，不能退款');
-        }
-        if (existingReversal) {
-          throw new ConflictException('订单消费已经撤销，不能再次退款');
-        }
-        const activation = await tx.idBusinessV2Activation.findUnique({
-          where: {
-            orderId: order.id
-          },
-          select: {
-            id: true
-          }
-        });
-        if (restoreBalance && activation) {
-          throw new ConflictException('订单已有开通记录，不能把 Apple 余额自动恢复');
-        }
-
-        let reversalLedger: IdBusinessV2BalanceLedger | null = null;
-        if (restoreBalance) {
-          const restoration = await this.support.restoreConsumption(
-            tx,
-            order,
-            consumption,
-            idempotencyKey,
-            `订单退款并恢复余额：${reason}`,
-            operator
-          );
-          reversalLedger = restoration.ledger;
-        }
-        const effectiveBalanceCost = restoreBalance
-          ? new PrismaNamespace.Decimal(0)
-          : order.balanceCostAmount;
-        const profitAmount = this.support.calculateProfit(
-          order.receivedAmount,
-          order.platformFeeAmount,
-          effectiveBalanceCost,
-          refundCostAmount
-        );
-        const release = await this.orderLockService.releaseOrderLockInTransaction(
-          tx,
-          order.id,
-          `订单退款：${reason}`,
-          operator
-        );
-        const statusChangedAt = new Date();
-        await tx.idBusinessV2Order.update({
-          where: {
-            id: order.id
-          },
-          data: {
-            refundCostAmount,
-            balanceCostAmount: effectiveBalanceCost,
-            profitAmount,
-            status: 'refunded',
-            statusChangedAt,
-            updatedByUserId: operator?.id
-          }
-        });
-        await this.support.writeLifecycleAudit(
-          tx,
-          'refund',
-          order,
-          {
-            status: 'refunded',
-            statusChangedAt,
-            reason,
-            refundCostAmount: refundCostAmount.toString(),
-            balanceRestored: restoreBalance,
-            reversalLedgerId: reversalLedger?.id ?? null,
-            balanceCostAmount: effectiveBalanceCost.toString(),
-            profitAmount: profitAmount.toString(),
-            lockReleased: release.released
-          },
-          operator
-        );
-        return {
-          orderId: order.id,
-          reversalLedger,
-          balanceRestored: restoreBalance,
-          lockReleased: release.released,
-          idempotentReplay: false
-        };
-      },
-      '订单已经退款或消费撤销正在并发处理，请刷新后核对'
-    );
-
-    return this.support.buildLifecycleResponse(result);
   }
 
   remove(orderIdValue: string, dto: DeleteIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
