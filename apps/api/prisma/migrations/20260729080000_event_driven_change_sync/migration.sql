@@ -124,19 +124,25 @@ BEGIN
 
   IF to_regclass('realtime.messages') IS NOT NULL
      AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY';
-    EXECUTE 'DROP POLICY IF EXISTS id_business_v2_receive_private_changes ON realtime.messages';
-    EXECUTE $policy$
-      CREATE POLICY id_business_v2_receive_private_changes
-      ON realtime.messages
-      FOR SELECT
-      TO authenticated
-      USING (
-        realtime.topic() = 'id-business-v2:changes'
-        AND extension = 'broadcast'
-        AND public.id_business_v2_can_receive_changes()
-      )
-    $policy$;
+    BEGIN
+      EXECUTE 'ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY';
+      EXECUTE 'DROP POLICY IF EXISTS id_business_v2_receive_private_changes ON realtime.messages';
+      EXECUTE $policy$
+        CREATE POLICY id_business_v2_receive_private_changes
+        ON realtime.messages
+        FOR SELECT
+        TO authenticated
+        USING (
+          realtime.topic() = 'id-business-v2:changes'
+          AND extension = 'broadcast'
+          AND public.id_business_v2_can_receive_changes()
+        )
+      $policy$;
+    EXCEPTION
+      WHEN insufficient_privilege THEN
+        RAISE NOTICE
+          'Skipping realtime.messages policy because the migration role is not the managed table owner';
+    END;
   END IF;
 END;
 $block$;

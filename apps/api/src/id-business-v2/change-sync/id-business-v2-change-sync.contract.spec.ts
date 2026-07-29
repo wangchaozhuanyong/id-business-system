@@ -51,6 +51,8 @@ describe('V2 event-driven change sync contract', () => {
     expect(migration).not.toContain('FOR INSERT');
     expect(migration).toContain("realtime.topic() = 'id-business-v2:changes'");
     expect(migration).toContain("extension = 'broadcast'");
+    expect(migration).toContain('WHEN insufficient_privilege THEN');
+    expect(migration).toContain('migration role is not the managed table owner');
   });
 
   it('keeps the versions endpoint authenticated and scope-only', () => {
