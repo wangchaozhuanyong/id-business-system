@@ -81,13 +81,13 @@ let browser = null;
 try {
   if (!configuredAdminUrl) {
     await buildSharedPackage();
-    await optimizeAdminDependencies();
     adminServer = startAdminServer(adminUrl);
   }
   await waitForServer(adminUrl, adminServer);
 
   browser = await chromium.launch({ headless: true });
   await warmLayoutFixture(browser);
+  await warmCustomerPage(browser);
   await verifyLayoutFixture(browser);
   for (const scenario of permissionScenarios) {
     await verifyCustomerPage(browser, scenario);
@@ -111,17 +111,6 @@ async function buildSharedPackage() {
     ['run', 'build', '--workspace', '@apple-business/shared'],
     '共享包构建',
     process.env
-  );
-}
-
-async function optimizeAdminDependencies() {
-  await runNpmCommand(
-    ['exec', '--workspace', '@apple-business/admin', '--', 'vite', 'optimize', '--force'],
-    '管理端依赖预构建',
-    {
-      ...process.env,
-      NODE_ENV: 'development'
-    }
   );
 }
 
@@ -222,14 +211,47 @@ async function warmLayoutFixture(browserInstance) {
   const context = await browserInstance.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   try {
-    await page.goto(new URL('/table-layout-fixture.html', adminUrl).href, {
-      waitUntil: 'networkidle'
-    });
-    await page.locator('[data-layout-fixture]').first().waitFor({ state: 'visible' });
-    await settleLayout(page);
+    await warmPage(page, '/table-layout-fixture.html', '[data-layout-fixture]');
   } finally {
     await context.close();
   }
+}
+
+async function warmCustomerPage(browserInstance) {
+  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const user = createUser(permissionScenarios[0]);
+  const unexpectedRequests = [];
+
+  await page.addInitScript((currentUser) => {
+    localStorage.setItem('apple_business_access_token', 'layout-test-token');
+    localStorage.setItem('apple_business_current_user', JSON.stringify(currentUser));
+  }, user);
+  await installApiMocks(page, user, unexpectedRequests);
+
+  try {
+    await warmPage(page, '/v2/customers', '.v2-records-mobile-item');
+  } finally {
+    await context.close();
+  }
+}
+
+async function warmPage(page, pathname, readySelector) {
+  const targetUrl = new URL(pathname, adminUrl).href;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    const ready = await page
+      .locator(readySelector)
+      .first()
+      .waitFor({ state: 'attached', timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (ready) {
+      await settleLayout(page);
+      return;
+    }
+  }
+  throw new Error(`布局验收预热失败：${targetUrl}`);
 }
 
 async function verifyLayoutFixture(browserInstance) {
