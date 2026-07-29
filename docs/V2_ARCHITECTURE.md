@@ -147,6 +147,9 @@ GET   /api/id-business-v2/renewals/warning-summary
   不恢复导航触发的完整业务列表轮询。
 - Supabase 项目必须在发布前由环境管理员确认关闭公开频道访问；该控制台设置不由仓库 migration
   代替。
+- migration 会尝试安装 `realtime.messages` 私有 SELECT policy；若托管表属于
+  `supabase_realtime_admin` 且发布角色不是其成员，migration 记录 Notice 后继续，环境管理员需由
+  表所有者补装 policy。补装前客户端自动降级为版本接口校验。
 - 发布顺序固定为：部署 migration/RLS → 发布版本接口 → 发布管理端协调器 → 启用
   `VITE_V2_REALTIME_CHANGES_ENABLED`。回滚 Broadcast 时保留版本校验，不恢复导航 TTL 或完整列表
   轮询。
