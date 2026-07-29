@@ -5,6 +5,11 @@ import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2BalancesApi, idBusinessV2ExchangeRatesApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import {
+  buildManualGiftCardCreditPayload,
+  resolveUsdtRateReference,
+  type V2TopupUsdtRateReference
+} from './gift-card-credit-form';
 import { useTopupListQuery } from './topup-query';
 import type {
   V2GiftCardReversalAction,
@@ -38,8 +43,7 @@ export function useTopupWorkbenchPage() {
   const exchangeRateLoading = ref(false);
   const exchangeRateResolved = ref(false);
   const exchangeRateMessage = ref('');
-  const exchangeRateSnapshotId = ref('');
-  const exchangeRatePrefilledValue = ref('');
+  const usdtRateReference = ref<V2TopupUsdtRateReference | null>(null);
   const reversalDrawerVisible = ref(false);
   const reversalAccount = ref<V2TopupWorkbenchItem | null>(null);
   const reversibleGiftCards = ref<V2ReversibleGiftCard[]>([]);
@@ -70,12 +74,6 @@ export function useTopupWorkbenchPage() {
     if (!Number.isFinite(faceValue) || !Number.isFinite(exchangeRate)) return '0';
     return (faceValue * exchangeRate).toFixed(4);
   });
-  const exchangeRateWasEdited = computed(
-    () =>
-      Boolean(exchangeRateSnapshotId.value) &&
-      normalizeDecimalInput(creditForm.exchangeRate) !==
-        normalizeDecimalInput(exchangeRatePrefilledValue.value)
-  );
   const canConfirmCredit = computed(
     () =>
       Boolean(selectedAccount.value) &&
@@ -255,34 +253,23 @@ export function useTopupWorkbenchPage() {
       supplierOptionId: '',
       remark: ''
     });
-    exchangeRateSnapshotId.value = '';
-    exchangeRatePrefilledValue.value = '';
+    usdtRateReference.value = null;
     exchangeRateMessage.value = '';
     exchangeRateResolved.value = false;
-    void loadEffectiveExchangeRate();
+    void loadUsdtRateReference();
   }
 
-  async function loadEffectiveExchangeRate() {
+  async function loadUsdtRateReference() {
     exchangeRateLoading.value = true;
     try {
-      const effective = await idBusinessV2ExchangeRatesApi.effective();
-      if (
-        effective.available &&
-        effective.snapshotId &&
-        effective.midRateToRmb &&
-        effective.averagedAt
-      ) {
-        exchangeRateSnapshotId.value = effective.snapshotId;
-        exchangeRatePrefilledValue.value = effective.midRateToRmb;
-        creditForm.exchangeRate = effective.midRateToRmb;
-        exchangeRateMessage.value = `已带入 ${formatDate(
-          effective.averagedAt
-        )} 的双平台中间价 ${formatDecimal(effective.midRateToRmb, 8)}`;
-        return;
-      }
-      exchangeRateMessage.value = effectiveRateUnavailableMessage(effective.reason);
+      const overview = await idBusinessV2ExchangeRatesApi.overview();
+      usdtRateReference.value = resolveUsdtRateReference(overview);
+      exchangeRateMessage.value = usdtRateReference.value
+        ? ''
+        : effectiveRateUnavailableMessage(overview.effective.reason);
     } catch (error) {
-      exchangeRateMessage.value = `自动汇率读取失败：${getApiErrorMessage(error)}。请手工填写并核对。`;
+      usdtRateReference.value = null;
+      exchangeRateMessage.value = `USDT 汇率读取失败：${getApiErrorMessage(error)}`;
     } finally {
       exchangeRateResolved.value = true;
       exchangeRateLoading.value = false;
@@ -318,20 +305,17 @@ export function useTopupWorkbenchPage() {
 
     creditSubmitting.value = true;
     try {
-      const result = await idBusinessV2BalancesApi.confirmGiftCardCredit(selectedAccount.value.id, {
-        code: normalizedCreditCode.value,
-        faceValue: creditForm.faceValue.trim(),
-        exchangeRate: creditForm.exchangeRate.trim(),
-        ...(exchangeRateSnapshotId.value
-          ? {
-              exchangeRateSnapshotId: exchangeRateSnapshotId.value,
-              exchangeRatePrefilledValue: exchangeRatePrefilledValue.value
-            }
-          : {}),
-        supplierOptionId: creditForm.supplierOptionId,
-        idempotencyKey: creditIdempotencyKey.value,
-        remark: creditForm.remark.trim() || undefined
-      });
+      const result = await idBusinessV2BalancesApi.confirmGiftCardCredit(
+        selectedAccount.value.id,
+        buildManualGiftCardCreditPayload({
+          code: normalizedCreditCode.value,
+          faceValue: creditForm.faceValue,
+          exchangeRate: creditForm.exchangeRate,
+          supplierOptionId: creditForm.supplierOptionId,
+          idempotencyKey: creditIdempotencyKey.value,
+          remark: creditForm.remark
+        })
+      );
       ElMessage.success(
         result.idempotentReplay ? '该请求已经完成，未重复入账' : '礼品卡已确认入账'
       );
@@ -444,25 +428,20 @@ export function useTopupWorkbenchPage() {
     return globalThis.crypto.randomUUID();
   }
 
-  function normalizeDecimalInput(value: string) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed.toFixed(8) : value.trim();
-  }
-
   function effectiveRateUnavailableMessage(reason: string | null) {
     if (reason === 'latest_attempt_failed') {
-      return '最新一次双平台采集失败，历史成功值已过期。请手工填写并核对汇率。';
+      return '最新一次 USDT 汇率采集失败，当前没有可展示的参考值。';
     }
     if (reason === 'stale') {
-      return '最近成功汇率已过期，不会自动带入。请手工填写并核对汇率。';
+      return '最近一次 USDT 汇率已经过期，当前没有可展示的参考值。';
     }
     if (reason === 'emergency_disabled') {
-      return '汇率网络采集已关闭，请手工填写并核对汇率。';
+      return 'USDT 汇率网络采集已关闭。';
     }
     if (reason === 'collection_in_progress') {
-      return '首次双平台汇率仍在采集中，请稍后重试或手工填写并核对。';
+      return 'USDT 汇率正在采集中，请稍后查看。';
     }
-    return '暂无有效的双平台汇率，请手工填写并核对汇率。';
+    return '暂无可展示的 USDT 参考汇率。';
   }
 
   function maskGiftCardCode(value: string) {
@@ -541,8 +520,7 @@ export function useTopupWorkbenchPage() {
     exchangeRateLoading,
     exchangeRateResolved,
     exchangeRateMessage,
-    exchangeRateSnapshotId,
-    exchangeRateWasEdited,
+    usdtRateReference,
     reversalDrawerVisible,
     reversalAccount,
     reversibleGiftCards,

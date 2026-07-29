@@ -56,7 +56,7 @@
               v-model="page.creditForm.exchangeRate"
               inputmode="decimal"
               maxlength="19"
-              placeholder="例如 7.25"
+              placeholder="手工填写，例如 5.70"
             />
           </label>
         </div>
@@ -66,24 +66,54 @@
           skeleton="inline"
           :loading="page.exchangeRateLoading"
           :resolved="page.exchangeRateResolved"
-          loading-title="正在读取有效汇率"
-          refreshing-title="正在更新有效汇率"
+          loading-title="正在读取当前 USDT 汇率"
+          refreshing-title="正在更新当前 USDT 汇率"
         >
+          <section
+            v-if="page.usdtRateReference"
+            class="v2-topup-usdt-reference"
+            aria-label="当前 USDT 参考汇率"
+          >
+            <header>
+              <div>
+                <strong>{{
+                  page.usdtRateReference.stale ? '最近一次 USDT 汇率' : '当前 USDT 汇率'
+                }}</strong>
+                <span>
+                  CNY / USDT · 更新于
+                  {{ page.formatDate(page.usdtRateReference.averagedAt) }}
+                </span>
+              </div>
+              <el-tag
+                :type="page.usdtRateReference.stale ? 'warning' : 'success'"
+                effect="plain"
+                size="small"
+              >
+                {{ page.usdtRateReference.stale ? '已过期' : '仅供参考' }}
+              </el-tag>
+            </header>
+            <dl>
+              <div>
+                <dt>买入</dt>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantBuyRateToRmb, 8) }}</dd>
+              </div>
+              <div>
+                <dt>卖出</dt>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.merchantSellRateToRmb, 8) }}</dd>
+              </div>
+              <div>
+                <dt>中间价</dt>
+                <dd>¥{{ page.formatDecimal(page.usdtRateReference.midRateToRmb, 8) }}</dd>
+              </div>
+            </dl>
+          </section>
           <el-alert
-            v-if="page.exchangeRateMessage"
-            :type="page.exchangeRateSnapshotId ? 'success' : 'warning'"
+            v-else-if="page.exchangeRateMessage"
+            type="warning"
             :title="page.exchangeRateMessage"
             show-icon
             :closable="false"
           />
-          <el-tag
-            v-if="page.exchangeRateSnapshotId && page.exchangeRateWasEdited"
-            type="warning"
-            effect="plain"
-            size="small"
-          >
-            已人工修改预填汇率
-          </el-tag>
         </V2AsyncRegion>
 
         <label>
