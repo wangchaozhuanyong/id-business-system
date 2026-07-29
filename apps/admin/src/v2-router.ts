@@ -2,11 +2,12 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { isAuthSessionExpired } from '@/auth/session';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserRoutePermission } from '@/utils/permissions';
-import { v2ModuleDefinitions } from '@/v2/config/modules';
+import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 import { setV2RouteNavigationState, v2RouteNavigationState, v2Routes } from '@/v2/router/routes';
 import { beginV2RoutePerformance, markV2RouteCodeReady } from '@/runtime/performance';
 
 const V2LoginView = () => import('@/v2/views/V2LoginView.vue');
+const V2ForbiddenView = () => import('@/v2/views/V2ForbiddenView.vue');
 
 export const v2Router = createRouter({
   history: createWebHistory(),
@@ -22,6 +23,14 @@ export const v2Router = createRouter({
       meta: {
         public: true,
         title: '登录'
+      }
+    },
+    {
+      path: '/403',
+      name: 'forbidden',
+      component: V2ForbiddenView,
+      meta: {
+        title: '权限不足'
       }
     },
     ...v2Routes,
@@ -69,7 +78,7 @@ v2Router.beforeEach(async (to) => {
   }
 
   if (!hasUserRoutePermission(authStore.user, to.meta.permission)) {
-    return firstAllowedV2Route(authStore.user?.permissions ?? [], authStore.user?.roles ?? []);
+    return getFirstAllowedV2Route(authStore.user);
   }
 
   return true;
@@ -112,15 +121,6 @@ function redirectToLogin(targetFullPath: string) {
   };
 }
 
-function firstAllowedV2Route(permissions: string[], roles: string[]) {
-  if (roles.includes('admin')) return '/v2/workbench/renewals';
-  const permissionSet = new Set(permissions);
-  return (
-    v2ModuleDefinitions.find((module) => !module.permission || permissionSet.has(module.permission))
-      ?.route ?? '/login'
-  );
-}
-
 async function refreshCurrentUserInBackground(
   authStore: ReturnType<typeof useAuthStore>,
   activePath: string
@@ -130,9 +130,7 @@ async function refreshCurrentUserInBackground(
     const route = v2Router.currentRoute.value;
     if (route.fullPath !== activePath) return;
     if (!hasUserRoutePermission(authStore.user, route.meta.permission)) {
-      await v2Router.replace(
-        firstAllowedV2Route(authStore.user?.permissions ?? [], authStore.user?.roles ?? [])
-      );
+      await v2Router.replace(getFirstAllowedV2Route(authStore.user));
     }
   } catch {
     if (isAuthSessionExpired()) {
