@@ -34,8 +34,10 @@ ID 销售闭环使用增量 migration
 订单保留 ID 购买成本快照，并通过 `appliedAccountCostAmount` 明确本单实际计入值。退款默认保留
 销售占用，只有明确提交 `accountReturned=true` 才恢复 ID 可用并重算利润。
 
-ID 永久报损使用增量 migration `20260729090000_account_loss`。报损只结转余额人民币成本，不重复
-计入 ID 购买成本；已卖出 ID 保留销售关系，历史普通冻结状态不自动回填为报损。
+ID 永久报损先由增量 migration `20260729085000_account_loss_ledger_type` 单独提交流水枚举值，再由
+`20260729090000_account_loss` 创建约束和报损结构，避免 PostgreSQL 在同一事务中拒绝引用新枚举值。
+报损只结转余额人民币成本，不重复计入 ID 购买成本；已卖出 ID 保留销售关系，历史普通冻结状态不
+自动回填为报损。
 礼品卡联动报损复用该表和流水类型，不新增 migration；卡片损失与扣卡后剩余 ID 损失分别记账，
 并使用同一原因和确定性幂等关联。
 

@@ -3,6 +3,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const schema = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+const ledgerTypeMigration = readFileSync(
+  resolve(process.cwd(), 'prisma/migrations/20260729085000_account_loss_ledger_type/migration.sql'),
+  'utf8'
+);
 const migration = readFileSync(
   resolve(process.cwd(), 'prisma/migrations/20260729090000_account_loss/migration.sql'),
   'utf8'
@@ -12,9 +16,9 @@ describe('ID Business V2 account loss schema contract', () => {
   it('adds a permanent account loss timestamp and immutable account-loss ledger type', () => {
     expect(schema).toContain('account_loss');
     expect(schema).toMatch(/lossReportedAt\s+DateTime\?/);
-    expect(migration).toContain(
-      'ALTER TYPE "IdBusinessV2BalanceLedgerEntryType" ADD VALUE \'account_loss\''
-    );
+    expect(ledgerTypeMigration).toContain('ALTER TYPE "IdBusinessV2BalanceLedgerEntryType"');
+    expect(ledgerTypeMigration).toContain("ADD VALUE IF NOT EXISTS 'account_loss'");
+    expect(migration).not.toContain('ALTER TYPE "IdBusinessV2BalanceLedgerEntryType"');
     expect(migration).toContain('ADD COLUMN "loss_reported_at" TIMESTAMPTZ(6)');
   });
 
