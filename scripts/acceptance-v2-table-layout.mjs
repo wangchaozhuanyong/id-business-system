@@ -7,6 +7,8 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const rootDir = process.cwd();
+const adminDir = path.join(rootDir, 'apps', 'admin');
+const viteCliPath = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js');
 const configuredAdminUrl = process.env.V2_TABLE_LAYOUT_ADMIN_URL;
 const adminUrl = new URL(configuredAdminUrl ?? 'http://127.0.0.1:5384');
 const screenshotDirectory = process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR
@@ -139,21 +141,10 @@ async function runNpmCommand(args, label, env) {
 function startAdminServer(url) {
   const output = [];
   const child = spawn(
-    process.platform === 'win32' ? 'npm.cmd' : 'npm',
-    [
-      'run',
-      'dev',
-      '--workspace',
-      '@apple-business/admin',
-      '--',
-      '--host',
-      url.hostname,
-      '--port',
-      url.port,
-      '--strictPort'
-    ],
+    process.execPath,
+    [viteCliPath, '--host', url.hostname, '--port', url.port, '--strictPort'],
     {
-      cwd: rootDir,
+      cwd: adminDir,
       env: {
         ...process.env,
         NODE_ENV: 'development',
