@@ -87,6 +87,7 @@ try {
   await waitForServer(adminUrl, adminServer);
 
   browser = await chromium.launch({ headless: true });
+  await warmLayoutFixture(browser);
   await verifyLayoutFixture(browser);
   for (const scenario of permissionScenarios) {
     await verifyCustomerPage(browser, scenario);
@@ -215,6 +216,20 @@ async function stopAdminServer(child) {
       if (child.exitCode == null) child.kill('SIGKILL');
     })
   ]);
+}
+
+async function warmLayoutFixture(browserInstance) {
+  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(new URL('/table-layout-fixture.html', adminUrl).href, {
+      waitUntil: 'networkidle'
+    });
+    await page.locator('[data-layout-fixture]').first().waitFor({ state: 'visible' });
+    await settleLayout(page);
+  } finally {
+    await context.close();
+  }
 }
 
 async function verifyLayoutFixture(browserInstance) {
