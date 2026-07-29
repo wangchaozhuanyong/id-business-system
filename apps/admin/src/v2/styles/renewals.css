@@ -1,0 +1,224 @@
+.v2-renewals-toolbar {
+  grid-template-columns:
+    minmax(250px, 1fr) minmax(150px, 190px) minmax(260px, 310px)
+    minmax(145px, 180px) auto;
+}
+
+.v2-renewals-toolbar > .el-date-editor {
+  width: 100%;
+}
+
+.v2-renewal-status {
+  display: inline-grid;
+  justify-items: start;
+  gap: 3px;
+}
+
+.v2-renewal-status small {
+  color: var(--el-color-warning);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.v2-records-table .el-table__row.is-renewal-warning > .el-table__cell {
+  background: color-mix(in srgb, var(--el-color-warning) 7%, var(--v2-surface));
+}
+
+.v2-records-table .el-table__row.is-renewal-expired > .el-table__cell {
+  background: color-mix(in srgb, var(--v2-danger) 6%, var(--v2-surface));
+}
+
+.v2-records-mobile-item.is-renewal-warning {
+  border-left: 3px solid var(--el-color-warning);
+}
+
+.v2-records-mobile-item.is-renewal-expired {
+  border-left: 3px solid var(--v2-danger);
+}
+
+.v2-renewal-warning-settings {
+  display: grid;
+  gap: 16px;
+}
+
+.v2-renewal-warning-settings label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px);
+  align-items: center;
+  gap: 16px;
+}
+
+.v2-renewal-warning-settings label > span {
+  color: var(--v2-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.v2-renewal-warning-settings .el-input-number {
+  width: 100%;
+}
+
+.v2-renewal-warning-settings > small,
+.v2-renewal-warning-settings__state {
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.v2-renewal-account {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.v2-renewal-account strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.v2-renewal-account span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-renewal-balance {
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-renewal-open {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
+.v2-renewal-open__target {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 18px;
+  padding-bottom: 17px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-renewal-open__target > div,
+.v2-renewal-open__form,
+.v2-renewal-open__form label {
+  display: grid;
+  min-width: 0;
+}
+
+.v2-renewal-open__target > div {
+  gap: 4px;
+}
+
+.v2-renewal-open__target span,
+.v2-renewal-open__form label > span,
+.v2-renewal-open__preview span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-renewal-open__target strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.v2-renewal-open__form {
+  gap: 15px;
+}
+
+.v2-renewal-open__form label {
+  gap: 7px;
+}
+
+.v2-renewal-open__form .el-date-editor,
+.v2-renewal-open__form .el-select {
+  width: 100%;
+}
+
+.v2-renewal-open__grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.v2-renewal-open__preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--v2-border-soft);
+}
+
+.v2-renewal-open__preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.v2-renewal-open__preview > div:last-child {
+  text-align: right;
+}
+
+.v2-renewal-open__preview strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1320px) {
+  .v2-renewals-toolbar {
+    grid-template-columns:
+      minmax(230px, 1fr) minmax(145px, 175px) minmax(240px, 290px)
+      minmax(140px, 170px);
+  }
+
+  .v2-renewals-toolbar .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-renewals-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-renewals-toolbar > .el-input,
+  .v2-renewals-toolbar .el-date-editor {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  .v2-renewals-toolbar .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .v2-renewals-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-renewals-toolbar > *,
+  .v2-renewals-toolbar .v2-records-toolbar__actions {
+    grid-column: 1;
+  }
+
+  .v2-renewal-open__target,
+  .v2-renewal-open__grid,
+  .v2-renewal-warning-settings label {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-renewal-open__preview {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .v2-renewal-open__preview > div:last-child {
+    text-align: left;
+  }
+}

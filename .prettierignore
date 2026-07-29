@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+apps/*/dist/
+packages/*/dist/
+.env.production.example
+Dockerfile
+apps/*/Dockerfile
+deploy/nginx/*.conf
+scripts/*.sh
+.dockerignore
+.gitignore

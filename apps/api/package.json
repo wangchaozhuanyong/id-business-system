@@ -1,0 +1,41 @@
+{
+  "name": "@apple-business/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "build": "nest build",
+    "build:cloudflare": "tsc -p tsconfig.cloudflare.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run --passWithNoTests",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@prisma/adapter-pg": "^6.19.3",
+    "@prisma/client": "^6.0.0",
+    "@supabase/supabase-js": "^2.110.9",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/testing": "^11.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5",
+    "esbuild": "^0.28.1",
+    "prisma": "^6.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.17"
+  }
+}

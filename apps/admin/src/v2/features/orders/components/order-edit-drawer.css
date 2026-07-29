@@ -1,0 +1,29 @@
+.v2-order-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.v2-order-edit-readonly {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 10px;
+}
+
+.v2-order-edit-error {
+  display: block;
+  margin-top: 6px;
+  color: var(--el-color-danger);
+  font-size: 12px;
+}
+
+.v2-order-edit-clear {
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .v2-order-edit-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist-cloudflare",
+    "rootDir": "./src",
+    "incremental": false,
+    "tsBuildInfoFile": "./dist-cloudflare/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/cloudflare-v2-bootstrap.ts"],
+  "exclude": ["node_modules", "dist", "dist-cloudflare", "test", "**/*.spec.ts"]
+}

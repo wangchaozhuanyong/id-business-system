@@ -1,0 +1,90 @@
+name: Quality Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/id_business?schema=public
+      JWT_SECRET: ci-jwt-secret
+      FIELD_ENCRYPTION_KEY: ci-field-encryption-key
+      HASH_SECRET: ci-hash-secret
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check V2 loading standard
+        run: npm run check:v2-loading-standard
+
+      - name: Check single-system isolation
+        run: npm run check:v2-isolation
+
+      - name: Check module architecture
+        run: npm run check:v2-module-architecture
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Build shared package
+        run: npm run build --workspace @apple-business/shared
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Validate Prisma schema
+        run: npm run prisma:validate
+
+      - name: Validate production Compose example
+        run: npm run prod:config:example
+
+      - name: Audit high severity vulnerabilities
+        run: npm run audit:high
+
+      - name: Check Git readiness
+        run: npm run git:readiness
+
+  production-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate production Compose example
+        run: |
+          PROD_ENV_FILE=.env.production.example \
+            docker compose --env-file .env.production.example -f docker-compose.prod.yml config
+
+      - name: Build production Docker images
+        env:
+          COMPOSE_BAKE: 'false'
+          DOCKER_BUILDKIT: '0'
+          PROD_ENV_FILE: .env.production.example
+        run: docker compose --env-file .env.production.example -f docker-compose.prod.yml build api admin

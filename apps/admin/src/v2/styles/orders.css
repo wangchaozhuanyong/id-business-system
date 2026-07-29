@@ -1,0 +1,134 @@
+.v2-orders-toolbar {
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 180px) auto auto;
+}
+
+.v2-order-number {
+  color: var(--v2-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.v2-order-money,
+.v2-order-date {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-order-profit--positive {
+  color: var(--el-color-success);
+  font-weight: 600;
+}
+
+.v2-order-profit--negative {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+
+.v2-order-row-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v2-order-action-danger {
+  color: var(--el-color-danger);
+}
+
+.v2-order-detail {
+  display: grid;
+  gap: 22px;
+}
+
+.v2-order-detail section {
+  display: grid;
+  gap: 10px;
+}
+
+.v2-order-detail h3 {
+  margin: 0;
+  color: var(--v2-text);
+  font-size: 14px;
+}
+
+.v2-order-detail dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--v2-border-soft);
+  border-left: 1px solid var(--v2-border-soft);
+}
+
+.v2-order-detail dl div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(88px, 0.42fr) minmax(0, 1fr);
+  border-right: 1px solid var(--v2-border-soft);
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-order-detail dt,
+.v2-order-detail dd {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+}
+
+.v2-order-detail dt {
+  color: var(--v2-text-soft);
+  background: var(--v2-surface-muted);
+  font-size: 12px;
+}
+
+.v2-order-detail dd {
+  color: var(--v2-text);
+  font-size: 13px;
+}
+
+.v2-order-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--v2-border-soft);
+}
+
+@media (max-width: 1320px) {
+  .v2-orders-toolbar {
+    grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) auto auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-orders-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-orders-toolbar .el-date-editor {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  .v2-order-detail dl {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-records-mobile-item footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-records-mobile-item footer .v2-order-row-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .v2-order-detail-actions {
+    justify-content: flex-start;
+  }
+}

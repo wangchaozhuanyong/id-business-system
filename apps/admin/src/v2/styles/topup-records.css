@@ -1,0 +1,205 @@
+.v2-topup-records-tabs {
+  min-width: 0;
+  padding: 0 14px;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  background: var(--v2-surface);
+}
+
+.v2-topup-records-tabs .el-tabs__header {
+  margin: 0;
+}
+
+.v2-topup-records-tabs .el-tabs__nav-wrap::after {
+  height: 1px;
+  background: var(--v2-border-soft);
+}
+
+.v2-topup-records-tabs .el-tabs__item {
+  height: 46px;
+}
+
+.v2-topup-records-scope {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 6px;
+  background: var(--el-color-primary-light-9);
+}
+
+.v2-topup-records-scope > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 8px;
+}
+
+.v2-topup-records-scope span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-topup-records-scope__title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.v2-topup-records-scope__title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.v2-topup-records-scope__title .feature-help {
+  margin-left: 0;
+}
+
+.v2-topup-records-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 190px) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  background: var(--v2-surface);
+}
+
+.v2-topup-records-toolbar .el-select,
+.v2-topup-records-toolbar .el-date-editor {
+  width: 100%;
+}
+
+.v2-topup-records-code,
+.v2-topup-records-account strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.v2-topup-records-account {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.v2-topup-records-account span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-ledger-amount--credit {
+  color: var(--v2-success);
+}
+
+.v2-ledger-amount--debit {
+  color: var(--v2-danger);
+}
+
+.v2-topup-records-metadata,
+.v2-topup-records-reversal {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.v2-topup-records-metadata > section {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--v2-border);
+}
+
+.v2-topup-records-metadata > section span,
+.v2-topup-records-metadata > section small,
+.v2-topup-records-metadata > label > span,
+.v2-topup-records-reversal label > span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-topup-records-metadata > section strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.v2-topup-records-metadata > label,
+.v2-topup-records-reversal label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.v2-topup-records-metadata .el-select {
+  width: 100%;
+}
+
+.v2-topup-records-reversal p {
+  margin: 0;
+  line-height: 1.7;
+}
+
+@media (max-width: 1320px) {
+  .v2-topup-records-toolbar {
+    grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) auto auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-topup-records .v2-module-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-topup-records .v2-records-header-status {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .v2-topup-records-tabs {
+    padding: 0 10px;
+  }
+
+  .v2-topup-records-scope {
+    align-items: flex-start;
+  }
+
+  .v2-topup-records-tabs .el-tabs__nav {
+    width: 100%;
+  }
+
+  .v2-topup-records-tabs .el-tabs__item {
+    flex: 1;
+  }
+
+  .v2-topup-records-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 11px;
+  }
+
+  .v2-topup-records-toolbar > .el-input,
+  .v2-topup-records-toolbar .el-date-editor,
+  .v2-topup-records-toolbar .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
+  }
+
+  .v2-topup-records-toolbar .el-date-editor {
+    min-width: 0;
+  }
+
+  .v2-topup-records .v2-records-mobile-item footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-topup-records .v2-record-actions {
+    width: 100%;
+  }
+}

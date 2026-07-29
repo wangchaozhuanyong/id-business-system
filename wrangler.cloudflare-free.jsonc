@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "daichongxitong-v2-free-20260727",
+  "main": "./deploy/cloudflare-free/worker.mjs",
+  "compatibility_date": "2026-07-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "@cloudflare-prisma/client": "./apps/api/src/generated/prisma-cloudflare/client.ts",
+    "class-validator": "./deploy/cloudflare-free/noop.mjs",
+    "class-transformer": "./deploy/cloudflare-free/noop.mjs",
+    "@nestjs/websockets/socket-module": "./deploy/cloudflare-free/noop.mjs",
+    "@nestjs/microservices/microservices-module": "./deploy/cloudflare-free/noop.mjs",
+    "@nestjs/microservices": "./deploy/cloudflare-free/noop.mjs"
+  },
+  "assets": {
+    "directory": "./apps/admin/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "e5b50b7bc677487aba1d3597e6fe801a"
+    }
+  ],
+  "vars": {
+    "NODE_ENV": "production",
+    "CLOUDFLARE_WORKER": "true",
+    "APP_PUBLIC_URL": "https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev",
+    "CORS_ORIGIN": "https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev",
+    "JWT_EXPIRES_IN": "7d",
+    "ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED": "true",
+    "ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS": "600000"
+  }
+}

@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+**/dist-cloudflare/
+apps/api/src/generated/prisma-cloudflare/
+apps/api/src/generated/prisma-supabase-edge/
+.wrangler/
+supabase/.branches/
+supabase/.temp/
+supabase/functions/.deno/
+supabase/functions/v2-api/bundle.mjs
+supabase/functions/v2-api/query_compiler_bg.js
+supabase/functions/v2-api/query_compiler_bg.wasm
+supabase/functions/v2-api-perf/
+coverage/
+
+# Local env files
+.env
+.env.local
+.env.*.local
+.env.production
+supabase/.env
+supabase/.env.*
+!supabase/.env.example
+
+# Local deployment secrets and machine-specific credentials
+.deploy/
+.secrets/
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Runtime data
+uploads/
+tmp/
+.runtime/
+backups/
+exports/
+
+# Generated visual QA evidence
+artifacts/design-qa/
+qa-artifacts/
+design-qa.md

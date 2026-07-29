@@ -1,0 +1,972 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator cloudflareClient {
+  provider   = "prisma-client"
+  output     = "../src/generated/prisma-cloudflare"
+  runtime    = "cloudflare"
+  engineType = "client"
+}
+
+generator supabaseEdgeClient {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma-supabase-edge"
+  runtime             = "deno"
+  engineType          = "client"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  disabled
+}
+
+enum LoginLogStatus {
+  success
+  failed
+  blocked
+}
+
+enum IpWhitelistScope {
+  admin
+  api
+}
+
+enum SensitiveAccessApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+}
+
+enum IdBusinessV2OptionType {
+  id_status
+  id_region
+  customer_source
+  customer_tag
+  country
+  business_category
+  service
+  id_supplier
+  topup_supplier
+  settlement_platform
+}
+
+enum IdBusinessV2OptionStatus {
+  active
+  disabled
+}
+
+enum IdBusinessV2RecordStatus {
+  active
+  disabled
+}
+
+enum IdBusinessV2GiftCardStatus {
+  credited
+  redeemed
+  withdrawn
+}
+
+enum IdBusinessV2BalanceLedgerEntryType {
+  gift_card_credit
+  gift_card_redeemed
+  gift_card_withdrawal
+  order_consumption
+  order_consumption_reversal
+  opening_balance
+  manual_adjustment
+}
+
+enum IdBusinessV2BalanceDirection {
+  credit
+  debit
+  adjustment
+}
+
+enum IdBusinessV2OrderStatus {
+  draft
+  pending
+  waiting_external
+  processing
+  completed
+  refunded
+  cancelled
+  failed
+}
+
+enum IdBusinessV2AccountLockScope {
+  by_service
+  global
+}
+
+enum IdBusinessV2AccountLockStatus {
+  active
+  released
+  expired
+}
+
+enum IdBusinessV2ActivationStatus {
+  active
+  expired
+  cancelled
+  abnormal
+}
+
+enum IdBusinessV2AutoRenewalStatus {
+  unknown
+  enabled
+  disabled
+}
+
+enum IdBusinessV2ExchangeRateRunStatus {
+  running
+  success
+  failed
+}
+
+enum IdBusinessV2ExchangeRateTriggerType {
+  manual
+  scheduled
+  system
+}
+
+enum IdBusinessV2OtcProvider {
+  binance
+  okx
+}
+
+enum IdBusinessV2OtcSide {
+  merchant_buy
+  merchant_sell
+}
+
+enum IdBusinessV2ExchangeRateErrorProvider {
+  binance
+  okx
+  multiple
+  system
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  username     String     @unique @db.VarChar(100)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  displayName  String     @map("display_name") @db.VarChar(100)
+  phone        String?    @db.VarChar(50)
+  email        String?    @db.VarChar(255)
+  status       UserStatus @default(active)
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  userRoles                         UserRole[]
+  v2AuthIdentity                    V2AuthIdentity?
+  auditLogs                         AuditLog[]
+  attachments                       Attachment[]
+  loginLogs                         LoginLog[]                         @relation("LoginLogUser")
+  activeSessions                    ActiveSession[]                    @relation("ActiveSessionUser")
+  securitySettingsUpdated           SecuritySetting[]                  @relation("SecuritySettingUpdatedBy")
+  ipWhitelistsCreated               IpWhitelist[]                      @relation("IpWhitelistCreatedBy")
+  sensitiveAccessLogs               SensitiveAccessLog[]               @relation("SensitiveAccessLogUser")
+  sensitiveApprovalsAsked           SensitiveAccessApproval[]          @relation("SensitiveAccessApprovalRequester")
+  sensitiveApprovalsDone            SensitiveAccessApproval[]          @relation("SensitiveAccessApprovalApprover")
+  idBusinessV2OptionsCreated        IdBusinessV2Option[]               @relation("IdBusinessV2OptionCreatedBy")
+  idBusinessV2OptionsUpdated        IdBusinessV2Option[]               @relation("IdBusinessV2OptionUpdatedBy")
+  idBusinessV2CustomersCreated      IdBusinessV2Customer[]             @relation("IdBusinessV2CustomerCreatedBy")
+  idBusinessV2CustomersUpdated      IdBusinessV2Customer[]             @relation("IdBusinessV2CustomerUpdatedBy")
+  idBusinessV2AccountsCreated       IdBusinessV2Account[]              @relation("IdBusinessV2AccountCreatedBy")
+  idBusinessV2AccountsUpdated       IdBusinessV2Account[]              @relation("IdBusinessV2AccountUpdatedBy")
+  idBusinessV2GiftCardsCreated      IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardCreatedBy")
+  idBusinessV2GiftCardsUpdated      IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardUpdatedBy")
+  idBusinessV2BalanceEntriesCreated IdBusinessV2BalanceLedger[]        @relation("IdBusinessV2BalanceLedgerCreatedBy")
+  idBusinessV2OrdersCreated         IdBusinessV2Order[]                @relation("IdBusinessV2OrderCreatedBy")
+  idBusinessV2OrdersUpdated         IdBusinessV2Order[]                @relation("IdBusinessV2OrderUpdatedBy")
+  idBusinessV2LocksCreated          IdBusinessV2AccountLock[]          @relation("IdBusinessV2AccountLockCreatedBy")
+  idBusinessV2LocksEnded            IdBusinessV2AccountLock[]          @relation("IdBusinessV2AccountLockEndedBy")
+  idBusinessV2ActivationsCreated    IdBusinessV2Activation[]           @relation("IdBusinessV2ActivationCreatedBy")
+  idBusinessV2ActivationsUpdated    IdBusinessV2Activation[]           @relation("IdBusinessV2ActivationUpdatedBy")
+  idBusinessV2RenewalWarningUpdated IdBusinessV2RenewalWarningSetting[] @relation("IdBusinessV2RenewalWarningUpdatedBy")
+  idBusinessV2ExchangeRateRuns      IdBusinessV2ExchangeRateRun[]      @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
+  idBusinessV2ExchangeRateEntries   IdBusinessV2ExchangeRateEntry[]    @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
+  idBusinessV2ExchangeRateSettings  IdBusinessV2ExchangeRateSettings[] @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model LoginLog {
+  id            String         @id @default(uuid()) @db.Uuid
+  userId        String?        @map("user_id") @db.Uuid
+  username      String         @db.VarChar(100)
+  status        LoginLogStatus
+  failureReason String?        @map("failure_reason") @db.Text
+  ip            String?        @db.VarChar(100)
+  userAgent     String?        @map("user_agent") @db.Text
+  location      String?        @db.VarChar(120)
+  abnormal      Boolean        @default(false)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation("LoginLogUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([username])
+  @@index([ip])
+  @@index([abnormal])
+  @@index([createdAt])
+  @@map("login_logs")
+}
+
+model ActiveSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash") @db.VarChar(128)
+  ip           String?   @db.VarChar(100)
+  userAgent    String?   @map("user_agent") @db.Text
+  lastActiveAt DateTime  @default(now()) @map("last_active_at") @db.Timestamptz(6)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation("ActiveSessionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@map("active_sessions")
+}
+
+model SecuritySetting {
+  id              String   @id @default(uuid()) @db.Uuid
+  key             String   @unique @db.VarChar(120)
+  value           Json     @default("{}")
+  remark          String?  @db.Text
+  updatedByUserId String?  @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("SecuritySettingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([updatedByUserId])
+  @@map("security_settings")
+}
+
+model IpWhitelist {
+  id              String           @id @default(uuid()) @db.Uuid
+  ipOrCidr        String           @map("ip_or_cidr") @db.VarChar(100)
+  scope           IpWhitelistScope @default(admin)
+  enabled         Boolean          @default(true)
+  remark          String?          @db.Text
+  createdByUserId String?          @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  createdBy User? @relation("IpWhitelistCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([ipOrCidr, scope])
+  @@index([scope, enabled])
+  @@index([createdByUserId])
+  @@map("ip_whitelists")
+}
+
+model SensitiveAccessLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String?  @map("user_id") @db.Uuid
+  module       String   @db.VarChar(100)
+  fieldName    String   @map("field_name") @db.VarChar(120)
+  objectType   String   @map("object_type") @db.VarChar(120)
+  objectId     String?  @map("object_id") @db.Uuid
+  accessReason String?  @map("access_reason") @db.Text
+  approved     Boolean  @default(false)
+  ip           String?  @db.VarChar(100)
+  userAgent    String?  @map("user_agent") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation("SensitiveAccessLogUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([module, fieldName])
+  @@index([objectType, objectId])
+  @@index([approved])
+  @@index([createdAt])
+  @@map("sensitive_access_logs")
+}
+
+model SensitiveAccessApproval {
+  id           String                        @id @default(uuid()) @db.Uuid
+  requesterId  String                        @map("requester_id") @db.Uuid
+  approverId   String?                       @map("approver_id") @db.Uuid
+  module       String                        @db.VarChar(100)
+  fieldName    String                        @map("field_name") @db.VarChar(120)
+  objectType   String                        @map("object_type") @db.VarChar(120)
+  objectId     String?                       @map("object_id") @db.Uuid
+  reason       String                        @db.Text
+  status       SensitiveAccessApprovalStatus @default(pending)
+  decisionNote String?                       @map("decision_note") @db.Text
+  approvedAt   DateTime?                     @map("approved_at") @db.Timestamptz(6)
+  expiresAt    DateTime?                     @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  requester User  @relation("SensitiveAccessApprovalRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  approver  User? @relation("SensitiveAccessApprovalApprover", fields: [approverId], references: [id], onDelete: SetNull)
+
+  @@index([requesterId])
+  @@index([approverId])
+  @@index([module, fieldName])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([createdAt])
+  @@map("sensitive_access_approvals")
+}
+
+model IdBusinessV2Option {
+  id              String                   @id @default(uuid()) @db.Uuid
+  type            IdBusinessV2OptionType
+  code            String                   @db.VarChar(120)
+  name            String                   @db.VarChar(160)
+  uniqueKey       String                   @unique @map("unique_key") @db.VarChar(360)
+  parentId        String?                  @map("parent_id") @db.Uuid
+  countryOptionId String?                  @map("country_option_id") @db.Uuid
+  businessAmount  Decimal?                 @map("business_amount") @db.Decimal(18, 4)
+  currencyCode    String?                  @map("currency_code") @db.VarChar(3)
+  fixedFee        Decimal                  @default(0) @map("fixed_fee") @db.Decimal(18, 4)
+  percentageFee   Decimal                  @default(0) @map("percentage_fee") @db.Decimal(9, 4)
+  sortOrder       Int                      @default(0) @map("sort_order")
+  status          IdBusinessV2OptionStatus @default(active)
+  isSystem        Boolean                  @default(false) @map("is_system")
+  remark          String?                  @db.Text
+  createdByUserId String?                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?                  @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?                @map("deleted_at") @db.Timestamptz(6)
+
+  parent            IdBusinessV2Option?  @relation("IdBusinessV2OptionTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children          IdBusinessV2Option[] @relation("IdBusinessV2OptionTree")
+  countryOption     IdBusinessV2Option?  @relation("IdBusinessV2ServiceCountry", fields: [countryOptionId], references: [id], onDelete: Restrict)
+  servicesByCountry IdBusinessV2Option[] @relation("IdBusinessV2ServiceCountry")
+  createdBy         User?                @relation("IdBusinessV2OptionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy         User?                @relation("IdBusinessV2OptionUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  customersBySource    IdBusinessV2Customer[]        @relation("IdBusinessV2CustomerSource")
+  customerTags         IdBusinessV2CustomerTag[]
+  customerServices     IdBusinessV2CustomerService[]
+  accountsByCountry    IdBusinessV2Account[]         @relation("IdBusinessV2AccountCountry")
+  accountsByStatus     IdBusinessV2Account[]         @relation("IdBusinessV2AccountStatus")
+  accountsBySupplier   IdBusinessV2Account[]         @relation("IdBusinessV2AccountSupplier")
+  giftCardsBySupplier  IdBusinessV2GiftCard[]        @relation("IdBusinessV2GiftCardSupplier")
+  ordersByService      IdBusinessV2Order[]           @relation("IdBusinessV2OrderService")
+  ordersBySettlement   IdBusinessV2Order[]           @relation("IdBusinessV2OrderSettlementPlatform")
+  locksByService       IdBusinessV2AccountLock[]     @relation("IdBusinessV2AccountLockService")
+  activationsByService IdBusinessV2Activation[]      @relation("IdBusinessV2ActivationService")
+
+  @@unique([type, code])
+  @@index([type, status, sortOrder])
+  @@index([parentId])
+  @@index([countryOptionId])
+  @@index([deletedAt])
+  @@map("id_business_v2_options")
+}
+
+model IdBusinessV2Customer {
+  id              String                   @id @default(uuid()) @db.Uuid
+  name            String                   @db.VarChar(120)
+  phoneEncrypted  String?                  @map("phone_encrypted") @db.Text
+  phoneHash       String?                  @map("phone_hash") @db.VarChar(64)
+  phoneMasked     String?                  @map("phone_masked") @db.VarChar(80)
+  phoneTail       String?                  @map("phone_tail") @db.VarChar(8)
+  wechat          String?                  @db.VarChar(120)
+  sourceOptionId  String?                  @map("source_option_id") @db.Uuid
+  recordStatus    IdBusinessV2RecordStatus @default(active) @map("record_status")
+  remark          String?                  @db.Text
+  createdByUserId String?                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?                  @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?                @map("deleted_at") @db.Timestamptz(6)
+
+  sourceOption IdBusinessV2Option?           @relation("IdBusinessV2CustomerSource", fields: [sourceOptionId], references: [id], onDelete: Restrict)
+  tags         IdBusinessV2CustomerTag[]
+  services     IdBusinessV2CustomerService[]
+  createdBy    User?                         @relation("IdBusinessV2CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy    User?                         @relation("IdBusinessV2CustomerUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  orders       IdBusinessV2Order[]
+  activations  IdBusinessV2Activation[]
+
+  @@index([name])
+  @@index([phoneHash])
+  @@index([phoneTail])
+  @@index([sourceOptionId])
+  @@index([recordStatus, updatedAt])
+  @@index([deletedAt])
+  @@map("id_business_v2_customers")
+}
+
+model IdBusinessV2CustomerTag {
+  customerId String   @map("customer_id") @db.Uuid
+  optionId   String   @map("option_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer IdBusinessV2Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  option   IdBusinessV2Option   @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  @@id([customerId, optionId])
+  @@index([optionId])
+  @@map("id_business_v2_customer_tags")
+}
+
+model IdBusinessV2CustomerService {
+  customerId String   @map("customer_id") @db.Uuid
+  optionId   String   @map("option_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer IdBusinessV2Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  option   IdBusinessV2Option   @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  @@id([customerId, optionId])
+  @@index([optionId])
+  @@map("id_business_v2_customer_services")
+}
+
+model IdBusinessV2Account {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  appleIdEncrypted      String                   @map("apple_id_encrypted") @db.Text
+  appleIdHash           String                   @unique @map("apple_id_hash") @db.VarChar(64)
+  appleIdMasked         String                   @map("apple_id_masked") @db.VarChar(255)
+  passwordEncrypted     String?                  @map("password_encrypted") @db.Text
+  phoneEncrypted        String?                  @map("phone_encrypted") @db.Text
+  phoneHash             String?                  @map("phone_hash") @db.VarChar(64)
+  phoneMasked           String?                  @map("phone_masked") @db.VarChar(80)
+  phoneTail             String?                  @map("phone_tail") @db.VarChar(8)
+  securityInfoEncrypted String?                  @map("security_info_encrypted") @db.Text
+  countryOptionId       String                   @map("country_option_id") @db.Uuid
+  statusOptionId        String                   @map("status_option_id") @db.Uuid
+  supplierOptionId      String?                  @map("supplier_option_id") @db.Uuid
+  currentBalance        Decimal                  @default(0) @map("current_balance") @db.Decimal(18, 4)
+  balanceCostAmount     Decimal                  @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
+  purchaseCost          Decimal                  @default(0) @map("purchase_cost") @db.Decimal(18, 4)
+  recordStatus          IdBusinessV2RecordStatus @default(active) @map("record_status")
+  remark                String?                  @db.Text
+  createdByUserId       String?                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId       String?                  @map("updated_by_user_id") @db.Uuid
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt             DateTime?                @map("deleted_at") @db.Timestamptz(6)
+
+  countryOption     IdBusinessV2Option             @relation("IdBusinessV2AccountCountry", fields: [countryOptionId], references: [id], onDelete: Restrict)
+  statusOption      IdBusinessV2Option             @relation("IdBusinessV2AccountStatus", fields: [statusOptionId], references: [id], onDelete: Restrict)
+  supplierOption    IdBusinessV2Option?            @relation("IdBusinessV2AccountSupplier", fields: [supplierOptionId], references: [id], onDelete: Restrict)
+  createdBy         User?                          @relation("IdBusinessV2AccountCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy         User?                          @relation("IdBusinessV2AccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  giftCards         IdBusinessV2GiftCard[]
+  balanceLedger     IdBusinessV2BalanceLedger[]
+  orders            IdBusinessV2Order[]
+  locks             IdBusinessV2AccountLock[]
+  activations       IdBusinessV2Activation[]
+
+  @@index([appleIdMasked])
+  @@index([phoneHash])
+  @@index([phoneTail])
+  @@index([countryOptionId])
+  @@index([statusOptionId])
+  @@index([supplierOptionId])
+  @@index([recordStatus, updatedAt])
+  @@index([deletedAt])
+  @@map("id_business_v2_accounts")
+}
+
+model IdBusinessV2GiftCard {
+  id                         String                     @id @default(uuid()) @db.Uuid
+  accountId                  String                     @map("account_id") @db.Uuid
+  supplierOptionId           String?                    @map("supplier_option_id") @db.Uuid
+  sourceAttachmentId         String?                    @map("source_attachment_id") @db.Uuid
+  codeEncrypted              String                     @map("code_encrypted") @db.Text
+  codeHash                   String                     @unique @map("code_hash") @db.VarChar(64)
+  codeMasked                 String                     @map("code_masked") @db.VarChar(80)
+  codeTail                   String                     @map("code_tail") @db.VarChar(8)
+  faceValue                  Decimal                    @map("face_value") @db.Decimal(18, 4)
+  exchangeRate               Decimal                    @map("exchange_rate") @db.Decimal(18, 8)
+  exchangeRateSource         String                     @default("manual_input") @map("exchange_rate_source") @db.VarChar(40)
+  exchangeRateSnapshotId     String?                    @map("exchange_rate_snapshot_id") @db.Uuid
+  exchangeRatePrefilledValue Decimal?                   @map("exchange_rate_prefilled_value") @db.Decimal(18, 8)
+  exchangeRateWasOverridden  Boolean                    @default(false) @map("exchange_rate_was_overridden")
+  costAmount                 Decimal                    @map("cost_amount") @db.Decimal(18, 4)
+  status                     IdBusinessV2GiftCardStatus
+  statusChangedAt            DateTime                   @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  remark                     String?                    @db.Text
+  createdByUserId            String?                    @map("created_by_user_id") @db.Uuid
+  updatedByUserId            String?                    @map("updated_by_user_id") @db.Uuid
+  createdAt                  DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  account              IdBusinessV2Account               @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  supplierOption       IdBusinessV2Option?               @relation("IdBusinessV2GiftCardSupplier", fields: [supplierOptionId], references: [id], onDelete: Restrict)
+  sourceAttachment     Attachment?                       @relation("IdBusinessV2GiftCardSourceAttachment", fields: [sourceAttachmentId], references: [id], onDelete: SetNull)
+  createdBy            User?                             @relation("IdBusinessV2GiftCardCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy            User?                             @relation("IdBusinessV2GiftCardUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  exchangeRateSnapshot IdBusinessV2ExchangeRateSnapshot? @relation(fields: [exchangeRateSnapshotId], references: [id], onDelete: Restrict)
+  ledgerEntries        IdBusinessV2BalanceLedger[]
+
+  @@index([accountId, createdAt])
+  @@index([supplierOptionId])
+  @@index([sourceAttachmentId])
+  @@index([exchangeRateSnapshotId])
+  @@index([status, statusChangedAt])
+  @@index([createdByUserId])
+  @@map("id_business_v2_gift_cards")
+}
+
+model IdBusinessV2BalanceLedger {
+  id                String                             @id @default(uuid()) @db.Uuid
+  accountId         String                             @map("account_id") @db.Uuid
+  giftCardId        String?                            @map("gift_card_id") @db.Uuid
+  orderId           String?                            @map("order_id") @db.Uuid
+  entryType         IdBusinessV2BalanceLedgerEntryType @map("entry_type")
+  direction         IdBusinessV2BalanceDirection
+  balanceAmount     Decimal                            @map("balance_amount") @db.Decimal(18, 4)
+  costAmount        Decimal                            @map("cost_amount") @db.Decimal(18, 4)
+  balanceBefore     Decimal                            @map("balance_before") @db.Decimal(18, 4)
+  balanceAfter      Decimal                            @map("balance_after") @db.Decimal(18, 4)
+  costBefore        Decimal                            @map("cost_before") @db.Decimal(18, 4)
+  costAfter         Decimal                            @map("cost_after") @db.Decimal(18, 4)
+  averageCostBefore Decimal                            @map("average_cost_before") @db.Decimal(18, 8)
+  averageCostAfter  Decimal                            @map("average_cost_after") @db.Decimal(18, 8)
+  reversalOfEntryId String?                            @unique @map("reversal_of_entry_id") @db.Uuid
+  idempotencyKey    String                             @unique @map("idempotency_key") @db.VarChar(160)
+  remark            String?                            @db.Text
+  createdByUserId   String?                            @map("created_by_user_id") @db.Uuid
+  createdAt         DateTime                           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  account         IdBusinessV2Account        @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  giftCard        IdBusinessV2GiftCard?      @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
+  order           IdBusinessV2Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reversalOfEntry IdBusinessV2BalanceLedger? @relation("IdBusinessV2BalanceLedgerReversal", fields: [reversalOfEntryId], references: [id], onDelete: Restrict)
+  reversedByEntry IdBusinessV2BalanceLedger? @relation("IdBusinessV2BalanceLedgerReversal")
+  createdBy       User?                      @relation("IdBusinessV2BalanceLedgerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([giftCardId, entryType])
+  @@unique([orderId, entryType])
+  @@index([accountId, createdAt])
+  @@index([giftCardId])
+  @@index([orderId])
+  @@index([entryType, createdAt])
+  @@index([direction, createdAt])
+  @@index([createdByUserId])
+  @@map("id_business_v2_balance_ledger")
+}
+
+model IdBusinessV2Order {
+  id                         String                  @id @default(uuid()) @db.Uuid
+  orderNo                    String                  @unique @map("order_no") @db.VarChar(40)
+  customerId                 String                  @map("customer_id") @db.Uuid
+  serviceOptionId            String                  @map("service_option_id") @db.Uuid
+  accountId                  String?                 @map("account_id") @db.Uuid
+  settlementPlatformOptionId String?                 @map("settlement_platform_option_id") @db.Uuid
+  platformOrderNo            String?                 @map("platform_order_no") @db.VarChar(160)
+  websiteAccountEncrypted    String?                 @map("website_account_encrypted") @db.Text
+  websiteAccountHash         String?                 @map("website_account_hash") @db.VarChar(64)
+  websiteAccountMasked       String?                 @map("website_account_masked") @db.VarChar(255)
+  receivedAmount             Decimal                 @default(0) @map("received_amount") @db.Decimal(18, 4)
+  platformFeeAmount          Decimal                 @default(0) @map("platform_fee_amount") @db.Decimal(18, 4)
+  accountCostAmount          Decimal                 @default(0) @map("account_cost_amount") @db.Decimal(18, 4)
+  balanceAmount              Decimal                 @default(0) @map("balance_amount") @db.Decimal(18, 4)
+  balanceCostAmount          Decimal                 @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
+  refundCostAmount           Decimal?                @map("refund_cost_amount") @db.Decimal(18, 4)
+  profitAmount               Decimal?                @map("profit_amount") @db.Decimal(18, 4)
+  status                     IdBusinessV2OrderStatus @default(draft)
+  statusChangedAt            DateTime                @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  openedAt                   DateTime?               @map("opened_at") @db.Timestamptz(6)
+  dueAt                      DateTime?               @map("due_at") @db.Timestamptz(6)
+  idempotencyKey             String                  @unique @map("idempotency_key") @db.VarChar(160)
+  remark                     String?                 @db.Text
+  createdByUserId            String?                 @map("created_by_user_id") @db.Uuid
+  updatedByUserId            String?                 @map("updated_by_user_id") @db.Uuid
+  createdAt                  DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt                  DateTime?               @map("deleted_at") @db.Timestamptz(6)
+
+  customer               IdBusinessV2Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  serviceOption          IdBusinessV2Option            @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
+  account                IdBusinessV2Account?          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  settlementPlatform     IdBusinessV2Option?           @relation("IdBusinessV2OrderSettlementPlatform", fields: [settlementPlatformOptionId], references: [id], onDelete: Restrict)
+  createdBy              User?                         @relation("IdBusinessV2OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy              User?                         @relation("IdBusinessV2OrderUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  activation             IdBusinessV2Activation?
+  locks                  IdBusinessV2AccountLock[]
+  balanceLedger          IdBusinessV2BalanceLedger[]
+
+  @@unique([settlementPlatformOptionId, platformOrderNo], map: "id_business_v2_orders_platform_order_key")
+  @@index([customerId])
+  @@index([serviceOptionId])
+  @@index([accountId])
+  @@index([settlementPlatformOptionId])
+  @@index([websiteAccountHash])
+  @@index([status, statusChangedAt])
+  @@index([openedAt])
+  @@index([dueAt])
+  @@index([createdByUserId])
+  @@index([deletedAt])
+  @@map("id_business_v2_orders")
+}
+
+model IdBusinessV2AccountLock {
+  id              String                        @id @default(uuid()) @db.Uuid
+  accountId       String                        @map("account_id") @db.Uuid
+  serviceOptionId String?                       @map("service_option_id") @db.Uuid
+  orderId         String                        @map("order_id") @db.Uuid
+  lockScope       IdBusinessV2AccountLockScope  @default(by_service) @map("lock_scope")
+  status          IdBusinessV2AccountLockStatus @default(active)
+  lockToken       String                        @unique @map("lock_token") @db.VarChar(64)
+  reason          String?                       @db.Text
+  lockedAt        DateTime                      @default(now()) @map("locked_at") @db.Timestamptz(6)
+  expiresAt       DateTime                      @map("expires_at") @db.Timestamptz(6)
+  endedAt         DateTime?                     @map("ended_at") @db.Timestamptz(6)
+  endReason       String?                       @map("end_reason") @db.Text
+  createdByUserId String?                       @map("created_by_user_id") @db.Uuid
+  endedByUserId   String?                       @map("ended_by_user_id") @db.Uuid
+  createdAt       DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  account       IdBusinessV2Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  serviceOption IdBusinessV2Option? @relation("IdBusinessV2AccountLockService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
+  order         IdBusinessV2Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdBy     User?               @relation("IdBusinessV2AccountLockCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  endedBy       User?               @relation("IdBusinessV2AccountLockEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, status])
+  @@index([serviceOptionId, status])
+  @@index([orderId, status])
+  @@index([lockScope, status])
+  @@index([expiresAt, status])
+  @@index([createdByUserId])
+  @@index([endedByUserId])
+  @@map("id_business_v2_account_locks")
+}
+
+model IdBusinessV2Activation {
+  id                      String                        @id @default(uuid()) @db.Uuid
+  orderId                 String                        @unique @map("order_id") @db.Uuid
+  renewedFromActivationId String?                       @unique @map("renewed_from_activation_id") @db.Uuid
+  customerId              String                        @map("customer_id") @db.Uuid
+  accountId               String                        @map("account_id") @db.Uuid
+  serviceOptionId         String                        @map("service_option_id") @db.Uuid
+  openedAt                DateTime                      @map("opened_at") @db.Timestamptz(6)
+  dueAt                   DateTime?                     @map("due_at") @db.Timestamptz(6)
+  status                  IdBusinessV2ActivationStatus  @default(active)
+  statusChangedAt         DateTime                      @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  autoRenewalStatus       IdBusinessV2AutoRenewalStatus @default(unknown) @map("auto_renewal_status")
+  autoRenewalChangedAt    DateTime?                     @map("auto_renewal_changed_at") @db.Timestamptz(6)
+  remark                  String?                       @db.Text
+  createdByUserId         String?                       @map("created_by_user_id") @db.Uuid
+  updatedByUserId         String?                       @map("updated_by_user_id") @db.Uuid
+  createdAt               DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order             IdBusinessV2Order              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  renewedFrom       IdBusinessV2Activation?        @relation("IdBusinessV2ActivationRenewalChain", fields: [renewedFromActivationId], references: [id], onDelete: Restrict)
+  renewedBy         IdBusinessV2Activation?        @relation("IdBusinessV2ActivationRenewalChain")
+  customer          IdBusinessV2Customer           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  account           IdBusinessV2Account            @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  serviceOption     IdBusinessV2Option             @relation("IdBusinessV2ActivationService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
+  createdBy         User?                          @relation("IdBusinessV2ActivationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy         User?                          @relation("IdBusinessV2ActivationUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([accountId])
+  @@index([serviceOptionId])
+  @@index([status, dueAt])
+  @@index([openedAt])
+  @@index([createdByUserId])
+  @@map("id_business_v2_activations")
+}
+
+model IdBusinessV2RenewalWarningSetting {
+  id              String   @id @default(uuid()) @db.Uuid
+  scope           String   @unique @default("global") @db.VarChar(32)
+  warningDays     Int      @default(3) @map("warning_days")
+  updatedByUserId String?  @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("IdBusinessV2RenewalWarningUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([updatedByUserId])
+  @@map("id_business_v2_renewal_warning_settings")
+}
+
+model IdBusinessV2ExchangeRateRun {
+  id                           String                                 @id @default(uuid()) @db.Uuid
+  status                       IdBusinessV2ExchangeRateRunStatus      @default(running)
+  triggerType                  IdBusinessV2ExchangeRateTriggerType    @map("trigger_type")
+  asset                        String                                 @default("USDT") @db.VarChar(16)
+  fiat                         String                                 @default("CNY") @db.VarChar(16)
+  targetAmountRmb              Decimal?                               @map("target_amount_rmb") @db.Decimal(18, 2)
+  startedAt                    DateTime                               @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt                   DateTime?                              @map("finished_at") @db.Timestamptz(6)
+  policyMinCompletedOrderCount Int?                                   @map("policy_min_completed_order_count")
+  policyMinCompletionRate      Decimal?                               @map("policy_min_completion_rate") @db.Decimal(9, 8)
+  policyMaxPriceDeviationRate  Decimal?                               @map("policy_max_price_deviation_rate") @db.Decimal(9, 8)
+  policyMinValidAdsPerSide     Int?                                   @map("policy_min_valid_ads_per_side")
+  policyDecimalPlaces          Int?                                   @map("policy_decimal_places")
+  errorCode                    String?                                @map("error_code") @db.VarChar(120)
+  errorMessage                 String?                                @map("error_message") @db.Text
+  errorProvider                IdBusinessV2ExchangeRateErrorProvider? @map("error_provider")
+  errorSide                    IdBusinessV2OtcSide?                   @map("error_side")
+  errorRetryable               Boolean?                               @map("error_retryable")
+  errorDetails                 Json?                                  @map("error_details")
+  triggeredByUserId            String?                                @map("triggered_by_user_id") @db.Uuid
+  createdAt                    DateTime                               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  triggeredBy User?                             @relation("IdBusinessV2ExchangeRateRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  snapshot    IdBusinessV2ExchangeRateSnapshot?
+
+  @@index([status, startedAt])
+  @@index([triggerType, startedAt])
+  @@index([triggeredByUserId])
+  @@index([createdAt])
+  @@map("id_business_v2_exchange_rate_runs")
+}
+
+model IdBusinessV2ExchangeRateEntry {
+  id                                   String   @id @default(uuid()) @db.Uuid
+  binanceMerchantBuyRateToRmb          Decimal  @map("binance_merchant_buy_rate_to_rmb") @db.Decimal(18, 8)
+  binanceMerchantSellRateToRmb         Decimal  @map("binance_merchant_sell_rate_to_rmb") @db.Decimal(18, 8)
+  okxMerchantBuyRateToRmb              Decimal  @map("okx_merchant_buy_rate_to_rmb") @db.Decimal(18, 8)
+  okxMerchantSellRateToRmb             Decimal  @map("okx_merchant_sell_rate_to_rmb") @db.Decimal(18, 8)
+  combinedMerchantBuyAverageRateToRmb  Decimal  @map("combined_merchant_buy_average_rate_to_rmb") @db.Decimal(18, 8)
+  combinedMerchantSellAverageRateToRmb Decimal  @map("combined_merchant_sell_average_rate_to_rmb") @db.Decimal(18, 8)
+  midRateToRmb                         Decimal  @map("mid_rate_to_rmb") @db.Decimal(18, 8)
+  recordedAt                           DateTime @map("recorded_at") @db.Timestamptz(6)
+  remark                               String?  @db.Text
+  createdByUserId                      String?  @map("created_by_user_id") @db.Uuid
+  createdAt                            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  createdBy User? @relation("IdBusinessV2ExchangeRateEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([recordedAt])
+  @@index([createdByUserId])
+  @@index([createdAt])
+  @@map("id_business_v2_exchange_rate_entries")
+}
+
+model IdBusinessV2ExchangeRateSnapshot {
+  id                                   String   @id @default(uuid()) @db.Uuid
+  runId                                String   @unique @map("run_id") @db.Uuid
+  asset                                String   @db.VarChar(16)
+  fiat                                 String   @db.VarChar(16)
+  averagedAt                           DateTime @map("averaged_at") @db.Timestamptz(6)
+  combinedMerchantBuyAverageRateToRmb  Decimal  @map("combined_merchant_buy_average_rate_to_rmb") @db.Decimal(18, 8)
+  combinedMerchantSellAverageRateToRmb Decimal  @map("combined_merchant_sell_average_rate_to_rmb") @db.Decimal(18, 8)
+  midRateToRmb                         Decimal  @map("mid_rate_to_rmb") @db.Decimal(18, 8)
+  createdAt                            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  run               IdBusinessV2ExchangeRateRun                @relation(fields: [runId], references: [id], onDelete: Restrict)
+  providerSnapshots IdBusinessV2ExchangeRateProviderSnapshot[]
+  giftCards         IdBusinessV2GiftCard[]
+
+  @@index([averagedAt])
+  @@index([createdAt])
+  @@map("id_business_v2_exchange_rate_snapshots")
+}
+
+model IdBusinessV2ExchangeRateSettings {
+  id              Int       @id @default(1)
+  autoEnabled     Boolean   @default(true) @map("auto_enabled")
+  intervalMinutes Int       @default(30) @map("interval_minutes")
+  targetAmountRmb Decimal   @default(5000) @map("target_amount_rmb") @db.Decimal(18, 2)
+  nextRunAt       DateTime? @map("next_run_at") @db.Timestamptz(6)
+  updatedByUserId String?   @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([nextRunAt])
+  @@index([updatedByUserId])
+  @@map("id_business_v2_exchange_rate_settings")
+}
+
+model IdBusinessV2ExchangeRateProviderSnapshot {
+  id                            String                  @id @default(uuid()) @db.Uuid
+  snapshotId                    String                  @map("snapshot_id") @db.Uuid
+  provider                      IdBusinessV2OtcProvider
+  side                          IdBusinessV2OtcSide
+  sourceContract                String                  @map("source_contract") @db.VarChar(120)
+  sourceUrl                     String                  @map("source_url") @db.VarChar(2048)
+  collectedAt                   DateTime                @map("collected_at") @db.Timestamptz(6)
+  receivedAdCount               Int                     @map("received_ad_count")
+  collectorAcceptedAdCount      Int                     @map("collector_accepted_ad_count")
+  collectorRejectedAdCount      Int                     @map("collector_rejected_ad_count")
+  validAdCount                  Int                     @map("valid_ad_count")
+  filteredAdCount               Int                     @map("filtered_ad_count")
+  excludedMissingTradableAmount Int                     @map("excluded_missing_tradable_amount")
+  excludedNonPositiveTradable   Int                     @map("excluded_non_positive_tradable")
+  excludedMissingOrderCount     Int                     @map("excluded_missing_order_count")
+  excludedLowOrderCount         Int                     @map("excluded_low_order_count")
+  excludedMissingCompletionRate Int                     @map("excluded_missing_completion_rate")
+  excludedLowCompletionRate     Int                     @map("excluded_low_completion_rate")
+  excludedPriceOutlier          Int                     @map("excluded_price_outlier")
+  medianRateToRmb               Decimal                 @map("median_rate_to_rmb") @db.Decimal(18, 8)
+  lowestValidRateToRmb          Decimal                 @map("lowest_valid_rate_to_rmb") @db.Decimal(18, 8)
+  highestValidRateToRmb         Decimal                 @map("highest_valid_rate_to_rmb") @db.Decimal(18, 8)
+  averageRateToRmb              Decimal                 @map("average_rate_to_rmb") @db.Decimal(18, 8)
+  createdAt                     DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  snapshot     IdBusinessV2ExchangeRateSnapshot      @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  validSamples IdBusinessV2ExchangeRateQuoteSample[]
+
+  @@unique([snapshotId, provider, side])
+  @@index([provider, side, collectedAt])
+  @@index([createdAt])
+  @@map("id_business_v2_exchange_rate_provider_snapshots")
+}
+
+model IdBusinessV2ExchangeRateQuoteSample {
+  id                  String   @id @default(uuid()) @db.Uuid
+  providerSnapshotId  String   @map("provider_snapshot_id") @db.Uuid
+  sourceAdId          String   @map("source_ad_id") @db.VarChar(200)
+  priceToRmb          Decimal  @map("price_to_rmb") @db.Decimal(18, 8)
+  minAmountRmb        Decimal? @map("min_amount_rmb") @db.Decimal(24, 8)
+  maxAmountRmb        Decimal? @map("max_amount_rmb") @db.Decimal(24, 8)
+  tradableAmountUsdt  Decimal  @map("tradable_amount_usdt") @db.Decimal(24, 8)
+  paymentMethods      String[] @default([]) @map("payment_methods")
+  merchantType        String   @map("merchant_type") @db.VarChar(80)
+  completedOrderCount Int      @map("completed_order_count")
+  completionRate      Decimal  @map("completion_rate") @db.Decimal(9, 8)
+  positiveReviewRate  Decimal? @map("positive_review_rate") @db.Decimal(9, 8)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  providerSnapshot IdBusinessV2ExchangeRateProviderSnapshot @relation(fields: [providerSnapshotId], references: [id], onDelete: Restrict)
+
+  @@unique([providerSnapshotId, sourceAdId])
+  @@index([providerSnapshotId, priceToRmb])
+  @@index([createdAt])
+  @@map("id_business_v2_exchange_rate_quote_samples")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(100)
+  code        String   @unique @db.VarChar(100)
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(100)
+  code      String   @unique @db.VarChar(150)
+  module    String   @db.VarChar(100)
+  action    String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+
+  @@index([module, action])
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  module     String   @db.VarChar(100)
+  action     String   @db.VarChar(100)
+  objectType String?  @map("object_type") @db.VarChar(100)
+  objectId   String?  @map("object_id") @db.Uuid
+  beforeData Json?    @map("before_data")
+  afterData  Json?    @map("after_data")
+  ip         String?  @db.VarChar(100)
+  userAgent  String?  @map("user_agent") @db.Text
+  remark     String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([module, action])
+  @@index([objectType, objectId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model V2AuthIdentity {
+  id                  String    @id @default(uuid()) @db.Uuid
+  authUserId          String    @unique @map("auth_user_id") @db.Uuid
+  userId              String    @unique @map("user_id") @db.Uuid
+  usernameNormalized  String    @unique @map("username_normalized") @db.VarChar(100)
+  authEmail           String    @unique @map("auth_email") @db.VarChar(255)
+  enabled             Boolean   @default(true)
+  mustResetPassword   Boolean   @default(true) @map("must_reset_password")
+  lastAuthenticatedAt DateTime? @map("last_authenticated_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([enabled])
+  @@index([createdAt])
+  @@map("v2_auth_identities")
+}
+
+model Attachment {
+  id              String   @id @default(uuid()) @db.Uuid
+  originalName    String   @map("original_name") @db.VarChar(255)
+  storageKey      String   @unique @map("storage_key") @db.VarChar(500)
+  mimeType        String   @map("mime_type") @db.VarChar(150)
+  sizeBytes       BigInt   @map("size_bytes")
+  businessModule  String?  @map("business_module") @db.VarChar(80)
+  objectType      String?  @map("object_type") @db.VarChar(120)
+  objectId        String?  @map("object_id") @db.Uuid
+  purpose         String?  @db.VarChar(120)
+  remark          String?  @db.Text
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  createdBy             User?                  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  idBusinessV2GiftCards IdBusinessV2GiftCard[] @relation("IdBusinessV2GiftCardSourceAttachment")
+
+  @@index([createdByUserId])
+  @@index([businessModule, objectType])
+  @@index([objectId])
+  @@index([purpose])
+  @@index([createdAt])
+  @@map("attachments")
+}

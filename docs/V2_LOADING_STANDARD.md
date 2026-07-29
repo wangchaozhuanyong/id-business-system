@@ -1,0 +1,136 @@
+# V2 页面统一加载规范
+
+本规范适用于所有当前及未来的路由业务页面，禁止使用 `v-loading`、`el-skeleton` 或整页遮罩。
+
+## 1. 加载状态矩阵
+
+| 场景                       | 标准行为                                                                   |
+| -------------------------- | -------------------------------------------------------------------------- |
+| HTML 启动阶段              | 只显示路由中性的极简品牌占位；不得伪造工作区侧边栏、导航或业务表格。       |
+| 会话确认                   | Vue 应用先挂载，再由 Boot Gate 核验会话；未确认时不渲染敏感业务内容。      |
+| 首次路由加载               | Boot Gate 区分登录页和已确认身份的工作区，不允许空白帧。                   |
+| 路由资源加载               | 保留 V2 外壳和当前页面，只显示顶部路由进度；禁止白屏、整页卸载和交叉动画。 |
+| 路由资源失败               | 已有页面时只显示一个布局内错误；保留当前页面，由用户决定是否重试。         |
+| 路由意图预取               | 只预取目标路由代码；短暂掠过可取消，不提前请求业务数据或改变当前页面。     |
+| 首次数据加载               | 没有成功快照时，使用与真实内容结构一致的共享骨架。                         |
+| 缓存命中                   | 立即显示缓存数据，不显示骨架、遮罩或按钮闪烁。                             |
+| 刷新、筛选、分页、页签切换 | 保留最后成功内容；超过 120ms 后只显示区域顶部细进度线。                    |
+| 首次加载失败               | 显示统一错误状态、错误原因和重新加载按钮。                                 |
+| 已有数据刷新失败           | 保留原内容，在区域顶部显示错误和重试；禁止清空列表。                       |
+| 空数据                     | 只有请求成功后才能显示空状态，不能把加载中或失败误报为空。                 |
+| 权限不足                   | 使用统一 forbidden 状态，不渲染无权限业务操作。                            |
+| 写操作                     | 只在当前按钮、行、抽屉或弹窗显示 loading，并阻止重复提交。                 |
+
+## 2. 强制实现方式
+
+- 入口必须静态导入 Vue、Pinia、App 和 Router；安装运行时错误处理、Pinia 和 Router 后立即
+  `mount`，不得等待鉴权、`router.isReady()` 或 Element Plus 组件合集。
+- `useAuthStore().ensureSessionReady()` 是会话初始化唯一入口。它必须复用进行中的 Promise，并使用
+  `idle | checking | ready | anonymous | error` 表达状态；受保护路由只有在 `ready` 后才允许渲染。
+- 本地用户快照只能辅助非敏感启动外壳，不能在服务端会话确认前渲染权限导航或业务数据。退出、
+  会话过期和身份变化必须终止旧身份请求、清空 V2 查询缓存，并通过重建路由树清除组件内草稿。
+- Element Plus 组件和样式必须通过 `unplugin-vue-components`、`unplugin-auto-import` 与
+  `ElementPlusResolver` 按需引入，禁止 `element-plus/dist/index.css` 和完整工作区组件预加载。
+- `vite:preloadError` 必须区分首次启动和已有稳定路由：首次失败按 `buildId` 在当前
+  `sessionStorage` 最多自动刷新一次；再次失败进入可恢复状态。已有稳定路由时全局恢复器不得拦截
+  Promise：真实导航错误交给 Vue Router 显示唯一布局内错误，推测预取错误由预取调用方静默吸收。
+  错误出现前必须保留当前页面；用户明确重试后允许重载目标地址，以绕过浏览器 ES 模块映射缓存的
+  失败动态导入。
+- 路由预取必须以真实用户意图触发：鼠标悬停使用可取消的短延迟，键盘聚焦可预取，pointerdown
+  确认导航时立即复用同一加载 Promise；pointerleave/blur 必须取消尚未开始的任务。标签页不可见、
+  离线、`saveData`、`slow-2g` 或 `2g` 时禁止推测预取，但不得阻止用户实际导航。预取只加载哈希
+  路由代码，不读取业务 API、不持久化数据、不显示导航进度。
+- 性能观测必须把一次导航拆为 `v2:route-start`、`v2:route-code-ready` 和
+  `v2:route-data-ready`。`afterEach` 只能上报代码就绪；当前路由的唯一
+  `useV2ModuleQuery` 在内存缓存可用或真实网络请求成功后上报数据就绪，并标明
+  `memory-cache | network`。首次数据失败上报 `v2:route-data-error`，迟到的旧路由响应不得结束
+  当前导航指标。
+- 每个 V2 路由页面必须使用 `V2AsyncRegion`；主列表使用 `page`，抽屉、页签子列表和独立数据块使用
+  `section`。
+- 每个 `V2AsyncRegion` 必须显式声明 `skeleton`。共享内容形状固定为：列表与分页使用 `table`，
+  订单录入及复杂编辑使用 `form`，汇率概览使用 `metrics`，选项工作区使用 `settings`，抽屉详情使用
+  `detail`，候选项与卡片列表使用 `cards`，单行引用数据使用 `inline`。页面不得复制或改造私有骨架。
+- 每个 V2 模块必须在 `V2ModuleDefinition.loadingTier` 声明缓存等级。所有真实远程数据页面必须
+  使用 `useV2ModuleQuery({ moduleKey, scope, key, query })`；禁止继续使用仅缓存完成标记的
+  `useV2ModuleRefresh({ moduleKey, scope, load })`。
+- `resolved` 表示该区域至少成功返回过一次，不能用 `items.length` 判断；成功空列表也属于
+  resolved。
+- 查询 key 必须由已规范化的分页、搜索、筛选和排序参数生成；同身份、同 scope、同 key 的并发读取
+  必须复用一个请求，不同 key 不允许通过固定请求通道互相取消。
+- 远程请求开始前不得清空已提交的列表、表格列或详情。筛选、排序和分页的新 key 尚无数据时，
+  必须保留最后一次成功内容；新 key 成功后原子替换，失败时继续保留旧内容并显示可重试错误。
+- 查询缓存等级固定为：`critical` 15 秒、`operational` 60 秒、`reference` 5 分钟、`live`
+  30 秒。缓存 key 必须包含登录身份代际；写操作成功后失效相关 scope、中止失效中的旧读取并阻止
+  旧响应回写，退出登录或切换身份时清空全部 V2 查询缓存。
+- 组件创建时必须同步读取同身份、同 scope、同 key 的已有缓存，回访不得先渲染一次骨架。服务端
+  数据与界面草稿必须分离：只有订单录入通过显式路由声明使用 KeepAlive；普通列表、筛选、分页、
+  页签、抽屉和弹窗随页面卸载，不得依赖全页面 KeepAlive。
+- 读取请求的主反馈由 `V2AsyncRegion` 独占：首次请求显示内容形状骨架；已有内容的请求超过 120ms
+  后只显示不遮挡内容的顶部进度线。手工刷新按钮请求期间只禁用，不得再显示 loading；搜索、筛选、
+  分页、页签和自动轮询也不得额外显示全局“后台更新中”、旋转图标、浮动卡片或第二个区域指示器。
+- 加载区域必须具有 `aria-busy`；状态文案通过 live region 或 `role="status"` 提供；动态动画必须
+  支持 `prefers-reduced-motion`。
+
+## 3. 禁止写法
+
+- 在 `app.mount()` 前等待 `initializeSession()`、`ensureSessionReady()`、`router.isReady()` 或
+  组件集合预加载。
+- 在 `index.html` 中复制后台侧边栏、导航、顶部栏、表格或业务数据骨架。
+- 入口安装全量 Element Plus 插件或预加载完整工作区组件集合。
+- 同一路由资源错误同时显示布局错误和 V2App 全屏错误，或在已有稳定页面时自动刷新。
+- 空闲时、启动后或按固定列表批量预取全部 V2 路由；短暂掠过后不取消，或在省流量/2G 下推测预取。
+- 路由预取时提前请求业务 API、写入浏览器持久化存储、显示路由进度或把失败误报成当前页面错误。
+- 在 Router `afterEach` 中记录含糊的 `route-ready` 并把它解释成业务数据已经返回。
+- V2 路由页面直接使用 `v-loading`、`el-skeleton`、`ElLoading`。
+- 直接拼装 `<V2PageState state="loading">`，遗漏 `V2AsyncRegion.skeleton`，或复制页面专用
+  skeleton、mask、overlay。
+- 同一读取请求同时显示按钮 loading、全局更新文案与区域进度，或恢复右上角浮动刷新卡片、旋转
+  指示器和内容蒙层。
+- 在 `onActivated` 中无条件调用页面加载函数。
+- 对全部 V2 路由统一套用 KeepAlive，或把服务端响应、敏感数据、订单草稿写入浏览器持久化存储。
+- 请求开始时执行 `items = []`、销毁表格 `key` 或用空白占位替换已有内容。
+- 缓存命中仍显示 loading，或把刷新失败、权限失败显示成“暂无数据”。
+- 为绕过检查添加无说明例外。确需例外时必须先建立清理任务并写明期限。
+
+## 4. 新页面示例
+
+```vue
+<V2AsyncRegion
+  skeleton="table"
+  :loading="loading || isInitialLoading"
+  :resolved="hasLoadedOnce"
+  :error="loadError"
+  loading-title="正在加载订单"
+  refreshing-title="正在更新订单"
+  error-title="订单加载失败"
+  @retry="loadOrders"
+>
+  <OrderList />
+</V2AsyncRegion>
+
+<AppButton title="刷新订单" :disabled="loading" @click="loadOrders">刷新</AppButton>
+```
+
+```ts
+const ordersQuery = useV2ModuleQuery({
+  moduleKey: 'orders',
+  scope: 'orders',
+  key: () => createV2QueryKey(normalizeOrdersQuery(query)),
+  query: ({ signal }) => ordersApi.list(normalizeOrdersQuery(query), { signal })
+});
+
+const items = computed(() => ordersQuery.data.value?.items ?? []);
+```
+
+新增或修改 V2 页面后必须运行：
+
+```bash
+npm run typecheck --workspace @apple-business/admin
+npm run lint --workspace @apple-business/admin
+npm run build --workspace @apple-business/admin
+npm run check:v2-loading-standard
+npm run acceptance:v2-navigation-performance
+```
+
+`acceptance:v2-navigation-performance` 需要本地 API 和测试账号；缺少运行条件时必须明确记录未执行，
+不能把静态检查或本地 mock 当成真实登录通过。

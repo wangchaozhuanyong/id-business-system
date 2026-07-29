@@ -1,0 +1,334 @@
+.v2-records-page {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-records-header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.v2-records-header-status span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-records-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 190px) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-records-toolbar--accounts {
+  grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(140px, 180px)) auto auto;
+}
+
+.v2-records-toolbar__actions,
+.v2-record-actions,
+.v2-sensitive-cell,
+.v2-record-tags {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.v2-records-toolbar__actions,
+.v2-record-actions {
+  justify-content: flex-end;
+}
+
+.v2-records-toolbar__actions {
+  flex-wrap: wrap;
+}
+
+.v2-account-row-actions {
+  width: 100%;
+}
+
+.v2-record-action-danger {
+  color: var(--el-color-danger);
+}
+
+.v2-records-security-note {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 7px;
+  margin: -4px 2px -2px;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-records-security-note .el-icon {
+  color: var(--v2-accent);
+  font-size: 14px;
+}
+
+.v2-account-import-summary {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.v2-account-import-summary strong {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.v2-account-import-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.v2-account-import-errors {
+  margin-top: 14px;
+}
+
+.v2-account-reveal-form {
+  margin-top: 16px;
+}
+
+.v2-account-reveal-form .el-select {
+  width: 100%;
+}
+
+.v2-record-tags {
+  flex-wrap: wrap;
+}
+
+.v2-records-table .v2-record-tags {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.v2-sensitive-cell {
+  justify-content: space-between;
+}
+
+.v2-account-security-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.v2-records-list {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+  box-shadow: none;
+}
+
+.v2-records-table {
+  width: 100%;
+}
+
+.v2-records-table .el-table__header-wrapper th.el-table__cell {
+  height: 42px;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+}
+
+.v2-records-table .el-table__body-wrapper td.el-table__cell {
+  height: 52px;
+  padding-block: 6px;
+}
+
+.v2-records-empty {
+  display: grid;
+  min-height: 230px;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  color: var(--v2-text-soft);
+}
+
+.v2-records-empty strong {
+  color: var(--v2-text);
+  font-size: 14px;
+}
+
+.v2-records-empty span {
+  font-size: 12px;
+}
+
+.v2-records-pagination {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--v2-border-soft);
+}
+
+.v2-records-pagination > span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-records-mobile-list {
+  display: none;
+}
+
+.v2-record-form-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1fr;
+  gap: 0 12px;
+}
+
+.v2-record-form-grid--three {
+  grid-template-columns: 1fr;
+}
+
+.v2-form-drawer__body .el-select,
+.v2-form-drawer__body .el-input-number {
+  width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .v2-records-toolbar,
+  .v2-records-toolbar--accounts {
+    grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(140px, 180px)) auto;
+  }
+
+  .v2-records-toolbar__actions {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-records-toolbar,
+  .v2-records-toolbar--accounts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 11px;
+  }
+
+  .v2-records-toolbar > .el-input {
+    grid-column: 1 / -1;
+  }
+
+  .v2-records-toolbar > .v2-filter-disclosure {
+    grid-column: 1 / -1;
+  }
+
+  .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
+  }
+
+  .v2-records-toolbar__actions .app-button:not(.app-button--icon) {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .v2-records-table {
+    display: none;
+  }
+
+  .v2-records-mobile-list {
+    display: grid;
+  }
+
+  .v2-records-mobile-item {
+    display: grid;
+    min-width: 0;
+    gap: 13px;
+    padding: 14px;
+    border-bottom: 1px solid var(--v2-border-soft);
+    background: var(--v2-surface);
+  }
+
+  .v2-records-mobile-item header,
+  .v2-records-mobile-item footer {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .v2-records-mobile-item header > div {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .v2-records-mobile-item header strong {
+    overflow-wrap: anywhere;
+    font-size: 14px;
+  }
+
+  .v2-records-mobile-item header span {
+    color: var(--v2-text-soft);
+    font-size: 12px;
+  }
+
+  .v2-records-mobile-item dl {
+    display: grid;
+    margin: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .v2-records-mobile-item dl div {
+    min-width: 0;
+  }
+
+  .v2-records-mobile-item dt {
+    margin-bottom: 3px;
+    color: var(--v2-text-soft);
+    font-size: 11px;
+  }
+
+  .v2-records-mobile-item dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  .v2-records-mobile-item footer {
+    align-items: center;
+  }
+
+  .v2-record-actions {
+    flex-wrap: wrap;
+  }
+
+  .v2-records-mobile-item footer .v2-account-row-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .v2-records-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-records-pagination .el-pagination {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .v2-records-pagination .el-pagination__sizes {
+    margin: 0;
+  }
+
+  .v2-record-form-grid,
+  .v2-record-form-grid--three {
+    grid-template-columns: 1fr;
+  }
+}

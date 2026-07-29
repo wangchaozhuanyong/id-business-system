@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "strict": true
+  },
+  "imports": {},
+  "nodeModulesDir": "auto"
+}
