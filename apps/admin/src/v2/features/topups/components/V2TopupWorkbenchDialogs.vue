@@ -270,7 +270,7 @@
 </template>
 
 <script setup lang="ts">
-import { WarningFilled } from '@element-plus/icons-vue';
+import { RefreshLeft, WarningFilled } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';

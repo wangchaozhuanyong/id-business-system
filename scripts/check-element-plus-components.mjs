@@ -21,6 +21,29 @@ for (const file of walk(path.join(rootDir, 'apps/admin/src')).filter((item) =>
   if (/app\.use\(\s*ElementPlus\s*\)/.test(source)) {
     failures.push(`${projectPath}: 禁止安装 Element Plus 全量插件`);
   }
+
+  if (file.endsWith('.vue')) {
+    const usedIcons = new Set(
+      [...source.matchAll(/<el-icon\b[^>]*>\s*<([A-Z][A-Za-z0-9]*)\b/g)].map((match) => match[1])
+    );
+    const importedIcons = new Set(
+      [...source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]@element-plus\/icons-vue['"]/g)]
+        .flatMap((match) => match[1].split(','))
+        .map((name) =>
+          name
+            .trim()
+            .split(/\s+as\s+/)
+            .pop()
+        )
+        .filter(Boolean)
+    );
+
+    for (const icon of usedIcons) {
+      if (!importedIcons.has(icon)) {
+        failures.push(`${projectPath}: <el-icon> 使用了未显式导入的 ${icon}`);
+      }
+    }
+  }
 }
 
 if (failures.length) {
