@@ -123,6 +123,7 @@ function startAdminServer(url) {
       cwd: rootDir,
       env: {
         ...process.env,
+        NODE_ENV: 'development',
         VITE_API_BASE_URL: '/api',
         VITE_SUPABASE_URL: '',
         VITE_SUPABASE_ANON_KEY: '',
