@@ -119,6 +119,27 @@ npm run git:readiness
 npm run deploy:production
 ```
 
+Cloudflare 发布命令包含以下硬门禁：
+
+- 当前分支必须为干净的 `main`，且 `HEAD` 与 `origin/main` 完全一致。
+- GitHub `quality`、`production-images` 必须成功，`main` 必须启用 PR、管理员约束、线性历史、
+  对话解决和禁止强推/删除的保护规则。
+- Cloudflare account、Worker、Hyperdrive、公开域名和 CORS 必须与仓库固定生产配置一致。
+- `.deploy/cloudflare-free.secrets.json` 必须包含四项运行时密钥及
+  `SMOKE_TEST_USERNAME`、`SMOKE_TEST_PASSWORD`，该文件必须保持 Git 忽略且权限为 `0600`。
+- Wrangler 版本消息和标签写入完整/短 Git commit；部署成功后自动检查首页、健康端点、只读账号
+  登录、最小权限集合和核心只读接口。
+
+首次创建或轮换生产巡检账号时，在受控本机执行：
+
+```bash
+npm run prod:smoke-user:provision
+```
+
+该命令只同步所需的七项查看权限并创建/刷新 `production_smoke_readonly` 角色和专用账号，不修改
+数据库结构，也不授予新增、修改、删除、密文查看或业务选项管理权限。巡检账号凭据只保存在被 Git
+忽略的本机部署凭据文件中，不上传为 Worker 运行时密钥。
+
 ## 8. 回滚
 
 - 前端回滚到上一份已验证静态构建。

@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  "account_id": "a7e061557092f924beb4a7c8adc39c3d",
   "name": "daichongxitong-v2-free-20260727",
   "main": "./deploy/cloudflare-free/worker.mjs",
   "compatibility_date": "2026-07-27",
