@@ -68,6 +68,7 @@ export interface V2RenewalWorkbenchQuery extends V2PageQuery {
 export interface V2RenewalWorkbenchResult extends PaginatedResult<V2RenewalWorkbenchItem> {
   warningSummary: V2RenewalWarningCounts;
   evaluatedAt: string;
+  revalidateAt: string | null;
 }
 
 export interface V2RenewalWarningCounts {
@@ -104,6 +105,7 @@ export interface V2RenewalWarningSummary extends V2RenewalWarningSettings, V2Ren
     warningState: V2RenewalWarningState;
   }>;
   evaluatedAt: string;
+  revalidateAt: string | null;
 }
 
 export interface V2RenewalFilterOptions {

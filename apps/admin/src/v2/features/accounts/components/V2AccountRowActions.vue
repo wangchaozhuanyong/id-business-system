@@ -3,7 +3,7 @@
     <AppButton v-if="canViewSensitive" size="small" variant="ghost" @click="emit('view-sensitive')">
       敏感资料
     </AppButton>
-    <AppButton v-if="canUpdate" size="small" variant="ghost" @click="emit('edit')">
+    <AppButton v-if="canUpdate && !lossReported" size="small" variant="ghost" @click="emit('edit')">
       <el-icon><Edit /></el-icon>
       编辑
     </AppButton>
@@ -19,13 +19,21 @@
       </AppButton>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item v-if="canUpdate" command="toggle-status">
+          <el-dropdown-item v-if="canUpdate && !lossReported" command="toggle-status">
             {{ recordStatus === 'active' ? '停用 ID' : '启用 ID' }}
           </el-dropdown-item>
           <el-dropdown-item
-            v-if="canDelete"
-            command="delete"
+            v-if="canReportLoss && !lossReported"
+            command="report-loss"
             :divided="canUpdate"
+            class="v2-record-action-danger"
+          >
+            报损
+          </el-dropdown-item>
+          <el-dropdown-item
+            v-if="canDelete && !lossReported"
+            command="delete"
+            :divided="canUpdate || canReportLoss"
             class="v2-record-action-danger"
           >
             删除 ID
@@ -48,18 +56,27 @@ const props = defineProps<{
   canViewSensitive: boolean;
   canUpdate: boolean;
   canDelete: boolean;
+  canReportLoss: boolean;
+  lossReported: boolean;
 }>();
 
 const emit = defineEmits<{
   'view-sensitive': [];
   edit: [];
   'toggle-status': [];
+  'report-loss': [];
   delete: [];
 }>();
 
 const dropdownRef = ref<{ handleClose: () => void } | null>(null);
-const hasActions = computed(() => props.canViewSensitive || props.canUpdate || props.canDelete);
-const hasSecondaryActions = computed(() => props.canUpdate || props.canDelete);
+const hasActions = computed(
+  () =>
+    props.canViewSensitive ||
+    (!props.lossReported && (props.canUpdate || props.canDelete || props.canReportLoss))
+);
+const hasSecondaryActions = computed(
+  () => !props.lossReported && (props.canUpdate || props.canDelete || props.canReportLoss)
+);
 
 function closeMenu() {
   dropdownRef.value?.handleClose();
@@ -68,6 +85,8 @@ function closeMenu() {
 function handleCommand(command: string | number | object) {
   if (command === 'toggle-status') {
     emit('toggle-status');
+  } else if (command === 'report-loss') {
+    emit('report-loss');
   } else if (command === 'delete') {
     emit('delete');
   }

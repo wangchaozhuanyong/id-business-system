@@ -45,7 +45,7 @@
           <template #default="{ row }">{{ page.formatDecimal(row.currentBalance) }}</template>
         </el-table-column>
         <el-table-column label="平均成本" min-width="130">
-          <template #default="{ row }">¥{{ page.formatDecimal(row.averageCost, 8) }}</template>
+          <template #default="{ row }">¥{{ page.formatDecimal(row.averageCost) }}</template>
         </el-table-column>
         <el-table-column label="加卡记录" min-width="125">
           <template #default="{ row }">
@@ -122,7 +122,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="98" fixed="right">
+        <V2TableActionColumn layout="single">
           <template #default="{ row }">
             <AppButton
               v-if="page.canTopup"
@@ -136,7 +136,7 @@
             </AppButton>
             <span v-else>-</span>
           </template>
-        </el-table-column>
+        </V2TableActionColumn>
       </el-table>
 
       <div class="v2-records-mobile-list">
@@ -161,7 +161,7 @@
             </div>
             <div>
               <dt>平均成本</dt>
-              <dd>¥{{ page.formatDecimal(item.averageCost, 8) }}</dd>
+              <dd>¥{{ page.formatDecimal(item.averageCost) }}</dd>
             </div>
             <div>
               <dt>最近加卡</dt>
@@ -290,6 +290,7 @@
 import { DataAnalysis, Plus, RefreshLeft, Tickets } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useTopupWorkbenchPage } from '../useTopupWorkbenchPage';
 

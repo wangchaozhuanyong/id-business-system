@@ -54,6 +54,13 @@
           有开通证据时会拒绝恢复。
         </p>
       </el-form-item>
+
+      <el-form-item v-if="order?.accountDisposition === 'sold'" label="ID 销售处理">
+        <el-checkbox v-model="form.accountReturned">ID 已由客户退回并确认可再次使用</el-checkbox>
+        <p class="v2-order-refund-hint">
+          默认保持“已卖出”。勾选后会解除销售占用，并从本单利润中撤销已计入的 ID 成本。
+        </p>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -71,6 +78,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
+import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import type { RefundV2OrderInput, V2Order } from '../contracts';
 
 const props = defineProps<{
@@ -88,7 +96,8 @@ const formRef = ref<FormInstance>();
 const form = reactive({
   refundCostAmount: '',
   reason: '',
-  restoreBalance: false
+  restoreBalance: false,
+  accountReturned: false
 });
 
 const submitDisabled = computed(
@@ -101,7 +110,9 @@ const rules: FormRules = {
     {
       validator: (_rule, value, callback) =>
         callback(
-          isNonNegativeDecimal(value) ? undefined : new Error('请输入最多 4 位小数的非负金额')
+          isNonNegativeDecimal(value)
+            ? undefined
+            : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
         ),
       trigger: 'blur'
     }
@@ -128,7 +139,8 @@ watch(
     Object.assign(form, {
       refundCostAmount: props.order?.refundCostAmount ?? '',
       reason: '',
-      restoreBalance: false
+      restoreBalance: false,
+      accountReturned: false
     });
   }
 );
@@ -138,12 +150,13 @@ async function submit() {
   emit('submit', {
     refundCostAmount: form.refundCostAmount.trim(),
     reason: form.reason.trim(),
-    restoreBalance: form.restoreBalance
+    restoreBalance: form.restoreBalance,
+    accountReturned: form.accountReturned
   });
 }
 
 function isNonNegativeDecimal(value: unknown) {
-  return /^\d+(\.\d{1,4})?$/.test(String(value ?? '').trim());
+  return isV2UnsignedDecimal(value);
 }
 </script>
 

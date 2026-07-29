@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2GiftCardRecordsService } from './id-business-v2-gift-card-records.service';
@@ -49,6 +49,7 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
     account: {
       id: accountId,
       appleIdMasked: 'us***@example.com',
+      lossReportedAt: null,
       countryOption: country
     },
     supplierOption: {
@@ -165,7 +166,10 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       id: giftCardId,
       codeMasked: 'X123****CDEF',
       supplierOptionId: null,
-      remark: null
+      remark: null,
+      account: {
+        lossReportedAt: null
+      }
     });
     tx.idBusinessV2GiftCard.update.mockResolvedValue(makeGiftCardRecord());
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
@@ -200,13 +204,35 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
             costAfter: '810'
           },
           account: {
-            appleIdMasked: 'us***@example.com'
+            appleIdMasked: 'us***@example.com',
+            lossStatus: 'active',
+            lossReportedAt: null
           }
         }
       ]
     });
     expect(JSON.stringify(result)).not.toContain('codeEncrypted');
     expect(JSON.stringify(result)).not.toContain('codeHash');
+  });
+
+  it('marks gift-card records whose ID has been permanently reported lost', async () => {
+    prisma.idBusinessV2GiftCard.findMany.mockResolvedValue([
+      makeGiftCardRecord({
+        account: {
+          id: accountId,
+          appleIdMasked: 'us***@example.com',
+          lossReportedAt: reversedAt,
+          countryOption: country
+        }
+      })
+    ]);
+
+    const result = await service.listGiftCards({});
+
+    expect(result.items[0]?.account).toMatchObject({
+      lossStatus: 'reported',
+      lossReportedAt: reversedAt
+    });
   });
 
   it('exposes reversal evidence without replacing the original credit record', async () => {
@@ -307,6 +333,12 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     await expect(service.listBalanceLedger({ entryType: 'manual_success' })).rejects.toBeInstanceOf(
       BadRequestException
     );
+    await service.listBalanceLedger({ entryType: 'account_loss' });
+    expect(prisma.idBusinessV2BalanceLedger.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ entryType: 'account_loss' })
+      })
+    );
     await expect(service.listGiftCards({ accountId: 'not-an-id' })).rejects.toBeInstanceOf(
       BadRequestException
     );
@@ -369,5 +401,22 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(tx.idBusinessV2GiftCard.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects metadata changes after the related ID is permanently reported lost', async () => {
+    tx.idBusinessV2GiftCard.findUnique.mockResolvedValue({
+      id: giftCardId,
+      codeMasked: 'X123****CDEF',
+      supplierOptionId: null,
+      remark: null,
+      account: {
+        lossReportedAt: reversedAt
+      }
+    });
+
+    await expect(
+      service.updateMetadata(giftCardId, { remark: '报损后不得修改' }, operator)
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.idBusinessV2GiftCard.update).not.toHaveBeenCalled();
   });
 });

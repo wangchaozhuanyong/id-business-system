@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const renewalWorkbenchFeature = defineV2Feature({
@@ -8,7 +9,7 @@ export const renewalWorkbenchFeature = defineV2Feature({
   sourceSheet: '工作台-续费操作',
   permission: 'apple.renewal_task.view',
   kind: 'list',
-  loadingTier: 'critical',
+  freshnessPolicy: 'event-with-deadline',
   filters: [
     {
       key: 'keyword',
@@ -33,7 +34,12 @@ export const renewalWorkbenchFeature = defineV2Feature({
     { key: 'service', label: '开通业务', minWidth: 140 },
     { key: 'dueAt', label: '到期时间', minWidth: 160 },
     { key: 'status', label: '状态', minWidth: 130 },
-    { key: 'actions', label: '操作', minWidth: 180, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2RenewalsView.vue')
 });

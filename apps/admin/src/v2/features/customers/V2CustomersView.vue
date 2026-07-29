@@ -156,32 +156,30 @@
           <el-table-column prop="updatedAt" label="更新时间" min-width="165" sortable="custom">
             <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="230" fixed="right">
+          <V2TableActionColumn layout="triple">
             <template #default="{ row }">
-              <div class="v2-record-actions">
-                <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(row)">
-                  <el-icon><Edit /></el-icon>
-                  编辑
-                </AppButton>
-                <AppButton
-                  v-if="canUpdate"
-                  size="small"
-                  :variant="row.recordStatus === 'active' ? 'soft' : 'success'"
-                  @click="toggleStatus(row)"
-                >
-                  <el-icon>
-                    <VideoPause v-if="row.recordStatus === 'active'" />
-                    <VideoPlay v-else />
-                  </el-icon>
-                  {{ row.recordStatus === 'active' ? '停用' : '启用' }}
-                </AppButton>
-                <AppButton v-if="canDelete" size="small" variant="danger" @click="openDelete(row)">
-                  <el-icon><Delete /></el-icon>
-                  删除
-                </AppButton>
-              </div>
+              <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(row)">
+                <el-icon><Edit /></el-icon>
+                编辑
+              </AppButton>
+              <AppButton
+                v-if="canUpdate"
+                size="small"
+                :variant="row.recordStatus === 'active' ? 'soft' : 'success'"
+                @click="toggleStatus(row)"
+              >
+                <el-icon>
+                  <VideoPause v-if="row.recordStatus === 'active'" />
+                  <VideoPlay v-else />
+                </el-icon>
+                {{ row.recordStatus === 'active' ? '停用' : '启用' }}
+              </AppButton>
+              <AppButton v-if="canDelete" size="small" variant="danger" @click="openDelete(row)">
+                <el-icon><Delete /></el-icon>
+                删除
+              </AppButton>
             </template>
-          </el-table-column>
+          </V2TableActionColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -403,6 +401,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { useCustomersPage } from './useCustomersPage';
 import '@/v2/styles/records.css';
 

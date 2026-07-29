@@ -68,6 +68,14 @@ export interface V2Account {
   currentBalance: string;
   balanceCostAmount: string;
   purchaseCost: string;
+  saleState: 'available' | 'sold';
+  soldAt: string | null;
+  soldByOrder: {
+    id: string;
+    orderNo: string;
+  } | null;
+  lossStatus: 'active' | 'reported';
+  lossReportedAt: string | null;
   recordStatus: V2RecordStatus;
   remark: string | null;
   createdAt: string;
@@ -82,6 +90,7 @@ export interface V2AccountListQuery extends V2PageQuery {
   statusOptionId?: string;
   supplierOptionId?: string;
   recordStatus?: V2RecordStatus | '';
+  saleState?: 'available' | 'sold' | '';
   sortBy?:
     | 'appleId'
     | 'currentBalance'
@@ -134,6 +143,65 @@ export interface V2AccountExportResult {
   total: number;
   containsSensitiveFields: false;
   exportedAt: string;
+}
+
+export interface ReportV2AccountLossInput {
+  reason: string;
+  expectedCurrentBalance: string | number;
+  expectedBalanceCostAmount: string | number;
+  idempotencyKey: string;
+}
+
+export interface V2AccountLossRecord {
+  rowNumber?: number;
+  id: string;
+  accountId: string;
+  ledgerEntryId: string;
+  appleIdMasked: string;
+  countryOptionId: string;
+  countryName: string;
+  currencyCode: string | null;
+  supplierOptionId: string | null;
+  supplierName: string | null;
+  saleState: 'available' | 'sold';
+  soldOrderId: string | null;
+  soldOrderNo: string | null;
+  lossBalance: string;
+  lossCostAmount: string;
+  reason: string;
+  reportedByName: string | null;
+  reportedBy: {
+    id: string;
+    username: string;
+    displayName: string;
+  } | null;
+  reportedAt: string;
+}
+
+export type V2AccountLossListResult = PaginatedResult<V2AccountLossRecord>;
+
+export interface V2AccountLossListQuery extends V2PageQuery {
+  keyword?: string;
+  countryOptionId?: string;
+  saleState?: 'available' | 'sold' | '';
+  reportedFrom?: string;
+  reportedTo?: string;
+  sortBy?: 'reportedAt' | 'lossBalance' | 'lossCostAmount';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface ReportV2AccountLossResult {
+  lossRecord: V2AccountLossRecord;
+  account: Pick<
+    V2Account,
+    | 'id'
+    | 'appleIdMasked'
+    | 'lossStatus'
+    | 'lossReportedAt'
+    | 'currentBalance'
+    | 'balanceCostAmount'
+  >;
+  idempotentReplay: boolean;
 }
 
 export type V2AccountSecretField = 'appleId' | 'password' | 'phone' | 'securityInfo';

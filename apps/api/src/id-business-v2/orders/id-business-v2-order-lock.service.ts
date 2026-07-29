@@ -4,6 +4,7 @@ import type { IdBusinessV2OrderStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
 import {
   assertReservableOrder,
   assertReservationReplayMatches,
@@ -338,6 +339,7 @@ export class IdBusinessV2OrderLockService {
         "received_amount" AS "receivedAmount",
         "platform_fee_amount" AS "platformFeeAmount",
         "account_cost_amount" AS "accountCostAmount",
+        "account_disposition" AS "accountDisposition",
         "balance_amount" AS "balanceAmount",
         "balance_cost_amount" AS "balanceCostAmount",
         "refund_cost_amount" AS "refundCostAmount",
@@ -364,6 +366,8 @@ export class IdBusinessV2OrderLockService {
         account."current_balance" AS "currentBalance",
         account."balance_cost_amount" AS "balanceCostAmount",
         account."purchase_cost" AS "purchaseCost",
+        account."sold_by_order_id" AS "soldByOrderId",
+        account."loss_reported_at" AS "lossReportedAt",
         account."country_option_id" AS "countryOptionId",
         status."code" AS "statusCode"
       FROM "id_business_v2_accounts" account
@@ -381,6 +385,7 @@ export class IdBusinessV2OrderLockService {
         account."id" = CAST(${accountId} AS UUID)
         AND account."deleted_at" IS NULL
         AND account."record_status" = 'active'
+        AND account."loss_reported_at" IS NULL
       FOR UPDATE OF account
     `);
     const account = rows[0];
@@ -395,12 +400,18 @@ export class IdBusinessV2OrderLockService {
     order: LockedOrderRow,
     account: LockedAccountRow
   ) {
+    if (account.lossReportedAt) {
+      throw new ConflictException('已报损 ID 永久冻结，不能锁定或扣减余额');
+    }
     if (account.statusCode !== 'normal') {
       throw new ConflictException('只有状态正常的 ID 才能锁定或扣减余额');
     }
+    if (account.soldByOrderId && account.soldByOrderId !== order.id) {
+      throw new ConflictException('该 ID 已卖出，不能再次匹配、加卡或续费');
+    }
     if (account.currentBalance.lessThan(order.balanceAmount)) {
       throw new ConflictException(
-        `ID 余额不足，需要 ${order.balanceAmount.toString()}，当前 ${account.currentBalance.toString()}`
+        `ID 余额不足，需要 ${toV2DecimalString(order.balanceAmount)}，当前 ${toV2DecimalString(account.currentBalance)}`
       );
     }
 

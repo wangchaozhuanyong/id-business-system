@@ -1,6 +1,7 @@
 import {
   createClient,
   type AuthChangeEvent,
+  type RealtimeChannel,
   type Session,
   type Subscription
 } from '@supabase/supabase-js';
@@ -44,5 +45,42 @@ export function subscribeSupabaseSession(
   listener: (event: AuthChangeEvent, session: Session | null) => void
 ): Subscription | null {
   if (!supabase) return null;
-  return supabase.auth.onAuthStateChange(listener).data.subscription;
+  return supabase.auth.onAuthStateChange((event, session) => {
+    if (session?.access_token) {
+      void supabase.realtime.setAuth(session.access_token);
+    }
+    listener(event, session);
+  }).data.subscription;
+}
+
+export type SupabaseRealtimeStatus = 'SUBSCRIBED' | 'TIMED_OUT' | 'CLOSED' | 'CHANNEL_ERROR';
+
+export async function refreshSupabaseRealtimeAuth() {
+  if (!supabase) return false;
+  const session = await getSupabaseSession();
+  if (!session?.access_token) return false;
+  await supabase.realtime.setAuth(session.access_token);
+  return true;
+}
+
+export function subscribeSupabasePrivateBroadcast(
+  topic: string,
+  event: string,
+  listener: (payload: unknown) => void,
+  onStatus: (status: SupabaseRealtimeStatus) => void
+): RealtimeChannel | null {
+  if (!supabase) return null;
+  return supabase
+    .channel(topic, {
+      config: {
+        private: true
+      }
+    })
+    .on('broadcast', { event }, ({ payload }) => listener(payload))
+    .subscribe((status) => onStatus(status));
+}
+
+export async function removeSupabaseRealtimeChannel(channel: RealtimeChannel | null) {
+  if (!supabase || !channel) return;
+  await supabase.removeChannel(channel);
 }

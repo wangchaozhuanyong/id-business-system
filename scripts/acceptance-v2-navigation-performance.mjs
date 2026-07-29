@@ -65,6 +65,7 @@ function checkSourceContracts() {
   const router = read('apps/admin/src/v2-router.ts');
   const viteConfig = read('apps/admin/vite.config.ts');
   const query = read('apps/admin/src/v2/composables/useV2Query.ts');
+  const changeSync = read('apps/admin/src/v2/runtime/changeSync.ts');
   const pageState = read('apps/admin/src/v2/components/V2PageState.vue');
   const asyncRegion = read('apps/admin/src/v2/components/V2AsyncRegion.vue');
   const asyncRegionState = read('apps/admin/src/v2/components/asyncRegionState.ts');
@@ -181,10 +182,11 @@ function checkSourceContracts() {
   assert.match(router, /beginV2RoutePerformance\(to\.path\)/, '路由开始没有性能代际');
   assert.match(router, /markV2RouteCodeReady/, 'afterEach 没有只记录路由代码就绪');
   assert.match(viteConfig, /ElementPlusResolver/, 'V2 未配置 Element Plus 官方按需解析器');
-  assert.match(query, /critical: 15_000/, 'critical 新鲜期不是 15 秒');
-  assert.match(query, /operational: 60_000/, 'operational 新鲜期不是 60 秒');
-  assert.match(query, /reference: 5 \* 60_000/, 'reference 新鲜期不是 5 分钟');
-  assert.match(query, /live: 30_000/, 'live 新鲜期不是 30 秒');
+  assert.doesNotMatch(query, /TIER_FRESHNESS_MS|critical:\s*15_000/, '查询缓存仍使用固定 TTL');
+  assert.match(query, /entry\.invalidated/, '查询缓存缺少精确失效状态');
+  assert.match(query, /entry\.revalidateAt/, '时间语义查询缺少 deadline');
+  assert.match(query, /MAX_INACTIVE_QUERY_ENTRIES = 200/, '查询缓存缺少 200 条 LRU 保护');
+  assert.match(query, /INVALIDATION_COALESCE_MS = 100/, '查询失效没有在 100ms 内合并');
   assert.match(query, /entry\.inFlight/, '同查询请求去重缺失');
   assert.match(query, /getAuthIdentityEpoch/, '查询缓存缺少身份代际隔离');
   assert.match(query, /entry\.revision/, '失效请求缺少旧响应回写保护');
@@ -199,6 +201,15 @@ function checkSourceContracts() {
     /localStorage|sessionStorage|indexedDB/i,
     '敏感业务查询缓存被写入浏览器持久化存储'
   );
+  assert.match(changeSync, /id-business-v2:changes/, '缺少 V2 私有实时主题');
+  assert.match(
+    changeSync,
+    /HEALTHY_RECONCILE_INTERVAL_MS = 5 \* 60 \* 1000/,
+    '健康校验不是 5 分钟'
+  );
+  assert.match(changeSync, /DEGRADED_RECONCILE_INTERVAL_MS = 60 \* 1000/, '降级校验不是 60 秒');
+  assert.match(changeSync, /document\.visibilityState/, '版本补偿缺少标签页可见性处理');
+  assert.match(changeSync, /window\.addEventListener\('online'/, '版本补偿缺少恢复联网处理');
   assert.doesNotMatch(
     `${entry}\n${viteConfig}`,
     /serviceWorker|navigator\.serviceWorker|workbox/i,
@@ -453,8 +464,24 @@ async function checkBrowserRuntime() {
     const requestsAfterFirstVisit = orderRequests.length;
 
     await navigateAndMeasure(page, '/v2/customers');
+    await page.evaluate(() => {
+      const originalNow = Date.now.bind(Date);
+      Object.defineProperty(window, '__v2AcceptanceRestoreDateNow', {
+        configurable: true,
+        value: () => {
+          Date.now = originalNow;
+          delete window.__v2AcceptanceRestoreDateNow;
+        }
+      });
+      Date.now = () => originalNow() + 6 * 60 * 1000;
+    });
     await navigateAndMeasure(page, '/v2/orders');
-    assert.equal(orderRequests.length, requestsAfterFirstVisit, '新鲜期内回访订单页仍重复请求');
+    assert.equal(
+      orderRequests.length,
+      requestsAfterFirstVisit,
+      '超过旧 TTL 后回访 clean 订单页仍重复请求'
+    );
+    await page.evaluate(() => window.__v2AcceptanceRestoreDateNow?.());
     assert.equal(
       await page.locator('input[placeholder="订单号、客户、平台订单号、账号"]').inputValue(),
       '',

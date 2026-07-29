@@ -36,7 +36,7 @@ export const idBusinessV2OptionsApi = {
       {
         scope: 'options',
         key: getOptionListCacheKey(params),
-        tier: 'reference',
+        freshnessPolicy: 'event-driven',
         query: ({ signal }: V2QueryContext) =>
           request<V2OptionListResult>(
             http.get('/id-business-v2/options', {
@@ -82,7 +82,7 @@ export const idBusinessV2OptionsApi = {
     return fetchV2Query({
       scope: 'options-reference',
       key: 'types',
-      tier: 'reference',
+      freshnessPolicy: 'event-driven',
       query: ({ signal }: V2QueryContext) =>
         request<V2OptionTypesResult>(http.get('/id-business-v2/options/types', { signal }))
     });
@@ -91,7 +91,7 @@ export const idBusinessV2OptionsApi = {
     return fetchV2Query({
       scope: 'options-reference',
       key: `selectors:${type}:${parentId ?? ''}`,
-      tier: 'reference',
+      freshnessPolicy: 'event-driven',
       query: ({ signal }: V2QueryContext) =>
         request<{ items: V2OptionSelector[] }>(
           http.get('/id-business-v2/options/selectors', {
@@ -139,7 +139,7 @@ const OPTION_MUTATION_SCOPES = [
   'balance-record-options',
   'options-page',
   'order-entry-matching'
-];
+] as const;
 
 const DEFAULT_OPTION_PAGE_SIZE = 20;
 

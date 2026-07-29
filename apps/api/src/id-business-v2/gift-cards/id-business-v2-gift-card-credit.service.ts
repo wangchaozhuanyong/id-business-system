@@ -12,6 +12,7 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2ExchangeRateQueryService } from '../exchange-rates/public-api';
+import { toV2DecimalString } from '../decimal-policy';
 import type { ConfirmIdBusinessV2GiftCardCreditDto } from './dto/confirm-id-business-v2-gift-card-credit.dto';
 
 interface LockedAccountRow {
@@ -19,6 +20,8 @@ interface LockedAccountRow {
   appleIdMasked: string;
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
+  soldByOrderId: string | null;
+  lossReportedAt: Date | null;
 }
 
 export interface CreditResponse {
@@ -121,6 +124,9 @@ export class IdBusinessV2GiftCardCreditService {
         });
 
         if (existingEntry?.giftCard) {
+          if (account.lossReportedAt) {
+            throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
+          }
           this.assertReplayMatches(existingEntry.giftCard, {
             accountId,
             codeHash,
@@ -138,6 +144,12 @@ export class IdBusinessV2GiftCardCreditService {
             idempotentReplay: true
           });
           return this.toResponse(account, existingEntry.giftCard, existingEntry, true);
+        }
+        if (account.lossReportedAt) {
+          throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
+        }
+        if (account.soldByOrderId) {
+          throw new ConflictException('该 ID 已卖出，不能继续加卡');
         }
 
         const supplier = await tx.idBusinessV2Option.findFirst({
@@ -264,12 +276,15 @@ export class IdBusinessV2GiftCardCreditService {
         "id",
         "apple_id_masked" AS "appleIdMasked",
         "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount"
+        "balance_cost_amount" AS "balanceCostAmount",
+        "sold_by_order_id" AS "soldByOrderId",
+        "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE
         "id" = CAST(${accountId} AS UUID)
         AND "deleted_at" IS NULL
         AND "record_status" = 'active'
+        AND "loss_reported_at" IS NULL
       FOR UPDATE
     `);
     const account = accounts[0];
@@ -371,13 +386,16 @@ export class IdBusinessV2GiftCardCreditService {
         id: giftCard.id,
         codeMasked: giftCard.codeMasked,
         codeTail: giftCard.codeTail,
-        faceValue: giftCard.faceValue.toString(),
-        exchangeRate: giftCard.exchangeRate.toString(),
+        faceValue: toV2DecimalString(giftCard.faceValue),
+        exchangeRate: toV2DecimalString(giftCard.exchangeRate),
         exchangeRateSource: giftCard.exchangeRateSource,
         exchangeRateSnapshotId: giftCard.exchangeRateSnapshotId,
-        exchangeRatePrefilledValue: giftCard.exchangeRatePrefilledValue?.toString() ?? null,
+        exchangeRatePrefilledValue:
+          giftCard.exchangeRatePrefilledValue == null
+            ? null
+            : toV2DecimalString(giftCard.exchangeRatePrefilledValue),
         exchangeRateWasOverridden: giftCard.exchangeRateWasOverridden,
-        costAmount: giftCard.costAmount.toString(),
+        costAmount: toV2DecimalString(giftCard.costAmount),
         status: giftCard.status,
         supplierOptionId: giftCard.supplierOptionId,
         sourceAttachmentId: giftCard.sourceAttachmentId,
@@ -385,19 +403,19 @@ export class IdBusinessV2GiftCardCreditService {
       },
       ledgerEntry: {
         id: ledgerEntry.id,
-        balanceBefore: ledgerEntry.balanceBefore.toString(),
-        balanceAfter: ledgerEntry.balanceAfter.toString(),
-        costBefore: ledgerEntry.costBefore.toString(),
-        costAfter: ledgerEntry.costAfter.toString(),
-        averageCostBefore: ledgerEntry.averageCostBefore.toString(),
-        averageCostAfter: ledgerEntry.averageCostAfter.toString(),
+        balanceBefore: toV2DecimalString(ledgerEntry.balanceBefore),
+        balanceAfter: toV2DecimalString(ledgerEntry.balanceAfter),
+        costBefore: toV2DecimalString(ledgerEntry.costBefore),
+        costAfter: toV2DecimalString(ledgerEntry.costAfter),
+        averageCostBefore: toV2DecimalString(ledgerEntry.averageCostBefore),
+        averageCostAfter: toV2DecimalString(ledgerEntry.averageCostAfter),
         createdAt: ledgerEntry.createdAt
       },
       account: {
         id: account.id,
         appleIdMasked: account.appleIdMasked,
-        currentBalance: account.currentBalance.toString(),
-        balanceCostAmount: account.balanceCostAmount.toString()
+        currentBalance: toV2DecimalString(account.currentBalance),
+        balanceCostAmount: toV2DecimalString(account.balanceCostAmount)
       },
       idempotentReplay
     };

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { CreateIdBusinessV2ManualRenewalDto } from './dto/create-id-business-v2-manual-renewal.dto';
+import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
 
 export interface NormalizedManualRenewal {
   serviceOptionId: string;
@@ -34,7 +35,6 @@ export type ManualRenewalReplayOrder = Prisma.IdBusinessV2OrderGetPayload<{
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const DECIMAL_PATTERN = /^\d+(\.\d{1,4})?$/;
 const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
 
 export function normalizeManualRenewalInput(
@@ -150,14 +150,14 @@ export function toManualRenewalLedgerResponse(entry: {
   return {
     id: entry.id,
     accountId: entry.accountId,
-    balanceAmount: entry.balanceAmount.toString(),
-    costAmount: entry.costAmount.toString(),
-    balanceBefore: entry.balanceBefore.toString(),
-    balanceAfter: entry.balanceAfter.toString(),
-    costBefore: entry.costBefore.toString(),
-    costAfter: entry.costAfter.toString(),
-    averageCostBefore: entry.averageCostBefore.toString(),
-    averageCostAfter: entry.averageCostAfter.toString(),
+    balanceAmount: toV2DecimalString(entry.balanceAmount),
+    costAmount: toV2DecimalString(entry.costAmount),
+    balanceBefore: toV2DecimalString(entry.balanceBefore),
+    balanceAfter: toV2DecimalString(entry.balanceAfter),
+    costBefore: toV2DecimalString(entry.costBefore),
+    costAfter: toV2DecimalString(entry.costAfter),
+    averageCostBefore: toV2DecimalString(entry.averageCostBefore),
+    averageCostAfter: toV2DecimalString(entry.averageCostAfter),
     createdAt: entry.createdAt
   };
 }
@@ -191,8 +191,8 @@ function normalizeOptionalString(value: unknown, label: string, maxLength: numbe
 function normalizeAmount(value: unknown, label: string, allowZero: boolean) {
   const normalized =
     typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-  if (!DECIMAL_PATTERN.test(normalized)) {
-    throw new BadRequestException(`${label}必须是最多 4 位小数的非负数`);
+  if (!V2_DECIMAL_PATTERN.test(normalized)) {
+    throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
   }
   const amount = new PrismaNamespace.Decimal(normalized);
   if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {

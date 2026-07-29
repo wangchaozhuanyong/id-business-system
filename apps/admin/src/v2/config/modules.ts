@@ -5,7 +5,7 @@ export type {
   V2ModuleKey,
   V2ModuleKind,
   V2NavigationSection,
-  V2QueryTier,
+  V2FreshnessPolicy,
   V2TableColumnDefinition
 } from '@/v2/features/feature';
 

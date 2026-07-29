@@ -136,4 +136,4 @@ const ORDER_MUTATION_SCOPES = [
   'renewals',
   'order-entry-options',
   'order-entry-matching'
-];
+] as const;

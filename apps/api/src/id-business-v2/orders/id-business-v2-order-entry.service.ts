@@ -4,7 +4,9 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
+import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import {
@@ -217,7 +219,8 @@ export class IdBusinessV2OrderEntryService {
                 id: service.id,
                 code: service.code,
                 name: service.name,
-                businessAmount: service.businessAmount?.toString() ?? '0',
+                businessAmount:
+                  service.businessAmount === null ? '0' : toV2DecimalString(service.businessAmount),
                 currencyCode: service.countryOption?.currencyCode ?? country.currencyCode
               }))
           }))
@@ -227,8 +230,8 @@ export class IdBusinessV2OrderEntryService {
         id: platform.id,
         code: platform.code,
         name: platform.name,
-        fixedFee: platform.fixedFee.toString(),
-        percentageFee: platform.percentageFee.toString()
+        fixedFee: toV2DecimalString(platform.fixedFee),
+        percentageFee: toV2DecimalString(platform.percentageFee)
       }))
     };
   }
@@ -288,6 +291,7 @@ export class IdBusinessV2OrderEntryService {
             receivedAmount: input.receivedAmount,
             platformFeeAmount,
             accountCostAmount: 0,
+            accountDisposition: input.accountDisposition,
             balanceAmount: input.balanceAmount,
             balanceCostAmount: 0,
             refundCostAmount: null,
@@ -312,10 +316,22 @@ export class IdBusinessV2OrderEntryService {
           },
           operator
         );
+        await applyNewOrderAccountDisposition(
+          tx,
+          order.id,
+          input.accountId,
+          input.accountDisposition,
+          operator
+        );
+        const auditedOrder = await tx.idBusinessV2Order.findUniqueOrThrow({
+          where: {
+            id: order.id
+          }
+        });
 
         await writeOrderEntryAuditLog(
           tx,
-          order,
+          auditedOrder,
           input,
           platformFeeAmount,
           reservation.lock,
@@ -390,6 +406,7 @@ export class IdBusinessV2OrderEntryService {
         receivedAmount: input.receivedAmount,
         platformFeeAmount,
         accountCostAmount: 0,
+        accountDisposition: 'retained',
         balanceAmount: input.balanceAmount,
         balanceCostAmount: 0,
         refundCostAmount: null,
@@ -467,6 +484,7 @@ export class IdBusinessV2OrderEntryService {
         receivedAmount: input.receivedAmount,
         platformFeeAmount,
         accountCostAmount: 0,
+        accountDisposition: 'retained',
         balanceAmount: input.balanceAmount,
         balanceCostAmount: 0,
         refundCostAmount: null,

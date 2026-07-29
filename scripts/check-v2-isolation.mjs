@@ -57,9 +57,16 @@ if (!existsSync(migrationsPath)) {
 } else {
   const migrations = readdirSync(migrationsPath, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  if (migrations.length !== 1 || migrations[0] !== baselineMigration) {
-    failures.push(`纯净仓库只允许 ${baselineMigration}，当前为 ${migrations.join(', ') || '(空)'}`);
+    .map((entry) => entry.name)
+    .sort();
+  if (migrations[0] !== baselineMigration) {
+    failures.push(`当前系统必须以纯净基线 ${baselineMigration} 开始`);
+  }
+  const invalidIncrementalMigrations = migrations
+    .slice(1)
+    .filter((migration) => !/^\d{14}_[a-z0-9_]+$/.test(migration));
+  if (invalidIncrementalMigrations.length) {
+    failures.push(`增量 migration 命名无效：${invalidIncrementalMigrations.join(', ')}`);
   }
 }
 

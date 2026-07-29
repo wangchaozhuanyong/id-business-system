@@ -6,6 +6,12 @@ import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2BalancesApi, idBusinessV2ExchangeRatesApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
+  V2_DECIMAL_PLACES,
+  formatV2Decimal,
+  isV2UnsignedDecimal,
+  multiplyDecimalStrings
+} from '@/v2/utils/decimal';
+import {
   buildManualGiftCardCreditPayload,
   resolveUsdtRateReference,
   type V2TopupUsdtRateReference
@@ -69,10 +75,13 @@ export function useTopupWorkbenchPage() {
     candidateCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
   );
   const creditCostPreview = computed(() => {
-    const faceValue = Number(creditForm.faceValue);
-    const exchangeRate = Number(creditForm.exchangeRate);
-    if (!Number.isFinite(faceValue) || !Number.isFinite(exchangeRate)) return '0';
-    return (faceValue * exchangeRate).toFixed(4);
+    if (
+      !isV2UnsignedDecimal(creditForm.faceValue) ||
+      !isV2UnsignedDecimal(creditForm.exchangeRate)
+    ) {
+      return '0';
+    }
+    return multiplyDecimalStrings(creditForm.faceValue, creditForm.exchangeRate);
   });
   const canConfirmCredit = computed(
     () =>
@@ -80,8 +89,8 @@ export function useTopupWorkbenchPage() {
       /^[A-Z0-9]{10,64}$/.test(normalizedCreditCode.value) &&
       /[A-Z]/.test(normalizedCreditCode.value) &&
       /\d/.test(normalizedCreditCode.value) &&
-      isValidPositiveDecimal(creditForm.faceValue, 4) &&
-      isValidPositiveDecimal(creditForm.exchangeRate, 8) &&
+      isValidPositiveDecimal(creditForm.faceValue) &&
+      isValidPositiveDecimal(creditForm.exchangeRate) &&
       Boolean(creditForm.supplierOptionId) &&
       !creditSubmitting.value
   );
@@ -168,7 +177,7 @@ export function useTopupWorkbenchPage() {
         return false;
       }
       if (!isValidBalanceInput(minimum) || !isValidBalanceInput(maximum)) {
-        ElMessage.warning('余额必须是最多 4 位小数的非负数字');
+        ElMessage.warning(`余额必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数字`);
         return false;
       }
       if (minimum && maximum && Number(minimum) > Number(maximum)) {
@@ -449,21 +458,16 @@ export function useTopupWorkbenchPage() {
     return `${value.slice(0, 4)}****${value.slice(-4)}`;
   }
 
-  function isValidPositiveDecimal(value: string, scale: number) {
-    const normalized = value.trim();
-    if (!new RegExp(`^\\d+(\\.\\d{1,${scale}})?$`).test(normalized)) return false;
-    return Number(normalized) > 0;
+  function isValidPositiveDecimal(value: string) {
+    return isV2UnsignedDecimal(value, { allowZero: false });
   }
 
-  function formatDecimal(value: string, maximumFractionDigits = 4) {
-    const number = Number(value);
-    return Number.isFinite(number)
-      ? number.toLocaleString('zh-CN', { maximumFractionDigits })
-      : value;
+  function formatDecimal(value: string) {
+    return formatV2Decimal(value);
   }
 
   function isValidBalanceInput(value: string) {
-    return !value || /^\d+(\.\d{1,4})?$/.test(value);
+    return !value || isV2UnsignedDecimal(value);
   }
 
   function formatDate(value: string) {

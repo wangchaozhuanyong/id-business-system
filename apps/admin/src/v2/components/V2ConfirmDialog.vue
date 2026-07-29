@@ -4,6 +4,9 @@
     :title="title"
     width="min(420px, 92vw)"
     align-center
+    :close-on-click-modal="!confirmLoading"
+    :close-on-press-escape="!confirmLoading"
+    :show-close="!confirmLoading"
     @close="$emit('update:modelValue', false)"
   >
     <slot>
@@ -11,7 +14,13 @@
     </slot>
     <template #footer>
       <div class="v2-confirm-dialog__footer">
-        <AppButton variant="ghost" @click="$emit('update:modelValue', false)">取消</AppButton>
+        <AppButton
+          variant="ghost"
+          :disabled="confirmLoading"
+          @click="$emit('update:modelValue', false)"
+        >
+          取消
+        </AppButton>
         <AppButton
           :variant="danger ? 'danger' : 'primary'"
           :loading="confirmLoading"

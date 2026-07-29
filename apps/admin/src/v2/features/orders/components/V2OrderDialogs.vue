@@ -36,6 +36,10 @@
               <dd>{{ page.detail.account?.appleIdMasked || '-' }}</dd>
             </div>
             <div>
+              <dt>ID 处理状态</dt>
+              <dd>{{ page.accountDispositionMeta(page.detail.accountDisposition).label }}</dd>
+            </div>
+            <div>
               <dt>国家</dt>
               <dd>{{ page.detail.account?.country.name || '-' }}</dd>
             </div>
@@ -64,9 +68,13 @@
               <dt>平台手续费</dt>
               <dd>{{ page.formatDecimal(page.detail.platformFeeAmount) }}</dd>
             </div>
-            <div title="ID 购买成本快照，不在每笔订阅订单中重复计入利润">
-              <dt>ID 成本快照</dt>
+            <div title="选择卖出 ID 时保存的购买成本快照，后续修改 ID 资料不会改写">
+              <dt>ID 购买成本快照</dt>
               <dd>{{ page.formatDecimal(page.detail.accountCostAmount) }}</dd>
+            </div>
+            <div>
+              <dt>本单计入 ID 成本</dt>
+              <dd>{{ page.formatDecimal(page.detail.appliedAccountCostAmount) }}</dd>
             </div>
             <div>
               <dt>消耗余额</dt>

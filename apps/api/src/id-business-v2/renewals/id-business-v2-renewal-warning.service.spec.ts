@@ -55,7 +55,8 @@ describe('IdBusinessV2RenewalWarningService', () => {
     },
     idBusinessV2Activation: {
       count: vi.fn(),
-      findMany: vi.fn()
+      findMany: vi.fn(),
+      findFirst: vi.fn()
     },
     $transaction: vi.fn()
   };
@@ -76,6 +77,7 @@ describe('IdBusinessV2RenewalWarningService', () => {
           status: 'expired'
         })
       ]);
+    prisma.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.idBusinessV2RenewalWarningSetting.findUnique.mockResolvedValue(null);
     tx.idBusinessV2RenewalWarningSetting.upsert.mockResolvedValue({

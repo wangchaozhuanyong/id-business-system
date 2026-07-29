@@ -44,6 +44,22 @@ const DAY_MS = 24 * HOUR_MS;
 
 @Injectable()
 export class IdBusinessV2ActivationStatusService {
+  getNextRevalidateAt(dueAt: Date | null, now = new Date(), warningDays?: number) {
+    if (!dueAt) return null;
+    const warningBoundary =
+      warningDays === undefined ? [] : [dueAt.getTime() - warningDays * DAY_MS];
+    const nextBoundary = [
+      ...warningBoundary,
+      dueAt.getTime() - 7 * DAY_MS,
+      dueAt.getTime() - 23 * HOUR_MS,
+      dueAt.getTime() - HOUR_MS,
+      dueAt.getTime()
+    ]
+      .filter((timestamp) => timestamp > now.getTime())
+      .sort((left, right) => left - right)[0];
+    return nextBoundary === undefined ? null : new Date(nextBoundary);
+  }
+
   resolve(
     storedStatus: IdBusinessV2ActivationStatus,
     dueAt: Date | null,

@@ -4,6 +4,12 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
+import {
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  V2_DECIMAL_ROUNDING_MODE,
+  toV2DecimalString
+} from '../decimal-policy';
 
 export interface ListIdBusinessV2ExchangeRatesQuery extends PaginationQuery {
   keyword?: string;
@@ -17,8 +23,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RATE = new Prisma.Decimal('9999999999.99999999');
 const TWO = new Prisma.Decimal(2);
-const DECIMAL_PLACES = 8;
-const ROUNDING_MODE = Prisma.Decimal.ROUND_HALF_UP;
+const DECIMAL_PLACES = V2_DECIMAL_PLACES;
+const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
 
 const ENTRY_INCLUDE = {
   createdBy: {
@@ -209,6 +215,9 @@ export class IdBusinessV2ExchangeRatesService {
     if (!normalized) {
       throw new BadRequestException(`${label}不能为空`);
     }
+    if (!V2_DECIMAL_PATTERN.test(normalized)) {
+      throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
+    }
 
     let rate: Prisma.Decimal;
     try {
@@ -312,13 +321,17 @@ export class IdBusinessV2ExchangeRatesService {
   private toResponse(entry: ExchangeRateEntryRecord) {
     return {
       id: entry.id,
-      binanceMerchantBuyRateToRmb: entry.binanceMerchantBuyRateToRmb.toString(),
-      binanceMerchantSellRateToRmb: entry.binanceMerchantSellRateToRmb.toString(),
-      okxMerchantBuyRateToRmb: entry.okxMerchantBuyRateToRmb.toString(),
-      okxMerchantSellRateToRmb: entry.okxMerchantSellRateToRmb.toString(),
-      combinedMerchantBuyAverageRateToRmb: entry.combinedMerchantBuyAverageRateToRmb.toString(),
-      combinedMerchantSellAverageRateToRmb: entry.combinedMerchantSellAverageRateToRmb.toString(),
-      midRateToRmb: entry.midRateToRmb.toString(),
+      binanceMerchantBuyRateToRmb: toV2DecimalString(entry.binanceMerchantBuyRateToRmb),
+      binanceMerchantSellRateToRmb: toV2DecimalString(entry.binanceMerchantSellRateToRmb),
+      okxMerchantBuyRateToRmb: toV2DecimalString(entry.okxMerchantBuyRateToRmb),
+      okxMerchantSellRateToRmb: toV2DecimalString(entry.okxMerchantSellRateToRmb),
+      combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
+        entry.combinedMerchantBuyAverageRateToRmb
+      ),
+      combinedMerchantSellAverageRateToRmb: toV2DecimalString(
+        entry.combinedMerchantSellAverageRateToRmb
+      ),
+      midRateToRmb: toV2DecimalString(entry.midRateToRmb),
       recordedAt: entry.recordedAt,
       remark: entry.remark,
       createdBy: entry.createdBy,

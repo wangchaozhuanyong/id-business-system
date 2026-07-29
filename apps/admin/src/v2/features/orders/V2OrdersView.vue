@@ -23,6 +23,20 @@
           :value="option.value"
         />
       </el-select>
+      <el-select
+        v-model="page.query.accountDisposition"
+        clearable
+        placeholder="全部 ID 处理状态"
+        aria-label="筛选 ID 处理状态"
+        @change="page.handleFilterChange"
+      >
+        <el-option
+          v-for="option in page.accountDispositionOptions"
+          :key="option.value"
+          :label="option.label"
+          :value="option.value"
+        />
+      </el-select>
       <V2FilterDisclosure>
         <el-select
           v-model="page.query.serviceOptionId"

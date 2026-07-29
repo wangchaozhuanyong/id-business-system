@@ -39,6 +39,7 @@ import {
   parseOptionType,
   rethrowOptionUniqueConstraint
 } from './id-business-v2-option-input';
+import { V2_DECIMAL_PLACES } from '../decimal-policy';
 
 @Injectable()
 export class IdBusinessV2OptionsService {
@@ -194,7 +195,6 @@ export class IdBusinessV2OptionsService {
       remark: `创建 V2 选项：${option.name}`
     });
 
-    this.query.clearCache();
     return toOptionResponse(option);
   }
 
@@ -264,7 +264,6 @@ export class IdBusinessV2OptionsService {
       remark: `修改 V2 选项：${existing.name}`
     });
 
-    this.query.clearCache();
     return toOptionResponse(option);
   }
 
@@ -292,7 +291,6 @@ export class IdBusinessV2OptionsService {
       remark: `删除 V2 选项：${existing.name}`
     });
 
-    this.query.clearCache();
     return { deleted: true };
   }
 
@@ -543,7 +541,7 @@ export class IdBusinessV2OptionsService {
       const businessAmount = normalizeOptionDecimal(
         values.businessAmount ?? undefined,
         '业务金额',
-        4
+        V2_DECIMAL_PLACES
       );
       if (new PrismaNamespace.Decimal(businessAmount).lessThanOrEqualTo(0)) {
         throw new BadRequestException('业务金额必须大于 0');

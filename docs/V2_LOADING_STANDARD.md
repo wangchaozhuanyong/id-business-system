@@ -50,7 +50,8 @@
 - 每个 `V2AsyncRegion` 必须显式声明 `skeleton`。共享内容形状固定为：列表与分页使用 `table`，
   订单录入及复杂编辑使用 `form`，汇率概览使用 `metrics`，选项工作区使用 `settings`，抽屉详情使用
   `detail`，候选项与卡片列表使用 `cards`，单行引用数据使用 `inline`。页面不得复制或改造私有骨架。
-- 每个 V2 模块必须在 `V2ModuleDefinition.loadingTier` 声明缓存等级。所有真实远程数据页面必须
+- 每个 V2 模块必须在 `V2ModuleDefinition.freshnessPolicy` 声明
+  `event-driven | event-with-deadline`。所有真实远程数据页面必须
   使用 `useV2ModuleQuery({ moduleKey, scope, key, query })`；禁止继续使用仅缓存完成标记的
   `useV2ModuleRefresh({ moduleKey, scope, load })`。
 - `resolved` 表示该区域至少成功返回过一次，不能用 `items.length` 判断；成功空列表也属于
@@ -59,9 +60,16 @@
   必须复用一个请求，不同 key 不允许通过固定请求通道互相取消。
 - 远程请求开始前不得清空已提交的列表、表格列或详情。筛选、排序和分页的新 key 尚无数据时，
   必须保留最后一次成功内容；新 key 成功后原子替换，失败时继续保留旧内容并显示可重试错误。
-- 查询缓存等级固定为：`critical` 15 秒、`operational` 60 秒、`reference` 5 分钟、`live`
-  30 秒。缓存 key 必须包含登录身份代际；写操作成功后失效相关 scope、中止失效中的旧读取并阻止
-  旧响应回写，退出登录或切换身份时清空全部 V2 查询缓存。
+- 时间过去不等于缓存失效。`event-driven` 查询在没有 scope 版本变化时永久保持 clean；
+  `event-with-deadline` 只允许在服务端返回的 `revalidateAt` 到达时失效。clean 缓存回访不得读取
+  业务列表；dirty 的活跃查询保留旧内容并立即后台刷新，dirty 的非活跃查询只在进入页面时刷新。
+- 数据库写入必须原子递增 `id_business_v2_scope_versions` 并向私有主题
+  `id-business-v2:changes` 广播 scope/version。事件不得包含订单、账号、手机号、卡号或其他业务行
+  字段。重连、恢复联网、长时间隐藏后恢复及后台周期校验只读取
+  `/api/id-business-v2/change-versions`，不得用完整列表轮询补偿漏事件。
+- 缓存 key 必须包含登录身份代际；失效必须中止旧读取并阻止旧响应回写，100ms 内合并同 scope
+  事件。同 scope、同 key 的并发读取复用 Promise。最多保留 200 个非活跃查询条目，缓存仅在内存，
+  退出登录或切换身份时清空并断开实时频道。
 - 组件创建时必须同步读取同身份、同 scope、同 key 的已有缓存，回访不得先渲染一次骨架。服务端
   数据与界面草稿必须分离：只有订单录入通过显式路由声明使用 KeepAlive；普通列表、筛选、分页、
   页签、抽屉和弹窗随页面卸载，不得依赖全页面 KeepAlive。
@@ -86,7 +94,8 @@
   skeleton、mask、overlay。
 - 同一读取请求同时显示按钮 loading、全局更新文案与区域进度，或恢复右上角浮动刷新卡片、旋转
   指示器和内容蒙层。
-- 在 `onActivated` 中无条件调用页面加载函数。
+- 在 `onActivated` 中绕过统一查询状态机无条件调用页面加载函数。
+- 因固定 15/30/60 秒 TTL 或导航切换重新读取 clean 业务列表；用完整列表轮询代替 scope 版本校验。
 - 对全部 V2 路由统一套用 KeepAlive，或把服务端响应、敏感数据、订单草稿写入浏览器持久化存储。
 - 请求开始时执行 `items = []`、销毁表格 `key` 或用空白占位替换已有内容。
 - 缓存命中仍显示 loading，或把刷新失败、权限失败显示成“暂无数据”。
@@ -130,7 +139,12 @@ npm run lint --workspace @apple-business/admin
 npm run build --workspace @apple-business/admin
 npm run check:v2-loading-standard
 npm run acceptance:v2-navigation-performance
+npm run acceptance:v2-realtime
 ```
 
 `acceptance:v2-navigation-performance` 需要本地 API 和测试账号；缺少运行条件时必须明确记录未执行，
 不能把静态检查或本地 mock 当成真实登录通过。
+
+`acceptance:v2-realtime` 还要求本地 Supabase Realtime、迁移后的本地数据库，以及
+`V2_REALTIME_USERNAME`、`V2_REALTIME_PASSWORD`。脚本默认拒绝远程地址，只递增本地 scope
+version 并发送私有测试事件，不修改业务行。

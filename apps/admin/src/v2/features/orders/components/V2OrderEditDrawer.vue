@@ -34,7 +34,7 @@
         <el-alert
           v-if="order && !order.operations.canEditCore"
           type="info"
-          title="订单已有扣款证据，客户、业务、使用 ID 和消耗余额已锁定"
+          title="订单已有扣款或开通证据，客户、业务、使用 ID、ID 处理方式和消耗余额已锁定"
           :closable="false"
           show-icon
         />
@@ -103,6 +103,22 @@
             <span v-if="matchingError" class="v2-order-edit-error">{{ matchingError }}</span>
           </el-form-item>
 
+          <el-form-item label="ID 处理方式">
+            <div class="v2-order-edit-disposition">
+              <el-radio-group
+                v-model="form.accountDisposition"
+                :disabled="!order?.operations.canEditCore"
+              >
+                <el-radio value="retained">保留 ID</el-radio>
+                <el-radio value="sold">卖出 ID</el-radio>
+              </el-radio-group>
+              <small v-if="form.accountDisposition === 'sold'">
+                将计入当前 ID 购买成本，并锁定该 ID 停止匹配、加卡和续费。
+              </small>
+              <small v-else>不计 ID 购买成本，ID 仍可继续使用。</small>
+            </div>
+          </el-form-item>
+
           <el-form-item label="结算平台">
             <el-select
               v-model="form.settlementPlatformOptionId"
@@ -164,6 +180,7 @@
                 v-for="option in lockScopeOptions"
                 :key="option.value"
                 :value="option.value"
+                :disabled="form.accountDisposition === 'sold' && option.value !== 'global'"
               >
                 {{ option.label }}
               </el-radio-button>
@@ -206,11 +223,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { calculatePlatformFeeAmount } from '@/v2/features/order-entry/order-pricing';
 import type {
   UpdateV2OrderInput,
   V2Order,
@@ -218,6 +236,14 @@ import type {
   V2OrderEntryCustomer,
   V2OrderEntryOptions
 } from '../contracts';
+import {
+  createEmptyOrderEditForm,
+  createOrderEditRules,
+  customerLabel,
+  formatDecimal,
+  isNonNegativeDecimal,
+  isPositiveDecimal
+} from './order-edit-form';
 import './order-edit-drawer.css';
 
 const props = defineProps<{
@@ -244,7 +270,7 @@ const options = ref<V2OrderEntryOptions>({
   countries: [],
   settlementPlatforms: []
 });
-const form = reactive(emptyForm());
+const form = reactive(createEmptyOrderEditForm());
 let customerTimer: ReturnType<typeof setTimeout> | undefined;
 let matchingTimer: ReturnType<typeof setTimeout> | undefined;
 let matchingSequence = 0;
@@ -321,10 +347,12 @@ const selectedPlatform = computed(
 );
 
 const platformFeePreview = computed(() => {
-  const received = Number(form.receivedAmount);
   const platform = selectedPlatform.value;
-  if (!platform || !Number.isFinite(received) || received < 0) return '0.0000';
-  return (Number(platform.fixedFee) + (received * Number(platform.percentageFee)) / 100).toFixed(4);
+  if (!platform) return '0';
+  return (
+    calculatePlatformFeeAmount(form.receivedAmount, platform.fixedFee, platform.percentageFee) ??
+    '0'
+  );
 });
 
 const submitDisabled = computed(
@@ -341,59 +369,7 @@ const submitDisabled = computed(
     !(form.dueAt instanceof Date)
 );
 
-const rules: FormRules = {
-  customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
-  serviceOptionId: [{ required: true, message: '请选择业务', trigger: 'change' }],
-  accountId: [{ required: true, message: '请选择使用 ID', trigger: 'change' }],
-  receivedAmount: [
-    {
-      validator: (_rule, value, callback) =>
-        callback(
-          isNonNegativeDecimal(value) ? undefined : new Error('请输入最多 4 位小数的非负金额')
-        ),
-      trigger: 'blur'
-    }
-  ],
-  balanceAmount: [
-    {
-      validator: (_rule, value, callback) =>
-        callback(isPositiveDecimal(value) ? undefined : new Error('请输入最多 4 位小数的正数')),
-      trigger: 'blur'
-    }
-  ],
-  openedAt: [{ required: true, message: '请选择开通时间', trigger: 'change' }],
-  dueAt: [
-    {
-      validator: (_rule, value, callback) => {
-        if (!(value instanceof Date) || !(form.openedAt instanceof Date)) {
-          callback(new Error('请选择有效时间'));
-          return;
-        }
-        if (value.getTime() <= form.openedAt.getTime()) {
-          callback(new Error('到期时间必须晚于开通时间'));
-          return;
-        }
-        if (props.order?.operations.canEditCore && value.getTime() <= Date.now()) {
-          callback(new Error('待处理订单的到期时间必须晚于当前时间'));
-          return;
-        }
-        callback();
-      },
-      trigger: 'change'
-    }
-  ],
-  platformOrderNo: [
-    {
-      validator: (_rule, value, callback) =>
-        callback(
-          value && !form.settlementPlatformOptionId
-            ? new Error('填写平台订单号时必须选择结算平台')
-            : undefined
-        ),
-      trigger: 'blur'
-    }
-  ]
-};
+const rules = createOrderEditRules(form, () => Boolean(props.order?.operations.canEditCore));
 
 watch(
   () => [props.modelValue, props.order?.id] as const,
@@ -413,23 +389,12 @@ watch(
   }
 );
 
-function emptyForm() {
-  return {
-    customerId: '',
-    serviceOptionId: '',
-    accountId: '',
-    settlementPlatformOptionId: '',
-    platformOrderNo: '',
-    websiteAccount: '',
-    clearWebsiteAccount: false,
-    receivedAmount: '',
-    balanceAmount: '',
-    openedAt: null as Date | null,
-    dueAt: null as Date | null,
-    lockScope: 'by_service' as 'by_service' | 'global',
-    remark: ''
-  };
-}
+watch(
+  () => form.accountDisposition,
+  (disposition) => {
+    if (disposition === 'sold') form.lockScope = 'global';
+  }
+);
 
 async function initialize(order: V2Order) {
   initializing = true;
@@ -438,6 +403,7 @@ async function initialize(order: V2Order) {
     customerId: order.customer.id,
     serviceOptionId: order.service.id,
     accountId: order.account?.id ?? '',
+    accountDisposition: order.accountDisposition === 'sold' ? 'sold' : 'retained',
     settlementPlatformOptionId: order.settlementPlatform?.id ?? '',
     platformOrderNo: order.platformOrderNo ?? '',
     websiteAccount: '',
@@ -551,8 +517,9 @@ async function submit() {
       customerId: form.customerId,
       serviceOptionId: form.serviceOptionId,
       accountId: form.accountId,
+      accountDisposition: form.accountDisposition,
       balanceAmount: form.balanceAmount.trim(),
-      lockScope: form.lockScope
+      lockScope: form.accountDisposition === 'sold' ? 'global' : form.lockScope
     });
   }
   if (form.clearWebsiteAccount) {
@@ -561,27 +528,6 @@ async function submit() {
     payload.websiteAccount = form.websiteAccount.trim();
   }
   emit('submit', payload);
-}
-
-function customerLabel(customer: V2OrderEntryCustomer) {
-  const detail = customer.wechat || customer.maskedPhone;
-  return detail ? `${customer.name} / ${detail}` : customer.name;
-}
-
-function isNonNegativeDecimal(value: unknown) {
-  return /^\d+(\.\d{1,4})?$/.test(String(value ?? '').trim());
-}
-
-function isPositiveDecimal(value: unknown) {
-  const normalized = String(value ?? '').trim();
-  return isNonNegativeDecimal(normalized) && Number(normalized) > 0;
-}
-
-function formatDecimal(value: string) {
-  const amount = Number(value);
-  return Number.isFinite(amount)
-    ? amount.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
-    : value;
 }
 
 onBeforeUnmount(() => {

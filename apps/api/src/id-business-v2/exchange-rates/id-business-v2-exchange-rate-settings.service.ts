@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, ServiceUnavailableException } from '@n
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
 import type { UpdateIdBusinessV2ExchangeRateSettingsDto } from './dto/update-id-business-v2-exchange-rate-settings.dto';
 
 const SETTINGS_ID = 1;
@@ -132,6 +133,9 @@ export class IdBusinessV2ExchangeRateSettingsService {
   private parseTargetAmount(value: unknown) {
     const normalized =
       typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+    if (!V2_DECIMAL_PATTERN.test(normalized)) {
+      throw new BadRequestException(`目标成交额必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
+    }
     let amount: Prisma.Decimal;
     try {
       amount = new Prisma.Decimal(normalized);
@@ -157,7 +161,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
     return {
       autoEnabled: settings.autoEnabled,
       intervalMinutes: settings.intervalMinutes,
-      targetAmountRmb: settings.targetAmountRmb.toString(),
+      targetAmountRmb: toV2DecimalString(settings.targetAmountRmb),
       nextRunAt: settings.nextRunAt,
       emergencyNetworkEnabled: this.isNetworkEnabled(),
       updatedByUserId: settings.updatedByUserId,

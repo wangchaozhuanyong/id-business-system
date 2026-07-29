@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { IdBusinessV2OrderAccountDisposition } from '@prisma/client';
 import type { IdBusinessV2OrderStatus, Prisma } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
 
 export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   keyword?: string;
@@ -11,6 +13,7 @@ export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   accountId?: string;
   settlementPlatformOptionId?: string;
   status?: string;
+  accountDisposition?: string;
   openedFrom?: string;
   openedTo?: string;
   sortBy?: string;
@@ -126,6 +129,7 @@ const ORDER_SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2OrderOrderByWit
   profitAmount: 'profitAmount',
   balanceAmount: 'balanceAmount',
   status: 'status',
+  accountDisposition: 'accountDisposition',
   openedAt: 'openedAt',
   dueAt: 'dueAt',
   createdAt: 'createdAt',
@@ -151,6 +155,7 @@ export class IdBusinessV2OrdersService {
       '结算平台'
     );
     const status = this.parseStatus(query.status);
+    const accountDisposition = this.parseAccountDisposition(query.accountDisposition);
     const where: Prisma.IdBusinessV2OrderWhereInput = {
       deletedAt: null,
       customerId: customerId ?? undefined,
@@ -158,6 +163,7 @@ export class IdBusinessV2OrdersService {
       accountId: accountId ?? undefined,
       settlementPlatformOptionId: settlementPlatformOptionId ?? undefined,
       status: status ?? undefined,
+      accountDisposition: accountDisposition ?? undefined,
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo),
       OR: keyword
         ? [
@@ -236,6 +242,19 @@ export class IdBusinessV2OrdersService {
     throw new BadRequestException('订单状态无效');
   }
 
+  private parseAccountDisposition(value: unknown): IdBusinessV2OrderAccountDisposition | null {
+    const normalized = this.normalizeNullableString(value);
+    if (!normalized) return null;
+    if (
+      normalized === IdBusinessV2OrderAccountDisposition.retained ||
+      normalized === IdBusinessV2OrderAccountDisposition.sold ||
+      normalized === IdBusinessV2OrderAccountDisposition.recovered
+    ) {
+      return normalized;
+    }
+    throw new BadRequestException('ID 处理状态无效');
+  }
+
   private parseDateRange(fromValue: unknown, toValue: unknown) {
     const from = this.parseDate(fromValue, '开通开始日期', false);
     const to = this.parseDate(toValue, '开通结束日期', true);
@@ -309,13 +328,20 @@ export class IdBusinessV2OrdersService {
       platformOrderNo: order.platformOrderNo,
       maskedWebsiteAccount: order.websiteAccountMasked,
       hasWebsiteAccount: Boolean(order.websiteAccountEncrypted),
-      receivedAmount: order.receivedAmount.toString(),
-      platformFeeAmount: order.platformFeeAmount.toString(),
-      accountCostAmount: order.accountCostAmount.toString(),
-      balanceAmount: order.balanceAmount.toString(),
-      balanceCostAmount: order.balanceCostAmount.toString(),
-      refundCostAmount: order.refundCostAmount?.toString() ?? null,
-      profitAmount: order.profitAmount?.toString() ?? null,
+      receivedAmount: toV2DecimalString(order.receivedAmount),
+      platformFeeAmount: toV2DecimalString(order.platformFeeAmount),
+      accountDisposition: order.accountDisposition,
+      accountCostAmount: toV2DecimalString(order.accountCostAmount),
+      appliedAccountCostAmount: toV2DecimalString(
+        order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold
+          ? order.accountCostAmount
+          : 0
+      ),
+      balanceAmount: toV2DecimalString(order.balanceAmount),
+      balanceCostAmount: toV2DecimalString(order.balanceCostAmount),
+      refundCostAmount:
+        order.refundCostAmount === null ? null : toV2DecimalString(order.refundCostAmount),
+      profitAmount: order.profitAmount === null ? null : toV2DecimalString(order.profitAmount),
       status: order.status,
       statusChangedAt: order.statusChangedAt,
       openedAt: order.openedAt,

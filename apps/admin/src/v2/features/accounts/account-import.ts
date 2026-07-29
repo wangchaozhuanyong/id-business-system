@@ -1,5 +1,6 @@
 import { exportRowsToCsv } from '@/utils/exportCsv';
 import { resolveAccountCountryCsvHeader } from '@/v2/utils/csv';
+import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import {
   calculateBalanceCost,
   isNonNegativeExchangeRate,
@@ -157,8 +158,8 @@ function resolveOptionalImportOption(rawValue: string, options: V2OptionSelector
 
 function parseImportDecimal(rawValue: string, label: string) {
   const value = rawValue || '0';
-  if (!/^\d+(\.\d{1,4})?$/.test(value)) {
-    throw new Error(`${label}必须是最多 4 位小数的非负数字`);
+  if (!isV2UnsignedDecimal(value)) {
+    throw new Error(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数字`);
   }
   return value;
 }
@@ -166,7 +167,7 @@ function parseImportDecimal(rawValue: string, label: string) {
 function parseImportExchangeRate(rawValue: string) {
   if (!rawValue) return '';
   if (!isNonNegativeExchangeRate(rawValue)) {
-    throw new Error('汇率必须是最多 8 位小数的非负数字');
+    throw new Error(`汇率必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数字`);
   }
   return normalizeDecimalInput(rawValue);
 }

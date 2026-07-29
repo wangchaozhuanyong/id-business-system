@@ -1,9 +1,13 @@
-import type { IdBusinessV2AccountLockScope } from '@prisma/client';
+import type {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderAccountDisposition
+} from '@prisma/client';
 
 export interface UpdateIdBusinessV2OrderDto {
   customerId?: string;
   serviceOptionId?: string;
   accountId?: string;
+  accountDisposition?: IdBusinessV2OrderAccountDisposition | string;
   settlementPlatformOptionId?: string | null;
   platformOrderNo?: string | null;
   websiteAccount?: string | null;

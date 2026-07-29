@@ -99,10 +99,10 @@
         <el-form-item label="业务金额" required>
           <el-input-number
             v-model="businessAmount"
-            :min="0.0001"
+            :min="Number(V2_DECIMAL_STEP)"
             :max="99999999999999"
-            :precision="4"
-            :step="1"
+            :precision="V2_DECIMAL_PLACES"
+            :step="Number(V2_DECIMAL_STEP)"
             controls-position="right"
           />
         </el-form-item>
@@ -117,8 +117,8 @@
             v-model="fixedFee"
             :min="0"
             :max="99999999"
-            :precision="4"
-            :step="0.1"
+            :precision="V2_DECIMAL_PLACES"
+            :step="Number(V2_DECIMAL_STEP)"
             controls-position="right"
           />
         </el-form-item>
@@ -127,8 +127,8 @@
             v-model="percentageFee"
             :min="0"
             :max="100"
-            :precision="4"
-            :step="0.1"
+            :precision="V2_DECIMAL_PLACES"
+            :step="Number(V2_DECIMAL_STEP)"
             controls-position="right"
           />
         </el-form-item>
@@ -164,6 +164,7 @@
 import { computed, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import type {
   V2Option,
   V2OptionSelector,

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { IdBusinessV2Account, IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { Prisma as PrismaNamespace } from '@prisma/client';
+import { toV2DecimalString } from '../decimal-policy';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { PaginationQuery } from '../../common/pagination';
 import type { IdBusinessV2AccountSecretField } from './dto/reveal-id-business-v2-account-secret.dto';
@@ -11,6 +12,7 @@ export interface AccountListQuery extends PaginationQuery {
   statusOptionId?: string;
   supplierOptionId?: string;
   recordStatus?: string;
+  saleState?: string;
   sortBy?: string;
   sortOrder?: string;
 }
@@ -42,6 +44,12 @@ export const ACCOUNT_INCLUDE = {
       id: true,
       code: true,
       name: true
+    }
+  },
+  soldByOrder: {
+    select: {
+      id: true,
+      orderNo: true
     }
   }
 } satisfies Prisma.IdBusinessV2AccountInclude;
@@ -93,12 +101,15 @@ export function buildAccountWhere(
   const keyword = normalizeNullableString(query.keyword);
   const normalizedAppleId = keyword ? normalizeAppleId(keyword, false) : null;
   const normalizedPhone = keyword ? normalizePhone(keyword) : null;
+  const saleState = parseSaleState(query.saleState);
   return {
     deletedAt: null,
     countryOptionId: normalizeNullableString(query.countryOptionId) ?? undefined,
     statusOptionId: normalizeNullableString(query.statusOptionId) ?? undefined,
     supplierOptionId: normalizeNullableString(query.supplierOptionId) ?? undefined,
     recordStatus: parseRecordStatus(query.recordStatus, false) ?? undefined,
+    soldByOrderId:
+      saleState === 'sold' ? { not: null } : saleState === 'available' ? null : undefined,
     OR: keyword
       ? [
           { appleIdMasked: { contains: keyword, mode: 'insensitive' } },
@@ -151,6 +162,12 @@ export function parseRecordStatus(
     throw new BadRequestException('资料状态无效');
   }
   return value;
+}
+
+export function parseSaleState(value: unknown): 'available' | 'sold' | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (value === 'available' || value === 'sold') return value;
+  throw new BadRequestException('销售状态无效');
 }
 
 export function parseSecretField(value: unknown): IdBusinessV2AccountSecretField {
@@ -223,7 +240,7 @@ export function normalizeMoney(value: unknown, label: string) {
   try {
     const decimal = new PrismaNamespace.Decimal(raw);
     if (decimal.isNegative()) throw new BadRequestException(`${label}不能为负数`);
-    return decimal.toDecimalPlaces(4).toString();
+    return toV2DecimalString(decimal);
   } catch (error) {
     if (error instanceof BadRequestException) throw error;
     throw new BadRequestException(`${label}格式无效`);
@@ -290,9 +307,14 @@ export function toAccountResponse(account: AccountWithRelations) {
     status: account.statusOption,
     supplierOptionId: account.supplierOptionId,
     supplier: account.supplierOption,
-    currentBalance: account.currentBalance.toString(),
-    balanceCostAmount: account.balanceCostAmount.toString(),
-    purchaseCost: account.purchaseCost.toString(),
+    currentBalance: toV2DecimalString(account.currentBalance),
+    balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
+    purchaseCost: toV2DecimalString(account.purchaseCost),
+    saleState: account.soldByOrderId ? ('sold' as const) : ('available' as const),
+    soldAt: account.soldAt,
+    soldByOrder: account.soldByOrder,
+    lossStatus: account.lossReportedAt ? ('reported' as const) : ('active' as const),
+    lossReportedAt: account.lossReportedAt,
     recordStatus: account.recordStatus,
     remark: account.remark,
     createdAt: account.createdAt,

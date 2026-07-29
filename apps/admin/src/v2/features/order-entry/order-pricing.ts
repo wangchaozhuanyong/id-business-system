@@ -1,6 +1,8 @@
-const AMOUNT_SCALE = 4;
-const CENT_FACTOR = 100n;
-const PERCENT_SCALE = 4;
+import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
+
+const AMOUNT_SCALE = V2_DECIMAL_PLACES;
+const CENT_FACTOR = 10n ** BigInt(Math.max(0, AMOUNT_SCALE - 2));
+const PERCENT_SCALE = V2_DECIMAL_PLACES;
 const PERCENT_FACTOR = 10n ** BigInt(PERCENT_SCALE);
 const PERCENT_BASE = 100n * PERCENT_FACTOR;
 const MAX_AMOUNT_UNITS = 999_999_999_999_999_999n;
@@ -40,29 +42,45 @@ export function calculatePlatformFeeAmount(
 export function calculateEstimatedProfitAmount(
   receivedAmount: unknown,
   platformFee: unknown,
+  appliedAccountCostAmount: unknown,
   estimatedBalanceCostAmount: unknown
 ) {
   const received = parseUnsignedDecimal(receivedAmount, AMOUNT_SCALE, MAX_AMOUNT_UNITS);
   const fee = parseUnsignedDecimal(platformFee, AMOUNT_SCALE, MAX_AMOUNT_UNITS);
+  const accountCost = parseUnsignedDecimal(
+    appliedAccountCostAmount,
+    AMOUNT_SCALE,
+    MAX_AMOUNT_UNITS
+  );
   const balanceCost = parseUnsignedDecimal(
     estimatedBalanceCostAmount,
     AMOUNT_SCALE,
     MAX_AMOUNT_UNITS
   );
-  if (received === null || fee === null || balanceCost === null) return null;
+  if (received === null || fee === null || accountCost === null || balanceCost === null)
+    return null;
 
-  return formatScaledInteger(received - fee - balanceCost, AMOUNT_SCALE);
+  return formatScaledInteger(received - fee - accountCost - balanceCost, AMOUNT_SCALE);
 }
 
 export function calculateSuggestedReceivedAmount(input: {
   targetProfit: unknown;
+  appliedAccountCostAmount: unknown;
   estimatedBalanceCostAmount: unknown;
   fixedFee: unknown;
   percentageFee: unknown;
 }): SuggestedReceivedAmount {
   const targetProfit = parseUnsignedDecimal(input.targetProfit, AMOUNT_SCALE, MAX_AMOUNT_UNITS);
   if (targetProfit === null) {
-    return unavailableSuggestion('预计利润必须是最多 4 位小数的非负金额');
+    return unavailableSuggestion(`目标利润必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`);
+  }
+  const accountCost = parseUnsignedDecimal(
+    input.appliedAccountCostAmount,
+    AMOUNT_SCALE,
+    MAX_AMOUNT_UNITS
+  );
+  if (accountCost === null) {
+    return unavailableSuggestion('ID 成本格式无效');
   }
   const balanceCost = parseUnsignedDecimal(
     input.estimatedBalanceCostAmount,
@@ -83,14 +101,20 @@ export function calculateSuggestedReceivedAmount(input: {
     return unavailableSuggestion('手续费比例为 100%，无法计算建议收款金额');
   }
 
-  const baseAmount = targetProfit + balanceCost + fixedFee;
+  const baseAmount = targetProfit + accountCost + balanceCost + fixedFee;
   let cents = divideCeil(baseAmount * PERCENT_BASE, netPercentage * CENT_FACTOR);
   let received = cents * CENT_FACTOR;
   if (received > MAX_AMOUNT_UNITS) {
     return unavailableSuggestion('建议收款金额超出系统金额上限');
   }
 
-  let result = calculateSuggestionResult(received, fixedFee, percentageFee, balanceCost);
+  let result = calculateSuggestionResult(
+    received,
+    fixedFee,
+    percentageFee,
+    accountCost,
+    balanceCost
+  );
   if (result.feeUnits > MAX_AMOUNT_UNITS) {
     return unavailableSuggestion('建议平台手续费超出系统金额上限');
   }
@@ -100,7 +124,7 @@ export function calculateSuggestedReceivedAmount(input: {
     if (received > MAX_AMOUNT_UNITS) {
       return unavailableSuggestion('建议收款金额超出系统金额上限');
     }
-    result = calculateSuggestionResult(received, fixedFee, percentageFee, balanceCost);
+    result = calculateSuggestionResult(received, fixedFee, percentageFee, accountCost, balanceCost);
     if (result.feeUnits > MAX_AMOUNT_UNITS) {
       return unavailableSuggestion('建议平台手续费超出系统金额上限');
     }
@@ -118,13 +142,35 @@ function calculateSuggestionResult(
   received: bigint,
   fixedFee: bigint,
   percentageFee: bigint,
+  accountCost: bigint,
   balanceCost: bigint
 ) {
   const feeUnits = fixedFee + divideHalfUp(received * percentageFee, PERCENT_BASE);
   return {
     feeUnits,
-    profitUnits: received - feeUnits - balanceCost
+    profitUnits: received - feeUnits - accountCost - balanceCost
   };
+}
+
+export function calculateTotalCostAmount(
+  platformFee: unknown,
+  appliedAccountCostAmount: unknown,
+  estimatedBalanceCostAmount: unknown
+) {
+  const fee = parseUnsignedDecimal(platformFee, AMOUNT_SCALE, MAX_AMOUNT_UNITS);
+  const accountCost = parseUnsignedDecimal(
+    appliedAccountCostAmount,
+    AMOUNT_SCALE,
+    MAX_AMOUNT_UNITS
+  );
+  const balanceCost = parseUnsignedDecimal(
+    estimatedBalanceCostAmount,
+    AMOUNT_SCALE,
+    MAX_AMOUNT_UNITS
+  );
+  if (fee === null || accountCost === null || balanceCost === null) return null;
+  const total = fee + accountCost + balanceCost;
+  return total <= MAX_AMOUNT_UNITS ? formatScaledInteger(total, AMOUNT_SCALE) : null;
 }
 
 function unavailableSuggestion(error: string): SuggestedReceivedAmount {

@@ -1,8 +1,7 @@
+import { formatV2Decimal } from '@/v2/utils/decimal';
+
 export function formatAccountDecimal(value: string) {
-  const number = Number(value);
-  return Number.isFinite(number)
-    ? number.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
-    : value;
+  return formatV2Decimal(value);
 }
 
 export function formatAccountDate(value: string) {

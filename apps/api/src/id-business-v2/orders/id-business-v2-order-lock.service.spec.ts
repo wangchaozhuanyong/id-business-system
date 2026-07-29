@@ -29,6 +29,7 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     accountId: null,
     receivedAmount: decimal('100'),
     platformFeeAmount: decimal('3'),
+    accountDisposition: 'retained',
     accountCostAmount: decimal('0'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('0'),
@@ -46,6 +47,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     currentBalance: decimal('30'),
     balanceCostAmount: decimal('180'),
     purchaseCost: decimal('25'),
+    soldByOrderId: null,
     countryOptionId: '66666666-6666-4666-8666-666666666666',
     statusCode: 'normal',
     ...overrides
@@ -343,6 +345,21 @@ describe('IdBusinessV2OrderLockService', () => {
     });
     await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
       'ID 国家与订单业务所属国家不一致'
+    );
+
+    tx.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce([makeOrder()])
+      .mockResolvedValueOnce([
+        makeAccount({
+          soldByOrderId: '99999999-9999-4999-8999-999999999999'
+        })
+      ]);
+    tx.idBusinessV2Option.findFirst.mockResolvedValueOnce({
+      countryOptionId: '66666666-6666-4666-8666-666666666666'
+    });
+    await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
+      '该 ID 已卖出，不能再次匹配、加卡或续费'
     );
   });
 

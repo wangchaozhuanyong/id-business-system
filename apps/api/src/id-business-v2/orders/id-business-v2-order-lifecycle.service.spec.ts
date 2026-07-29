@@ -40,6 +40,7 @@ function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
     websiteAccountMasked: 'te***@example.com',
     receivedAmount: decimal('100'),
     platformFeeAmount: decimal('3'),
+    accountDisposition: 'retained',
     accountCostAmount: decimal('25'),
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('60'),
@@ -127,7 +128,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       findFirst: vi.fn()
     },
     idBusinessV2Account: {
-      update: vi.fn()
+      update: vi.fn(),
+      updateMany: vi.fn()
     },
     auditLog: {
       create: vi.fn()
@@ -213,6 +215,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       return { id: where.id };
     });
     tx.idBusinessV2Account.update.mockResolvedValue({ id: accountId });
+    tx.idBusinessV2Account.updateMany.mockResolvedValue({ count: 1 });
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
     orderLockService.releaseOrderLockInTransaction.mockResolvedValue({
       released: true,
@@ -278,6 +281,56 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     );
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
     expect(result.id).toBe(orderId);
+  });
+
+  it('allows a pending order to switch to sold and forces a global sale lock', async () => {
+    storedOrder = makeOrder({
+      status: 'pending',
+      accountDisposition: 'retained',
+      accountCostAmount: decimal('0'),
+      balanceCostAmount: decimal('0'),
+      profitAmount: null
+    });
+    consumption = null;
+    tx.$queryRaw.mockResolvedValueOnce([{ id: orderId }]).mockResolvedValueOnce([
+      {
+        id: accountId,
+        purchaseCost: decimal('25'),
+        soldByOrderId: null
+      }
+    ]);
+
+    await service.update(
+      orderId,
+      {
+        accountDisposition: 'sold',
+        expectedUpdatedAt: updatedAt.toISOString()
+      },
+      operator
+    );
+
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
+      where: { id: accountId },
+      data: expect.objectContaining({
+        soldByOrderId: orderId,
+        soldAt: expect.any(Date)
+      })
+    });
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountDisposition: 'sold',
+          accountCostAmount: decimal('25')
+        })
+      })
+    );
+    expect(orderLockService.reserveAccountForOrderInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        lockScope: 'global'
+      }),
+      operator
+    );
   });
 
   it('recalculates processing order profit while protecting consumed core fields', async () => {
@@ -385,6 +438,41 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     });
   });
 
+  it('recovers a sold ID when an unfinished order is cancelled', async () => {
+    storedOrder = makeOrder({
+      status: 'pending',
+      accountDisposition: 'sold',
+      accountCostAmount: decimal('25'),
+      balanceCostAmount: decimal('0'),
+      profitAmount: null
+    });
+    consumption = null;
+
+    await service.cancel(
+      orderId,
+      {
+        reason: '客户取消，ID 已收回',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(tx.idBusinessV2Account.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: accountId,
+        soldByOrderId: orderId,
+        lossReportedAt: null
+      },
+      data: {
+        soldByOrderId: null,
+        soldAt: null,
+        updatedByUserId: operator.id
+      }
+    });
+    expect(storedOrder.accountDisposition).toBe('recovered');
+    expect(storedOrder.accountCostAmount.toString()).toBe('25');
+  });
+
   it('cancels a consumed order by restoring the exact original balance and cost', async () => {
     tx.$queryRaw.mockResolvedValueOnce([{ id: orderId }]).mockResolvedValueOnce([
       {
@@ -488,6 +576,61 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       lockReleased: true,
       idempotentReplay: false
     });
+  });
+
+  it('keeps a sold ID occupied by default and only recovers it when explicitly returned', async () => {
+    storedOrder = makeOrder({
+      status: 'completed',
+      accountDisposition: 'sold',
+      accountCostAmount: decimal('25'),
+      profitAmount: decimal('12')
+    });
+    tx.idBusinessV2Activation.findUnique.mockResolvedValue({ id: 'activation-1' });
+
+    await service.refund(
+      orderId,
+      {
+        refundCostAmount: '100',
+        reason: '客户退款但未退回 ID',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(tx.idBusinessV2Account.updateMany).not.toHaveBeenCalled();
+    expect(storedOrder.accountDisposition).toBe('sold');
+    expect(storedOrder.profitAmount?.toString()).toBe('-88');
+
+    storedOrder = makeOrder({
+      status: 'completed',
+      accountDisposition: 'sold',
+      accountCostAmount: decimal('25'),
+      profitAmount: decimal('12')
+    });
+    reversal = null;
+    await service.refund(
+      orderId,
+      {
+        refundCostAmount: '100',
+        reason: '客户退款并退回 ID',
+        accountReturned: true,
+        idempotencyKey: 'returned-key-1'
+      },
+      operator
+    );
+
+    expect(tx.idBusinessV2Account.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: accountId,
+          soldByOrderId: orderId,
+          lossReportedAt: null
+        }
+      })
+    );
+    expect(storedOrder.accountDisposition).toBe('recovered');
+    expect(storedOrder.accountCostAmount.toString()).toBe('25');
+    expect(storedOrder.profitAmount?.toString()).toBe('-63');
   });
 
   it('restores balance for an explicit pre-activation refund and rejects it after activation', async () => {

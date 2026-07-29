@@ -73,6 +73,7 @@ function makeSourceActivation(overrides: Record<string, unknown> = {}) {
       countryOptionId,
       recordStatus: 'active',
       deletedAt: null,
+      soldByOrderId: null as string | null,
       countryOption: {
         id: countryOptionId,
         code: 'us',
@@ -150,7 +151,8 @@ describe('IdBusinessV2ManualRenewalService', () => {
         id: accountId,
         currentBalance: decimal('30'),
         balanceCostAmount: decimal('90'),
-        purchaseCost: decimal('15')
+        purchaseCost: decimal('15'),
+        soldByOrderId: null
       }
     ]);
     tx.idBusinessV2Activation.findFirst.mockResolvedValue(makeSourceActivation());
@@ -403,6 +405,17 @@ describe('IdBusinessV2ManualRenewalService', () => {
   it('rejects another active order lock', async () => {
     tx.idBusinessV2AccountLock.findFirst.mockResolvedValueOnce({ id: 'active-lock' });
     await expect(service.create(activationId, makeDto())).rejects.toThrow('该 ID 已被其他订单占用');
+  });
+
+  it('rejects renewal when the source ID has already been sold', async () => {
+    const source = makeSourceActivation();
+    source.account.soldByOrderId = targetOrderId;
+    tx.idBusinessV2Activation.findFirst.mockResolvedValueOnce(source);
+
+    await expect(service.create(activationId, makeDto())).rejects.toThrow(
+      '只有启用且状态正常的 ID 才能续费'
+    );
+    expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects the same renewal period even when a new idempotency key is used', async () => {

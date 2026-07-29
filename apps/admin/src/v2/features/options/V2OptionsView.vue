@@ -191,32 +191,30 @@
                   <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
                 </el-table-column>
 
-                <el-table-column label="操作" width="170" fixed="right">
+                <V2TableActionColumn layout="double">
                   <template #default="{ row }">
-                    <div class="v2-options-actions">
-                      <AppButton
-                        size="small"
-                        variant="ghost"
-                        :disabled="row.isSystem"
-                        :title="row.isSystem ? '系统固定选项不能编辑' : '编辑选项'"
-                        @click="openEdit(row)"
-                      >
-                        <el-icon><Edit /></el-icon>
-                        编辑
-                      </AppButton>
-                      <AppButton
-                        size="small"
-                        variant="danger"
-                        :disabled="row.isSystem || row.childCount > 0"
-                        :title="getDeleteTitle(row)"
-                        @click="openDelete(row)"
-                      >
-                        <el-icon><Delete /></el-icon>
-                        删除
-                      </AppButton>
-                    </div>
+                    <AppButton
+                      size="small"
+                      variant="ghost"
+                      :disabled="row.isSystem"
+                      :title="row.isSystem ? '系统固定选项不能编辑' : '编辑选项'"
+                      @click="openEdit(row)"
+                    >
+                      <el-icon><Edit /></el-icon>
+                      编辑
+                    </AppButton>
+                    <AppButton
+                      size="small"
+                      variant="danger"
+                      :disabled="row.isSystem || row.childCount > 0"
+                      :title="getDeleteTitle(row)"
+                      @click="openDelete(row)"
+                    >
+                      <el-icon><Delete /></el-icon>
+                      删除
+                    </AppButton>
                   </template>
-                </el-table-column>
+                </V2TableActionColumn>
               </el-table>
 
               <div class="v2-options-mobile-list">
@@ -365,6 +363,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2OptionFormDrawer from './components/V2OptionFormDrawer.vue';
 import { useOptionsPage } from './useOptionsPage';
 

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuditLogsModule } from '../../audit-logs/audit-logs.module';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { IdBusinessV2AccountsModule } from '../accounts/public-api';
 import { IdBusinessV2BalancesModule } from '../balances/public-api';
 import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
@@ -12,6 +13,7 @@ import { IdBusinessV2GiftCardsController } from './id-business-v2-gift-cards.con
 @Module({
   imports: [
     AuditLogsModule,
+    IdBusinessV2AccountsModule,
     IdBusinessV2BalancesModule,
     IdBusinessV2ExchangeRatesModule,
     IdBusinessV2OptionsModule

@@ -131,7 +131,7 @@ export class IdBusinessV2ActivationsService {
         : undefined
     };
 
-    const [items, total] = await this.prisma.$transaction([
+    const [items, total, nextTimedActivation] = await this.prisma.$transaction([
       this.prisma.idBusinessV2Activation.findMany({
         where,
         include: ACTIVATION_INCLUDE,
@@ -139,7 +139,26 @@ export class IdBusinessV2ActivationsService {
         take: pagination.take,
         orderBy: this.buildOrderBy(query)
       }),
-      this.prisma.idBusinessV2Activation.count({ where })
+      this.prisma.idBusinessV2Activation.count({ where }),
+      this.prisma.idBusinessV2Activation.findFirst({
+        where: {
+          AND: [
+            where,
+            {
+              status: 'active',
+              dueAt: {
+                gt: now
+              }
+            }
+          ]
+        },
+        select: {
+          dueAt: true
+        },
+        orderBy: {
+          dueAt: 'asc'
+        }
+      })
     ]);
 
     return {
@@ -147,7 +166,11 @@ export class IdBusinessV2ActivationsService {
       total,
       page: pagination.page,
       pageSize: pagination.pageSize,
-      evaluatedAt: now
+      evaluatedAt: now,
+      revalidateAt: this.activationStatusService.getNextRevalidateAt(
+        nextTimedActivation?.dueAt ?? null,
+        now
+      )
     };
   }
 

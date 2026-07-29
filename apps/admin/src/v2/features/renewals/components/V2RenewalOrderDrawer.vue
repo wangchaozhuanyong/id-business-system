@@ -186,6 +186,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatV2Decimal } from '@/v2/utils/decimal';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import type { V2ManualRenewalOptions, V2RenewalWorkbenchItem } from '../contracts';
@@ -234,11 +235,6 @@ function serviceLabel(service: ManualService) {
 }
 
 function formatDecimal(value: string | number | null | undefined) {
-  const parsed = Number(value ?? 0);
-  if (!Number.isFinite(parsed)) return '-';
-  return parsed.toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4
-  });
+  return formatV2Decimal(value, { minimumFractionDigits: 2 });
 }
 </script>

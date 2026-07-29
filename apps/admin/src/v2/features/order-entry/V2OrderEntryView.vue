@@ -199,6 +199,13 @@
               </el-select>
             </el-form-item>
 
+            <el-form-item label="ID 购买成本">
+              <div class="v2-order-entry-readonly">
+                <strong>¥{{ formatDecimal(accountPurchaseCostPreview) }}</strong>
+                <span>{{ selectedCandidate ? '成本快照预览' : '选择 ID 后显示' }}</span>
+              </div>
+            </el-form-item>
+
             <V2SectionHeading
               as="div"
               level="h3"
@@ -215,6 +222,19 @@
                 autocomplete="off"
                 placeholder="选填"
               />
+            </el-form-item>
+
+            <el-form-item label="ID 处理方式">
+              <div class="v2-order-entry-disposition">
+                <el-radio-group v-model="form.accountDisposition">
+                  <el-radio value="retained">保留 ID</el-radio>
+                  <el-radio value="sold">卖出 ID</el-radio>
+                </el-radio-group>
+                <small v-if="form.accountDisposition === 'sold'">
+                  本单计入 ID 购买成本；创建后该 ID 将停止匹配、加卡和续费。
+                </small>
+                <small v-else>本单不计 ID 购买成本，ID 后续仍可继续使用。</small>
+              </div>
             </el-form-item>
 
             <el-form-item label="结算平台">
@@ -252,7 +272,7 @@
               />
             </el-form-item>
 
-            <el-form-item label="预计利润" prop="targetProfit">
+            <el-form-item label="目标利润" prop="targetProfit">
               <el-input
                 v-model="form.targetProfit"
                 inputmode="decimal"
@@ -273,7 +293,7 @@
                   <small v-else-if="suggestedReceived.estimatedProfit">
                     采用后预计利润 ¥{{ formatDecimal(suggestedReceived.estimatedProfit) }}
                   </small>
-                  <small v-else>填写预计利润并选择可用 ID 后自动计算</small>
+                  <small v-else>填写目标利润并选择可用 ID 后自动计算</small>
                 </div>
                 <AppButton
                   variant="ghost"
@@ -354,6 +374,11 @@
           :id-selection-mode="idSelectionMode"
           :selected-candidate="selectedCandidate"
           :selected-country-name="selectedCountry?.name ?? ''"
+          :account-disposition="form.accountDisposition"
+          :account-purchase-cost-preview="accountPurchaseCostPreview"
+          :applied-account-cost-preview="appliedAccountCostPreview"
+          :estimated-balance-cost-preview="estimatedBalanceCostPreview"
+          :total-cost-preview="totalCostPreview"
           :platform-fee-preview="platformFeePreview"
           :estimated-profit-preview="estimatedProfitPreview"
           :can-match="canMatch"
@@ -437,6 +462,10 @@ const {
   canSubmit,
   hasPendingConsumption,
   platformFeePreview,
+  accountPurchaseCostPreview,
+  appliedAccountCostPreview,
+  estimatedBalanceCostPreview,
+  totalCostPreview,
   estimatedProfitPreview,
   suggestedReceived,
   matchingEmptyMessage,
@@ -458,7 +487,6 @@ const {
   customerLabel,
   formatDecimal
 } = useOrderEntryPage();
-
 const quickCustomerVisible = ref(false);
 
 function handleCustomerCreated(customer: V2OrderEntryCustomer) {

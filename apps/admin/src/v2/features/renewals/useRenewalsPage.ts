@@ -11,6 +11,8 @@ import {
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
 import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
+import { addDecimalStrings, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { calculatePlatformFeeAmount } from '@/v2/features/order-entry/order-pricing';
 import { idBusinessV2RenewalsApi } from './api';
 import type {
   V2ManualRenewalOptions,
@@ -30,12 +32,12 @@ const dueStatusOptions: Array<{ value: V2RenewalDueStatus; label: string }> = [
   { value: 'expired', label: '已到期' }
 ];
 
-function isValidNonNegativeDecimal(value: string, scale: number) {
-  return new RegExp(`^\\d+(\\.\\d{1,${scale}})?$`).test(value.trim());
+function isValidNonNegativeDecimal(value: string) {
+  return isV2UnsignedDecimal(value);
 }
 
-function isValidPositiveDecimal(value: string, scale: number) {
-  return isValidNonNegativeDecimal(value, scale) && Number(value) > 0;
+function isValidPositiveDecimal(value: string) {
+  return isV2UnsignedDecimal(value, { allowZero: false });
 }
 
 interface RenewalsReferenceOptions {
@@ -119,12 +121,13 @@ export function useRenewalsPage() {
     scope: 'renewals',
     key: () => createV2QueryKey(getRenewalsListQuery()),
     keepPreviousData: true,
+    getRevalidateAt: (result) => result.list.revalidateAt,
     query: async ({ signal }) => {
       const params = getRenewalsListQuery();
       const cachedOptions = getV2QueryData<RenewalsReferenceOptions>(
         RENEWALS_OPTIONS_SCOPE,
         RENEWALS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         return {
@@ -213,19 +216,17 @@ export function useRenewalsPage() {
       ) ?? null
   );
   const platformFeePreview = computed(() => {
-    const receivedAmount = Number(form.receivedAmount);
     const platform = selectedPlatform.value;
-    if (!platform || !Number.isFinite(receivedAmount) || receivedAmount < 0) return '0.0000';
+    if (!platform) return '0';
     return (
-      Number(platform.fixedFee) +
-      (receivedAmount * Number(platform.percentageFee)) / 100
-    ).toFixed(4);
+      calculatePlatformFeeAmount(form.receivedAmount, platform.fixedFee, platform.percentageFee) ??
+      '0'
+    );
   });
   const balanceAfterPreview = computed(() => {
-    const currentBalance = Number(selectedRenewal.value?.account.currentBalance ?? '');
-    const balanceAmount = Number(form.balanceAmount);
-    if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAmount)) return '0.0000';
-    return (currentBalance - balanceAmount).toFixed(4);
+    const currentBalance = selectedRenewal.value?.account.currentBalance;
+    if (!currentBalance || !isValidNonNegativeDecimal(form.balanceAmount)) return '0';
+    return addDecimalStrings(currentBalance, `-${form.balanceAmount}`);
   });
   const canSubmitRenewal = computed(() => {
     const renewal = selectedRenewal.value;
@@ -246,8 +247,8 @@ export function useRenewalsPage() {
     const currentBalance = Number(renewal.account.currentBalance);
     return (
       availableServices.value.some((service) => service.id === form.serviceOptionId) &&
-      isValidNonNegativeDecimal(form.receivedAmount, 4) &&
-      isValidPositiveDecimal(form.balanceAmount, 4) &&
+      isValidNonNegativeDecimal(form.receivedAmount) &&
+      isValidPositiveDecimal(form.balanceAmount) &&
       Number.isFinite(balanceAmount) &&
       Number.isFinite(currentBalance) &&
       balanceAmount <= currentBalance &&
@@ -308,7 +309,7 @@ export function useRenewalsPage() {
       const cachedOptions = getV2QueryData<RenewalsReferenceOptions>(
         RENEWALS_OPTIONS_SCOPE,
         RENEWALS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         primeV2Query({
@@ -439,7 +440,7 @@ export function useRenewalsPage() {
 
   function applySelectedServiceAmount() {
     const amount = selectedManualService.value?.businessAmount ?? '';
-    form.balanceAmount = isValidPositiveDecimal(amount, 4) ? amount : '';
+    form.balanceAmount = isValidPositiveDecimal(amount) ? amount : '';
   }
 
   function openConfirmation() {
@@ -496,12 +497,7 @@ export function useRenewalsPage() {
   );
 
   function formatDecimal(value: string | number | null | undefined) {
-    const parsed = Number(value ?? 0);
-    if (!Number.isFinite(parsed)) return '-';
-    return parsed.toLocaleString('zh-CN', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 4
-    });
+    return formatV2Decimal(value, { minimumFractionDigits: 2 });
   }
 
   function formatDate(value: string | null) {

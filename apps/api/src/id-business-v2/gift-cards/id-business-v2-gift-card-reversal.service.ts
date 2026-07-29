@@ -1,24 +1,34 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException
 } from '@nestjs/common';
 import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { IdBusinessV2AccountLossesService } from '../accounts/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { toV2DecimalString } from '../decimal-policy';
 import type {
   IdBusinessV2GiftCardReversalAction,
   ReverseIdBusinessV2GiftCardDto
 } from './dto/reverse-id-business-v2-gift-card.dto';
+import {
+  buildGiftCardReversalResponse,
+  writeGiftCardReversalAuditLog
+} from './id-business-v2-gift-card-reversal-result';
 
 interface LockedAccountRow {
   id: string;
   appleIdMasked: string;
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
+  recordStatus: string;
+  lossReportedAt: Date | null;
 }
 
 interface LockedGiftCardRow {
@@ -35,41 +45,6 @@ interface LockedGiftCardRow {
   createdAt: Date;
 }
 
-export interface IdBusinessV2GiftCardReversalResponse {
-  action: IdBusinessV2GiftCardReversalAction;
-  giftCard: {
-    id: string;
-    codeMasked: string;
-    codeTail: string;
-    faceValue: string;
-    exchangeRate: string;
-    originalCostAmount: string;
-    status: string;
-    statusChangedAt: Date;
-  };
-  ledgerEntry: {
-    id: string;
-    entryType: string;
-    balanceAmount: string;
-    costAmount: string;
-    balanceBefore: string;
-    balanceAfter: string;
-    costBefore: string;
-    costAfter: string;
-    averageCostBefore: string;
-    averageCostAfter: string;
-    reversalOfEntryId: string;
-    createdAt: Date;
-  };
-  account: {
-    id: string;
-    appleIdMasked: string;
-    currentBalance: string;
-    balanceCostAmount: string;
-  };
-  idempotentReplay: boolean;
-}
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 
@@ -77,7 +52,8 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 export class IdBusinessV2GiftCardReversalService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService
+    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
+    private readonly accountLossesService: IdBusinessV2AccountLossesService
   ) {}
 
   async listReversible(accountIdValue: string) {
@@ -86,7 +62,8 @@ export class IdBusinessV2GiftCardReversalService {
       where: {
         id: accountId,
         deletedAt: null,
-        recordStatus: 'active'
+        recordStatus: 'active',
+        lossReportedAt: null
       },
       select: {
         id: true,
@@ -148,16 +125,16 @@ export class IdBusinessV2GiftCardReversalService {
         id: giftCard.id,
         codeMasked: giftCard.codeMasked,
         codeTail: giftCard.codeTail,
-        faceValue: giftCard.faceValue.toString(),
-        exchangeRate: giftCard.exchangeRate.toString(),
-        costAmount: giftCard.costAmount.toString(),
+        faceValue: toV2DecimalString(giftCard.faceValue),
+        exchangeRate: toV2DecimalString(giftCard.exchangeRate),
+        costAmount: toV2DecimalString(giftCard.costAmount),
         status: giftCard.status,
         supplier: giftCard.supplierOption,
         creditedLedger: giftCard.ledgerEntries[0]
           ? {
               id: giftCard.ledgerEntries[0].id,
-              balanceBefore: giftCard.ledgerEntries[0].balanceBefore.toString(),
-              balanceAfter: giftCard.ledgerEntries[0].balanceAfter.toString(),
+              balanceBefore: toV2DecimalString(giftCard.ledgerEntries[0].balanceBefore),
+              balanceAfter: toV2DecimalString(giftCard.ledgerEntries[0].balanceAfter),
               createdAt: giftCard.ledgerEntries[0].createdAt
             }
           : null,
@@ -181,6 +158,14 @@ export class IdBusinessV2GiftCardReversalService {
       this.normalizeIdempotencyKey(dto.idempotencyKey)
     );
     const entryType = this.getEntryType(action);
+    const reportAccountLoss = this.normalizeReportAccountLoss(dto.reportAccountLoss);
+    if (reportAccountLoss && action !== 'redeemed') {
+      throw new BadRequestException('只有标记被赎回时才能同时报损 ID');
+    }
+    if (reportAccountLoss) {
+      this.assertAccountLossPermission(operator);
+    }
+    const accountLossRequestKey = this.buildAccountLossRequestKey(idempotencyKey);
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -201,7 +186,30 @@ export class IdBusinessV2GiftCardReversalService {
         });
         if (existingEntry?.giftCard) {
           this.assertReplayMatches(existingEntry, giftCardId, entryType, reason);
-          return this.toResponse(action, account, existingEntry.giftCard, existingEntry, true);
+          const accountLoss = await this.resolveReplayAccountLoss(
+            tx,
+            account,
+            existingEntry.giftCard,
+            existingEntry,
+            reportAccountLoss,
+            accountLossRequestKey,
+            reason,
+            operator
+          );
+          return buildGiftCardReversalResponse(
+            action,
+            account,
+            existingEntry.giftCard,
+            existingEntry,
+            true,
+            accountLoss
+          );
+        }
+        if (account.lossReportedAt) {
+          throw new ConflictException('已报损 ID 永久冻结，不能再处理余额');
+        }
+        if (account.recordStatus !== 'active') {
+          throw new NotFoundException('目标 ID 不存在或已停用');
         }
 
         const giftCard = await this.lockGiftCard(tx, giftCardId);
@@ -307,8 +315,34 @@ export class IdBusinessV2GiftCardReversalService {
           }
         });
 
-        const result = this.toResponse(action, updatedAccount, updatedGiftCard, ledgerEntry, false);
-        await this.writeAuditLog(tx, result, reason, operator);
+        const accountLoss = reportAccountLoss
+          ? await this.accountLossesService.reportLossInTransaction(
+              tx,
+              account.id,
+              {
+                reason,
+                expectedCurrentBalance: toV2DecimalString(snapshot.balanceAfter),
+                expectedBalanceCostAmount: toV2DecimalString(snapshot.costAfter),
+                idempotencyKey: accountLossRequestKey
+              },
+              operator,
+              {
+                source: 'gift_card_redeemed',
+                giftCardId,
+                giftCardMasked: updatedGiftCard.codeMasked,
+                reversalLedgerEntryId: ledgerEntry.id
+              }
+            )
+          : null;
+        const result = buildGiftCardReversalResponse(
+          action,
+          updatedAccount,
+          updatedGiftCard,
+          ledgerEntry,
+          false,
+          accountLoss
+        );
+        await writeGiftCardReversalAuditLog(tx, result, reason, operator);
         return result;
       });
     } catch (error) {
@@ -325,22 +359,70 @@ export class IdBusinessV2GiftCardReversalService {
   private async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
     const accounts = await tx.$queryRaw<LockedAccountRow[]>(PrismaNamespace.sql`
       SELECT
-        "id",
-        "apple_id_masked" AS "appleIdMasked",
-        "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount"
-      FROM "id_business_v2_accounts"
+        account."id",
+        account."apple_id_masked" AS "appleIdMasked",
+        account."current_balance" AS "currentBalance",
+        account."balance_cost_amount" AS "balanceCostAmount",
+        account."record_status" AS "recordStatus",
+        account."loss_reported_at" AS "lossReportedAt"
+      FROM "id_business_v2_accounts" account
       WHERE
-        "id" = CAST(${accountId} AS UUID)
-        AND "deleted_at" IS NULL
-        AND "record_status" = 'active'
-      FOR UPDATE
+        account."id" = CAST(${accountId} AS UUID)
+        AND account."deleted_at" IS NULL
+      FOR UPDATE OF account
     `);
     const account = accounts[0];
     if (!account) {
       throw new NotFoundException('目标 ID 不存在或已停用');
     }
     return account;
+  }
+
+  private async resolveReplayAccountLoss(
+    tx: Prisma.TransactionClient,
+    account: LockedAccountRow,
+    giftCard: {
+      id: string;
+      codeMasked: string;
+    },
+    ledgerEntry: {
+      id: string;
+      balanceAfter: PrismaNamespace.Decimal;
+      costAfter: PrismaNamespace.Decimal;
+    },
+    reportAccountLoss: boolean,
+    accountLossRequestKey: string,
+    reason: string,
+    operator?: AuthenticatedUser
+  ) {
+    const linkedLoss = await tx.idBusinessV2AccountLoss.findUnique({
+      where: {
+        idempotencyKey: this.buildAccountLossIdempotencyKey(account.id, accountLossRequestKey)
+      },
+      select: { id: true }
+    });
+    if (Boolean(linkedLoss) !== reportAccountLoss) {
+      throw new ConflictException('相同幂等键对应的“同时报损 ID”选项不一致');
+    }
+    if (!reportAccountLoss) return null;
+
+    return this.accountLossesService.reportLossInTransaction(
+      tx,
+      account.id,
+      {
+        reason,
+        expectedCurrentBalance: toV2DecimalString(ledgerEntry.balanceAfter),
+        expectedBalanceCostAmount: toV2DecimalString(ledgerEntry.costAfter),
+        idempotencyKey: accountLossRequestKey
+      },
+      operator,
+      {
+        source: 'gift_card_redeemed',
+        giftCardId: giftCard.id,
+        giftCardMasked: giftCard.codeMasked,
+        reversalLedgerEntryId: ledgerEntry.id
+      }
+    );
   }
 
   private async lockGiftCard(tx: Prisma.TransactionClient, giftCardId: string) {
@@ -387,113 +469,6 @@ export class IdBusinessV2GiftCardReversalService {
     }
   }
 
-  private toResponse(
-    action: IdBusinessV2GiftCardReversalAction,
-    account: {
-      id: string;
-      appleIdMasked: string;
-      currentBalance: PrismaNamespace.Decimal;
-      balanceCostAmount: PrismaNamespace.Decimal;
-    },
-    giftCard: {
-      id: string;
-      codeMasked: string;
-      codeTail: string;
-      faceValue: PrismaNamespace.Decimal;
-      exchangeRate: PrismaNamespace.Decimal;
-      costAmount: PrismaNamespace.Decimal;
-      status: string;
-      statusChangedAt: Date;
-    },
-    ledgerEntry: {
-      id: string;
-      entryType: string;
-      balanceAmount: PrismaNamespace.Decimal;
-      costAmount: PrismaNamespace.Decimal;
-      balanceBefore: PrismaNamespace.Decimal;
-      balanceAfter: PrismaNamespace.Decimal;
-      costBefore: PrismaNamespace.Decimal;
-      costAfter: PrismaNamespace.Decimal;
-      averageCostBefore: PrismaNamespace.Decimal;
-      averageCostAfter: PrismaNamespace.Decimal;
-      reversalOfEntryId: string | null;
-      createdAt: Date;
-    },
-    idempotentReplay: boolean
-  ): IdBusinessV2GiftCardReversalResponse {
-    if (!ledgerEntry.reversalOfEntryId) {
-      throw new ConflictException('反向流水缺少原入账流水引用');
-    }
-    return {
-      action,
-      giftCard: {
-        id: giftCard.id,
-        codeMasked: giftCard.codeMasked,
-        codeTail: giftCard.codeTail,
-        faceValue: giftCard.faceValue.toString(),
-        exchangeRate: giftCard.exchangeRate.toString(),
-        originalCostAmount: giftCard.costAmount.toString(),
-        status: giftCard.status,
-        statusChangedAt: giftCard.statusChangedAt
-      },
-      ledgerEntry: {
-        id: ledgerEntry.id,
-        entryType: ledgerEntry.entryType,
-        balanceAmount: ledgerEntry.balanceAmount.toString(),
-        costAmount: ledgerEntry.costAmount.toString(),
-        balanceBefore: ledgerEntry.balanceBefore.toString(),
-        balanceAfter: ledgerEntry.balanceAfter.toString(),
-        costBefore: ledgerEntry.costBefore.toString(),
-        costAfter: ledgerEntry.costAfter.toString(),
-        averageCostBefore: ledgerEntry.averageCostBefore.toString(),
-        averageCostAfter: ledgerEntry.averageCostAfter.toString(),
-        reversalOfEntryId: ledgerEntry.reversalOfEntryId,
-        createdAt: ledgerEntry.createdAt
-      },
-      account: {
-        id: account.id,
-        appleIdMasked: account.appleIdMasked,
-        currentBalance: account.currentBalance.toString(),
-        balanceCostAmount: account.balanceCostAmount.toString()
-      },
-      idempotentReplay
-    };
-  }
-
-  private async writeAuditLog(
-    tx: Prisma.TransactionClient,
-    result: IdBusinessV2GiftCardReversalResponse,
-    reason: string,
-    operator?: AuthenticatedUser
-  ) {
-    const actionLabel = result.action === 'redeemed' ? '标记被赎回' : '撤回';
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: `id_business_v2.gift_card.${result.action}`,
-        objectType: 'id_business_v2_gift_card',
-        objectId: result.giftCard.id,
-        beforeData: {
-          status: 'credited',
-          balance: result.ledgerEntry.balanceBefore,
-          balanceCostAmount: result.ledgerEntry.costBefore
-        },
-        afterData: {
-          status: result.giftCard.status,
-          codeMasked: result.giftCard.codeMasked,
-          balanceAmount: result.ledgerEntry.balanceAmount,
-          costAmount: result.ledgerEntry.costAmount,
-          balance: result.ledgerEntry.balanceAfter,
-          balanceCostAmount: result.ledgerEntry.costAfter,
-          reversalOfEntryId: result.ledgerEntry.reversalOfEntryId,
-          reason
-        },
-        remark: `V2 礼品卡${actionLabel}：${result.giftCard.codeMasked}`
-      }
-    });
-  }
-
   private normalizeUuid(value: unknown, label: string) {
     const normalized = typeof value === 'string' ? value.trim() : '';
     if (!UUID_PATTERN.test(normalized)) {
@@ -505,6 +480,21 @@ export class IdBusinessV2GiftCardReversalService {
   private normalizeAction(value: unknown): IdBusinessV2GiftCardReversalAction {
     if (value === 'redeemed' || value === 'withdrawn') return value;
     throw new BadRequestException('反向处理类型无效');
+  }
+
+  private normalizeReportAccountLoss(value: unknown) {
+    if (value === undefined || value === false) return false;
+    if (value === true) return true;
+    throw new BadRequestException('同时报损 ID 选项无效');
+  }
+
+  private assertAccountLossPermission(operator?: AuthenticatedUser) {
+    if (
+      !operator ||
+      (!operator.roles.includes('admin') && !operator.permissions.includes('apple.account.update'))
+    ) {
+      throw new ForbiddenException('同时报损 ID 还需要 ID 修改权限');
+    }
   }
 
   private normalizeReason(value: unknown) {
@@ -525,6 +515,14 @@ export class IdBusinessV2GiftCardReversalService {
 
   private buildIdempotencyKey(giftCardId: string, value: string) {
     return `gift_card_reversal:${giftCardId}:${value}`;
+  }
+
+  private buildAccountLossRequestKey(reversalIdempotencyKey: string) {
+    return `gc-loss-${createHash('sha256').update(reversalIdempotencyKey).digest('hex')}`;
+  }
+
+  private buildAccountLossIdempotencyKey(accountId: string, requestKey: string) {
+    return `account_loss:${accountId}:${requestKey}`;
   }
 
   private getEntryType(action: IdBusinessV2GiftCardReversalAction) {

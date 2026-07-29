@@ -4,12 +4,13 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, toV2DecimalString } from '../decimal-policy';
 import type { ConsumeIdBusinessV2OrderDto } from './dto/consume-id-business-v2-order.dto';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 
 const MAX_SIGNED_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
-const ROUNDING_MODE = PrismaNamespace.Decimal.ROUND_HALF_UP;
+const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
 
 @Injectable()
 export class IdBusinessV2OrderConsumptionService {
@@ -74,15 +75,26 @@ export class IdBusinessV2OrderConsumptionService {
           prepared.order.balanceAmount
         );
         const accountCostAmount = this.normalizeStoredAmount(
-          prepared.account.purchaseCost,
-          'ID 购买成本'
+          prepared.order.accountCostAmount,
+          'ID 购买成本快照'
         );
+        if (
+          prepared.order.accountDisposition === 'sold' &&
+          prepared.account.soldByOrderId !== prepared.order.id
+        ) {
+          throw new ConflictException('订单标记为卖出 ID，但 ID 销售占用证据不一致');
+        }
+        const appliedAccountCostAmount =
+          prepared.order.accountDisposition === 'sold'
+            ? accountCostAmount
+            : new PrismaNamespace.Decimal(0);
         const refundCostAmount = prepared.order.refundCostAmount ?? new PrismaNamespace.Decimal(0);
         const profitAmount = prepared.order.receivedAmount
           .minus(prepared.order.platformFeeAmount)
+          .minus(appliedAccountCostAmount)
           .minus(movement.costAmount)
           .minus(refundCostAmount)
-          .toDecimalPlaces(4, ROUNDING_MODE);
+          .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
         this.assertSignedAmountWithinRange(profitAmount, '订单利润');
 
         const ledgerEntry = await tx.idBusinessV2BalanceLedger.create({
@@ -142,7 +154,9 @@ export class IdBusinessV2OrderConsumptionService {
             appleIdMasked: prepared.account.appleIdMasked,
             activeLockId: prepared.activeLock.id,
             previousStatus: prepared.order.status,
+            accountDisposition: prepared.order.accountDisposition,
             accountCostAmount,
+            appliedAccountCostAmount,
             platformFeeAmount: prepared.order.platformFeeAmount,
             refundCostAmount,
             profitAmount,
@@ -238,7 +252,10 @@ export class IdBusinessV2OrderConsumptionService {
   }
 
   private normalizeStoredAmount(value: PrismaNamespace.Decimal.Value, label: string) {
-    const amount = new PrismaNamespace.Decimal(value).toDecimalPlaces(4, ROUNDING_MODE);
+    const amount = new PrismaNamespace.Decimal(value).toDecimalPlaces(
+      V2_DECIMAL_PLACES,
+      ROUNDING_MODE
+    );
     if (amount.isNegative() || amount.greaterThan(MAX_SIGNED_AMOUNT)) {
       throw new BadRequestException(`${label}数值超出数据库范围`);
     }
@@ -260,7 +277,9 @@ export class IdBusinessV2OrderConsumptionService {
       appleIdMasked: string;
       activeLockId: string;
       previousStatus: string;
+      accountDisposition: string;
       accountCostAmount: PrismaNamespace.Decimal;
+      appliedAccountCostAmount: PrismaNamespace.Decimal;
       platformFeeAmount: PrismaNamespace.Decimal;
       refundCostAmount: PrismaNamespace.Decimal;
       profitAmount: PrismaNamespace.Decimal;
@@ -299,7 +318,9 @@ export class IdBusinessV2OrderConsumptionService {
           statusChangedAt: input.statusChangedAt,
           consumedBalance: input.movement.balanceAmount.toString(),
           balanceCostAmount: input.movement.costAmount.toString(),
+          accountDisposition: input.accountDisposition,
           accountCostAmount: input.accountCostAmount.toString(),
+          appliedAccountCostAmount: input.appliedAccountCostAmount.toString(),
           platformFeeAmount: input.platformFeeAmount.toString(),
           refundCostAmount: input.refundCostAmount.toString(),
           profitAmount: input.profitAmount.toString(),
@@ -328,14 +349,14 @@ export class IdBusinessV2OrderConsumptionService {
     return {
       id: entry.id,
       accountId: entry.accountId,
-      balanceAmount: entry.balanceAmount.toString(),
-      costAmount: entry.costAmount.toString(),
-      balanceBefore: entry.balanceBefore.toString(),
-      balanceAfter: entry.balanceAfter.toString(),
-      costBefore: entry.costBefore.toString(),
-      costAfter: entry.costAfter.toString(),
-      averageCostBefore: entry.averageCostBefore.toString(),
-      averageCostAfter: entry.averageCostAfter.toString(),
+      balanceAmount: toV2DecimalString(entry.balanceAmount),
+      costAmount: toV2DecimalString(entry.costAmount),
+      balanceBefore: toV2DecimalString(entry.balanceBefore),
+      balanceAfter: toV2DecimalString(entry.balanceAfter),
+      costBefore: toV2DecimalString(entry.costBefore),
+      costAfter: toV2DecimalString(entry.costAfter),
+      averageCostBefore: toV2DecimalString(entry.averageCostBefore),
+      averageCostAfter: toV2DecimalString(entry.averageCostAfter),
       createdAt: entry.createdAt
     };
   }

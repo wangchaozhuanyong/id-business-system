@@ -5,6 +5,7 @@ import {
   Prisma as PrismaNamespace
 } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
+import { V2_DECIMAL_PLACES } from '../decimal-policy';
 import { ID_BUSINESS_V2_OPTION_TYPE_MAP } from './id-business-v2-options.constants';
 
 const OPTION_SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2OptionOrderByWithRelationInput> =
@@ -21,8 +22,12 @@ export function normalizeOptionFees(
   fixedFeeValue?: string | number,
   percentageFeeValue?: string | number
 ) {
-  const fixedFee = normalizeOptionDecimal(fixedFeeValue, '固定手续费', 4);
-  const percentageFee = normalizeOptionDecimal(percentageFeeValue, '百分比手续费', 4);
+  const fixedFee = normalizeOptionDecimal(fixedFeeValue, '固定手续费', V2_DECIMAL_PLACES);
+  const percentageFee = normalizeOptionDecimal(
+    percentageFeeValue,
+    '百分比手续费',
+    V2_DECIMAL_PLACES
+  );
   const supportsFees = ID_BUSINESS_V2_OPTION_TYPE_MAP.get(type)?.supportsFees;
 
   if (!supportsFees && (fixedFee !== '0' || percentageFee !== '0')) {

@@ -28,13 +28,19 @@ const ACCOUNTS_OPTIONS_KEY = 'selectors';
 
 type AccountsListQueryDraft = Omit<
   V2AccountListQuery,
-  'keyword' | 'countryOptionId' | 'statusOptionId' | 'supplierOptionId' | 'recordStatus'
+  | 'keyword'
+  | 'countryOptionId'
+  | 'statusOptionId'
+  | 'supplierOptionId'
+  | 'recordStatus'
+  | 'saleState'
 > & {
   keyword: string;
   countryOptionId: string;
   statusOptionId: string;
   supplierOptionId: string;
   recordStatus: V2RecordStatus | '';
+  saleState: 'available' | 'sold' | '';
 };
 
 export function normalizeAccountsListQuery(query: AccountsListQueryDraft): V2AccountListQuery {
@@ -44,7 +50,8 @@ export function normalizeAccountsListQuery(query: AccountsListQueryDraft): V2Acc
     countryOptionId: query.countryOptionId || undefined,
     statusOptionId: query.statusOptionId || undefined,
     supplierOptionId: query.supplierOptionId || undefined,
-    recordStatus: query.recordStatus || undefined
+    recordStatus: query.recordStatus || undefined,
+    saleState: query.saleState || undefined
   };
 }
 
@@ -59,7 +66,7 @@ export function useAccountsListQuery(getParams: () => V2AccountListQuery) {
       const cachedOptions = getV2QueryData<AccountsReferenceOptions>(
         ACCOUNTS_OPTIONS_SCOPE,
         ACCOUNTS_OPTIONS_KEY,
-        { tier: 'reference' }
+        {}
       );
       if (cachedOptions) {
         return {

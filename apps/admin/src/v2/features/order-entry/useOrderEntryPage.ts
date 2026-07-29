@@ -7,11 +7,13 @@ import { hasUserPermission } from '@/utils/permissions';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
+import { V2_DECIMAL_PLACES, formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2OrdersApi } from './api';
 import {
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
   calculateSuggestedReceivedAmount,
+  calculateTotalCostAmount,
   isNonNegativeOrderAmount,
   isPositiveOrderAmount
 } from './order-pricing';
@@ -46,6 +48,7 @@ function createInitialForm() {
     serviceOptionId: '',
     customerId: '',
     accountId: '',
+    accountDisposition: 'retained' as 'retained' | 'sold',
     settlementPlatformOptionId: '',
     platformOrderNo: '',
     websiteAccount: '',
@@ -149,12 +152,28 @@ export function useOrderEntryPage() {
       ) ?? '0'
     );
   });
+  const accountPurchaseCostPreview = computed(() => selectedCandidate.value?.purchaseCost ?? '0');
+  const appliedAccountCostPreview = computed(() =>
+    form.accountDisposition === 'sold' ? accountPurchaseCostPreview.value : '0'
+  );
+  const estimatedBalanceCostPreview = computed(
+    () => selectedCandidate.value?.estimatedBalanceCostAmount ?? '0'
+  );
+  const totalCostPreview = computed(
+    () =>
+      calculateTotalCostAmount(
+        platformFeePreview.value,
+        appliedAccountCostPreview.value,
+        estimatedBalanceCostPreview.value
+      ) ?? '0'
+  );
   const estimatedProfitPreview = computed(() => {
     return (
       calculateEstimatedProfitAmount(
         form.receivedAmount,
         platformFeePreview.value,
-        selectedCandidate.value?.estimatedBalanceCostAmount ?? '0'
+        appliedAccountCostPreview.value,
+        estimatedBalanceCostPreview.value
       ) ?? '0'
     );
   });
@@ -170,6 +189,7 @@ export function useOrderEntryPage() {
     const platform = selectedSettlementPlatform.value;
     return calculateSuggestedReceivedAmount({
       targetProfit: form.targetProfit,
+      appliedAccountCostAmount: appliedAccountCostPreview.value,
       estimatedBalanceCostAmount: selectedCandidate.value?.estimatedBalanceCostAmount ?? null,
       fixedFee: platform?.fixedFee ?? '0',
       percentageFee: platform?.percentageFee ?? '0'
@@ -192,7 +212,9 @@ export function useOrderEntryPage() {
       {
         validator: (_rule, value, callback) => {
           callback(
-            isNonNegativeOrderAmount(value) ? undefined : new Error('请输入最多 4 位小数的非负金额')
+            isNonNegativeOrderAmount(value)
+              ? undefined
+              : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
           );
         },
         trigger: 'blur'
@@ -205,7 +227,7 @@ export function useOrderEntryPage() {
           callback(
             !normalized || isNonNegativeOrderAmount(normalized)
               ? undefined
-              : new Error('请输入最多 4 位小数的非负金额')
+              : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
           );
         },
         trigger: 'blur'
@@ -215,7 +237,9 @@ export function useOrderEntryPage() {
       {
         validator: (_rule, value, callback) => {
           callback(
-            isPositiveOrderAmount(value) ? undefined : new Error('请输入最多 4 位小数的正数')
+            isPositiveOrderAmount(value)
+              ? undefined
+              : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的正数`)
           );
         },
         trigger: 'blur'
@@ -369,10 +393,11 @@ export function useOrderEntryPage() {
         platformOrderNo: form.platformOrderNo.trim() || null,
         websiteAccount: form.websiteAccount.trim() || null,
         receivedAmount: form.receivedAmount.trim(),
+        accountDisposition: form.accountDisposition,
         balanceAmount: form.balanceAmount.trim(),
         openedAt: form.openedAt.toISOString(),
         dueAt: form.dueAt.toISOString(),
-        lockScope: 'by_service',
+        lockScope: form.accountDisposition === 'sold' ? 'global' : 'by_service',
         idempotencyKey: form.idempotencyKey,
         remark: form.remark.trim() || null
       });
@@ -444,12 +469,7 @@ export function useOrderEntryPage() {
   }
 
   function formatDecimal(value: string) {
-    const normalized = String(value).trim();
-    const match = normalized.match(/^(-?)(\d+)(?:\.(\d+))?$/);
-    if (!match) return value;
-    const [, sign, integer, fractional = ''] = match;
-    const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return `${sign}${grouped}${fractional ? `.${fractional.slice(0, 4)}` : ''}`;
+    return formatV2Decimal(value);
   }
 
   function stopDeferredTasks() {
@@ -496,6 +516,10 @@ export function useOrderEntryPage() {
     canSubmit,
     hasPendingConsumption,
     platformFeePreview,
+    accountPurchaseCostPreview,
+    appliedAccountCostPreview,
+    estimatedBalanceCostPreview,
+    totalCostPreview,
     estimatedProfitPreview,
     suggestedReceived,
     matchingEmptyMessage,

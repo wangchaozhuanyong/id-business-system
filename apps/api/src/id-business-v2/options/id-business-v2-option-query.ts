@@ -1,5 +1,4 @@
 import type { IdBusinessV2OptionType, Prisma } from '@prisma/client';
-import { TimedMemoryCache } from '../../common/cache/timed-memory-cache';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -27,17 +26,10 @@ export interface ListIdBusinessV2OptionsQuery extends PaginationQuery {
   sortOrder?: string;
 }
 
-const OPTION_SELECTOR_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_OPTION_PAGE_SIZE = 20;
 
 export class IdBusinessV2OptionQuery {
-  private readonly selectorCache = new TimedMemoryCache();
-
   constructor(private readonly prisma: PrismaService) {}
-
-  clearCache() {
-    this.selectorCache.clear();
-  }
 
   async list(query: ListIdBusinessV2OptionsQuery) {
     const pagination = getPagination(query);
@@ -131,11 +123,7 @@ export class IdBusinessV2OptionQuery {
   async listSelectors(typeValue?: string, parentIdValue?: string) {
     const type = parseOptionType(typeValue, true);
     const parentId = normalizeNullableString(parentIdValue);
-    return this.selectorCache.getOrSet(
-      `${type}:${parentId ?? ''}`,
-      OPTION_SELECTOR_CACHE_TTL_MS,
-      () => this.listSelectorsUncached(type, parentId)
-    );
+    return this.listSelectorsUncached(type, parentId);
   }
 
   async getBusinessTree() {

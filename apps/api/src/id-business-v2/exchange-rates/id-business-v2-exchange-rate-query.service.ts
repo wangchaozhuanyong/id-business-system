@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, toV2DecimalString } from '../decimal-policy';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
 
 export interface ListIdBusinessV2ExchangeRateRunsQuery extends PaginationQuery {
@@ -91,11 +92,13 @@ export class IdBusinessV2ExchangeRateQueryService {
         ? {
             id: run.snapshot.id,
             averagedAt: run.snapshot.averagedAt,
-            combinedMerchantBuyAverageRateToRmb:
-              run.snapshot.combinedMerchantBuyAverageRateToRmb.toString(),
-            combinedMerchantSellAverageRateToRmb:
-              run.snapshot.combinedMerchantSellAverageRateToRmb.toString(),
-            midRateToRmb: run.snapshot.midRateToRmb.toString()
+            combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
+              run.snapshot.combinedMerchantBuyAverageRateToRmb
+            ),
+            combinedMerchantSellAverageRateToRmb: toV2DecimalString(
+              run.snapshot.combinedMerchantSellAverageRateToRmb
+            ),
+            midRateToRmb: toV2DecimalString(run.snapshot.midRateToRmb)
           }
         : null,
       providerSnapshots:
@@ -122,21 +125,24 @@ export class IdBusinessV2ExchangeRateQueryService {
             lowCompletionRate: provider.excludedLowCompletionRate,
             priceOutlier: provider.excludedPriceOutlier
           },
-          medianRateToRmb: provider.medianRateToRmb.toString(),
-          lowestValidRateToRmb: provider.lowestValidRateToRmb.toString(),
-          highestValidRateToRmb: provider.highestValidRateToRmb.toString(),
-          averageRateToRmb: provider.averageRateToRmb.toString(),
+          medianRateToRmb: toV2DecimalString(provider.medianRateToRmb),
+          lowestValidRateToRmb: toV2DecimalString(provider.lowestValidRateToRmb),
+          highestValidRateToRmb: toV2DecimalString(provider.highestValidRateToRmb),
+          averageRateToRmb: toV2DecimalString(provider.averageRateToRmb),
           validSamples: provider.validSamples.map((sample) => ({
             sourceAdId: sample.sourceAdId,
-            priceToRmb: sample.priceToRmb.toString(),
-            minAmountRmb: sample.minAmountRmb?.toString() ?? null,
-            maxAmountRmb: sample.maxAmountRmb?.toString() ?? null,
-            tradableAmountUsdt: sample.tradableAmountUsdt.toString(),
+            priceToRmb: toV2DecimalString(sample.priceToRmb),
+            minAmountRmb: sample.minAmountRmb ? toV2DecimalString(sample.minAmountRmb) : null,
+            maxAmountRmb: sample.maxAmountRmb ? toV2DecimalString(sample.maxAmountRmb) : null,
+            tradableAmountUsdt: toV2DecimalString(sample.tradableAmountUsdt),
             paymentMethods: sample.paymentMethods,
             merchantType: sample.merchantType,
             completedOrderCount: sample.completedOrderCount,
-            completionRate: sample.completionRate.toString(),
-            positiveReviewRate: sample.positiveReviewRate?.toString() ?? null
+            completionRate: toV2DecimalString(sample.completionRate),
+            positiveReviewRate:
+              sample.positiveReviewRate === null
+                ? null
+                : toV2DecimalString(sample.positiveReviewRate)
           }))
         })) ?? []
     };
@@ -252,7 +258,7 @@ export class IdBusinessV2ExchangeRateQueryService {
       reason: null,
       runId: candidate.id,
       snapshotId: candidate.snapshot.id,
-      midRateToRmb: candidate.snapshot.midRateToRmb.toString(),
+      midRateToRmb: toV2DecimalString(candidate.snapshot.midRateToRmb),
       averagedAt: candidate.snapshot.averagedAt,
       expiresAt
     };
@@ -310,11 +316,13 @@ export class IdBusinessV2ExchangeRateQueryService {
         ? {
             id: run.snapshot.id,
             averagedAt: run.snapshot.averagedAt,
-            combinedMerchantBuyAverageRateToRmb:
-              run.snapshot.combinedMerchantBuyAverageRateToRmb.toString(),
-            combinedMerchantSellAverageRateToRmb:
-              run.snapshot.combinedMerchantSellAverageRateToRmb.toString(),
-            midRateToRmb: run.snapshot.midRateToRmb.toString(),
+            combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
+              run.snapshot.combinedMerchantBuyAverageRateToRmb
+            ),
+            combinedMerchantSellAverageRateToRmb: toV2DecimalString(
+              run.snapshot.combinedMerchantSellAverageRateToRmb
+            ),
+            midRateToRmb: toV2DecimalString(run.snapshot.midRateToRmb),
             providerSnapshotCount: run.snapshot.providerSnapshots.length,
             validSampleCount: run.snapshot.providerSnapshots.reduce(
               (sum, item) => sum + item.validAdCount,
@@ -324,7 +332,7 @@ export class IdBusinessV2ExchangeRateQueryService {
               provider: provider.provider,
               side: provider.side,
               validAdCount: provider.validAdCount,
-              averageRateToRmb: provider.averageRateToRmb.toString()
+              averageRateToRmb: toV2DecimalString(provider.averageRateToRmb)
             }))
           }
         : null
@@ -349,7 +357,7 @@ export class IdBusinessV2ExchangeRateQueryService {
       id: run.id,
       status: run.status,
       triggerType: run.triggerType,
-      targetAmountRmb: run.targetAmountRmb?.toString() ?? null,
+      targetAmountRmb: run.targetAmountRmb === null ? null : toV2DecimalString(run.targetAmountRmb),
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
       triggeredBy: run.triggeredBy,
@@ -382,7 +390,7 @@ export class IdBusinessV2ExchangeRateQueryService {
     try {
       const decimal = new Prisma.Decimal(
         typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
-      ).toDecimalPlaces(8, Prisma.Decimal.ROUND_HALF_UP);
+      ).toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE);
       if (!decimal.isFinite() || decimal.lte(0)) throw new Error('invalid');
       return decimal;
     } catch {

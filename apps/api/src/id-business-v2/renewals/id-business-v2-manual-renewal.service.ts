@@ -11,6 +11,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2ActivationStatusService } from '../activations/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2OrderEntryService, IdBusinessV2OrdersService } from '../orders/public-api';
+import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, toV2DecimalString } from '../decimal-policy';
 import type { CreateIdBusinessV2ManualRenewalDto } from './dto/create-id-business-v2-manual-renewal.dto';
 import {
   buildManualRenewalReplayResult,
@@ -26,10 +27,12 @@ interface LockedAccount {
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
   purchaseCost: PrismaNamespace.Decimal;
+  soldByOrderId: string | null;
+  lossReportedAt: Date | null;
 }
 
 const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
-const ROUNDING_MODE = PrismaNamespace.Decimal.ROUND_HALF_UP;
+const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
 @Injectable()
 export class IdBusinessV2ManualRenewalService {
   constructor(
@@ -107,8 +110,8 @@ export class IdBusinessV2ManualRenewalService {
     return {
       settlementPlatforms: settlementPlatforms.map((platform) => ({
         ...platform,
-        fixedFee: platform.fixedFee.toString(),
-        percentageFee: platform.percentageFee.toString()
+        fixedFee: toV2DecimalString(platform.fixedFee),
+        percentageFee: toV2DecimalString(platform.percentageFee)
       })),
       services: services.map((service) => ({
         id: service.id,
@@ -121,7 +124,8 @@ export class IdBusinessV2ManualRenewalService {
             }
           : null,
         country: service.countryOption,
-        businessAmount: service.businessAmount?.toString() ?? '0',
+        businessAmount:
+          service.businessAmount === null ? '0' : toV2DecimalString(service.businessAmount),
         currencyCode: service.countryOption?.currencyCode ?? null
       }))
     };
@@ -220,6 +224,8 @@ export class IdBusinessV2ManualRenewalService {
         if (
           sourceActivation.account.recordStatus !== 'active' ||
           sourceActivation.account.deletedAt ||
+          sourceActivation.account.lossReportedAt ||
+          sourceActivation.account.soldByOrderId ||
           sourceActivation.account.statusOption.code !== 'normal' ||
           sourceActivation.account.statusOption.status !== 'active' ||
           sourceActivation.account.statusOption.deletedAt
@@ -361,7 +367,7 @@ export class IdBusinessV2ManualRenewalService {
           .minus(createdOrder.platformFeeAmount)
           .minus(movement.costAmount)
           .minus(refundCostAmount)
-          .toDecimalPlaces(4, ROUNDING_MODE);
+          .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
         if (profitAmount.abs().greaterThan(MAX_AMOUNT)) {
           throw new BadRequestException('续费订单利润数值超出数据库范围');
         }
@@ -495,16 +501,16 @@ export class IdBusinessV2ManualRenewalService {
       activation: result.activation,
       ledgerEntry: toManualRenewalLedgerResponse(result.ledgerEntry),
       balance: {
-        before: result.ledgerEntry.balanceBefore.toString(),
-        consumed: result.ledgerEntry.balanceAmount.toString(),
-        after: result.ledgerEntry.balanceAfter.toString(),
-        costBefore: result.ledgerEntry.costBefore.toString(),
-        consumedCost: result.ledgerEntry.costAmount.toString(),
-        costAfter: result.ledgerEntry.costAfter.toString(),
-        averageCostBefore: result.ledgerEntry.averageCostBefore.toString(),
-        averageCostAfter: result.ledgerEntry.averageCostAfter.toString()
+        before: toV2DecimalString(result.ledgerEntry.balanceBefore),
+        consumed: toV2DecimalString(result.ledgerEntry.balanceAmount),
+        after: toV2DecimalString(result.ledgerEntry.balanceAfter),
+        costBefore: toV2DecimalString(result.ledgerEntry.costBefore),
+        consumedCost: toV2DecimalString(result.ledgerEntry.costAmount),
+        costAfter: toV2DecimalString(result.ledgerEntry.costAfter),
+        averageCostBefore: toV2DecimalString(result.ledgerEntry.averageCostBefore),
+        averageCostAfter: toV2DecimalString(result.ledgerEntry.averageCostAfter)
       },
-      profitAmount: result.profitAmount.toString(),
+      profitAmount: toV2DecimalString(result.profitAmount),
       idempotentReplay: result.idempotentReplay,
       executionBoundary: {
         manualAccountingCompleted: true,
@@ -534,16 +540,25 @@ export class IdBusinessV2ManualRenewalService {
         "id",
         "current_balance" AS "currentBalance",
         "balance_cost_amount" AS "balanceCostAmount",
-        "purchase_cost" AS "purchaseCost"
+        "purchase_cost" AS "purchaseCost",
+        "sold_by_order_id" AS "soldByOrderId",
+        "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE
         "id" = CAST(${accountId} AS UUID)
         AND "record_status" = 'active'
         AND "deleted_at" IS NULL
+        AND "loss_reported_at" IS NULL
       FOR UPDATE
     `);
     if (!rows[0]) {
       throw new ConflictException('ID 不存在、已停用或已删除');
+    }
+    if (rows[0].soldByOrderId) {
+      throw new ConflictException('该 ID 已卖出，不能续费');
+    }
+    if (rows[0].lossReportedAt) {
+      throw new ConflictException('已报损 ID 永久冻结，不能续费');
     }
     return rows[0];
   }

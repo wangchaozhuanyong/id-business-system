@@ -40,10 +40,20 @@
             <template #default="{ row }">{{ formatDecimal(row.faceValue) }}</template>
           </el-table-column>
           <el-table-column prop="exchangeRate" label="卡片汇率" min-width="110" sortable="custom">
-            <template #default="{ row }">¥{{ formatDecimal(row.exchangeRate, 8) }}</template>
+            <template #default="{ row }">¥{{ formatDecimal(row.exchangeRate) }}</template>
           </el-table-column>
           <el-table-column label="加入 ID" min-width="190">
-            <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
+            <template #default="{ row }">
+              {{ row.account.appleIdMasked }}
+              <el-tag
+                v-if="row.account.lossStatus === 'reported'"
+                type="danger"
+                effect="plain"
+                size="small"
+              >
+                已报损
+              </el-tag>
+            </template>
           </el-table-column>
           <el-table-column label="国家" min-width="105">
             <template #default="{ row }">{{ row.account.country.name }}</template>
@@ -76,9 +86,9 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
+          <V2TableActionColumn layout="triple">
             <template #default="{ row }">
-              <div v-if="canAdjustBalance" class="v2-record-actions">
+              <template v-if="canAdjustBalance && row.account.lossStatus === 'active'">
                 <AppButton size="small" variant="ghost" @click="openMetadataDrawer(row)">
                   <el-icon><Edit /></el-icon>
                   修改
@@ -101,10 +111,10 @@
                     撤回
                   </AppButton>
                 </template>
-              </div>
+              </template>
               <span v-else>-</span>
             </template>
-          </el-table-column>
+          </V2TableActionColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -125,7 +135,7 @@
               </div>
               <div>
                 <dt>汇率</dt>
-                <dd>¥{{ formatDecimal(item.exchangeRate, 8) }}</dd>
+                <dd>¥{{ formatDecimal(item.exchangeRate) }}</dd>
               </div>
               <div>
                 <dt>供应商</dt>
@@ -141,7 +151,10 @@
             </dl>
             <footer>
               <span>{{ formatDate(item.statusChangedAt) }}</span>
-              <div v-if="canAdjustBalance" class="v2-record-actions">
+              <div
+                v-if="canAdjustBalance && item.account.lossStatus === 'active'"
+                class="v2-record-actions"
+              >
                 <AppButton size="small" variant="ghost" @click="openMetadataDrawer(item)">
                   修改
                 </AppButton>
@@ -250,7 +263,7 @@
             <template #default="{ row }">¥{{ formatDecimal(row.costAfter) }}</template>
           </el-table-column>
           <el-table-column label="平均成本" min-width="135">
-            <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter, 8) }} </template>
+            <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter) }} </template>
           </el-table-column>
           <el-table-column label="关联" min-width="105">
             <template #default="{ row }">
@@ -297,7 +310,7 @@
               </div>
               <div>
                 <dt>平均成本</dt>
-                <dd>¥{{ formatDecimal(item.averageCostAfter, 8) }}</dd>
+                <dd>¥{{ formatDecimal(item.averageCostAfter) }}</dd>
               </div>
             </dl>
             <footer>
@@ -335,6 +348,8 @@
 import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { formatV2Decimal } from '@/v2/utils/decimal';
 import type {
   V2BalanceLedgerEntryType,
   V2BalanceLedgerRecord,
@@ -449,11 +464,13 @@ function ledgerTypeLabel(entryType: V2BalanceLedgerEntryType) {
     order_consumption: '订单扣减',
     order_consumption_reversal: '订单退款恢复',
     opening_balance: '期初余额',
-    manual_adjustment: '手工修正'
+    manual_adjustment: '手工修正',
+    account_loss: 'ID 永久报损'
   }[entryType];
 }
 
 function ledgerTypeTag(entryType: V2BalanceLedgerEntryType) {
+  if (entryType === 'account_loss') return 'danger';
   return entryType === 'gift_card_credit' || entryType === 'opening_balance'
     ? 'success'
     : entryType === 'gift_card_redeemed' || entryType === 'order_consumption'
@@ -483,11 +500,8 @@ function formatOptionalDecimal(value?: string) {
   return value === undefined ? '-' : formatDecimal(value);
 }
 
-function formatDecimal(value: string, maximumFractionDigits = 4) {
-  const number = Number(value);
-  return Number.isFinite(number)
-    ? number.toLocaleString('zh-CN', { maximumFractionDigits })
-    : value;
+function formatDecimal(value: string) {
+  return formatV2Decimal(value);
 }
 
 function formatDate(value: string) {

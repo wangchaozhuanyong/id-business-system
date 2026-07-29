@@ -20,6 +20,9 @@ export function exportAccountRowsToCsv(rows: V2Account[]) {
       },
       { header: '人民币成本', value: (row) => row.balanceCostAmount },
       { header: 'ID购买成本', value: (row) => row.purchaseCost },
+      { header: '销售状态', value: (row) => (row.saleState === 'sold' ? '已卖出' : '可用') },
+      { header: '卖出来源订单', value: (row) => row.soldByOrder?.orderNo ?? '' },
+      { header: '卖出时间', value: (row) => (row.soldAt ? formatDate(row.soldAt) : '') },
       {
         header: '资料状态',
         value: (row) => (row.recordStatus === 'active' ? '启用' : '停用')

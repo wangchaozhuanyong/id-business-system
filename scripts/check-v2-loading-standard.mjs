@@ -19,7 +19,9 @@ const layoutPath = 'apps/admin/src/v2/layouts/V2AdminLayout.vue';
 const layoutSource = read(layoutPath);
 const globalStylesPath = 'apps/admin/src/v2/styles/v2.css';
 const globalStylesSource = read(globalStylesPath);
-const allowedTiers = new Set(['critical', 'operational', 'reference', 'live']);
+const queryCachePath = 'apps/admin/src/v2/composables/useV2Query.ts';
+const queryCacheSource = read(queryCachePath);
+const allowedFreshnessPolicies = new Set(['event-driven', 'event-with-deadline']);
 const allowedSkeletonKinds = new Set([
   'table',
   'form',
@@ -62,9 +64,9 @@ if (uniqueRoutedViews.length !== moduleKeys.length) {
 
 for (const { projectPath, source } of featureManifests) {
   const key = source.match(/^\s{2}key: '([a-z0-9-]+)',\s*$/m)?.[1] ?? projectPath;
-  const tier = source.match(/loadingTier: '([^']+)'/)?.[1];
-  if (!tier || !allowedTiers.has(tier)) {
-    issues.push(`${projectPath}: 模块 ${key} 缺少有效 loadingTier`);
+  const freshnessPolicy = source.match(/freshnessPolicy: '([^']+)'/)?.[1];
+  if (!freshnessPolicy || !allowedFreshnessPolicies.has(freshnessPolicy)) {
+    issues.push(`${projectPath}: 模块 ${key} 缺少有效 freshnessPolicy`);
   }
 }
 const keepAliveModules = featureManifests
@@ -112,6 +114,16 @@ requirePatterns(globalStylesPath, globalStylesSource, [
   [/\.v2-sr-only\s*\{[\s\S]*clip:/, '共享加载状态缺少全局读屏专用工具类'],
   [/\.v2-page-state--loading\s*\{[\s\S]*width:\s*100%/, '加载骨架没有占满可用区域']
 ]);
+requirePatterns(queryCachePath, queryCacheSource, [
+  [/MAX_INACTIVE_QUERY_ENTRIES = 200/, '查询缓存缺少 200 条非活跃 LRU 保护'],
+  [/INVALIDATION_COALESCE_MS = 100/, 'scope 失效没有在 100ms 内合并'],
+  [/entry\.revalidateAt/, 'event-with-deadline 查询缺少 revalidateAt'],
+  [/entry\.inFlight/, '同 scope 同 key 的并发请求没有复用']
+]);
+forbidPatterns(queryCachePath, queryCacheSource, [
+  [/TIER_FRESHNESS_MS/, '时间过去不得让 event-driven 缓存失效'],
+  [/critical:\s*15_000|operational:\s*60_000|live:\s*30_000/, '不得恢复导航 TTL']
+]);
 
 for (const [pattern, message] of [
   [/const REFRESH_FEEDBACK_DELAY_MS = 120;/, '刷新反馈延迟必须固定为 120ms'],
@@ -150,7 +162,7 @@ if (issues.length) {
       ok: true,
       routedViews: uniqueRoutedViews.length,
       moduleKeys: moduleKeys.length,
-      loadingTiers: [...allowedTiers],
+      freshnessPolicies: [...allowedFreshnessPolicies],
       refreshFeedbackDelayMs: 120,
       asyncRegions: loadingVisualSummary.regionCount,
       contentSkeletonKinds: [...loadingVisualSummary.usedSkeletonKinds].sort(),

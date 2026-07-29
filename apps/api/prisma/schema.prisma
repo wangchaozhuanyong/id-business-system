@@ -83,6 +83,7 @@ enum IdBusinessV2BalanceLedgerEntryType {
   order_consumption_reversal
   opening_balance
   manual_adjustment
+  account_loss
 }
 
 enum IdBusinessV2BalanceDirection {
@@ -102,6 +103,12 @@ enum IdBusinessV2OrderStatus {
   failed
 }
 
+enum IdBusinessV2OrderAccountDisposition {
+  retained
+  sold
+  recovered
+}
+
 enum IdBusinessV2AccountLockScope {
   by_service
   global
@@ -111,6 +118,11 @@ enum IdBusinessV2AccountLockStatus {
   active
   released
   expired
+}
+
+enum IdBusinessV2AccountLossSaleState {
+  available
+  sold
 }
 
 enum IdBusinessV2ActivationStatus {
@@ -185,6 +197,7 @@ model User {
   idBusinessV2CustomersUpdated      IdBusinessV2Customer[]             @relation("IdBusinessV2CustomerUpdatedBy")
   idBusinessV2AccountsCreated       IdBusinessV2Account[]              @relation("IdBusinessV2AccountCreatedBy")
   idBusinessV2AccountsUpdated       IdBusinessV2Account[]              @relation("IdBusinessV2AccountUpdatedBy")
+  idBusinessV2AccountLossesReported IdBusinessV2AccountLoss[]          @relation("IdBusinessV2AccountLossReportedBy")
   idBusinessV2GiftCardsCreated      IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardCreatedBy")
   idBusinessV2GiftCardsUpdated      IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardUpdatedBy")
   idBusinessV2BalanceEntriesCreated IdBusinessV2BalanceLedger[]        @relation("IdBusinessV2BalanceLedgerCreatedBy")
@@ -455,6 +468,9 @@ model IdBusinessV2Account {
   currentBalance        Decimal                  @default(0) @map("current_balance") @db.Decimal(18, 4)
   balanceCostAmount     Decimal                  @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
   purchaseCost          Decimal                  @default(0) @map("purchase_cost") @db.Decimal(18, 4)
+  soldByOrderId         String?                  @unique @map("sold_by_order_id") @db.Uuid
+  soldAt                DateTime?                @map("sold_at") @db.Timestamptz(6)
+  lossReportedAt        DateTime?                @map("loss_reported_at") @db.Timestamptz(6)
   recordStatus          IdBusinessV2RecordStatus @default(active) @map("record_status")
   remark                String?                  @db.Text
   createdByUserId       String?                  @map("created_by_user_id") @db.Uuid
@@ -470,9 +486,11 @@ model IdBusinessV2Account {
   updatedBy         User?                          @relation("IdBusinessV2AccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   giftCards         IdBusinessV2GiftCard[]
   balanceLedger     IdBusinessV2BalanceLedger[]
-  orders            IdBusinessV2Order[]
+  orders            IdBusinessV2Order[]           @relation("IdBusinessV2OrderAccount")
+  soldByOrder       IdBusinessV2Order?             @relation("IdBusinessV2AccountSoldByOrder", fields: [soldByOrderId], references: [id], onDelete: Restrict)
   locks             IdBusinessV2AccountLock[]
   activations       IdBusinessV2Activation[]
+  lossRecord        IdBusinessV2AccountLoss?
 
   @@index([appleIdMasked])
   @@index([phoneHash])
@@ -480,6 +498,7 @@ model IdBusinessV2Account {
   @@index([countryOptionId])
   @@index([statusOptionId])
   @@index([supplierOptionId])
+  @@index([lossReportedAt])
   @@index([recordStatus, updatedAt])
   @@index([deletedAt])
   @@map("id_business_v2_accounts")
@@ -553,6 +572,7 @@ model IdBusinessV2BalanceLedger {
   reversalOfEntry IdBusinessV2BalanceLedger? @relation("IdBusinessV2BalanceLedgerReversal", fields: [reversalOfEntryId], references: [id], onDelete: Restrict)
   reversedByEntry IdBusinessV2BalanceLedger? @relation("IdBusinessV2BalanceLedgerReversal")
   createdBy       User?                      @relation("IdBusinessV2BalanceLedgerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  lossRecord      IdBusinessV2AccountLoss?
 
   @@unique([giftCardId, entryType])
   @@unique([orderId, entryType])
@@ -563,6 +583,41 @@ model IdBusinessV2BalanceLedger {
   @@index([direction, createdAt])
   @@index([createdByUserId])
   @@map("id_business_v2_balance_ledger")
+}
+
+model IdBusinessV2AccountLoss {
+  id                 String                           @id @default(uuid()) @db.Uuid
+  accountId          String                           @unique @map("account_id") @db.Uuid
+  ledgerEntryId      String                           @unique @map("ledger_entry_id") @db.Uuid
+  appleIdMasked      String                           @map("apple_id_masked") @db.VarChar(255)
+  countryOptionId    String                           @map("country_option_id") @db.Uuid
+  countryName        String                           @map("country_name") @db.VarChar(160)
+  currencyCode       String?                          @map("currency_code") @db.VarChar(3)
+  supplierOptionId   String?                          @map("supplier_option_id") @db.Uuid
+  supplierName       String?                          @map("supplier_name") @db.VarChar(160)
+  saleState          IdBusinessV2AccountLossSaleState @map("sale_state")
+  soldOrderId        String?                          @map("sold_order_id") @db.Uuid
+  soldOrderNo        String?                          @map("sold_order_no") @db.VarChar(40)
+  lossBalance        Decimal                          @map("loss_balance") @db.Decimal(18, 4)
+  lossCostAmount     Decimal                          @map("loss_cost_amount") @db.Decimal(18, 4)
+  reason             String                           @db.Text
+  idempotencyKey     String                           @unique @map("idempotency_key") @db.VarChar(160)
+  reportedByUserId   String?                          @map("reported_by_user_id") @db.Uuid
+  reportedByName     String?                          @map("reported_by_name") @db.VarChar(160)
+  reportedAt         DateTime                         @default(now()) @map("reported_at") @db.Timestamptz(6)
+
+  account      IdBusinessV2Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  ledgerEntry  IdBusinessV2BalanceLedger @relation(fields: [ledgerEntryId], references: [id], onDelete: Restrict)
+  reportedBy   User?                     @relation("IdBusinessV2AccountLossReportedBy", fields: [reportedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([reportedAt])
+  @@index([countryOptionId, reportedAt])
+  @@index([countryName])
+  @@index([saleState, reportedAt])
+  @@index([soldOrderId])
+  @@index([soldOrderNo])
+  @@index([reportedByUserId])
+  @@map("id_business_v2_account_losses")
 }
 
 model IdBusinessV2Order {
@@ -579,6 +634,7 @@ model IdBusinessV2Order {
   receivedAmount             Decimal                 @default(0) @map("received_amount") @db.Decimal(18, 4)
   platformFeeAmount          Decimal                 @default(0) @map("platform_fee_amount") @db.Decimal(18, 4)
   accountCostAmount          Decimal                 @default(0) @map("account_cost_amount") @db.Decimal(18, 4)
+  accountDisposition         IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
   balanceAmount              Decimal                 @default(0) @map("balance_amount") @db.Decimal(18, 4)
   balanceCostAmount          Decimal                 @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
   refundCostAmount           Decimal?                @map("refund_cost_amount") @db.Decimal(18, 4)
@@ -597,7 +653,8 @@ model IdBusinessV2Order {
 
   customer               IdBusinessV2Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
   serviceOption          IdBusinessV2Option            @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
-  account                IdBusinessV2Account?          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account                IdBusinessV2Account?          @relation("IdBusinessV2OrderAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  soldAccount            IdBusinessV2Account?          @relation("IdBusinessV2AccountSoldByOrder")
   settlementPlatform     IdBusinessV2Option?           @relation("IdBusinessV2OrderSettlementPlatform", fields: [settlementPlatformOptionId], references: [id], onDelete: Restrict)
   createdBy              User?                         @relation("IdBusinessV2OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   updatedBy              User?                         @relation("IdBusinessV2OrderUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
@@ -609,6 +666,7 @@ model IdBusinessV2Order {
   @@index([customerId])
   @@index([serviceOptionId])
   @@index([accountId])
+  @@index([accountDisposition])
   @@index([settlementPlatformOptionId])
   @@index([websiteAccountHash])
   @@index([status, statusChangedAt])
@@ -944,6 +1002,14 @@ model V2AuthIdentity {
   @@index([enabled])
   @@index([createdAt])
   @@map("v2_auth_identities")
+}
+
+model IdBusinessV2ScopeVersion {
+  scope     String   @id @db.VarChar(80)
+  version   BigInt   @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("id_business_v2_scope_versions")
 }
 
 model Attachment {

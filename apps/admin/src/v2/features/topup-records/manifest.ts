@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const topupRecordsFeature = defineV2Feature({
@@ -8,7 +9,7 @@ export const topupRecordsFeature = defineV2Feature({
   sourceSheet: '加卡记录',
   permission: 'apple.balance.view',
   kind: 'list',
-  loadingTier: 'critical',
+  freshnessPolicy: 'event-driven',
   filters: [
     {
       key: 'keyword',
@@ -36,7 +37,12 @@ export const topupRecordsFeature = defineV2Feature({
     { key: 'balanceAfter', label: '加入后余额', minWidth: 130 },
     { key: 'changedAt', label: '变动时间', minWidth: 160 },
     { key: 'status', label: '状态', minWidth: 110 },
-    { key: 'actions', label: '操作', minWidth: 170, fixed: 'right' }
+    {
+      key: 'actions',
+      label: '操作',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.triple,
+      fixed: 'right'
+    }
   ],
   loadView: () => import('./V2TopupRecordsView.vue')
 });
