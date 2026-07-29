@@ -21,11 +21,17 @@
 - [x] 应用壳、查询缓存、共享骨架、意图预取与 Chunk 恢复
 - [x] 桌面端、平板和移动端基础验收
 - [x] 删除未注册页面、API、脚本、文档和运行入口
+- [x] 生产发布预检、Git 提交溯源、主分支保护与最小权限自动巡检
 
 订单录入手动选择任务新增只读
 `POST /api/id-business-v2/orders/manual-candidates/search`，原自动匹配候选增加本单
 `estimatedBalanceCostAmount`。预计利润只在前端草稿中参与精确计算，订单创建 DTO、数据库表和字段均
 未修改，无需执行 Prisma migration；服务端提交时仍重新校验 ID 资格、锁和真实余额成本。
+
+生产发布加固任务新增固定 Cloudflare 目标、干净且已同步的 `main`、必需 CI 和分支保护预检；
+Wrangler 版本写入 Git commit，部署后自动使用 `production_smoke_readonly` 独立账号检查公共健康端点、
+最小权限集合和核心只读接口。只同步所需查看权限并新增角色和账号数据，不新增表、字段或 Prisma
+migration。
 
 ## 当前待办
 

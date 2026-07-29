@@ -101,3 +101,11 @@ npm run deploy:admin
 ```bash
 npm run deploy:production
 ```
+
+该命令会强制检查干净且已同步的 `main`、GitHub 必需检查、主分支保护、固定 Cloudflare
+账号/Worker/域名和生产凭据。部署版本写入 Git commit，成功后自动使用独立只读账号执行线上巡检。
+首次配置或轮换巡检账号时执行：
+
+```bash
+npm run prod:smoke-user:provision
+```
