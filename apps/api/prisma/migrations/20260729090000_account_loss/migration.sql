@@ -1,5 +1,3 @@
-ALTER TYPE "IdBusinessV2BalanceLedgerEntryType" ADD VALUE 'account_loss';
-
 ALTER TABLE "public"."id_business_v2_balance_ledger"
 DROP CONSTRAINT "id_business_v2_balance_ledger_business_reference_check";
 
