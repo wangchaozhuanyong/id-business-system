@@ -4,7 +4,6 @@
       <V2BootGate
         v-if="bootStage !== 'ready'"
         :state="bootStage"
-        :variant="bootGateVariant"
         :degraded-reason="hasBootRouteError ? 'route' : 'session'"
         @retry="retryBoot"
       />
@@ -49,7 +48,11 @@ import { appRuntimeError, clearAppRuntimeError } from '@/runtime/appRuntimeError
 import { useAuthStore } from '@/stores/auth';
 import V2BootGate from '@/v2/components/V2BootGate.vue';
 import { clearV2QueryCache } from '@/v2/composables/useV2Query';
-import { setV2RouteNavigationState, v2RouteNavigationState } from '@/v2/router/routes';
+import {
+  resetV2RouteNavigationState,
+  setV2RouteNavigationState,
+  v2RouteNavigationState
+} from '@/v2/router/routes';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -81,9 +84,6 @@ const bootStage = computed<BootStage>(() => {
   }
   return 'ready';
 });
-const bootGateVariant = computed<'login' | 'workspace'>(() =>
-  window.location.pathname.startsWith('/v2') ? 'workspace' : 'login'
-);
 const messageConfig = {
   duration: 2600,
   grouping: true,
@@ -114,6 +114,7 @@ function handleAuthSessionExpired(rawEvent: Event) {
 
 function handleAuthIdentityChanged() {
   clearV2QueryCache();
+  resetV2RouteNavigationState(router.currentRoute.value.fullPath);
   runtimeEpoch.value += 1;
 }
 

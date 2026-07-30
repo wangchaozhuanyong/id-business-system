@@ -57,6 +57,7 @@ export const ordersFeature = defineV2Feature({
     },
     { key: 'receivedAmount', label: '实收金额', kind: 'numeric', widthPreset: 'standard' },
     { key: 'profit', label: '利润', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'profitRate', label: '利润率', kind: 'numeric', widthPreset: 'standard' },
     { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
     { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
     { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },

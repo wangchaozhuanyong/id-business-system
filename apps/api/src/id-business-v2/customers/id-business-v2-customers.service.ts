@@ -56,6 +56,9 @@ const CUSTOMER_INCLUDE = {
     }
   },
   services: {
+    where: {
+      source: 'activation'
+    },
     include: {
       option: {
         select: {
@@ -71,11 +74,7 @@ const CUSTOMER_INCLUDE = {
         }
       }
     },
-    orderBy: {
-      option: {
-        sortOrder: 'asc'
-      }
-    }
+    orderBy: [{ lastOpenedAt: 'desc' }, { option: { sortOrder: 'asc' } }]
   }
 } satisfies Prisma.IdBusinessV2CustomerInclude;
 
@@ -106,7 +105,12 @@ export class IdBusinessV2CustomersService {
   async list(query: ListIdBusinessV2CustomersQuery) {
     const pagination = getPagination(query);
     const keyword = this.normalizeNullableString(query.keyword);
-    const phoneKeyword = keyword ? this.normalizePhone(keyword) : null;
+    const normalizedContactKeyword = keyword ? keyword.replace(/[\s()-]/g, '') : null;
+    const contactKeyword =
+      normalizedContactKeyword && normalizedContactKeyword.length <= 40
+        ? normalizedContactKeyword
+        : null;
+    const contactHash = this.fieldEncryptionService.hash(contactKeyword);
     const where: Prisma.IdBusinessV2CustomerWhereInput = {
       deletedAt: null,
       sourceOptionId: this.normalizeNullableString(query.sourceOptionId) ?? undefined,
@@ -121,7 +125,8 @@ export class IdBusinessV2CustomersService {
       services: query.serviceOptionId
         ? {
             some: {
-              optionId: query.serviceOptionId
+              optionId: query.serviceOptionId,
+              source: 'activation'
             }
           }
         : undefined,
@@ -129,8 +134,21 @@ export class IdBusinessV2CustomersService {
         ? [
             { name: { contains: keyword, mode: 'insensitive' } },
             { wechat: { contains: keyword, mode: 'insensitive' } },
-            { phoneTail: { contains: phoneKeyword?.slice(-8) ?? keyword, mode: 'insensitive' } },
-            { phoneHash: this.fieldEncryptionService.hash(phoneKeyword) ?? undefined }
+            { qq: { contains: keyword, mode: 'insensitive' } },
+            {
+              phoneTail: {
+                contains: contactKeyword?.slice(-8) ?? keyword,
+                mode: 'insensitive'
+              }
+            },
+            { phoneHash: contactHash ?? undefined },
+            {
+              whatsappTail: {
+                contains: contactKeyword?.slice(-8) ?? keyword,
+                mode: 'insensitive'
+              }
+            },
+            { whatsappHash: contactHash ?? undefined }
           ]
         : undefined
     };
@@ -161,7 +179,8 @@ export class IdBusinessV2CustomersService {
 
   async create(dto: CreateIdBusinessV2CustomerDto, operator?: AuthenticatedUser) {
     const name = this.normalizeRequiredString(dto.name, '客户名称');
-    const phone = this.normalizePhone(dto.phone);
+    const phone = this.normalizePhone(dto.phone, '手机号');
+    const whatsapp = this.normalizePhone(dto.whatsapp, 'WhatsApp');
     const sourceOption = await this.optionsService.requireActiveOption(
       dto.sourceOptionId,
       'customer_source',
@@ -173,12 +192,6 @@ export class IdBusinessV2CustomersService {
       'customer_tag',
       '客户标签'
     );
-    const services = await this.optionsService.requireActiveOptions(
-      dto.serviceOptionIds,
-      'service',
-      '常开业务'
-    );
-
     const customer = await this.prisma.idBusinessV2Customer.create({
       data: {
         name,
@@ -186,7 +199,12 @@ export class IdBusinessV2CustomersService {
         phoneHash: this.fieldEncryptionService.hash(phone),
         phoneMasked: this.maskPhone(phone),
         phoneTail: phone ? phone.slice(-8) : null,
-        wechat: this.normalizeNullableString(dto.wechat),
+        wechat: this.normalizeOptionalText(dto.wechat, '微信', 120),
+        qq: this.normalizeOptionalText(dto.qq, 'QQ', 120),
+        whatsappEncrypted: this.fieldEncryptionService.encrypt(whatsapp),
+        whatsappHash: this.fieldEncryptionService.hash(whatsapp),
+        whatsappMasked: this.maskPhone(whatsapp),
+        whatsappTail: whatsapp ? whatsapp.slice(-8) : null,
         sourceOptionId: sourceOption?.id ?? null,
         recordStatus: this.parseRecordStatus(dto.recordStatus, false) ?? 'active',
         remark: this.normalizeNullableString(dto.remark),
@@ -196,13 +214,6 @@ export class IdBusinessV2CustomersService {
           ? {
               create: tags.map((tag) => ({
                 optionId: tag.id
-              }))
-            }
-          : undefined,
-        services: services.length
-          ? {
-              create: services.map((service) => ({
-                optionId: service.id
               }))
             }
           : undefined
@@ -226,7 +237,9 @@ export class IdBusinessV2CustomersService {
 
   async update(id: string, dto: UpdateIdBusinessV2CustomerDto, operator?: AuthenticatedUser) {
     const existing = await this.findCustomerOrThrow(id);
-    const phone = dto.phone === undefined ? undefined : this.normalizePhone(dto.phone);
+    const phone = dto.phone === undefined ? undefined : this.normalizePhone(dto.phone, '手机号');
+    const whatsapp =
+      dto.whatsapp === undefined ? undefined : this.normalizePhone(dto.whatsapp, 'WhatsApp');
     const sourceOption =
       dto.sourceOptionId === undefined
         ? undefined
@@ -244,15 +257,6 @@ export class IdBusinessV2CustomersService {
             'customer_tag',
             '客户标签'
           );
-    const services =
-      dto.serviceOptionIds === undefined
-        ? undefined
-        : await this.optionsService.requireActiveOptions(
-            dto.serviceOptionIds,
-            'service',
-            '常开业务'
-          );
-
     const customer = await this.prisma.idBusinessV2Customer.update({
       where: { id: existing.id },
       data: {
@@ -263,7 +267,17 @@ export class IdBusinessV2CustomersService {
         phoneHash: phone === undefined ? undefined : this.fieldEncryptionService.hash(phone),
         phoneMasked: phone === undefined ? undefined : this.maskPhone(phone),
         phoneTail: phone === undefined ? undefined : (phone?.slice(-8) ?? null),
-        wechat: dto.wechat === undefined ? undefined : this.normalizeNullableString(dto.wechat),
+        wechat:
+          dto.wechat === undefined
+            ? undefined
+            : this.normalizeOptionalText(dto.wechat, '微信', 120),
+        qq: dto.qq === undefined ? undefined : this.normalizeOptionalText(dto.qq, 'QQ', 120),
+        whatsappEncrypted:
+          whatsapp === undefined ? undefined : this.fieldEncryptionService.encrypt(whatsapp),
+        whatsappHash:
+          whatsapp === undefined ? undefined : this.fieldEncryptionService.hash(whatsapp),
+        whatsappMasked: whatsapp === undefined ? undefined : this.maskPhone(whatsapp),
+        whatsappTail: whatsapp === undefined ? undefined : (whatsapp?.slice(-8) ?? null),
         sourceOptionId: sourceOption === undefined ? undefined : (sourceOption?.id ?? null),
         recordStatus:
           dto.recordStatus === undefined
@@ -278,15 +292,6 @@ export class IdBusinessV2CustomersService {
                 deleteMany: {},
                 create: tags.map((tag) => ({
                   optionId: tag.id
-                }))
-              },
-        services:
-          services === undefined
-            ? undefined
-            : {
-                deleteMany: {},
-                create: services.map((service) => ({
-                  optionId: service.id
                 }))
               }
       },
@@ -337,58 +342,25 @@ export class IdBusinessV2CustomersService {
     operator?: AuthenticatedUser,
     requestMeta?: AuditRequestMeta
   ) {
-    this.assertPhonePermission(operator);
-    const reason = this.normalizeRevealReason(dto.reason);
-    const customer = await this.findCustomerOrThrow(id);
-    const phone = this.fieldEncryptionService.decrypt(customer.phoneEncrypted);
-    if (!phone) {
-      throw new NotFoundException('该客户没有手机号');
-    }
-
-    const approved = await verifySensitiveAccessApproval(this.prisma, {
-      approvalId: dto.approvalId,
-      requesterId: operator?.id,
-      module: 'id_business_v2_customer',
-      fieldName: 'phone',
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id
-    });
-
-    await this.prisma.sensitiveAccessLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2_customer',
-        fieldName: 'phone',
-        objectType: 'id_business_v2_customer',
-        objectId: customer.id,
-        accessReason: reason,
-        approved,
-        ip: requestMeta?.ip ?? undefined,
-        userAgent: requestMeta?.userAgent ?? undefined
-      }
-    });
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_customers',
-      action: 'id_business_v2.customer.phone.reveal',
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id,
-      afterData: this.toAuditJson({
-        field: 'phone',
-        reason,
-        approved,
-        phoneTail: customer.phoneTail
-      }),
-      ip: requestMeta?.ip ?? undefined,
-      userAgent: requestMeta?.userAgent ?? undefined,
-      remark: `查看 V2 客户手机号：${customer.name}`
-    });
-
+    const result = await this.revealSensitiveContact(id, dto, 'phone', operator, requestMeta);
     return {
-      customerId: customer.id,
-      phone,
-      revealedAt: new Date().toISOString()
+      customerId: result.customerId,
+      phone: result.value,
+      revealedAt: result.revealedAt
+    };
+  }
+
+  async revealWhatsapp(
+    id: string,
+    dto: RevealIdBusinessV2CustomerPhoneDto,
+    operator?: AuthenticatedUser,
+    requestMeta?: AuditRequestMeta
+  ) {
+    const result = await this.revealSensitiveContact(id, dto, 'whatsapp', operator, requestMeta);
+    return {
+      customerId: result.customerId,
+      whatsapp: result.value,
+      revealedAt: result.revealedAt
     };
   }
 
@@ -452,12 +424,20 @@ export class IdBusinessV2CustomersService {
     return value.trim() || null;
   }
 
-  private normalizePhone(value: unknown) {
+  private normalizeOptionalText(value: unknown, label: string, maximumLength: number) {
+    const normalized = this.normalizeNullableString(value);
+    if (normalized && normalized.length > maximumLength) {
+      throw new BadRequestException(`${label}不能超过 ${maximumLength} 个字符`);
+    }
+    return normalized;
+  }
+
+  private normalizePhone(value: unknown, label = '手机号') {
     const phone = this.normalizeNullableString(value);
     if (!phone) return null;
     const normalized = phone.replace(/[\s()-]/g, '');
     if (normalized.length > 40) {
-      throw new BadRequestException('手机号过长');
+      throw new BadRequestException(`${label}过长`);
     }
     return normalized;
   }
@@ -469,14 +449,14 @@ export class IdBusinessV2CustomersService {
     return reason;
   }
 
-  private assertPhonePermission(operator?: AuthenticatedUser) {
+  private assertContactPermission(operator?: AuthenticatedUser) {
     if (
       operator &&
       (operator.roles.includes('admin') || operator.permissions.includes('customer.view_phone'))
     ) {
       return;
     }
-    throw new ForbiddenException('无权查看完整手机号');
+    throw new ForbiddenException('无权查看完整联系电话');
   }
 
   private maskPhone(value: string | null) {
@@ -493,12 +473,21 @@ export class IdBusinessV2CustomersService {
       phoneTail: customer.phoneTail,
       hasPhone: Boolean(customer.phoneEncrypted),
       wechat: customer.wechat,
+      qq: customer.qq,
+      maskedWhatsapp: customer.whatsappMasked,
+      whatsappTail: customer.whatsappTail,
+      hasWhatsapp: Boolean(customer.whatsappEncrypted),
       sourceOptionId: customer.sourceOptionId,
       source: customer.sourceOption,
       tagOptionIds: customer.tags.map((item) => item.optionId),
       tags: customer.tags.map((item) => item.option),
       serviceOptionIds: customer.services.map((item) => item.optionId),
-      services: customer.services.map((item) => item.option),
+      services: customer.services.map((item) => ({
+        ...item.option,
+        firstOpenedAt: item.firstOpenedAt!,
+        lastOpenedAt: item.lastOpenedAt!,
+        activationCount: item.activationCount
+      })),
       recordStatus: customer.recordStatus,
       remark: customer.remark,
       createdAt: customer.createdAt,
@@ -508,5 +497,69 @@ export class IdBusinessV2CustomersService {
 
   private toAuditJson(value: unknown) {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  private async revealSensitiveContact(
+    id: string,
+    dto: RevealIdBusinessV2CustomerPhoneDto,
+    field: 'phone' | 'whatsapp',
+    operator?: AuthenticatedUser,
+    requestMeta?: AuditRequestMeta
+  ) {
+    this.assertContactPermission(operator);
+    const reason = this.normalizeRevealReason(dto.reason);
+    const customer = await this.findCustomerOrThrow(id);
+    const encryptedValue = field === 'phone' ? customer.phoneEncrypted : customer.whatsappEncrypted;
+    const value = this.fieldEncryptionService.decrypt(encryptedValue);
+    const label = field === 'phone' ? '手机号' : 'WhatsApp';
+    if (!value) {
+      throw new NotFoundException(`该客户没有${label}`);
+    }
+
+    const approved = await verifySensitiveAccessApproval(this.prisma, {
+      approvalId: dto.approvalId,
+      requesterId: operator?.id,
+      module: 'id_business_v2_customer',
+      fieldName: field,
+      objectType: 'id_business_v2_customer',
+      objectId: customer.id
+    });
+
+    await this.prisma.sensitiveAccessLog.create({
+      data: {
+        userId: operator?.id,
+        module: 'id_business_v2_customer',
+        fieldName: field,
+        objectType: 'id_business_v2_customer',
+        objectId: customer.id,
+        accessReason: reason,
+        approved,
+        ip: requestMeta?.ip ?? undefined,
+        userAgent: requestMeta?.userAgent ?? undefined
+      }
+    });
+
+    await this.auditLogsService.create({
+      userId: operator?.id,
+      module: 'id_business_v2_customers',
+      action: `id_business_v2.customer.${field}.reveal`,
+      objectType: 'id_business_v2_customer',
+      objectId: customer.id,
+      afterData: this.toAuditJson({
+        field,
+        reason,
+        approved,
+        contactTail: field === 'phone' ? customer.phoneTail : customer.whatsappTail
+      }),
+      ip: requestMeta?.ip ?? undefined,
+      userAgent: requestMeta?.userAgent ?? undefined,
+      remark: `查看 V2 客户${label}：${customer.name}`
+    });
+
+    return {
+      customerId: customer.id,
+      value,
+      revealedAt: new Date().toISOString()
+    };
   }
 }

@@ -11,7 +11,12 @@ export const customersFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [
-    { key: 'keyword', label: '搜索', kind: 'search', placeholder: '客户名称、手机、微信' },
+    {
+      key: 'keyword',
+      label: '搜索',
+      kind: 'search',
+      placeholder: '客户名称、手机、微信、QQ、WhatsApp'
+    },
     {
       key: 'source',
       label: '来源',
@@ -29,11 +34,13 @@ export const customersFeature = defineV2Feature({
     { key: 'name', label: '客户名称', kind: 'text', widthPreset: 'identifier' },
     { key: 'phone', label: '手机号', kind: 'identifier', widthPreset: 'wide' },
     { key: 'wechat', label: '微信', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'qq', label: 'QQ', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'whatsapp', label: 'WhatsApp', kind: 'identifier', widthPreset: 'wide' },
     { key: 'source', label: '来源', kind: 'text', widthPreset: 'standard' },
     { key: 'tag', label: '标签', kind: 'text', widthPreset: 'identifier' },
     {
-      key: 'frequentService',
-      label: '常开业务',
+      key: 'historicalService',
+      label: '历史开通业务',
       kind: 'text',
       widthPreset: 'identifier'
     },

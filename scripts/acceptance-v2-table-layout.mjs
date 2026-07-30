@@ -618,11 +618,14 @@ function createUser(scenario) {
 function createCustomersBootstrap() {
   const source = createOption('source-wechat', 'customer_source', 'wechat', '微信');
   const tag = createOption('tag-quality', 'customer_tag', 'quality', '高质量');
+  const now = new Date().toISOString();
   const service = {
     ...createOption('service-ai', 'service', 'ai-service', 'AI 服务'),
-    parent: { id: 'business-ai', name: 'AI 类' }
+    parent: { id: 'business-ai', name: 'AI 类' },
+    firstOpenedAt: '2026-05-01T00:00:00.000Z',
+    lastOpenedAt: '2026-07-30T00:00:00.000Z',
+    activationCount: 3
   };
-  const now = new Date().toISOString();
   const items = [
     createCustomer('customer-active', '完整权限客户', 'active', source, tag, service, now),
     createCustomer('customer-disabled', '停用状态客户', 'disabled', source, tag, service, now)
@@ -651,6 +654,10 @@ function createCustomer(id, name, recordStatus, source, tag, service, now) {
     phoneTail: '5678',
     hasPhone: true,
     wechat: 'layout-test',
+    qq: '10001',
+    maskedWhatsapp: '+60****6789',
+    whatsappTail: '23456789',
+    hasWhatsapp: true,
     sourceOptionId: source.id,
     source,
     tagOptionIds: [tag.id],

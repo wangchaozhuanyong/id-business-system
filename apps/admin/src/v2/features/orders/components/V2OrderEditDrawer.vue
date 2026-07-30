@@ -58,7 +58,7 @@
               :remote-method="searchCustomers"
               :loading="customerSearching"
               :disabled="!order?.operations.canEditCore"
-              placeholder="搜索客户"
+              placeholder="按名称、手机、微信、QQ、WhatsApp 搜索"
             >
               <el-option
                 v-for="customer in customerChoices"
@@ -130,6 +130,7 @@
 
           <V2OrderEditPricingFields
             v-if="order"
+            v-model:profit-rate-input-value="profitRatePricing.profitRateInputValue"
             :form="form"
             :order="order"
             :settlement-choices="settlementChoices"
@@ -140,7 +141,9 @@
             :recommendation-applied="recommendationApplied"
             :applied-suggested-cny="appliedSuggestedCny"
             :estimated-profit-preview="estimatedProfitPreview"
-            :estimated-profit-rate-preview="estimatedProfitRatePreview"
+            :estimated-profit-rate-preview="profitRatePricing.estimatedProfitRatePreview"
+            :pricing-input-mode="profitRatePricing.pricingInputMode"
+            :profit-rate-input-hint="profitRatePricing.profitRateInputHint"
             @settlement-change="handleSettlementChange"
             @manual-price-input="handleManualPriceInput"
             @apply-suggested="applySuggestedReceivedAmount"
@@ -223,7 +226,6 @@ import V2OrderEditPricingFields from './V2OrderEditPricingFields.vue';
 import {
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
-  calculateProfitRate,
   calculateSuggestedOriginalAmount,
   calculateSuggestedReceivedAmount
 } from '@/v2/features/order-entry/order-pricing';
@@ -243,6 +245,7 @@ import {
   isPositiveDecimal
 } from './order-edit-form';
 import { useOrderEditChoices } from './useOrderEditChoices';
+import { useOrderEditProfitRateInput } from './useOrderEditProfitRateInput';
 import './order-edit-drawer.css';
 
 const props = defineProps<{
@@ -332,13 +335,25 @@ const estimatedProfitPreview = computed(
       estimatedBalanceCostPreview.value
     ) ?? '0'
 );
-const estimatedProfitRatePreview = computed(() =>
-  calculateProfitRate(estimatedProfitPreview.value, receivedAmountPreview.value)
+const profitRatePricing = reactive(
+  useOrderEditProfitRateInput({
+    form,
+    getOrder: () => props.order,
+    selectedPlatform,
+    selectedCandidate,
+    optionsLoading,
+    matchingLoading,
+    receivedAmountPreview,
+    estimatedProfitPreview,
+    estimatedBalanceCostPreview,
+    appliedAccountCostPreview
+  })
 );
 const suggestedReceived = computed(() => {
   if (!form.targetProfitRate.trim()) {
     return {
       amount: null,
+      exactAmount: null,
       platformFee: null,
       estimatedProfit: null,
       estimatedProfitRate: null,
@@ -356,7 +371,7 @@ const suggestedReceived = computed(() => {
 const suggestedOriginalAmount = computed(() => {
   if (!suggestedReceived.value.amount || !props.order) return null;
   return calculateSuggestedOriginalAmount(
-    suggestedReceived.value.amount,
+    suggestedReceived.value.exactAmount ?? suggestedReceived.value.amount,
     props.order.receivedCurrency,
     props.order.receivedFxRateToCny
   );
@@ -421,6 +436,7 @@ async function initialize(order: V2Order) {
     lockScope: order.activeLock?.lockScope ?? 'by_service',
     remark: order.remark ?? ''
   });
+  profitRatePricing.resetPricingInputMode();
   candidates.value = [];
   matchingError.value = '';
   recommendationApplied.value = false;
@@ -518,6 +534,8 @@ function undoSuggestedReceivedAmount() {
 }
 
 function handleManualPriceInput() {
+  profitRatePricing.useReceiptDrivenProfitRate();
+  formRef.value?.clearValidate('targetProfitRate');
   recommendationApplied.value = false;
   appliedSuggestedCny.value = '';
 }

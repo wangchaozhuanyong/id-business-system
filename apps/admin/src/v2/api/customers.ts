@@ -52,6 +52,11 @@ export const idBusinessV2CustomersApi = {
       http.post(`/id-business-v2/customers/${id}/reveal-phone`, payload)
     );
   },
+  revealWhatsapp(id: string, payload: V2RevealInput) {
+    return request<{ customerId: string; whatsapp: string; revealedAt: string }>(
+      http.post(`/id-business-v2/customers/${id}/reveal-whatsapp`, payload)
+    );
+  },
   remove(id: string) {
     return withV2QueryInvalidation(
       request<{ deleted: true }>(http.delete(`/id-business-v2/customers/${id}`)),

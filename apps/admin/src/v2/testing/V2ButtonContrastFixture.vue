@@ -35,8 +35,11 @@
       </article>
     </section>
 
-    <section class="v2-button-contrast__order" data-order-entry-scenario>
-      <h2>订单录入主操作</h2>
+    <section class="v2-button-contrast__order v2-order-entry-actions" data-order-entry-scenario>
+      <div>
+        <span>订单状态</span>
+        <strong>待处理</strong>
+      </div>
       <AppButton variant="primary" disabled data-order-entry-state="disabled">
         <el-icon><CircleCheck /></el-icon>
         创建并扣减余额
@@ -116,6 +119,8 @@ const variants = ['default', 'primary', 'soft', 'danger', 'success', 'ghost'] as
 }
 
 .v2-button-contrast__order {
+  position: static;
+  bottom: auto;
   max-width: 1120px;
   margin: 14px auto 0;
   grid-template-columns: minmax(0, 1fr) repeat(3, auto);

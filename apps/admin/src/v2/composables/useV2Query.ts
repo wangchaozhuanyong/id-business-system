@@ -392,9 +392,12 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   }
 
   function cancel() {
-    if (!subscribedEntry) return;
-    unsubscribe(subscribedEntry);
-    subscribedEntry = null;
+    if (subscribedEntry) {
+      unsubscribe(subscribedEntry);
+      subscribedEntry = null;
+    }
+    isInitialLoading.value = false;
+    isRefreshing.value = false;
   }
 
   const initialCacheKey = resolveKey(options.scope, options.key);

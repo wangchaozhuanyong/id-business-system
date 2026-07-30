@@ -12,6 +12,7 @@ import {
   normalizeFinanceRate
 } from '../finance/public-api';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
+import type { QuoteIdBusinessV2OrderReceiptFxDto } from './dto/quote-id-business-v2-order-receipt-fx.dto';
 import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { getIdBusinessV2OrderEntryOptions } from './id-business-v2-order-entry-options';
@@ -86,6 +87,11 @@ export class IdBusinessV2OrderEntryService {
       ...options,
       latestFxRates: latestFxRates.items
     };
+  }
+
+  quoteReceiptFx(dto: QuoteIdBusinessV2OrderReceiptFxDto, operator?: AuthenticatedUser) {
+    const currency = normalizeFinanceCurrency(dto.currency, '收款币种');
+    return this.financeFxService.quoteOrderRate(currency, operator);
   }
 
   async create(dto: CreateIdBusinessV2OrderDto, operator?: AuthenticatedUser) {

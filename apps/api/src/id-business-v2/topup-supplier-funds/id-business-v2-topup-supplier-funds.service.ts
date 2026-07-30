@@ -471,14 +471,15 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       }
 
       const account = await this.lockSupplierAccountById(tx, payment.supplierAccountId);
-      const balanceAfter = roundV2Decimal(account.currentBalanceCny.sub(payment.creditedCny));
+      const creditedCny = roundV2Decimal(payment.creditedCny);
+      const balanceAfter = roundV2Decimal(account.currentBalanceCny.sub(creditedCny));
       const entry = await tx.idBusinessV2TopupSupplierLedger.create({
         data: {
           supplierAccountId: account.id,
           paymentId: payment.id,
           entryType: 'payment_reversal',
           direction: 'debit',
-          ...this.cnyLedgerAmounts(payment.creditedCny, account.currentBalanceCny, balanceAfter),
+          ...this.cnyLedgerAmounts(creditedCny, account.currentBalanceCny, balanceAfter),
           supplierNameSnapshot: account.supplierName,
           reversalOfEntryId: creditEntry.id,
           idempotencyKey,

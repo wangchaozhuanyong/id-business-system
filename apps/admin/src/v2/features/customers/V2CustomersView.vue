@@ -4,7 +4,7 @@
       <el-input
         v-model="query.keyword"
         clearable
-        placeholder="客户名称、手机号、微信"
+        placeholder="客户名称、手机、微信、QQ、WhatsApp"
         aria-label="搜索客户"
         @keyup.enter="handleSearch"
         @clear="handleSearch"
@@ -35,6 +35,21 @@
             v-for="option in tagOptions"
             :key="option.id"
             :label="option.name"
+            :value="option.id"
+          />
+        </el-select>
+        <el-select
+          v-model="query.serviceOptionId"
+          clearable
+          filterable
+          placeholder="全部历史业务"
+          aria-label="筛选历史开通业务"
+          @change="handleFilterChange"
+        >
+          <el-option
+            v-for="option in serviceOptions"
+            :key="option.id"
+            :label="selectorLabel(option)"
             :value="option.id"
           />
         </el-select>
@@ -104,19 +119,13 @@
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="wide" label="手机号">
             <template #default="{ row }">
-              <span class="v2-sensitive-cell">
-                <strong>{{ row.maskedPhone || '—' }}</strong>
-                <AppButton
-                  v-if="row.hasPhone && canRevealPhone"
-                  icon-only
-                  size="small"
-                  variant="ghost"
-                  title="查看完整手机号"
-                  @click="openRevealPhone(row)"
-                >
-                  <el-icon><View /></el-icon>
-                </AppButton>
-              </span>
+              <V2CustomerSensitiveContactCell
+                :masked-value="row.maskedPhone"
+                :has-value="row.hasPhone"
+                :can-reveal="canRevealContact"
+                reveal-title="查看完整手机号"
+                @reveal="openRevealPhone(row)"
+              />
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -127,6 +136,20 @@
             sortable="custom"
           >
             <template #default="{ row }">{{ row.wechat || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="wide" prop="qq" label="QQ">
+            <template #default="{ row }">{{ row.qq || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="wide" label="WhatsApp">
+            <template #default="{ row }">
+              <V2CustomerSensitiveContactCell
+                :masked-value="row.maskedWhatsapp"
+                :has-value="row.hasWhatsapp"
+                :can-reveal="canRevealContact"
+                reveal-title="查看完整 WhatsApp"
+                @reveal="openRevealWhatsapp(row)"
+              />
+            </template>
           </V2TableColumn>
           <V2TableColumn kind="text" label="来源" width-preset="standard">
             <template #default="{ row }">{{ row.source?.name || '—' }}</template>
@@ -139,23 +162,9 @@
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="常开业务" width-preset="identifier">
+          <V2TableColumn kind="text" label="历史开通业务" width-preset="identifier">
             <template #default="{ row }">
-              <div
-                v-if="row.services.length"
-                class="v2-record-tags"
-                :title="optionNames(row.services)"
-              >
-                <el-tag
-                  v-for="service in row.services"
-                  :key="service.id"
-                  type="info"
-                  effect="plain"
-                >
-                  {{ service.name }}
-                </el-tag>
-              </div>
-              <span v-else>—</span>
+              <V2CustomerHistoryServices :services="row.services" />
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -217,32 +226,23 @@
                 {{ item.recordStatus === 'active' ? '启用' : '停用' }}
               </el-tag>
             </header>
-            <dl>
-              <div>
-                <dt>手机号</dt>
-                <dd>{{ item.maskedPhone || '—' }}</dd>
-              </div>
-              <div>
-                <dt>微信</dt>
-                <dd>{{ item.wechat || '—' }}</dd>
-              </div>
-              <div>
-                <dt>标签</dt>
-                <dd>{{ item.tags.map((tag) => tag.name).join('、') || '—' }}</dd>
-              </div>
-              <div>
-                <dt>常开业务</dt>
-                <dd>{{ item.services.map((service) => service.name).join('、') || '—' }}</dd>
-              </div>
-            </dl>
+            <V2CustomerMobileDetails :customer="item" />
             <footer>
               <AppButton
-                v-if="item.hasPhone && canRevealPhone"
+                v-if="item.hasPhone && canRevealContact"
                 size="small"
                 variant="ghost"
                 @click="openRevealPhone(item)"
               >
                 查看手机号
+              </AppButton>
+              <AppButton
+                v-if="item.hasWhatsapp && canRevealContact"
+                size="small"
+                variant="ghost"
+                @click="openRevealWhatsapp(item)"
+              >
+                查看 WhatsApp
               </AppButton>
               <div class="v2-record-actions">
                 <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(item)">
@@ -316,6 +316,19 @@
         <el-form-item label="微信">
           <el-input v-model="form.wechat" maxlength="120" />
         </el-form-item>
+        <el-form-item label="QQ">
+          <el-input v-model="form.qq" maxlength="120" />
+        </el-form-item>
+        <el-form-item label="WhatsApp">
+          <el-input
+            v-model="form.whatsapp"
+            :disabled="form.clearWhatsapp"
+            :placeholder="editingItem?.hasWhatsapp ? '留空保持原 WhatsApp' : '请输入 WhatsApp'"
+          />
+          <el-checkbox v-if="editingItem?.hasWhatsapp" v-model="form.clearWhatsapp">
+            清空已保存 WhatsApp
+          </el-checkbox>
+        </el-form-item>
         <el-form-item label="客户来源">
           <el-select v-model="form.sourceOptionId" clearable filterable placeholder="选择客户来源">
             <el-option
@@ -343,23 +356,6 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="常开业务">
-          <el-select
-            v-model="form.serviceOptionIds"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            filterable
-            placeholder="选择常开业务"
-          >
-            <el-option
-              v-for="option in serviceOptions"
-              :key="option.id"
-              :label="selectorLabel(option)"
-              :value="option.id"
-            />
-          </el-select>
-        </el-form-item>
         <el-form-item label="资料状态">
           <el-switch v-model="form.active" active-text="启用" inactive-text="停用" />
         </el-form-item>
@@ -369,7 +365,11 @@
       </el-form>
     </V2FormDrawer>
 
-    <el-dialog v-model="revealDialogVisible" title="查看完整手机号" width="min(440px, 92vw)">
+    <el-dialog
+      v-model="revealDialogVisible"
+      :title="revealField === 'phone' ? '查看完整手机号' : '查看完整 WhatsApp'"
+      width="min(440px, 92vw)"
+    >
       <el-form
         ref="revealFormRef"
         class="v2-horizontal-form"
@@ -388,13 +388,16 @@
         <el-form-item label="审批编号">
           <el-input v-model="revealForm.approvalId" placeholder="可选" />
         </el-form-item>
-        <el-form-item v-if="revealForm.phone" label="完整手机号">
-          <el-input v-model="revealForm.phone" readonly />
+        <el-form-item
+          v-if="revealForm.value"
+          :label="revealField === 'phone' ? '完整手机号' : '完整 WhatsApp'"
+        >
+          <el-input v-model="revealForm.value" readonly />
         </el-form-item>
       </el-form>
       <template #footer>
         <AppButton variant="ghost" @click="revealDialogVisible = false">关闭</AppButton>
-        <AppButton variant="primary" :loading="revealing" @click="revealPhone"> 查看 </AppButton>
+        <AppButton variant="primary" :loading="revealing" @click="revealContact"> 查看 </AppButton>
       </template>
     </el-dialog>
 
@@ -419,8 +422,7 @@ import {
   Refresh,
   Search,
   VideoPause,
-  VideoPlay,
-  View
+  VideoPlay
 } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -428,6 +430,9 @@ import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2CustomerHistoryServices from './components/V2CustomerHistoryServices.vue';
+import V2CustomerMobileDetails from './components/V2CustomerMobileDetails.vue';
+import V2CustomerSensitiveContactCell from './components/V2CustomerSensitiveContactCell.vue';
 import { useCustomersPage } from './useCustomersPage';
 import '@/v2/styles/records.css';
 
@@ -445,6 +450,7 @@ const {
   deletingItem,
   deleteDialogVisible,
   deleting,
+  revealField,
   revealDialogVisible,
   revealing,
   formRef,
@@ -455,7 +461,7 @@ const {
   canCreate,
   canUpdate,
   canDelete,
-  canRevealPhone,
+  canRevealContact,
   formRules,
   revealRules,
   hasLoadedOnce,
@@ -472,7 +478,8 @@ const {
   submitForm,
   toggleStatus,
   openRevealPhone,
-  revealPhone,
+  openRevealWhatsapp,
+  revealContact,
   openDelete,
   confirmDelete,
   selectorLabel,

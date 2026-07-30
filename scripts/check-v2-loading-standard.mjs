@@ -288,6 +288,7 @@ function validateStartupArchitecture() {
     app: 'apps/admin/src/App.vue',
     appRuntimeError: 'apps/admin/src/runtime/appRuntimeError.ts',
     auth: 'apps/admin/src/stores/auth.ts',
+    bootGate: 'apps/admin/src/v2/components/V2BootGate.vue',
     entry: 'apps/admin/src/main.ts',
     html: 'apps/admin/index.html',
     layout: 'apps/admin/src/v2/layouts/V2AdminLayout.vue',
@@ -307,12 +308,19 @@ function validateStartupArchitecture() {
   requirePatterns(files.html, sources.html, [
     [/id-business-v2-theme/, '缺少同步主题初始化'],
     [/class="v2-boot"/, '缺少路由中性的 HTML 启动占位'],
+    [/正在安全打开页面/, 'HTML 启动占位没有使用统一安全加载文案'],
     [/vite:preloadError/, 'HTML 没有覆盖核心模块加载失败']
   ]);
   forbidPatterns(files.html, sources.html, [
     [/v2-boot__sidebar/, 'HTML 启动占位不得伪造工作区侧边栏'],
     [/v2-boot__nav/, 'HTML 启动占位不得伪造业务导航'],
     [/<table\b|<el-table\b/, 'HTML 启动占位不得伪造业务表格']
+  ]);
+  requirePatterns(files.bootGate, sources.bootGate, [
+    [/正在安全打开页面/, 'Vue Boot Gate 没有复用统一安全加载文案']
+  ]);
+  forbidPatterns(files.bootGate, sources.bootGate, [
+    [/has-workspace-placeholder|v2-boot-gate__workspace/, 'Boot Gate 不得临时伪造工作区']
   ]);
 
   requirePatterns(files.entry, sources.entry, [
@@ -416,7 +424,11 @@ function validateStartupArchitecture() {
   ]);
   requirePatterns(files.router, sources.router, [
     [/beginV2RoutePerformance\(to\.path\)/, '路由开始没有建立独立性能代际'],
-    [/markV2RouteCodeReady/, 'afterEach 没有只记录代码就绪']
+    [/markV2RouteCodeReady/, 'afterEach 没有只记录代码就绪'],
+    [/resetV2RouteNavigationState/, '非 V2 跳转没有清理旧工作区加载状态']
+  ]);
+  requirePatterns(files.routes, sources.routes, [
+    [/export function resetV2RouteNavigationState/, '路由状态缺少显式重置入口']
   ]);
   requirePatterns(files.query, sources.query, [
     [/markV2RouteDataReady/, '真实模块查询没有上报业务数据就绪'],

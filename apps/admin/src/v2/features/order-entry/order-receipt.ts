@@ -55,9 +55,10 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
     receivedManualRateReason: [
       {
         validator: (_rule, value, callback) => {
+          const reason = String(value ?? '').trim();
           callback(
-            form.receivedFxRateToCny && !String(value ?? '').trim()
-              ? new Error('手工填写汇率时必须说明来源')
+            form.receivedFxRateToCny && reason.length < 2
+              ? new Error('手工填写汇率时必须填写至少 2 个字符的来源')
               : undefined
           );
         },

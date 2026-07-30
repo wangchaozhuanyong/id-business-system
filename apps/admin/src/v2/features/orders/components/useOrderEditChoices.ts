@@ -19,7 +19,9 @@ export function useOrderEditChoices(
           id: order.customer.id,
           name: order.customer.name,
           wechat: null,
-          maskedPhone: null
+          qq: null,
+          maskedPhone: null,
+          maskedWhatsapp: null
         }
       : null;
     return current && !options.value.customers.some((item) => item.id === current.id)

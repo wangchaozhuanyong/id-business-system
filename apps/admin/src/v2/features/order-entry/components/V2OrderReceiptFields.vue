@@ -24,31 +24,50 @@
         v-model="form.receivedFxRateToCny"
         inputmode="decimal"
         placeholder="留空则保存时自动采集"
+        @input="emit('manualRateInput')"
       />
     </el-form-item>
-    <el-form-item v-if="!form.receivedFxRateToCny" label="可用汇率">
-      <div class="v2-order-entry-readonly">
-        <strong>
-          {{
-            form.automaticFxRateToCny
-              ? `1 ${form.receivedCurrency} = ¥${form.automaticFxRateToCny}`
-              : '暂无可用汇率'
-          }}
-        </strong>
-        <span>
-          {{
-            form.automaticFxRateToCny
-              ? '采用推荐价时锁定该汇率快照'
-              : '可填写手工汇率；缺少汇率时不能采用推荐价'
-          }}
-        </span>
+    <el-form-item v-if="!form.receivedFxRateToCny" label="自动汇率">
+      <div
+        class="v2-order-entry-readonly v2-order-entry-fx-quote"
+        :class="{ 'is-error': receiptFxError }"
+        role="status"
+        aria-live="polite"
+      >
+        <div>
+          <strong>
+            {{
+              receiptFxLoading
+                ? `正在采集 ${form.receivedCurrency}/CNY 汇率`
+                : form.automaticFxRateToCny
+                  ? `1 ${form.receivedCurrency} = ¥${form.automaticFxRateToCny}`
+                  : '暂无可用汇率'
+            }}
+          </strong>
+          <span v-if="receiptFxQuote && form.automaticFxRateToCny">
+            {{ sourceLabel(receiptFxQuote.source) }} · 采集于
+            {{ formatQuoteTime(receiptFxQuote.capturedAt) }}
+            <template v-if="receiptFxQuote.expiresAt">
+              · 有效至 {{ formatQuoteTime(receiptFxQuote.expiresAt) }}
+            </template>
+          </span>
+          <span v-else-if="receiptFxError">{{ receiptFxError }}</span>
+          <span v-else-if="!receiptFxLoading">可改用人工汇率，并填写真实来源</span>
+        </div>
+        <AppButton
+          v-if="receiptFxError && !receiptFxLoading"
+          variant="ghost"
+          @click="emit('retryFxQuote')"
+        >
+          重新采集
+        </AppButton>
       </div>
     </el-form-item>
-    <el-form-item v-if="form.receivedFxRateToCny" label="汇率原因" prop="receivedManualRateReason">
+    <el-form-item v-if="form.receivedFxRateToCny" label="汇率来源" prop="receivedManualRateReason">
       <el-input
         v-model="form.receivedManualRateReason"
         maxlength="200"
-        placeholder="说明手工汇率来源"
+        placeholder="说明人工汇率来源，至少 2 个字符"
       />
     </el-form-item>
   </template>
@@ -59,25 +78,55 @@
         {{
           receivedAmountPreview
             ? `¥${formatDecimal(receivedAmountPreview)}`
-            : '保存时按交易汇率计算'
+            : form.receivedCurrency !== 'CNY' && receiptFxLoading
+              ? '等待汇率采集'
+              : '等待原币金额与有效汇率'
         }}
       </strong>
-      <span>交易汇率会锁定，历史利润不会随最新汇率漂移</span>
+      <span>成交时锁定交易汇率，历史利润不会随最新汇率漂移</span>
     </div>
   </el-form-item>
 </template>
 
 <script setup lang="ts">
+import type { V2FinanceFxRateSnapshot, V2OrderReceiptFxQuote } from '@apple-business/shared';
+import AppButton from '@/components/ui/AppButton.vue';
 import type { V2OrderEntryForm } from '../order-entry-form';
 
 defineProps<{
   form: V2OrderEntryForm;
   receivedAmountPreview: string;
+  receiptFxQuote: V2OrderReceiptFxQuote | null;
+  receiptFxLoading: boolean;
+  receiptFxError: string;
   formatDecimal: (value: string) => string;
 }>();
 
 const emit = defineEmits<{
   currencyChange: [];
   priceInput: [];
+  manualRateInput: [];
+  retryFxQuote: [];
 }>();
+
+function sourceLabel(source: V2FinanceFxRateSnapshot['source']) {
+  if (source === 'ecb_cross') return 'ECB 国际参考交叉汇率';
+  if (source === 'combined_p2p') return 'Binance + OKX P2P 综合价';
+  if (source === 'cny_fixed') return '人民币固定汇率';
+  if (source === 'manual') return '人工汇率';
+  return source.toUpperCase();
+}
+
+function formatQuoteTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date);
+}
 </script>

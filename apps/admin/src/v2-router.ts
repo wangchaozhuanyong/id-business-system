@@ -3,7 +3,12 @@ import { isAuthSessionExpired } from '@/auth/session';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserRouteAccess } from '@/utils/permissions';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
-import { setV2RouteNavigationState, v2RouteNavigationState, v2Routes } from '@/v2/router/routes';
+import {
+  resetV2RouteNavigationState,
+  setV2RouteNavigationState,
+  v2RouteNavigationState,
+  v2Routes
+} from '@/v2/router/routes';
 import { beginV2RoutePerformance, markV2RouteCodeReady } from '@/runtime/performance';
 
 const V2LoginView = () => import('@/v2/views/V2LoginView.vue');
@@ -61,10 +66,12 @@ v2Router.beforeEach(async (to) => {
   }
 
   if (to.meta.public) {
+    resetV2RouteNavigationState(to.fullPath);
     return sessionStatus === 'ready' ? '/v2' : true;
   }
 
   if (sessionStatus !== 'ready' || !authStore.isAuthenticated) {
+    resetV2RouteNavigationState('/login');
     return redirectToLogin(to.fullPath);
   }
 
@@ -79,6 +86,7 @@ v2Router.beforeEach(async (to) => {
 
   if (!hasUserRouteAccess(authStore.user, to.meta.permission, to.meta.requiredRoles)) {
     if (to.meta.status === 'planned') {
+      resetV2RouteNavigationState('/403');
       return {
         path: '/403',
         query: { from: to.fullPath }
@@ -109,6 +117,8 @@ v2Router.afterEach((to, _from, failure) => {
   document.title = `${title} - ID 业务管理`;
   if (to.path.startsWith('/v2')) {
     setV2RouteNavigationState(to.fullPath, 'ready');
+  } else {
+    resetV2RouteNavigationState(to.fullPath);
   }
   markV2RouteCodeReady(
     to.path,

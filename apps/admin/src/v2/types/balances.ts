@@ -293,15 +293,7 @@ export interface V2GiftCardRecord {
     averageCostAfter: string;
     createdAt: string;
   } | null;
-  supplierFunding: {
-    ledgerEntryId: string;
-    supplierName: string;
-    amountCny: string;
-    balanceBeforeCny: string;
-    balanceAfterCny: string;
-    reversed: boolean;
-    createdAt: string;
-  } | null;
+  hasSupplierFunding: boolean;
   reversal: {
     id: string;
     entryType: 'gift_card_redeemed' | 'gift_card_withdrawal';

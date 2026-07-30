@@ -148,6 +148,29 @@
   padding-block: 6px;
 }
 
+.v2-records-help-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  vertical-align: middle;
+}
+
+.v2-records-help-title .feature-help {
+  min-width: 22px;
+  min-height: 22px;
+  margin-left: 0;
+}
+
+.v2-records-help-title .feature-help__marker {
+  width: 16px;
+  height: 16px;
+}
+
+.v2-records-help-title .feature-help__marker .el-icon {
+  font-size: 12px;
+}
+
 .v2-records-empty {
   display: grid;
   min-height: 230px;
