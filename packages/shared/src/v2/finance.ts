@@ -217,6 +217,33 @@ export interface V2FinanceHistoryBackfillResult {
   };
 }
 
+export interface V2FinanceHistoryBackfillPreviewCategory {
+  candidateCount: number;
+  willCreateCount: number;
+  skippedExistingCount: number;
+  skippedZeroAmountCount: number;
+}
+
+export interface V2FinanceHistoryBackfillPreview {
+  previewedAt: IsoDateTimeString;
+  asOf: IsoDateTimeString;
+  historyStatus: V2FinanceHistoryStatus;
+  canBackfill: boolean;
+  assumption: 'legacy_assumed_cny';
+  fingerprint: string;
+  summary: {
+    orders: V2FinanceHistoryBackfillPreviewCategory;
+    accountLosses: V2FinanceHistoryBackfillPreviewCategory;
+    redeemedGiftCards: V2FinanceHistoryBackfillPreviewCategory;
+    withdrawnGiftCards: V2FinanceHistoryBackfillPreviewCategory;
+  };
+  fxSnapshotUpdates: {
+    accounts: number;
+    giftCards: number;
+    orders: number;
+  };
+}
+
 export interface V2FinanceCurrencyBreakdown {
   currency: V2FinanceCurrency;
   income: DecimalString;

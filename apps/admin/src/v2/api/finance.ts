@@ -6,6 +6,7 @@ import type {
   V2FinanceExpense,
   V2FinanceExpensePage,
   V2FinanceLatestRate,
+  V2FinanceHistoryBackfillPreview,
   V2FinanceHistoryBackfillResult,
   V2FinanceJournal,
   V2FinanceJournalPage,
@@ -255,10 +256,15 @@ export const idBusinessV2FinanceApi = {
       http.get('/id-business-v2/finance/settings', { signal: options.signal })
     );
   },
-  backfillHistory() {
+  previewHistoryBackfill() {
+    return request<V2FinanceHistoryBackfillPreview>(
+      http.get('/id-business-v2/finance/history/backfill-preview')
+    );
+  },
+  backfillHistory(previewFingerprint: string) {
     return withV2QueryInvalidation(
       request<V2FinanceHistoryBackfillResult>(
-        http.post('/id-business-v2/finance/history/backfill')
+        http.post('/id-business-v2/finance/history/backfill', { previewFingerprint })
       ),
       FINANCE_SCOPES
     );

@@ -5,6 +5,7 @@ import type {
   V2FinanceAccountType,
   V2FinanceCurrency,
   V2FinanceExpense,
+  V2FinanceHistoryBackfillPreview,
   V2FinanceJournal,
   V2FinanceJournalType,
   V2FinancePeriod,
@@ -212,6 +213,14 @@ export function useFinanceLedgerPage() {
   const historyDrawerVisible = ref(false);
   const historySubmitting = ref(false);
   const historyNote = ref('');
+  const historyPreviewVisible = ref(false);
+  const historyPreviewLoading = ref(false);
+  const historyPreview = ref<V2FinanceHistoryBackfillPreview | null>(null);
+  const historyPreviewConfirmDisabledReason = computed(() => {
+    if (!historyPreview.value) return '请先加载回填预览';
+    if (!historyPreview.value.canBackfill) return '当前历史状态不允许再次回填';
+    return '';
+  });
 
   function refresh() {
     return ledgerQuery.refresh();
@@ -398,10 +407,27 @@ export function useFinanceLedgerPage() {
     }
   }
 
+  async function openHistoryBackfillPreview() {
+    historyPreviewLoading.value = true;
+    try {
+      historyPreview.value = await idBusinessV2FinanceApi.previewHistoryBackfill();
+      historyPreviewVisible.value = true;
+    } catch (cause) {
+      ElMessage.error(getApiErrorMessage(cause));
+    } finally {
+      historyPreviewLoading.value = false;
+    }
+  }
+
   async function runHistoryBackfill() {
+    if (!historyPreview.value?.canBackfill) {
+      return showWarning('请先完成历史回填预览');
+    }
     historySubmitting.value = true;
     try {
-      const result = await idBusinessV2FinanceApi.backfillHistory();
+      const result = await idBusinessV2FinanceApi.backfillHistory(historyPreview.value.fingerprint);
+      historyPreviewVisible.value = false;
+      historyPreview.value = null;
       ElMessage.success(`历史回填完成：${result.summary.orders} 个订单`);
       await refresh();
     } catch (cause) {
@@ -486,6 +512,10 @@ export function useFinanceLedgerPage() {
     historyDrawerVisible,
     historySubmitting,
     historyNote,
+    historyPreviewVisible,
+    historyPreviewLoading,
+    historyPreview,
+    historyPreviewConfirmDisabledReason,
     refresh,
     applyFilters,
     resetFilters,
@@ -497,6 +527,7 @@ export function useFinanceLedgerPage() {
     submitReversal,
     openPeriod,
     submitPeriod,
+    openHistoryBackfillPreview,
     runHistoryBackfill,
     openHistoryConfirmation,
     confirmHistory,

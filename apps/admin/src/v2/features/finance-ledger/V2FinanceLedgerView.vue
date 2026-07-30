@@ -337,10 +337,10 @@
                 <AppButton
                   v-if="page.settings?.historyStatus !== 'completed'"
                   variant="soft"
-                  :loading="page.historySubmitting"
-                  @click="page.runHistoryBackfill"
+                  :loading="page.historyPreviewLoading"
+                  @click="page.openHistoryBackfillPreview"
                 >
-                  自动回填历史
+                  预览历史回填
                 </AppButton>
                 <AppButton
                   v-if="

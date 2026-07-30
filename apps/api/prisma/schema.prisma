@@ -612,7 +612,7 @@ model IdBusinessV2CustomerService {
   @@id([customerId, optionId])
   @@index([optionId])
   @@index([source, optionId])
-  @@index([customerId, source, lastOpenedAt])
+  @@index([customerId, source, lastOpenedAt], map: "id_business_v2_customer_services_customer_id_source_last_opened")
   @@map("id_business_v2_customer_services")
 }
 
@@ -771,7 +771,7 @@ model IdBusinessV2TopupSupplierAccount {
   updatedAt           DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   supplierOption    IdBusinessV2Option                 @relation(fields: [supplierOptionId], references: [id], onDelete: Restrict)
-  initializedBy     User?                              @relation("IdBusinessV2TopupSupplierAccountInitializedBy", fields: [initializedByUserId], references: [id], onDelete: SetNull)
+  initializedBy     User?                              @relation("IdBusinessV2TopupSupplierAccountInitializedBy", fields: [initializedByUserId], references: [id], onDelete: SetNull, map: "id_business_v2_topup_supplier_accounts_initialized_by_user_id_f")
   updatedBy         User?                              @relation("IdBusinessV2TopupSupplierAccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   payments          IdBusinessV2TopupSupplierPayment[]
   ledgerEntries     IdBusinessV2TopupSupplierLedger[]
@@ -779,7 +779,7 @@ model IdBusinessV2TopupSupplierAccount {
   accountPurchases  IdBusinessV2Account[]              @relation("IdBusinessV2AccountPurchaseSupplierAccount")
   giftCardPurchases IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardPurchaseSupplierAccount")
 
-  @@unique([supplierOptionId, currency])
+  @@unique([supplierOptionId, currency], map: "id_business_v2_topup_supplier_accounts_supplier_option_id_curre")
   @@index([initializedAt])
   @@index([status])
   @@index([currentBalance])
@@ -794,14 +794,14 @@ model IdBusinessV2TopupSupplierPayment {
   financeAccountId      String?                     @map("finance_account_id") @db.Uuid
   fxRateSnapshotId      String?                     @map("fx_rate_snapshot_id") @db.Uuid
   supplierNameSnapshot  String                      @map("supplier_name_snapshot") @db.VarChar(160)
-  paidCurrency          IdBusinessV2FinanceCurrency @map("paid_currency")
+  paidCurrency          IdBusinessV2FinanceCurrency @default(USDT) @map("paid_currency")
   paidAmount            Decimal                     @map("paid_amount") @db.Decimal(18, 4)
   networkFeeAmount      Decimal                     @default(0) @map("network_fee_amount") @db.Decimal(18, 4)
   fxRateToCny           Decimal                     @map("fx_rate_to_cny") @db.Decimal(18, 8)
   creditedAmount        Decimal                     @map("credited_amount") @db.Decimal(18, 4)
   creditedCny           Decimal                     @map("credited_cny") @db.Decimal(18, 4)
   receivedUsdt          Decimal?                    @map("received_usdt") @db.Decimal(18, 4)
-  networkFeeUsdt        Decimal?                    @map("network_fee_usdt") @db.Decimal(18, 4)
+  networkFeeUsdt        Decimal?                    @default(0) @map("network_fee_usdt") @db.Decimal(18, 4)
   settlementRateCnyUsdt Decimal?                    @map("settlement_rate_cny_usdt") @db.Decimal(18, 8)
   network               String?                     @db.VarChar(40)
   transactionHash       String?                     @map("transaction_hash") @db.VarChar(180)
@@ -817,8 +817,8 @@ model IdBusinessV2TopupSupplierPayment {
   createdBy       User?                              @relation("IdBusinessV2TopupSupplierPaymentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   ledgerEntries   IdBusinessV2TopupSupplierLedger[]
 
-  @@index([supplierAccountId, paidAt])
-  @@index([financeAccountId, paidAt])
+  @@index([supplierAccountId, paidAt], map: "id_business_v2_topup_supplier_payments_supplier_account_id_paid")
+  @@index([financeAccountId, paidAt], map: "id_business_v2_topup_supplier_payments_finance_account_id_paid_")
   @@index([fxRateSnapshotId])
   @@index([transactionHash])
   @@index([createdByUserId])
@@ -833,7 +833,7 @@ model IdBusinessV2TopupSupplierLedger {
   giftCardId           String?                                  @map("gift_card_id") @db.Uuid
   entryType            IdBusinessV2TopupSupplierLedgerEntryType @map("entry_type")
   direction            IdBusinessV2BalanceDirection
-  currency             IdBusinessV2FinanceCurrency
+  currency             IdBusinessV2FinanceCurrency              @default(CNY)
   amount               Decimal                                  @db.Decimal(18, 4)
   balanceBefore        Decimal                                  @map("balance_before") @db.Decimal(18, 4)
   balanceAfter         Decimal                                  @map("balance_after") @db.Decimal(18, 4)
@@ -854,7 +854,7 @@ model IdBusinessV2TopupSupplierLedger {
   reversedBy      IdBusinessV2TopupSupplierLedger?  @relation("IdBusinessV2TopupSupplierLedgerReversal")
   createdBy       User?                             @relation("IdBusinessV2TopupSupplierLedgerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
-  @@index([supplierAccountId, createdAt])
+  @@index([supplierAccountId, createdAt], map: "id_business_v2_topup_supplier_ledger_supplier_account_id_create")
   @@index([paymentId])
   @@index([giftCardId])
   @@index([entryType, createdAt])
@@ -927,7 +927,7 @@ model IdBusinessV2FinanceFxRateSnapshot {
   createdByUserId String?                         @map("created_by_user_id") @db.Uuid
   createdAt       DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  createdBy         User?                              @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy         User?                              @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull, map: "id_business_v2_finance_fx_rate_snapshots_created_by_user_id_fke")
   journalLines      IdBusinessV2FinanceJournalLine[]
   expenses          IdBusinessV2FinanceExpense[]
   supplierPayments  IdBusinessV2TopupSupplierPayment[]
@@ -935,7 +935,7 @@ model IdBusinessV2FinanceFxRateSnapshot {
   giftCardPurchases IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardPurchaseFxSnapshot")
   orderReceipts     IdBusinessV2Order[]                @relation("IdBusinessV2OrderReceivedFxSnapshot")
 
-  @@index([currency, businessDate, capturedAt])
+  @@index([currency, businessDate, capturedAt], map: "id_business_v2_finance_fx_rate_snapshots_currency_business_date")
   @@index([source, capturedAt])
   @@index([createdByUserId])
   @@map("id_business_v2_finance_fx_rate_snapshots")
@@ -997,10 +997,10 @@ model IdBusinessV2FinanceJournalLine {
   fxRateSnapshot  IdBusinessV2FinanceFxRateSnapshot? @relation(fields: [fxRateSnapshotId], references: [id], onDelete: Restrict)
 
   @@unique([journalId, lineNo])
-  @@index([accountCode, createdAt])
+  @@index([accountCode, createdAt], map: "id_business_v2_finance_journal_lines_account_code_created_at_id")
   @@index([currency, createdAt])
-  @@index([financeAccountId, createdAt])
-  @@index([supplierAccountId, createdAt])
+  @@index([financeAccountId, createdAt], map: "id_business_v2_finance_journal_lines_finance_account_id_created")
+  @@index([supplierAccountId, createdAt], map: "id_business_v2_finance_journal_lines_supplier_account_id_create")
   @@index([fxRateSnapshotId])
   @@map("id_business_v2_finance_journal_lines")
 }
@@ -1030,8 +1030,8 @@ model IdBusinessV2FinanceExpense {
   receiptAttachment Attachment?                        @relation("IdBusinessV2FinanceExpenseReceipt", fields: [receiptAttachmentId], references: [id], onDelete: SetNull)
   createdBy         User?                              @relation("IdBusinessV2FinanceExpenseCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
-  @@index([categoryOptionId, occurredAt])
-  @@index([financeAccountId, occurredAt])
+  @@index([categoryOptionId, occurredAt], map: "id_business_v2_finance_expenses_category_option_id_occurred_at_")
+  @@index([financeAccountId, occurredAt], map: "id_business_v2_finance_expenses_finance_account_id_occurred_at_")
   @@index([currency, occurredAt])
   @@index([fxRateSnapshotId])
   @@index([receiptAttachmentId])
@@ -1532,7 +1532,7 @@ model V2AuthIdentity {
 model IdBusinessV2ScopeVersion {
   scope     String   @id @db.VarChar(80)
   version   BigInt   @default(0)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("id_business_v2_scope_versions")
 }
