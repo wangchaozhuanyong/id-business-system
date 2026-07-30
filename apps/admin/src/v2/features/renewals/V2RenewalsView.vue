@@ -140,7 +140,7 @@
             kind="text"
             prop="customer"
             label="客户"
-            min-width="120"
+            width-preset="standard"
             fixed="left"
             sortable="custom"
           >
@@ -155,7 +155,7 @@
           >
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="105">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.account.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="wide" label="客户网站账号">
@@ -178,7 +178,7 @@
             kind="text"
             prop="service"
             label="当前业务"
-            min-width="125"
+            width-preset="standard"
             sortable="custom"
           >
             <template #default="{ row }">{{ row.service.name }}</template>

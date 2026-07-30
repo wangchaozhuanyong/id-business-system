@@ -82,7 +82,7 @@
                 </el-tag>
               </template>
             </V2TableColumn>
-            <V2TableColumn kind="text" label="触发" width="104">
+            <V2TableColumn kind="text" label="触发" width-preset="compact" width-mode="fixed">
               <template #default="{ row }">{{ page.triggerLabel(row.triggerType) }}</template>
             </V2TableColumn>
             <V2TableColumn kind="numeric" width-preset="standard" label="成交档位">
@@ -108,7 +108,7 @@
             <V2TableColumn kind="numeric" width-preset="compact" label="有效样本">
               <template #default="{ row }">{{ row.snapshot?.validSampleCount ?? '—' }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="text" label="失败来源" min-width="150" show-overflow-tooltip>
+            <V2TableColumn kind="text" label="失败来源" width-preset="wide" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ row.error ? page.failureLabel(row) : '—' }}
               </template>
@@ -271,14 +271,14 @@
                 }}</strong>
               </template>
             </V2TableColumn>
-            <V2TableColumn kind="text" label="操作人" width="120">
+            <V2TableColumn kind="text" label="操作人" width-preset="standard" width-mode="fixed">
               <template #default="{ row }">{{ page.operatorName(row) }}</template>
             </V2TableColumn>
             <V2TableColumn
               kind="text"
               prop="remark"
               label="备注"
-              min-width="180"
+              width-preset="identifier"
               show-overflow-tooltip
             />
             <V2TableActionColumn layout="icon">

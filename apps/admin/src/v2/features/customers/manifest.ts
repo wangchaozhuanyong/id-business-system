@@ -26,14 +26,19 @@ export const customersFeature = defineV2Feature({
     }
   ],
   columns: [
-    { key: 'name', label: '客户名称', kind: 'text', minWidth: 150 },
-    { key: 'phone', label: '手机号', kind: 'identifier', minWidth: 160 },
-    { key: 'wechat', label: '微信', kind: 'identifier', minWidth: 160 },
-    { key: 'source', label: '来源', kind: 'text', minWidth: 110 },
-    { key: 'tag', label: '标签', kind: 'text', minWidth: 110 },
-    { key: 'frequentService', label: '常开业务', kind: 'text', minWidth: 150 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
-    { key: 'updatedAt', label: '更新时间', kind: 'date', minWidth: 165 },
+    { key: 'name', label: '客户名称', kind: 'text', widthPreset: 'identifier' },
+    { key: 'phone', label: '手机号', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'wechat', label: '微信', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'source', label: '来源', kind: 'text', widthPreset: 'standard' },
+    { key: 'tag', label: '标签', kind: 'text', widthPreset: 'identifier' },
+    {
+      key: 'frequentService',
+      label: '常开业务',
+      kind: 'text',
+      widthPreset: 'identifier'
+    },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
     {
       key: 'actions',
       label: '操作',

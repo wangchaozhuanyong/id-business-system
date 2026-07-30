@@ -1311,8 +1311,15 @@
   vertical-align: middle;
 }
 
+.v2-shell .v2-adaptive-table {
+  --v2-table-cell-inline-padding: 12px;
+  container-name: v2-data-table;
+  container-type: inline-size;
+}
+
 .v2-shell .el-table .cell {
   min-width: 0;
+  padding-inline: var(--v2-table-cell-inline-padding, 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1361,6 +1368,18 @@
 
 .v2-table-actions .el-button + .el-button {
   margin-left: 0;
+}
+
+@container v2-data-table (max-width: 1199px) {
+  .v2-shell .v2-adaptive-table .cell {
+    --v2-table-cell-inline-padding: 10px;
+  }
+}
+
+@container v2-data-table (max-width: 839px) {
+  .v2-shell .v2-adaptive-table .cell {
+    --v2-table-cell-inline-padding: 8px;
+  }
 }
 
 .v2-shell .el-tag {

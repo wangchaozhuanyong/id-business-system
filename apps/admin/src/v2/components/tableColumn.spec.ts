@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getV2TableColumnWidthProps,
   getV2TableColumnClass,
   V2_TABLE_COLUMN_ALIGNMENT,
-  V2_TABLE_COLUMN_WIDTH
+  V2_TABLE_COLUMN_WIDTH,
+  V2_TABLE_COLUMN_WIDTH_MODE
 } from './tableColumn';
 
 describe('V2 table column semantics', () => {
@@ -27,6 +29,20 @@ describe('V2 table column semantics', () => {
       identifier: 192,
       longText: 224
     });
+  });
+
+  it('keeps semantic data columns stable and lets text columns absorb remaining space', () => {
+    expect(V2_TABLE_COLUMN_WIDTH_MODE).toEqual({
+      text: 'flex',
+      identifier: 'fixed',
+      index: 'fixed',
+      numeric: 'fixed',
+      date: 'fixed',
+      status: 'fixed'
+    });
+    expect(getV2TableColumnWidthProps('text', 'wide')).toEqual({ minWidth: 160 });
+    expect(getV2TableColumnWidthProps('numeric', 'standard')).toEqual({ width: 128 });
+    expect(getV2TableColumnWidthProps('text', 'compact', 'fixed')).toEqual({ width: 112 });
   });
 
   it('returns stable semantic classes for cells and headers', () => {

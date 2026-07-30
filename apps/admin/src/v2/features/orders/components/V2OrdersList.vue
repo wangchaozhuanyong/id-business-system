@@ -55,12 +55,12 @@
         >
           <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="客户" min-width="140">
+        <V2TableColumn kind="text" label="客户" width-preset="wide">
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.customer.name }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="业务" min-width="150">
+        <V2TableColumn kind="text" label="业务" width-preset="wide">
           <template #default="{ row }">{{ row.service.name }}</template>
         </V2TableColumn>
         <V2TableColumn

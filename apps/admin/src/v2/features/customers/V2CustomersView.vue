@@ -91,7 +91,13 @@
             </div>
           </template>
 
-          <V2TableColumn kind="text" prop="name" label="客户" min-width="170" sortable="custom">
+          <V2TableColumn
+            kind="text"
+            prop="name"
+            label="客户"
+            width-preset="identifier"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <strong class="v2-table-cell">{{ row.name }}</strong>
             </template>
@@ -122,10 +128,10 @@
           >
             <template #default="{ row }">{{ row.wechat || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="来源" min-width="120">
+          <V2TableColumn kind="text" label="来源" width-preset="standard">
             <template #default="{ row }">{{ row.source?.name || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="标签" min-width="170">
+          <V2TableColumn kind="text" label="标签" width-preset="identifier">
             <template #default="{ row }">
               <div v-if="row.tags.length" class="v2-record-tags" :title="optionNames(row.tags)">
                 <el-tag v-for="tag in row.tags" :key="tag.id" effect="plain">{{ tag.name }}</el-tag>
@@ -133,7 +139,7 @@
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="常开业务" min-width="190">
+          <V2TableColumn kind="text" label="常开业务" width-preset="identifier">
             <template #default="{ row }">
               <div
                 v-if="row.services.length"

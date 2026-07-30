@@ -18,10 +18,16 @@ export const financeLedgerFeature = defineV2Feature({
     { key: 'journalType', label: '业务类型', kind: 'select' }
   ],
   columns: [
-    { key: 'journalNo', label: '流水号', kind: 'text', minWidth: 190, fixed: 'left' },
-    { key: 'occurredAt', label: '发生时间', kind: 'date', minWidth: 165 },
-    { key: 'summary', label: '摘要', kind: 'text', minWidth: 220 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 100 },
+    {
+      key: 'journalNo',
+      label: '流水号',
+      kind: 'identifier',
+      widthPreset: 'identifier',
+      fixed: 'left'
+    },
+    { key: 'occurredAt', label: '发生时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'summary', label: '摘要', kind: 'text', widthPreset: 'longText' },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
     {
       key: 'actions',
       label: '操作',

@@ -38,7 +38,7 @@
           </article>
         </section>
         <el-table :data="detail.items" row-key="id" scrollbar-always-on show-overflow-tooltip>
-          <V2TableColumn kind="text" label="类型" min-width="135">
+          <V2TableColumn kind="text" label="类型" width-preset="wide">
             <template #default="{ row }">{{ ledgerTypeLabel(row.entryType) }}</template>
           </V2TableColumn>
           <V2TableColumn kind="numeric" label="余额变动" width-preset="standard">
@@ -58,7 +58,7 @@
               }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="原因" min-width="180">
+          <V2TableColumn kind="text" label="原因" width-preset="identifier">
             <template #default="{ row }">{{ row.reason || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="date" label="入账时间" width-preset="dateTime">

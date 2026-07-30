@@ -90,8 +90,8 @@
               <strong class="v2-account-losses__account">{{ row.appleIdMasked }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" prop="countryName" label="国家" min-width="110" />
-          <V2TableColumn kind="text" label="供应商" min-width="120">
+          <V2TableColumn kind="text" prop="countryName" label="国家" width-preset="compact" />
+          <V2TableColumn kind="text" label="供应商" width-preset="standard">
             <template #default="{ row }">{{ row.supplierName || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="status" width-preset="compact" label="销售状态">
@@ -133,10 +133,10 @@
             kind="text"
             prop="reason"
             label="报损原因"
-            min-width="220"
+            width-preset="longText"
             show-overflow-tooltip
           />
-          <V2TableColumn kind="text" label="操作人" min-width="120">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{
                 row.reportedByName || row.reportedBy?.displayName || row.reportedBy?.username || '—'

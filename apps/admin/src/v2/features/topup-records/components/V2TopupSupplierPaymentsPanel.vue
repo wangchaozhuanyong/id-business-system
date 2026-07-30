@@ -141,7 +141,7 @@
           >
             <template #default="{ row }">¥{{ formatDecimal(row.creditedCny) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商余额快照" min-width="190">
+          <V2TableColumn kind="numeric" label="供应商余额快照" width-preset="identifier">
             <template #default="{ row }">
               <span v-if="row.balanceBeforeCny !== null && row.balanceAfterCny !== null">
                 ¥{{ formatDecimal(row.balanceBeforeCny) }} → ¥{{
@@ -151,7 +151,7 @@
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="网络和交易哈希" min-width="210">
+          <V2TableColumn kind="text" label="网络和交易哈希" width-preset="longText">
             <template #default="{ row }">
               <div class="v2-payment-chain">
                 <span>{{ row.network || '—' }}</span>
@@ -184,10 +184,10 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="备注" min-width="150">
+          <V2TableColumn kind="text" label="备注" width-preset="wide">
             <template #default="{ row }">{{ row.remark || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" min-width="120">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>
