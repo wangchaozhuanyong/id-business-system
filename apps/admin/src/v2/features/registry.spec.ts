@@ -28,7 +28,7 @@ describe('V2 feature registry', () => {
   it('keeps planned modules explicit and free of fake table configuration', () => {
     const plannedFeatures = v2FeatureRegistry.filter((feature) => feature.status === 'planned');
 
-    expect(plannedFeatures).toHaveLength(9);
+    expect(plannedFeatures).toHaveLength(7);
     for (const feature of plannedFeatures) {
       expect(feature.kind).toBe('planned');
       expect(feature.summary).toBeTruthy();
@@ -36,6 +36,30 @@ describe('V2 feature registry', () => {
       expect(feature.filters).toEqual([]);
       expect(feature.columns).toEqual([]);
     }
+  });
+
+  it('registers employee accounts as an administrator-only real module', () => {
+    const employees = v2FeatureRegistry.find((feature) => feature.key === 'employees');
+
+    expect(employees).toMatchObject({
+      kind: 'list',
+      requiredRoles: ['admin']
+    });
+    expect(employees?.status).not.toBe('planned');
+    expect(employees?.filters.length).toBeGreaterThan(0);
+    expect(employees?.columns.length).toBeGreaterThan(0);
+  });
+
+  it('registers role permissions as an administrator-only real module', () => {
+    const roles = v2FeatureRegistry.find((feature) => feature.key === 'roles');
+
+    expect(roles).toMatchObject({
+      kind: 'list',
+      requiredRoles: ['admin']
+    });
+    expect(roles?.status).not.toBe('planned');
+    expect(roles?.filters.length).toBeGreaterThan(0);
+    expect(roles?.columns.length).toBeGreaterThan(0);
   });
 
   it('derives navigation from the same registered feature objects', () => {

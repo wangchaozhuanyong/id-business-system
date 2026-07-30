@@ -1,14 +1,15 @@
 import { ForbiddenException } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
-import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './auth.decorators';
+import { IS_PUBLIC_KEY, PERMISSIONS_KEY, REQUIRED_ROLES_KEY } from './auth.decorators';
 import { PermissionsGuard } from './permissions.guard';
 
-function createGuard(requiredPermissions: string[]) {
+function createGuard(requiredPermissions: string[] = [], requiredRoles: string[] = []) {
   const reflector = {
     getAllAndOverride: jest.fn((key: string) => {
       if (key === IS_PUBLIC_KEY) return false;
       if (key === PERMISSIONS_KEY) return requiredPermissions;
+      if (key === REQUIRED_ROLES_KEY) return requiredRoles;
       return undefined;
     })
   } as unknown as Reflector;
@@ -67,5 +68,27 @@ describe('PermissionsGuard', () => {
     });
 
     expect(() => guard.canActivate(context)).toThrow(new ForbiddenException('Permission denied'));
+  });
+
+  it('allows a user with one of the required roles', () => {
+    const guard = createGuard([], ['admin']);
+    const context = createContext({
+      roles: ['admin'],
+      permissions: []
+    });
+
+    expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('rejects a user without any required role', () => {
+    const guard = createGuard([], ['admin']);
+    const context = createContext({
+      roles: ['operation'],
+      permissions: []
+    });
+
+    expect(() => guard.canActivate(context)).toThrow(
+      new ForbiddenException('Required role is missing')
+    );
   });
 });

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException
@@ -27,6 +28,13 @@ export interface SupabaseLoginResult {
   expiresAt: string;
   userId: string;
   sessionId: string;
+}
+
+export interface CreateManagedAuthUserInput {
+  email: string;
+  password: string;
+  username: string;
+  displayName: string;
 }
 
 const ACCESS_TOKEN_CACHE_TTL_MS = 30_000;
@@ -238,6 +246,39 @@ export class SupabaseAuthService {
     if (result.error) {
       throw new ServiceUnavailableException('Supabase 密码更新暂时不可用，请稍后重试。');
     }
+  }
+
+  async createManagedUser(input: CreateManagedAuthUserInput) {
+    const result = await this.createServiceClient().auth.admin.createUser({
+      email: input.email,
+      password: input.password,
+      email_confirm: true,
+      user_metadata: {
+        username: input.username,
+        display_name: input.displayName
+      }
+    });
+    if (result.error || !result.data.user) {
+      if (result.error?.status === 422) {
+        throw new ConflictException('Supabase 登录账号已存在。');
+      }
+      throw new ServiceUnavailableException('Supabase 员工账号暂时无法开通，请稍后重试。');
+    }
+    return {
+      authUserId: result.data.user.id
+    };
+  }
+
+  async deleteManagedUser(authUserId: string) {
+    const result = await this.createServiceClient().auth.admin.deleteUser(authUserId, false);
+    if (result.error && result.error.status !== 404) {
+      throw new ServiceUnavailableException('Supabase 员工账号清理失败，请联系管理员。');
+    }
+  }
+
+  invalidateAccessTokenCache() {
+    this.tokenIdentityCache.clear();
+    this.pendingAuthentications.clear();
   }
 
   async verifyCurrentPassword(userId: string, password: string) {

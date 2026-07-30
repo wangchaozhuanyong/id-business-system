@@ -5,6 +5,8 @@ import { getPagination, type PaginationQuery } from '../common/pagination';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { CreateAuditLogInput } from './audit-logs.types';
 
+type AuditLogClient = Pick<Prisma.TransactionClient, 'auditLog'>;
+
 interface ListAuditLogsQuery extends PaginationQuery {
   module?: string;
   action?: string;
@@ -28,8 +30,8 @@ export class AuditLogsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(input: CreateAuditLogInput) {
-    const log = await this.prisma.auditLog.create({
+  async create(input: CreateAuditLogInput, client: AuditLogClient = this.prisma) {
+    const log = await client.auditLog.create({
       data: {
         userId: input.userId,
         module: input.module,
