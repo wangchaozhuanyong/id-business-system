@@ -39,7 +39,7 @@
             <strong class="v2-topup-account v2-table-cell">{{ row.appleIdMasked }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="国家" min-width="105">
+        <V2TableColumn kind="text" label="国家" width-preset="compact">
           <template #default="{ row }">{{ row.country.name }}</template>
         </V2TableColumn>
         <V2TableColumn
@@ -54,7 +54,7 @@
         <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
           <template #default="{ row }">¥{{ page.formatDecimal(row.averageCost) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="加卡记录" min-width="125">
+        <V2TableColumn kind="text" label="加卡记录" width-preset="standard">
           <template #default="{ row }">
             <div class="v2-topup-record-links">
               <AppButton
@@ -79,7 +79,7 @@
             </div>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="余额流水" min-width="125">
+        <V2TableColumn kind="text" label="余额流水" width-preset="standard">
           <template #default="{ row }">
             <AppButton
               size="small"
@@ -108,7 +108,7 @@
         >
           <template #default="{ row }">{{ page.formatElapsed(row.updatedAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="当前业务" min-width="185">
+        <V2TableColumn kind="text" label="当前业务" width-preset="identifier">
           <template #default="{ row }">
             <div
               v-if="row.currentServices.length"

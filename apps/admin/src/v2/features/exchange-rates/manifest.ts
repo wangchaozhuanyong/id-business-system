@@ -15,16 +15,32 @@ export const exchangeRatesFeature = defineV2Feature({
     { key: 'recordedAt', label: '记录时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'recordedAt', label: '记录时间', kind: 'date', minWidth: 165, fixed: 'left' },
-    { key: 'binanceBuy', label: 'Binance 买入', kind: 'numeric', minWidth: 128 },
-    { key: 'binanceSell', label: 'Binance 卖出', kind: 'numeric', minWidth: 128 },
-    { key: 'okxBuy', label: 'OKX 买入', kind: 'numeric', minWidth: 128 },
-    { key: 'okxSell', label: 'OKX 卖出', kind: 'numeric', minWidth: 128 },
-    { key: 'averageBuyRate', label: '综合买入', kind: 'numeric', minWidth: 128 },
-    { key: 'averageSellRate', label: '综合卖出', kind: 'numeric', minWidth: 128 },
-    { key: 'midRate', label: '中间价', kind: 'numeric', minWidth: 128 },
-    { key: 'operator', label: '操作人', kind: 'text', minWidth: 120 },
-    { key: 'remark', label: '备注', kind: 'text', minWidth: 180 },
+    {
+      key: 'recordedAt',
+      label: '记录时间',
+      kind: 'date',
+      widthPreset: 'dateTime',
+      fixed: 'left'
+    },
+    { key: 'binanceBuy', label: 'Binance 买入', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'binanceSell', label: 'Binance 卖出', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'okxBuy', label: 'OKX 买入', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'okxSell', label: 'OKX 卖出', kind: 'numeric', widthPreset: 'standard' },
+    {
+      key: 'averageBuyRate',
+      label: '综合买入',
+      kind: 'numeric',
+      widthPreset: 'standard'
+    },
+    {
+      key: 'averageSellRate',
+      label: '综合卖出',
+      kind: 'numeric',
+      widthPreset: 'standard'
+    },
+    { key: 'midRate', label: '中间价', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'operator', label: '操作人', kind: 'text', widthPreset: 'standard' },
+    { key: 'remark', label: '备注', kind: 'text', widthPreset: 'identifier' },
     {
       key: 'actions',
       label: '操作',

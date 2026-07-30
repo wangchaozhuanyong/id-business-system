@@ -17,7 +17,7 @@
       v-if="optionsError"
       class="v2-quick-customer-options-error"
       type="warning"
-      title="客户来源、标签或业务选项暂时加载失败"
+      title="客户来源或标签选项暂时加载失败"
       description="仍可先填写基本资料并保存，也可以重试加载选项。"
       :closable="false"
       show-icon
@@ -63,6 +63,20 @@
         />
       </el-form-item>
 
+      <el-form-item label="QQ">
+        <el-input v-model="form.qq" maxlength="120" autocomplete="off" placeholder="输入 QQ 号" />
+      </el-form-item>
+
+      <el-form-item label="WhatsApp">
+        <el-input
+          v-model="form.whatsapp"
+          maxlength="40"
+          inputmode="tel"
+          autocomplete="off"
+          placeholder="输入 WhatsApp 号码"
+        />
+      </el-form-item>
+
       <el-form-item label="客户来源">
         <el-select
           v-model="form.sourceOptionId"
@@ -92,25 +106,6 @@
         >
           <el-option
             v-for="option in tagOptions"
-            :key="option.id"
-            :label="option.name"
-            :value="option.id"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="常用业务">
-        <el-select
-          v-model="form.serviceOptionIds"
-          multiple
-          filterable
-          collapse-tags
-          collapse-tags-tooltip
-          :loading="optionsLoading"
-          placeholder="选择常用业务"
-        >
-          <el-option
-            v-for="option in serviceOptions"
             :key="option.id"
             :label="option.name"
             :value="option.id"
@@ -169,7 +164,6 @@ const optionsResolved = ref(false);
 const optionsError = ref('');
 const sourceOptions = ref<V2OptionSelector[]>([]);
 const tagOptions = ref<V2OptionSelector[]>([]);
-const serviceOptions = ref<V2OptionSelector[]>([]);
 
 const rules: FormRules = {
   name: [
@@ -211,7 +205,6 @@ async function loadOptions() {
     });
     sourceOptions.value = result.options.sources;
     tagOptions.value = result.options.tags;
-    serviceOptions.value = result.options.services;
     optionsResolved.value = true;
   } catch (error) {
     optionsError.value = getApiErrorMessage(error);

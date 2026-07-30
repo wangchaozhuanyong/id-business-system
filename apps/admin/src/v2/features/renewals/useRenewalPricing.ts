@@ -61,6 +61,7 @@ export function useRenewalPricing(
         })
       : {
           amount: null,
+          exactAmount: null,
           platformFee: null,
           estimatedProfit: null,
           estimatedProfitRate: null,

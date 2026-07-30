@@ -49,7 +49,7 @@ export function createInitialOrderEntryForm() {
 export type V2OrderEntryForm = ReturnType<typeof createInitialOrderEntryForm>;
 
 export function customerLabel(customer: V2OrderEntryCustomer) {
-  const detail = customer.wechat || customer.maskedPhone;
+  const detail = customer.wechat || customer.qq || customer.maskedWhatsapp || customer.maskedPhone;
   return detail ? `${customer.name} / ${detail}` : customer.name;
 }
 

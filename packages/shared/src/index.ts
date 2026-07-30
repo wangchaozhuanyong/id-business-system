@@ -75,6 +75,7 @@ export {
   type V2FinanceSupplierLedgerEntry,
   type V2FinanceSupplierLedgerPage,
   type V2FinanceSupplierWallet,
+  type V2OrderReceiptFxQuote,
   type V2SettlementPlatformOriginalAmount,
   type V2SettlementPlatformReport,
   type V2SettlementPlatformReportRow

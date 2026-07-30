@@ -11,9 +11,8 @@ export async function getIdBusinessV2OrderEntryOptions(
   customerKeywordValue?: string
 ) {
   const customerKeyword = normalizeOptionalString(customerKeywordValue, '客户搜索', 160);
-  const phoneHash = customerKeyword
-    ? fieldEncryptionService.hash(customerKeyword.replace(/\s+/g, ''))
-    : null;
+  const normalizedContact = customerKeyword ? customerKeyword.replace(/[\s()-]/g, '') : null;
+  const contactHash = fieldEncryptionService.hash(normalizedContact);
   const [customers, countries, categories, services, settlementPlatforms] =
     await prisma.$transaction([
       prisma.idBusinessV2Customer.findMany({
@@ -24,13 +23,21 @@ export async function getIdBusinessV2OrderEntryOptions(
             ? [
                 { name: { contains: customerKeyword, mode: 'insensitive' } },
                 { wechat: { contains: customerKeyword, mode: 'insensitive' } },
+                { qq: { contains: customerKeyword, mode: 'insensitive' } },
                 {
                   phoneTail: {
-                    contains: customerKeyword.slice(-8),
+                    contains: normalizedContact?.slice(-8) ?? customerKeyword,
                     mode: 'insensitive'
                   }
                 },
-                { phoneHash: phoneHash ?? undefined }
+                { phoneHash: contactHash ?? undefined },
+                {
+                  whatsappTail: {
+                    contains: normalizedContact?.slice(-8) ?? customerKeyword,
+                    mode: 'insensitive'
+                  }
+                },
+                { whatsappHash: contactHash ?? undefined }
               ]
             : undefined
         },
@@ -38,7 +45,9 @@ export async function getIdBusinessV2OrderEntryOptions(
           id: true,
           name: true,
           wechat: true,
-          phoneMasked: true
+          qq: true,
+          phoneMasked: true,
+          whatsappMasked: true
         },
         take: MAX_CUSTOMERS,
         orderBy: [{ name: 'asc' }, { id: 'asc' }]
@@ -104,7 +113,9 @@ export async function getIdBusinessV2OrderEntryOptions(
       id: customer.id,
       name: customer.name,
       wechat: customer.wechat,
-      maskedPhone: customer.phoneMasked
+      qq: customer.qq,
+      maskedPhone: customer.phoneMasked,
+      maskedWhatsapp: customer.whatsappMasked
     })),
     countries: countries.map((country) => ({
       ...country,

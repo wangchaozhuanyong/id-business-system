@@ -13,13 +13,13 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from './api';
 import type {
-  CreateV2CustomerInput,
   V2Customer,
   V2CustomerListQuery,
   V2CustomerListResult,
   V2OptionSelector,
   V2RecordStatus
 } from './contracts';
+import { createCustomerPayload, type CustomerFormState } from './customer-form';
 
 interface CustomersReferenceOptions {
   sources: V2OptionSelector[];
@@ -35,27 +35,17 @@ interface CustomersPageSnapshot {
 const CUSTOMERS_OPTIONS_SCOPE = 'customers-options';
 const CUSTOMERS_OPTIONS_KEY = 'selectors';
 
-interface CustomerFormState {
-  name: string;
-  phone: string;
-  clearPhone: boolean;
-  wechat: string;
-  sourceOptionId: string;
-  tagOptionIds: string[];
-  serviceOptionIds: string[];
-  active: boolean;
-  remark: string;
-}
-
 function emptyForm(): CustomerFormState {
   return {
     name: '',
     phone: '',
     clearPhone: false,
     wechat: '',
+    qq: '',
+    whatsapp: '',
+    clearWhatsapp: false,
     sourceOptionId: '',
     tagOptionIds: [],
-    serviceOptionIds: [],
     active: true,
     remark: ''
   };
@@ -75,6 +65,7 @@ export function useCustomersPage() {
   const deleteDialogVisible = ref(false);
   const deleting = ref(false);
   const revealTarget = ref<V2Customer | null>(null);
+  const revealField = ref<'phone' | 'whatsapp'>('phone');
   const revealDialogVisible = ref(false);
   const revealing = ref(false);
   const formRef = ref<FormInstance>();
@@ -86,6 +77,7 @@ export function useCustomersPage() {
     keyword: '',
     sourceOptionId: '',
     tagOptionId: '',
+    serviceOptionId: '',
     recordStatus: '' as V2RecordStatus | '',
     sortBy: 'updatedAt' as 'name' | 'wechat' | 'recordStatus' | 'createdAt' | 'updatedAt',
     sortOrder: 'desc' as 'asc' | 'desc'
@@ -95,13 +87,13 @@ export function useCustomersPage() {
   const revealForm = reactive({
     reason: '',
     approvalId: '',
-    phone: ''
+    value: ''
   });
 
   const canCreate = computed(() => hasUserPermission(authStore.user, 'customer.create'));
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'customer.update'));
   const canDelete = computed(() => hasUserPermission(authStore.user, 'customer.delete'));
-  const canRevealPhone = computed(() => hasUserPermission(authStore.user, 'customer.view_phone'));
+  const canRevealContact = computed(() => hasUserPermission(authStore.user, 'customer.view_phone'));
 
   const formRules: FormRules<CustomerFormState> = {
     name: [
@@ -142,6 +134,7 @@ export function useCustomersPage() {
       keyword: query.keyword.trim() || undefined,
       sourceOptionId: query.sourceOptionId || undefined,
       tagOptionId: query.tagOptionId || undefined,
+      serviceOptionId: query.serviceOptionId || undefined,
       recordStatus: query.recordStatus || undefined
     };
   }
@@ -248,9 +241,11 @@ export function useCustomersPage() {
       phone: '',
       clearPhone: false,
       wechat: item.wechat ?? '',
+      qq: item.qq ?? '',
+      whatsapp: '',
+      clearWhatsapp: false,
       sourceOptionId: item.sourceOptionId ?? '',
       tagOptionIds: [...item.tagOptionIds],
-      serviceOptionIds: [...item.serviceOptionIds],
       active: item.recordStatus === 'active',
       remark: item.remark ?? ''
     });
@@ -260,20 +255,7 @@ export function useCustomersPage() {
   async function submitForm() {
     if (!(await validateV2Form(formRef.value))) return;
 
-    const payload: CreateV2CustomerInput = {
-      name: form.name.trim(),
-      wechat: form.wechat.trim() || null,
-      sourceOptionId: form.sourceOptionId || null,
-      tagOptionIds: form.tagOptionIds,
-      serviceOptionIds: form.serviceOptionIds,
-      recordStatus: form.active ? 'active' : 'disabled',
-      remark: form.remark.trim() || null
-    };
-    if (!editingItem.value || form.phone.trim()) {
-      payload.phone = form.phone.trim() || null;
-    } else if (form.clearPhone) {
-      payload.phone = null;
-    }
+    const payload = createCustomerPayload(form, editingItem.value);
 
     saving.value = true;
     try {
@@ -305,25 +287,43 @@ export function useCustomersPage() {
     }
   }
 
-  function openRevealPhone(item: V2Customer) {
+  function openRevealContact(item: V2Customer, field: 'phone' | 'whatsapp') {
     revealTarget.value = item;
+    revealField.value = field;
     Object.assign(revealForm, {
       reason: '',
       approvalId: '',
-      phone: ''
+      value: ''
     });
     revealDialogVisible.value = true;
   }
 
-  async function revealPhone() {
+  function openRevealPhone(item: V2Customer) {
+    openRevealContact(item, 'phone');
+  }
+
+  function openRevealWhatsapp(item: V2Customer) {
+    openRevealContact(item, 'whatsapp');
+  }
+
+  async function revealContact() {
     if (!revealTarget.value || !(await validateV2Form(revealFormRef.value))) return;
     revealing.value = true;
     try {
-      const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, {
+      const payload = {
         reason: revealForm.reason.trim(),
         approvalId: revealForm.approvalId.trim() || null
-      });
-      revealForm.phone = result.phone;
+      };
+      if (revealField.value === 'phone') {
+        const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, payload);
+        revealForm.value = result.phone;
+      } else {
+        const result = await idBusinessV2CustomersApi.revealWhatsapp(
+          revealTarget.value.id,
+          payload
+        );
+        revealForm.value = result.whatsapp;
+      }
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -382,6 +382,7 @@ export function useCustomersPage() {
     deleteDialogVisible,
     deleting,
     revealTarget,
+    revealField,
     revealDialogVisible,
     revealing,
     formRef,
@@ -392,7 +393,7 @@ export function useCustomersPage() {
     canCreate,
     canUpdate,
     canDelete,
-    canRevealPhone,
+    canRevealContact,
     formRules,
     revealRules,
     hasLoadedOnce,
@@ -409,7 +410,8 @@ export function useCustomersPage() {
     submitForm,
     toggleStatus,
     openRevealPhone,
-    revealPhone,
+    openRevealWhatsapp,
+    revealContact,
     openDelete,
     confirmDelete,
     selectorLabel,

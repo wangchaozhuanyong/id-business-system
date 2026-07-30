@@ -210,7 +210,7 @@
                   ><strong>{{ row.categoryName }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="text" label="付款账户" min-width="160">
+              <V2TableColumn kind="text" label="付款账户" width-preset="wide">
                 <template #default="{ row }">{{ row.financeAccountName }}</template>
               </V2TableColumn>
               <V2TableColumn kind="numeric" label="原币金额" width-preset="standard">
@@ -224,10 +224,10 @@
               <V2TableColumn kind="numeric" label="人民币金额" width-preset="standard">
                 <template #default="{ row }">{{ formatCny(row.amountCny) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="收款方" min-width="150">
+              <V2TableColumn kind="text" label="收款方" width-preset="wide">
                 <template #default="{ row }">{{ row.payee || '—' }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="备注" min-width="200">
+              <V2TableColumn kind="text" label="备注" width-preset="longText">
                 <template #default="{ row }">{{ row.remark || '—' }}</template>
               </V2TableColumn>
             </el-table>
@@ -276,13 +276,13 @@
               <V2TableColumn kind="date" label="发生时间" width-preset="dateTime">
                 <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="status" label="业务类型" min-width="150">
+              <V2TableColumn kind="status" label="业务类型" width-preset="wide">
                 <template #default="{ row }">
                   <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="摘要" min-width="220" prop="summary" />
-              <V2TableColumn kind="identifier" label="来源" min-width="170">
+              <V2TableColumn kind="text" label="摘要" width-preset="longText" prop="summary" />
+              <V2TableColumn kind="identifier" label="来源" width-preset="identifier">
                 <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
               </V2TableColumn>
               <V2TableColumn kind="status" label="状态" width-preset="compact">
@@ -382,7 +382,7 @@
               <V2TableColumn kind="date" label="重开时间" width-preset="dateTime">
                 <template #default="{ row }">{{ formatDate(row.reopenedAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="重开原因" min-width="220">
+              <V2TableColumn kind="text" label="重开原因" width-preset="longText">
                 <template #default="{ row }">{{ row.reopenReason || '—' }}</template>
               </V2TableColumn>
               <V2TableActionColumn v-if="page.canClose" layout="single">

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { IdBusinessV2BinanceOtcCollector } from './id-business-v2-binance-otc.collector';
 import { IdBusinessV2ExchangeRateCronService } from './id-business-v2-exchange-rate-cron.service';
+import { IdBusinessV2ExchangeRateOrderQuoteService } from './id-business-v2-exchange-rate-order-quote.service';
 import { IdBusinessV2ExchangeRatePersistenceService } from './id-business-v2-exchange-rate-persistence.service';
 import { IdBusinessV2ExchangeRateQueryService } from './id-business-v2-exchange-rate-query.service';
 import { IdBusinessV2ExchangeRateRetentionService } from './id-business-v2-exchange-rate-retention.service';
@@ -23,6 +24,7 @@ import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.ser
     IdBusinessV2ExchangeRateSettingsService,
     IdBusinessV2ExchangeRatePersistenceService,
     IdBusinessV2ExchangeRateQueryService,
+    IdBusinessV2ExchangeRateOrderQuoteService,
     IdBusinessV2ExchangeRateWorker,
     IdBusinessV2ExchangeRateRetentionService,
     IdBusinessV2ExchangeRateCronService
@@ -30,7 +32,8 @@ import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.ser
   exports: [
     IdBusinessV2ExchangeRatesService,
     IdBusinessV2ExchangeRateQueryService,
-    IdBusinessV2ExchangeRateSettingsService
+    IdBusinessV2ExchangeRateSettingsService,
+    IdBusinessV2ExchangeRateOrderQuoteService
   ]
 })
 export class IdBusinessV2ExchangeRatesModule {}

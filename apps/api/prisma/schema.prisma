@@ -70,6 +70,11 @@ enum IdBusinessV2RecordStatus {
   disabled
 }
 
+enum IdBusinessV2CustomerServiceSource {
+  manual_legacy
+  activation
+}
+
 enum IdBusinessV2GiftCardStatus {
   credited
   redeemed
@@ -536,21 +541,26 @@ model IdBusinessV2Option {
 }
 
 model IdBusinessV2Customer {
-  id              String                   @id @default(uuid()) @db.Uuid
-  name            String                   @db.VarChar(120)
-  phoneEncrypted  String?                  @map("phone_encrypted") @db.Text
-  phoneHash       String?                  @map("phone_hash") @db.VarChar(64)
-  phoneMasked     String?                  @map("phone_masked") @db.VarChar(80)
-  phoneTail       String?                  @map("phone_tail") @db.VarChar(8)
-  wechat          String?                  @db.VarChar(120)
-  sourceOptionId  String?                  @map("source_option_id") @db.Uuid
-  recordStatus    IdBusinessV2RecordStatus @default(active) @map("record_status")
-  remark          String?                  @db.Text
-  createdByUserId String?                  @map("created_by_user_id") @db.Uuid
-  updatedByUserId String?                  @map("updated_by_user_id") @db.Uuid
-  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt       DateTime?                @map("deleted_at") @db.Timestamptz(6)
+  id                String                   @id @default(uuid()) @db.Uuid
+  name              String                   @db.VarChar(120)
+  phoneEncrypted    String?                  @map("phone_encrypted") @db.Text
+  phoneHash         String?                  @map("phone_hash") @db.VarChar(64)
+  phoneMasked       String?                  @map("phone_masked") @db.VarChar(80)
+  phoneTail         String?                  @map("phone_tail") @db.VarChar(8)
+  wechat            String?                  @db.VarChar(120)
+  qq                String?                  @db.VarChar(120)
+  whatsappEncrypted String?                  @map("whatsapp_encrypted") @db.Text
+  whatsappHash      String?                  @map("whatsapp_hash") @db.VarChar(64)
+  whatsappMasked    String?                  @map("whatsapp_masked") @db.VarChar(80)
+  whatsappTail      String?                  @map("whatsapp_tail") @db.VarChar(8)
+  sourceOptionId    String?                  @map("source_option_id") @db.Uuid
+  recordStatus      IdBusinessV2RecordStatus @default(active) @map("record_status")
+  remark            String?                  @db.Text
+  createdByUserId   String?                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId   String?                  @map("updated_by_user_id") @db.Uuid
+  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime?                @map("deleted_at") @db.Timestamptz(6)
 
   sourceOption IdBusinessV2Option?           @relation("IdBusinessV2CustomerSource", fields: [sourceOptionId], references: [id], onDelete: Restrict)
   tags         IdBusinessV2CustomerTag[]
@@ -563,6 +573,9 @@ model IdBusinessV2Customer {
   @@index([name])
   @@index([phoneHash])
   @@index([phoneTail])
+  @@index([qq])
+  @@index([whatsappHash])
+  @@index([whatsappTail])
   @@index([sourceOptionId])
   @@index([recordStatus, updatedAt])
   @@index([deletedAt])
@@ -583,15 +596,21 @@ model IdBusinessV2CustomerTag {
 }
 
 model IdBusinessV2CustomerService {
-  customerId String   @map("customer_id") @db.Uuid
-  optionId   String   @map("option_id") @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  customerId      String                            @map("customer_id") @db.Uuid
+  optionId        String                            @map("option_id") @db.Uuid
+  source          IdBusinessV2CustomerServiceSource @default(manual_legacy)
+  firstOpenedAt   DateTime?                         @map("first_opened_at") @db.Timestamptz(6)
+  lastOpenedAt    DateTime?                         @map("last_opened_at") @db.Timestamptz(6)
+  activationCount Int                               @default(0) @map("activation_count")
+  createdAt       DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
 
   customer IdBusinessV2Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   option   IdBusinessV2Option   @relation(fields: [optionId], references: [id], onDelete: Restrict)
 
   @@id([customerId, optionId])
   @@index([optionId])
+  @@index([source, optionId])
+  @@index([customerId, source, lastOpenedAt])
   @@map("id_business_v2_customer_services")
 }
 

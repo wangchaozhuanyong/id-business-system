@@ -26,20 +26,38 @@ export const topupRecordsFeature = defineV2Feature({
     { key: 'changedAt', label: '变动时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'rowNumber', label: '序号', kind: 'index', minWidth: 72 },
-    { key: 'giftCardCode', label: '礼品卡号', kind: 'identifier', minWidth: 192 },
-    { key: 'faceValue', label: '面值', kind: 'numeric', minWidth: 112 },
-    { key: 'exchangeRate', label: '卡片汇率', kind: 'numeric', minWidth: 112 },
-    { key: 'costAmount', label: '本次人民币成本', kind: 'numeric', minWidth: 136 },
-    { key: 'account', label: '加入 ID', kind: 'identifier', minWidth: 192 },
-    { key: 'country', label: '国家', kind: 'text', minWidth: 110 },
-    { key: 'supplier', label: '供应商', kind: 'text', minWidth: 120 },
-    { key: 'balanceBefore', label: 'ID 加卡前余额', kind: 'numeric', minWidth: 136 },
-    { key: 'balanceAfter', label: 'ID 加卡后余额', kind: 'numeric', minWidth: 136 },
-    { key: 'supplierBalanceBefore', label: '供应商扣款前余额', kind: 'numeric', minWidth: 152 },
-    { key: 'supplierBalanceAfter', label: '供应商扣款后余额', kind: 'numeric', minWidth: 152 },
-    { key: 'changedAt', label: '加卡时间', kind: 'date', minWidth: 165 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
+    { key: 'rowNumber', label: '序号', kind: 'index', widthPreset: 'index' },
+    {
+      key: 'giftCardCode',
+      label: '礼品卡号',
+      kind: 'identifier',
+      widthPreset: 'identifier'
+    },
+    { key: 'faceValue', label: '面值', kind: 'numeric', widthPreset: 'compact' },
+    { key: 'exchangeRate', label: '卡片汇率', kind: 'numeric', widthPreset: 'compact' },
+    {
+      key: 'costAmount',
+      label: '本次人民币成本',
+      kind: 'numeric',
+      widthPreset: 'wide'
+    },
+    { key: 'account', label: '加入 ID', kind: 'identifier', widthPreset: 'identifier' },
+    { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
+    { key: 'supplier', label: '供应商', kind: 'text', widthPreset: 'standard' },
+    {
+      key: 'balanceBefore',
+      label: 'ID 加卡前余额',
+      kind: 'numeric',
+      widthPreset: 'wide'
+    },
+    {
+      key: 'balanceAfter',
+      label: 'ID 加卡后余额',
+      kind: 'numeric',
+      widthPreset: 'wide'
+    },
+    { key: 'changedAt', label: '加卡时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
     {
       key: 'actions',
       label: '操作',

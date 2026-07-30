@@ -103,6 +103,13 @@ export function setV2RouteNavigationState(
   }
 }
 
+export function resetV2RouteNavigationState(path = '') {
+  mutableV2RouteNavigationState.path = path;
+  mutableV2RouteNavigationState.stablePath = '';
+  mutableV2RouteNavigationState.state = 'idle';
+  mutableV2RouteNavigationState.error = null;
+}
+
 export const v2Routes: RouteRecordRaw[] = [
   {
     path: '/v2',

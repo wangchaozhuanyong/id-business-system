@@ -173,7 +173,8 @@ describe('IdBusinessV2OrderEntryService', () => {
       id: null,
       rateToCny: new Prisma.Decimal(1),
       source: 'cny_fixed'
-    })
+    }),
+    quoteOrderRate: vi.fn()
   };
   const service = new IdBusinessV2OrderEntryService(
     prisma as never,
@@ -252,6 +253,23 @@ describe('IdBusinessV2OrderEntryService', () => {
       status: 'pending',
       platformFeeAmount: '3'
     });
+    financeFxService.quoteOrderRate.mockResolvedValue({
+      snapshotId: '99999999-9999-4999-8999-999999999999',
+      currency: 'MYR',
+      rateToCny: '1.65',
+      source: 'ecb_cross',
+      capturedAt: openedAt,
+      expiresAt: dueAt
+    });
+  });
+
+  it('returns an automatic receipt quote for the requested order currency', async () => {
+    await expect(service.quoteReceiptFx({ currency: 'MYR' }, operator)).resolves.toMatchObject({
+      currency: 'MYR',
+      rateToCny: '1.65',
+      source: 'ecb_cross'
+    });
+    expect(financeFxService.quoteOrderRate).toHaveBeenCalledWith('MYR', operator);
   });
 
   it('creates a pending order and a real ID lock in one transaction with server-calculated fees', async () => {
@@ -558,7 +576,9 @@ describe('IdBusinessV2OrderEntryService', () => {
         id: customerId,
         name: '客户 A',
         wechat: 'customer-a',
-        phoneMasked: '138****5678'
+        qq: '10001',
+        phoneMasked: '138****5678',
+        whatsappMasked: '+60****5678'
       }
     ]);
     prisma.idBusinessV2Option.findMany
@@ -590,7 +610,9 @@ describe('IdBusinessV2OrderEntryService', () => {
           id: customerId,
           name: '客户 A',
           wechat: 'customer-a',
-          maskedPhone: '138****5678'
+          qq: '10001',
+          maskedPhone: '138****5678',
+          maskedWhatsapp: '+60****5678'
         }
       ],
       countries: [
@@ -632,7 +654,9 @@ describe('IdBusinessV2OrderEntryService', () => {
           id: true,
           name: true,
           wechat: true,
-          phoneMasked: true
+          qq: true,
+          phoneMasked: true,
+          whatsappMasked: true
         },
         take: 50
       })

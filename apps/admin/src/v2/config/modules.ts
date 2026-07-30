@@ -8,6 +8,7 @@ export type {
   V2NavigationSection,
   V2FreshnessPolicy,
   V2PlannedSectionDefinition,
+  V2TableDataColumnDefinition,
   V2TableColumnDefinition,
   V2TableColumnKind
 } from '@/v2/features/feature';

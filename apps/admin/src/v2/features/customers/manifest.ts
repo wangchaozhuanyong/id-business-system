@@ -11,7 +11,12 @@ export const customersFeature = defineV2Feature({
   kind: 'list',
   freshnessPolicy: 'event-driven',
   filters: [
-    { key: 'keyword', label: '搜索', kind: 'search', placeholder: '客户名称、手机、微信' },
+    {
+      key: 'keyword',
+      label: '搜索',
+      kind: 'search',
+      placeholder: '客户名称、手机、微信、QQ、WhatsApp'
+    },
     {
       key: 'source',
       label: '来源',
@@ -26,14 +31,21 @@ export const customersFeature = defineV2Feature({
     }
   ],
   columns: [
-    { key: 'name', label: '客户名称', kind: 'text', minWidth: 150 },
-    { key: 'phone', label: '手机号', kind: 'identifier', minWidth: 160 },
-    { key: 'wechat', label: '微信', kind: 'identifier', minWidth: 160 },
-    { key: 'source', label: '来源', kind: 'text', minWidth: 110 },
-    { key: 'tag', label: '标签', kind: 'text', minWidth: 110 },
-    { key: 'frequentService', label: '常开业务', kind: 'text', minWidth: 150 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
-    { key: 'updatedAt', label: '更新时间', kind: 'date', minWidth: 165 },
+    { key: 'name', label: '客户名称', kind: 'text', widthPreset: 'identifier' },
+    { key: 'phone', label: '手机号', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'wechat', label: '微信', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'qq', label: 'QQ', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'whatsapp', label: 'WhatsApp', kind: 'identifier', widthPreset: 'wide' },
+    { key: 'source', label: '来源', kind: 'text', widthPreset: 'standard' },
+    { key: 'tag', label: '标签', kind: 'text', widthPreset: 'identifier' },
+    {
+      key: 'historicalService',
+      label: '历史开通业务',
+      kind: 'text',
+      widthPreset: 'identifier'
+    },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
     {
       key: 'actions',
       label: '操作',

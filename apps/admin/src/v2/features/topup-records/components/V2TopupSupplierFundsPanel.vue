@@ -261,7 +261,7 @@
             <el-form-item label="折算人民币">
               <strong>¥{{ formatDecimal(paymentPreviewCny) }}</strong>
             </el-form-item>
-            <el-form-item label="网络手续费">
+            <el-form-item label="网络手续费 USDT">
               <el-input
                 v-model="paymentForm.networkFeeUsdt"
                 inputmode="decimal"

@@ -162,4 +162,16 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
       triggeredByUserId: operator.id
     });
   });
+
+  it('records an order-triggered refresh as a system collection', async () => {
+    const targetAmountRmb = new Prisma.Decimal('5000');
+    settings.getRecord.mockResolvedValue({ targetAmountRmb });
+
+    await worker.collectSystem();
+
+    expect(persistence.collectAndPersist).toHaveBeenCalledWith({
+      triggerType: 'system',
+      targetAmountRmb
+    });
+  });
 });

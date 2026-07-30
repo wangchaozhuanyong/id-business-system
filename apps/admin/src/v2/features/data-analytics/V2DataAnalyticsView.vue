@@ -318,13 +318,13 @@
             <V2TableColumn kind="date" label="发生时间" width-preset="dateTime">
               <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="status" label="业务类型" min-width="150">
+            <V2TableColumn kind="status" label="业务类型" width-preset="wide">
               <template #default="{ row }">
                 <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
               </template>
             </V2TableColumn>
-            <V2TableColumn kind="text" label="摘要" min-width="220" prop="summary" />
-            <V2TableColumn kind="identifier" label="来源单号" min-width="170">
+            <V2TableColumn kind="text" label="摘要" width-preset="longText" prop="summary" />
+            <V2TableColumn kind="identifier" label="来源单号" width-preset="identifier">
               <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
             </V2TableColumn>
             <V2TableColumn kind="numeric" label="人民币金额" width-preset="standard">

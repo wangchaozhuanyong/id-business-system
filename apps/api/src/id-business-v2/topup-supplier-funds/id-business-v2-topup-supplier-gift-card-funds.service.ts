@@ -3,7 +3,7 @@ import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal } from '../decimal-policy';
+import { roundV2Decimal, toV2Decimal } from '../decimal-policy';
 import { IdBusinessV2TopupSupplierFundsSupport } from './id-business-v2-topup-supplier-funds-support';
 
 interface GiftCardFundInput {
@@ -36,10 +36,12 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
       where: { idempotencyKey }
     });
     if (replay) {
+      const replayAmount = toV2Decimal(replay.amount);
+      const replayAmountCny = toV2Decimal(replay.amountCny);
       if (
         replay.currency !== currency ||
-        !replay.amount.eq(amountOriginal) ||
-        !replay.amountCny.eq(amountCny)
+        !replayAmount.eq(amountOriginal) ||
+        !replayAmountCny.eq(amountCny)
       ) {
         throw new ConflictException('礼品卡供应商扣款请求与已入账内容不一致');
       }
@@ -119,10 +121,11 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
     if (!debitEntry) return null;
 
     const account = await this.lockSupplierAccountById(tx, debitEntry.supplierAccountId);
-    const debitAmount = debitEntry.amount ?? debitEntry.amountCny;
+    const debitAmount = roundV2Decimal(debitEntry.amount ?? debitEntry.amountCny);
+    const debitAmountCny = roundV2Decimal(debitEntry.amountCny);
     const balanceBefore = account.currentBalance ?? account.currentBalanceCny;
     const balanceAfter = roundV2Decimal(balanceBefore.add(debitAmount));
-    const balanceAfterCny = roundV2Decimal(account.currentBalanceCny.add(debitEntry.amountCny));
+    const balanceAfterCny = roundV2Decimal(account.currentBalanceCny.add(debitAmountCny));
     const entry = await tx.idBusinessV2TopupSupplierLedger.create({
       data: {
         supplierAccountId: account.id,
@@ -133,7 +136,7 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
         amount: debitAmount,
         balanceBefore,
         balanceAfter,
-        amountCny: debitEntry.amountCny,
+        amountCny: debitAmountCny,
         balanceBeforeCny: account.currentBalanceCny,
         balanceAfterCny,
         supplierNameSnapshot: account.supplierName,

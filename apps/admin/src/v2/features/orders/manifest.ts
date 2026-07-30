@@ -32,19 +32,35 @@ export const ordersFeature = defineV2Feature({
     { key: 'openedAt', label: '开通时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'orderNo', label: '订单', kind: 'identifier', minWidth: 192 },
-    { key: 'createdAt', label: '创建时间', kind: 'date', minWidth: 165 },
-    { key: 'customer', label: '客户', kind: 'text', minWidth: 140 },
-    { key: 'service', label: '业务', kind: 'text', minWidth: 140 },
-    { key: 'account', label: '使用 ID', kind: 'identifier', minWidth: 192 },
-    { key: 'accountDisposition', label: 'ID 处理状态', kind: 'status', minWidth: 128 },
-    { key: 'appliedAccountCostAmount', label: '本单 ID 成本', kind: 'numeric', minWidth: 128 },
-    { key: 'websiteAccount', label: '客户网站账号', kind: 'identifier', minWidth: 160 },
-    { key: 'receivedAmount', label: '实收金额', kind: 'numeric', minWidth: 128 },
-    { key: 'profit', label: '利润', kind: 'numeric', minWidth: 128 },
-    { key: 'openedAt', label: '开通时间', kind: 'date', minWidth: 165 },
-    { key: 'dueAt', label: '到期时间', kind: 'date', minWidth: 165 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
+    { key: 'orderNo', label: '订单', kind: 'identifier', widthPreset: 'identifier' },
+    { key: 'createdAt', label: '创建时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'customer', label: '客户', kind: 'text', widthPreset: 'wide' },
+    { key: 'service', label: '业务', kind: 'text', widthPreset: 'wide' },
+    { key: 'account', label: '使用 ID', kind: 'identifier', widthPreset: 'identifier' },
+    {
+      key: 'accountDisposition',
+      label: 'ID 处理状态',
+      kind: 'status',
+      widthPreset: 'standard'
+    },
+    {
+      key: 'appliedAccountCostAmount',
+      label: '本单 ID 成本',
+      kind: 'numeric',
+      widthPreset: 'standard'
+    },
+    {
+      key: 'websiteAccount',
+      label: '客户网站账号',
+      kind: 'identifier',
+      widthPreset: 'wide'
+    },
+    { key: 'receivedAmount', label: '实收金额', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'profit', label: '利润', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'profitRate', label: '利润率', kind: 'numeric', widthPreset: 'standard' },
+    { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
     {
       key: 'actions',
       label: '操作',

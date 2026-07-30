@@ -192,6 +192,15 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
   }
 
   function resetCandidateSelection() {
+    if (matchingTimer) {
+      clearTimeout(matchingTimer);
+      matchingTimer = undefined;
+    }
+    if (manualSearchTimer) {
+      clearTimeout(manualSearchTimer);
+      manualSearchTimer = undefined;
+    }
+    resumeCandidateMatch = false;
     idSelectionMode.value = 'auto';
     manualSearchKeyword.value = '';
     clearCandidates();

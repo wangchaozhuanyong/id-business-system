@@ -19,12 +19,23 @@ export const dataAnalyticsFeature = defineV2Feature({
     { key: 'financeAccount', label: '资金账户', kind: 'select' }
   ],
   columns: [
-    { key: 'journalNo', label: '财务流水号', kind: 'text', minWidth: 190, fixed: 'left' },
-    { key: 'occurredAt', label: '发生时间', kind: 'date', minWidth: 165 },
-    { key: 'journalType', label: '业务类型', kind: 'status', minWidth: 150 },
-    { key: 'summary', label: '摘要', kind: 'text', minWidth: 220 },
-    { key: 'sourceReference', label: '来源单号', kind: 'text', minWidth: 170 },
-    { key: 'amountCny', label: '人民币金额', kind: 'numeric', minWidth: 140 }
+    {
+      key: 'journalNo',
+      label: '财务流水号',
+      kind: 'identifier',
+      widthPreset: 'identifier',
+      fixed: 'left'
+    },
+    { key: 'occurredAt', label: '发生时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'journalType', label: '业务类型', kind: 'status', widthPreset: 'wide' },
+    { key: 'summary', label: '摘要', kind: 'text', widthPreset: 'longText' },
+    {
+      key: 'sourceReference',
+      label: '来源单号',
+      kind: 'identifier',
+      widthPreset: 'identifier'
+    },
+    { key: 'amountCny', label: '人民币金额', kind: 'numeric', widthPreset: 'wide' }
   ],
   loadView: () => import('./V2DataAnalyticsView.vue')
 });

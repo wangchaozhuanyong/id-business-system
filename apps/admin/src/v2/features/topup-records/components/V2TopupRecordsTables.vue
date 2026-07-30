@@ -65,7 +65,7 @@
           >
             <template #default="{ row }">¥{{ formatDecimal(row.costAmount) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="实际付款" min-width="135">
+          <V2TableColumn kind="numeric" label="实际付款" width-preset="wide">
             <template #default="{ row }">
               {{ formatDecimal(row.purchaseOriginalAmount) }} {{ row.purchaseCurrency }}
             </template>
@@ -83,10 +83,10 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="105">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.country.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="供应商" min-width="125">
+          <V2TableColumn kind="text" label="供应商" width-preset="standard">
             <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡前余额">
@@ -99,25 +99,7 @@
               {{ formatOptionalDecimal(row.creditedLedger?.balanceAfter) }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款前余额" min-width="150">
-            <template #default="{ row }">
-              {{
-                row.supplierFunding
-                  ? `¥${formatDecimal(row.supplierFunding.balanceBeforeCny)}`
-                  : '—（切账前）'
-              }}
-            </template>
-          </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款后余额" min-width="150">
-            <template #default="{ row }">
-              {{
-                row.supplierFunding
-                  ? `¥${formatDecimal(row.supplierFunding.balanceAfterCny)}`
-                  : '—（切账前）'
-              }}
-            </template>
-          </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" min-width="115">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
             </template>
@@ -234,18 +216,6 @@
                   {{ formatOptionalDecimal(item.creditedLedger?.balanceAfter) }}
                 </dd>
               </div>
-              <div>
-                <dt>供应商余额</dt>
-                <dd>
-                  {{
-                    item.supplierFunding
-                      ? `¥${formatDecimal(item.supplierFunding.balanceBeforeCny)} → ¥${formatDecimal(
-                          item.supplierFunding.balanceAfterCny
-                        )}`
-                      : '—（切账前）'
-                  }}
-                </dd>
-              </div>
             </dl>
             <footer>
               <span>{{ formatDate(item.createdAt) }}</span>
@@ -333,7 +303,13 @@
           <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
             <template #default="{ $index }">{{ ledgerRowNumber($index) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="变动类型" min-width="125" fixed="left">
+          <V2TableColumn
+            kind="text"
+            label="变动类型"
+            width-preset="standard"
+            width-mode="fixed"
+            fixed="left"
+          >
             <template #default="{ row }">
               <el-tag :type="ledgerTypeTag(row.entryType)" effect="plain">
                 {{ ledgerTypeLabel(row.entryType) }}
@@ -346,7 +322,7 @@
           <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="105">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.account.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn
@@ -390,14 +366,14 @@
           <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
             <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter) }} </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="关联" min-width="105">
+          <V2TableColumn kind="text" label="冲正状态" width-preset="compact">
             <template #default="{ row }">
               <el-tag v-if="row.reversalOf" type="warning" effect="plain">反向流水</el-tag>
               <el-tag v-else-if="row.reversedBy" type="info" effect="plain">已反冲</el-tag>
-              <span v-else>—</span>
+              <span v-else>正常</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" min-width="115">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>
@@ -443,11 +419,17 @@
                 <dt>平均成本</dt>
                 <dd>¥{{ formatDecimal(item.averageCostAfter) }}</dd>
               </div>
+              <div>
+                <dt>冲正状态</dt>
+                <dd>
+                  <el-tag v-if="item.reversalOf" type="warning" effect="plain">反向流水</el-tag>
+                  <el-tag v-else-if="item.reversedBy" type="info" effect="plain">已反冲</el-tag>
+                  <span v-else>正常</span>
+                </dd>
+              </div>
             </dl>
             <footer>
               <span>{{ formatDate(item.createdAt) }}</span>
-              <el-tag v-if="item.reversalOf" type="warning" effect="plain">反向流水</el-tag>
-              <el-tag v-else-if="item.reversedBy" type="info" effect="plain">已反冲</el-tag>
             </footer>
           </article>
           <div v-if="!ledgerEntries.length" class="v2-records-empty">

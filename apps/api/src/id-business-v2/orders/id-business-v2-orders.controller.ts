@@ -6,6 +6,7 @@ import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-ord
 import type { ConsumeIdBusinessV2OrderDto } from './dto/consume-id-business-v2-order.dto';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
+import type { QuoteIdBusinessV2OrderReceiptFxDto } from './dto/quote-id-business-v2-order-receipt-fx.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
@@ -134,6 +135,15 @@ export class IdBusinessV2OrdersController {
   @RequirePermissions('apple.order.create')
   getEntryOptions(@Query('customerKeyword') customerKeyword?: string) {
     return this.orderEntryService.getEntryOptions(customerKeyword);
+  }
+
+  @Post('receipt-fx-quote')
+  @RequirePermissions('apple.order.create')
+  quoteReceiptFx(
+    @Body() dto: QuoteIdBusinessV2OrderReceiptFxDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderEntryService.quoteReceiptFx(dto, operator);
   }
 
   @Post()

@@ -19,7 +19,7 @@ const HEALTHY_RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
 const DEGRADED_RECONCILE_INTERVAL_MS = 60 * 1000;
 const LONG_HIDDEN_INTERVAL_MS = 60 * 1000;
 const MAX_RECONNECT_DELAY_MS = 60 * 1000;
-const REALTIME_ENABLED = import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED !== 'false';
+const REALTIME_ENABLED = import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED === 'true';
 
 type ChangeSyncStatus = 'idle' | 'connecting' | 'connected' | 'degraded';
 

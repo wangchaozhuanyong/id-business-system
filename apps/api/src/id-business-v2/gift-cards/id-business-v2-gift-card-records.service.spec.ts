@@ -193,7 +193,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
-  it('returns paginated gift card records with full codes and immutable balance snapshots', async () => {
+  it('returns paginated gift card records with full codes and ID balance snapshots', async () => {
     const result = await service.listGiftCards({ page: '2', pageSize: '20' });
 
     expect(prisma.idBusinessV2GiftCard.findMany).toHaveBeenCalledWith(
@@ -216,6 +216,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
           exchangeRate: '5.4',
           costAmount: '108',
           status: 'credited',
+          hasSupplierFunding: false,
           creditedLedger: {
             balanceBefore: '130',
             balanceAfter: '150',
@@ -232,7 +233,24 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     });
     expect(JSON.stringify(result)).not.toContain('codeEncrypted');
     expect(JSON.stringify(result)).not.toContain('codeHash');
+    expect(JSON.stringify(result)).not.toContain('balanceBeforeCny');
+    expect(JSON.stringify(result)).not.toContain('balanceAfterCny');
     expect(fieldEncryptionService.decrypt).toHaveBeenCalledWith('v1:must-not-leak');
+  });
+
+  it('exposes only supplier-funding existence without leaking supplier balance snapshots', async () => {
+    prisma.idBusinessV2GiftCard.findMany.mockResolvedValue([
+      makeGiftCardRecord({
+        supplierFundEntries: [{ id: '99999999-9999-4999-8999-999999999999' }]
+      })
+    ]);
+
+    const result = await service.listGiftCards({});
+
+    expect(result.items[0]?.hasSupplierFunding).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('supplierFunding');
+    expect(JSON.stringify(result)).not.toContain('balanceBeforeCny');
+    expect(JSON.stringify(result)).not.toContain('balanceAfterCny');
   });
 
   it('marks gift-card records whose ID has been permanently reported lost', async () => {

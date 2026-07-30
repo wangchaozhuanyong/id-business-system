@@ -255,16 +255,13 @@ async function verifyLayoutFixture(browserInstance) {
     });
     await page.locator('[data-layout-fixture]').first().waitFor({ state: 'visible' });
 
-    for (const width of [1440, 1024]) {
+    for (const width of [1600, 1440, 1024, 901]) {
       await page.setViewportSize({ width, height: 1000 });
       await settleLayout(page);
       const measurements = await measureActionGroups(page, '[data-layout-fixture]');
       assert.equal(measurements.length, 5, `宽度 ${width}px 未渲染全部五种操作列档位`);
       assertActionGroupsFit(measurements, `布局夹具 ${width}px`);
-      assertSemanticColumnAlignment(
-        await measureSemanticColumnAlignment(page),
-        `语义列夹具 ${width}px`
-      );
+      assertSemanticColumnLayout(await measureSemanticColumnLayout(page), `语义列夹具 ${width}px`);
       assert.equal(await getDocumentOverflow(page), 0, `布局夹具 ${width}px 出现页面横向溢出`);
     }
     assert.deepEqual(runtimeErrors, [], `布局夹具出现浏览器错误：${runtimeErrors.join('\n')}`);
@@ -471,23 +468,33 @@ function assertActionGroupsFit(measurements, label) {
   }
 }
 
-async function measureSemanticColumnAlignment(page) {
-  return page.locator('[data-alignment-fixture]').evaluate((container) =>
-    ['text', 'identifier', 'index', 'numeric', 'date', 'status'].map((kind) => {
+async function measureSemanticColumnLayout(page) {
+  return page.locator('[data-alignment-fixture]').evaluate((container) => {
+    const table = container.querySelector('.v2-adaptive-table');
+    const tableWidth = table?.getBoundingClientRect().width ?? 0;
+    const columns = ['text', 'identifier', 'index', 'numeric', 'date', 'status'].map((kind) => {
       const header = container.querySelector(`th.v2-table-column--${kind}`);
       const cell = container.querySelector(`td.v2-table-column--${kind}`);
       const cellContent = cell?.querySelector('.cell');
       return {
         kind,
+        width: header?.getBoundingClientRect().width ?? 0,
         headerTextAlign: header ? getComputedStyle(header).textAlign : null,
         cellTextAlign: cell ? getComputedStyle(cell).textAlign : null,
-        fontVariantNumeric: cellContent ? getComputedStyle(cellContent).fontVariantNumeric : null
+        fontVariantNumeric: cellContent ? getComputedStyle(cellContent).fontVariantNumeric : null,
+        paddingLeft: cellContent
+          ? Number.parseFloat(getComputedStyle(cellContent).paddingLeft)
+          : null,
+        paddingRight: cellContent
+          ? Number.parseFloat(getComputedStyle(cellContent).paddingRight)
+          : null
       };
-    })
-  );
+    });
+    return { tableWidth, columns };
+  });
 }
 
-function assertSemanticColumnAlignment(measurements, label) {
+function assertSemanticColumnLayout(measurement, label) {
   const expectedAlignments = {
     text: 'left',
     identifier: 'left',
@@ -496,16 +503,36 @@ function assertSemanticColumnAlignment(measurements, label) {
     date: 'left',
     status: 'center'
   };
-  assert.equal(measurements.length, 6, `${label} 未渲染全部六种语义列`);
-  for (const measurement of measurements) {
-    const expected = expectedAlignments[measurement.kind];
-    assert.equal(measurement.headerTextAlign, expected, `${label} ${measurement.kind} 表头未对齐`);
-    assert.equal(measurement.cellTextAlign, expected, `${label} ${measurement.kind} 内容未对齐`);
-    if (['identifier', 'index', 'numeric', 'date'].includes(measurement.kind)) {
+  const expectedWidths = {
+    identifier: 192,
+    index: 72,
+    numeric: 128,
+    date: 165,
+    status: 112
+  };
+  const expectedPadding =
+    measurement.tableWidth >= 1200 ? 12 : measurement.tableWidth >= 840 ? 10 : 8;
+  assert.equal(measurement.columns.length, 6, `${label} 未渲染全部六种语义列`);
+  for (const column of measurement.columns) {
+    const expected = expectedAlignments[column.kind];
+    assert.equal(column.headerTextAlign, expected, `${label} ${column.kind} 表头未对齐`);
+    assert.equal(column.cellTextAlign, expected, `${label} ${column.kind} 内容未对齐`);
+    assert.equal(column.paddingLeft, expectedPadding, `${label} ${column.kind} 左侧间距不正确`);
+    assert.equal(column.paddingRight, expectedPadding, `${label} ${column.kind} 右侧间距不正确`);
+    if (column.kind === 'text') {
+      assert.ok(column.width >= 160, `${label} 文本列小于 wide 最小宽度`);
+    } else {
+      assert.equal(
+        Math.round(column.width),
+        expectedWidths[column.kind],
+        `${label} ${column.kind} 未保持固定语义宽度`
+      );
+    }
+    if (['identifier', 'index', 'numeric', 'date'].includes(column.kind)) {
       assert.match(
-        measurement.fontVariantNumeric ?? '',
+        column.fontVariantNumeric ?? '',
         /tabular-nums/,
-        `${label} ${measurement.kind} 未启用等宽数字`
+        `${label} ${column.kind} 未启用等宽数字`
       );
     }
   }
@@ -591,11 +618,14 @@ function createUser(scenario) {
 function createCustomersBootstrap() {
   const source = createOption('source-wechat', 'customer_source', 'wechat', '微信');
   const tag = createOption('tag-quality', 'customer_tag', 'quality', '高质量');
+  const now = new Date().toISOString();
   const service = {
     ...createOption('service-ai', 'service', 'ai-service', 'AI 服务'),
-    parent: { id: 'business-ai', name: 'AI 类' }
+    parent: { id: 'business-ai', name: 'AI 类' },
+    firstOpenedAt: '2026-05-01T00:00:00.000Z',
+    lastOpenedAt: '2026-07-30T00:00:00.000Z',
+    activationCount: 3
   };
-  const now = new Date().toISOString();
   const items = [
     createCustomer('customer-active', '完整权限客户', 'active', source, tag, service, now),
     createCustomer('customer-disabled', '停用状态客户', 'disabled', source, tag, service, now)
@@ -624,6 +654,10 @@ function createCustomer(id, name, recordStatus, source, tag, service, now) {
     phoneTail: '5678',
     hasPhone: true,
     wechat: 'layout-test',
+    qq: '10001',
+    maskedWhatsapp: '+60****6789',
+    whatsappTail: '23456789',
+    hasWhatsapp: true,
     sourceOptionId: source.id,
     source,
     tagOptionIds: [tag.id],

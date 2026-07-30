@@ -4,6 +4,7 @@ import { Prisma as PrismaNamespace } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { IdBusinessV2ExchangeRateOrderQuoteService } from '../exchange-rates/public-api';
 import { toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
 
 interface ResolveFinanceRateInput {
@@ -17,7 +18,15 @@ interface ResolveFinanceRateInput {
 
 @Injectable()
 export class IdBusinessV2FinanceFxService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly automaticQuoteInFlight = new Map<
+    'MYR' | 'USDT',
+    Promise<Prisma.IdBusinessV2FinanceFxRateSnapshotGetPayload<object>>
+  >();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly exchangeRateOrderQuoteService: IdBusinessV2ExchangeRateOrderQuoteService
+  ) {}
 
   async resolve(input: ResolveFinanceRateInput) {
     if (input.currency === 'CNY') {
@@ -66,9 +75,37 @@ export class IdBusinessV2FinanceFxService {
         return snapshot;
       });
     }
-    return input.currency === 'USDT'
-      ? this.snapshotLatestUsdtRate(input)
-      : this.collectMyrCrossRate(input);
+    return this.ensureAutomaticRate(input);
+  }
+
+  async quoteOrderRate(
+    currency: IdBusinessV2FinanceCurrency,
+    operator?: AuthenticatedUser,
+    quotedAt = new Date()
+  ) {
+    if (currency === 'CNY') {
+      return {
+        snapshotId: null,
+        currency,
+        rateToCny: '1',
+        source: 'cny_fixed' as const,
+        capturedAt: quotedAt,
+        expiresAt: null
+      };
+    }
+    const snapshot = await this.ensureAutomaticRate({
+      currency,
+      occurredAt: quotedAt,
+      operator
+    });
+    return {
+      snapshotId: snapshot.id,
+      currency: snapshot.currency,
+      rateToCny: snapshot.rateToCny.toString(),
+      source: snapshot.source,
+      capturedAt: snapshot.capturedAt,
+      expiresAt: snapshot.expiresAt
+    };
   }
 
   async createManual(
@@ -137,38 +174,67 @@ export class IdBusinessV2FinanceFxService {
     return { items, generatedAt: new Date().toISOString() };
   }
 
-  private async snapshotLatestUsdtRate(input: ResolveFinanceRateInput) {
-    const source = await this.prisma.idBusinessV2ExchangeRateSnapshot.findFirst({
-      where: {
-        asset: 'USDT',
-        fiat: 'CNY'
-      },
-      orderBy: [{ averagedAt: 'desc' }, { id: 'desc' }]
+  private ensureAutomaticRate(input: ResolveFinanceRateInput) {
+    if (input.currency === 'CNY') {
+      throw new BadRequestException('CNY 汇率固定为 1');
+    }
+    const currency = input.currency;
+    const existing = this.automaticQuoteInFlight.get(currency);
+    if (existing) return existing;
+    const quote =
+      currency === 'USDT'
+        ? this.snapshotEffectiveUsdtRate(input)
+        : this.findOrCollectMyrCrossRate(input);
+    this.automaticQuoteInFlight.set(currency, quote);
+    return quote.finally(() => {
+      if (this.automaticQuoteInFlight.get(currency) === quote) {
+        this.automaticQuoteInFlight.delete(currency);
+      }
     });
-    if (!source) {
-      throw new ServiceUnavailableException('缺少 USDT/CNY 汇率，请先完成汇率采集或填写人工汇率');
-    }
-    const ageMs = input.occurredAt.getTime() - source.averagedAt.getTime();
-    if (ageMs > 2 * 60 * 60 * 1000) {
-      throw new ServiceUnavailableException('USDT/CNY 汇率已过期，请重新采集或填写人工汇率');
-    }
+  }
+
+  private async snapshotEffectiveUsdtRate(input: ResolveFinanceRateInput) {
+    const effective = await this.exchangeRateOrderQuoteService.ensureEffective();
+    const existing = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
+      where: {
+        currency: 'USDT',
+        source: 'combined_p2p',
+        sourceReference: effective.snapshotId,
+        expiresAt: { gt: input.occurredAt }
+      },
+      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
+    });
+    if (existing) return existing;
     return this.prisma.idBusinessV2FinanceFxRateSnapshot.create({
       data: {
         id: randomUUID(),
         currency: 'USDT',
-        rateToCny: source.midRateToRmb,
+        rateToCny: effective.midRateToRmb,
         source: 'combined_p2p',
-        sourceReference: source.id,
+        sourceReference: effective.snapshotId,
         sourceEvidence: {
-          legacySnapshotId: source.id,
-          averagedAt: source.averagedAt.toISOString()
+          exchangeRateRunId: effective.runId,
+          exchangeRateSnapshotId: effective.snapshotId,
+          averagedAt: effective.averagedAt.toISOString()
         },
         businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
-        capturedAt: source.averagedAt,
-        expiresAt: new Date(source.averagedAt.getTime() + 2 * 60 * 60 * 1000),
+        capturedAt: effective.averagedAt,
+        expiresAt: effective.expiresAt,
         createdByUserId: input.operator?.id
       }
     });
+  }
+
+  private async findOrCollectMyrCrossRate(input: ResolveFinanceRateInput) {
+    const existing = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
+      where: {
+        currency: 'MYR',
+        source: 'ecb_cross',
+        expiresAt: { gt: input.occurredAt }
+      },
+      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
+    });
+    return existing ?? this.collectMyrCrossRate(input);
   }
 
   private async collectMyrCrossRate(input: ResolveFinanceRateInput) {

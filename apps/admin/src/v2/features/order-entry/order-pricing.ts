@@ -1,14 +1,28 @@
 import type { V2FinanceCurrency } from '@apple-business/shared';
-import { V2_DECIMAL_PLACES, divideDecimalStrings } from '@/v2/utils/decimal';
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
+import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
 
 const AMOUNT_SCALE = V2_DECIMAL_PLACES;
+const RATE_SCALE = V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES;
 const PERCENT_SCALE = V2_DECIMAL_PLACES;
 const PERCENT_FACTOR = 10n ** BigInt(PERCENT_SCALE);
 const PERCENT_BASE = 100n * PERCENT_FACTOR;
 const MAX_AMOUNT_UNITS = 999_999_999_999_999_999n;
+const MAX_RATE_UNITS = 999_999_999_999_999_999n;
 
 export interface SuggestedReceivedAmount {
   amount: string | null;
+  exactAmount: string | null;
+  platformFee: string | null;
+  estimatedProfit: string | null;
+  estimatedProfitRate: string | null;
+  error: string;
+}
+
+export interface SuggestedReceiptQuote {
+  cnyAmount: string | null;
+  originalAmount: string | null;
+  equivalentCnyAmount: string | null;
   platformFee: string | null;
   estimatedProfit: string | null;
   estimatedProfitRate: string | null;
@@ -79,13 +93,18 @@ export function calculateSuggestedOriginalAmount(
 ) {
   const amount = parseUnsignedDecimal(suggestedCnyAmount, AMOUNT_SCALE, MAX_AMOUNT_UNITS);
   if (amount === null) return null;
-  if (currency === 'CNY') return formatScaledInteger(amount, AMOUNT_SCALE);
-  const rate = parseUnsignedDecimal(rateToCny, PERCENT_SCALE, MAX_AMOUNT_UNITS);
+  if (currency === 'CNY') {
+    const originalUnits = roundPositiveRecommendation(amount, 10n ** BigInt(AMOUNT_SCALE));
+    const normalizedAmountUnits = originalUnits * 10n ** BigInt(AMOUNT_SCALE);
+    return normalizedAmountUnits <= MAX_AMOUNT_UNITS ? formatScaledInteger(originalUnits, 0) : null;
+  }
+  const rate = parseUnsignedDecimal(rateToCny, RATE_SCALE, MAX_RATE_UNITS);
   if (rate === null || rate <= 0n) return null;
-  return divideDecimalStrings(
-    formatScaledInteger(amount, AMOUNT_SCALE),
-    formatScaledInteger(rate, PERCENT_SCALE)
-  );
+  const exponent = RATE_SCALE - AMOUNT_SCALE;
+  const originalUnits = roundPositiveRecommendation(amount * 10n ** BigInt(exponent), rate);
+  const normalizedAmountUnits = originalUnits * 10n ** BigInt(AMOUNT_SCALE);
+  if (normalizedAmountUnits > MAX_AMOUNT_UNITS) return null;
+  return formatScaledInteger(originalUnits, 0);
 }
 
 export function validateTargetProfitRate(targetProfitRate: unknown, percentageFee: unknown) {
@@ -169,8 +188,21 @@ export function calculateSuggestedReceivedAmount(input: {
     }
   }
 
+  const exactReceived = received;
+  const wholeAmountFactor = 10n ** BigInt(AMOUNT_SCALE);
+  const roundedWholeUnits = roundPositiveRecommendation(exactReceived, wholeAmountFactor);
+  received = roundedWholeUnits * wholeAmountFactor;
+  if (received > MAX_AMOUNT_UNITS) {
+    return unavailableSuggestion('建议收款金额超出系统金额上限');
+  }
+  result = calculateSuggestionResult(received, fixedFee, percentageFee, accountCost, balanceCost);
+  if (result.feeUnits > MAX_AMOUNT_UNITS) {
+    return unavailableSuggestion('建议平台手续费超出系统金额上限');
+  }
+
   return {
-    amount: formatScaledInteger(received, AMOUNT_SCALE),
+    amount: formatScaledInteger(roundedWholeUnits, 0),
+    exactAmount: formatScaledInteger(exactReceived, AMOUNT_SCALE),
     platformFee: formatScaledInteger(result.feeUnits, AMOUNT_SCALE),
     estimatedProfit: formatScaledInteger(result.profitUnits, AMOUNT_SCALE),
     estimatedProfitRate: calculateProfitRate(
@@ -234,6 +266,7 @@ export function calculateTotalCostAmount(
 function unavailableSuggestion(error: string): SuggestedReceivedAmount {
   return {
     amount: null,
+    exactAmount: null,
     platformFee: null,
     estimatedProfit: null,
     estimatedProfitRate: null,
@@ -273,6 +306,11 @@ function divideHalfUpSigned(value: bigint, divisor: bigint) {
   return negative ? -result : result;
 }
 
+function roundPositiveRecommendation(value: bigint, divisor: bigint) {
+  const rounded = divideHalfUp(value, divisor);
+  return value > 0n && rounded === 0n ? 1n : rounded;
+}
+
 function divideCeil(value: bigint, divisor: bigint) {
   return (value + divisor - 1n) / divisor;
 }
@@ -280,6 +318,7 @@ function divideCeil(value: bigint, divisor: bigint) {
 function formatScaledInteger(value: bigint, scale: number) {
   const negative = value < 0n;
   const absolute = negative ? -value : value;
+  if (scale === 0) return `${negative ? '-' : ''}${absolute.toString()}`;
   const digits = absolute.toString().padStart(scale + 1, '0');
   const integerPart = digits.slice(0, -scale);
   const fractionalPart = digits.slice(-scale).replace(/0+$/, '');
