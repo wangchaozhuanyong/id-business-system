@@ -23,6 +23,11 @@ export class V2IdentityService {
             deletedAt: null
           },
           include: {
+            v2AuthIdentity: {
+              select: {
+                mustResetPassword: true
+              }
+            },
             userRoles: {
               include: {
                 role: {
@@ -54,9 +59,14 @@ export class V2IdentityService {
                 assignment.role.rolePermissions.map(({ permission }) => permission.code)
               )
             )
-          ]
+          ],
+          mustResetPassword: user.v2AuthIdentity?.mustResetPassword ?? false
         };
       }
     );
+  }
+
+  invalidateAuthenticatedUser(userId: string) {
+    this.authenticatedUserCache.delete(userId);
   }
 }

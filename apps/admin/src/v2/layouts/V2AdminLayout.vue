@@ -254,6 +254,7 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="profile">我的账户</el-dropdown-item>
+                  <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
                   <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -607,6 +608,10 @@ function handleAccountCommand(command: string | number | object) {
   if (command === 'profile') {
     beginNavigation('/v2/profile');
     void router.push('/v2/profile');
+    return;
+  }
+  if (command === 'change-password') {
+    void router.push('/change-password');
     return;
   }
   if (command === 'logout') {

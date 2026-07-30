@@ -17,5 +17,17 @@ export const authApi = {
   },
   logout() {
     return request<{ loggedOut: boolean }>(http.post('/auth/logout'));
+  },
+  changePassword(currentPassword: string, newPassword: string) {
+    return request<{
+      passwordChanged: boolean;
+      signedOut: boolean;
+      providerSignedOut?: boolean;
+    }>(
+      http.post('/auth/change-password', {
+        currentPassword,
+        newPassword
+      })
+    );
   }
 };

@@ -10,6 +10,9 @@ describe('V2IdentityService', () => {
           id: '33333333-3333-4333-8333-333333333333',
           username: 'admin',
           displayName: '管理员',
+          v2AuthIdentity: {
+            mustResetPassword: true
+          },
           userRoles: [
             {
               role: {
@@ -31,6 +34,7 @@ describe('V2IdentityService', () => {
 
     expect(result.roles).toEqual(['admin']);
     expect(result.permissions).toEqual(['apple.order.view']);
+    expect(result.mustResetPassword).toBe(true);
   });
 
   it('rejects missing or disabled operators', async () => {
