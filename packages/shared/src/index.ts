@@ -22,7 +22,7 @@ export type {
   PaginationQueryContract,
   V2PageQuery,
   V2SortOrder
-} from './v2/common';
+} from './v2/common.js';
 export {
   V2_DECIMAL_PLACES,
   V2_DECIMAL_STEP,
@@ -33,7 +33,7 @@ export {
   multiplyDecimalStrings,
   roundDecimalString,
   v2UnsignedDecimalPattern
-} from './v2/decimal';
+} from './v2/decimal.js';
 export {
   V2_DATA_SCOPES,
   V2_SCOPE_DEPENDENCIES,
@@ -43,7 +43,7 @@ export {
   type V2ChangeVersionsResult,
   type V2DataScope,
   type V2ScopeVersion
-} from './v2/data-scopes';
+} from './v2/data-scopes.js';
 export {
   V2_FINANCE_ACCOUNT_TYPES,
   V2_FINANCE_CURRENCIES,
@@ -78,4 +78,4 @@ export {
   type V2SettlementPlatformOriginalAmount,
   type V2SettlementPlatformReport,
   type V2SettlementPlatformReportRow
-} from './v2/finance';
+} from './v2/finance.js';
