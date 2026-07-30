@@ -6,7 +6,7 @@ import {
 } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import { roundV2Decimal, toV2Decimal, toV2DecimalString } from '../decimal-policy';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
 import { getIdBusinessV2SettlementPlatformReport } from './id-business-v2-finance-settlement-platform-report';
 
@@ -70,11 +70,17 @@ export class IdBusinessV2FinanceReportsService {
     const amount = (code: IdBusinessV2FinanceAccountCode, natural: 'debit' | 'credit') => {
       const naturalTotal = grouped
         .filter((item) => item.accountCode === code && item.direction === natural)
-        .reduce((sum, item) => sum.add(item._sum.amountCny ?? 0), new PrismaNamespace.Decimal(0));
+        .reduce(
+          (sum, item) => sum.add(toV2Decimal(item._sum.amountCny ?? 0)),
+          new PrismaNamespace.Decimal(0)
+        );
       const opposite = natural === 'debit' ? 'credit' : 'debit';
       const oppositeTotal = grouped
         .filter((item) => item.accountCode === code && item.direction === opposite)
-        .reduce((sum, item) => sum.add(item._sum.amountCny ?? 0), new PrismaNamespace.Decimal(0));
+        .reduce(
+          (sum, item) => sum.add(toV2Decimal(item._sum.amountCny ?? 0)),
+          new PrismaNamespace.Decimal(0)
+        );
       return roundV2Decimal(naturalTotal.sub(oppositeTotal));
     };
     const salesRevenue = amount('sales_revenue', 'credit');
@@ -123,13 +129,13 @@ export class IdBusinessV2FinanceReportsService {
       const income = grouped
         .filter((item) => item.currency === currency && item.direction === 'debit')
         .reduce(
-          (sum, item) => sum.add(item._sum.amountOriginal ?? 0),
+          (sum, item) => sum.add(toV2Decimal(item._sum.amountOriginal ?? 0)),
           new PrismaNamespace.Decimal(0)
         );
       const expense = grouped
         .filter((item) => item.currency === currency && item.direction === 'credit')
         .reduce(
-          (sum, item) => sum.add(item._sum.amountOriginal ?? 0),
+          (sum, item) => sum.add(toV2Decimal(item._sum.amountOriginal ?? 0)),
           new PrismaNamespace.Decimal(0)
         );
       const net = income.sub(expense);
@@ -174,20 +180,18 @@ export class IdBusinessV2FinanceReportsService {
       _sum: { purchaseCost: true }
     });
     const cashBook = financeAccounts.reduce(
-      (sum, item) => sum.add(item.currentBalanceCny),
+      (sum, item) => sum.add(toV2Decimal(item.currentBalanceCny)),
       new PrismaNamespace.Decimal(0)
     );
     const supplierBook = supplierWallets.reduce(
-      (sum, item) => sum.add(item.currentBalanceCny),
+      (sum, item) => sum.add(toV2Decimal(item.currentBalanceCny)),
       new PrismaNamespace.Decimal(0)
     );
     const cashLatest = this.latestValuation(financeAccounts, latestRates);
     const supplierLatest = this.latestValuation(supplierWallets, latestRates);
-    const giftCardInventory =
-      accountAssets._sum.balanceCostAmount ?? new PrismaNamespace.Decimal(0);
-    const idInventory = unsoldId._sum.purchaseCost ?? new PrismaNamespace.Decimal(0);
-    const refundReceivable =
-      pendingRefunds._sum.supplierRefundAmountCny ?? new PrismaNamespace.Decimal(0);
+    const giftCardInventory = toV2Decimal(accountAssets._sum.balanceCostAmount ?? 0);
+    const idInventory = toV2Decimal(unsoldId._sum.purchaseCost ?? 0);
+    const refundReceivable = toV2Decimal(pendingRefunds._sum.supplierRefundAmountCny ?? 0);
     const totalBook = cashBook
       .add(supplierBook)
       .add(giftCardInventory)
@@ -299,17 +303,18 @@ export class IdBusinessV2FinanceReportsService {
         continue;
       }
       const net = lines.reduce((total, line) => {
+        const amountCny = toV2Decimal(line.amountCny);
         const naturalCredit =
           line.accountCode === 'sales_revenue' || line.accountCode === 'realized_fx_gain_loss';
         const positive =
           (naturalCredit && line.direction === 'credit') ||
           (!naturalCredit && line.direction === 'credit');
         if (line.accountCode === 'sales_revenue' || line.accountCode === 'realized_fx_gain_loss') {
-          return positive ? total.add(line.amountCny) : total.sub(line.amountCny);
+          return positive ? total.add(amountCny) : total.sub(amountCny);
         }
-        return line.direction === 'debit' ? total.sub(line.amountCny) : total.add(line.amountCny);
+        return line.direction === 'debit' ? total.sub(amountCny) : total.add(amountCny);
       }, new PrismaNamespace.Decimal(0));
-      const difference = net.sub(order.profitAmount ?? 0).abs();
+      const difference = net.sub(toV2Decimal(order.profitAmount ?? 0)).abs();
       if (difference.gt('0.01')) {
         issues.push({
           code: 'order_profit_difference',
@@ -343,14 +348,16 @@ export class IdBusinessV2FinanceReportsService {
     }
     for (const wallet of wallets) {
       const latest = wallet.ledgerEntries[0];
-      if (latest && !latest.balanceAfter.equals(wallet.currentBalance)) {
+      if (latest && !toV2Decimal(latest.balanceAfter).equals(toV2Decimal(wallet.currentBalance))) {
         issues.push({
           code: 'supplier_balance_difference',
           severity: 'error',
           sourceType: 'supplier_wallet',
           sourceId: wallet.id,
           message: '供应商钱包余额与最后一条流水不一致',
-          amountCny: toV2DecimalString(wallet.currentBalanceCny.sub(latest.balanceAfterCny).abs())
+          amountCny: toV2DecimalString(
+            toV2Decimal(wallet.currentBalanceCny).sub(toV2Decimal(latest.balanceAfterCny)).abs()
+          )
         });
       }
     }
@@ -451,7 +458,7 @@ export class IdBusinessV2FinanceReportsService {
     const rates = new Map<IdBusinessV2FinanceCurrency, PrismaNamespace.Decimal>([
       ['CNY', new PrismaNamespace.Decimal(1)]
     ]);
-    for (const [currency, row] of rows) rates.set(currency, row.rateToCny);
+    for (const [currency, row] of rows) rates.set(currency, toV2Decimal(row.rateToCny));
     return rates;
   }
 
@@ -478,7 +485,7 @@ export class IdBusinessV2FinanceReportsService {
   ) {
     return items.reduce((sum, item) => {
       const rate = rates.get(item.currency);
-      return rate ? sum.add(item.currentBalance.mul(rate)) : sum;
+      return rate ? sum.add(toV2Decimal(item.currentBalance).mul(rate)) : sum;
     }, new PrismaNamespace.Decimal(0));
   }
 }
