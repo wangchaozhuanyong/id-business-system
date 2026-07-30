@@ -1,11 +1,25 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma as PrismaNamespace } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { toV2DecimalString } from '../decimal-policy';
+import { calculateFinanceHistoryAssetOpening } from './id-business-v2-finance-history-opening';
 
 const SOURCE_BATCH_SIZE = 500;
 
 type HistorySourceType = 'order' | 'account_loss' | 'gift_card';
+type HistoryPreviewClient = Pick<
+  Prisma.TransactionClient,
+  | 'idBusinessV2FinanceSettings'
+  | 'idBusinessV2Order'
+  | 'idBusinessV2AccountLoss'
+  | 'idBusinessV2GiftCard'
+  | 'idBusinessV2Account'
+  | 'idBusinessV2TopupSupplierAccount'
+  | 'idBusinessV2FinanceJournal'
+  | 'idBusinessV2FinanceJournalLine'
+>;
 
 interface HistoryCandidate {
   id: string;
@@ -23,8 +37,16 @@ export class IdBusinessV2FinanceHistoryPreviewService {
   constructor(private readonly prisma: PrismaService) {}
 
   async preview(requestedAsOf?: Date) {
+    return this.previewWithClient(this.prisma, requestedAsOf);
+  }
+
+  async previewInTransaction(tx: Prisma.TransactionClient, requestedAsOf?: Date) {
+    return this.previewWithClient(tx, requestedAsOf);
+  }
+
+  private async previewWithClient(client: HistoryPreviewClient, requestedAsOf?: Date) {
     const previewedAt = new Date();
-    const settings = await this.prisma.idBusinessV2FinanceSettings.findUnique({
+    const settings = await client.idBusinessV2FinanceSettings.findUnique({
       where: { id: 1 },
       select: { enabledAt: true, historyStatus: true }
     });
@@ -37,32 +59,34 @@ export class IdBusinessV2FinanceHistoryPreviewService {
       giftCards,
       accountsMissingFxSnapshot,
       giftCardsMissingFxSnapshot,
-      ordersMissingFxSnapshot
+      ordersMissingFxSnapshot,
+      assetOpeningCalculation
     ] = await Promise.all([
-      this.previewOrders(asOf),
-      this.previewAccountLosses(asOf),
-      this.previewGiftCards(asOf),
-      this.prisma.idBusinessV2Account.count({
+      this.previewOrders(client, asOf),
+      this.previewAccountLosses(client, asOf),
+      this.previewGiftCards(client, asOf),
+      client.idBusinessV2Account.count({
         where: {
           createdAt: { lte: asOf },
           purchaseCurrency: 'CNY',
           purchaseFxSnapshotId: null
         }
       }),
-      this.prisma.idBusinessV2GiftCard.count({
+      client.idBusinessV2GiftCard.count({
         where: {
           createdAt: { lte: asOf },
           purchaseCurrency: 'CNY',
           purchaseFxSnapshotId: null
         }
       }),
-      this.prisma.idBusinessV2Order.count({
+      client.idBusinessV2Order.count({
         where: {
           createdAt: { lte: asOf },
           receivedCurrency: 'CNY',
           receivedFxSnapshotId: null
         }
-      })
+      }),
+      calculateFinanceHistoryAssetOpening(client)
     ]);
 
     const summary = {
@@ -76,6 +100,16 @@ export class IdBusinessV2FinanceHistoryPreviewService {
       giftCards: giftCardsMissingFxSnapshot,
       orders: ordersMissingFxSnapshot
     };
+    const assetOpening = {
+      willCreate: assetOpeningCalculation.willCreate,
+      adjustmentTotalCny: toV2DecimalString(assetOpeningCalculation.adjustmentTotalCny),
+      journalLineCount: assetOpeningCalculation.journalLineCount,
+      adjustments: assetOpeningCalculation.adjustments.map((item) => ({
+        accountCode: item.accountCode,
+        direction: item.direction,
+        amountCny: toV2DecimalString(item.amountCny)
+      }))
+    };
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify({
@@ -83,7 +117,8 @@ export class IdBusinessV2FinanceHistoryPreviewService {
           historyStatus,
           assumption: 'legacy_assumed_cny',
           summary,
-          fxSnapshotUpdates
+          fxSnapshotUpdates,
+          assetOpening
         })
       )
       .digest('hex');
@@ -96,15 +131,16 @@ export class IdBusinessV2FinanceHistoryPreviewService {
       assumption: 'legacy_assumed_cny' as const,
       fingerprint,
       summary,
-      fxSnapshotUpdates
+      fxSnapshotUpdates,
+      assetOpening
     };
   }
 
-  private async previewOrders(asOf: Date) {
+  private async previewOrders(client: HistoryPreviewClient, asOf: Date) {
     const summary = emptyCategory();
     let cursor: string | undefined;
     while (true) {
-      const rows = await this.prisma.idBusinessV2Order.findMany({
+      const rows = await client.idBusinessV2Order.findMany({
         where: {
           createdAt: { lte: asOf },
           deletedAt: null,
@@ -125,6 +161,7 @@ export class IdBusinessV2FinanceHistoryPreviewService {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
       const existing = await this.findExistingSourceIds(
+        client,
         'order',
         rows.map((item) => item.id)
       );
@@ -134,11 +171,11 @@ export class IdBusinessV2FinanceHistoryPreviewService {
     }
   }
 
-  private async previewAccountLosses(asOf: Date) {
+  private async previewAccountLosses(client: HistoryPreviewClient, asOf: Date) {
     const summary = emptyCategory();
     let cursor: string | undefined;
     while (true) {
-      const rows = await this.prisma.idBusinessV2AccountLoss.findMany({
+      const rows = await client.idBusinessV2AccountLoss.findMany({
         where: { reportedAt: { lte: asOf } },
         select: {
           id: true,
@@ -150,6 +187,7 @@ export class IdBusinessV2FinanceHistoryPreviewService {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
       const existing = await this.findExistingSourceIds(
+        client,
         'account_loss',
         rows.map((item) => item.id)
       );
@@ -164,14 +202,14 @@ export class IdBusinessV2FinanceHistoryPreviewService {
     }
   }
 
-  private async previewGiftCards(asOf: Date) {
+  private async previewGiftCards(client: HistoryPreviewClient, asOf: Date) {
     const summary = {
       redeemed: emptyCategory(),
       withdrawn: emptyCategory()
     };
     let cursor: string | undefined;
     while (true) {
-      const rows = await this.prisma.idBusinessV2GiftCard.findMany({
+      const rows = await client.idBusinessV2GiftCard.findMany({
         where: {
           createdAt: { lte: asOf },
           status: { in: ['redeemed', 'withdrawn'] }
@@ -182,6 +220,7 @@ export class IdBusinessV2FinanceHistoryPreviewService {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
       });
       const existing = await this.findExistingSourceIds(
+        client,
         'gift_card',
         rows.map((item) => item.id)
       );
@@ -198,10 +237,14 @@ export class IdBusinessV2FinanceHistoryPreviewService {
     }
   }
 
-  private async findExistingSourceIds(sourceType: HistorySourceType, sourceIds: string[]) {
+  private async findExistingSourceIds(
+    client: HistoryPreviewClient,
+    sourceType: HistorySourceType,
+    sourceIds: string[]
+  ) {
     const existing = new Set<string>();
     for (let offset = 0; offset < sourceIds.length; offset += SOURCE_BATCH_SIZE) {
-      const rows = await this.prisma.idBusinessV2FinanceJournal.findMany({
+      const rows = await client.idBusinessV2FinanceJournal.findMany({
         where: {
           sourceType,
           sourceId: { in: sourceIds.slice(offset, offset + SOURCE_BATCH_SIZE) },

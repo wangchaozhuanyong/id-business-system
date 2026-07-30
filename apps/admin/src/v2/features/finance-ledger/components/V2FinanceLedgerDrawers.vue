@@ -429,6 +429,26 @@
         {{ page.historyPreview.fxSnapshotUpdates.giftCards }}、订单
         {{ page.historyPreview.fxSnapshotUpdates.orders }}。
       </p>
+      <template v-if="page.historyPreview.assetOpening.willCreate">
+        <dl aria-label="资产期初差额">
+          <div
+            v-for="adjustment in page.historyPreview.assetOpening.adjustments"
+            :key="adjustment.accountCode"
+          >
+            <dt>{{ historyAssetOpeningAccountLabel(adjustment.accountCode) }}</dt>
+            <dd>
+              {{ historyAssetOpeningDirectionLabel(adjustment.direction) }}
+              {{ formatCny(adjustment.amountCny) }}
+            </dd>
+          </div>
+        </dl>
+        <p>
+          将生成 1 张期初流水、{{ page.historyPreview.assetOpening.journalLineCount }}
+          条分录；资产调整合计
+          {{ formatCny(page.historyPreview.assetOpening.adjustmentTotalCny) }}。
+        </p>
+      </template>
+      <p v-else>无需生成资产期初差额流水。</p>
       <p>回填后状态仍为“待人工确认”，不会自动宣称历史数据完整。</p>
     </div>
   </V2ConfirmDialog>
@@ -440,7 +460,12 @@ import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2FinanceCurrency } from '../contracts';
-import { formatDate } from '../financeLedgerPresentation';
+import {
+  formatCny,
+  formatDate,
+  historyAssetOpeningAccountLabel,
+  historyAssetOpeningDirectionLabel
+} from '../financeLedgerPresentation';
 import { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 
 const { page } = defineProps<{
