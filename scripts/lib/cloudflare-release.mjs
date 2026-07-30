@@ -3,6 +3,7 @@ export const RELEASE_BRANCH = 'main';
 export const RELEASE_WORKER_NAME = 'daichongxitong-v2-free-20260727';
 export const RELEASE_ACCOUNT_ID = 'a7e061557092f924beb4a7c8adc39c3d';
 export const RELEASE_PUBLIC_URL = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
+export const RELEASE_V2_REALTIME_CHANGES_ENABLED = 'false';
 export const REQUIRED_CHECKS = ['quality', 'production-images'];
 export const SMOKE_ROLE_CODE = 'production_smoke_readonly';
 export const SMOKE_PERMISSIONS = [
@@ -17,6 +18,13 @@ export const SMOKE_PERMISSIONS = [
 
 const unsafeValuePattern =
   /(change_me|replace_with|placeholder|example\.(com|net|org)|localhost|127\.0\.0\.1|0\.0\.0\.0|\.test(?::|\/|$)|\.invalid(?::|\/|$))/i;
+
+export function createCloudflareProductionBuildEnvironment(env) {
+  return {
+    ...env,
+    VITE_V2_REALTIME_CHANGES_ENABLED: RELEASE_V2_REALTIME_CHANGES_ENABLED
+  };
+}
 
 export function validateReleaseEnvironment(env) {
   const errors = [];

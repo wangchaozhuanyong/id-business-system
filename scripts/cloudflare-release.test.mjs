@@ -4,7 +4,9 @@ import {
   RELEASE_ACCOUNT_ID,
   RELEASE_PUBLIC_URL,
   RELEASE_REPOSITORY,
+  RELEASE_V2_REALTIME_CHANGES_ENABLED,
   RELEASE_WORKER_NAME,
+  createCloudflareProductionBuildEnvironment,
   parseGitHubRepository,
   validateGitHubReleaseState,
   validateGitState,
@@ -43,6 +45,17 @@ const validConfig = {
 test('accepts the pinned production environment and Cloudflare target', () => {
   assert.deepEqual(validateReleaseEnvironment(validEnvironment), []);
   assert.deepEqual(validateWranglerConfig(validConfig), []);
+});
+
+test('forces the Cloudflare production frontend to use version polling', () => {
+  const buildEnvironment = createCloudflareProductionBuildEnvironment({
+    KEEP_ME: 'yes',
+    VITE_V2_REALTIME_CHANGES_ENABLED: 'true'
+  });
+
+  assert.equal(RELEASE_V2_REALTIME_CHANGES_ENABLED, 'false');
+  assert.equal(buildEnvironment.VITE_V2_REALTIME_CHANGES_ENABLED, 'false');
+  assert.equal(buildEnvironment.KEEP_ME, 'yes');
 });
 
 test('rejects local database, weak smoke credentials and target drift', () => {
