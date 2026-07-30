@@ -123,6 +123,7 @@ describe('IdBusinessV2OrdersService', () => {
           balanceAmount: '20',
           balanceCostAmount: '50',
           profitAmount: '47.4',
+          profitRate: '47.4474',
           status: 'completed'
         })
       ],
@@ -286,6 +287,7 @@ describe('IdBusinessV2OrdersService', () => {
         canComplete,
         canEdit,
         canEditCore,
+        canEditPricing: ['pending', 'processing', 'failed'].includes(status),
         canRefund,
         canCancel,
         canDelete

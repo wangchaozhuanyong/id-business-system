@@ -10,6 +10,7 @@ import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-busin
 export interface FindIdBusinessV2OrderCandidatesQuery {
   serviceOptionId?: string;
   balanceAmount?: string;
+  orderId?: string;
   limit?: string;
 }
 
@@ -80,6 +81,7 @@ export class IdBusinessV2OrderMatchingService {
     const serviceOptionId = this.normalizeRequiredUuid(query.serviceOptionId, '业务');
     const requiredBalance = this.normalizeRequiredBalance(query.balanceAmount);
     const limit = this.normalizeLimit(query.limit);
+    const editingOrderId = query.orderId ? this.normalizeRequiredUuid(query.orderId, '订单') : null;
     const context = await this.resolveMatchingContext(serviceOptionId);
     const evaluatedAt = new Date();
 
@@ -88,7 +90,10 @@ export class IdBusinessV2OrderMatchingService {
       recordStatus: 'active',
       lossReportedAt: null,
       countryOptionId: context.country.id,
-      soldByOrderId: null
+      soldByOrderId: editingOrderId ? undefined : null,
+      AND: editingOrderId
+        ? [{ OR: [{ soldByOrderId: null }, { soldByOrderId: editingOrderId }] }]
+        : undefined
     };
     const normalStatusWhere: Prisma.IdBusinessV2AccountWhereInput = {
       ...activeInCountryWhere,
@@ -123,7 +128,8 @@ export class IdBusinessV2OrderMatchingService {
               lockScope: 'by_service',
               serviceOptionId
             }
-          ]
+          ],
+          orderId: editingOrderId ? { not: editingOrderId } : undefined
         }
       }
     };

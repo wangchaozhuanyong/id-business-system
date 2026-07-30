@@ -113,11 +113,13 @@ export class IdBusinessV2OrdersController {
   findMatchingCandidates(
     @Query('serviceOptionId') serviceOptionId?: string,
     @Query('balanceAmount') balanceAmount?: string,
+    @Query('orderId') orderId?: string,
     @Query('limit') limit?: string
   ) {
     return this.orderMatchingService.findCandidates({
       serviceOptionId,
       balanceAmount,
+      orderId,
       limit
     });
   }

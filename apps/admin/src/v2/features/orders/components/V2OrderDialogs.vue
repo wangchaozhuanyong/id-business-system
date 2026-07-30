@@ -94,6 +94,16 @@
                 {{ page.formatNullableDecimal(page.detail.profitAmount) }}
               </dd>
             </div>
+            <div>
+              <dt>实际利润率</dt>
+              <dd :class="page.profitClass(page.detail.profitRate)">
+                {{
+                  page.detail.profitRate === null
+                    ? '—'
+                    : `${page.formatDecimal(page.detail.profitRate)}%`
+                }}
+              </dd>
+            </div>
           </dl>
         </section>
         <section>

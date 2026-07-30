@@ -251,7 +251,6 @@ export interface V2FinanceReconciliationIssue {
     | 'order_profit_difference'
     | 'supplier_balance_difference'
     | 'open_supplier_refund'
-    | 'missing_finance_account'
     | 'missing_finance_journal';
   severity: 'info' | 'warning' | 'error';
   sourceType: string | null;
@@ -260,11 +259,47 @@ export interface V2FinanceReconciliationIssue {
   amountCny: DecimalString | null;
 }
 
+export interface V2SettlementPlatformOriginalAmount {
+  currency: V2FinanceCurrency;
+  grossReceived: DecimalString;
+  refunded: DecimalString;
+}
+
+export interface V2SettlementPlatformReportRow {
+  settlementPlatform: {
+    id: string;
+    name: string;
+  } | null;
+  completedOrderCount: number;
+  originalAmounts: V2SettlementPlatformOriginalAmount[];
+  grossReceivedCny: DecimalString;
+  refundedCny: DecimalString;
+  platformFeeCny: DecimalString;
+  netSettlementCny: DecimalString;
+  realizedProfitCny: DecimalString;
+  realizedProfitRate: DecimalString | null;
+  pendingOrderCount: number;
+  pendingReceivedCny: DecimalString;
+  pendingProfitCny: DecimalString;
+}
+
+export interface V2SettlementPlatformReport {
+  options: Array<{
+    id: string;
+    name: string;
+  }>;
+  totals: Omit<V2SettlementPlatformReportRow, 'settlementPlatform'>;
+  rows: V2SettlementPlatformReportRow[];
+  hasHistoricalUnspecified: boolean;
+  historicalUnspecifiedAmountCny: DecimalString;
+}
+
 export interface V2FinanceOverview {
   settings: V2FinanceSettings;
   profitLoss: V2FinanceProfitLoss;
   currencyBreakdown: V2FinanceCurrencyBreakdown[];
   assets: V2FinanceAssetBreakdown;
+  settlementPlatformReport: V2SettlementPlatformReport;
   reconciliation: {
     isComplete: boolean;
     issueCount: number;

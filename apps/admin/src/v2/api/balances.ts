@@ -160,10 +160,5 @@ export const idBusinessV2BalancesApi = {
       }>(http.post(`/id-business-v2/gift-cards/${giftCardId}/supplier-reassignments`, payload)),
       ['balance-records', 'supplier-funds', 'supplier-payments', 'balances-options']
     );
-  },
-  revealGiftCardCode(giftCardId: string, payload: { reason: string; approvalId?: string }) {
-    return request<{ giftCardId: string; code: string; revealedAt: string }>(
-      http.post(`/id-business-v2/gift-cards/${giftCardId}/reveal-code`, payload)
-    );
   }
 };

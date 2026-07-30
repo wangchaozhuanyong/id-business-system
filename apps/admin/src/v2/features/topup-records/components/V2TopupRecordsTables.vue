@@ -33,17 +33,7 @@
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡号" fixed="left">
             <template #default="{ row }">
-              <div class="v2-topup-records-code-cell">
-                <strong class="v2-topup-records-code">{{ row.codeMasked }}</strong>
-                <AppButton
-                  v-if="canRevealGiftCard"
-                  size="small"
-                  variant="ghost"
-                  @click="openRevealCode(row)"
-                >
-                  查看完整
-                </AppButton>
-              </div>
+              <strong class="v2-topup-records-code">{{ row.code }}</strong>
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -207,7 +197,7 @@
           <article v-for="item in giftCards" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.codeMasked }}</strong>
+                <strong>{{ item.code }}</strong>
                 <span>{{ item.account.appleIdMasked }} / {{ item.country.name }}</span>
               </div>
               <el-tag :type="giftCardStatusType(item.status)" effect="plain">
@@ -261,8 +251,7 @@
               <span>{{ formatDate(item.createdAt) }}</span>
               <div
                 v-if="
-                  item.account.lossStatus === 'active' &&
-                  (canAdjustBalance || canReassignSupplier || canRevealGiftCard)
+                  item.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)
                 "
                 class="v2-record-actions"
               >
@@ -273,14 +262,6 @@
                   @click="openMetadataDrawer(item)"
                 >
                   备注
-                </AppButton>
-                <AppButton
-                  v-if="canRevealGiftCard"
-                  size="small"
-                  variant="ghost"
-                  @click="openRevealCode(item)"
-                >
-                  查看完整
                 </AppButton>
                 <AppButton
                   v-if="canReassignSupplier"
@@ -360,7 +341,7 @@
             </template>
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡">
-            <template #default="{ row }">{{ row.giftCard?.codeMasked || '—' }}</template>
+            <template #default="{ row }">{{ row.giftCard?.code || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
@@ -446,7 +427,7 @@
             <dl>
               <div>
                 <dt>礼品卡</dt>
-                <dd>{{ item.giftCard?.codeMasked || '—' }}</dd>
+                <dd>{{ item.giftCard?.code || '—' }}</dd>
               </div>
               <div>
                 <dt>余额快照</dt>
@@ -537,7 +518,6 @@ defineProps<{
   ledgerTotal: number;
   canAdjustBalance: boolean;
   canReassignSupplier: boolean;
-  canRevealGiftCard: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -551,7 +531,6 @@ const emit = defineEmits<{
   ledgerPageSizeChange: [];
   editMetadata: [giftCard: V2GiftCardRecord];
   reassignSupplier: [giftCard: V2GiftCardRecord];
-  revealCode: [giftCard: V2GiftCardRecord];
   reverse: [giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction];
 }>();
 
@@ -572,9 +551,6 @@ function openMetadataDrawer(giftCard: V2GiftCardRecord) {
 }
 function openSupplierReassignment(giftCard: V2GiftCardRecord) {
   emit('reassignSupplier', giftCard);
-}
-function openRevealCode(giftCard: V2GiftCardRecord) {
-  emit('revealCode', giftCard);
 }
 function openReversalConfirmation(giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction) {
   emit('reverse', giftCard, action);

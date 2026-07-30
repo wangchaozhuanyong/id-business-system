@@ -115,6 +115,7 @@ export const BALANCE_LEDGER_INCLUDE = {
   giftCard: {
     select: {
       id: true,
+      codeEncrypted: true,
       codeMasked: true,
       codeTail: true,
       faceValue: true,

@@ -69,10 +69,12 @@
           <el-form-item label="客户实收金额" prop="receivedAmount">
             <el-input
               v-model="receivedAmount"
+              clearable
               inputmode="decimal"
               maxlength="19"
               aria-label="续费客户实收金额"
               placeholder="例如 100"
+              @input="emit('manualPriceInput')"
             />
           </el-form-item>
           <el-form-item
@@ -94,13 +96,12 @@
         </div>
 
         <div class="v2-renewal-open__grid">
-          <el-form-item label="结算平台">
+          <el-form-item label="结算平台" prop="settlementPlatformOptionId">
             <el-select
               v-model="settlementPlatformOptionId"
-              clearable
               filterable
               aria-label="续费结算平台"
-              placeholder="无"
+              placeholder="请选择收款方式"
               :loading="optionsLoading"
               @change="emit('settlementPlatformChange')"
             >
@@ -120,6 +121,62 @@
               aria-label="续费平台订单号"
               placeholder="选填"
             />
+          </el-form-item>
+        </div>
+
+        <div class="v2-renewal-open__grid">
+          <el-form-item label="目标利润率" prop="targetProfitRate">
+            <el-input
+              v-model="targetProfitRate"
+              clearable
+              inputmode="decimal"
+              maxlength="8"
+              placeholder="选填，例如 10"
+            >
+              <template #append>%</template>
+            </el-input>
+          </el-form-item>
+          <el-form-item label="推荐价格">
+            <div class="v2-renewal-price-recommendation">
+              <div>
+                <strong>
+                  {{
+                    suggestedReceived.amount ? `¥${formatDecimal(suggestedReceived.amount)}` : '—'
+                  }}
+                </strong>
+                <small v-if="suggestedReceived.error">{{ suggestedReceived.error }}</small>
+                <small v-else-if="suggestedReceived.estimatedProfit">
+                  预计利润 ¥{{ formatDecimal(suggestedReceived.estimatedProfit) }}，利润率
+                  {{ suggestedReceived.estimatedProfitRate }}%
+                </small>
+                <small v-else>填写目标利润率后按本次余额成本反推</small>
+                <small
+                  v-if="
+                    recommendationApplied &&
+                    appliedSuggestedCny &&
+                    suggestedReceived.amount !== appliedSuggestedCny
+                  "
+                >
+                  推荐价已更新，现有价格不会自动覆盖
+                </small>
+              </div>
+              <div class="v2-renewal-price-recommendation__actions">
+                <AppButton
+                  v-if="recommendationApplied"
+                  variant="ghost"
+                  @click="emit('undoSuggested')"
+                >
+                  撤销采用
+                </AppButton>
+                <AppButton
+                  variant="ghost"
+                  :disabled="!suggestedReceived.amount"
+                  @click="emit('applySuggested')"
+                >
+                  采用推荐价
+                </AppButton>
+              </div>
+            </div>
           </el-form-item>
         </div>
 
@@ -171,6 +228,20 @@
             <strong>¥{{ formatDecimal(platformFeePreview) }}</strong>
           </div>
           <div>
+            <span>预计余额成本</span>
+            <strong>¥{{ formatDecimal(estimatedBalanceCostPreview) }}</strong>
+          </div>
+          <div>
+            <span>预计利润</span>
+            <strong>¥{{ formatDecimal(estimatedProfitPreview) }}</strong>
+          </div>
+          <div>
+            <span>预计利润率</span>
+            <strong>
+              {{ estimatedProfitRatePreview === null ? '—' : `${estimatedProfitRatePreview}%` }}
+            </strong>
+          </div>
+          <div>
             <span>续费后 ID 余额</span>
             <strong>{{ formatDecimal(balanceAfterPreview) }}</strong>
           </div>
@@ -194,7 +265,12 @@
 import { computed, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import {
+  validateTargetProfitRate,
+  type SuggestedReceivedAmount
+} from '@/v2/features/order-entry/order-pricing';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import AppButton from '@/components/ui/AppButton.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import type { V2ManualRenewalOptions, V2RenewalWorkbenchItem } from '../contracts';
@@ -211,6 +287,12 @@ const props = defineProps<{
   submitting: boolean;
   submitDisabledReason: string;
   platformFeePreview: string;
+  estimatedBalanceCostPreview: string;
+  estimatedProfitPreview: string;
+  estimatedProfitRatePreview: string | null;
+  suggestedReceived: SuggestedReceivedAmount;
+  recommendationApplied: boolean;
+  appliedSuggestedCny: string;
   balanceAfterPreview: string;
   confirmationMessage: string;
 }>();
@@ -219,6 +301,9 @@ const emit = defineEmits<{
   openConfirmation: [];
   submit: [];
   settlementPlatformChange: [];
+  applySuggested: [];
+  undoSuggested: [];
+  manualPriceInput: [];
   openedAtChange: [value: Date | null];
 }>();
 
@@ -230,6 +315,7 @@ const settlementPlatformOptionId = defineModel<string>('settlementPlatformOption
 });
 const platformOrderNo = defineModel<string>('platformOrderNo', { required: true });
 const receivedAmount = defineModel<string>('receivedAmount', { required: true });
+const targetProfitRate = defineModel<string>('targetProfitRate', { required: true });
 const balanceAmount = defineModel<string>('balanceAmount', { required: true });
 const openedAt = defineModel<Date | null>('openedAt', { required: true });
 const dueAt = defineModel<Date | null>('dueAt', { required: true });
@@ -240,6 +326,7 @@ const formModel = computed(() => ({
   settlementPlatformOptionId: settlementPlatformOptionId.value,
   platformOrderNo: platformOrderNo.value,
   receivedAmount: receivedAmount.value,
+  targetProfitRate: targetProfitRate.value,
   balanceAmount: balanceAmount.value,
   openedAt: openedAt.value,
   dueAt: dueAt.value,
@@ -267,6 +354,24 @@ const formRules = computed<FormRules>(() => ({
             ? undefined
             : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
         ),
+      trigger: 'blur'
+    }
+  ],
+  settlementPlatformOptionId: [{ required: true, message: '请选择结算平台', trigger: 'change' }],
+  targetProfitRate: [
+    {
+      validator: (_rule, value, callback) => {
+        const normalized = String(value ?? '').trim();
+        if (!normalized) {
+          callback();
+          return;
+        }
+        const selectedPlatform = props.settlementPlatforms.find(
+          (platform) => platform.id === settlementPlatformOptionId.value
+        );
+        const error = validateTargetProfitRate(normalized, selectedPlatform?.percentageFee ?? '0');
+        callback(error ? new Error(error) : undefined);
+      },
       trigger: 'blur'
     }
   ],

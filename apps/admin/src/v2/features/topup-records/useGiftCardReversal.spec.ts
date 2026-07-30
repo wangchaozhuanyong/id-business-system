@@ -9,6 +9,7 @@ import {
 function makeGiftCard(lossStatus: 'active' | 'reported' = 'active') {
   return {
     id: '22222222-2222-4222-8222-222222222222',
+    code: 'X123456789ABCDEF',
     codeMasked: 'X123****CDEF',
     faceValue: '20',
     status: 'credited',

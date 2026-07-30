@@ -106,8 +106,9 @@ POST /api/id-business-v2/gift-cards/:giftCardId/reveal-code
 ```
 
 资金只读接口使用 `apple.topup_supplier_fund.view`，资金写操作使用
-`apple.topup_supplier_fund.manage`。供应商更正还要求 `apple.balance.adjust`，完整卡号查看要求
-`apple.gift_card.view_full` 并写敏感访问日志。
+`apple.topup_supplier_fund.manage`。供应商更正还要求 `apple.balance.adjust`。加卡记录和余额变动
+接口使用 `apple.balance.view`，响应直接包含完整礼品卡号；数据库继续加密保存，审计和业务日志只
+记录脱敏值。`reveal-code` 保留为兼容接口，当前管理端不再调用。
 
 ## 6. 续费工作台
 

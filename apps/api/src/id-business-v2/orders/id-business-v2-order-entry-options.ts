@@ -14,7 +14,7 @@ export async function getIdBusinessV2OrderEntryOptions(
   const phoneHash = customerKeyword
     ? fieldEncryptionService.hash(customerKeyword.replace(/\s+/g, ''))
     : null;
-  const [customers, countries, categories, services, settlementPlatforms, financeAccounts] =
+  const [customers, countries, categories, services, settlementPlatforms] =
     await prisma.$transaction([
       prisma.idBusinessV2Customer.findMany({
         where: {
@@ -96,17 +96,7 @@ export async function getIdBusinessV2OrderEntryOptions(
           percentageFee: true
         },
         orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      }),
-      prisma.idBusinessV2FinanceAccount?.findMany({
-        where: { status: 'active' },
-        select: {
-          id: true,
-          name: true,
-          currency: true,
-          currentBalance: true
-        },
-        orderBy: [{ currency: 'asc' }, { name: 'asc' }]
-      }) ?? Promise.resolve([])
+      })
     ]);
 
   return {
@@ -143,10 +133,6 @@ export async function getIdBusinessV2OrderEntryOptions(
       name: platform.name,
       fixedFee: toV2DecimalString(platform.fixedFee),
       percentageFee: toV2DecimalString(platform.percentageFee)
-    })),
-    financeAccounts: financeAccounts.map((account) => ({
-      ...account,
-      currentBalance: toV2DecimalString(account.currentBalance)
     }))
   };
 }

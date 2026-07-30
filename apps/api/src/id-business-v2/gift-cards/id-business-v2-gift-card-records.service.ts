@@ -10,6 +10,7 @@ import type {
   Prisma
 } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { toV2DecimalString } from '../decimal-policy';
@@ -77,7 +78,8 @@ const LEDGER_SORT_FIELDS: Record<
 export class IdBusinessV2GiftCardRecordsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly optionsService: IdBusinessV2OptionsService
+    private readonly optionsService: IdBusinessV2OptionsService,
+    private readonly fieldEncryptionService: FieldEncryptionService
   ) {}
 
   async listGiftCards(query: ListIdBusinessV2GiftCardRecordsQuery) {
@@ -296,6 +298,7 @@ export class IdBusinessV2GiftCardRecordsService {
     const supplierFunding = item.supplierFundEntries[0] ?? null;
     return {
       id: item.id,
+      code: this.decryptGiftCardCode(item.codeEncrypted),
       codeMasked: item.codeMasked,
       codeTail: item.codeTail,
       faceValue: toV2DecimalString(item.faceValue),
@@ -407,6 +410,7 @@ export class IdBusinessV2GiftCardRecordsService {
       giftCard: item.giftCard
         ? {
             id: item.giftCard.id,
+            code: this.decryptGiftCardCode(item.giftCard.codeEncrypted),
             codeMasked: item.giftCard.codeMasked,
             codeTail: item.giftCard.codeTail,
             faceValue: toV2DecimalString(item.giftCard.faceValue),
@@ -419,6 +423,12 @@ export class IdBusinessV2GiftCardRecordsService {
       operator: item.createdBy,
       createdAt: item.createdAt
     };
+  }
+
+  private decryptGiftCardCode(codeEncrypted: string) {
+    const code = this.fieldEncryptionService.decrypt(codeEncrypted);
+    if (!code) throw new NotFoundException('礼品卡号不可用');
+    return code;
   }
 
   private parseGiftCardStatus(value: unknown): IdBusinessV2GiftCardStatus | null {

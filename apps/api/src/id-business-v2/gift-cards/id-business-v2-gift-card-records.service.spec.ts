@@ -112,6 +112,7 @@ function makeLedgerRecord(overrides: Record<string, unknown> = {}) {
     },
     giftCard: {
       id: giftCardId,
+      codeEncrypted: 'v1:must-not-leak',
       codeMasked: 'X123****CDEF',
       codeTail: 'CDEF',
       faceValue: decimal('20'),
@@ -153,7 +154,14 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
   const optionsService = {
     requireActiveOption: vi.fn()
   };
-  const service = new IdBusinessV2GiftCardRecordsService(prisma as never, optionsService as never);
+  const fieldEncryptionService = {
+    decrypt: vi.fn()
+  };
+  const service = new IdBusinessV2GiftCardRecordsService(
+    prisma as never,
+    optionsService as never,
+    fieldEncryptionService as never
+  );
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -164,6 +172,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     prisma.idBusinessV2GiftCard.count.mockResolvedValue(1);
     prisma.idBusinessV2BalanceLedger.findMany.mockResolvedValue([makeLedgerRecord()]);
     prisma.idBusinessV2BalanceLedger.count.mockResolvedValue(1);
+    fieldEncryptionService.decrypt.mockReturnValue('X123456789ABCDEF');
     optionsService.requireActiveOption.mockResolvedValue({
       id: supplierOptionId,
       type: 'topup_supplier',
@@ -184,7 +193,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
-  it('returns paginated masked gift card records with immutable balance snapshots', async () => {
+  it('returns paginated gift card records with full codes and immutable balance snapshots', async () => {
     const result = await service.listGiftCards({ page: '2', pageSize: '20' });
 
     expect(prisma.idBusinessV2GiftCard.findMany).toHaveBeenCalledWith(
@@ -201,6 +210,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       items: [
         {
           id: giftCardId,
+          code: 'X123456789ABCDEF',
           codeMasked: 'X123****CDEF',
           faceValue: '20',
           exchangeRate: '5.4',
@@ -222,6 +232,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     });
     expect(JSON.stringify(result)).not.toContain('codeEncrypted');
     expect(JSON.stringify(result)).not.toContain('codeHash');
+    expect(fieldEncryptionService.decrypt).toHaveBeenCalledWith('v1:must-not-leak');
   });
 
   it('marks gift-card records whose ID has been permanently reported lost', async () => {
@@ -326,6 +337,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       averageCostBefore: '5.4',
       averageCostAfter: '5.4',
       giftCard: {
+        code: 'X123456789ABCDEF',
         codeMasked: 'X123****CDEF'
       },
       operator: {
@@ -390,6 +402,8 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       })
     });
     expect(result.codeMasked).toBe('X123****CDEF');
+    expect(result.code).toBe('X123456789ABCDEF');
+    expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('X123456789ABCDEF');
   });
 
   it('rejects supplier changes through ordinary metadata updates', async () => {

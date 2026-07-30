@@ -9,8 +9,8 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { toV2Decimal } from '../decimal-policy';
-import { IdBusinessV2FinancePostingService, normalizeFinanceDate } from '../finance/public-api';
+import { roundV2Decimal, toV2Decimal } from '../decimal-policy';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
@@ -84,7 +84,6 @@ export class IdBusinessV2OrderLifecycleService {
           throw new ConflictException('当前订单状态不能修改');
         }
         const immutableReceiptEvidenceRequested = [
-          dto.receivedOriginalAmount,
           dto.receivedCurrency,
           dto.receivedFxRateToCny,
           dto.receivedFxSnapshotId,
@@ -93,16 +92,22 @@ export class IdBusinessV2OrderLifecycleService {
         if (immutableReceiptEvidenceRequested) {
           throw new ConflictException('原币金额、币种和汇率快照只能在订单录入时确定');
         }
+        const pricingEvidenceRequested = [
+          dto.receivedAmount,
+          dto.receivedOriginalAmount,
+          dto.settlementPlatformOptionId,
+          dto.platformOrderNo
+        ].some((value) => value !== undefined);
         if (
-          (dto.receivedAmount !== undefined ||
-            dto.receivedFinanceAccountId !== undefined ||
-            dto.receivedAt !== undefined) &&
+          pricingEvidenceRequested &&
           (order.status === 'completed' || order.status === 'refunded')
         ) {
-          throw new ConflictException('已完成或已退款订单的收款证据不可直接修改，请冲销并重记');
+          throw new ConflictException(
+            '已完成或已退款订单的价格和结算平台不可直接修改，请冲销并重记'
+          );
         }
         if (dto.receivedAmount !== undefined && order.receivedCurrency !== 'CNY') {
-          throw new ConflictException('非人民币订单的实收金额必须连同原币汇率证据冲销并重记');
+          throw new ConflictException('非人民币订单请修改原币实收，人民币折算将沿用锁定汇率');
         }
 
         const [consumption, activation, activeLock] = await Promise.all([
@@ -156,6 +161,9 @@ export class IdBusinessV2OrderLifecycleService {
           dto.settlementPlatformOptionId === undefined
             ? order.settlementPlatformOptionId
             : this.support.normalizeOptionalUuid(dto.settlementPlatformOptionId, '结算平台');
+        if (dto.settlementPlatformOptionId !== undefined && !settlementPlatformOptionId) {
+          throw new BadRequestException('结算平台不能为空');
+        }
         const platformOrderNo =
           dto.platformOrderNo === undefined
             ? order.platformOrderNo
@@ -164,22 +172,26 @@ export class IdBusinessV2OrderLifecycleService {
           throw new BadRequestException('填写平台订单号时必须选择结算平台');
         }
 
-        const receivedAmount =
-          dto.receivedAmount === undefined
+        const requestedOriginalAmount =
+          dto.receivedOriginalAmount === undefined
+            ? null
+            : this.support.normalizeAmount(dto.receivedOriginalAmount, '原币实收', true);
+        const receivedAmount = requestedOriginalAmount
+          ? roundV2Decimal(requestedOriginalAmount.mul(order.receivedFxRateToCny))
+          : dto.receivedAmount === undefined
             ? order.receivedAmount
             : this.support.normalizeAmount(dto.receivedAmount, '实收金额', true);
         const receivedOriginalAmount =
-          dto.receivedAmount !== undefined && order.receivedCurrency === 'CNY'
+          requestedOriginalAmount ??
+          (dto.receivedAmount !== undefined && order.receivedCurrency === 'CNY'
             ? receivedAmount
-            : order.receivedOriginalAmount;
-        const receivedFinanceAccountId =
-          dto.receivedFinanceAccountId === undefined
-            ? order.receivedFinanceAccountId
-            : this.support.normalizeOptionalUuid(dto.receivedFinanceAccountId, '收款账户');
-        const receivedAt =
-          dto.receivedAt === undefined
-            ? order.receivedAt
-            : normalizeFinanceDate(dto.receivedAt, '收款时间');
+            : order.receivedOriginalAmount);
+        if (
+          (dto.receivedAmount !== undefined || dto.receivedOriginalAmount !== undefined) &&
+          !settlementPlatformOptionId
+        ) {
+          throw new BadRequestException('修改实收金额前必须先选择结算平台');
+        }
         const balanceAmount =
           dto.balanceAmount === undefined
             ? order.balanceAmount
@@ -237,18 +249,6 @@ export class IdBusinessV2OrderLifecycleService {
           receivedAmount,
           settlementPlatform
         );
-        if (receivedFinanceAccountId) {
-          const financeAccount = await tx.idBusinessV2FinanceAccount.findUnique({
-            where: { id: receivedFinanceAccountId }
-          });
-          if (
-            !financeAccount ||
-            financeAccount.status !== 'active' ||
-            financeAccount.currency !== order.receivedCurrency
-          ) {
-            throw new BadRequestException('收款账户不存在、已停用或币种不一致');
-          }
-        }
         const accountCostAmount = await applyUpdatedOrderAccountDisposition(
           tx,
           order,
@@ -299,8 +299,6 @@ export class IdBusinessV2OrderLifecycleService {
             websiteAccountMasked: website.masked,
             receivedAmount,
             receivedOriginalAmount,
-            receivedFinanceAccountId,
-            receivedAt,
             platformFeeAmount,
             balanceAmount,
             accountDisposition,
@@ -389,8 +387,6 @@ export class IdBusinessV2OrderLifecycleService {
               receivedCurrency: order.receivedCurrency,
               receivedFxRateToCny: order.receivedFxRateToCny.toString(),
               receivedFxSnapshotId: order.receivedFxSnapshotId,
-              receivedFinanceAccountId,
-              receivedAt,
               platformFeeAmount: platformFeeAmount.toString(),
               balanceAmount: balanceAmount.toString(),
               accountDisposition,

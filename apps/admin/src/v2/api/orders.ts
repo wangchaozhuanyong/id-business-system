@@ -59,6 +59,7 @@ export const idBusinessV2OrdersApi = {
     params: {
       serviceOptionId: string;
       balanceAmount: string;
+      orderId?: string;
       limit?: number;
     },
     options: ApiRequestOptions = {}

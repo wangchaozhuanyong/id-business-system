@@ -81,9 +81,6 @@ export function useTopupRecordsPage() {
   const canManageSupplierFunds = computed(() =>
     hasUserPermission(authStore.user, 'apple.topup_supplier_fund.manage')
   );
-  const canRevealGiftCard = computed(() =>
-    hasUserPermission(authStore.user, 'apple.gift_card.view_full')
-  );
   const canReassignSupplier = computed(
     () => canAdjustBalance.value && canManageSupplierFunds.value
   );
@@ -110,10 +107,6 @@ export function useTopupRecordsPage() {
   const selectedGiftCard = ref<V2GiftCardRecord | null>(null);
   const supplierDrawerVisible = ref(false);
   const supplierSubmitting = ref(false);
-  const revealDialogVisible = ref(false);
-  const revealSubmitting = ref(false);
-  const revealedGiftCardCode = ref('');
-  const revealReason = ref('');
 
   const filters = reactive({
     keyword: '',
@@ -466,43 +459,6 @@ export function useTopupRecordsPage() {
     }
   }
 
-  function openRevealDialog(giftCard: V2GiftCardRecord) {
-    selectedGiftCard.value = giftCard;
-    revealReason.value = '';
-    revealedGiftCardCode.value = '';
-    revealDialogVisible.value = true;
-  }
-
-  const revealDisabledReason = computed(() => {
-    if (!selectedGiftCard.value) return '未选择礼品卡记录';
-    if (!canRevealGiftCard.value) return '当前账号无权查看完整礼品卡号';
-    const length = revealReason.value.trim().length;
-    return length >= 2 && length <= 200 ? '' : '查看原因必须为 2 至 200 个字符';
-  });
-
-  async function submitRevealGiftCard() {
-    const giftCard = selectedGiftCard.value;
-    if (!giftCard || revealSubmitting.value || revealDisabledReason.value) return;
-    revealSubmitting.value = true;
-    try {
-      const result = await idBusinessV2BalancesApi.revealGiftCardCode(giftCard.id, {
-        reason: revealReason.value.trim()
-      });
-      revealedGiftCardCode.value = result.code;
-      ElMessage.success('完整卡号已临时解密，本次查看已记录审计');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      revealSubmitting.value = false;
-    }
-  }
-
-  watch(revealDialogVisible, (visible) => {
-    if (visible) return;
-    revealedGiftCardCode.value = '';
-    revealReason.value = '';
-  });
-
   function giftCardRowNumber(index: number) {
     return (giftCardQuery.page - 1) * giftCardQuery.pageSize + index + 1;
   }
@@ -515,7 +471,6 @@ export function useTopupRecordsPage() {
     canAdjustBalance,
     canViewSupplierFunds,
     canManageSupplierFunds,
-    canRevealGiftCard,
     canReassignSupplier,
     activeTab,
     countryOptions,
@@ -530,10 +485,6 @@ export function useTopupRecordsPage() {
     metadataSubmitting,
     supplierDrawerVisible,
     supplierSubmitting,
-    revealDialogVisible,
-    revealSubmitting,
-    revealedGiftCardCode,
-    revealReason,
     selectedGiftCard,
     filters,
     giftCardQuery,
@@ -542,7 +493,6 @@ export function useTopupRecordsPage() {
     supplierForm,
     metadataDisabledReason,
     supplierDisabledReason,
-    revealDisabledReason,
     activeLoading,
     activeError,
     activeResolved,
@@ -565,8 +515,6 @@ export function useTopupRecordsPage() {
     submitMetadata,
     openSupplierDrawer,
     submitSupplierReassignment,
-    openRevealDialog,
-    submitRevealGiftCard,
     ...giftCardReversal,
     giftCardRowNumber,
     ledgerRowNumber,

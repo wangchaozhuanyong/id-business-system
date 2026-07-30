@@ -42,7 +42,8 @@ export function useDataAnalyticsPage() {
     currency: '' as V2FinanceCurrency | '',
     supplierOptionId: '',
     journalType: '' as V2FinanceJournalType | '',
-    financeAccountId: ''
+    financeAccountId: '',
+    settlementPlatformOptionId: ''
   });
   const applied = ref<V2FinanceReportQuery>({});
   const query = useV2ModuleQuery<AnalyticsSnapshot>({
@@ -78,6 +79,9 @@ export function useDataAnalyticsPage() {
     for (const wallet of wallets.value) items.set(wallet.supplierOptionId, wallet.supplierName);
     return [...items].map(([value, label]) => ({ value, label }));
   });
+  const settlementPlatformOptions = computed(
+    () => overview.value?.settlementPlatformReport.options ?? []
+  );
   const assetRows = computed(() => {
     if (!overview.value) return [];
     return [
@@ -96,7 +100,8 @@ export function useDataAnalyticsPage() {
       currency: filters.currency || undefined,
       supplierOptionId: filters.supplierOptionId || undefined,
       journalType: filters.journalType || undefined,
-      financeAccountId: filters.financeAccountId || undefined
+      financeAccountId: filters.financeAccountId || undefined,
+      settlementPlatformOptionId: filters.settlementPlatformOptionId || undefined
     };
     void query.refresh();
   }
@@ -107,6 +112,7 @@ export function useDataAnalyticsPage() {
     filters.supplierOptionId = '';
     filters.journalType = '';
     filters.financeAccountId = '';
+    filters.settlementPlatformOptionId = '';
     applyFilters();
   }
 
@@ -122,6 +128,7 @@ export function useDataAnalyticsPage() {
     resolved,
     error,
     supplierOptions,
+    settlementPlatformOptions,
     assetRows,
     applyFilters,
     resetFilters,

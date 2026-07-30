@@ -74,5 +74,8 @@ export {
   type V2FinanceSettings,
   type V2FinanceSupplierLedgerEntry,
   type V2FinanceSupplierLedgerPage,
-  type V2FinanceSupplierWallet
+  type V2FinanceSupplierWallet,
+  type V2SettlementPlatformOriginalAmount,
+  type V2SettlementPlatformReport,
+  type V2SettlementPlatformReportRow
 } from './v2/finance';

@@ -239,8 +239,7 @@
 
 .v2-supplier-fund-form,
 .v2-supplier-fund-details,
-.v2-payment-reversal-form,
-.v2-gift-card-reveal {
+.v2-payment-reversal-form {
   display: grid;
   min-width: 0;
   gap: 16px;
@@ -258,8 +257,7 @@
 }
 
 .v2-supplier-fund-form .el-form-item,
-.v2-payment-reversal-form .el-form-item,
-.v2-gift-card-reveal .el-form-item {
+.v2-payment-reversal-form .el-form-item {
   margin-bottom: 12px;
 }
 
@@ -292,26 +290,6 @@
 .v2-supplier-country-stats span {
   color: var(--v2-text-soft);
   font-size: 11px;
-}
-
-.v2-gift-card-reveal__result {
-  display: grid;
-  gap: 7px;
-  padding: 14px;
-  border: 1px solid var(--el-color-primary-light-7);
-  border-radius: 6px;
-  background: var(--el-color-primary-light-9);
-}
-
-.v2-gift-card-reveal__result span {
-  color: var(--v2-text-soft);
-  font-size: 12px;
-}
-
-.v2-gift-card-reveal__result code {
-  overflow-wrap: anywhere;
-  font-size: 16px;
-  font-weight: 700;
 }
 
 @media (max-width: 1320px) {

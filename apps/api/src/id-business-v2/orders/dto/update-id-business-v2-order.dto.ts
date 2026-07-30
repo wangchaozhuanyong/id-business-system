@@ -18,9 +18,7 @@ export interface UpdateIdBusinessV2OrderDto {
   receivedCurrency?: IdBusinessV2FinanceCurrency;
   receivedFxRateToCny?: string | number;
   receivedFxSnapshotId?: string | null;
-  receivedFinanceAccountId?: string | null;
   receivedManualRateReason?: string | null;
-  receivedAt?: string | null;
   balanceAmount?: string | number;
   openedAt?: string;
   dueAt?: string;

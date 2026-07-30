@@ -26,6 +26,7 @@ export interface V2FinanceReportQuery {
   supplierOptionId?: string;
   journalType?: V2FinanceJournalType | '';
   financeAccountId?: string;
+  settlementPlatformOptionId?: string;
 }
 
 export interface V2FinanceJournalQuery extends V2FinanceReportQuery {

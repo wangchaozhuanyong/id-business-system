@@ -37,6 +37,19 @@
           :value="item.id"
         />
       </el-select>
+      <el-select
+        v-model="filters.settlementPlatformOptionId"
+        clearable
+        filterable
+        placeholder="全部结算平台"
+      >
+        <el-option
+          v-for="item in settlementPlatformOptions"
+          :key="item.id"
+          :label="item.name"
+          :value="item.id"
+        />
+      </el-select>
       <div class="v2-records-toolbar__actions">
         <AppButton title="应用筛选" @click="applyFilters">
           <el-icon><Search /></el-icon>
@@ -120,6 +133,8 @@
             <small>处理中订单，不计入净利润</small>
           </article>
         </section>
+
+        <V2SettlementPlatformReport :report="overview.settlementPlatformReport" />
 
         <section class="v2-finance-grid">
           <article class="v2-finance-panel">
@@ -380,6 +395,7 @@ import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2SettlementPlatformReport from './components/V2SettlementPlatformReport.vue';
 import { useDataAnalyticsPage } from './useDataAnalyticsPage';
 import '@/v2/styles/records.css';
 import '@/v2/styles/finance.css';
@@ -396,6 +412,7 @@ const {
   resolved,
   error,
   supplierOptions,
+  settlementPlatformOptions,
   assetRows,
   applyFilters,
   resetFilters,

@@ -12,7 +12,6 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
 import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
 import { addDecimalStrings, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
-import { calculatePlatformFeeAmount } from '@/v2/features/order-entry/order-pricing';
 import { idBusinessV2RenewalsApi } from './api';
 import type {
   V2ManualRenewalOptions,
@@ -24,6 +23,7 @@ import type {
   V2RenewalWorkbenchResult
 } from './contracts';
 import { useRenewalWarningSettings } from './useRenewalWarningSettings';
+import { useRenewalPricing } from './useRenewalPricing';
 
 const dueStatusOptions: Array<{ value: V2RenewalDueStatus; label: string }> = [
   { value: 'due_within_1_hour', label: '1小时内到期' },
@@ -85,6 +85,7 @@ export function useRenewalsPage() {
     settlementPlatformOptionId: '',
     platformOrderNo: '',
     receivedAmount: '',
+    targetProfitRate: '',
     balanceAmount: '',
     openedAt: null as Date | null,
     dueAt: null as Date | null,
@@ -215,14 +216,19 @@ export function useRenewalsPage() {
         (platform) => platform.id === form.settlementPlatformOptionId
       ) ?? null
   );
-  const platformFeePreview = computed(() => {
-    const platform = selectedPlatform.value;
-    if (!platform) return '0';
-    return (
-      calculatePlatformFeeAmount(form.receivedAmount, platform.fixedFee, platform.percentageFee) ??
-      '0'
-    );
-  });
+  const {
+    platformFeePreview,
+    estimatedBalanceCostPreview,
+    estimatedProfitPreview,
+    estimatedProfitRatePreview,
+    suggestedReceived,
+    recommendationApplied,
+    appliedSuggestedCny,
+    applySuggestedReceivedAmount,
+    undoSuggestedReceivedAmount,
+    handleManualPriceInput,
+    resetRecommendation
+  } = useRenewalPricing(form, selectedRenewal, selectedPlatform);
   const balanceAfterPreview = computed(() => {
     const currentBalance = selectedRenewal.value?.account.currentBalance;
     if (!currentBalance || !isValidNonNegativeDecimal(form.balanceAmount)) return '0';
@@ -236,6 +242,7 @@ export function useRenewalsPage() {
     if (optionsLoading.value) return '正在加载续费业务选项';
     if (optionsError.value) return '续费业务选项加载失败，请先重试';
     if (!availableServices.value.length) return '当前国家暂无可用续费业务';
+    if (!options.value.settlementPlatforms.length) return '请先配置可用结算平台';
     return '';
   });
   const renewalStatusStripItems = computed<V2StatusStripItem[]>(() => {
@@ -388,12 +395,14 @@ export function useRenewalsPage() {
       settlementPlatformOptionId: '',
       platformOrderNo: '',
       receivedAmount: '',
+      targetProfitRate: '',
       balanceAmount: '',
       openedAt,
       dueAt: calculateOneMonthInclusiveDueAt(openedAt),
       remark: ''
     });
     applySelectedServiceAmount();
+    resetRecommendation();
     drawerVisible.value = true;
     confirmationVisible.value = false;
     if (!options.value.services.length || optionsError.value) void loadManualRenewalOptions();
@@ -443,7 +452,7 @@ export function useRenewalsPage() {
     try {
       const result = await idBusinessV2RenewalsApi.createManualRenewal(renewal.id, {
         serviceOptionId: form.serviceOptionId,
-        settlementPlatformOptionId: form.settlementPlatformOptionId || null,
+        settlementPlatformOptionId: form.settlementPlatformOptionId,
         platformOrderNo: form.platformOrderNo.trim() || null,
         receivedAmount: form.receivedAmount.trim(),
         balanceAmount: form.balanceAmount.trim(),
@@ -543,6 +552,12 @@ export function useRenewalsPage() {
     availableServices,
     selectedManualService,
     platformFeePreview,
+    estimatedBalanceCostPreview,
+    estimatedProfitPreview,
+    estimatedProfitRatePreview,
+    suggestedReceived,
+    recommendationApplied,
+    appliedSuggestedCny,
     balanceAfterPreview,
     renewalSubmitDisabledReason,
     renewalStatusStripItems,
@@ -566,6 +581,9 @@ export function useRenewalsPage() {
     saveWarningSettings,
     handleRenewalOpenedAtChange,
     handleSettlementPlatformChange,
+    applySuggestedReceivedAmount,
+    undoSuggestedReceivedAmount,
+    handleManualPriceInput,
     openConfirmation,
     submitRenewal,
     serviceLabel,

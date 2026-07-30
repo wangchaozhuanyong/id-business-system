@@ -6,7 +6,7 @@ import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../dec
 
 export interface NormalizedManualRenewal {
   serviceOptionId: string;
-  settlementPlatformOptionId: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo: string | null;
   receivedAmount: PrismaNamespace.Decimal;
   balanceAmount: PrismaNamespace.Decimal;
@@ -42,10 +42,7 @@ export function normalizeManualRenewalInput(
   dto: CreateIdBusinessV2ManualRenewalDto
 ): NormalizedManualRenewal {
   const serviceOptionId = normalizeUuid(dto.serviceOptionId, '续费业务');
-  const settlementPlatformOptionId = normalizeOptionalUuid(
-    dto.settlementPlatformOptionId,
-    '结算平台'
-  );
+  const settlementPlatformOptionId = normalizeUuid(dto.settlementPlatformOptionId, '结算平台');
   const platformOrderNo = normalizeOptionalString(dto.platformOrderNo, '平台订单号', 160);
   if (platformOrderNo && !settlementPlatformOptionId) {
     throw new BadRequestException('填写平台订单号时必须选择结算平台');
@@ -169,11 +166,6 @@ export function isUniqueConstraintError(error: unknown) {
     'code' in error &&
     (error as { code?: unknown }).code === 'P2002'
   );
-}
-
-function normalizeOptionalUuid(value: unknown, label: string) {
-  if (value === undefined || value === null || value === '') return null;
-  return normalizeUuid(value, label);
 }
 
 function normalizeOptionalString(value: unknown, label: string, maxLength: number) {

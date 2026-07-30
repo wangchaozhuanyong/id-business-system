@@ -134,7 +134,8 @@
 }
 
 .v2-renewal-open__preview {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -148,13 +149,42 @@
   gap: 3px;
 }
 
-.v2-renewal-open__preview > div:last-child {
-  text-align: right;
-}
-
 .v2-renewal-open__preview strong {
   font-size: 18px;
   font-variant-numeric: tabular-nums;
+}
+
+.v2-renewal-price-recommendation {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface-muted);
+}
+
+.v2-renewal-price-recommendation > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-renewal-price-recommendation strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-renewal-price-recommendation small {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.v2-renewal-price-recommendation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 @media (max-width: 1320px) {
@@ -202,11 +232,6 @@
   }
 
   .v2-renewal-open__preview {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .v2-renewal-open__preview > div:last-child {
-    text-align: left;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
