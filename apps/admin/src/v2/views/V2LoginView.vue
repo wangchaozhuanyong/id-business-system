@@ -174,6 +174,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage, http, request } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
+import { getSafeV2Redirect } from '@/v2/router/passwordReset';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
 
@@ -244,15 +245,7 @@ async function submit() {
 }
 
 function getLoginRedirectPath() {
-  const redirect = Array.isArray(route.query.redirect)
-    ? route.query.redirect[0]
-    : route.query.redirect;
-
-  if (typeof redirect === 'string' && redirect.startsWith('/v2') && !redirect.startsWith('//')) {
-    return redirect;
-  }
-
-  return '/v2';
+  return getSafeV2Redirect(route.query.redirect);
 }
 
 function getLoginErrorMessage(error: unknown) {
