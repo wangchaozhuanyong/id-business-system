@@ -65,7 +65,7 @@
           >
             <template #default="{ row }">¥{{ formatDecimal(row.costAmount) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="实际付款" min-width="135">
+          <V2TableColumn kind="numeric" label="实际付款" width-preset="wide">
             <template #default="{ row }">
               {{ formatDecimal(row.purchaseOriginalAmount) }} {{ row.purchaseCurrency }}
             </template>
@@ -83,10 +83,10 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="105">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.country.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="供应商" min-width="125">
+          <V2TableColumn kind="text" label="供应商" width-preset="standard">
             <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡前余额">
@@ -99,7 +99,7 @@
               {{ formatOptionalDecimal(row.creditedLedger?.balanceAfter) }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款前余额" min-width="150">
+          <V2TableColumn kind="numeric" label="供应商扣款前余额" width-preset="wide">
             <template #default="{ row }">
               {{
                 row.supplierFunding
@@ -108,7 +108,7 @@
               }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款后余额" min-width="150">
+          <V2TableColumn kind="numeric" label="供应商扣款后余额" width-preset="wide">
             <template #default="{ row }">
               {{
                 row.supplierFunding
@@ -117,7 +117,7 @@
               }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" min-width="115">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
             </template>
@@ -333,7 +333,13 @@
           <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
             <template #default="{ $index }">{{ ledgerRowNumber($index) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="变动类型" min-width="125" fixed="left">
+          <V2TableColumn
+            kind="text"
+            label="变动类型"
+            width-preset="standard"
+            width-mode="fixed"
+            fixed="left"
+          >
             <template #default="{ row }">
               <el-tag :type="ledgerTypeTag(row.entryType)" effect="plain">
                 {{ ledgerTypeLabel(row.entryType) }}
@@ -346,7 +352,7 @@
           <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="105">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.account.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn
@@ -390,14 +396,14 @@
           <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
             <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter) }} </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="关联" min-width="105">
+          <V2TableColumn kind="text" label="关联" width-preset="compact">
             <template #default="{ row }">
               <el-tag v-if="row.reversalOf" type="warning" effect="plain">反向流水</el-tag>
               <el-tag v-else-if="row.reversedBy" type="info" effect="plain">已反冲</el-tag>
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" min-width="115">
+          <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>

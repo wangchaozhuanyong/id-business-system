@@ -84,10 +84,10 @@
               <strong class="v2-activation-order">{{ row.order.orderNo }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="客户" min-width="140">
+          <V2TableColumn kind="text" label="客户" width-preset="wide">
             <template #default="{ row }">{{ row.customer.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="业务" min-width="155">
+          <V2TableColumn kind="text" label="业务" width-preset="wide">
             <template #default="{ row }">{{ row.service.name }}</template>
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="identifier" label="苹果 ID">

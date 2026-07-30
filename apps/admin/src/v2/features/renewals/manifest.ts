@@ -26,14 +26,19 @@ export const renewalWorkbenchFeature = defineV2Feature({
     { key: 'dueAt', label: '到期时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'customer', label: '客户', kind: 'text', minWidth: 140 },
-    { key: 'account', label: 'ID账号', kind: 'identifier', minWidth: 192 },
-    { key: 'country', label: '国家', kind: 'text', minWidth: 110 },
-    { key: 'websiteAccount', label: '客户网站账号', kind: 'identifier', minWidth: 160 },
-    { key: 'balance', label: 'ID余额', kind: 'numeric', minWidth: 112 },
-    { key: 'service', label: '开通业务', kind: 'text', minWidth: 140 },
-    { key: 'dueAt', label: '到期时间', kind: 'date', minWidth: 165 },
-    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
+    { key: 'customer', label: '客户', kind: 'text', widthPreset: 'wide' },
+    { key: 'account', label: 'ID账号', kind: 'identifier', widthPreset: 'identifier' },
+    { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
+    {
+      key: 'websiteAccount',
+      label: '客户网站账号',
+      kind: 'identifier',
+      widthPreset: 'wide'
+    },
+    { key: 'balance', label: 'ID余额', kind: 'numeric', widthPreset: 'compact' },
+    { key: 'service', label: '开通业务', kind: 'text', widthPreset: 'wide' },
+    { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
     {
       key: 'actions',
       label: '操作',

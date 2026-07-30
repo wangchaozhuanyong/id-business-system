@@ -61,12 +61,12 @@
       <V2TableColumn kind="numeric" label="已结算订单" width-preset="standard">
         <template #default="{ row }">{{ row.completedOrderCount }}</template>
       </V2TableColumn>
-      <V2TableColumn kind="text" label="原币实收" min-width="180">
+      <V2TableColumn kind="text" label="原币实收" width-preset="identifier">
         <template #default="{ row }">
           {{ formatOriginalAmounts(row.originalAmounts, 'grossReceived') }}
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="text" label="原币退款" min-width="180">
+      <V2TableColumn kind="text" label="原币退款" width-preset="identifier">
         <template #default="{ row }">
           {{ formatOriginalAmounts(row.originalAmounts, 'refunded') }}
         </template>

@@ -14,7 +14,7 @@
         :kind="column.kind"
         :prop="column.key"
         :label="column.label"
-        :min-width="column.minWidth"
+        :width-preset="column.widthPreset"
         :fixed="column.fixed"
       />
       <template #empty>
@@ -35,19 +35,13 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import type { V2TableColumnDefinition } from '@/v2/config/modules';
+import type { V2TableColumnDefinition, V2TableDataColumnDefinition } from '@/v2/config/modules';
 
 const props = defineProps<{
   columns: readonly V2TableColumnDefinition[];
 }>();
 
 const dataColumns = computed(() =>
-  props.columns.filter(
-    (
-      column
-    ): column is V2TableColumnDefinition & {
-      kind: Exclude<V2TableColumnDefinition['kind'], 'actions'>;
-    } => column.kind !== 'actions'
-  )
+  props.columns.filter((column): column is V2TableDataColumnDefinition => column.kind !== 'actions')
 );
 </script>

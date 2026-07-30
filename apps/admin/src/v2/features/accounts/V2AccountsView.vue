@@ -169,7 +169,7 @@
           >
             <template #default="{ row }">{{ row.soldByOrder?.orderNo || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" min-width="110">
+          <V2TableColumn kind="text" label="国家" width-preset="compact">
             <template #default="{ row }">{{ row.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn
@@ -193,7 +193,7 @@
           >
             <template #default="{ row }">¥{{ page.formatDecimal(row.balanceCostAmount) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="供应商" min-width="120">
+          <V2TableColumn kind="text" label="供应商" width-preset="standard">
             <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="status" width-preset="compact" label="ID 状态">

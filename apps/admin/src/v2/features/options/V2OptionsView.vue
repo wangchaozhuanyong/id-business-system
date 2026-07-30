@@ -112,7 +112,7 @@
                   kind="text"
                   prop="name"
                   label="选项名称"
-                  min-width="180"
+                  width-preset="identifier"
                   sortable="custom"
                 >
                   <template #default="{ row }">
@@ -123,7 +123,7 @@
                   kind="text"
                   prop="remark"
                   label="备注"
-                  min-width="180"
+                  width-preset="identifier"
                   show-overflow-tooltip
                 />
 
@@ -131,7 +131,7 @@
                   v-if="activeTypeDefinition?.parentType"
                   kind="text"
                   label="上级选项"
-                  min-width="160"
+                  width-preset="wide"
                 >
                   <template #default="{ row }">{{ row.parent?.name ?? '—' }}</template>
                 </V2TableColumn>
@@ -140,7 +140,7 @@
                   v-if="activeTypeDefinition?.requiresCountry"
                   kind="text"
                   label="上级国家"
-                  min-width="130"
+                  width-preset="wide"
                 >
                   <template #default="{ row }">{{ row.country?.name ?? '—' }}</template>
                 </V2TableColumn>
@@ -160,7 +160,7 @@
                   v-if="activeTypeDefinition?.supportsCurrency"
                   kind="text"
                   label="默认货币"
-                  min-width="110"
+                  width-preset="compact"
                 >
                   <template #default="{ row }">{{ row.currencyCode ?? '—' }}</template>
                 </V2TableColumn>

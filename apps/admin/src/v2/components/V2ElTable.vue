@@ -6,16 +6,20 @@ export default defineComponent({
   name: 'V2ElTable',
   inheritAttrs: false,
   setup(_, { attrs, slots }) {
-    return () =>
-      h(
+    return () => {
+      const tableAttrs = { ...attrs };
+      return h(
         ElTable,
         {
           fit: true,
           tableLayout: 'auto',
-          ...attrs
+          scrollbarAlwaysOn: true,
+          ...tableAttrs,
+          class: ['v2-adaptive-table', tableAttrs.class]
         },
         slots
       );
+    };
   }
 });
 </script>

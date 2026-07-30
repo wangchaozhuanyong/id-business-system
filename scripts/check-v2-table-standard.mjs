@@ -12,6 +12,15 @@ const tableColumnDefinitionPath = 'apps/admin/src/v2/components/tableColumn.ts';
 const tableActionColumnPath = 'apps/admin/src/v2/components/V2TableActionColumn.vue';
 const tableActionLayoutPath = 'apps/admin/src/v2/components/tableActionLayout.ts';
 const validColumnKinds = new Set(['text', 'identifier', 'index', 'numeric', 'date', 'status']);
+const validColumnWidthPresets = new Set([
+  'index',
+  'compact',
+  'standard',
+  'wide',
+  'dateTime',
+  'identifier',
+  'longText'
+]);
 const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'wide']);
 const issues = [];
 
@@ -64,6 +73,7 @@ for (const { projectPath, source } of featureManifests) {
   for (const entry of columnsBlock.match(/\{[\s\S]*?\}/g) ?? []) {
     const key = entry.match(/\bkey:\s*'([^']+)'/)?.[1];
     const kind = entry.match(/\bkind:\s*'([^']+)'/)?.[1];
+    const widthPreset = entry.match(/\bwidthPreset:\s*'([^']+)'/)?.[1];
     if (!key) continue;
     if (key === 'actions') {
       if (kind !== 'actions') {
@@ -71,6 +81,10 @@ for (const { projectPath, source } of featureManifests) {
       }
     } else if (!kind || !validColumnKinds.has(kind)) {
       issues.push(`${projectPath}: 数据列 ${key} 缺少有效语义 kind`);
+    } else if (!widthPreset || !validColumnWidthPresets.has(widthPreset)) {
+      issues.push(`${projectPath}: 数据列 ${key} 缺少有效共享宽度档位`);
+    } else if (/\bminWidth\s*:/.test(entry)) {
+      issues.push(`${projectPath}: 数据列 ${key} 禁止维护任意 minWidth`);
     }
   }
 }
@@ -96,12 +110,34 @@ const tableActionLayoutSource = read(tableActionLayoutPath);
 if (!elementPlusSource.includes('fit: true') || elementPlusSource.includes('fit: false')) {
   issues.push('apps/admin/src/v2/components/V2ElTable.vue: 表格必须默认 fit: true 自动填满容器');
 }
+if (
+  !elementPlusSource.includes('scrollbarAlwaysOn: true') ||
+  !elementPlusSource.includes('v2-adaptive-table')
+) {
+  issues.push('apps/admin/src/v2/components/V2ElTable.vue: 表格必须启用自适应容器和常显滚动条');
+}
 for (const [pattern, message] of [
   [/\.v2-shell \.el-table \.cell[\s\S]*?white-space:\s*nowrap/, '表格单元格未强制单行'],
   [/\.v2-shell \.el-table \.cell[\s\S]*?text-overflow:\s*ellipsis/, '表格长内容未使用省略号'],
   [
     /\.v2-shell \.el-table td\.el-table__cell[\s\S]*?vertical-align:\s*middle/,
     '表格单元格未垂直居中'
+  ],
+  [
+    /\.v2-shell \.v2-adaptive-table[\s\S]*?container-name:\s*v2-data-table/,
+    '表格未建立容器级自适应上下文'
+  ],
+  [
+    /\.v2-shell \.el-table \.cell[\s\S]*?padding-inline:\s*var\(--v2-table-cell-inline-padding/,
+    '表格单元格未使用统一自适应横向间距'
+  ],
+  [
+    /@container v2-data-table \(max-width:\s*1199px\)[\s\S]*?--v2-table-cell-inline-padding:\s*10px/,
+    '中等表格容器未使用 10px 横向间距'
+  ],
+  [
+    /@container v2-data-table \(max-width:\s*839px\)[\s\S]*?--v2-table-cell-inline-padding:\s*8px/,
+    '紧凑表格容器未使用 8px 横向间距'
   ]
 ]) {
   if (!pattern.test(tableStyleSource)) issues.push(`${tableStylePath}: ${message}`);
@@ -139,6 +175,18 @@ for (const [preset, width] of Object.entries({
 })) {
   if (!new RegExp(`\\b${preset}:\\s*${width}\\b`).test(tableColumnDefinitionSource)) {
     issues.push(`${tableColumnDefinitionPath}: ${preset} 列宽必须为 ${width}`);
+  }
+}
+for (const [kind, mode] of Object.entries({
+  text: 'flex',
+  identifier: 'fixed',
+  index: 'fixed',
+  numeric: 'fixed',
+  date: 'fixed',
+  status: 'fixed'
+})) {
+  if (!new RegExp(`\\b${kind}:\\s*'${mode}'`).test(tableColumnDefinitionSource)) {
+    issues.push(`${tableColumnDefinitionPath}: ${kind} 列宽模式必须为 ${mode}`);
   }
 }
 for (const [layout, width] of Object.entries({
@@ -189,6 +237,9 @@ for (const snippet of [
   'V2TableColumn',
   '数字、金额、汇率和百分比',
   '空值统一显示 `—`',
+  '固定语义宽度',
+  '表格单元格横向间距',
+  '`width-preset`',
   'V2TableActionColumn',
   '禁止同时叠加 `gap` 与 Element Plus 相邻按钮默认边距',
   '操作按钮不得被裁切'
@@ -310,8 +361,24 @@ function validateViewSource(source, isOptionsView) {
     }
     for (const openingTag of table.match(/<V2TableColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
       const kind = openingTag.match(/\bkind=["']([^"']+)["']/)?.[1];
+      const widthPreset = openingTag.match(/\bwidth-preset=["']([^"']+)["']/)?.[1];
+      const widthMode = openingTag.match(/\bwidth-mode=["']([^"']+)["']/)?.[1];
+      const isExpandControl =
+        /\btype=["']expand["']/.test(openingTag) && /(?<!min-)\bwidth=["']52["']/.test(openingTag);
       if (!kind || !validColumnKinds.has(kind)) {
         viewIssues.push('V2TableColumn 必须声明有效的语义 kind');
+      }
+      if (!isExpandControl && (!widthPreset || !validColumnWidthPresets.has(widthPreset))) {
+        viewIssues.push('V2TableColumn 必须使用共享 width-preset');
+      }
+      if (/\bmin-width=["'][^"']+["']/.test(openingTag)) {
+        viewIssues.push('V2TableColumn 禁止使用页面级 min-width');
+      }
+      if (/(?<!min-)\bwidth=["'][^"']+["']/.test(openingTag) && !isExpandControl) {
+        viewIssues.push('V2TableColumn 仅展开控制列允许固定 52px width');
+      }
+      if (widthMode && !['fixed', 'flex'].includes(widthMode)) {
+        viewIssues.push('V2TableColumn width-mode 只能为 fixed 或 flex');
       }
     }
     for (const openingTag of table.match(/<V2TableActionColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
@@ -370,7 +437,7 @@ function extractPrismaModel(source, modelName) {
 function runSelfTests() {
   const valid = `
     <el-table show-overflow-tooltip>
-      <V2TableColumn kind="identifier" label="账号" />
+      <V2TableColumn kind="identifier" width-preset="identifier" label="账号" />
       <V2TableActionColumn layout="triple"><AppButton>编辑</AppButton></V2TableActionColumn>
     </el-table>
     <script setup>
@@ -388,6 +455,8 @@ function runSelfTests() {
     '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="操作" /></el-table>',
     '<el-table show-overflow-tooltip><V2TableColumn label="账号" /></el-table>',
     '<el-table show-overflow-tooltip><V2TableColumn kind="custom" label="账号" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" min-width="140" label="账号" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" width-preset="custom" label="账号" /></el-table>',
     '<el-table show-overflow-tooltip><V2TableActionColumn /></el-table>',
     '<el-table show-overflow-tooltip><V2TableActionColumn layout="custom" /></el-table>'
   ]) {
@@ -395,7 +464,7 @@ function runSelfTests() {
   }
   assert.deepEqual(
     validateViewSource(
-      `<el-table show-overflow-tooltip><V2TableColumn kind="numeric" label="排序" /></el-table>
+      `<el-table show-overflow-tooltip><V2TableColumn kind="numeric" width-preset="compact" label="排序" /></el-table>
        <script setup>
        import V2TableColumn from '@/v2/components/V2TableColumn.vue';
        </script>`,
@@ -453,6 +522,7 @@ function validateTableColumnSource(source) {
   return [
     'ElTableColumn',
     'V2_TABLE_COLUMN_ALIGNMENT[props.kind]',
+    'getV2TableColumnWidthProps(props.kind, widthPreset, props.widthMode)',
     'align:',
     'headerAlign:',
     'getV2TableColumnClass(props.kind)'

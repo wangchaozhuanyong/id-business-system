@@ -198,7 +198,7 @@
       class="v2-account-import-errors"
     >
       <V2TableColumn kind="index" width-preset="index" prop="rowNumber" label="行号" />
-      <V2TableColumn kind="text" prop="reason" label="未导入原因" min-width="300" />
+      <V2TableColumn kind="text" prop="reason" label="未导入原因" width-preset="longText" />
     </el-table>
 
     <template #footer>

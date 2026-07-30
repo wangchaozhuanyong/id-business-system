@@ -2,10 +2,11 @@
 import { defineComponent, h, type PropType } from 'vue';
 import { ElTableColumn } from 'element-plus/es/components/table/index.mjs';
 import {
+  getV2TableColumnWidthProps,
   getV2TableColumnClass,
   V2_TABLE_COLUMN_ALIGNMENT,
-  V2_TABLE_COLUMN_WIDTH,
   type V2TableColumnKind,
+  type V2TableColumnWidthMode,
   type V2TableColumnWidthPreset
 } from './tableColumn';
 
@@ -19,6 +20,10 @@ export default defineComponent({
     },
     widthPreset: {
       type: String as PropType<V2TableColumnWidthPreset>,
+      default: undefined
+    },
+    widthMode: {
+      type: String as PropType<V2TableColumnWidthMode>,
       default: undefined
     }
   },
@@ -42,9 +47,7 @@ export default defineComponent({
         {
           ...columnAttrs,
           ...(widthPreset && !hasExplicitWidth
-            ? props.kind === 'index'
-              ? { width: V2_TABLE_COLUMN_WIDTH[widthPreset] }
-              : { minWidth: V2_TABLE_COLUMN_WIDTH[widthPreset] }
+            ? getV2TableColumnWidthProps(props.kind, widthPreset, props.widthMode)
             : {}),
           align: V2_TABLE_COLUMN_ALIGNMENT[props.kind],
           headerAlign: V2_TABLE_COLUMN_ALIGNMENT[props.kind],
