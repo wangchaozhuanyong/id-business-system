@@ -8,6 +8,7 @@ import {
   createWranglerRollbackArguments,
   fetchWithReleasePolicy,
   getDeploymentGitCommit,
+  getDeploymentId,
   getReleaseFailureRecovery,
   getRemoteProductionReleaseLockCommit,
   getWranglerDeployVersionId,
@@ -53,6 +54,12 @@ test('requires an exact Git commit annotation on the active deployment', () => {
       }),
     /完整 Git commit/
   );
+});
+
+test('requires an exact deployment ID before comparing concurrent releases', () => {
+  assert.equal(getDeploymentId({ id: stableVersionId }), stableVersionId);
+  assert.throws(() => getDeploymentId({}), /deployment ID/);
+  assert.throws(() => getDeploymentId({ id: 'bad deployment id' }), /deployment ID/);
 });
 
 test('uses compare-and-swap arguments for the remote production release lock', () => {

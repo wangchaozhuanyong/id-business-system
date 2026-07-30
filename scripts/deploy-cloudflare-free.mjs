@@ -12,6 +12,7 @@ import {
   createProductionReleaseLockReleaseArguments,
   createWranglerRollbackArguments,
   getDeploymentGitCommit,
+  getDeploymentId,
   getReleaseFailureRecovery,
   getRemoteProductionReleaseLockCommit,
   getWranglerDeployVersionId,
@@ -25,9 +26,11 @@ import {
 } from './lib/cloudflare-release.mjs';
 
 const externalCommandEnvironment = createReleaseSubprocessEnvironment(process.env);
-const commit = (await capture('git', ['rev-parse', 'HEAD'])).trim();
 const wranglerCommand = 'wrangler@4.114.0';
 const wranglerConfig = 'wrangler.cloudflare-free.jsonc';
+await run('node', ['scripts/validate-cloudflare-free-release.mjs']);
+const commit = (await capture('git', ['rev-parse', 'HEAD'])).trim();
+await assertReleaseGitCommit(commit, { fetch: false });
 const releaseLockCommit = await acquireProductionReleaseLock(commit);
 
 let deploymentError;
@@ -57,6 +60,7 @@ console.log(JSON.stringify(deploymentResult, null, 2));
 async function deploy(releaseCommit, leaseCommit) {
   await assertProductionReleaseLockOwned(leaseCommit);
   await run('node', ['scripts/validate-cloudflare-free-release.mjs']);
+  await assertReleaseGitCommit(releaseCommit);
 
   const config = JSON.parse(await readFile(wranglerConfig, 'utf8'));
   const authAuditEnvironment = createReleaseSubprocessEnvironment(process.env, [
@@ -82,6 +86,7 @@ async function deploy(releaseCommit, leaseCommit) {
     env: authAuditEnvironment
   });
   await run('node', ['scripts/validate-cloudflare-free-release.mjs']);
+  await assertReleaseGitCommit(releaseCommit);
   await assertProductionReleaseLockOwned(leaseCommit);
 
   const rollbackDeployment = await readActiveDeployment();
@@ -102,8 +107,9 @@ async function deploy(releaseCommit, leaseCommit) {
     });
     try {
       await assertProductionReleaseLockOwned(leaseCommit);
+      await assertReleaseGitCommit(releaseCommit);
       const latestDeployment = await readActiveDeployment();
-      if (latestDeployment.id !== rollbackDeployment.id) {
+      if (getDeploymentId(latestDeployment) !== getDeploymentId(rollbackDeployment)) {
         throw new Error('获取发布锁后 Cloudflare 部署记录发生变化，已在上传前停止');
       }
       assertReleaseStillOwnsActiveVersion(
@@ -239,7 +245,20 @@ async function acquireProductionReleaseLock(releaseCommit) {
       { cause: error }
     );
   }
-  await assertProductionReleaseLockOwned(leaseCommit);
+  try {
+    await assertProductionReleaseLockOwned(leaseCommit);
+  } catch (ownershipError) {
+    try {
+      await releaseProductionReleaseLock(leaseCommit);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [ownershipError, cleanupError],
+        '远端生产发布锁已创建，但首次归属复核失败且无法条件清理',
+        { cause: cleanupError }
+      );
+    }
+    throw ownershipError;
+  }
   return leaseCommit;
 }
 
@@ -247,10 +266,6 @@ async function releaseProductionReleaseLock(leaseCommit) {
   await run('git', createProductionReleaseLockReleaseArguments(leaseCommit), {
     env: externalCommandEnvironment
   });
-  const currentLock = await readRemoteProductionReleaseLock();
-  if (currentLock) {
-    throw new Error('远端生产发布锁释放后仍然存在，必须人工核对');
-  }
 }
 
 async function assertProductionReleaseLockOwned(leaseCommit) {
@@ -264,6 +279,29 @@ async function readRemoteProductionReleaseLock() {
   return getRemoteProductionReleaseLockCommit(
     await capture('git', ['ls-remote', '--refs', 'origin', PRODUCTION_RELEASE_LOCK_REF])
   );
+}
+
+async function assertReleaseGitCommit(expectedCommit, options = {}) {
+  if (options.fetch !== false) {
+    await run('git', ['fetch', 'origin', 'main', '--prune'], {
+      env: externalCommandEnvironment
+    });
+  }
+  const [branch, status, head, originHead] = await Promise.all([
+    capture('git', ['branch', '--show-current']),
+    capture('git', ['status', '--porcelain=v1']),
+    capture('git', ['rev-parse', 'HEAD']),
+    capture('git', ['rev-parse', 'origin/main'])
+  ]);
+  if (
+    !/^[0-9a-f]{40}$/.test(expectedCommit) ||
+    branch.trim() !== 'main' ||
+    status.trim() ||
+    head.trim() !== expectedCommit ||
+    originHead.trim() !== expectedCommit
+  ) {
+    throw new Error('发布 checkout、工作区、HEAD 或 origin/main 已偏离本次固定 commit');
+  }
 }
 
 async function assertActiveDeploymentIsAncestor(deployment, releaseCommit) {
@@ -368,6 +406,7 @@ async function readActiveDeployment() {
     ]),
     'Cloudflare 当前部署状态'
   );
+  getDeploymentId(deployment);
   getSoleActiveVersionId(deployment);
   return deployment;
 }

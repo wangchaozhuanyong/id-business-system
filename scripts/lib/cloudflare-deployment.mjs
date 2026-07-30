@@ -161,6 +161,13 @@ export function getDeploymentGitCommit(deployment, branch = 'main') {
   return match[1];
 }
 
+export function getDeploymentId(deployment) {
+  if (typeof deployment?.id !== 'string' || !VERSION_ID_PATTERN.test(deployment.id)) {
+    throw new Error('Cloudflare 当前部署缺少唯一有效的 deployment ID');
+  }
+  return deployment.id;
+}
+
 export function createProductionReleaseLockAcquireArguments(leaseCommit) {
   if (!GIT_SHA_PATTERN.test(leaseCommit)) {
     throw new Error('生产发布锁提交无效');
