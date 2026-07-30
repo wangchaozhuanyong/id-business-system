@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
-import { CurrentUser, Public } from '../auth/auth.decorators';
+import { AllowDuringPasswordReset, CurrentUser, Public } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import type { ChangePasswordDto } from '../auth/dto/change-password.dto';
 import type { LoginDto } from '../auth/dto/login.dto';
 
 interface RequestWithMeta {
@@ -24,11 +25,13 @@ export class V2AuthController {
   }
 
   @Post('logout')
+  @AllowDuringPasswordReset()
   logout(@Req() request: RequestWithMeta, @CurrentUser() user?: AuthenticatedUser) {
     return this.authService.logout(this.extractBearerToken(request), user);
   }
 
   @Get('me')
+  @AllowDuringPasswordReset()
   me(@CurrentUser() user: AuthenticatedUser) {
     return user;
   }
@@ -39,6 +42,16 @@ export class V2AuthController {
       ip: request.ip,
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
+  }
+
+  @Post('change-password')
+  @AllowDuringPasswordReset()
+  changePassword(
+    @Body() dto: ChangePasswordDto,
+    @Req() request: RequestWithMeta,
+    @CurrentUser() user: AuthenticatedUser
+  ) {
+    return this.authService.changePassword(dto, this.extractBearerToken(request), user);
   }
 
   private getHeaderValue(value: string | string[] | undefined) {

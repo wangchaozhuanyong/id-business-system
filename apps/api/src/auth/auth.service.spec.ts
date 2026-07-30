@@ -1,4 +1,8 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+  UnauthorizedException
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -6,21 +10,40 @@ import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import { AuthService } from './auth.service';
 import { hashPassword } from './password-hasher';
+import { SupabaseAuthService } from './supabase-auth.service';
 
 describe('AuthService', () => {
   const now = new Date('2026-06-18T00:00:00.000Z');
   const userId = '33333333-3333-4333-8333-333333333333';
+  const authUserId = '44444444-4444-4444-8444-444444444444';
+  const supabaseSessionId = '55555555-5555-4555-8555-555555555555';
   const fixturePassword = 'UnitTestPassword123!';
+  const newPassword = 'NewUnitTestPassword456!';
+  const supabaseSession = {
+    accessToken: 'supabase-access-token',
+    refreshToken: 'supabase-refresh-token',
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    userId,
+    sessionId: supabaseSessionId
+  };
   const authenticatedUser = {
     id: userId,
     username: 'admin',
     displayName: '管理员',
     roles: ['admin'],
-    permissions: []
+    permissions: [],
+    mustResetPassword: false
   };
 
-  async function createService(options?: { mfaRequired?: boolean; mfaBound?: boolean }) {
+  async function createService(options?: {
+    commitError?: Error;
+    mfaRequired?: boolean;
+    mfaBound?: boolean;
+    supabaseEnabled?: boolean;
+    transactionError?: Error;
+  }) {
     const passwordHash = await hashPassword(fixturePassword);
+    let storedPasswordHash = passwordHash;
     const user = {
       id: userId,
       username: 'admin',
@@ -29,12 +52,52 @@ describe('AuthService', () => {
       status: 'active',
       deletedAt: null
     };
-    const prisma = {
+    const transaction = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
+      user: {
+        findFirst: jest.fn().mockImplementation(() =>
+          Promise.resolve({
+            ...user,
+            passwordHash: storedPasswordHash
+          })
+        ),
+        update: jest.fn().mockImplementation(({ data }) => {
+          if (options?.transactionError) {
+            return Promise.reject(options.transactionError);
+          }
+          storedPasswordHash = data.passwordHash;
+          return Promise.resolve({
+            ...user,
+            passwordHash: storedPasswordHash
+          });
+        })
+      },
+      v2AuthIdentity: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 })
+      },
+      activeSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 3 })
+      },
+      auditLog: {
+        create: jest.fn().mockResolvedValue({ id: 'audit-log-1' })
+      }
+    };
+    let transactionCallCount = 0;
+    const prismaMock = {
       user: {
         findFirst: jest.fn().mockResolvedValue(user),
         update: jest.fn().mockResolvedValue({ ...user, lastLoginAt: now })
-      }
-    } as unknown as PrismaService;
+      },
+      $transaction: jest.fn(async (callback: (client: typeof transaction) => Promise<unknown>) => {
+        transactionCallCount += 1;
+        const result = await callback(transaction);
+        if (options?.commitError && transactionCallCount === 1) {
+          throw options.commitError;
+        }
+        return result;
+      })
+    };
+    const prisma = prismaMock as unknown as PrismaService;
     const tokenPayload = Buffer.from(
       JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })
     ).toString('base64url');
@@ -42,7 +105,8 @@ describe('AuthService', () => {
       sign: jest.fn().mockReturnValue(`header.${tokenPayload}.signature`)
     } as unknown as JwtService;
     const identityService = {
-      getAuthenticatedUser: jest.fn().mockResolvedValue(authenticatedUser)
+      getAuthenticatedUser: jest.fn().mockResolvedValue(authenticatedUser),
+      invalidateAuthenticatedUser: jest.fn()
     } as unknown as V2IdentityService;
     const auditLogsService = {
       create: jest.fn().mockResolvedValue({})
@@ -58,8 +122,26 @@ describe('AuthService', () => {
       verifyUserMfaCode: jest.fn().mockResolvedValue({ method: 'totp' }),
       recordLoginAttempt: jest.fn().mockResolvedValue({}),
       createActiveSession: jest.fn().mockResolvedValue({}),
-      revokeAccessToken: jest.fn().mockResolvedValue(true)
+      createProviderActiveSession: jest.fn().mockResolvedValue({}),
+      revokeAccessToken: jest.fn().mockResolvedValue(true),
+      revokeSessionIdentifier: jest.fn().mockResolvedValue(true),
+      assertPasswordMeetsPolicy: jest.fn().mockResolvedValue(undefined),
+      invalidateActiveSessionCache: jest.fn()
     } as unknown as SecurityService;
+    const supabaseAuthService = {
+      isEnabled: jest.fn().mockReturnValue(Boolean(options?.supabaseEnabled)),
+      authenticateAccessToken: jest.fn().mockResolvedValue({
+        userId,
+        sessionId: supabaseSessionId,
+        expiresAt: new Date(supabaseSession.expiresAt)
+      }),
+      login: jest.fn().mockResolvedValue(supabaseSession),
+      logout: jest.fn().mockResolvedValue(undefined),
+      verifyCurrentPassword: jest.fn().mockResolvedValue({
+        authUserId
+      }),
+      updatePassword: jest.fn().mockResolvedValue(undefined)
+    } as unknown as SupabaseAuthService;
 
     return {
       service: new AuthService(
@@ -67,11 +149,16 @@ describe('AuthService', () => {
         jwtService,
         identityService,
         auditLogsService,
-        securityService
+        securityService,
+        supabaseAuthService
       ),
       prisma,
       jwtService,
-      securityService
+      securityService,
+      identityService,
+      auditLogsService,
+      supabaseAuthService,
+      transaction
     };
   }
 
@@ -249,6 +336,357 @@ describe('AuthService', () => {
     expect(securityService.revokeAccessToken).toHaveBeenCalledWith(
       'plain.jwt.token',
       authenticatedUser
+    );
+  });
+
+  it('still revokes the Supabase session when local revocation fails', async () => {
+    const { service, securityService, auditLogsService, supabaseAuthService } = await createService(
+      {
+        supabaseEnabled: true
+      }
+    );
+    jest
+      .mocked(securityService.revokeSessionIdentifier)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(
+      service.logout(supabaseSession.accessToken, authenticatedUser)
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(supabaseAuthService.logout).toHaveBeenCalledWith(supabaseSession.accessToken);
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'logout_failed',
+        afterData: {
+          failedStages: ['local_session']
+        }
+      })
+    );
+  });
+
+  it('still revokes the local session when Supabase logout fails', async () => {
+    const { service, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(supabaseAuthService.logout)
+      .mockRejectedValueOnce(new Error('Supabase unavailable'));
+
+    await expect(
+      service.logout(supabaseSession.accessToken, authenticatedUser)
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(securityService.revokeSessionIdentifier).toHaveBeenCalledWith(
+      `supabase:${supabaseSessionId}`,
+      authenticatedUser
+    );
+  });
+
+  it('rejects server-side token refresh when Supabase manages the session', async () => {
+    const { service, securityService } = await createService({
+      supabaseEnabled: true
+    });
+
+    await expect(
+      service.refresh(authenticatedUser, {
+        ip: '127.0.0.1',
+        userAgent: 'unit-test'
+      })
+    ).rejects.toEqual(new BadRequestException('Supabase 登录会话由客户端安全刷新。'));
+    expect(securityService.createActiveSession).not.toHaveBeenCalled();
+  });
+
+  it('registers a successful Supabase login with its stable session identifier', async () => {
+    const { service, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+
+    await expect(
+      service.login(
+        {
+          username: 'admin',
+          password: fixturePassword
+        },
+        {
+          ip: '127.0.0.1',
+          userAgent: 'unit-test'
+        }
+      )
+    ).resolves.toEqual({
+      accessToken: supabaseSession.accessToken,
+      refreshToken: supabaseSession.refreshToken,
+      expiresAt: supabaseSession.expiresAt,
+      user: authenticatedUser
+    });
+
+    expect(supabaseAuthService.login).toHaveBeenCalledWith('admin', fixturePassword, undefined);
+    expect(securityService.createProviderActiveSession).toHaveBeenCalledWith({
+      userId,
+      sessionIdentifier: `supabase:${supabaseSessionId}`,
+      expiresAt: new Date(supabaseSession.expiresAt),
+      ip: '127.0.0.1',
+      userAgent: 'unit-test'
+    });
+  });
+
+  it('logs out the new Supabase session when local session registration fails', async () => {
+    const { service, prisma, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(securityService.createProviderActiveSession)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(
+      service.login(
+        {
+          username: 'admin',
+          password: fixturePassword
+        },
+        {
+          ip: '127.0.0.1',
+          userAgent: 'unit-test'
+        }
+      )
+    ).rejects.toEqual(
+      new ServiceUnavailableException('登录会话登记失败，请重新登录。', {
+        cause: expect.any(Error)
+      })
+    );
+
+    expect(supabaseAuthService.logout).toHaveBeenCalledWith(supabaseSession.accessToken);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('changes the password atomically, clears the reset flag, revokes sessions and omits secrets from audit', async () => {
+    const { service, securityService, identityService, supabaseAuthService, transaction } =
+      await createService({
+        supabaseEnabled: true
+      });
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        {
+          ...authenticatedUser,
+          mustResetPassword: true
+        }
+      )
+    ).resolves.toEqual({
+      passwordChanged: true,
+      signedOut: true,
+      providerSignedOut: true
+    });
+
+    expect(supabaseAuthService.updatePassword).toHaveBeenCalledWith(authUserId, newPassword);
+    expect(transaction.v2AuthIdentity.updateMany).toHaveBeenCalledWith({
+      where: { userId },
+      data: {
+        mustResetPassword: false
+      }
+    });
+    expect(transaction.activeSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId,
+        revokedAt: null
+      },
+      data: {
+        revokedAt: expect.any(Date)
+      }
+    });
+    expect(transaction.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId,
+        module: 'auth',
+        action: 'change_password',
+        objectType: 'user',
+        objectId: userId,
+        afterData: expect.objectContaining({
+          mustResetPassword: false,
+          revokedSessionCount: 3
+        })
+      })
+    });
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    const serializedAudit = JSON.stringify(
+      jest.mocked(transaction.auditLog.create).mock.calls[0]?.[0]
+    );
+    expect(serializedAudit).not.toContain(fixturePassword);
+    expect(serializedAudit).not.toContain(newPassword);
+    expect(identityService.invalidateAuthenticatedUser).toHaveBeenCalledWith(userId);
+    expect(securityService.invalidateActiveSessionCache).toHaveBeenCalledTimes(1);
+    expect(supabaseAuthService.logout).toHaveBeenCalledWith(supabaseSession.accessToken, 'global');
+  });
+
+  it('records a provider-wide logout failure after the business sessions are revoked', async () => {
+    const { service, auditLogsService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(supabaseAuthService.logout)
+      .mockRejectedValueOnce(new Error('provider logout unavailable'));
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).resolves.toEqual({
+      passwordChanged: true,
+      signedOut: true,
+      providerSignedOut: false
+    });
+
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'change_password_provider_logout_failed',
+        afterData: expect.objectContaining({
+          businessSessionsRevoked: true
+        })
+      })
+    );
+  });
+
+  it('does not update either password store when the current password is wrong', async () => {
+    const { service, prisma, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(supabaseAuthService.verifyCurrentPassword)
+      .mockRejectedValueOnce(new BadRequestException('当前密码不正确，请重新输入。'));
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: 'WrongCurrentPassword123!',
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toEqual(new BadRequestException('当前密码不正确，请重新输入。'));
+
+    expect(supabaseAuthService.updatePassword).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not update either password store when the new password violates policy', async () => {
+    const { service, prisma, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(securityService.assertPasswordMeetsPolicy)
+      .mockRejectedValueOnce(new BadRequestException('密码强度不足。'));
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword: 'weak'
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toEqual(new BadRequestException('密码强度不足。'));
+
+    expect(supabaseAuthService.updatePassword).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('restores the Supabase password when the local password transaction fails', async () => {
+    const { service, identityService, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true,
+      transactionError: new Error('transaction failed')
+    });
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(supabaseAuthService.updatePassword).toHaveBeenNthCalledWith(1, authUserId, newPassword);
+    expect(supabaseAuthService.updatePassword).toHaveBeenNthCalledWith(
+      2,
+      authUserId,
+      fixturePassword
+    );
+    expect(identityService.invalidateAuthenticatedUser).not.toHaveBeenCalled();
+    expect(securityService.invalidateActiveSessionCache).not.toHaveBeenCalled();
+    expect(supabaseAuthService.logout).not.toHaveBeenCalled();
+  });
+
+  it('records a repair event when provider password compensation also fails', async () => {
+    const { service, auditLogsService, supabaseAuthService } = await createService({
+      supabaseEnabled: true,
+      transactionError: new Error('transaction failed')
+    });
+    jest
+      .mocked(supabaseAuthService.updatePassword)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('compensation unavailable'));
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'change_password_failed',
+        afterData: expect.objectContaining({
+          providerCompensation: 'failed',
+          providerPasswordUpdated: true
+        })
+      })
+    );
+  });
+
+  it('does not overwrite the provider when a commit response fails after local state is already new', async () => {
+    const { service, supabaseAuthService, auditLogsService } = await createService({
+      supabaseEnabled: true,
+      commitError: new Error('commit response lost')
+    });
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    expect(supabaseAuthService.updatePassword).toHaveBeenCalledTimes(1);
+    expect(supabaseAuthService.updatePassword).toHaveBeenCalledWith(authUserId, newPassword);
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'change_password_failed',
+        afterData: expect.objectContaining({
+          providerCompensation: 'local_committed'
+        })
+      })
     );
   });
 });

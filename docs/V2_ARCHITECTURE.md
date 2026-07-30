@@ -141,7 +141,12 @@ GET   /api/id-business-v2/renewals/warning-summary
 
 - 当前只提供内部登录，不提供公开注册。
 - `AUTH_PROVIDER=local` 使用本地 JWT；`AUTH_PROVIDER=supabase` 使用 Supabase Auth。
-- `V2IdentityService` 只读取当前用户、角色与权限。
+- `V2IdentityService` 只读取当前用户、角色、权限与强制改密状态。
+- Supabase 会话使用 JWT 的稳定 `session_id` 生成不可逆哈希并登记到 `ActiveSession`；access token
+  刷新不新增会话。未登记、已撤销、归属不一致或已过期的会话一律失败关闭。
+- 强制改密期间后端只允许读取当前身份、修改密码和退出登录；修改成功后清除标记、撤销该用户全部
+  会话并要求重新登录。审计只记录结果和撤销数量，不记录新旧密码。
+- Supabase access token 由前端 SDK 刷新，Supabase 模式不得通过 `/auth/refresh` 签发本地 JWT。
 - 前端隐藏无权限操作，后端守卫必须再次拒绝。
 - 敏感字段查看与所有写操作必须记录审计。
 

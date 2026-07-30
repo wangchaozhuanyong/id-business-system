@@ -5,7 +5,31 @@ export const RELEASE_ACCOUNT_ID = 'a7e061557092f924beb4a7c8adc39c3d';
 export const RELEASE_PUBLIC_URL = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
 export const RELEASE_V2_REALTIME_CHANGES_ENABLED = 'false';
 export const REQUIRED_CHECKS = ['quality', 'production-images'];
+export const SMOKE_USERNAME = 'production_release_smoke';
+export const SMOKE_AUTH_EMAIL =
+  'production-release-smoke@daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
+export const SMOKE_AUTH_ACTOR = 'id_business_v2_production_smoke';
+export const SMOKE_DISPLAY_NAME = '生产发布只读巡检';
+export const RELEASE_REQUIRED_ENV_KEYS = [
+  'DATABASE_URL',
+  'JWT_SECRET',
+  'FIELD_ENCRYPTION_KEY',
+  'HASH_SECRET',
+  'AUTH_PROVIDER',
+  'SUPABASE_URL',
+  'VITE_SUPABASE_URL',
+  'VITE_V2_REALTIME_CHANGES_ENABLED',
+  'SMOKE_TEST_USERNAME',
+  'SMOKE_TEST_PASSWORD'
+];
+export const RELEASE_REQUIRED_ENV_KEY_GROUPS = [
+  ['SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY'],
+  ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'],
+  ['VITE_SUPABASE_ANON_KEY', 'VITE_SUPABASE_PUBLISHABLE_KEY']
+];
 export const SMOKE_ROLE_CODE = 'production_smoke_readonly';
+export const SMOKE_ROLE_NAME = '生产发布只读巡检';
+export const SMOKE_ROLE_DESCRIPTION = '仅用于生产发布后的自动只读健康检查';
 export const SMOKE_PERMISSIONS = [
   'apple.order.view',
   'apple.renewal_task.view',
@@ -34,9 +58,59 @@ export function validateReleaseEnvironment(env) {
   validateSecret(env.FIELD_ENCRYPTION_KEY, 'FIELD_ENCRYPTION_KEY', 32, errors);
   validateSecret(env.HASH_SECRET, 'HASH_SECRET', 32, errors);
 
+  if (env.AUTH_PROVIDER?.trim() !== 'supabase') {
+    errors.push('AUTH_PROVIDER 必须固定为 supabase');
+  }
+
+  const backendUrl = validateProductionHttpsUrl(env.SUPABASE_URL, 'SUPABASE_URL', errors);
+  const frontendUrl = validateProductionHttpsUrl(
+    env.VITE_SUPABASE_URL,
+    'VITE_SUPABASE_URL',
+    errors
+  );
+  if (backendUrl && frontendUrl && backendUrl !== frontendUrl) {
+    errors.push('SUPABASE_URL 与 VITE_SUPABASE_URL 必须指向同一个 Supabase 项目');
+  }
+
+  const backendPublicKeys = validateCredentialGroup(
+    env,
+    RELEASE_REQUIRED_ENV_KEY_GROUPS[0],
+    '后端 Supabase publishable/anon key',
+    errors
+  );
+  const serviceKeys = validateCredentialGroup(
+    env,
+    RELEASE_REQUIRED_ENV_KEY_GROUPS[1],
+    '后端 Supabase service/secret key',
+    errors
+  );
+  const frontendPublicKeys = validateCredentialGroup(
+    env,
+    RELEASE_REQUIRED_ENV_KEY_GROUPS[2],
+    '前端 Supabase publishable/anon key',
+    errors
+  );
+  if (
+    serviceKeys.some(
+      (serviceKey) =>
+        backendPublicKeys.includes(serviceKey) || frontendPublicKeys.includes(serviceKey)
+    )
+  ) {
+    errors.push('Supabase publishable/anon key 与 service/secret key 必须分离');
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (name.startsWith('VITE_') && /(SERVICE_ROLE|SECRET_KEY)/.test(name) && value?.trim()) {
+      errors.push(`${name} 不得进入前端环境`);
+    }
+  }
+
+  if (env.VITE_V2_REALTIME_CHANGES_ENABLED?.trim() !== 'false') {
+    errors.push('Supabase Auth 首发要求 VITE_V2_REALTIME_CHANGES_ENABLED=false');
+  }
+
   const username = env.SMOKE_TEST_USERNAME?.trim() ?? '';
-  if (!username || username.length > 100 || unsafeValuePattern.test(username)) {
-    errors.push('SMOKE_TEST_USERNAME 必须是有效的生产巡检账号');
+  if (username !== SMOKE_USERNAME) {
+    errors.push(`SMOKE_TEST_USERNAME 必须固定为 ${SMOKE_USERNAME}`);
   }
   validateSecret(env.SMOKE_TEST_PASSWORD, 'SMOKE_TEST_PASSWORD', 20, errors);
 
@@ -186,4 +260,35 @@ function validateSecret(value, name, minimumLength, errors) {
   if (typeof value !== 'string' || value.length < minimumLength || unsafeValuePattern.test(value)) {
     errors.push(`${name} 必须至少包含 ${minimumLength} 位非占位字符`);
   }
+}
+
+function validateProductionHttpsUrl(value, name, errors) {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== 'https:' ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      unsafeValuePattern.test(value)
+    ) {
+      throw new Error();
+    }
+    return url.origin.toLowerCase();
+  } catch {
+    errors.push(`${name} 必须是有效的生产 HTTPS 地址`);
+    return '';
+  }
+}
+
+function validateCredentialGroup(env, names, label, errors) {
+  const configured = names.map((name) => env[name]?.trim() ?? '').filter(Boolean);
+  if (!configured.length) {
+    errors.push(`${label} 必须完整配置`);
+    return [];
+  }
+  if (configured.some((value) => value.length < 20 || unsafeValuePattern.test(value))) {
+    errors.push(`${label} 必须使用有效的非占位凭据`);
+  }
+  return configured;
 }

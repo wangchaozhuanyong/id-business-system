@@ -11,6 +11,7 @@ function createUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
     displayName: '操作员',
     roles: [],
     permissions: [],
+    mustResetPassword: false,
     ...overrides
   };
 }

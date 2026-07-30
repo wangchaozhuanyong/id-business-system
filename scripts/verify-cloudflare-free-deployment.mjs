@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE } from './lib/cloudflare-release.mjs';
+import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE, SMOKE_USERNAME } from './lib/cloudflare-release.mjs';
 
 const baseUrl = process.argv[2]?.replace(/\/+$/, '');
 const username = process.env.SMOKE_TEST_USERNAME?.trim();
@@ -9,8 +9,8 @@ if (!baseUrl || !baseUrl.startsWith('https://')) {
   throw new Error('请传入 Cloudflare Workers HTTPS 地址');
 }
 
-if (!username || !password) {
-  throw new Error('缺少 SMOKE_TEST_USERNAME 或 SMOKE_TEST_PASSWORD');
+if (username !== SMOKE_USERNAME || !password) {
+  throw new Error(`SMOKE_TEST_USERNAME 必须固定为 ${SMOKE_USERNAME}，且密码不能为空`);
 }
 
 const publicEndpoints = ['/', '/api/health/live', '/api/health/ready'];

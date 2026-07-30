@@ -30,6 +30,7 @@ let sessionReadyPromise: Promise<SessionStatus> | null = null;
 let sessionReadyAttemptId = 0;
 let sessionGeneration = 0;
 let supabaseSessionSubscribed = false;
+let supabaseAuthUserId = '';
 let supabaseAuthModulePromise: Promise<typeof import('@/auth/supabase')> | null = null;
 let authApiModulePromise: Promise<typeof import('@/api/auth')> | null = null;
 
@@ -89,7 +90,8 @@ function isCurrentUser(value: unknown): value is CurrentUser {
     typeof user.username === 'string' &&
     typeof user.displayName === 'string' &&
     Array.isArray(user.roles) &&
-    Array.isArray(user.permissions)
+    Array.isArray(user.permissions) &&
+    typeof user.mustResetPassword === 'boolean'
   );
 }
 
@@ -139,6 +141,7 @@ export const useAuthStore = defineStore('auth', {
               supabaseSessionSubscribed = true;
               supabaseAuth.subscribeSupabaseSession((event, session) => {
                 if (!session) {
+                  supabaseAuthUserId = '';
                   this.clearLocalSession({
                     reason: 'session-cleared',
                     supabase: false
@@ -146,19 +149,22 @@ export const useAuthStore = defineStore('auth', {
                   return;
                 }
 
-                const changedUser = Boolean(this.user?.id) && this.user?.id !== session.user.id;
-                if (changedUser) {
+                const nextAuthUserId = session.user.id;
+                const changedAuthUser =
+                  Boolean(supabaseAuthUserId) && supabaseAuthUserId !== nextAuthUserId;
+                if (changedAuthUser) {
                   this.clearLocalSession({
                     reason: 'identity-switched',
                     supabase: false
                   });
                 }
+                supabaseAuthUserId = nextAuthUserId;
                 this.syncAccessToken(session.access_token);
 
                 if (
-                  event === 'SIGNED_IN' &&
+                  (event === 'SIGNED_IN' || event === 'USER_UPDATED') &&
                   this.sessionStatus !== 'checking' &&
-                  (!this.user || changedUser)
+                  (!this.user || changedAuthUser || event === 'USER_UPDATED')
                 ) {
                   this.sessionStatus = 'idle';
                   void this.ensureSessionReady({ force: true });
@@ -175,6 +181,7 @@ export const useAuthStore = defineStore('auth', {
               });
               return 'anonymous';
             }
+            supabaseAuthUserId = session.user.id;
             this.syncAccessToken(session.access_token);
           }
 
@@ -244,7 +251,11 @@ export const useAuthStore = defineStore('auth', {
             throw new Error('登录成功，但服务端没有返回可续期的登录会话。');
           }
           const supabaseAuth = await loadSupabaseAuthModule();
-          await supabaseAuth.setSupabaseSession(data.accessToken, data.refreshToken);
+          const session = await supabaseAuth.setSupabaseSession(
+            data.accessToken,
+            data.refreshToken
+          );
+          supabaseAuthUserId = session?.user.id ?? '';
         }
         this.syncAccessToken(data.accessToken);
         this.user = data.user;
@@ -307,6 +318,7 @@ export const useAuthStore = defineStore('auth', {
       this.userLoadedAt = 0;
       this.userRefreshing = false;
       this.sessionStatus = 'anonymous';
+      supabaseAuthUserId = '';
       clearStoredAuthSession();
       if ((options.supabase ?? true) && isSupabaseAuthConfigured()) {
         void loadSupabaseAuthModule()
@@ -332,6 +344,23 @@ export const useAuthStore = defineStore('auth', {
           supabase: false
         });
       }
+    },
+    async changePassword(currentPassword: string, newPassword: string) {
+      const { authApi } = await loadAuthApiModule();
+      const result = await authApi.changePassword(currentPassword, newPassword);
+      if (!result.passwordChanged || !result.signedOut) {
+        throw new Error('密码修改结果不完整，请重新登录后确认。');
+      }
+
+      if (isSupabaseAuthConfigured()) {
+        const supabaseAuth = await loadSupabaseAuthModule();
+        await supabaseAuth.clearSupabaseSession().catch(() => undefined);
+      }
+      this.clearLocalSession({
+        reason: 'logout',
+        supabase: false
+      });
+      return result;
     }
   }
 });

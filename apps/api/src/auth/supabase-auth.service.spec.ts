@@ -1,4 +1,8 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+  UnauthorizedException
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -12,13 +16,26 @@ vi.mock('@supabase/supabase-js', () => ({
 describe('SupabaseAuthService', () => {
   const userId = '33333333-3333-4333-8333-333333333333';
   const authUserId = '44444444-4444-4444-8444-444444444444';
+  const providerSessionId = '55555555-5555-4555-8555-555555555555';
   const password = 'ExistingAdminPassword123!';
   const authEmail = 'admin-3333333333334333@v2-auth.invalid';
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + 3600;
+  const accessToken = [
+    Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
+    Buffer.from(
+      JSON.stringify({
+        sub: authUserId,
+        session_id: providerSessionId,
+        exp: expiresAtSeconds
+      })
+    ).toString('base64url'),
+    'signature'
+  ].join('.');
   const session = {
-    access_token: 'access-token',
+    access_token: accessToken,
     refresh_token: 'refresh-token',
     expires_in: 3600,
-    expires_at: 1_800_000_000,
+    expires_at: expiresAtSeconds,
     token_type: 'bearer',
     user: {
       id: authUserId
@@ -30,6 +47,12 @@ describe('SupabaseAuthService', () => {
     storedPassword?: string;
     initialSignInSucceeds?: boolean;
     claimsValid?: boolean;
+    claimsExpiresAt?: number;
+    factorListFails?: boolean;
+    lastAuthenticatedAt?: Date | null;
+    loginSessionIdMissing?: boolean;
+    mfaVerificationFails?: boolean;
+    verifiedFactor?: boolean;
   }) {
     const passwordHash = await hashPassword(options?.storedPassword ?? password);
     const identity = {
@@ -37,6 +60,7 @@ describe('SupabaseAuthService', () => {
       authUserId,
       userId,
       mustResetPassword: options?.mustResetPassword ?? true,
+      lastAuthenticatedAt: options?.lastAuthenticatedAt ?? null,
       user: {
         passwordHash
       }
@@ -58,6 +82,21 @@ describe('SupabaseAuthService', () => {
         return values[key];
       })
     } as unknown as ConfigService;
+    const loginSession = options?.loginSessionIdMissing
+      ? {
+          ...session,
+          access_token: [
+            Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
+            Buffer.from(
+              JSON.stringify({
+                sub: authUserId,
+                exp: expiresAtSeconds
+              })
+            ).toString('base64url'),
+            'signature'
+          ].join('.')
+        }
+      : session;
     const publicClient = {
       auth: {
         getClaims: vi.fn().mockResolvedValue(
@@ -72,7 +111,8 @@ describe('SupabaseAuthService', () => {
                 data: {
                   claims: {
                     sub: authUserId,
-                    exp: Math.floor(Date.now() / 1000) + 3600
+                    session_id: providerSessionId,
+                    exp: options?.claimsExpiresAt ?? expiresAtSeconds
                   }
                 },
                 error: null
@@ -82,16 +122,41 @@ describe('SupabaseAuthService', () => {
           .fn()
           .mockResolvedValueOnce(
             options?.initialSignInSucceeds
-              ? { data: { session }, error: null }
+              ? { data: { session: loginSession }, error: null }
               : { data: { session: null }, error: { message: 'invalid credentials' } }
           )
-          .mockResolvedValue({ data: { session }, error: null }),
+          .mockResolvedValue({ data: { session: loginSession }, error: null }),
         mfa: {
-          listFactors: vi.fn().mockResolvedValue({
-            data: {
-              totp: []
-            }
-          })
+          listFactors: vi.fn().mockResolvedValue(
+            options?.factorListFails
+              ? {
+                  data: null,
+                  error: {
+                    message: 'MFA service unavailable'
+                  }
+                }
+              : {
+                  data: {
+                    totp: options?.verifiedFactor
+                      ? [{ id: 'verified-factor', status: 'verified' }]
+                      : []
+                  },
+                  error: null
+                }
+          ),
+          challengeAndVerify: vi.fn().mockResolvedValue(
+            options?.mfaVerificationFails
+              ? {
+                  data: null,
+                  error: {
+                    message: 'invalid MFA code'
+                  }
+                }
+              : {
+                  data: loginSession,
+                  error: null
+                }
+          )
         }
       }
     };
@@ -102,6 +167,10 @@ describe('SupabaseAuthService', () => {
             data: {
               user: session.user
             },
+            error: null
+          }),
+          signOut: vi.fn().mockResolvedValue({
+            data: {},
             error: null
           })
         }
@@ -116,7 +185,8 @@ describe('SupabaseAuthService', () => {
       service: new SupabaseAuthService(config, prisma),
       prisma,
       publicClient,
-      serviceClient
+      serviceClient,
+      loginSession
     };
   }
 
@@ -131,7 +201,8 @@ describe('SupabaseAuthService', () => {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       expiresAt: new Date(session.expires_at * 1000).toISOString(),
-      userId
+      userId,
+      sessionId: providerSessionId
     });
 
     expect(serviceClient.auth.admin.updateUserById).toHaveBeenCalledWith(authUserId, {
@@ -143,8 +214,7 @@ describe('SupabaseAuthService', () => {
         userId
       },
       data: {
-        lastAuthenticatedAt: expect.any(Date),
-        mustResetPassword: false
+        lastAuthenticatedAt: expect.any(Date)
       }
     });
   });
@@ -160,9 +230,10 @@ describe('SupabaseAuthService', () => {
     expect(serviceClient.auth.admin.updateUserById).not.toHaveBeenCalled();
   });
 
-  it('does not fall back to the stored password after migration is complete', async () => {
+  it('does not fall back to the stored password after a successful Supabase login was recorded', async () => {
     const { service, serviceClient } = await createService({
-      mustResetPassword: false
+      mustResetPassword: true,
+      lastAuthenticatedAt: new Date()
     });
 
     await expect(service.login('admin', password)).rejects.toThrow(
@@ -184,6 +255,58 @@ describe('SupabaseAuthService', () => {
     expect(serviceClient.auth.admin.updateUserById).not.toHaveBeenCalled();
   });
 
+  it('fails closed and revokes the temporary session when MFA factors cannot be confirmed', async () => {
+    const { service, serviceClient } = await createService({
+      factorListFails: true,
+      initialSignInSucceeds: true
+    });
+
+    await expect(service.login('admin', password)).rejects.toThrow(
+      new ServiceUnavailableException('Supabase MFA 状态暂时无法确认，请稍后重试。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it('revokes the temporary session when a verified factor has no code', async () => {
+    const { service, serviceClient } = await createService({
+      initialSignInSucceeds: true,
+      verifiedFactor: true
+    });
+
+    await expect(service.login('admin', password)).rejects.toThrow(
+      new UnauthorizedException('需要输入动态验证码或恢复码。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it('revokes the temporary session when MFA verification fails', async () => {
+    const { service, serviceClient } = await createService({
+      initialSignInSucceeds: true,
+      mfaVerificationFails: true,
+      verifiedFactor: true
+    });
+
+    await expect(service.login('admin', password, '000000')).rejects.toThrow(
+      new UnauthorizedException('动态验证码或恢复码错误，请重新输入。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it('revokes an otherwise authenticated session when its stable session id is missing', async () => {
+    const { service, serviceClient, loginSession } = await createService({
+      initialSignInSucceeds: true,
+      loginSessionIdMissing: true
+    });
+
+    await expect(service.login('admin', password)).rejects.toThrow(
+      new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(
+      loginSession.access_token,
+      'local'
+    );
+  });
+
   it('deduplicates concurrent token verification and reuses the verified identity cache', async () => {
     const { service, prisma, publicClient } = await createService();
 
@@ -192,8 +315,23 @@ describe('SupabaseAuthService', () => {
         service.authenticateAccessToken(session.access_token),
         service.authenticateAccessToken(session.access_token)
       ])
-    ).resolves.toEqual([userId, userId]);
-    await expect(service.authenticateAccessToken(session.access_token)).resolves.toBe(userId);
+    ).resolves.toEqual([
+      {
+        userId,
+        sessionId: providerSessionId,
+        expiresAt: new Date(expiresAtSeconds * 1000)
+      },
+      {
+        userId,
+        sessionId: providerSessionId,
+        expiresAt: new Date(expiresAtSeconds * 1000)
+      }
+    ]);
+    await expect(service.authenticateAccessToken(session.access_token)).resolves.toEqual({
+      userId,
+      sessionId: providerSessionId,
+      expiresAt: new Date(expiresAtSeconds * 1000)
+    });
 
     expect(publicClient.auth.getClaims).toHaveBeenCalledTimes(1);
     expect(prisma.v2AuthIdentity.findFirst).toHaveBeenCalledTimes(1);
@@ -208,5 +346,41 @@ describe('SupabaseAuthService', () => {
       new UnauthorizedException('登录状态无效或已过期，请重新登录。')
     );
     expect(prisma.v2AuthIdentity.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects a verified token whose claims are already expired', async () => {
+    const { service, prisma } = await createService({
+      claimsExpiresAt: Math.floor(Date.now() / 1000) - 1
+    });
+
+    await expect(service.authenticateAccessToken(accessToken)).rejects.toThrow(
+      new UnauthorizedException('登录状态无效或已过期，请重新登录。')
+    );
+    expect(prisma.v2AuthIdentity.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifies the current password against Supabase and closes the temporary session', async () => {
+    const { service, publicClient, serviceClient } = await createService({
+      initialSignInSucceeds: true
+    });
+
+    await expect(service.verifyCurrentPassword(userId, password)).resolves.toEqual({
+      authUserId
+    });
+
+    expect(publicClient.auth.signInWithPassword).toHaveBeenCalledWith({
+      email: authEmail,
+      password
+    });
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it('rejects a current password that Supabase does not accept', async () => {
+    const { service, serviceClient } = await createService();
+
+    await expect(service.verifyCurrentPassword(userId, password)).rejects.toThrow(
+      new BadRequestException('当前密码不正确，请重新输入。')
+    );
+    expect(serviceClient.auth.admin.signOut).not.toHaveBeenCalled();
   });
 });

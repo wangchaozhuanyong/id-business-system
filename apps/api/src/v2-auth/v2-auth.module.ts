@@ -20,8 +20,9 @@ import { V2IdentityService } from './v2-identity.service';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
+        const authProvider = configService.get<string>('AUTH_PROVIDER') ?? 'local';
         const secret = configService.get<string>('JWT_SECRET');
-        if (!secret && nodeEnv === 'production') {
+        if (!secret && nodeEnv === 'production' && authProvider !== 'supabase') {
           throw new Error('JWT_SECRET is required in production');
         }
 
