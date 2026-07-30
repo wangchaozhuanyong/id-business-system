@@ -22,13 +22,13 @@ export interface HistoryPreviewCategory {
 export class IdBusinessV2FinanceHistoryPreviewService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async preview() {
+  async preview(requestedAsOf?: Date) {
     const previewedAt = new Date();
     const settings = await this.prisma.idBusinessV2FinanceSettings.findUnique({
       where: { id: 1 },
       select: { enabledAt: true, historyStatus: true }
     });
-    const asOf = settings?.enabledAt ?? previewedAt;
+    const asOf = settings?.enabledAt ?? requestedAsOf ?? previewedAt;
     const historyStatus = settings?.historyStatus ?? 'not_started';
 
     const [

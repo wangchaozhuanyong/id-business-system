@@ -27,12 +27,12 @@ export class IdBusinessV2FinanceHistoryService {
     private readonly historyPreviewService: IdBusinessV2FinanceHistoryPreviewService
   ) {}
 
-  async backfill(previewFingerprint: string, operator?: AuthenticatedUser) {
+  async backfill(previewFingerprint: string, previewAsOf: Date, operator?: AuthenticatedUser) {
     const normalizedFingerprint = previewFingerprint?.trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(normalizedFingerprint)) {
       throw new ConflictException('请先完成历史回填预览');
     }
-    const preview = await this.historyPreviewService.preview();
+    const preview = await this.historyPreviewService.preview(previewAsOf);
     if (!preview.canBackfill) {
       throw new ConflictException('当前历史状态不允许执行回填');
     }
@@ -55,7 +55,7 @@ export class IdBusinessV2FinanceHistoryService {
           throw new ConflictException('历史数据已经确认完成，不能再次回填');
         }
 
-        const enabledAt = settings.enabledAt ?? new Date();
+        const enabledAt = settings.enabledAt ?? previewAsOf;
         await tx.idBusinessV2FinanceSettings.update({
           where: { id: 1 },
           data: {

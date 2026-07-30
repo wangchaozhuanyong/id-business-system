@@ -276,7 +276,11 @@ export class IdBusinessV2FinanceController {
     @Body() dto: BackfillIdBusinessV2FinanceHistoryDto,
     @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.historyService.backfill(dto.previewFingerprint, operator);
+    return this.historyService.backfill(
+      dto.previewFingerprint,
+      normalizeFinanceDate(dto.previewAsOf, '预览截止时间'),
+      operator
+    );
   }
 
   @Post('history/confirm')

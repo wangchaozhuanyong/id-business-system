@@ -425,7 +425,10 @@ export function useFinanceLedgerPage() {
     }
     historySubmitting.value = true;
     try {
-      const result = await idBusinessV2FinanceApi.backfillHistory(historyPreview.value.fingerprint);
+      const result = await idBusinessV2FinanceApi.backfillHistory(
+        historyPreview.value.fingerprint,
+        historyPreview.value.asOf
+      );
       historyPreviewVisible.value = false;
       historyPreview.value = null;
       ElMessage.success(`历史回填完成：${result.summary.orders} 个订单`);

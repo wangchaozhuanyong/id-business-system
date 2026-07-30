@@ -121,6 +121,25 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
       canBackfill: false
     });
   });
+
+  it('reuses the requested cutoff when finance history has no fixed enabled time', async () => {
+    const requestedAsOf = new Date('2026-07-30T02:30:00.000Z');
+    prisma.idBusinessV2FinanceSettings.findUnique.mockResolvedValue({
+      enabledAt: null,
+      historyStatus: 'incomplete'
+    });
+
+    const result = await service.preview(requestedAsOf);
+
+    expect(result.asOf).toEqual(requestedAsOf);
+    expect(prisma.idBusinessV2Order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: { lte: requestedAsOf }
+        })
+      })
+    );
+  });
 });
 
 function order(id: string, receivedAmount: string) {

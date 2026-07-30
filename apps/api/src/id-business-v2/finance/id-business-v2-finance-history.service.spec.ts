@@ -59,6 +59,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
   });
 
   it('rejects a stale preview fingerprint before starting the write transaction', async () => {
+    const previewAsOf = new Date('2026-07-30T00:00:00.000Z');
     const prisma = { $transaction: vi.fn() };
     const historyPreviewService = {
       preview: vi.fn().mockResolvedValue({
@@ -72,9 +73,35 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       historyPreviewService as never
     );
 
-    await expect(service.backfill('b'.repeat(64))).rejects.toThrow(
+    await expect(service.backfill('b'.repeat(64), previewAsOf)).rejects.toThrow(
       '历史数据已发生变化，请重新预览后再执行回填'
     );
+    expect(historyPreviewService.preview).toHaveBeenCalledWith(previewAsOf);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('starts backfill after recomputing the matching preview at the same cutoff', async () => {
+    const previewAsOf = new Date('2026-07-30T00:00:00.000Z');
+    const fingerprint = 'a'.repeat(64);
+    const prisma = {
+      $transaction: vi.fn().mockResolvedValue({ historyStatus: 'incomplete' })
+    };
+    const historyPreviewService = {
+      preview: vi.fn().mockResolvedValue({
+        canBackfill: true,
+        fingerprint
+      })
+    };
+    const service = new IdBusinessV2FinanceHistoryService(
+      prisma as never,
+      {} as never,
+      historyPreviewService as never
+    );
+
+    await expect(service.backfill(fingerprint, previewAsOf)).resolves.toEqual({
+      historyStatus: 'incomplete'
+    });
+    expect(historyPreviewService.preview).toHaveBeenCalledWith(previewAsOf);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });
