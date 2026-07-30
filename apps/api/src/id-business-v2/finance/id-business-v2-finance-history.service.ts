@@ -1,10 +1,11 @@
 import { ConflictException, Injectable } from '@nestjs/common';
+import type { V2FinanceHistoryBackfillPreview } from '@apple-business/shared';
 import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal } from '../decimal-policy';
+import { toV2Decimal } from '../decimal-policy';
 import { normalizeFinanceText, toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
 import {
   createHistoricalCnyLine,
@@ -32,15 +33,16 @@ export class IdBusinessV2FinanceHistoryService {
     if (!/^[a-f0-9]{64}$/.test(normalizedFingerprint)) {
       throw new ConflictException('请先完成历史回填预览');
     }
-    const preview = await this.historyPreviewService.preview(previewAsOf);
-    if (!preview.canBackfill) {
-      throw new ConflictException('当前历史状态不允许执行回填');
-    }
-    if (preview.fingerprint !== normalizedFingerprint) {
-      throw new ConflictException('历史数据已发生变化，请重新预览后再执行回填');
-    }
     return this.prisma.$transaction(
       async (tx) => {
+        const preview = await this.historyPreviewService.previewInTransaction(tx, previewAsOf);
+        if (!preview.canBackfill) {
+          throw new ConflictException('当前历史状态不允许执行回填');
+        }
+        if (preview.fingerprint !== normalizedFingerprint) {
+          throw new ConflictException('历史数据已发生变化，请重新预览后再执行回填');
+        }
+
         const settings = await tx.idBusinessV2FinanceSettings.upsert({
           where: { id: 1 },
           update: {},
@@ -55,7 +57,7 @@ export class IdBusinessV2FinanceHistoryService {
           throw new ConflictException('历史数据已经确认完成，不能再次回填');
         }
 
-        const enabledAt = settings.enabledAt ?? previewAsOf;
+        const enabledAt = settings.enabledAt ?? preview.asOf;
         await tx.idBusinessV2FinanceSettings.update({
           where: { id: 1 },
           data: {
@@ -240,6 +242,7 @@ export class IdBusinessV2FinanceHistoryService {
           tx,
           enabledAt,
           legacyRate.id,
+          preview.assetOpening,
           operator
         );
 
@@ -493,74 +496,30 @@ export class IdBusinessV2FinanceHistoryService {
     tx: Prisma.TransactionClient,
     enabledAt: Date,
     rateSnapshotId: string,
+    assetOpening: V2FinanceHistoryBackfillPreview['assetOpening'],
     operator?: AuthenticatedUser
   ) {
+    if (!assetOpening.willCreate || assetOpening.adjustments.length === 0) return false;
     const existing = await tx.idBusinessV2FinanceJournal.findUnique({
       where: { idempotencyKey: 'legacy:asset_opening:v1' },
       select: { id: true }
     });
     if (existing) return false;
 
-    const [accountAssets, unsoldIds, supplierWallets, pendingRefunds, gl] = await Promise.all([
-      tx.idBusinessV2Account.aggregate({
-        where: { deletedAt: null, lossReportedAt: null },
-        _sum: { balanceCostAmount: true }
-      }),
-      tx.idBusinessV2Account.aggregate({
-        where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
-        _sum: { purchaseCost: true }
-      }),
-      tx.idBusinessV2TopupSupplierAccount.aggregate({
-        where: { status: 'active' },
-        _sum: { currentBalanceCny: true }
-      }),
-      tx.idBusinessV2GiftCard.aggregate({
-        where: { supplierRefundStatus: 'pending' },
-        _sum: { supplierRefundAmountCny: true }
-      }),
-      tx.idBusinessV2FinanceJournalLine.groupBy({
-        by: ['accountCode', 'direction'],
-        where: {
-          accountCode: {
-            in: [
-              'gift_card_inventory',
-              'id_inventory',
-              'supplier_prepayment',
-              'supplier_refund_receivable'
-            ]
-          }
-        },
-        _sum: { amountCny: true }
-      })
-    ]);
-    const targets = new Map([
-      ['gift_card_inventory', accountAssets._sum.balanceCostAmount ?? ZERO],
-      ['id_inventory', unsoldIds._sum.purchaseCost ?? ZERO],
-      ['supplier_prepayment', supplierWallets._sum.currentBalanceCny ?? ZERO],
-      ['supplier_refund_receivable', pendingRefunds._sum.supplierRefundAmountCny ?? ZERO]
-    ] as const);
     const lines: FinancePostingLineInput[] = [];
-    for (const [accountCode, target] of targets) {
-      const debit = gl
-        .filter((item) => item.accountCode === accountCode && item.direction === 'debit')
-        .reduce((total, item) => total.add(item._sum.amountCny ?? 0), ZERO);
-      const credit = gl
-        .filter((item) => item.accountCode === accountCode && item.direction === 'credit')
-        .reduce((total, item) => total.add(item._sum.amountCny ?? 0), ZERO);
-      const difference = roundV2Decimal(target.sub(debit.sub(credit)));
-      if (difference.eq(0)) continue;
-      const amount = difference.abs();
+    for (const adjustment of assetOpening.adjustments) {
+      const amount = toV2Decimal(adjustment.amountCny);
       lines.push(
         createHistoricalCnyLine(
-          accountCode,
-          difference.gt(0) ? 'debit' : 'credit',
+          adjustment.accountCode,
+          adjustment.direction,
           amount,
           rateSnapshotId,
           '历史资产期初差额'
         ),
         createHistoricalCnyLine(
           'opening_equity',
-          difference.gt(0) ? 'credit' : 'debit',
+          adjustment.direction === 'debit' ? 'credit' : 'debit',
           amount,
           rateSnapshotId,
           '历史资产期初权益'

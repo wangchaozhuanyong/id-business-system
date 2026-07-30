@@ -5,6 +5,7 @@ import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finan
 const decimal = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
 describe('IdBusinessV2FinanceHistoryPreviewService', () => {
+  let giftCardInventoryAmount = '12.5';
   const prisma = {
     idBusinessV2FinanceSettings: {
       findUnique: vi.fn()
@@ -18,19 +19,29 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
     },
     idBusinessV2GiftCard: {
       findMany: vi.fn(),
-      count: vi.fn()
+      count: vi.fn(),
+      aggregate: vi.fn()
     },
     idBusinessV2Account: {
-      count: vi.fn()
+      count: vi.fn(),
+      aggregate: vi.fn()
+    },
+    idBusinessV2TopupSupplierAccount: {
+      aggregate: vi.fn()
     },
     idBusinessV2FinanceJournal: {
-      findMany: vi.fn()
+      findMany: vi.fn(),
+      findUnique: vi.fn()
+    },
+    idBusinessV2FinanceJournalLine: {
+      groupBy: vi.fn()
     }
   };
   const service = new IdBusinessV2FinanceHistoryPreviewService(prisma as never);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    giftCardInventoryAmount = '12.5';
     prisma.idBusinessV2FinanceSettings.findUnique.mockResolvedValue({
       enabledAt: new Date('2026-07-30T00:00:00.000Z'),
       historyStatus: 'incomplete'
@@ -53,8 +64,23 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
       { id: 'card-withdrawn-zero', status: 'withdrawn', costAmount: decimal('0') }
     ]);
     prisma.idBusinessV2Account.count.mockResolvedValue(2);
+    prisma.idBusinessV2Account.aggregate.mockImplementation(({ where }) =>
+      Promise.resolve(
+        where.soldByOrderId === null
+          ? { _sum: { purchaseCost: decimal('2.5') } }
+          : { _sum: { balanceCostAmount: decimal(giftCardInventoryAmount) } }
+      )
+    );
     prisma.idBusinessV2GiftCard.count.mockResolvedValue(3);
+    prisma.idBusinessV2GiftCard.aggregate.mockResolvedValue({
+      _sum: { supplierRefundAmountCny: decimal('4') }
+    });
     prisma.idBusinessV2Order.count.mockResolvedValue(4);
+    prisma.idBusinessV2TopupSupplierAccount.aggregate.mockResolvedValue({
+      _sum: { currentBalanceCny: decimal('3') }
+    });
+    prisma.idBusinessV2FinanceJournal.findUnique.mockResolvedValue(null);
+    prisma.idBusinessV2FinanceJournalLine.groupBy.mockResolvedValue([]);
     prisma.idBusinessV2FinanceJournal.findMany.mockImplementation(({ where }) => {
       if (where.sourceType === 'order') {
         return Promise.resolve([{ sourceId: 'order-existing' }]);
@@ -104,6 +130,33 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
         accounts: 2,
         giftCards: 3,
         orders: 4
+      },
+      assetOpening: {
+        willCreate: true,
+        adjustmentTotalCny: '22',
+        journalLineCount: 8,
+        adjustments: [
+          {
+            accountCode: 'gift_card_inventory',
+            direction: 'debit',
+            amountCny: '12.5'
+          },
+          {
+            accountCode: 'id_inventory',
+            direction: 'debit',
+            amountCny: '2.5'
+          },
+          {
+            accountCode: 'supplier_prepayment',
+            direction: 'debit',
+            amountCny: '3'
+          },
+          {
+            accountCode: 'supplier_refund_receivable',
+            direction: 'debit',
+            amountCny: '4'
+          }
+        ]
       }
     });
     expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -139,6 +192,21 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
         })
       })
     );
+  });
+
+  it('changes the fingerprint when an asset opening amount changes', async () => {
+    const requestedAsOf = new Date('2026-07-30T02:30:00.000Z');
+    prisma.idBusinessV2FinanceSettings.findUnique.mockResolvedValue({
+      enabledAt: null,
+      historyStatus: 'incomplete'
+    });
+
+    const first = await service.preview(requestedAsOf);
+    giftCardInventoryAmount = '13.5';
+    const second = await service.preview(requestedAsOf);
+
+    expect(second.assetOpening.adjustmentTotalCny).toBe('23');
+    expect(second.fingerprint).not.toBe(first.fingerprint);
   });
 });
 

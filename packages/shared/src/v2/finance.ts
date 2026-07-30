@@ -242,6 +242,20 @@ export interface V2FinanceHistoryBackfillPreview {
     giftCards: number;
     orders: number;
   };
+  assetOpening: {
+    willCreate: boolean;
+    adjustmentTotalCny: DecimalString;
+    journalLineCount: number;
+    adjustments: Array<{
+      accountCode:
+        | 'gift_card_inventory'
+        | 'id_inventory'
+        | 'supplier_prepayment'
+        | 'supplier_refund_receivable';
+      direction: 'debit' | 'credit';
+      amountCny: DecimalString;
+    }>;
+  };
 }
 
 export interface V2FinanceCurrencyBreakdown {

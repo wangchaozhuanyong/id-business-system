@@ -1,4 +1,5 @@
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import type { V2FinanceHistoryBackfillPreview } from '@apple-business/shared';
 import type {
   V2FinanceAccountCode,
   V2FinanceAccountType,
@@ -7,6 +8,9 @@ import type {
   V2FinanceJournalType,
   V2FinancePeriodStatus
 } from './contracts';
+
+type HistoryAssetOpeningAdjustment =
+  V2FinanceHistoryBackfillPreview['assetOpening']['adjustments'][number];
 
 export function formatCny(value: string) {
   return `¥${formatNumber(value)}`;
@@ -111,6 +115,25 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     manual_adjustment: '手工调整'
   };
   return labels[value];
+}
+
+export function historyAssetOpeningAccountLabel(
+  value: HistoryAssetOpeningAdjustment['accountCode']
+) {
+  return (
+    {
+      gift_card_inventory: '礼品卡库存',
+      id_inventory: '未售 ID 库存',
+      supplier_prepayment: '卡商预付款',
+      supplier_refund_receivable: '卡商退款应收'
+    } as const
+  )[value];
+}
+
+export function historyAssetOpeningDirectionLabel(
+  value: HistoryAssetOpeningAdjustment['direction']
+) {
+  return value === 'debit' ? '借方补记' : '贷方冲减';
 }
 
 function formatNumber(value: string) {
