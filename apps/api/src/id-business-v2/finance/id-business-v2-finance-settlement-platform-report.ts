@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { IdBusinessV2FinanceCurrency, Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import { roundV2Decimal, toV2Decimal, toV2DecimalString } from '../decimal-policy';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
 
 export interface SettlementPlatformReportQuery {
@@ -108,8 +108,8 @@ export async function getIdBusinessV2SettlementPlatformReport(
     const bucket = getBucket(order.settlementPlatform);
     if (['pending', 'waiting_external', 'processing'].includes(order.status)) {
       bucket.pendingOrderCount += 1;
-      bucket.pendingReceivedCny = bucket.pendingReceivedCny.add(order.receivedAmount);
-      bucket.pendingProfitCny = bucket.pendingProfitCny.add(order.profitAmount ?? 0);
+      bucket.pendingReceivedCny = bucket.pendingReceivedCny.add(toV2Decimal(order.receivedAmount));
+      bucket.pendingProfitCny = bucket.pendingProfitCny.add(toV2Decimal(order.profitAmount ?? 0));
     }
   }
 
@@ -171,29 +171,31 @@ export async function getIdBusinessV2SettlementPlatformReport(
     }
 
     for (const line of journal.lines) {
+      const amountCny = toV2Decimal(line.amountCny);
+      const amountOriginal = toV2Decimal(line.amountOriginal);
       if (line.accountCode === 'sales_revenue') {
         if (originalJournalType === 'order_completed') {
           const sign = line.direction === 'credit' ? 1 : -1;
-          bucket.grossReceivedCny = bucket.grossReceivedCny.add(line.amountCny.mul(sign));
+          bucket.grossReceivedCny = bucket.grossReceivedCny.add(amountCny.mul(sign));
           const currency = getSettlementOriginalAmount(bucket, line.currency);
-          currency.grossReceived = currency.grossReceived.add(line.amountOriginal.mul(sign));
+          currency.grossReceived = currency.grossReceived.add(amountOriginal.mul(sign));
         } else {
           const sign = line.direction === 'debit' ? 1 : -1;
-          bucket.refundedCny = bucket.refundedCny.add(line.amountCny.mul(sign));
+          bucket.refundedCny = bucket.refundedCny.add(amountCny.mul(sign));
           const currency = getSettlementOriginalAmount(bucket, line.currency);
-          currency.refunded = currency.refunded.add(line.amountOriginal.mul(sign));
+          currency.refunded = currency.refunded.add(amountOriginal.mul(sign));
         }
       }
 
       if (line.accountCode === 'platform_fee') {
         bucket.platformFeeCny = bucket.platformFeeCny.add(
-          line.direction === 'debit' ? line.amountCny : line.amountCny.neg()
+          line.direction === 'debit' ? amountCny : amountCny.neg()
         );
       }
 
       if (line.accountCode === 'sales_revenue') {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'credit' ? line.amountCny : line.amountCny.neg()
+          line.direction === 'credit' ? amountCny : amountCny.neg()
         );
       } else if (
         ORDER_REPORT_EXPENSE_CODES.includes(
@@ -201,11 +203,11 @@ export async function getIdBusinessV2SettlementPlatformReport(
         )
       ) {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'debit' ? line.amountCny.neg() : line.amountCny
+          line.direction === 'debit' ? amountCny.neg() : amountCny
         );
       } else if (line.accountCode === 'realized_fx_gain_loss') {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'credit' ? line.amountCny : line.amountCny.neg()
+          line.direction === 'credit' ? amountCny : amountCny.neg()
         );
       }
     }

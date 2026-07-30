@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-reports.service';
 
@@ -9,7 +10,7 @@ const pendingOrderId = '33333333-3333-4333-8333-333333333333';
 const historicalOrderId = '44444444-4444-4444-8444-444444444444';
 
 function decimal(value: Prisma.Decimal.Value) {
-  return new Prisma.Decimal(value);
+  return new CloudflarePrisma.Decimal(String(value));
 }
 
 function line(
@@ -209,5 +210,73 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
         settlementPlatformOptionId: 'not-a-uuid'
       })
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('normalizes Cloudflare Prisma decimals while calculating assets', async () => {
+    const assetPrisma = {
+      idBusinessV2FinanceAccount: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            currency: 'CNY',
+            currentBalance: decimal('100'),
+            currentBalanceCny: decimal('100')
+          }
+        ])
+      },
+      idBusinessV2TopupSupplierAccount: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            currency: 'MYR',
+            currentBalance: decimal('10'),
+            currentBalanceCny: decimal('20')
+          }
+        ])
+      },
+      idBusinessV2Account: {
+        aggregate: vi
+          .fn()
+          .mockResolvedValueOnce({
+            _sum: {
+              balanceCostAmount: decimal('5'),
+              purchaseCost: decimal('9')
+            }
+          })
+          .mockResolvedValueOnce({
+            _sum: {
+              purchaseCost: decimal('7')
+            }
+          })
+      },
+      idBusinessV2GiftCard: {
+        aggregate: vi.fn().mockResolvedValue({
+          _sum: {
+            supplierRefundAmountCny: decimal('3')
+          }
+        })
+      },
+      idBusinessV2FinanceFxRateSnapshot: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            currency: 'MYR',
+            rateToCny: decimal('2'),
+            capturedAt: new Date('2026-07-29T00:00:00.000Z'),
+            expiresAt: null
+          }
+        ])
+      }
+    };
+    const assetService = new IdBusinessV2FinanceReportsService(assetPrisma as never);
+
+    await expect(assetService.assets()).resolves.toMatchObject({
+      cashCny: '100',
+      supplierPrepaymentCny: '20',
+      giftCardInventoryCny: '5',
+      unsoldIdInventoryCny: '7',
+      supplierRefundReceivableCny: '3',
+      totalBookValueCny: '135',
+      totalLatestValuationCny: '135',
+      unrealizedFxChangeCny: '0'
+    });
   });
 });
