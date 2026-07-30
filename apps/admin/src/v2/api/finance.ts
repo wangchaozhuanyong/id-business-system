@@ -261,10 +261,13 @@ export const idBusinessV2FinanceApi = {
       http.get('/id-business-v2/finance/history/backfill-preview')
     );
   },
-  backfillHistory(previewFingerprint: string) {
+  backfillHistory(previewFingerprint: string, previewAsOf: string) {
     return withV2QueryInvalidation(
       request<V2FinanceHistoryBackfillResult>(
-        http.post('/id-business-v2/finance/history/backfill', { previewFingerprint })
+        http.post('/id-business-v2/finance/history/backfill', {
+          previewFingerprint,
+          previewAsOf
+        })
       ),
       FINANCE_SCOPES
     );

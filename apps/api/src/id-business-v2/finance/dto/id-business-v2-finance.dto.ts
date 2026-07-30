@@ -113,4 +113,5 @@ export interface ConfirmIdBusinessV2FinanceHistoryDto {
 
 export interface BackfillIdBusinessV2FinanceHistoryDto {
   previewFingerprint: string;
+  previewAsOf: string;
 }
