@@ -24,6 +24,7 @@ export const optionsFeature = defineV2Feature({
         '业务名称',
         'ID供应商',
         '加卡供应商',
+        '卡片名称',
         '结算平台'
       ]
     }

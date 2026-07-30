@@ -7,6 +7,7 @@ export type V2OptionType =
   | 'service'
   | 'id_supplier'
   | 'topup_supplier'
+  | 'gift_card_name'
   | 'settlement_platform'
   | 'expense_category';
 

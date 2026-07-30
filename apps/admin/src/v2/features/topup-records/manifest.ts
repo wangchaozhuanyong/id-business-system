@@ -15,7 +15,7 @@ export const topupRecordsFeature = defineV2Feature({
       key: 'keyword',
       label: '搜索',
       kind: 'search',
-      placeholder: '礼品卡尾号、ID、供应商'
+      placeholder: '卡片名称、礼品卡尾号、ID、供应商'
     },
     {
       key: 'status',
@@ -33,13 +33,14 @@ export const topupRecordsFeature = defineV2Feature({
       kind: 'identifier',
       widthPreset: 'identifier'
     },
+    { key: 'cardName', label: '卡片名称', kind: 'text', widthPreset: 'standard' },
     { key: 'faceValue', label: '面值', kind: 'numeric', widthPreset: 'compact' },
     { key: 'exchangeRate', label: '卡片汇率', kind: 'numeric', widthPreset: 'compact' },
     {
       key: 'costAmount',
-      label: '本次人民币成本',
+      label: '卡片价值（人民币）',
       kind: 'numeric',
-      widthPreset: 'wide'
+      widthPreset: 'standard'
     },
     { key: 'account', label: '加入 ID', kind: 'identifier', widthPreset: 'identifier' },
     { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
@@ -68,6 +69,8 @@ export const topupRecordsFeature = defineV2Feature({
       kind: 'numeric',
       widthPreset: 'wide'
     },
+    { key: 'operator', label: '操作人', kind: 'text', widthPreset: 'standard' },
+    { key: 'remark', label: '备注', kind: 'text', widthPreset: 'wide' },
     { key: 'changedAt', label: '加卡时间', kind: 'date', widthPreset: 'dateTime' },
     { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
     {

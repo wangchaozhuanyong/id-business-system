@@ -15,6 +15,9 @@ export interface LockedGiftCardCreditAccountRow {
 export interface CreditResponse {
   giftCard: {
     id: string;
+    cardNameOptionId: string;
+    cardName: string;
+    countryOptionId: string;
     codeMasked: string;
     codeTail: string;
     faceValue: string;
@@ -31,6 +34,7 @@ export interface CreditResponse {
     purchaseFinanceAccountId: string | null;
     purchaseSupplierAccountId: string | null;
     paidAt: Date | null;
+    creditedAt: Date;
     status: string;
     supplierOptionId: string | null;
     sourceAttachmentId: string | null;

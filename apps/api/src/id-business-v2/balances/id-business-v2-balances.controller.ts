@@ -51,7 +51,7 @@ export class IdBusinessV2BalancesController {
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
-    const [list, countries, suppliers, purchaseSources] = await Promise.all([
+    const [list, cardNames, countries, suppliers] = await Promise.all([
       this.topupWorkbenchService.list({
         page,
         pageSize,
@@ -63,16 +63,16 @@ export class IdBusinessV2BalancesController {
         sortBy,
         sortOrder
       }),
+      this.optionsService.listSelectors('gift_card_name'),
       this.optionsService.listSelectors('country'),
-      this.supplierFundsQueryService.listBalanceSelectors(),
-      this.supplierFundsQueryService.listGiftCardPurchaseSources()
+      this.supplierFundsQueryService.listBalanceSelectors()
     ]);
     return {
       list,
       options: {
+        cardNames: cardNames.items,
         countries: countries.items,
-        suppliers,
-        purchaseSources
+        suppliers
       },
       generatedAt: new Date().toISOString()
     };

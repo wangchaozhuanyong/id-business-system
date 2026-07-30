@@ -14,6 +14,9 @@ export function assertGiftCardCreditReplayMatches(
   balanceCalculator: IdBusinessV2BalanceCalculatorService,
   giftCard: {
     accountId: string;
+    cardNameOptionId: string;
+    countryOptionId: string;
+    creditedAt: Date;
     codeHash: string;
     faceValue: PrismaNamespace.Decimal;
     exchangeRate: PrismaNamespace.Decimal;
@@ -26,6 +29,9 @@ export function assertGiftCardCreditReplayMatches(
   },
   input: {
     accountId: string;
+    cardNameOptionId?: string;
+    countryOptionId?: string;
+    creditedAt?: Date;
     codeHash: string;
     faceValue: PrismaNamespace.Decimal.Value;
     exchangeRate: PrismaNamespace.Decimal.Value;
@@ -46,6 +52,11 @@ export function assertGiftCardCreditReplayMatches(
   );
   if (
     giftCard.accountId !== input.accountId ||
+    (input.cardNameOptionId !== undefined &&
+      giftCard.cardNameOptionId !== input.cardNameOptionId) ||
+    (input.countryOptionId !== undefined && giftCard.countryOptionId !== input.countryOptionId) ||
+    (input.creditedAt !== undefined &&
+      giftCard.creditedAt.getTime() !== input.creditedAt.getTime()) ||
     giftCard.codeHash !== input.codeHash ||
     !giftCard.faceValue.equals(snapshot.balanceAmount) ||
     !giftCard.exchangeRate.equals(snapshot.exchangeRate) ||
@@ -72,6 +83,9 @@ export function toGiftCardCreditResponse(
   },
   giftCard: {
     id: string;
+    cardNameOptionId: string;
+    cardNameSnapshot: string;
+    countryOptionId: string;
     supplierOptionId: string | null;
     sourceAttachmentId: string | null;
     codeMasked: string;
@@ -90,6 +104,7 @@ export function toGiftCardCreditResponse(
     purchaseFinanceAccountId?: string | null;
     purchaseSupplierAccountId?: string | null;
     paidAt?: Date | null;
+    creditedAt: Date;
     status: string;
     createdAt: Date;
   },
@@ -109,6 +124,9 @@ export function toGiftCardCreditResponse(
   return {
     giftCard: {
       id: giftCard.id,
+      cardNameOptionId: giftCard.cardNameOptionId,
+      cardName: giftCard.cardNameSnapshot,
+      countryOptionId: giftCard.countryOptionId,
       codeMasked: giftCard.codeMasked,
       codeTail: giftCard.codeTail,
       faceValue: toV2DecimalString(giftCard.faceValue),
@@ -129,7 +147,8 @@ export function toGiftCardCreditResponse(
       purchaseFxSnapshotId: giftCard.purchaseFxSnapshotId ?? null,
       purchaseFinanceAccountId: giftCard.purchaseFinanceAccountId ?? null,
       purchaseSupplierAccountId: giftCard.purchaseSupplierAccountId ?? null,
-      paidAt: giftCard.paidAt ?? giftCard.createdAt,
+      paidAt: giftCard.paidAt ?? null,
+      creditedAt: giftCard.creditedAt,
       status: giftCard.status,
       supplierOptionId: giftCard.supplierOptionId,
       sourceAttachmentId: giftCard.sourceAttachmentId,
@@ -171,6 +190,10 @@ export function writeGiftCardCreditAuditLogs(
       objectId: result.giftCard.id,
       afterData: {
         accountId: result.account.id,
+        cardNameOptionId: result.giftCard.cardNameOptionId,
+        cardName: result.giftCard.cardName,
+        countryOptionId: result.giftCard.countryOptionId,
+        creditedAt: result.giftCard.creditedAt,
         codeMasked: result.giftCard.codeMasked,
         codeTail: result.giftCard.codeTail,
         faceValue: result.giftCard.faceValue,

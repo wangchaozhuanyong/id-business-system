@@ -58,9 +58,6 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
     if (account.supplierOptionId !== supplierOptionId || accountCurrency !== currency) {
       throw new BadRequestException('供应商钱包与加卡供应商或付款币种不一致');
     }
-    if (currentBalance.lt(amountOriginal)) {
-      throw new ConflictException('供应商钱包余额不足，不能继续加卡');
-    }
     const balanceAfter = roundV2Decimal(currentBalance.sub(amountOriginal));
     const balanceAfterCny = roundV2Decimal(account.currentBalanceCny.sub(amountCny));
     const entry = await tx.idBusinessV2TopupSupplierLedger.create({

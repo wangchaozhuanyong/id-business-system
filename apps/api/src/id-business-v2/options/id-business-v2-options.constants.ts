@@ -84,6 +84,15 @@ export const ID_BUSINESS_V2_OPTION_TYPES: readonly IdBusinessV2OptionTypeDefinit
     supportsBusinessAmount: false
   },
   {
+    type: 'gift_card_name',
+    label: '卡片名称',
+    parentType: null,
+    supportsFees: false,
+    supportsCurrency: false,
+    requiresCountry: false,
+    supportsBusinessAmount: false
+  },
+  {
     type: 'settlement_platform',
     label: '结算平台',
     parentType: null,

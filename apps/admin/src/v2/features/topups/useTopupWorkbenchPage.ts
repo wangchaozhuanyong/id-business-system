@@ -3,23 +3,12 @@ import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
-import { idBusinessV2BalancesApi, idBusinessV2ExchangeRatesApi } from './api';
+import { idBusinessV2BalancesApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import {
-  V2_DECIMAL_PLACES,
-  addDecimalStrings,
-  divideDecimalStrings,
-  isV2UnsignedDecimal
-} from '@/v2/utils/decimal';
-import {
-  buildManualGiftCardCreditPayload,
-  normalizeGiftCardCode,
-  resolveUsdtRateReference,
-  type V2TopupUsdtRateReference
-} from './gift-card-credit-form';
+import { V2_DECIMAL_PLACES, addDecimalStrings } from '@/v2/utils/decimal';
+import { buildManualGiftCardCreditPayload, normalizeGiftCardCode } from './gift-card-credit-form';
 import { useTopupListQuery } from './topup-query';
 import type {
-  V2GiftCardPurchaseSources,
   V2GiftCardReversalAction,
   V2OptionSelector,
   V2ReversibleGiftCard,
@@ -29,11 +18,8 @@ import type {
   V2TopupWorkbenchListQuery,
   V2TopupWorkbenchSortBy
 } from './contracts';
-import type { V2FinanceCurrency } from '@apple-business/shared';
 import {
-  buildPurchaseSourceOptions,
   calculateCreditCostPreview,
-  effectiveRateUnavailableMessage,
   formatDate,
   formatDecimal,
   formatElapsed,
@@ -48,12 +34,9 @@ export function useTopupWorkbenchPage() {
   const items = ref<V2TopupWorkbenchItem[]>([]);
   const total = ref(0);
   const evaluatedAt = ref('');
+  const cardNameOptions = ref<V2OptionSelector[]>([]);
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2TopupSupplierFundSelector[]>([]);
-  const purchaseSources = ref<V2GiftCardPurchaseSources>({
-    financeAccounts: [],
-    supplierWallets: []
-  });
   const authStore = useAuthStore();
   const router = useRouter();
   const canTopup = computed(() => hasUserPermission(authStore.user, 'apple.balance.topup'));
@@ -65,10 +48,7 @@ export function useTopupWorkbenchPage() {
   const creditSubmitting = ref(false);
   const creditConfirmationVisible = ref(false);
   const creditIdempotencyKey = ref('');
-  const exchangeRateLoading = ref(false);
-  const exchangeRateResolved = ref(false);
-  const exchangeRateMessage = ref('');
-  const usdtRateReference = ref<V2TopupUsdtRateReference | null>(null);
+  const creditInitialSnapshot = ref('');
   const reversalDrawerVisible = ref(false);
   const reversalAccount = ref<V2TopupWorkbenchItem | null>(null);
   const reversibleGiftCards = ref<V2ReversibleGiftCard[]>([]);
@@ -84,49 +64,44 @@ export function useTopupWorkbenchPage() {
   const reversalIdempotencyKey = ref('');
   const reversalSubmitting = ref(false);
   const creditForm = reactive({
+    cardNameOptionId: '',
+    countryOptionId: '',
     code: '',
     faceValue: '',
-    purchaseOriginalAmount: '',
-    purchaseCurrency: 'CNY' as V2FinanceCurrency,
-    purchaseFxRateToCny: '',
-    purchaseSourceId: '',
-    purchaseManualRateReason: '',
-    paidAt: toLocalDateTimeInput(new Date()),
+    exchangeRate: '',
     supplierOptionId: '',
+    creditedAt: toLocalDateTimeInput(new Date()),
     remark: ''
   });
   const reversalForm = reactive({
     reason: ''
   });
+  const creditDirty = computed(
+    () =>
+      Boolean(creditInitialSnapshot.value) && snapshotCreditForm() !== creditInitialSnapshot.value
+  );
   const normalizedCreditCode = computed(() => normalizeGiftCardCode(creditForm.code));
   const creditCostPreview = computed(() => calculateCreditCostPreview(creditForm));
-  const creditUnitCostPreview = computed(() => {
-    if (
-      !creditCostPreview.value ||
-      !isV2UnsignedDecimal(creditForm.faceValue, { allowZero: false })
-    ) {
-      return '';
-    }
-    return divideDecimalStrings(creditCostPreview.value, creditForm.faceValue, 8);
-  });
-  const purchaseSourceOptions = computed(() =>
-    buildPurchaseSourceOptions(purchaseSources.value, creditForm)
+  const selectedCardName = computed(
+    () => cardNameOptions.value.find((item) => item.id === creditForm.cardNameOptionId) ?? null
   );
-  const selectedPurchaseSource = computed(
-    () =>
-      purchaseSourceOptions.value.find((source) => source.value === creditForm.purchaseSourceId) ??
-      null
+  const selectedCountry = computed(
+    () => countryOptions.value.find((item) => item.id === creditForm.countryOptionId) ?? null
+  );
+  const selectedTopupSupplier = computed(
+    () => topupSupplierOptions.value.find((item) => item.id === creditForm.supplierOptionId) ?? null
   );
   const creditProjectedSupplierBalance = computed(() => {
     if (
-      selectedPurchaseSource.value?.kind !== 'wallet' ||
-      !isV2UnsignedDecimal(creditForm.purchaseOriginalAmount)
+      !selectedTopupSupplier.value?.initialized ||
+      selectedTopupSupplier.value.currentBalanceCny === null ||
+      !creditCostPreview.value
     ) {
       return null;
     }
     return addDecimalStrings(
-      selectedPurchaseSource.value.currentBalance,
-      `-${creditForm.purchaseOriginalAmount}`
+      selectedTopupSupplier.value.currentBalanceCny,
+      `-${creditCostPreview.value}`
     );
   });
   const creditWillOverdraw = computed(
@@ -134,28 +109,30 @@ export function useTopupWorkbenchPage() {
   );
   const creditDisabledReason = computed(() => {
     if (!selectedAccount.value) return '请先选择目标 ID';
+    if (!cardNameOptions.value.length) return '暂无启用的卡片名称，请先到选项设置完成配置';
+    if (!selectedCountry.value) return '目标 ID 国家不存在或已停用';
     if (!topupSupplierOptions.value.length) return '暂无启用的加卡供应商';
-    if (!creditForm.purchaseSourceId) return '请选择实际付款账户或供应商预存钱包';
-    if (creditWillOverdraw.value) return '供应商钱包余额不足，不能继续加卡';
+    if (selectedTopupSupplier.value && !selectedTopupSupplier.value.initialized) {
+      return `加卡供应商“${selectedTopupSupplier.value.name}”资金账户尚未初始化`;
+    }
     return '';
   });
   const creditConfirmationMessage = computed(() => {
     if (!selectedAccount.value) return '';
     const supplierBalanceText =
-      selectedPurchaseSource.value?.kind === 'wallet'
-        ? `供应商钱包余额将从 ${formatDecimal(
-            selectedPurchaseSource.value.currentBalance
-          )} 变为 ${formatDecimal(creditProjectedSupplierBalance.value ?? '0')} ${
-            creditForm.purchaseCurrency
-          }。`
+      selectedTopupSupplier.value?.currentBalanceCny != null &&
+      creditProjectedSupplierBalance.value !== null
+        ? `卡商预付款余额将从 ¥${formatDecimal(
+            selectedTopupSupplier.value.currentBalanceCny
+          )} 变为 ¥${formatDecimal(creditProjectedSupplierBalance.value)}。`
         : '';
-    return `确认向 ${selectedAccount.value.appleIdMasked} 入账礼品卡 ${maskGiftCardCode(
-      normalizedCreditCode.value
-    )}，增加余额 ${creditForm.faceValue}，实际支付 ${formatDecimal(
-      creditForm.purchaseOriginalAmount
-    )} ${creditForm.purchaseCurrency}，人民币成本${
-      creditCostPreview.value ? `约 ¥${formatDecimal(creditCostPreview.value)}` : '按交易汇率计算'
-    }。${supplierBalanceText}确认后将立即写入两套独立的不可变流水。`;
+    return `确认向 ${selectedAccount.value.appleIdMasked} 入账${
+      selectedCardName.value?.name ?? '礼品卡'
+    } ${maskGiftCardCode(normalizedCreditCode.value)}，国家为 ${
+      selectedCountry.value?.name ?? selectedAccount.value.country.name
+    }，面值 ${creditForm.faceValue}，卡片汇率 ${creditForm.exchangeRate}，卡片价值${
+      creditCostPreview.value ? ` ¥${formatDecimal(creditCostPreview.value)}` : '由系统计算'
+    }。${supplierBalanceText}确认后将立即写入 ID 余额、卡商资金和财务流水。`;
   });
   const reversalDialogTitle = computed(() =>
     pendingReversal.value?.action === 'redeemed' ? '确认标记被赎回' : '确认撤回礼品卡'
@@ -210,9 +187,9 @@ export function useTopupWorkbenchPage() {
       items.value = snapshot.list.items;
       total.value = snapshot.list.total;
       evaluatedAt.value = snapshot.list.evaluatedAt;
+      cardNameOptions.value = snapshot.options.cardNames;
       countryOptions.value = snapshot.options.countries;
       topupSupplierOptions.value = snapshot.options.suppliers;
-      purchaseSources.value = snapshot.options.purchaseSources;
     },
     { immediate: true }
   );
@@ -312,38 +289,16 @@ export function useTopupWorkbenchPage() {
     creditConfirmationVisible.value = false;
     creditIdempotencyKey.value = createIdempotencyKey();
     Object.assign(creditForm, {
+      cardNameOptionId: cardNameOptions.value[0]?.id ?? '',
+      countryOptionId: account.country.id,
       code: '',
       faceValue: '',
-      purchaseOriginalAmount: '',
-      purchaseCurrency: 'CNY',
-      purchaseFxRateToCny: '',
-      purchaseSourceId: '',
-      purchaseManualRateReason: '',
-      paidAt: toLocalDateTimeInput(new Date()),
+      exchangeRate: '',
       supplierOptionId: '',
+      creditedAt: toLocalDateTimeInput(new Date()),
       remark: ''
     });
-    usdtRateReference.value = null;
-    exchangeRateMessage.value = '';
-    exchangeRateResolved.value = false;
-    void loadUsdtRateReference();
-  }
-
-  async function loadUsdtRateReference() {
-    exchangeRateLoading.value = true;
-    try {
-      const overview = await idBusinessV2ExchangeRatesApi.overview();
-      usdtRateReference.value = resolveUsdtRateReference(overview);
-      exchangeRateMessage.value = usdtRateReference.value
-        ? ''
-        : effectiveRateUnavailableMessage(overview.effective.reason);
-    } catch (error) {
-      usdtRateReference.value = null;
-      exchangeRateMessage.value = `USDT 汇率读取失败：${getApiErrorMessage(error)}`;
-    } finally {
-      exchangeRateResolved.value = true;
-      exchangeRateLoading.value = false;
-    }
+    creditInitialSnapshot.value = snapshotCreditForm();
   }
 
   function openAccountRecords(account: V2TopupWorkbenchItem, tab: 'giftCards' | 'ledger') {
@@ -361,18 +316,12 @@ export function useTopupWorkbenchPage() {
     creditForm.code = normalizedCreditCode.value;
   }
 
-  function handlePurchaseCurrencyChange() {
-    creditForm.purchaseSourceId = '';
-    if (creditForm.purchaseCurrency === 'CNY') {
-      creditForm.purchaseFxRateToCny = '';
-      creditForm.purchaseManualRateReason = '';
-    }
-  }
-
-  function handleSupplierChange() {
-    if (creditForm.purchaseSourceId.startsWith('wallet:')) {
-      creditForm.purchaseSourceId = '';
-    }
+  function openCardNameOptions() {
+    creditDrawerVisible.value = false;
+    void router.push({
+      path: '/v2/options',
+      query: { type: 'gift_card_name' }
+    });
   }
 
   function openCreditConfirmation() {
@@ -394,20 +343,27 @@ export function useTopupWorkbenchPage() {
         buildManualGiftCardCreditPayload({
           code: normalizedCreditCode.value,
           faceValue: creditForm.faceValue,
-          purchaseOriginalAmount: creditForm.purchaseOriginalAmount,
-          purchaseCurrency: creditForm.purchaseCurrency,
-          purchaseFxRateToCny: creditForm.purchaseFxRateToCny,
-          purchaseSourceId: creditForm.purchaseSourceId,
-          purchaseManualRateReason: creditForm.purchaseManualRateReason,
-          paidAt: new Date(creditForm.paidAt).toISOString(),
+          cardNameOptionId: creditForm.cardNameOptionId,
+          countryOptionId: creditForm.countryOptionId,
+          exchangeRate: creditForm.exchangeRate,
           supplierOptionId: creditForm.supplierOptionId,
+          creditedAt: new Date(creditForm.creditedAt).toISOString(),
           idempotencyKey: creditIdempotencyKey.value,
           remark: creditForm.remark
         })
       );
-      ElMessage.success(
-        result.idempotentReplay ? '该请求已经完成，未重复入账' : '礼品卡已确认入账'
-      );
+      const successMessage = result.idempotentReplay
+        ? '该请求已经完成，未重复入账'
+        : '礼品卡已确认入账';
+      if (result.supplierFunding?.isNegative) {
+        ElMessage.warning(
+          `${successMessage}；卡商预付款余额为负 ¥${formatDecimal(
+            result.supplierFunding.shortfallCny
+          )}`
+        );
+      } else {
+        ElMessage.success(successMessage);
+      }
       creditConfirmationVisible.value = false;
       creditDrawerVisible.value = false;
       await loadWorkbench();
@@ -517,25 +473,26 @@ export function useTopupWorkbenchPage() {
     return globalThis.crypto.randomUUID();
   }
 
+  function snapshotCreditForm() {
+    return JSON.stringify(creditForm);
+  }
+
   return {
     items,
     total,
     evaluatedAt,
     loading,
     listError,
+    cardNameOptions,
     countryOptions,
     topupSupplierOptions,
-    purchaseSources,
     canTopup,
     canAdjustBalance,
     creditDrawerVisible,
     selectedAccount,
     creditSubmitting,
     creditConfirmationVisible,
-    exchangeRateLoading,
-    exchangeRateResolved,
-    exchangeRateMessage,
-    usdtRateReference,
+    creditDirty,
     reversalDrawerVisible,
     reversalAccount,
     reversibleGiftCards,
@@ -550,9 +507,9 @@ export function useTopupWorkbenchPage() {
     creditForm,
     normalizedCreditCode,
     creditCostPreview,
-    creditUnitCostPreview,
-    purchaseSourceOptions,
-    selectedPurchaseSource,
+    selectedCardName,
+    selectedCountry,
+    selectedTopupSupplier,
     creditProjectedSupplierBalance,
     creditWillOverdraw,
     creditDisabledReason,
@@ -572,8 +529,7 @@ export function useTopupWorkbenchPage() {
     openCreditDrawer,
     openAccountRecords,
     normalizeCandidateCode,
-    handlePurchaseCurrencyChange,
-    handleSupplierChange,
+    openCardNameOptions,
     openCreditConfirmation,
     submitGiftCardCredit,
     openReversalDrawer,

@@ -207,12 +207,14 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     prisma.idBusinessV2GiftCard.findMany.mockResolvedValue([
       {
         id: giftCardId,
+        cardNameSnapshot: '苹果礼品卡',
         codeMasked: 'X123****CDEF',
         codeTail: 'CDEF',
         faceValue: decimal('20'),
         exchangeRate: decimal('5.4'),
         costAmount: decimal('108'),
         status: 'credited',
+        creditedAt: createdAt,
         createdAt,
         supplierOption: {
           id: '66666666-6666-4666-8666-666666666666',
@@ -240,11 +242,13 @@ describe('IdBusinessV2GiftCardReversalService', () => {
       items: [
         {
           id: giftCardId,
+          cardName: '苹果礼品卡',
           codeMasked: 'X123****CDEF',
           faceValue: '20',
           exchangeRate: '5.4',
           costAmount: '108',
           status: 'credited',
+          creditedAt: createdAt,
           supplier: {
             name: '供应商 A'
           },

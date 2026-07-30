@@ -36,6 +36,9 @@
               <strong class="v2-topup-records-code">{{ row.code }}</strong>
             </template>
           </V2TableColumn>
+          <V2TableColumn kind="text" width-preset="standard" label="卡片名称">
+            <template #default="{ row }">{{ row.cardName.name }}</template>
+          </V2TableColumn>
           <V2TableColumn
             kind="numeric"
             width-preset="compact"
@@ -60,15 +63,10 @@
             kind="numeric"
             width-preset="standard"
             prop="costAmount"
-            label="本次人民币成本"
+            label="卡片价值（人民币）"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ formatDecimal(row.costAmount) }}</template>
-          </V2TableColumn>
-          <V2TableColumn kind="numeric" label="实际付款" width-preset="wide">
-            <template #default="{ row }">
-              {{ formatDecimal(row.purchaseOriginalAmount) }} {{ row.purchaseCurrency }}
-            </template>
           </V2TableColumn>
           <V2TableColumn kind="identifier" width-preset="identifier" label="加入 ID">
             <template #default="{ row }">
@@ -123,13 +121,22 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
+            kind="text"
+            width-preset="wide"
+            prop="remark"
+            label="备注"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ row.remark || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn
             kind="date"
             width-preset="dateTime"
-            prop="createdAt"
+            prop="creditedAt"
             label="加卡时间"
             sortable="custom"
           >
-            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+            <template #default="{ row }">{{ formatDate(row.creditedAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
             kind="status"
@@ -197,7 +204,7 @@
           <article v-for="item in giftCards" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.code }}</strong>
+                <strong>{{ item.cardName.name }} · {{ item.code }}</strong>
                 <span>{{ item.account.appleIdMasked }} / {{ item.country.name }}</span>
               </div>
               <el-tag :type="giftCardStatusType(item.status)" effect="plain">
@@ -214,14 +221,12 @@
                 <dd>¥{{ formatDecimal(item.exchangeRate) }}</dd>
               </div>
               <div>
-                <dt>人民币成本</dt>
+                <dt>卡片价值（人民币）</dt>
                 <dd>¥{{ formatDecimal(item.costAmount) }}</dd>
               </div>
               <div>
-                <dt>实际付款</dt>
-                <dd>
-                  {{ formatDecimal(item.purchaseOriginalAmount) }} {{ item.purchaseCurrency }}
-                </dd>
+                <dt>备注</dt>
+                <dd>{{ item.remark || '—' }}</dd>
               </div>
               <div>
                 <dt>供应商</dt>
@@ -248,7 +253,7 @@
               </div>
             </dl>
             <footer>
-              <span>{{ formatDate(item.createdAt) }}</span>
+              <span>{{ formatDate(item.creditedAt) }}</span>
               <div
                 v-if="
                   item.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)

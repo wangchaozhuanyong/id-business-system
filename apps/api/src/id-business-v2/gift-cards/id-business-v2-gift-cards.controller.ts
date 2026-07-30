@@ -39,6 +39,7 @@ export class IdBusinessV2GiftCardsController {
     @Query('pageSize') pageSize?: string,
     @Query('keyword') keyword?: string,
     @Query('accountId') accountId?: string,
+    @Query('cardNameOptionId') cardNameOptionId?: string,
     @Query('countryOptionId') countryOptionId?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('status') status?: string,
@@ -69,6 +70,7 @@ export class IdBusinessV2GiftCardsController {
             pageSize,
             keyword,
             accountId,
+            cardNameOptionId,
             countryOptionId,
             supplierOptionId,
             status,
@@ -77,8 +79,9 @@ export class IdBusinessV2GiftCardsController {
             sortBy,
             sortOrder
           });
-    const [list, countries, suppliers] = await Promise.all([
+    const [list, cardNames, countries, suppliers] = await Promise.all([
       listPromise,
+      this.optionsService.listSelectors('gift_card_name'),
       this.optionsService.listSelectors('country'),
       this.optionsService.listSelectors('topup_supplier')
     ]);
@@ -86,6 +89,7 @@ export class IdBusinessV2GiftCardsController {
       tab: selectedTab,
       list,
       options: {
+        cardNames: cardNames.items,
         countries: countries.items,
         suppliers: suppliers.items
       },
@@ -100,6 +104,7 @@ export class IdBusinessV2GiftCardsController {
     @Query('pageSize') pageSize?: string,
     @Query('keyword') keyword?: string,
     @Query('accountId') accountId?: string,
+    @Query('cardNameOptionId') cardNameOptionId?: string,
     @Query('countryOptionId') countryOptionId?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('status') status?: string,
@@ -113,6 +118,7 @@ export class IdBusinessV2GiftCardsController {
       pageSize,
       keyword,
       accountId,
+      cardNameOptionId,
       countryOptionId,
       supplierOptionId,
       status,

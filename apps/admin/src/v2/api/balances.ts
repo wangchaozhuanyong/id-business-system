@@ -7,7 +7,6 @@ import type {
   V2GiftCardCreditPayload,
   V2GiftCardCreditResult,
   V2GiftCardRecord,
-  V2GiftCardPurchaseSources,
   V2GiftCardRecordListQuery,
   V2GiftCardRecordListResult,
   V2GiftCardReversalPayload,
@@ -32,9 +31,9 @@ export const idBusinessV2BalancesApi = {
     return request<{
       list: V2TopupWorkbenchListResult;
       options: {
+        cardNames: V2OptionSelector[];
         countries: V2OptionSelector[];
         suppliers: V2TopupSupplierFundSelector[];
-        purchaseSources: V2GiftCardPurchaseSources;
       };
       generatedAt: string;
     }>(
@@ -118,6 +117,7 @@ export const idBusinessV2BalancesApi = {
           tab: 'giftCards';
           list: V2GiftCardRecordListResult;
           options: {
+            cardNames: V2OptionSelector[];
             countries: V2OptionSelector[];
             suppliers: V2OptionSelector[];
           };
@@ -127,6 +127,7 @@ export const idBusinessV2BalancesApi = {
           tab: 'ledger';
           list: V2BalanceLedgerListResult;
           options: {
+            cardNames: V2OptionSelector[];
             countries: V2OptionSelector[];
             suppliers: V2OptionSelector[];
           };

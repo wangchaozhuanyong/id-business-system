@@ -72,6 +72,12 @@ export class IdBusinessV2GiftCardCreditService {
     }
 
     const supplierOptionId = normalizeGiftCardCreditUuid(dto.supplierOptionId, '加卡供应商');
+    const requestedCardNameOptionId = dto.cardNameOptionId
+      ? normalizeGiftCardCreditUuid(dto.cardNameOptionId, '卡片名称')
+      : undefined;
+    const requestedCountryOptionId = dto.countryOptionId
+      ? normalizeGiftCardCreditUuid(dto.countryOptionId, '卡片国家')
+      : undefined;
     const idempotencyKey = buildGiftCardCreditIdempotencyKey(
       accountId,
       normalizeGiftCardCreditIdempotencyKey(dto.idempotencyKey)
@@ -94,7 +100,10 @@ export class IdBusinessV2GiftCardCreditService {
       dto.purchaseCurrency ?? 'CNY',
       '礼品卡付款币种'
     );
-    const paidAt = dto.paidAt ? normalizeFinanceDate(dto.paidAt, '礼品卡付款时间') : new Date();
+    const creditedAt = dto.creditedAt
+      ? normalizeFinanceDate(dto.creditedAt, '加卡时间')
+      : new Date();
+    const paidAt = dto.paidAt ? normalizeFinanceDate(dto.paidAt, '礼品卡付款时间') : null;
     const purchaseFinanceAccountId = normalizeOptionalFinanceUuid(
       dto.purchaseFinanceAccountId,
       '礼品卡付款账户'
@@ -130,7 +139,7 @@ export class IdBusinessV2GiftCardCreditService {
       );
       const purchaseRate = await this.financeFxService.resolve({
         currency: purchaseCurrency,
-        occurredAt: paidAt,
+        occurredAt: paidAt ?? creditedAt,
         fxRateSnapshotId: dto.purchaseFxSnapshotId,
         manualRate:
           dto.purchaseFxRateToCny === undefined
@@ -171,6 +180,12 @@ export class IdBusinessV2GiftCardCreditService {
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const account = await this.lockAccount(tx, accountId);
+        if (
+          requestedCountryOptionId !== undefined &&
+          requestedCountryOptionId !== account.countryOptionId
+        ) {
+          throw new ConflictException('卡片国家必须与目标 ID 当前国家一致，请刷新后重新提交');
+        }
         const existingEntry = await tx.idBusinessV2BalanceLedger.findUnique({
           where: { idempotencyKey },
           include: {
@@ -184,6 +199,9 @@ export class IdBusinessV2GiftCardCreditService {
           }
           assertGiftCardCreditReplayMatches(this.balanceCalculator, existingEntry.giftCard, {
             accountId,
+            cardNameOptionId: requestedCardNameOptionId,
+            countryOptionId: requestedCountryOptionId,
+            creditedAt: dto.creditedAt ? creditedAt : undefined,
             codeHash,
             faceValue,
             exchangeRate: effectiveCardRate,
@@ -203,9 +221,9 @@ export class IdBusinessV2GiftCardCreditService {
             !storedPurchaseOriginalAmount.equals(purchaseOriginalAmount) ||
             !storedPurchaseFxRate.equals(purchaseFxRateToCny) ||
             storedFinanceAccountId !== purchaseFinanceAccountId ||
-            storedSupplierAccountId !== purchaseSupplierAccountId
+            (hasPurchaseEvidence && storedSupplierAccountId !== purchaseSupplierAccountId)
           ) {
-            throw new ConflictException('幂等键已用于不同的礼品卡付款证据');
+            throw new ConflictException('幂等键已用于不同的礼品卡入账证据');
           }
           const supplierFunding =
             storedSupplierAccountId || !storedFinanceAccountId
@@ -242,18 +260,50 @@ export class IdBusinessV2GiftCardCreditService {
           throw new ConflictException('该 ID 已卖出，不能继续加卡');
         }
 
-        const supplier = await tx.idBusinessV2Option.findFirst({
-          where: {
-            id: supplierOptionId,
-            type: 'topup_supplier',
-            status: 'active',
-            deletedAt: null
-          },
-          select: {
-            id: true,
-            name: true
-          }
-        });
+        const [country, cardName, supplier] = await Promise.all([
+          tx.idBusinessV2Option.findFirst({
+            where: {
+              id: account.countryOptionId,
+              type: 'country',
+              status: 'active',
+              deletedAt: null
+            },
+            select: { id: true }
+          }),
+          tx.idBusinessV2Option.findFirst({
+            where: {
+              id: requestedCardNameOptionId,
+              type: 'gift_card_name',
+              status: 'active',
+              deletedAt: null
+            },
+            select: {
+              id: true,
+              name: true
+            },
+            orderBy: requestedCardNameOptionId
+              ? undefined
+              : [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+          }),
+          tx.idBusinessV2Option.findFirst({
+            where: {
+              id: supplierOptionId,
+              type: 'topup_supplier',
+              status: 'active',
+              deletedAt: null
+            },
+            select: {
+              id: true,
+              name: true
+            }
+          })
+        ]);
+        if (!country) {
+          throw new BadRequestException('目标 ID 国家不存在或已停用');
+        }
+        if (!cardName) {
+          throw new BadRequestException('卡片名称不存在或已停用，请先到选项设置完成配置');
+        }
         if (!supplier) {
           throw new BadRequestException('加卡供应商不存在或已停用');
         }
@@ -295,8 +345,10 @@ export class IdBusinessV2GiftCardCreditService {
           data: {
             id: giftCardId,
             accountId,
+            cardNameOptionId: cardName.id,
             supplierOptionId: supplier.id,
             countryOptionId: account.countryOptionId,
+            cardNameSnapshot: cardName.name,
             countryNameSnapshot: account.countryName,
             currencyCodeSnapshot: account.currencyCode,
             supplierNameSnapshot: supplier.name,
@@ -320,6 +372,8 @@ export class IdBusinessV2GiftCardCreditService {
             purchaseSupplierAccountId,
             paidAt,
             status: 'credited',
+            statusChangedAt: creditedAt,
+            creditedAt,
             remark,
             createdByUserId: operator?.id,
             updatedByUserId: operator?.id
@@ -431,6 +485,7 @@ export class IdBusinessV2GiftCardCreditService {
       purchaseFinanceAccountId?: string | null;
       purchaseSupplierAccountId?: string | null;
       paidAt?: Date | null;
+      creditedAt?: Date;
     },
     supplierFunding: CreditResponse['supplierFunding'],
     operator?: AuthenticatedUser
@@ -443,7 +498,7 @@ export class IdBusinessV2GiftCardCreditService {
       sourceType: 'gift_card',
       sourceId: giftCard.id,
       sourceReference: giftCard.codeMasked,
-      occurredAt: giftCard.paidAt ?? new Date(),
+      occurredAt: giftCard.creditedAt ?? giftCard.paidAt ?? new Date(),
       summary: `礼品卡采购入库：${giftCard.codeMasked}`,
       idempotencyKey: `auto:gift_card_purchase:${giftCard.id}`,
       operator,

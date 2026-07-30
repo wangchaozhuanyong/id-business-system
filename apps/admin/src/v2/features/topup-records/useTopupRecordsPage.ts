@@ -45,6 +45,7 @@ export type RecordsTab = 'giftCards' | 'ledger' | 'suppliers' | 'payments';
 type RecordsDataTab = Extract<RecordsTab, 'giftCards' | 'ledger'>;
 
 interface RecordsReferenceOptions {
+  cardNames: V2OptionSelector[];
   countries: V2OptionSelector[];
   suppliers: V2OptionSelector[];
 }
@@ -94,6 +95,7 @@ export function useTopupRecordsPage() {
       : requestedTab
   );
   const recordsDataTab = ref<RecordsDataTab>(activeTab.value === 'ledger' ? 'ledger' : 'giftCards');
+  const cardNameOptions = ref<V2OptionSelector[]>([]);
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2OptionSelector[]>([]);
   const giftCards = ref<V2GiftCardRecord[]>([]);
@@ -112,6 +114,7 @@ export function useTopupRecordsPage() {
     keyword: '',
     accountId: readAccountId(route.query.accountId),
     accountLabel: readQueryString(route.query.accountLabel, 255),
+    cardNameOptionId: '',
     countryOptionId: '',
     supplierOptionId: '',
     dateRange: [] as string[]
@@ -120,7 +123,7 @@ export function useTopupRecordsPage() {
     page: 1,
     pageSize: 20,
     status: '' as V2GiftCardRecordStatus | '',
-    sortBy: 'statusChangedAt' as V2GiftCardRecordSortBy,
+    sortBy: 'creditedAt' as V2GiftCardRecordSortBy,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
   const ledgerQuery = reactive({
@@ -155,6 +158,7 @@ export function useTopupRecordsPage() {
       ? {
           tab: 'giftCards',
           ...common,
+          cardNameOptionId: filters.cardNameOptionId || undefined,
           page: giftCardQuery.page,
           pageSize: giftCardQuery.pageSize,
           status: giftCardQuery.status || undefined,
@@ -215,6 +219,7 @@ export function useTopupRecordsPage() {
     recordsQuery.data,
     (snapshot) => {
       if (!snapshot) return;
+      cardNameOptions.value = snapshot.options.cardNames;
       countryOptions.value = snapshot.options.countries;
       topupSupplierOptions.value = snapshot.options.suppliers;
       if (snapshot.tab === 'giftCards') {
@@ -286,6 +291,7 @@ export function useTopupRecordsPage() {
   function resetFilters() {
     Object.assign(filters, {
       keyword: '',
+      cardNameOptionId: '',
       countryOptionId: '',
       supplierOptionId: '',
       dateRange: []
@@ -293,7 +299,7 @@ export function useTopupRecordsPage() {
     Object.assign(giftCardQuery, {
       page: 1,
       status: '',
-      sortBy: 'statusChangedAt',
+      sortBy: 'creditedAt',
       sortOrder: 'desc'
     });
     Object.assign(ledgerQuery, {
@@ -351,13 +357,14 @@ export function useTopupRecordsPage() {
       'costAmount',
       'status',
       'statusChangedAt',
+      'creditedAt',
       'createdAt',
       'updatedAt'
     ] as const;
     giftCardQuery.sortBy =
       sort.prop && supported.includes(sort.prop as (typeof supported)[number])
         ? (sort.prop as V2GiftCardRecordSortBy)
-        : 'statusChangedAt';
+        : 'creditedAt';
     giftCardQuery.sortOrder = sort.order === 'ascending' ? 'asc' : 'desc';
     giftCardQuery.page = 1;
     void recordsQuery.ensureFresh();
@@ -473,6 +480,7 @@ export function useTopupRecordsPage() {
     canManageSupplierFunds,
     canReassignSupplier,
     activeTab,
+    cardNameOptions,
     countryOptions,
     topupSupplierOptions,
     giftCards,

@@ -7,6 +7,7 @@ const accountId = '11111111-1111-4111-8111-111111111111';
 const giftCardId = '22222222-2222-4222-8222-222222222222';
 const supplierOptionId = '33333333-3333-4333-8333-333333333333';
 const ledgerEntryId = '44444444-4444-4444-8444-444444444444';
+const cardNameOptionId = '77777777-7777-4777-8777-777777777777';
 const operator = {
   id: '55555555-5555-4555-8555-555555555555',
   username: 'admin',
@@ -19,6 +20,11 @@ const country = {
   code: 'US',
   name: '美国'
 };
+const cardName = {
+  id: cardNameOptionId,
+  code: 'apple_gift_card',
+  name: '苹果礼品卡'
+};
 const createdAt = new Date('2026-07-26T12:00:00.000Z');
 const reversedAt = new Date('2026-07-26T13:00:00.000Z');
 
@@ -30,6 +36,8 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
   return {
     id: giftCardId,
     accountId,
+    cardNameOptionId,
+    cardNameSnapshot: cardName.name,
     supplierOptionId,
     sourceAttachmentId: '88888888-8888-4888-8888-888888888888',
     codeEncrypted: 'v1:must-not-leak',
@@ -45,6 +53,7 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
     supplierNameSnapshot: '供应商 A',
     status: 'credited',
     statusChangedAt: createdAt,
+    creditedAt: createdAt,
     remark: '首批加卡',
     createdByUserId: operator.id,
     updatedByUserId: operator.id,
@@ -61,6 +70,7 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
       code: 'topup_supplier_a',
       name: '供应商 A'
     },
+    cardNameOption: cardName,
     countryOption: {
       ...country,
       currencyCode: 'USD'
@@ -200,7 +210,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       expect.objectContaining({
         skip: 20,
         take: 20,
-        orderBy: [{ statusChangedAt: 'desc' }, { id: 'desc' }]
+        orderBy: [{ creditedAt: 'desc' }, { id: 'desc' }]
       })
     );
     expect(result).toMatchObject({
@@ -216,6 +226,9 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
           exchangeRate: '5.4',
           costAmount: '108',
           status: 'credited',
+          cardNameOptionId,
+          cardName,
+          creditedAt: createdAt,
           creditedLedger: {
             balanceBefore: '130',
             balanceAfter: '150',
@@ -294,6 +307,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     await service.listGiftCards({
       keyword: 'CDEF',
       accountId,
+      cardNameOptionId,
       countryOptionId: country.id,
       supplierOptionId,
       status: 'credited',
@@ -307,10 +321,11 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           accountId,
+          cardNameOptionId,
           supplierOptionId,
           status: 'credited',
           countryOptionId: country.id,
-          statusChangedAt: {
+          creditedAt: {
             gte: new Date('2026-07-25T00:00:00.000Z'),
             lte: new Date('2026-07-26T23:59:59.999Z')
           },
