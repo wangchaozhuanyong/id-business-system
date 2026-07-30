@@ -6,6 +6,8 @@ import { IdBusinessV2GiftCardCreditService } from './id-business-v2-gift-card-cr
 
 const accountId = '11111111-1111-4111-8111-111111111111';
 const supplierOptionId = '22222222-2222-4222-8222-222222222222';
+const cardNameOptionId = '77777777-7777-4777-8777-777777777777';
+const countryOptionId = '66666666-6666-4666-8666-666666666666';
 const operator = {
   id: '33333333-3333-4333-8333-333333333333',
   username: 'admin',
@@ -23,8 +25,11 @@ function makeDto(overrides: Record<string, unknown> = {}) {
   return {
     code: 'X123-4567-89AB-CDEF',
     faceValue: '10',
+    cardNameOptionId,
+    countryOptionId,
     exchangeRate: '2.5',
     supplierOptionId,
+    creditedAt: createdAt.toISOString(),
     idempotencyKey: 'request-12345678',
     remark: '人工核对通过',
     ...overrides
@@ -35,7 +40,12 @@ function makeGiftCard(overrides: Record<string, unknown> = {}) {
   return {
     id: '44444444-4444-4444-8444-444444444444',
     accountId,
+    cardNameOptionId,
+    cardNameSnapshot: '苹果礼品卡',
     supplierOptionId,
+    countryOptionId,
+    countryNameSnapshot: '美国',
+    currencyCodeSnapshot: 'USD',
     sourceAttachmentId: null,
     codeEncrypted: 'v1:encrypted',
     codeHash: 'hashed-code',
@@ -48,10 +58,19 @@ function makeGiftCard(overrides: Record<string, unknown> = {}) {
     exchangeRatePrefilledValue: null,
     exchangeRateWasOverridden: false,
     costAmount: decimal('25'),
+    purchaseOriginalAmount: decimal('25'),
+    purchaseCurrency: 'CNY',
+    purchaseFxRateToCny: decimal('1'),
+    purchaseFxSnapshotId: null,
+    purchaseFinanceAccountId: null,
+    purchaseSupplierAccountId: null,
+    paidAt: null,
     creditedAmount: decimal('0'),
     redeemedAmount: decimal('0'),
     withdrawnAmount: decimal('0'),
     status: 'credited',
+    statusChangedAt: createdAt,
+    creditedAt: createdAt,
     remark: '人工核对通过',
     createdByUserId: operator.id,
     updatedByUserId: operator.id,
@@ -161,15 +180,18 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         balanceCostAmount: decimal('50'),
         soldByOrderId: null,
         lossReportedAt: null,
-        countryOptionId: '66666666-6666-4666-8666-666666666666',
+        countryOptionId,
         countryName: '美国',
         currencyCode: 'USD'
       }
     ]);
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
-    tx.idBusinessV2Option.findFirst.mockResolvedValue({
-      id: supplierOptionId,
-      name: '测试供应商'
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
+      if (where.type === 'country') return { id: countryOptionId };
+      if (where.type === 'gift_card_name') {
+        return { id: cardNameOptionId, name: '苹果礼品卡' };
+      }
+      return { id: supplierOptionId, name: '测试供应商' };
     });
     tx.idBusinessV2GiftCard.findUnique.mockResolvedValue(null);
     tx.idBusinessV2GiftCard.update.mockResolvedValue({});
@@ -223,6 +245,9 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     expect(tx.idBusinessV2GiftCard.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         accountId,
+        cardNameOptionId,
+        cardNameSnapshot: '苹果礼品卡',
+        countryOptionId,
         supplierOptionId,
         codeEncrypted: 'v1:encrypted',
         codeHash: 'hashed-code',
@@ -231,6 +256,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         faceValue: decimal('10'),
         exchangeRate: decimal('2.5'),
         costAmount: decimal('25'),
+        creditedAt: createdAt,
         status: 'credited'
       })
     });
@@ -264,6 +290,9 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     });
     expect(result).toMatchObject({
       giftCard: {
+        cardNameOptionId,
+        cardName: '苹果礼品卡',
+        countryOptionId,
         codeMasked: 'X123****CDEF',
         faceValue: '10',
         exchangeRate: '2.5',
@@ -283,6 +312,53 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('X123456789ABCDEF');
+  });
+
+  it('uses the first active card name for a rolling-release request without the new field', async () => {
+    await service.confirmCredit(
+      accountId,
+      makeDto({
+        cardNameOptionId: undefined
+      }),
+      operator
+    );
+
+    const cardNameLookup = tx.idBusinessV2Option.findFirst.mock.calls.find(
+      ([input]) => input.where.type === 'gift_card_name'
+    )?.[0];
+    expect(cardNameLookup).toMatchObject({
+      where: {
+        id: undefined,
+        type: 'gift_card_name',
+        status: 'active',
+        deletedAt: null
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+    });
+    expect(tx.idBusinessV2GiftCard.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        cardNameOptionId,
+        cardNameSnapshot: '苹果礼品卡'
+      })
+    });
+  });
+
+  it('rejects a missing card name and a non-positive card rate before any balance write', async () => {
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
+      if (where.type === 'country') return { id: countryOptionId };
+      if (where.type === 'gift_card_name') return null;
+      return { id: supplierOptionId, name: '测试供应商' };
+    });
+
+    await expect(service.confirmCredit(accountId, makeDto(), operator)).rejects.toThrow(
+      '卡片名称不存在或已停用'
+    );
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
+
+    await expect(
+      service.confirmCredit(accountId, makeDto({ exchangeRate: '0' }), operator)
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('locks MYR payment evidence and debits the selected finance account', async () => {
@@ -348,7 +424,11 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         appleIdMasked: 'us***@example.com',
         currentBalance: decimal('20'),
         balanceCostAmount: decimal('50'),
-        soldByOrderId: '99999999-9999-4999-8999-999999999999'
+        soldByOrderId: '99999999-9999-4999-8999-999999999999',
+        lossReportedAt: null,
+        countryOptionId,
+        countryName: '美国',
+        currencyCode: 'USD'
       }
     ]);
 
@@ -470,13 +550,31 @@ describe('IdBusinessV2GiftCardCreditService', () => {
   });
 
   it('rejects an inactive or non-topup supplier', async () => {
-    tx.idBusinessV2Option.findFirst.mockResolvedValue(null);
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
+      if (where.type === 'country') return { id: countryOptionId };
+      if (where.type === 'gift_card_name') {
+        return { id: cardNameOptionId, name: '苹果礼品卡' };
+      }
+      return null;
+    });
 
     await expect(service.confirmCredit(accountId, makeDto(), operator)).rejects.toBeInstanceOf(
       BadRequestException
     );
     expect(tx.idBusinessV2GiftCard.findUnique).not.toHaveBeenCalled();
     expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a card country that no longer matches the locked target ID', async () => {
+    await expect(
+      service.confirmCredit(
+        accountId,
+        makeDto({ countryOptionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }),
+        operator
+      )
+    ).rejects.toThrow('卡片国家必须与目标 ID 当前国家一致');
+    expect(tx.idBusinessV2Option.findFirst).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
   });
 
   it('rejects a missing or disabled target account before any write', async () => {

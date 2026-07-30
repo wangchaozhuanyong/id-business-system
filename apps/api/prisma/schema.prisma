@@ -56,6 +56,7 @@ enum IdBusinessV2OptionType {
   service
   id_supplier
   topup_supplier
+  gift_card_name
   settlement_platform
   expense_category
 }
@@ -520,6 +521,7 @@ model IdBusinessV2Option {
   accountsBySupplier   IdBusinessV2Account[]              @relation("IdBusinessV2AccountSupplier")
   giftCardsBySupplier  IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardSupplier")
   giftCardsByCountry   IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardCountry")
+  giftCardsByCardName  IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardName")
   topupFundAccounts    IdBusinessV2TopupSupplierAccount[]
   financeExpenses      IdBusinessV2FinanceExpense[]       @relation("IdBusinessV2FinanceExpenseCategory")
   ordersByService      IdBusinessV2Order[]                @relation("IdBusinessV2OrderService")
@@ -664,8 +666,10 @@ model IdBusinessV2Account {
 model IdBusinessV2GiftCard {
   id                         String                          @id @default(uuid()) @db.Uuid
   accountId                  String                          @map("account_id") @db.Uuid
+  cardNameOptionId           String                          @map("card_name_option_id") @db.Uuid
   supplierOptionId           String?                         @map("supplier_option_id") @db.Uuid
   countryOptionId            String                          @map("country_option_id") @db.Uuid
+  cardNameSnapshot           String                          @map("card_name_snapshot") @db.VarChar(160)
   countryNameSnapshot        String                          @map("country_name_snapshot") @db.VarChar(160)
   currencyCodeSnapshot       String?                         @map("currency_code_snapshot") @db.VarChar(3)
   supplierNameSnapshot       String?                         @map("supplier_name_snapshot") @db.VarChar(160)
@@ -694,6 +698,7 @@ model IdBusinessV2GiftCard {
   supplierRefundClosedAt     DateTime?                       @map("supplier_refund_closed_at") @db.Timestamptz(6)
   status                     IdBusinessV2GiftCardStatus
   statusChangedAt            DateTime                        @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  creditedAt                 DateTime                        @default(now()) @map("credited_at") @db.Timestamptz(6)
   remark                     String?                         @db.Text
   createdByUserId            String?                         @map("created_by_user_id") @db.Uuid
   updatedByUserId            String?                         @map("updated_by_user_id") @db.Uuid
@@ -701,6 +706,7 @@ model IdBusinessV2GiftCard {
   updatedAt                  DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   account                 IdBusinessV2Account                @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  cardNameOption          IdBusinessV2Option                 @relation("IdBusinessV2GiftCardName", fields: [cardNameOptionId], references: [id], onDelete: Restrict)
   supplierOption          IdBusinessV2Option?                @relation("IdBusinessV2GiftCardSupplier", fields: [supplierOptionId], references: [id], onDelete: Restrict)
   countryOption           IdBusinessV2Option                 @relation("IdBusinessV2GiftCardCountry", fields: [countryOptionId], references: [id], onDelete: Restrict)
   sourceAttachment        Attachment?                        @relation("IdBusinessV2GiftCardSourceAttachment", fields: [sourceAttachmentId], references: [id], onDelete: SetNull)
@@ -714,8 +720,11 @@ model IdBusinessV2GiftCard {
   supplierFundEntries     IdBusinessV2TopupSupplierLedger[]
 
   @@index([accountId, createdAt])
+  @@index([accountId, creditedAt])
+  @@index([cardNameOptionId, creditedAt])
   @@index([supplierOptionId])
   @@index([countryOptionId, createdAt])
+  @@index([countryOptionId, creditedAt])
   @@index([sourceAttachmentId])
   @@index([exchangeRateSnapshotId])
   @@index([purchaseFxSnapshotId])

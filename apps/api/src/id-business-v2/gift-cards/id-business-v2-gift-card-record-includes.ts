@@ -1,6 +1,13 @@
 import type { Prisma } from '@prisma/client';
 
 export const GIFT_CARD_RECORD_INCLUDE = {
+  cardNameOption: {
+    select: {
+      id: true,
+      code: true,
+      name: true
+    }
+  },
   account: {
     select: {
       id: true,

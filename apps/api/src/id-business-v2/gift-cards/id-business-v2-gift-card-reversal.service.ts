@@ -71,12 +71,14 @@ export class IdBusinessV2GiftCardReversalService {
       },
       select: {
         id: true,
+        cardNameSnapshot: true,
         codeMasked: true,
         codeTail: true,
         faceValue: true,
         exchangeRate: true,
         costAmount: true,
         status: true,
+        creditedAt: true,
         createdAt: true,
         supplierOption: {
           select: {
@@ -97,9 +99,7 @@ export class IdBusinessV2GiftCardReversalService {
           take: 1
         }
       },
-      orderBy: {
-        createdAt: 'desc'
-      },
+      orderBy: { creditedAt: 'desc' },
       take: 101
     });
     const items = giftCards.slice(0, 100);
@@ -108,6 +108,7 @@ export class IdBusinessV2GiftCardReversalService {
       account,
       items: items.map((giftCard) => ({
         id: giftCard.id,
+        cardName: giftCard.cardNameSnapshot,
         codeMasked: giftCard.codeMasked,
         codeTail: giftCard.codeTail,
         faceValue: toV2DecimalString(giftCard.faceValue),
@@ -123,6 +124,7 @@ export class IdBusinessV2GiftCardReversalService {
               createdAt: giftCard.ledgerEntries[0].createdAt
             }
           : null,
+        creditedAt: giftCard.creditedAt,
         createdAt: giftCard.createdAt
       })),
       total: items.length,

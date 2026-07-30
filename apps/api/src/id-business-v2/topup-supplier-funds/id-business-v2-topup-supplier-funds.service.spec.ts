@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2TopupSupplierFundsService } from './id-business-v2-topup-supplier-funds.service';
@@ -182,13 +183,43 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     });
   });
 
-  it('rejects a gift-card debit when the supplier wallet would become negative', async () => {
+  it('allows a gift-card debit to create an explicit negative supplier balance', async () => {
     tx.$queryRaw.mockResolvedValue([lockedAccount('100')]);
     tx.idBusinessV2TopupSupplierLedger.create.mockImplementation(async ({ data }) => ({
       id: ledgerId,
       ...data,
       createdAt
     }));
+
+    const result = await giftCardFundsService.debitGiftCard(tx as never, {
+      supplierOptionId,
+      giftCardId,
+      amountCny: '570',
+      operator
+    });
+
+    expect(result).toMatchObject({
+      balanceBeforeCny: '100',
+      balanceAfterCny: '-470',
+      isNegative: true,
+      shortfallCny: '470'
+    });
+    expect(tx.idBusinessV2TopupSupplierAccount.update).toHaveBeenCalledWith({
+      where: { id: supplierAccountId },
+      data: expect.objectContaining({
+        currentBalance: decimal('-470'),
+        currentBalanceCny: decimal('-470')
+      })
+    });
+  });
+
+  it('rejects gift-card debit when the supplier prepaid account is not initialized', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      {
+        ...lockedAccount('100'),
+        initializedAt: null
+      }
+    ]);
 
     await expect(
       giftCardFundsService.debitGiftCard(tx as never, {
@@ -197,7 +228,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
         amountCny: '570',
         operator
       })
-    ).rejects.toThrow('供应商钱包余额不足');
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(tx.idBusinessV2TopupSupplierLedger.create).not.toHaveBeenCalled();
     expect(tx.idBusinessV2TopupSupplierAccount.update).not.toHaveBeenCalled();
   });

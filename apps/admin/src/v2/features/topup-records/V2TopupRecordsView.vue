@@ -39,7 +39,7 @@
       <el-input
         v-model="filters.keyword"
         clearable
-        placeholder="礼品卡尾号、ID、供应商"
+        placeholder="卡片名称、礼品卡尾号、ID、供应商"
         aria-label="搜索加卡记录"
         @keyup.enter="handleSearch"
         @clear="handleSearch"
@@ -70,6 +70,21 @@
         <el-option label="ID 永久报损" value="account_loss" />
       </el-select>
       <V2FilterDisclosure>
+        <el-select
+          v-if="activeTab === 'giftCards'"
+          v-model="filters.cardNameOptionId"
+          clearable
+          placeholder="全部卡片名称"
+          aria-label="筛选卡片名称"
+          @change="handleFilterChange"
+        >
+          <el-option
+            v-for="option in cardNameOptions"
+            :key="option.id"
+            :label="option.name"
+            :value="option.id"
+          />
+        </el-select>
         <el-select
           v-model="filters.countryOptionId"
           clearable
@@ -349,6 +364,7 @@ const {
   canManageSupplierFunds,
   canReassignSupplier,
   activeTab,
+  cardNameOptions,
   countryOptions,
   topupSupplierOptions,
   giftCards,

@@ -26,6 +26,7 @@ import {
 export interface ListIdBusinessV2GiftCardRecordsQuery extends PaginationQuery {
   keyword?: string;
   accountId?: string;
+  cardNameOptionId?: string;
   countryOptionId?: string;
   supplierOptionId?: string;
   status?: string;
@@ -59,6 +60,7 @@ const GIFT_CARD_SORT_FIELDS: Record<
   costAmount: 'costAmount',
   status: 'status',
   statusChangedAt: 'statusChangedAt',
+  creditedAt: 'creditedAt',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };
@@ -86,17 +88,20 @@ export class IdBusinessV2GiftCardRecordsService {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const accountId = this.normalizeOptionalUuid(query.accountId, '目标 ID');
+    const cardNameOptionId = this.normalizeOptionalUuid(query.cardNameOptionId, '卡片名称');
     const countryOptionId = this.normalizeOptionalUuid(query.countryOptionId, '国家');
     const supplierOptionId = this.normalizeOptionalUuid(query.supplierOptionId, '供应商');
     const status = this.parseGiftCardStatus(query.status);
     const where: Prisma.IdBusinessV2GiftCardWhereInput = {
       accountId: accountId ?? undefined,
+      cardNameOptionId: cardNameOptionId ?? undefined,
       supplierOptionId: supplierOptionId ?? undefined,
       countryOptionId: countryOptionId ?? undefined,
       status: status ?? undefined,
-      statusChangedAt: this.parseDateRange(query.dateFrom, query.dateTo),
+      creditedAt: this.parseDateRange(query.dateFrom, query.dateTo),
       OR: keyword
         ? [
+            { cardNameSnapshot: { contains: keyword, mode: 'insensitive' } },
             { codeMasked: { contains: keyword, mode: 'insensitive' } },
             { codeTail: { contains: keyword.slice(-8), mode: 'insensitive' } },
             {
@@ -123,7 +128,7 @@ export class IdBusinessV2GiftCardRecordsService {
         include: GIFT_CARD_RECORD_INCLUDE,
         skip: pagination.skip,
         take: pagination.take,
-        orderBy: this.buildOrderBy(query, GIFT_CARD_SORT_FIELDS, 'statusChangedAt')
+        orderBy: this.buildOrderBy(query, GIFT_CARD_SORT_FIELDS, 'creditedAt')
       }),
       this.prisma.idBusinessV2GiftCard.count({ where })
     ]);
@@ -298,6 +303,11 @@ export class IdBusinessV2GiftCardRecordsService {
     const supplierFunding = item.supplierFundEntries[0] ?? null;
     return {
       id: item.id,
+      cardNameOptionId: item.cardNameOptionId,
+      cardName: {
+        ...item.cardNameOption,
+        name: item.cardNameSnapshot
+      },
       code: this.decryptGiftCardCode(item.codeEncrypted),
       codeMasked: item.codeMasked,
       codeTail: item.codeTail,
@@ -317,7 +327,8 @@ export class IdBusinessV2GiftCardRecordsService {
       purchaseFxSnapshotId: item.purchaseFxSnapshotId ?? null,
       purchaseFinanceAccountId: item.purchaseFinanceAccountId ?? null,
       purchaseSupplierAccountId: item.purchaseSupplierAccountId ?? null,
-      paidAt: item.paidAt ?? item.createdAt,
+      paidAt: item.paidAt ?? null,
+      creditedAt: item.creditedAt,
       supplierRefundStatus: item.supplierRefundStatus ?? ('none' as const),
       supplierRefundAmount: toV2DecimalString(item.supplierRefundAmount ?? 0),
       supplierRefundAmountCny: toV2DecimalString(item.supplierRefundAmountCny ?? 0),

@@ -70,17 +70,20 @@ export interface V2TopupWorkbenchListQuery extends V2PageQuery {
 export interface V2GiftCardCreditPayload {
   code: string;
   faceValue: string;
+  cardNameOptionId: string;
+  countryOptionId: string;
   exchangeRate?: string;
   exchangeRateSnapshotId?: string;
   exchangeRatePrefilledValue?: string;
   supplierOptionId: string;
-  purchaseOriginalAmount: string;
-  purchaseCurrency: V2FinanceCurrency;
+  creditedAt: string;
+  purchaseOriginalAmount?: string;
+  purchaseCurrency?: V2FinanceCurrency;
   purchaseFxRateToCny?: string;
   purchaseFinanceAccountId?: string;
   purchaseSupplierAccountId?: string;
   purchaseManualRateReason?: string;
-  paidAt: string;
+  paidAt?: string;
   idempotencyKey: string;
   remark?: string;
 }
@@ -88,6 +91,9 @@ export interface V2GiftCardCreditPayload {
 export interface V2GiftCardCreditResult {
   giftCard: {
     id: string;
+    cardNameOptionId: string;
+    cardName: string;
+    countryOptionId: string;
     codeMasked: string;
     codeTail: string;
     faceValue: string;
@@ -104,6 +110,7 @@ export interface V2GiftCardCreditResult {
     purchaseFinanceAccountId: string | null;
     purchaseSupplierAccountId: string | null;
     paidAt: string | null;
+    creditedAt: string;
     status: string;
     supplierOptionId: string | null;
     sourceAttachmentId: string | null;
@@ -144,6 +151,7 @@ export type V2GiftCardReversalAction = 'redeemed' | 'withdrawn';
 
 export interface V2ReversibleGiftCard {
   id: string;
+  cardName: string;
   codeMasked: string;
   codeTail: string;
   faceValue: string;
@@ -164,6 +172,7 @@ export interface V2ReversibleGiftCard {
     balanceAfter: string;
     createdAt: string;
   } | null;
+  creditedAt: string;
   createdAt: string;
 }
 
@@ -234,11 +243,14 @@ export type V2GiftCardRecordSortBy =
   | 'costAmount'
   | 'status'
   | 'statusChangedAt'
+  | 'creditedAt'
   | 'createdAt'
   | 'updatedAt';
 
 export interface V2GiftCardRecord {
   id: string;
+  cardNameOptionId: string;
+  cardName: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
   code: string;
   codeMasked: string;
   codeTail: string;
@@ -252,6 +264,7 @@ export interface V2GiftCardRecord {
   purchaseFinanceAccountId: string | null;
   purchaseSupplierAccountId: string | null;
   paidAt: string | null;
+  creditedAt: string;
   supplierRefundStatus: 'none' | 'pending' | 'received' | 'written_off';
   supplierRefundAmount: string;
   supplierRefundAmountCny: string;
@@ -308,6 +321,7 @@ export interface V2GiftCardRecord {
 export interface V2GiftCardRecordListQuery extends V2PageQuery {
   keyword?: string;
   accountId?: string;
+  cardNameOptionId?: string;
   countryOptionId?: string;
   supplierOptionId?: string;
   status?: V2GiftCardRecordStatus;

@@ -1,12 +1,9 @@
-import type { V2FinanceCurrency } from '@apple-business/shared';
 import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
-import type { V2GiftCardPurchaseSources, V2TopupServiceSummary } from './contracts';
+import type { V2TopupServiceSummary } from './contracts';
 
-interface GiftCardPurchaseForm {
-  purchaseOriginalAmount: string;
-  purchaseCurrency: V2FinanceCurrency;
-  purchaseFxRateToCny: string;
-  supplierOptionId: string;
+interface GiftCardValueForm {
+  faceValue: string;
+  exchangeRate: string;
 }
 
 export function toLocalDateTimeInput(value: Date) {
@@ -14,58 +11,17 @@ export function toLocalDateTimeInput(value: Date) {
   return new Date(value.getTime() - offset).toISOString().slice(0, 16);
 }
 
-export function calculateCreditCostPreview(form: GiftCardPurchaseForm) {
+export function calculateCreditCostPreview(form: GiftCardValueForm) {
   if (
-    !isV2UnsignedDecimal(form.purchaseOriginalAmount, { allowZero: false }) ||
-    (form.purchaseCurrency !== 'CNY' &&
-      !isV2UnsignedDecimal(form.purchaseFxRateToCny, {
-        allowZero: false,
-        decimalPlaces: 8
-      }))
+    !isV2UnsignedDecimal(form.faceValue, { allowZero: false }) ||
+    !isV2UnsignedDecimal(form.exchangeRate, {
+      allowZero: false,
+      decimalPlaces: 8
+    })
   ) {
     return '';
   }
-  return multiplyDecimalStrings(
-    form.purchaseOriginalAmount,
-    form.purchaseCurrency === 'CNY' ? '1' : form.purchaseFxRateToCny
-  );
-}
-
-export function buildPurchaseSourceOptions(
-  sources: V2GiftCardPurchaseSources,
-  form: GiftCardPurchaseForm
-) {
-  return [
-    ...sources.financeAccounts
-      .filter((account) => account.currency === form.purchaseCurrency)
-      .map((account) => ({
-        value: `account:${account.id}`,
-        label: `${account.name} · ${account.currency} · 余额 ${account.currentBalance}`,
-        currentBalance: account.currentBalance,
-        kind: 'account' as const
-      })),
-    ...sources.supplierWallets
-      .filter(
-        (wallet) =>
-          wallet.currency === form.purchaseCurrency &&
-          wallet.supplierOptionId === form.supplierOptionId
-      )
-      .map((wallet) => ({
-        value: `wallet:${wallet.id}`,
-        label: `${wallet.supplierName}预存 · ${wallet.currency} · 余额 ${wallet.currentBalance}`,
-        currentBalance: wallet.currentBalance,
-        kind: 'wallet' as const
-      }))
-  ];
-}
-
-export function effectiveRateUnavailableMessage(reason: string | null) {
-  if (reason === 'latest_attempt_failed')
-    return '最新一次 USDT 汇率采集失败，当前没有可展示的参考值。';
-  if (reason === 'stale') return '最近一次 USDT 汇率已经过期，当前没有可展示的参考值。';
-  if (reason === 'emergency_disabled') return 'USDT 汇率网络采集已关闭。';
-  if (reason === 'collection_in_progress') return 'USDT 汇率正在采集中，请稍后查看。';
-  return '暂无可展示的 USDT 参考汇率。';
+  return multiplyDecimalStrings(form.faceValue, form.exchangeRate);
 }
 
 export function maskGiftCardCode(value: string) {

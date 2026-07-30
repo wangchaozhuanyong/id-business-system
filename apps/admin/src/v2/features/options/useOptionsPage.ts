@@ -1,4 +1,5 @@
 import { computed, reactive, ref, watch, type Component } from 'vue';
+import { useRoute } from 'vue-router';
 import {
   Box,
   CircleCheck,
@@ -37,6 +38,7 @@ const OPTIONS_TYPES_SCOPE = 'options-reference';
 const OPTIONS_TYPES_KEY = 'types';
 
 export function useOptionsPage() {
+  const route = useRoute();
   interface OptionFormState {
     type: V2OptionType;
     name: string;
@@ -61,11 +63,14 @@ export function useOptionsPage() {
     service: Tickets,
     id_supplier: Box,
     topup_supplier: Wallet,
+    gift_card_name: CreditCard,
     settlement_platform: CreditCard,
     expense_category: Wallet
   };
-  const selectedType = ref<V2OptionType>('id_status');
-  const renderedType = ref<V2OptionType>('id_status');
+  const requestedType =
+    typeof route.query.type === 'string' ? (route.query.type as V2OptionType) : 'id_status';
+  const selectedType = ref<V2OptionType>(requestedType);
+  const renderedType = ref<V2OptionType>(requestedType);
   const items = ref<V2Option[]>([]);
   const total = ref(0);
   const drawerVisible = ref(false);

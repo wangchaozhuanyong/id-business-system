@@ -6,7 +6,6 @@ import {
 } from '@/v2/composables/useV2Query';
 import { idBusinessV2BalancesApi } from './api';
 import type {
-  V2GiftCardPurchaseSources,
   V2OptionSelector,
   V2TopupSupplierFundSelector,
   V2TopupWorkbenchListQuery,
@@ -14,9 +13,9 @@ import type {
 } from './contracts';
 
 interface TopupReferenceOptions {
+  cardNames: V2OptionSelector[];
   countries: V2OptionSelector[];
   suppliers: V2TopupSupplierFundSelector[];
-  purchaseSources: V2GiftCardPurchaseSources;
 }
 
 interface TopupPageSnapshot {
