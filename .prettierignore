@@ -11,3 +11,4 @@ deploy/nginx/*.conf
 scripts/*.sh
 .dockerignore
 .gitignore
+.github/CODEOWNERS

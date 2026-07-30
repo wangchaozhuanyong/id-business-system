@@ -121,14 +121,18 @@
         </el-form-item>
 
         <el-form-item prop="mfaCode">
-          <template #label>动态验证码 / 恢复码（未启用 MFA 可留空）</template>
+          <template #label>
+            {{ supabaseMfaRequired ? '6 位动态验证码' : '动态验证码 / 恢复码' }}
+          </template>
           <el-input
             v-model.trim="form.mfaCode"
             autocomplete="one-time-code"
-            inputmode="numeric"
-            maxlength="64"
+            :inputmode="supabaseMfaRequired ? 'numeric' : undefined"
+            :maxlength="supabaseMfaRequired ? 6 : 64"
             name="one-time-code"
-            placeholder="请输入 6 位动态验证码或恢复码（可留空）"
+            :placeholder="
+              supabaseMfaRequired ? '请输入 6 位动态验证码' : '本地认证未启用 MFA 时可留空'
+            "
           >
             <template #prefix>
               <el-icon><Key /></el-icon>
@@ -172,6 +176,7 @@ import { Key, List, Lock, PieChart, Sunny, User } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage, http, request } from '@/api/client';
+import { isSupabaseAuthConfigured } from '@/auth/supabase-config';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
 import { getSafeV2Redirect } from '@/v2/router/passwordReset';
@@ -185,6 +190,7 @@ const formRef = ref<FormInstance>();
 const loading = ref(false);
 const loginError = ref('');
 const currentTheme = ref<V2Theme>(getPreferredV2Theme());
+const supabaseMfaRequired = isSupabaseAuthConfigured();
 const systemHealthStatus = ref<'checking' | 'ready' | 'unavailable'>('checking');
 const systemHealthText = computed(() => {
   if (systemHealthStatus.value === 'ready') return '系统运行正常';
@@ -200,7 +206,17 @@ const form = reactive({
 
 const rules: FormRules<typeof form> = {
   username: [{ required: true, message: '请输入管理员账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  mfaCode: supabaseMfaRequired
+    ? [
+        {
+          required: true,
+          pattern: /^\d{6}$/,
+          message: '请输入 6 位动态验证码',
+          trigger: ['blur', 'change']
+        }
+      ]
+    : []
 };
 
 function setTheme(theme: V2Theme) {

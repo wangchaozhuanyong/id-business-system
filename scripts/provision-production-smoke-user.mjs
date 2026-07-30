@@ -362,6 +362,13 @@ function createSupabaseAdminClient({ serviceKey, supabaseUrl }) {
       autoRefreshToken: false,
       detectSessionInUrl: false,
       persistSession: false
+    },
+    global: {
+      fetch: (input, init = {}) =>
+        fetch(input, {
+          ...init,
+          signal: AbortSignal.timeout(15_000)
+        })
     }
   });
 }

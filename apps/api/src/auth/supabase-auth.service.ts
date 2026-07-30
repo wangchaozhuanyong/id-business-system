@@ -29,6 +29,8 @@ export interface SupabaseLoginResult {
   sessionId: string;
 }
 
+export type SupabasePasswordWriteState = 'desired_confirmed' | 'alternate_confirmed' | 'unknown';
+
 const ACCESS_TOKEN_CACHE_TTL_MS = 30_000;
 const VERIFIED_TOKEN_CACHE_TTL_MS = 60_000;
 const TOKEN_EXPIRY_SAFETY_MS = 5_000;
@@ -99,52 +101,63 @@ export class SupabaseAuthService {
     }
 
     let session = signInResult.data.session;
+    await this.assertExpectedAuthUser(session, identity.authUserId);
     const factorResult = await client.auth.mfa.listFactors();
     if (factorResult.error || !factorResult.data) {
       await this.logout(session.access_token).catch(() => undefined);
       throw new ServiceUnavailableException('Supabase MFA 状态暂时无法确认，请稍后重试。');
     }
-    const verifiedFactor = factorResult.data?.totp.find((factor) => factor.status === 'verified');
-    if (verifiedFactor) {
-      const code = mfaCode?.trim();
-      if (!code) {
-        await this.logout(session.access_token).catch(() => undefined);
-        throw new UnauthorizedException('需要输入动态验证码或恢复码。');
+    const verifiedFactors = factorResult.data.all.filter((factor) => factor.status === 'verified');
+    const verifiedFactor = factorResult.data.totp.find((factor) => factor.status === 'verified');
+    if (!verifiedFactor) {
+      await this.logout(session.access_token).catch(() => undefined);
+      if (verifiedFactors.length === 0) {
+        throw new UnauthorizedException(
+          '当前账号尚未绑定 Supabase 动态验证码，请联系管理员完成绑定。'
+        );
       }
-
-      const verifyResult = await client.auth.mfa.challengeAndVerify({
-        factorId: verifiedFactor.id,
-        code
-      });
-      if (verifyResult.error || !verifyResult.data) {
-        await this.logout(session.access_token).catch(() => undefined);
-        throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
-      }
-      session = {
-        access_token: verifyResult.data.access_token,
-        refresh_token: verifyResult.data.refresh_token,
-        expires_in: verifyResult.data.expires_in,
-        expires_at: Math.floor(Date.now() / 1000) + verifyResult.data.expires_in,
-        token_type: verifyResult.data.token_type,
-        user: verifyResult.data.user
-      };
+      throw new UnauthorizedException('当前账号需要使用受支持的二次验证方式。');
+    }
+    const code = mfaCode?.trim();
+    if (!code) {
+      await this.logout(session.access_token).catch(() => undefined);
+      throw new UnauthorizedException('需要输入 6 位动态验证码。');
     }
 
-    await this.prisma.v2AuthIdentity.update({
-      where: {
-        userId: identity.userId
-      },
-      data: {
-        lastAuthenticatedAt: new Date()
-      }
+    const verifyResult = await client.auth.mfa.challengeAndVerify({
+      factorId: verifiedFactor.id,
+      code
     });
+    if (verifyResult.error || !verifyResult.data) {
+      await this.logout(session.access_token).catch(() => undefined);
+      throw new UnauthorizedException('6 位动态验证码错误，请重新输入。');
+    }
+    session = {
+      access_token: verifyResult.data.access_token,
+      refresh_token: verifyResult.data.refresh_token,
+      expires_in: verifyResult.data.expires_in,
+      token_type: verifyResult.data.token_type,
+      user: verifyResult.data.user
+    };
+    await this.assertExpectedAuthUser(session, identity.authUserId);
 
     let sessionIdentity: SupabaseSessionIdentity;
     try {
-      sessionIdentity = this.getSessionIdentityFromAccessToken(
+      sessionIdentity = await this.getVerifiedSessionIdentity(
+        client,
         session.access_token,
+        identity.authUserId,
+        true,
         identity.userId
       );
+      await this.prisma.v2AuthIdentity.update({
+        where: {
+          userId: identity.userId
+        },
+        data: {
+          lastAuthenticatedAt: new Date()
+        }
+      });
     } catch (error) {
       await this.logout(session.access_token).catch(() => undefined);
       throw error;
@@ -235,9 +248,43 @@ export class SupabaseAuthService {
     const result = await this.createServiceClient().auth.admin.updateUserById(authUserId, {
       password
     });
-    if (result.error) {
+    if (result.error || result.data.user?.id !== authUserId) {
       throw new ServiceUnavailableException('Supabase 密码更新暂时不可用，请稍后重试。');
     }
+  }
+
+  async setPasswordWithConfirmation(input: {
+    alternatePassword: string;
+    authEmail: string;
+    authUserId: string;
+    desiredPassword: string;
+  }): Promise<SupabasePasswordWriteState> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.updatePassword(input.authUserId, input.desiredPassword);
+        return 'desired_confirmed';
+      } catch {
+        // The provider may have committed before a timeout. Retry is idempotent, then probe.
+      }
+    }
+
+    const desiredState = await this.probePassword(
+      input.authEmail,
+      input.authUserId,
+      input.desiredPassword
+    );
+    const alternateState = await this.probePassword(
+      input.authEmail,
+      input.authUserId,
+      input.alternatePassword
+    );
+    if (desiredState === 'accepted' && alternateState === 'rejected') {
+      return 'desired_confirmed';
+    }
+    if (alternateState === 'accepted' && desiredState === 'rejected') {
+      return 'alternate_confirmed';
+    }
+    return 'unknown';
   }
 
   async verifyCurrentPassword(userId: string, password: string) {
@@ -274,6 +321,7 @@ export class SupabaseAuthService {
 
     await this.logout(session.access_token);
     return {
+      authEmail: identity.authEmail,
       authUserId: identity.authUserId
     };
   }
@@ -307,11 +355,11 @@ export class SupabaseAuthService {
   private getConfig() {
     const url = this.configService.get<string>('SUPABASE_URL');
     const anonKey =
-      this.configService.get<string>('SUPABASE_ANON_KEY') ??
-      this.configService.get<string>('SUPABASE_PUBLISHABLE_KEY');
+      this.configService.get<string>('SUPABASE_ANON_KEY')?.trim() ||
+      this.configService.get<string>('SUPABASE_PUBLISHABLE_KEY')?.trim();
     const serviceRoleKey =
-      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ??
-      this.configService.get<string>('SUPABASE_SECRET_KEY');
+      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY')?.trim() ||
+      this.configService.get<string>('SUPABASE_SECRET_KEY')?.trim();
 
     if (!url || !anonKey || !serviceRoleKey) {
       throw new ServiceUnavailableException('Supabase Auth 环境变量尚未完整配置。');
@@ -325,12 +373,10 @@ export class SupabaseAuthService {
   }
 
   private toLoginResult(session: Session, identity: SupabaseSessionIdentity): SupabaseLoginResult {
-    const expiresAtSeconds =
-      session.expires_at ?? Math.floor(Date.now() / 1000) + session.expires_in;
     return {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
-      expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+      expiresAt: identity.expiresAt.toISOString(),
       userId: identity.userId,
       sessionId: identity.sessionId
     };
@@ -354,31 +400,77 @@ export class SupabaseAuthService {
     });
   }
 
-  private getSessionIdentityFromAccessToken(
+  private async getVerifiedSessionIdentity(
+    client: SupabaseClient,
     accessToken: string,
+    expectedAuthUserId: string,
+    requireAal2: boolean,
     userId: string
-  ): SupabaseSessionIdentity {
-    const payloadPart = accessToken.split('.')[1];
-    if (!payloadPart) {
-      throw new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。');
-    }
-
+  ): Promise<SupabaseSessionIdentity> {
     try {
-      const payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8')) as {
-        exp?: number;
-        session_id?: string;
-      };
-      if (!payload.session_id || !this.isUuid(payload.session_id)) {
+      const claimsResult = await client.auth.getClaims(accessToken);
+      const claims = claimsResult.data?.claims;
+      if (
+        claimsResult.error ||
+        !claims ||
+        claims.sub !== expectedAuthUserId ||
+        !claims.session_id ||
+        typeof claims.session_id !== 'string' ||
+        !this.isUuid(claims.session_id) ||
+        (requireAal2 && claims.aal !== 'aal2')
+      ) {
         throw new Error('missing session_id');
       }
       return {
         userId,
-        sessionId: payload.session_id,
-        expiresAt: this.getClaimsExpiry(payload.exp)
+        sessionId: claims.session_id,
+        expiresAt: this.getClaimsExpiry(claims.exp)
       };
     } catch {
       throw new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。');
     }
+  }
+
+  private async assertExpectedAuthUser(session: Session, expectedAuthUserId: string) {
+    if (session.user.id === expectedAuthUserId) return;
+    await this.logout(session.access_token).catch(() => undefined);
+    throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
+  }
+
+  private async probePassword(
+    authEmail: string,
+    expectedAuthUserId: string,
+    password: string
+  ): Promise<'accepted' | 'rejected' | 'unknown'> {
+    try {
+      const result = await this.createPublicClient().auth.signInWithPassword({
+        email: authEmail,
+        password
+      });
+      const session = result.data.session;
+      if (result.error || !session) {
+        return this.isDefinitiveCredentialRejection(result.error) ? 'rejected' : 'unknown';
+      }
+      const matchesExpectedUser = session.user.id === expectedAuthUserId;
+      const signedOut = await this.logout(session.access_token)
+        .then(() => true)
+        .catch(() => false);
+      return matchesExpectedUser && signedOut ? 'accepted' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  private isDefinitiveCredentialRejection(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    const authError = error as {
+      code?: unknown;
+      status?: unknown;
+    };
+    return (
+      authError.code === 'invalid_credentials' &&
+      (authError.status === 400 || authError.status === 401)
+    );
   }
 
   private getClaimsExpiry(exp?: number) {

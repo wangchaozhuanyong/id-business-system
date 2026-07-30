@@ -5,7 +5,10 @@ import {
   SMOKE_ROLE_CODE,
   SMOKE_ROLE_DESCRIPTION,
   SMOKE_ROLE_NAME,
-  SMOKE_USERNAME
+  SMOKE_USERNAME,
+  RELEASE_SUPABASE_PROJECT_REF,
+  classifySupabaseCredential,
+  getSupabaseDatabaseProjectRefFromTarget
 } from './cloudflare-release.mjs';
 
 export class SmokeProvisioningSafetyError extends Error {}
@@ -89,12 +92,13 @@ export function assertSmokeProvisioningEnvironment(env) {
   if (authProvider === 'supabase') {
     const url = env.SUPABASE_URL?.trim() ?? '';
     const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim() || env.SUPABASE_SECRET_KEY?.trim();
+    const databaseUrlValue = env.DATABASE_URL?.trim() ?? '';
     let supabaseUrl;
     try {
       const parsedUrl = new URL(url);
       if (
         parsedUrl.protocol !== 'https:' ||
-        !parsedUrl.hostname ||
+        parsedUrl.hostname.toLowerCase() !== `${RELEASE_SUPABASE_PROJECT_REF}.supabase.co` ||
         parsedUrl.username ||
         parsedUrl.password ||
         (parsedUrl.pathname !== '/' && parsedUrl.pathname !== '') ||
@@ -105,10 +109,30 @@ export function assertSmokeProvisioningEnvironment(env) {
       }
       supabaseUrl = parsedUrl.origin;
     } catch {
-      throw new Error('SUPABASE_URL 必须是有效的 HTTPS 项目根地址');
+      throw new Error('SUPABASE_URL 必须是本仓库固定的生产 Supabase HTTPS 项目根地址');
     }
-    if (!serviceKey || serviceKey.length < 20) {
+    if (
+      !serviceKey ||
+      serviceKey.length < 20 ||
+      classifySupabaseCredential(serviceKey) !== 'service'
+    ) {
       throw new Error('Supabase 巡检账号 provisioning 缺少服务端管理配置');
+    }
+    try {
+      const databaseUrl = new URL(databaseUrlValue);
+      const database = decodeURIComponent(databaseUrl.pathname.replace(/^\/+/, ''));
+      const schema = databaseUrl.searchParams.get('schema') ?? 'public';
+      if (
+        !['postgres:', 'postgresql:'].includes(databaseUrl.protocol) ||
+        database !== 'postgres' ||
+        schema !== 'public' ||
+        getSupabaseDatabaseProjectRefFromTarget(databaseUrl.hostname, databaseUrl.username) !==
+          RELEASE_SUPABASE_PROJECT_REF
+      ) {
+        throw new Error();
+      }
+    } catch {
+      throw new Error('DATABASE_URL 必须固定为同一生产 Supabase 项目的 postgres/public');
     }
     return { authProvider, password, serviceKey, supabaseUrl };
   }

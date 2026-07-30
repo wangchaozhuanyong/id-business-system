@@ -16,6 +16,7 @@ describe('AuthService', () => {
   const now = new Date('2026-06-18T00:00:00.000Z');
   const userId = '33333333-3333-4333-8333-333333333333';
   const authUserId = '44444444-4444-4444-8444-444444444444';
+  const authEmail = 'admin@example.invalid';
   const supabaseSessionId = '55555555-5555-4555-8555-555555555555';
   const fixturePassword = 'UnitTestPassword123!';
   const newPassword = 'NewUnitTestPassword456!';
@@ -138,8 +139,10 @@ describe('AuthService', () => {
       login: jest.fn().mockResolvedValue(supabaseSession),
       logout: jest.fn().mockResolvedValue(undefined),
       verifyCurrentPassword: jest.fn().mockResolvedValue({
+        authEmail,
         authUserId
       }),
+      setPasswordWithConfirmation: jest.fn().mockResolvedValue('desired_confirmed'),
       updatePassword: jest.fn().mockResolvedValue(undefined)
     } as unknown as SupabaseAuthService;
 
@@ -482,7 +485,12 @@ describe('AuthService', () => {
       providerSignedOut: true
     });
 
-    expect(supabaseAuthService.updatePassword).toHaveBeenCalledWith(authUserId, newPassword);
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenCalledWith({
+      alternatePassword: fixturePassword,
+      authEmail,
+      authUserId,
+      desiredPassword: newPassword
+    });
     expect(transaction.v2AuthIdentity.updateMany).toHaveBeenCalledWith({
       where: { userId },
       data: {
@@ -574,7 +582,7 @@ describe('AuthService', () => {
       )
     ).rejects.toEqual(new BadRequestException('当前密码不正确，请重新输入。'));
 
-    expect(supabaseAuthService.updatePassword).not.toHaveBeenCalled();
+    expect(supabaseAuthService.setPasswordWithConfirmation).not.toHaveBeenCalled();
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -597,7 +605,7 @@ describe('AuthService', () => {
       )
     ).rejects.toEqual(new BadRequestException('密码强度不足。'));
 
-    expect(supabaseAuthService.updatePassword).not.toHaveBeenCalled();
+    expect(supabaseAuthService.setPasswordWithConfirmation).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
@@ -618,12 +626,18 @@ describe('AuthService', () => {
       )
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
 
-    expect(supabaseAuthService.updatePassword).toHaveBeenNthCalledWith(1, authUserId, newPassword);
-    expect(supabaseAuthService.updatePassword).toHaveBeenNthCalledWith(
-      2,
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenNthCalledWith(1, {
+      alternatePassword: fixturePassword,
+      authEmail,
       authUserId,
-      fixturePassword
-    );
+      desiredPassword: newPassword
+    });
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenNthCalledWith(2, {
+      alternatePassword: newPassword,
+      authEmail,
+      authUserId,
+      desiredPassword: fixturePassword
+    });
     expect(identityService.invalidateAuthenticatedUser).not.toHaveBeenCalled();
     expect(securityService.invalidateActiveSessionCache).not.toHaveBeenCalled();
     expect(supabaseAuthService.logout).not.toHaveBeenCalled();
@@ -635,9 +649,9 @@ describe('AuthService', () => {
       transactionError: new Error('transaction failed')
     });
     jest
-      .mocked(supabaseAuthService.updatePassword)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('compensation unavailable'));
+      .mocked(supabaseAuthService.setPasswordWithConfirmation)
+      .mockResolvedValueOnce('desired_confirmed')
+      .mockResolvedValueOnce('unknown');
 
     await expect(
       service.changePassword(
@@ -661,11 +675,12 @@ describe('AuthService', () => {
     );
   });
 
-  it('does not overwrite the provider when a commit response fails after local state is already new', async () => {
-    const { service, supabaseAuthService, auditLogsService } = await createService({
-      supabaseEnabled: true,
-      commitError: new Error('commit response lost')
-    });
+  it('reconciles a lost commit response and still closes every session', async () => {
+    const { service, supabaseAuthService, auditLogsService, identityService, securityService } =
+      await createService({
+        supabaseEnabled: true,
+        commitError: new Error('commit response lost')
+      });
 
     await expect(
       service.changePassword(
@@ -676,17 +691,86 @@ describe('AuthService', () => {
         supabaseSession.accessToken,
         authenticatedUser
       )
-    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    ).resolves.toEqual({
+      passwordChanged: true,
+      signedOut: true,
+      providerSignedOut: true
+    });
 
-    expect(supabaseAuthService.updatePassword).toHaveBeenCalledTimes(1);
-    expect(supabaseAuthService.updatePassword).toHaveBeenCalledWith(authUserId, newPassword);
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenCalledTimes(1);
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenCalledWith({
+      alternatePassword: fixturePassword,
+      authEmail,
+      authUserId,
+      desiredPassword: newPassword
+    });
     expect(auditLogsService.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: 'change_password_failed',
+        action: 'change_password_reconciled',
         afterData: expect.objectContaining({
-          providerCompensation: 'local_committed'
+          localCommitted: true,
+          providerPasswordConfirmed: true
         })
       })
     );
+    expect(identityService.invalidateAuthenticatedUser).toHaveBeenCalledWith(userId);
+    expect(securityService.invalidateActiveSessionCache).toHaveBeenCalled();
+    expect(supabaseAuthService.logout).toHaveBeenCalledWith(supabaseSession.accessToken, 'global');
+  });
+
+  it('restores the old provider password when an ambiguous write cannot confirm the new password', async () => {
+    const { service, supabaseAuthService, transaction } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(supabaseAuthService.setPasswordWithConfirmation)
+      .mockResolvedValueOnce('unknown')
+      .mockResolvedValueOnce('desired_confirmed');
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).rejects.toThrow('已恢复原密码');
+
+    expect(transaction.user.update).not.toHaveBeenCalled();
+    expect(supabaseAuthService.setPasswordWithConfirmation).toHaveBeenNthCalledWith(2, {
+      alternatePassword: newPassword,
+      authEmail,
+      authUserId,
+      desiredPassword: fixturePassword
+    });
+  });
+
+  it('commits the local password when an ambiguous write later confirms the new provider password', async () => {
+    const { service, supabaseAuthService, transaction } = await createService({
+      supabaseEnabled: true
+    });
+    jest
+      .mocked(supabaseAuthService.setPasswordWithConfirmation)
+      .mockResolvedValueOnce('unknown')
+      .mockResolvedValueOnce('alternate_confirmed');
+
+    await expect(
+      service.changePassword(
+        {
+          currentPassword: fixturePassword,
+          newPassword
+        },
+        supabaseSession.accessToken,
+        authenticatedUser
+      )
+    ).resolves.toEqual({
+      passwordChanged: true,
+      providerSignedOut: true,
+      signedOut: true
+    });
+
+    expect(transaction.user.update).toHaveBeenCalledTimes(1);
   });
 });

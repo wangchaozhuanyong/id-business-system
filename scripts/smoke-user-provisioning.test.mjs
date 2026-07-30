@@ -7,7 +7,8 @@ import {
   SMOKE_ROLE_CODE,
   SMOKE_ROLE_DESCRIPTION,
   SMOKE_ROLE_NAME,
-  SMOKE_USERNAME
+  SMOKE_USERNAME,
+  RELEASE_SUPABASE_PROJECT_REF
 } from './lib/cloudflare-release.mjs';
 import {
   assertDedicatedSmokeBusinessUsers,
@@ -43,12 +44,13 @@ test('accepts only the fixed smoke username and server-side Supabase configurati
     AUTH_PROVIDER: 'supabase',
     SMOKE_TEST_USERNAME: SMOKE_USERNAME,
     SMOKE_TEST_PASSWORD: 'not-logged-by-test-value',
-    SUPABASE_URL: 'https://project.supabase.co/',
+    DATABASE_URL: `postgresql://postgres.${RELEASE_SUPABASE_PROJECT_REF}:password@aws-0-us-west-1.pooler.supabase.com:5432/postgres?schema=public`,
+    SUPABASE_URL: `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/`,
     SUPABASE_SECRET_KEY: `sb_secret_${'s'.repeat(24)}`
   });
 
   assert.equal(result.authProvider, 'supabase');
-  assert.equal(result.supabaseUrl, 'https://project.supabase.co');
+  assert.equal(result.supabaseUrl, `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co`);
   assert.throws(
     () =>
       assertSmokeProvisioningEnvironment({
@@ -73,7 +75,8 @@ test('accepts only the fixed smoke username and server-side Supabase configurati
         AUTH_PROVIDER: 'supabase',
         SMOKE_TEST_USERNAME: SMOKE_USERNAME,
         SMOKE_TEST_PASSWORD: 'not-logged-by-test-value',
-        SUPABASE_URL: 'http://project.supabase.co/',
+        DATABASE_URL: `postgresql://postgres.${RELEASE_SUPABASE_PROJECT_REF}:password@aws-0-us-west-1.pooler.supabase.com:5432/postgres`,
+        SUPABASE_URL: `http://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/`,
         SUPABASE_SECRET_KEY: `sb_secret_${'s'.repeat(24)}`
       }),
     /HTTPS 项目根地址/
@@ -84,10 +87,24 @@ test('accepts only the fixed smoke username and server-side Supabase configurati
         AUTH_PROVIDER: 'supabase',
         SMOKE_TEST_USERNAME: SMOKE_USERNAME,
         SMOKE_TEST_PASSWORD: 'not-logged-by-test-value',
-        SUPABASE_URL: 'https://project.supabase.co/',
+        DATABASE_URL: `postgresql://postgres.${RELEASE_SUPABASE_PROJECT_REF}:password@aws-0-us-west-1.pooler.supabase.com:5432/postgres`,
+        SUPABASE_URL: `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/`,
         SUPABASE_SECRET_KEY: 'short'
       }),
     /服务端管理配置/
+  );
+  assert.throws(
+    () =>
+      assertSmokeProvisioningEnvironment({
+        AUTH_PROVIDER: 'supabase',
+        SMOKE_TEST_USERNAME: SMOKE_USERNAME,
+        SMOKE_TEST_PASSWORD: 'not-logged-by-test-value',
+        DATABASE_URL:
+          'postgresql://postgres.abcdefghijklmnopqrst:password@aws-0-us-west-1.pooler.supabase.com:5432/postgres',
+        SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co/',
+        SUPABASE_SECRET_KEY: `sb_secret_${'s'.repeat(24)}`
+      }),
+    /固定的生产 Supabase/
   );
 });
 

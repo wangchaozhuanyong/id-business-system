@@ -12,7 +12,7 @@ const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
 const pagesHeaders = fileURLToPath(new URL('./dist/_headers', import.meta.url));
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, workspaceRoot, '');
+  const env = loadEnv(mode, workspaceRoot, ['VITE_', 'AUTH_PROVIDER', 'SUPABASE_URL']);
   validateAuthBuildConfiguration(mode, {
     ...env,
     ...process.env

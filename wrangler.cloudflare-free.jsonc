@@ -29,6 +29,8 @@
     "CLOUDFLARE_WORKER": "true",
     "APP_PUBLIC_URL": "https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev",
     "CORS_ORIGIN": "https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev",
+    "AUTH_PROVIDER": "supabase",
+    "SUPABASE_EDGE_FUNCTION": "false",
     "JWT_EXPIRES_IN": "7d",
     "ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED": "true",
     "ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS": "600000"

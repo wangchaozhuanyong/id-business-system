@@ -87,4 +87,5 @@ docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T postgres \
     select 'id_business_v2_activations=' || count(*) from public.id_business_v2_activations;
   "
 
-echo "Restore drill completed successfully for ${BACKUP_FILE}"
+echo "Basic isolated restore checks completed for ${BACKUP_FILE}"
+echo "This result alone is not production release evidence; finance, constraints, encryption, migration, and source-watermark checks remain required."

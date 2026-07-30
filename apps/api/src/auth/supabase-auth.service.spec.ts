@@ -49,10 +49,13 @@ describe('SupabaseAuthService', () => {
     claimsValid?: boolean;
     claimsExpiresAt?: number;
     factorListFails?: boolean;
+    loginAuthUserId?: string;
     lastAuthenticatedAt?: Date | null;
     loginSessionIdMissing?: boolean;
     mfaVerificationFails?: boolean;
+    verifiedFactorType?: 'phone' | 'totp' | 'webauthn';
     verifiedFactor?: boolean;
+    claimsAal?: 'aal1' | 'aal2';
   }) {
     const passwordHash = await hashPassword(options?.storedPassword ?? password);
     const identity = {
@@ -82,9 +85,15 @@ describe('SupabaseAuthService', () => {
         return values[key];
       })
     } as unknown as ConfigService;
+    const loginSessionBase = {
+      ...session,
+      user: {
+        id: options?.loginAuthUserId ?? authUserId
+      }
+    };
     const loginSession = options?.loginSessionIdMissing
       ? {
-          ...session,
+          ...loginSessionBase,
           access_token: [
             Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
             Buffer.from(
@@ -96,7 +105,17 @@ describe('SupabaseAuthService', () => {
             'signature'
           ].join('.')
         }
-      : session;
+      : loginSessionBase;
+    const verifiedFactorType = options?.verifiedFactorType ?? 'totp';
+    const verifiedFactors = options?.verifiedFactor
+      ? [
+          {
+            factor_type: verifiedFactorType,
+            id: 'verified-factor',
+            status: 'verified'
+          }
+        ]
+      : [];
     const publicClient = {
       auth: {
         getClaims: vi.fn().mockResolvedValue(
@@ -111,8 +130,9 @@ describe('SupabaseAuthService', () => {
                 data: {
                   claims: {
                     sub: authUserId,
-                    session_id: providerSessionId,
-                    exp: options?.claimsExpiresAt ?? expiresAtSeconds
+                    session_id: options?.loginSessionIdMissing ? undefined : providerSessionId,
+                    exp: options?.claimsExpiresAt ?? expiresAtSeconds,
+                    aal: options?.claimsAal ?? (options?.verifiedFactor ? 'aal2' : 'aal1')
                   }
                 },
                 error: null
@@ -137,9 +157,10 @@ describe('SupabaseAuthService', () => {
                 }
               : {
                   data: {
-                    totp: options?.verifiedFactor
-                      ? [{ id: 'verified-factor', status: 'verified' }]
-                      : []
+                    all: verifiedFactors,
+                    phone: verifiedFactors.filter((factor) => factor.factor_type === 'phone'),
+                    totp: verifiedFactors.filter((factor) => factor.factor_type === 'totp'),
+                    webauthn: verifiedFactors.filter((factor) => factor.factor_type === 'webauthn')
                   },
                   error: null
                 }
@@ -195,9 +216,11 @@ describe('SupabaseAuthService', () => {
   });
 
   it('migrates the stored password once and then signs in through Supabase Auth', async () => {
-    const { service, prisma, publicClient, serviceClient } = await createService();
+    const { service, prisma, publicClient, serviceClient } = await createService({
+      verifiedFactor: true
+    });
 
-    await expect(service.login('admin', password)).resolves.toEqual({
+    await expect(service.login('admin', password, '000000')).resolves.toEqual({
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       expiresAt: new Date(session.expires_at * 1000).toISOString(),
@@ -216,6 +239,19 @@ describe('SupabaseAuthService', () => {
       data: {
         lastAuthenticatedAt: expect.any(Date)
       }
+    });
+  });
+
+  it('returns the verified token claim expiry without recomputing it from the clock', async () => {
+    const claimsExpiresAt = expiresAtSeconds - 120;
+    const { service } = await createService({
+      initialSignInSucceeds: true,
+      verifiedFactor: true,
+      claimsExpiresAt
+    });
+
+    await expect(service.login('admin', password, '000000')).resolves.toMatchObject({
+      expiresAt: new Date(claimsExpiresAt * 1000).toISOString()
     });
   });
 
@@ -244,10 +280,11 @@ describe('SupabaseAuthService', () => {
 
   it('keeps an existing Supabase password without invoking stored-password migration', async () => {
     const { service, serviceClient } = await createService({
-      initialSignInSucceeds: true
+      initialSignInSucceeds: true,
+      verifiedFactor: true
     });
 
-    await expect(service.login('admin', password)).resolves.toEqual(
+    await expect(service.login('admin', password, '000000')).resolves.toEqual(
       expect.objectContaining({
         userId
       })
@@ -267,6 +304,17 @@ describe('SupabaseAuthService', () => {
     expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
   });
 
+  it('rejects and revokes a password session when no verified TOTP factor is bound', async () => {
+    const { service, serviceClient } = await createService({
+      initialSignInSucceeds: true
+    });
+
+    await expect(service.login('admin', password)).rejects.toThrow(
+      new UnauthorizedException('当前账号尚未绑定 Supabase 动态验证码，请联系管理员完成绑定。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
   it('revokes the temporary session when a verified factor has no code', async () => {
     const { service, serviceClient } = await createService({
       initialSignInSucceeds: true,
@@ -274,7 +322,7 @@ describe('SupabaseAuthService', () => {
     });
 
     await expect(service.login('admin', password)).rejects.toThrow(
-      new UnauthorizedException('需要输入动态验证码或恢复码。')
+      new UnauthorizedException('需要输入 6 位动态验证码。')
     );
     expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
   });
@@ -287,7 +335,7 @@ describe('SupabaseAuthService', () => {
     });
 
     await expect(service.login('admin', password, '000000')).rejects.toThrow(
-      new UnauthorizedException('动态验证码或恢复码错误，请重新输入。')
+      new UnauthorizedException('6 位动态验证码错误，请重新输入。')
     );
     expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
   });
@@ -295,10 +343,11 @@ describe('SupabaseAuthService', () => {
   it('revokes an otherwise authenticated session when its stable session id is missing', async () => {
     const { service, serviceClient, loginSession } = await createService({
       initialSignInSucceeds: true,
-      loginSessionIdMissing: true
+      loginSessionIdMissing: true,
+      verifiedFactor: true
     });
 
-    await expect(service.login('admin', password)).rejects.toThrow(
+    await expect(service.login('admin', password, '000000')).rejects.toThrow(
       new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。')
     );
     expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(
@@ -365,6 +414,7 @@ describe('SupabaseAuthService', () => {
     });
 
     await expect(service.verifyCurrentPassword(userId, password)).resolves.toEqual({
+      authEmail,
       authUserId
     });
 
@@ -382,5 +432,74 @@ describe('SupabaseAuthService', () => {
       new BadRequestException('当前密码不正确，请重新输入。')
     );
     expect(serviceClient.auth.admin.signOut).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Supabase login whose returned Auth user does not match the bound identity', async () => {
+    const { service, serviceClient } = await createService({
+      initialSignInSucceeds: true,
+      loginAuthUserId: '66666666-6666-4666-8666-666666666666'
+    });
+
+    await expect(service.login('admin', password)).rejects.toThrow(
+      new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it.each(['phone', 'webauthn'] as const)(
+    'fails closed for a verified %s-only MFA account',
+    async (verifiedFactorType) => {
+      const { service, serviceClient } = await createService({
+        initialSignInSucceeds: true,
+        verifiedFactor: true,
+        verifiedFactorType
+      });
+
+      await expect(service.login('admin', password, '000000')).rejects.toThrow(
+        new UnauthorizedException('当前账号需要使用受支持的二次验证方式。')
+      );
+      expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+    }
+  );
+
+  it('rejects a TOTP login whose verified session remains at AAL1', async () => {
+    const { service, serviceClient } = await createService({
+      claimsAal: 'aal1',
+      initialSignInSucceeds: true,
+      verifiedFactor: true
+    });
+
+    await expect(service.login('admin', password, '000000')).rejects.toThrow(
+      new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。')
+    );
+    expect(serviceClient.auth.admin.signOut).toHaveBeenCalledWith(session.access_token, 'local');
+  });
+
+  it('confirms a password update that succeeded before an ambiguous provider response', async () => {
+    const { service, publicClient, serviceClient } = await createService();
+    serviceClient.auth.admin.updateUserById.mockRejectedValue(new Error('response lost'));
+    publicClient.auth.signInWithPassword
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: { session },
+        error: null
+      })
+      .mockResolvedValueOnce({
+        data: { session: null },
+        error: {
+          code: 'invalid_credentials',
+          status: 400
+        }
+      });
+
+    await expect(
+      service.setPasswordWithConfirmation({
+        alternatePassword: password,
+        authEmail,
+        authUserId,
+        desiredPassword: 'NewPassword456!'
+      })
+    ).resolves.toBe('desired_confirmed');
+    expect(serviceClient.auth.admin.updateUserById).toHaveBeenCalledTimes(2);
   });
 });

@@ -130,9 +130,12 @@ npm run build:supabase-v2-api
 npm run audit:supabase-auth-readiness
 ```
 
-返回码 `2` 表示存在未绑定身份、历史改密标记或停用账号身份问题，需要逐个业务账号复核。历史版本
-曾在登录时直接清除强制改密标记，因此只允许按明确的 `userId` 定向恢复标记并撤销该账号会话，
-禁止全表更新。`cleanupEligibleSessions` 只是保留期规划数据，不是删除授权。
+返回码 `2` 表示存在未绑定身份、历史改密标记、停用账号身份、Provider 身份不一致或未绑定
+verified TOTP 的账号，需要逐个业务账号复核。历史版本曾在登录时直接清除强制改密标记，因此只允许
+按明确的 `userId` 定向恢复标记并撤销该账号会话，禁止全表更新。`cleanupEligibleSessions` 只是
+保留期规划数据，不是删除授权。默认输出只有脱敏汇总；需要账号明细时使用
+`--details-output .deploy/auth-readiness-details.json`，脚本会把文件权限固定为 `0600`，不得把明细
+写入 CI 日志。
 
 ## 7. 发布检查
 
@@ -156,26 +159,106 @@ Cloudflare 发布命令包含以下硬门禁：
 
 - 当前分支必须为干净的 `main`，且 `HEAD` 与 `origin/main` 完全一致。
 - GitHub `quality`、`production-images` 必须成功，`main` 必须启用 PR、管理员约束、线性历史、
-  对话解决和禁止强推/删除的保护规则。
-- Cloudflare account、Worker、Hyperdrive、公开域名和 CORS 必须与仓库固定生产配置一致。
+  对话解决、至少一名 CODEOWNER 批准、新提交撤销旧批准、最后推送者不得自批，以及禁止强推/删除
+  的保护规则。
+- Cloudflare account、Worker、Hyperdrive、公开域名和 CORS 必须与仓库固定生产配置一致；
+  `DATABASE_URL` 固定使用 `postgres/public`，Hyperdrive 必须直连同一 Supabase 项目的
+  `db.<project-ref>.supabase.co:5432/postgres`、使用 `postgres` 用户并关闭查询缓存。
 - `.deploy/cloudflare-free.secrets.json` 必须包含数据库与字段安全密钥、固定的
   `AUTH_PROVIDER=supabase`、前后端同项目 Supabase URL、前后端 publishable/anon key、仅后端使用
-  的 service/secret key、首发 Realtime 关闭开关及 `SMOKE_TEST_USERNAME`、
-  `SMOKE_TEST_PASSWORD`；该文件必须保持 Git 忽略且权限为 `0600`。
+  的 service/secret key、汇率 Cron 密钥、首发 Realtime 关闭开关及 `SMOKE_TEST_USERNAME`、
+  `SMOKE_TEST_PASSWORD`、`SMOKE_TEST_MFA_TOTP_SECRET`；该文件必须保持 Git 忽略且权限为
+  `0600`，不得决定发布凭证信任根。巡检密码与 TOTP seed 都不会上传为 Worker 运行密钥，也不会
+  进入前端构建环境。
+- 发布凭证受信公钥只能进入受保护分支中的 `deploy/production-release-trust.json`，新增或轮换必须
+  使用独立 PR 审查。该文件默认没有受信任 key，配置真实受信任公钥前生产发布会主动阻断；部署
+  操作者不得在发布时临时替换公钥。
+- 当前 commit 必须存在 `.deploy/release-evidence/<commit>.json`，权限为 `0600`。凭证有效期不超过
+  两小时，必须绑定当前仓库、分支、commit、Git tree、Supabase 项目、数据库指纹和最新 migration
+  水位，同时绑定当前 `FIELD_ENCRYPTION_KEY`、`HASH_SECRET` 的 SHA-256（只记录摘要，不记录原值），
+  并包含可追溯的托管备份、隔离恢复、认证审计、migration、财务完整性和业务负责人批准。
+  凭证必须由受信任的 Ed25519 私钥签名；缺失、过期、签名无效或任一水位不一致都会在上传前拒绝。
+- `.deploy/release-evidence/artifacts/<commit>/` 必须包含 `backup-provider.json`、
+  `restore-drill.json`、`auth-audit.json`、`migration-status.json`、`data-integrity.json` 和
+  `business-owner-approval.json` 六个 `0600` 普通文件。预检会逐文件读取、重算 SHA-256 并核对
+  receipt、commit、生产项目和数据库范围，reference、任意 64 位字符串或单独填写 `true` 都不能
+  代替附件。
+- 预检会先正向识别 Supabase publishable/anon 与 secret/service_role 凭据类型，再验证公开 key
+  可被目标 Supabase Auth 接受；任何 service key 误配到前端都会在构建前拒绝。预检还会严格核对
+  Hyperdrive 的直连主机、端口、数据库、用户、协议和禁用缓存状态，并对生产库执行只读
+  `prisma migrate status` 与 `prisma migrate diff --exit-code`。认证审计会同时比对业务身份与
+  Supabase Admin 用户；构建和认证审计后、上传前以及上传后 smoke 前都会再次核对发布门禁。
+- Worker 的 `AUTH_PROVIDER` 固定为 `supabase`。部署时只把后端运行密钥写入临时 `0600`
+  secrets 文件并随 Worker Version 上传；前端构建只接收 `/api`、Supabase 项目 URL 和公开 key
+  等白名单变量，数据库、service key、字段密钥和巡检密码不会进入前端构建进程。预检拒绝任何
+  未纳入清单的遗留远端 secret；上传后要求远端 secret 名称与本次规范集合完全一致。
 - Wrangler 版本消息和标签写入完整/短 Git commit；部署成功后自动检查首页、健康端点、只读账号
-  登录、最小权限集合和核心只读接口。
-- 发布前读取当前唯一承载 100% 流量的 Worker 版本；新版本部署或线上巡检失败时自动回滚该版本并
-  再跑一次巡检。流量正在分批发布或无法确定唯一回滚目标时，发布会在变更前直接拒绝。
+  登录、Supabase issuer/refresh token/稳定 session、最小权限集合、核心只读接口和退出后会话失效。
+- `npm run deploy:production` 在任何构建或上传前，使用 Git `force-with-lease` 原子创建唯一远端
+  `refs/tags/id-business-production-release-lock`。第二个发布不能并行获得同一个锁；上传前会再次
+  核对锁归属、Cloudflare deployment ID 和活跃版本，并要求线上版本标记的完整 Git commit 是本次
+  commit 的祖先，拒绝用旧提交覆盖更新线上版本。命令正常或失败退出时只按本进程 lease SHA 条件
+  删除锁；进程被强制终止导致遗留锁时，必须先确认没有运行中发布及线上版本归属，再人工清理。
+  生产 Cloudflare 写权限只能用于该入口，禁止绕过门禁直接运行 Wrangler 发布。
+- 发布前读取当前唯一承载 100% 流量的 Worker 版本。线上 GET 巡检使用有限重试和逐请求超时，
+  登录、刷新和退出等写请求不重试。新版本部署或巡检失败后不会自动回滚：脚本会重新读取当前活跃
+  版本，仅在仍由本次发布持有时输出发布前版本作为人工回滚目标；若已被其他发布替换则只报告现状，
+  从而避免检查与回滚之间的竞态把更新版本覆盖。流量分批、状态无效或回滚目标不唯一时会提前拒绝。
+
+生产发布凭证从模板开始填写，并在备份、隔离恢复、migration、认证审计和财务确认全部完成后签名：
+
+```bash
+COMMIT="$(git rev-parse HEAD)"
+mkdir -p .deploy/release-evidence
+mkdir -p ".deploy/release-evidence/artifacts/${COMMIT}"
+cp docs/PRODUCTION_RELEASE_EVIDENCE.example.json \
+  ".deploy/release-evidence/${COMMIT}.json"
+chmod 600 ".deploy/release-evidence/${COMMIT}.json"
+
+PRODUCTION_RELEASE_EVIDENCE_PRIVATE_KEY_FILE=/受控路径/production-release-ed25519.pem \
+PRODUCTION_RELEASE_EVIDENCE_KEY_ID=production-release-v1 \
+npm run release:evidence:sign -- ".deploy/release-evidence/${COMMIT}.json"
+```
+
+先把六个真实机器可读附件写入上述 artifacts 目录并固定为 `0600`，再把其 SHA-256 填入凭证。
+签名命令会确认所有附件存在、内容范围匹配、哈希一致，并确认私钥与受保护代码中的公钥匹配后才
+写入签名。私钥不得放入仓库、`.deploy/cloudflare-free.secrets.json`、Worker secrets 或 CI 日志。
+所有时间必须满足 `backup → restoreDrill → dataIntegrity → businessOwnerApproval → issuedAt`；
+备份恢复点距离签发时刻不得超过两小时。业务负责人批准附件必须绑定本次 receipt、commit、生产
+项目、数据库指纹及禁止原地恢复策略。
+
+六个附件都使用 `schemaVersion=1`，并包含 `artifactType`、`receiptId`、`releaseCommit`、
+`productionProjectRef`、`databaseIdentitySha256`。`artifactType` 依次为 `backup_provider`、
+`restore_drill`、`auth_audit`、`migration_status`、`data_integrity` 和
+`business_owner_approval`；其余业务字段必须与发布凭证对应区块完全一致。批准附件还必须包含
+`approvalProvider=github_pull_request_review`、当前仓库不可变 GitHub Review API
+`approvalReference`、该 Review 固定字段规范化后的 `approvalReceiptSha256`、`decision=approved`、
+`approverRole=business-owner`、脱敏的 `approverIdentitySha256`、`approvedAt`，
+`inPlaceRestoreAllowed=false` 和 `databaseRollbackOnAppFailure=false`。发布前必须保存对应
+GitHub Review API 回执。预检会在线重新读取 Review、PR 和当前发布账号，核对 Review 仍为
+`APPROVED`、批准的是最终 PR head、PR 已合并为当前生产 commit，且审批人是仓库独立协作者、
+不是 PR 作者或发布操作者；本地自填角色字符串、过期 Review 或不可追溯引用不能作为业务批准。
 
 首次创建或轮换生产巡检账号时，在受控本机执行：
 
 ```bash
+npm run prod:smoke-user:provision
+npm run prod:smoke-user:mfa-enroll
 npm run prod:smoke-user:provision
 ```
 
 该命令只同步所需的七项查看权限并创建/刷新 `production_smoke_readonly` 角色和专用账号，不修改
 数据库结构，也不授予新增、修改、删除、密文查看或业务选项管理权限。巡检账号凭据只保存在被 Git
 忽略的本机部署凭据文件中，不上传为 Worker 运行时密钥。
+
+第一次 provisioning 允许本机凭据暂时缺少 `SMOKE_TEST_MFA_TOTP_SECRET`，用于建立专用 Auth 和
+业务账号。随后 `prod:smoke-user:mfa-enroll` 只登录固定专用邮箱，创建并立即验证唯一 TOTP
+factor，再把生成的 seed 原子写回同一个 `0600` 本机凭据文件；命令不会把 seed 打印到终端。若
+已存在多个 factor、现有 factor 与本地 seed 不一致或专用身份标记不匹配，脚本会停止，不会自动
+删除或轮换。初始化全程使用独占本机锁，避免两个进程同时创建 factor 或覆盖 seed；异常遗留锁只
+允许在人工确认没有运行中任务后移除。最后再次 provisioning 并运行认证就绪审计，确认账号只有
+一个 verified TOTP。后续线上 smoke 会按当前时间动态生成 6 位验证码，并同时校验 Supabase
+token 的 `aal=aal2`。
 
 Provisioning 使用固定业务用户名 `production_release_smoke` 和固定专用 Auth 邮箱
 `production-release-smoke@daichongxitong-v2-free-20260727.ppfzj1314.workers.dev`，不接受环境
@@ -190,7 +273,8 @@ Provisioning 使用固定业务用户名 `production_release_smoke` 和固定专
 
 ## 8. 回滚
 
-- Cloudflare 单体发布失败时由发布脚本回滚到发布前记录的 100% 流量版本，并再次执行线上巡检。
+- Cloudflare 单体发布失败时，脚本只报告发布前记录的 100% 流量版本，不自动执行回滚。负责人必须
+  重新读取当前活跃版本、确认仍是失败版本后，才可人工回滚并再次执行线上巡检。
 - 前端与 API 必须作为同一个 Worker 版本回滚，不能只回滚一侧。
 - migration 默认只向前，不直接回滚数据结构。
 - 应用版本回滚不会回滚数据库。若发布包含数据库变更，必须先验证新旧代码兼容窗口，并按该

@@ -263,6 +263,7 @@ export class AuthService {
 
     const changeId = randomUUID();
     const passwordHash = await hashPassword(newPassword);
+    let supabaseAuthEmail: string | null = null;
     let supabaseAuthUserId: string | null = null;
     let providerPasswordUpdated = false;
     let providerCompensation: ProviderCompensationStatus = 'not_needed';
@@ -297,9 +298,42 @@ export class AuthService {
               user.id,
               currentPassword
             );
+            supabaseAuthEmail = identity.authEmail;
             supabaseAuthUserId = identity.authUserId;
-            await this.supabaseAuthService.updatePassword(identity.authUserId, newPassword);
-            providerPasswordUpdated = true;
+            const providerWriteState = await this.supabaseAuthService.setPasswordWithConfirmation({
+              alternatePassword: currentPassword,
+              authEmail: identity.authEmail,
+              authUserId: identity.authUserId,
+              desiredPassword: newPassword
+            });
+            if (providerWriteState === 'desired_confirmed') {
+              providerPasswordUpdated = true;
+            } else if (providerWriteState === 'alternate_confirmed') {
+              throw new ServiceUnavailableException(
+                'Supabase 密码未更新，请稍后使用同一新密码重试。'
+              );
+            } else {
+              const compensationState = await this.supabaseAuthService.setPasswordWithConfirmation({
+                alternatePassword: newPassword,
+                authEmail: identity.authEmail,
+                authUserId: identity.authUserId,
+                desiredPassword: currentPassword
+              });
+              if (compensationState === 'desired_confirmed') {
+                providerCompensation = 'succeeded';
+                throw new ServiceUnavailableException(
+                  'Supabase 密码更新结果不确定，已恢复原密码，请稍后重试。'
+                );
+              }
+              if (compensationState === 'alternate_confirmed') {
+                providerPasswordUpdated = true;
+              } else {
+                providerCompensation = 'failed';
+                throw new ServiceUnavailableException(
+                  'Supabase 密码状态无法确认，请联系管理员处理。'
+                );
+              }
+            }
           } else if (!(await verifyPassword(currentPassword, currentUser.passwordHash))) {
             throw new BadRequestException('当前密码不正确，请重新输入。');
           }
@@ -307,10 +341,22 @@ export class AuthService {
           try {
             await this.persistPasswordChange(transaction, user.id, passwordHash, changeId);
           } catch (error) {
-            if (providerPasswordUpdated && supabaseAuthUserId && this.supabaseAuthService) {
+            if (
+              providerPasswordUpdated &&
+              supabaseAuthEmail &&
+              supabaseAuthUserId &&
+              this.supabaseAuthService
+            ) {
               try {
-                await this.supabaseAuthService.updatePassword(supabaseAuthUserId, currentPassword);
-                providerCompensation = 'succeeded';
+                const compensationState =
+                  await this.supabaseAuthService.setPasswordWithConfirmation({
+                    alternatePassword: newPassword,
+                    authEmail: supabaseAuthEmail,
+                    authUserId: supabaseAuthUserId,
+                    desiredPassword: currentPassword
+                  });
+                providerCompensation =
+                  compensationState === 'desired_confirmed' ? 'succeeded' : 'failed';
               } catch {
                 providerCompensation = 'failed';
               }
@@ -331,33 +377,41 @@ export class AuthService {
       if (
         providerPasswordUpdated &&
         providerCompensation === 'not_needed' &&
+        supabaseAuthEmail &&
         supabaseAuthUserId &&
         this.supabaseAuthService
       ) {
         providerCompensation = await this.reconcileProviderPasswordAfterTransactionFailure({
           currentPassword,
           newPassword,
+          supabaseAuthEmail,
           supabaseAuthUserId,
           userId: user.id
         });
       }
 
-      await this.recordPasswordChangeFailure({
-        changeId,
-        providerCompensation,
-        providerPasswordUpdated,
-        userId: user.id
-      });
+      if (providerCompensation === 'local_committed') {
+        await this.recordPasswordChangeCommitRecovered(user.id, changeId);
+      } else {
+        await this.recordPasswordChangeFailure({
+          changeId,
+          providerCompensation,
+          providerPasswordUpdated,
+          userId: user.id
+        });
+      }
       if (error instanceof ServiceUnavailableException && !providerPasswordUpdated) {
         throw error;
       }
 
-      throw new ServiceUnavailableException(
-        `密码更新未完成（参考编号 ${changeId}），请分别尝试当前密码和新密码重新登录；仍无法登录时请联系管理员。`,
-        {
-          cause: error
-        }
-      );
+      if (providerCompensation !== 'local_committed') {
+        throw new ServiceUnavailableException(
+          `密码更新未完成（参考编号 ${changeId}），请分别尝试当前密码和新密码重新登录；仍无法登录时请联系管理员。`,
+          {
+            cause: error
+          }
+        );
+      }
     }
 
     this.identityService.invalidateAuthenticatedUser(user.id);
@@ -428,6 +482,7 @@ export class AuthService {
   private async reconcileProviderPasswordAfterTransactionFailure(input: {
     currentPassword: string;
     newPassword: string;
+    supabaseAuthEmail: string;
     supabaseAuthUserId: string;
     userId: string;
   }): Promise<ProviderCompensationStatus> {
@@ -460,11 +515,13 @@ export class AuthService {
           }
 
           try {
-            await this.supabaseAuthService!.updatePassword(
-              input.supabaseAuthUserId,
-              input.currentPassword
-            );
-            return 'succeeded';
+            const compensationState = await this.supabaseAuthService!.setPasswordWithConfirmation({
+              alternatePassword: input.newPassword,
+              authEmail: input.supabaseAuthEmail,
+              authUserId: input.supabaseAuthUserId,
+              desiredPassword: input.currentPassword
+            });
+            return compensationState === 'desired_confirmed' ? 'succeeded' : 'failed';
           } catch {
             return 'failed';
           }
@@ -509,6 +566,30 @@ export class AuthService {
     ) {
       this.logger.error(
         `Password change failure requires review: changeId=${input.changeId} userId=${input.userId} compensation=${input.providerCompensation}`
+      );
+    }
+  }
+
+  private async recordPasswordChangeCommitRecovered(userId: string, changeId: string) {
+    const recorded = await this.auditLogsService
+      .create({
+        userId,
+        module: 'auth',
+        action: 'change_password_reconciled',
+        objectType: 'user',
+        objectId: userId,
+        afterData: {
+          changeId,
+          localCommitted: true,
+          providerPasswordConfirmed: true
+        },
+        remark: 'Password change commit response was lost; committed state was reconciled'
+      })
+      .then(() => true)
+      .catch(() => false);
+    if (!recorded) {
+      throw new ServiceUnavailableException(
+        `密码已更新但补充审计失败（参考编号 ${changeId}），请联系管理员复核。`
       );
     }
   }

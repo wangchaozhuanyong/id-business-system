@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "00000000-0000-4000-8000-000000000000",
+  "environment": "production",
+  "issuedAt": "2026-07-30T10:00:00.000Z",
+  "expiresAt": "2026-07-30T12:00:00.000Z",
+  "release": {
+    "repository": "wangchaozhuanyong/id-business-system",
+    "branch": "main",
+    "commit": "replace_with_40_character_git_commit",
+    "tree": "replace_with_40_character_git_tree"
+  },
+  "target": {
+    "supabaseProjectRef": "replace_with_project_ref",
+    "databaseIdentitySha256": "replace_with_sha256",
+    "migrationWatermark": "replace_with_latest_applied_migration",
+    "migrationSetSha256": "replace_with_sha256",
+    "prismaSchemaSha256": "replace_with_sha256",
+    "fieldEncryptionKeySha256": "replace_with_sha256_of_current_field_encryption_key",
+    "hashSecretSha256": "replace_with_sha256_of_current_hash_secret"
+  },
+  "backup": {
+    "provider": "supabase",
+    "reference": "replace_with_provider_backup_reference",
+    "kind": "snapshot",
+    "sourceProjectRef": "replace_with_project_ref",
+    "status": "available",
+    "createdAt": "2026-07-30T09:30:00.000Z",
+    "restorePoint": "2026-07-30T09:29:59.000Z",
+    "migrationWatermark": "replace_with_latest_applied_migration",
+    "schemaSha256": "replace_with_production_schema_sha256",
+    "coreDataWatermarkSha256": "replace_with_core_data_watermark_sha256",
+    "providerEvidenceSha256": "replace_with_sha256"
+  },
+  "restoreDrill": {
+    "reference": "replace_with_isolated_restore_reference",
+    "sourceBackupReference": "replace_with_provider_backup_reference",
+    "targetProjectRef": "replace_with_isolated_project_ref",
+    "status": "passed",
+    "completedAt": "2026-07-30T09:45:00.000Z",
+    "sourceMigrationWatermark": "replace_with_latest_applied_migration",
+    "restoredMigrationWatermark": "replace_with_latest_applied_migration",
+    "sourceSchemaSha256": "replace_with_production_schema_sha256",
+    "restoredSchemaSha256": "replace_with_production_schema_sha256",
+    "sourceCoreDataWatermarkSha256": "replace_with_core_data_watermark_sha256",
+    "restoredCoreDataWatermarkSha256": "replace_with_core_data_watermark_sha256",
+    "checks": {
+      "sourceTargetSeparated": true,
+      "schemaMatched": true,
+      "migrationsMatched": true,
+      "constraintsPassed": true,
+      "financeBalancesPassed": true,
+      "sensitiveDecryptSamplePassed": true,
+      "postBackupChangesCompared": true
+    },
+    "checksArtifactSha256": "replace_with_sha256"
+  },
+  "authAudit": {
+    "projectRef": "replace_with_project_ref",
+    "databaseIdentitySha256": "replace_with_sha256",
+    "generatedAt": "2026-07-30T09:50:00.000Z",
+    "readOnly": true,
+    "readyForAutomaticRelease": true,
+    "detailsTruncated": false,
+    "blockingIssueCount": 0,
+    "reportSha256": "replace_with_sha256"
+  },
+  "migrations": {
+    "checkedAt": "2026-07-30T09:52:00.000Z",
+    "appliedWatermark": "replace_with_latest_applied_migration",
+    "pending": [],
+    "failed": [],
+    "schemaDrift": false,
+    "forwardOnly": true,
+    "migrationSetSha256": "replace_with_sha256",
+    "prismaSchemaSha256": "replace_with_sha256",
+    "reportSha256": "replace_with_sha256"
+  },
+  "dataIntegrity": {
+    "checkedAt": "2026-07-30T09:55:00.000Z",
+    "reference": "replace_with_finance_integrity_report_reference",
+    "businessOwnerApprovalProvider": "github_pull_request_review",
+    "businessOwnerApprovalReference": "https://api.github.com/repos/wangchaozhuanyong/id-business-system/pulls/123/reviews/456",
+    "businessOwnerApprovalReceiptSha256": "replace_with_sha256_of_canonical_github_review_fields",
+    "businessOwnerApprovedAt": "2026-07-30T09:58:00.000Z",
+    "businessOwnerApprovalSha256": "replace_with_sha256",
+    "reportSha256": "replace_with_sha256",
+    "immutableLedgersBalanced": true,
+    "financeHistoryComplete": true,
+    "initialBalancesConfirmed": true,
+    "postBackupChangesCompared": true
+  },
+  "restorePolicy": {
+    "inPlaceRestoreAllowed": false,
+    "databaseRollbackOnAppFailure": false
+  }
+}

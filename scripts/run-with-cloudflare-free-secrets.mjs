@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { constants as fileSystemConstants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
   RELEASE_REQUIRED_ENV_KEYS,
-  RELEASE_REQUIRED_ENV_KEY_GROUPS
+  RELEASE_REQUIRED_ENV_KEY_GROUPS,
+  isSmokeMfaBootstrapCommand,
+  validateReleaseEnvironment
 } from './lib/cloudflare-release.mjs';
 
 const separatorIndex = process.argv.indexOf('--');
@@ -16,13 +19,44 @@ if (!command) {
 }
 
 const secretsPath = path.resolve('.deploy/cloudflare-free.secrets.json');
-const secretsStat = await stat(secretsPath);
-if ((secretsStat.mode & 0o077) !== 0) {
-  throw new Error('部署凭据权限必须为 0600，不能允许组用户或其他用户读取');
+let secretsHandle;
+try {
+  secretsHandle = await open(
+    secretsPath,
+    fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW
+  );
+} catch {
+  throw new Error('部署凭据必须是可读取的普通文件，不能是符号链接');
 }
-const secrets = JSON.parse(await readFile(secretsPath, 'utf8'));
+let secretsContent;
+try {
+  const secretsStatBefore = await secretsHandle.stat();
+  if (!secretsStatBefore.isFile() || (secretsStatBefore.mode & 0o077) !== 0) {
+    throw new Error('部署凭据权限必须为 0600，且必须是普通文件');
+  }
+  secretsContent = await secretsHandle.readFile('utf8');
+  const secretsStatAfter = await secretsHandle.stat();
+  if (
+    secretsStatBefore.dev !== secretsStatAfter.dev ||
+    secretsStatBefore.ino !== secretsStatAfter.ino ||
+    secretsStatBefore.size !== secretsStatAfter.size ||
+    secretsStatBefore.mtimeMs !== secretsStatAfter.mtimeMs
+  ) {
+    throw new Error('部署凭据在读取期间发生变化，已停止执行');
+  }
+} finally {
+  await secretsHandle.close();
+}
+const secrets = JSON.parse(secretsContent);
+if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
+  throw new Error('部署凭据文件必须是 JSON 对象');
+}
+const allowsSmokeMfaBootstrap = isSmokeMfaBootstrapCommand(command, args);
 
 for (const key of RELEASE_REQUIRED_ENV_KEYS) {
+  if (key === 'SMOKE_TEST_MFA_TOTP_SECRET' && allowsSmokeMfaBootstrap) {
+    continue;
+  }
   if (typeof secrets[key] !== 'string' || !secrets[key]) {
     throw new Error(`部署凭据缺少 ${key}`);
   }
@@ -32,13 +66,28 @@ for (const keys of RELEASE_REQUIRED_ENV_KEY_GROUPS) {
     throw new Error(`部署凭据缺少 ${keys.join(' 或 ')}`);
   }
 }
+const environmentErrors = validateReleaseEnvironment({
+  ...secrets,
+  SMOKE_TEST_MFA_TOTP_SECRET:
+    allowsSmokeMfaBootstrap && !secrets.SMOKE_TEST_MFA_TOTP_SECRET
+      ? 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+      : secrets.SMOKE_TEST_MFA_TOTP_SECRET
+});
+if (environmentErrors.length) {
+  throw new Error(`部署凭据目标校验失败：${environmentErrors.join('；')}`);
+}
+
+const childEnvironment = {
+  ...process.env,
+  ...secrets
+};
+if (allowsSmokeMfaBootstrap) {
+  delete childEnvironment.SMOKE_TEST_MFA_TOTP_SECRET;
+}
 
 const child = spawn(command, args, {
   cwd: process.cwd(),
-  env: {
-    ...process.env,
-    ...secrets
-  },
+  env: childEnvironment,
   stdio: 'inherit'
 });
 
