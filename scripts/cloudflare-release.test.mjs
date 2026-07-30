@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   RELEASE_ACCOUNT_ID,
@@ -56,6 +57,19 @@ test('forces the Cloudflare production frontend to use version polling', () => {
   assert.equal(RELEASE_V2_REALTIME_CHANGES_ENABLED, 'false');
   assert.equal(buildEnvironment.VITE_V2_REALTIME_CHANGES_ENABLED, 'false');
   assert.equal(buildEnvironment.KEEP_ME, 'yes');
+});
+
+test('builds the shared package before the Cloudflare admin bundle', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  );
+  const buildScript = packageJson.scripts['build:cloudflare-free'];
+  const sharedBuild = buildScript.indexOf('build --workspace @apple-business/shared');
+  const adminBuild = buildScript.indexOf('build --workspace @apple-business/admin');
+
+  assert.notEqual(sharedBuild, -1);
+  assert.notEqual(adminBuild, -1);
+  assert.ok(sharedBuild < adminBuild);
 });
 
 test('rejects local database, weak smoke credentials and target drift', () => {

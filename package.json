@@ -14,7 +14,7 @@
     "dev:api": "npm run dev --workspace @apple-business/api",
     "dev:admin": "npm run dev --workspace @apple-business/admin",
     "build": "npm run build --workspaces --if-present",
-    "build:cloudflare-free": "npm run prisma:generate --workspace @apple-business/api && npm run build:cloudflare --workspace @apple-business/api && npm run build --workspace @apple-business/admin",
+    "build:cloudflare-free": "npm run prisma:generate --workspace @apple-business/api && npm run build --workspace @apple-business/shared && npm run build:cloudflare --workspace @apple-business/api && npm run build --workspace @apple-business/admin",
     "build:supabase-v2-api": "npm run prisma:generate --workspace @apple-business/api && npm run build:cloudflare --workspace @apple-business/api && node scripts/build-supabase-v2-api.mjs",
     "build:supabase-v2-api:perf": "npm run prisma:generate --workspace @apple-business/api && npm run build:cloudflare --workspace @apple-business/api && node scripts/build-supabase-v2-api.mjs --function-name=v2-api-perf",
     "supabase:local:migrate": "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres?schema=public npm run prisma:migrate:deploy --workspace @apple-business/api",
