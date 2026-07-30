@@ -36,6 +36,14 @@ load_env_file() {
 
 load_env_file "${ENV_FILE}"
 
+if ! docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" config --services |
+  grep -Fxq postgres; then
+  echo "Configured compose file does not define a postgres service." >&2
+  echo "This command cannot back up a managed Supabase/PostgreSQL database." >&2
+  echo "Use the provider-approved backup workflow and record restore-drill evidence instead." >&2
+  exit 1
+fi
+
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
 
@@ -44,6 +52,14 @@ BACKUP_FILE="${BACKUP_DIR}/${POSTGRES_DB}-$(date +%Y%m%d-%H%M%S).dump"
 
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T postgres \
   pg_dump -U "${POSTGRES_USER}" -Fc "${POSTGRES_DB}" >"${BACKUP_FILE}"
+
+if [[ ! -s "${BACKUP_FILE}" ]]; then
+  echo "Backup file is empty; refusing to continue." >&2
+  exit 1
+fi
+
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T postgres \
+  pg_restore --list <"${BACKUP_FILE}" >/dev/null
 
 chmod 600 "${BACKUP_FILE}"
 echo "Backup written to ${BACKUP_FILE}"
@@ -72,5 +88,9 @@ prune_old_backups_by_count() {
   done < <(ls -1t "${BACKUP_DIR}/${POSTGRES_DB}-"*.dump 2>/dev/null | tail -n +"${delete_from}")
 }
 
-prune_old_backups_by_days "${BACKUP_RETENTION_DAYS}"
-prune_old_backups_by_count "${BACKUP_RETENTION_COUNT}"
+if [[ "${BACKUP_PRUNE_CONFIRMED:-}" == "YES" ]]; then
+  prune_old_backups_by_days "${BACKUP_RETENTION_DAYS}"
+  prune_old_backups_by_count "${BACKUP_RETENTION_COUNT}"
+else
+  echo "Backup pruning skipped; set BACKUP_PRUNE_CONFIRMED=YES only after restore verification."
+fi

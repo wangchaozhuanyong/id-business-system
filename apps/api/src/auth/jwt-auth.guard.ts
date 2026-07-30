@@ -9,13 +9,14 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
-import { IS_PUBLIC_KEY } from './auth.decorators';
+import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorators';
 import { SupabaseAuthService } from './supabase-auth.service';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 
 interface RequestWithAuthHeader {
   headers: {
     authorization?: string;
+    'user-agent'?: string;
   };
   originalUrl?: string;
   query?: Record<string, string | string[] | undefined>;
@@ -42,6 +43,10 @@ export class JwtAuthGuard implements CanActivate {
     if (isPublic) {
       return true;
     }
+    const allowDuringPasswordReset = this.reflector.getAllAndOverride<boolean>(
+      ALLOW_DURING_PASSWORD_RESET_KEY,
+      [context.getHandler(), context.getClass()]
+    );
 
     const request = context.switchToHttp().getRequest<RequestWithAuthHeader>();
     const token = this.extractToken(request);
@@ -52,7 +57,7 @@ export class JwtAuthGuard implements CanActivate {
 
     try {
       if (this.supabaseAuthService.isEnabled()) {
-        const userId = await this.supabaseAuthService.authenticateAccessToken(token);
+        const identity = await this.supabaseAuthService.authenticateAccessToken(token);
         const ipAllowed = await this.securityService.isRequestIpAllowed(request.ip, [
           'admin',
           'api'
@@ -60,7 +65,18 @@ export class JwtAuthGuard implements CanActivate {
         if (!ipAllowed) {
           throw new ForbiddenException('当前 IP 不在白名单内，无法访问。');
         }
-        request.user = await this.identityService.getAuthenticatedUser(userId);
+        const active = await this.securityService.ensureActiveSession({
+          userId: identity.userId,
+          sessionIdentifier: `supabase:${identity.sessionId}`,
+          expiresAt: identity.expiresAt,
+          ip: request.ip,
+          userAgent: request.headers['user-agent']
+        });
+        if (!active) {
+          throw new UnauthorizedException('登录状态已过期或已被下线，请重新登录。');
+        }
+        request.user = await this.identityService.getAuthenticatedUser(identity.userId);
+        this.assertPasswordResetAccess(request.user, allowDuringPasswordReset);
         return true;
       }
 
@@ -76,6 +92,7 @@ export class JwtAuthGuard implements CanActivate {
       }
 
       request.user = await this.identityService.getAuthenticatedUser(payload.sub);
+      this.assertPasswordResetAccess(request.user, allowDuringPasswordReset);
       return true;
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
@@ -98,5 +115,14 @@ export class JwtAuthGuard implements CanActivate {
 
     const queryToken = request.query?.accessToken;
     return Array.isArray(queryToken) ? queryToken[0] : queryToken;
+  }
+
+  private assertPasswordResetAccess(
+    user: AuthenticatedUser,
+    allowDuringPasswordReset: boolean | undefined
+  ) {
+    if (user.mustResetPassword && !allowDuringPasswordReset) {
+      throw new ForbiddenException('必须先修改临时密码后才能访问业务功能。');
+    }
   }
 }

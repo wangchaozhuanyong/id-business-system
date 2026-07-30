@@ -41,7 +41,21 @@ load_env_file() {
 
 load_env_file "${ENV_FILE}"
 
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
+
+if ! [[ "${TEMP_DB}" =~ ^restore_drill_[A-Za-z0-9_]{1,48}$ ]] ||
+  [[ "${TEMP_DB}" == "${POSTGRES_DB}" ]]; then
+  echo "RESTORE_DRILL_DB must be an isolated restore_drill_* database, never POSTGRES_DB." >&2
+  exit 1
+fi
+
+if ! docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" config --services |
+  grep -Fxq postgres; then
+  echo "Configured compose file does not define a postgres service." >&2
+  echo "Run the managed-database restore drill through an isolated provider project instead." >&2
+  exit 1
+fi
 
 cleanup() {
   docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T postgres \

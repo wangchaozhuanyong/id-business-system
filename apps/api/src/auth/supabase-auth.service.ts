@@ -1,4 +1,9 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
@@ -6,8 +11,14 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { verifyPassword } from './password-hasher';
 
 interface CachedIdentity {
-  userId: string;
+  identity: SupabaseSessionIdentity;
   expiresAt: number;
+}
+
+export interface SupabaseSessionIdentity {
+  userId: string;
+  sessionId: string;
+  expiresAt: Date;
 }
 
 export interface SupabaseLoginResult {
@@ -15,6 +26,7 @@ export interface SupabaseLoginResult {
   refreshToken: string;
   expiresAt: string;
   userId: string;
+  sessionId: string;
 }
 
 const ACCESS_TOKEN_CACHE_TTL_MS = 30_000;
@@ -24,7 +36,7 @@ const TOKEN_EXPIRY_SAFETY_MS = 5_000;
 @Injectable()
 export class SupabaseAuthService {
   private readonly tokenIdentityCache = new Map<string, CachedIdentity>();
-  private readonly pendingAuthentications = new Map<string, Promise<string>>();
+  private readonly pendingAuthentications = new Map<string, Promise<SupabaseSessionIdentity>>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -51,6 +63,7 @@ export class SupabaseAuthService {
         authUserId: true,
         userId: true,
         mustResetPassword: true,
+        lastAuthenticatedAt: true,
         user: {
           select: {
             passwordHash: true
@@ -71,6 +84,7 @@ export class SupabaseAuthService {
     if (
       (signInResult.error || !signInResult.data.session) &&
       identity.mustResetPassword &&
+      !identity.lastAuthenticatedAt &&
       (await verifyPassword(password, identity.user.passwordHash))
     ) {
       await this.migrateStoredPassword(identity.authUserId, password);
@@ -86,10 +100,15 @@ export class SupabaseAuthService {
 
     let session = signInResult.data.session;
     const factorResult = await client.auth.mfa.listFactors();
+    if (factorResult.error || !factorResult.data) {
+      await this.logout(session.access_token).catch(() => undefined);
+      throw new ServiceUnavailableException('Supabase MFA 状态暂时无法确认，请稍后重试。');
+    }
     const verifiedFactor = factorResult.data?.totp.find((factor) => factor.status === 'verified');
     if (verifiedFactor) {
       const code = mfaCode?.trim();
       if (!code) {
+        await this.logout(session.access_token).catch(() => undefined);
         throw new UnauthorizedException('需要输入动态验证码或恢复码。');
       }
 
@@ -98,6 +117,7 @@ export class SupabaseAuthService {
         code
       });
       if (verifyResult.error || !verifyResult.data) {
+        await this.logout(session.access_token).catch(() => undefined);
         throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
       }
       session = {
@@ -115,21 +135,35 @@ export class SupabaseAuthService {
         userId: identity.userId
       },
       data: {
-        lastAuthenticatedAt: new Date(),
-        mustResetPassword: false
+        lastAuthenticatedAt: new Date()
       }
     });
 
-    this.cacheIdentity(session.access_token, identity.userId);
-    return this.toLoginResult(session, identity.userId);
+    let sessionIdentity: SupabaseSessionIdentity;
+    try {
+      sessionIdentity = this.getSessionIdentityFromAccessToken(
+        session.access_token,
+        identity.userId
+      );
+    } catch (error) {
+      await this.logout(session.access_token).catch(() => undefined);
+      throw error;
+    }
+    this.cacheIdentity(session.access_token, sessionIdentity);
+    return this.toLoginResult(session, sessionIdentity);
   }
 
-  async authenticateAccessToken(accessToken: string) {
+  async authenticateAccessToken(accessToken: string): Promise<SupabaseSessionIdentity> {
     const cacheKey = this.hashToken(accessToken);
     const cached = this.tokenIdentityCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.userId;
+    if (
+      cached &&
+      cached.expiresAt > Date.now() &&
+      cached.identity.expiresAt.getTime() > Date.now()
+    ) {
+      return cached.identity;
     }
+    this.tokenIdentityCache.delete(cacheKey);
 
     const pending = this.pendingAuthentications.get(cacheKey);
     if (pending) return pending;
@@ -146,7 +180,14 @@ export class SupabaseAuthService {
     const claimsResult = await client.auth.getClaims(accessToken);
     const claims = claimsResult.data?.claims;
     const authUserId = claims?.sub;
-    if (claimsResult.error || !claims || !authUserId) {
+    const sessionId = claims?.session_id;
+    if (
+      claimsResult.error ||
+      !claims ||
+      !authUserId ||
+      typeof sessionId !== 'string' ||
+      !this.isUuid(sessionId)
+    ) {
       this.tokenIdentityCache.delete(cacheKey);
       throw new UnauthorizedException('登录状态无效或已过期，请重新登录。');
     }
@@ -168,21 +209,73 @@ export class SupabaseAuthService {
       throw new UnauthorizedException('登录账号未绑定到业务系统或已停用。');
     }
 
-    this.cacheIdentity(accessToken, identity.userId, this.getVerifiedTokenCacheExpiry(claims.exp));
-    return identity.userId;
+    const sessionIdentity = {
+      userId: identity.userId,
+      sessionId,
+      expiresAt: this.getClaimsExpiry(claims.exp)
+    };
+    this.cacheIdentity(accessToken, sessionIdentity, this.getVerifiedTokenCacheExpiry(claims.exp));
+    return sessionIdentity;
   }
 
-  async logout(accessToken?: string) {
+  async logout(accessToken?: string, scope: 'local' | 'global' = 'local') {
     if (!accessToken) return;
 
     const cacheKey = this.hashToken(accessToken);
     this.tokenIdentityCache.delete(cacheKey);
     this.pendingAuthentications.delete(cacheKey);
     const client = this.createServiceClient();
-    const result = await client.auth.admin.signOut(accessToken, 'local');
+    const result = await client.auth.admin.signOut(accessToken, scope);
     if (result.error && result.error.status !== 404) {
       throw new ServiceUnavailableException('Supabase 登录会话注销失败，请稍后重试。');
     }
+  }
+
+  async updatePassword(authUserId: string, password: string) {
+    const result = await this.createServiceClient().auth.admin.updateUserById(authUserId, {
+      password
+    });
+    if (result.error) {
+      throw new ServiceUnavailableException('Supabase 密码更新暂时不可用，请稍后重试。');
+    }
+  }
+
+  async verifyCurrentPassword(userId: string, password: string) {
+    const identity = await this.prisma.v2AuthIdentity.findFirst({
+      where: {
+        userId,
+        enabled: true,
+        user: {
+          status: 'active',
+          deletedAt: null
+        }
+      },
+      select: {
+        authEmail: true,
+        authUserId: true
+      }
+    });
+
+    if (!identity) {
+      throw new UnauthorizedException('登录账号未绑定到 Supabase Auth 或已停用。');
+    }
+
+    const result = await this.createPublicClient().auth.signInWithPassword({
+      email: identity.authEmail,
+      password
+    });
+    const session = result.data.session;
+    if (result.error || !session || session.user.id !== identity.authUserId) {
+      if (session) {
+        await this.logout(session.access_token).catch(() => undefined);
+      }
+      throw new BadRequestException('当前密码不正确，请重新输入。');
+    }
+
+    await this.logout(session.access_token);
+    return {
+      authUserId: identity.authUserId
+    };
   }
 
   private createPublicClient() {
@@ -208,12 +301,7 @@ export class SupabaseAuthService {
   }
 
   private async migrateStoredPassword(authUserId: string, password: string) {
-    const result = await this.createServiceClient().auth.admin.updateUserById(authUserId, {
-      password
-    });
-    if (result.error) {
-      throw new ServiceUnavailableException('管理员密码安全迁移暂时不可用，请稍后重试。');
-    }
+    await this.updatePassword(authUserId, password);
   }
 
   private getConfig() {
@@ -236,22 +324,72 @@ export class SupabaseAuthService {
     };
   }
 
-  private toLoginResult(session: Session, userId: string): SupabaseLoginResult {
+  private toLoginResult(session: Session, identity: SupabaseSessionIdentity): SupabaseLoginResult {
     const expiresAtSeconds =
       session.expires_at ?? Math.floor(Date.now() / 1000) + session.expires_in;
     return {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
-      userId
+      userId: identity.userId,
+      sessionId: identity.sessionId
     };
   }
 
-  private cacheIdentity(accessToken: string, userId: string, expiresAt?: number) {
+  private cacheIdentity(
+    accessToken: string,
+    identity: SupabaseSessionIdentity,
+    expiresAt?: number
+  ) {
+    const cacheExpiresAt = Math.max(
+      Date.now(),
+      Math.min(
+        expiresAt ?? Date.now() + ACCESS_TOKEN_CACHE_TTL_MS,
+        identity.expiresAt.getTime() - TOKEN_EXPIRY_SAFETY_MS
+      )
+    );
     this.tokenIdentityCache.set(this.hashToken(accessToken), {
-      userId,
-      expiresAt: expiresAt ?? Date.now() + ACCESS_TOKEN_CACHE_TTL_MS
+      identity,
+      expiresAt: cacheExpiresAt
     });
+  }
+
+  private getSessionIdentityFromAccessToken(
+    accessToken: string,
+    userId: string
+  ): SupabaseSessionIdentity {
+    const payloadPart = accessToken.split('.')[1];
+    if (!payloadPart) {
+      throw new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。');
+    }
+
+    try {
+      const payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8')) as {
+        exp?: number;
+        session_id?: string;
+      };
+      if (!payload.session_id || !this.isUuid(payload.session_id)) {
+        throw new Error('missing session_id');
+      }
+      return {
+        userId,
+        sessionId: payload.session_id,
+        expiresAt: this.getClaimsExpiry(payload.exp)
+      };
+    } catch {
+      throw new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。');
+    }
+  }
+
+  private getClaimsExpiry(exp?: number) {
+    if (!exp || !Number.isFinite(exp) || exp * 1000 <= Date.now()) {
+      throw new UnauthorizedException('登录状态无效或已过期，请重新登录。');
+    }
+    return new Date(exp * 1000);
+  }
+
+  private isUuid(value: string) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   }
 
   private getVerifiedTokenCacheExpiry(exp?: number) {

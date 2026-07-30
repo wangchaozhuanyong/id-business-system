@@ -4,4 +4,5 @@ export interface CurrentUser {
   displayName: string;
   roles: string[];
   permissions: string[];
+  mustResetPassword: boolean;
 }

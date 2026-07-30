@@ -5,6 +5,7 @@ import AutoImport from 'unplugin-auto-import/vite';
 import Components from 'unplugin-vue-components/vite';
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
 import { defineConfig, loadEnv } from 'vite';
+import { validateAuthBuildConfiguration } from './src/auth/auth-build-config';
 
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url));
 const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
@@ -12,6 +13,10 @@ const pagesHeaders = fileURLToPath(new URL('./dist/_headers', import.meta.url));
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, workspaceRoot, '');
+  validateAuthBuildConfiguration(mode, {
+    ...env,
+    ...process.env
+  });
   const apiProxyTarget =
     process.env.VITE_DEV_API_PROXY_TARGET ||
     env.VITE_DEV_API_PROXY_TARGET ||

@@ -83,6 +83,12 @@ export interface CreateActiveSessionInput extends RequestMeta {
   expiresAt: Date;
 }
 
+export interface EnsureActiveSessionInput extends RequestMeta {
+  userId: string;
+  sessionIdentifier: string;
+  expiresAt: Date;
+}
+
 export interface SaveIpWhitelistInput {
   ipOrCidr?: string;
   scope?: string;
@@ -345,7 +351,65 @@ export class SecurityService {
   }
 
   async createActiveSession(input: CreateActiveSessionInput) {
-    const tokenHash = this.hashToken(input.accessToken);
+    return this.createProviderActiveSession({
+      userId: input.userId,
+      sessionIdentifier: input.accessToken,
+      expiresAt: input.expiresAt,
+      ip: input.ip,
+      userAgent: input.userAgent
+    });
+  }
+
+  async ensureActiveSession(input: EnsureActiveSessionInput) {
+    const userId = this.normalizeRequiredUuid(input.userId, 'userId');
+    const sessionIdentifier = this.normalizeRequiredString(
+      input.sessionIdentifier,
+      'sessionIdentifier'
+    );
+    const tokenHash = this.hashToken(sessionIdentifier);
+    const now = new Date();
+    if (
+      !(input.expiresAt instanceof Date) ||
+      !Number.isFinite(input.expiresAt.getTime()) ||
+      input.expiresAt <= now
+    ) {
+      this.activeTokenCache.delete(tokenHash);
+      return false;
+    }
+    const result = await this.prisma.activeSession.updateMany({
+      where: {
+        userId,
+        tokenHash,
+        revokedAt: null
+      },
+      data: {
+        lastActiveAt: now,
+        expiresAt: input.expiresAt
+      }
+    });
+
+    if (result.count !== 1) {
+      this.activeTokenCache.delete(tokenHash);
+      return false;
+    }
+
+    this.cacheActiveToken(tokenHash, input.expiresAt, now);
+    return true;
+  }
+
+  async createProviderActiveSession(input: EnsureActiveSessionInput) {
+    const sessionIdentifier = this.normalizeRequiredString(
+      input.sessionIdentifier,
+      'sessionIdentifier'
+    );
+    const tokenHash = this.hashToken(sessionIdentifier);
+    if (
+      !(input.expiresAt instanceof Date) ||
+      !Number.isFinite(input.expiresAt.getTime()) ||
+      input.expiresAt <= new Date()
+    ) {
+      throw new BadRequestException('expiresAt is invalid');
+    }
     const session = await this.prisma.activeSession.create({
       data: {
         userId: this.normalizeRequiredUuid(input.userId, 'userId'),
@@ -368,10 +432,6 @@ export class SecurityService {
 
     const now = new Date();
     const tokenHash = this.hashToken(accessToken);
-    if (this.activeTokenCache.get<boolean>(tokenHash)) {
-      return true;
-    }
-
     const session = await this.prisma.activeSession.findUnique({
       where: { tokenHash },
       select: {
@@ -383,6 +443,7 @@ export class SecurityService {
     });
 
     if (!session || session.revokedAt || session.expiresAt <= now) {
+      this.activeTokenCache.delete(tokenHash);
       return false;
     }
 
@@ -403,12 +464,19 @@ export class SecurityService {
   }
 
   async revokeAccessToken(accessToken: string | null | undefined, operator?: AuthenticatedUser) {
-    if (!accessToken) {
+    return this.revokeSessionIdentifier(accessToken, operator);
+  }
+
+  async revokeSessionIdentifier(
+    sessionIdentifier: string | null | undefined,
+    operator?: AuthenticatedUser
+  ) {
+    if (!sessionIdentifier) {
       return false;
     }
 
     const session = await this.prisma.activeSession.findUnique({
-      where: { tokenHash: this.hashToken(accessToken) },
+      where: { tokenHash: this.hashToken(sessionIdentifier) },
       include: this.getSessionInclude()
     });
 
@@ -439,6 +507,50 @@ export class SecurityService {
     });
 
     return Boolean(updated.revokedAt);
+  }
+
+  async revokeOtherSessions(
+    userIdInput: string,
+    currentSessionIdentifier: string | null | undefined,
+    operator?: AuthenticatedUser
+  ) {
+    const userId = this.normalizeRequiredUuid(userIdInput, 'userId');
+    const currentTokenHash = currentSessionIdentifier
+      ? this.hashToken(currentSessionIdentifier)
+      : undefined;
+    const revokedAt = new Date();
+    const result = await this.prisma.activeSession.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(currentTokenHash ? { tokenHash: { not: currentTokenHash } } : {})
+      },
+      data: {
+        revokedAt
+      }
+    });
+
+    this.activeTokenCache.clear();
+    this.overviewCache.clear();
+    if (result.count > 0) {
+      await this.auditLogsService.create({
+        userId: operator?.id,
+        module: 'security',
+        action: 'security.session.revoke_others',
+        objectType: 'user',
+        objectId: userId,
+        afterData: this.toAuditJson({
+          userId,
+          revokedSessionCount: result.count
+        }),
+        remark: `Revoked ${result.count} other active sessions`
+      });
+    }
+    return result.count;
+  }
+
+  invalidateActiveSessionCache() {
+    this.activeTokenCache.clear();
   }
 
   async isRequestIpAllowed(ip: string | null | undefined, scopes: IpWhitelistScope[]) {
@@ -589,6 +701,7 @@ export class SecurityService {
       include: this.getSessionInclude()
     });
 
+    this.activeTokenCache.delete(session.tokenHash);
     this.overviewCache.clear();
     await this.auditLogsService.create({
       userId: operator?.id,
@@ -827,6 +940,35 @@ export class SecurityService {
       expireDays: 0,
       maxFailedAttempts: 5
     });
+  }
+
+  async assertPasswordMeetsPolicy(passwordInput: string | null | undefined) {
+    const password = typeof passwordInput === 'string' ? passwordInput : '';
+    if (!password || password.length > 160) {
+      throw new BadRequestException('新密码长度必须在密码策略允许范围内。');
+    }
+
+    const policy = await this.getPasswordPolicy();
+    const value = policy.value as Record<string, unknown>;
+    const minLength = this.getPositiveIntegerSetting(value.minLength, 8);
+    const failures: string[] = [];
+    if (password.length < minLength) failures.push(`至少 ${minLength} 位`);
+    if (this.getSettingBoolean(value.requireUppercase, true) && !/[A-Z]/.test(password)) {
+      failures.push('包含大写字母');
+    }
+    if (this.getSettingBoolean(value.requireLowercase, true) && !/[a-z]/.test(password)) {
+      failures.push('包含小写字母');
+    }
+    if (this.getSettingBoolean(value.requireNumber, true) && !/\d/.test(password)) {
+      failures.push('包含数字');
+    }
+    if (this.getSettingBoolean(value.requireSymbol, false) && !/[^A-Za-z0-9\s]/.test(password)) {
+      failures.push('包含符号');
+    }
+
+    if (failures.length) {
+      throw new BadRequestException(`新密码必须${failures.join('、')}。`);
+    }
   }
 
   updatePasswordPolicy(value: Record<string, unknown>, operator?: AuthenticatedUser) {
@@ -1525,6 +1667,7 @@ export class SecurityService {
 
   private cacheActiveToken(tokenHash: string, expiresAt: Date, now = new Date()) {
     const ttlMs = Math.min(ACTIVE_TOKEN_CACHE_TTL_MS, expiresAt.getTime() - now.getTime());
+    if (ttlMs <= 0) return;
     this.activeTokenCache.set(tokenHash, true, ttlMs);
   }
 
