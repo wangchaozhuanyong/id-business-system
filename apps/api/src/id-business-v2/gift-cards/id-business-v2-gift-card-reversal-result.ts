@@ -41,6 +41,13 @@ export interface IdBusinessV2GiftCardReversalResponse {
   accountLoss: Awaited<
     ReturnType<IdBusinessV2AccountLossesService['reportLossInTransaction']>
   > | null;
+  supplierFunding: {
+    ledgerEntryId: string;
+    amountCny: string;
+    balanceBeforeCny: string;
+    balanceAfterCny: string;
+    isNegative: boolean;
+  } | null;
   idempotentReplay: boolean;
 }
 
@@ -77,7 +84,8 @@ export function buildGiftCardReversalResponse(
     createdAt: Date;
   },
   idempotentReplay: boolean,
-  accountLoss: IdBusinessV2GiftCardReversalResponse['accountLoss']
+  accountLoss: IdBusinessV2GiftCardReversalResponse['accountLoss'],
+  supplierFunding: IdBusinessV2GiftCardReversalResponse['supplierFunding'] = null
 ): IdBusinessV2GiftCardReversalResponse {
   if (!ledgerEntry.reversalOfEntryId) {
     throw new ConflictException('反向流水缺少原入账流水引用');
@@ -117,6 +125,7 @@ export function buildGiftCardReversalResponse(
         accountLoss?.account.balanceCostAmount ?? toV2DecimalString(account.balanceCostAmount)
     },
     accountLoss,
+    supplierFunding,
     idempotentReplay
   };
 }
@@ -150,6 +159,9 @@ export async function writeGiftCardReversalAuditLog(
         reversalOfEntryId: result.ledgerEntry.reversalOfEntryId,
         accountLossRecordId: result.accountLoss?.lossRecord.id ?? null,
         accountLossLedgerEntryId: result.accountLoss?.lossRecord.ledgerEntryId ?? null,
+        supplierFundingLedgerEntryId: result.supplierFunding?.ledgerEntryId ?? null,
+        supplierBalanceBeforeCny: result.supplierFunding?.balanceBeforeCny ?? null,
+        supplierBalanceAfterCny: result.supplierFunding?.balanceAfterCny ?? null,
         reason
       },
       remark: `V2 礼品卡${actionLabel}：${result.giftCard.codeMasked}`

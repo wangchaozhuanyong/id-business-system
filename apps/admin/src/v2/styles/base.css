@@ -33,28 +33,41 @@
   --v3-primary-solid-hover: #1d4ed8;
   --v3-primary-soft: #eaf1ff;
   --v3-primary-border-soft: #cdddfd;
-  --v3-green: #159447;
-  --v3-green-soft: #edf9f1;
-  --v3-green-border-soft: #c4e9d1;
-  --v3-orange: #c87413;
-  --v3-orange-soft: #fff7ea;
-  --v3-orange-border-soft: #f2d2a7;
-  --v3-red: #dc3d46;
-  --v3-red-soft: #fff1f2;
-  --v3-red-border-soft: #f1c5c8;
+  --v3-on-primary-solid: #ffffff;
+  --v3-on-primary-soft: #2563eb;
+  --v3-success: #0b6b31;
+  --v3-success-solid: #159447;
+  --v3-on-success-solid: #071829;
+  --v3-success-soft: #edf9f1;
+  --v3-success-border-soft: #c4e9d1;
+  --v3-warning: #9a580b;
+  --v3-warning-solid: #c87413;
+  --v3-on-warning-solid: #071829;
+  --v3-warning-soft: #fff7ea;
+  --v3-warning-border-soft: #f2d2a7;
+  --v3-danger: #b4232e;
+  --v3-danger-solid: #c5303b;
+  --v3-on-danger-solid: #ffffff;
+  --v3-danger-soft: #fff1f2;
+  --v3-danger-border-soft: #f1c5c8;
+  --v3-disabled-surface: #e3e8f0;
+  --v3-disabled-text: #526074;
+  --v3-disabled-border: #cbd5e1;
   --v3-radius-sm: 6px;
   --v3-radius: 8px;
   --v3-radius-lg: 12px;
   --v3-shadow-sm: 0 1px 2px rgba(18, 32, 52, 0.06);
   --v3-shadow-md: 0 18px 38px rgba(24, 33, 45, 0.13);
   --v3-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --v3-focus-ring: 0 0 0 3px rgba(53, 104, 201, 0.18);
+  --v3-focus-color: #1d4ed8;
+  --v3-focus-ring: 0 0 0 2px var(--v3-focus-color);
   --v3-overlay: rgba(17, 24, 35, 0.42);
   --v3-skeleton-start: #edf0f4;
   --v3-skeleton-mid: #f7f8fa;
   --v3-sidebar: #071829;
   --v3-sidebar-surface: #10253a;
   --v3-sidebar-text: #d8e2ef;
+  --v3-sidebar-text-strong: #ffffff;
   --v3-sidebar-muted: #8494a8;
   --v3-sidebar-border: rgba(255, 255, 255, 0.08);
   --color-bg: var(--v3-bg);
@@ -65,9 +78,9 @@
   --radius-md: var(--v3-radius);
   --shadow-panel: var(--v3-shadow-md);
   --el-color-primary: var(--v3-primary);
-  --el-color-success: var(--v3-green);
-  --el-color-warning: var(--v3-orange);
-  --el-color-danger: var(--v3-red);
+  --el-color-success: var(--v3-success);
+  --el-color-warning: var(--v3-warning);
+  --el-color-danger: var(--v3-danger);
   --el-text-color-primary: var(--v3-text);
   --el-text-color-regular: var(--v3-text-soft);
   --el-text-color-secondary: var(--v3-muted);
@@ -85,7 +98,7 @@
   --el-fill-color-extra-light: var(--v3-surface-hover);
   --el-fill-color-blank: var(--v3-surface);
   --el-mask-color: var(--v3-overlay);
-  --el-mask-color-extra-light: var(--v3-overlay);
+  --el-mask-color-extra-light: transparent;
   --el-border-radius-base: var(--v3-radius);
   --el-font-family: var(--v3-font-sans);
   --el-font-size-base: var(--v3-font-size-body);
@@ -108,24 +121,37 @@ html[data-v2-theme='dark'] {
   --v3-primary-solid-hover: #2d55a4;
   --v3-primary-soft: #192845;
   --v3-primary-border-soft: #31558c;
-  --v3-green: #4fc78b;
-  --v3-green-soft: #142d24;
-  --v3-green-border-soft: #275a43;
-  --v3-orange: #e6a956;
-  --v3-orange-soft: #332719;
-  --v3-orange-border-soft: #624622;
-  --v3-red: #ed7179;
-  --v3-red-soft: #351d24;
-  --v3-red-border-soft: #6b333c;
+  --v3-on-primary-solid: #ffffff;
+  --v3-on-primary-soft: #8b97a9;
+  --v3-success: #4fc78b;
+  --v3-success-solid: #4fc78b;
+  --v3-on-success-solid: #071829;
+  --v3-success-soft: #142d24;
+  --v3-success-border-soft: #275a43;
+  --v3-warning: #e6a956;
+  --v3-warning-solid: #e6a956;
+  --v3-on-warning-solid: #071829;
+  --v3-warning-soft: #332719;
+  --v3-warning-border-soft: #624622;
+  --v3-danger: #ed7179;
+  --v3-danger-solid: #ed7179;
+  --v3-on-danger-solid: #071829;
+  --v3-danger-soft: #351d24;
+  --v3-danger-border-soft: #6b333c;
+  --v3-disabled-surface: #263241;
+  --v3-disabled-text: #aeb9c8;
+  --v3-disabled-border: #3a4758;
   --v3-shadow-sm: 0 8px 18px rgba(0, 0, 0, 0.18);
   --v3-shadow-md: 0 18px 38px rgba(0, 0, 0, 0.32);
-  --v3-focus-ring: 0 0 0 3px rgba(79, 127, 223, 0.28);
+  --v3-focus-color: #8fb1ff;
+  --v3-focus-ring: 0 0 0 2px var(--v3-focus-color);
   --v3-overlay: rgba(2, 6, 12, 0.7);
   --v3-skeleton-start: #1b2430;
   --v3-skeleton-mid: #263241;
   --v3-sidebar: #061321;
   --v3-sidebar-surface: #102338;
   --v3-sidebar-text: #d6deea;
+  --v3-sidebar-text-strong: #ffffff;
   --v3-sidebar-muted: #8290a3;
   --v3-sidebar-border: rgba(255, 255, 255, 0.07);
   --el-color-primary-light-3: #456fbf;
@@ -133,9 +159,9 @@ html[data-v2-theme='dark'] {
   --el-color-primary-light-7: #294575;
   --el-color-primary-light-8: #20365c;
   --el-color-primary-light-9: #192845;
-  --el-color-success-light-9: var(--v3-green-soft);
-  --el-color-warning-light-9: var(--v3-orange-soft);
-  --el-color-danger-light-9: var(--v3-red-soft);
+  --el-color-success-light-9: var(--v3-success-soft);
+  --el-color-warning-light-9: var(--v3-warning-soft);
+  --el-color-danger-light-9: var(--v3-danger-soft);
   --el-box-shadow-light: var(--v3-shadow-sm);
 }
 
@@ -275,7 +301,7 @@ p {
   place-items: center;
   border-radius: 10px;
   background: var(--v3-primary-solid);
-  color: #fff;
+  color: var(--v3-on-primary-solid);
   font-size: 24px;
   font-weight: 800;
 }
@@ -396,10 +422,10 @@ p {
   gap: 4px;
   margin: 0 0 14px;
   padding: 12px 14px;
-  border: 1px solid var(--v3-red-border-soft);
+  border: 1px solid var(--v3-danger-border-soft);
   border-radius: var(--v3-radius);
-  background: var(--v3-red-soft);
-  color: var(--v3-red);
+  background: var(--v3-danger-soft);
+  color: var(--v3-danger);
 }
 
 .login-error strong {
@@ -409,7 +435,7 @@ p {
 }
 
 .login-error span {
-  color: var(--v3-red);
+  color: var(--v3-danger);
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -589,12 +615,23 @@ p {
 }
 
 .app-button.el-button {
+  --el-button-text-color: var(--v3-text);
+  --el-button-bg-color: var(--v3-surface);
+  --el-button-border-color: var(--v3-border);
+  --el-button-hover-text-color: var(--v3-text);
+  --el-button-hover-bg-color: var(--v3-surface-hover);
+  --el-button-hover-border-color: var(--v3-muted);
+  --el-button-active-text-color: var(--v3-text);
+  --el-button-active-bg-color: var(--v3-surface-3);
+  --el-button-active-border-color: var(--v3-muted);
+  --el-button-disabled-text-color: var(--v3-disabled-text);
+  --el-button-disabled-bg-color: var(--v3-disabled-surface);
+  --el-button-disabled-border-color: var(--v3-disabled-border);
+  --el-button-outline-color: var(--v3-focus-color);
+  --el-mask-color-extra-light: transparent;
   min-height: 36px;
   padding: 0 12px;
-  border: 1px solid var(--v3-border);
   border-radius: var(--v3-radius);
-  background: var(--v3-surface);
-  color: var(--v3-text);
   font-size: 13px;
   transition:
     border-color 180ms var(--v3-ease),
@@ -604,51 +641,74 @@ p {
     transform 180ms var(--v3-ease);
 }
 
-.app-button.el-button:hover {
-  border-color: var(--v3-muted);
-}
-
 .app-button.el-button:active {
   transform: translateY(1px);
 }
 
 .app-button.el-button:focus-visible {
-  outline: none;
-  box-shadow: var(--v3-focus-ring);
+  outline: 2px solid var(--v3-focus-color);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 
 .app-button--primary.el-button {
-  border-color: var(--v3-primary-solid);
-  background: var(--v3-primary-solid);
-  color: #ffffff;
-}
-
-.app-button--primary.el-button:hover {
-  border-color: var(--v3-primary-solid-hover);
-  background: var(--v3-primary-solid-hover);
-  color: #ffffff;
+  --el-button-text-color: var(--v3-on-primary-solid);
+  --el-button-bg-color: var(--v3-primary-solid);
+  --el-button-border-color: var(--v3-primary-solid);
+  --el-button-hover-text-color: var(--v3-on-primary-solid);
+  --el-button-hover-bg-color: var(--v3-primary-solid-hover);
+  --el-button-hover-border-color: var(--v3-primary-solid-hover);
+  --el-button-active-text-color: var(--v3-on-primary-solid);
+  --el-button-active-bg-color: var(--v3-primary-solid-hover);
+  --el-button-active-border-color: var(--v3-primary-solid-hover);
 }
 
 .app-button--soft.el-button {
-  border-color: var(--v3-primary-border-soft);
-  background: var(--v3-primary-soft);
-  color: var(--v3-primary);
+  --el-button-text-color: var(--v3-on-primary-soft);
+  --el-button-bg-color: var(--v3-primary-soft);
+  --el-button-border-color: var(--v3-primary-border-soft);
+  --el-button-hover-text-color: var(--v3-primary-2);
+  --el-button-hover-bg-color: var(--v3-primary-soft);
+  --el-button-hover-border-color: var(--v3-primary);
+  --el-button-active-text-color: var(--v3-primary-2);
+  --el-button-active-bg-color: var(--v3-primary-soft);
+  --el-button-active-border-color: var(--v3-primary);
 }
 
 .app-button--danger.el-button {
-  border-color: var(--v3-red-border-soft);
-  background: var(--v3-red-soft);
-  color: var(--v3-red);
+  --el-button-text-color: var(--v3-danger);
+  --el-button-bg-color: var(--v3-danger-soft);
+  --el-button-border-color: var(--v3-danger-border-soft);
+  --el-button-hover-text-color: var(--v3-danger);
+  --el-button-hover-bg-color: var(--v3-danger-soft);
+  --el-button-hover-border-color: var(--v3-danger);
+  --el-button-active-text-color: var(--v3-danger);
+  --el-button-active-bg-color: var(--v3-danger-soft);
+  --el-button-active-border-color: var(--v3-danger);
 }
 
 .app-button--success.el-button {
-  border-color: var(--v3-green);
-  background: var(--v3-green);
-  color: #ffffff;
+  --el-button-text-color: var(--v3-on-success-solid);
+  --el-button-bg-color: var(--v3-success-solid);
+  --el-button-border-color: var(--v3-success-solid);
+  --el-button-hover-text-color: var(--v3-on-success-solid);
+  --el-button-hover-bg-color: var(--v3-success-solid);
+  --el-button-hover-border-color: var(--v3-success);
+  --el-button-active-text-color: var(--v3-on-success-solid);
+  --el-button-active-bg-color: var(--v3-success-solid);
+  --el-button-active-border-color: var(--v3-success);
 }
 
 .app-button--ghost.el-button {
-  background: transparent;
+  --el-button-text-color: var(--v3-text);
+  --el-button-bg-color: transparent;
+  --el-button-border-color: var(--v3-border);
+  --el-button-hover-text-color: var(--v3-text);
+  --el-button-hover-bg-color: var(--v3-surface-hover);
+  --el-button-hover-border-color: var(--v3-muted);
+  --el-button-active-text-color: var(--v3-text);
+  --el-button-active-bg-color: var(--v3-surface-3);
+  --el-button-active-border-color: var(--v3-muted);
 }
 
 .app-button--icon.el-button {
@@ -678,7 +738,7 @@ p {
   width: min(460px, 100%);
   gap: 16px;
   padding: 24px;
-  border: 1px solid var(--v3-orange-border-soft);
+  border: 1px solid var(--v3-warning-border-soft);
   border-radius: var(--v3-radius-lg);
   background: var(--v3-surface);
   box-shadow: var(--v3-shadow-md);
@@ -719,9 +779,9 @@ p {
 }
 
 .app-route-error__button--primary {
-  border-color: var(--v3-orange);
-  background: var(--v3-orange);
-  color: #ffffff;
+  border-color: var(--v3-warning-solid);
+  background: var(--v3-warning-solid);
+  color: var(--v3-on-warning-solid);
 }
 
 @media (prefers-reduced-motion: reduce) {

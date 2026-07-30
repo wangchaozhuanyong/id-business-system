@@ -113,7 +113,8 @@ describe('IdBusinessV2OptionsService', () => {
   it('exposes all workbook option types and fixed status codes', () => {
     const result = service.listTypes();
 
-    expect(result.items).toHaveLength(9);
+    expect(result.items).toHaveLength(10);
+    expect(result.items.some((item) => item.type === 'expense_category')).toBe(true);
     expect(result.items.some((item) => item.type === 'id_region')).toBe(false);
     expect(result.items.find((item) => item.type === 'service')).toMatchObject({
       parentType: 'business_category',
@@ -145,7 +146,7 @@ describe('IdBusinessV2OptionsService', () => {
     const result = await service.listDefaultPages();
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledTimes(9);
+    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledTimes(10);
     expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -165,7 +166,7 @@ describe('IdBusinessV2OptionsService', () => {
         _all: true
       }
     });
-    expect(Object.keys(result)).toHaveLength(9);
+    expect(Object.keys(result)).toHaveLength(10);
     expect(result.id_status).toMatchObject({ total: 2, page: 1, pageSize: 20 });
     expect(result.customer_source).toMatchObject({ total: 3, page: 1, pageSize: 20 });
     expect(result.country.items[0]).toMatchObject({

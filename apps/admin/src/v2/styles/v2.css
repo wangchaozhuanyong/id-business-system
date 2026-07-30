@@ -14,9 +14,14 @@
   --v2-border-soft: var(--v3-border-soft);
   --v2-accent: var(--v3-primary);
   --v2-accent-solid: var(--v3-primary-solid);
+  --v2-on-accent-solid: var(--v3-on-primary-solid);
   --v2-accent-soft: var(--v3-primary-soft);
-  --v2-success: var(--v3-green);
-  --v2-danger: var(--v3-red);
+  --v2-success: var(--v3-success);
+  --v2-success-solid: var(--v3-success-solid);
+  --v2-on-success-solid: var(--v3-on-success-solid);
+  --v2-danger: var(--v3-danger);
+  --v2-danger-solid: var(--v3-danger-solid);
+  --v2-on-danger-solid: var(--v3-on-danger-solid);
   --v2-focus: var(--v3-focus-ring);
   display: grid;
   min-height: 100dvh;
@@ -82,7 +87,7 @@
   place-items: center;
   border-radius: 6px;
   background: var(--v2-accent-solid);
-  color: #ffffff;
+  color: var(--v2-on-accent-solid);
   font-size: 14px;
   font-weight: 800;
 }
@@ -172,11 +177,11 @@
 .v2-navigation__parent:hover,
 .v2-navigation__section.is-open > .v2-navigation__parent {
   background: rgba(255, 255, 255, 0.055);
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
 }
 
 .v2-navigation__section.is-active > .v2-navigation__parent {
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
 }
 
 .v2-navigation__parent:focus-visible {
@@ -232,7 +237,7 @@
 
 .v2-navigation__item:hover {
   background: var(--v2-sidebar-surface);
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
 }
 
 .v2-navigation__item:active {
@@ -246,7 +251,7 @@
 
 .v2-navigation__item.router-link-active {
   background: var(--v2-accent-solid);
-  color: #ffffff;
+  color: var(--v2-on-accent-solid);
   font-weight: var(--v3-font-weight-semibold);
 }
 
@@ -257,6 +262,24 @@
   border-radius: 50%;
   background: currentColor;
   opacity: 0.7;
+}
+
+.v2-navigation__item-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-navigation__item-badge {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 16px;
+  opacity: 0.78;
 }
 
 .v2-shell.is-sidebar-collapsed .v2-brand {
@@ -305,7 +328,7 @@
   padding: 0 18px 0 22px;
   border-bottom: 1px solid var(--v2-sidebar-border);
   background: var(--v2-sidebar);
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
 }
 
 .v2-topbar__identity,
@@ -478,12 +501,12 @@
 }
 
 .v2-theme-switcher button:hover {
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
 }
 
 .v2-theme-switcher button.is-active {
   background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  color: var(--v3-sidebar-text-strong);
   box-shadow: none;
 }
 
@@ -538,8 +561,8 @@
   padding: 0 4px;
   border: 2px solid var(--v2-sidebar);
   border-radius: 999px;
-  background: var(--v2-danger);
-  color: #fff;
+  background: var(--v2-danger-solid);
+  color: var(--v2-on-danger-solid);
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
@@ -697,10 +720,46 @@
   font-size: 10px;
 }
 
-.v2-topbar__account .app-button--ghost.el-button {
-  min-height: 30px;
-  border-color: rgba(255, 255, 255, 0.12);
+.v2-topbar__profile-link {
+  display: flex;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
   color: var(--v2-sidebar-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.v2-topbar__profile-link:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--v2-sidebar-surface);
+}
+
+.v2-topbar__profile-link:focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
+.v2-topbar__account-chevron {
+  color: var(--v2-sidebar-muted);
+  font-size: 12px;
+}
+
+.v2-topbar__account .app-button--ghost.el-button {
+  --el-button-text-color: var(--v2-sidebar-text);
+  --el-button-border-color: rgba(255, 255, 255, 0.12);
+  --el-button-hover-text-color: var(--v3-sidebar-text-strong);
+  --el-button-hover-bg-color: var(--v2-sidebar-surface);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.18);
+  --el-button-active-text-color: var(--v3-sidebar-text-strong);
+  --el-button-active-bg-color: var(--v2-sidebar-surface);
+  --el-button-active-border-color: rgba(255, 255, 255, 0.18);
+  min-height: 30px;
 }
 
 .v2-menu-button {
@@ -708,8 +767,8 @@
 }
 
 .v2-topbar .v2-menu-button.app-button--ghost.el-button {
-  border-color: transparent;
-  color: #ffffff;
+  --el-button-text-color: var(--v3-sidebar-text-strong);
+  --el-button-border-color: transparent;
 }
 
 .v2-content {
@@ -752,7 +811,7 @@
 
 .v2-route-progress.is-error span {
   width: 100%;
-  background: var(--v2-danger);
+  background: var(--v2-danger-solid);
   opacity: 1;
   transform: none;
 }
@@ -764,10 +823,10 @@
   gap: 10px;
   margin-bottom: 14px;
   padding: 10px 12px;
-  border: 1px solid var(--v3-red-border-soft);
+  border: 1px solid var(--v3-danger-border-soft);
   border-radius: 6px;
-  background: var(--v3-red-soft);
-  color: var(--v3-red);
+  background: var(--v3-danger-soft);
+  color: var(--v3-danger);
 }
 
 .v2-route-error span {
@@ -1185,8 +1244,18 @@
 .v2-form-drawer__footer,
 .v2-confirm-dialog__footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.v2-submit-disabled-reason {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--v2-danger);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
 }
 
 .v2-confirm-dialog__message {
@@ -1256,6 +1325,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.v2-shell
+  .el-table
+  :where(
+    .v2-table-column--identifier,
+    .v2-table-column--index,
+    .v2-table-column--numeric,
+    .v2-table-column--date
+  )
+  .cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-shell .el-table .v2-table-column--status .cell {
+  text-align: center;
 }
 
 .v2-table-actions {
@@ -1333,6 +1418,10 @@
 
 .v2-horizontal-form .el-form-item__content {
   min-width: 0;
+}
+
+.v2-horizontal-form .el-form-item.is-error {
+  margin-bottom: 24px;
 }
 
 .v2-horizontal-form .el-select,
@@ -1423,7 +1512,8 @@
 @media (max-width: 1100px) {
   .v2-global-search,
   .v2-query-activity,
-  .v2-topbar__account-copy {
+  .v2-topbar__account-copy,
+  .v2-topbar__account-chevron {
     display: none;
   }
 
@@ -1531,10 +1621,16 @@
   }
 
   .v2-menu-button.app-button.el-button,
-  .v2-notification > button {
+  .v2-notification > button,
+  .v2-topbar__profile-link {
     width: 44px;
     height: 44px;
     min-width: 44px;
+  }
+
+  .v2-topbar__profile-link {
+    justify-content: center;
+    padding: 3px;
   }
 
   .v2-query-activity,

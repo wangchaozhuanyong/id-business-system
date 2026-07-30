@@ -16,6 +16,9 @@ const permissions = [
   ['查看余额', 'apple.balance.view'],
   ['余额入账', 'apple.balance.topup'],
   ['调整余额', 'apple.balance.adjust'],
+  ['查看加卡供应商资金', 'apple.topup_supplier_fund.view'],
+  ['管理加卡供应商资金', 'apple.topup_supplier_fund.manage'],
+  ['查看完整礼品卡号', 'apple.gift_card.view_full'],
   ['查看订单', 'apple.order.view'],
   ['新增订单', 'apple.order.create'],
   ['修改订单', 'apple.order.update'],
@@ -34,7 +37,13 @@ const permissions = [
   ['查看客户手机号', 'customer.view_phone'],
   ['管理业务选项', 'data.dictionary.manage'],
   ['查看审计日志', 'audit_log.view'],
-  ['管理续费预警', 'id_business_v2.renewal_warning.manage']
+  ['管理续费预警', 'id_business_v2.renewal_warning.manage'],
+  ['查看经营分析', 'data.analytics.view'],
+  ['查看财务', 'finance.view'],
+  ['财务记账', 'finance.post'],
+  ['财务调整', 'finance.adjust'],
+  ['管理财务', 'finance.manage'],
+  ['财务关账', 'finance.close']
 ] as const;
 
 async function main() {

@@ -43,6 +43,12 @@ export interface V2Order {
   maskedWebsiteAccount: string | null;
   hasWebsiteAccount: boolean;
   receivedAmount: string;
+  receivedOriginalAmount: string;
+  receivedCurrency: V2FinanceCurrency;
+  receivedFxRateToCny: string;
+  receivedFxSnapshotId: string | null;
+  receivedFinanceAccountId: string | null;
+  receivedAt: string | null;
   platformFeeAmount: string;
   accountDisposition: V2OrderAccountDisposition;
   accountCostAmount: string;
@@ -130,6 +136,12 @@ export interface V2OrderEntryOptions {
   customers: V2OrderEntryCustomer[];
   countries: V2OrderEntryCountry[];
   settlementPlatforms: V2OrderEntrySettlementPlatform[];
+  financeAccounts: Array<{
+    id: string;
+    name: string;
+    currency: V2FinanceCurrency;
+    currentBalance: string;
+  }>;
 }
 
 export interface V2OrderCandidate {
@@ -180,7 +192,13 @@ export interface CreateV2OrderInput {
   settlementPlatformOptionId?: string | null;
   platformOrderNo?: string | null;
   websiteAccount?: string | null;
-  receivedAmount: string;
+  receivedAmount?: string;
+  receivedOriginalAmount: string;
+  receivedCurrency: V2FinanceCurrency;
+  receivedFxRateToCny?: string;
+  receivedFinanceAccountId: string;
+  receivedManualRateReason?: string;
+  receivedAt: string;
   accountDisposition: Exclude<V2OrderAccountDisposition, 'recovered'>;
   balanceAmount: string;
   openedAt: string;
@@ -315,4 +333,4 @@ export interface DeleteV2OrderResult {
   deleted: true;
   idempotentReplay: boolean;
 }
-import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
+import type { PaginatedResult, V2FinanceCurrency, V2PageQuery } from '@apple-business/shared';

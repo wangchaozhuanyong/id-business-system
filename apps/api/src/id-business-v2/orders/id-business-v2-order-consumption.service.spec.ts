@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
 
@@ -18,6 +19,10 @@ const operator = {
 
 function decimal(value: Prisma.Decimal.Value) {
   return new Prisma.Decimal(value);
+}
+
+function cloudflareDecimal(value: Prisma.Decimal.Value) {
+  return new CloudflarePrisma.Decimal(String(value));
 }
 
 function makeOrder(overrides: Record<string, unknown> = {}) {
@@ -240,6 +245,41 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: false,
       nextStep: 'waiting_activation_record'
     });
+  });
+
+  it('normalizes Cloudflare Prisma order amounts before calculating profit', async () => {
+    orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
+      idempotentReplay: false,
+      idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
+      order: makeOrder({
+        receivedAmount: cloudflareDecimal('128'),
+        platformFeeAmount: cloudflareDecimal('5.12'),
+        accountCostAmount: cloudflareDecimal('0'),
+        balanceAmount: cloudflareDecimal('20'),
+        refundCostAmount: cloudflareDecimal('0')
+      }),
+      account: makeAccount({
+        currentBalance: cloudflareDecimal('30'),
+        balanceCostAmount: cloudflareDecimal('90')
+      }),
+      activeLock: {
+        id: lockId
+      },
+      existingEntry: null
+    });
+    ordersService.get.mockResolvedValueOnce(
+      makeOrderResponse({
+        profitAmount: '62.88'
+      })
+    );
+
+    await service.consume(orderId, {
+      idempotencyKey: 'consume-request-1'
+    });
+
+    expect(tx.idBusinessV2Order.update.mock.calls[0]?.[0].data.profitAmount).toEqual(
+      decimal('62.88')
+    );
   });
 
   it('keeps a retained ID purchase-cost snapshot without charging it in order profit', async () => {

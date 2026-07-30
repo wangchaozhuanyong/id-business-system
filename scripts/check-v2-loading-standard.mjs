@@ -46,12 +46,25 @@ const routedViewEntries = featureManifests
     const view = source.match(
       /loadView:\s*\(\)\s*=>\s*import\('\.\/(V2[A-Za-z0-9]+View\.vue)'\)/
     )?.[1];
-    return view ? { view, projectPath: `${path.posix.dirname(projectPath)}/${view}` } : null;
+    const key = source.match(/^\s{2}key: '([a-z0-9-]+)',\s*$/m)?.[1];
+    const planned = /status:\s*'planned'/.test(source);
+    return view
+      ? {
+          view,
+          key,
+          planned,
+          projectPath: `${path.posix.dirname(projectPath)}/${view}`
+        }
+      : null;
   })
   .filter(Boolean);
 const routedViews = routedViewEntries.map(({ view }) => view);
 const uniqueRoutedViews = [...new Set(routedViews)];
 const moduleKeys = featureManifests
+  .map(({ source }) => source.match(/^\s{2}key: '([a-z0-9-]+)',\s*$/m)?.[1])
+  .filter(Boolean);
+const readyModuleKeys = featureManifests
+  .filter(({ source }) => !/status:\s*'planned'/.test(source))
   .map(({ source }) => source.match(/^\s{2}key: '([a-z0-9-]+)',\s*$/m)?.[1])
   .filter(Boolean);
 
@@ -80,14 +93,21 @@ if (keepAliveModules.length !== 1 || keepAliveModules[0] !== 'order-entry') {
 }
 
 const registeredModuleKeys = new Set();
-for (const { projectPath } of routedViewEntries) {
+for (const { projectPath, planned } of routedViewEntries) {
   const viewSource = read(projectPath);
   const source = collectLocalSources(projectPath).join('\n');
-  const viewIssues = validateViewSource(source, viewSource);
+  const viewIssues = validateViewSource(source, viewSource, !planned);
   for (const issue of viewIssues) issues.push(`${projectPath}: ${issue}`);
 
+  if (planned) {
+    if (/useV2ModuleQuery|<V2AsyncRegion\b/.test(source)) {
+      issues.push(`${projectPath}: 规划占位页不得伪造远程查询或加载状态`);
+    }
+    continue;
+  }
+
   const moduleKey = source.match(/moduleKey:\s*'([a-z0-9-]+)'/)?.[1];
-  if (!moduleKey || !moduleKeys.includes(moduleKey)) {
+  if (!moduleKey || !readyModuleKeys.includes(moduleKey)) {
     issues.push(`${projectPath}: 统一模块查询入口缺少有效 moduleKey`);
   } else if (registeredModuleKeys.has(moduleKey)) {
     issues.push(`${projectPath}: moduleKey ${moduleKey} 被重复注册`);
@@ -99,7 +119,7 @@ for (const { projectPath } of routedViewEntries) {
   }
 }
 
-for (const key of moduleKeys) {
+for (const key of readyModuleKeys) {
   if (!registeredModuleKeys.has(key)) {
     issues.push(`${featuresPath}: 模块 ${key} 没有使用统一刷新入口的路由页面`);
   }
@@ -162,6 +182,7 @@ if (issues.length) {
       ok: true,
       routedViews: uniqueRoutedViews.length,
       moduleKeys: moduleKeys.length,
+      plannedPlaceholders: moduleKeys.length - readyModuleKeys.length,
       freshnessPolicies: [...allowedFreshnessPolicies],
       refreshFeedbackDelayMs: 120,
       asyncRegions: loadingVisualSummary.regionCount,
@@ -235,14 +256,16 @@ function validateLoadingVisualArchitecture() {
   return { regionCount, usedSkeletonKinds };
 }
 
-function validateViewSource(source, pageSource = source) {
+function validateViewSource(source, pageSource = source, requiresRemoteData = true) {
   const viewIssues = [];
-  const required = [['V2AsyncRegion', '没有使用 V2AsyncRegion']];
-  for (const [snippet, message] of required) {
-    if (!source.includes(snippet)) viewIssues.push(message);
-  }
-  if (!source.includes('useV2ModuleQuery')) {
-    viewIssues.push('没有使用真实数据模块查询入口');
+  if (requiresRemoteData) {
+    const required = [['V2AsyncRegion', '没有使用 V2AsyncRegion']];
+    for (const [snippet, message] of required) {
+      if (!source.includes(snippet)) viewIssues.push(message);
+    }
+    if (!source.includes('useV2ModuleQuery')) {
+      viewIssues.push('没有使用真实数据模块查询入口');
+    }
   }
   const forbidden = [
     [/\bv-loading\s*=/, '禁止使用 v-loading'],

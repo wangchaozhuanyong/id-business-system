@@ -2,7 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from '@nestjs/common';
 import { Prisma as PrismaNamespace } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
@@ -12,74 +13,36 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2ExchangeRateQueryService } from '../exchange-rates/public-api';
-import { toV2DecimalString } from '../decimal-policy';
+import { roundV2Decimal } from '../decimal-policy';
+import {
+  IdBusinessV2FinanceFxService,
+  IdBusinessV2FinancePostingService,
+  normalizeFinanceCurrency,
+  normalizeFinanceDate,
+  normalizeFinanceMoney,
+  normalizeFinanceRate,
+  normalizeOptionalFinanceUuid
+} from '../finance/public-api';
+import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
 import type { ConfirmIdBusinessV2GiftCardCreditDto } from './dto/confirm-id-business-v2-gift-card-credit.dto';
-
-interface LockedAccountRow {
-  id: string;
-  appleIdMasked: string;
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  soldByOrderId: string | null;
-  lossReportedAt: Date | null;
-}
-
-export interface CreditResponse {
-  giftCard: {
-    id: string;
-    codeMasked: string;
-    codeTail: string;
-    faceValue: string;
-    exchangeRate: string;
-    exchangeRateSource: string;
-    exchangeRateSnapshotId: string | null;
-    exchangeRatePrefilledValue: string | null;
-    exchangeRateWasOverridden: boolean;
-    costAmount: string;
-    status: string;
-    supplierOptionId: string | null;
-    sourceAttachmentId: string | null;
-    createdAt: Date;
-  };
-  ledgerEntry: {
-    id: string;
-    balanceBefore: string;
-    balanceAfter: string;
-    costBefore: string;
-    costAfter: string;
-    averageCostBefore: string;
-    averageCostAfter: string;
-    createdAt: Date;
-  };
-  account: {
-    id: string;
-    appleIdMasked: string;
-    currentBalance: string;
-    balanceCostAmount: string;
-  };
-  idempotentReplay: boolean;
-}
-
-export interface CreditAuditContext {
-  source: 'renewal_workbench';
-  activationId: string;
-  orderId: string;
-  orderNo: string;
-}
-
-export interface CreditTransactionHookContext {
-  tx: Prisma.TransactionClient;
-  accountId: string;
-  giftCardId: string;
-  ledgerEntryId: string;
-  idempotentReplay: boolean;
-}
-
-export type CreditTransactionHook = (context: CreditTransactionHookContext) => Promise<void>;
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CODE_PATTERN = /^[A-Z0-9]{10,64}$/;
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
+import type {
+  CreditAuditContext,
+  CreditResponse,
+  CreditTransactionHook,
+  LockedGiftCardCreditAccountRow
+} from './id-business-v2-gift-card-credit.types';
+import {
+  assertGiftCardCreditReplayMatches,
+  buildGiftCardCreditIdempotencyKey,
+  giftCardCodeTail,
+  maskGiftCardCode,
+  normalizeGiftCardCode,
+  normalizeGiftCardCreditIdempotencyKey,
+  normalizeGiftCardCreditRemark,
+  normalizeGiftCardCreditUuid,
+  toGiftCardCreditResponse,
+  writeGiftCardCreditAuditLogs
+} from './id-business-v2-gift-card-credit-support';
 
 @Injectable()
 export class IdBusinessV2GiftCardCreditService {
@@ -87,7 +50,10 @@ export class IdBusinessV2GiftCardCreditService {
     private readonly prisma: PrismaService,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
-    private readonly exchangeRateQueryService: IdBusinessV2ExchangeRateQueryService
+    private readonly exchangeRateQueryService: IdBusinessV2ExchangeRateQueryService,
+    private readonly supplierFundsService: IdBusinessV2TopupSupplierGiftCardFundsService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
+    @Optional() private readonly financeFxService?: IdBusinessV2FinanceFxService
   ) {}
 
   async confirmCredit(
@@ -97,21 +63,110 @@ export class IdBusinessV2GiftCardCreditService {
     auditContext?: CreditAuditContext,
     transactionHook?: CreditTransactionHook
   ) {
-    const accountId = this.normalizeUuid(accountIdValue, '目标 ID');
-    const code = this.normalizeCode(dto.code);
+    const accountId = normalizeGiftCardCreditUuid(accountIdValue, '目标 ID');
+    const code = normalizeGiftCardCode(dto.code);
     const codeHash = this.fieldEncryptionService.hash(code);
     const codeEncrypted = this.fieldEncryptionService.encrypt(code);
     if (!codeHash || !codeEncrypted) {
       throw new BadRequestException('礼品卡号不能为空');
     }
 
-    const supplierOptionId = this.normalizeUuid(dto.supplierOptionId, '加卡供应商');
-    const idempotencyKey = this.buildIdempotencyKey(
+    const supplierOptionId = normalizeGiftCardCreditUuid(dto.supplierOptionId, '加卡供应商');
+    const idempotencyKey = buildGiftCardCreditIdempotencyKey(
       accountId,
-      this.normalizeIdempotencyKey(dto.idempotencyKey)
+      normalizeGiftCardCreditIdempotencyKey(dto.idempotencyKey)
     );
-    const remark = this.normalizeRemark(dto.remark);
-    const exchangeRateAudit = await this.resolveExchangeRateAudit(dto);
+    const remark = normalizeGiftCardCreditRemark(dto.remark);
+    const faceValue = this.balanceCalculator.calculateGiftCardCredit(
+      { currentBalance: 0, balanceCostAmount: 0 },
+      dto.faceValue,
+      1
+    ).balanceAmount;
+    const hasPurchaseEvidence =
+      dto.purchaseOriginalAmount !== undefined ||
+      dto.purchaseCurrency !== undefined ||
+      dto.purchaseFxRateToCny !== undefined ||
+      dto.purchaseFxSnapshotId !== undefined ||
+      dto.purchaseFinanceAccountId !== undefined ||
+      dto.purchaseSupplierAccountId !== undefined ||
+      dto.paidAt !== undefined;
+    const purchaseCurrency = normalizeFinanceCurrency(
+      dto.purchaseCurrency ?? 'CNY',
+      '礼品卡付款币种'
+    );
+    const paidAt = dto.paidAt ? normalizeFinanceDate(dto.paidAt, '礼品卡付款时间') : new Date();
+    const purchaseFinanceAccountId = normalizeOptionalFinanceUuid(
+      dto.purchaseFinanceAccountId,
+      '礼品卡付款账户'
+    );
+    const purchaseSupplierAccountId = normalizeOptionalFinanceUuid(
+      dto.purchaseSupplierAccountId,
+      '礼品卡供应商钱包'
+    );
+    if (purchaseFinanceAccountId && purchaseSupplierAccountId) {
+      throw new BadRequestException('礼品卡付款账户和供应商钱包只能选择一种');
+    }
+    if (hasPurchaseEvidence && !purchaseFinanceAccountId && !purchaseSupplierAccountId) {
+      throw new BadRequestException('请选择礼品卡实际付款账户或供应商钱包');
+    }
+
+    let purchaseOriginalAmount: PrismaNamespace.Decimal;
+    let purchaseFxRateToCny: PrismaNamespace.Decimal;
+    let purchaseFxSnapshotId: string | null;
+    let purchaseCost: PrismaNamespace.Decimal;
+    let effectiveCardRate: PrismaNamespace.Decimal;
+    let exchangeRateAudit: Awaited<ReturnType<typeof this.resolveExchangeRateAudit>>;
+
+    if (hasPurchaseEvidence) {
+      if (dto.purchaseOriginalAmount === undefined) {
+        throw new BadRequestException('礼品卡原币付款金额不能为空');
+      }
+      if (!this.financeFxService) {
+        throw new BadRequestException('财务汇率服务不可用，暂时不能记录多币种礼品卡');
+      }
+      purchaseOriginalAmount = normalizeFinanceMoney(
+        dto.purchaseOriginalAmount,
+        '礼品卡原币付款金额'
+      );
+      const purchaseRate = await this.financeFxService.resolve({
+        currency: purchaseCurrency,
+        occurredAt: paidAt,
+        fxRateSnapshotId: dto.purchaseFxSnapshotId,
+        manualRate:
+          dto.purchaseFxRateToCny === undefined
+            ? null
+            : normalizeFinanceRate(dto.purchaseFxRateToCny, purchaseCurrency),
+        manualReason: dto.purchaseManualRateReason,
+        operator
+      });
+      purchaseFxRateToCny = purchaseRate.rateToCny;
+      purchaseFxSnapshotId = purchaseRate.id;
+      purchaseCost = roundV2Decimal(purchaseOriginalAmount.mul(purchaseFxRateToCny));
+      effectiveCardRate = purchaseCost
+        .div(faceValue)
+        .toDecimalPlaces(8, PrismaNamespace.Decimal.ROUND_HALF_UP);
+      exchangeRateAudit = {
+        exchangeRateSource: 'system_derived_purchase_cost',
+        exchangeRateSnapshotId: null,
+        exchangeRatePrefilledValue: null,
+        exchangeRateWasOverridden: false
+      };
+    } else {
+      if (dto.exchangeRate === undefined) {
+        throw new BadRequestException('卡片汇率不能为空');
+      }
+      const legacySnapshot = this.balanceCalculator.calculateGiftCardCredit(
+        { currentBalance: 0, balanceCostAmount: 0 },
+        faceValue,
+        dto.exchangeRate
+      );
+      purchaseOriginalAmount = legacySnapshot.costAmount;
+      purchaseFxRateToCny = new PrismaNamespace.Decimal(1);
+      purchaseFxSnapshotId = null;
+      purchaseCost = legacySnapshot.costAmount;
+      effectiveCardRate = legacySnapshot.exchangeRate;
+      exchangeRateAudit = await this.resolveExchangeRateAudit(dto);
+    }
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
@@ -127,15 +182,44 @@ export class IdBusinessV2GiftCardCreditService {
           if (account.lossReportedAt) {
             throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
           }
-          this.assertReplayMatches(existingEntry.giftCard, {
+          assertGiftCardCreditReplayMatches(this.balanceCalculator, existingEntry.giftCard, {
             accountId,
             codeHash,
-            faceValue: dto.faceValue,
-            exchangeRate: dto.exchangeRate,
+            faceValue,
+            exchangeRate: effectiveCardRate,
             exchangeRateAudit,
             supplierOptionId,
             remark
           });
+          const storedPurchaseOriginalAmount =
+            existingEntry.giftCard.purchaseOriginalAmount ?? existingEntry.giftCard.costAmount;
+          const storedPurchaseCurrency = existingEntry.giftCard.purchaseCurrency ?? 'CNY';
+          const storedPurchaseFxRate =
+            existingEntry.giftCard.purchaseFxRateToCny ?? new PrismaNamespace.Decimal(1);
+          const storedFinanceAccountId = existingEntry.giftCard.purchaseFinanceAccountId ?? null;
+          const storedSupplierAccountId = existingEntry.giftCard.purchaseSupplierAccountId ?? null;
+          if (
+            storedPurchaseCurrency !== purchaseCurrency ||
+            !storedPurchaseOriginalAmount.equals(purchaseOriginalAmount) ||
+            !storedPurchaseFxRate.equals(purchaseFxRateToCny) ||
+            storedFinanceAccountId !== purchaseFinanceAccountId ||
+            storedSupplierAccountId !== purchaseSupplierAccountId
+          ) {
+            throw new ConflictException('幂等键已用于不同的礼品卡付款证据');
+          }
+          const supplierFunding =
+            storedSupplierAccountId || !storedFinanceAccountId
+              ? await this.supplierFundsService.debitGiftCard(tx, {
+                  supplierOptionId,
+                  supplierAccountId: storedSupplierAccountId ?? undefined,
+                  giftCardId: existingEntry.giftCard.id,
+                  currency: storedPurchaseCurrency,
+                  amountOriginal: storedPurchaseOriginalAmount,
+                  amountCny: existingEntry.giftCard.costAmount,
+                  operator
+                })
+              : null;
+          await this.postPurchaseJournal(tx, existingEntry.giftCard, supplierFunding, operator);
           await transactionHook?.({
             tx,
             accountId,
@@ -143,7 +227,13 @@ export class IdBusinessV2GiftCardCreditService {
             ledgerEntryId: existingEntry.id,
             idempotentReplay: true
           });
-          return this.toResponse(account, existingEntry.giftCard, existingEntry, true);
+          return toGiftCardCreditResponse(
+            account,
+            existingEntry.giftCard,
+            existingEntry,
+            supplierFunding,
+            true
+          );
         }
         if (account.lossReportedAt) {
           throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
@@ -167,6 +257,18 @@ export class IdBusinessV2GiftCardCreditService {
         if (!supplier) {
           throw new BadRequestException('加卡供应商不存在或已停用');
         }
+        if (purchaseFinanceAccountId) {
+          const financeAccount = await tx.idBusinessV2FinanceAccount.findUnique({
+            where: { id: purchaseFinanceAccountId }
+          });
+          if (
+            !financeAccount ||
+            financeAccount.status !== 'active' ||
+            financeAccount.currency !== purchaseCurrency
+          ) {
+            throw new BadRequestException('礼品卡付款账户不存在、已停用或币种不一致');
+          }
+        }
 
         const duplicateGiftCard = await tx.idBusinessV2GiftCard.findUnique({
           where: { codeHash },
@@ -181,9 +283,12 @@ export class IdBusinessV2GiftCardCreditService {
             currentBalance: account.currentBalance,
             balanceCostAmount: account.balanceCostAmount
           },
-          dto.faceValue,
-          dto.exchangeRate
+          faceValue,
+          effectiveCardRate
         );
+        if (!snapshot.costAmount.equals(purchaseCost)) {
+          throw new BadRequestException('礼品卡付款成本无法按单位成本精确分摊，请调整金额');
+        }
         const giftCardId = randomUUID();
 
         const giftCard = await tx.idBusinessV2GiftCard.create({
@@ -191,11 +296,15 @@ export class IdBusinessV2GiftCardCreditService {
             id: giftCardId,
             accountId,
             supplierOptionId: supplier.id,
+            countryOptionId: account.countryOptionId,
+            countryNameSnapshot: account.countryName,
+            currencyCodeSnapshot: account.currencyCode,
+            supplierNameSnapshot: supplier.name,
             sourceAttachmentId: null,
             codeEncrypted,
             codeHash,
-            codeMasked: this.maskCode(code),
-            codeTail: this.getCodeTail(code),
+            codeMasked: maskGiftCardCode(code),
+            codeTail: giftCardCodeTail(code),
             faceValue: snapshot.balanceAmount,
             exchangeRate: snapshot.exchangeRate,
             exchangeRateSource: exchangeRateAudit.exchangeRateSource,
@@ -203,6 +312,13 @@ export class IdBusinessV2GiftCardCreditService {
             exchangeRatePrefilledValue: exchangeRateAudit.exchangeRatePrefilledValue,
             exchangeRateWasOverridden: exchangeRateAudit.exchangeRateWasOverridden,
             costAmount: snapshot.costAmount,
+            purchaseOriginalAmount,
+            purchaseCurrency,
+            purchaseFxRateToCny,
+            purchaseFxSnapshotId,
+            purchaseFinanceAccountId,
+            purchaseSupplierAccountId,
+            paidAt,
             status: 'credited',
             remark,
             createdByUserId: operator?.id,
@@ -246,8 +362,40 @@ export class IdBusinessV2GiftCardCreditService {
           }
         });
 
-        const result = this.toResponse(updatedAccount, giftCard, ledgerEntry, false);
-        await this.writeAuditLogs(tx, result, operator, auditContext);
+        const supplierFunding =
+          purchaseSupplierAccountId || !purchaseFinanceAccountId
+            ? await this.supplierFundsService.debitGiftCard(tx, {
+                supplierOptionId: supplier.id,
+                supplierAccountId: purchaseSupplierAccountId ?? undefined,
+                giftCardId: giftCard.id,
+                currency: purchaseCurrency,
+                amountOriginal: purchaseOriginalAmount,
+                amountCny: snapshot.costAmount,
+                operator
+              })
+            : null;
+        if (supplierFunding && !purchaseSupplierAccountId) {
+          await tx.idBusinessV2GiftCard.update({
+            where: { id: giftCard.id },
+            data: { purchaseSupplierAccountId: supplierFunding.supplierAccountId }
+          });
+        }
+        const journalGiftCard =
+          supplierFunding && !purchaseSupplierAccountId
+            ? {
+                ...giftCard,
+                purchaseSupplierAccountId: supplierFunding.supplierAccountId
+              }
+            : giftCard;
+        await this.postPurchaseJournal(tx, journalGiftCard, supplierFunding, operator);
+        const result = toGiftCardCreditResponse(
+          updatedAccount,
+          journalGiftCard,
+          ledgerEntry,
+          supplierFunding,
+          false
+        );
+        await writeGiftCardCreditAuditLogs(tx, result, operator, auditContext);
         await transactionHook?.({
           tx,
           accountId,
@@ -270,211 +418,89 @@ export class IdBusinessV2GiftCardCreditService {
     }
   }
 
+  private postPurchaseJournal(
+    tx: Prisma.TransactionClient,
+    giftCard: {
+      id: string;
+      codeMasked: string;
+      costAmount: PrismaNamespace.Decimal;
+      purchaseOriginalAmount?: PrismaNamespace.Decimal;
+      purchaseCurrency?: 'CNY' | 'MYR' | 'USDT';
+      purchaseFxRateToCny?: PrismaNamespace.Decimal;
+      purchaseFxSnapshotId?: string | null;
+      purchaseFinanceAccountId?: string | null;
+      purchaseSupplierAccountId?: string | null;
+      paidAt?: Date | null;
+    },
+    supplierFunding: CreditResponse['supplierFunding'],
+    operator?: AuthenticatedUser
+  ) {
+    const purchaseOriginalAmount = giftCard.purchaseOriginalAmount ?? giftCard.costAmount;
+    const purchaseCurrency = giftCard.purchaseCurrency ?? 'CNY';
+    const purchaseFxRateToCny = giftCard.purchaseFxRateToCny ?? new PrismaNamespace.Decimal(1);
+    return this.financePostingService.post(tx, {
+      journalType: 'gift_card_purchase',
+      sourceType: 'gift_card',
+      sourceId: giftCard.id,
+      sourceReference: giftCard.codeMasked,
+      occurredAt: giftCard.paidAt ?? new Date(),
+      summary: `礼品卡采购入库：${giftCard.codeMasked}`,
+      idempotencyKey: `auto:gift_card_purchase:${giftCard.id}`,
+      operator,
+      lines: [
+        {
+          accountCode: 'gift_card_inventory',
+          direction: 'debit',
+          currency: purchaseCurrency,
+          amountOriginal: purchaseOriginalAmount,
+          fxRateToCny: purchaseFxRateToCny,
+          amountCny: giftCard.costAmount,
+          fxRateSnapshotId: giftCard.purchaseFxSnapshotId,
+          memo: '礼品卡余额资产'
+        },
+        {
+          accountCode: supplierFunding ? 'supplier_prepayment' : 'cash',
+          direction: 'credit',
+          currency: purchaseCurrency,
+          amountOriginal: purchaseOriginalAmount,
+          fxRateToCny: purchaseFxRateToCny,
+          amountCny: giftCard.costAmount,
+          financeAccountId: giftCard.purchaseFinanceAccountId,
+          supplierAccountId: supplierFunding?.supplierAccountId,
+          fxRateSnapshotId: giftCard.purchaseFxSnapshotId,
+          memo: supplierFunding ? '扣减卡商预付款' : '礼品卡采购付款'
+        }
+      ]
+    });
+  }
+
   private async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
-    const accounts = await tx.$queryRaw<LockedAccountRow[]>(PrismaNamespace.sql`
+    const accounts = await tx.$queryRaw<LockedGiftCardCreditAccountRow[]>(PrismaNamespace.sql`
       SELECT
-        "id",
-        "apple_id_masked" AS "appleIdMasked",
-        "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount",
-        "sold_by_order_id" AS "soldByOrderId",
-        "loss_reported_at" AS "lossReportedAt"
-      FROM "id_business_v2_accounts"
+        account."id",
+        account."apple_id_masked" AS "appleIdMasked",
+        account."current_balance" AS "currentBalance",
+        account."balance_cost_amount" AS "balanceCostAmount",
+        account."sold_by_order_id" AS "soldByOrderId",
+        account."loss_reported_at" AS "lossReportedAt",
+        account."country_option_id" AS "countryOptionId",
+        country_option."name" AS "countryName",
+        country_option."currency_code" AS "currencyCode"
+      FROM "id_business_v2_accounts" account
+      INNER JOIN "id_business_v2_options" country_option
+        ON country_option."id" = account."country_option_id"
       WHERE
-        "id" = CAST(${accountId} AS UUID)
-        AND "deleted_at" IS NULL
-        AND "record_status" = 'active'
-        AND "loss_reported_at" IS NULL
-      FOR UPDATE
+        account."id" = CAST(${accountId} AS UUID)
+        AND account."deleted_at" IS NULL
+        AND account."record_status" = 'active'
+        AND account."loss_reported_at" IS NULL
+      FOR UPDATE OF account
     `);
     const account = accounts[0];
     if (!account) {
       throw new NotFoundException('目标 ID 不存在或已停用');
     }
     return account;
-  }
-
-  private assertReplayMatches(
-    giftCard: {
-      accountId: string;
-      codeHash: string;
-      faceValue: PrismaNamespace.Decimal;
-      exchangeRate: PrismaNamespace.Decimal;
-      exchangeRateSource: string;
-      exchangeRateSnapshotId: string | null;
-      exchangeRatePrefilledValue: PrismaNamespace.Decimal | null;
-      exchangeRateWasOverridden: boolean;
-      supplierOptionId: string | null;
-      remark: string | null;
-    },
-    input: {
-      accountId: string;
-      codeHash: string;
-      faceValue: PrismaNamespace.Decimal.Value;
-      exchangeRate: PrismaNamespace.Decimal.Value;
-      exchangeRateAudit: {
-        exchangeRateSource: string;
-        exchangeRateSnapshotId: string | null;
-        exchangeRatePrefilledValue: PrismaNamespace.Decimal | null;
-        exchangeRateWasOverridden: boolean;
-      };
-      supplierOptionId: string;
-      remark: string | null;
-    }
-  ) {
-    const snapshot = this.balanceCalculator.calculateGiftCardCredit(
-      { currentBalance: '0', balanceCostAmount: '0' },
-      input.faceValue,
-      input.exchangeRate
-    );
-    if (
-      giftCard.accountId !== input.accountId ||
-      giftCard.codeHash !== input.codeHash ||
-      !giftCard.faceValue.equals(snapshot.balanceAmount) ||
-      !giftCard.exchangeRate.equals(snapshot.exchangeRate) ||
-      giftCard.exchangeRateSource !== input.exchangeRateAudit.exchangeRateSource ||
-      giftCard.exchangeRateSnapshotId !== input.exchangeRateAudit.exchangeRateSnapshotId ||
-      !this.nullableDecimalEquals(
-        giftCard.exchangeRatePrefilledValue,
-        input.exchangeRateAudit.exchangeRatePrefilledValue
-      ) ||
-      giftCard.exchangeRateWasOverridden !== input.exchangeRateAudit.exchangeRateWasOverridden ||
-      giftCard.supplierOptionId !== input.supplierOptionId ||
-      giftCard.remark !== input.remark
-    ) {
-      throw new ConflictException('幂等键已用于其他入账内容，请刷新后重新提交');
-    }
-  }
-
-  private toResponse(
-    account: {
-      id: string;
-      appleIdMasked: string;
-      currentBalance: PrismaNamespace.Decimal;
-      balanceCostAmount: PrismaNamespace.Decimal;
-    },
-    giftCard: {
-      id: string;
-      supplierOptionId: string | null;
-      sourceAttachmentId: string | null;
-      codeMasked: string;
-      codeTail: string;
-      faceValue: PrismaNamespace.Decimal;
-      exchangeRate: PrismaNamespace.Decimal;
-      exchangeRateSource: string;
-      exchangeRateSnapshotId: string | null;
-      exchangeRatePrefilledValue: PrismaNamespace.Decimal | null;
-      exchangeRateWasOverridden: boolean;
-      costAmount: PrismaNamespace.Decimal;
-      status: string;
-      createdAt: Date;
-    },
-    ledgerEntry: {
-      id: string;
-      balanceBefore: PrismaNamespace.Decimal;
-      balanceAfter: PrismaNamespace.Decimal;
-      costBefore: PrismaNamespace.Decimal;
-      costAfter: PrismaNamespace.Decimal;
-      averageCostBefore: PrismaNamespace.Decimal;
-      averageCostAfter: PrismaNamespace.Decimal;
-      createdAt: Date;
-    },
-    idempotentReplay: boolean
-  ): CreditResponse {
-    return {
-      giftCard: {
-        id: giftCard.id,
-        codeMasked: giftCard.codeMasked,
-        codeTail: giftCard.codeTail,
-        faceValue: toV2DecimalString(giftCard.faceValue),
-        exchangeRate: toV2DecimalString(giftCard.exchangeRate),
-        exchangeRateSource: giftCard.exchangeRateSource,
-        exchangeRateSnapshotId: giftCard.exchangeRateSnapshotId,
-        exchangeRatePrefilledValue:
-          giftCard.exchangeRatePrefilledValue == null
-            ? null
-            : toV2DecimalString(giftCard.exchangeRatePrefilledValue),
-        exchangeRateWasOverridden: giftCard.exchangeRateWasOverridden,
-        costAmount: toV2DecimalString(giftCard.costAmount),
-        status: giftCard.status,
-        supplierOptionId: giftCard.supplierOptionId,
-        sourceAttachmentId: giftCard.sourceAttachmentId,
-        createdAt: giftCard.createdAt
-      },
-      ledgerEntry: {
-        id: ledgerEntry.id,
-        balanceBefore: toV2DecimalString(ledgerEntry.balanceBefore),
-        balanceAfter: toV2DecimalString(ledgerEntry.balanceAfter),
-        costBefore: toV2DecimalString(ledgerEntry.costBefore),
-        costAfter: toV2DecimalString(ledgerEntry.costAfter),
-        averageCostBefore: toV2DecimalString(ledgerEntry.averageCostBefore),
-        averageCostAfter: toV2DecimalString(ledgerEntry.averageCostAfter),
-        createdAt: ledgerEntry.createdAt
-      },
-      account: {
-        id: account.id,
-        appleIdMasked: account.appleIdMasked,
-        currentBalance: toV2DecimalString(account.currentBalance),
-        balanceCostAmount: toV2DecimalString(account.balanceCostAmount)
-      },
-      idempotentReplay
-    };
-  }
-
-  private async writeAuditLogs(
-    tx: Prisma.TransactionClient,
-    result: CreditResponse,
-    operator?: AuthenticatedUser,
-    auditContext?: CreditAuditContext
-  ) {
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: 'id_business_v2.gift_card.credit',
-        objectType: 'id_business_v2_gift_card',
-        objectId: result.giftCard.id,
-        afterData: {
-          accountId: result.account.id,
-          codeMasked: result.giftCard.codeMasked,
-          codeTail: result.giftCard.codeTail,
-          faceValue: result.giftCard.faceValue,
-          exchangeRate: result.giftCard.exchangeRate,
-          exchangeRateSource: result.giftCard.exchangeRateSource,
-          exchangeRateSnapshotId: result.giftCard.exchangeRateSnapshotId,
-          exchangeRatePrefilledValue: result.giftCard.exchangeRatePrefilledValue,
-          exchangeRateWasOverridden: result.giftCard.exchangeRateWasOverridden,
-          costAmount: result.giftCard.costAmount,
-          supplierOptionId: result.giftCard.supplierOptionId,
-          sourceAttachmentId: result.giftCard.sourceAttachmentId,
-          balanceBefore: result.ledgerEntry.balanceBefore,
-          balanceAfter: result.ledgerEntry.balanceAfter,
-          costBefore: result.ledgerEntry.costBefore,
-          costAfter: result.ledgerEntry.costAfter,
-          ...(auditContext
-            ? {
-                sourceContext: {
-                  source: auditContext.source,
-                  activationId: auditContext.activationId,
-                  orderId: auditContext.orderId,
-                  orderNo: auditContext.orderNo
-                }
-              }
-            : {})
-        },
-        remark: auditContext
-          ? `V2 续费工作台礼品卡确认入账：${result.giftCard.codeMasked}`
-          : `V2 礼品卡确认入账：${result.giftCard.codeMasked}`
-      }
-    });
-  }
-
-  private normalizeUuid(value: unknown, label: string) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!UUID_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return normalized;
   }
 
   private async resolveExchangeRateAudit(dto: ConfirmIdBusinessV2GiftCardCreditDto) {
@@ -500,54 +526,5 @@ export class IdBusinessV2GiftCardCreditService {
       exchangeRatePrefilledValue: null,
       exchangeRateWasOverridden: false
     };
-  }
-
-  private nullableDecimalEquals(
-    left: PrismaNamespace.Decimal | null,
-    right: PrismaNamespace.Decimal | null
-  ) {
-    if (left === null || right === null) return left === right;
-    return left.equals(right);
-  }
-
-  private normalizeCode(value: unknown) {
-    const normalized =
-      typeof value === 'string' ? value.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
-    if (!CODE_PATTERN.test(normalized) || !/[A-Z]/.test(normalized) || !/\d/.test(normalized)) {
-      throw new BadRequestException('礼品卡号必须是 10 至 64 位且同时包含字母和数字');
-    }
-    return normalized;
-  }
-
-  private normalizeIdempotencyKey(value: unknown) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!IDEMPOTENCY_KEY_PATTERN.test(normalized)) {
-      throw new BadRequestException('幂等键必须是 8 至 100 位字母、数字或 ._:-');
-    }
-    return normalized;
-  }
-
-  private buildIdempotencyKey(accountId: string, value: string) {
-    return `gift_card_credit:${accountId}:${value}`;
-  }
-
-  private normalizeRemark(value: unknown) {
-    if (value === undefined || value === null) return null;
-    if (typeof value !== 'string') {
-      throw new BadRequestException('备注格式无效');
-    }
-    const normalized = value.trim();
-    if (normalized.length > 2000) {
-      throw new BadRequestException('备注不能超过 2000 个字符');
-    }
-    return normalized || null;
-  }
-
-  private maskCode(code: string) {
-    return `${code.slice(0, 4)}****${this.getCodeTail(code)}`;
-  }
-
-  private getCodeTail(code: string) {
-    return code.slice(-4);
   }
 }

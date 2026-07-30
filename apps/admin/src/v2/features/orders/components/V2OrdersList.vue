@@ -27,31 +27,50 @@
           </div>
         </template>
 
-        <el-table-column prop="orderNo" label="订单" min-width="182" fixed="left" sortable="custom">
+        <V2TableColumn
+          kind="identifier"
+          width-preset="identifier"
+          prop="orderNo"
+          label="订单"
+          fixed="left"
+          sortable="custom"
+        >
           <template #default="{ row }">
             <strong class="v2-order-number v2-table-cell">{{ row.orderNo }}</strong>
           </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="创建时间" min-width="165" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="date"
+          width-preset="dateTime"
+          prop="createdAt"
+          label="创建时间"
+          sortable="custom"
+        >
           <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="客户" min-width="140">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="客户" min-width="140">
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.customer.name }}</strong>
           </template>
-        </el-table-column>
-        <el-table-column label="业务" min-width="150">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="业务" min-width="150">
           <template #default="{ row }">{{ row.service.name }}</template>
-        </el-table-column>
-        <el-table-column label="使用 ID" min-width="190" show-overflow-tooltip>
+        </V2TableColumn>
+        <V2TableColumn
+          kind="identifier"
+          width-preset="identifier"
+          label="使用 ID"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '-' }}</strong>
+            <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
           </template>
-        </el-table-column>
-        <el-table-column
+        </V2TableColumn>
+        <V2TableColumn
+          kind="status"
+          width-preset="standard"
           prop="accountDisposition"
           label="ID 处理状态"
-          min-width="118"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -59,43 +78,79 @@
               {{ page.accountDispositionMeta(row.accountDisposition).label }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column
+        </V2TableColumn>
+        <V2TableColumn
+          kind="numeric"
+          width-preset="standard"
           prop="accountCostAmount"
           label="本单 ID 成本"
-          min-width="128"
           sortable="custom"
         >
           <template #default="{ row }">
             ¥{{ page.formatDecimal(row.appliedAccountCostAmount) }}
           </template>
-        </el-table-column>
-        <el-table-column label="客户网站账号" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.maskedWebsiteAccount || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="receivedAmount" label="实收金额" min-width="120" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="identifier"
+          width-preset="wide"
+          label="客户网站账号"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+        </V2TableColumn>
+        <V2TableColumn
+          kind="numeric"
+          width-preset="standard"
+          prop="receivedAmount"
+          label="实收金额"
+          sortable="custom"
+        >
           <template #default="{ row }">¥{{ page.formatDecimal(row.receivedAmount) }}</template>
-        </el-table-column>
-        <el-table-column prop="profitAmount" label="利润" min-width="115" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="numeric"
+          width-preset="standard"
+          prop="profitAmount"
+          label="利润"
+          sortable="custom"
+        >
           <template #default="{ row }">
             <strong :class="page.profitClass(row.profitAmount)">
               ¥{{ page.formatNullableDecimal(row.profitAmount) }}
             </strong>
           </template>
-        </el-table-column>
-        <el-table-column prop="openedAt" label="开通时间" min-width="165" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="date"
+          width-preset="dateTime"
+          prop="openedAt"
+          label="开通时间"
+          sortable="custom"
+        >
           <template #default="{ row }">{{ page.formatDate(row.openedAt) }}</template>
-        </el-table-column>
-        <el-table-column prop="dueAt" label="到期时间" min-width="165" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="date"
+          width-preset="dateTime"
+          prop="dueAt"
+          label="到期时间"
+          sortable="custom"
+        >
           <template #default="{ row }">{{ page.formatDate(row.dueAt) }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="108" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="status"
+          width-preset="compact"
+          prop="status"
+          label="状态"
+          sortable="custom"
+        >
           <template #default="{ row }">
             <el-tag :type="page.statusMeta(row.status).type" effect="plain">
               {{ page.statusMeta(row.status).label }}
             </el-tag>
           </template>
-        </el-table-column>
+        </V2TableColumn>
         <V2TableActionColumn layout="wide">
           <template #default="{ row }">
             <AppButton
@@ -189,7 +244,7 @@
           <dl>
             <div>
               <dt>使用 ID</dt>
-              <dd>{{ item.account?.appleIdMasked || '-' }}</dd>
+              <dd>{{ item.account?.appleIdMasked || '—' }}</dd>
             </div>
             <div>
               <dt>ID 处理状态</dt>
@@ -201,7 +256,7 @@
             </div>
             <div>
               <dt>结算平台</dt>
-              <dd>{{ item.settlementPlatform?.name || '-' }}</dd>
+              <dd>{{ item.settlementPlatform?.name || '—' }}</dd>
             </div>
             <div>
               <dt>实收金额</dt>
@@ -325,6 +380,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

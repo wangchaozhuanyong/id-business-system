@@ -5,6 +5,7 @@ import path from 'node:path';
 const rootDir = process.cwd();
 const failures = [];
 const sourceRoots = ['apps/admin/src', 'apps/api/src/id-business-v2', 'packages/shared/src'];
+const maxExchangeRateDecimalPlaces = 8;
 const forbiddenPatterns = [
   {
     pattern: /toFixed\(\s*(?:[5-9]|\d{2,})\s*\)/g,
@@ -38,6 +39,7 @@ for (const sourceRoot of sourceRoots) {
     const source = readFileSync(path.join(rootDir, relativePath), 'utf8');
     for (const rule of forbiddenPatterns) {
       for (const match of source.matchAll(rule.pattern)) {
+        if (isAllowedExchangeRatePrecision(source, match.index, match[0])) continue;
         const line = source.slice(0, match.index).split('\n').length;
         failures.push(`${relativePath}:${line} ${rule.message}：${match[0]}`);
       }
@@ -46,12 +48,29 @@ for (const sourceRoot of sourceRoots) {
 }
 
 if (failures.length) {
-  console.error(`V2 四位小数标准检查失败（${failures.length} 项）：`);
+  console.error(`V2 金额四位、汇率八位小数标准检查失败（${failures.length} 项）：`);
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
 
-console.log('V2 四位小数标准检查通过。');
+console.log('V2 金额四位、汇率八位小数标准检查通过。');
+
+function isAllowedExchangeRatePrecision(source, matchIndex, matchedText) {
+  const requestedPlaces = Math.max(
+    ...Array.from(matchedText.matchAll(/\d+/g), ([digits]) => Number(digits))
+  );
+  if (!Number.isFinite(requestedPlaces) || requestedPlaces > maxExchangeRateDecimalPlaces) {
+    return false;
+  }
+
+  const context = source.slice(
+    Math.max(0, matchIndex - 240),
+    Math.min(source.length, matchIndex + matchedText.length + 240)
+  );
+  return /exchange.?rate|settlement.?rate|effective.?rate|weightedAverage(?:Settlement)?Rate|RATE_PATTERN|汇率|\bfx\b/i.test(
+    context
+  );
+}
 
 function listSourceFiles(relativeRoot) {
   const absoluteRoot = path.join(rootDir, relativeRoot);

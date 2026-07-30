@@ -91,6 +91,15 @@ export const ID_BUSINESS_V2_OPTION_TYPES: readonly IdBusinessV2OptionTypeDefinit
     supportsCurrency: false,
     requiresCountry: false,
     supportsBusinessAmount: false
+  },
+  {
+    type: 'expense_category',
+    label: '开支分类',
+    parentType: null,
+    supportsFees: false,
+    supportsCurrency: false,
+    requiresCountry: false,
+    supportsBusinessAmount: false
   }
 ] as const;
 

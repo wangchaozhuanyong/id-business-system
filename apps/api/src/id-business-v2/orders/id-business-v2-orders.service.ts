@@ -329,6 +329,14 @@ export class IdBusinessV2OrdersService {
       maskedWebsiteAccount: order.websiteAccountMasked,
       hasWebsiteAccount: Boolean(order.websiteAccountEncrypted),
       receivedAmount: toV2DecimalString(order.receivedAmount),
+      receivedOriginalAmount: toV2DecimalString(
+        order.receivedOriginalAmount ?? order.receivedAmount
+      ),
+      receivedCurrency: order.receivedCurrency ?? 'CNY',
+      receivedFxRateToCny: toV2DecimalString(order.receivedFxRateToCny ?? 1),
+      receivedFxSnapshotId: order.receivedFxSnapshotId ?? null,
+      receivedFinanceAccountId: order.receivedFinanceAccountId ?? null,
+      receivedAt: order.receivedAt ?? order.openedAt ?? order.createdAt,
       platformFeeAmount: toV2DecimalString(order.platformFeeAmount),
       accountDisposition: order.accountDisposition,
       accountCostAmount: toV2DecimalString(order.accountCostAmount),

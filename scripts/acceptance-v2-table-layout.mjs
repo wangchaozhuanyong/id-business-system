@@ -261,6 +261,10 @@ async function verifyLayoutFixture(browserInstance) {
       const measurements = await measureActionGroups(page, '[data-layout-fixture]');
       assert.equal(measurements.length, 5, `宽度 ${width}px 未渲染全部五种操作列档位`);
       assertActionGroupsFit(measurements, `布局夹具 ${width}px`);
+      assertSemanticColumnAlignment(
+        await measureSemanticColumnAlignment(page),
+        `语义列夹具 ${width}px`
+      );
       assert.equal(await getDocumentOverflow(page), 0, `布局夹具 ${width}px 出现页面横向溢出`);
     }
     assert.deepEqual(runtimeErrors, [], `布局夹具出现浏览器错误：${runtimeErrors.join('\n')}`);
@@ -405,6 +409,7 @@ async function measureActionGroups(page, containerSelector) {
       const groupRect = group.getBoundingClientRect();
       const cellRect = cell?.getBoundingClientRect();
       const tableRect = table?.getBoundingClientRect();
+      const header = table?.querySelector('th.v2-table-action-column');
       const buttons = [...group.querySelectorAll('button')].filter((button) => {
         const style = getComputedStyle(button);
         const rect = button.getBoundingClientRect();
@@ -431,7 +436,10 @@ async function measureActionGroups(page, containerSelector) {
         groupOutsideCell:
           cellRect == null ||
           groupRect.left < cellRect.left - 1 ||
-          groupRect.right > cellRect.right + 1
+          groupRect.right > cellRect.right + 1,
+        cellTextAlign: cell ? getComputedStyle(cell).textAlign : null,
+        headerTextAlign: header ? getComputedStyle(header).textAlign : null,
+        groupJustifyContent: getComputedStyle(group).justifyContent
       };
     })
   );
@@ -453,6 +461,53 @@ function assertActionGroupsFit(measurements, label) {
       false,
       `${label} 第 ${index + 1} 行操作组超出单元格`
     );
+    assert.equal(measurement.cellTextAlign, 'right', `${label} 第 ${index + 1} 行操作内容未靠右`);
+    assert.equal(measurement.headerTextAlign, 'right', `${label} 第 ${index + 1} 行操作表头未靠右`);
+    assert.equal(
+      measurement.groupJustifyContent,
+      'flex-end',
+      `${label} 第 ${index + 1} 行操作按钮组未贴近右侧`
+    );
+  }
+}
+
+async function measureSemanticColumnAlignment(page) {
+  return page.locator('[data-alignment-fixture]').evaluate((container) =>
+    ['text', 'identifier', 'index', 'numeric', 'date', 'status'].map((kind) => {
+      const header = container.querySelector(`th.v2-table-column--${kind}`);
+      const cell = container.querySelector(`td.v2-table-column--${kind}`);
+      const cellContent = cell?.querySelector('.cell');
+      return {
+        kind,
+        headerTextAlign: header ? getComputedStyle(header).textAlign : null,
+        cellTextAlign: cell ? getComputedStyle(cell).textAlign : null,
+        fontVariantNumeric: cellContent ? getComputedStyle(cellContent).fontVariantNumeric : null
+      };
+    })
+  );
+}
+
+function assertSemanticColumnAlignment(measurements, label) {
+  const expectedAlignments = {
+    text: 'left',
+    identifier: 'left',
+    index: 'center',
+    numeric: 'right',
+    date: 'left',
+    status: 'center'
+  };
+  assert.equal(measurements.length, 6, `${label} 未渲染全部六种语义列`);
+  for (const measurement of measurements) {
+    const expected = expectedAlignments[measurement.kind];
+    assert.equal(measurement.headerTextAlign, expected, `${label} ${measurement.kind} 表头未对齐`);
+    assert.equal(measurement.cellTextAlign, expected, `${label} ${measurement.kind} 内容未对齐`);
+    if (['identifier', 'index', 'numeric', 'date'].includes(measurement.kind)) {
+      assert.match(
+        measurement.fontVariantNumeric ?? '',
+        /tabular-nums/,
+        `${label} ${measurement.kind} 未启用等宽数字`
+      );
+    }
   }
 }
 

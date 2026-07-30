@@ -125,8 +125,9 @@ export const v2Routes: RouteRecordRaw[] = [
           meta: {
             title: module.title,
             group: module.group,
-            status: 'ready',
+            status: module.status ?? 'ready',
             permission: 'permission' in module ? module.permission : undefined,
+            requiredRoles: 'requiredRoles' in module ? module.requiredRoles : undefined,
             v2ModuleKey: module.key,
             keepAlive: 'keepAlive' in module && module.keepAlive === true
           }

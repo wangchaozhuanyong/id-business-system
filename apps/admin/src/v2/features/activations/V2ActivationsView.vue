@@ -79,36 +79,48 @@
             </div>
           </template>
 
-          <el-table-column label="订单" min-width="175" fixed="left">
+          <V2TableColumn kind="identifier" width-preset="identifier" label="订单" fixed="left">
             <template #default="{ row }">
               <strong class="v2-activation-order">{{ row.order.orderNo }}</strong>
             </template>
-          </el-table-column>
-          <el-table-column label="客户" min-width="140">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="客户" min-width="140">
             <template #default="{ row }">{{ row.customer.name }}</template>
-          </el-table-column>
-          <el-table-column label="业务" min-width="155">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="业务" min-width="155">
             <template #default="{ row }">{{ row.service.name }}</template>
-          </el-table-column>
-          <el-table-column label="苹果 ID" min-width="190">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="苹果 ID">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
-          </el-table-column>
-          <el-table-column label="客户网站账号" min-width="175">
-            <template #default="{ row }">{{ row.maskedWebsiteAccount || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="openedAt" label="开通日期" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="wide" label="客户网站账号">
+            <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="openedAt"
+            label="开通日期"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ formatDate(row.openedAt) }}</template>
-          </el-table-column>
-          <el-table-column prop="dueAt" label="到期日期" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="dueAt"
+            label="到期日期"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ formatDate(row.dueAt) }}</template>
-          </el-table-column>
-          <el-table-column prop="status" label="状态" min-width="138">
+          </V2TableColumn>
+          <V2TableColumn kind="status" width-preset="compact" prop="status" label="状态">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status.code)" effect="plain">
                 {{ row.status.label }}
               </el-tag>
             </template>
-          </el-table-column>
+          </V2TableColumn>
           <V2TableActionColumn layout="single">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="openDetail(row)">
@@ -137,7 +149,7 @@
               </div>
               <div>
                 <dt>客户网站账号</dt>
-                <dd>{{ item.maskedWebsiteAccount || '-' }}</dd>
+                <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
               </div>
               <div>
                 <dt>开通日期</dt>
@@ -215,7 +227,7 @@
             </div>
             <div>
               <dt>网站账号</dt>
-              <dd>{{ detail.maskedWebsiteAccount || '-' }}</dd>
+              <dd>{{ detail.maskedWebsiteAccount || '—' }}</dd>
             </div>
             <div>
               <dt>开通日期</dt>
@@ -235,7 +247,7 @@
             </div>
             <div>
               <dt>备注</dt>
-              <dd>{{ detail.remark || '-' }}</dd>
+              <dd>{{ detail.remark || '—' }}</dd>
             </div>
             <div>
               <dt>记录生成时间</dt>
@@ -249,6 +261,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { computed, reactive, ref } from 'vue';
 import { Refresh, Search, View } from '@element-plus/icons-vue';
 import type { TagProps } from 'element-plus';
@@ -425,7 +438,7 @@ function statusType(status: V2ActivationDueStatus): TagProps['type'] {
 }
 
 function formatDate(value: string | null) {
-  if (!value) return '-';
+  if (!value) return '—';
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric',
     month: '2-digit',
@@ -437,7 +450,7 @@ function formatDate(value: string | null) {
 }
 
 function formatNullableDecimal(value: string | null) {
-  if (value === null) return '-';
+  if (value === null) return '—';
   const [integer, fraction = ''] = value.split('.');
   const trimmedFraction = fraction.replace(/0+$/, '');
   return trimmedFraction ? `${integer}.${trimmedFraction}` : integer;

@@ -118,9 +118,7 @@
 }
 
 .v2-topup-records-metadata > section span,
-.v2-topup-records-metadata > section small,
-.v2-topup-records-metadata > label > span,
-.v2-topup-records-reversal label > span {
+.v2-topup-records-metadata > section small {
   color: var(--v2-text-soft);
   font-size: 12px;
 }
@@ -130,11 +128,9 @@
   font-size: 15px;
 }
 
-.v2-topup-records-metadata > label,
-.v2-topup-records-reversal label {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
+.v2-topup-records-metadata .el-form-item,
+.v2-topup-records-reversal .el-form-item {
+  margin-bottom: 0;
 }
 
 .v2-topup-records-metadata .el-select {
@@ -146,9 +142,190 @@
   line-height: 1.7;
 }
 
+.v2-topup-records-code-cell,
+.v2-payment-chain {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 3px;
+}
+
+.v2-payment-chain code {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--v2-text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-supplier-funds-panel,
+.v2-supplier-payments-panel {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-supplier-funds-summary,
+.v2-supplier-payment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.v2-supplier-funds-summary article,
+.v2-supplier-payment-summary article {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  background: var(--v2-surface);
+}
+
+.v2-supplier-funds-summary span,
+.v2-supplier-payment-summary span,
+.v2-supplier-fund-form header span,
+.v2-supplier-fund-form header small,
+.v2-supplier-fund-details header span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-supplier-funds-summary strong,
+.v2-supplier-payment-summary strong,
+.v2-supplier-fund-details header strong {
+  overflow-wrap: anywhere;
+  font-size: 20px;
+}
+
+.v2-supplier-funds-summary .is-danger,
+.v2-supplier-funds-panel .is-negative {
+  color: var(--v2-danger);
+}
+
+.v2-supplier-funds-toolbar,
+.v2-supplier-payments-toolbar {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  background: var(--v2-surface);
+}
+
+.v2-supplier-funds-toolbar {
+  grid-template-columns: minmax(240px, 1fr) minmax(160px, 220px) auto;
+}
+
+.v2-supplier-payments-toolbar {
+  grid-template-columns:
+    minmax(240px, 1fr)
+    minmax(150px, 200px)
+    minmax(130px, 160px)
+    minmax(250px, 310px)
+    auto;
+}
+
+.v2-supplier-funds-toolbar .el-select,
+.v2-supplier-payments-toolbar .el-select,
+.v2-supplier-payments-toolbar .el-date-editor {
+  width: 100%;
+}
+
+.v2-supplier-fund-form,
+.v2-supplier-fund-details,
+.v2-payment-reversal-form,
+.v2-gift-card-reveal {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.v2-supplier-fund-form > header {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--v2-border);
+}
+
+.v2-supplier-fund-form > header strong {
+  font-size: 16px;
+}
+
+.v2-supplier-fund-form .el-form-item,
+.v2-payment-reversal-form .el-form-item,
+.v2-gift-card-reveal .el-form-item {
+  margin-bottom: 12px;
+}
+
+.v2-supplier-fund-details > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.v2-supplier-fund-details > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.v2-supplier-country-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.v2-supplier-country-stats article {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 6px;
+  background: var(--v2-surface-muted);
+}
+
+.v2-supplier-country-stats span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-gift-card-reveal__result {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 6px;
+  background: var(--el-color-primary-light-9);
+}
+
+.v2-gift-card-reveal__result span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-gift-card-reveal__result code {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  font-weight: 700;
+}
+
 @media (max-width: 1320px) {
   .v2-topup-records-toolbar {
     grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) auto auto;
+  }
+
+  .v2-supplier-payments-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  }
+
+  .v2-supplier-payments-toolbar > .el-input,
+  .v2-supplier-payments-toolbar > .el-date-editor {
+    grid-column: span 2;
   }
 }
 
@@ -201,5 +378,36 @@
 
   .v2-topup-records .v2-record-actions {
     width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .v2-supplier-funds-summary,
+  .v2-supplier-payment-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-supplier-funds-toolbar,
+  .v2-supplier-payments-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 11px;
+  }
+
+  .v2-supplier-funds-toolbar > .el-input,
+  .v2-supplier-funds-toolbar .v2-records-toolbar__actions,
+  .v2-supplier-payments-toolbar > .el-input,
+  .v2-supplier-payments-toolbar > .el-date-editor,
+  .v2-supplier-payments-toolbar .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
+  }
+
+  .v2-supplier-country-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .v2-supplier-funds-summary,
+  .v2-supplier-payment-summary {
+    grid-template-columns: 1fr;
   }
 }

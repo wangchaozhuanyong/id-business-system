@@ -129,6 +129,12 @@ export class IdBusinessV2AccountsController {
     );
   }
 
+  @Get('purchase-sources')
+  @RequirePermissions('apple.account.view', 'apple.account.create')
+  listPurchaseSources() {
+    return this.accountsService.listPurchaseSources();
+  }
+
   @Get(':id')
   @RequirePermissions('apple.account.view')
   get(@Param('id') id: string) {

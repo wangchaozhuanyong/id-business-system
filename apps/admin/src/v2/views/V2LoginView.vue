@@ -330,19 +330,19 @@ onMounted(() => {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--v3-green);
+  background: var(--v3-success-solid);
 }
 
 .v2-login-status.is-checking i {
-  background: var(--v3-orange);
+  background: var(--v3-warning-solid);
 }
 
 .v2-login-status.is-unavailable {
-  color: var(--v3-red);
+  color: var(--v3-danger);
 }
 
 .v2-login-status.is-unavailable i {
-  background: var(--v3-red);
+  background: var(--v3-danger-solid);
 }
 
 .v2-login-security {

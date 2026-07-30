@@ -24,6 +24,7 @@ import {
 } from './account-import';
 import { useAccountLossReporting } from './useAccountLossReporting';
 import { useAccountPermissions } from './useAccountPermissions';
+import { useAccountPurchaseSources } from './useAccountPurchaseSources';
 import type {
   CreateV2AccountInput,
   ImportV2AccountRowInput,
@@ -81,6 +82,7 @@ export function useAccountsPage() {
   });
 
   const form = reactive<AccountFormState>(emptyAccountForm());
+  const purchaseSourceState = useAccountPurchaseSources(form, editingItem);
   const revealForm = reactive({
     field: '' as V2AccountSecretField | '',
     reason: '',
@@ -129,22 +131,12 @@ export function useAccountsPage() {
         normalizeDecimalInput(editingItem.value.balanceCostAmount)
     );
   });
-  const formDisabled = computed(
-    () =>
-      (!editingItem.value && !form.appleId.trim()) ||
-      !form.countryOptionId ||
-      !form.statusOptionId ||
-      Boolean(balanceInputError.value) ||
-      Boolean(exchangeRateInputError.value) ||
-      Boolean(balanceCostInputError.value) ||
-      (!editingItem.value &&
-        !accountPermissions.canAdjustBalance.value &&
-        (!isZeroDecimal(form.currentBalance) || !isZeroDecimal(form.balanceCostAmount))) ||
-      (Boolean(editingItem.value) &&
-        balanceChanged.value &&
-        (!accountPermissions.canAdjustBalance.value ||
-          form.balanceAdjustmentReason.trim().length < 2))
-  );
+  const formDisabledReason = computed(() => {
+    if (editingItem.value?.lossStatus === 'reported') return '已报损 ID 永久冻结，不能编辑';
+    if (!countryOptions.value.length) return '系统缺少国家选项';
+    if (!formStatusOptions.value.length) return '系统缺少 ID 状态选项';
+    return '';
+  });
 
   const accountsQuery = useAccountsListQuery(() => normalizeAccountsListQuery(query));
   watch(
@@ -318,6 +310,7 @@ export function useAccountsPage() {
       ElMessage.error('系统缺少“正常”ID 状态，请先在选项设置中恢复');
     }
     drawerVisible.value = true;
+    void purchaseSourceState.loadPurchaseSources();
   }
 
   function handleToolbarCommand(command: string) {
@@ -353,6 +346,16 @@ export function useAccountsPage() {
       balanceCostAmount: item.balanceCostAmount,
       balanceAdjustmentReason: '',
       purchaseCost: Number(item.purchaseCost),
+      purchaseOriginalAmount: item.purchaseOriginalAmount,
+      purchaseCurrency: item.purchaseCurrency,
+      purchaseFxRateToCny: item.purchaseFxRateToCny,
+      purchaseSourceId: item.purchaseFinanceAccountId
+        ? `account:${item.purchaseFinanceAccountId}`
+        : item.purchaseSupplierAccountId
+          ? `wallet:${item.purchaseSupplierAccountId}`
+          : '',
+      purchaseManualRateReason: '',
+      purchasedAt: item.purchasedAt,
       active: item.recordStatus === 'active',
       remark: item.remark ?? ''
     });
@@ -372,12 +375,11 @@ export function useAccountsPage() {
   }
 
   async function submitForm() {
-    if (formDisabled.value) return;
+    if (formDisabledReason.value || purchaseSourceState.purchaseEvidenceError.value) return;
     const commonPayload = {
       countryOptionId: form.countryOptionId,
       statusOptionId: form.statusOptionId,
       supplierOptionId: form.supplierOptionId || null,
-      purchaseCost: form.purchaseCost,
       recordStatus: (form.active ? 'active' : 'disabled') as V2RecordStatus,
       remark: form.remark.trim() || null
     };
@@ -385,7 +387,10 @@ export function useAccountsPage() {
     saving.value = true;
     try {
       if (editingItem.value) {
-        const payload: UpdateV2AccountInput = { ...commonPayload };
+        const payload: UpdateV2AccountInput = {
+          ...commonPayload,
+          purchaseCost: form.purchaseCost
+        };
         if (form.appleId.trim()) payload.appleId = form.appleId.trim();
         if (form.password.trim()) payload.password = form.password.trim();
         if (form.phone.trim()) payload.phone = form.phone.trim();
@@ -401,6 +406,7 @@ export function useAccountsPage() {
         await idBusinessV2AccountsApi.update(editingItem.value.id, payload);
         ElMessage.success('ID 资料已更新');
       } else {
+        const [purchaseSourceType, purchaseSourceId] = form.purchaseSourceId.split(':', 2);
         const payload: CreateV2AccountInput = {
           ...commonPayload,
           appleId: form.appleId.trim(),
@@ -408,7 +414,14 @@ export function useAccountsPage() {
           phone: form.phone.trim() || null,
           securityInfo: form.securityInfo.trim() || null,
           currentBalance: normalizeDecimalInput(form.currentBalance),
-          balanceCostAmount: normalizeDecimalInput(form.balanceCostAmount)
+          balanceCostAmount: normalizeDecimalInput(form.balanceCostAmount),
+          purchaseOriginalAmount: normalizeDecimalInput(form.purchaseOriginalAmount),
+          purchaseCurrency: form.purchaseCurrency,
+          purchaseFxRateToCny: form.purchaseFxRateToCny || undefined,
+          purchaseFinanceAccountId: purchaseSourceType === 'account' ? purchaseSourceId : undefined,
+          purchaseSupplierAccountId: purchaseSourceType === 'wallet' ? purchaseSourceId : undefined,
+          purchaseManualRateReason: form.purchaseManualRateReason.trim() || undefined,
+          purchasedAt: new Date(form.purchasedAt).toISOString()
         };
         await idBusinessV2AccountsApi.create(payload);
         ElMessage.success('ID 资料已新增');
@@ -515,6 +528,7 @@ export function useAccountsPage() {
     countryOptions,
     statusOptions,
     supplierOptions,
+    ...purchaseSourceState,
     drawerVisible,
     saving,
     editingItem,
@@ -544,7 +558,7 @@ export function useAccountsPage() {
     exchangeRateInputError,
     balanceCostInputError,
     balanceChanged,
-    formDisabled,
+    formDisabledReason,
     loadAccounts,
     handleSearch,
     handleFilterChange: handleSearch,

@@ -23,6 +23,7 @@ function makeLockedAccount(overrides: Record<string, unknown> = {}) {
     currencyCode: 'USD',
     supplierOptionId: '40000000-0000-4000-8000-000000000001',
     supplierName: '供应商 A',
+    purchaseCost: new Prisma.Decimal(0),
     currentBalance: new Prisma.Decimal('20'),
     balanceCostAmount: new Prisma.Decimal('70'),
     soldByOrderId: null,
@@ -48,6 +49,7 @@ function makeLossRecord(overrides: Record<string, unknown> = {}) {
     soldOrderNo: null,
     lossBalance: new Prisma.Decimal('20'),
     lossCostAmount: new Prisma.Decimal('70'),
+    idPurchaseCostLossAmount: new Prisma.Decimal('0'),
     reason: 'ID 已死亡无法登录',
     idempotencyKey: `account_loss:${accountId}:loss-request-0001`,
     reportedByUserId: operator.id,
@@ -94,9 +96,13 @@ describe('IdBusinessV2AccountLossesService', () => {
     ...tx,
     $transaction: vi.fn()
   };
+  const financePostingService = {
+    post: vi.fn()
+  };
   const service = new IdBusinessV2AccountLossesService(
     prisma as never,
-    new IdBusinessV2BalanceCalculatorService()
+    new IdBusinessV2BalanceCalculatorService(),
+    financePostingService as never
   );
 
   beforeEach(() => {
@@ -118,6 +124,7 @@ describe('IdBusinessV2AccountLossesService', () => {
     tx.idBusinessV2Account.update.mockResolvedValue({});
     tx.idBusinessV2Activation.updateMany.mockResolvedValue({ count: 1 });
     tx.auditLog.create.mockResolvedValue({});
+    financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
   });
 
   it('atomically freezes the ID, clears balance, writes loss ledger and marks activations abnormal', async () => {

@@ -55,9 +55,6 @@ export function useRenewalWarningSettings(options: {
       warningDaysInput.value < warningSettings.minWarningDays ||
       warningDaysInput.value > warningSettings.maxWarningDays
     ) {
-      ElMessage.warning(
-        `请输入 ${warningSettings.minWarningDays} 到 ${warningSettings.maxWarningDays} 的整数天数`
-      );
       return;
     }
     warningSettingsSaving.value = true;

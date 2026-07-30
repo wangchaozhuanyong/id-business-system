@@ -21,19 +21,20 @@ export const topupWorkbenchFeature = defineV2Feature({
     { key: 'balance', label: '自定义余额', kind: 'number-range' }
   ],
   columns: [
-    { key: 'account', label: 'ID账号', minWidth: 190 },
-    { key: 'country', label: '国家', minWidth: 110 },
-    { key: 'balance', label: '余额', minWidth: 110 },
-    { key: 'averageCost', label: '平均成本', minWidth: 120 },
-    { key: 'topupRecords', label: '加卡记录', minWidth: 120 },
-    { key: 'balanceChanges', label: '余额流水', minWidth: 120 },
-    { key: 'lastTopupAt', label: '最近加卡', minWidth: 130 },
-    { key: 'updatedAt', label: '更新时间', minWidth: 160 },
-    { key: 'currentServices', label: '当前业务', minWidth: 160 },
-    { key: 'status', label: 'ID 状态', minWidth: 110 },
+    { key: 'account', label: 'ID账号', kind: 'identifier', minWidth: 192 },
+    { key: 'country', label: '国家', kind: 'text', minWidth: 110 },
+    { key: 'balance', label: '余额', kind: 'numeric', minWidth: 112 },
+    { key: 'averageCost', label: '平均成本', kind: 'numeric', minWidth: 128 },
+    { key: 'topupRecords', label: '加卡记录', kind: 'text', minWidth: 120 },
+    { key: 'balanceChanges', label: '余额流水', kind: 'text', minWidth: 120 },
+    { key: 'lastTopupAt', label: '最近加卡', kind: 'date', minWidth: 165 },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', minWidth: 165 },
+    { key: 'currentServices', label: '当前业务', kind: 'text', minWidth: 160 },
+    { key: 'status', label: 'ID 状态', kind: 'status', minWidth: 112 },
     {
       key: 'actions',
       label: '操作',
+      kind: 'actions',
       minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
       fixed: 'right'
     }

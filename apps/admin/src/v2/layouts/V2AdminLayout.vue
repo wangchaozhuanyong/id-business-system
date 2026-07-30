@@ -78,7 +78,8 @@
               @click="closeMobileMenu"
             >
               <span class="v2-navigation__item-dot" aria-hidden="true" />
-              <span>{{ item.title }}</span>
+              <span class="v2-navigation__item-label">{{ item.title }}</span>
+              <span v-if="item.status === 'planned'" class="v2-navigation__item-badge"> 规划 </span>
             </RouterLink>
           </div>
         </section>
@@ -234,19 +235,29 @@
             </div>
           </div>
           <div class="v2-topbar__account">
-            <span class="v2-topbar__avatar" aria-hidden="true">{{ operatorInitial }}</span>
-            <span class="v2-topbar__account-copy">
-              <strong>{{ authStore.displayName }}</strong>
-              <small>{{ operatorRole }}</small>
-            </span>
-            <AppButton
+            <el-dropdown
               v-if="authStore.isAuthenticated"
-              variant="ghost"
-              size="small"
-              @click="logout"
+              trigger="click"
+              placement="bottom-end"
+              @command="handleAccountCommand"
             >
-              退出
-            </AppButton>
+              <button class="v2-topbar__profile-link" type="button" aria-label="打开账户菜单">
+                <span class="v2-topbar__avatar" aria-hidden="true">{{ operatorInitial }}</span>
+                <span class="v2-topbar__account-copy">
+                  <strong>{{ authStore.displayName }}</strong>
+                  <small>{{ operatorRole }}</small>
+                </span>
+                <el-icon class="v2-topbar__account-chevron" aria-hidden="true">
+                  <ArrowDown />
+                </el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="profile">我的账户</el-dropdown-item>
+                  <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </header>
@@ -314,7 +325,7 @@ import {
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
-import { hasUserPermission } from '@/utils/permissions';
+import { hasUserFeatureAccess, hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
 import { v2ModuleDefinitions, v2NavigationSections } from '@/v2/config/modules';
@@ -353,9 +364,12 @@ const pageTitleElement = ref<HTMLElement | null>(null);
 const liveMessage = ref('');
 const currentPageTitle = computed(() => String(route.meta.title ?? '工作台'));
 const navigationSectionIcons: Record<string, Component> = {
+  overview: Collection,
   workspace: Monitor,
   business: DataAnalysis,
   records: Files,
+  data: DataAnalysis,
+  monitoring: Monitor,
   system: Setting
 };
 const isRoutePending = computed(() => v2RouteNavigationState.state === 'pending');
@@ -375,14 +389,22 @@ const visibleNavigationSections = computed(() =>
   v2NavigationSections
     .map((section) => ({
       ...section,
-      items: section.items.filter((item) => hasUserPermission(authStore.user, item.permission))
+      items: section.items.filter((item) => hasUserFeatureAccess(authStore.user, item))
     }))
     .filter((section) => section.items.length)
 );
-const searchableModules = computed(() =>
-  visibleNavigationSections.value.flatMap((section) =>
-    section.items.map((item) => ({ ...item, group: section.title }))
+const navigationTitleByGroup = new Map(
+  v2NavigationSections.flatMap((section) =>
+    section.items.map((item) => [item.group, section.title] as const)
   )
+);
+const searchableModules = computed(() =>
+  v2ModuleDefinitions
+    .filter((item) => hasUserFeatureAccess(authStore.user, item))
+    .map((item) => ({
+      ...item,
+      group: navigationTitleByGroup.get(item.group) ?? item.group
+    }))
 );
 const globalSearchResults = computed(() => {
   const keyword = globalSearchQuery.value.toLocaleLowerCase('zh-CN');
@@ -579,6 +601,17 @@ function beginNavigation(path: string, event?: PointerEvent) {
 function retryCurrentRoute() {
   const attemptedPath = v2RouteNavigationState.path || route.fullPath;
   window.location.assign(attemptedPath);
+}
+
+function handleAccountCommand(command: string | number | object) {
+  if (command === 'profile') {
+    beginNavigation('/v2/profile');
+    void router.push('/v2/profile');
+    return;
+  }
+  if (command === 'logout') {
+    void logout();
+  }
 }
 
 async function logout() {

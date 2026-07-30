@@ -135,14 +135,23 @@ describe('IdBusinessV2GiftCardReversalService', () => {
   const accountLossesService = {
     reportLossInTransaction: vi.fn()
   };
+  const supplierFundsService = {
+    reverseGiftCardDebit: vi.fn()
+  };
+  const financePostingService = {
+    post: vi.fn()
+  };
   const service = new IdBusinessV2GiftCardReversalService(
     prisma as never,
     new IdBusinessV2BalanceCalculatorService(),
-    accountLossesService as never
+    accountLossesService as never,
+    supplierFundsService as never,
+    financePostingService as never
   );
 
   beforeEach(() => {
     vi.resetAllMocks();
+    financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     prisma.idBusinessV2Account.findFirst.mockResolvedValue({
       id: accountId,
@@ -297,6 +306,7 @@ describe('IdBusinessV2GiftCardReversalService', () => {
       }
     });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
+    expect(supplierFundsService.reverseGiftCardDebit).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       action: 'redeemed',
       giftCard: {
@@ -456,6 +466,11 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     expect(result.action).toBe('withdrawn');
     expect(result.giftCard.status).toBe('withdrawn');
     expect(result.ledgerEntry.entryType).toBe('gift_card_withdrawal');
+    expect(supplierFundsService.reverseGiftCardDebit).toHaveBeenCalledWith(tx, {
+      giftCardId,
+      reason: '录入目标错误，需要撤回',
+      operator
+    });
   });
 
   it('returns a matching idempotent replay without a second debit', async () => {

@@ -32,6 +32,15 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
   const reversalDialogTitle = computed(() => copy.value.title);
   const reversalConfirmText = computed(() => copy.value.confirmText);
   const reversalMessage = computed(() => copy.value.message);
+  const reversalDisabledReason = computed(() => {
+    if (!options.canAdjustBalance.value) return '当前账号无余额调整权限';
+    if (!pendingReversal.value) return '未选择需要处理的礼品卡';
+    if (pendingReversal.value.giftCard.status !== 'credited') return '该礼品卡已不是入账状态';
+    if (pendingReversal.value.giftCard.account.lossStatus === 'reported') {
+      return '该 ID 已永久报损';
+    }
+    return '';
+  });
 
   function openReversalConfirmation(giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction) {
     if (
@@ -91,6 +100,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
     reversalDialogTitle,
     reversalConfirmText,
     reversalMessage,
+    reversalDisabledReason,
     openReversalConfirmation,
     submitReversal
   };

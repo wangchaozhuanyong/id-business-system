@@ -31,6 +31,7 @@ export function createOrderEditRules(
     accountId: [{ required: true, message: '请选择使用 ID', trigger: 'change' }],
     receivedAmount: [
       {
+        required: true,
         validator: (_rule, value, callback) =>
           callback(
             isNonNegativeDecimal(value)
@@ -42,6 +43,7 @@ export function createOrderEditRules(
     ],
     balanceAmount: [
       {
+        required: true,
         validator: (_rule, value, callback) =>
           callback(
             isPositiveDecimal(value)
@@ -54,6 +56,7 @@ export function createOrderEditRules(
     openedAt: [{ required: true, message: '请选择开通时间', trigger: 'change' }],
     dueAt: [
       {
+        required: true,
         validator: (_rule, value, callback) => {
           if (!(value instanceof Date) || !(form.openedAt instanceof Date)) {
             callback(new Error('请选择有效时间'));

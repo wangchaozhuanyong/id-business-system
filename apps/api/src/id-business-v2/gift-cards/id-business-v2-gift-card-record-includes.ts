@@ -22,6 +22,12 @@ export const GIFT_CARD_RECORD_INCLUDE = {
       name: true
     }
   },
+  countryOption: {
+    select: {
+      id: true,
+      code: true
+    }
+  },
   createdBy: {
     select: {
       id: true,
@@ -59,6 +65,30 @@ export const GIFT_CARD_RECORD_INCLUDE = {
           createdAt: true
         }
       }
+    },
+    take: 1
+  },
+  supplierFundEntries: {
+    where: {
+      entryType: 'gift_card_debit'
+    },
+    select: {
+      id: true,
+      amountCny: true,
+      balanceBeforeCny: true,
+      balanceAfterCny: true,
+      supplierNameSnapshot: true,
+      createdAt: true,
+      reversedBy: {
+        select: {
+          id: true,
+          entryType: true,
+          createdAt: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: 'desc'
     },
     take: 1
   }

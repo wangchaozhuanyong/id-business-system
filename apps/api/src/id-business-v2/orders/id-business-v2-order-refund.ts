@@ -13,12 +13,15 @@ import type {
   LifecycleTransactionResult
 } from './id-business-v2-order-lifecycle-support';
 import type { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
+import type { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import { roundV2Decimal } from '../decimal-policy';
 
 const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
 
 export async function refundIdBusinessV2Order(
   support: IdBusinessV2OrderLifecycleSupport,
   orderLockService: IdBusinessV2OrderLockService,
+  financePostingService: IdBusinessV2FinancePostingService,
   orderIdValue: string,
   dto: RefundIdBusinessV2OrderDto,
   operator?: AuthenticatedUser
@@ -138,6 +141,23 @@ export async function refundIdBusinessV2Order(
           updatedByUserId: operator?.id
         }
       });
+      const financeJournal = await financePostingService.post(tx, {
+        journalType: 'order_refund',
+        sourceType: 'order',
+        sourceId: order.id,
+        sourceReference: order.orderNo,
+        occurredAt: statusChangedAt,
+        summary: `订单退款：${order.orderNo}`,
+        metadata: {
+          reason,
+          restoreBalance,
+          accountReturned,
+          originalStatus: order.status
+        },
+        idempotencyKey: `auto:order_refund:${order.id}`,
+        operator,
+        lines: buildRefundFinanceLines(order, refundCostAmount, restoreBalance, accountReturned)
+      });
       await support.writeLifecycleAudit(
         tx,
         'refund',
@@ -155,7 +175,8 @@ export async function refundIdBusinessV2Order(
           reversalLedgerId: reversalLedger?.id ?? null,
           balanceCostAmount: effectiveBalanceCost.toString(),
           profitAmount: profitAmount.toString(),
-          lockReleased: release.released
+          lockReleased: release.released,
+          financeJournalId: financeJournal.id
         },
         operator
       );
@@ -171,4 +192,125 @@ export async function refundIdBusinessV2Order(
   );
 
   return support.buildLifecycleResponse(result);
+}
+
+function buildRefundFinanceLines(
+  order: {
+    receivedAmount: PrismaNamespace.Decimal;
+    receivedOriginalAmount: PrismaNamespace.Decimal;
+    receivedCurrency: 'CNY' | 'MYR' | 'USDT';
+    receivedFxRateToCny: PrismaNamespace.Decimal;
+    receivedFxSnapshotId: string | null;
+    receivedFinanceAccountId: string | null;
+    balanceCostAmount: PrismaNamespace.Decimal;
+    accountCostAmount: PrismaNamespace.Decimal;
+    status: IdBusinessV2OrderStatus;
+  },
+  refundCostAmount: PrismaNamespace.Decimal,
+  restoreBalance: boolean,
+  accountReturned: boolean
+) {
+  const completed = order.status === 'completed';
+  const hasOriginalEvidence = order.receivedOriginalAmount.gt(0);
+  const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
+  const rate = hasOriginalEvidence ? order.receivedFxRateToCny : new PrismaNamespace.Decimal(1);
+  const receivedOriginal = hasOriginalEvidence
+    ? order.receivedOriginalAmount
+    : order.receivedAmount;
+  const refundCostOriginal =
+    currency === 'CNY' ? refundCostAmount : roundV2Decimal(refundCostAmount.div(rate));
+  const lines = [];
+  if (completed) {
+    lines.push(
+      {
+        accountCode: 'sales_revenue' as const,
+        direction: 'debit' as const,
+        currency,
+        amountOriginal: receivedOriginal,
+        fxRateToCny: rate,
+        amountCny: order.receivedAmount,
+        fxRateSnapshotId: order.receivedFxSnapshotId,
+        memo: '冲回已完成订单收入'
+      },
+      {
+        accountCode: 'cash' as const,
+        direction: 'credit' as const,
+        currency,
+        amountOriginal: receivedOriginal,
+        fxRateToCny: rate,
+        amountCny: order.receivedAmount,
+        financeAccountId: order.receivedFinanceAccountId,
+        fxRateSnapshotId: order.receivedFxSnapshotId,
+        memo: '订单退款支出'
+      }
+    );
+  }
+  lines.push(
+    {
+      accountCode: 'refund_loss' as const,
+      direction: 'debit' as const,
+      currency,
+      amountOriginal: refundCostOriginal,
+      fxRateToCny: rate,
+      amountCny: refundCostAmount,
+      fxRateSnapshotId: order.receivedFxSnapshotId,
+      memo: '退款附加成本'
+    },
+    {
+      accountCode: 'cash' as const,
+      direction: 'credit' as const,
+      currency,
+      amountOriginal: refundCostOriginal,
+      fxRateToCny: rate,
+      amountCny: refundCostAmount,
+      financeAccountId: order.receivedFinanceAccountId,
+      fxRateSnapshotId: order.receivedFxSnapshotId,
+      memo: '退款成本支付'
+    }
+  );
+  if (restoreBalance) {
+    lines.push(
+      {
+        accountCode: 'gift_card_inventory' as const,
+        direction: 'debit' as const,
+        currency: 'CNY' as const,
+        amountOriginal: order.balanceCostAmount,
+        fxRateToCny: 1,
+        amountCny: order.balanceCostAmount,
+        memo: '退款恢复礼品卡余额资产'
+      },
+      {
+        accountCode: 'gift_card_cost' as const,
+        direction: 'credit' as const,
+        currency: 'CNY' as const,
+        amountOriginal: order.balanceCostAmount,
+        fxRateToCny: 1,
+        amountCny: order.balanceCostAmount,
+        memo: '冲回礼品卡销售成本'
+      }
+    );
+  }
+  if (accountReturned) {
+    lines.push(
+      {
+        accountCode: 'id_inventory' as const,
+        direction: 'debit' as const,
+        currency: 'CNY' as const,
+        amountOriginal: order.accountCostAmount,
+        fxRateToCny: 1,
+        amountCny: order.accountCostAmount,
+        memo: '退款收回 ID 库存'
+      },
+      {
+        accountCode: 'id_cost' as const,
+        direction: 'credit' as const,
+        currency: 'CNY' as const,
+        amountOriginal: order.accountCostAmount,
+        fxRateToCny: 1,
+        amountCny: order.accountCostAmount,
+        memo: '冲回已卖 ID 成本'
+      }
+    );
+  }
+  return lines;
 }

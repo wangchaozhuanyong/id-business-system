@@ -11,6 +11,7 @@ import type {
   V2AccountImportResult,
   V2AccountListQuery,
   V2AccountListResult,
+  V2AccountPurchaseSources,
   V2AccountSecretField,
   V2RevealInput
 } from '@/v2/types/records';
@@ -41,6 +42,13 @@ export const idBusinessV2AccountsApi = {
   exportRows(params: Omit<V2AccountListQuery, 'page' | 'pageSize'>) {
     return request<V2AccountExportResult>(http.get('/id-business-v2/accounts/export', { params }));
   },
+  purchaseSources(options: ApiRequestOptions = {}) {
+    return request<V2AccountPurchaseSources>(
+      http.get('/id-business-v2/accounts/purchase-sources', {
+        signal: options.signal
+      })
+    );
+  },
   importRows(rows: ImportV2AccountRowInput[]) {
     return withV2QueryInvalidation(
       request<V2AccountImportResult>(http.post('/id-business-v2/accounts/import', { rows })),
@@ -50,7 +58,9 @@ export const idBusinessV2AccountsApi = {
         'order-entry-options',
         'order-entry-matching',
         'renewals',
-        'renewals-options'
+        'renewals-options',
+        'finance-ledger',
+        'finance-reports'
       ]
     );
   },
@@ -66,7 +76,9 @@ export const idBusinessV2AccountsApi = {
         'order-entry-options',
         'order-entry-matching',
         'renewals',
-        'renewals-options'
+        'renewals-options',
+        'finance-ledger',
+        'finance-reports'
       ]
     );
   },

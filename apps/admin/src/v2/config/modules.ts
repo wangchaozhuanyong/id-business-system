@@ -4,9 +4,12 @@ export type {
   V2FilterKind,
   V2ModuleKey,
   V2ModuleKind,
+  V2ModuleStatus,
   V2NavigationSection,
   V2FreshnessPolicy,
-  V2TableColumnDefinition
+  V2PlannedSectionDefinition,
+  V2TableColumnDefinition,
+  V2TableColumnKind
 } from '@/v2/features/feature';
 
 export {

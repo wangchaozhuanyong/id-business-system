@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { V2ExchangeRateOverview } from '@/v2/types/exchangeRates';
 import {
   buildManualGiftCardCreditPayload,
+  getGiftCardCodeError,
+  normalizeGiftCardCode,
   resolveUsdtRateReference
 } from './gift-card-credit-form';
 
@@ -42,6 +44,15 @@ function overviewWithRates(): V2ExchangeRateOverview {
 }
 
 describe('gift card manual rate form', () => {
+  it('normalizes and validates gift card codes with the server contract', () => {
+    expect(normalizeGiftCardCode('x123-4567-89ab-cdef')).toBe('X123456789ABCDEF');
+    expect(getGiftCardCodeError('x123-4567-89ab-cdef')).toBe('');
+    expect(getGiftCardCodeError('ABC12')).toBe('礼品卡号必须是 10 至 64 位且同时包含字母和数字');
+    expect(getGiftCardCodeError('1234567890')).toBe(
+      '礼品卡号必须是 10 至 64 位且同时包含字母和数字'
+    );
+  });
+
   it('uses the latest USDT buy, sell and mid rates for read-only reference', () => {
     expect(resolveUsdtRateReference(overviewWithRates())).toEqual({
       merchantBuyRateToRmb: '6.74',
@@ -52,11 +63,16 @@ describe('gift card manual rate form', () => {
     });
   });
 
-  it('keeps the card exchange rate manual and omits automatic snapshot fields', () => {
+  it('posts original-currency payment evidence and a selected source', () => {
     const payload = buildManualGiftCardCreditPayload({
       code: 'ABCD123456',
       faceValue: ' 200 ',
-      exchangeRate: ' 5.7 ',
+      purchaseOriginalAmount: ' 100 ',
+      purchaseCurrency: 'MYR',
+      purchaseFxRateToCny: ' 1.7 ',
+      purchaseSourceId: 'wallet:wallet-1',
+      purchaseManualRateReason: 'manual quote',
+      paidAt: '2026-07-29T03:00:00.000Z',
       supplierOptionId: 'supplier-1',
       idempotencyKey: 'request-1',
       remark: ' manual rate '
@@ -65,7 +81,12 @@ describe('gift card manual rate form', () => {
     expect(payload).toEqual({
       code: 'ABCD123456',
       faceValue: '200',
-      exchangeRate: '5.7',
+      purchaseOriginalAmount: '100',
+      purchaseCurrency: 'MYR',
+      purchaseFxRateToCny: '1.7',
+      purchaseSupplierAccountId: 'wallet-1',
+      purchaseManualRateReason: 'manual quote',
+      paidAt: '2026-07-29T03:00:00.000Z',
       supplierOptionId: 'supplier-1',
       idempotencyKey: 'request-1',
       remark: 'manual rate'

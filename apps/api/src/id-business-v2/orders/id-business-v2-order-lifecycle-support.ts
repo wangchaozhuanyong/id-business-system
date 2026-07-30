@@ -9,10 +9,12 @@ import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-ord
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
 import type { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import type { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
+import { maskWebsiteAccount } from './id-business-v2-order-entry-support';
 import {
   V2_DECIMAL_PATTERN,
   V2_DECIMAL_PLACES,
   V2_DECIMAL_ROUNDING_MODE,
+  toV2Decimal,
   toV2DecimalString
 } from '../decimal-policy';
 interface LockedAccountRow {
@@ -336,8 +338,9 @@ export class IdBusinessV2OrderLifecycleSupport {
     } | null
   ) {
     if (!platform) return new PrismaNamespace.Decimal(0);
-    const fee = platform.fixedFee
-      .plus(receivedAmount.mul(platform.percentageFee).div(100))
+    const normalizedReceivedAmount = toV2Decimal(receivedAmount);
+    const fee = toV2Decimal(platform.fixedFee)
+      .plus(normalizedReceivedAmount.mul(toV2Decimal(platform.percentageFee)).div(100))
       .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
     if (fee.greaterThan(MAX_AMOUNT)) {
       throw new BadRequestException('平台手续费数值过大');
@@ -352,11 +355,11 @@ export class IdBusinessV2OrderLifecycleSupport {
     balanceCostAmount: PrismaNamespace.Decimal,
     refundCostAmount: PrismaNamespace.Decimal | null
   ) {
-    const profit = receivedAmount
-      .minus(platformFeeAmount)
-      .minus(accountCostAmount)
-      .minus(balanceCostAmount)
-      .minus(refundCostAmount ?? 0)
+    const profit = toV2Decimal(receivedAmount)
+      .minus(toV2Decimal(platformFeeAmount))
+      .minus(toV2Decimal(accountCostAmount))
+      .minus(toV2Decimal(balanceCostAmount))
+      .minus(toV2Decimal(refundCostAmount ?? 0))
       .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
     if (profit.abs().greaterThan(MAX_AMOUNT)) {
       throw new BadRequestException('订单利润数值超出数据库范围');
@@ -389,7 +392,7 @@ export class IdBusinessV2OrderLifecycleSupport {
     return {
       encrypted: this.fieldEncryptionService.encrypt(value),
       hash: this.fieldEncryptionService.hash(value),
-      masked: this.maskWebsiteAccount(value)
+      masked: maskWebsiteAccount(value)
     };
   }
 
@@ -474,6 +477,13 @@ export class IdBusinessV2OrderLifecycleSupport {
       'websiteAccount',
       'clearWebsiteAccount',
       'receivedAmount',
+      'receivedOriginalAmount',
+      'receivedCurrency',
+      'receivedFxRateToCny',
+      'receivedFxSnapshotId',
+      'receivedFinanceAccountId',
+      'receivedManualRateReason',
+      'receivedAt',
       'balanceAmount',
       'accountDisposition',
       'openedAt',
@@ -573,17 +583,6 @@ export class IdBusinessV2OrderLifecycleSupport {
       throw new BadRequestException('幂等键必须是 8 至 100 位字母、数字或 ._:-');
     }
     return normalized;
-  }
-
-  maskWebsiteAccount(value: string | null) {
-    if (!value) return null;
-    const [name, domain] = value.split('@');
-    if (domain) {
-      const prefix = name.length <= 2 ? `${name[0] ?? '*'}***` : `${name.slice(0, 2)}***`;
-      return `${prefix}@${domain}`;
-    }
-    if (value.length <= 4) return '****';
-    return `${value.slice(0, 2)}***${value.slice(-2)}`;
   }
 
   rethrowWriteConflict(error: unknown, message: string): never {

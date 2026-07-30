@@ -84,36 +84,43 @@
               <span>报损操作成功后会自动生成不可修改的记录</span>
             </div>
           </template>
-          <el-table-column prop="rowNumber" label="序号" width="72" />
-          <el-table-column label="ID 账号" min-width="210" fixed="left">
+          <V2TableColumn kind="index" width-preset="index" prop="rowNumber" label="序号" />
+          <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号" fixed="left">
             <template #default="{ row }">
               <strong class="v2-account-losses__account">{{ row.appleIdMasked }}</strong>
             </template>
-          </el-table-column>
-          <el-table-column prop="countryName" label="国家" min-width="110" />
-          <el-table-column label="供应商" min-width="120">
-            <template #default="{ row }">{{ row.supplierName || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="销售状态" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn kind="text" prop="countryName" label="国家" min-width="110" />
+          <V2TableColumn kind="text" label="供应商" min-width="120">
+            <template #default="{ row }">{{ row.supplierName || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="status" width-preset="compact" label="销售状态">
             <template #default="{ row }">
               <el-tag :type="row.saleState === 'sold' ? 'danger' : 'info'" effect="plain">
                 {{ row.saleState === 'sold' ? '已卖出' : '可用' }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="来源订单" min-width="170">
-            <template #default="{ row }">{{ row.soldOrderNo || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="lossBalance" label="损失余额" min-width="120" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="来源订单">
+            <template #default="{ row }">{{ row.soldOrderNo || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
+            prop="lossBalance"
+            label="损失余额"
+            sortable="custom"
+          >
             <template #default="{ row }">
               {{ page.formatDecimal(row.lossBalance) }}
               {{ row.currencyCode || '' }}
             </template>
-          </el-table-column>
-          <el-table-column
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
             prop="lossCostAmount"
             label="人民币亏损"
-            min-width="130"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -121,18 +128,30 @@
                 ¥{{ page.formatDecimal(row.lossCostAmount) }}
               </strong>
             </template>
-          </el-table-column>
-          <el-table-column prop="reason" label="报损原因" min-width="220" show-overflow-tooltip />
-          <el-table-column label="操作人" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="text"
+            prop="reason"
+            label="报损原因"
+            min-width="220"
+            show-overflow-tooltip
+          />
+          <V2TableColumn kind="text" label="操作人" min-width="120">
             <template #default="{ row }">
               {{
-                row.reportedByName || row.reportedBy?.displayName || row.reportedBy?.username || '-'
+                row.reportedByName || row.reportedBy?.displayName || row.reportedBy?.username || '—'
               }}
             </template>
-          </el-table-column>
-          <el-table-column prop="reportedAt" label="报损时间" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="reportedAt"
+            label="报损时间"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ page.formatDate(row.reportedAt) }}</template>
-          </el-table-column>
+          </V2TableColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -151,7 +170,7 @@
               </div>
               <div>
                 <dt>来源订单</dt>
-                <dd>{{ item.soldOrderNo || '-' }}</dd>
+                <dd>{{ item.soldOrderNo || '—' }}</dd>
               </div>
               <div>
                 <dt>损失余额</dt>
@@ -168,7 +187,7 @@
                     item.reportedByName ||
                     item.reportedBy?.displayName ||
                     item.reportedBy?.username ||
-                    '-'
+                    '—'
                   }}
                 </dd>
               </div>
@@ -208,6 +227,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { reactive } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

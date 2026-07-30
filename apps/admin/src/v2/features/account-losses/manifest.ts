@@ -16,17 +16,17 @@ export const accountLossesFeature = defineV2Feature({
     { key: 'reportedAt', label: '报损时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'rowNumber', label: '序号', minWidth: 72 },
-    { key: 'account', label: 'ID账号', minWidth: 210 },
-    { key: 'country', label: '国家', minWidth: 110 },
-    { key: 'supplier', label: '供应商', minWidth: 120 },
-    { key: 'saleState', label: '销售状态', minWidth: 110 },
-    { key: 'soldOrderNo', label: '来源订单', minWidth: 170 },
-    { key: 'lossBalance', label: '损失余额', minWidth: 120 },
-    { key: 'lossCostAmount', label: '人民币亏损', minWidth: 130 },
-    { key: 'reason', label: '报损原因', minWidth: 220 },
-    { key: 'reportedBy', label: '操作人', minWidth: 120 },
-    { key: 'reportedAt', label: '报损时间', minWidth: 165 }
+    { key: 'rowNumber', label: '序号', kind: 'index', minWidth: 72 },
+    { key: 'account', label: 'ID账号', kind: 'identifier', minWidth: 192 },
+    { key: 'country', label: '国家', kind: 'text', minWidth: 110 },
+    { key: 'supplier', label: '供应商', kind: 'text', minWidth: 120 },
+    { key: 'saleState', label: '销售状态', kind: 'status', minWidth: 112 },
+    { key: 'soldOrderNo', label: '来源订单', kind: 'identifier', minWidth: 192 },
+    { key: 'lossBalance', label: '损失余额', kind: 'numeric', minWidth: 128 },
+    { key: 'lossCostAmount', label: '人民币亏损', kind: 'numeric', minWidth: 128 },
+    { key: 'reason', label: '报损原因', kind: 'text', minWidth: 220 },
+    { key: 'reportedBy', label: '操作人', kind: 'text', minWidth: 120 },
+    { key: 'reportedAt', label: '报损时间', kind: 'date', minWidth: 165 }
   ],
   loadView: () => import('./V2AccountLossesView.vue')
 });

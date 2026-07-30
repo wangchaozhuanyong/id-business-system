@@ -4,7 +4,7 @@
     :title="order ? `修改订单 ${order.orderNo}` : '修改订单'"
     confirm-text="保存修改"
     :confirm-loading="saving"
-    :confirm-disabled="submitDisabled"
+    :confirm-disabled-reason="submitDisabledReason"
     size="min(720px, 96vw)"
     @update:model-value="$emit('update:modelValue', $event)"
     @confirm="submit"
@@ -29,6 +29,8 @@
         label-width="96px"
         require-asterisk-position="right"
         status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
         autocomplete="off"
       >
         <el-alert
@@ -229,6 +231,7 @@ import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { calculatePlatformFeeAmount } from '@/v2/features/order-entry/order-pricing';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import type {
   UpdateV2OrderInput,
   V2Order,
@@ -241,7 +244,6 @@ import {
   createOrderEditRules,
   customerLabel,
   formatDecimal,
-  isNonNegativeDecimal,
   isPositiveDecimal
 } from './order-edit-form';
 import './order-edit-drawer.css';
@@ -268,7 +270,8 @@ const candidates = ref<V2OrderCandidate[]>([]);
 const options = ref<V2OrderEntryOptions>({
   customers: [],
   countries: [],
-  settlementPlatforms: []
+  settlementPlatforms: [],
+  financeAccounts: []
 });
 const form = reactive(createEmptyOrderEditForm());
 let customerTimer: ReturnType<typeof setTimeout> | undefined;
@@ -355,19 +358,12 @@ const platformFeePreview = computed(() => {
   );
 });
 
-const submitDisabled = computed(
-  () =>
-    props.saving ||
-    optionsLoading.value ||
-    Boolean(optionsError.value) ||
-    !form.customerId ||
-    !form.serviceOptionId ||
-    !form.accountId ||
-    !isNonNegativeDecimal(form.receivedAmount) ||
-    !isPositiveDecimal(form.balanceAmount) ||
-    !(form.openedAt instanceof Date) ||
-    !(form.dueAt instanceof Date)
-);
+const submitDisabledReason = computed(() => {
+  if (!props.order) return '未选择可编辑订单';
+  if (optionsLoading.value) return '正在加载订单选项';
+  if (optionsError.value) return '订单选项加载失败，请先重试';
+  return '';
+});
 
 const rules = createOrderEditRules(form, () => Boolean(props.order?.operations.canEditCore));
 
@@ -495,8 +491,8 @@ async function submit() {
   const order = props.order;
   if (
     !order ||
-    !formRef.value ||
-    !(await formRef.value.validate().catch(() => false)) ||
+    submitDisabledReason.value ||
+    !(await validateV2Form(formRef.value)) ||
     !form.openedAt ||
     !form.dueAt
   ) {

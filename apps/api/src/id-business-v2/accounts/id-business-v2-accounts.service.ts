@@ -13,6 +13,11 @@ import { getPagination } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { verifySensitiveAccessApproval } from '../../common/sensitive-access-approval';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { toV2DecimalString } from '../decimal-policy';
+import {
+  IdBusinessV2FinanceFxService,
+  IdBusinessV2FinancePostingService
+} from '../finance/public-api';
 import { IdBusinessV2OptionsService } from '../options/public-api';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
@@ -23,6 +28,7 @@ import {
   type LockedAccountBalanceRow
 } from './id-business-v2-account-balance-guard';
 import { importAccountRows } from './id-business-v2-account-import';
+import { createIdBusinessV2Account } from './id-business-v2-account-create';
 import {
   ACCOUNT_INCLUDE,
   SECRET_FIELDS,
@@ -66,7 +72,9 @@ export class IdBusinessV2AccountsService {
     private readonly auditLogsService: AuditLogsService,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly optionsService: IdBusinessV2OptionsService,
-    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService
+    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
+    private readonly financeFxService: IdBusinessV2FinanceFxService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {}
 
   async list(query: ListIdBusinessV2AccountsQuery) {
@@ -74,6 +82,50 @@ export class IdBusinessV2AccountsService {
     return {
       ...result,
       items: result.items.map((account) => toAccountResponse(account))
+    };
+  }
+
+  async listPurchaseSources() {
+    const [financeAccounts, supplierWallets] = await Promise.all([
+      this.prisma.idBusinessV2FinanceAccount.findMany({
+        where: { status: 'active' },
+        select: {
+          id: true,
+          name: true,
+          currency: true,
+          currentBalance: true
+        },
+        orderBy: [{ currency: 'asc' }, { name: 'asc' }]
+      }),
+      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
+        where: { status: 'active' },
+        select: {
+          id: true,
+          supplierOptionId: true,
+          currency: true,
+          currentBalance: true,
+          supplierOption: {
+            select: {
+              name: true
+            }
+          }
+        },
+        orderBy: [{ currency: 'asc' }, { supplierOption: { name: 'asc' } }]
+      })
+    ]);
+
+    return {
+      financeAccounts: financeAccounts.map((account) => ({
+        ...account,
+        currentBalance: toV2DecimalString(account.currentBalance)
+      })),
+      supplierWallets: supplierWallets.map((wallet) => ({
+        id: wallet.id,
+        supplierOptionId: wallet.supplierOptionId,
+        supplierName: wallet.supplierOption.name,
+        currency: wallet.currency,
+        currentBalance: toV2DecimalString(wallet.currentBalance)
+      }))
     };
   }
 
@@ -156,109 +208,32 @@ export class IdBusinessV2AccountsService {
   }
 
   async create(dto: CreateIdBusinessV2AccountDto, operator?: AuthenticatedUser) {
-    const appleId = normalizeAppleId(dto.appleId, true)!;
-    const appleIdHash = this.fieldEncryptionService.hash(appleId)!;
-    await this.assertAppleIdAvailable(appleIdHash);
-
-    const country = await this.optionsService.requireActiveOption(
-      dto.countryOptionId,
-      'country',
-      '国家'
+    return createIdBusinessV2Account(
+      {
+        prisma: this.prisma,
+        auditLogsService: this.auditLogsService,
+        fieldEncryptionService: this.fieldEncryptionService,
+        optionsService: this.optionsService,
+        balanceCalculator: this.balanceCalculator,
+        financeFxService: this.financeFxService,
+        financePostingService: this.financePostingService
+      },
+      dto,
+      operator
     );
-    const status = await this.optionsService.requireActiveOption(
-      dto.statusOptionId,
-      'id_status',
-      'ID 状态'
-    );
-    const supplier = await this.optionsService.requireActiveOption(
-      dto.supplierOptionId,
-      'id_supplier',
-      'ID 供应商',
-      true
-    );
-    const phone = normalizePhone(dto.phone);
-    const openingBalance = this.balanceCalculator.normalizeSnapshot(
-      dto.currentBalance ?? '0',
-      dto.balanceCostAmount ?? '0'
-    );
-    if (!openingBalance.currentBalance.equals(0) || !openingBalance.balanceCostAmount.equals(0)) {
-      assertBalanceAdjustmentPermission(operator);
-    }
-
-    const account = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.idBusinessV2Account.create({
-        data: {
-          appleIdEncrypted: this.fieldEncryptionService.encrypt(appleId)!,
-          appleIdHash,
-          appleIdMasked: maskAppleId(appleId),
-          passwordEncrypted: this.fieldEncryptionService.encrypt(
-            normalizeNullableString(dto.password)
-          ),
-          phoneEncrypted: this.fieldEncryptionService.encrypt(phone),
-          phoneHash: this.fieldEncryptionService.hash(phone),
-          phoneMasked: maskPhone(phone),
-          phoneTail: phone ? phone.slice(-8) : null,
-          securityInfoEncrypted: this.fieldEncryptionService.encrypt(
-            normalizeNullableString(dto.securityInfo)
-          ),
-          countryOptionId: country!.id,
-          statusOptionId: status!.id,
-          supplierOptionId: supplier?.id ?? null,
-          currentBalance: openingBalance.currentBalance,
-          balanceCostAmount: openingBalance.balanceCostAmount,
-          purchaseCost: normalizeMoney(dto.purchaseCost, 'ID 购买成本'),
-          recordStatus: parseRecordStatus(dto.recordStatus, false) ?? 'active',
-          remark: normalizeNullableString(dto.remark),
-          createdByUserId: operator?.id,
-          updatedByUserId: operator?.id
-        },
-        include: ACCOUNT_INCLUDE
-      });
-
-      if (!openingBalance.currentBalance.equals(0)) {
-        await tx.idBusinessV2BalanceLedger.create({
-          data: {
-            accountId: created.id,
-            giftCardId: null,
-            orderId: null,
-            entryType: 'opening_balance',
-            direction: 'credit',
-            balanceAmount: openingBalance.currentBalance,
-            costAmount: openingBalance.balanceCostAmount,
-            balanceBefore: '0',
-            balanceAfter: openingBalance.currentBalance,
-            costBefore: '0',
-            costAfter: openingBalance.balanceCostAmount,
-            averageCostBefore: '0',
-            averageCostAfter: openingBalance.averageCost,
-            reversalOfEntryId: null,
-            idempotencyKey: `account-opening:${created.id}`,
-            remark: 'ID 新增期初余额',
-            createdByUserId: operator?.id
-          }
-        });
-      }
-
-      return created;
-    });
-
-    const response = toAccountResponse(account);
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_accounts',
-      action: 'id_business_v2.account.create',
-      objectType: 'id_business_v2_account',
-      objectId: account.id,
-      afterData: toAuditJson(response),
-      remark: `创建 V2 ID：${account.appleIdMasked}`
-    });
-
-    return response;
   }
 
   async update(id: string, dto: UpdateIdBusinessV2AccountDto, operator?: AuthenticatedUser) {
     const existing = await this.findAccountOrThrow(id);
     assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 永久冻结，不能再修改');
+    if (
+      dto.purchaseCost !== undefined &&
+      !new PrismaNamespace.Decimal(normalizeMoney(dto.purchaseCost, 'ID 购买成本')).equals(
+        existing.purchaseCost
+      )
+    ) {
+      throw new BadRequestException('已入账的 ID 采购成本不能直接修改，请冲销原账务后重记');
+    }
     const appleId = dto.appleId === undefined ? undefined : normalizeAppleId(dto.appleId, true)!;
     const appleIdHash =
       appleId === undefined ? undefined : this.fieldEncryptionService.hash(appleId)!;

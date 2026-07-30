@@ -164,9 +164,9 @@ onBeforeUnmount(clearRefreshTimer);
   gap: 10px;
   margin-bottom: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--v3-red-border-soft);
+  border: 1px solid var(--v3-danger-border-soft);
   border-radius: 6px;
-  background: var(--v3-red-soft);
+  background: var(--v3-danger-soft);
   color: var(--v2-text-soft);
   font-size: 13px;
 }

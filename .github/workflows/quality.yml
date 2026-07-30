@@ -41,11 +41,17 @@ jobs:
       - name: Check admin UI guardrails
         run: npm run check:admin-ui
 
+      - name: Check V2 color contrast tokens
+        run: npm run check:v2-color-contrast
+
       - name: Check V2 table standard
         run: npm run check:v2-table-standard
 
       - name: Verify V2 table action layouts
         run: npm run acceptance:v2-table-layout
+
+      - name: Verify V2 button color contrast
+        run: npm run acceptance:v2-color-contrast
 
       - name: Check V2 loading standard
         run: npm run check:v2-loading-standard

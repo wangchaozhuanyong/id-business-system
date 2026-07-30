@@ -142,48 +142,61 @@
             </div>
           </template>
 
-          <el-table-column
+          <V2TableColumn
+            kind="identifier"
+            width-preset="identifier"
             prop="appleId"
             label="ID 账号"
-            min-width="220"
             sortable="custom"
             show-overflow-tooltip
           >
             <template #default="{ row }">
               <strong class="v2-table-cell">{{ row.appleIdMasked }}</strong>
             </template>
-          </el-table-column>
-          <el-table-column label="销售状态" min-width="130">
+          </V2TableColumn>
+          <V2TableColumn kind="status" width-preset="compact" label="销售状态">
             <template #default="{ row }">
               <el-tag :type="row.saleState === 'sold' ? 'danger' : 'success'" effect="plain">
                 {{ row.saleState === 'sold' ? '已卖出' : '可用' }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="来源订单" min-width="180" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.soldByOrder?.orderNo || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="国家" min-width="110">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="identifier"
+            width-preset="identifier"
+            label="来源订单"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ row.soldByOrder?.orderNo || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="国家" min-width="110">
             <template #default="{ row }">{{ row.country.name }}</template>
-          </el-table-column>
-          <el-table-column prop="currentBalance" label="余额" min-width="110" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="compact"
+            prop="currentBalance"
+            label="余额"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ page.formatDecimal(row.currentBalance) }}</template>
-          </el-table-column>
-          <el-table-column label="汇率" min-width="110">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="compact" label="汇率">
             <template #default="{ row }">{{ page.getAccountExchangeRate(row) }}</template>
-          </el-table-column>
-          <el-table-column
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
             prop="balanceCostAmount"
             label="人民币成本"
-            min-width="130"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ page.formatDecimal(row.balanceCostAmount) }}</template>
-          </el-table-column>
-          <el-table-column label="供应商" min-width="120">
-            <template #default="{ row }">{{ row.supplier?.name || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="ID 状态" min-width="110">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="供应商" min-width="120">
+            <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="status" width-preset="compact" label="ID 状态">
             <template #default="{ row }">
               <el-tag
                 :type="
@@ -198,17 +211,29 @@
                 {{ row.lossStatus === 'reported' ? '已报损（冻结）' : row.status.name }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column prop="recordStatus" label="资料状态" min-width="110" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="status"
+            width-preset="compact"
+            prop="recordStatus"
+            label="资料状态"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <el-tag :type="row.recordStatus === 'active' ? 'success' : 'info'" effect="plain">
                 {{ row.recordStatus === 'active' ? '启用' : '停用' }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column prop="updatedAt" label="更新时间" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="updatedAt"
+            label="更新时间"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ page.formatDate(row.updatedAt) }}</template>
-          </el-table-column>
+          </V2TableColumn>
           <V2TableActionColumn layout="triple">
             <template #default="{ row }">
               <V2AccountRowActions
@@ -267,20 +292,20 @@
               </div>
               <div>
                 <dt>来源订单</dt>
-                <dd>{{ item.soldByOrder?.orderNo || '-' }}</dd>
+                <dd>{{ item.soldByOrder?.orderNo || '—' }}</dd>
               </div>
               <div>
                 <dt>手机号</dt>
-                <dd>{{ item.maskedPhone || '-' }}</dd>
+                <dd>{{ item.maskedPhone || '—' }}</dd>
               </div>
               <div>
                 <dt>ID 密码</dt>
-                <dd>{{ item.hasPassword ? '已保存' : '-' }}</dd>
+                <dd>{{ item.hasPassword ? '已保存' : '—' }}</dd>
               </div>
               <div>
                 <dt>密保</dt>
                 <dd class="v2-account-security-text">
-                  {{ item.hasSecurityInfo ? '已保存' : '-' }}
+                  {{ item.hasSecurityInfo ? '已保存' : '—' }}
                 </dd>
               </div>
               <div>
@@ -351,6 +376,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { reactive } from 'vue';
 import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

@@ -228,35 +228,15 @@ export function useRenewalsPage() {
     if (!currentBalance || !isValidNonNegativeDecimal(form.balanceAmount)) return '0';
     return addDecimalStrings(currentBalance, `-${form.balanceAmount}`);
   });
-  const canSubmitRenewal = computed(() => {
+  const renewalSubmitDisabledReason = computed(() => {
     const renewal = selectedRenewal.value;
-    if (
-      !renewal ||
-      !renewal.withinActionWindow ||
-      !form.serviceOptionId ||
-      !form.openedAt ||
-      !form.dueAt ||
-      optionsLoading.value ||
-      Boolean(optionsError.value) ||
-      submitting.value
-    ) {
-      return false;
-    }
-    const sourceDueAt = renewal.dueAt ? new Date(renewal.dueAt) : null;
-    const balanceAmount = Number(form.balanceAmount);
-    const currentBalance = Number(renewal.account.currentBalance);
-    return (
-      availableServices.value.some((service) => service.id === form.serviceOptionId) &&
-      isValidNonNegativeDecimal(form.receivedAmount) &&
-      isValidPositiveDecimal(form.balanceAmount) &&
-      Number.isFinite(balanceAmount) &&
-      Number.isFinite(currentBalance) &&
-      balanceAmount <= currentBalance &&
-      (!form.platformOrderNo.trim() || Boolean(form.settlementPlatformOptionId)) &&
-      (!sourceDueAt || form.openedAt.getTime() >= sourceDueAt.getTime()) &&
-      form.dueAt.getTime() > form.openedAt.getTime() &&
-      form.dueAt.getTime() > Date.now()
-    );
+    if (!canRenew.value) return '当前账号无续费权限';
+    if (!renewal) return '未选择续费记录';
+    if (!renewal.withinActionWindow) return '该记录不在允许续费的时间范围内';
+    if (optionsLoading.value) return '正在加载续费业务选项';
+    if (optionsError.value) return '续费业务选项加载失败，请先重试';
+    if (!availableServices.value.length) return '当前国家暂无可用续费业务';
+    return '';
   });
   const renewalStatusStripItems = computed<V2StatusStripItem[]>(() => {
     return [
@@ -444,16 +424,19 @@ export function useRenewalsPage() {
   }
 
   function openConfirmation() {
-    if (!canSubmitRenewal.value) {
-      ElMessage.warning('请核对续费业务、金额、ID余额和续费周期');
-      return;
-    }
+    if (renewalSubmitDisabledReason.value) return;
     confirmationVisible.value = true;
   }
 
   async function submitRenewal() {
     const renewal = selectedRenewal.value;
-    if (!renewal || !form.openedAt || !form.dueAt || !canSubmitRenewal.value || submitting.value) {
+    if (
+      !renewal ||
+      !form.openedAt ||
+      !form.dueAt ||
+      renewalSubmitDisabledReason.value ||
+      submitting.value
+    ) {
       return;
     }
     submitting.value = true;
@@ -561,7 +544,7 @@ export function useRenewalsPage() {
     selectedManualService,
     platformFeePreview,
     balanceAfterPreview,
-    canSubmitRenewal,
+    renewalSubmitDisabledReason,
     renewalStatusStripItems,
     activeWarningScope,
     emptyDescription,

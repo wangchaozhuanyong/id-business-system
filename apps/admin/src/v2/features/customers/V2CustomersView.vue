@@ -91,15 +91,15 @@
             </div>
           </template>
 
-          <el-table-column prop="name" label="客户" min-width="170" sortable="custom">
+          <V2TableColumn kind="text" prop="name" label="客户" min-width="170" sortable="custom">
             <template #default="{ row }">
               <strong class="v2-table-cell">{{ row.name }}</strong>
             </template>
-          </el-table-column>
-          <el-table-column label="手机号" min-width="170">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="wide" label="手机号">
             <template #default="{ row }">
               <span class="v2-sensitive-cell">
-                <strong>{{ row.maskedPhone || '-' }}</strong>
+                <strong>{{ row.maskedPhone || '—' }}</strong>
                 <AppButton
                   v-if="row.hasPhone && canRevealPhone"
                   icon-only
@@ -112,22 +112,28 @@
                 </AppButton>
               </span>
             </template>
-          </el-table-column>
-          <el-table-column prop="wechat" label="微信" min-width="145" sortable="custom">
-            <template #default="{ row }">{{ row.wechat || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="来源" min-width="120">
-            <template #default="{ row }">{{ row.source?.name || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="标签" min-width="170">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="identifier"
+            width-preset="wide"
+            prop="wechat"
+            label="微信"
+            sortable="custom"
+          >
+            <template #default="{ row }">{{ row.wechat || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="来源" min-width="120">
+            <template #default="{ row }">{{ row.source?.name || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="标签" min-width="170">
             <template #default="{ row }">
               <div v-if="row.tags.length" class="v2-record-tags" :title="optionNames(row.tags)">
                 <el-tag v-for="tag in row.tags" :key="tag.id" effect="plain">{{ tag.name }}</el-tag>
               </div>
-              <span v-else>-</span>
+              <span v-else>—</span>
             </template>
-          </el-table-column>
-          <el-table-column label="常开业务" min-width="190">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="常开业务" min-width="190">
             <template #default="{ row }">
               <div
                 v-if="row.services.length"
@@ -143,19 +149,31 @@
                   {{ service.name }}
                 </el-tag>
               </div>
-              <span v-else>-</span>
+              <span v-else>—</span>
             </template>
-          </el-table-column>
-          <el-table-column prop="recordStatus" label="状态" width="100" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="status"
+            width-preset="compact"
+            prop="recordStatus"
+            label="状态"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <el-tag :type="row.recordStatus === 'active' ? 'success' : 'info'" effect="plain">
                 {{ row.recordStatus === 'active' ? '启用' : '停用' }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column prop="updatedAt" label="更新时间" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="updatedAt"
+            label="更新时间"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
-          </el-table-column>
+          </V2TableColumn>
           <V2TableActionColumn layout="triple">
             <template #default="{ row }">
               <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(row)">
@@ -196,19 +214,19 @@
             <dl>
               <div>
                 <dt>手机号</dt>
-                <dd>{{ item.maskedPhone || '-' }}</dd>
+                <dd>{{ item.maskedPhone || '—' }}</dd>
               </div>
               <div>
                 <dt>微信</dt>
-                <dd>{{ item.wechat || '-' }}</dd>
+                <dd>{{ item.wechat || '—' }}</dd>
               </div>
               <div>
                 <dt>标签</dt>
-                <dd>{{ item.tags.map((tag) => tag.name).join('、') || '-' }}</dd>
+                <dd>{{ item.tags.map((tag) => tag.name).join('、') || '—' }}</dd>
               </div>
               <div>
                 <dt>常开业务</dt>
-                <dd>{{ item.services.map((service) => service.name).join('、') || '-' }}</dd>
+                <dd>{{ item.services.map((service) => service.name).join('、') || '—' }}</dd>
               </div>
             </dl>
             <footer>
@@ -262,7 +280,6 @@
       :title="editingItem ? '编辑客户' : '新增客户'"
       :confirm-text="editingItem ? '保存修改' : '确认新增'"
       :confirm-loading="saving"
-      :confirm-disabled="!form.name.trim()"
       @confirm="submitForm"
     >
       <el-form
@@ -273,6 +290,9 @@
         label-position="left"
         label-width="96px"
         require-asterisk-position="right"
+        status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
       >
         <el-form-item label="客户名称" prop="name">
           <el-input v-model="form.name" maxlength="120" show-word-limit />
@@ -345,12 +365,18 @@
 
     <el-dialog v-model="revealDialogVisible" title="查看完整手机号" width="min(440px, 92vw)">
       <el-form
+        ref="revealFormRef"
         class="v2-horizontal-form"
+        :model="revealForm"
+        :rules="revealRules"
         label-position="left"
         label-width="88px"
         require-asterisk-position="right"
+        status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
       >
-        <el-form-item label="查看原因" required>
+        <el-form-item label="查看原因" prop="reason">
           <el-input v-model="revealForm.reason" maxlength="200" />
         </el-form-item>
         <el-form-item label="审批编号">
@@ -362,14 +388,7 @@
       </el-form>
       <template #footer>
         <AppButton variant="ghost" @click="revealDialogVisible = false">关闭</AppButton>
-        <AppButton
-          variant="primary"
-          :loading="revealing"
-          :disabled="!revealForm.reason.trim()"
-          @click="revealPhone"
-        >
-          查看
-        </AppButton>
+        <AppButton variant="primary" :loading="revealing" @click="revealPhone"> 查看 </AppButton>
       </template>
     </el-dialog>
 
@@ -386,6 +405,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import {
   Delete,
   Edit,
@@ -422,6 +442,7 @@ const {
   revealDialogVisible,
   revealing,
   formRef,
+  revealFormRef,
   query,
   form,
   revealForm,
@@ -430,6 +451,7 @@ const {
   canDelete,
   canRevealPhone,
   formRules,
+  revealRules,
   hasLoadedOnce,
   isInitialLoading,
   loadCustomers,

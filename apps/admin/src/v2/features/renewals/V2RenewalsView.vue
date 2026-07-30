@@ -136,7 +136,8 @@
             </div>
           </template>
 
-          <el-table-column
+          <V2TableColumn
+            kind="text"
             prop="customer"
             label="客户"
             min-width="120"
@@ -144,30 +145,54 @@
             sortable="custom"
           >
             <template #default="{ row }">{{ row.customer.name }}</template>
-          </el-table-column>
-          <el-table-column prop="account" label="ID账号" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="identifier"
+            width-preset="identifier"
+            prop="account"
+            label="ID账号"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
-          </el-table-column>
-          <el-table-column label="国家" min-width="105">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="国家" min-width="105">
             <template #default="{ row }">{{ row.account.country.name }}</template>
-          </el-table-column>
-          <el-table-column label="客户网站账号" min-width="150">
-            <template #default="{ row }">{{ row.maskedWebsiteAccount || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="currentBalance" label="ID余额" min-width="92" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="wide" label="客户网站账号">
+            <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="compact"
+            prop="currentBalance"
+            label="ID余额"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <strong class="v2-renewal-balance">{{
                 formatDecimal(row.account.currentBalance)
               }}</strong>
             </template>
-          </el-table-column>
-          <el-table-column prop="service" label="当前业务" min-width="125" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="text"
+            prop="service"
+            label="当前业务"
+            min-width="125"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ row.service.name }}</template>
-          </el-table-column>
-          <el-table-column prop="dueAt" label="到期时间" min-width="150" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="dueAt"
+            label="到期时间"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ formatDate(row.dueAt) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="116" fixed="right">
+          </V2TableColumn>
+          <V2TableColumn kind="status" width-preset="compact" label="状态" fixed="right">
             <template #default="{ row }">
               <span class="v2-renewal-status">
                 <el-tag :type="statusType(row.status.code)" effect="plain">
@@ -179,7 +204,7 @@
                 </el-tag>
               </span>
             </template>
-          </el-table-column>
+          </V2TableColumn>
           <V2TableActionColumn layout="single">
             <template #default="{ row }">
               <el-tooltip
@@ -198,7 +223,7 @@
                     <el-icon><CirclePlus /></el-icon>
                     续费
                   </AppButton>
-                  <span v-else>-</span>
+                  <span v-else>—</span>
                 </span>
               </el-tooltip>
             </template>
@@ -235,7 +260,7 @@
               </div>
               <div>
                 <dt>网站账号</dt>
-                <dd>{{ item.maskedWebsiteAccount || '-' }}</dd>
+                <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
               </div>
               <div>
                 <dt>到期时间</dt>
@@ -283,66 +308,16 @@
       </section>
     </V2AsyncRegion>
 
-    <el-dialog
+    <V2RenewalWarningSettingsDialog
       v-model="warningSettingsVisible"
-      title="续费到期预警设置"
-      width="min(460px, 92vw)"
-      :close-on-click-modal="!warningSettingsSaving"
-      :close-on-press-escape="!warningSettingsSaving"
-    >
-      <section class="v2-renewal-warning-settings">
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          title="此设置全局生效"
-          :description="`设为 ${warningDaysInput} 天后，工作台和右上角提醒会显示未来 ${warningDaysInput} 天内到期的记录；已到期记录会单独统计。`"
-        />
-        <p v-if="warningSettingsLoading" class="v2-renewal-warning-settings__state">
-          正在读取当前设置…
-        </p>
-        <el-alert
-          v-else-if="warningSettingsError"
-          type="error"
-          :closable="false"
-          show-icon
-          :title="warningSettingsError"
-        />
-        <label v-else>
-          <span>提前预警天数</span>
-          <el-input-number
-            v-model="warningDaysInput"
-            :min="warningSettings.minWarningDays"
-            :max="warningSettings.maxWarningDays"
-            :step="1"
-            step-strictly
-            controls-position="right"
-            aria-label="提前预警天数"
-          />
-        </label>
-        <small>
-          可设置 {{ warningSettings.minWarningDays }}–{{ warningSettings.maxWarningDays }} 天。
-          实际录入续费仍只允许处理 7 天内到期或已到期记录。
-        </small>
-      </section>
-      <template #footer>
-        <AppButton
-          variant="ghost"
-          :disabled="warningSettingsSaving"
-          @click="warningSettingsVisible = false"
-        >
-          取消
-        </AppButton>
-        <AppButton
-          variant="primary"
-          :loading="warningSettingsSaving"
-          :disabled="warningSettingsLoading || Boolean(warningSettingsError)"
-          @click="saveWarningSettings"
-        >
-          保存设置
-        </AppButton>
-      </template>
-    </el-dialog>
+      v-model:warning-days="warningDaysInput"
+      :settings="warningSettings"
+      :loading="warningSettingsLoading"
+      :saving="warningSettingsSaving"
+      :error="warningSettingsError"
+      :can-manage="canManageWarning"
+      @save="saveWarningSettings"
+    />
 
     <V2RenewalOrderDrawer
       v-model="drawerVisible"
@@ -362,7 +337,7 @@
       :options-loading="optionsLoading"
       :options-error="optionsError"
       :submitting="submitting"
-      :can-submit="canSubmitRenewal"
+      :submit-disabled-reason="renewalSubmitDisabledReason"
       :platform-fee-preview="platformFeePreview"
       :balance-after-preview="balanceAfterPreview"
       :confirmation-message="confirmationMessage"
@@ -375,6 +350,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { CirclePlus, Refresh, Search, Setting } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -382,6 +358,7 @@ import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2StatusStrip from '@/v2/components/V2StatusStrip.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2RenewalOrderDrawer from './components/V2RenewalOrderDrawer.vue';
+import V2RenewalWarningSettingsDialog from './components/V2RenewalWarningSettingsDialog.vue';
 import { useRenewalsPage } from './useRenewalsPage';
 import '@/v2/styles/records.css';
 import '@/v2/styles/renewals.css';
@@ -416,7 +393,7 @@ const {
   selectedManualService,
   platformFeePreview,
   balanceAfterPreview,
-  canSubmitRenewal,
+  renewalSubmitDisabledReason,
   renewalStatusStripItems,
   activeWarningScope,
   emptyDescription,

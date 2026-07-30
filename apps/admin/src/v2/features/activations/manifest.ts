@@ -21,17 +21,18 @@ export const activationsFeature = defineV2Feature({
     { key: 'dueAt', label: '到期时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'order', label: '订单', minWidth: 150 },
-    { key: 'customer', label: '客户', minWidth: 140 },
-    { key: 'service', label: '业务', minWidth: 140 },
-    { key: 'account', label: '苹果ID', minWidth: 190 },
-    { key: 'websiteAccount', label: '客户网站账号', minWidth: 170 },
-    { key: 'openedAt', label: '开通日期', minWidth: 150 },
-    { key: 'dueAt', label: '到期日期', minWidth: 150 },
-    { key: 'status', label: '状态', minWidth: 130 },
+    { key: 'order', label: '订单', kind: 'identifier', minWidth: 192 },
+    { key: 'customer', label: '客户', kind: 'text', minWidth: 140 },
+    { key: 'service', label: '业务', kind: 'text', minWidth: 140 },
+    { key: 'account', label: '苹果ID', kind: 'identifier', minWidth: 192 },
+    { key: 'websiteAccount', label: '客户网站账号', kind: 'identifier', minWidth: 160 },
+    { key: 'openedAt', label: '开通日期', kind: 'date', minWidth: 165 },
+    { key: 'dueAt', label: '到期日期', kind: 'date', minWidth: 165 },
+    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
     {
       key: 'actions',
       label: '操作',
+      kind: 'actions',
       minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
       fixed: 'right'
     }

@@ -7,33 +7,53 @@ import { idBusinessV2BalancesApi, idBusinessV2ExchangeRatesApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
   V2_DECIMAL_PLACES,
-  formatV2Decimal,
-  isV2UnsignedDecimal,
-  multiplyDecimalStrings
+  addDecimalStrings,
+  divideDecimalStrings,
+  isV2UnsignedDecimal
 } from '@/v2/utils/decimal';
 import {
   buildManualGiftCardCreditPayload,
+  normalizeGiftCardCode,
   resolveUsdtRateReference,
   type V2TopupUsdtRateReference
 } from './gift-card-credit-form';
 import { useTopupListQuery } from './topup-query';
 import type {
+  V2GiftCardPurchaseSources,
   V2GiftCardReversalAction,
   V2OptionSelector,
   V2ReversibleGiftCard,
-  V2TopupServiceSummary,
+  V2TopupSupplierFundSelector,
   V2TopupBalancePreset,
   V2TopupWorkbenchItem,
   V2TopupWorkbenchListQuery,
   V2TopupWorkbenchSortBy
 } from './contracts';
+import type { V2FinanceCurrency } from '@apple-business/shared';
+import {
+  buildPurchaseSourceOptions,
+  calculateCreditCostPreview,
+  effectiveRateUnavailableMessage,
+  formatDate,
+  formatDecimal,
+  formatElapsed,
+  formatTime,
+  isValidBalanceInput,
+  maskGiftCardCode,
+  servicePath,
+  toLocalDateTimeInput
+} from './topup-workbench-support';
 
 export function useTopupWorkbenchPage() {
   const items = ref<V2TopupWorkbenchItem[]>([]);
   const total = ref(0);
   const evaluatedAt = ref('');
   const countryOptions = ref<V2OptionSelector[]>([]);
-  const topupSupplierOptions = ref<V2OptionSelector[]>([]);
+  const topupSupplierOptions = ref<V2TopupSupplierFundSelector[]>([]);
+  const purchaseSources = ref<V2GiftCardPurchaseSources>({
+    financeAccounts: [],
+    supplierWallets: []
+  });
   const authStore = useAuthStore();
   const router = useRouter();
   const canTopup = computed(() => hasUserPermission(authStore.user, 'apple.balance.topup'));
@@ -42,7 +62,6 @@ export function useTopupWorkbenchPage() {
   );
   const creditDrawerVisible = ref(false);
   const selectedAccount = ref<V2TopupWorkbenchItem | null>(null);
-  const candidateCode = ref('');
   const creditSubmitting = ref(false);
   const creditConfirmationVisible = ref(false);
   const creditIdempotencyKey = ref('');
@@ -62,45 +81,81 @@ export function useTopupWorkbenchPage() {
     giftCard: V2ReversibleGiftCard;
     action: V2GiftCardReversalAction;
   } | null>(null);
-  const reversalReason = ref('');
   const reversalIdempotencyKey = ref('');
   const reversalSubmitting = ref(false);
   const creditForm = reactive({
+    code: '',
     faceValue: '',
-    exchangeRate: '',
+    purchaseOriginalAmount: '',
+    purchaseCurrency: 'CNY' as V2FinanceCurrency,
+    purchaseFxRateToCny: '',
+    purchaseSourceId: '',
+    purchaseManualRateReason: '',
+    paidAt: toLocalDateTimeInput(new Date()),
     supplierOptionId: '',
     remark: ''
   });
-  const normalizedCreditCode = computed(() =>
-    candidateCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
-  );
-  const creditCostPreview = computed(() => {
-    if (
-      !isV2UnsignedDecimal(creditForm.faceValue) ||
-      !isV2UnsignedDecimal(creditForm.exchangeRate)
-    ) {
-      return '0';
-    }
-    return multiplyDecimalStrings(creditForm.faceValue, creditForm.exchangeRate);
+  const reversalForm = reactive({
+    reason: ''
   });
-  const canConfirmCredit = computed(
-    () =>
-      Boolean(selectedAccount.value) &&
-      /^[A-Z0-9]{10,64}$/.test(normalizedCreditCode.value) &&
-      /[A-Z]/.test(normalizedCreditCode.value) &&
-      /\d/.test(normalizedCreditCode.value) &&
-      isValidPositiveDecimal(creditForm.faceValue) &&
-      isValidPositiveDecimal(creditForm.exchangeRate) &&
-      Boolean(creditForm.supplierOptionId) &&
-      !creditSubmitting.value
+  const normalizedCreditCode = computed(() => normalizeGiftCardCode(creditForm.code));
+  const creditCostPreview = computed(() => calculateCreditCostPreview(creditForm));
+  const creditUnitCostPreview = computed(() => {
+    if (
+      !creditCostPreview.value ||
+      !isV2UnsignedDecimal(creditForm.faceValue, { allowZero: false })
+    ) {
+      return '';
+    }
+    return divideDecimalStrings(creditCostPreview.value, creditForm.faceValue, 8);
+  });
+  const purchaseSourceOptions = computed(() =>
+    buildPurchaseSourceOptions(purchaseSources.value, creditForm)
   );
+  const selectedPurchaseSource = computed(
+    () =>
+      purchaseSourceOptions.value.find((source) => source.value === creditForm.purchaseSourceId) ??
+      null
+  );
+  const creditProjectedSupplierBalance = computed(() => {
+    if (
+      selectedPurchaseSource.value?.kind !== 'wallet' ||
+      !isV2UnsignedDecimal(creditForm.purchaseOriginalAmount)
+    ) {
+      return null;
+    }
+    return addDecimalStrings(
+      selectedPurchaseSource.value.currentBalance,
+      `-${creditForm.purchaseOriginalAmount}`
+    );
+  });
+  const creditWillOverdraw = computed(
+    () => creditProjectedSupplierBalance.value?.startsWith('-') ?? false
+  );
+  const creditDisabledReason = computed(() => {
+    if (!selectedAccount.value) return '请先选择目标 ID';
+    if (!topupSupplierOptions.value.length) return '暂无启用的加卡供应商';
+    if (!creditForm.purchaseSourceId) return '请选择实际付款账户或供应商预存钱包';
+    if (creditWillOverdraw.value) return '供应商钱包余额不足，不能继续加卡';
+    return '';
+  });
   const creditConfirmationMessage = computed(() => {
     if (!selectedAccount.value) return '';
+    const supplierBalanceText =
+      selectedPurchaseSource.value?.kind === 'wallet'
+        ? `供应商钱包余额将从 ${formatDecimal(
+            selectedPurchaseSource.value.currentBalance
+          )} 变为 ${formatDecimal(creditProjectedSupplierBalance.value ?? '0')} ${
+            creditForm.purchaseCurrency
+          }。`
+        : '';
     return `确认向 ${selectedAccount.value.appleIdMasked} 入账礼品卡 ${maskGiftCardCode(
       normalizedCreditCode.value
-    )}，增加余额 ${creditForm.faceValue}，人民币成本约 ¥${formatDecimal(
-      creditCostPreview.value
-    )}。确认后将立即写入余额与不可变流水。`;
+    )}，增加余额 ${creditForm.faceValue}，实际支付 ${formatDecimal(
+      creditForm.purchaseOriginalAmount
+    )} ${creditForm.purchaseCurrency}，人民币成本${
+      creditCostPreview.value ? `约 ¥${formatDecimal(creditCostPreview.value)}` : '按交易汇率计算'
+    }。${supplierBalanceText}确认后将立即写入两套独立的不可变流水。`;
   });
   const reversalDialogTitle = computed(() =>
     pendingReversal.value?.action === 'redeemed' ? '确认标记被赎回' : '确认撤回礼品卡'
@@ -157,6 +212,7 @@ export function useTopupWorkbenchPage() {
       evaluatedAt.value = snapshot.list.evaluatedAt;
       countryOptions.value = snapshot.options.countries;
       topupSupplierOptions.value = snapshot.options.suppliers;
+      purchaseSources.value = snapshot.options.purchaseSources;
     },
     { immediate: true }
   );
@@ -255,10 +311,15 @@ export function useTopupWorkbenchPage() {
     creditDrawerVisible.value = true;
     creditConfirmationVisible.value = false;
     creditIdempotencyKey.value = createIdempotencyKey();
-    candidateCode.value = '';
     Object.assign(creditForm, {
+      code: '',
       faceValue: '',
-      exchangeRate: '',
+      purchaseOriginalAmount: '',
+      purchaseCurrency: 'CNY',
+      purchaseFxRateToCny: '',
+      purchaseSourceId: '',
+      purchaseManualRateReason: '',
+      paidAt: toLocalDateTimeInput(new Date()),
       supplierOptionId: '',
       remark: ''
     });
@@ -297,20 +358,34 @@ export function useTopupWorkbenchPage() {
   }
 
   function normalizeCandidateCode() {
-    candidateCode.value = normalizedCreditCode.value;
+    creditForm.code = normalizedCreditCode.value;
+  }
+
+  function handlePurchaseCurrencyChange() {
+    creditForm.purchaseSourceId = '';
+    if (creditForm.purchaseCurrency === 'CNY') {
+      creditForm.purchaseFxRateToCny = '';
+      creditForm.purchaseManualRateReason = '';
+    }
+  }
+
+  function handleSupplierChange() {
+    if (creditForm.purchaseSourceId.startsWith('wallet:')) {
+      creditForm.purchaseSourceId = '';
+    }
   }
 
   function openCreditConfirmation() {
     normalizeCandidateCode();
-    if (!canConfirmCredit.value) {
-      ElMessage.warning('请核对礼品卡号、面值、汇率和供应商');
+    if (creditDisabledReason.value) {
+      ElMessage.warning(creditDisabledReason.value);
       return;
     }
     creditConfirmationVisible.value = true;
   }
 
   async function submitGiftCardCredit() {
-    if (!selectedAccount.value || !canConfirmCredit.value || creditSubmitting.value) return;
+    if (!selectedAccount.value || creditDisabledReason.value || creditSubmitting.value) return;
 
     creditSubmitting.value = true;
     try {
@@ -319,7 +394,12 @@ export function useTopupWorkbenchPage() {
         buildManualGiftCardCreditPayload({
           code: normalizedCreditCode.value,
           faceValue: creditForm.faceValue,
-          exchangeRate: creditForm.exchangeRate,
+          purchaseOriginalAmount: creditForm.purchaseOriginalAmount,
+          purchaseCurrency: creditForm.purchaseCurrency,
+          purchaseFxRateToCny: creditForm.purchaseFxRateToCny,
+          purchaseSourceId: creditForm.purchaseSourceId,
+          purchaseManualRateReason: creditForm.purchaseManualRateReason,
+          paidAt: new Date(creditForm.paidAt).toISOString(),
           supplierOptionId: creditForm.supplierOptionId,
           idempotencyKey: creditIdempotencyKey.value,
           remark: creditForm.remark
@@ -346,7 +426,7 @@ export function useTopupWorkbenchPage() {
     reversalResolved.value = false;
     reversalLimited.value = false;
     pendingReversal.value = null;
-    reversalReason.value = '';
+    reversalForm.reason = '';
     reversalConfirmationVisible.value = false;
     reversalDrawerVisible.value = true;
     void loadReversibleGiftCards();
@@ -386,14 +466,14 @@ export function useTopupWorkbenchPage() {
       return;
     }
     pendingReversal.value = { giftCard, action };
-    reversalReason.value = '';
+    reversalForm.reason = '';
     reversalIdempotencyKey.value = createIdempotencyKey();
     reversalConfirmationVisible.value = true;
   }
 
   async function submitGiftCardReversal() {
     const pending = pendingReversal.value;
-    const reason = reversalReason.value.trim();
+    const reason = reversalForm.reason.trim();
     if (!pending || reversalSubmitting.value) return;
     if (reason.length < 2) {
       ElMessage.warning('处理原因至少填写 2 个字符');
@@ -437,75 +517,6 @@ export function useTopupWorkbenchPage() {
     return globalThis.crypto.randomUUID();
   }
 
-  function effectiveRateUnavailableMessage(reason: string | null) {
-    if (reason === 'latest_attempt_failed') {
-      return '最新一次 USDT 汇率采集失败，当前没有可展示的参考值。';
-    }
-    if (reason === 'stale') {
-      return '最近一次 USDT 汇率已经过期，当前没有可展示的参考值。';
-    }
-    if (reason === 'emergency_disabled') {
-      return 'USDT 汇率网络采集已关闭。';
-    }
-    if (reason === 'collection_in_progress') {
-      return 'USDT 汇率正在采集中，请稍后查看。';
-    }
-    return '暂无可展示的 USDT 参考汇率。';
-  }
-
-  function maskGiftCardCode(value: string) {
-    if (value.length < 8) return value;
-    return `${value.slice(0, 4)}****${value.slice(-4)}`;
-  }
-
-  function isValidPositiveDecimal(value: string) {
-    return isV2UnsignedDecimal(value, { allowZero: false });
-  }
-
-  function formatDecimal(value: string) {
-    return formatV2Decimal(value);
-  }
-
-  function isValidBalanceInput(value: string) {
-    return !value || isV2UnsignedDecimal(value);
-  }
-
-  function formatDate(value: string) {
-    return new Intl.DateTimeFormat('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  }
-
-  function formatTime(value: string) {
-    return new Intl.DateTimeFormat('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  }
-
-  function servicePath(service: V2TopupServiceSummary) {
-    return service.parent ? `${service.parent.name} / ${service.name}` : service.name;
-  }
-
-  function formatElapsed(value: string | null) {
-    if (!value) return '-';
-    const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
-    const hours = Math.floor(elapsed / 3_600_000);
-    if (hours < 48) {
-      return `${Math.max(1, hours)} 小时前`;
-    }
-    return `${Math.max(2, Math.floor(hours / 24))} 天前`;
-  }
-
   return {
     items,
     total,
@@ -514,11 +525,11 @@ export function useTopupWorkbenchPage() {
     listError,
     countryOptions,
     topupSupplierOptions,
+    purchaseSources,
     canTopup,
     canAdjustBalance,
     creditDrawerVisible,
     selectedAccount,
-    candidateCode,
     creditSubmitting,
     creditConfirmationVisible,
     exchangeRateLoading,
@@ -534,12 +545,17 @@ export function useTopupWorkbenchPage() {
     reversalLimited,
     reversalConfirmationVisible,
     pendingReversal,
-    reversalReason,
+    reversalForm,
     reversalSubmitting,
     creditForm,
     normalizedCreditCode,
     creditCostPreview,
-    canConfirmCredit,
+    creditUnitCostPreview,
+    purchaseSourceOptions,
+    selectedPurchaseSource,
+    creditProjectedSupplierBalance,
+    creditWillOverdraw,
+    creditDisabledReason,
     creditConfirmationMessage,
     reversalDialogTitle,
     reversalConfirmText,
@@ -556,6 +572,8 @@ export function useTopupWorkbenchPage() {
     openCreditDrawer,
     openAccountRecords,
     normalizeCandidateCode,
+    handlePurchaseCurrencyChange,
+    handleSupplierChange,
     openCreditConfirmation,
     submitGiftCardCredit,
     openReversalDrawer,

@@ -135,5 +135,8 @@ const ORDER_MUTATION_SCOPES = [
   'activations',
   'renewals',
   'order-entry-options',
-  'order-entry-matching'
+  'order-entry-matching',
+  'finance-accounts',
+  'finance-ledger',
+  'finance-reports'
 ] as const;

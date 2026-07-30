@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
+import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
 
@@ -21,6 +22,10 @@ const operator = {
 
 function decimal(value: Prisma.Decimal.Value) {
   return new Prisma.Decimal(value);
+}
+
+function cloudflareDecimal(value: Prisma.Decimal.Value) {
+  return new CloudflarePrisma.Decimal(String(value));
 }
 
 function makeDto(overrides: Record<string, unknown> = {}) {
@@ -78,6 +83,12 @@ function makeStoredOrder(overrides: Record<string, unknown> = {}) {
     websiteAccountHash: 'website-hash',
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('100'),
+    receivedOriginalAmount: decimal('100'),
+    receivedCurrency: 'CNY',
+    receivedFxRateToCny: decimal('1'),
+    receivedFxSnapshotId: null,
+    receivedFinanceAccountId: null,
+    receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
     accountCostAmount: decimal('0'),
@@ -145,11 +156,19 @@ describe('IdBusinessV2OrderEntryService', () => {
   const orderLockService = {
     reserveAccountForOrderInTransaction: vi.fn()
   };
+  const financeFxService = {
+    resolve: vi.fn().mockResolvedValue({
+      id: null,
+      rateToCny: new Prisma.Decimal(1),
+      source: 'cny_fixed'
+    })
+  };
   const service = new IdBusinessV2OrderEntryService(
     prisma as never,
     fieldEncryptionService as never,
     ordersService as never,
-    orderLockService as never
+    orderLockService as never,
+    financeFxService as never
   );
 
   beforeEach(() => {
@@ -289,6 +308,28 @@ describe('IdBusinessV2OrderEntryService', () => {
     });
   });
 
+  it('normalizes Cloudflare Prisma fees before creating an order', async () => {
+    tx.idBusinessV2Option.findFirst.mockImplementation(
+      async ({ where }: { where: { type: string } }) => {
+        if (where.type === 'service') return { id: serviceOptionId };
+        if (where.type === 'settlement_platform') {
+          return {
+            id: settlementPlatformOptionId,
+            fixedFee: cloudflareDecimal('1.25'),
+            percentageFee: cloudflareDecimal('4')
+          };
+        }
+        return null;
+      }
+    );
+
+    await service.create(makeDto({ receivedAmount: '128' }), operator);
+
+    const orderCreate = tx.idBusinessV2Order.create.mock.calls[0]?.[0];
+    expect(orderCreate.data.platformFeeAmount).toEqual(decimal('6.37'));
+    expect(orderCreate.data.platformFeeAmount.minus('1.25')).toEqual(decimal('5.12'));
+  });
+
   it('globally occupies a sold ID and snapshots its purchase cost in the same transaction', async () => {
     tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValueOnce(
       makeStoredOrder({
@@ -351,7 +392,10 @@ describe('IdBusinessV2OrderEntryService', () => {
 
   it('returns the original order for an exact idempotent replay without writing again', async () => {
     tx.idBusinessV2Order.findUnique.mockResolvedValue({
-      ...makeStoredOrder(),
+      ...makeStoredOrder({
+        receivedAmount: cloudflareDecimal('100'),
+        balanceAmount: cloudflareDecimal('20')
+      }),
       locks: [makeLock()]
     });
 
@@ -536,7 +580,8 @@ describe('IdBusinessV2OrderEntryService', () => {
           fixedFee: '1.5',
           percentageFee: '2.25'
         }
-      ]
+      ],
+      financeAccounts: []
     });
     expect(prisma.idBusinessV2Customer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

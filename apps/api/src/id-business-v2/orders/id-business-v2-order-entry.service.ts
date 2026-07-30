@@ -4,10 +4,19 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
+import { roundV2Decimal } from '../decimal-policy';
+import {
+  IdBusinessV2FinanceFxService,
+  normalizeFinanceCurrency,
+  normalizeFinanceDate,
+  normalizeFinanceMoney,
+  normalizeFinanceRate,
+  normalizeOptionalFinanceUuid
+} from '../finance/public-api';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
+import { getIdBusinessV2OrderEntryOptions } from './id-business-v2-order-entry-options';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import {
   assertOrderEntryReplayMatches,
@@ -16,7 +25,6 @@ import {
   isUniqueConstraintError,
   maskWebsiteAccount,
   normalizeCreateOrderInput,
-  normalizeOptionalString,
   toOrderEntryLockSummary,
   writeOrderEntryAuditLog,
   type OrderEntryLockSummary
@@ -57,188 +65,75 @@ export interface CreateManualRenewalOrderInput {
   remark: string | null;
 }
 
-const MAX_CUSTOMERS = 50;
-
 @Injectable()
 export class IdBusinessV2OrderEntryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly ordersService: IdBusinessV2OrdersService,
-    private readonly orderLockService: IdBusinessV2OrderLockService
+    private readonly orderLockService: IdBusinessV2OrderLockService,
+    private readonly financeFxService: IdBusinessV2FinanceFxService
   ) {}
 
   async getEntryOptions(customerKeywordValue?: string) {
-    const customerKeyword = normalizeOptionalString(customerKeywordValue, '客户搜索', 160);
-    const phoneHash = customerKeyword
-      ? this.fieldEncryptionService.hash(customerKeyword.replace(/\s+/g, ''))
-      : null;
-
-    const [customers, countries, categories, services, settlementPlatforms] =
-      await this.prisma.$transaction([
-        this.prisma.idBusinessV2Customer.findMany({
-          where: {
-            deletedAt: null,
-            recordStatus: 'active',
-            OR: customerKeyword
-              ? [
-                  {
-                    name: {
-                      contains: customerKeyword,
-                      mode: 'insensitive'
-                    }
-                  },
-                  {
-                    wechat: {
-                      contains: customerKeyword,
-                      mode: 'insensitive'
-                    }
-                  },
-                  {
-                    phoneTail: {
-                      contains: customerKeyword.slice(-8),
-                      mode: 'insensitive'
-                    }
-                  },
-                  {
-                    phoneHash: phoneHash ?? undefined
-                  }
-                ]
-              : undefined
-          },
-          select: {
-            id: true,
-            name: true,
-            wechat: true,
-            phoneMasked: true
-          },
-          take: MAX_CUSTOMERS,
-          orderBy: [{ name: 'asc' }, { id: 'asc' }]
-        }),
-        this.prisma.idBusinessV2Option.findMany({
-          where: {
-            type: 'country',
-            status: 'active',
-            deletedAt: null
-          },
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            currencyCode: true
-          },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-        }),
-        this.prisma.idBusinessV2Option.findMany({
-          where: {
-            type: 'business_category',
-            status: 'active',
-            deletedAt: null,
-            parentId: null
-          },
-          select: {
-            id: true,
-            code: true,
-            name: true
-          },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-        }),
-        this.prisma.idBusinessV2Option.findMany({
-          where: {
-            type: 'service',
-            status: 'active',
-            deletedAt: null,
-            businessAmount: {
-              gt: 0
-            },
-            parent: {
-              is: {
-                type: 'business_category',
-                status: 'active',
-                deletedAt: null
-              }
-            },
-            countryOption: {
-              is: {
-                type: 'country',
-                status: 'active',
-                deletedAt: null
-              }
-            }
-          },
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            parentId: true,
-            countryOptionId: true,
-            businessAmount: true,
-            countryOption: {
-              select: {
-                currencyCode: true
-              }
-            }
-          },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-        }),
-        this.prisma.idBusinessV2Option.findMany({
-          where: {
-            type: 'settlement_platform',
-            status: 'active',
-            deletedAt: null
-          },
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            fixedFee: true,
-            percentageFee: true
-          },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-        })
-      ]);
-
-    return {
-      customers: customers.map((customer) => ({
-        id: customer.id,
-        name: customer.name,
-        wechat: customer.wechat,
-        maskedPhone: customer.phoneMasked
-      })),
-      countries: countries.map((country) => ({
-        ...country,
-        children: categories
-          .map((category) => ({
-            ...category,
-            children: services
-              .filter(
-                (service) =>
-                  service.countryOptionId === country.id && service.parentId === category.id
-              )
-              .map((service) => ({
-                id: service.id,
-                code: service.code,
-                name: service.name,
-                businessAmount:
-                  service.businessAmount === null ? '0' : toV2DecimalString(service.businessAmount),
-                currencyCode: service.countryOption?.currencyCode ?? country.currencyCode
-              }))
-          }))
-          .filter((category) => category.children.length > 0)
-      })),
-      settlementPlatforms: settlementPlatforms.map((platform) => ({
-        id: platform.id,
-        code: platform.code,
-        name: platform.name,
-        fixedFee: toV2DecimalString(platform.fixedFee),
-        percentageFee: toV2DecimalString(platform.percentageFee)
-      }))
-    };
+    return getIdBusinessV2OrderEntryOptions(
+      this.prisma,
+      this.fieldEncryptionService,
+      customerKeywordValue
+    );
   }
 
   async create(dto: CreateIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
-    const input = normalizeCreateOrderInput(dto, (value) =>
-      this.fieldEncryptionService.hash(value)
+    const receivedCurrency = normalizeFinanceCurrency(dto.receivedCurrency ?? 'CNY', '收款币种');
+    if (dto.receivedOriginalAmount === undefined && dto.receivedAmount === undefined) {
+      throw new BadRequestException('原币收款金额不能为空');
+    }
+    const receivedOriginalAmount =
+      dto.receivedOriginalAmount === undefined
+        ? normalizeFinanceMoney(dto.receivedAmount, '实收金额', true)
+        : normalizeFinanceMoney(dto.receivedOriginalAmount, '原币收款金额', true);
+    const inputBeforeRate = normalizeCreateOrderInput(
+      {
+        ...dto,
+        receivedAmount: dto.receivedAmount ?? receivedOriginalAmount.toString()
+      },
+      (value) => this.fieldEncryptionService.hash(value)
+    );
+    const receivedAt = dto.receivedAt
+      ? normalizeFinanceDate(dto.receivedAt, '收款时间')
+      : inputBeforeRate.openedAt;
+    const manualRate =
+      dto.receivedFxRateToCny === undefined
+        ? null
+        : normalizeFinanceRate(dto.receivedFxRateToCny, receivedCurrency);
+    const receiptRate = await this.financeFxService.resolve({
+      currency: receivedCurrency,
+      occurredAt: receivedAt,
+      fxRateSnapshotId: dto.receivedFxSnapshotId,
+      manualRate,
+      manualReason: dto.receivedManualRateReason,
+      operator
+    });
+    const derivedReceivedAmount = roundV2Decimal(receivedOriginalAmount.mul(receiptRate.rateToCny));
+    if (
+      dto.receivedAmount !== undefined &&
+      !derivedReceivedAmount.equals(inputBeforeRate.receivedAmount)
+    ) {
+      throw new BadRequestException('人民币实收与原币金额、交易汇率计算结果不一致');
+    }
+    const input =
+      dto.receivedAmount === undefined
+        ? normalizeCreateOrderInput(
+            {
+              ...dto,
+              receivedAmount: derivedReceivedAmount.toString()
+            },
+            (value) => this.fieldEncryptionService.hash(value)
+          )
+        : inputBeforeRate;
+    const receivedFinanceAccountId = normalizeOptionalFinanceUuid(
+      dto.receivedFinanceAccountId,
+      '收款账户'
     );
     let transactionResult: {
       orderId: string;
@@ -263,6 +158,15 @@ export class IdBusinessV2OrderEntryService {
         });
         if (existing) {
           assertOrderEntryReplayMatches(existing, existing.locks[0] ?? null, input);
+          if (
+            existing.receivedCurrency !== receivedCurrency ||
+            !existing.receivedOriginalAmount.equals(receivedOriginalAmount) ||
+            !existing.receivedFxRateToCny.equals(receiptRate.rateToCny) ||
+            existing.receivedFinanceAccountId !== receivedFinanceAccountId ||
+            existing.receivedAt?.getTime() !== receivedAt.getTime()
+          ) {
+            throw new ConflictException('幂等键已用于其他收款证据');
+          }
           return {
             orderId: existing.id,
             lock: toOrderEntryLockSummary(existing.locks[0] ?? null),
@@ -276,6 +180,18 @@ export class IdBusinessV2OrderEntryService {
           tx,
           input.settlementPlatformOptionId
         );
+        if (receivedFinanceAccountId) {
+          const financeAccount = await tx.idBusinessV2FinanceAccount.findUnique({
+            where: { id: receivedFinanceAccountId }
+          });
+          if (
+            !financeAccount ||
+            financeAccount.status !== 'active' ||
+            financeAccount.currency !== receivedCurrency
+          ) {
+            throw new BadRequestException('收款账户不存在、已停用或币种不一致');
+          }
+        }
         const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
         const order = await tx.idBusinessV2Order.create({
           data: {
@@ -289,6 +205,12 @@ export class IdBusinessV2OrderEntryService {
             websiteAccountHash: input.websiteAccountHash,
             websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
             receivedAmount: input.receivedAmount,
+            receivedOriginalAmount,
+            receivedCurrency,
+            receivedFxRateToCny: receiptRate.rateToCny,
+            receivedFxSnapshotId: receiptRate.id,
+            receivedFinanceAccountId,
+            receivedAt,
             platformFeeAmount,
             accountCostAmount: 0,
             accountDisposition: input.accountDisposition,
@@ -404,6 +326,10 @@ export class IdBusinessV2OrderEntryService {
         websiteAccountHash: input.websiteAccountHash,
         websiteAccountMasked: input.websiteAccountMasked,
         receivedAmount: input.receivedAmount,
+        receivedOriginalAmount: input.receivedAmount,
+        receivedCurrency: 'CNY',
+        receivedFxRateToCny: 1,
+        receivedAt: input.openedAt,
         platformFeeAmount,
         accountCostAmount: 0,
         accountDisposition: 'retained',
@@ -482,6 +408,10 @@ export class IdBusinessV2OrderEntryService {
         websiteAccountHash: input.websiteAccountHash,
         websiteAccountMasked: input.websiteAccountMasked,
         receivedAmount: input.receivedAmount,
+        receivedOriginalAmount: input.receivedAmount,
+        receivedCurrency: 'CNY',
+        receivedFxRateToCny: 1,
+        receivedAt: input.openedAt,
         platformFeeAmount,
         accountCostAmount: 0,
         accountDisposition: 'retained',

@@ -4,7 +4,12 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, toV2DecimalString } from '../decimal-policy';
+import {
+  V2_DECIMAL_PLACES,
+  V2_DECIMAL_ROUNDING_MODE,
+  toV2Decimal,
+  toV2DecimalString
+} from '../decimal-policy';
 import type { ConsumeIdBusinessV2OrderDto } from './dto/consume-id-business-v2-order.dto';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
@@ -88,11 +93,13 @@ export class IdBusinessV2OrderConsumptionService {
           prepared.order.accountDisposition === 'sold'
             ? accountCostAmount
             : new PrismaNamespace.Decimal(0);
-        const refundCostAmount = prepared.order.refundCostAmount ?? new PrismaNamespace.Decimal(0);
-        const profitAmount = prepared.order.receivedAmount
-          .minus(prepared.order.platformFeeAmount)
+        const receivedAmount = toV2Decimal(prepared.order.receivedAmount);
+        const platformFeeAmount = toV2Decimal(prepared.order.platformFeeAmount);
+        const refundCostAmount = toV2Decimal(prepared.order.refundCostAmount ?? 0);
+        const profitAmount = receivedAmount
+          .minus(platformFeeAmount)
           .minus(appliedAccountCostAmount)
-          .minus(movement.costAmount)
+          .minus(toV2Decimal(movement.costAmount))
           .minus(refundCostAmount)
           .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
         this.assertSignedAmountWithinRange(profitAmount, '订单利润');
@@ -157,7 +164,7 @@ export class IdBusinessV2OrderConsumptionService {
             accountDisposition: prepared.order.accountDisposition,
             accountCostAmount,
             appliedAccountCostAmount,
-            platformFeeAmount: prepared.order.platformFeeAmount,
+            platformFeeAmount,
             refundCostAmount,
             profitAmount,
             movement,
@@ -225,13 +232,13 @@ export class IdBusinessV2OrderConsumptionService {
       reversal.reversalOfEntryId === entry.id;
     const reversalMatchesOriginal =
       reversedEvidenceIsValid &&
-      reversal.balanceAmount.equals(entry.balanceAmount) &&
-      reversal.costAmount.equals(entry.costAmount);
+      toV2Decimal(reversal.balanceAmount).equals(toV2Decimal(entry.balanceAmount)) &&
+      toV2Decimal(reversal.costAmount).equals(toV2Decimal(entry.costAmount));
     if (
       reversal &&
       (!reversalMatchesOriginal ||
         (order.status !== 'cancelled' && order.status !== 'refunded') ||
-        !order.balanceCostAmount.equals(0))
+        !toV2Decimal(order.balanceCostAmount).equals(0))
     ) {
       throw new ConflictException('订单已有消费撤销流水，但撤销证据不完整，请人工检查');
     }
@@ -241,8 +248,8 @@ export class IdBusinessV2OrderConsumptionService {
       entry.accountId !== order.accountId ||
       entry.entryType !== 'order_consumption' ||
       entry.direction !== 'debit' ||
-      !entry.balanceAmount.equals(order.balanceAmount) ||
-      (!reversal && !entry.costAmount.equals(order.balanceCostAmount)) ||
+      !toV2Decimal(entry.balanceAmount).equals(toV2Decimal(order.balanceAmount)) ||
+      (!reversal && !toV2Decimal(entry.costAmount).equals(toV2Decimal(order.balanceCostAmount))) ||
       order.profitAmount === null ||
       order.status === 'draft' ||
       order.status === 'pending'
@@ -252,10 +259,7 @@ export class IdBusinessV2OrderConsumptionService {
   }
 
   private normalizeStoredAmount(value: PrismaNamespace.Decimal.Value, label: string) {
-    const amount = new PrismaNamespace.Decimal(value).toDecimalPlaces(
-      V2_DECIMAL_PLACES,
-      ROUNDING_MODE
-    );
+    const amount = toV2Decimal(value).toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
     if (amount.isNegative() || amount.greaterThan(MAX_SIGNED_AMOUNT)) {
       throw new BadRequestException(`${label}数值超出数据库范围`);
     }

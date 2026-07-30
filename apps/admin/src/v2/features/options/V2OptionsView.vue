@@ -108,88 +108,119 @@
                   </div>
                 </template>
 
-                <el-table-column prop="name" label="选项名称" min-width="180" sortable="custom">
+                <V2TableColumn
+                  kind="text"
+                  prop="name"
+                  label="选项名称"
+                  min-width="180"
+                  sortable="custom"
+                >
                   <template #default="{ row }">
                     <strong class="v2-table-cell">{{ row.name }}</strong>
                   </template>
-                </el-table-column>
-                <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+                </V2TableColumn>
+                <V2TableColumn
+                  kind="text"
+                  prop="remark"
+                  label="备注"
+                  min-width="180"
+                  show-overflow-tooltip
+                />
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.parentType"
+                  kind="text"
                   label="上级选项"
                   min-width="160"
                 >
-                  <template #default="{ row }">{{ row.parent?.name ?? '-' }}</template>
-                </el-table-column>
+                  <template #default="{ row }">{{ row.parent?.name ?? '—' }}</template>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.requiresCountry"
+                  kind="text"
                   label="上级国家"
                   min-width="130"
                 >
-                  <template #default="{ row }">{{ row.country?.name ?? '-' }}</template>
-                </el-table-column>
+                  <template #default="{ row }">{{ row.country?.name ?? '—' }}</template>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.supportsBusinessAmount"
+                  kind="numeric"
+                  width-preset="standard"
                   label="业务金额"
-                  min-width="130"
                 >
                   <template #default="{ row }">
-                    {{ formatDecimal(row.businessAmount ?? '0') }} {{ row.currencyCode ?? '-' }}
+                    {{ formatDecimal(row.businessAmount ?? '0') }} {{ row.currencyCode ?? '—' }}
                   </template>
-                </el-table-column>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.supportsCurrency"
+                  kind="text"
                   label="默认货币"
                   min-width="110"
                 >
-                  <template #default="{ row }">{{ row.currencyCode ?? '-' }}</template>
-                </el-table-column>
+                  <template #default="{ row }">{{ row.currencyCode ?? '—' }}</template>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.supportsFees"
+                  kind="numeric"
+                  width-preset="standard"
                   label="固定手续费"
-                  min-width="130"
                 >
                   <template #default="{ row }">¥{{ formatDecimal(row.fixedFee) }}</template>
-                </el-table-column>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
                   v-if="activeTypeDefinition?.supportsFees"
+                  kind="numeric"
+                  width-preset="wide"
                   label="百分比手续费"
-                  min-width="140"
                 >
                   <template #default="{ row }">{{ formatDecimal(row.percentageFee) }}%</template>
-                </el-table-column>
+                </V2TableColumn>
 
-                <el-table-column prop="sortOrder" label="排序" width="90" sortable="custom" />
+                <V2TableColumn
+                  kind="numeric"
+                  width-preset="compact"
+                  prop="sortOrder"
+                  label="排序"
+                  sortable="custom"
+                />
 
-                <el-table-column label="属性" width="110">
+                <V2TableColumn kind="status" width-preset="compact" label="属性">
                   <template #default="{ row }">
                     <el-tag v-if="row.isSystem" type="warning" effect="plain">系统固定</el-tag>
-                    <span v-else>-</span>
+                    <span v-else>—</span>
                   </template>
-                </el-table-column>
+                </V2TableColumn>
 
-                <el-table-column prop="status" label="状态" width="100" sortable="custom">
+                <V2TableColumn
+                  kind="status"
+                  width-preset="compact"
+                  prop="status"
+                  label="状态"
+                  sortable="custom"
+                >
                   <template #default="{ row }">
                     <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
                       {{ row.status === 'active' ? '启用' : '停用' }}
                     </el-tag>
                   </template>
-                </el-table-column>
+                </V2TableColumn>
 
-                <el-table-column
+                <V2TableColumn
+                  kind="date"
+                  width-preset="dateTime"
                   prop="updatedAt"
                   label="更新时间"
-                  min-width="170"
                   sortable="custom"
                 >
                   <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
-                </el-table-column>
+                </V2TableColumn>
 
                 <V2TableActionColumn layout="double">
                   <template #default="{ row }">
@@ -232,18 +263,18 @@
                   <dl>
                     <div v-if="activeTypeDefinition?.requiresCountry">
                       <dt>上级国家</dt>
-                      <dd>{{ item.country?.name ?? '-' }}</dd>
+                      <dd>{{ item.country?.name ?? '—' }}</dd>
                     </div>
                     <div v-if="activeTypeDefinition?.supportsBusinessAmount">
                       <dt>业务金额</dt>
                       <dd>
                         {{ formatDecimal(item.businessAmount ?? '0') }}
-                        {{ item.currencyCode ?? '-' }}
+                        {{ item.currencyCode ?? '—' }}
                       </dd>
                     </div>
                     <div v-if="activeTypeDefinition?.supportsCurrency">
                       <dt>默认货币</dt>
-                      <dd>{{ item.currencyCode ?? '-' }}</dd>
+                      <dd>{{ item.currencyCode ?? '—' }}</dd>
                     </div>
                     <div v-if="activeTypeDefinition?.supportsFees">
                       <dt>固定手续费</dt>
@@ -330,7 +361,7 @@
       v-model:remark="form.remark"
       :editing-item="editingItem"
       :saving="saving"
-      :submit-disabled="submitDisabled"
+      :submit-disabled-reason="submitDisabledReason"
       :type-definitions="typeDefinitions"
       :form-type-definition="formTypeDefinition"
       :parent-type-label="parentTypeLabel"
@@ -358,6 +389,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
@@ -397,7 +429,7 @@ const {
   formTypeDefinition,
   parentTypeLabel,
   selectedServiceCurrency,
-  submitDisabled,
+  submitDisabledReason,
   isInitialLoading,
   loadInitialData,
   handleTypeChange,

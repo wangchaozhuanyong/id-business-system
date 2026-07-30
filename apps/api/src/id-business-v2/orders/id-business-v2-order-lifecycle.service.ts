@@ -9,6 +9,8 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { toV2Decimal } from '../decimal-policy';
+import { IdBusinessV2FinancePostingService, normalizeFinanceDate } from '../finance/public-api';
 import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
@@ -51,7 +53,8 @@ export class IdBusinessV2OrderLifecycleService {
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly orderLockService: IdBusinessV2OrderLockService,
-    private readonly ordersService: IdBusinessV2OrdersService
+    private readonly ordersService: IdBusinessV2OrdersService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {
     this.support = new IdBusinessV2OrderLifecycleSupport(
       prisma,
@@ -79,6 +82,27 @@ export class IdBusinessV2OrderLifecycleService {
         }
         if (!EDITABLE_STATUSES.has(order.status)) {
           throw new ConflictException('当前订单状态不能修改');
+        }
+        const immutableReceiptEvidenceRequested = [
+          dto.receivedOriginalAmount,
+          dto.receivedCurrency,
+          dto.receivedFxRateToCny,
+          dto.receivedFxSnapshotId,
+          dto.receivedManualRateReason
+        ].some((value) => value !== undefined);
+        if (immutableReceiptEvidenceRequested) {
+          throw new ConflictException('原币金额、币种和汇率快照只能在订单录入时确定');
+        }
+        if (
+          (dto.receivedAmount !== undefined ||
+            dto.receivedFinanceAccountId !== undefined ||
+            dto.receivedAt !== undefined) &&
+          (order.status === 'completed' || order.status === 'refunded')
+        ) {
+          throw new ConflictException('已完成或已退款订单的收款证据不可直接修改，请冲销并重记');
+        }
+        if (dto.receivedAmount !== undefined && order.receivedCurrency !== 'CNY') {
+          throw new ConflictException('非人民币订单的实收金额必须连同原币汇率证据冲销并重记');
         }
 
         const [consumption, activation, activeLock] = await Promise.all([
@@ -144,6 +168,18 @@ export class IdBusinessV2OrderLifecycleService {
           dto.receivedAmount === undefined
             ? order.receivedAmount
             : this.support.normalizeAmount(dto.receivedAmount, '实收金额', true);
+        const receivedOriginalAmount =
+          dto.receivedAmount !== undefined && order.receivedCurrency === 'CNY'
+            ? receivedAmount
+            : order.receivedOriginalAmount;
+        const receivedFinanceAccountId =
+          dto.receivedFinanceAccountId === undefined
+            ? order.receivedFinanceAccountId
+            : this.support.normalizeOptionalUuid(dto.receivedFinanceAccountId, '收款账户');
+        const receivedAt =
+          dto.receivedAt === undefined
+            ? order.receivedAt
+            : normalizeFinanceDate(dto.receivedAt, '收款时间');
         const balanceAmount =
           dto.balanceAmount === undefined
             ? order.balanceAmount
@@ -173,7 +209,7 @@ export class IdBusinessV2OrderLifecycleService {
           order.serviceOptionId !== serviceOptionId ||
           order.accountId !== accountId ||
           order.accountDisposition !== accountDisposition ||
-          !order.balanceAmount.equals(balanceAmount) ||
+          !toV2Decimal(order.balanceAmount).equals(toV2Decimal(balanceAmount)) ||
           order.dueAt?.getTime() !== dueAt.getTime() ||
           activeLock?.lockScope !== lockScope;
         const lockSensitiveChanged = !consumption && reservationChanged;
@@ -201,6 +237,18 @@ export class IdBusinessV2OrderLifecycleService {
           receivedAmount,
           settlementPlatform
         );
+        if (receivedFinanceAccountId) {
+          const financeAccount = await tx.idBusinessV2FinanceAccount.findUnique({
+            where: { id: receivedFinanceAccountId }
+          });
+          if (
+            !financeAccount ||
+            financeAccount.status !== 'active' ||
+            financeAccount.currency !== order.receivedCurrency
+          ) {
+            throw new BadRequestException('收款账户不存在、已停用或币种不一致');
+          }
+        }
         const accountCostAmount = await applyUpdatedOrderAccountDisposition(
           tx,
           order,
@@ -250,6 +298,9 @@ export class IdBusinessV2OrderLifecycleService {
             websiteAccountHash: website.hash,
             websiteAccountMasked: website.masked,
             receivedAmount,
+            receivedOriginalAmount,
+            receivedFinanceAccountId,
+            receivedAt,
             platformFeeAmount,
             balanceAmount,
             accountDisposition,
@@ -334,6 +385,12 @@ export class IdBusinessV2OrderLifecycleService {
               platformOrderNo,
               websiteAccountMasked: website.masked,
               receivedAmount: receivedAmount.toString(),
+              receivedOriginalAmount: receivedOriginalAmount.toString(),
+              receivedCurrency: order.receivedCurrency,
+              receivedFxRateToCny: order.receivedFxRateToCny.toString(),
+              receivedFxSnapshotId: order.receivedFxSnapshotId,
+              receivedFinanceAccountId,
+              receivedAt,
               platformFeeAmount: platformFeeAmount.toString(),
               balanceAmount: balanceAmount.toString(),
               accountDisposition,
@@ -496,6 +553,7 @@ export class IdBusinessV2OrderLifecycleService {
     return refundIdBusinessV2Order(
       this.support,
       this.orderLockService,
+      this.financePostingService,
       orderIdValue,
       dto,
       operator
