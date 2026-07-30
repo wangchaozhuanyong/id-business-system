@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const rolesFeature = defineV2Feature({
@@ -5,32 +6,32 @@ export const rolesFeature = defineV2Feature({
   title: '角色权限',
   group: '系统管理',
   route: '/v2/system/roles',
-  sourceSheet: '规划占位-角色权限',
+  sourceSheet: '系统管理-角色权限',
   requiredRoles: ['admin'],
-  status: 'planned',
-  kind: 'planned',
+  kind: 'list',
   freshnessPolicy: 'event-driven',
-  summary: '按角色集中管理页面、操作和敏感资料访问权限。',
-  plannedSections: [
+  filters: [
     {
-      title: '角色列表',
-      description: '规划系统角色、自定义角色、说明和启用状态。'
-    },
-    {
-      title: '权限矩阵',
-      description: '按业务模块展示查看、创建、修改、删除和敏感操作权限。'
-    },
-    {
-      title: '角色成员',
-      description: '查看角色下的员工，并规划批量调整入口。'
-    },
-    {
-      title: '变更审计',
-      description: '角色和权限变更必须保存操作者、差异和原因。'
+      key: 'keyword',
+      label: '搜索',
+      kind: 'search',
+      placeholder: '角色名称、编码或说明'
     }
   ],
-  safetyNotice: '当前不会修改数据库中的角色、权限或员工角色关系。',
-  filters: [],
-  columns: [],
+  columns: [
+    { key: 'name', label: '角色名称', kind: 'text', widthPreset: 'wide', fixed: 'left' },
+    { key: 'code', label: '角色编码', kind: 'identifier', widthPreset: 'identifier' },
+    { key: 'description', label: '角色说明', kind: 'text', widthPreset: 'wide' },
+    { key: 'permissionCount', label: '权限数量', kind: 'numeric', widthPreset: 'compact' },
+    { key: 'memberCount', label: '成员数量', kind: 'numeric', widthPreset: 'compact' },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+    {
+      key: 'actions',
+      label: '操作',
+      kind: 'actions',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
+      fixed: 'right'
+    }
+  ],
   loadView: () => import('./V2RolesView.vue')
 });

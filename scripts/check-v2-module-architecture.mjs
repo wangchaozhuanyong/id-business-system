@@ -36,9 +36,7 @@ const plannedFeatures = new Set([
   'business-monitoring',
   'dashboard',
   'data-governance',
-  'employees',
   'profile',
-  'roles',
   'security',
   'system-monitoring'
 ]);

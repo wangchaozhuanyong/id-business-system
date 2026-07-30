@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { AuthenticatedUser } from './auth.types';
-import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './auth.decorators';
+import { IS_PUBLIC_KEY, PERMISSIONS_KEY, REQUIRED_ROLES_KEY } from './auth.decorators';
 
 interface RequestWithUser {
   user?: AuthenticatedUser;
@@ -21,12 +21,16 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(REQUIRED_ROLES_KEY, [
+      context.getHandler(),
+      context.getClass()
+    ]);
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
       context.getHandler(),
       context.getClass()
     ]);
 
-    if (!requiredPermissions?.length) {
+    if (!requiredRoles?.length && !requiredPermissions?.length) {
       return true;
     }
 
@@ -35,6 +39,17 @@ export class PermissionsGuard implements CanActivate {
 
     if (!user) {
       throw new ForbiddenException('Permission check requires authenticated user');
+    }
+
+    if (
+      requiredRoles?.length &&
+      !requiredRoles.some((requiredRole) => user.roles.includes(requiredRole))
+    ) {
+      throw new ForbiddenException('Required role is missing');
+    }
+
+    if (!requiredPermissions?.length) {
+      return true;
     }
 
     if (user.roles.includes('admin')) {

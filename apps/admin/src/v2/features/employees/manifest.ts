@@ -1,3 +1,4 @@
+import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
 
 export const employeesFeature = defineV2Feature({
@@ -5,32 +6,50 @@ export const employeesFeature = defineV2Feature({
   title: '员工账户',
   group: '系统管理',
   route: '/v2/system/employees',
-  sourceSheet: '规划占位-员工账户',
+  sourceSheet: '系统管理-员工账户',
   requiredRoles: ['admin'],
-  status: 'planned',
-  kind: 'planned',
+  kind: 'list',
   freshnessPolicy: 'event-driven',
-  summary: '由管理员统一开通、停用和管理内部员工登录账户。',
-  plannedSections: [
+  filters: [
     {
-      title: '员工列表',
-      description: '规划分页、搜索、状态、角色和最近登录信息。'
+      key: 'keyword',
+      label: '搜索',
+      kind: 'search',
+      placeholder: '登录账号、员工姓名'
     },
     {
-      title: '开通账户',
-      description: '由管理员创建内部账号，不提供公开注册入口。'
+      key: 'status',
+      label: '状态',
+      kind: 'select',
+      options: ['启用', '停用']
     },
     {
-      title: '账号状态',
-      description: '规划启用、停用、强制退出和密码重置流程。'
-    },
-    {
-      title: '角色分配',
-      description: '为员工分配受控角色，并记录变更前后的审计信息。'
+      key: 'roleId',
+      label: '角色',
+      kind: 'select'
     }
   ],
-  safetyNotice: '当前不会创建、停用或修改任何真实员工账户。',
-  filters: [],
-  columns: [],
+  columns: [
+    { key: 'username', label: '登录账号', kind: 'identifier', widthPreset: 'identifier' },
+    { key: 'displayName', label: '员工姓名', kind: 'text', widthPreset: 'wide' },
+    { key: 'roles', label: '角色', kind: 'text', widthPreset: 'wide' },
+    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+    {
+      key: 'activeSessionCount',
+      label: '在线会话',
+      kind: 'numeric',
+      widthPreset: 'compact'
+    },
+    { key: 'passwordState', label: '密码状态', kind: 'status', widthPreset: 'standard' },
+    { key: 'lastLoginAt', label: '最近登录', kind: 'date', widthPreset: 'dateTime' },
+    { key: 'createdAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
+    {
+      key: 'actions',
+      label: '操作',
+      kind: 'actions',
+      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
+      fixed: 'right'
+    }
+  ],
   loadView: () => import('./V2EmployeesView.vue')
 });
