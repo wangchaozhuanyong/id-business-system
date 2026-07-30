@@ -28,21 +28,59 @@
             </div>
           </template>
 
-          <el-table-column label="序号" width="72" fixed="left">
+          <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
             <template #default="{ $index }">{{ giftCardRowNumber($index) }}</template>
-          </el-table-column>
-          <el-table-column label="礼品卡号" min-width="175" fixed="left">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡号" fixed="left">
             <template #default="{ row }">
-              <strong class="v2-topup-records-code">{{ row.codeMasked }}</strong>
+              <div class="v2-topup-records-code-cell">
+                <strong class="v2-topup-records-code">{{ row.codeMasked }}</strong>
+                <AppButton
+                  v-if="canRevealGiftCard"
+                  size="small"
+                  variant="ghost"
+                  @click="openRevealCode(row)"
+                >
+                  查看完整
+                </AppButton>
+              </div>
             </template>
-          </el-table-column>
-          <el-table-column prop="faceValue" label="面值" min-width="95" sortable="custom">
-            <template #default="{ row }">{{ formatDecimal(row.faceValue) }}</template>
-          </el-table-column>
-          <el-table-column prop="exchangeRate" label="卡片汇率" min-width="110" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="compact"
+            prop="faceValue"
+            label="面值"
+            sortable="custom"
+          >
+            <template #default="{ row }">
+              {{ formatDecimal(row.faceValue) }} {{ row.country.currencyCode || '' }}
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="compact"
+            prop="exchangeRate"
+            label="卡片汇率"
+            sortable="custom"
+          >
             <template #default="{ row }">¥{{ formatDecimal(row.exchangeRate) }}</template>
-          </el-table-column>
-          <el-table-column label="加入 ID" min-width="190">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
+            prop="costAmount"
+            label="本次人民币成本"
+            sortable="custom"
+          >
+            <template #default="{ row }">¥{{ formatDecimal(row.costAmount) }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" label="实际付款" min-width="135">
+            <template #default="{ row }">
+              {{ formatDecimal(row.purchaseOriginalAmount) }} {{ row.purchaseCurrency }}
+            </template>
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="加入 ID">
             <template #default="{ row }">
               {{ row.account.appleIdMasked }}
               <el-tag
@@ -54,65 +92,113 @@
                 已报损
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="国家" min-width="105">
-            <template #default="{ row }">{{ row.account.country.name }}</template>
-          </el-table-column>
-          <el-table-column label="供应商" min-width="125">
-            <template #default="{ row }">{{ row.supplier?.name || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="加入前余额" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="国家" min-width="105">
+            <template #default="{ row }">{{ row.country.name }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="供应商" min-width="125">
+            <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡前余额">
             <template #default="{ row }">
               {{ formatOptionalDecimal(row.creditedLedger?.balanceBefore) }}
             </template>
-          </el-table-column>
-          <el-table-column label="加入后余额" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡后余额">
             <template #default="{ row }">
               {{ formatOptionalDecimal(row.creditedLedger?.balanceAfter) }}
             </template>
-          </el-table-column>
-          <el-table-column
-            prop="statusChangedAt"
-            label="变动时间"
-            min-width="165"
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" label="供应商扣款前余额" min-width="150">
+            <template #default="{ row }">
+              {{
+                row.supplierFunding
+                  ? `¥${formatDecimal(row.supplierFunding.balanceBeforeCny)}`
+                  : '—（切账前）'
+              }}
+            </template>
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" label="供应商扣款后余额" min-width="150">
+            <template #default="{ row }">
+              {{
+                row.supplierFunding
+                  ? `¥${formatDecimal(row.supplierFunding.balanceAfterCny)}`
+                  : '—（切账前）'
+              }}
+            </template>
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="操作人" min-width="115">
+            <template #default="{ row }">
+              {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="createdAt"
+            label="加卡时间"
             sortable="custom"
           >
-            <template #default="{ row }">{{ formatDate(row.statusChangedAt) }}</template>
-          </el-table-column>
-          <el-table-column prop="status" label="状态" min-width="105" sortable="custom">
+            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+          </V2TableColumn>
+          <V2TableColumn
+            kind="status"
+            width-preset="compact"
+            prop="status"
+            label="状态"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <el-tag :type="giftCardStatusType(row.status)" effect="plain">
                 {{ giftCardStatusLabel(row.status) }}
               </el-tag>
             </template>
-          </el-table-column>
+          </V2TableColumn>
           <V2TableActionColumn layout="triple">
             <template #default="{ row }">
-              <template v-if="canAdjustBalance && row.account.lossStatus === 'active'">
-                <AppButton size="small" variant="ghost" @click="openMetadataDrawer(row)">
+              <template
+                v-if="
+                  row.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)
+                "
+              >
+                <AppButton
+                  v-if="canAdjustBalance"
+                  size="small"
+                  variant="ghost"
+                  @click="openMetadataDrawer(row)"
+                >
                   <el-icon><Edit /></el-icon>
-                  修改
+                  备注
                 </AppButton>
-                <template v-if="row.status === 'credited'">
-                  <AppButton
-                    size="small"
-                    variant="soft"
-                    @click="openReversalConfirmation(row, 'redeemed')"
-                  >
-                    <el-icon><CircleClose /></el-icon>
-                    被赎回
-                  </AppButton>
-                  <AppButton
-                    size="small"
-                    variant="danger"
-                    @click="openReversalConfirmation(row, 'withdrawn')"
-                  >
-                    <el-icon><Back /></el-icon>
-                    撤回
-                  </AppButton>
-                </template>
+                <AppButton
+                  v-if="canReassignSupplier"
+                  size="small"
+                  variant="soft"
+                  @click="openSupplierReassignment(row)"
+                >
+                  更正供应商
+                </AppButton>
+                <el-dropdown
+                  v-if="canAdjustBalance && row.status === 'credited'"
+                  trigger="click"
+                  @command="handleFinancialCommand(row, $event)"
+                >
+                  <AppButton size="small" variant="ghost">更多操作</AppButton>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="redeemed">
+                        <el-icon><CircleClose /></el-icon>
+                        标记被赎回
+                      </el-dropdown-item>
+                      <el-dropdown-item command="withdrawn" divided>
+                        <el-icon><Back /></el-icon>
+                        撤回并返还供应商
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </template>
-              <span v-else>-</span>
+              <span v-else>—</span>
             </template>
           </V2TableActionColumn>
         </el-table>
@@ -122,7 +208,7 @@
             <header>
               <div>
                 <strong>{{ item.codeMasked }}</strong>
-                <span>{{ item.account.appleIdMasked }} / {{ item.account.country.name }}</span>
+                <span>{{ item.account.appleIdMasked }} / {{ item.country.name }}</span>
               </div>
               <el-tag :type="giftCardStatusType(item.status)" effect="plain">
                 {{ giftCardStatusLabel(item.status) }}
@@ -131,15 +217,25 @@
             <dl>
               <div>
                 <dt>面值</dt>
-                <dd>{{ formatDecimal(item.faceValue) }}</dd>
+                <dd>{{ formatDecimal(item.faceValue) }} {{ item.country.currencyCode || '' }}</dd>
               </div>
               <div>
                 <dt>汇率</dt>
                 <dd>¥{{ formatDecimal(item.exchangeRate) }}</dd>
               </div>
               <div>
+                <dt>人民币成本</dt>
+                <dd>¥{{ formatDecimal(item.costAmount) }}</dd>
+              </div>
+              <div>
+                <dt>实际付款</dt>
+                <dd>
+                  {{ formatDecimal(item.purchaseOriginalAmount) }} {{ item.purchaseCurrency }}
+                </dd>
+              </div>
+              <div>
                 <dt>供应商</dt>
-                <dd>{{ item.supplier?.name || '-' }}</dd>
+                <dd>{{ item.supplier?.name || '—' }}</dd>
               </div>
               <div>
                 <dt>余额变化</dt>
@@ -148,18 +244,54 @@
                   {{ formatOptionalDecimal(item.creditedLedger?.balanceAfter) }}
                 </dd>
               </div>
+              <div>
+                <dt>供应商余额</dt>
+                <dd>
+                  {{
+                    item.supplierFunding
+                      ? `¥${formatDecimal(item.supplierFunding.balanceBeforeCny)} → ¥${formatDecimal(
+                          item.supplierFunding.balanceAfterCny
+                        )}`
+                      : '—（切账前）'
+                  }}
+                </dd>
+              </div>
             </dl>
             <footer>
-              <span>{{ formatDate(item.statusChangedAt) }}</span>
+              <span>{{ formatDate(item.createdAt) }}</span>
               <div
-                v-if="canAdjustBalance && item.account.lossStatus === 'active'"
+                v-if="
+                  item.account.lossStatus === 'active' &&
+                  (canAdjustBalance || canReassignSupplier || canRevealGiftCard)
+                "
                 class="v2-record-actions"
               >
-                <AppButton size="small" variant="ghost" @click="openMetadataDrawer(item)">
-                  修改
+                <AppButton
+                  v-if="canAdjustBalance"
+                  size="small"
+                  variant="ghost"
+                  @click="openMetadataDrawer(item)"
+                >
+                  备注
                 </AppButton>
                 <AppButton
-                  v-if="item.status === 'credited'"
+                  v-if="canRevealGiftCard"
+                  size="small"
+                  variant="ghost"
+                  @click="openRevealCode(item)"
+                >
+                  查看完整
+                </AppButton>
+                <AppButton
+                  v-if="canReassignSupplier"
+                  size="small"
+                  variant="soft"
+                  @click="openSupplierReassignment(item)"
+                >
+                  更正供应商
+                </AppButton>
+                <AppButton
+                  v-if="canAdjustBalance && item.status === 'credited'"
                   size="small"
                   variant="soft"
                   @click="openReversalConfirmation(item, 'redeemed')"
@@ -167,7 +299,7 @@
                   被赎回
                 </AppButton>
                 <AppButton
-                  v-if="item.status === 'credited'"
+                  v-if="canAdjustBalance && item.status === 'credited'"
                   size="small"
                   variant="danger"
                   @click="openReversalConfirmation(item, 'withdrawn')"
@@ -217,69 +349,87 @@
             </div>
           </template>
 
-          <el-table-column label="序号" width="72" fixed="left">
+          <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
             <template #default="{ $index }">{{ ledgerRowNumber($index) }}</template>
-          </el-table-column>
-          <el-table-column label="变动类型" min-width="125" fixed="left">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="变动类型" min-width="125" fixed="left">
             <template #default="{ row }">
               <el-tag :type="ledgerTypeTag(row.entryType)" effect="plain">
                 {{ ledgerTypeLabel(row.entryType) }}
               </el-tag>
             </template>
-          </el-table-column>
-          <el-table-column label="礼品卡" min-width="165">
-            <template #default="{ row }">{{ row.giftCard?.codeMasked || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="ID 账号" min-width="185">
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡">
+            <template #default="{ row }">{{ row.giftCard?.codeMasked || '—' }}</template>
+          </V2TableColumn>
+          <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
-          </el-table-column>
-          <el-table-column label="国家" min-width="105">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="国家" min-width="105">
             <template #default="{ row }">{{ row.account.country.name }}</template>
-          </el-table-column>
-          <el-table-column prop="balanceAmount" label="余额变动" min-width="115" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
+            prop="balanceAmount"
+            label="余额变动"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <strong :class="`v2-ledger-amount--${deltaType(row.balanceDelta)}`">
                 {{ formatSignedDecimal(row.balanceDelta) }}
               </strong>
             </template>
-          </el-table-column>
-          <el-table-column label="变动前余额" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="变动前余额">
             <template #default="{ row }">{{ formatDecimal(row.balanceBefore) }}</template>
-          </el-table-column>
-          <el-table-column label="变动后余额" min-width="120">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="变动后余额">
             <template #default="{ row }">{{ formatDecimal(row.balanceAfter) }}</template>
-          </el-table-column>
-          <el-table-column prop="costAmount" label="成本变动" min-width="125" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="numeric"
+            width-preset="standard"
+            prop="costAmount"
+            label="成本变动"
+            sortable="custom"
+          >
             <template #default="{ row }">
               <strong :class="`v2-ledger-amount--${deltaType(row.costDelta)}`">
                 {{ formatSignedCurrency(row.costDelta) }}
               </strong>
             </template>
-          </el-table-column>
-          <el-table-column label="变动前成本" min-width="125">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="变动前成本">
             <template #default="{ row }">¥{{ formatDecimal(row.costBefore) }}</template>
-          </el-table-column>
-          <el-table-column label="变动后成本" min-width="125">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="变动后成本">
             <template #default="{ row }">¥{{ formatDecimal(row.costAfter) }}</template>
-          </el-table-column>
-          <el-table-column label="平均成本" min-width="135">
+          </V2TableColumn>
+          <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
             <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter) }} </template>
-          </el-table-column>
-          <el-table-column label="关联" min-width="105">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="关联" min-width="105">
             <template #default="{ row }">
               <el-tag v-if="row.reversalOf" type="warning" effect="plain">反向流水</el-tag>
               <el-tag v-else-if="row.reversedBy" type="info" effect="plain">已反冲</el-tag>
-              <span v-else>-</span>
+              <span v-else>—</span>
             </template>
-          </el-table-column>
-          <el-table-column label="操作人" min-width="115">
+          </V2TableColumn>
+          <V2TableColumn kind="text" label="操作人" min-width="115">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>
-          </el-table-column>
-          <el-table-column prop="createdAt" label="变动时间" min-width="165" sortable="custom">
+          </V2TableColumn>
+          <V2TableColumn
+            kind="date"
+            width-preset="dateTime"
+            prop="createdAt"
+            label="变动时间"
+            sortable="custom"
+          >
             <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-          </el-table-column>
+          </V2TableColumn>
         </el-table>
 
         <div class="v2-records-mobile-list">
@@ -296,7 +446,7 @@
             <dl>
               <div>
                 <dt>礼品卡</dt>
-                <dd>{{ item.giftCard?.codeMasked || '-' }}</dd>
+                <dd>{{ item.giftCard?.codeMasked || '—' }}</dd>
               </div>
               <div>
                 <dt>余额快照</dt>
@@ -345,16 +495,26 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
-import { formatV2Decimal } from '@/v2/utils/decimal';
+import {
+  deltaType,
+  formatDate,
+  formatDecimal,
+  formatOptionalDecimal,
+  formatSignedCurrency,
+  formatSignedDecimal,
+  giftCardStatusLabel,
+  giftCardStatusType,
+  ledgerTypeLabel,
+  ledgerTypeTag
+} from '../topup-records-format';
 import type {
-  V2BalanceLedgerEntryType,
   V2BalanceLedgerRecord,
   V2GiftCardRecord,
-  V2GiftCardRecordStatus,
   V2GiftCardReversalAction
 } from '../contracts';
 
@@ -376,6 +536,8 @@ defineProps<{
   ledgerEntries: V2BalanceLedgerRecord[];
   ledgerTotal: number;
   canAdjustBalance: boolean;
+  canReassignSupplier: boolean;
+  canRevealGiftCard: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -388,6 +550,8 @@ const emit = defineEmits<{
   ledgerPageChange: [];
   ledgerPageSizeChange: [];
   editMetadata: [giftCard: V2GiftCardRecord];
+  reassignSupplier: [giftCard: V2GiftCardRecord];
+  revealCode: [giftCard: V2GiftCardRecord];
   reverse: [giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction];
 }>();
 
@@ -395,123 +559,35 @@ const giftCardPage = defineModel<number>('giftCardPage', { required: true });
 const giftCardPageSize = defineModel<number>('giftCardPageSize', { required: true });
 const ledgerPage = defineModel<number>('ledgerPage', { required: true });
 const ledgerPageSize = defineModel<number>('ledgerPageSize', { required: true });
-
-function loadActiveTab() {
-  emit('retry');
-}
-
-function resetFilters() {
-  emit('reset');
-}
-
-function handleGiftCardSortChange(value: SortChange) {
-  emit('giftCardSortChange', value);
-}
-
-function handleLedgerSortChange(value: SortChange) {
-  emit('ledgerSortChange', value);
-}
-
-function loadGiftCards() {
-  emit('giftCardPageChange');
-}
-
-function handleGiftCardPageSizeChange() {
-  emit('giftCardPageSizeChange');
-}
-
-function loadBalanceLedger() {
-  emit('ledgerPageChange');
-}
-
-function handleLedgerPageSizeChange() {
-  emit('ledgerPageSizeChange');
-}
-
+const loadActiveTab = () => emit('retry');
+const resetFilters = () => emit('reset');
+const handleGiftCardSortChange = (value: SortChange) => emit('giftCardSortChange', value);
+const handleLedgerSortChange = (value: SortChange) => emit('ledgerSortChange', value);
+const loadGiftCards = () => emit('giftCardPageChange');
+const handleGiftCardPageSizeChange = () => emit('giftCardPageSizeChange');
+const loadBalanceLedger = () => emit('ledgerPageChange');
+const handleLedgerPageSizeChange = () => emit('ledgerPageSizeChange');
 function openMetadataDrawer(giftCard: V2GiftCardRecord) {
   emit('editMetadata', giftCard);
 }
-
+function openSupplierReassignment(giftCard: V2GiftCardRecord) {
+  emit('reassignSupplier', giftCard);
+}
+function openRevealCode(giftCard: V2GiftCardRecord) {
+  emit('revealCode', giftCard);
+}
 function openReversalConfirmation(giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction) {
   emit('reverse', giftCard, action);
 }
-
+function handleFinancialCommand(giftCard: V2GiftCardRecord, command: unknown) {
+  if (command === 'redeemed' || command === 'withdrawn') {
+    openReversalConfirmation(giftCard, command);
+  }
+}
 function giftCardRowNumber(index: number) {
   return (giftCardPage.value - 1) * giftCardPageSize.value + index + 1;
 }
-
 function ledgerRowNumber(index: number) {
   return (ledgerPage.value - 1) * ledgerPageSize.value + index + 1;
-}
-
-function giftCardStatusLabel(status: V2GiftCardRecordStatus) {
-  return {
-    credited: '加卡成功',
-    redeemed: '被赎回',
-    withdrawn: '已撤回'
-  }[status];
-}
-
-function giftCardStatusType(status: V2GiftCardRecordStatus) {
-  return status === 'credited' ? 'success' : status === 'redeemed' ? 'warning' : 'info';
-}
-
-function ledgerTypeLabel(entryType: V2BalanceLedgerEntryType) {
-  return {
-    gift_card_credit: '礼品卡入账',
-    gift_card_redeemed: '被赎回扣减',
-    gift_card_withdrawal: '撤回扣减',
-    order_consumption: '订单扣减',
-    order_consumption_reversal: '订单退款恢复',
-    opening_balance: '期初余额',
-    manual_adjustment: '手工修正',
-    account_loss: 'ID 永久报损'
-  }[entryType];
-}
-
-function ledgerTypeTag(entryType: V2BalanceLedgerEntryType) {
-  if (entryType === 'account_loss') return 'danger';
-  return entryType === 'gift_card_credit' || entryType === 'opening_balance'
-    ? 'success'
-    : entryType === 'gift_card_redeemed' || entryType === 'order_consumption'
-      ? 'warning'
-      : 'info';
-}
-
-function deltaType(value: string) {
-  return Number(value) < 0 ? 'debit' : 'credit';
-}
-
-function formatSignedDecimal(value: string) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return value;
-  const formatted = formatDecimal(String(Math.abs(number)));
-  return number > 0 ? `+${formatted}` : number < 0 ? `-${formatted}` : formatted;
-}
-
-function formatSignedCurrency(value: string) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return `¥${value}`;
-  const formatted = `¥${formatDecimal(String(Math.abs(number)))}`;
-  return number > 0 ? `+${formatted}` : number < 0 ? `-${formatted}` : formatted;
-}
-
-function formatOptionalDecimal(value?: string) {
-  return value === undefined ? '-' : formatDecimal(value);
-}
-
-function formatDecimal(value: string) {
-  return formatV2Decimal(value);
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date(value));
 }
 </script>

@@ -15,19 +15,20 @@ export const exchangeRatesFeature = defineV2Feature({
     { key: 'recordedAt', label: '记录时间', kind: 'date-range' }
   ],
   columns: [
-    { key: 'recordedAt', label: '记录时间', minWidth: 170, fixed: 'left' },
-    { key: 'binanceBuy', label: 'Binance 买入', minWidth: 130 },
-    { key: 'binanceSell', label: 'Binance 卖出', minWidth: 130 },
-    { key: 'okxBuy', label: 'OKX 买入', minWidth: 120 },
-    { key: 'okxSell', label: 'OKX 卖出', minWidth: 120 },
-    { key: 'averageBuyRate', label: '综合买入', minWidth: 125 },
-    { key: 'averageSellRate', label: '综合卖出', minWidth: 125 },
-    { key: 'midRate', label: '中间价', minWidth: 120 },
-    { key: 'operator', label: '操作人', minWidth: 120 },
-    { key: 'remark', label: '备注', minWidth: 180 },
+    { key: 'recordedAt', label: '记录时间', kind: 'date', minWidth: 165, fixed: 'left' },
+    { key: 'binanceBuy', label: 'Binance 买入', kind: 'numeric', minWidth: 128 },
+    { key: 'binanceSell', label: 'Binance 卖出', kind: 'numeric', minWidth: 128 },
+    { key: 'okxBuy', label: 'OKX 买入', kind: 'numeric', minWidth: 128 },
+    { key: 'okxSell', label: 'OKX 卖出', kind: 'numeric', minWidth: 128 },
+    { key: 'averageBuyRate', label: '综合买入', kind: 'numeric', minWidth: 128 },
+    { key: 'averageSellRate', label: '综合卖出', kind: 'numeric', minWidth: 128 },
+    { key: 'midRate', label: '中间价', kind: 'numeric', minWidth: 128 },
+    { key: 'operator', label: '操作人', kind: 'text', minWidth: 120 },
+    { key: 'remark', label: '备注', kind: 'text', minWidth: 180 },
     {
       key: 'actions',
       label: '操作',
+      kind: 'actions',
       minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.icon,
       fixed: 'right'
     }

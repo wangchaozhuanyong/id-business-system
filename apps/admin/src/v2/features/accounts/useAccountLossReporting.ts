@@ -1,4 +1,4 @@
-import { computed, ref, type Ref } from 'vue';
+import { ref, type Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { idBusinessV2AccountsApi } from './api';
@@ -17,9 +17,6 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
   const lossReason = ref('');
   const lossConfirmed = ref(false);
   const lossIdempotencyKey = ref('');
-  const lossFormReady = computed(() =>
-    isAccountLossConfirmationValid(lossReason.value, lossConfirmed.value)
-  );
 
   function openReportLoss(item: V2Account) {
     if (!options.canReportLoss.value || item.lossStatus === 'reported') return;
@@ -33,7 +30,13 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
   async function confirmReportLoss() {
     const target = lossTarget.value;
     const reason = lossReason.value.trim();
-    if (!target || !lossFormReady.value || lossSubmitting.value) return;
+    if (
+      !target ||
+      !isAccountLossConfirmationValid(lossReason.value, lossConfirmed.value) ||
+      lossSubmitting.value
+    ) {
+      return;
+    }
 
     lossSubmitting.value = true;
     try {
@@ -60,7 +63,6 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
     lossSubmitting,
     lossReason,
     lossConfirmed,
-    lossFormReady,
     openReportLoss,
     confirmReportLoss
   };

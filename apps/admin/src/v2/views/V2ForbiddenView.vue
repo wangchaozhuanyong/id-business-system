@@ -3,9 +3,9 @@
     <section class="v2-forbidden-card" aria-labelledby="v2-forbidden-title">
       <span class="v2-forbidden-code" aria-hidden="true">403</span>
       <h1 id="v2-forbidden-title">权限不足</h1>
-      <p>当前账号没有可访问的后台模块，请联系管理员分配业务权限后重新登录。</p>
-      <AppButton variant="primary" :loading="loggingOut" @click="returnToLogin">
-        返回登录
+      <p>当前账号没有权限访问这个页面，请联系管理员分配对应角色或查看权限。</p>
+      <AppButton variant="primary" :loading="returning" @click="returnToAllowedPage">
+        返回可访问页面
       </AppButton>
     </section>
   </main>
@@ -16,19 +16,19 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
+import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 
 const router = useRouter();
 const authStore = useAuthStore();
-const loggingOut = ref(false);
+const returning = ref(false);
 
-async function returnToLogin() {
-  if (loggingOut.value) return;
-  loggingOut.value = true;
+async function returnToAllowedPage() {
+  if (returning.value) return;
+  returning.value = true;
   try {
-    await authStore.logout();
+    await router.replace(getFirstAllowedV2Route(authStore.user));
   } finally {
-    await router.replace('/login');
-    loggingOut.value = false;
+    returning.value = false;
   }
 }
 </script>

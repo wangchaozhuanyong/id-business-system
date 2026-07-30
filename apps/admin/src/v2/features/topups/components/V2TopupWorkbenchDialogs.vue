@@ -4,9 +4,9 @@
     title="礼品卡入账"
     size="min(560px, 94vw)"
     confirm-text="确认入账"
-    :confirm-disabled="!page.canConfirmCredit"
+    :confirm-disabled-reason="page.creditDisabledReason"
     :confirm-loading="page.creditSubmitting"
-    @confirm="page.openCreditConfirmation"
+    @confirm="openCreditConfirmation"
   >
     <div v-if="page.selectedAccount" class="v2-topup-credit-entry">
       <section class="v2-topup-credit-entry-target">
@@ -22,45 +22,67 @@
       </section>
 
       <el-alert
-        title="请手工核对卡号、面值、汇率和供应商；确认后将立即写入余额与成本流水"
+        title="请核对卡号、面值、实际付款、资金来源和供应商；确认后将立即写入余额与成本流水"
         type="info"
         show-icon
         :closable="false"
       />
 
-      <section class="v2-topup-credit-entry-section v2-topup-credit-form">
-        <label class="v2-topup-credit-entry-code">
-          <span>礼品卡号</span>
+      <el-form
+        ref="creditFormRef"
+        class="v2-horizontal-form v2-topup-credit-entry-section v2-topup-credit-form"
+        :model="page.creditForm"
+        :rules="creditRules"
+        label-position="left"
+        label-width="108px"
+        require-asterisk-position="right"
+        status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ block: 'center', behavior: 'smooth' }"
+      >
+        <el-form-item label="礼品卡号" prop="code" class="v2-topup-credit-entry-code">
           <el-input
-            v-model="page.candidateCode"
+            v-model="page.creditForm.code"
             maxlength="64"
             autocomplete="off"
             placeholder="手工输入礼品卡号"
             @blur="page.normalizeCandidateCode"
           />
-        </label>
+        </el-form-item>
 
         <div class="v2-topup-credit-grid">
-          <label>
-            <span>礼品卡面值</span>
+          <el-form-item label="礼品卡面值" prop="faceValue">
             <el-input
               v-model="page.creditForm.faceValue"
               inputmode="decimal"
               maxlength="19"
               placeholder="例如 100"
             />
-          </label>
-          <label>
-            <span>卡片汇率</span>
+          </el-form-item>
+          <el-form-item label="付款币种" prop="purchaseCurrency">
+            <el-select
+              v-model="page.creditForm.purchaseCurrency"
+              @change="page.handlePurchaseCurrencyChange"
+            >
+              <el-option label="人民币 CNY" value="CNY" />
+              <el-option label="马币 MYR" value="MYR" />
+              <el-option label="USDT" value="USDT" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="实际付款" prop="purchaseOriginalAmount">
             <el-input
-              v-model="page.creditForm.exchangeRate"
+              v-model="page.creditForm.purchaseOriginalAmount"
               inputmode="decimal"
               maxlength="19"
-              placeholder="手工填写，例如 5.70"
+              :placeholder="`实际支付的 ${page.creditForm.purchaseCurrency} 金额`"
             />
-          </label>
+          </el-form-item>
+          <el-form-item label="付款时间" prop="paidAt">
+            <el-input v-model="page.creditForm.paidAt" type="datetime-local" />
+          </el-form-item>
         </div>
         <V2AsyncRegion
+          v-if="page.creditForm.purchaseCurrency === 'USDT'"
           class="v2-topup-exchange-source"
           variant="section"
           skeleton="inline"
@@ -116,12 +138,12 @@
           />
         </V2AsyncRegion>
 
-        <label>
-          <span>加卡供应商</span>
+        <el-form-item label="加卡供应商" prop="supplierOptionId">
           <el-select
             v-model="page.creditForm.supplierOptionId"
             filterable
             placeholder="选择启用的加卡供应商"
+            @change="page.handleSupplierChange"
           >
             <el-option
               v-for="option in page.topupSupplierOptions"
@@ -130,7 +152,7 @@
               :value="option.id"
             />
           </el-select>
-        </label>
+        </el-form-item>
         <el-alert
           v-if="!page.topupSupplierOptions.length"
           title="暂无启用的加卡供应商，请先到选项设置完成配置"
@@ -139,8 +161,43 @@
           :closable="false"
         />
 
-        <label>
-          <span>备注</span>
+        <el-form-item label="付款来源" prop="purchaseSourceId">
+          <el-select
+            v-model="page.creditForm.purchaseSourceId"
+            filterable
+            placeholder="选择资金账户或该供应商预存钱包"
+          >
+            <el-option
+              v-for="source in page.purchaseSourceOptions"
+              :key="source.value"
+              :label="source.label"
+              :value="source.value"
+            />
+          </el-select>
+        </el-form-item>
+
+        <div v-if="page.creditForm.purchaseCurrency !== 'CNY'" class="v2-topup-credit-grid">
+          <el-form-item label="手工汇率" prop="purchaseFxRateToCny">
+            <el-input
+              v-model="page.creditForm.purchaseFxRateToCny"
+              inputmode="decimal"
+              placeholder="留空则保存时自动采集"
+            />
+          </el-form-item>
+          <el-form-item
+            v-if="page.creditForm.purchaseFxRateToCny"
+            label="汇率原因"
+            prop="purchaseManualRateReason"
+          >
+            <el-input
+              v-model="page.creditForm.purchaseManualRateReason"
+              maxlength="200"
+              placeholder="说明手工汇率来源"
+            />
+          </el-form-item>
+        </div>
+
+        <el-form-item label="备注">
           <el-input
             v-model="page.creditForm.remark"
             type="textarea"
@@ -149,13 +206,46 @@
             show-word-limit
             placeholder="选填，记录采购批次或人工核对说明"
           />
-        </label>
+        </el-form-item>
 
         <div class="v2-topup-credit-preview">
-          <span>预计人民币成本</span>
-          <strong>¥{{ page.formatDecimal(page.creditCostPreview) }}</strong>
+          <span>本次人民币成本</span>
+          <strong>
+            {{
+              page.creditCostPreview
+                ? `¥${page.formatDecimal(page.creditCostPreview)}`
+                : '保存时按交易汇率计算'
+            }}
+          </strong>
+          <span>系统单位成本</span>
+          <strong>
+            {{
+              page.creditUnitCostPreview
+                ? page.formatDecimal(page.creditUnitCostPreview)
+                : '保存后生成'
+            }}
+          </strong>
+          <template v-if="page.selectedPurchaseSource?.kind === 'wallet'">
+            <span>供应商钱包余额</span>
+            <strong>
+              {{ page.formatDecimal(page.selectedPurchaseSource.currentBalance) }}
+              {{ page.creditForm.purchaseCurrency }}
+            </strong>
+            <span>扣款后钱包余额</span>
+            <strong :class="{ 'is-negative': page.creditWillOverdraw }">
+              {{ page.formatDecimal(page.creditProjectedSupplierBalance || '0') }}
+              {{ page.creditForm.purchaseCurrency }}
+            </strong>
+          </template>
         </div>
-      </section>
+        <el-alert
+          v-if="page.creditWillOverdraw"
+          type="error"
+          show-icon
+          :closable="false"
+          title="供应商钱包余额不足，系统将拒绝入账，不允许静默透支"
+        />
+      </el-form>
     </div>
   </V2FormDrawer>
 
@@ -277,40 +367,143 @@
     :message="page.reversalConfirmationMessage"
     :confirm-text="page.reversalConfirmText"
     :confirm-loading="page.reversalSubmitting"
-    :confirm-disabled="page.reversalReason.trim().length < 2"
     danger
-    @confirm="page.submitGiftCardReversal"
+    @confirm="submitGiftCardReversal"
   >
     <div class="v2-topup-reversal-confirm">
       <p class="v2-confirm-dialog__message">{{ page.reversalConfirmationMessage }}</p>
-      <label>
-        <span>处理原因</span>
-        <el-input
-          v-model="page.reversalReason"
-          type="textarea"
-          :rows="3"
-          minlength="2"
-          maxlength="500"
-          show-word-limit
-          placeholder="必填，记录供应商反馈或撤回依据"
-        />
-      </label>
+      <el-form
+        ref="reversalFormRef"
+        class="v2-horizontal-form"
+        :model="page.reversalForm"
+        :rules="reversalRules"
+        label-position="left"
+        label-width="88px"
+        require-asterisk-position="right"
+        scroll-to-error
+      >
+        <el-form-item label="处理原因" prop="reason">
+          <el-input
+            v-model="page.reversalForm.reason"
+            type="textarea"
+            :rows="3"
+            minlength="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="必填，记录供应商反馈或撤回依据"
+          />
+        </el-form-item>
+      </el-form>
     </div>
   </V2ConfirmDialog>
 </template>
 
 <script setup lang="ts">
 import { RefreshLeft, WarningFilled } from '@element-plus/icons-vue';
+import { ref } from 'vue';
+import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { validateV2Form } from '@/v2/utils/formValidation';
+import { getGiftCardCodeError } from '../gift-card-credit-form';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useTopupWorkbenchPage } from '../useTopupWorkbenchPage';
 
 type TopupWorkbenchPage = UnwrapNestedRefs<ReturnType<typeof useTopupWorkbenchPage>>;
 
-defineProps<{
+const props = defineProps<{
   page: TopupWorkbenchPage;
 }>();
+
+const creditFormRef = ref<FormInstance>();
+const reversalFormRef = ref<FormInstance>();
+
+const creditRules: FormRules = {
+  code: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        const message = getGiftCardCodeError(String(value ?? ''));
+        callback(message ? new Error(message) : undefined);
+      },
+      trigger: 'blur'
+    }
+  ],
+  faceValue: [positiveDecimalRule('礼品卡面值')],
+  purchaseCurrency: [{ required: true, message: '请选择付款币种', trigger: 'change' }],
+  purchaseOriginalAmount: [positiveDecimalRule('实际付款金额')],
+  purchaseSourceId: [{ required: true, message: '请选择付款来源', trigger: 'change' }],
+  paidAt: [{ required: true, message: '请选择付款时间', trigger: 'change' }],
+  purchaseFxRateToCny: [
+    {
+      validator: (_rule, value, callback) => {
+        const normalized = String(value ?? '').trim();
+        callback(
+          !normalized || isV2UnsignedDecimal(normalized, { allowZero: false, decimalPlaces: 8 })
+            ? undefined
+            : new Error('汇率必须是最多 8 位小数的正数')
+        );
+      },
+      trigger: 'blur'
+    }
+  ],
+  purchaseManualRateReason: [
+    {
+      validator: (_rule, value, callback) =>
+        callback(
+          props.page.creditForm.purchaseFxRateToCny && !String(value ?? '').trim()
+            ? new Error('手工填写汇率时必须说明来源')
+            : undefined
+        ),
+      trigger: 'blur'
+    }
+  ],
+  supplierOptionId: [{ required: true, message: '请选择加卡供应商', trigger: 'change' }]
+};
+
+const reversalRules: FormRules = {
+  reason: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        callback(
+          String(value ?? '').trim().length >= 2
+            ? undefined
+            : new Error('处理原因至少填写 2 个字符')
+        );
+      },
+      trigger: 'blur'
+    }
+  ]
+};
+
+function positiveDecimalRule(label: string) {
+  return {
+    required: true,
+    validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
+      callback(
+        isV2UnsignedDecimal(String(value ?? ''), { allowZero: false })
+          ? undefined
+          : new Error(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`)
+      );
+    },
+    trigger: 'blur'
+  };
+}
+
+async function openCreditConfirmation() {
+  props.page.normalizeCandidateCode();
+  if (await validateV2Form(creditFormRef.value)) {
+    props.page.openCreditConfirmation();
+  }
+}
+
+async function submitGiftCardReversal() {
+  if (await validateV2Form(reversalFormRef.value)) {
+    await props.page.submitGiftCardReversal();
+  }
+}
 </script>

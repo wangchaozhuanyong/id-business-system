@@ -25,6 +25,7 @@ contracts 和模块样式。跨模块能力只允许放在 `components`、`compo
 - `options`
 - `balances`
 - `gift-cards`
+- `topup-supplier-funds`
 - `orders`
 - `activations`
 - `renewals`
@@ -62,6 +63,13 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
 - 礼品卡损失与 ID 剩余余额损失分开记账，共用处理原因；扣卡后余额为零也保留 0 元 ID 报损记录。
 - 卖出、切换、取消、退款和明确收回必须与订单、ID、流水和审计处于同一事务。
 - 余额流水不可变；纠错通过反向流水完成。
+- 加卡供应商资金使用独立的 CNY 账户与不可变流水。付款按到账 USDT 和付款结算汇率增加余额，
+  加卡按礼品卡成本快照扣减；两种汇率互不覆盖。
+- 供应商账户、ID 余额和礼品卡在加卡事务内原子写入；付款、加卡、撤回、调账与供应商更正均锁定
+  CNY 供应商账户，允许扣减后为负数但不允许余额快照错序。
+- 被赎回和 ID 报损不触发供应商流水；撤回引用原 `gift_card_debit` 生成
+  `gift_card_withdrawal_reversal`，按原金额返还。
+- 供应商更正对切账后礼品卡在同一事务内完成原供应商返还和新供应商扣减；切账前记录只更正归属。
 - 订单、余额、开通记录和审计必须处于同一事务或明确的补偿边界内。
 - 幂等键相同且请求一致时返回原结果；内容不一致时拒绝。
 
@@ -82,6 +90,24 @@ GET  /api/id-business-v2/account-losses
 `reportAccountLoss=true`。普通被赎回仍只需余额调整权限；同时报损还需 ID 修改权限，且撤回操作
 不得携带该选项。礼品卡反向幂等键会派生稳定的报损幂等键，重放时“是否同时报损”必须与首次请求
 一致。
+
+### 加卡供应商资金接口
+
+```text
+GET  /api/id-business-v2/topup-supplier-funds/suppliers
+GET  /api/id-business-v2/topup-supplier-funds/suppliers/:supplierOptionId/ledger
+GET  /api/id-business-v2/topup-supplier-funds/payments
+POST /api/id-business-v2/topup-supplier-funds/suppliers/:supplierOptionId/initialize
+POST /api/id-business-v2/topup-supplier-funds/suppliers/:supplierOptionId/payments
+POST /api/id-business-v2/topup-supplier-funds/suppliers/:supplierOptionId/adjustments
+POST /api/id-business-v2/topup-supplier-funds/payments/:paymentId/reversals
+POST /api/id-business-v2/gift-cards/:giftCardId/supplier-reassignments
+POST /api/id-business-v2/gift-cards/:giftCardId/reveal-code
+```
+
+资金只读接口使用 `apple.topup_supplier_fund.view`，资金写操作使用
+`apple.topup_supplier_fund.manage`。供应商更正还要求 `apple.balance.adjust`，完整卡号查看要求
+`apple.gift_card.view_full` 并写敏感访问日志。
 
 ## 6. 续费工作台
 

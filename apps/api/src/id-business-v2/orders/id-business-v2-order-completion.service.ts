@@ -13,6 +13,8 @@ import type {
 } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { roundV2Decimal } from '../decimal-policy';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -21,7 +23,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 export class IdBusinessV2OrderCompletionService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly ordersService: IdBusinessV2OrdersService
+    private readonly ordersService: IdBusinessV2OrdersService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {}
 
   async complete(orderIdValue: string, operator?: AuthenticatedUser) {
@@ -99,6 +102,7 @@ export class IdBusinessV2OrderCompletionService {
             endReason: '订单完成后释放'
           }
         });
+        const financeJournal = await this.postCompletionJournal(tx, order, completedAt, operator);
 
         await tx.auditLog.create({
           data: {
@@ -117,7 +121,8 @@ export class IdBusinessV2OrderCompletionService {
               activationId: activation.id,
               openedAt: activation.openedAt,
               dueAt: activation.dueAt,
-              releasedLockCount: releasedLocks.count
+              releasedLockCount: releasedLocks.count,
+              financeJournalId: financeJournal.id
             },
             remark: `V2 订单完成并生成开通记录：${order.orderNo}`
           }
@@ -143,6 +148,114 @@ export class IdBusinessV2OrderCompletionService {
       consumptionLedgerId: result.consumptionLedgerId,
       idempotentReplay: result.idempotentReplay
     };
+  }
+
+  private postCompletionJournal(
+    tx: Prisma.TransactionClient,
+    order: IdBusinessV2Order,
+    completedAt: Date,
+    operator?: AuthenticatedUser
+  ) {
+    const hasOriginalEvidence = order.receivedOriginalAmount.gt(0);
+    const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
+    const receivedOriginal = hasOriginalEvidence
+      ? order.receivedOriginalAmount
+      : order.receivedAmount;
+    const rate = hasOriginalEvidence ? order.receivedFxRateToCny : new PrismaNamespace.Decimal(1);
+    const platformFeeOriginal =
+      currency === 'CNY'
+        ? order.platformFeeAmount
+        : roundV2Decimal(order.platformFeeAmount.div(rate));
+    return this.financePostingService.post(tx, {
+      journalType: 'order_completed',
+      sourceType: 'order',
+      sourceId: order.id,
+      sourceReference: order.orderNo,
+      occurredAt: completedAt,
+      summary: `订单完成：${order.orderNo}`,
+      idempotencyKey: `auto:order_completed:${order.id}`,
+      operator,
+      lines: [
+        {
+          accountCode: 'cash',
+          direction: 'debit',
+          currency,
+          amountOriginal: receivedOriginal,
+          fxRateToCny: rate,
+          amountCny: order.receivedAmount,
+          financeAccountId: order.receivedFinanceAccountId,
+          fxRateSnapshotId: order.receivedFxSnapshotId,
+          memo: '订单收款'
+        },
+        {
+          accountCode: 'sales_revenue',
+          direction: 'credit',
+          currency,
+          amountOriginal: receivedOriginal,
+          fxRateToCny: rate,
+          amountCny: order.receivedAmount,
+          fxRateSnapshotId: order.receivedFxSnapshotId,
+          memo: '已完成订单收入'
+        },
+        {
+          accountCode: 'platform_fee',
+          direction: 'debit',
+          currency,
+          amountOriginal: platformFeeOriginal,
+          fxRateToCny: rate,
+          amountCny: order.platformFeeAmount,
+          fxRateSnapshotId: order.receivedFxSnapshotId,
+          memo: '订单平台手续费'
+        },
+        {
+          accountCode: 'cash',
+          direction: 'credit',
+          currency,
+          amountOriginal: platformFeeOriginal,
+          fxRateToCny: rate,
+          amountCny: order.platformFeeAmount,
+          financeAccountId: order.receivedFinanceAccountId,
+          fxRateSnapshotId: order.receivedFxSnapshotId,
+          memo: '平台手续费扣款'
+        },
+        {
+          accountCode: 'gift_card_cost',
+          direction: 'debit',
+          currency: 'CNY',
+          amountOriginal: order.balanceCostAmount,
+          fxRateToCny: 1,
+          amountCny: order.balanceCostAmount,
+          memo: '已消耗礼品卡余额成本'
+        },
+        {
+          accountCode: 'gift_card_inventory',
+          direction: 'credit',
+          currency: 'CNY',
+          amountOriginal: order.balanceCostAmount,
+          fxRateToCny: 1,
+          amountCny: order.balanceCostAmount,
+          memo: '结转礼品卡库存成本'
+        },
+        {
+          accountCode: 'id_cost',
+          direction: 'debit',
+          currency: 'CNY',
+          amountOriginal: order.accountCostAmount,
+          fxRateToCny: 1,
+          amountCny: order.accountCostAmount,
+          memo: '已卖出 ID 成本'
+        },
+        {
+          accountCode: 'id_inventory',
+          direction: 'credit',
+          currency: 'CNY',
+          amountOriginal: order.accountCostAmount,
+          fxRateToCny: 1,
+          amountCny: order.accountCostAmount,
+          memo: '结转 ID 库存成本'
+        }
+      ]
+    });
   }
 
   private async lockOrder(tx: Prisma.TransactionClient, orderId: string) {

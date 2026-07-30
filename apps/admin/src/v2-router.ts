@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { isAuthSessionExpired } from '@/auth/session';
 import { useAuthStore } from '@/stores/auth';
-import { hasUserRoutePermission } from '@/utils/permissions';
+import { hasUserRouteAccess } from '@/utils/permissions';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 import { setV2RouteNavigationState, v2RouteNavigationState, v2Routes } from '@/v2/router/routes';
 import { beginV2RoutePerformance, markV2RouteCodeReady } from '@/runtime/performance';
@@ -77,7 +77,13 @@ v2Router.beforeEach(async (to) => {
     return false;
   }
 
-  if (!hasUserRoutePermission(authStore.user, to.meta.permission)) {
+  if (!hasUserRouteAccess(authStore.user, to.meta.permission, to.meta.requiredRoles)) {
+    if (to.meta.status === 'planned') {
+      return {
+        path: '/403',
+        query: { from: to.fullPath }
+      };
+    }
     return getFirstAllowedV2Route(authStore.user);
   }
 
@@ -129,7 +135,14 @@ async function refreshCurrentUserInBackground(
     await authStore.loadCurrentUser();
     const route = v2Router.currentRoute.value;
     if (route.fullPath !== activePath) return;
-    if (!hasUserRoutePermission(authStore.user, route.meta.permission)) {
+    if (!hasUserRouteAccess(authStore.user, route.meta.permission, route.meta.requiredRoles)) {
+      if (route.meta.status === 'planned') {
+        await v2Router.replace({
+          path: '/403',
+          query: { from: route.fullPath }
+        });
+        return;
+      }
       await v2Router.replace(getFirstAllowedV2Route(authStore.user));
     }
   } catch {

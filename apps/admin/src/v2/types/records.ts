@@ -1,4 +1,4 @@
-import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
+import type { PaginatedResult, V2FinanceCurrency, V2PageQuery } from '@apple-business/shared';
 import type { V2OptionSelector } from './options';
 
 export type V2RecordStatus = 'active' | 'disabled';
@@ -68,6 +68,13 @@ export interface V2Account {
   currentBalance: string;
   balanceCostAmount: string;
   purchaseCost: string;
+  purchaseOriginalAmount: string;
+  purchaseCurrency: V2FinanceCurrency;
+  purchaseFxRateToCny: string;
+  purchaseFxSnapshotId: string | null;
+  purchaseFinanceAccountId: string | null;
+  purchaseSupplierAccountId: string | null;
+  purchasedAt: string;
   saleState: 'available' | 'sold';
   soldAt: string | null;
   soldByOrder: {
@@ -113,8 +120,32 @@ export interface CreateV2AccountInput {
   currentBalance?: string | number;
   balanceCostAmount?: string | number;
   purchaseCost?: string | number;
+  purchaseOriginalAmount?: string | number;
+  purchaseCurrency?: V2FinanceCurrency;
+  purchaseFxRateToCny?: string | number;
+  purchaseFxSnapshotId?: string | null;
+  purchaseFinanceAccountId?: string | null;
+  purchaseSupplierAccountId?: string | null;
+  purchaseManualRateReason?: string | null;
+  purchasedAt?: string | null;
   recordStatus?: V2RecordStatus;
   remark?: string | null;
+}
+
+export interface V2AccountPurchaseSources {
+  financeAccounts: Array<{
+    id: string;
+    name: string;
+    currency: V2FinanceCurrency;
+    currentBalance: string;
+  }>;
+  supplierWallets: Array<{
+    id: string;
+    supplierOptionId: string;
+    supplierName: string;
+    currency: V2FinanceCurrency;
+    currentBalance: string;
+  }>;
 }
 
 export interface UpdateV2AccountInput extends Partial<CreateV2AccountInput> {

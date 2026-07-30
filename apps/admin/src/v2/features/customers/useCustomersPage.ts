@@ -10,6 +10,7 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from './api';
 import type {
   CreateV2CustomerInput,
@@ -77,6 +78,7 @@ export function useCustomersPage() {
   const revealDialogVisible = ref(false);
   const revealing = ref(false);
   const formRef = ref<FormInstance>();
+  const revealFormRef = ref<FormInstance>();
 
   const query = reactive({
     page: 1,
@@ -102,7 +104,36 @@ export function useCustomersPage() {
   const canRevealPhone = computed(() => hasUserPermission(authStore.user, 'customer.view_phone'));
 
   const formRules: FormRules<CustomerFormState> = {
-    name: [{ required: true, message: '请输入客户名称', trigger: 'blur' }]
+    name: [
+      {
+        required: true,
+        validator: (_rule, value, callback) => {
+          const normalized = String(value ?? '').trim();
+          callback(
+            normalized.length >= 1 && normalized.length <= 120
+              ? undefined
+              : new Error('请输入 1 至 120 个字符的客户名称')
+          );
+        },
+        trigger: 'blur'
+      }
+    ]
+  };
+  const revealRules: FormRules = {
+    reason: [
+      {
+        required: true,
+        validator: (_rule, value, callback) => {
+          const normalized = String(value ?? '').trim();
+          callback(
+            normalized.length >= 1 && normalized.length <= 200
+              ? undefined
+              : new Error('请输入 1 至 200 个字符的查看原因')
+          );
+        },
+        trigger: 'blur'
+      }
+    ]
   };
 
   function getCustomersListQuery(): V2CustomerListQuery {
@@ -227,8 +258,7 @@ export function useCustomersPage() {
   }
 
   async function submitForm() {
-    const valid = await formRef.value?.validate().catch(() => false);
-    if (!valid) return;
+    if (!(await validateV2Form(formRef.value))) return;
 
     const payload: CreateV2CustomerInput = {
       name: form.name.trim(),
@@ -286,7 +316,7 @@ export function useCustomersPage() {
   }
 
   async function revealPhone() {
-    if (!revealTarget.value || !revealForm.reason.trim()) return;
+    if (!revealTarget.value || !(await validateV2Form(revealFormRef.value))) return;
     revealing.value = true;
     try {
       const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, {
@@ -355,6 +385,7 @@ export function useCustomersPage() {
     revealDialogVisible,
     revealing,
     formRef,
+    revealFormRef,
     query,
     form,
     revealForm,
@@ -363,6 +394,7 @@ export function useCustomersPage() {
     canDelete,
     canRevealPhone,
     formRules,
+    revealRules,
     hasLoadedOnce,
     isInitialLoading,
     loadCustomers,

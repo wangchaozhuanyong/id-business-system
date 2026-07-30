@@ -26,17 +26,18 @@ export const customersFeature = defineV2Feature({
     }
   ],
   columns: [
-    { key: 'name', label: '客户名称', minWidth: 150 },
-    { key: 'phone', label: '手机号', minWidth: 150 },
-    { key: 'wechat', label: '微信', minWidth: 140 },
-    { key: 'source', label: '来源', minWidth: 110 },
-    { key: 'tag', label: '标签', minWidth: 110 },
-    { key: 'frequentService', label: '常开业务', minWidth: 150 },
-    { key: 'status', label: '状态', minWidth: 100 },
-    { key: 'updatedAt', label: '更新时间', minWidth: 160 },
+    { key: 'name', label: '客户名称', kind: 'text', minWidth: 150 },
+    { key: 'phone', label: '手机号', kind: 'identifier', minWidth: 160 },
+    { key: 'wechat', label: '微信', kind: 'identifier', minWidth: 160 },
+    { key: 'source', label: '来源', kind: 'text', minWidth: 110 },
+    { key: 'tag', label: '标签', kind: 'text', minWidth: 110 },
+    { key: 'frequentService', label: '常开业务', kind: 'text', minWidth: 150 },
+    { key: 'status', label: '状态', kind: 'status', minWidth: 112 },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', minWidth: 165 },
     {
       key: 'actions',
       label: '操作',
+      kind: 'actions',
       minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.triple,
       fixed: 'right'
     }

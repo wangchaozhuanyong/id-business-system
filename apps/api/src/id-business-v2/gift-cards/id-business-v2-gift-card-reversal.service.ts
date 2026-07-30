@@ -13,6 +13,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2AccountLossesService } from '../accounts/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { toV2DecimalString } from '../decimal-policy';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
 import type {
   IdBusinessV2GiftCardReversalAction,
   ReverseIdBusinessV2GiftCardDto
@@ -21,29 +23,10 @@ import {
   buildGiftCardReversalResponse,
   writeGiftCardReversalAuditLog
 } from './id-business-v2-gift-card-reversal-result';
-
-interface LockedAccountRow {
-  id: string;
-  appleIdMasked: string;
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  recordStatus: string;
-  lossReportedAt: Date | null;
-}
-
-interface LockedGiftCardRow {
-  id: string;
-  accountId: string;
-  supplierOptionId: string | null;
-  sourceAttachmentId: string | null;
-  codeMasked: string;
-  codeTail: string;
-  faceValue: PrismaNamespace.Decimal;
-  exchangeRate: PrismaNamespace.Decimal;
-  costAmount: PrismaNamespace.Decimal;
-  status: string;
-  createdAt: Date;
-}
+import type {
+  LockedGiftCardReversalAccountRow,
+  LockedGiftCardReversalRow
+} from './id-business-v2-gift-card-reversal.types';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
@@ -53,7 +36,9 @@ export class IdBusinessV2GiftCardReversalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
-    private readonly accountLossesService: IdBusinessV2AccountLossesService
+    private readonly accountLossesService: IdBusinessV2AccountLossesService,
+    private readonly supplierFundsService: IdBusinessV2TopupSupplierGiftCardFundsService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {}
 
   async listReversible(accountIdValue: string) {
@@ -196,6 +181,21 @@ export class IdBusinessV2GiftCardReversalService {
             reason,
             operator
           );
+          await this.postReversalJournal(
+            tx,
+            action,
+            existingEntry.giftCard,
+            existingEntry.costAmount,
+            reason,
+            operator
+          );
+          if (action === 'withdrawn') {
+            await this.supplierFundsService.reverseGiftCardDebit(tx, {
+              giftCardId,
+              reason,
+              operator
+            });
+          }
           return buildGiftCardReversalResponse(
             action,
             account,
@@ -285,6 +285,11 @@ export class IdBusinessV2GiftCardReversalService {
           data: {
             status: action,
             statusChangedAt,
+            supplierRefundStatus: action === 'withdrawn' ? 'pending' : 'none',
+            supplierRefundAmount:
+              action === 'withdrawn' ? snapshot.costAmount : new PrismaNamespace.Decimal(0),
+            supplierRefundAmountCny:
+              action === 'withdrawn' ? snapshot.costAmount : new PrismaNamespace.Decimal(0),
             updatedByUserId: operator?.id
           },
           select: {
@@ -334,6 +339,21 @@ export class IdBusinessV2GiftCardReversalService {
               }
             )
           : null;
+        await this.postReversalJournal(
+          tx,
+          action,
+          updatedGiftCard,
+          snapshot.costAmount,
+          reason,
+          operator
+        );
+        if (action === 'withdrawn') {
+          await this.supplierFundsService.reverseGiftCardDebit(tx, {
+            giftCardId,
+            reason,
+            operator
+          });
+        }
         const result = buildGiftCardReversalResponse(
           action,
           updatedAccount,
@@ -356,8 +376,51 @@ export class IdBusinessV2GiftCardReversalService {
     }
   }
 
+  private postReversalJournal(
+    tx: Prisma.TransactionClient,
+    action: IdBusinessV2GiftCardReversalAction,
+    giftCard: { id: string; codeMasked: string },
+    costAmount: PrismaNamespace.Decimal,
+    reason: string,
+    operator?: AuthenticatedUser
+  ) {
+    const redeemed = action === 'redeemed';
+    return this.financePostingService.post(tx, {
+      journalType: redeemed ? 'gift_card_redemption_loss' : 'gift_card_withdrawal_pending',
+      sourceType: 'gift_card',
+      sourceId: giftCard.id,
+      sourceReference: giftCard.codeMasked,
+      occurredAt: new Date(),
+      summary: `${redeemed ? '礼品卡赎回损失' : '礼品卡撤回待退款'}：${giftCard.codeMasked}`,
+      metadata: { reason },
+      idempotencyKey: `auto:gift_card_${action}:${giftCard.id}`,
+      operator,
+      lines: [
+        {
+          accountCode: redeemed ? 'gift_card_redemption_loss' : 'supplier_refund_receivable',
+          direction: 'debit',
+          currency: 'CNY',
+          amountOriginal: costAmount,
+          fxRateToCny: 1,
+          amountCny: costAmount,
+          memo: reason
+        },
+        {
+          accountCode: 'gift_card_inventory',
+          direction: 'credit',
+          currency: 'CNY',
+          amountOriginal: costAmount,
+          fxRateToCny: 1,
+          amountCny: costAmount,
+          memo: '冲减礼品卡余额资产'
+        }
+      ]
+    });
+  }
+
   private async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
-    const accounts = await tx.$queryRaw<LockedAccountRow[]>(PrismaNamespace.sql`
+    const accounts = await tx.$queryRaw<LockedGiftCardReversalAccountRow[]>(
+      PrismaNamespace.sql`
       SELECT
         account."id",
         account."apple_id_masked" AS "appleIdMasked",
@@ -370,7 +433,8 @@ export class IdBusinessV2GiftCardReversalService {
         account."id" = CAST(${accountId} AS UUID)
         AND account."deleted_at" IS NULL
       FOR UPDATE OF account
-    `);
+    `
+    );
     const account = accounts[0];
     if (!account) {
       throw new NotFoundException('目标 ID 不存在或已停用');
@@ -380,7 +444,7 @@ export class IdBusinessV2GiftCardReversalService {
 
   private async resolveReplayAccountLoss(
     tx: Prisma.TransactionClient,
-    account: LockedAccountRow,
+    account: LockedGiftCardReversalAccountRow,
     giftCard: {
       id: string;
       codeMasked: string;
@@ -426,7 +490,7 @@ export class IdBusinessV2GiftCardReversalService {
   }
 
   private async lockGiftCard(tx: Prisma.TransactionClient, giftCardId: string) {
-    const giftCards = await tx.$queryRaw<LockedGiftCardRow[]>(PrismaNamespace.sql`
+    const giftCards = await tx.$queryRaw<LockedGiftCardReversalRow[]>(PrismaNamespace.sql`
       SELECT
         "id",
         "account_id" AS "accountId",

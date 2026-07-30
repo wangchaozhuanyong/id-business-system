@@ -105,8 +105,8 @@ h3.v2-section-heading__title,
   flex: 0 0 22px;
   place-items: center;
   border-radius: 50%;
-  background: var(--v2-accent);
-  color: #ffffff;
+  background: var(--v3-primary-solid);
+  color: var(--v3-on-primary-solid);
   font-size: 11px;
   font-weight: var(--v3-font-weight-bold);
   line-height: 1;

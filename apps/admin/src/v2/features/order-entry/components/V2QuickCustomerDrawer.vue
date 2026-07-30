@@ -4,7 +4,6 @@
     title="新增客户"
     confirm-text="保存并选中"
     :confirm-loading="saving"
-    :confirm-disabled="saving || !form.name.trim()"
     size="min(580px, 96vw)"
     @update:model-value="$emit('update:modelValue', $event)"
     @confirm="submit"
@@ -37,6 +36,8 @@
       label-width="104px"
       require-asterisk-position="right"
       status-icon
+      scroll-to-error
+      :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
       autocomplete="off"
     >
       <el-form-item label="客户名称" prop="name">
@@ -142,6 +143,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from '../api';
 import type { V2OptionSelector, V2OrderEntryCustomer } from '../contracts';
 import {
@@ -171,8 +173,18 @@ const serviceOptions = ref<V2OptionSelector[]>([]);
 
 const rules: FormRules = {
   name: [
-    { required: true, message: '请输入客户名称', trigger: 'blur' },
-    { min: 1, max: 120, message: '客户名称最多 120 个字符', trigger: 'blur' }
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        const normalized = String(value ?? '').trim();
+        callback(
+          normalized.length >= 1 && normalized.length <= 120
+            ? undefined
+            : new Error('请输入 1 至 120 个字符的客户名称')
+        );
+      },
+      trigger: 'blur'
+    }
   ]
 };
 
@@ -209,7 +221,7 @@ async function loadOptions() {
 }
 
 async function submit() {
-  if (!formRef.value || !(await formRef.value.validate().catch(() => false))) return;
+  if (!(await validateV2Form(formRef.value))) return;
   saving.value = true;
   try {
     const customer = await idBusinessV2CustomersApi.create(createQuickCustomerPayload(form));

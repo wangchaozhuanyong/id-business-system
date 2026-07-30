@@ -3,6 +3,7 @@ import {
   isV2UnsignedDecimal,
   multiplyDecimalStrings
 } from '@/v2/utils/decimal';
+import type { V2FinanceCurrency } from '@apple-business/shared';
 
 export interface AccountFormState {
   appleId: string;
@@ -17,6 +18,12 @@ export interface AccountFormState {
   balanceCostAmount: string;
   balanceAdjustmentReason: string;
   purchaseCost: number;
+  purchaseOriginalAmount: string;
+  purchaseCurrency: V2FinanceCurrency;
+  purchaseFxRateToCny: string;
+  purchaseSourceId: string;
+  purchaseManualRateReason: string;
+  purchasedAt: string;
   active: boolean;
   remark: string;
 }
@@ -35,9 +42,20 @@ export function emptyAccountForm(): AccountFormState {
     balanceCostAmount: '0',
     balanceAdjustmentReason: '',
     purchaseCost: 0,
+    purchaseOriginalAmount: '0',
+    purchaseCurrency: 'CNY',
+    purchaseFxRateToCny: '',
+    purchaseSourceId: '',
+    purchaseManualRateReason: '',
+    purchasedAt: toLocalDateTimeInput(new Date()),
     active: true,
     remark: ''
   };
+}
+
+function toLocalDateTimeInput(value: Date) {
+  const offset = value.getTimezoneOffset() * 60_000;
+  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
 }
 
 export function isNonNegativeDecimal(value: unknown) {

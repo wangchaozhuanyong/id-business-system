@@ -8,7 +8,12 @@ import type { IdBusinessV2AccountLock, IdBusinessV2Order, Prisma } from '@prisma
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
-import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
+import {
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  V2_DECIMAL_ROUNDING_MODE,
+  toV2Decimal
+} from '../decimal-policy';
 
 export interface NormalizedCreateOrderInput {
   customerId: string;
@@ -103,8 +108,9 @@ export function calculatePlatformFee(
   } | null
 ) {
   if (!platform) return new PrismaNamespace.Decimal(0);
-  const platformFeeAmount = platform.fixedFee
-    .plus(receivedAmount.mul(platform.percentageFee).div(100))
+  const normalizedReceivedAmount = toV2Decimal(receivedAmount);
+  const platformFeeAmount = toV2Decimal(platform.fixedFee)
+    .plus(normalizedReceivedAmount.mul(toV2Decimal(platform.percentageFee)).div(100))
     .toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE);
   if (platformFeeAmount.greaterThan(MAX_AMOUNT)) {
     throw new BadRequestException('平台手续费数值过大');
@@ -128,8 +134,8 @@ export function assertOrderEntryReplayMatches(
     order.settlementPlatformOptionId !== input.settlementPlatformOptionId ||
     order.platformOrderNo !== input.platformOrderNo ||
     order.websiteAccountHash !== input.websiteAccountHash ||
-    !order.receivedAmount.equals(input.receivedAmount) ||
-    !order.balanceAmount.equals(input.balanceAmount) ||
+    !toV2Decimal(order.receivedAmount).equals(toV2Decimal(input.receivedAmount)) ||
+    !toV2Decimal(order.balanceAmount).equals(toV2Decimal(input.balanceAmount)) ||
     order.openedAt?.getTime() !== input.openedAt.getTime() ||
     order.dueAt?.getTime() !== input.dueAt.getTime() ||
     order.remark !== input.remark ||

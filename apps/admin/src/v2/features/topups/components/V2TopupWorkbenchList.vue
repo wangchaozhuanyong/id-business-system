@@ -27,27 +27,34 @@
           </div>
         </template>
 
-        <el-table-column
+        <V2TableColumn
+          kind="identifier"
+          width-preset="identifier"
           prop="appleId"
           label="ID 账号"
-          min-width="190"
           fixed="left"
           sortable="custom"
         >
           <template #default="{ row }">
             <strong class="v2-topup-account v2-table-cell">{{ row.appleIdMasked }}</strong>
           </template>
-        </el-table-column>
-        <el-table-column label="国家" min-width="105">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="国家" min-width="105">
           <template #default="{ row }">{{ row.country.name }}</template>
-        </el-table-column>
-        <el-table-column prop="currentBalance" label="余额" min-width="105" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="numeric"
+          width-preset="compact"
+          prop="currentBalance"
+          label="余额"
+          sortable="custom"
+        >
           <template #default="{ row }">{{ page.formatDecimal(row.currentBalance) }}</template>
-        </el-table-column>
-        <el-table-column label="平均成本" min-width="130">
+        </V2TableColumn>
+        <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
           <template #default="{ row }">¥{{ page.formatDecimal(row.averageCost) }}</template>
-        </el-table-column>
-        <el-table-column label="加卡记录" min-width="125">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="加卡记录" min-width="125">
           <template #default="{ row }">
             <div class="v2-topup-record-links">
               <AppButton
@@ -71,8 +78,8 @@
               </AppButton>
             </div>
           </template>
-        </el-table-column>
-        <el-table-column label="余额流水" min-width="125">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="余额流水" min-width="125">
           <template #default="{ row }">
             <AppButton
               size="small"
@@ -84,18 +91,24 @@
               流水 {{ row.balanceChangeCount }}
             </AppButton>
           </template>
-        </el-table-column>
-        <el-table-column label="最近加卡" min-width="130">
+        </V2TableColumn>
+        <V2TableColumn kind="date" width-preset="dateTime" label="最近加卡">
           <template #default="{ row }">
             <span :title="row.lastTopupAt ? page.formatDate(row.lastTopupAt) : undefined">
               {{ page.formatElapsed(row.lastTopupAt) }}
             </span>
           </template>
-        </el-table-column>
-        <el-table-column prop="updatedAt" label="更新时间" min-width="130" sortable="custom">
+        </V2TableColumn>
+        <V2TableColumn
+          kind="date"
+          width-preset="dateTime"
+          prop="updatedAt"
+          label="更新时间"
+          sortable="custom"
+        >
           <template #default="{ row }">{{ page.formatElapsed(row.updatedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="当前业务" min-width="185">
+        </V2TableColumn>
+        <V2TableColumn kind="text" label="当前业务" min-width="185">
           <template #default="{ row }">
             <div
               v-if="row.currentServices.length"
@@ -112,16 +125,16 @@
                 {{ service.name }}
               </el-tag>
             </div>
-            <span v-else>-</span>
+            <span v-else>—</span>
           </template>
-        </el-table-column>
-        <el-table-column label="ID 状态" min-width="105">
+        </V2TableColumn>
+        <V2TableColumn kind="status" width-preset="compact" label="ID 状态">
           <template #default="{ row }">
             <el-tag :type="row.status.code === 'normal' ? 'success' : 'warning'" effect="plain">
               {{ row.status.name }}
             </el-tag>
           </template>
-        </el-table-column>
+        </V2TableColumn>
         <V2TableActionColumn layout="single">
           <template #default="{ row }">
             <AppButton
@@ -134,7 +147,7 @@
               <el-icon><Plus /></el-icon>
               加卡
             </AppButton>
-            <span v-else>-</span>
+            <span v-else>—</span>
           </template>
         </V2TableActionColumn>
       </el-table>
@@ -209,7 +222,7 @@
                     {{ service.name }}
                   </el-tag>
                 </div>
-                <span v-else>-</span>
+                <span v-else>—</span>
               </dd>
             </div>
             <div class="v2-topup-mobile-service">
@@ -226,7 +239,7 @@
                     {{ service.name }}
                   </el-tag>
                 </div>
-                <span v-else>-</span>
+                <span v-else>—</span>
               </dd>
             </div>
           </dl>
@@ -287,6 +300,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { DataAnalysis, Plus, RefreshLeft, Tickets } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

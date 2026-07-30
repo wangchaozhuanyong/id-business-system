@@ -72,47 +72,47 @@
                 <span>到期调度或立即采集后会生成真实批次</span>
               </div>
             </template>
-            <el-table-column label="采集时间" width="170" fixed="left">
+            <V2TableColumn kind="date" width-preset="dateTime" label="采集时间" fixed="left">
               <template #default="{ row }">{{ page.formatDate(row.startedAt) }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="92">
+            </V2TableColumn>
+            <V2TableColumn kind="status" width-preset="compact" label="状态">
               <template #default="{ row }">
                 <el-tag :type="page.runStatusType(row.status)" size="small" effect="plain">
                   {{ page.runStatusLabel(row.status) }}
                 </el-tag>
               </template>
-            </el-table-column>
-            <el-table-column label="触发" width="104">
+            </V2TableColumn>
+            <V2TableColumn kind="text" label="触发" width="104">
               <template #default="{ row }">{{ page.triggerLabel(row.triggerType) }}</template>
-            </el-table-column>
-            <el-table-column label="成交档位" width="112">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="成交档位">
               <template #default="{ row }">¥{{ page.formatAmount(row.targetAmountRmb) }}</template>
-            </el-table-column>
-            <el-table-column label="综合买入" min-width="118">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="综合买入">
               <template #default="{ row }">
                 {{ page.formatRate(row.snapshot?.combinedMerchantBuyAverageRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="综合卖出" min-width="118">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="综合卖出">
               <template #default="{ row }">
                 {{ page.formatRate(row.snapshot?.combinedMerchantSellAverageRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="中间价" min-width="112">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="中间价">
               <template #default="{ row }">
                 <strong class="v2-exchange-table-rate">
                   {{ page.formatRate(row.snapshot?.midRateToRmb) }}
                 </strong>
               </template>
-            </el-table-column>
-            <el-table-column label="有效样本" width="96">
-              <template #default="{ row }">{{ row.snapshot?.validSampleCount ?? '-' }}</template>
-            </el-table-column>
-            <el-table-column label="失败来源" min-width="150" show-overflow-tooltip>
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="compact" label="有效样本">
+              <template #default="{ row }">{{ row.snapshot?.validSampleCount ?? '—' }}</template>
+            </V2TableColumn>
+            <V2TableColumn kind="text" label="失败来源" min-width="150" show-overflow-tooltip>
               <template #default="{ row }">
-                {{ row.error ? page.failureLabel(row) : '-' }}
+                {{ row.error ? page.failureLabel(row) : '—' }}
               </template>
-            </el-table-column>
+            </V2TableColumn>
             <V2TableActionColumn layout="icon">
               <template #default="{ row }">
                 <AppButton
@@ -241,40 +241,46 @@
                 <span>人工记录不会覆盖联网汇率</span>
               </div>
             </template>
-            <el-table-column label="记录时间" width="170" fixed="left">
+            <V2TableColumn kind="date" width-preset="dateTime" label="记录时间" fixed="left">
               <template #default="{ row }">{{ page.formatDate(row.recordedAt) }}</template>
-            </el-table-column>
-            <el-table-column label="Binance 买入" min-width="130">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="Binance 买入">
               <template #default="{ row }">
                 {{ page.formatRate(row.binanceMerchantBuyRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="Binance 卖出" min-width="130">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="Binance 卖出">
               <template #default="{ row }">
                 {{ page.formatRate(row.binanceMerchantSellRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="OKX 买入" min-width="120">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="OKX 买入">
               <template #default="{ row }">
                 {{ page.formatRate(row.okxMerchantBuyRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="OKX 卖出" min-width="120">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="OKX 卖出">
               <template #default="{ row }">
                 {{ page.formatRate(row.okxMerchantSellRateToRmb) }}
               </template>
-            </el-table-column>
-            <el-table-column label="中间价" width="118">
+            </V2TableColumn>
+            <V2TableColumn kind="numeric" width-preset="standard" label="中间价">
               <template #default="{ row }">
                 <strong class="v2-exchange-table-rate">{{
                   page.formatRate(row.midRateToRmb)
                 }}</strong>
               </template>
-            </el-table-column>
-            <el-table-column label="操作人" width="120">
+            </V2TableColumn>
+            <V2TableColumn kind="text" label="操作人" width="120">
               <template #default="{ row }">{{ page.operatorName(row) }}</template>
-            </el-table-column>
-            <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+            </V2TableColumn>
+            <V2TableColumn
+              kind="text"
+              prop="remark"
+              label="备注"
+              min-width="180"
+              show-overflow-tooltip
+            />
             <V2TableActionColumn layout="icon">
               <template #default="{ row }">
                 <AppButton
@@ -363,6 +369,7 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Search, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

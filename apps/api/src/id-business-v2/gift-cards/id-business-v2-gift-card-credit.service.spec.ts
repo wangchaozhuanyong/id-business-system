@@ -97,13 +97,17 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     },
     idBusinessV2GiftCard: {
       findUnique: vi.fn(),
-      create: vi.fn()
+      create: vi.fn(),
+      update: vi.fn()
     },
     auditLog: {
       create: vi.fn()
     },
     idBusinessV2Account: {
       update: vi.fn()
+    },
+    idBusinessV2FinanceAccount: {
+      findUnique: vi.fn()
     }
   };
   const prisma = {
@@ -116,15 +120,38 @@ describe('IdBusinessV2GiftCardCreditService', () => {
   const exchangeRateQueryService = {
     validatePrefill: vi.fn()
   };
+  const supplierFundsService = {
+    debitGiftCard: vi.fn()
+  };
+  const financePostingService = {
+    post: vi.fn()
+  };
+  const financeFxService = {
+    resolve: vi.fn()
+  };
   const service = new IdBusinessV2GiftCardCreditService(
     prisma as never,
     fieldEncryptionService as never,
     new IdBusinessV2BalanceCalculatorService(),
-    exchangeRateQueryService as never
+    exchangeRateQueryService as never,
+    supplierFundsService as never,
+    financePostingService as never,
+    financeFxService as never
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
+    financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
+    financeFxService.resolve.mockResolvedValue({
+      id: '99999999-9999-4999-8999-999999999999',
+      rateToCny: decimal('1.7'),
+      source: 'manual'
+    });
+    tx.idBusinessV2FinanceAccount.findUnique.mockResolvedValue({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      currency: 'MYR',
+      status: 'active'
+    });
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.$queryRaw.mockResolvedValue([
       {
@@ -132,7 +159,11 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         appleIdMasked: 'us***@example.com',
         currentBalance: decimal('20'),
         balanceCostAmount: decimal('50'),
-        soldByOrderId: null
+        soldByOrderId: null,
+        lossReportedAt: null,
+        countryOptionId: '66666666-6666-4666-8666-666666666666',
+        countryName: '美国',
+        currencyCode: 'USD'
       }
     ]);
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
@@ -141,6 +172,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       name: '测试供应商'
     });
     tx.idBusinessV2GiftCard.findUnique.mockResolvedValue(null);
+    tx.idBusinessV2GiftCard.update.mockResolvedValue({});
     tx.idBusinessV2GiftCard.create.mockImplementation(async ({ data }) =>
       makeGiftCard({
         ...data,
@@ -168,6 +200,18 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       exchangeRateSnapshotId: '66666666-6666-4666-8666-666666666666',
       exchangeRatePrefilledValue: decimal('2.5'),
       exchangeRateWasOverridden: true
+    });
+    supplierFundsService.debitGiftCard.mockResolvedValue({
+      ledgerEntryId: '77777777-7777-4777-8777-777777777777',
+      supplierAccountId: '88888888-8888-4888-8888-888888888888',
+      supplierName: '测试供应商',
+      amountCny: '25',
+      balanceBeforeCny: '1000',
+      balanceAfterCny: '975',
+      isNegative: false,
+      shortfallCny: '0',
+      createdAt,
+      idempotentReplay: false
     });
   });
 
@@ -239,6 +283,62 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('X123456789ABCDEF');
+  });
+
+  it('locks MYR payment evidence and debits the selected finance account', async () => {
+    const financeAccountId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const result = await service.confirmCredit(
+      accountId,
+      makeDto({
+        faceValue: '20',
+        exchangeRate: undefined,
+        purchaseOriginalAmount: '100',
+        purchaseCurrency: 'MYR',
+        purchaseFxRateToCny: '1.7',
+        purchaseFinanceAccountId: financeAccountId,
+        purchaseManualRateReason: '银行成交回单',
+        paidAt: createdAt.toISOString()
+      }),
+      operator
+    );
+
+    expect(financeFxService.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currency: 'MYR',
+        manualRate: decimal('1.7'),
+        manualReason: '银行成交回单'
+      })
+    );
+    expect(supplierFundsService.debitGiftCard).not.toHaveBeenCalled();
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        journalType: 'gift_card_purchase',
+        lines: [
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            currency: 'MYR',
+            amountOriginal: decimal('100'),
+            amountCny: decimal('170')
+          }),
+          expect.objectContaining({
+            accountCode: 'cash',
+            financeAccountId,
+            currency: 'MYR',
+            amountOriginal: decimal('100'),
+            amountCny: decimal('170')
+          })
+        ]
+      })
+    );
+    expect(result.giftCard).toMatchObject({
+      purchaseOriginalAmount: '100',
+      purchaseCurrency: 'MYR',
+      purchaseFxRateToCny: '1.7',
+      purchaseFinanceAccountId: financeAccountId,
+      costAmount: '170'
+    });
+    expect(result.supplierFunding).toBeNull();
   });
 
   it('rejects a new gift-card credit when the target ID has been sold', async () => {

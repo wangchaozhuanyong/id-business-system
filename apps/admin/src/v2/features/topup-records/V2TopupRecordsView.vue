@@ -4,10 +4,16 @@
       <el-tabs v-model="activeTab" @tab-change="handleTabChange">
         <el-tab-pane label="加卡记录" name="giftCards" />
         <el-tab-pane label="余额变动" name="ledger" />
+        <el-tab-pane v-if="canViewSupplierFunds" label="加卡供应商" name="suppliers" />
+        <el-tab-pane v-if="canViewSupplierFunds" label="付款记录" name="payments" />
       </el-tabs>
     </section>
 
-    <section v-if="filters.accountId" class="v2-topup-records-scope" aria-label="当前 ID 记录范围">
+    <section
+      v-if="filters.accountId && (activeTab === 'giftCards' || activeTab === 'ledger')"
+      class="v2-topup-records-scope"
+      aria-label="当前 ID 记录范围"
+    >
       <div>
         <span>当前只显示</span>
         <div class="v2-topup-records-scope__title">
@@ -25,7 +31,11 @@
       </AppButton>
     </section>
 
-    <section class="v2-topup-records-toolbar" aria-label="加卡记录筛选">
+    <section
+      v-if="activeTab === 'giftCards' || activeTab === 'ledger'"
+      class="v2-topup-records-toolbar"
+      aria-label="加卡记录筛选"
+    >
       <el-input
         v-model="filters.keyword"
         clearable
@@ -113,6 +123,7 @@
     </section>
 
     <V2TopupRecordsTables
+      v-if="activeTab === 'giftCards' || activeTab === 'ledger'"
       v-model:gift-card-page="giftCardQuery.page"
       v-model:gift-card-page-size="giftCardQuery.pageSize"
       v-model:ledger-page="ledgerQuery.page"
@@ -129,6 +140,8 @@
       :ledger-entries="ledgerEntries"
       :ledger-total="ledgerTotal"
       :can-adjust-balance="canAdjustBalance"
+      :can-reassign-supplier="canReassignSupplier"
+      :can-reveal-gift-card="canRevealGiftCard"
       @retry="loadActiveTab"
       @reset="resetFilters"
       @gift-card-sort-change="handleGiftCardSortChange"
@@ -138,18 +151,43 @@
       @ledger-page-change="handleLedgerPageChange"
       @ledger-page-size-change="handleLedgerPageSizeChange"
       @edit-metadata="openMetadataDrawer"
+      @reassign-supplier="openSupplierDrawer"
+      @reveal-code="openRevealDialog"
       @reverse="openReversalConfirmation"
+    />
+
+    <V2TopupSupplierFundsPanel
+      v-else-if="activeTab === 'suppliers'"
+      :can-manage="canManageSupplierFunds"
+    />
+
+    <V2TopupSupplierPaymentsPanel
+      v-else
+      :can-manage="canManageSupplierFunds"
+      :suppliers="topupSupplierOptions"
     />
 
     <V2FormDrawer
       v-model="metadataDrawerVisible"
       title="修改加卡记录"
       confirm-text="保存非账务信息"
-      :confirm-disabled="!selectedGiftCard"
+      :confirm-disabled-reason="metadataDisabledReason"
       :confirm-loading="metadataSubmitting"
-      @confirm="submitMetadata"
+      :dirty="metadataDirty"
+      @confirm="confirmMetadata"
     >
-      <div v-if="selectedGiftCard" class="v2-topup-records-metadata">
+      <el-form
+        v-if="selectedGiftCard"
+        ref="metadataFormRef"
+        class="v2-topup-records-metadata v2-horizontal-form"
+        :model="metadataForm"
+        label-position="left"
+        label-width="88px"
+        require-asterisk-position="right"
+        status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
+      >
         <section>
           <span>礼品卡</span>
           <strong>{{ selectedGiftCard.codeMasked }}</strong>
@@ -161,24 +199,7 @@
           show-icon
           :closable="false"
         />
-        <label>
-          <span>供应商</span>
-          <el-select
-            v-model="metadataForm.supplierOptionId"
-            clearable
-            placeholder="未设置"
-            aria-label="修改供应商"
-          >
-            <el-option
-              v-for="option in topupSupplierOptions"
-              :key="option.id"
-              :label="option.name"
-              :value="option.id"
-            />
-          </el-select>
-        </label>
-        <label>
-          <span>备注</span>
+        <el-form-item label="备注">
           <el-input
             v-model="metadataForm.remark"
             type="textarea"
@@ -187,9 +208,110 @@
             show-word-limit
             placeholder="记录供应商复核或业务说明"
           />
-        </label>
-      </div>
+        </el-form-item>
+      </el-form>
     </V2FormDrawer>
+
+    <V2FormDrawer
+      v-model="supplierDrawerVisible"
+      title="更正加卡供应商"
+      confirm-text="确认更正供应商"
+      :confirm-disabled-reason="supplierDisabledReason"
+      :confirm-loading="supplierSubmitting"
+      :dirty="supplierDirty"
+      @confirm="confirmSupplierReassignment"
+    >
+      <el-form
+        v-if="selectedGiftCard"
+        ref="supplierFormRef"
+        class="v2-topup-records-metadata v2-horizontal-form"
+        :model="supplierForm"
+        label-position="left"
+        label-width="104px"
+        require-asterisk-position="right"
+      >
+        <section>
+          <span>礼品卡</span>
+          <strong>{{ selectedGiftCard.codeMasked }}</strong>
+          <small>原供应商：{{ selectedGiftCard.supplier?.name || '未设置' }}</small>
+        </section>
+        <el-alert
+          :title="
+            selectedGiftCard.supplierFunding
+              ? '切账后更正会在同一事务中返还原供应商并扣减新供应商'
+              : '切账前历史记录只更正归属，不生成供应商资金流水'
+          "
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+        <el-form-item label="新供应商" prop="supplierOptionId" required>
+          <el-select v-model="supplierForm.supplierOptionId" placeholder="请选择新的加卡供应商">
+            <el-option
+              v-for="option in topupSupplierOptions"
+              :key="option.id"
+              :label="option.name"
+              :value="option.id"
+              :disabled="option.id === selectedGiftCard.supplierOptionId"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="更正原因" prop="reason" required>
+          <el-input
+            v-model="supplierForm.reason"
+            type="textarea"
+            :rows="4"
+            minlength="2"
+            maxlength="500"
+            show-word-limit
+            placeholder="必填，说明供应商归属更正依据"
+          />
+        </el-form-item>
+      </el-form>
+    </V2FormDrawer>
+
+    <V2ConfirmDialog
+      v-model="revealDialogVisible"
+      title="查看完整礼品卡号"
+      message="完整卡号属于敏感信息，本次查看会写入敏感访问日志和审计。"
+      :confirm-text="revealedGiftCardCode ? '已完成查看' : '确认解密查看'"
+      :confirm-loading="revealSubmitting"
+      :confirm-disabled="Boolean(revealedGiftCardCode)"
+      :confirm-disabled-reason="revealedGiftCardCode ? '' : revealDisabledReason"
+      @confirm="submitRevealGiftCard"
+    >
+      <section class="v2-gift-card-reveal">
+        <el-alert
+          title="请仅在业务核验确有需要时查看，关闭窗口后页面不会保留完整卡号"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+        <el-form
+          class="v2-horizontal-form"
+          label-position="left"
+          label-width="88px"
+          require-asterisk-position="right"
+        >
+          <el-form-item label="查看原因" required>
+            <el-input
+              v-model="revealReason"
+              type="textarea"
+              :rows="3"
+              minlength="2"
+              maxlength="200"
+              show-word-limit
+              :disabled="Boolean(revealedGiftCardCode)"
+              placeholder="必填，说明本次查看用途"
+            />
+          </el-form-item>
+        </el-form>
+        <section v-if="revealedGiftCardCode" class="v2-gift-card-reveal__result">
+          <span>完整礼品卡号</span>
+          <code>{{ revealedGiftCardCode }}</code>
+        </section>
+      </section>
+    </V2ConfirmDialog>
 
     <V2ConfirmDialog
       v-model="reversalDialogVisible"
@@ -197,9 +319,9 @@
       :message="reversalMessage"
       :confirm-text="reversalConfirmText"
       :confirm-loading="reversalSubmitting"
-      :confirm-disabled="reversalReason.trim().length < 2"
+      :confirm-disabled-reason="reversalDisabledReason"
       danger
-      @confirm="submitReversal"
+      @confirm="confirmReversal"
     >
       <div class="v2-topup-records-reversal">
         <p>{{ reversalMessage }}</p>
@@ -219,37 +341,59 @@
           show-icon
           :closable="false"
         />
-        <label>
-          <span>处理原因</span>
-          <el-input
-            v-model="reversalReason"
-            type="textarea"
-            :rows="3"
-            minlength="2"
-            maxlength="500"
-            show-word-limit
-            placeholder="必填，记录供应商反馈或撤回依据"
-          />
-        </label>
+        <el-form
+          ref="reversalFormRef"
+          class="v2-horizontal-form"
+          :model="reversalFormModel"
+          :rules="reversalRules"
+          label-position="left"
+          label-width="88px"
+          require-asterisk-position="right"
+          status-icon
+          scroll-to-error
+          :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
+        >
+          <el-form-item label="处理原因" prop="reason">
+            <el-input
+              v-model="reversalReason"
+              type="textarea"
+              :rows="3"
+              minlength="2"
+              maxlength="500"
+              show-word-limit
+              placeholder="必填，记录供应商反馈或撤回依据"
+            />
+          </el-form-item>
+        </el-form>
       </div>
     </V2ConfirmDialog>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue';
+import type { FormInstance } from 'element-plus';
 import { Close, Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import V2TopupRecordsTables from './components/V2TopupRecordsTables.vue';
+import V2TopupSupplierFundsPanel from './components/V2TopupSupplierFundsPanel.vue';
+import V2TopupSupplierPaymentsPanel from './components/V2TopupSupplierPaymentsPanel.vue';
+import { topupRecordReversalRules as reversalRules } from './topup-records-form';
 import { useTopupRecordsPage } from './useTopupRecordsPage';
 import '@/v2/styles/records.css';
 import '@/v2/styles/topup-records.css';
 
 const {
   canAdjustBalance,
+  canViewSupplierFunds,
+  canManageSupplierFunds,
+  canRevealGiftCard,
+  canReassignSupplier,
   activeTab,
   countryOptions,
   topupSupplierOptions,
@@ -261,6 +405,12 @@ const {
   ledgerLoading,
   metadataDrawerVisible,
   metadataSubmitting,
+  supplierDrawerVisible,
+  supplierSubmitting,
+  revealDialogVisible,
+  revealSubmitting,
+  revealedGiftCardCode,
+  revealReason,
   selectedGiftCard,
   reversalDialogVisible,
   reversalSubmitting,
@@ -271,12 +421,17 @@ const {
   giftCardQuery,
   ledgerQuery,
   metadataForm,
+  supplierForm,
+  metadataDisabledReason,
+  supplierDisabledReason,
+  revealDisabledReason,
   activeLoading,
   activeError,
   activeResolved,
   reversalDialogTitle,
   reversalConfirmText,
   reversalMessage,
+  reversalDisabledReason,
   isInitialLoading,
   loadActiveTab,
   handleTabChange,
@@ -292,7 +447,42 @@ const {
   handleLedgerSortChange,
   openMetadataDrawer,
   submitMetadata,
+  openSupplierDrawer,
+  submitSupplierReassignment,
+  openRevealDialog,
+  submitRevealGiftCard,
   openReversalConfirmation,
   submitReversal
 } = useTopupRecordsPage();
+
+const metadataFormRef = ref<FormInstance>();
+const supplierFormRef = ref<FormInstance>();
+const reversalFormRef = ref<FormInstance>();
+const metadataDirty = computed(
+  () =>
+    Boolean(selectedGiftCard.value) &&
+    metadataForm.remark !== (selectedGiftCard.value?.remark ?? '')
+);
+const supplierDirty = computed(
+  () =>
+    Boolean(selectedGiftCard.value) &&
+    (supplierForm.supplierOptionId !== (selectedGiftCard.value?.supplierOptionId ?? '') ||
+      Boolean(supplierForm.reason.trim()))
+);
+const reversalFormModel = computed(() => ({ reason: reversalReason.value }));
+
+async function confirmMetadata() {
+  if (metadataDisabledReason.value || !(await validateV2Form(metadataFormRef.value))) return;
+  await submitMetadata();
+}
+
+async function confirmSupplierReassignment() {
+  if (supplierDisabledReason.value || !(await validateV2Form(supplierFormRef.value))) return;
+  await submitSupplierReassignment();
+}
+
+async function confirmReversal() {
+  if (reversalDisabledReason.value || !(await validateV2Form(reversalFormRef.value))) return;
+  await submitReversal();
+}
 </script>

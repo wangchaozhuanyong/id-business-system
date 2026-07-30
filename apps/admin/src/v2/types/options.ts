@@ -7,7 +7,8 @@ export type V2OptionType =
   | 'service'
   | 'id_supplier'
   | 'topup_supplier'
-  | 'settlement_platform';
+  | 'settlement_platform'
+  | 'expense_category';
 
 export type V2OptionStatus = 'active' | 'disabled';
 

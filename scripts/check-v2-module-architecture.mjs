@@ -11,15 +11,37 @@ const expectedFeatures = [
   'account-losses',
   'accounts',
   'activations',
+  'audit-logs',
+  'business-monitoring',
   'customers',
+  'dashboard',
+  'data-analytics',
+  'data-governance',
+  'employees',
   'exchange-rates',
+  'finance-ledger',
   'options',
   'order-entry',
   'orders',
+  'profile',
   'renewals',
+  'roles',
+  'security',
+  'system-monitoring',
   'topup-records',
   'topups'
 ];
+const plannedFeatures = new Set([
+  'audit-logs',
+  'business-monitoring',
+  'dashboard',
+  'data-governance',
+  'employees',
+  'profile',
+  'roles',
+  'security',
+  'system-monitoring'
+]);
 const expectedBackendDomains = [
   'accounts',
   'activations',
@@ -27,6 +49,7 @@ const expectedBackendDomains = [
   'change-sync',
   'customers',
   'exchange-rates',
+  'finance',
   'gift-cards',
   'options',
   'orders',
@@ -72,7 +95,9 @@ function checkFrontendFeatures() {
 
   for (const feature of expectedFeatures) {
     const featurePath = `${frontendRoot}/${feature}`;
-    const requiredFiles = ['manifest.ts', 'api.ts', 'contracts.ts'];
+    const requiredFiles = plannedFeatures.has(feature)
+      ? ['manifest.ts']
+      : ['manifest.ts', 'api.ts', 'contracts.ts'];
     for (const file of requiredFiles) {
       requireFile(`${featurePath}/${file}`);
     }
@@ -127,6 +152,13 @@ function checkFrontendFeatures() {
     ]) {
       if (!new RegExp(`\\b${field}:`).test(manifestSource)) {
         issues.push(`${manifestPath}: 缺少 ${field}`);
+      }
+    }
+    if (plannedFeatures.has(feature)) {
+      for (const snippet of ["status: 'planned'", "kind: 'planned'", 'plannedSections:']) {
+        if (!manifestSource.includes(snippet)) {
+          issues.push(`${manifestPath}: 规划模块缺少 ${snippet}`);
+        }
       }
     }
     if (!registrySource.includes(`@/v2/features/${feature}/manifest`)) {

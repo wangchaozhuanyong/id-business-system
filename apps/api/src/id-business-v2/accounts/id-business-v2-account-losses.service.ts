@@ -11,7 +11,17 @@ import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { toV2DecimalString } from '../decimal-policy';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import type { ReportIdBusinessV2AccountLossDto } from './dto/report-id-business-v2-account-loss.dto';
+import {
+  normalizeAccountLossDate,
+  normalizeAccountLossIdempotencyKey,
+  normalizeAccountLossKeyword,
+  normalizeAccountLossReason,
+  normalizeAccountLossSaleState,
+  normalizeAccountLossUuid,
+  normalizeOptionalAccountLossUuid
+} from './id-business-v2-account-loss-input';
 
 interface ListIdBusinessV2AccountLossesQuery extends PaginationQuery {
   keyword?: string;
@@ -33,6 +43,7 @@ interface LockedAccountRow {
   supplierName: string | null;
   currentBalance: PrismaNamespace.Decimal;
   balanceCostAmount: PrismaNamespace.Decimal;
+  purchaseCost: PrismaNamespace.Decimal;
   soldByOrderId: string | null;
   soldOrderNo: string | null;
   lossReportedAt: Date | null;
@@ -45,8 +56,6 @@ export interface IdBusinessV2AccountLossAuditContext {
   reversalLedgerEntryId: string;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 const SORT_FIELDS = {
   reportedAt: 'reportedAt',
   lossBalance: 'lossBalance',
@@ -57,7 +66,8 @@ const SORT_FIELDS = {
 export class IdBusinessV2AccountLossesService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService
+    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {}
 
   async reportLoss(
@@ -87,9 +97,9 @@ export class IdBusinessV2AccountLossesService {
     operator?: AuthenticatedUser,
     auditContext?: IdBusinessV2AccountLossAuditContext
   ) {
-    const accountId = this.normalizeUuid(accountIdValue, 'ID');
-    const reason = this.normalizeReason(dto.reason);
-    const requestIdempotencyKey = this.normalizeIdempotencyKey(dto.idempotencyKey);
+    const accountId = normalizeAccountLossUuid(accountIdValue, 'ID');
+    const reason = normalizeAccountLossReason(dto.reason);
+    const requestIdempotencyKey = normalizeAccountLossIdempotencyKey(dto.idempotencyKey);
     const idempotencyKey = `account_loss:${accountId}:${requestIdempotencyKey}`;
     const expected = this.balanceCalculator.normalizeSnapshot(
       dto.expectedCurrentBalance,
@@ -208,6 +218,7 @@ export class IdBusinessV2AccountLossesService {
         soldOrderNo: account.soldOrderNo,
         lossBalance: account.currentBalance,
         lossCostAmount: account.balanceCostAmount,
+        idPurchaseCostLossAmount: account.soldByOrderId ? 0 : account.purchaseCost,
         reason,
         idempotencyKey,
         reportedByUserId: operator?.id,
@@ -247,6 +258,62 @@ export class IdBusinessV2AccountLossesService {
         updatedByUserId: operator?.id
       }
     });
+    const idPurchaseCostLossAmount = account.soldByOrderId
+      ? new PrismaNamespace.Decimal(0)
+      : account.purchaseCost;
+    const financeJournal = await this.financePostingService.post(tx, {
+      journalType: 'account_loss',
+      sourceType: 'account_loss',
+      sourceId: lossRecord.id,
+      sourceReference: account.appleIdMasked,
+      occurredAt: now,
+      summary: `ID 报损：${account.appleIdMasked}`,
+      metadata: {
+        accountId,
+        saleState: account.soldByOrderId ? 'sold' : 'available',
+        reason
+      },
+      idempotencyKey: `auto:account_loss:${lossRecord.id}`,
+      operator,
+      lines: [
+        {
+          accountCode: 'balance_loss',
+          direction: 'debit',
+          currency: 'CNY',
+          amountOriginal: account.balanceCostAmount,
+          fxRateToCny: 1,
+          amountCny: account.balanceCostAmount,
+          memo: 'ID 剩余余额成本报损'
+        },
+        {
+          accountCode: 'gift_card_inventory',
+          direction: 'credit',
+          currency: 'CNY',
+          amountOriginal: account.balanceCostAmount,
+          fxRateToCny: 1,
+          amountCny: account.balanceCostAmount,
+          memo: '冲减礼品卡余额资产'
+        },
+        {
+          accountCode: 'id_purchase_loss',
+          direction: 'debit',
+          currency: 'CNY',
+          amountOriginal: idPurchaseCostLossAmount,
+          fxRateToCny: 1,
+          amountCny: idPurchaseCostLossAmount,
+          memo: '未售 ID 采购成本报损'
+        },
+        {
+          accountCode: 'id_inventory',
+          direction: 'credit',
+          currency: 'CNY',
+          amountOriginal: idPurchaseCostLossAmount,
+          fxRateToCny: 1,
+          amountCny: idPurchaseCostLossAmount,
+          memo: '冲减未售 ID 库存'
+        }
+      ]
+    });
     await tx.auditLog.create({
       data: {
         userId: operator?.id,
@@ -266,6 +333,8 @@ export class IdBusinessV2AccountLossesService {
           lossReportedAt: now.toISOString(),
           lossRecordId: lossRecord.id,
           ledgerEntryId: ledgerEntry.id,
+          idPurchaseCostLossAmount: toV2DecimalString(idPurchaseCostLossAmount),
+          financeJournalId: financeJournal.id,
           reason,
           ...(auditContext
             ? {
@@ -285,9 +354,9 @@ export class IdBusinessV2AccountLossesService {
 
   async list(query: ListIdBusinessV2AccountLossesQuery) {
     const pagination = getPagination(query);
-    const keyword = this.normalizeKeyword(query.keyword);
-    const countryOptionId = this.normalizeOptionalUuid(query.countryOptionId, '国家');
-    const saleState = this.normalizeSaleState(query.saleState);
+    const keyword = normalizeAccountLossKeyword(query.keyword);
+    const countryOptionId = normalizeOptionalAccountLossUuid(query.countryOptionId, '国家');
+    const saleState = normalizeAccountLossSaleState(query.saleState);
     const reportedAt = this.buildReportedAtFilter(query.reportedFrom, query.reportedTo);
     const where: Prisma.IdBusinessV2AccountLossWhereInput = {
       countryOptionId: countryOptionId ?? undefined,
@@ -346,6 +415,7 @@ export class IdBusinessV2AccountLossesService {
         supplier."name" AS "supplierName",
         account."current_balance" AS "currentBalance",
         account."balance_cost_amount" AS "balanceCostAmount",
+        account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
         sold_order."order_no" AS "soldOrderNo",
         account."loss_reported_at" AS "lossReportedAt"
@@ -384,6 +454,7 @@ export class IdBusinessV2AccountLossesService {
       soldOrderNo: string | null;
       lossBalance: PrismaNamespace.Decimal;
       lossCostAmount: PrismaNamespace.Decimal;
+      idPurchaseCostLossAmount: PrismaNamespace.Decimal;
       reason: string;
       reportedByName: string | null;
       reportedAt: Date;
@@ -411,6 +482,7 @@ export class IdBusinessV2AccountLossesService {
       reason: string;
       lossBalance: PrismaNamespace.Decimal;
       lossCostAmount: PrismaNamespace.Decimal;
+      idPurchaseCostLossAmount: PrismaNamespace.Decimal;
     },
     accountId: string,
     reason: string,
@@ -444,6 +516,7 @@ export class IdBusinessV2AccountLossesService {
     soldOrderNo: string | null;
     lossBalance: PrismaNamespace.Decimal;
     lossCostAmount: PrismaNamespace.Decimal;
+    idPurchaseCostLossAmount: PrismaNamespace.Decimal;
     reason: string;
     reportedByName: string | null;
     reportedAt: Date;
@@ -464,6 +537,7 @@ export class IdBusinessV2AccountLossesService {
       soldOrderNo: loss.soldOrderNo,
       lossBalance: toV2DecimalString(loss.lossBalance),
       lossCostAmount: toV2DecimalString(loss.lossCostAmount),
+      idPurchaseCostLossAmount: toV2DecimalString(loss.idPurchaseCostLossAmount),
       reason: loss.reason,
       reportedByName: loss.reportedByName,
       reportedBy: loss.reportedBy,
@@ -487,8 +561,8 @@ export class IdBusinessV2AccountLossesService {
   }
 
   private buildReportedAtFilter(fromValue?: string, toValue?: string) {
-    const from = this.normalizeDate(fromValue, '开始日期');
-    const to = this.normalizeDate(toValue, '结束日期');
+    const from = normalizeAccountLossDate(fromValue, '开始日期');
+    const to = normalizeAccountLossDate(toValue, '结束日期');
     if (from && to && from.getTime() > to.getTime()) {
       throw new BadRequestException('开始日期不能晚于结束日期');
     }
@@ -498,61 +572,5 @@ export class IdBusinessV2AccountLossesService {
       gte: from,
       lt: exclusiveTo
     };
-  }
-
-  private normalizeDate(value: unknown, label: string) {
-    if (value === undefined || value === null || value === '') return undefined;
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    const date = new Date(`${normalized}T00:00:00.000Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return date;
-  }
-
-  private normalizeKeyword(value: unknown) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (normalized.length > 160) {
-      throw new BadRequestException('搜索内容不能超过 160 个字符');
-    }
-    return normalized || null;
-  }
-
-  private normalizeSaleState(value: unknown): 'available' | 'sold' | null {
-    if (value === undefined || value === null || value === '') return null;
-    if (value === 'available' || value === 'sold') return value;
-    throw new BadRequestException('销售状态无效');
-  }
-
-  private normalizeReason(value: unknown) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (normalized.length < 2 || normalized.length > 500) {
-      throw new BadRequestException('报损原因必须为 2 至 500 个字符');
-    }
-    return normalized;
-  }
-
-  private normalizeIdempotencyKey(value: unknown) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!IDEMPOTENCY_KEY_PATTERN.test(normalized)) {
-      throw new BadRequestException('幂等键必须是 8 至 100 位字母、数字或 ._:-');
-    }
-    return normalized;
-  }
-
-  private normalizeUuid(value: unknown, label: string) {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!UUID_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return normalized;
-  }
-
-  private normalizeOptionalUuid(value: unknown, label: string) {
-    if (value === undefined || value === null || value === '') return null;
-    return this.normalizeUuid(value, label);
   }
 }

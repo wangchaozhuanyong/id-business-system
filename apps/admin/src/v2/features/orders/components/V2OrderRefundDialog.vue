@@ -22,6 +22,8 @@
       label-width="112px"
       require-asterisk-position="right"
       status-icon
+      scroll-to-error
+      :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
       <el-form-item label="退款成本" prop="refundCostAmount">
         <el-input
@@ -65,8 +67,17 @@
 
     <template #footer>
       <div class="v2-order-refund-footer">
+        <span v-if="submitDisabledReason" class="v2-submit-disabled-reason" role="status">
+          {{ submitDisabledReason }}
+        </span>
         <AppButton variant="ghost" @click="$emit('update:modelValue', false)">取消</AppButton>
-        <AppButton variant="danger" :loading="saving" :disabled="submitDisabled" @click="submit">
+        <AppButton
+          variant="danger"
+          :loading="saving"
+          :disabled="Boolean(submitDisabledReason)"
+          :aria-label="submitDisabledReason ? `确认退款：${submitDisabledReason}` : '确认退款'"
+          @click="submit"
+        >
           确认退款
         </AppButton>
       </div>
@@ -79,6 +90,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import type { RefundV2OrderInput, V2Order } from '../contracts';
 
 const props = defineProps<{
@@ -100,14 +112,12 @@ const form = reactive({
   accountReturned: false
 });
 
-const submitDisabled = computed(
-  () =>
-    props.saving || !isNonNegativeDecimal(form.refundCostAmount) || form.reason.trim().length < 2
-);
+const submitDisabledReason = computed(() => (props.order ? '' : '未选择退款订单'));
 
 const rules: FormRules = {
   refundCostAmount: [
     {
+      required: true,
       validator: (_rule, value, callback) =>
         callback(
           isNonNegativeDecimal(value)
@@ -119,6 +129,7 @@ const rules: FormRules = {
   ],
   reason: [
     {
+      required: true,
       validator: (_rule, value, callback) => {
         const normalized = String(value ?? '').trim();
         callback(
@@ -146,7 +157,7 @@ watch(
 );
 
 async function submit() {
-  if (!formRef.value || !(await formRef.value.validate().catch(() => false))) return;
+  if (submitDisabledReason.value || !(await validateV2Form(formRef.value))) return;
   emit('submit', {
     refundCostAmount: form.refundCostAmount.trim(),
     reason: form.reason.trim(),

@@ -4,9 +4,9 @@
     title="录入续费订单"
     size="min(660px, 96vw)"
     confirm-text="核对并续费"
-    :confirm-disabled="!canSubmit"
+    :confirm-disabled-reason="submitDisabledReason"
     :confirm-loading="submitting"
-    @confirm="emit('openConfirmation')"
+    @confirm="confirm"
   >
     <div v-if="renewal" class="v2-renewal-open">
       <section class="v2-renewal-open__target">
@@ -36,9 +36,19 @@
         </div>
       </section>
 
-      <section class="v2-renewal-open__form">
-        <label>
-          <span>续费业务</span>
+      <el-form
+        ref="formRef"
+        class="v2-renewal-open__form v2-horizontal-form"
+        :model="formModel"
+        :rules="formRules"
+        label-position="left"
+        label-width="132px"
+        require-asterisk-position="right"
+        status-icon
+        scroll-to-error
+        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
+      >
+        <el-form-item label="续费业务" prop="serviceOptionId">
           <el-select
             v-model="serviceOptionId"
             filterable
@@ -53,11 +63,10 @@
               :value="option.id"
             />
           </el-select>
-        </label>
+        </el-form-item>
 
         <div class="v2-renewal-open__grid">
-          <label>
-            <span>客户实收金额</span>
+          <el-form-item label="客户实收金额" prop="receivedAmount">
             <el-input
               v-model="receivedAmount"
               inputmode="decimal"
@@ -65,15 +74,15 @@
               aria-label="续费客户实收金额"
               placeholder="例如 100"
             />
-          </label>
-          <label>
-            <span>
-              {{
-                selectedService?.currencyCode
-                  ? `扣减 ID 余额（${selectedService.currencyCode}）`
-                  : '扣减 ID 余额'
-              }}
-            </span>
+          </el-form-item>
+          <el-form-item
+            :label="
+              selectedService?.currencyCode
+                ? `扣减 ID 余额（${selectedService.currencyCode}）`
+                : '扣减 ID 余额'
+            "
+            prop="balanceAmount"
+          >
             <el-input
               v-model="balanceAmount"
               inputmode="decimal"
@@ -81,12 +90,11 @@
               aria-label="续费扣减 ID 余额"
               placeholder="例如 10"
             />
-          </label>
+          </el-form-item>
         </div>
 
         <div class="v2-renewal-open__grid">
-          <label>
-            <span>结算平台</span>
+          <el-form-item label="结算平台">
             <el-select
               v-model="settlementPlatformOptionId"
               clearable
@@ -103,9 +111,8 @@
                 :value="option.id"
               />
             </el-select>
-          </label>
-          <label>
-            <span>平台订单号</span>
+          </el-form-item>
+          <el-form-item label="平台订单号" prop="platformOrderNo">
             <el-input
               v-model="platformOrderNo"
               maxlength="160"
@@ -113,12 +120,11 @@
               aria-label="续费平台订单号"
               placeholder="选填"
             />
-          </label>
+          </el-form-item>
         </div>
 
         <div class="v2-renewal-open__grid">
-          <label>
-            <span>续费开始时间</span>
+          <el-form-item label="续费开始时间" prop="openedAt">
             <el-date-picker
               v-model="openedAt"
               type="datetime"
@@ -127,9 +133,8 @@
               placeholder="选择开始时间"
               @change="emit('openedAtChange', openedAt)"
             />
-          </label>
-          <label>
-            <span>续费到期时间</span>
+          </el-form-item>
+          <el-form-item label="续费到期时间" prop="dueAt">
             <el-date-picker
               v-model="dueAt"
               type="datetime"
@@ -137,11 +142,10 @@
               aria-label="续费到期时间"
               placeholder="选择到期时间"
             />
-          </label>
+          </el-form-item>
         </div>
 
-        <label>
-          <span>备注</span>
+        <el-form-item label="备注">
           <el-input
             v-model="remark"
             type="textarea"
@@ -151,7 +155,7 @@
             aria-label="续费备注"
             placeholder="选填"
           />
-        </label>
+        </el-form-item>
 
         <el-alert
           v-if="optionsError"
@@ -171,7 +175,7 @@
             <strong>{{ formatDecimal(balanceAfterPreview) }}</strong>
           </div>
         </div>
-      </section>
+      </el-form>
     </div>
   </V2FormDrawer>
 
@@ -181,19 +185,23 @@
     :message="confirmationMessage"
     confirm-text="确认续费"
     :confirm-loading="submitting"
+    :confirm-disabled-reason="submitDisabledReason"
     @confirm="emit('submit')"
   />
 </template>
 
 <script setup lang="ts">
-import { formatV2Decimal } from '@/v2/utils/decimal';
+import { computed, ref } from 'vue';
+import type { FormInstance, FormRules } from 'element-plus';
+import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import type { V2ManualRenewalOptions, V2RenewalWorkbenchItem } from '../contracts';
 
 type ManualService = V2ManualRenewalOptions['services'][number];
 
-defineProps<{
+const props = defineProps<{
   renewal: V2RenewalWorkbenchItem | null;
   services: V2ManualRenewalOptions['services'];
   settlementPlatforms: V2ManualRenewalOptions['settlementPlatforms'];
@@ -201,7 +209,7 @@ defineProps<{
   optionsLoading: boolean;
   optionsError: string;
   submitting: boolean;
-  canSubmit: boolean;
+  submitDisabledReason: string;
   platformFeePreview: string;
   balanceAfterPreview: string;
   confirmationMessage: string;
@@ -226,6 +234,108 @@ const balanceAmount = defineModel<string>('balanceAmount', { required: true });
 const openedAt = defineModel<Date | null>('openedAt', { required: true });
 const dueAt = defineModel<Date | null>('dueAt', { required: true });
 const remark = defineModel<string>('remark', { required: true });
+const formRef = ref<FormInstance>();
+const formModel = computed(() => ({
+  serviceOptionId: serviceOptionId.value,
+  settlementPlatformOptionId: settlementPlatformOptionId.value,
+  platformOrderNo: platformOrderNo.value,
+  receivedAmount: receivedAmount.value,
+  balanceAmount: balanceAmount.value,
+  openedAt: openedAt.value,
+  dueAt: dueAt.value,
+  remark: remark.value
+}));
+const formRules = computed<FormRules>(() => ({
+  serviceOptionId: [
+    { required: true, message: '请选择续费业务', trigger: 'change' },
+    {
+      validator: (_rule, value, callback) =>
+        callback(
+          props.services.some((service) => service.id === value)
+            ? undefined
+            : new Error('所选业务不适用于当前 ID 国家')
+        ),
+      trigger: 'change'
+    }
+  ],
+  receivedAmount: [
+    {
+      required: true,
+      validator: (_rule, value, callback) =>
+        callback(
+          isV2UnsignedDecimal(value)
+            ? undefined
+            : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
+        ),
+      trigger: 'blur'
+    }
+  ],
+  balanceAmount: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        if (!isV2UnsignedDecimal(value, { allowZero: false })) {
+          callback(new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的正数`));
+          return;
+        }
+        const currentBalance = Number(props.renewal?.account.currentBalance);
+        callback(
+          Number(value) <= currentBalance ? undefined : new Error('扣减余额不能超过 ID 当前余额')
+        );
+      },
+      trigger: 'blur'
+    }
+  ],
+  platformOrderNo: [
+    {
+      validator: (_rule, value, callback) =>
+        callback(
+          String(value ?? '').trim() && !settlementPlatformOptionId.value
+            ? new Error('填写平台订单号时必须选择结算平台')
+            : undefined
+        ),
+      trigger: 'blur'
+    }
+  ],
+  openedAt: [
+    { required: true, message: '请选择续费开始时间', trigger: 'change' },
+    {
+      validator: (_rule, value, callback) => {
+        const sourceDueAt = props.renewal?.dueAt ? new Date(props.renewal.dueAt) : null;
+        callback(
+          value instanceof Date && (!sourceDueAt || value.getTime() >= sourceDueAt.getTime())
+            ? undefined
+            : new Error('续费开始时间不能早于原到期时间')
+        );
+      },
+      trigger: 'change'
+    }
+  ],
+  dueAt: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        if (!(value instanceof Date) || !(openedAt.value instanceof Date)) {
+          callback(new Error('请选择有效的续费时间'));
+          return;
+        }
+        if (value.getTime() <= openedAt.value.getTime()) {
+          callback(new Error('续费到期时间必须晚于开始时间'));
+          return;
+        }
+        callback(
+          value.getTime() > Date.now() ? undefined : new Error('续费到期时间必须晚于当前时间')
+        );
+      },
+      trigger: 'change'
+    }
+  ]
+}));
+
+async function confirm() {
+  if (props.submitDisabledReason || !(await validateV2Form(formRef.value))) return;
+  emit('openConfirmation');
+}
 
 function serviceLabel(service: ManualService) {
   const category = service.category ? `${service.category.name} / ` : '';

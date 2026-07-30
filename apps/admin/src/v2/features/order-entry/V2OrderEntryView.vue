@@ -56,6 +56,8 @@
           label-width="112px"
           require-asterisk-position="right"
           status-icon
+          scroll-to-error
+          :scroll-into-view-options="{ block: 'center', behavior: 'smooth' }"
         >
           <V2SectionHeading
             class="v2-order-entry-section-header"
@@ -262,16 +264,13 @@
                 placeholder="选填"
               />
             </el-form-item>
-
-            <el-form-item label="实收金额" prop="receivedAmount">
-              <el-input
-                v-model="form.receivedAmount"
-                inputmode="decimal"
-                maxlength="19"
-                placeholder="例如 100"
-              />
-            </el-form-item>
-
+            <V2OrderReceiptFields
+              :form="form"
+              :finance-accounts="availableFinanceAccounts"
+              :received-amount-preview="receivedAmountPreview"
+              :format-decimal="formatDecimal"
+              @currency-change="handleReceivedCurrencyChange"
+            />
             <el-form-item label="目标利润" prop="targetProfit">
               <el-input
                 v-model="form.targetProfit"
@@ -293,7 +292,7 @@
                   <small v-else-if="suggestedReceived.estimatedProfit">
                     采用后预计利润 ¥{{ formatDecimal(suggestedReceived.estimatedProfit) }}
                   </small>
-                  <small v-else>填写目标利润并选择可用 ID 后自动计算</small>
+                  <small v-else>人民币建议值；填写目标利润并选择可用 ID 后自动计算</small>
                 </div>
                 <AppButton
                   variant="ghost"
@@ -357,10 +356,16 @@
               <span>订单状态</span>
               <strong>待处理</strong>
             </div>
+            <span v-if="submitDisabledReason" class="v2-submit-disabled-reason" role="status">
+              {{ submitDisabledReason }}
+            </span>
             <AppButton
               variant="primary"
               :loading="submitting"
-              :disabled="!canSubmit"
+              :disabled="Boolean(submitDisabledReason)"
+              :aria-label="
+                submitDisabledReason ? `创建并扣减余额：${submitDisabledReason}` : '创建并扣减余额'
+              "
               @click="submitOrder"
             >
               <el-icon><CircleCheck /></el-icon>
@@ -417,15 +422,15 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
+import { ref } from 'vue';
 import { CircleCheck, Plus } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2OrderEntryCandidates from './components/V2OrderEntryCandidates.vue';
+import V2OrderReceiptFields from './components/V2OrderReceiptFields.vue';
 import V2OrderEntryResult from './components/V2OrderEntryResult.vue';
 import V2QuickCustomerDrawer from './components/V2QuickCustomerDrawer.vue';
-import type { V2OrderEntryCustomer } from './contracts';
 import { useOrderEntryPage } from './useOrderEntryPage';
 import '@/v2/styles/order-entry.css';
 
@@ -451,6 +456,7 @@ const {
   availableCategories,
   availableServices,
   selectedService,
+  availableFinanceAccounts,
   candidateItems,
   selectedCandidate,
   missingOptionsConfiguration,
@@ -459,9 +465,10 @@ const {
   canViewCustomers,
   canCreateCustomer,
   canMatch,
-  canSubmit,
+  submitDisabledReason,
   hasPendingConsumption,
   platformFeePreview,
+  receivedAmountPreview,
   accountPurchaseCostPreview,
   appliedAccountCostPreview,
   estimatedBalanceCostPreview,
@@ -478,23 +485,16 @@ const {
   handleCountryChange,
   handleCategoryChange,
   handleSettlementPlatformChange,
+  handleReceivedCurrencyChange,
   handleIdSelectionModeChange,
   searchManualCandidates,
   loadCandidates,
   applySuggestedReceivedAmount,
   submitOrder,
   retryConsumption,
+  handleCustomerCreated,
   customerLabel,
   formatDecimal
 } = useOrderEntryPage();
 const quickCustomerVisible = ref(false);
-
-function handleCustomerCreated(customer: V2OrderEntryCustomer) {
-  entryOptions.value = {
-    ...entryOptions.value,
-    customers: [customer, ...entryOptions.value.customers.filter((item) => item.id !== customer.id)]
-  };
-  form.customerId = customer.id;
-  void nextTick(() => formRef.value?.clearValidate('customerId'));
-}
 </script>

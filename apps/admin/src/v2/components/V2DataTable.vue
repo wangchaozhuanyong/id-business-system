@@ -8,9 +8,10 @@
     </header>
 
     <el-table :data="[]" row-key="id" height="420">
-      <el-table-column
-        v-for="column in columns"
+      <V2TableColumn
+        v-for="column in dataColumns"
         :key="column.key"
+        :kind="column.kind"
         :prop="column.key"
         :label="column.label"
         :min-width="column.minWidth"
@@ -32,9 +33,21 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import type { V2TableColumnDefinition } from '@/v2/config/modules';
 
-defineProps<{
+const props = defineProps<{
   columns: readonly V2TableColumnDefinition[];
 }>();
+
+const dataColumns = computed(() =>
+  props.columns.filter(
+    (
+      column
+    ): column is V2TableColumnDefinition & {
+      kind: Exclude<V2TableColumnDefinition['kind'], 'actions'>;
+    } => column.kind !== 'actions'
+  )
+);
 </script>

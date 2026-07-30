@@ -310,6 +310,15 @@ export function toAccountResponse(account: AccountWithRelations) {
     currentBalance: toV2DecimalString(account.currentBalance),
     balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
     purchaseCost: toV2DecimalString(account.purchaseCost),
+    purchaseOriginalAmount: toV2DecimalString(
+      account.purchaseOriginalAmount ?? account.purchaseCost
+    ),
+    purchaseCurrency: account.purchaseCurrency ?? ('CNY' as const),
+    purchaseFxRateToCny: toV2DecimalString(account.purchaseFxRateToCny ?? 1),
+    purchaseFxSnapshotId: account.purchaseFxSnapshotId ?? null,
+    purchaseFinanceAccountId: account.purchaseFinanceAccountId ?? null,
+    purchaseSupplierAccountId: account.purchaseSupplierAccountId ?? null,
+    purchasedAt: account.purchasedAt ?? account.createdAt,
     saleState: account.soldByOrderId ? ('sold' as const) : ('available' as const),
     soldAt: account.soldAt,
     soldByOrder: account.soldByOrder,

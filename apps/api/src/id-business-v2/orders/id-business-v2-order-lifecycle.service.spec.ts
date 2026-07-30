@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { IdBusinessV2Order } from '@prisma/client';
+import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2OrderLifecycleService } from './id-business-v2-order-lifecycle.service';
@@ -26,6 +27,10 @@ function decimal(value: Prisma.Decimal.Value) {
   return new Prisma.Decimal(value);
 }
 
+function cloudflareDecimal(value: Prisma.Decimal.Value) {
+  return new CloudflarePrisma.Decimal(String(value));
+}
+
 function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
   return {
     id: orderId,
@@ -39,6 +44,12 @@ function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
     websiteAccountHash: 'website-hash',
     websiteAccountMasked: 'te***@example.com',
     receivedAmount: decimal('100'),
+    receivedOriginalAmount: decimal('100'),
+    receivedCurrency: 'CNY',
+    receivedFxRateToCny: decimal('1'),
+    receivedFxSnapshotId: null,
+    receivedFinanceAccountId: null,
+    receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
     accountCostAmount: decimal('25'),
@@ -149,12 +160,16 @@ describe('IdBusinessV2OrderLifecycleService', () => {
   const ordersService = {
     get: vi.fn()
   };
+  const financePostingService = {
+    post: vi.fn()
+  };
   const service = new IdBusinessV2OrderLifecycleService(
     prisma as never,
     fieldEncryption as never,
     new IdBusinessV2BalanceCalculatorService(),
     orderLockService as never,
-    ordersService as never
+    ordersService as never,
+    financePostingService as never
   );
   let storedOrder = makeOrder();
   let consumption: ReturnType<typeof makeConsumption> | null = makeConsumption();
@@ -162,6 +177,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
     storedOrder = makeOrder();
     consumption = makeConsumption();
     reversal = null;
@@ -237,11 +253,23 @@ describe('IdBusinessV2OrderLifecycleService', () => {
   it('updates a pending order, recalculates fees, and atomically recreates its lock', async () => {
     storedOrder = makeOrder({
       status: 'pending',
-      accountCostAmount: decimal('0'),
-      balanceCostAmount: decimal('0'),
+      receivedAmount: cloudflareDecimal('100'),
+      platformFeeAmount: cloudflareDecimal('3'),
+      accountCostAmount: cloudflareDecimal('0'),
+      balanceAmount: cloudflareDecimal('20'),
+      balanceCostAmount: cloudflareDecimal('0'),
       profitAmount: null
     });
     consumption = null;
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
+      if (where.type === 'settlement_platform') {
+        return {
+          fixedFee: cloudflareDecimal('1'),
+          percentageFee: cloudflareDecimal('2')
+        };
+      }
+      return { id: where.id };
+    });
     const nextDueAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     const result = await service.update(
@@ -334,6 +362,25 @@ describe('IdBusinessV2OrderLifecycleService', () => {
   });
 
   it('recalculates processing order profit while protecting consumed core fields', async () => {
+    storedOrder = makeOrder({
+      receivedAmount: cloudflareDecimal('100'),
+      platformFeeAmount: cloudflareDecimal('3'),
+      accountCostAmount: cloudflareDecimal('25'),
+      balanceAmount: cloudflareDecimal('20'),
+      balanceCostAmount: cloudflareDecimal('60'),
+      refundCostAmount: cloudflareDecimal('0'),
+      profitAmount: cloudflareDecimal('37')
+    });
+    tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
+      if (where.type === 'settlement_platform') {
+        return {
+          fixedFee: cloudflareDecimal('1'),
+          percentageFee: cloudflareDecimal('2')
+        };
+      }
+      return { id: where.id };
+    });
+
     await service.update(
       orderId,
       {

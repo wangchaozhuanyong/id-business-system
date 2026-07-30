@@ -143,7 +143,7 @@ const description = computed(() => {
   place-items: center;
   border-radius: 9px;
   background: var(--v3-primary-solid);
-  color: #fff;
+  color: var(--v3-on-primary-solid);
   font-weight: 800;
 }
 
@@ -182,7 +182,7 @@ const description = computed(() => {
   border: 0;
   border-radius: var(--v3-radius-sm);
   background: var(--v3-primary-solid);
-  color: #fff;
+  color: var(--v3-on-primary-solid);
   cursor: pointer;
   font: inherit;
   font-weight: 600;

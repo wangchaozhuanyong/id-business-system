@@ -66,6 +66,8 @@ npm run check:v2-isolation
 npm run check:v2-loading-standard
 npm run check:v2-table-standard
 npm run check:v2-module-architecture
+npm run check:v2-color-contrast
+npm run acceptance:v2-color-contrast
 npm run typecheck
 npm run test
 npm run build

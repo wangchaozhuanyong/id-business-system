@@ -61,7 +61,8 @@ export function useOptionsPage() {
     service: Tickets,
     id_supplier: Box,
     topup_supplier: Wallet,
-    settlement_platform: CreditCard
+    settlement_platform: CreditCard,
+    expense_category: Wallet
   };
   const selectedType = ref<V2OptionType>('id_status');
   const renderedType = ref<V2OptionType>('id_status');
@@ -126,18 +127,18 @@ export function useOptionsPage() {
       countryOptions.value.find((option) => option.id === form.countryOptionId)?.currencyCode ??
       '选择国家后自动带入'
   );
-  const submitDisabled = computed(
-    () =>
-      !form.name.trim() ||
-      Boolean(formTypeDefinition.value?.parentType && !form.parentId) ||
-      Boolean(formTypeDefinition.value?.requiresCountry && !form.countryOptionId) ||
-      Boolean(
-        formTypeDefinition.value?.supportsCurrency && !/^[A-Z]{3}$/.test(form.currencyCode)
-      ) ||
-      Boolean(formTypeDefinition.value?.supportsBusinessAmount && form.businessAmount <= 0) ||
-      parentOptionsLoading.value ||
-      countryOptionsLoading.value
-  );
+  const submitDisabledReason = computed(() => {
+    if (parentOptionsLoading.value || countryOptionsLoading.value) {
+      return '正在加载关联业务选项';
+    }
+    if (formTypeDefinition.value?.parentType && !parentOptions.value.length) {
+      return `暂无可用${parentTypeLabel.value}`;
+    }
+    if (formTypeDefinition.value?.requiresCountry && !countryOptions.value.length) {
+      return '暂无已配置货币的国家选项';
+    }
+    return '';
+  });
 
   function createEmptyForm(): OptionFormState {
     return {
@@ -365,7 +366,7 @@ export function useOptionsPage() {
   }
 
   async function submitForm() {
-    if (submitDisabled.value) return;
+    if (submitDisabledReason.value) return;
 
     const payload = {
       name: form.name.trim(),
@@ -495,7 +496,7 @@ export function useOptionsPage() {
     formTypeDefinition,
     parentTypeLabel,
     selectedServiceCurrency,
-    submitDisabled,
+    submitDisabledReason,
     isInitialLoading,
     loadInitialData,
     handleTypeChange,

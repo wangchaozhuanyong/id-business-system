@@ -41,17 +41,8 @@
   gap: 16px;
 }
 
-.v2-renewal-warning-settings label {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px);
-  align-items: center;
-  gap: 16px;
-}
-
-.v2-renewal-warning-settings label > span {
-  color: var(--v2-text);
-  font-size: 13px;
-  font-weight: 650;
+.v2-renewal-warning-settings .el-form-item {
+  margin-bottom: 0;
 }
 
 .v2-renewal-warning-settings .el-input-number {
@@ -102,8 +93,7 @@
 }
 
 .v2-renewal-open__target > div,
-.v2-renewal-open__form,
-.v2-renewal-open__form label {
+.v2-renewal-open__form {
   display: grid;
   min-width: 0;
 }
@@ -113,7 +103,6 @@
 }
 
 .v2-renewal-open__target span,
-.v2-renewal-open__form label > span,
 .v2-renewal-open__preview span {
   color: var(--v2-text-soft);
   font-size: 12px;
@@ -128,8 +117,8 @@
   gap: 15px;
 }
 
-.v2-renewal-open__form label {
-  gap: 7px;
+.v2-renewal-open__form .el-form-item {
+  margin-bottom: 4px;
 }
 
 .v2-renewal-open__form .el-date-editor,
@@ -208,8 +197,7 @@
   }
 
   .v2-renewal-open__target,
-  .v2-renewal-open__grid,
-  .v2-renewal-warning-settings label {
+  .v2-renewal-open__grid {
     grid-template-columns: 1fr;
   }
 

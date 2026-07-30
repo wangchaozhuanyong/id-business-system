@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2BalancesModule } from '../balances/public-api';
+import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
@@ -12,7 +13,7 @@ import { IdBusinessV2OrdersController } from './id-business-v2-orders.controller
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 
 @Module({
-  imports: [IdBusinessV2BalancesModule, IdBusinessV2OptionsModule],
+  imports: [IdBusinessV2BalancesModule, IdBusinessV2FinanceModule, IdBusinessV2OptionsModule],
   controllers: [IdBusinessV2OrdersController],
   providers: [
     FieldEncryptionService,

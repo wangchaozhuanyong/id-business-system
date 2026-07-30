@@ -39,6 +39,12 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     websiteAccountHash: 'hash',
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('100'),
+    receivedOriginalAmount: decimal('100'),
+    receivedCurrency: 'CNY',
+    receivedFxRateToCny: decimal('1'),
+    receivedFxSnapshotId: null,
+    receivedFinanceAccountId: null,
+    receivedAt: openedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'sold',
     accountCostAmount: decimal('25'),
@@ -138,7 +144,14 @@ describe('IdBusinessV2OrderCompletionService', () => {
   const ordersService = {
     get: vi.fn()
   };
-  const service = new IdBusinessV2OrderCompletionService(prisma as never, ordersService as never);
+  const financePostingService = {
+    post: vi.fn()
+  };
+  const service = new IdBusinessV2OrderCompletionService(
+    prisma as never,
+    ordersService as never,
+    financePostingService as never
+  );
   let order = makeOrder();
   let consumption: IdBusinessV2BalanceLedger | null = makeConsumption();
   let reversal: IdBusinessV2BalanceLedger | null = null;
@@ -146,6 +159,7 @@ describe('IdBusinessV2OrderCompletionService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
     order = makeOrder();
     consumption = makeConsumption();
     reversal = null;

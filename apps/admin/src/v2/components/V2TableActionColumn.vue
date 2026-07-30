@@ -3,6 +3,8 @@
     label="操作"
     :width="V2_TABLE_ACTION_COLUMN_WIDTH[layout]"
     fixed="right"
+    align="right"
+    header-align="right"
     class-name="v2-table-action-column"
     label-class-name="v2-table-action-column"
   >

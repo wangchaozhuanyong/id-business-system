@@ -22,20 +22,21 @@ export const accountsFeature = defineV2Feature({
     { key: 'saleState', label: '销售状态', kind: 'select', options: ['可用', '已卖出'] }
   ],
   columns: [
-    { key: 'account', label: 'ID账号', minWidth: 200 },
-    { key: 'country', label: '国家', minWidth: 110 },
-    { key: 'balance', label: '余额', minWidth: 100 },
-    { key: 'exchangeRate', label: '汇率', minWidth: 110 },
-    { key: 'costRmb', label: '人民币成本', minWidth: 130 },
-    { key: 'supplier', label: '供应商', minWidth: 120 },
-    { key: 'status', label: 'ID 状态', minWidth: 110 },
-    { key: 'saleState', label: '销售状态', minWidth: 110 },
-    { key: 'soldByOrder', label: '来源订单', minWidth: 180 },
-    { key: 'recordStatus', label: '资料状态', minWidth: 110 },
-    { key: 'updatedAt', label: '更新时间', minWidth: 160 },
+    { key: 'account', label: 'ID账号', kind: 'identifier', minWidth: 192 },
+    { key: 'country', label: '国家', kind: 'text', minWidth: 110 },
+    { key: 'balance', label: '余额', kind: 'numeric', minWidth: 112 },
+    { key: 'exchangeRate', label: '汇率', kind: 'numeric', minWidth: 112 },
+    { key: 'costRmb', label: '人民币成本', kind: 'numeric', minWidth: 128 },
+    { key: 'supplier', label: '供应商', kind: 'text', minWidth: 120 },
+    { key: 'status', label: 'ID 状态', kind: 'status', minWidth: 112 },
+    { key: 'saleState', label: '销售状态', kind: 'status', minWidth: 112 },
+    { key: 'soldByOrder', label: '来源订单', kind: 'identifier', minWidth: 192 },
+    { key: 'recordStatus', label: '资料状态', kind: 'status', minWidth: 112 },
+    { key: 'updatedAt', label: '更新时间', kind: 'date', minWidth: 165 },
     {
       key: 'actions',
       label: '操作',
+      kind: 'actions',
       minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.triple,
       fixed: 'right'
     }

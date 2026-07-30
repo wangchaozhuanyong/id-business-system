@@ -1,6 +1,7 @@
-import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
+import type { PaginatedResult, V2FinanceCurrency, V2PageQuery } from '@apple-business/shared';
 import type { V2OptionSelector } from './options';
 import type { ReportV2AccountLossResult } from './records';
+import type { V2TopupSupplierFundSelector } from './topupSupplierFunds';
 
 export type V2TopupBalancePreset = '' | 'zero' | 'positive_under_20' | 'custom';
 export type V2TopupWorkbenchSortBy =
@@ -40,6 +41,22 @@ export interface V2TopupWorkbenchListResult extends PaginatedResult<V2TopupWorkb
   evaluatedAt: string;
 }
 
+export interface V2GiftCardPurchaseSources {
+  financeAccounts: Array<{
+    id: string;
+    name: string;
+    currency: V2FinanceCurrency;
+    currentBalance: string;
+  }>;
+  supplierWallets: Array<{
+    id: string;
+    supplierOptionId: string;
+    supplierName: string;
+    currency: V2FinanceCurrency;
+    currentBalance: string;
+  }>;
+}
+
 export interface V2TopupWorkbenchListQuery extends V2PageQuery {
   countryOptionId?: string;
   balancePreset?: Exclude<V2TopupBalancePreset, ''>;
@@ -53,10 +70,17 @@ export interface V2TopupWorkbenchListQuery extends V2PageQuery {
 export interface V2GiftCardCreditPayload {
   code: string;
   faceValue: string;
-  exchangeRate: string;
+  exchangeRate?: string;
   exchangeRateSnapshotId?: string;
   exchangeRatePrefilledValue?: string;
   supplierOptionId: string;
+  purchaseOriginalAmount: string;
+  purchaseCurrency: V2FinanceCurrency;
+  purchaseFxRateToCny?: string;
+  purchaseFinanceAccountId?: string;
+  purchaseSupplierAccountId?: string;
+  purchaseManualRateReason?: string;
+  paidAt: string;
   idempotencyKey: string;
   remark?: string;
 }
@@ -68,11 +92,18 @@ export interface V2GiftCardCreditResult {
     codeTail: string;
     faceValue: string;
     exchangeRate: string;
-    exchangeRateSource: 'manual_input' | 'automatic_snapshot';
+    exchangeRateSource: 'manual_input' | 'automatic_snapshot' | 'system_derived_purchase_cost';
     exchangeRateSnapshotId: string | null;
     exchangeRatePrefilledValue: string | null;
     exchangeRateWasOverridden: boolean;
     costAmount: string;
+    purchaseOriginalAmount: string;
+    purchaseCurrency: V2FinanceCurrency;
+    purchaseFxRateToCny: string;
+    purchaseFxSnapshotId: string | null;
+    purchaseFinanceAccountId: string | null;
+    purchaseSupplierAccountId: string | null;
+    paidAt: string | null;
     status: string;
     supplierOptionId: string | null;
     sourceAttachmentId: string | null;
@@ -94,6 +125,18 @@ export interface V2GiftCardCreditResult {
     currentBalance: string;
     balanceCostAmount: string;
   };
+  supplierFunding: {
+    ledgerEntryId: string;
+    supplierAccountId: string;
+    supplierName: string;
+    amountCny: string;
+    balanceBeforeCny: string;
+    balanceAfterCny: string;
+    isNegative: boolean;
+    shortfallCny: string;
+    createdAt: string;
+    idempotentReplay: boolean;
+  } | null;
   idempotentReplay: boolean;
 }
 
@@ -105,7 +148,7 @@ export interface V2ReversibleGiftCard {
   codeTail: string;
   faceValue: string;
   exchangeRate: string;
-  exchangeRateSource: 'manual_input' | 'automatic_snapshot';
+  exchangeRateSource: 'manual_input' | 'automatic_snapshot' | 'system_derived_purchase_cost';
   exchangeRateSnapshotId: string | null;
   exchangeRatePrefilledValue: string | null;
   exchangeRateWasOverridden: boolean;
@@ -174,6 +217,13 @@ export interface V2GiftCardReversalResult {
     balanceCostAmount: string;
   };
   accountLoss: ReportV2AccountLossResult | null;
+  supplierFunding: {
+    ledgerEntryId: string;
+    amountCny: string;
+    balanceBeforeCny: string;
+    balanceAfterCny: string;
+    isNegative: boolean;
+  } | null;
   idempotentReplay: boolean;
 }
 
@@ -194,10 +244,24 @@ export interface V2GiftCardRecord {
   faceValue: string;
   exchangeRate: string;
   costAmount: string;
+  purchaseOriginalAmount: string;
+  purchaseCurrency: V2FinanceCurrency;
+  purchaseFxRateToCny: string;
+  purchaseFxSnapshotId: string | null;
+  purchaseFinanceAccountId: string | null;
+  purchaseSupplierAccountId: string | null;
+  paidAt: string | null;
+  supplierRefundStatus: 'none' | 'pending' | 'received' | 'written_off';
+  supplierRefundAmount: string;
+  supplierRefundAmountCny: string;
+  supplierRefundClosedAt: string | null;
   status: V2GiftCardRecordStatus;
   statusChangedAt: string;
   supplierOptionId: string | null;
   supplier: Pick<V2OptionSelector, 'id' | 'code' | 'name'> | null;
+  country: Pick<V2OptionSelector, 'id' | 'code' | 'name'> & {
+    currencyCode: string | null;
+  };
   account: {
     id: string;
     appleIdMasked: string;
@@ -213,6 +277,15 @@ export interface V2GiftCardRecord {
     costAfter: string;
     averageCostBefore: string;
     averageCostAfter: string;
+    createdAt: string;
+  } | null;
+  supplierFunding: {
+    ledgerEntryId: string;
+    supplierName: string;
+    amountCny: string;
+    balanceBeforeCny: string;
+    balanceAfterCny: string;
+    reversed: boolean;
     createdAt: string;
   } | null;
   reversal: {
@@ -249,6 +322,8 @@ export interface V2GiftCardMetadataPayload {
   supplierOptionId?: string | null;
   remark?: string | null;
 }
+
+export type { V2TopupSupplierFundSelector };
 
 export type V2BalanceLedgerEntryType =
   | 'gift_card_credit'

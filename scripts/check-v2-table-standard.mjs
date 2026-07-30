@@ -7,8 +7,11 @@ const rootDir = process.cwd();
 const featuresPath = 'apps/admin/src/v2/features';
 const schemaPath = 'apps/api/prisma/schema.prisma';
 const tableStylePath = 'apps/admin/src/v2/styles/v2.css';
+const tableColumnPath = 'apps/admin/src/v2/components/V2TableColumn.vue';
+const tableColumnDefinitionPath = 'apps/admin/src/v2/components/tableColumn.ts';
 const tableActionColumnPath = 'apps/admin/src/v2/components/V2TableActionColumn.vue';
 const tableActionLayoutPath = 'apps/admin/src/v2/components/tableActionLayout.ts';
+const validColumnKinds = new Set(['text', 'identifier', 'index', 'numeric', 'date', 'status']);
 const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'wide']);
 const issues = [];
 
@@ -56,6 +59,21 @@ if (
 ) {
   issues.push(`${featuresPath}: 选项设置列定义必须保留排序`);
 }
+for (const { projectPath, source } of featureManifests) {
+  const columnsBlock = extractFeatureColumnsBlock(source);
+  for (const entry of columnsBlock.match(/\{[\s\S]*?\}/g) ?? []) {
+    const key = entry.match(/\bkey:\s*'([^']+)'/)?.[1];
+    const kind = entry.match(/\bkind:\s*'([^']+)'/)?.[1];
+    if (!key) continue;
+    if (key === 'actions') {
+      if (kind !== 'actions') {
+        issues.push(`${projectPath}: 操作列清单 kind 必须为 actions`);
+      }
+    } else if (!kind || !validColumnKinds.has(kind)) {
+      issues.push(`${projectPath}: 数据列 ${key} 缺少有效语义 kind`);
+    }
+  }
+}
 
 let tableCount = 0;
 let actionColumnCount = 0;
@@ -71,6 +89,8 @@ for (const projectPath of featureVueFiles) {
 
 const tableStyleSource = read(tableStylePath);
 const elementPlusSource = read('apps/admin/src/v2/components/V2ElTable.vue');
+const tableColumnSource = read(tableColumnPath);
+const tableColumnDefinitionSource = read(tableColumnDefinitionPath);
 const tableActionColumnSource = read(tableActionColumnPath);
 const tableActionLayoutSource = read(tableActionLayoutPath);
 if (!elementPlusSource.includes('fit: true') || elementPlusSource.includes('fit: false')) {
@@ -89,8 +109,37 @@ for (const [pattern, message] of [
 for (const issue of validateActionStyleSource(tableStyleSource)) {
   issues.push(`${tableStylePath}: ${issue}`);
 }
+for (const [pattern, message] of [
+  [
+    /\.v2-table-column--numeric[\s\S]*?font-variant-numeric:\s*tabular-nums/,
+    '数字列未启用等宽数字'
+  ],
+  [/\.v2-table-column--date[\s\S]*?font-variant-numeric:\s*tabular-nums/, '日期列未启用等宽数字'],
+  [
+    /\.v2-table-column--identifier[\s\S]*?font-variant-numeric:\s*tabular-nums/,
+    '标识列未启用等宽数字'
+  ]
+]) {
+  if (!pattern.test(tableStyleSource)) issues.push(`${tableStylePath}: ${message}`);
+}
+for (const issue of validateTableColumnSource(tableColumnSource)) {
+  issues.push(`${tableColumnPath}: ${issue}`);
+}
 for (const issue of validateActionColumnSource(tableActionColumnSource)) {
   issues.push(`${tableActionColumnPath}: ${issue}`);
+}
+for (const [preset, width] of Object.entries({
+  index: 72,
+  compact: 112,
+  standard: 128,
+  wide: 160,
+  dateTime: 165,
+  identifier: 192,
+  longText: 224
+})) {
+  if (!new RegExp(`\\b${preset}:\\s*${width}\\b`).test(tableColumnDefinitionSource)) {
+    issues.push(`${tableColumnDefinitionPath}: ${preset} 列宽必须为 ${width}`);
+  }
 }
 for (const [layout, width] of Object.entries({
   icon: 76,
@@ -137,6 +186,9 @@ for (const { projectPath, source } of featureManifests) {
 
 const uiRulesSource = read('docs/UI_DESIGN.md');
 for (const snippet of [
+  'V2TableColumn',
+  '数字、金额、汇率和百分比',
+  '空值统一显示 `—`',
   'V2TableActionColumn',
   '禁止同时叠加 `gap` 与 Element Plus 相邻按钮默认边距',
   '操作按钮不得被裁切'
@@ -199,11 +251,14 @@ for (const projectPath of [
 const optionsViewPath = 'apps/admin/src/v2/features/options/V2OptionsView.vue';
 const optionsFormPath = 'apps/admin/src/v2/features/options/components/V2OptionFormDrawer.vue';
 const optionsViewSource = `${read(optionsViewPath)}\n${read(optionsFormPath)}`;
-for (const [snippet, message] of [
-  ['prop="sortOrder" label="排序"', '选项设置必须保留排序列'],
-  ['v-model:sort-order="form.sortOrder"', '选项设置必须保留排序输入']
+for (const [pattern, message] of [
+  [
+    /<V2TableColumn[\s\S]{0,180}?prop="sortOrder"[\s\S]{0,120}?label="排序"/,
+    '选项设置必须保留排序列'
+  ],
+  [/v-model:sort-order="form\.sortOrder"/, '选项设置必须保留排序输入']
 ]) {
-  if (!optionsViewSource.includes(snippet)) {
+  if (!pattern.test(optionsViewSource)) {
     issues.push(`${optionsViewPath}: ${message}`);
   }
 }
@@ -235,7 +290,10 @@ function validateViewSource(source, isOptionsView) {
     if (!/\bshow-overflow-tooltip\b/.test(openingTag)) {
       viewIssues.push('桌面表格必须启用统一溢出提示');
     }
-    if (/<el-table-column\b[^>]*\blabel=["'][^"']*(?:\/|／)[^"']*["']/.test(table)) {
+    if (/<el-table-column\b/.test(table)) {
+      viewIssues.push('业务数据列必须使用 V2TableColumn 声明语义类型');
+    }
+    if (/<V2TableColumn\b[^>]*\blabel=["'][^"']*(?:\/|／)[^"']*["']/.test(table)) {
       viewIssues.push('表头禁止使用斜杠合并独立业务字段');
     }
     if (/<(?:br|small)\b/.test(table)) {
@@ -244,11 +302,17 @@ function validateViewSource(source, isOptionsView) {
     if (/\b(?:v2-table-stack|v2-renewal-account|v2-topup-records-account)\b/.test(table)) {
       viewIssues.push('桌面表格禁止使用堆叠单元格样式');
     }
-    if (!isOptionsView && /<el-table-column\b[^>]*\blabel=["']排序["']/.test(table)) {
+    if (!isOptionsView && /<V2TableColumn\b[^>]*\blabel=["']排序["']/.test(table)) {
       viewIssues.push('业务数据表禁止显示人工排序列');
     }
-    if (/<el-table-column\b[^>]*\blabel=["']操作["']/.test(table)) {
-      viewIssues.push('操作列禁止直接使用 el-table-column，必须使用 V2TableActionColumn');
+    if (/<V2TableColumn\b[^>]*\blabel=["']操作["']/.test(table)) {
+      viewIssues.push('操作列禁止使用 V2TableColumn，必须使用 V2TableActionColumn');
+    }
+    for (const openingTag of table.match(/<V2TableColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
+      const kind = openingTag.match(/\bkind=["']([^"']+)["']/)?.[1];
+      if (!kind || !validColumnKinds.has(kind)) {
+        viewIssues.push('V2TableColumn 必须声明有效的语义 kind');
+      }
     }
     for (const openingTag of table.match(/<V2TableActionColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
       const layout = openingTag.match(/\blayout=["']([^"']+)["']/)?.[1];
@@ -258,6 +322,12 @@ function validateViewSource(source, isOptionsView) {
     }
   }
 
+  if (
+    source.includes('<V2TableColumn') &&
+    !/import\s+V2TableColumn\s+from\s+['"]@\/v2\/components\/V2TableColumn\.vue['"]/.test(source)
+  ) {
+    viewIssues.push('使用语义列时必须显式导入 V2TableColumn');
+  }
   if (
     source.includes('<V2TableActionColumn') &&
     !/import\s+V2TableActionColumn\s+from\s+['"]@\/v2\/components\/V2TableActionColumn\.vue['"]/.test(
@@ -289,6 +359,10 @@ function extractActionLayouts(source) {
   );
 }
 
+function extractFeatureColumnsBlock(source) {
+  return source.match(/columns:\s*\[([\s\S]*?)\n\s*\],\n\s*loadView:/)?.[1] ?? '';
+}
+
 function extractPrismaModel(source, modelName) {
   return source.match(new RegExp(`model ${modelName} \\{[\\s\\S]*?\\n\\}`))?.[0] ?? '';
 }
@@ -296,21 +370,24 @@ function extractPrismaModel(source, modelName) {
 function runSelfTests() {
   const valid = `
     <el-table show-overflow-tooltip>
-      <el-table-column label="账号" />
+      <V2TableColumn kind="identifier" label="账号" />
       <V2TableActionColumn layout="triple"><AppButton>编辑</AppButton></V2TableActionColumn>
     </el-table>
     <script setup>
+    import V2TableColumn from '@/v2/components/V2TableColumn.vue';
     import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
     </script>
   `;
   assert.deepEqual(validateViewSource(valid, false), []);
   for (const invalid of [
     '<el-table><el-table-column label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><el-table-column label="账号 / 国家" /></el-table>',
-    '<el-table show-overflow-tooltip><el-table-column label="账号"><small>国家</small></el-table-column></el-table>',
-    '<el-table show-overflow-tooltip><el-table-column label="排序" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="账号 / 国家" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="账号"><small>国家</small></V2TableColumn></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="排序" /></el-table>',
     '<el-table show-overflow-tooltip><div class="v2-table-stack"></div></el-table>',
-    '<el-table show-overflow-tooltip><el-table-column label="操作" width="230" fixed="right" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="操作" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn label="账号" /></el-table>',
+    '<el-table show-overflow-tooltip><V2TableColumn kind="custom" label="账号" /></el-table>',
     '<el-table show-overflow-tooltip><V2TableActionColumn /></el-table>',
     '<el-table show-overflow-tooltip><V2TableActionColumn layout="custom" /></el-table>'
   ]) {
@@ -318,7 +395,10 @@ function runSelfTests() {
   }
   assert.deepEqual(
     validateViewSource(
-      '<el-table show-overflow-tooltip><el-table-column label="排序" /></el-table>',
+      `<el-table show-overflow-tooltip><V2TableColumn kind="numeric" label="排序" /></el-table>
+       <script setup>
+       import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+       </script>`,
       true
     ),
     []
@@ -329,6 +409,8 @@ function runSelfTests() {
       label="操作"
       :width="V2_TABLE_ACTION_COLUMN_WIDTH[layout]"
       fixed="right"
+      align="right"
+      header-align="right"
     >
       <div class="v2-table-actions" :data-action-layout="layout"></div>
     </el-table-column>
@@ -337,7 +419,12 @@ function runSelfTests() {
   assert.ok(validateActionColumnSource(validActionColumn.replace('fixed="right"', '')).length > 0);
 
   const validActionStyles = `
-    .v2-table-actions { display: flex; gap: 6px; flex-wrap: nowrap; }
+    .v2-table-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: nowrap;
+    }
     .v2-table-actions .el-button + .el-button { margin-left: 0; }
   `;
   assert.deepEqual(validateActionStyleSource(validActionStyles), []);
@@ -353,10 +440,25 @@ function validateActionStyleSource(source) {
   if (!/\.v2-table-actions[\s\S]*?flex-wrap:\s*nowrap/.test(source)) {
     styleIssues.push('操作按钮组未强制桌面端单行');
   }
+  if (!/\.v2-table-actions[\s\S]*?justify-content:\s*flex-end/.test(source)) {
+    styleIssues.push('操作按钮组未靠右对齐');
+  }
   if (!/\.v2-table-actions \.el-button \+ \.el-button[\s\S]*?margin-left:\s*0/.test(source)) {
     styleIssues.push('操作按钮组未清除 Element Plus 相邻按钮默认边距');
   }
   return styleIssues;
+}
+
+function validateTableColumnSource(source) {
+  return [
+    'ElTableColumn',
+    'V2_TABLE_COLUMN_ALIGNMENT[props.kind]',
+    'align:',
+    'headerAlign:',
+    'getV2TableColumnClass(props.kind)'
+  ]
+    .filter((snippet) => !source.includes(snippet))
+    .map((snippet) => `缺少 ${snippet}`);
 }
 
 function validateActionColumnSource(source) {
@@ -364,6 +466,8 @@ function validateActionColumnSource(source) {
     'label="操作"',
     ':width="V2_TABLE_ACTION_COLUMN_WIDTH[layout]"',
     'fixed="right"',
+    'align="right"',
+    'header-align="right"',
     'class="v2-table-actions"',
     ':data-action-layout="layout"'
   ]

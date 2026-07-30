@@ -10,6 +10,9 @@ export const V2_DATA_SCOPES = [
   'customers',
   'customers-options',
   'exchange-rates',
+  'finance-accounts',
+  'finance-ledger',
+  'finance-reports',
   'options',
   'options-page',
   'options-reference',
@@ -21,7 +24,9 @@ export const V2_DATA_SCOPES = [
   'renewals',
   'renewals-options',
   'renewal-warning-settings',
-  'renewal-warning-summary'
+  'renewal-warning-summary',
+  'supplier-funds',
+  'supplier-payments'
 ] as const;
 
 export type V2DataScope = (typeof V2_DATA_SCOPES)[number];
@@ -36,6 +41,8 @@ export const V2_SCOPE_DEPENDENCIES = {
     'activations',
     'renewals',
     'renewal-warning-summary',
+    'finance-ledger',
+    'finance-reports',
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
@@ -46,6 +53,8 @@ export const V2_SCOPE_DEPENDENCIES = {
     'balance-records',
     'orders',
     'renewals',
+    'finance-ledger',
+    'finance-reports',
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
@@ -60,15 +69,29 @@ export const V2_SCOPE_DEPENDENCIES = {
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
-  balances: ['balances', 'accounts', 'balance-records', 'orders', 'renewals'],
+  balances: [
+    'balances',
+    'accounts',
+    'balance-records',
+    'supplier-funds',
+    'supplier-payments',
+    'orders',
+    'renewals',
+    'finance-ledger',
+    'finance-reports'
+  ],
   'balances-options': ['balances-options'],
   'balance-records': [
     'account-losses',
     'balance-records',
+    'supplier-funds',
+    'supplier-payments',
     'balances',
     'accounts',
     'orders',
     'renewals',
+    'finance-ledger',
+    'finance-reports',
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
@@ -76,6 +99,9 @@ export const V2_SCOPE_DEPENDENCIES = {
   customers: ['customers', 'orders', 'renewals', 'renewal-warning-summary', 'order-entry-options'],
   'customers-options': ['customers-options'],
   'exchange-rates': ['exchange-rates'],
+  'finance-accounts': ['finance-accounts', 'finance-reports'],
+  'finance-ledger': ['finance-ledger', 'finance-accounts', 'finance-reports'],
+  'finance-reports': ['finance-reports'],
   options: [
     'options',
     'options-page',
@@ -87,6 +113,9 @@ export const V2_SCOPE_DEPENDENCIES = {
     'orders-options',
     'order-entry-options',
     'renewals-options',
+    'supplier-funds',
+    'supplier-payments',
+    'finance-reports',
     'accounts',
     'customers',
     'orders',
@@ -102,6 +131,8 @@ export const V2_SCOPE_DEPENDENCIES = {
     'renewals',
     'balances',
     'balance-records',
+    'finance-ledger',
+    'finance-reports',
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
@@ -112,7 +143,22 @@ export const V2_SCOPE_DEPENDENCIES = {
   renewals: ['renewals', 'renewal-warning-summary'],
   'renewals-options': ['renewals-options'],
   'renewal-warning-settings': ['renewal-warning-settings', 'renewals', 'renewal-warning-summary'],
-  'renewal-warning-summary': ['renewal-warning-summary']
+  'renewal-warning-summary': ['renewal-warning-summary'],
+  'supplier-funds': [
+    'supplier-funds',
+    'supplier-payments',
+    'balance-records',
+    'finance-accounts',
+    'finance-ledger',
+    'finance-reports'
+  ],
+  'supplier-payments': [
+    'supplier-payments',
+    'supplier-funds',
+    'finance-accounts',
+    'finance-ledger',
+    'finance-reports'
+  ]
 } as const satisfies Record<V2DataScope, readonly V2DataScope[]>;
 
 const V2_DATA_SCOPE_SET = new Set<string>(V2_DATA_SCOPES);

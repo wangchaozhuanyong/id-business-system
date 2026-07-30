@@ -75,9 +75,7 @@
   gap: 4px;
 }
 
-.v2-topup-credit-entry-target span,
-.v2-topup-credit-entry-section > label,
-.v2-topup-credit-entry-code > span {
+.v2-topup-credit-entry-target span {
   color: var(--v2-text-soft);
   font-size: 12px;
 }
@@ -87,8 +85,7 @@
   font-size: 14px;
 }
 
-.v2-topup-credit-entry-section,
-.v2-topup-credit-entry-code {
+.v2-topup-credit-entry-section {
   display: grid;
   gap: 10px;
 }
@@ -98,11 +95,9 @@
   border-top: 1px solid var(--v2-border);
 }
 
-.v2-topup-credit-form > label,
-.v2-topup-credit-grid label {
-  display: grid;
+.v2-topup-credit-form .el-form-item {
   min-width: 0;
-  gap: 7px;
+  margin-bottom: 12px;
 }
 
 .v2-topup-credit-form .el-select {
@@ -116,16 +111,25 @@
 }
 
 .v2-topup-credit-preview {
-  display: flex;
+  display: grid;
   min-height: 38px;
-  align-items: center;
-  justify-content: space-between;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 12px;
   padding: 8px 0;
   border-top: 1px solid var(--v2-border);
   border-bottom: 1px solid var(--v2-border);
   color: var(--v2-text-soft);
   font-size: 12px;
+}
+
+.v2-topup-credit-preview > span {
+  display: grid;
+  gap: 3px;
+}
+
+.v2-topup-credit-preview .is-negative {
+  color: var(--v2-danger);
 }
 
 .v2-topup-exchange-source {
@@ -284,11 +288,8 @@
   gap: 14px;
 }
 
-.v2-topup-reversal-confirm > label {
-  display: grid;
-  gap: 7px;
-  color: var(--v2-text-soft);
-  font-size: 12px;
+.v2-topup-reversal-confirm .el-form-item {
+  margin-bottom: 0;
 }
 
 .v2-topup-record-links,

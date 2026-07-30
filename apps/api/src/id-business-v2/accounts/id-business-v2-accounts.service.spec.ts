@@ -82,12 +82,24 @@ describe('IdBusinessV2AccountsService', () => {
   const optionsService = {
     requireActiveOption: vi.fn()
   };
+  const financeFxService = {
+    resolve: vi.fn().mockResolvedValue({
+      id: null,
+      rateToCny: new Prisma.Decimal(1),
+      source: 'cny_fixed'
+    })
+  };
+  const financePostingService = {
+    post: vi.fn().mockResolvedValue({ id: 'finance-journal-1' })
+  };
   const service = new IdBusinessV2AccountsService(
     prisma as never,
     auditLogsService as never,
     encryptionService as never,
     optionsService as never,
-    new IdBusinessV2BalanceCalculatorService()
+    new IdBusinessV2BalanceCalculatorService(),
+    financeFxService as never,
+    financePostingService as never
   );
 
   beforeEach(() => {

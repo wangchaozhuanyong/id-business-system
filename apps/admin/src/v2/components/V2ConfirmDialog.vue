@@ -14,6 +14,9 @@
     </slot>
     <template #footer>
       <div class="v2-confirm-dialog__footer">
+        <span v-if="confirmDisabledReason" class="v2-submit-disabled-reason" role="status">
+          {{ confirmDisabledReason }}
+        </span>
         <AppButton
           variant="ghost"
           :disabled="confirmLoading"
@@ -24,7 +27,10 @@
         <AppButton
           :variant="danger ? 'danger' : 'primary'"
           :loading="confirmLoading"
-          :disabled="confirmDisabled"
+          :disabled="confirmDisabled || Boolean(confirmDisabledReason)"
+          :aria-label="
+            confirmDisabledReason ? `${confirmText}：${confirmDisabledReason}` : undefined
+          "
           @click="$emit('confirm')"
         >
           {{ confirmText }}
@@ -45,12 +51,14 @@ withDefaults(
     confirmText?: string;
     confirmLoading?: boolean;
     confirmDisabled?: boolean;
+    confirmDisabledReason?: string;
     danger?: boolean;
   }>(),
   {
     confirmText: '确认',
     confirmLoading: false,
     confirmDisabled: false,
+    confirmDisabledReason: '',
     danger: false
   }
 );

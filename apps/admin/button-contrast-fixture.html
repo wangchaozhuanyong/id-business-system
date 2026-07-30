@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>V2 Button Contrast Fixture</title>
+    <script>
+      const requestedTheme = new URLSearchParams(location.search).get('theme');
+      const theme = requestedTheme === 'dark' ? 'dark' : 'light';
+      document.documentElement.dataset.v2Theme = theme;
+      document.documentElement.style.colorScheme = theme;
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/v2/testing/button-contrast-fixture.ts"></script>
+  </body>
+</html>

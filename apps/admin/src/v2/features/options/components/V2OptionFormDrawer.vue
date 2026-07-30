@@ -4,7 +4,7 @@
     :title="editingItem ? '编辑选项' : '新增选项'"
     :confirm-text="editingItem ? '保存修改' : '确认新增'"
     :confirm-loading="saving"
-    :confirm-disabled="submitDisabled"
+    :confirm-disabled-reason="submitDisabledReason"
     @confirm="confirm"
   >
     <el-form
@@ -15,6 +15,9 @@
       label-position="left"
       label-width="108px"
       require-asterisk-position="right"
+      status-icon
+      scroll-to-error
+      :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
       <el-form-item label="选项类型" prop="type">
         <el-select
@@ -78,7 +81,11 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item v-if="formTypeDefinition?.supportsCurrency" label="默认货币" required>
+      <el-form-item
+        v-if="formTypeDefinition?.supportsCurrency"
+        label="默认货币"
+        prop="currencyCode"
+      >
         <el-select
           v-model="currencyCode"
           filterable
@@ -96,7 +103,7 @@
       </el-form-item>
 
       <div v-if="formTypeDefinition?.supportsBusinessAmount" class="v2-options-fee-grid">
-        <el-form-item label="业务金额" required>
+        <el-form-item label="业务金额" prop="businessAmount">
           <el-input-number
             v-model="businessAmount"
             :min="Number(V2_DECIMAL_STEP)"
@@ -165,6 +172,7 @@ import { computed, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import type {
   V2Option,
   V2OptionSelector,
@@ -175,7 +183,7 @@ import type {
 const props = defineProps<{
   editingItem: V2Option | null;
   saving: boolean;
-  submitDisabled: boolean;
+  submitDisabledReason: string;
   typeDefinitions: V2OptionTypeDefinition[];
   formTypeDefinition: V2OptionTypeDefinition | undefined;
   parentTypeLabel: string;
@@ -211,16 +219,55 @@ const formModel = computed(() => ({
   type: type.value,
   name: name.value,
   parentId: parentId.value,
-  countryOptionId: countryOptionId.value
+  countryOptionId: countryOptionId.value,
+  businessAmount: businessAmount.value,
+  currencyCode: currencyCode.value
 }));
-const formRules: FormRules = {
+const formRules = computed<FormRules>(() => ({
   type: [{ required: true, message: '请选择选项类型', trigger: 'change' }],
-  name: [{ required: true, message: '请输入选项名称', trigger: 'blur' }]
-};
+  name: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        const normalized = String(value ?? '').trim();
+        callback(
+          normalized.length >= 1 && normalized.length <= 160
+            ? undefined
+            : new Error('请输入 1 至 160 个字符的选项名称')
+        );
+      },
+      trigger: 'blur'
+    }
+  ],
+  parentId: props.formTypeDefinition?.parentType
+    ? [{ required: true, message: `请选择${props.parentTypeLabel}`, trigger: 'change' }]
+    : [],
+  countryOptionId: props.formTypeDefinition?.requiresCountry
+    ? [{ required: true, message: '请选择上级国家', trigger: 'change' }]
+    : [],
+  currencyCode: props.formTypeDefinition?.supportsCurrency
+    ? [
+        { required: true, message: '请输入默认货币', trigger: 'change' },
+        {
+          pattern: /^[A-Za-z]{3}$/,
+          message: '货币代码必须为 3 位英文字母',
+          trigger: ['blur', 'change']
+        }
+      ]
+    : [],
+  businessAmount: props.formTypeDefinition?.supportsBusinessAmount
+    ? [
+        {
+          validator: (_rule, value, callback) =>
+            callback(Number(value) > 0 ? undefined : new Error('业务金额必须大于 0')),
+          trigger: ['blur', 'change']
+        }
+      ]
+    : []
+}));
 
 async function confirm() {
-  if (props.submitDisabled) return;
-  if (!(await formRef.value?.validate().catch(() => false))) return;
+  if (props.submitDisabledReason || !(await validateV2Form(formRef.value))) return;
   emit('confirm');
 }
 </script>

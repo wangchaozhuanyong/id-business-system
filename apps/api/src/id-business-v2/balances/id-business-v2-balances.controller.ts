@@ -1,13 +1,15 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { RequirePermissions } from '../../auth/auth.decorators';
 import { IdBusinessV2OptionsService } from '../options/public-api';
+import { IdBusinessV2TopupSupplierFundsQueryService } from '../topup-supplier-funds/public-api';
 import { IdBusinessV2TopupWorkbenchService } from './id-business-v2-topup-workbench.service';
 
 @Controller('id-business-v2/balances')
 export class IdBusinessV2BalancesController {
   constructor(
     private readonly topupWorkbenchService: IdBusinessV2TopupWorkbenchService,
-    private readonly optionsService: IdBusinessV2OptionsService
+    private readonly optionsService: IdBusinessV2OptionsService,
+    private readonly supplierFundsQueryService: IdBusinessV2TopupSupplierFundsQueryService
   ) {}
 
   @Get('workbench')
@@ -49,7 +51,7 @@ export class IdBusinessV2BalancesController {
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
-    const [list, countries, suppliers] = await Promise.all([
+    const [list, countries, suppliers, purchaseSources] = await Promise.all([
       this.topupWorkbenchService.list({
         page,
         pageSize,
@@ -62,13 +64,15 @@ export class IdBusinessV2BalancesController {
         sortOrder
       }),
       this.optionsService.listSelectors('country'),
-      this.optionsService.listSelectors('topup_supplier')
+      this.supplierFundsQueryService.listBalanceSelectors(),
+      this.supplierFundsQueryService.listGiftCardPurchaseSources()
     ]);
     return {
       list,
       options: {
         countries: countries.items,
-        suppliers: suppliers.items
+        suppliers,
+        purchaseSources
       },
       generatedAt: new Date().toISOString()
     };

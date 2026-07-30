@@ -39,6 +39,10 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
     faceValue: decimal('20'),
     exchangeRate: decimal('5.4'),
     costAmount: decimal('108'),
+    countryOptionId: country.id,
+    countryNameSnapshot: country.name,
+    currencyCodeSnapshot: 'USD',
+    supplierNameSnapshot: '供应商 A',
     status: 'credited',
     statusChangedAt: createdAt,
     remark: '首批加卡',
@@ -57,6 +61,10 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
       code: 'topup_supplier_a',
       name: '供应商 A'
     },
+    countryOption: {
+      ...country,
+      currencyCode: 'USD'
+    },
     createdBy: operator,
     updatedBy: operator,
     ledgerEntries: [
@@ -72,6 +80,7 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
         reversedByEntry: null
       }
     ],
+    supplierFundEntries: [],
     ...overrides
   };
 }
@@ -289,7 +298,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
           accountId,
           supplierOptionId,
           status: 'credited',
-          account: { is: { countryOptionId: country.id } },
+          countryOptionId: country.id,
           statusChangedAt: {
             gte: new Date('2026-07-25T00:00:00.000Z'),
             lte: new Date('2026-07-26T23:59:59.999Z')
@@ -348,26 +357,19 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     expect(prisma.idBusinessV2GiftCard.findMany).not.toHaveBeenCalled();
   });
 
-  it('updates only supplier and remark metadata and writes the audit in one transaction', async () => {
+  it('updates only remark metadata and writes the audit in one transaction', async () => {
     const result = await service.updateMetadata(
       giftCardId,
       {
-        supplierOptionId,
         remark: '供应商复核完成'
       },
       operator
     );
 
-    expect(optionsService.requireActiveOption).toHaveBeenCalledWith(
-      supplierOptionId,
-      'topup_supplier',
-      '加卡供应商',
-      true
-    );
+    expect(optionsService.requireActiveOption).not.toHaveBeenCalled();
     expect(tx.idBusinessV2GiftCard.update).toHaveBeenCalledWith({
       where: { id: giftCardId },
       data: {
-        supplierOptionId,
         remark: '供应商复核完成',
         updatedByUserId: operator.id
       },
@@ -388,6 +390,20 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       })
     });
     expect(result.codeMasked).toBe('X123****CDEF');
+  });
+
+  it('rejects supplier changes through ordinary metadata updates', async () => {
+    await expect(
+      service.updateMetadata(
+        giftCardId,
+        {
+          supplierOptionId,
+          remark: '不能绕过资金更正'
+        },
+        operator
+      )
+    ).rejects.toThrow('供应商不能作为普通信息修改');
+    expect(tx.idBusinessV2GiftCard.update).not.toHaveBeenCalled();
   });
 
   it('rejects empty metadata updates and missing records', async () => {

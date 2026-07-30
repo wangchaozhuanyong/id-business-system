@@ -7,6 +7,7 @@ import type {
   V2GiftCardCreditPayload,
   V2GiftCardCreditResult,
   V2GiftCardRecord,
+  V2GiftCardPurchaseSources,
   V2GiftCardRecordListQuery,
   V2GiftCardRecordListResult,
   V2GiftCardReversalPayload,
@@ -16,6 +17,7 @@ import type {
   V2TopupWorkbenchListResult
 } from '@/v2/types/balances';
 import type { V2OptionSelector } from '@/v2/types/options';
+import type { V2TopupSupplierFundSelector } from '@/v2/types/topupSupplierFunds';
 
 export const idBusinessV2BalancesApi = {
   listTopupWorkbench(params: V2TopupWorkbenchListQuery, options: ApiRequestOptions = {}) {
@@ -31,7 +33,8 @@ export const idBusinessV2BalancesApi = {
       list: V2TopupWorkbenchListResult;
       options: {
         countries: V2OptionSelector[];
-        suppliers: V2OptionSelector[];
+        suppliers: V2TopupSupplierFundSelector[];
+        purchaseSources: V2GiftCardPurchaseSources;
       };
       generatedAt: string;
     }>(
@@ -53,7 +56,10 @@ export const idBusinessV2BalancesApi = {
         'orders',
         'renewals',
         'order-entry-options',
-        'order-entry-matching'
+        'order-entry-matching',
+        'finance-accounts',
+        'finance-ledger',
+        'finance-reports'
       ]
     );
   },
@@ -78,7 +84,10 @@ export const idBusinessV2BalancesApi = {
         'renewal-warning-summary',
         'order-entry-options',
         'order-entry-matching',
-        'order-entry-manual-candidates'
+        'order-entry-manual-candidates',
+        'finance-accounts',
+        'finance-ledger',
+        'finance-reports'
       ]
     );
   },
@@ -136,6 +145,25 @@ export const idBusinessV2BalancesApi = {
         http.patch(`/id-business-v2/gift-cards/${giftCardId}/metadata`, payload)
       ),
       ['balance-records']
+    );
+  },
+  reassignGiftCardSupplier(
+    giftCardId: string,
+    payload: { supplierOptionId: string; reason: string; idempotencyKey: string }
+  ) {
+    return withV2QueryInvalidation(
+      request<{
+        giftCardId: string;
+        supplier: V2OptionSelector;
+        legacyCutoverRecord: boolean;
+        idempotentReplay: boolean;
+      }>(http.post(`/id-business-v2/gift-cards/${giftCardId}/supplier-reassignments`, payload)),
+      ['balance-records', 'supplier-funds', 'supplier-payments', 'balances-options']
+    );
+  },
+  revealGiftCardCode(giftCardId: string, payload: { reason: string; approvalId?: string }) {
+    return request<{ giftCardId: string; code: string; revealedAt: string }>(
+      http.post(`/id-business-v2/gift-cards/${giftCardId}/reveal-code`, payload)
     );
   }
 };

@@ -1,15 +1,21 @@
 <template>
   <el-drawer v-model="page.settingsVisible" title="采集设置" size="min(480px, 96vw)">
     <el-form
+      ref="settingsFormRef"
+      :model="page.settingsForm"
+      :rules="settingsRules"
       label-position="left"
       label-width="132px"
       require-asterisk-position="right"
       class="v2-exchange-settings v2-horizontal-form"
+      status-icon
+      scroll-to-error
+      :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
       <el-form-item label="自动采集">
         <el-switch v-model="page.settingsForm.autoEnabled" />
       </el-form-item>
-      <el-form-item label="采集周期">
+      <el-form-item label="采集周期" prop="intervalMinutes">
         <el-select v-model="page.settingsForm.intervalMinutes">
           <el-option
             v-for="minutes in page.runtime?.settings.allowedIntervals ?? page.defaultIntervals"
@@ -19,7 +25,7 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="目标成交额（人民币）">
+      <el-form-item label="目标成交额（人民币）" prop="targetAmountRmb">
         <el-input
           v-model="page.settingsForm.targetAmountRmb"
           inputmode="decimal"
@@ -37,8 +43,17 @@
     </el-form>
     <template #footer>
       <div class="v2-exchange-drawer-footer">
+        <span v-if="settingsDisabledReason" class="v2-submit-disabled-reason" role="status">
+          {{ settingsDisabledReason }}
+        </span>
         <AppButton variant="ghost" @click="page.settingsVisible = false">取消</AppButton>
-        <AppButton variant="primary" :loading="page.settingsSaving" @click="page.saveSettings">
+        <AppButton
+          variant="primary"
+          :loading="page.settingsSaving"
+          :disabled="Boolean(settingsDisabledReason)"
+          :aria-label="settingsDisabledReason ? `保存设置：${settingsDisabledReason}` : '保存设置'"
+          @click="saveSettings"
+        >
           保存设置
         </AppButton>
       </div>
@@ -142,20 +157,30 @@
               size="small"
               row-key="sourceAdId"
             >
-              <el-table-column prop="sourceAdId" label="公开广告编号" min-width="180" />
-              <el-table-column label="价格" width="92">
+              <V2TableColumn
+                kind="identifier"
+                width-preset="identifier"
+                prop="sourceAdId"
+                label="公开广告编号"
+              />
+              <V2TableColumn kind="numeric" width-preset="compact" label="价格">
                 <template #default="{ row }">{{ page.formatRate(row.priceToRmb) }}</template>
-              </el-table-column>
-              <el-table-column label="最低成交额" min-width="120">
+              </V2TableColumn>
+              <V2TableColumn kind="numeric" width-preset="standard" label="最低成交额">
                 <template #default="{ row }">¥{{ page.formatAmount(row.minAmountRmb) }}</template>
-              </el-table-column>
-              <el-table-column label="最高成交额" min-width="120">
+              </V2TableColumn>
+              <V2TableColumn kind="numeric" width-preset="standard" label="最高成交额">
                 <template #default="{ row }">¥{{ page.formatAmount(row.maxAmountRmb) }}</template>
-              </el-table-column>
-              <el-table-column prop="completedOrderCount" label="完成订单" width="96" />
-              <el-table-column label="完成率" width="88">
+              </V2TableColumn>
+              <V2TableColumn
+                kind="numeric"
+                width-preset="compact"
+                prop="completedOrderCount"
+                label="完成订单"
+              />
+              <V2TableColumn kind="numeric" width-preset="compact" label="完成率">
                 <template #default="{ row }">{{ page.formatPercent(row.completionRate) }}</template>
-              </el-table-column>
+              </V2TableColumn>
             </el-table>
           </div>
         </section>
@@ -165,18 +190,24 @@
 
   <el-drawer v-model="page.manualCreateVisible" title="录入人工汇率" size="min(700px, 96vw)">
     <el-form
+      ref="manualFormRef"
+      :model="page.manualForm"
+      :rules="manualRules"
       label-position="left"
       label-width="92px"
       require-asterisk-position="right"
       class="v2-exchange-form v2-horizontal-form"
+      status-icon
+      scroll-to-error
+      :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
       <section class="v2-exchange-form__group">
         <h2>Binance</h2>
         <div class="v2-exchange-form__grid">
-          <el-form-item label="商家买入价"
+          <el-form-item label="商家买入价" prop="binanceMerchantBuyRateToRmb"
             ><el-input v-model="page.manualForm.binanceMerchantBuyRateToRmb" inputmode="decimal"
           /></el-form-item>
-          <el-form-item label="商家卖出价"
+          <el-form-item label="商家卖出价" prop="binanceMerchantSellRateToRmb"
             ><el-input v-model="page.manualForm.binanceMerchantSellRateToRmb" inputmode="decimal"
           /></el-form-item>
         </div>
@@ -184,15 +215,15 @@
       <section class="v2-exchange-form__group">
         <h2>OKX</h2>
         <div class="v2-exchange-form__grid">
-          <el-form-item label="商家买入价"
+          <el-form-item label="商家买入价" prop="okxMerchantBuyRateToRmb"
             ><el-input v-model="page.manualForm.okxMerchantBuyRateToRmb" inputmode="decimal"
           /></el-form-item>
-          <el-form-item label="商家卖出价"
+          <el-form-item label="商家卖出价" prop="okxMerchantSellRateToRmb"
             ><el-input v-model="page.manualForm.okxMerchantSellRateToRmb" inputmode="decimal"
           /></el-form-item>
         </div>
       </section>
-      <el-form-item label="记录时间">
+      <el-form-item label="记录时间" prop="recordedAt">
         <el-date-picker v-model="page.manualForm.recordedAt" type="datetime" style="width: 100%" />
       </el-form-item>
       <el-form-item label="备注">
@@ -214,8 +245,16 @@
     </el-form>
     <template #footer>
       <div class="v2-exchange-drawer-footer">
+        <span v-if="manualDisabledReason" class="v2-submit-disabled-reason" role="status">
+          {{ manualDisabledReason }}
+        </span>
         <AppButton variant="ghost" @click="page.manualCreateVisible = false">取消</AppButton>
-        <AppButton variant="primary" :loading="page.manualCreating" @click="page.createManualEntry"
+        <AppButton
+          variant="primary"
+          :loading="page.manualCreating"
+          :disabled="Boolean(manualDisabledReason)"
+          :aria-label="manualDisabledReason ? `确认录入：${manualDisabledReason}` : '确认录入'"
+          @click="createManualEntry"
           >确认录入</AppButton
         >
       </div>
@@ -253,7 +292,7 @@
         </div>
         <div class="v2-exchange-detail__wide">
           <dt>备注</dt>
-          <dd>{{ page.manualDetail.remark || '-' }}</dd>
+          <dd>{{ page.manualDetail.remark || '—' }}</dd>
         </div>
       </dl>
     </section>
@@ -261,14 +300,90 @@
 </template>
 
 <script setup lang="ts">
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
-import type { UnwrapNestedRefs } from 'vue';
+import { computed, ref, type UnwrapNestedRefs } from 'vue';
+import type { FormInstance, FormRules } from 'element-plus';
+import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
 
 type ExchangeRatesPage = UnwrapNestedRefs<ReturnType<typeof useExchangeRatesPage>>;
 
-defineProps<{
+const props = defineProps<{
   page: ExchangeRatesPage;
 }>();
+
+const settingsFormRef = ref<FormInstance>();
+const manualFormRef = ref<FormInstance>();
+const settingsDisabledReason = computed(() => {
+  if (!props.page.canManage) return '当前账号无汇率设置权限';
+  if (!props.page.runtime) return '汇率运行配置尚未加载';
+  return '';
+});
+const manualDisabledReason = computed(() =>
+  props.page.canCreate ? '' : '当前账号无人工汇率录入权限'
+);
+const settingsRules = computed<FormRules>(() => ({
+  intervalMinutes: [
+    { required: true, message: '请选择采集周期', trigger: 'change' },
+    {
+      validator: (_rule, value, callback) =>
+        callback(
+          (props.page.runtime?.settings.allowedIntervals ?? props.page.defaultIntervals).includes(
+            Number(value)
+          )
+            ? undefined
+            : new Error('请选择系统允许的采集周期')
+        ),
+      trigger: 'change'
+    }
+  ],
+  targetAmountRmb: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        const amount = Number(value);
+        callback(
+          isV2UnsignedDecimal(value, { allowZero: false }) &&
+            Number.isFinite(amount) &&
+            amount <= 1_000_000
+            ? undefined
+            : new Error(
+                `目标成交额必须大于 0、不超过 1,000,000 元且最多 ${V2_DECIMAL_PLACES} 位小数`
+              )
+        );
+      },
+      trigger: 'blur'
+    }
+  ]
+}));
+const rateRule = {
+  required: true,
+  validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) =>
+    callback(
+      isV2UnsignedDecimal(value, { allowZero: false })
+        ? undefined
+        : new Error(`请输入大于 0、最多 ${V2_DECIMAL_PLACES} 位小数的汇率`)
+    ),
+  trigger: 'blur'
+};
+const manualRules: FormRules = {
+  binanceMerchantBuyRateToRmb: [rateRule],
+  binanceMerchantSellRateToRmb: [rateRule],
+  okxMerchantBuyRateToRmb: [rateRule],
+  okxMerchantSellRateToRmb: [rateRule],
+  recordedAt: [{ required: true, message: '请选择记录时间', trigger: 'change' }]
+};
+
+async function saveSettings() {
+  if (settingsDisabledReason.value || !(await validateV2Form(settingsFormRef.value))) return;
+  await props.page.saveSettings();
+}
+
+async function createManualEntry() {
+  if (manualDisabledReason.value || !(await validateV2Form(manualFormRef.value))) return;
+  await props.page.createManualEntry();
+}
 </script>

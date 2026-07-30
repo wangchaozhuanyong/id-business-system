@@ -6,7 +6,6 @@ import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
-  V2_DECIMAL_PLACES,
   addDecimalStrings,
   divideDecimalStrings,
   formatV2Decimal,
@@ -321,9 +320,6 @@ export function useExchangeRatesPage() {
       !Number.isFinite(amount) ||
       amount > 1_000_000
     ) {
-      ElMessage.warning(
-        `目标成交额必须大于 0、不超过 1,000,000 元且最多 ${V2_DECIMAL_PLACES} 位小数`
-      );
       return;
     }
     settingsSaving.value = true;
@@ -382,7 +378,6 @@ export function useExchangeRatesPage() {
       manualForm.okxMerchantSellRateToRmb
     ];
     if (values.some((value) => parseRate(value) === null)) {
-      ElMessage.warning(`四项汇率都必须是大于 0、最多 ${V2_DECIMAL_PLACES} 位小数的数字`);
       return;
     }
     manualCreating.value = true;

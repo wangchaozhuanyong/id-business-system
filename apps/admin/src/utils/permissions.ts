@@ -53,3 +53,35 @@ export function hasUserRoutePermission(
 
   return typeof permission === 'string' ? hasUserPermission(user, permission) : true;
 }
+
+export function hasUserRequiredRole(
+  user: CurrentUser | null | undefined,
+  requiredRoles: unknown
+): boolean {
+  if (!Array.isArray(requiredRoles) || requiredRoles.length === 0) {
+    return true;
+  }
+
+  const roleSet = new Set(user?.roles ?? []);
+  return requiredRoles.some((role) => typeof role === 'string' && roleSet.has(role));
+}
+
+export function hasUserFeatureAccess(
+  user: CurrentUser | null | undefined,
+  feature: {
+    permission?: string;
+    requiredRoles?: readonly string[];
+  }
+): boolean {
+  return (
+    hasUserPermission(user, feature.permission) && hasUserRequiredRole(user, feature.requiredRoles)
+  );
+}
+
+export function hasUserRouteAccess(
+  user: CurrentUser | null | undefined,
+  permission: unknown,
+  requiredRoles: unknown
+): boolean {
+  return hasUserRoutePermission(user, permission) && hasUserRequiredRole(user, requiredRoles);
+}

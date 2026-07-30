@@ -90,15 +90,9 @@ export class IdBusinessV2GiftCardRecordsService {
     const where: Prisma.IdBusinessV2GiftCardWhereInput = {
       accountId: accountId ?? undefined,
       supplierOptionId: supplierOptionId ?? undefined,
+      countryOptionId: countryOptionId ?? undefined,
       status: status ?? undefined,
       statusChangedAt: this.parseDateRange(query.dateFrom, query.dateTo),
-      account: countryOptionId
-        ? {
-            is: {
-              countryOptionId
-            }
-          }
-        : undefined,
       OR: keyword
         ? [
             { codeMasked: { contains: keyword, mode: 'insensitive' } },
@@ -231,15 +225,15 @@ export class IdBusinessV2GiftCardRecordsService {
     if (dto.supplierOptionId === undefined && dto.remark === undefined) {
       throw new BadRequestException('至少提交一个可修改字段');
     }
-    const supplier =
-      dto.supplierOptionId === undefined
-        ? undefined
-        : await this.optionsService.requireActiveOption(
-            dto.supplierOptionId,
-            'topup_supplier',
-            '加卡供应商',
-            true
-          );
+    if (dto.supplierOptionId !== undefined) {
+      await this.optionsService.requireActiveOption(
+        dto.supplierOptionId,
+        'topup_supplier',
+        '加卡供应商',
+        true
+      );
+      throw new BadRequestException('供应商不能作为普通信息修改，请使用“更正供应商”操作');
+    }
     const remark =
       dto.remark === undefined ? undefined : this.normalizeRemark(dto.remark, '备注', 2000);
 
@@ -268,7 +262,6 @@ export class IdBusinessV2GiftCardRecordsService {
       const updated = await tx.idBusinessV2GiftCard.update({
         where: { id: giftCardId },
         data: {
-          supplierOptionId: supplier === undefined ? undefined : (supplier?.id ?? null),
           remark,
           updatedByUserId: operator?.id
         },
@@ -300,6 +293,7 @@ export class IdBusinessV2GiftCardRecordsService {
 
   private toGiftCardResponse(item: GiftCardRecord) {
     const creditedLedger = item.ledgerEntries[0] ?? null;
+    const supplierFunding = item.supplierFundEntries[0] ?? null;
     return {
       id: item.id,
       codeMasked: item.codeMasked,
@@ -314,10 +308,32 @@ export class IdBusinessV2GiftCardRecordsService {
           : toV2DecimalString(item.exchangeRatePrefilledValue),
       exchangeRateWasOverridden: item.exchangeRateWasOverridden,
       costAmount: toV2DecimalString(item.costAmount),
+      purchaseOriginalAmount: toV2DecimalString(item.purchaseOriginalAmount ?? item.costAmount),
+      purchaseCurrency: item.purchaseCurrency ?? ('CNY' as const),
+      purchaseFxRateToCny: (item.purchaseFxRateToCny ?? 1).toString(),
+      purchaseFxSnapshotId: item.purchaseFxSnapshotId ?? null,
+      purchaseFinanceAccountId: item.purchaseFinanceAccountId ?? null,
+      purchaseSupplierAccountId: item.purchaseSupplierAccountId ?? null,
+      paidAt: item.paidAt ?? item.createdAt,
+      supplierRefundStatus: item.supplierRefundStatus ?? ('none' as const),
+      supplierRefundAmount: toV2DecimalString(item.supplierRefundAmount ?? 0),
+      supplierRefundAmountCny: toV2DecimalString(item.supplierRefundAmountCny ?? 0),
+      supplierRefundClosedAt: item.supplierRefundClosedAt ?? null,
       status: item.status,
       statusChangedAt: item.statusChangedAt,
       supplierOptionId: item.supplierOptionId,
-      supplier: item.supplierOption,
+      supplier: item.supplierOption
+        ? {
+            ...item.supplierOption,
+            name: item.supplierNameSnapshot ?? item.supplierOption.name
+          }
+        : null,
+      country: {
+        id: item.countryOptionId,
+        code: item.countryOption.code,
+        name: item.countryNameSnapshot,
+        currencyCode: item.currencyCodeSnapshot
+      },
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
@@ -335,6 +351,17 @@ export class IdBusinessV2GiftCardRecordsService {
             averageCostBefore: toV2DecimalString(creditedLedger.averageCostBefore),
             averageCostAfter: toV2DecimalString(creditedLedger.averageCostAfter),
             createdAt: creditedLedger.createdAt
+          }
+        : null,
+      supplierFunding: supplierFunding
+        ? {
+            ledgerEntryId: supplierFunding.id,
+            supplierName: supplierFunding.supplierNameSnapshot,
+            amountCny: toV2DecimalString(supplierFunding.amountCny),
+            balanceBeforeCny: toV2DecimalString(supplierFunding.balanceBeforeCny),
+            balanceAfterCny: toV2DecimalString(supplierFunding.balanceAfterCny),
+            reversed: Boolean(supplierFunding.reversedBy),
+            createdAt: supplierFunding.createdAt
           }
         : null,
       reversal: creditedLedger?.reversedByEntry

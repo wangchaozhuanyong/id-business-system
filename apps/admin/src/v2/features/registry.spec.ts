@@ -8,23 +8,42 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(11);
+    expect(v2FeatureRegistry).toHaveLength(22);
   });
 
-  it('keeps routing, permissions and loading behavior in each feature manifest', () => {
+  it('keeps routing, access and loading behavior in each feature manifest', () => {
     for (const feature of v2FeatureRegistry) {
       expect(feature.route).toMatch(/^\/v2(?:\/|$)/);
       expect(feature.loadView).toBeTypeOf('function');
       expect(['event-driven', 'event-with-deadline']).toContain(feature.freshnessPolicy);
-      expect(feature.permission).toBeTruthy();
+      expect(
+        Boolean(feature.permission) ||
+          Boolean(feature.requiredRoles?.length) ||
+          feature.key === 'dashboard' ||
+          feature.key === 'profile'
+      ).toBe(true);
+    }
+  });
+
+  it('keeps planned modules explicit and free of fake table configuration', () => {
+    const plannedFeatures = v2FeatureRegistry.filter((feature) => feature.status === 'planned');
+
+    expect(plannedFeatures).toHaveLength(9);
+    for (const feature of plannedFeatures) {
+      expect(feature.kind).toBe('planned');
+      expect(feature.summary).toBeTruthy();
+      expect(feature.plannedSections?.length).toBeGreaterThan(0);
+      expect(feature.filters).toEqual([]);
+      expect(feature.columns).toEqual([]);
     }
   });
 
   it('derives navigation from the same registered feature objects', () => {
     const navigationItems = v2NavigationSections.flatMap((section) => section.items);
+    const navigableFeatures = v2FeatureRegistry.filter((feature) => feature.navigation !== false);
 
-    expect(navigationItems).toHaveLength(v2FeatureRegistry.length);
-    expect(new Set(navigationItems)).toEqual(new Set(v2FeatureRegistry));
+    expect(navigationItems).toHaveLength(navigableFeatures.length);
+    expect(new Set(navigationItems)).toEqual(new Set(navigableFeatures));
   });
 
   it('keeps only the order-entry draft component alive', () => {

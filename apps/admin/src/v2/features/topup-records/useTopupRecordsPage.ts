@@ -10,8 +10,22 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2BalancesApi } from './api';
+import {
+  deltaType,
+  formatDate,
+  formatDecimal,
+  formatOptionalDecimal,
+  formatSignedCurrency,
+  formatSignedDecimal,
+  giftCardStatusLabel,
+  giftCardStatusType,
+  ledgerTypeLabel,
+  ledgerTypeTag,
+  readAccountId,
+  readQueryString,
+  readRecordsTab
+} from './topup-records-format';
 import type {
   V2BalanceLedgerEntryType,
   V2BalanceLedgerListQuery,
@@ -27,7 +41,8 @@ import type {
 } from './contracts';
 import { useGiftCardReversal } from './useGiftCardReversal';
 
-type RecordsTab = 'giftCards' | 'ledger';
+export type RecordsTab = 'giftCards' | 'ledger' | 'suppliers' | 'payments';
+type RecordsDataTab = Extract<RecordsTab, 'giftCards' | 'ledger'>;
 
 interface RecordsReferenceOptions {
   countries: V2OptionSelector[];
@@ -60,10 +75,28 @@ export function useTopupRecordsPage() {
   const canAdjustBalance = computed(() =>
     hasUserPermission(authStore.user, 'apple.balance.adjust')
   );
+  const canViewSupplierFunds = computed(() =>
+    hasUserPermission(authStore.user, 'apple.topup_supplier_fund.view')
+  );
+  const canManageSupplierFunds = computed(() =>
+    hasUserPermission(authStore.user, 'apple.topup_supplier_fund.manage')
+  );
+  const canRevealGiftCard = computed(() =>
+    hasUserPermission(authStore.user, 'apple.gift_card.view_full')
+  );
+  const canReassignSupplier = computed(
+    () => canAdjustBalance.value && canManageSupplierFunds.value
+  );
   const canReportAccountLoss = computed(
     () => canAdjustBalance.value && hasUserPermission(authStore.user, 'apple.account.update')
   );
-  const activeTab = ref<RecordsTab>(readRecordsTab(route.query.tab));
+  const requestedTab = readRecordsTab(route.query.tab);
+  const activeTab = ref<RecordsTab>(
+    (requestedTab === 'suppliers' || requestedTab === 'payments') && !canViewSupplierFunds.value
+      ? 'giftCards'
+      : requestedTab
+  );
+  const recordsDataTab = ref<RecordsDataTab>(activeTab.value === 'ledger' ? 'ledger' : 'giftCards');
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2OptionSelector[]>([]);
   const giftCards = ref<V2GiftCardRecord[]>([]);
@@ -75,6 +108,12 @@ export function useTopupRecordsPage() {
   const metadataDrawerVisible = ref(false);
   const metadataSubmitting = ref(false);
   const selectedGiftCard = ref<V2GiftCardRecord | null>(null);
+  const supplierDrawerVisible = ref(false);
+  const supplierSubmitting = ref(false);
+  const revealDialogVisible = ref(false);
+  const revealSubmitting = ref(false);
+  const revealedGiftCardCode = ref('');
+  const revealReason = ref('');
 
   const filters = reactive({
     keyword: '',
@@ -99,9 +138,16 @@ export function useTopupRecordsPage() {
     sortOrder: 'desc' as 'asc' | 'desc'
   });
   const metadataForm = reactive({
-    supplierOptionId: '',
     remark: ''
   });
+  const supplierForm = reactive({
+    supplierOptionId: '',
+    reason: '',
+    idempotencyKey: ''
+  });
+  const metadataDisabledReason = computed(() =>
+    selectedGiftCard.value ? '' : '未选择需要修改的礼品卡记录'
+  );
 
   function getRecordsRequest(): RecordsRequest {
     const common = {
@@ -112,7 +158,7 @@ export function useTopupRecordsPage() {
       dateFrom: filters.dateRange[0] || undefined,
       dateTo: filters.dateRange[1] || undefined
     };
-    return activeTab.value === 'giftCards'
+    return recordsDataTab.value === 'giftCards'
       ? {
           tab: 'giftCards',
           ...common,
@@ -219,12 +265,19 @@ export function useTopupRecordsPage() {
   }
 
   function loadActiveTab() {
-    return activeTab.value === 'giftCards' ? loadGiftCards() : loadBalanceLedger();
+    return activeTab.value === 'giftCards'
+      ? loadGiftCards()
+      : activeTab.value === 'ledger'
+        ? loadBalanceLedger()
+        : Promise.resolve();
   }
 
   function handleTabChange() {
     syncRouteScope();
-    void recordsQuery.ensureFresh();
+    if (activeTab.value === 'giftCards' || activeTab.value === 'ledger') {
+      recordsDataTab.value = activeTab.value;
+      void recordsQuery.ensureFresh();
+    }
   }
 
   function handleSearch() {
@@ -339,7 +392,6 @@ export function useTopupRecordsPage() {
 
   function openMetadataDrawer(giftCard: V2GiftCardRecord) {
     selectedGiftCard.value = giftCard;
-    metadataForm.supplierOptionId = giftCard.supplierOptionId ?? '';
     metadataForm.remark = giftCard.remark ?? '';
     metadataDrawerVisible.value = true;
   }
@@ -351,10 +403,9 @@ export function useTopupRecordsPage() {
     metadataSubmitting.value = true;
     try {
       await idBusinessV2BalancesApi.updateGiftCardMetadata(giftCard.id, {
-        supplierOptionId: metadataForm.supplierOptionId || null,
         remark: metadataForm.remark.trim() || null
       });
-      ElMessage.success('供应商和备注已更新，账务字段未变更');
+      ElMessage.success('备注已更新，账务字段未变更');
       metadataDrawerVisible.value = false;
       selectedGiftCard.value = null;
       await loadGiftCards();
@@ -365,6 +416,93 @@ export function useTopupRecordsPage() {
     }
   }
 
+  function openSupplierDrawer(giftCard: V2GiftCardRecord) {
+    selectedGiftCard.value = giftCard;
+    Object.assign(supplierForm, {
+      supplierOptionId: giftCard.supplierOptionId ?? '',
+      reason: '',
+      idempotencyKey: globalThis.crypto.randomUUID()
+    });
+    supplierDrawerVisible.value = true;
+  }
+
+  const supplierDisabledReason = computed(() => {
+    const giftCard = selectedGiftCard.value;
+    if (!giftCard) return '未选择需要更正的礼品卡记录';
+    if (!canReassignSupplier.value) return '当前账号缺少余额调整或供应商资金管理权限';
+    if (!supplierForm.supplierOptionId) return '请选择新的供应商';
+    if (supplierForm.supplierOptionId === giftCard.supplierOptionId)
+      return '新供应商不能与原供应商相同';
+    const supplier = topupSupplierOptions.value.find(
+      (item) => item.id === supplierForm.supplierOptionId
+    );
+    if (!supplier) return '所选供应商已不可用';
+    if (supplierForm.reason.trim().length < 2) return '更正原因至少填写 2 个字符';
+    return '';
+  });
+
+  async function submitSupplierReassignment() {
+    const giftCard = selectedGiftCard.value;
+    if (!giftCard || supplierSubmitting.value || supplierDisabledReason.value) return;
+    supplierSubmitting.value = true;
+    try {
+      const result = await idBusinessV2BalancesApi.reassignGiftCardSupplier(giftCard.id, {
+        supplierOptionId: supplierForm.supplierOptionId,
+        reason: supplierForm.reason.trim(),
+        idempotencyKey: supplierForm.idempotencyKey
+      });
+      ElMessage.success(
+        result.legacyCutoverRecord
+          ? '切账前记录的供应商归属已更正，未生成资金流水'
+          : '供应商已更正，原供应商返还与新供应商扣款已同时入账'
+      );
+      supplierDrawerVisible.value = false;
+      selectedGiftCard.value = null;
+      await loadGiftCards();
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error));
+    } finally {
+      supplierSubmitting.value = false;
+    }
+  }
+
+  function openRevealDialog(giftCard: V2GiftCardRecord) {
+    selectedGiftCard.value = giftCard;
+    revealReason.value = '';
+    revealedGiftCardCode.value = '';
+    revealDialogVisible.value = true;
+  }
+
+  const revealDisabledReason = computed(() => {
+    if (!selectedGiftCard.value) return '未选择礼品卡记录';
+    if (!canRevealGiftCard.value) return '当前账号无权查看完整礼品卡号';
+    const length = revealReason.value.trim().length;
+    return length >= 2 && length <= 200 ? '' : '查看原因必须为 2 至 200 个字符';
+  });
+
+  async function submitRevealGiftCard() {
+    const giftCard = selectedGiftCard.value;
+    if (!giftCard || revealSubmitting.value || revealDisabledReason.value) return;
+    revealSubmitting.value = true;
+    try {
+      const result = await idBusinessV2BalancesApi.revealGiftCardCode(giftCard.id, {
+        reason: revealReason.value.trim()
+      });
+      revealedGiftCardCode.value = result.code;
+      ElMessage.success('完整卡号已临时解密，本次查看已记录审计');
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error));
+    } finally {
+      revealSubmitting.value = false;
+    }
+  }
+
+  watch(revealDialogVisible, (visible) => {
+    if (visible) return;
+    revealedGiftCardCode.value = '';
+    revealReason.value = '';
+  });
+
   function giftCardRowNumber(index: number) {
     return (giftCardQuery.page - 1) * giftCardQuery.pageSize + index + 1;
   }
@@ -373,98 +511,12 @@ export function useTopupRecordsPage() {
     return (ledgerQuery.page - 1) * ledgerQuery.pageSize + index + 1;
   }
 
-  function giftCardStatusLabel(status: V2GiftCardRecordStatus) {
-    return {
-      credited: '加卡成功',
-      redeemed: '被赎回',
-      withdrawn: '已撤回'
-    }[status];
-  }
-
-  function giftCardStatusType(status: V2GiftCardRecordStatus) {
-    return status === 'credited' ? 'success' : status === 'redeemed' ? 'warning' : 'info';
-  }
-
-  function ledgerTypeLabel(entryType: V2BalanceLedgerEntryType) {
-    return {
-      gift_card_credit: '礼品卡入账',
-      gift_card_redeemed: '被赎回扣减',
-      gift_card_withdrawal: '撤回扣减',
-      order_consumption: '订单扣减',
-      order_consumption_reversal: '订单退款恢复',
-      opening_balance: '期初余额',
-      manual_adjustment: '手工修正',
-      account_loss: 'ID 永久报损'
-    }[entryType];
-  }
-
-  function ledgerTypeTag(entryType: V2BalanceLedgerEntryType) {
-    if (entryType === 'account_loss') return 'danger';
-    return entryType === 'gift_card_credit' || entryType === 'opening_balance'
-      ? 'success'
-      : entryType === 'gift_card_redeemed' || entryType === 'order_consumption'
-        ? 'warning'
-        : 'info';
-  }
-
-  function deltaType(value: string) {
-    return Number(value) < 0 ? 'debit' : 'credit';
-  }
-
-  function formatSignedDecimal(value: string) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return value;
-    const formatted = formatDecimal(String(Math.abs(number)));
-    return number > 0 ? `+${formatted}` : number < 0 ? `-${formatted}` : formatted;
-  }
-
-  function formatSignedCurrency(value: string) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return `¥${value}`;
-    const formatted = `¥${formatDecimal(String(Math.abs(number)))}`;
-    return number > 0 ? `+${formatted}` : number < 0 ? `-${formatted}` : formatted;
-  }
-
-  function formatOptionalDecimal(value?: string) {
-    return value === undefined ? '-' : formatDecimal(value);
-  }
-
-  function formatDecimal(value: string) {
-    return formatV2Decimal(value);
-  }
-
-  function formatDate(value: string) {
-    return new Intl.DateTimeFormat('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  }
-
-  function readRecordsTab(value: unknown): RecordsTab {
-    const normalized = Array.isArray(value) ? value[0] : value;
-    return normalized === 'ledger' ? 'ledger' : 'giftCards';
-  }
-
-  function readAccountId(value: unknown) {
-    const normalized = readQueryString(value, 36);
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      normalized
-    )
-      ? normalized
-      : '';
-  }
-
-  function readQueryString(value: unknown, maximumLength: number) {
-    const normalized = Array.isArray(value) ? value[0] : value;
-    return typeof normalized === 'string' ? normalized.trim().slice(0, maximumLength) : '';
-  }
-
   return {
     canAdjustBalance,
+    canViewSupplierFunds,
+    canManageSupplierFunds,
+    canRevealGiftCard,
+    canReassignSupplier,
     activeTab,
     countryOptions,
     topupSupplierOptions,
@@ -476,11 +528,21 @@ export function useTopupRecordsPage() {
     ledgerLoading,
     metadataDrawerVisible,
     metadataSubmitting,
+    supplierDrawerVisible,
+    supplierSubmitting,
+    revealDialogVisible,
+    revealSubmitting,
+    revealedGiftCardCode,
+    revealReason,
     selectedGiftCard,
     filters,
     giftCardQuery,
     ledgerQuery,
     metadataForm,
+    supplierForm,
+    metadataDisabledReason,
+    supplierDisabledReason,
+    revealDisabledReason,
     activeLoading,
     activeError,
     activeResolved,
@@ -501,6 +563,10 @@ export function useTopupRecordsPage() {
     handleLedgerSortChange,
     openMetadataDrawer,
     submitMetadata,
+    openSupplierDrawer,
+    submitSupplierReassignment,
+    openRevealDialog,
+    submitRevealGiftCard,
     ...giftCardReversal,
     giftCardRowNumber,
     ledgerRowNumber,
