@@ -106,6 +106,15 @@ export interface V2FinanceLatestRate {
   expiresAt: IsoDateTimeString | null;
 }
 
+export interface V2OrderReceiptFxQuote {
+  snapshotId: string | null;
+  currency: V2FinanceCurrency;
+  rateToCny: DecimalString;
+  source: V2FinanceFxRateSnapshot['source'];
+  capturedAt: IsoDateTimeString;
+  expiresAt: IsoDateTimeString | null;
+}
+
 export interface V2FinanceJournalLine {
   id: string;
   lineNo: number;

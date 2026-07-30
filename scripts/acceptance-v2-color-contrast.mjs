@@ -280,9 +280,10 @@ async function measureButtons(page, selector) {
         }
         return 'rgb(255, 255, 255)';
       };
-      const style = getComputedStyle(button);
+      const contentSpan = button.querySelector(':scope > span') ?? button.querySelector('span');
+      const textStyle = getComputedStyle(contentSpan ?? button);
       const rect = button.getBoundingClientRect();
-      const spanRect = button.querySelector('span')?.getBoundingClientRect();
+      const spanRect = contentSpan?.getBoundingClientRect();
       return {
         variant:
           button.getAttribute('data-button-variant') ??
@@ -291,7 +292,7 @@ async function measureButtons(page, selector) {
           button.getAttribute('data-button-state') ??
           button.getAttribute('data-order-entry-state') ??
           'unknown',
-        foreground: style.color,
+        foreground: textStyle.color,
         background: resolveBackground(button),
         disabled: button.hasAttribute('disabled'),
         loading: button.classList.contains('is-loading'),
@@ -327,9 +328,10 @@ async function measureButton(locator) {
       }
       return 'rgb(255, 255, 255)';
     };
-    const style = getComputedStyle(button);
+    const contentSpan = button.querySelector(':scope > span') ?? button.querySelector('span');
+    const textStyle = getComputedStyle(contentSpan ?? button);
     const rect = button.getBoundingClientRect();
-    const spanRect = button.querySelector('span')?.getBoundingClientRect();
+    const spanRect = contentSpan?.getBoundingClientRect();
     return {
       variant:
         button.getAttribute('data-button-variant') ??
@@ -338,7 +340,7 @@ async function measureButton(locator) {
         button.getAttribute('data-button-state') ??
         button.getAttribute('data-order-entry-state') ??
         'unknown',
-      foreground: style.color,
+      foreground: textStyle.color,
       background: resolveBackground(button),
       disabled: button.hasAttribute('disabled'),
       loading: button.classList.contains('is-loading'),

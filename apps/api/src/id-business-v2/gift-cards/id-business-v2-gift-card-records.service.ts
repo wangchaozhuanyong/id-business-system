@@ -300,7 +300,7 @@ export class IdBusinessV2GiftCardRecordsService {
 
   private toGiftCardResponse(item: GiftCardRecord) {
     const creditedLedger = item.ledgerEntries[0] ?? null;
-    const supplierFunding = item.supplierFundEntries[0] ?? null;
+    const hasSupplierFunding = Boolean(item.supplierFundEntries[0]);
     return {
       id: item.id,
       cardNameOptionId: item.cardNameOptionId,
@@ -367,17 +367,7 @@ export class IdBusinessV2GiftCardRecordsService {
             createdAt: creditedLedger.createdAt
           }
         : null,
-      supplierFunding: supplierFunding
-        ? {
-            ledgerEntryId: supplierFunding.id,
-            supplierName: supplierFunding.supplierNameSnapshot,
-            amountCny: toV2DecimalString(supplierFunding.amountCny),
-            balanceBeforeCny: toV2DecimalString(supplierFunding.balanceBeforeCny),
-            balanceAfterCny: toV2DecimalString(supplierFunding.balanceAfterCny),
-            reversed: Boolean(supplierFunding.reversedBy),
-            createdAt: supplierFunding.createdAt
-          }
-        : null,
+      hasSupplierFunding,
       reversal: creditedLedger?.reversedByEntry
         ? {
             id: creditedLedger.reversedByEntry.id,

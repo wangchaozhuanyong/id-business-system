@@ -97,24 +97,6 @@
               {{ formatOptionalDecimal(row.creditedLedger?.balanceAfter) }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款前余额" width-preset="wide">
-            <template #default="{ row }">
-              {{
-                row.supplierFunding
-                  ? `¥${formatDecimal(row.supplierFunding.balanceBeforeCny)}`
-                  : '—（切账前）'
-              }}
-            </template>
-          </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商扣款后余额" width-preset="wide">
-            <template #default="{ row }">
-              {{
-                row.supplierFunding
-                  ? `¥${formatDecimal(row.supplierFunding.balanceAfterCny)}`
-                  : '—（切账前）'
-              }}
-            </template>
-          </V2TableColumn>
           <V2TableColumn kind="text" label="操作人" width-preset="standard">
             <template #default="{ row }">
               {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
@@ -237,18 +219,6 @@
                 <dd>
                   {{ formatOptionalDecimal(item.creditedLedger?.balanceBefore) }} →
                   {{ formatOptionalDecimal(item.creditedLedger?.balanceAfter) }}
-                </dd>
-              </div>
-              <div>
-                <dt>供应商余额</dt>
-                <dd>
-                  {{
-                    item.supplierFunding
-                      ? `¥${formatDecimal(item.supplierFunding.balanceBeforeCny)} → ¥${formatDecimal(
-                          item.supplierFunding.balanceAfterCny
-                        )}`
-                      : '—（切账前）'
-                  }}
                 </dd>
               </div>
             </dl>
@@ -405,7 +375,7 @@
             <template #default="{ row }">
               <el-tag v-if="row.reversalOf" type="warning" effect="plain">反向流水</el-tag>
               <el-tag v-else-if="row.reversedBy" type="info" effect="plain">已反冲</el-tag>
-              <span v-else>—</span>
+              <span v-else>正常</span>
             </template>
           </V2TableColumn>
           <V2TableColumn kind="text" label="操作人" width-preset="standard">
@@ -454,11 +424,17 @@
                 <dt>平均成本</dt>
                 <dd>¥{{ formatDecimal(item.averageCostAfter) }}</dd>
               </div>
+              <div>
+                <dt>冲正状态</dt>
+                <dd>
+                  <el-tag v-if="item.reversalOf" type="warning" effect="plain">反向流水</el-tag>
+                  <el-tag v-else-if="item.reversedBy" type="info" effect="plain">已反冲</el-tag>
+                  <span v-else>正常</span>
+                </dd>
+              </div>
             </dl>
             <footer>
               <span>{{ formatDate(item.createdAt) }}</span>
-              <el-tag v-if="item.reversalOf" type="warning" effect="plain">反向流水</el-tag>
-              <el-tag v-else-if="item.reversedBy" type="info" effect="plain">已反冲</el-tag>
             </footer>
           </article>
           <div v-if="!ledgerEntries.length" class="v2-records-empty">

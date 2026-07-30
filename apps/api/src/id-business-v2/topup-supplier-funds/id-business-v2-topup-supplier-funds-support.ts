@@ -25,6 +25,14 @@ export interface LockedSupplierAccountRow {
   initializedAt: Date | null;
 }
 
+type RawLockedSupplierAccountRow = Omit<
+  LockedSupplierAccountRow,
+  'currentBalance' | 'currentBalanceCny'
+> & {
+  currentBalance: PrismaNamespace.Decimal.Value;
+  currentBalanceCny: PrismaNamespace.Decimal.Value;
+};
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 const SIGNED_AMOUNT_PATTERN = /^-?(?:0|[1-9]\d{0,13})(?:\.\d{1,4})?$/;
@@ -49,7 +57,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
   }
 
   protected async lockSupplierAccount(tx: Prisma.TransactionClient, supplierOptionId: string) {
-    const rows = await tx.$queryRaw<LockedSupplierAccountRow[]>(PrismaNamespace.sql`
+    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
       SELECT
         account."id",
         account."supplier_option_id" AS "supplierOptionId",
@@ -73,11 +81,11 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       const supplier = await this.requireSupplierOption(tx, supplierOptionId);
       throw new ConflictException(`供应商“${supplier.name}”资金账户尚未初始化`);
     }
-    return rows[0];
+    return this.normalizeLockedSupplierAccount(rows[0]);
   }
 
   protected async lockSupplierAccountById(tx: Prisma.TransactionClient, accountId: string) {
-    const rows = await tx.$queryRaw<LockedSupplierAccountRow[]>(PrismaNamespace.sql`
+    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
       SELECT
         account."id",
         account."supplier_option_id" AS "supplierOptionId",
@@ -94,12 +102,12 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       FOR UPDATE OF account
     `);
     if (!rows[0]) throw new NotFoundException('供应商资金账户不存在');
-    return rows[0];
+    return this.normalizeLockedSupplierAccount(rows[0]);
   }
 
   protected async lockSupplierAccountsByIds(tx: Prisma.TransactionClient, accountIds: string[]) {
     const uniqueIds = [...new Set(accountIds)].sort();
-    const rows = await tx.$queryRaw<LockedSupplierAccountRow[]>(PrismaNamespace.sql`
+    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
       SELECT
         account."id",
         account."supplier_option_id" AS "supplierOptionId",
@@ -117,7 +125,22 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       ORDER BY account."id"
       FOR UPDATE OF account
     `);
-    return new Map(rows.map((row) => [row.id, row]));
+    return new Map(
+      rows.map((row) => {
+        const normalized = this.normalizeLockedSupplierAccount(row);
+        return [normalized.id, normalized];
+      })
+    );
+  }
+
+  private normalizeLockedSupplierAccount(
+    row: RawLockedSupplierAccountRow
+  ): LockedSupplierAccountRow {
+    return {
+      ...row,
+      currentBalance: toV2Decimal(row.currentBalance),
+      currentBalanceCny: toV2Decimal(row.currentBalanceCny)
+    };
   }
 
   protected assertInitialized(account: LockedSupplierAccountRow) {
@@ -243,9 +266,10 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       reason: string;
     }
   ) {
+    const balanceAfterCny = toV2Decimal(replay.balanceAfterCny);
     if (
       replay.entryType !== expected.entryType ||
-      (expected.balanceAfter && !replay.balanceAfterCny.eq(expected.balanceAfter)) ||
+      (expected.balanceAfter && !balanceAfterCny.eq(expected.balanceAfter)) ||
       replay.reason !== expected.reason
     ) {
       throw new ConflictException('幂等键已用于不同的供应商资金操作');
@@ -275,9 +299,9 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       remark: string | null;
     }
   ) {
-    const receivedUsdt = replay.receivedUsdt ?? replay.paidAmount;
-    const networkFeeUsdt = replay.networkFeeUsdt ?? replay.networkFeeAmount;
-    const settlementRate = replay.settlementRateCnyUsdt ?? replay.fxRateToCny;
+    const receivedUsdt = toV2Decimal(replay.receivedUsdt ?? replay.paidAmount);
+    const networkFeeUsdt = toV2Decimal(replay.networkFeeUsdt ?? replay.networkFeeAmount);
+    const settlementRate = toV2Decimal(replay.settlementRateCnyUsdt ?? replay.fxRateToCny);
     if (
       !receivedUsdt.eq(expected.receivedUsdt) ||
       !networkFeeUsdt.eq(expected.networkFeeUsdt) ||

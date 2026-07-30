@@ -167,6 +167,17 @@
             label="来源订单"
             show-overflow-tooltip
           >
+            <template #header>
+              <span class="v2-records-help-title">
+                来源订单
+                <FeatureHelp
+                  title="来源订单"
+                  :text="sourceOrderHelp"
+                  placement="bottom"
+                  :width="300"
+                />
+              </span>
+            </template>
             <template #default="{ row }">{{ row.soldByOrder?.orderNo || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn kind="text" label="国家" width-preset="compact">
@@ -291,7 +302,15 @@
                 <dd>{{ item.saleState === 'sold' ? '已卖出' : '可用' }}</dd>
               </div>
               <div>
-                <dt>来源订单</dt>
+                <dt class="v2-records-help-title">
+                  来源订单
+                  <FeatureHelp
+                    title="来源订单"
+                    :text="sourceOrderHelp"
+                    placement="bottom"
+                    :width="300"
+                  />
+                </dt>
                 <dd>{{ item.soldByOrder?.orderNo || '—' }}</dd>
               </div>
               <div>
@@ -380,6 +399,7 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { reactive } from 'vue';
 import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
@@ -392,6 +412,8 @@ import '@/v2/styles/records.css';
 const accountPage = useAccountsPage();
 const importFileInput = accountPage.importFileInput;
 const page = reactive(accountPage);
+const sourceOrderHelp =
+  '这个 ID 被订单卖出后，系统会在这里显示对应订单号；未卖出或没有关联订单时显示空横线。';
 
 function canOpenSensitiveAccess(item: V2Account) {
   return (

@@ -133,7 +133,7 @@
                   reserve-keyword
                   :remote-method="searchCustomers"
                   :loading="customerSearching"
-                  placeholder="搜索并选择客户"
+                  placeholder="按名称、手机、微信、QQ、WhatsApp 搜索"
                 >
                   <el-option
                     v-for="customer in entryOptions.customers"
@@ -266,18 +266,26 @@
             <V2OrderReceiptFields
               :form="form"
               :received-amount-preview="receivedAmountPreview"
+              :receipt-fx-quote="receiptFxQuote"
+              :receipt-fx-loading="receiptFxLoading"
+              :receipt-fx-error="receiptFxError"
               :format-decimal="formatDecimal"
               @currency-change="handleReceivedCurrencyChange"
               @price-input="handleManualPriceInput"
+              @manual-rate-input="handleManualFxRateInput"
+              @retry-fx-quote="loadReceiptFxQuote"
             />
             <V2OrderPricingFields
+              v-model:profit-rate-input-value="profitRateInputValue"
               :form="form"
-              :suggested-received="suggestedReceived"
+              :suggested-receipt="suggestedReceipt"
               :recommendation-applied="recommendationApplied"
-              :applied-suggested-cny="appliedSuggestedCny"
+              :applied-suggested-original="appliedSuggestedOriginal"
               :platform-fee-preview="platformFeePreview"
               :estimated-profit-preview="estimatedProfitPreview"
               :estimated-profit-rate-preview="estimatedProfitRatePreview"
+              :pricing-input-mode="pricingInputMode"
+              :profit-rate-input-hint="profitRateInputHint"
               :format-decimal="formatDecimal"
               @apply-suggested="applySuggestedReceivedAmount"
               @undo-suggested="undoSuggestedReceivedAmount"
@@ -447,9 +455,15 @@ const {
   totalCostPreview,
   estimatedProfitPreview,
   estimatedProfitRatePreview,
-  suggestedReceived,
+  pricingInputMode,
+  profitRateInputValue,
+  profitRateInputHint,
+  suggestedReceipt,
   recommendationApplied,
-  appliedSuggestedCny,
+  appliedSuggestedOriginal,
+  receiptFxQuote,
+  receiptFxLoading,
+  receiptFxError,
   matchingEmptyMessage,
   emptyConfigurationMessage,
   rules,
@@ -467,6 +481,8 @@ const {
   applySuggestedReceivedAmount,
   undoSuggestedReceivedAmount,
   handleManualPriceInput,
+  handleManualFxRateInput,
+  loadReceiptFxQuote,
   submitOrder,
   retryConsumption,
   handleCustomerCreated,

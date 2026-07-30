@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
 import { IdBusinessV2FinanceAccountsService } from './id-business-v2-finance-accounts.service';
 import { IdBusinessV2FinanceController } from './id-business-v2-finance.controller';
 import { IdBusinessV2FinanceExpensesService } from './id-business-v2-finance-expenses.service';
@@ -12,6 +13,7 @@ import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-repo
 import { IdBusinessV2FinanceSupplierWalletsService } from './id-business-v2-finance-supplier-wallets.service';
 
 @Module({
+  imports: [IdBusinessV2ExchangeRatesModule],
   controllers: [IdBusinessV2FinanceController],
   providers: [
     IdBusinessV2FinanceAccountsService,

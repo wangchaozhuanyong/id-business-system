@@ -10,6 +10,10 @@ export interface V2Customer {
   phoneTail: string | null;
   hasPhone: boolean;
   wechat: string | null;
+  qq: string | null;
+  maskedWhatsapp: string | null;
+  whatsappTail: string | null;
+  hasWhatsapp: boolean;
   sourceOptionId: string | null;
   source: Pick<V2OptionSelector, 'id' | 'code' | 'name'> | null;
   tagOptionIds: string[];
@@ -18,6 +22,9 @@ export interface V2Customer {
   services: Array<
     Pick<V2OptionSelector, 'id' | 'code' | 'name'> & {
       parent: { id: string; name: string } | null;
+      firstOpenedAt: string;
+      lastOpenedAt: string;
+      activationCount: number;
     }
   >;
   recordStatus: V2RecordStatus;
@@ -42,9 +49,10 @@ export interface CreateV2CustomerInput {
   name: string;
   phone?: string | null;
   wechat?: string | null;
+  qq?: string | null;
+  whatsapp?: string | null;
   sourceOptionId?: string | null;
   tagOptionIds?: string[];
-  serviceOptionIds?: string[];
   recordStatus?: V2RecordStatus;
   remark?: string | null;
 }

@@ -160,15 +160,16 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
         throw new ConflictException('供应商资金账户状态已变化，请刷新后重试');
       }
 
-      const oldAfter = roundV2Decimal(oldAccount.currentBalanceCny.add(activeDebit.amountCny));
-      const newAfter = roundV2Decimal(newAccount.currentBalanceCny.sub(activeDebit.amountCny));
+      const activeDebitAmountCny = roundV2Decimal(activeDebit.amountCny);
+      const oldAfter = roundV2Decimal(oldAccount.currentBalanceCny.add(activeDebitAmountCny));
+      const newAfter = roundV2Decimal(newAccount.currentBalanceCny.sub(activeDebitAmountCny));
       await tx.idBusinessV2TopupSupplierLedger.create({
         data: {
           supplierAccountId: oldAccount.id,
           giftCardId,
           entryType: 'gift_card_withdrawal_reversal',
           direction: 'credit',
-          ...this.cnyLedgerAmounts(activeDebit.amountCny, oldAccount.currentBalanceCny, oldAfter),
+          ...this.cnyLedgerAmounts(activeDebitAmountCny, oldAccount.currentBalanceCny, oldAfter),
           supplierNameSnapshot: oldAccount.supplierName,
           reversalOfEntryId: activeDebit.id,
           idempotencyKey: outgoingKey,
@@ -182,7 +183,7 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           giftCardId,
           entryType: 'gift_card_debit',
           direction: 'debit',
-          ...this.cnyLedgerAmounts(activeDebit.amountCny, newAccount.currentBalanceCny, newAfter),
+          ...this.cnyLedgerAmounts(activeDebitAmountCny, newAccount.currentBalanceCny, newAfter),
           supplierNameSnapshot: newAccount.supplierName,
           idempotencyKey: incomingKey,
           reason: `供应商更正扣款：${reason}`,

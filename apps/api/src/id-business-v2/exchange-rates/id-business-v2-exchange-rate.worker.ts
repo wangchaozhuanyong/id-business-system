@@ -78,6 +78,30 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
     }
   }
 
+  async collectSystem() {
+    this.assertNetworkEnabled();
+    await this.recoverStaleRuns();
+    const settings = await this.settingsService.getRecord();
+    try {
+      return await this.persistenceService.collectAndPersist({
+        triggerType: 'system',
+        targetAmountRmb: settings.targetAmountRmb
+      });
+    } catch (error) {
+      if (error instanceof IdBusinessV2ExchangeRateRunError) {
+        throw new BadGatewayException({
+          message: error.message,
+          code: error.code,
+          runId: error.runId,
+          provider: error.provider,
+          side: error.side,
+          retryable: error.retryable
+        });
+      }
+      throw error;
+    }
+  }
+
   async getRuntime() {
     const [settings, databaseRunning] = await Promise.all([
       this.settingsService.get(),

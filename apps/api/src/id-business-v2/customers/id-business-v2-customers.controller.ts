@@ -121,7 +121,7 @@ export class IdBusinessV2CustomersController {
   @Post(':id/reveal-phone')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('customer.view')
+  @RequirePermissions('customer.view_phone')
   revealPhone(
     @Param('id') id: string,
     @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
@@ -129,6 +129,22 @@ export class IdBusinessV2CustomersController {
     @Req() request: RequestWithAuditMeta
   ) {
     return this.customersService.revealPhone(id, dto, operator, {
+      ip: request.ip,
+      userAgent: this.getHeaderValue(request.headers['user-agent'])
+    });
+  }
+
+  @Post(':id/reveal-whatsapp')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @RequirePermissions('customer.view_phone')
+  revealWhatsapp(
+    @Param('id') id: string,
+    @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
+  ) {
+    return this.customersService.revealWhatsapp(id, dto, operator, {
       ip: request.ip,
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });

@@ -93,6 +93,42 @@ describe('V2 query cache', () => {
     scope.stop();
   });
 
+  it('clears only the canceled consumer loading state while a shared request continues', async () => {
+    const deferred = createDeferred<{ items: string[] }>();
+    const query = vi.fn(() => deferred.promise);
+    const firstScope = effectScope();
+    const secondScope = effectScope();
+    const options = {
+      scope: 'order-entry-matching' as const,
+      key: 'candidate-page',
+      freshnessPolicy: 'event-driven' as const,
+      query
+    };
+    const first = firstScope.run(() => useV2Query(options));
+    const second = secondScope.run(() => useV2Query(options));
+    if (!first || !second) return;
+
+    const firstPending = first.ensureFresh();
+    const secondPending = second.ensureFresh();
+    await Promise.resolve();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(first.isInitialLoading.value).toBe(true);
+    expect(second.isInitialLoading.value).toBe(true);
+
+    first.cancel();
+    expect(first.isInitialLoading.value).toBe(false);
+    expect(first.isRefreshing.value).toBe(false);
+    expect(second.isInitialLoading.value).toBe(true);
+
+    deferred.resolve({ items: ['candidate-1'] });
+    await Promise.all([firstPending, secondPending]);
+    expect(first.isInitialLoading.value).toBe(false);
+    expect(second.data.value).toEqual({ items: ['candidate-1'] });
+    expect(second.isInitialLoading.value).toBe(false);
+    firstScope.stop();
+    secondScope.stop();
+  });
+
   it('does not let an invalidated in-flight read overwrite the cache after a write', async () => {
     const deferred = createDeferred<string>();
     const pending = fetchV2Query({

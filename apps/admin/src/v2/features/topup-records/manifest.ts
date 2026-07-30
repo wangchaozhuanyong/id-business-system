@@ -57,18 +57,6 @@ export const topupRecordsFeature = defineV2Feature({
       kind: 'numeric',
       widthPreset: 'wide'
     },
-    {
-      key: 'supplierBalanceBefore',
-      label: '供应商扣款前余额',
-      kind: 'numeric',
-      widthPreset: 'wide'
-    },
-    {
-      key: 'supplierBalanceAfter',
-      label: '供应商扣款后余额',
-      kind: 'numeric',
-      widthPreset: 'wide'
-    },
     { key: 'operator', label: '操作人', kind: 'text', widthPreset: 'standard' },
     { key: 'remark', label: '备注', kind: 'text', widthPreset: 'wide' },
     { key: 'changedAt', label: '加卡时间', kind: 'date', widthPreset: 'dateTime' },

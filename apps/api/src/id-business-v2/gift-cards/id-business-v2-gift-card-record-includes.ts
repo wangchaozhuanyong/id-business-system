@@ -80,19 +80,7 @@ export const GIFT_CARD_RECORD_INCLUDE = {
       entryType: 'gift_card_debit'
     },
     select: {
-      id: true,
-      amountCny: true,
-      balanceBeforeCny: true,
-      balanceAfterCny: true,
-      supplierNameSnapshot: true,
-      createdAt: true,
-      reversedBy: {
-        select: {
-          id: true,
-          entryType: true,
-          createdAt: true
-        }
-      }
+      id: true
     },
     orderBy: {
       createdAt: 'desc'

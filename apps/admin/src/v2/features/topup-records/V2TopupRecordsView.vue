@@ -250,7 +250,7 @@
         </section>
         <el-alert
           :title="
-            selectedGiftCard.supplierFunding
+            selectedGiftCard.hasSupplierFunding
               ? '切账后更正会在同一事务中返还原供应商并扣减新供应商'
               : '切账前历史记录只更正归属，不生成供应商资金流水'
           "

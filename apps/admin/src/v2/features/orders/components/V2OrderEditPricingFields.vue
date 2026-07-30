@@ -53,17 +53,12 @@
   </el-form-item>
 
   <template v-if="order.operations.canEditPricing">
-    <el-form-item label="目标利润率" prop="targetProfitRate">
-      <el-input
-        v-model="form.targetProfitRate"
-        clearable
-        inputmode="decimal"
-        maxlength="8"
-        placeholder="选填，例如 10"
-      >
-        <template #append>%</template>
-      </el-input>
-    </el-form-item>
+    <V2OrderProfitRateField
+      :model-value="profitRateInputValue"
+      :mode="pricingInputMode"
+      :hint="profitRateInputHint"
+      @update:model-value="emit('update:profitRateInputValue', $event)"
+    />
 
     <el-form-item label="推荐价格">
       <div class="v2-order-edit-recommendation">
@@ -80,7 +75,13 @@
             预计利润 ¥{{ formatDecimal(suggestedReceived.estimatedProfit) }}，利润率
             {{ suggestedReceived.estimatedProfitRate }}%
           </small>
-          <small v-else>填写目标利润率后按当前成本反推</small>
+          <small v-else>
+            {{
+              pricingInputMode === 'receipt'
+                ? '当前为实收反算；直接修改上方利润率可切换为目标定价'
+                : '填写目标利润率后按当前成本反推'
+            }}
+          </small>
           <small
             v-if="
               recommendationApplied &&
@@ -119,7 +120,9 @@
 
 <script setup lang="ts">
 import AppButton from '@/components/ui/AppButton.vue';
+import V2OrderProfitRateField from '@/v2/features/order-entry/components/V2OrderProfitRateField.vue';
 import type { SuggestedReceivedAmount } from '@/v2/features/order-entry/order-pricing';
+import type { OrderPricingInputMode } from '@/v2/features/order-entry/useOrderPricingInputMode';
 import type { V2Order, V2OrderEntrySettlementPlatform } from '../contracts';
 import { formatDecimal, type OrderEditForm } from './order-edit-form';
 
@@ -135,9 +138,13 @@ defineProps<{
   appliedSuggestedCny: string;
   estimatedProfitPreview: string;
   estimatedProfitRatePreview: string | null;
+  profitRateInputValue: string;
+  pricingInputMode: OrderPricingInputMode;
+  profitRateInputHint: string;
 }>();
 
 const emit = defineEmits<{
+  'update:profitRateInputValue': [value: string];
   settlementChange: [];
   manualPriceInput: [];
   applySuggested: [];

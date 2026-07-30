@@ -112,7 +112,9 @@ export interface V2OrderEntryCustomer {
   id: string;
   name: string;
   wechat: string | null;
+  qq: string | null;
   maskedPhone: string | null;
+  maskedWhatsapp: string | null;
 }
 
 export interface V2OrderEntryServiceOption extends V2OrderOption {
