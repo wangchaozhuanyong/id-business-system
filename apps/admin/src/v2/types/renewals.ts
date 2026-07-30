@@ -22,6 +22,7 @@ export interface V2RenewalWorkbenchItem {
     id: string;
     appleIdMasked: string;
     currentBalance: string;
+    balanceCostAmount: string;
     recordStatus: 'active' | 'disabled';
     country: {
       id: string;
@@ -157,7 +158,7 @@ export interface V2ManualRenewalOptions {
 
 export interface V2ManualRenewalPayload {
   serviceOptionId: string;
-  settlementPlatformOptionId?: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo?: string | null;
   receivedAmount: string;
   balanceAmount: string;

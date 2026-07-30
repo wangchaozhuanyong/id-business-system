@@ -326,6 +326,7 @@
       v-model:settlement-platform-option-id="form.settlementPlatformOptionId"
       v-model:platform-order-no="form.platformOrderNo"
       v-model:received-amount="form.receivedAmount"
+      v-model:target-profit-rate="form.targetProfitRate"
       v-model:balance-amount="form.balanceAmount"
       v-model:opened-at="form.openedAt"
       v-model:due-at="form.dueAt"
@@ -339,10 +340,19 @@
       :submitting="submitting"
       :submit-disabled-reason="renewalSubmitDisabledReason"
       :platform-fee-preview="platformFeePreview"
+      :estimated-balance-cost-preview="estimatedBalanceCostPreview"
+      :estimated-profit-preview="estimatedProfitPreview"
+      :estimated-profit-rate-preview="estimatedProfitRatePreview"
+      :suggested-received="suggestedReceived"
+      :recommendation-applied="recommendationApplied"
+      :applied-suggested-cny="appliedSuggestedCny"
       :balance-after-preview="balanceAfterPreview"
       :confirmation-message="confirmationMessage"
       @opened-at-change="handleRenewalOpenedAtChange"
       @settlement-platform-change="handleSettlementPlatformChange"
+      @apply-suggested="applySuggestedReceivedAmount"
+      @undo-suggested="undoSuggestedReceivedAmount"
+      @manual-price-input="handleManualPriceInput"
       @open-confirmation="openConfirmation"
       @submit="submitRenewal"
     />
@@ -392,6 +402,12 @@ const {
   availableServices,
   selectedManualService,
   platformFeePreview,
+  estimatedBalanceCostPreview,
+  estimatedProfitPreview,
+  estimatedProfitRatePreview,
+  suggestedReceived,
+  recommendationApplied,
+  appliedSuggestedCny,
   balanceAfterPreview,
   renewalSubmitDisabledReason,
   renewalStatusStripItems,
@@ -415,6 +431,9 @@ const {
   saveWarningSettings,
   handleRenewalOpenedAtChange,
   handleSettlementPlatformChange,
+  applySuggestedReceivedAmount,
+  undoSuggestedReceivedAmount,
+  handleManualPriceInput,
   openConfirmation,
   submitRenewal,
   serviceLabel,

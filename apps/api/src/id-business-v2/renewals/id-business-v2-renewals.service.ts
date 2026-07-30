@@ -55,6 +55,7 @@ const RENEWAL_INCLUDE = {
       id: true,
       appleIdMasked: true,
       currentBalance: true,
+      balanceCostAmount: true,
       recordStatus: true,
       soldByOrderId: true,
       countryOption: {
@@ -379,6 +380,7 @@ export class IdBusinessV2RenewalsService {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
         currentBalance: toV2DecimalString(item.account.currentBalance),
+        balanceCostAmount: toV2DecimalString(item.account.balanceCostAmount),
         recordStatus: item.account.recordStatus,
         country: item.account.countryOption
       },

@@ -222,7 +222,8 @@ export class IdBusinessV2FinanceController {
     @Query('currency') currency?: string,
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('journalType') journalType?: string,
-    @Query('financeAccountId') financeAccountId?: string
+    @Query('financeAccountId') financeAccountId?: string,
+    @Query('settlementPlatformOptionId') settlementPlatformOptionId?: string
   ) {
     return this.reportsService.overview({
       dateFrom,
@@ -230,7 +231,8 @@ export class IdBusinessV2FinanceController {
       currency,
       supplierOptionId,
       journalType,
-      financeAccountId
+      financeAccountId,
+      settlementPlatformOptionId
     });
   }
 

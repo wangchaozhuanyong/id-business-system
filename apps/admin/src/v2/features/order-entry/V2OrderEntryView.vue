@@ -239,12 +239,11 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="结算平台">
+            <el-form-item label="结算平台" prop="settlementPlatformOptionId">
               <el-select
                 v-model="form.settlementPlatformOptionId"
-                clearable
                 filterable
-                placeholder="不使用结算平台"
+                placeholder="请选择收款方式"
                 @change="handleSettlementPlatformChange"
               >
                 <el-option
@@ -266,50 +265,23 @@
             </el-form-item>
             <V2OrderReceiptFields
               :form="form"
-              :finance-accounts="availableFinanceAccounts"
               :received-amount-preview="receivedAmountPreview"
               :format-decimal="formatDecimal"
               @currency-change="handleReceivedCurrencyChange"
+              @price-input="handleManualPriceInput"
             />
-            <el-form-item label="目标利润" prop="targetProfit">
-              <el-input
-                v-model="form.targetProfit"
-                inputmode="decimal"
-                maxlength="19"
-                placeholder="选填，例如 20"
-              />
-            </el-form-item>
-
-            <el-form-item label="建议收款金额">
-              <div class="v2-order-entry-recommendation">
-                <div>
-                  <strong>
-                    {{
-                      suggestedReceived.amount ? `¥${formatDecimal(suggestedReceived.amount)}` : '-'
-                    }}
-                  </strong>
-                  <small v-if="suggestedReceived.error">{{ suggestedReceived.error }}</small>
-                  <small v-else-if="suggestedReceived.estimatedProfit">
-                    采用后预计利润 ¥{{ formatDecimal(suggestedReceived.estimatedProfit) }}
-                  </small>
-                  <small v-else>人民币建议值；填写目标利润并选择可用 ID 后自动计算</small>
-                </div>
-                <AppButton
-                  variant="ghost"
-                  :disabled="!suggestedReceived.amount"
-                  @click="applySuggestedReceivedAmount"
-                >
-                  采用建议
-                </AppButton>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="预计平台手续费">
-              <div class="v2-order-entry-readonly">
-                <strong>¥{{ formatDecimal(platformFeePreview) }}</strong>
-                <el-tag type="info" effect="plain">服务端复核</el-tag>
-              </div>
-            </el-form-item>
+            <V2OrderPricingFields
+              :form="form"
+              :suggested-received="suggestedReceived"
+              :recommendation-applied="recommendationApplied"
+              :applied-suggested-cny="appliedSuggestedCny"
+              :platform-fee-preview="platformFeePreview"
+              :estimated-profit-preview="estimatedProfitPreview"
+              :estimated-profit-rate-preview="estimatedProfitRatePreview"
+              :format-decimal="formatDecimal"
+              @apply-suggested="applySuggestedReceivedAmount"
+              @undo-suggested="undoSuggestedReceivedAmount"
+            />
 
             <V2SectionHeading
               as="div"
@@ -428,6 +400,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2OrderEntryCandidates from './components/V2OrderEntryCandidates.vue';
+import V2OrderPricingFields from './components/V2OrderPricingFields.vue';
 import V2OrderReceiptFields from './components/V2OrderReceiptFields.vue';
 import V2OrderEntryResult from './components/V2OrderEntryResult.vue';
 import V2QuickCustomerDrawer from './components/V2QuickCustomerDrawer.vue';
@@ -456,7 +429,6 @@ const {
   availableCategories,
   availableServices,
   selectedService,
-  availableFinanceAccounts,
   candidateItems,
   selectedCandidate,
   missingOptionsConfiguration,
@@ -474,7 +446,10 @@ const {
   estimatedBalanceCostPreview,
   totalCostPreview,
   estimatedProfitPreview,
+  estimatedProfitRatePreview,
   suggestedReceived,
+  recommendationApplied,
+  appliedSuggestedCny,
   matchingEmptyMessage,
   emptyConfigurationMessage,
   rules,
@@ -490,6 +465,8 @@ const {
   searchManualCandidates,
   loadCandidates,
   applySuggestedReceivedAmount,
+  undoSuggestedReceivedAmount,
+  handleManualPriceInput,
   submitOrder,
   retryConsumption,
   handleCustomerCreated,

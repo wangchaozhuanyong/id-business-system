@@ -4,7 +4,7 @@ import type { IdBusinessV2OrderStatus, Prisma } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
+import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
 
 export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   keyword?: string;
@@ -33,6 +33,12 @@ const ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'failed'
 ]);
 const FULLY_EDITABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>(['draft', 'pending']);
+const PRICING_EDITABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
+  'draft',
+  'pending',
+  'processing',
+  'failed'
+]);
 const EDITABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'draft',
   'pending',
@@ -312,6 +318,10 @@ export class IdBusinessV2OrdersService {
 
   private toResponse(order: OrderRecord) {
     const activeLock = order.locks?.[0] ?? null;
+    const profitRate =
+      order.profitAmount === null || order.receivedAmount.lessThanOrEqualTo(0)
+        ? null
+        : roundV2Decimal(order.profitAmount.div(order.receivedAmount).mul(100));
     return {
       id: order.id,
       orderNo: order.orderNo,
@@ -350,6 +360,7 @@ export class IdBusinessV2OrdersService {
       refundCostAmount:
         order.refundCostAmount === null ? null : toV2DecimalString(order.refundCostAmount),
       profitAmount: order.profitAmount === null ? null : toV2DecimalString(order.profitAmount),
+      profitRate: profitRate === null ? null : toV2DecimalString(profitRate),
       status: order.status,
       statusChangedAt: order.statusChangedAt,
       openedAt: order.openedAt,
@@ -375,6 +386,7 @@ export class IdBusinessV2OrdersService {
         canComplete: order.status === 'processing',
         canEdit: EDITABLE_ORDER_STATUSES.has(order.status),
         canEditCore: FULLY_EDITABLE_ORDER_STATUSES.has(order.status),
+        canEditPricing: PRICING_EDITABLE_ORDER_STATUSES.has(order.status),
         canRefund: REFUNDABLE_ORDER_STATUSES.has(order.status),
         canCancel: CANCELLABLE_ORDER_STATUSES.has(order.status),
         canDelete: DELETABLE_ORDER_STATUSES.has(order.status)

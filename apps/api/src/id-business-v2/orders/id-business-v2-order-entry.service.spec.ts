@@ -157,6 +157,18 @@ describe('IdBusinessV2OrderEntryService', () => {
     reserveAccountForOrderInTransaction: vi.fn()
   };
   const financeFxService = {
+    listLatest: vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: null,
+          currency: 'CNY',
+          rateToCny: '1',
+          source: 'cny_fixed',
+          capturedAt: openedAt,
+          expiresAt: null
+        }
+      ]
+    }),
     resolve: vi.fn().mockResolvedValue({
       id: null,
       rateToCny: new Prisma.Decimal(1),
@@ -269,6 +281,15 @@ describe('IdBusinessV2OrderEntryService', () => {
         idempotencyKey: 'order_entry:order-request-1001'
       })
     });
+    const createdOrderData = tx.idBusinessV2Order.create.mock.calls[0]?.[0].data;
+    expect(createdOrderData.receivedFinanceAccountId).toBeNull();
+    expect(createdOrderData.receivedAt).toBeInstanceOf(Date);
+    expect(createdOrderData.createdAt).toEqual(createdOrderData.receivedAt);
+    expect(financeFxService.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        occurredAt: createdOrderData.createdAt
+      })
+    );
     expect(orderLockService.reserveAccountForOrderInTransaction).toHaveBeenCalledWith(
       tx,
       {
@@ -517,6 +538,15 @@ describe('IdBusinessV2OrderEntryService', () => {
       )
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
+      service.create(
+        makeDto({
+          settlementPlatformOptionId: null,
+          platformOrderNo: null
+        }),
+        operator
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
       service.create(makeDto({ lockScope: 'unsupported' }), operator)
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -581,7 +611,16 @@ describe('IdBusinessV2OrderEntryService', () => {
           percentageFee: '2.25'
         }
       ],
-      financeAccounts: []
+      latestFxRates: [
+        {
+          id: null,
+          currency: 'CNY',
+          rateToCny: '1',
+          source: 'cny_fixed',
+          capturedAt: openedAt,
+          expiresAt: null
+        }
+      ]
     });
     expect(prisma.idBusinessV2Customer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

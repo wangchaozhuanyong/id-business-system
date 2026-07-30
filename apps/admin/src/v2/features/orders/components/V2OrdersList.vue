@@ -39,6 +39,13 @@
             <strong class="v2-order-number v2-table-cell">{{ row.orderNo }}</strong>
           </template>
         </V2TableColumn>
+        <V2TableColumn kind="numeric" width-preset="standard" label="利润率">
+          <template #default="{ row }">
+            <strong :class="page.profitClass(row.profitRate)">
+              {{ row.profitRate === null ? '—' : `${page.formatDecimal(row.profitRate)}%` }}
+            </strong>
+          </template>
+        </V2TableColumn>
         <V2TableColumn
           kind="date"
           width-preset="dateTime"
@@ -266,6 +273,12 @@
               <dt>利润</dt>
               <dd :class="page.profitClass(item.profitAmount)">
                 {{ page.formatNullableDecimal(item.profitAmount) }}
+              </dd>
+            </div>
+            <div>
+              <dt>利润率</dt>
+              <dd :class="page.profitClass(item.profitRate)">
+                {{ item.profitRate === null ? '—' : `${page.formatDecimal(item.profitRate)}%` }}
               </dd>
             </div>
             <div>

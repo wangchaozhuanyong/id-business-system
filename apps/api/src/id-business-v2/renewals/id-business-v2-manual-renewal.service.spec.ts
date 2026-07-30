@@ -396,6 +396,15 @@ describe('IdBusinessV2ManualRenewalService', () => {
     await expect(service.create('not-a-uuid', makeDto())).rejects.toBeInstanceOf(
       BadRequestException
     );
+    await expect(
+      service.create(
+        activationId,
+        makeDto({
+          settlementPlatformOptionId: null,
+          platformOrderNo: null
+        })
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
 
     tx.idBusinessV2Activation.findFirst.mockResolvedValueOnce(null);
     await expect(service.create(activationId, makeDto())).rejects.toBeInstanceOf(NotFoundException);

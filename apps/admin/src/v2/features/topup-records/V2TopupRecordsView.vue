@@ -141,7 +141,6 @@
       :ledger-total="ledgerTotal"
       :can-adjust-balance="canAdjustBalance"
       :can-reassign-supplier="canReassignSupplier"
-      :can-reveal-gift-card="canRevealGiftCard"
       @retry="loadActiveTab"
       @reset="resetFilters"
       @gift-card-sort-change="handleGiftCardSortChange"
@@ -152,7 +151,6 @@
       @ledger-page-size-change="handleLedgerPageSizeChange"
       @edit-metadata="openMetadataDrawer"
       @reassign-supplier="openSupplierDrawer"
-      @reveal-code="openRevealDialog"
       @reverse="openReversalConfirmation"
     />
 
@@ -190,7 +188,7 @@
       >
         <section>
           <span>礼品卡</span>
-          <strong>{{ selectedGiftCard.codeMasked }}</strong>
+          <strong>{{ selectedGiftCard.code }}</strong>
           <small>{{ selectedGiftCard.account.appleIdMasked }}</small>
         </section>
         <el-alert
@@ -232,7 +230,7 @@
       >
         <section>
           <span>礼品卡</span>
-          <strong>{{ selectedGiftCard.codeMasked }}</strong>
+          <strong>{{ selectedGiftCard.code }}</strong>
           <small>原供应商：{{ selectedGiftCard.supplier?.name || '未设置' }}</small>
         </section>
         <el-alert
@@ -269,49 +267,6 @@
         </el-form-item>
       </el-form>
     </V2FormDrawer>
-
-    <V2ConfirmDialog
-      v-model="revealDialogVisible"
-      title="查看完整礼品卡号"
-      message="完整卡号属于敏感信息，本次查看会写入敏感访问日志和审计。"
-      :confirm-text="revealedGiftCardCode ? '已完成查看' : '确认解密查看'"
-      :confirm-loading="revealSubmitting"
-      :confirm-disabled="Boolean(revealedGiftCardCode)"
-      :confirm-disabled-reason="revealedGiftCardCode ? '' : revealDisabledReason"
-      @confirm="submitRevealGiftCard"
-    >
-      <section class="v2-gift-card-reveal">
-        <el-alert
-          title="请仅在业务核验确有需要时查看，关闭窗口后页面不会保留完整卡号"
-          type="warning"
-          show-icon
-          :closable="false"
-        />
-        <el-form
-          class="v2-horizontal-form"
-          label-position="left"
-          label-width="88px"
-          require-asterisk-position="right"
-        >
-          <el-form-item label="查看原因" required>
-            <el-input
-              v-model="revealReason"
-              type="textarea"
-              :rows="3"
-              minlength="2"
-              maxlength="200"
-              show-word-limit
-              :disabled="Boolean(revealedGiftCardCode)"
-              placeholder="必填，说明本次查看用途"
-            />
-          </el-form-item>
-        </el-form>
-        <section v-if="revealedGiftCardCode" class="v2-gift-card-reveal__result">
-          <span>完整礼品卡号</span>
-          <code>{{ revealedGiftCardCode }}</code>
-        </section>
-      </section>
-    </V2ConfirmDialog>
 
     <V2ConfirmDialog
       v-model="reversalDialogVisible"
@@ -392,7 +347,6 @@ const {
   canAdjustBalance,
   canViewSupplierFunds,
   canManageSupplierFunds,
-  canRevealGiftCard,
   canReassignSupplier,
   activeTab,
   countryOptions,
@@ -407,10 +361,6 @@ const {
   metadataSubmitting,
   supplierDrawerVisible,
   supplierSubmitting,
-  revealDialogVisible,
-  revealSubmitting,
-  revealedGiftCardCode,
-  revealReason,
   selectedGiftCard,
   reversalDialogVisible,
   reversalSubmitting,
@@ -424,7 +374,6 @@ const {
   supplierForm,
   metadataDisabledReason,
   supplierDisabledReason,
-  revealDisabledReason,
   activeLoading,
   activeError,
   activeResolved,
@@ -449,8 +398,6 @@ const {
   submitMetadata,
   openSupplierDrawer,
   submitSupplierReassignment,
-  openRevealDialog,
-  submitRevealGiftCard,
   openReversalConfirmation,
   submitReversal
 } = useTopupRecordsPage();

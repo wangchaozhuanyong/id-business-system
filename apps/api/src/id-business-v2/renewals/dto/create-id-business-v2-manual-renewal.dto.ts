@@ -1,6 +1,6 @@
 export interface CreateIdBusinessV2ManualRenewalDto {
   serviceOptionId: string;
-  settlementPlatformOptionId?: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo?: string | null;
   receivedAmount: string | number;
   balanceAmount: string | number;

@@ -1,45 +1,50 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calculateEstimatedBalanceCostAmount,
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
+  calculateProfitRate,
+  calculateSuggestedOriginalAmount,
   calculateSuggestedReceivedAmount
 } from './order-pricing';
 
 describe('order entry pricing', () => {
-  it('calculates a no-fee recommendation and rounds it up to cents', () => {
+  it('calculates a no-fee recommendation from target profit rate', () => {
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '10.001',
+        targetProfitRate: '10',
         appliedAccountCostAmount: '0',
         estimatedBalanceCostAmount: '120',
         fixedFee: '0',
         percentageFee: '0'
       })
     ).toEqual({
-      amount: '130.01',
+      amount: '133.3334',
       platformFee: '0',
-      estimatedProfit: '10.01',
+      estimatedProfit: '13.3334',
+      estimatedProfitRate: '10',
       error: ''
     });
   });
 
   it('supports fixed and percentage fees with exact decimal arithmetic', () => {
     const suggestion = calculateSuggestedReceivedAmount({
-      targetProfit: '20',
+      targetProfitRate: '20',
       appliedAccountCostAmount: '0',
       estimatedBalanceCostAmount: '100',
       fixedFee: '1',
       percentageFee: '2.5'
     });
 
-    expect(suggestion.amount).toBe('124.11');
-    expect(suggestion.platformFee).toBe('4.1028');
-    expect(suggestion.estimatedProfit).toBe('20.0072');
+    expect(suggestion.amount).toBe('130.3227');
+    expect(suggestion.platformFee).toBe('4.2581');
+    expect(suggestion.estimatedProfit).toBe('26.0646');
+    expect(suggestion.estimatedProfitRate).toBe('20');
   });
 
-  it('keeps the recommended profit at or above the requested target after fee rounding', () => {
+  it('keeps the recommended profit rate at or above the requested target after fee rounding', () => {
     const suggestion = calculateSuggestedReceivedAmount({
-      targetProfit: '1',
+      targetProfitRate: '0.0005',
       appliedAccountCostAmount: '0',
       estimatedBalanceCostAmount: '1',
       fixedFee: '0',
@@ -47,24 +52,24 @@ describe('order entry pricing', () => {
     });
 
     expect(suggestion.error).toBe('');
-    expect(Number(suggestion.estimatedProfit)).toBeGreaterThanOrEqual(1);
+    expect(Number(suggestion.estimatedProfitRate)).toBeGreaterThanOrEqual(0.0005);
   });
 
-  it('rejects a 100 percent fee and an amount beyond the Decimal limit', () => {
+  it('rejects an impossible combined rate and an amount beyond the Decimal limit', () => {
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '10',
+        targetProfitRate: '10',
         appliedAccountCostAmount: '0',
         estimatedBalanceCostAmount: '20',
         fixedFee: '0',
-        percentageFee: '100'
+        percentageFee: '90'
       }).error
-    ).toContain('100%');
+    ).toContain('合计必须小于 100%');
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '99999999999999.999',
+        targetProfitRate: '99.9999',
         appliedAccountCostAmount: '0',
-        estimatedBalanceCostAmount: '1',
+        estimatedBalanceCostAmount: '99999999999999.9999',
         fixedFee: '0',
         percentageFee: '0'
       }).error
@@ -79,16 +84,36 @@ describe('order entry pricing', () => {
   it('includes sold ID cost in recommendation and estimated profit', () => {
     expect(
       calculateSuggestedReceivedAmount({
-        targetProfit: '10',
+        targetProfitRate: '10',
         appliedAccountCostAmount: '35.1234',
         estimatedBalanceCostAmount: '20',
         fixedFee: '0',
         percentageFee: '0'
       })
     ).toMatchObject({
-      amount: '65.13',
-      estimatedProfit: '10.0066'
+      amount: '61.2483',
+      estimatedProfit: '6.1249',
+      estimatedProfitRate: '10.0001'
     });
-    expect(calculateEstimatedProfitAmount('65.13', '0', '35.1234', '20')).toBe('10.0066');
+    expect(calculateEstimatedProfitAmount('61.2483', '0', '35.1234', '20')).toBe('6.1249');
+  });
+
+  it('calculates positive, negative, and unavailable profit rates', () => {
+    expect(calculateProfitRate('20', '100')).toBe('20');
+    expect(calculateProfitRate('-23.24', '100.01')).toBe('-23.2377');
+    expect(calculateProfitRate('0', '0')).toBeNull();
+  });
+
+  it('converts CNY recommendations to CNY, MYR and USDT without mixing currencies', () => {
+    expect(calculateSuggestedOriginalAmount('100', 'CNY', '')).toBe('100');
+    expect(calculateSuggestedOriginalAmount('100', 'MYR', '1.6')).toBe('62.5');
+    expect(calculateSuggestedOriginalAmount('100', 'USDT', '7.2')).toBe('13.8889');
+    expect(calculateSuggestedOriginalAmount('100', 'USDT', '')).toBeNull();
+  });
+
+  it('estimates balance cost from the stored balance snapshot', () => {
+    expect(calculateEstimatedBalanceCostAmount('30', '90', '10')).toBe('30');
+    expect(calculateEstimatedBalanceCostAmount('3', '10', '3')).toBe('10');
+    expect(calculateEstimatedBalanceCostAmount('3', '10', '4')).toBeNull();
   });
 });

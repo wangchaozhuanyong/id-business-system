@@ -39,6 +39,7 @@ function makeRenewal() {
       id: accountId,
       appleIdMasked: 'us***@example.com',
       currentBalance: new Prisma.Decimal('18.5'),
+      balanceCostAmount: new Prisma.Decimal('42.25'),
       recordStatus: 'active',
       countryOption: {
         id: '66666666-6666-4666-8666-666666666666',
@@ -128,7 +129,8 @@ describe('IdBusinessV2RenewalsService', () => {
           },
           account: {
             appleIdMasked: 'us***@example.com',
-            currentBalance: '18.5'
+            currentBalance: '18.5',
+            balanceCostAmount: '42.25'
           },
           maskedWebsiteAccount: 'cu***@example.com',
           status: {

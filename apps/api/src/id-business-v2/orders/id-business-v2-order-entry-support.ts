@@ -20,7 +20,7 @@ export interface NormalizedCreateOrderInput {
   serviceOptionId: string;
   accountId: string;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
-  settlementPlatformOptionId: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo: string | null;
   websiteAccount: string | null;
   websiteAccountHash: string | null;
@@ -57,10 +57,7 @@ export function normalizeCreateOrderInput(
   const serviceOptionId = normalizeUuid(dto.serviceOptionId, '业务');
   const accountId = normalizeUuid(dto.accountId, '使用 ID');
   const accountDisposition = normalizeAccountDisposition(dto.accountDisposition);
-  const settlementPlatformOptionId = normalizeOptionalUuid(
-    dto.settlementPlatformOptionId,
-    '结算平台'
-  );
+  const settlementPlatformOptionId = normalizeUuid(dto.settlementPlatformOptionId, '结算平台');
   const platformOrderNo = normalizeOptionalString(dto.platformOrderNo, '平台订单号', 160);
   if (platformOrderNo && !settlementPlatformOptionId) {
     throw new BadRequestException('填写平台订单号时必须选择结算平台');
@@ -249,11 +246,6 @@ export function isUniqueConstraintError(error: unknown) {
     'code' in error &&
     (error as { code?: unknown }).code === 'P2002'
   );
-}
-
-function normalizeOptionalUuid(value: unknown, label: string) {
-  if (value === undefined || value === null || value === '') return null;
-  return normalizeUuid(value, label);
 }
 
 function normalizeAmount(value: unknown, label: string, allowZero: boolean) {

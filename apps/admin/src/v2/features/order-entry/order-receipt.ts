@@ -2,20 +2,21 @@ import type { FormRules } from 'element-plus';
 import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { isNonNegativeOrderAmount } from './order-pricing';
-import type { V2OrderEntryForm } from './useOrderEntryPage';
+import type { V2OrderEntryForm } from './order-entry-form';
 
 export function calculateReceivedAmountPreview(form: V2OrderEntryForm) {
   if (!isNonNegativeOrderAmount(form.receivedOriginalAmount)) return '';
   if (form.receivedCurrency === 'CNY') return form.receivedOriginalAmount;
+  const rate = form.receivedFxRateToCny || form.automaticFxRateToCny;
   if (
-    !isV2UnsignedDecimal(form.receivedFxRateToCny, {
+    !isV2UnsignedDecimal(rate, {
       allowZero: false,
       decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
     })
   ) {
     return '';
   }
-  return multiplyDecimalStrings(form.receivedOriginalAmount, form.receivedFxRateToCny);
+  return multiplyDecimalStrings(form.receivedOriginalAmount, rate);
 }
 
 export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
@@ -34,10 +35,6 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
       }
     ],
     receivedCurrency: [{ required: true, message: '请选择收款币种', trigger: 'change' }],
-    receivedFinanceAccountId: [
-      { required: true, message: '请选择实际收款账户', trigger: 'change' }
-    ],
-    receivedAt: [{ required: true, message: '请选择收款时间', trigger: 'change' }],
     receivedFxRateToCny: [
       {
         validator: (_rule, value, callback) => {
@@ -71,9 +68,8 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
 }
 
 export function resetReceiptCurrencyEvidence(form: V2OrderEntryForm) {
-  form.receivedFinanceAccountId = '';
-  if (form.receivedCurrency === 'CNY') {
-    form.receivedFxRateToCny = '';
-    form.receivedManualRateReason = '';
-  }
+  form.receivedFxRateToCny = '';
+  form.receivedFxSnapshotId = '';
+  form.automaticFxRateToCny = '';
+  form.receivedManualRateReason = '';
 }

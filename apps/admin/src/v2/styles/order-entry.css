@@ -269,6 +269,13 @@
   line-height: 1.35;
 }
 
+.v2-order-entry-recommendation__actions {
+  display: flex !important;
+  flex: 0 0 auto;
+  grid-auto-flow: column;
+  gap: 6px !important;
+}
+
 .v2-order-entry-actions {
   position: sticky;
   z-index: 5;

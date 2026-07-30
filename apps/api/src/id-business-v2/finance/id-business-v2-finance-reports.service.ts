@@ -8,6 +8,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
+import { getIdBusinessV2SettlementPlatformReport } from './id-business-v2-finance-settlement-platform-report';
 
 interface FinanceReportQuery {
   dateFrom?: string;
@@ -16,6 +17,7 @@ interface FinanceReportQuery {
   supplierOptionId?: string;
   journalType?: string;
   financeAccountId?: string;
+  settlementPlatformOptionId?: string;
 }
 
 const EXPENSE_CODES = [
@@ -28,20 +30,34 @@ const EXPENSE_CODES = [
   'id_purchase_loss',
   'operating_expense'
 ] as const;
-
 @Injectable()
 export class IdBusinessV2FinanceReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async overview(query: FinanceReportQuery) {
-    const [settings, profitLoss, currencyBreakdown, assets, reconciliation] = await Promise.all([
+    const [
+      settings,
+      profitLoss,
+      currencyBreakdown,
+      assets,
+      reconciliation,
+      settlementPlatformReport
+    ] = await Promise.all([
       this.getSettings(),
       this.profitLoss(query),
       this.currencyBreakdown(query),
       this.assets(),
-      this.reconciliation(query)
+      this.reconciliation(query),
+      this.settlementPlatformReport(query)
     ]);
-    return { settings, profitLoss, currencyBreakdown, assets, reconciliation };
+    return {
+      settings,
+      profitLoss,
+      currencyBreakdown,
+      assets,
+      reconciliation,
+      settlementPlatformReport
+    };
   }
 
   async profitLoss(query: FinanceReportQuery) {
@@ -129,6 +145,9 @@ export class IdBusinessV2FinanceReportsService {
     });
   }
 
+  async settlementPlatformReport(query: FinanceReportQuery) {
+    return getIdBusinessV2SettlementPlatformReport(this.prisma, query);
+  }
   async assets() {
     const [financeAccounts, supplierWallets, accountAssets, pendingRefunds, latestRates] =
       await Promise.all([
@@ -212,13 +231,7 @@ export class IdBusinessV2FinanceReportsService {
         amountCny: null
       });
     }
-    const [
-      completedOrders,
-      missingOrderAccounts,
-      missingPurchaseEvidence,
-      pendingRefunds,
-      wallets
-    ] = await Promise.all([
+    const [completedOrders, missingPurchaseEvidence, pendingRefunds, wallets] = await Promise.all([
       this.prisma.idBusinessV2Order.findMany({
         where: {
           status: 'completed',
@@ -228,16 +241,6 @@ export class IdBusinessV2FinanceReportsService {
         },
         select: { id: true, orderNo: true, profitAmount: true },
         orderBy: [{ statusChangedAt: 'desc' }, { id: 'desc' }],
-        take: 50
-      }),
-      this.prisma.idBusinessV2Order.findMany({
-        where: {
-          status: 'completed',
-          receivedAmount: { gt: 0 },
-          receivedFinanceAccountId: null,
-          openedAt: this.parseOccurredAt(query.dateFrom, query.dateTo)
-        },
-        select: { id: true, orderNo: true, receivedAmount: true },
         take: 50
       }),
       this.prisma.idBusinessV2Account.findMany({
@@ -317,16 +320,6 @@ export class IdBusinessV2FinanceReportsService {
           amountCny: toV2DecimalString(difference)
         });
       }
-    }
-    for (const order of missingOrderAccounts) {
-      issues.push({
-        code: 'missing_finance_account',
-        severity: 'warning',
-        sourceType: 'order',
-        sourceId: order.id,
-        message: `订单 ${order.orderNo} 未关联收款账户`,
-        amountCny: toV2DecimalString(order.receivedAmount)
-      });
     }
     for (const account of missingPurchaseEvidence) {
       issues.push({

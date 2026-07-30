@@ -6,18 +6,26 @@ import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
-import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
-import { V2_DECIMAL_PLACES, divideDecimalStrings, formatV2Decimal } from '@/v2/utils/decimal';
-import type { V2FinanceCurrency } from '@apple-business/shared';
+import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
 import { idBusinessV2OrdersApi } from './api';
+import {
+  applyLatestOrderEntryFxRate,
+  createConsumptionIdempotencyKey,
+  createInitialOrderEntryForm,
+  customerLabel,
+  formatOrderEntryDecimal
+} from './order-entry-form';
 import {
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
+  calculateProfitRate,
+  calculateSuggestedOriginalAmount,
   calculateSuggestedReceivedAmount,
   calculateTotalCostAmount,
-  isNonNegativeOrderAmount,
-  isPositiveOrderAmount
+  isPositiveOrderAmount,
+  validateTargetProfitRate
 } from './order-pricing';
 import {
   calculateReceivedAmountPreview,
@@ -32,51 +40,6 @@ import type {
   V2OrderEntryOptions
 } from './contracts';
 
-function createIdempotencyKey() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `order-${crypto.randomUUID()}`;
-  }
-  return `order-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-}
-
-function createConsumptionIdempotencyKey() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `consume-${crypto.randomUUID()}`;
-  }
-  return `consume-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-}
-
-function createInitialForm() {
-  const now = new Date();
-  now.setSeconds(0, 0);
-  return {
-    countryId: '',
-    categoryId: '',
-    serviceOptionId: '',
-    customerId: '',
-    accountId: '',
-    accountDisposition: 'retained' as 'retained' | 'sold',
-    settlementPlatformOptionId: '',
-    platformOrderNo: '',
-    websiteAccount: '',
-    receivedAmount: '',
-    receivedOriginalAmount: '',
-    receivedCurrency: 'CNY' as V2FinanceCurrency,
-    receivedFxRateToCny: '',
-    receivedFinanceAccountId: '',
-    receivedManualRateReason: '',
-    receivedAt: now,
-    targetProfit: '',
-    balanceAmount: '',
-    openedAt: now,
-    dueAt: calculateOneMonthInclusiveDueAt(now),
-    remark: '',
-    idempotencyKey: createIdempotencyKey()
-  };
-}
-
-export type V2OrderEntryForm = ReturnType<typeof createInitialForm>;
-
 export function useOrderEntryPage() {
   const router = useRouter();
   const authStore = useAuthStore();
@@ -89,13 +52,16 @@ export function useOrderEntryPage() {
   const consumptionResult = ref<ConsumeV2OrderResult | null>(null);
   const consumptionError = ref('');
   const consumptionIdempotencyKey = ref('');
+  const recommendationApplied = ref(false);
+  const previousManualPrice = ref('');
+  const appliedSuggestedCny = ref('');
   const entryOptions = ref<V2OrderEntryOptions>({
     customers: [],
     countries: [],
     settlementPlatforms: [],
-    financeAccounts: []
+    latestFxRates: []
   });
-  const form = reactive(createInitialForm());
+  const form = reactive(createInitialOrderEntryForm());
   let customerSearchTimer: ReturnType<typeof setTimeout> | undefined;
   const {
     idSelectionMode,
@@ -131,11 +97,6 @@ export function useOrderEntryPage() {
         (platform) => platform.id === form.settlementPlatformOptionId
       ) ?? null
   );
-  const availableFinanceAccounts = computed(() =>
-    entryOptions.value.financeAccounts.filter(
-      (account) => account.currency === form.receivedCurrency
-    )
-  );
   const missingOptionsConfiguration = computed(() => !entryOptions.value.countries.length);
   const missingCustomersConfiguration = computed(() => !entryOptions.value.customers.length);
   const canManageOptions = computed(() =>
@@ -150,9 +111,6 @@ export function useOrderEntryPage() {
     if (hasPendingConsumption.value) return '已有订单等待完成余额扣减，请先重试扣减';
     if (missingOptionsConfiguration.value) return '请先配置可用的国家与业务资料';
     if (missingCustomersConfiguration.value) return '请先新增可用客户';
-    if (!availableFinanceAccounts.value.length) {
-      return `请先配置可用的 ${form.receivedCurrency} 资金账户`;
-    }
     return '';
   });
   const receivedAmountPreview = computed(() => calculateReceivedAmountPreview(form));
@@ -191,18 +149,35 @@ export function useOrderEntryPage() {
       ) ?? '0'
     );
   });
+  const estimatedProfitRatePreview = computed(() =>
+    calculateProfitRate(estimatedProfitPreview.value, form.receivedAmount)
+  );
   const suggestedReceived = computed(() => {
-    if (!form.targetProfit.trim()) {
+    if (!form.targetProfitRate.trim()) {
       return {
         amount: null,
         platformFee: null,
         estimatedProfit: null,
+        estimatedProfitRate: null,
         error: ''
       };
     }
     const platform = selectedSettlementPlatform.value;
+    if (
+      form.receivedCurrency !== 'CNY' &&
+      !form.receivedFxRateToCny &&
+      !form.automaticFxRateToCny
+    ) {
+      return {
+        amount: null,
+        platformFee: null,
+        estimatedProfit: null,
+        estimatedProfitRate: null,
+        error: '缺少可用汇率，无法把人民币推荐价换算为原币'
+      };
+    }
     return calculateSuggestedReceivedAmount({
-      targetProfit: form.targetProfit,
+      targetProfitRate: form.targetProfitRate,
       appliedAccountCostAmount: appliedAccountCostPreview.value,
       estimatedBalanceCostAmount: selectedCandidate.value?.estimatedBalanceCostAmount ?? null,
       fixedFee: platform?.fixedFee ?? '0',
@@ -223,15 +198,20 @@ export function useOrderEntryPage() {
     customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
     accountId: [{ required: true, message: '请选择可用 ID', trigger: 'change' }],
     ...createOrderReceiptRules(form),
-    targetProfit: [
+    settlementPlatformOptionId: [{ required: true, message: '请选择结算平台', trigger: 'change' }],
+    targetProfitRate: [
       {
         validator: (_rule, value, callback) => {
           const normalized = String(value ?? '').trim();
-          callback(
-            !normalized || isNonNegativeOrderAmount(normalized)
-              ? undefined
-              : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
+          if (!normalized) {
+            callback();
+            return;
+          }
+          const error = validateTargetProfitRate(
+            normalized,
+            selectedSettlementPlatform.value?.percentageFee ?? '0'
           );
+          callback(error ? new Error(error) : undefined);
         },
         trigger: 'blur'
       }
@@ -331,6 +311,7 @@ export function useOrderEntryPage() {
             ? [selectedCustomer, ...result.customers]
             : result.customers
       };
+      syncAutomaticFxRate();
     },
     { immediate: true }
   );
@@ -385,22 +366,45 @@ export function useOrderEntryPage() {
 
   function handleReceivedCurrencyChange() {
     resetReceiptCurrencyEvidence(form);
+    syncAutomaticFxRate();
+  }
+
+  function syncAutomaticFxRate() {
+    applyLatestOrderEntryFxRate(form, entryOptions.value.latestFxRates);
   }
 
   function applySuggestedReceivedAmount() {
     if (!suggestedReceived.value.amount) return;
-    if (form.receivedCurrency === 'CNY') {
-      form.receivedOriginalAmount = suggestedReceived.value.amount;
-    } else if (form.receivedFxRateToCny) {
-      form.receivedOriginalAmount = divideDecimalStrings(
-        suggestedReceived.value.amount,
-        form.receivedFxRateToCny
-      );
-    } else {
+    if (!recommendationApplied.value) {
+      previousManualPrice.value = form.receivedOriginalAmount;
+    }
+    const originalAmount = calculateSuggestedOriginalAmount(
+      suggestedReceived.value.amount,
+      form.receivedCurrency,
+      form.receivedFxRateToCny || form.automaticFxRateToCny
+    );
+    if (!originalAmount) {
       ElMessage.warning('自动汇率尚未锁定，无法把人民币建议金额换算为原币');
       return;
     }
+    form.receivedOriginalAmount = originalAmount;
+    recommendationApplied.value = true;
+    appliedSuggestedCny.value = suggestedReceived.value.amount;
     void nextTick(() => formRef.value?.clearValidate('receivedOriginalAmount'));
+  }
+
+  function undoSuggestedReceivedAmount() {
+    if (!recommendationApplied.value) return;
+    form.receivedOriginalAmount = previousManualPrice.value;
+    recommendationApplied.value = false;
+    appliedSuggestedCny.value = '';
+    void nextTick(() => formRef.value?.clearValidate('receivedOriginalAmount'));
+  }
+
+  function handleManualPriceInput() {
+    if (!recommendationApplied.value) return;
+    recommendationApplied.value = false;
+    appliedSuggestedCny.value = '';
   }
 
   async function submitOrder() {
@@ -416,16 +420,18 @@ export function useOrderEntryPage() {
         customerId: form.customerId,
         serviceOptionId: form.serviceOptionId,
         accountId: form.accountId,
-        settlementPlatformOptionId: form.settlementPlatformOptionId || null,
+        settlementPlatformOptionId: form.settlementPlatformOptionId,
         platformOrderNo: form.platformOrderNo.trim() || null,
         websiteAccount: form.websiteAccount.trim() || null,
         receivedAmount: form.receivedAmount.trim() || undefined,
         receivedOriginalAmount: form.receivedOriginalAmount.trim(),
         receivedCurrency: form.receivedCurrency,
         receivedFxRateToCny: form.receivedFxRateToCny.trim() || undefined,
-        receivedFinanceAccountId: form.receivedFinanceAccountId,
+        receivedFxSnapshotId:
+          !form.receivedFxRateToCny && form.receivedFxSnapshotId
+            ? form.receivedFxSnapshotId
+            : undefined,
         receivedManualRateReason: form.receivedManualRateReason.trim() || undefined,
-        receivedAt: form.receivedAt.toISOString(),
         accountDisposition: form.accountDisposition,
         balanceAmount: form.balanceAmount.trim(),
         openedAt: form.openedAt.toISOString(),
@@ -484,7 +490,10 @@ export function useOrderEntryPage() {
   }
 
   function resetForm(options: { preserveResult?: boolean } = {}) {
-    Object.assign(form, createInitialForm());
+    Object.assign(form, createInitialOrderEntryForm());
+    recommendationApplied.value = false;
+    previousManualPrice.value = '';
+    appliedSuggestedCny.value = '';
     resetCandidateSelection();
     formRef.value?.clearValidate();
     if (!options.preserveResult) {
@@ -494,11 +503,6 @@ export function useOrderEntryPage() {
       consumptionIdempotencyKey.value = '';
     }
     void nextTick(() => formRef.value?.clearValidate());
-  }
-
-  function customerLabel(customer: V2OrderEntryCustomer) {
-    const detail = customer.wechat || customer.maskedPhone;
-    return detail ? `${customer.name} / ${detail}` : customer.name;
   }
 
   function handleCustomerCreated(customer: V2OrderEntryCustomer) {
@@ -511,10 +515,6 @@ export function useOrderEntryPage() {
     };
     form.customerId = customer.id;
     void nextTick(() => formRef.value?.clearValidate('customerId'));
-  }
-
-  function formatDecimal(value: string) {
-    return formatV2Decimal(value);
   }
 
   function stopDeferredTasks() {
@@ -550,7 +550,6 @@ export function useOrderEntryPage() {
     availableServices,
     selectedService,
     selectedSettlementPlatform,
-    availableFinanceAccounts,
     candidateItems,
     selectedCandidate,
     missingOptionsConfiguration,
@@ -568,7 +567,10 @@ export function useOrderEntryPage() {
     estimatedBalanceCostPreview,
     totalCostPreview,
     estimatedProfitPreview,
+    estimatedProfitRatePreview,
     suggestedReceived,
+    recommendationApplied,
+    appliedSuggestedCny,
     matchingEmptyMessage,
     emptyConfigurationMessage,
     rules,
@@ -584,11 +586,13 @@ export function useOrderEntryPage() {
     searchManualCandidates,
     loadCandidates,
     applySuggestedReceivedAmount,
+    undoSuggestedReceivedAmount,
+    handleManualPriceInput,
     submitOrder,
     retryConsumption,
     resetForm,
     handleCustomerCreated,
     customerLabel,
-    formatDecimal
+    formatDecimal: formatOrderEntryDecimal
   };
 }

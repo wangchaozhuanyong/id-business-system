@@ -8,10 +8,8 @@ import { roundV2Decimal } from '../decimal-policy';
 import {
   IdBusinessV2FinanceFxService,
   normalizeFinanceCurrency,
-  normalizeFinanceDate,
   normalizeFinanceMoney,
-  normalizeFinanceRate,
-  normalizeOptionalFinanceUuid
+  normalizeFinanceRate
 } from '../finance/public-api';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
@@ -34,7 +32,7 @@ export interface CreateWaitingExternalOrderInput {
   customerId: string;
   serviceOptionId: string;
   accountId: string;
-  settlementPlatformOptionId: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo: string | null;
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
@@ -52,7 +50,7 @@ export interface CreateManualRenewalOrderInput {
   customerId: string;
   serviceOptionId: string;
   accountId: string;
-  settlementPlatformOptionId: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo: string | null;
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
@@ -76,14 +74,22 @@ export class IdBusinessV2OrderEntryService {
   ) {}
 
   async getEntryOptions(customerKeywordValue?: string) {
-    return getIdBusinessV2OrderEntryOptions(
-      this.prisma,
-      this.fieldEncryptionService,
-      customerKeywordValue
-    );
+    const [options, latestFxRates] = await Promise.all([
+      getIdBusinessV2OrderEntryOptions(
+        this.prisma,
+        this.fieldEncryptionService,
+        customerKeywordValue
+      ),
+      this.financeFxService.listLatest()
+    ]);
+    return {
+      ...options,
+      latestFxRates: latestFxRates.items
+    };
   }
 
   async create(dto: CreateIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
+    const orderTimestamp = new Date();
     const receivedCurrency = normalizeFinanceCurrency(dto.receivedCurrency ?? 'CNY', '收款币种');
     if (dto.receivedOriginalAmount === undefined && dto.receivedAmount === undefined) {
       throw new BadRequestException('原币收款金额不能为空');
@@ -99,16 +105,13 @@ export class IdBusinessV2OrderEntryService {
       },
       (value) => this.fieldEncryptionService.hash(value)
     );
-    const receivedAt = dto.receivedAt
-      ? normalizeFinanceDate(dto.receivedAt, '收款时间')
-      : inputBeforeRate.openedAt;
     const manualRate =
       dto.receivedFxRateToCny === undefined
         ? null
         : normalizeFinanceRate(dto.receivedFxRateToCny, receivedCurrency);
     const receiptRate = await this.financeFxService.resolve({
       currency: receivedCurrency,
-      occurredAt: receivedAt,
+      occurredAt: orderTimestamp,
       fxRateSnapshotId: dto.receivedFxSnapshotId,
       manualRate,
       manualReason: dto.receivedManualRateReason,
@@ -131,10 +134,6 @@ export class IdBusinessV2OrderEntryService {
             (value) => this.fieldEncryptionService.hash(value)
           )
         : inputBeforeRate;
-    const receivedFinanceAccountId = normalizeOptionalFinanceUuid(
-      dto.receivedFinanceAccountId,
-      '收款账户'
-    );
     let transactionResult: {
       orderId: string;
       lock: OrderEntryLockSummary | null;
@@ -161,9 +160,7 @@ export class IdBusinessV2OrderEntryService {
           if (
             existing.receivedCurrency !== receivedCurrency ||
             !existing.receivedOriginalAmount.equals(receivedOriginalAmount) ||
-            !existing.receivedFxRateToCny.equals(receiptRate.rateToCny) ||
-            existing.receivedFinanceAccountId !== receivedFinanceAccountId ||
-            existing.receivedAt?.getTime() !== receivedAt.getTime()
+            (manualRate !== null && !existing.receivedFxRateToCny.equals(manualRate))
           ) {
             throw new ConflictException('幂等键已用于其他收款证据');
           }
@@ -180,18 +177,6 @@ export class IdBusinessV2OrderEntryService {
           tx,
           input.settlementPlatformOptionId
         );
-        if (receivedFinanceAccountId) {
-          const financeAccount = await tx.idBusinessV2FinanceAccount.findUnique({
-            where: { id: receivedFinanceAccountId }
-          });
-          if (
-            !financeAccount ||
-            financeAccount.status !== 'active' ||
-            financeAccount.currency !== receivedCurrency
-          ) {
-            throw new BadRequestException('收款账户不存在、已停用或币种不一致');
-          }
-        }
         const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
         const order = await tx.idBusinessV2Order.create({
           data: {
@@ -209,8 +194,8 @@ export class IdBusinessV2OrderEntryService {
             receivedCurrency,
             receivedFxRateToCny: receiptRate.rateToCny,
             receivedFxSnapshotId: receiptRate.id,
-            receivedFinanceAccountId,
-            receivedAt,
+            receivedFinanceAccountId: null,
+            receivedAt: orderTimestamp,
             platformFeeAmount,
             accountCostAmount: 0,
             accountDisposition: input.accountDisposition,
@@ -224,7 +209,8 @@ export class IdBusinessV2OrderEntryService {
             idempotencyKey: input.idempotencyKey,
             remark: input.remark,
             createdByUserId: operator?.id,
-            updatedByUserId: operator?.id
+            updatedByUserId: operator?.id,
+            createdAt: orderTimestamp
           }
         });
         const reservation = await this.orderLockService.reserveAccountForOrderInTransaction(
@@ -314,6 +300,7 @@ export class IdBusinessV2OrderEntryService {
       input.settlementPlatformOptionId
     );
     const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
+    const orderTimestamp = new Date();
     const order = await tx.idBusinessV2Order.create({
       data: {
         orderNo: generateOrderNo(),
@@ -329,7 +316,8 @@ export class IdBusinessV2OrderEntryService {
         receivedOriginalAmount: input.receivedAmount,
         receivedCurrency: 'CNY',
         receivedFxRateToCny: 1,
-        receivedAt: input.openedAt,
+        receivedFinanceAccountId: null,
+        receivedAt: orderTimestamp,
         platformFeeAmount,
         accountCostAmount: 0,
         accountDisposition: 'retained',
@@ -338,12 +326,14 @@ export class IdBusinessV2OrderEntryService {
         refundCostAmount: null,
         profitAmount: null,
         status: 'waiting_external',
+        statusChangedAt: orderTimestamp,
         openedAt: input.openedAt,
         dueAt: input.dueAt,
         idempotencyKey: input.idempotencyKey,
         remark: input.remark,
         createdByUserId: operator?.id,
-        updatedByUserId: operator?.id
+        updatedByUserId: operator?.id,
+        createdAt: orderTimestamp
       }
     });
 
@@ -395,7 +385,7 @@ export class IdBusinessV2OrderEntryService {
       input.settlementPlatformOptionId
     );
     const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
-    const statusChangedAt = new Date();
+    const orderTimestamp = new Date();
     const order = await tx.idBusinessV2Order.create({
       data: {
         orderNo: generateOrderNo(),
@@ -411,7 +401,8 @@ export class IdBusinessV2OrderEntryService {
         receivedOriginalAmount: input.receivedAmount,
         receivedCurrency: 'CNY',
         receivedFxRateToCny: 1,
-        receivedAt: input.openedAt,
+        receivedFinanceAccountId: null,
+        receivedAt: orderTimestamp,
         platformFeeAmount,
         accountCostAmount: 0,
         accountDisposition: 'retained',
@@ -420,13 +411,14 @@ export class IdBusinessV2OrderEntryService {
         refundCostAmount: null,
         profitAmount: null,
         status: 'processing',
-        statusChangedAt,
+        statusChangedAt: orderTimestamp,
         openedAt: input.openedAt,
         dueAt: input.dueAt,
         idempotencyKey: input.idempotencyKey,
         remark: input.remark,
         createdByUserId: operator?.id,
-        updatedByUserId: operator?.id
+        updatedByUserId: operator?.id,
+        createdAt: orderTimestamp
       }
     });
 

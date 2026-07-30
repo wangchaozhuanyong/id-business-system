@@ -1,5 +1,6 @@
 import type { FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { validateTargetProfitRate } from '@/v2/features/order-entry/order-pricing';
 import type { V2OrderEntryCustomer } from '../contracts';
 
 export function createEmptyOrderEditForm() {
@@ -12,7 +13,8 @@ export function createEmptyOrderEditForm() {
     platformOrderNo: '',
     websiteAccount: '',
     clearWebsiteAccount: false,
-    receivedAmount: '',
+    receivedOriginalAmount: '',
+    targetProfitRate: '',
     balanceAmount: '',
     openedAt: null as Date | null,
     dueAt: null as Date | null,
@@ -21,15 +23,30 @@ export function createEmptyOrderEditForm() {
   };
 }
 
+export type OrderEditForm = ReturnType<typeof createEmptyOrderEditForm>;
+
 export function createOrderEditRules(
   form: ReturnType<typeof createEmptyOrderEditForm>,
-  canEditCore: () => boolean
+  canEditCore: () => boolean,
+  canEditPricing: () => boolean,
+  percentageFee: () => string
 ): FormRules {
   return {
     customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
     serviceOptionId: [{ required: true, message: '请选择业务', trigger: 'change' }],
     accountId: [{ required: true, message: '请选择使用 ID', trigger: 'change' }],
-    receivedAmount: [
+    settlementPlatformOptionId: [
+      {
+        validator: (_rule, value, callback) =>
+          callback(
+            canEditPricing() && !String(value ?? '').trim()
+              ? new Error('请选择结算平台')
+              : undefined
+          ),
+        trigger: 'change'
+      }
+    ],
+    receivedOriginalAmount: [
       {
         required: true,
         validator: (_rule, value, callback) =>
@@ -38,6 +55,20 @@ export function createOrderEditRules(
               ? undefined
               : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
           ),
+        trigger: 'blur'
+      }
+    ],
+    targetProfitRate: [
+      {
+        validator: (_rule, value, callback) => {
+          const normalized = String(value ?? '').trim();
+          if (!normalized) {
+            callback();
+            return;
+          }
+          const error = validateTargetProfitRate(normalized, percentageFee());
+          callback(error ? new Error(error) : undefined);
+        },
         trigger: 'blur'
       }
     ],

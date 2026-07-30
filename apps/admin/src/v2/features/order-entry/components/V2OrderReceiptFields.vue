@@ -10,29 +10,11 @@
   <el-form-item label="原币实收" prop="receivedOriginalAmount">
     <el-input
       v-model="form.receivedOriginalAmount"
+      clearable
       inputmode="decimal"
       maxlength="19"
       :placeholder="`例如 100 ${form.receivedCurrency}`"
-    />
-  </el-form-item>
-
-  <el-form-item label="收款账户" prop="receivedFinanceAccountId">
-    <el-select v-model="form.receivedFinanceAccountId" filterable placeholder="选择同币种资金账户">
-      <el-option
-        v-for="account in financeAccounts"
-        :key="account.id"
-        :label="`${account.name} · ${account.currency} · 余额 ${account.currentBalance}`"
-        :value="account.id"
-      />
-    </el-select>
-  </el-form-item>
-
-  <el-form-item label="收款时间" prop="receivedAt">
-    <el-date-picker
-      v-model="form.receivedAt"
-      type="datetime"
-      placeholder="选择实际收款时间"
-      format="YYYY-MM-DD HH:mm"
+      @input="emit('priceInput')"
     />
   </el-form-item>
 
@@ -43,6 +25,24 @@
         inputmode="decimal"
         placeholder="留空则保存时自动采集"
       />
+    </el-form-item>
+    <el-form-item v-if="!form.receivedFxRateToCny" label="可用汇率">
+      <div class="v2-order-entry-readonly">
+        <strong>
+          {{
+            form.automaticFxRateToCny
+              ? `1 ${form.receivedCurrency} = ¥${form.automaticFxRateToCny}`
+              : '暂无可用汇率'
+          }}
+        </strong>
+        <span>
+          {{
+            form.automaticFxRateToCny
+              ? '采用推荐价时锁定该汇率快照'
+              : '可填写手工汇率；缺少汇率时不能采用推荐价'
+          }}
+        </span>
+      </div>
     </el-form-item>
     <el-form-item v-if="form.receivedFxRateToCny" label="汇率原因" prop="receivedManualRateReason">
       <el-input
@@ -68,17 +68,16 @@
 </template>
 
 <script setup lang="ts">
-import type { V2OrderEntryOptions } from '../contracts';
-import type { V2OrderEntryForm } from '../useOrderEntryPage';
+import type { V2OrderEntryForm } from '../order-entry-form';
 
 defineProps<{
   form: V2OrderEntryForm;
-  financeAccounts: V2OrderEntryOptions['financeAccounts'];
   receivedAmountPreview: string;
   formatDecimal: (value: string) => string;
 }>();
 
 const emit = defineEmits<{
   currencyChange: [];
+  priceInput: [];
 }>();
 </script>

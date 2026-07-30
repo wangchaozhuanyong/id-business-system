@@ -239,6 +239,7 @@ export type V2GiftCardRecordSortBy =
 
 export interface V2GiftCardRecord {
   id: string;
+  code: string;
   codeMasked: string;
   codeTail: string;
   faceValue: string;
@@ -369,6 +370,7 @@ export interface V2BalanceLedgerRecord {
   };
   giftCard: {
     id: string;
+    code: string;
     codeMasked: string;
     codeTail: string;
     faceValue: string;

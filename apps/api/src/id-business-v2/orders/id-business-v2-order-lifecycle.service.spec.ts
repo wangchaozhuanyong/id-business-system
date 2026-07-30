@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { IdBusinessV2Order } from '@prisma/client';
 import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
@@ -414,6 +414,82 @@ describe('IdBusinessV2OrderLifecycleService', () => {
         operator
       )
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('locks price and settlement-platform evidence after completion', async () => {
+    storedOrder = makeOrder({
+      status: 'completed'
+    });
+
+    await expect(
+      service.update(
+        orderId,
+        {
+          receivedAmount: '120',
+          settlementPlatformOptionId: platformId,
+          expectedUpdatedAt: updatedAt.toISOString()
+        },
+        operator
+      )
+    ).rejects.toThrow('已完成或已退款订单的价格和结算平台不可直接修改');
+
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('reprices a non-CNY processing order with its locked exchange rate', async () => {
+    storedOrder = makeOrder({
+      receivedAmount: decimal('80'),
+      receivedOriginalAmount: decimal('50'),
+      receivedCurrency: 'MYR',
+      receivedFxRateToCny: decimal('1.6'),
+      platformFeeAmount: decimal('2.6'),
+      profitAmount: decimal('17.4')
+    });
+
+    await service.update(
+      orderId,
+      {
+        receivedOriginalAmount: '60',
+        expectedUpdatedAt: updatedAt.toISOString()
+      },
+      operator
+    );
+
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          receivedOriginalAmount: decimal('60'),
+          receivedAmount: decimal('96'),
+          platformFeeAmount: decimal('2.92'),
+          profitAmount: decimal('33.08')
+        })
+      })
+    );
+  });
+
+  it('requires a settlement platform before repricing a legacy order', async () => {
+    storedOrder = makeOrder({
+      status: 'pending',
+      settlementPlatformOptionId: null,
+      platformOrderNo: null,
+      balanceCostAmount: decimal('0'),
+      profitAmount: null
+    });
+    consumption = null;
+
+    await expect(
+      service.update(
+        orderId,
+        {
+          receivedAmount: '120',
+          expectedUpdatedAt: updatedAt.toISOString()
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
   });
 
   it('updates a consumed order lock expiry without trying to consume or reserve balance again', async () => {

@@ -33,7 +33,7 @@ export function getGiftCardReversalCopy(
     return {
       title: '确认被赎回并报损 ID',
       confirmText: '确认被赎回并报损 ID',
-      message: `确认先将 ${giftCard.codeMasked} 标记为被赎回，并从 ${
+      message: `确认先将 ${giftCard.code} 标记为被赎回，并从 ${
         giftCard.account.appleIdMasked
       } 扣减余额 ${formatV2Decimal(
         giftCard.faceValue
@@ -44,7 +44,7 @@ export function getGiftCardReversalCopy(
   return {
     title: action === 'redeemed' ? '确认标记被赎回' : '确认撤回礼品卡',
     confirmText: action === 'redeemed' ? '确认被赎回并扣减' : '确认撤回并扣减',
-    message: `确认将 ${giftCard.codeMasked} ${actionLabel}，并从 ${
+    message: `确认将 ${giftCard.code} ${actionLabel}，并从 ${
       giftCard.account.appleIdMasked
     } 扣减余额 ${formatV2Decimal(giftCard.faceValue)}。`
   };

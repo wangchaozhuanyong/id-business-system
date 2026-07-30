@@ -9,7 +9,7 @@ export interface CreateIdBusinessV2OrderDto {
   serviceOptionId: string;
   accountId: string;
   accountDisposition: IdBusinessV2OrderAccountDisposition | string;
-  settlementPlatformOptionId?: string | null;
+  settlementPlatformOptionId: string;
   platformOrderNo?: string | null;
   websiteAccount?: string | null;
   receivedAmount?: string | number;
@@ -17,9 +17,7 @@ export interface CreateIdBusinessV2OrderDto {
   receivedCurrency?: IdBusinessV2FinanceCurrency;
   receivedFxRateToCny?: string | number;
   receivedFxSnapshotId?: string | null;
-  receivedFinanceAccountId?: string | null;
   receivedManualRateReason?: string | null;
-  receivedAt?: string | null;
   balanceAmount: string | number;
   openedAt: string;
   dueAt: string;

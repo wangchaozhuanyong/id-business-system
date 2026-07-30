@@ -40,6 +40,13 @@
           :closable="false"
           show-icon
         />
+        <el-alert
+          v-if="order && !order.operations.canEditPricing"
+          type="warning"
+          title="订单已完成，实收价格和结算平台已锁定；如需修正请先冲销或退款后重新建单"
+          :closable="false"
+          show-icon
+        />
 
         <div class="v2-order-edit-grid">
           <el-form-item label="客户" prop="customerId">
@@ -121,42 +128,24 @@
             </div>
           </el-form-item>
 
-          <el-form-item label="结算平台">
-            <el-select
-              v-model="form.settlementPlatformOptionId"
-              clearable
-              filterable
-              placeholder="不使用结算平台"
-              @change="handleSettlementChange"
-            >
-              <el-option
-                v-for="platform in settlementChoices"
-                :key="platform.id"
-                :label="platform.name"
-                :value="platform.id"
-              />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="平台订单号" prop="platformOrderNo">
-            <el-input
-              v-model="form.platformOrderNo"
-              maxlength="160"
-              :disabled="!form.settlementPlatformOptionId"
-              placeholder="选填"
-            />
-          </el-form-item>
-
-          <el-form-item label="实收金额" prop="receivedAmount">
-            <el-input v-model="form.receivedAmount" inputmode="decimal" maxlength="19" />
-          </el-form-item>
-
-          <el-form-item label="预计平台手续费">
-            <div class="v2-order-edit-readonly">
-              <strong>¥{{ platformFeePreview }}</strong>
-              <el-tag type="info" effect="plain">服务端复核</el-tag>
-            </div>
-          </el-form-item>
+          <V2OrderEditPricingFields
+            v-if="order"
+            :form="form"
+            :order="order"
+            :settlement-choices="settlementChoices"
+            :received-amount-preview="receivedAmountPreview"
+            :platform-fee-preview="platformFeePreview"
+            :suggested-received="suggestedReceived"
+            :suggested-original-amount="suggestedOriginalAmount"
+            :recommendation-applied="recommendationApplied"
+            :applied-suggested-cny="appliedSuggestedCny"
+            :estimated-profit-preview="estimatedProfitPreview"
+            :estimated-profit-rate-preview="estimatedProfitRatePreview"
+            @settlement-change="handleSettlementChange"
+            @manual-price-input="handleManualPriceInput"
+            @apply-suggested="applySuggestedReceivedAmount"
+            @undo-suggested="undoSuggestedReceivedAmount"
+          />
 
           <el-form-item label="开通时间" prop="openedAt">
             <el-date-picker
@@ -230,22 +219,30 @@ import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
-import { calculatePlatformFeeAmount } from '@/v2/features/order-entry/order-pricing';
+import V2OrderEditPricingFields from './V2OrderEditPricingFields.vue';
+import {
+  calculateEstimatedProfitAmount,
+  calculatePlatformFeeAmount,
+  calculateProfitRate,
+  calculateSuggestedOriginalAmount,
+  calculateSuggestedReceivedAmount
+} from '@/v2/features/order-entry/order-pricing';
+import { multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type {
   UpdateV2OrderInput,
   V2Order,
   V2OrderCandidate,
-  V2OrderEntryCustomer,
   V2OrderEntryOptions
 } from '../contracts';
 import {
   createEmptyOrderEditForm,
   createOrderEditRules,
   customerLabel,
-  formatDecimal,
+  isNonNegativeDecimal,
   isPositiveDecimal
 } from './order-edit-form';
+import { useOrderEditChoices } from './useOrderEditChoices';
 import './order-edit-drawer.css';
 
 const props = defineProps<{
@@ -267,11 +264,14 @@ const customerSearching = ref(false);
 const matchingLoading = ref(false);
 const matchingError = ref('');
 const candidates = ref<V2OrderCandidate[]>([]);
+const recommendationApplied = ref(false);
+const previousManualPrice = ref('');
+const appliedSuggestedCny = ref('');
 const options = ref<V2OrderEntryOptions>({
   customers: [],
   countries: [],
   settlementPlatforms: [],
-  financeAccounts: []
+  latestFxRates: []
 });
 const form = reactive(createEmptyOrderEditForm());
 let customerTimer: ReturnType<typeof setTimeout> | undefined;
@@ -284,77 +284,81 @@ const lockScopeOptions = [
   { label: '整个 ID', value: 'global' }
 ];
 
-const customerChoices = computed<V2OrderEntryCustomer[]>(() => {
-  const current = props.order
-    ? {
-        id: props.order.customer.id,
-        name: props.order.customer.name,
-        wechat: null,
-        maskedPhone: null
-      }
-    : null;
-  return current && !options.value.customers.some((item) => item.id === current.id)
-    ? [current, ...options.value.customers]
-    : options.value.customers;
-});
-
-const serviceChoices = computed(() => {
-  const items = options.value.countries.flatMap((country) =>
-    country.children.flatMap((category) =>
-      category.children.map((service) => ({
-        id: service.id,
-        label: `${country.name} / ${category.name} / ${service.name}`
-      }))
-    )
-  );
-  const current = props.order;
-  if (current && !items.some((item) => item.id === current.service.id)) {
-    items.unshift({
-      id: current.service.id,
-      label: `${current.service.parent?.name || '原分类'} / ${current.service.name}`
-    });
-  }
-  return items;
-});
-
-const settlementChoices = computed(() => {
-  const items = [...options.value.settlementPlatforms];
-  const current = props.order?.settlementPlatform;
-  if (current && !items.some((item) => item.id === current.id)) {
-    items.unshift({
-      ...current,
-      fixedFee: props.order?.platformFeeAmount ?? '0',
-      percentageFee: '0'
-    });
-  }
-  return items;
-});
-
-const accountChoices = computed(() => {
-  const items = candidates.value.map((candidate) => ({
-    id: candidate.id,
-    label: `${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}`
-  }));
-  const current = props.order?.account;
-  if (current && !items.some((item) => item.id === current.id)) {
-    items.unshift({
-      id: current.id,
-      label: `${current.appleIdMasked} / 当前使用`
-    });
-  }
-  return items;
-});
+const { customerChoices, serviceChoices, settlementChoices, accountChoices } = useOrderEditChoices(
+  options,
+  candidates,
+  () => props.order
+);
 
 const selectedPlatform = computed(
   () => settlementChoices.value.find((item) => item.id === form.settlementPlatformOptionId) ?? null
 );
+const selectedCandidate = computed(
+  () => candidates.value.find((item) => item.id === form.accountId) ?? null
+);
+const receivedAmountPreview = computed(() => {
+  if (!isNonNegativeDecimal(form.receivedOriginalAmount)) return '0';
+  if (!props.order || props.order.receivedCurrency === 'CNY') {
+    return form.receivedOriginalAmount;
+  }
+  return multiplyDecimalStrings(form.receivedOriginalAmount, props.order.receivedFxRateToCny);
+});
 
 const platformFeePreview = computed(() => {
   const platform = selectedPlatform.value;
   if (!platform) return '0';
   return (
-    calculatePlatformFeeAmount(form.receivedAmount, platform.fixedFee, platform.percentageFee) ??
-    '0'
+    calculatePlatformFeeAmount(
+      receivedAmountPreview.value,
+      platform.fixedFee,
+      platform.percentageFee
+    ) ?? '0'
+  );
+});
+const appliedAccountCostPreview = computed(() =>
+  form.accountDisposition === 'sold'
+    ? (selectedCandidate.value?.purchaseCost ?? props.order?.accountCostAmount ?? '0')
+    : '0'
+);
+const estimatedBalanceCostPreview = computed(
+  () => selectedCandidate.value?.estimatedBalanceCostAmount ?? props.order?.balanceCostAmount ?? '0'
+);
+const estimatedProfitPreview = computed(
+  () =>
+    calculateEstimatedProfitAmount(
+      receivedAmountPreview.value,
+      platformFeePreview.value,
+      appliedAccountCostPreview.value,
+      estimatedBalanceCostPreview.value
+    ) ?? '0'
+);
+const estimatedProfitRatePreview = computed(() =>
+  calculateProfitRate(estimatedProfitPreview.value, receivedAmountPreview.value)
+);
+const suggestedReceived = computed(() => {
+  if (!form.targetProfitRate.trim()) {
+    return {
+      amount: null,
+      platformFee: null,
+      estimatedProfit: null,
+      estimatedProfitRate: null,
+      error: ''
+    };
+  }
+  return calculateSuggestedReceivedAmount({
+    targetProfitRate: form.targetProfitRate,
+    appliedAccountCostAmount: appliedAccountCostPreview.value,
+    estimatedBalanceCostAmount: estimatedBalanceCostPreview.value,
+    fixedFee: selectedPlatform.value?.fixedFee ?? '0',
+    percentageFee: selectedPlatform.value?.percentageFee ?? '0'
+  });
+});
+const suggestedOriginalAmount = computed(() => {
+  if (!suggestedReceived.value.amount || !props.order) return null;
+  return calculateSuggestedOriginalAmount(
+    suggestedReceived.value.amount,
+    props.order.receivedCurrency,
+    props.order.receivedFxRateToCny
   );
 });
 
@@ -365,7 +369,12 @@ const submitDisabledReason = computed(() => {
   return '';
 });
 
-const rules = createOrderEditRules(form, () => Boolean(props.order?.operations.canEditCore));
+const rules = createOrderEditRules(
+  form,
+  () => Boolean(props.order?.operations.canEditCore),
+  () => Boolean(props.order?.operations.canEditPricing),
+  () => selectedPlatform.value?.percentageFee ?? '0'
+);
 
 watch(
   () => [props.modelValue, props.order?.id] as const,
@@ -404,7 +413,8 @@ async function initialize(order: V2Order) {
     platformOrderNo: order.platformOrderNo ?? '',
     websiteAccount: '',
     clearWebsiteAccount: false,
-    receivedAmount: order.receivedAmount,
+    receivedOriginalAmount: order.receivedOriginalAmount,
+    targetProfitRate: '',
     balanceAmount: order.balanceAmount,
     openedAt: order.openedAt ? new Date(order.openedAt) : null,
     dueAt: order.dueAt ? new Date(order.dueAt) : null,
@@ -413,7 +423,11 @@ async function initialize(order: V2Order) {
   });
   candidates.value = [];
   matchingError.value = '';
+  recommendationApplied.value = false;
+  previousManualPrice.value = '';
+  appliedSuggestedCny.value = '';
   await loadOptions();
+  if (order.operations.canEditCore) await loadCandidates();
   initializing = false;
 }
 
@@ -462,6 +476,7 @@ async function loadCandidates() {
     const result = await idBusinessV2OrdersApi.findMatchingCandidates({
       serviceOptionId: form.serviceOptionId,
       balanceAmount: form.balanceAmount.trim(),
+      orderId: props.order?.id,
       limit: 50
     });
     if (sequence !== matchingSequence) return;
@@ -487,6 +502,26 @@ function handleSettlementChange() {
   }
 }
 
+function applySuggestedReceivedAmount() {
+  if (!suggestedReceived.value.amount || !suggestedOriginalAmount.value) return;
+  if (!recommendationApplied.value) previousManualPrice.value = form.receivedOriginalAmount;
+  form.receivedOriginalAmount = suggestedOriginalAmount.value;
+  recommendationApplied.value = true;
+  appliedSuggestedCny.value = suggestedReceived.value.amount;
+}
+
+function undoSuggestedReceivedAmount() {
+  if (!recommendationApplied.value) return;
+  form.receivedOriginalAmount = previousManualPrice.value;
+  recommendationApplied.value = false;
+  appliedSuggestedCny.value = '';
+}
+
+function handleManualPriceInput() {
+  recommendationApplied.value = false;
+  appliedSuggestedCny.value = '';
+}
+
 async function submit() {
   const order = props.order;
   if (
@@ -500,14 +535,23 @@ async function submit() {
   }
 
   const payload: UpdateV2OrderInput = {
-    settlementPlatformOptionId: form.settlementPlatformOptionId || null,
-    platformOrderNo: form.platformOrderNo.trim() || null,
-    receivedAmount: form.receivedAmount.trim(),
     openedAt: form.openedAt.toISOString(),
     dueAt: form.dueAt.toISOString(),
     remark: form.remark.trim() || null,
     expectedUpdatedAt: order.updatedAt
   };
+  if (order.operations.canEditPricing) {
+    const platformOrderNo = form.platformOrderNo.trim() || null;
+    if (form.settlementPlatformOptionId !== (order.settlementPlatform?.id ?? '')) {
+      payload.settlementPlatformOptionId = form.settlementPlatformOptionId;
+    }
+    if (platformOrderNo !== order.platformOrderNo) {
+      payload.platformOrderNo = platformOrderNo;
+    }
+    if (form.receivedOriginalAmount.trim() !== order.receivedOriginalAmount) {
+      payload.receivedOriginalAmount = form.receivedOriginalAmount.trim();
+    }
+  }
   if (order.operations.canEditCore) {
     Object.assign(payload, {
       customerId: form.customerId,

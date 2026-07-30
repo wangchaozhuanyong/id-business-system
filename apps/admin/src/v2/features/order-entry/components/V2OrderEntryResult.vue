@@ -27,6 +27,16 @@
       <span>订单利润</span>
       <strong>¥{{ formatDecimal(consumptionResult.order.profitAmount || '0') }}</strong>
     </div>
+    <div v-if="consumptionResult">
+      <span>实际利润率</span>
+      <strong>
+        {{
+          consumptionResult.order.profitRate === null
+            ? '—'
+            : `${formatDecimal(consumptionResult.order.profitRate)}%`
+        }}
+      </strong>
+    </div>
     <AppButton
       v-if="hasPendingConsumption"
       variant="primary"
