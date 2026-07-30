@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import process from 'node:process';
+import { createCloudflareProductionBuildEnvironment } from './lib/cloudflare-release.mjs';
 
 await run('node', ['scripts/validate-cloudflare-free-release.mjs']);
 
@@ -9,7 +10,9 @@ const config = JSON.parse(await readFile('wrangler.cloudflare-free.jsonc', 'utf8
 const commit = (await capture('git', ['rev-parse', 'HEAD'])).trim();
 const shortCommit = commit.slice(0, 12);
 
-await run('npm', ['run', 'build:cloudflare-free']);
+await run('npm', ['run', 'build:cloudflare-free'], {
+  env: createCloudflareProductionBuildEnvironment(process.env)
+});
 await run('npx', [
   'wrangler@4.114.0',
   'deploy',
@@ -59,11 +62,11 @@ function capture(command, args) {
   });
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: 'inherit'
     });
     child.on('error', reject);

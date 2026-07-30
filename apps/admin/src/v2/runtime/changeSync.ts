@@ -7,10 +7,12 @@ import {
   subscribeSupabasePrivateBroadcast,
   type SupabaseRealtimeStatus
 } from '@/auth/supabase';
+import { isSupabaseAuthConfigured } from '@/auth/supabase-config';
 import { AUTH_IDENTITY_CHANGED_EVENT } from '@/auth/session';
 import { idBusinessV2ChangeSyncApi } from '@/v2/api/changeSync';
 import { invalidateV2Queries } from '@/v2/composables/useV2Query';
 import { showV2Warning } from '@/v2/services/feedback';
+import { shouldEnableV2RealtimeChanges } from '@/v2/runtime/changeSyncConfig';
 import { getChangedV2Scopes, parseV2ChangeEvent } from '@/v2/runtime/changeSyncPayload';
 
 const REALTIME_TOPIC = 'id-business-v2:changes';
@@ -19,7 +21,10 @@ const HEALTHY_RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
 const DEGRADED_RECONCILE_INTERVAL_MS = 60 * 1000;
 const LONG_HIDDEN_INTERVAL_MS = 60 * 1000;
 const MAX_RECONNECT_DELAY_MS = 60 * 1000;
-const REALTIME_ENABLED = import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED !== 'false';
+const REALTIME_ENABLED = shouldEnableV2RealtimeChanges(
+  import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED,
+  isSupabaseAuthConfigured()
+);
 
 type ChangeSyncStatus = 'idle' | 'connecting' | 'connected' | 'degraded';
 

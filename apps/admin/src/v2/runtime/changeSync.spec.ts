@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { V2_DATA_SCOPES, type V2DataScope } from '@apple-business/shared';
+import { shouldEnableV2RealtimeChanges } from './changeSyncConfig';
 import { getChangedV2Scopes, parseV2ChangeEvent } from './changeSyncPayload';
+
+describe('V2 change sync runtime configuration', () => {
+  it('enables Realtime only when explicitly requested and Supabase is configured', () => {
+    expect(shouldEnableV2RealtimeChanges('true', true)).toBe(true);
+    expect(shouldEnableV2RealtimeChanges(undefined, true)).toBe(false);
+    expect(shouldEnableV2RealtimeChanges('false', true)).toBe(false);
+    expect(shouldEnableV2RealtimeChanges('true', false)).toBe(false);
+  });
+});
 
 describe('V2 change sync payload validation', () => {
   it('accepts only the versioned scope-only broadcast contract', () => {
