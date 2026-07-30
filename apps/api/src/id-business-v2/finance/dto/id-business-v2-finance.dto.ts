@@ -110,3 +110,7 @@ export interface ConfirmIdBusinessV2FinanceHistoryDto {
   confirmed: boolean;
   note: string;
 }
+
+export interface BackfillIdBusinessV2FinanceHistoryDto {
+  previewFingerprint: string;
+}

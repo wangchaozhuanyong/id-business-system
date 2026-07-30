@@ -396,13 +396,51 @@
       </el-form-item>
     </el-form>
   </V2FormDrawer>
+
+  <V2ConfirmDialog
+    v-model="page.historyPreviewVisible"
+    title="历史回填影响预览"
+    message=""
+    confirm-text="确认并执行回填"
+    :confirm-loading="page.historySubmitting"
+    :confirm-disabled-reason="page.historyPreviewConfirmDisabledReason"
+    @confirm="page.runHistoryBackfill"
+  >
+    <div v-if="page.historyPreview" class="v2-finance-history-preview">
+      <el-alert
+        type="warning"
+        title="历史金额将按 CNY、汇率 1 回填"
+        :description="`预览截止 ${formatDate(page.historyPreview.asOf)}；确认前请核对下方影响，执行时新增数据可能使数量变化。`"
+        show-icon
+        :closable="false"
+      />
+      <dl>
+        <div v-for="item in historyPreviewRows" :key="item.label">
+          <dt>{{ item.label }}</dt>
+          <dd>
+            建账 {{ item.value.willCreateCount }} · 已有跳过 {{ item.value.skippedExistingCount }} ·
+            零金额跳过
+            {{ item.value.skippedZeroAmountCount }}
+          </dd>
+        </div>
+      </dl>
+      <p>
+        将补齐 CNY 汇率快照：ID {{ page.historyPreview.fxSnapshotUpdates.accounts }}、礼品卡
+        {{ page.historyPreview.fxSnapshotUpdates.giftCards }}、订单
+        {{ page.historyPreview.fxSnapshotUpdates.orders }}。
+      </p>
+      <p>回填后状态仍为“待人工确认”，不会自动宣称历史数据完整。</p>
+    </div>
+  </V2ConfirmDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, type UnwrapNestedRefs } from 'vue';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2FinanceCurrency } from '../contracts';
+import { formatDate } from '../financeLedgerPresentation';
 import { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 
 const { page } = defineProps<{
@@ -417,6 +455,17 @@ const walletMutationTitle = computed(() => {
         ? '供应商退款'
         : '供应商余额调整';
   return `${action}${page.selectedWallet ? ` · ${page.selectedWallet.supplierName}` : ''}`;
+});
+
+const historyPreviewRows = computed(() => {
+  const summary = page.historyPreview?.summary;
+  if (!summary) return [];
+  return [
+    { label: '历史订单', value: summary.orders },
+    { label: 'ID 报损', value: summary.accountLosses },
+    { label: '礼品卡赎回', value: summary.redeemedGiftCards },
+    { label: '礼品卡撤回', value: summary.withdrawnGiftCards }
+  ];
 });
 
 function formatOriginal(value: string, currency: V2FinanceCurrency) {

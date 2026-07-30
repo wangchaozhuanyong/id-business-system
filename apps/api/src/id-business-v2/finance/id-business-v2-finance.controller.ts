@@ -3,6 +3,7 @@ import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type {
   AdjustIdBusinessV2SupplierWalletDto,
+  BackfillIdBusinessV2FinanceHistoryDto,
   CloseIdBusinessV2GiftCardRefundDto,
   ConfirmIdBusinessV2FinanceHistoryDto,
   CreateIdBusinessV2FinanceAccountDto,
@@ -19,6 +20,7 @@ import { IdBusinessV2FinanceAccountsService } from './id-business-v2-finance-acc
 import { IdBusinessV2FinanceExpensesService } from './id-business-v2-finance-expenses.service';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
 import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-finance-gift-card-refunds.service';
+import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
 import {
   normalizeFinanceCurrency,
@@ -43,6 +45,7 @@ export class IdBusinessV2FinanceController {
     private readonly periodsService: IdBusinessV2FinancePeriodsService,
     private readonly fxService: IdBusinessV2FinanceFxService,
     private readonly giftCardRefundsService: IdBusinessV2FinanceGiftCardRefundsService,
+    private readonly historyPreviewService: IdBusinessV2FinanceHistoryPreviewService,
     private readonly historyService: IdBusinessV2FinanceHistoryService
   ) {}
 
@@ -261,10 +264,19 @@ export class IdBusinessV2FinanceController {
     return this.reportsService.getSettings();
   }
 
+  @Get('history/backfill-preview')
+  @RequirePermissions('finance.view', 'finance.manage')
+  previewHistoryBackfill() {
+    return this.historyPreviewService.preview();
+  }
+
   @Post('history/backfill')
   @RequirePermissions('finance.view', 'finance.manage')
-  backfillHistory(@CurrentUser() operator?: AuthenticatedUser) {
-    return this.historyService.backfill(operator);
+  backfillHistory(
+    @Body() dto: BackfillIdBusinessV2FinanceHistoryDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.historyService.backfill(dto.previewFingerprint, operator);
   }
 
   @Post('history/confirm')

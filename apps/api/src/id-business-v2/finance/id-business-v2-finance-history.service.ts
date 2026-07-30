@@ -11,6 +11,7 @@ import {
   createHistoricalCnyPair,
   pushHistoricalCnyPair
 } from './id-business-v2-finance-history-lines';
+import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import {
   IdBusinessV2FinancePostingService,
   type FinancePostingLineInput
@@ -22,10 +23,22 @@ const ZERO = new PrismaNamespace.Decimal(0);
 export class IdBusinessV2FinanceHistoryService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly postingService: IdBusinessV2FinancePostingService
+    private readonly postingService: IdBusinessV2FinancePostingService,
+    private readonly historyPreviewService: IdBusinessV2FinanceHistoryPreviewService
   ) {}
 
-  async backfill(operator?: AuthenticatedUser) {
+  async backfill(previewFingerprint: string, operator?: AuthenticatedUser) {
+    const normalizedFingerprint = previewFingerprint?.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalizedFingerprint)) {
+      throw new ConflictException('请先完成历史回填预览');
+    }
+    const preview = await this.historyPreviewService.preview();
+    if (!preview.canBackfill) {
+      throw new ConflictException('当前历史状态不允许执行回填');
+    }
+    if (preview.fingerprint !== normalizedFingerprint) {
+      throw new ConflictException('历史数据已发生变化，请重新预览后再执行回填');
+    }
     return this.prisma.$transaction(
       async (tx) => {
         const settings = await tx.idBusinessV2FinanceSettings.upsert({
@@ -247,8 +260,9 @@ export class IdBusinessV2FinanceHistoryService {
             module: 'id_business_v2_finance',
             action: 'id_business_v2.finance.history_backfill',
             objectType: 'id_business_v2_finance_settings',
-            objectId: '1',
+            objectId: null,
             afterData: {
+              settingsId: 1,
               enabledAt: enabledAt.toISOString(),
               assumption: 'legacy_assumed_cny',
               ...summary
@@ -297,12 +311,14 @@ export class IdBusinessV2FinanceHistoryService {
           module: 'id_business_v2_finance',
           action: 'id_business_v2.finance.history_confirm',
           objectType: 'id_business_v2_finance_settings',
-          objectId: '1',
+          objectId: null,
           beforeData: {
+            settingsId: 1,
             historyStatus: settings.historyStatus,
             historyNote: settings.historyNote
           },
           afterData: {
+            settingsId: 1,
             historyStatus: updated.historyStatus,
             historyCompletedAt: now.toISOString(),
             historyNote: note

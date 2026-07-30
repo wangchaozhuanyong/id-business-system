@@ -57,6 +57,8 @@ export {
   type V2FinanceExpense,
   type V2FinanceExpensePage,
   type V2FinanceFxRateSnapshot,
+  type V2FinanceHistoryBackfillPreview,
+  type V2FinanceHistoryBackfillPreviewCategory,
   type V2FinanceHistoryBackfillResult,
   type V2FinanceHistoryStatus,
   type V2FinanceLatestRate,
