@@ -5,7 +5,10 @@ import type { V2TopupSupplierFundSelector } from './topupSupplierFunds';
 
 export type V2TopupBalancePreset = '' | 'zero' | 'positive_under_20' | 'custom';
 export type V2TopupWorkbenchSortBy =
-  'appleId' | 'currentBalance' | 'balanceCostAmount' | 'updatedAt';
+  | 'appleId'
+  | 'currentBalance'
+  | 'balanceCostAmount'
+  | 'updatedAt';
 
 export interface V2TopupServiceSummary {
   id: string;
@@ -339,7 +342,11 @@ export type V2BalanceLedgerEntryType =
   | 'manual_adjustment'
   | 'account_loss';
 export type V2BalanceLedgerSortBy =
-  'balanceAmount' | 'costAmount' | 'balanceAfter' | 'costAfter' | 'createdAt';
+  | 'balanceAmount'
+  | 'costAmount'
+  | 'balanceAfter'
+  | 'costAfter'
+  | 'createdAt';
 
 export interface V2BalanceOperator {
   id: string;

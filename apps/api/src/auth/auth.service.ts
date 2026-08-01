@@ -27,7 +27,11 @@ interface LoginRequestMeta {
 }
 
 type ProviderCompensationStatus =
-  'not_needed' | 'succeeded' | 'failed' | 'local_committed' | 'skipped_newer_change';
+  | 'not_needed'
+  | 'succeeded'
+  | 'failed'
+  | 'local_committed'
+  | 'skipped_newer_change';
 
 @Injectable()
 export class AuthService {

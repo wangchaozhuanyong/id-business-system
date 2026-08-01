@@ -12,7 +12,11 @@ export type GovernanceJobStatus =
   | 'rejected'
   | 'cancelled';
 export type GovernanceEntityType =
-  'account' | 'customer' | 'option' | 'order' | 'exchange_rate_run';
+  | 'account'
+  | 'customer'
+  | 'option'
+  | 'order'
+  | 'exchange_rate_run';
 export type GovernanceApprovalDecision = 'approved' | 'rejected';
 export type RecycleEntity = Extract<
   GovernanceEntityType,

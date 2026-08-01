@@ -2,7 +2,10 @@ import type { Amount4, Rate8 } from '../runtime/public-api';
 
 export type IdBusinessV2ActivationStatus = 'active' | 'expired' | 'cancelled' | 'abnormal';
 export type IdBusinessV2RenewalDueStatus =
-  'due_within_1_hour' | 'due_within_23_hours' | 'due_within_7_days' | 'expired';
+  | 'due_within_1_hour'
+  | 'due_within_23_hours'
+  | 'due_within_7_days'
+  | 'expired';
 
 export interface RenewalBaseCriteria {
   keyword?: string | null;

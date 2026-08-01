@@ -12,7 +12,10 @@ export interface TopupWorkbenchBalanceRange {
 }
 
 export type TopupWorkbenchSortField =
-  'appleIdMasked' | 'currentBalance' | 'balanceCostAmount' | 'updatedAt';
+  | 'appleIdMasked'
+  | 'currentBalance'
+  | 'balanceCostAmount'
+  | 'updatedAt';
 
 export interface TopupWorkbenchCriteria {
   countryOptionId: string | null;

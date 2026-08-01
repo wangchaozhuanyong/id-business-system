@@ -25,7 +25,11 @@ const VALIDATION_LEASE_CLAIM_SETTLE_MS = 40;
 const SESSION_CHANNEL_NAME = 'apple-business:session-v2';
 
 export type SessionValidationSource =
-  'boot' | 'navigation' | 'manual-retry' | 'background' | 'recovery';
+  | 'boot'
+  | 'navigation'
+  | 'manual-retry'
+  | 'background'
+  | 'recovery';
 
 export type SessionState =
   | { kind: 'cold' }
@@ -52,7 +56,11 @@ export type SessionState =
 
 export type SessionResolution = 'ready' | 'degraded' | 'anonymous' | 'unavailable' | 'blocked';
 export type AuthIdentityChangeReason =
-  'login' | 'logout' | 'session-cleared' | 'session-expired' | 'identity-switched';
+  | 'login'
+  | 'logout'
+  | 'session-cleared'
+  | 'session-expired'
+  | 'identity-switched';
 
 interface SessionBroadcastMessage {
   credentialId?: string;

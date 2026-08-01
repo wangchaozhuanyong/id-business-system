@@ -7,7 +7,10 @@ import { isUniqueConstraintError, isWriteConflictError } from './id-business-v2-
 export type V2CommandTransaction = Prisma.TransactionClient;
 export type V2CommandRetryMode = 'none' | 'stableIdempotency' | 'fullReplay';
 export type V2TransactionIsolationLevel =
-  'ReadUncommitted' | 'ReadCommitted' | 'RepeatableRead' | 'Serializable';
+  | 'ReadUncommitted'
+  | 'ReadCommitted'
+  | 'RepeatableRead'
+  | 'Serializable';
 
 export interface V2CommandContext {
   attempt: number;
@@ -43,7 +46,8 @@ interface V2ReplayableCommandOptions<TResult> extends V2CommandTransactionBaseOp
 }
 
 export type V2CommandTransactionOptions<TResult> =
-  V2NonRetryableCommandOptions | V2ReplayableCommandOptions<TResult>;
+  | V2NonRetryableCommandOptions
+  | V2ReplayableCommandOptions<TResult>;
 
 @Injectable()
 export class V2CommandTransactionManager {

@@ -2,7 +2,10 @@ import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
 import type { V2Order } from './orders';
 
 export type V2RenewalDueStatus =
-  'due_within_1_hour' | 'due_within_23_hours' | 'due_within_7_days' | 'expired';
+  | 'due_within_1_hour'
+  | 'due_within_23_hours'
+  | 'due_within_7_days'
+  | 'expired';
 
 export type V2RenewalStatusCode = V2RenewalDueStatus | 'active';
 export type V2RenewalWarningState = 'upcoming' | 'expired';

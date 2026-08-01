@@ -1,6 +1,10 @@
 export type V2BusinessMonitoringSeverity = 'critical' | 'warning' | 'info';
 export type V2BusinessMonitoringCategory =
-  'order' | 'balance' | 'renewal' | 'exchange_rate' | 'finance';
+  | 'order'
+  | 'balance'
+  | 'renewal'
+  | 'exchange_rate'
+  | 'finance';
 
 export interface V2BusinessMonitoringListQuery {
   page: number;

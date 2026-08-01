@@ -59,9 +59,11 @@ describe('V2 navigation performance lifecycle', () => {
     expect(markV2RouteCodeReady('/v2/dashboard', 'dashboard')).toBe(true);
 
     const codeMark = performance.getEntriesByName('v2:route-code-ready').at(-1) as
-      PerformanceMark | undefined;
+      | PerformanceMark
+      | undefined;
     const dataMark = performance.getEntriesByName('v2:route-data-ready').at(-1) as
-      PerformanceMark | undefined;
+      | PerformanceMark
+      | undefined;
     expect(codeMark).toBeTruthy();
     expect(dataMark).toBeTruthy();
     expect(dataMark?.startTime).toBeGreaterThanOrEqual(codeMark?.startTime ?? 0);

@@ -9,7 +9,13 @@ export interface V2TableDataColumnDefinition {
   readonly label: string;
   readonly kind: 'text' | 'identifier' | 'index' | 'numeric' | 'date' | 'status';
   readonly widthPreset:
-    'index' | 'compact' | 'standard' | 'wide' | 'dateTime' | 'identifier' | 'longText';
+    | 'index'
+    | 'compact'
+    | 'standard'
+    | 'wide'
+    | 'dateTime'
+    | 'identifier'
+    | 'longText';
   readonly pin?: V2TableColumnPin;
 }
 
@@ -31,7 +37,9 @@ export interface V2TableControlColumnDefinition {
 }
 
 export type V2TableColumnDefinition =
-  V2TableDataColumnDefinition | V2TableActionColumnDefinition | V2TableControlColumnDefinition;
+  | V2TableDataColumnDefinition
+  | V2TableActionColumnDefinition
+  | V2TableControlColumnDefinition;
 
 export type V2TableRowKeyDefinition =
   | { readonly kind: 'path'; readonly value: string }
