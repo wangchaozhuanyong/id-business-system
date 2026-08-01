@@ -2,13 +2,13 @@
   <section class="v2-order-entry-page">
     <V2AsyncRegion
       skeleton="form"
-      :loading="optionsLoading || isInitialLoading"
+      :loading="optionsLoading"
       :resolved="optionsResolved"
       :error="optionsError"
       loading-title="正在加载订单录入资料"
       refreshing-title="正在更新订单录入资料"
       error-title="订单录入资料加载失败"
-      @retry="loadEntryOptions()"
+      @retry="retryEntryOptions"
     >
       <el-alert
         v-if="missingOptionsConfiguration || missingCustomersConfiguration"
@@ -126,22 +126,13 @@
 
             <el-form-item label="客户" prop="customerId" class="v2-order-entry-customer-item">
               <div class="v2-order-entry-customer-control">
-                <el-select
+                <V2CustomerRemoteSelect
                   v-model="form.customerId"
-                  filterable
-                  remote
-                  reserve-keyword
+                  :customers="customerOptions"
+                  :keyword="customerKeyword"
+                  :searching="customerSearching"
                   :remote-method="searchCustomers"
-                  :loading="customerSearching"
-                  placeholder="按名称、手机、微信、QQ、WhatsApp 搜索"
-                >
-                  <el-option
-                    v-for="customer in entryOptions.customers"
-                    :key="customer.id"
-                    :label="customerLabel(customer)"
-                    :value="customer.id"
-                  />
-                </el-select>
+                />
                 <AppButton
                   v-if="canCreateCustomer"
                   class="v2-order-entry-add-customer"
@@ -411,6 +402,7 @@ import V2OrderEntryCandidates from './components/V2OrderEntryCandidates.vue';
 import V2OrderPricingFields from './components/V2OrderPricingFields.vue';
 import V2OrderReceiptFields from './components/V2OrderReceiptFields.vue';
 import V2OrderEntryResult from './components/V2OrderEntryResult.vue';
+import V2CustomerRemoteSelect from './components/V2CustomerRemoteSelect.vue';
 import V2QuickCustomerDrawer from './components/V2QuickCustomerDrawer.vue';
 import { useOrderEntryPage } from './useOrderEntryPage';
 import '@/v2/styles/order-entry.css';
@@ -421,7 +413,6 @@ const {
   optionsLoading,
   optionsError,
   optionsResolved,
-  customerSearching,
   idSelectionMode,
   matchingLoading,
   matchingError,
@@ -432,6 +423,9 @@ const {
   consumptionResult,
   consumptionError,
   entryOptions,
+  customerOptions,
+  customerKeyword,
+  customerSearching,
   form,
   selectedCountry,
   availableCategories,
@@ -467,9 +461,8 @@ const {
   matchingEmptyMessage,
   emptyConfigurationMessage,
   rules,
-  isInitialLoading,
   handleOpenedAtChange,
-  loadEntryOptions,
+  retryEntryOptions,
   searchCustomers,
   handleCountryChange,
   handleCategoryChange,
@@ -486,7 +479,6 @@ const {
   submitOrder,
   retryConsumption,
   handleCustomerCreated,
-  customerLabel,
   formatDecimal
 } = useOrderEntryPage();
 const quickCustomerVisible = ref(false);

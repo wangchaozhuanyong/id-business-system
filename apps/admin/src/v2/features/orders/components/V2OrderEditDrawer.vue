@@ -18,7 +18,7 @@
       loading-title="正在加载订单选项"
       refreshing-title="正在更新订单选项"
       error-title="订单选项加载失败"
-      @retry="loadOptions()"
+      @retry="retryOptions"
     >
       <el-form
         ref="formRef"
@@ -50,23 +50,14 @@
 
         <div class="v2-order-edit-grid">
           <el-form-item label="客户" prop="customerId">
-            <el-select
+            <V2CustomerRemoteSelect
               v-model="form.customerId"
-              filterable
-              remote
-              reserve-keyword
+              :customers="visibleCustomerChoices"
+              :keyword="customerKeyword"
+              :searching="customerOptionsPending && optionsLoading"
               :remote-method="searchCustomers"
-              :loading="customerSearching"
               :disabled="!order?.operations.canEditCore"
-              placeholder="按名称、手机、微信、QQ、WhatsApp 搜索"
-            >
-              <el-option
-                v-for="customer in customerChoices"
-                :key="customer.id"
-                :label="customerLabel(customer)"
-                :value="customer.id"
-              />
-            </el-select>
+            />
           </el-form-item>
 
           <el-form-item label="业务" prop="serviceOptionId">
@@ -222,6 +213,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2CustomerRemoteSelect from '@/v2/features/order-entry/components/V2CustomerRemoteSelect.vue';
 import V2OrderEditPricingFields from './V2OrderEditPricingFields.vue';
 import {
   calculateEstimatedProfitAmount,
@@ -229,6 +221,11 @@ import {
   calculateSuggestedOriginalAmount,
   calculateSuggestedReceivedAmount
 } from '@/v2/features/order-entry/order-pricing';
+import {
+  getVisibleOrderEntryCustomers,
+  preserveSelectedOrderEntryCustomer,
+  useOrderEntryOptionsQuery
+} from '@/v2/features/order-entry/useOrderEntryOptionsQuery';
 import { multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type {
@@ -240,7 +237,6 @@ import type {
 import {
   createEmptyOrderEditForm,
   createOrderEditRules,
-  customerLabel,
   isNonNegativeDecimal,
   isPositiveDecimal
 } from './order-edit-form';
@@ -260,10 +256,6 @@ const emit = defineEmits<{
 }>();
 
 const formRef = ref<FormInstance>();
-const optionsLoading = ref(false);
-const optionsResolved = ref(false);
-const optionsError = ref('');
-const customerSearching = ref(false);
 const matchingLoading = ref(false);
 const matchingError = ref('');
 const candidates = ref<V2OrderCandidate[]>([]);
@@ -277,10 +269,25 @@ const options = ref<V2OrderEntryOptions>({
   latestFxRates: []
 });
 const form = reactive(createEmptyOrderEditForm());
-let customerTimer: ReturnType<typeof setTimeout> | undefined;
 let matchingTimer: ReturnType<typeof setTimeout> | undefined;
 let matchingSequence = 0;
 let initializing = false;
+
+const {
+  data: optionsQueryData,
+  loading: optionsLoading,
+  error: optionsError,
+  resolved: optionsResolved,
+  customerOptionsPending,
+  customerKeyword,
+  loadOptions,
+  searchCustomers,
+  retryOptions,
+  cancel: cancelOptionsQuery
+} = useOrderEntryOptionsQuery({
+  mode: 'manual',
+  freshnessPolicy: 'event-driven'
+});
 
 const lockScopeOptions = [
   { label: '当前业务', value: 'by_service' },
@@ -291,6 +298,24 @@ const { customerChoices, serviceChoices, settlementChoices, accountChoices } = u
   options,
   candidates,
   () => props.order
+);
+const visibleCustomerChoices = computed(() =>
+  getVisibleOrderEntryCustomers(
+    customerChoices.value,
+    form.customerId,
+    customerOptionsPending.value
+  )
+);
+watch(
+  optionsQueryData,
+  (result) => {
+    if (!result) return;
+    const selectedCustomer = customerChoices.value.find(
+      (customer) => customer.id === form.customerId
+    );
+    options.value = preserveSelectedOrderEntryCustomer(result, selectedCustomer);
+  },
+  { immediate: true }
 );
 
 const selectedPlatform = computed(
@@ -396,6 +421,8 @@ watch(
   ([visible]) => {
     if (visible && props.order) {
       initialize(props.order);
+    } else if (!visible) {
+      cancelOptionsQuery();
     }
   }
 );
@@ -418,7 +445,6 @@ watch(
 
 async function initialize(order: V2Order) {
   initializing = true;
-  optionsResolved.value = false;
   Object.assign(form, {
     customerId: order.customer.id,
     serviceOptionId: order.service.id,
@@ -442,37 +468,13 @@ async function initialize(order: V2Order) {
   recommendationApplied.value = false;
   previousManualPrice.value = '';
   appliedSuggestedCny.value = '';
-  await loadOptions();
+  await loadOptions('');
+  if (!props.modelValue || props.order?.id !== order.id) {
+    initializing = false;
+    return;
+  }
   if (order.operations.canEditCore) await loadCandidates();
   initializing = false;
-}
-
-async function loadOptions(customerKeyword = '') {
-  optionsLoading.value = true;
-  optionsError.value = '';
-  try {
-    const result = await idBusinessV2OrdersApi.getEntryOptions(customerKeyword || undefined);
-    const selected = customerChoices.value.find((item) => item.id === form.customerId);
-    options.value = {
-      ...result,
-      customers:
-        selected && !result.customers.some((item) => item.id === selected.id)
-          ? [selected, ...result.customers]
-          : result.customers
-    };
-    optionsResolved.value = true;
-  } catch (error) {
-    optionsError.value = getApiErrorMessage(error);
-  } finally {
-    optionsLoading.value = false;
-    customerSearching.value = false;
-  }
-}
-
-function searchCustomers(keyword: string) {
-  if (customerTimer) clearTimeout(customerTimer);
-  customerSearching.value = true;
-  customerTimer = setTimeout(() => void loadOptions(keyword.trim()), 300);
 }
 
 function scheduleCandidates() {
@@ -589,7 +591,7 @@ async function submit() {
 }
 
 onBeforeUnmount(() => {
-  if (customerTimer) clearTimeout(customerTimer);
+  cancelOptionsQuery();
   if (matchingTimer) clearTimeout(matchingTimer);
 });
 </script>

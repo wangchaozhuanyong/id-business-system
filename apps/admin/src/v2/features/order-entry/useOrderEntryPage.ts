@@ -1,10 +1,9 @@
-import { computed, nextTick, onDeactivated, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import type { FormInstance } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
-import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
@@ -12,7 +11,6 @@ import { idBusinessV2OrdersApi } from './api';
 import {
   createConsumptionIdempotencyKey,
   createInitialOrderEntryForm,
-  customerLabel,
   formatOrderEntryDecimal
 } from './order-entry-form';
 import {
@@ -27,6 +25,11 @@ import {
 import { createOrderEntryRules } from './order-entry-rules';
 import { calculateReceivedAmountPreview } from './order-receipt';
 import { useOrderCandidateSelection } from './useOrderCandidateSelection';
+import {
+  getVisibleOrderEntryCustomers,
+  preserveSelectedOrderEntryCustomer,
+  useOrderEntryOptionsQuery
+} from './useOrderEntryOptionsQuery';
 import { useOrderReceiptPricing } from './useOrderReceiptPricing';
 import { useOrderPricingInputMode } from './useOrderPricingInputMode';
 import type {
@@ -40,8 +43,6 @@ export function useOrderEntryPage() {
   const router = useRouter();
   const authStore = useAuthStore();
   const formRef = ref<FormInstance>();
-  const customerSearchKeyword = ref('');
-  const customerSearching = ref(false);
   const submitting = ref(false);
   const consuming = ref(false);
   const createdResult = ref<CreateV2OrderResult | null>(null);
@@ -54,8 +55,8 @@ export function useOrderEntryPage() {
     settlementPlatforms: [],
     latestFxRates: []
   });
+  const hasConfiguredCustomers = ref(false);
   const form = reactive(createInitialOrderEntryForm());
-  let customerSearchTimer: ReturnType<typeof setTimeout> | undefined;
   const {
     idSelectionMode,
     matchingLoading,
@@ -91,7 +92,7 @@ export function useOrderEntryPage() {
       ) ?? null
   );
   const missingOptionsConfiguration = computed(() => !entryOptions.value.countries.length);
-  const missingCustomersConfiguration = computed(() => !entryOptions.value.customers.length);
+  const missingCustomersConfiguration = computed(() => !hasConfiguredCustomers.value);
   const canManageOptions = computed(() =>
     hasUserPermission(authStore.user, 'data.dictionary.manage')
   );
@@ -268,64 +269,46 @@ export function useOrderEntryPage() {
     () => scheduleCandidateMatch()
   );
 
-  const optionsQuery = useV2ModuleQuery<V2OrderEntryOptions>({
-    moduleKey: 'order-entry',
-    scope: 'order-entry-options',
-    key: () => createV2QueryKey({ customerKeyword: customerSearchKeyword.value.trim() }),
-    keepPreviousData: true,
-    query: ({ signal }) =>
-      idBusinessV2OrdersApi.getEntryOptions(customerSearchKeyword.value.trim() || undefined, {
-        signal
-      })
+  const {
+    data: entryOptionsData,
+    loading: optionsLoading,
+    error: optionsError,
+    resolved: optionsResolved,
+    customerOptionsPending,
+    customerKeyword,
+    searchCustomers,
+    retryOptions: retryEntryOptions
+  } = useOrderEntryOptionsQuery({
+    mode: 'module',
+    moduleKey: 'order-entry'
   });
   watch(
-    optionsQuery.data,
+    entryOptionsData,
     (result) => {
       if (!result) return;
+      if (!customerKeyword.value) {
+        hasConfiguredCustomers.value = result.customers.length > 0;
+      }
       const selectedCustomer = entryOptions.value.customers.find(
         (customer) => customer.id === form.customerId
       );
-      entryOptions.value = {
-        ...result,
-        customers:
-          selectedCustomer &&
-          !result.customers.some((customer) => customer.id === selectedCustomer.id)
-            ? [selectedCustomer, ...result.customers]
-            : result.customers
-      };
+      entryOptions.value = preserveSelectedOrderEntryCustomer(result, selectedCustomer);
     },
     { immediate: true }
   );
-  const optionsLoading = computed(() => optionsQuery.isInitialLoading.value);
-  const optionsError = computed(() =>
-    optionsQuery.error.value ? getApiErrorMessage(optionsQuery.error.value) : ''
-  );
-  const optionsResolved = optionsQuery.hasData;
-  const { isInitialLoading } = optionsQuery;
+  const customerOptions = computed(() => {
+    return getVisibleOrderEntryCustomers(
+      entryOptions.value.customers,
+      form.customerId,
+      customerOptionsPending.value
+    );
+  });
+  const customerSearching = computed(() => customerOptionsPending.value && optionsLoading.value);
 
   function handleOpenedAtChange(openedAt: Date | null) {
     if (openedAt) {
       form.dueAt = calculateOneMonthInclusiveDueAt(openedAt);
     }
-  }
-
-  async function loadEntryOptions(customerKeyword = '') {
-    const normalizedKeyword = customerKeyword.trim();
-    const changed = normalizedKeyword !== customerSearchKeyword.value;
-    customerSearchKeyword.value = normalizedKeyword;
-    try {
-      await (changed ? optionsQuery.ensureFresh() : optionsQuery.refresh());
-    } finally {
-      if (customerSearchKeyword.value === normalizedKeyword) {
-        customerSearching.value = false;
-      }
-    }
-  }
-
-  function searchCustomers(keyword: string) {
-    if (customerSearchTimer) clearTimeout(customerSearchTimer);
-    customerSearching.value = true;
-    customerSearchTimer = setTimeout(() => void loadEntryOptions(keyword.trim()), 300);
   }
 
   function handleCountryChange() {
@@ -470,6 +453,7 @@ export function useOrderEntryPage() {
   }
 
   function handleCustomerCreated(customer: V2OrderEntryCustomer) {
+    hasConfiguredCustomers.value = true;
     entryOptions.value = {
       ...entryOptions.value,
       customers: [
@@ -481,24 +465,12 @@ export function useOrderEntryPage() {
     void nextTick(() => formRef.value?.clearValidate('customerId'));
   }
 
-  function stopDeferredTasks() {
-    if (customerSearchTimer) {
-      clearTimeout(customerSearchTimer);
-      customerSearchTimer = undefined;
-    }
-    customerSearching.value = false;
-  }
-
-  onDeactivated(stopDeferredTasks);
-  onUnmounted(stopDeferredTasks);
-
   return {
     router,
     formRef,
     optionsLoading,
     optionsError,
     optionsResolved,
-    customerSearching,
     idSelectionMode,
     matchingLoading,
     matchingError,
@@ -509,6 +481,9 @@ export function useOrderEntryPage() {
     consumptionResult,
     consumptionError,
     entryOptions,
+    customerOptions,
+    customerKeyword,
+    customerSearching,
     form,
     selectedCountry,
     availableCategories,
@@ -545,9 +520,8 @@ export function useOrderEntryPage() {
     matchingEmptyMessage,
     emptyConfigurationMessage,
     rules,
-    isInitialLoading,
     handleOpenedAtChange,
-    loadEntryOptions,
+    retryEntryOptions,
     searchCustomers,
     handleCountryChange,
     handleCategoryChange,
@@ -565,7 +539,6 @@ export function useOrderEntryPage() {
     retryConsumption,
     resetForm,
     handleCustomerCreated,
-    customerLabel,
     formatDecimal: formatOrderEntryDecimal
   };
 }
