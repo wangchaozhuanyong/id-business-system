@@ -1,9 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { IdBusinessV2FinanceCurrency, Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2Decimal, toV2DecimalString } from '../decimal-policy';
+import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
+import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
 
 export interface SettlementPlatformReportQuery {
   dateFrom?: string;
@@ -30,63 +29,34 @@ interface SettlementReportBucket {
   originalAmounts: Map<
     IdBusinessV2FinanceCurrency,
     {
-      grossReceived: PrismaNamespace.Decimal;
-      refunded: PrismaNamespace.Decimal;
+      grossReceived: Amount4;
+      refunded: Amount4;
     }
   >;
-  grossReceivedCny: PrismaNamespace.Decimal;
-  refundedCny: PrismaNamespace.Decimal;
-  platformFeeCny: PrismaNamespace.Decimal;
-  realizedProfitCny: PrismaNamespace.Decimal;
+  grossReceivedCny: Amount4;
+  refundedCny: Amount4;
+  platformFeeCny: Amount4;
+  realizedProfitCny: Amount4;
   pendingOrderCount: number;
-  pendingReceivedCny: PrismaNamespace.Decimal;
-  pendingProfitCny: PrismaNamespace.Decimal;
+  pendingReceivedCny: Amount4;
+  pendingProfitCny: Amount4;
 }
 
 export async function getIdBusinessV2SettlementPlatformReport(
-  prisma: PrismaService,
+  repository: IdBusinessV2FinanceReportRepository,
   query: SettlementPlatformReportQuery
 ) {
   const settlementPlatformOptionId = normalizeOptionalUuid(
     query.settlementPlatformOptionId,
     '结算平台'
   );
-  const [options, orders] = await Promise.all([
-    prisma.idBusinessV2Option.findMany({
-      where: {
-        type: 'settlement_platform',
-        status: 'active',
-        deletedAt: null
-      },
-      select: {
-        id: true,
-        name: true
-      },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-    }),
-    prisma.idBusinessV2Order.findMany({
-      where: {
-        settlementPlatformOptionId: settlementPlatformOptionId ?? undefined,
-        receivedCurrency: query.currency
-          ? (query.currency.toUpperCase() as IdBusinessV2FinanceCurrency)
-          : undefined,
-        createdAt: parseOccurredAt(query.dateFrom, query.dateTo)
-      },
-      select: {
-        id: true,
-        status: true,
-        settlementPlatformOptionId: true,
-        settlementPlatform: {
-          select: {
-            id: true,
-            name: true
-          }
-        },
-        receivedAmount: true,
-        profitAmount: true
-      }
-    })
-  ]);
+  const { options, orders, journals } = await repository.loadSettlementReport({
+    settlementPlatformOptionId: settlementPlatformOptionId ?? undefined,
+    currency: query.currency
+      ? (query.currency.toUpperCase() as IdBusinessV2FinanceCurrency)
+      : undefined,
+    occurredAt: parseOccurredAt(query.dateFrom, query.dateTo)
+  });
 
   const buckets = new Map<string, SettlementReportBucket>();
   const getBucket = (platform: { id: string; name: string } | null) => {
@@ -108,44 +78,10 @@ export async function getIdBusinessV2SettlementPlatformReport(
     const bucket = getBucket(order.settlementPlatform);
     if (['pending', 'waiting_external', 'processing'].includes(order.status)) {
       bucket.pendingOrderCount += 1;
-      bucket.pendingReceivedCny = bucket.pendingReceivedCny.add(toV2Decimal(order.receivedAmount));
-      bucket.pendingProfitCny = bucket.pendingProfitCny.add(toV2Decimal(order.profitAmount ?? 0));
+      bucket.pendingReceivedCny = bucket.pendingReceivedCny.add(order.receivedAmount);
+      bucket.pendingProfitCny = bucket.pendingProfitCny.add(order.profitAmount);
     }
   }
-
-  const orderIds = orders.map((order) => order.id);
-  const journals = orderIds.length
-    ? await prisma.idBusinessV2FinanceJournal.findMany({
-        where: {
-          OR: [
-            {
-              sourceType: 'order',
-              sourceId: { in: orderIds },
-              journalType: { in: ['order_completed', 'order_refund'] }
-            },
-            {
-              journalType: 'reversal',
-              reversalOf: {
-                is: {
-                  sourceType: 'order',
-                  sourceId: { in: orderIds },
-                  journalType: { in: ['order_completed', 'order_refund'] }
-                }
-              }
-            }
-          ]
-        },
-        include: {
-          lines: true,
-          reversalOf: {
-            select: {
-              sourceId: true,
-              journalType: true
-            }
-          }
-        }
-      })
-    : [];
 
   for (const journal of journals) {
     const originalJournalType =
@@ -171,8 +107,8 @@ export async function getIdBusinessV2SettlementPlatformReport(
     }
 
     for (const line of journal.lines) {
-      const amountCny = toV2Decimal(line.amountCny);
-      const amountOriginal = toV2Decimal(line.amountOriginal);
+      const amountCny = line.amountCny;
+      const amountOriginal = line.amountOriginal;
       if (line.accountCode === 'sales_revenue') {
         if (originalJournalType === 'order_completed') {
           const sign = line.direction === 'credit' ? 1 : -1;
@@ -189,13 +125,13 @@ export async function getIdBusinessV2SettlementPlatformReport(
 
       if (line.accountCode === 'platform_fee') {
         bucket.platformFeeCny = bucket.platformFeeCny.add(
-          line.direction === 'debit' ? amountCny : amountCny.neg()
+          line.direction === 'debit' ? amountCny : amountCny.negated()
         );
       }
 
       if (line.accountCode === 'sales_revenue') {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'credit' ? amountCny : amountCny.neg()
+          line.direction === 'credit' ? amountCny : amountCny.negated()
         );
       } else if (
         ORDER_REPORT_EXPENSE_CODES.includes(
@@ -203,11 +139,11 @@ export async function getIdBusinessV2SettlementPlatformReport(
         )
       ) {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'debit' ? amountCny.neg() : amountCny
+          line.direction === 'debit' ? amountCny.negated() : amountCny
         );
       } else if (line.accountCode === 'realized_fx_gain_loss') {
         bucket.realizedProfitCny = bucket.realizedProfitCny.add(
-          line.direction === 'credit' ? amountCny : amountCny.neg()
+          line.direction === 'credit' ? amountCny : amountCny.negated()
         );
       }
     }
@@ -216,9 +152,7 @@ export async function getIdBusinessV2SettlementPlatformReport(
   const rows = [...buckets.values()].map(toSettlementReportRow).sort((left, right) => {
     if (left.settlementPlatform === null) return 1;
     if (right.settlementPlatform === null) return -1;
-    const amountOrder = new PrismaNamespace.Decimal(right.grossReceivedCny).cmp(
-      left.grossReceivedCny
-    );
+    const amountOrder = Amount4.from(right.grossReceivedCny).compare(left.grossReceivedCny);
     return amountOrder || left.settlementPlatform.name.localeCompare(right.settlementPlatform.name);
   });
   const totalsBucket = createSettlementReportBucket(null);
@@ -256,13 +190,13 @@ function createSettlementReportBucket(
     settlementPlatform,
     completionCountByOrder: new Map(),
     originalAmounts: new Map(),
-    grossReceivedCny: new PrismaNamespace.Decimal(0),
-    refundedCny: new PrismaNamespace.Decimal(0),
-    platformFeeCny: new PrismaNamespace.Decimal(0),
-    realizedProfitCny: new PrismaNamespace.Decimal(0),
+    grossReceivedCny: Amount4.zero(),
+    refundedCny: Amount4.zero(),
+    platformFeeCny: Amount4.zero(),
+    realizedProfitCny: Amount4.zero(),
     pendingOrderCount: 0,
-    pendingReceivedCny: new PrismaNamespace.Decimal(0),
-    pendingProfitCny: new PrismaNamespace.Decimal(0)
+    pendingReceivedCny: Amount4.zero(),
+    pendingProfitCny: Amount4.zero()
   };
 }
 
@@ -273,8 +207,8 @@ function getSettlementOriginalAmount(
   const existing = bucket.originalAmounts.get(currency);
   if (existing) return existing;
   const value = {
-    grossReceived: new PrismaNamespace.Decimal(0),
-    refunded: new PrismaNamespace.Decimal(0)
+    grossReceived: Amount4.zero(),
+    refunded: Amount4.zero()
   };
   bucket.originalAmounts.set(currency, value);
   return value;
@@ -307,10 +241,10 @@ function mergeSettlementReportBucket(
 }
 
 function toSettlementReportRow(bucket: SettlementReportBucket) {
-  const receivedAfterRefund = roundV2Decimal(bucket.grossReceivedCny.sub(bucket.refundedCny));
-  const netSettlement = roundV2Decimal(receivedAfterRefund.sub(bucket.platformFeeCny));
-  const realizedProfitRate = receivedAfterRefund.greaterThan(0)
-    ? roundV2Decimal(bucket.realizedProfitCny.div(receivedAfterRefund).mul(100))
+  const receivedAfterRefund = bucket.grossReceivedCny.sub(bucket.refundedCny);
+  const netSettlement = receivedAfterRefund.sub(bucket.platformFeeCny);
+  const realizedProfitRate = receivedAfterRefund.gt(0)
+    ? Rate8.from(bucket.realizedProfitCny.ratio(receivedAfterRefund).mul(100))
     : null;
   return {
     settlementPlatform: bucket.settlementPlatform,
@@ -320,19 +254,19 @@ function toSettlementReportRow(bucket: SettlementReportBucket) {
       const amount = bucket.originalAmounts.get(currency);
       return {
         currency,
-        grossReceived: toV2DecimalString(amount?.grossReceived ?? 0),
-        refunded: toV2DecimalString(amount?.refunded ?? 0)
+        grossReceived: (amount?.grossReceived ?? Amount4.zero()).toString(),
+        refunded: (amount?.refunded ?? Amount4.zero()).toString()
       };
     }),
-    grossReceivedCny: toV2DecimalString(bucket.grossReceivedCny),
-    refundedCny: toV2DecimalString(bucket.refundedCny),
-    platformFeeCny: toV2DecimalString(bucket.platformFeeCny),
-    netSettlementCny: toV2DecimalString(netSettlement),
-    realizedProfitCny: toV2DecimalString(bucket.realizedProfitCny),
-    realizedProfitRate: realizedProfitRate === null ? null : toV2DecimalString(realizedProfitRate),
+    grossReceivedCny: bucket.grossReceivedCny.toString(),
+    refundedCny: bucket.refundedCny.toString(),
+    platformFeeCny: bucket.platformFeeCny.toString(),
+    netSettlementCny: netSettlement.toString(),
+    realizedProfitCny: bucket.realizedProfitCny.toString(),
+    realizedProfitRate: realizedProfitRate?.toString() ?? null,
     pendingOrderCount: bucket.pendingOrderCount,
-    pendingReceivedCny: toV2DecimalString(bucket.pendingReceivedCny),
-    pendingProfitCny: toV2DecimalString(bucket.pendingProfitCny)
+    pendingReceivedCny: bucket.pendingReceivedCny.toString(),
+    pendingProfitCny: bucket.pendingProfitCny.toString()
   };
 }
 
@@ -345,7 +279,7 @@ function normalizeOptionalUuid(value: unknown, label: string) {
   return normalized;
 }
 
-function parseOccurredAt(from?: string, to?: string): Prisma.DateTimeFilter | undefined {
+function parseOccurredAt(from?: string, to?: string) {
   if (!from && !to) return undefined;
   return {
     gte: from ? normalizeFinanceDate(`${from}T00:00:00+08:00`, '开始日期') : undefined,

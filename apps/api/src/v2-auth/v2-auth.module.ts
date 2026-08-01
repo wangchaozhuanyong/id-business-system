@@ -7,6 +7,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FieldEncryptionService } from '../common/crypto/field-encryption.service';
 import { SecurityService } from '../security/security.service';
 import { AuthService } from '../auth/auth.service';
+import { AuthAvailabilityMonitor } from '../auth/auth-availability.monitor';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { SupabaseAuthService } from '../auth/supabase-auth.service';
@@ -14,8 +15,11 @@ import { V2AuthController } from './v2-auth.controller';
 import { V2EmployeesController } from './employees/v2-employees.controller';
 import { V2EmployeesService } from './employees/v2-employees.service';
 import { V2IdentityService } from './v2-identity.service';
+import { V2ProfileController } from './profile/v2-profile.controller';
+import { V2ProfileService } from './profile/v2-profile.service';
 import { V2RolesController } from './roles/v2-roles.controller';
 import { V2RolesService } from './roles/v2-roles.service';
+import { V2SecurityController } from './security/v2-security.controller';
 
 @Module({
   imports: [
@@ -39,16 +43,24 @@ import { V2RolesService } from './roles/v2-roles.service';
       }
     })
   ],
-  controllers: [V2AuthController, V2EmployeesController, V2RolesController],
+  controllers: [
+    V2AuthController,
+    V2EmployeesController,
+    V2RolesController,
+    V2SecurityController,
+    V2ProfileController
+  ],
   providers: [
     AuditLogsService,
     FieldEncryptionService,
     SecurityService,
     V2IdentityService,
     V2EmployeesService,
+    V2ProfileService,
     V2RolesService,
     AuthService,
     SupabaseAuthService,
+    AuthAvailabilityMonitor,
     JwtAuthGuard,
     PermissionsGuard,
     {
@@ -60,6 +72,6 @@ import { V2RolesService } from './roles/v2-roles.service';
       useClass: PermissionsGuard
     }
   ],
-  exports: [JwtAuthGuard, PermissionsGuard]
+  exports: [AuthAvailabilityMonitor, JwtAuthGuard, PermissionsGuard]
 })
 export class V2AuthModule {}

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-/* global document, getComputedStyle, requestAnimationFrame */
+/* global document, getComputedStyle, location, requestAnimationFrame, window */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -14,8 +14,10 @@ const adminUrl = new URL(configuredAdminUrl ?? 'http://127.0.0.1:5384');
 const screenshotDirectory = process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR
   ? path.resolve(process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR)
   : null;
-const viewportWidths = [1440, 1024, 901, 900, 768, 390];
+const viewportWidths = [2141, 1920, 1600, 1440, 1024, 901, 900, 768, 390];
+const stabilityCheckpoints = [50, 100, 260, 500];
 const mobileBreakpoint = 900;
+const registeredSchemaIds = loadRegisteredSchemaIds();
 const permissionScenarios = [
   {
     key: 'all',
@@ -100,7 +102,9 @@ try {
       ok: true,
       actionLayouts: ['icon', 'single', 'double', 'triple', 'wide'],
       permissionScenarios: permissionScenarios.map(({ key }) => key),
-      viewportWidths
+      viewportWidths,
+      stabilityCheckpoints: ['2rAF', ...stabilityCheckpoints.map((value) => `${value}ms`)],
+      registeredSchemas: registeredSchemaIds.length
     })
   );
 } finally {
@@ -255,15 +259,21 @@ async function verifyLayoutFixture(browserInstance) {
     });
     await page.locator('[data-layout-fixture]').first().waitFor({ state: 'visible' });
 
-    for (const width of [1600, 1440, 1024, 901]) {
+    for (const width of viewportWidths) {
       await page.setViewportSize({ width, height: 1000 });
-      await settleLayout(page);
+      assertLayoutStable(await sampleLayoutTimeline(page), `布局夹具 ${width}px`);
       const measurements = await measureActionGroups(page, '[data-layout-fixture]');
       assert.equal(measurements.length, 5, `宽度 ${width}px 未渲染全部五种操作列档位`);
       assertActionGroupsFit(measurements, `布局夹具 ${width}px`);
       assertSemanticColumnLayout(await measureSemanticColumnLayout(page), `语义列夹具 ${width}px`);
+      assertNarrowContainerLayout(
+        await measureSemanticColumnLayout(page, '[data-narrow-container]'),
+        `窄容器夹具 ${width}px`
+      );
+      assertRegisteredSchemaFixtures(await measureRegisteredSchemaFixtures(page), width);
       assert.equal(await getDocumentOverflow(page), 0, `布局夹具 ${width}px 出现页面横向溢出`);
     }
+    await verifyScrollLifecycle(page);
     assert.deepEqual(runtimeErrors, [], `布局夹具出现浏览器错误：${runtimeErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -287,11 +297,9 @@ async function verifyCustomerPage(browserInstance, scenario) {
     await page.goto(new URL('/v2/customers', adminUrl).href, {
       waitUntil: 'domcontentloaded'
     });
+    let customerTableInstance;
     try {
-      await page.locator('.v2-records-mobile-item').first().waitFor({
-        state: 'attached',
-        timeout: 20_000
-      });
+      customerTableInstance = await waitForCustomerContentReady(page, user.displayName);
     } catch (error) {
       const bodyText = await page
         .locator('body')
@@ -312,7 +320,8 @@ async function verifyCustomerPage(browserInstance, scenario) {
 
     for (const width of viewportWidths) {
       await page.setViewportSize({ width, height: width <= mobileBreakpoint ? 844 : 900 });
-      await settleLayout(page);
+      await assertCustomerContentReady(page, user.displayName, customerTableInstance, width);
+      assertLayoutStable(await sampleLayoutTimeline(page), `客户页 ${scenario.key} ${width}px`);
       if (width > mobileBreakpoint) {
         await verifyDesktopCustomerLayout(page, scenario, width);
       } else {
@@ -334,6 +343,85 @@ async function verifyCustomerPage(browserInstance, scenario) {
   } finally {
     await context.close();
   }
+}
+
+async function waitForCustomerContentReady(page, expectedDisplayName) {
+  await page.waitForLoadState('networkidle', { timeout: 20_000 });
+  await page.waitForFunction(
+    ({ displayName, quietMilliseconds }) => {
+      const table = document.querySelector('[data-table-schema="customers.main"]');
+      const region = table?.closest('.v2-async-region');
+      const renderedDisplayName = document
+        .querySelector('.v2-topbar__account-copy strong')
+        ?.textContent?.trim();
+      const rowCount =
+        table?.querySelectorAll('.el-table__body-wrapper .el-table__row').length ?? 0;
+      const ready =
+        location.pathname === '/v2/customers' &&
+        renderedDisplayName === displayName &&
+        document.querySelectorAll('[data-table-schema="customers.main"]').length === 1 &&
+        region?.getAttribute('aria-busy') === 'false' &&
+        rowCount === 2 &&
+        document.querySelectorAll('.v2-records-mobile-item').length === 2;
+      const readinessKey = '__v2TableAcceptanceReadiness';
+      const state = window[readinessKey];
+      if (!ready) {
+        window[readinessKey] = null;
+        return false;
+      }
+      if (!state || state.table !== table || state.rowCount !== rowCount) {
+        window[readinessKey] = { rowCount, since: performance.now(), table };
+        return false;
+      }
+      return performance.now() - state.since >= quietMilliseconds;
+    },
+    { displayName: expectedDisplayName, quietMilliseconds: 200 },
+    { timeout: 20_000 }
+  );
+
+  const instanceToken = `customers-${Date.now()}`;
+  await page.locator('[data-table-schema="customers.main"]').evaluate((table, token) => {
+    table.setAttribute('data-layout-acceptance-instance', token);
+  }, instanceToken);
+  return instanceToken;
+}
+
+async function assertCustomerContentReady(page, expectedDisplayName, instanceToken, width) {
+  const state = await page.evaluate(
+    ({ displayName, token }) => {
+      const table = document.querySelector('[data-table-schema="customers.main"]');
+      const region = table?.closest('.v2-async-region');
+      return {
+        pathname: location.pathname,
+        renderedDisplayName: document
+          .querySelector('.v2-topbar__account-copy strong')
+          ?.textContent?.trim(),
+        tableCount: document.querySelectorAll('[data-table-schema="customers.main"]').length,
+        tableInstance: table?.getAttribute('data-layout-acceptance-instance') ?? null,
+        regionBusy: region?.getAttribute('aria-busy') ?? null,
+        rowCount: table?.querySelectorAll('.el-table__body-wrapper .el-table__row').length ?? 0,
+        cardCount: document.querySelectorAll('.v2-records-mobile-item').length,
+        expectedDisplayName: displayName,
+        expectedInstance: token
+      };
+    },
+    { displayName: expectedDisplayName, token: instanceToken }
+  );
+  assert.deepEqual(
+    state,
+    {
+      pathname: '/v2/customers',
+      renderedDisplayName: expectedDisplayName,
+      tableCount: 1,
+      tableInstance: instanceToken,
+      regionBusy: 'false',
+      rowCount: 2,
+      cardCount: 2,
+      expectedDisplayName,
+      expectedInstance: instanceToken
+    },
+    `客户页 ${width}px 布局采样前内容尚未就绪或表格被重新挂载`
+  );
 }
 
 async function verifyDesktopCustomerLayout(page, scenario, width) {
@@ -468,10 +556,18 @@ function assertActionGroupsFit(measurements, label) {
   }
 }
 
-async function measureSemanticColumnLayout(page) {
-  return page.locator('[data-alignment-fixture]').evaluate((container) => {
-    const table = container.querySelector('.v2-adaptive-table');
+async function measureSemanticColumnLayout(page, containerSelector = '[data-alignment-fixture]') {
+  return page.locator(containerSelector).evaluate((container) => {
+    const table = container.querySelector('.v2-unified-table');
     const tableWidth = table?.getBoundingClientRect().width ?? 0;
+    const containerRect = container.getBoundingClientRect();
+    const tableRect = table?.getBoundingClientRect();
+    const scroller = table
+      ? [...table.querySelectorAll('.el-scrollbar__wrap')].sort(
+          (left, right) =>
+            right.scrollWidth - right.clientWidth - (left.scrollWidth - left.clientWidth)
+        )[0]
+      : null;
     const columns = ['text', 'identifier', 'index', 'numeric', 'date', 'status'].map((kind) => {
       const header = container.querySelector(`th.v2-table-column--${kind}`);
       const cell = container.querySelector(`td.v2-table-column--${kind}`);
@@ -490,7 +586,16 @@ async function measureSemanticColumnLayout(page) {
           : null
       };
     });
-    return { tableWidth, columns };
+    return {
+      tableWidth,
+      columns,
+      scrollerClientWidth: scroller?.clientWidth ?? 0,
+      scrollerScrollWidth: scroller?.scrollWidth ?? 0,
+      outsideContainer:
+        tableRect == null
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, containerRect.left - tableRect.left, tableRect.right - containerRect.right)
+    };
   });
 }
 
@@ -503,29 +608,37 @@ function assertSemanticColumnLayout(measurement, label) {
     date: 'left',
     status: 'center'
   };
-  const expectedWidths = {
+  const minimumWidths = {
+    text: 160,
     identifier: 192,
     index: 72,
     numeric: 128,
     date: 165,
     status: 112
   };
-  const expectedPadding =
-    measurement.tableWidth >= 1200 ? 12 : measurement.tableWidth >= 840 ? 10 : 8;
+  const expectedPadding = Math.min(12, Math.max(8, measurement.tableWidth / 100));
   assert.equal(measurement.columns.length, 6, `${label} 未渲染全部六种语义列`);
   for (const column of measurement.columns) {
     const expected = expectedAlignments[column.kind];
     assert.equal(column.headerTextAlign, expected, `${label} ${column.kind} 表头未对齐`);
     assert.equal(column.cellTextAlign, expected, `${label} ${column.kind} 内容未对齐`);
-    assert.equal(column.paddingLeft, expectedPadding, `${label} ${column.kind} 左侧间距不正确`);
-    assert.equal(column.paddingRight, expectedPadding, `${label} ${column.kind} 右侧间距不正确`);
-    if (column.kind === 'text') {
-      assert.ok(column.width >= 160, `${label} 文本列小于 wide 最小宽度`);
+    assert.ok(
+      Math.abs(column.paddingLeft - expectedPadding) <= 0.25,
+      `${label} ${column.kind} 左侧间距未连续自适应`
+    );
+    assert.ok(
+      Math.abs(column.paddingRight - expectedPadding) <= 0.25,
+      `${label} ${column.kind} 右侧间距未连续自适应`
+    );
+    if (column.kind === 'index') {
+      assert.ok(
+        Math.abs(column.width - minimumWidths.index) <= 1,
+        `${label} 序号列未保持 72px 固定宽度`
+      );
     } else {
-      assert.equal(
-        Math.round(column.width),
-        expectedWidths[column.kind],
-        `${label} ${column.kind} 未保持固定语义宽度`
+      assert.ok(
+        column.width >= minimumWidths[column.kind] - 1,
+        `${label} ${column.kind} 小于 schema 最小宽度`
       );
     }
     if (['identifier', 'index', 'numeric', 'date'].includes(column.kind)) {
@@ -536,6 +649,265 @@ function assertSemanticColumnLayout(measurement, label) {
       );
     }
   }
+
+  const flexibleColumns = measurement.columns.filter((column) => column.kind !== 'index');
+  const flexibleMinimumTotal = flexibleColumns.reduce(
+    (total, column) => total + minimumWidths[column.kind],
+    0
+  );
+  const flexibleActualTotal = flexibleColumns.reduce((total, column) => total + column.width, 0);
+  const hasHorizontalOverflow =
+    measurement.scrollerScrollWidth > measurement.scrollerClientWidth + 1;
+
+  if (hasHorizontalOverflow) {
+    for (const column of flexibleColumns) {
+      assert.ok(
+        Math.abs(column.width - minimumWidths[column.kind]) <= 1,
+        `${label} ${column.kind} 内部滚动时未保持 schema 最小宽度`
+      );
+    }
+  } else {
+    const proportionalScale = flexibleActualTotal / flexibleMinimumTotal;
+    for (const column of flexibleColumns) {
+      const expectedWidth = minimumWidths[column.kind] * proportionalScale;
+      const actualScale = column.width / minimumWidths[column.kind];
+      assert.ok(
+        Math.abs(actualScale - proportionalScale) <= 0.03,
+        `${label} ${column.kind} 未按 schema 最小宽度同比例分配剩余空间（实际 ${column.width.toFixed(2)}，期望 ${expectedWidth.toFixed(2)}，实际比例 ${actualScale.toFixed(4)}，整体比例 ${proportionalScale.toFixed(4)}）`
+      );
+    }
+  }
+}
+
+function assertNarrowContainerLayout(measurement, label) {
+  assertSemanticColumnLayout(measurement, label);
+  assert.ok(measurement.tableWidth <= 480.5, `${label} 表格宽度超出 480px 抽屉容器`);
+  assert.ok(measurement.outsideContainer <= 1, `${label} 表格越出抽屉容器`);
+  assert.ok(
+    measurement.scrollerScrollWidth > measurement.scrollerClientWidth + 1,
+    `${label} 未把超宽内容限制为表格内部横向滚动`
+  );
+}
+
+async function measureRegisteredSchemaFixtures(page) {
+  return page.locator('[data-schema-fixture]').evaluateAll((sections) =>
+    sections.map((section) => {
+      const table = section.querySelector('.v2-unified-table');
+      const sectionRect = section.getBoundingClientRect();
+      const tableRect = table?.getBoundingClientRect();
+      const visible = Boolean(
+        table &&
+        getComputedStyle(table).display !== 'none' &&
+        tableRect &&
+        tableRect.width > 0 &&
+        tableRect.height > 0
+      );
+      const headers = table ? [...table.querySelectorAll('.el-table__header-wrapper th')] : [];
+      return {
+        id: section.getAttribute('data-schema-fixture'),
+        schemaId: table?.getAttribute('data-table-schema') ?? null,
+        mobileMode: table?.getAttribute('data-mobile-mode') ?? null,
+        expectedColumns: Number(section.getAttribute('data-schema-columns')),
+        renderedColumns: headers.length,
+        visible,
+        invalidVisibleColumnWidths: visible
+          ? headers.filter((header) => {
+              const width = header.getBoundingClientRect().width;
+              return !Number.isFinite(width) || width <= 0;
+            }).length
+          : 0,
+        outsideContainer:
+          tableRect == null
+            ? Number.POSITIVE_INFINITY
+            : Math.max(0, sectionRect.left - tableRect.left, tableRect.right - sectionRect.right)
+      };
+    })
+  );
+}
+
+function assertRegisteredSchemaFixtures(measurements, width) {
+  const actualIds = measurements
+    .map(({ id }) => id)
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(actualIds, registeredSchemaIds, `${width}px 未动态渲染所有最终 schema`);
+  assert.equal(new Set(actualIds).size, actualIds.length, `${width}px schema 夹具 id 重复`);
+
+  for (const measurement of measurements) {
+    assert.equal(measurement.schemaId, measurement.id, `${width}px schema id 与表格不一致`);
+    assert.equal(
+      measurement.renderedColumns,
+      measurement.expectedColumns,
+      `${width}px ${measurement.id} 列数与 schema 不一致`
+    );
+    const expectedVisible = width > mobileBreakpoint || measurement.mobileMode === 'scroll';
+    assert.equal(
+      measurement.visible,
+      expectedVisible,
+      `${width}px ${measurement.id} 移动呈现模式不正确`
+    );
+    if (measurement.visible) {
+      assert.equal(
+        measurement.invalidVisibleColumnWidths,
+        0,
+        `${width}px ${measurement.id} 存在无效列宽`
+      );
+      assert.ok(measurement.outsideContainer <= 1, `${width}px ${measurement.id} 表格超出容器`);
+    }
+  }
+}
+
+async function sampleLayoutTimeline(page) {
+  const startedAt = Date.now();
+  await waitForTwoAnimationFrames(page);
+  const samples = [{ checkpoint: '2rAF', state: await captureLayoutState(page) }];
+  for (const checkpoint of stabilityCheckpoints) {
+    const remaining = startedAt + checkpoint - Date.now();
+    if (remaining > 0) await page.waitForTimeout(remaining);
+    samples.push({ checkpoint: `${checkpoint}ms`, state: await captureLayoutState(page) });
+  }
+  return samples;
+}
+
+async function captureLayoutState(page) {
+  return page.evaluate(() => ({
+    documentOverflow: Math.max(
+      0,
+      document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      document.body.scrollWidth - document.body.clientWidth
+    ),
+    tables: [...document.querySelectorAll('.v2-unified-table')].map((table, index) => {
+      const rect = table.getBoundingClientRect();
+      const scrollers = [...table.querySelectorAll('.el-scrollbar__wrap')];
+      const scroller = scrollers.sort(
+        (left, right) =>
+          right.scrollWidth - right.clientWidth - (left.scrollWidth - left.clientWidth)
+      )[0];
+      return {
+        identity: `${table.getAttribute('data-table-schema') ?? 'unknown'}#${index}`,
+        visible: getComputedStyle(table).display !== 'none' && rect.width > 0,
+        left: rect.left,
+        width: rect.width,
+        scrollLeft: scroller?.scrollLeft ?? 0,
+        headerWidths: [...table.querySelectorAll('.el-table__header-wrapper th')].map(
+          (header) => header.getBoundingClientRect().width
+        )
+      };
+    })
+  }));
+}
+
+function assertLayoutStable(samples, label) {
+  const baseline = samples.at(-1)?.state;
+  assert.ok(baseline, `${label} 缺少布局采样`);
+  for (const { checkpoint, state } of samples) {
+    assert.ok(state.documentOverflow <= 1, `${label} ${checkpoint} 页面出现横向溢出`);
+    assert.equal(
+      state.tables.length,
+      baseline.tables.length,
+      `${label} ${checkpoint} 表格数量漂移`
+    );
+    for (const [index, table] of state.tables.entries()) {
+      const expected = baseline.tables[index];
+      assert.equal(table.identity, expected.identity, `${label} ${checkpoint} 表格顺序漂移`);
+      assert.equal(table.visible, expected.visible, `${label} ${checkpoint} 表格可见性漂移`);
+      assert.ok(
+        Math.abs(table.left - expected.left) <= 1,
+        `${label} ${checkpoint} ${table.identity} 横向位置漂移超过 1px`
+      );
+      assert.ok(
+        Math.abs(table.width - expected.width) <= 1,
+        `${label} ${checkpoint} ${table.identity} 宽度漂移超过 1px`
+      );
+      assert.ok(
+        Math.abs(table.scrollLeft - expected.scrollLeft) <= 1,
+        `${label} ${checkpoint} ${table.identity} scrollLeft 漂移超过 1px`
+      );
+      assert.equal(
+        table.headerWidths.length,
+        expected.headerWidths.length,
+        `${label} ${checkpoint} ${table.identity} 表头列数漂移`
+      );
+      for (const [columnIndex, columnWidth] of table.headerWidths.entries()) {
+        assert.ok(
+          Math.abs(columnWidth - expected.headerWidths[columnIndex]) <= 1,
+          `${label} ${checkpoint} ${table.identity} 第 ${columnIndex + 1} 列宽漂移超过 1px`
+        );
+      }
+    }
+  }
+}
+
+async function verifyScrollLifecycle(page) {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+  const before = await setLifecycleScroll(page, 240);
+  assert.ok(before.maxScrollLeft > 1, '滚动生命周期夹具未产生内部横向滚动');
+  assert.ok(before.scrollLeft > 1, '滚动生命周期夹具未能设置 scrollLeft');
+
+  await page.locator('[data-update-same-table]').click();
+  const sameTableSamples = await sampleLifecycleTimeline(page);
+  for (const sample of sameTableSamples) {
+    assert.equal(
+      sample.schemaId,
+      before.schemaId,
+      `${sample.checkpoint} 同表数据更新意外更换 schema`
+    );
+    assert.ok(
+      Math.abs(sample.scrollLeft - before.scrollLeft) <= 1,
+      `${sample.checkpoint} 同表数据更新未保留 scrollLeft`
+    );
+  }
+
+  await page.locator('[data-switch-schema]').click();
+  const switchedSamples = await sampleLifecycleTimeline(page);
+  for (const sample of switchedSamples) {
+    assert.notEqual(sample.schemaId, before.schemaId, `${sample.checkpoint} schema 未完成切换`);
+    assert.ok(sample.scrollLeft <= 1, `${sample.checkpoint} schema 切换后未归零 scrollLeft`);
+  }
+  assert.equal(await getDocumentOverflow(page), 0, '滚动生命周期验收出现页面溢出');
+}
+
+async function setLifecycleScroll(page, requestedLeft) {
+  return page.locator('[data-scroll-lifecycle] .v2-unified-table').evaluate((table, left) => {
+    const scroller = [...table.querySelectorAll('.el-scrollbar__wrap')].sort(
+      (first, second) =>
+        second.scrollWidth - second.clientWidth - (first.scrollWidth - first.clientWidth)
+    )[0];
+    if (!scroller) return { schemaId: null, scrollLeft: 0, maxScrollLeft: 0 };
+    scroller.scrollLeft = Math.min(left, scroller.scrollWidth - scroller.clientWidth);
+    scroller.dispatchEvent(new Event('scroll'));
+    return {
+      schemaId: table.getAttribute('data-table-schema'),
+      scrollLeft: scroller.scrollLeft,
+      maxScrollLeft: scroller.scrollWidth - scroller.clientWidth
+    };
+  }, requestedLeft);
+}
+
+async function sampleLifecycleTimeline(page) {
+  const startedAt = Date.now();
+  await waitForTwoAnimationFrames(page);
+  const samples = [{ checkpoint: '2rAF', ...(await readLifecycleState(page)) }];
+  for (const checkpoint of stabilityCheckpoints) {
+    const remaining = startedAt + checkpoint - Date.now();
+    if (remaining > 0) await page.waitForTimeout(remaining);
+    samples.push({ checkpoint: `${checkpoint}ms`, ...(await readLifecycleState(page)) });
+  }
+  return samples;
+}
+
+async function readLifecycleState(page) {
+  return page.locator('[data-scroll-lifecycle] .v2-unified-table').evaluate((table) => {
+    const scroller = [...table.querySelectorAll('.el-scrollbar__wrap')].sort(
+      (first, second) =>
+        second.scrollWidth - second.clientWidth - (first.scrollWidth - first.clientWidth)
+    )[0];
+    return {
+      schemaId: table.getAttribute('data-table-schema'),
+      scrollLeft: scroller?.scrollLeft ?? 0
+    };
+  });
 }
 
 async function getDocumentOverflow(page) {
@@ -586,6 +958,8 @@ async function installApiMocks(page, user, unexpectedRequests) {
         success: false,
         errorCode: 'UNEXPECTED_LAYOUT_TEST_REQUEST',
         message: 'Unexpected layout test request',
+        requestId: 'request-layout-unexpected',
+        retryable: false,
         timestamp: new Date().toISOString()
       })
     });
@@ -600,6 +974,7 @@ async function fulfillSuccess(route, data) {
       success: true,
       data,
       message: 'OK',
+      requestId: 'request-layout-success',
       timestamp: new Date().toISOString()
     })
   });
@@ -611,7 +986,8 @@ function createUser(scenario) {
     username: `layout-${scenario.key}`,
     displayName: `布局验收 ${scenario.key}`,
     roles: ['layout-test'],
-    permissions: scenario.permissions
+    permissions: scenario.permissions,
+    mustResetPassword: false
   };
 }
 
@@ -696,15 +1072,32 @@ function collectRuntimeErrors(page) {
 }
 
 async function settleLayout(page) {
-  // The shell and sidebar use 220ms responsive transitions. Wait for those to
-  // finish before measuring or capturing the breakpoint result.
-  await page.waitForTimeout(260);
+  await waitForTwoAnimationFrames(page);
+}
+
+async function waitForTwoAnimationFrames(page) {
   await page.evaluate(
     () =>
       new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
       })
   );
+}
+
+function loadRegisteredSchemaIds() {
+  const source = readFileSync(
+    path.join(rootDir, 'apps/admin/src/v2/features/tableSchemas.ts'),
+    'utf8'
+  )
+    .replace(/^import[^\n]+\n/m, '')
+    .replace('const table = defineV2TableSchema;', 'const table = (schema) => schema;')
+    .replaceAll('export const ', 'const ')
+    .replaceAll(' as const', '');
+  const registry = new Function(`${source}\nreturn v2TableSchemas;`)();
+  return Object.values(registry)
+    .flatMap((schemas) => Object.values(schemas))
+    .map((schema) => schema.id)
+    .sort();
 }
 
 async function maybeCaptureScreenshot(page, scenarioKey, width) {

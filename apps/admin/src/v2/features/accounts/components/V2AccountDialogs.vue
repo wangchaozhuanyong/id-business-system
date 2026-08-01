@@ -189,17 +189,21 @@
       show-icon
     />
 
-    <el-table
+    <V2Table
       v-if="page.importFailures.length"
+      :schema="v2TableSchemas.accounts.importErrors"
       show-overflow-tooltip
       :data="page.importFailures"
       max-height="300"
       size="small"
       class="v2-account-import-errors"
     >
-      <V2TableColumn kind="index" width-preset="index" prop="rowNumber" label="行号" />
-      <V2TableColumn kind="text" prop="reason" label="未导入原因" width-preset="longText" />
-    </el-table>
+      <V2TableColumn
+        :definition="v2TableSchemas.accounts.importErrors.columns[0]"
+        prop="rowNumber"
+      />
+      <V2TableColumn :definition="v2TableSchemas.accounts.importErrors.columns[1]" prop="reason" />
+    </V2Table>
 
     <template #footer>
       <span v-if="importDisabledReason" class="v2-submit-disabled-reason" role="status">
@@ -354,6 +358,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';

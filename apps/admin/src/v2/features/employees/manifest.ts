@@ -1,5 +1,5 @@
-import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const employeesFeature = defineV2Feature({
   key: 'employees',
@@ -29,27 +29,6 @@ export const employeesFeature = defineV2Feature({
       kind: 'select'
     }
   ],
-  columns: [
-    { key: 'username', label: '登录账号', kind: 'identifier', widthPreset: 'identifier' },
-    { key: 'displayName', label: '员工姓名', kind: 'text', widthPreset: 'wide' },
-    { key: 'roles', label: '角色', kind: 'text', widthPreset: 'wide' },
-    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-    {
-      key: 'activeSessionCount',
-      label: '在线会话',
-      kind: 'numeric',
-      widthPreset: 'compact'
-    },
-    { key: 'passwordState', label: '密码状态', kind: 'status', widthPreset: 'standard' },
-    { key: 'lastLoginAt', label: '最近登录', kind: 'date', widthPreset: 'dateTime' },
-    { key: 'createdAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
-    {
-      key: 'actions',
-      label: '操作',
-      kind: 'actions',
-      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
-      fixed: 'right'
-    }
-  ],
+  tables: v2TablesByFeature['employees'],
   loadView: () => import('./V2EmployeesView.vue')
 });

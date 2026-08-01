@@ -1,6 +1,8 @@
 import { ForbiddenException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { IdBusinessV2CustomersService } from './id-business-v2-customers.service';
+import { IdBusinessV2CustomerRepository } from './persistence/id-business-v2-customer.repository';
 
 const operator = {
   id: '20000000-0000-4000-8000-000000000001',
@@ -71,9 +73,14 @@ describe('IdBusinessV2CustomersService', () => {
     },
     sensitiveAccessLog: {
       create: vi.fn()
+    },
+    sensitiveAccessApproval: {
+      findUnique: vi.fn()
+    },
+    auditLog: {
+      create: vi.fn()
     }
   };
-  const auditLogsService = { create: vi.fn() };
   const encryptionService = {
     encrypt: vi.fn(),
     decrypt: vi.fn(),
@@ -84,16 +91,18 @@ describe('IdBusinessV2CustomersService', () => {
     requireActiveOptions: vi.fn()
   };
   const service = new IdBusinessV2CustomersService(
-    prisma as never,
-    auditLogsService as never,
+    new IdBusinessV2CustomerRepository(prisma as never),
     encryptionService as never,
-    optionsService as never
+    optionsService as never,
+    new V2CommandTransactionManager(prisma as never),
+    new V2TransactionalAuditService()
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
-      Promise.all(operations)
+    prisma.$transaction.mockImplementation(
+      async (work: Array<Promise<unknown>> | ((tx: typeof prisma) => Promise<unknown>)) =>
+        typeof work === 'function' ? work(prisma) : Promise.all(work)
     );
     encryptionService.encrypt.mockImplementation((value: string | null) =>
       value ? `encrypted:${value}` : null
@@ -106,7 +115,7 @@ describe('IdBusinessV2CustomersService', () => {
     );
     optionsService.requireActiveOption.mockResolvedValue(source);
     optionsService.requireActiveOptions.mockResolvedValue([tag]);
-    auditLogsService.create.mockResolvedValue({ id: 'audit-1' });
+    prisma.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
   it('lists customers by stable business order without exposing a numeric sort value', async () => {
@@ -195,8 +204,21 @@ describe('IdBusinessV2CustomersService', () => {
     expect(result.maskedPhone).toBe('138****8000');
     expect(result.maskedWhatsapp).toBe('+60****6789');
     expect(JSON.stringify(result)).not.toContain('encrypted-phone');
-    expect(JSON.stringify(auditLogsService.create.mock.calls)).not.toContain('13800138000');
-    expect(JSON.stringify(auditLogsService.create.mock.calls)).not.toContain('+60123456789');
+    expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('13800138000');
+    expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('+60123456789');
+  });
+
+  it('rejects the customer command when the in-transaction audit fails', async () => {
+    prisma.idBusinessV2Customer.create.mockResolvedValue(makeCustomer());
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(
+      service.create({ name: '测试客户', sourceOptionId: source.id }, operator)
+    ).rejects.toThrow('audit unavailable');
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.idBusinessV2Customer.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
   it('keeps WhatsApp when omitted and clears every stored derivative when explicitly null', async () => {
@@ -252,7 +274,19 @@ describe('IdBusinessV2CustomersService', () => {
         })
       })
     );
-    expect(JSON.stringify(auditLogsService.create.mock.calls)).not.toContain('13800138000');
+    expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('13800138000');
+  });
+
+  it('does not return decrypted contact data when sensitive audit persistence fails', async () => {
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(
+      service.revealPhone('customer-1', { reason: '处理客户续费' }, operator)
+    ).rejects.toThrow('audit unavailable');
+
+    expect(prisma.sensitiveAccessLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
   it('rejects phone reveal without the sensitive permission', async () => {
@@ -284,7 +318,7 @@ describe('IdBusinessV2CustomersService', () => {
         })
       })
     );
-    const auditCalls = JSON.stringify(auditLogsService.create.mock.calls);
+    const auditCalls = JSON.stringify(prisma.auditLog.create.mock.calls);
     expect(auditCalls).toContain('id_business_v2.customer.whatsapp.reveal');
     expect(auditCalls).not.toContain('+60123456789');
   });
@@ -301,8 +335,10 @@ describe('IdBusinessV2CustomersService', () => {
         })
       })
     );
-    expect(auditLogsService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'id_business_v2.customer.delete' })
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'id_business_v2.customer.delete' })
+      })
     );
   });
 });

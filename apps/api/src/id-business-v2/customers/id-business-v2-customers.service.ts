@@ -4,17 +4,25 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
-import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { verifySensitiveAccessApproval } from '../../common/sensitive-access-approval';
+import type { PaginationQuery } from '../../common/pagination';
 import { IdBusinessV2OptionsService } from '../options/public-api';
+import {
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  toV2JsonDocument,
+  type V2CommandTransaction
+} from '../runtime/public-api';
 import type { CreateIdBusinessV2CustomerDto } from './dto/create-id-business-v2-customer.dto';
 import type { RevealIdBusinessV2CustomerPhoneDto } from './dto/reveal-id-business-v2-customer-phone.dto';
 import type { UpdateIdBusinessV2CustomerDto } from './dto/update-id-business-v2-customer.dto';
+import {
+  IdBusinessV2CustomerRepository,
+  type CustomerWithRelations,
+  type UpdateCustomerPersistenceInput
+} from './persistence/id-business-v2-customer.repository';
 
 interface ListIdBusinessV2CustomersQuery extends PaginationQuery {
   keyword?: string;
@@ -29,372 +37,246 @@ interface ListIdBusinessV2CustomersQuery extends PaginationQuery {
 interface AuditRequestMeta {
   ip?: string | null;
   userAgent?: string | null;
+  requestId?: string;
 }
 
-const CUSTOMER_INCLUDE = {
-  sourceOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  tags: {
-    include: {
-      option: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    },
-    orderBy: {
-      option: {
-        sortOrder: 'asc'
-      }
-    }
-  },
-  services: {
-    where: {
-      source: 'activation'
-    },
-    include: {
-      option: {
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          parent: {
-            select: {
-              id: true,
-              name: true
-            }
-          }
-        }
-      }
-    },
-    orderBy: [{ lastOpenedAt: 'desc' }, { option: { sortOrder: 'asc' } }]
-  }
-} satisfies Prisma.IdBusinessV2CustomerInclude;
-
-type CustomerWithRelations = Prisma.IdBusinessV2CustomerGetPayload<{
-  include: typeof CUSTOMER_INCLUDE;
-}>;
-
-const CUSTOMER_SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2CustomerOrderByWithRelationInput
-> = {
-  name: 'name',
-  wechat: 'wechat',
-  recordStatus: 'recordStatus',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
+type CustomerRecordStatus = 'active' | 'disabled';
 
 @Injectable()
 export class IdBusinessV2CustomersService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly auditLogsService: AuditLogsService,
+    private readonly repository: IdBusinessV2CustomerRepository,
     private readonly fieldEncryptionService: FieldEncryptionService,
-    private readonly optionsService: IdBusinessV2OptionsService
+    private readonly optionsService: IdBusinessV2OptionsService,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly transactionalAudit: V2TransactionalAuditService
   ) {}
 
   async list(query: ListIdBusinessV2CustomersQuery) {
-    const pagination = getPagination(query);
     const keyword = this.normalizeNullableString(query.keyword);
     const normalizedContactKeyword = keyword ? keyword.replace(/[\s()-]/g, '') : null;
     const contactKeyword =
       normalizedContactKeyword && normalizedContactKeyword.length <= 40
         ? normalizedContactKeyword
         : null;
-    const contactHash = this.fieldEncryptionService.hash(contactKeyword);
-    const where: Prisma.IdBusinessV2CustomerWhereInput = {
-      deletedAt: null,
-      sourceOptionId: this.normalizeNullableString(query.sourceOptionId) ?? undefined,
-      recordStatus: this.parseRecordStatus(query.recordStatus, false) ?? undefined,
-      tags: query.tagOptionId
-        ? {
-            some: {
-              optionId: query.tagOptionId
-            }
-          }
-        : undefined,
-      services: query.serviceOptionId
-        ? {
-            some: {
-              optionId: query.serviceOptionId,
-              source: 'activation'
-            }
-          }
-        : undefined,
-      OR: keyword
-        ? [
-            { name: { contains: keyword, mode: 'insensitive' } },
-            { wechat: { contains: keyword, mode: 'insensitive' } },
-            { qq: { contains: keyword, mode: 'insensitive' } },
-            {
-              phoneTail: {
-                contains: contactKeyword?.slice(-8) ?? keyword,
-                mode: 'insensitive'
-              }
-            },
-            { phoneHash: contactHash ?? undefined },
-            {
-              whatsappTail: {
-                contains: contactKeyword?.slice(-8) ?? keyword,
-                mode: 'insensitive'
-              }
-            },
-            { whatsappHash: contactHash ?? undefined }
-          ]
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2Customer.findMany({
-        where,
-        include: CUSTOMER_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
-      }),
-      this.prisma.idBusinessV2Customer.count({ where })
-    ]);
-
-    return {
-      items: items.map((customer) => this.toResponse(customer)),
-      total,
-      page: pagination.page,
-      pageSize: pagination.pageSize
-    };
+    const result = await this.repository.list({
+      page: query.page,
+      pageSize: query.pageSize,
+      keyword,
+      contactKeyword,
+      contactHash: this.fieldEncryptionService.hash(contactKeyword),
+      sourceOptionId: this.normalizeNullableString(query.sourceOptionId),
+      tagOptionId: query.tagOptionId,
+      serviceOptionId: query.serviceOptionId,
+      recordStatus: this.parseRecordStatus(query.recordStatus, false),
+      sortBy: query.sortBy,
+      sortOrder: query.sortOrder
+    });
+    return { ...result, items: result.items.map((customer) => this.toResponse(customer)) };
   }
 
   async get(id: string) {
-    const customer = await this.findCustomerOrThrow(id);
-    return this.toResponse(customer);
+    return this.toResponse(await this.findCustomerOrThrow(id));
   }
 
-  async create(dto: CreateIdBusinessV2CustomerDto, operator?: AuthenticatedUser) {
-    const name = this.normalizeRequiredString(dto.name, '客户名称');
-    const phone = this.normalizePhone(dto.phone, '手机号');
-    const whatsapp = this.normalizePhone(dto.whatsapp, 'WhatsApp');
-    const sourceOption = await this.optionsService.requireActiveOption(
-      dto.sourceOptionId,
-      'customer_source',
-      '客户来源',
-      true
-    );
-    const tags = await this.optionsService.requireActiveOptions(
-      dto.tagOptionIds,
-      'customer_tag',
-      '客户标签'
-    );
-    const customer = await this.prisma.idBusinessV2Customer.create({
-      data: {
-        name,
-        phoneEncrypted: this.fieldEncryptionService.encrypt(phone),
-        phoneHash: this.fieldEncryptionService.hash(phone),
-        phoneMasked: this.maskPhone(phone),
-        phoneTail: phone ? phone.slice(-8) : null,
-        wechat: this.normalizeOptionalText(dto.wechat, '微信', 120),
-        qq: this.normalizeOptionalText(dto.qq, 'QQ', 120),
-        whatsappEncrypted: this.fieldEncryptionService.encrypt(whatsapp),
-        whatsappHash: this.fieldEncryptionService.hash(whatsapp),
-        whatsappMasked: this.maskPhone(whatsapp),
-        whatsappTail: whatsapp ? whatsapp.slice(-8) : null,
-        sourceOptionId: sourceOption?.id ?? null,
-        recordStatus: this.parseRecordStatus(dto.recordStatus, false) ?? 'active',
-        remark: this.normalizeNullableString(dto.remark),
-        createdByUserId: operator?.id,
-        updatedByUserId: operator?.id,
-        tags: tags.length
-          ? {
-              create: tags.map((tag) => ({
-                optionId: tag.id
-              }))
-            }
-          : undefined
+  create(
+    dto: CreateIdBusinessV2CustomerDto,
+    operator?: AuthenticatedUser,
+    requestMeta: AuditRequestMeta = {}
+  ) {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const name = this.normalizeRequiredString(dto.name, '客户名称');
+        const phone = this.normalizePhone(dto.phone, '手机号');
+        const whatsapp = this.normalizePhone(dto.whatsapp, 'WhatsApp');
+        const sourceOption = await this.optionsService.requireActiveOption(
+          dto.sourceOptionId,
+          'customer_source',
+          '客户来源',
+          true,
+          tx
+        );
+        const tags = await this.optionsService.requireActiveOptions(
+          dto.tagOptionIds,
+          'customer_tag',
+          '客户标签',
+          tx
+        );
+        const customer = await this.repository.create(tx, {
+          name,
+          phoneEncrypted: this.fieldEncryptionService.encrypt(phone),
+          phoneHash: this.fieldEncryptionService.hash(phone),
+          phoneMasked: this.maskPhone(phone),
+          phoneTail: phone ? phone.slice(-8) : null,
+          wechat: this.normalizeOptionalText(dto.wechat, '微信', 120),
+          qq: this.normalizeOptionalText(dto.qq, 'QQ', 120),
+          whatsappEncrypted: this.fieldEncryptionService.encrypt(whatsapp),
+          whatsappHash: this.fieldEncryptionService.hash(whatsapp),
+          whatsappMasked: this.maskPhone(whatsapp),
+          whatsappTail: whatsapp ? whatsapp.slice(-8) : null,
+          sourceOptionId: sourceOption?.id ?? null,
+          recordStatus: this.parseRecordStatus(dto.recordStatus, false) ?? 'active',
+          remark: this.normalizeNullableString(dto.remark),
+          tagOptionIds: tags.map((tag) => tag.id),
+          operatorId: operator?.id
+        });
+        const response = this.toResponse(customer);
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_customers',
+          action: 'id_business_v2.customer.create',
+          objectType: 'id_business_v2_customer',
+          objectId: customer.id,
+          afterData: toV2JsonDocument(response),
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined,
+          remark: `创建 V2 客户：${customer.name}`
+        });
+        return response;
       },
-      include: CUSTOMER_INCLUDE
-    });
-
-    const response = this.toResponse(customer);
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_customers',
-      action: 'id_business_v2.customer.create',
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id,
-      afterData: this.toAuditJson(response),
-      remark: `创建 V2 客户：${customer.name}`
-    });
-
-    return response;
+      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+    );
   }
 
-  async update(id: string, dto: UpdateIdBusinessV2CustomerDto, operator?: AuthenticatedUser) {
-    const existing = await this.findCustomerOrThrow(id);
-    const phone = dto.phone === undefined ? undefined : this.normalizePhone(dto.phone, '手机号');
-    const whatsapp =
-      dto.whatsapp === undefined ? undefined : this.normalizePhone(dto.whatsapp, 'WhatsApp');
-    const sourceOption =
-      dto.sourceOptionId === undefined
-        ? undefined
-        : await this.optionsService.requireActiveOption(
-            dto.sourceOptionId,
-            'customer_source',
-            '客户来源',
-            true
-          );
-    const tags =
-      dto.tagOptionIds === undefined
-        ? undefined
-        : await this.optionsService.requireActiveOptions(
-            dto.tagOptionIds,
-            'customer_tag',
-            '客户标签'
-          );
-    const customer = await this.prisma.idBusinessV2Customer.update({
-      where: { id: existing.id },
-      data: {
-        name:
-          dto.name === undefined ? undefined : this.normalizeRequiredString(dto.name, '客户名称'),
-        phoneEncrypted:
-          phone === undefined ? undefined : this.fieldEncryptionService.encrypt(phone),
-        phoneHash: phone === undefined ? undefined : this.fieldEncryptionService.hash(phone),
-        phoneMasked: phone === undefined ? undefined : this.maskPhone(phone),
-        phoneTail: phone === undefined ? undefined : (phone?.slice(-8) ?? null),
-        wechat:
-          dto.wechat === undefined
+  update(
+    id: string,
+    dto: UpdateIdBusinessV2CustomerDto,
+    operator?: AuthenticatedUser,
+    requestMeta: AuditRequestMeta = {}
+  ) {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const existing = await this.findCustomerOrThrowInTransaction(tx, id);
+        const phone =
+          dto.phone === undefined ? undefined : this.normalizePhone(dto.phone, '手机号');
+        const whatsapp =
+          dto.whatsapp === undefined ? undefined : this.normalizePhone(dto.whatsapp, 'WhatsApp');
+        const sourceOption =
+          dto.sourceOptionId === undefined
             ? undefined
-            : this.normalizeOptionalText(dto.wechat, '微信', 120),
-        qq: dto.qq === undefined ? undefined : this.normalizeOptionalText(dto.qq, 'QQ', 120),
-        whatsappEncrypted:
-          whatsapp === undefined ? undefined : this.fieldEncryptionService.encrypt(whatsapp),
-        whatsappHash:
-          whatsapp === undefined ? undefined : this.fieldEncryptionService.hash(whatsapp),
-        whatsappMasked: whatsapp === undefined ? undefined : this.maskPhone(whatsapp),
-        whatsappTail: whatsapp === undefined ? undefined : (whatsapp?.slice(-8) ?? null),
-        sourceOptionId: sourceOption === undefined ? undefined : (sourceOption?.id ?? null),
-        recordStatus:
-          dto.recordStatus === undefined
+            : await this.optionsService.requireActiveOption(
+                dto.sourceOptionId,
+                'customer_source',
+                '客户来源',
+                true,
+                tx
+              );
+        const tags =
+          dto.tagOptionIds === undefined
             ? undefined
-            : (this.parseRecordStatus(dto.recordStatus, true) ?? undefined),
-        remark: dto.remark === undefined ? undefined : this.normalizeNullableString(dto.remark),
-        updatedByUserId: operator?.id,
-        tags:
-          tags === undefined
-            ? undefined
-            : {
-                deleteMany: {},
-                create: tags.map((tag) => ({
-                  optionId: tag.id
-                }))
-              }
+            : await this.optionsService.requireActiveOptions(
+                dto.tagOptionIds,
+                'customer_tag',
+                '客户标签',
+                tx
+              );
+        const updateInput: UpdateCustomerPersistenceInput = {
+          name:
+            dto.name === undefined ? undefined : this.normalizeRequiredString(dto.name, '客户名称'),
+          phoneEncrypted:
+            phone === undefined ? undefined : this.fieldEncryptionService.encrypt(phone),
+          phoneHash: phone === undefined ? undefined : this.fieldEncryptionService.hash(phone),
+          phoneMasked: phone === undefined ? undefined : this.maskPhone(phone),
+          phoneTail: phone === undefined ? undefined : (phone?.slice(-8) ?? null),
+          wechat:
+            dto.wechat === undefined
+              ? undefined
+              : this.normalizeOptionalText(dto.wechat, '微信', 120),
+          qq: dto.qq === undefined ? undefined : this.normalizeOptionalText(dto.qq, 'QQ', 120),
+          whatsappEncrypted:
+            whatsapp === undefined ? undefined : this.fieldEncryptionService.encrypt(whatsapp),
+          whatsappHash:
+            whatsapp === undefined ? undefined : this.fieldEncryptionService.hash(whatsapp),
+          whatsappMasked: whatsapp === undefined ? undefined : this.maskPhone(whatsapp),
+          whatsappTail: whatsapp === undefined ? undefined : (whatsapp?.slice(-8) ?? null),
+          sourceOptionId: sourceOption === undefined ? undefined : (sourceOption?.id ?? null),
+          recordStatus:
+            dto.recordStatus === undefined
+              ? undefined
+              : (this.parseRecordStatus(dto.recordStatus, true) ?? undefined),
+          remark: dto.remark === undefined ? undefined : this.normalizeNullableString(dto.remark),
+          tagOptionIds: tags?.map((tag) => tag.id),
+          operatorId: operator?.id
+        };
+        const customer = await this.repository.update(tx, existing.id, updateInput);
+        const response = this.toResponse(customer);
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_customers',
+          action: 'id_business_v2.customer.update',
+          objectType: 'id_business_v2_customer',
+          objectId: customer.id,
+          beforeData: toV2JsonDocument(this.toResponse(existing)),
+          afterData: toV2JsonDocument(response),
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined,
+          remark: `修改 V2 客户：${existing.name}`
+        });
+        return response;
       },
-      include: CUSTOMER_INCLUDE
-    });
-
-    const response = this.toResponse(customer);
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_customers',
-      action: 'id_business_v2.customer.update',
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id,
-      beforeData: this.toAuditJson(this.toResponse(existing)),
-      afterData: this.toAuditJson(response),
-      remark: `修改 V2 客户：${existing.name}`
-    });
-
-    return response;
+      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+    );
   }
 
-  async remove(id: string, operator?: AuthenticatedUser) {
-    const existing = await this.findCustomerOrThrow(id);
-    await this.prisma.idBusinessV2Customer.update({
-      where: { id: existing.id },
-      data: {
-        deletedAt: new Date(),
-        updatedByUserId: operator?.id
-      }
-    });
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_customers',
-      action: 'id_business_v2.customer.delete',
-      objectType: 'id_business_v2_customer',
-      objectId: existing.id,
-      beforeData: this.toAuditJson(this.toResponse(existing)),
-      remark: `删除 V2 客户：${existing.name}`
-    });
-
-    return { deleted: true };
+  remove(id: string, operator?: AuthenticatedUser, requestMeta: AuditRequestMeta = {}) {
+    return this.transactionManager.execute(
+      async (tx, context) => {
+        const existing = await this.findCustomerOrThrowInTransaction(tx, id);
+        await this.repository.softDelete(tx, {
+          id: existing.id,
+          deletedAt: context.businessTime,
+          operatorId: operator?.id
+        });
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_customers',
+          action: 'id_business_v2.customer.delete',
+          objectType: 'id_business_v2_customer',
+          objectId: existing.id,
+          beforeData: toV2JsonDocument(this.toResponse(existing)),
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined,
+          remark: `删除 V2 客户：${existing.name}`
+        });
+        return { deleted: true };
+      },
+      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+    );
   }
 
   async revealPhone(
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
     operator?: AuthenticatedUser,
-    requestMeta?: AuditRequestMeta
+    requestMeta: AuditRequestMeta = {}
   ) {
     const result = await this.revealSensitiveContact(id, dto, 'phone', operator, requestMeta);
-    return {
-      customerId: result.customerId,
-      phone: result.value,
-      revealedAt: result.revealedAt
-    };
+    return { customerId: result.customerId, phone: result.value, revealedAt: result.revealedAt };
   }
 
   async revealWhatsapp(
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
     operator?: AuthenticatedUser,
-    requestMeta?: AuditRequestMeta
+    requestMeta: AuditRequestMeta = {}
   ) {
     const result = await this.revealSensitiveContact(id, dto, 'whatsapp', operator, requestMeta);
-    return {
-      customerId: result.customerId,
-      whatsapp: result.value,
-      revealedAt: result.revealedAt
-    };
+    return { customerId: result.customerId, whatsapp: result.value, revealedAt: result.revealedAt };
   }
 
-  private async findCustomerOrThrow(id: string): Promise<CustomerWithRelations> {
-    const customer = await this.prisma.idBusinessV2Customer.findFirst({
-      where: {
-        id,
-        deletedAt: null
-      },
-      include: CUSTOMER_INCLUDE
-    });
-    if (!customer) {
-      throw new NotFoundException('客户不存在');
-    }
+  private async findCustomerOrThrow(id: string) {
+    const customer = await this.repository.findById(id);
+    if (!customer) throw new NotFoundException('客户不存在');
     return customer;
   }
 
-  private buildOrderBy(query: ListIdBusinessV2CustomersQuery) {
-    const field = query.sortBy ? CUSTOMER_SORT_FIELDS[query.sortBy] : undefined;
-    if (!field) {
-      return [
-        { updatedAt: 'desc' },
-        { id: 'desc' }
-      ] satisfies Prisma.IdBusinessV2CustomerOrderByWithRelationInput[];
-    }
-    const direction = query.sortOrder === 'desc' ? 'desc' : 'asc';
-    return [
-      { [field]: direction },
-      { updatedAt: 'desc' },
-      { id: 'desc' }
-    ] as Prisma.IdBusinessV2CustomerOrderByWithRelationInput[];
+  private async findCustomerOrThrowInTransaction(tx: V2CommandTransaction, id: string) {
+    const customer = await this.repository.findByIdInTransaction(tx, id);
+    if (!customer) throw new NotFoundException('客户不存在');
+    return customer;
   }
 
-  private parseRecordStatus(value: unknown, required: boolean): IdBusinessV2RecordStatus | null {
+  private parseRecordStatus(value: unknown, required: boolean): CustomerRecordStatus | null {
     if (value === undefined || value === null || value === '') {
       if (required) throw new BadRequestException('资料状态不能为空');
       return null;
@@ -410,17 +292,13 @@ export class IdBusinessV2CustomersService {
       throw new BadRequestException(`${label}不能为空`);
     }
     const normalized = value.trim();
-    if (normalized.length > 120) {
-      throw new BadRequestException(`${label}过长`);
-    }
+    if (normalized.length > 120) throw new BadRequestException(`${label}过长`);
     return normalized;
   }
 
   private normalizeNullableString(value: unknown) {
     if (value === undefined || value === null) return null;
-    if (typeof value !== 'string') {
-      throw new BadRequestException('字段格式无效');
-    }
+    if (typeof value !== 'string') throw new BadRequestException('字段格式无效');
     return value.trim() || null;
   }
 
@@ -436,9 +314,7 @@ export class IdBusinessV2CustomersService {
     const phone = this.normalizeNullableString(value);
     if (!phone) return null;
     const normalized = phone.replace(/[\s()-]/g, '');
-    if (normalized.length > 40) {
-      throw new BadRequestException(`${label}过长`);
-    }
+    if (normalized.length > 40) throw new BadRequestException(`${label}过长`);
     return normalized;
   }
 
@@ -495,71 +371,61 @@ export class IdBusinessV2CustomersService {
     };
   }
 
-  private toAuditJson(value: unknown) {
-    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-  }
-
-  private async revealSensitiveContact(
+  private revealSensitiveContact(
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
     field: 'phone' | 'whatsapp',
     operator?: AuthenticatedUser,
-    requestMeta?: AuditRequestMeta
+    requestMeta: AuditRequestMeta = {}
   ) {
     this.assertContactPermission(operator);
     const reason = this.normalizeRevealReason(dto.reason);
-    const customer = await this.findCustomerOrThrow(id);
-    const encryptedValue = field === 'phone' ? customer.phoneEncrypted : customer.whatsappEncrypted;
-    const value = this.fieldEncryptionService.decrypt(encryptedValue);
-    const label = field === 'phone' ? '手机号' : 'WhatsApp';
-    if (!value) {
-      throw new NotFoundException(`该客户没有${label}`);
-    }
+    return this.transactionManager.execute(
+      async (tx, context) => {
+        const customer = await this.findCustomerOrThrowInTransaction(tx, id);
+        const encryptedValue =
+          field === 'phone' ? customer.phoneEncrypted : customer.whatsappEncrypted;
+        const value = this.fieldEncryptionService.decrypt(encryptedValue);
+        const label = field === 'phone' ? '手机号' : 'WhatsApp';
+        if (!value) throw new NotFoundException(`该客户没有${label}`);
 
-    const approved = await verifySensitiveAccessApproval(this.prisma, {
-      approvalId: dto.approvalId,
-      requesterId: operator?.id,
-      module: 'id_business_v2_customer',
-      fieldName: field,
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id
-    });
-
-    await this.prisma.sensitiveAccessLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2_customer',
-        fieldName: field,
-        objectType: 'id_business_v2_customer',
-        objectId: customer.id,
-        accessReason: reason,
-        approved,
-        ip: requestMeta?.ip ?? undefined,
-        userAgent: requestMeta?.userAgent ?? undefined
-      }
-    });
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_customers',
-      action: `id_business_v2.customer.${field}.reveal`,
-      objectType: 'id_business_v2_customer',
-      objectId: customer.id,
-      afterData: this.toAuditJson({
-        field,
-        reason,
-        approved,
-        contactTail: field === 'phone' ? customer.phoneTail : customer.whatsappTail
-      }),
-      ip: requestMeta?.ip ?? undefined,
-      userAgent: requestMeta?.userAgent ?? undefined,
-      remark: `查看 V2 客户${label}：${customer.name}`
-    });
-
-    return {
-      customerId: customer.id,
-      value,
-      revealedAt: new Date().toISOString()
-    };
+        const approved = await this.repository.verifySensitiveAccessApproval(tx, {
+          approvalId: dto.approvalId,
+          requesterId: operator?.id,
+          module: 'id_business_v2_customer',
+          fieldName: field,
+          objectType: 'id_business_v2_customer',
+          objectId: customer.id,
+          now: context.businessTime
+        });
+        await this.repository.appendSensitiveAccess(tx, {
+          userId: operator?.id,
+          fieldName: field,
+          objectId: customer.id,
+          accessReason: reason,
+          approved,
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined
+        });
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_customers',
+          action: `id_business_v2.customer.${field}.reveal`,
+          objectType: 'id_business_v2_customer',
+          objectId: customer.id,
+          afterData: toV2JsonDocument({
+            field,
+            reason,
+            approved,
+            contactTail: field === 'phone' ? customer.phoneTail : customer.whatsappTail
+          }),
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined,
+          remark: `查看 V2 客户${label}：${customer.name}`
+        });
+        return { customerId: customer.id, value, revealedAt: context.businessTime.toISOString() };
+      },
+      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+    );
   }
 }

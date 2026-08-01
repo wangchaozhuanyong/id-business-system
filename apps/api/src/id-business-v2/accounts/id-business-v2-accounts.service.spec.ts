@@ -1,8 +1,12 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2AccountBalanceAdjustmentService } from './id-business-v2-account-balance-adjustment.service';
 import { IdBusinessV2AccountsService } from './id-business-v2-accounts.service';
+import { IdBusinessV2AccountsRepository } from './persistence/id-business-v2-accounts.repository';
 
 const operator = {
   id: '20000000-0000-4000-8000-000000000001',
@@ -67,13 +71,27 @@ describe('IdBusinessV2AccountsService', () => {
       create: vi.fn(),
       findUnique: vi.fn()
     },
+    idBusinessV2TopupSupplierLedger: {
+      create: vi.fn()
+    },
+    idBusinessV2TopupSupplierAccount: {
+      update: vi.fn()
+    },
+    idBusinessV2FinanceAccount: {
+      findUnique: vi.fn()
+    },
+    idBusinessV2FinanceFxRateSnapshot: {
+      findUnique: vi.fn()
+    },
     sensitiveAccessLog: {
       create: vi.fn(),
       createMany: vi.fn()
     },
+    auditLog: {
+      create: vi.fn()
+    },
     $queryRaw: vi.fn()
   };
-  const auditLogsService = { create: vi.fn() };
   const encryptionService = {
     encrypt: vi.fn(),
     decrypt: vi.fn(),
@@ -92,14 +110,26 @@ describe('IdBusinessV2AccountsService', () => {
   const financePostingService = {
     post: vi.fn().mockResolvedValue({ id: 'finance-journal-1' })
   };
+  const balanceCalculator = new IdBusinessV2BalanceCalculatorService();
+  const transactionManager = new V2CommandTransactionManager(prisma as never);
+  const transactionalAudit = new V2TransactionalAuditService();
+  const repository = new IdBusinessV2AccountsRepository(prisma as never);
+  const balanceAdjustmentService = new IdBusinessV2AccountBalanceAdjustmentService(
+    balanceCalculator,
+    transactionManager,
+    transactionalAudit,
+    repository
+  );
   const service = new IdBusinessV2AccountsService(
-    prisma as never,
-    auditLogsService as never,
+    repository,
     encryptionService as never,
     optionsService as never,
-    new IdBusinessV2BalanceCalculatorService(),
+    balanceCalculator,
     financeFxService as never,
-    financePostingService as never
+    financePostingService as never,
+    transactionManager,
+    transactionalAudit,
+    balanceAdjustmentService
   );
 
   beforeEach(() => {
@@ -126,8 +156,13 @@ describe('IdBusinessV2AccountsService', () => {
       .mockResolvedValueOnce(country)
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(supplier);
-    auditLogsService.create.mockResolvedValue({ id: 'audit-1' });
+    prisma.auditLog.create.mockResolvedValue({ id: 'audit-transactional-1' });
     prisma.idBusinessV2Account.updateMany.mockResolvedValue({ count: 1 });
+    prisma.idBusinessV2FinanceFxRateSnapshot.findUnique.mockResolvedValue({
+      currency: 'MYR',
+      rateToCny: new Prisma.Decimal('2'),
+      expiresAt: null
+    });
   });
 
   it('lists IDs by stable business order without exposing a numeric sort value', async () => {
@@ -168,7 +203,75 @@ describe('IdBusinessV2AccountsService', () => {
     expect(encryptionService.encrypt).toHaveBeenCalledWith('security answer');
     expect(result.appleIdMasked).toBe('us***@example.com');
     expect(JSON.stringify(result)).not.toContain('encrypted-apple-id');
-    expect(JSON.stringify(auditLogsService.create.mock.calls)).not.toContain('secret-password');
+    expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('secret-password');
+  });
+
+  it('purchases an ID from Cloudflare Decimal supplier-wallet rows using canonical strings', async () => {
+    const supplierWalletId = '44444444-4444-4444-8444-444444444444';
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Account.create.mockResolvedValue(
+      makeAccount({
+        purchaseCost: new CloudflarePrisma.Decimal('20'),
+        purchaseOriginalAmount: new CloudflarePrisma.Decimal('10'),
+        purchaseCurrency: 'MYR',
+        purchaseFxRateToCny: new CloudflarePrisma.Decimal('2'),
+        purchaseSupplierAccountId: supplierWalletId
+      })
+    );
+    financeFxService.resolve.mockResolvedValueOnce({
+      id: '55555555-5555-4555-8555-555555555555',
+      rateToCny: new CloudflarePrisma.Decimal('2'),
+      source: 'manual'
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: supplierWalletId,
+        currency: 'MYR',
+        currentBalance: new CloudflarePrisma.Decimal('50'),
+        currentBalanceCny: new CloudflarePrisma.Decimal('100'),
+        supplierName: '供应商 A'
+      }
+    ]);
+    prisma.idBusinessV2TopupSupplierLedger.create.mockResolvedValue({ id: 'ledger-1' });
+    prisma.idBusinessV2TopupSupplierAccount.update.mockResolvedValue({});
+
+    await service.create(
+      {
+        appleId: 'purchase@example.com',
+        countryOptionId: country.id,
+        statusOptionId: status.id,
+        supplierOptionId: supplier.id,
+        purchaseCurrency: 'MYR',
+        purchaseOriginalAmount: '10',
+        purchaseFxRateToCny: '2',
+        purchaseManualRateReason: '人工采购汇率',
+        purchaseCost: '20',
+        purchaseSupplierAccountId: supplierWalletId
+      },
+      operator
+    );
+
+    expect(prisma.idBusinessV2Account.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          purchaseOriginalAmount: '10',
+          purchaseFxRateToCny: '2',
+          purchaseCost: '20'
+        })
+      })
+    );
+    expect(prisma.idBusinessV2TopupSupplierLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: '10',
+          balanceBefore: '50',
+          balanceAfter: '40',
+          amountCny: '20',
+          balanceBeforeCny: '100',
+          balanceAfterCny: '80'
+        })
+      })
+    );
   });
 
   it('creates an opening-balance ledger entry with the account in one transaction', async () => {
@@ -194,8 +297,8 @@ describe('IdBusinessV2AccountsService', () => {
     expect(prisma.idBusinessV2Account.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          currentBalance: expect.objectContaining({ toString: expect.any(Function) }),
-          balanceCostAmount: expect.objectContaining({ toString: expect.any(Function) })
+          currentBalance: '20',
+          balanceCostAmount: '70'
         })
       })
     );
@@ -204,14 +307,54 @@ describe('IdBusinessV2AccountsService', () => {
         data: expect.objectContaining({
           entryType: 'opening_balance',
           direction: 'credit',
-          balanceAmount: expect.objectContaining({ toString: expect.any(Function) }),
-          costAmount: expect.objectContaining({ toString: expect.any(Function) }),
+          balanceAmount: '20',
+          costAmount: '70',
           balanceBefore: '0',
           costBefore: '0',
           remark: 'ID 新增期初余额'
         })
       })
     );
+  });
+
+  it('rejects the whole create command when finance posting fails before audit', async () => {
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Account.create.mockResolvedValue(makeAccount());
+    financePostingService.post.mockRejectedValueOnce(new Error('finance unavailable'));
+
+    await expect(
+      service.create(
+        {
+          appleId: 'finance-failure@example.com',
+          countryOptionId: country.id,
+          statusOptionId: status.id,
+          purchaseCost: '35'
+        },
+        operator,
+        { requestId: 'account-create-finance-failure' }
+      )
+    ).rejects.toThrow('finance unavailable');
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects the whole create command when transactional audit fails', async () => {
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Account.create.mockResolvedValue(makeAccount());
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(
+      service.create(
+        {
+          appleId: 'audit-failure@example.com',
+          countryOptionId: country.id,
+          statusOptionId: status.id,
+          purchaseCost: '35'
+        },
+        operator,
+        { requestId: 'account-create-audit-failure' }
+      )
+    ).rejects.toThrow('audit unavailable');
+    expect(financePostingService.post).toHaveBeenCalled();
   });
 
   it('writes an immutable manual adjustment when balance targets change', async () => {
@@ -223,7 +366,9 @@ describe('IdBusinessV2AccountsService', () => {
       currentBalance: new Prisma.Decimal(15),
       balanceCostAmount: new Prisma.Decimal(45)
     });
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(existing);
+    prisma.idBusinessV2Account.findFirst
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(updated);
     prisma.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
     prisma.$queryRaw.mockResolvedValue([
       {
@@ -234,7 +379,6 @@ describe('IdBusinessV2AccountsService', () => {
         lossReportedAt: null
       }
     ]);
-    prisma.idBusinessV2Account.update.mockResolvedValue(updated);
 
     const result = await service.update(
       existing.id,
@@ -256,12 +400,56 @@ describe('IdBusinessV2AccountsService', () => {
         data: expect.objectContaining({
           entryType: 'manual_adjustment',
           direction: 'adjustment',
-          balanceBefore: expect.objectContaining({ toString: expect.any(Function) }),
-          balanceAfter: expect.objectContaining({ toString: expect.any(Function) }),
-          costBefore: expect.objectContaining({ toString: expect.any(Function) }),
-          costAfter: expect.objectContaining({ toString: expect.any(Function) }),
+          balanceBefore: '20',
+          balanceAfter: '15',
+          costBefore: '70',
+          costAfter: '45',
           remark: '人工核对修正'
         })
+      })
+    );
+  });
+
+  it('adjusts Cloudflare Decimal persisted balances without cross-runtime methods', async () => {
+    const existing = makeAccount({
+      currentBalance: new CloudflarePrisma.Decimal('20'),
+      balanceCostAmount: new CloudflarePrisma.Decimal('70')
+    });
+    const updated = makeAccount({
+      currentBalance: new CloudflarePrisma.Decimal('15'),
+      balanceCostAmount: new CloudflarePrisma.Decimal('45')
+    });
+    prisma.idBusinessV2Account.findFirst
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(updated);
+    prisma.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: existing.id,
+        currentBalance: new CloudflarePrisma.Decimal('20'),
+        balanceCostAmount: new CloudflarePrisma.Decimal('70'),
+        soldByOrderId: null,
+        lossReportedAt: null
+      }
+    ]);
+
+    const result = await service.update(
+      existing.id,
+      {
+        currentBalance: '15',
+        balanceCostAmount: '45',
+        expectedCurrentBalance: '20',
+        expectedBalanceCostAmount: '70',
+        balanceAdjustmentReason: 'Cloudflare 回归修正',
+        balanceAdjustmentIdempotencyKey: 'account-adjustment-cloudflare-0001'
+      },
+      operator
+    );
+
+    expect(result).toMatchObject({ currentBalance: '15', balanceCostAmount: '45' });
+    expect(prisma.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ balanceBefore: '20', costBefore: '70' })
       })
     );
   });
@@ -339,7 +527,19 @@ describe('IdBusinessV2AccountsService', () => {
         })
       })
     );
-    expect(JSON.stringify(auditLogsService.create.mock.calls)).not.toContain('secret-password');
+    expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('secret-password');
+  });
+
+  it('does not append the audit when sensitive access logging fails', async () => {
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
+    prisma.sensitiveAccessLog.create.mockRejectedValueOnce(new Error('sensitive log unavailable'));
+
+    await expect(
+      service.revealSecret('account-1', { field: 'password', reason: '执行客户续费' }, operator, {
+        requestId: 'account-reveal-sensitive-log-failure'
+      })
+    ).rejects.toThrow('sensitive log unavailable');
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('rejects a secret reveal without the field permission', async () => {
@@ -376,12 +576,14 @@ describe('IdBusinessV2AccountsService', () => {
     expect(result.items[0]?.appleIdMasked).toBe('us***@example.com');
     expect(JSON.stringify(result)).not.toContain('secret-password');
     expect(encryptionService.decrypt).not.toHaveBeenCalled();
-    expect(auditLogsService.create).toHaveBeenCalledWith(
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: 'id_business_v2.account.export',
-        afterData: expect.objectContaining({
-          count: 1,
-          containsSensitiveFields: false
+        data: expect.objectContaining({
+          action: 'id_business_v2.account.export',
+          afterData: expect.objectContaining({
+            count: 1,
+            containsSensitiveFields: false
+          })
         })
       })
     );
@@ -420,14 +622,16 @@ describe('IdBusinessV2AccountsService', () => {
         failedCount: 1,
         failures: [{ rowNumber: 7, reason: '该 Apple ID 已存在' }]
       });
-      expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: 'id_business_v2.account.import',
-          afterData: expect.objectContaining({
-            totalCount: 2,
-            successCount: 1,
-            failedCount: 1,
-            failedRowNumbers: [7]
+          data: expect.objectContaining({
+            action: 'id_business_v2.account.import',
+            afterData: expect.objectContaining({
+              totalCount: 2,
+              successCount: 1,
+              failedCount: 1,
+              failedRowNumbers: [7]
+            })
           })
         })
       );

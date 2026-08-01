@@ -31,9 +31,18 @@ contracts 和模块样式。跨模块能力只允许放在 `components`、`compo
 - `renewals`
 - `exchange-rates`
 - `change-sync`
+- `finance`
+- `dashboard`
+- `business-monitoring`
+- `system-monitoring`
+- `data-governance`
 
 公共运行能力包括 `v2-auth`、`auth`、`audit-logs`、`common` 和 `security`。模块通过
 `public-api.ts` 暴露稳定边界，禁止跨模块引用内部 service 文件。
+
+每个业务模块按职责拆分为 command/query service 与 `persistence/` repository。Prisma Client、
+raw SQL、Prisma runtime 错误识别和数据库 Decimal 行只能出现在 persistence adapter；业务层只能
+接收领域值对象或规范化字符串。写命令不得自行开启 Prisma 事务。
 
 ## 4. 数据边界
 
@@ -43,11 +52,22 @@ Supabase 身份映射，以及续费预警设置所需的系统规则记录。
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
 
-## 5. 账务规则
+## 5. 金额、事务与账务规则
 
-- 金额使用 Prisma Decimal。
+- 业务层金额统一使用 `Amount4`，汇率与平均成本统一使用 `Rate8`；两者基于共享 BigInt 小数算法，
+  不依赖 Node 或 Cloudflare 的 Prisma Decimal runtime。
+- API、DTO 和数据库边界统一使用规范十进制字符串。repository 从数据库读取金额后必须立即通过
+  `mapAmount4`、`mapRate8` 或对应 optional mapper 转为领域值对象，禁止把 Prisma Decimal 行传入
+  command/query service。
 - 余额与人民币成本保存 4 位小数。
 - 汇率与平均成本最多保存 8 位小数。
+- 所有写命令使用唯一入口 `V2CommandTransactionManager`，默认 Serializable，并携带 request ID、
+  操作人、业务时间和显式幂等策略。业务记录、不可变流水、财务凭证与审计必须同事务等待完成；
+  财务或审计失败必须回滚整单。
+- 只有能在新事务中重读并核验完整请求证据的稳定幂等命令才允许冲突重试。相同键、相同请求返回
+  原结果；相同键、不同请求返回 409。非幂等命令遇到事务冲突直接返回冲突，不自动重放写操作。
+- 财务账户和资金账户按稳定 ID 顺序锁定；余额校验与写入使用同一锁定快照。嵌套礼品卡报损复用
+  外层事务，不允许开启第二个事务。
 - 加卡使用移动加权平均成本。
 - 订单利润由服务端按 `实收 - 平台手续费 - 余额成本 - 实际计入的 ID 成本 - 退款成本` 计算。
 - 订单保留 `accountCostAmount` 购买成本快照；仅 `accountDisposition=sold` 时由
@@ -145,9 +165,24 @@ GET   /api/id-business-v2/renewals/warning-summary
 - 前端隐藏无权限操作，后端守卫必须再次拒绝。
 - 敏感字段查看与所有写操作必须记录审计。
 
-## 9. 加载与路由
+### 会话协调与错误契约
 
-- 应用壳在会话和首路由完成前挂载。
+- `SessionCoordinator` 是凭据、会话状态、请求取消、恢复和跨标签同步的唯一写入者。状态固定为
+  `cold | anonymous | validating | ready | refreshing | degraded | blocked`。
+- 浏览器只持久化一个带 schema version、`credentialId`、`tokenRevision`、Token 和用户缓存的原子
+  凭据对象；跨标签消息不携带 Token。每个响应提交前必须匹配当前 credential ID 与 revision。
+- 冷启动必须先完成 `/auth/me`，缓存用户不得解锁业务数据。冷启动认证不可用进入
+  `/session-unavailable`；已验证会话短暂 503 时保留最后内容并统一切为只读，恢复后重新验证权限和
+  失效查询，禁止重放写请求。
+- 401 才清凭据；403 进入明确阻断状态；502/503/504 只按 `/auth/me` 的有界策略重试。所有程序化
+  导航必须通过 `navigateSafely()` 消费 Vue Router NavigationFailure。
+- API 错误统一包含 `errorCode`、`message`、`retryable`、`requestId`、`timestamp`，可选
+  `retryAfterMs` 与 `fieldErrors`；响应头同时返回 `X-Request-Id`。日志不得包含 Token、请求体、完整
+  查询参数或敏感字段。
+
+## 9. 加载、路由与表格
+
+- Vue 根应用先挂载中性 Boot Gate；会话和目标路由确认前不得挂载业务壳、权限导航或缓存业务页。
 - 路由代码只由悬停、聚焦或点击等明确意图预取。
 - 远程数据由 `useV2ModuleQuery` 以 `clean | dirty | pending` 状态缓存；时间流逝本身不会让
   event-driven 缓存过期。
@@ -160,6 +195,11 @@ GET   /api/id-business-v2/renewals/warning-summary
 - 页面使用 `V2AsyncRegion` 统一首次加载、刷新、错误与空状态。
 - 路由指标区分 code ready 与 data ready。
 - 订单录入是唯一允许 KeepAlive 的业务页。
+- 桌面业务表统一使用显式 `V2Table + typed schema`。schema 是列顺序、语义宽度、固定方向、操作列、
+  行键和移动模式的唯一来源；manifest 只引用 schema，禁止复制列契约或恢复 `<el-table>` 隐式代理。
+- 表格使用 fixed layout、共享最小宽度与容器内滚动。新 schema/标签同步回到最左侧；同表刷新、
+  排序、分页和数据替换保留横向位置。901px 显示桌面表，900px 及以下按 schema 使用移动卡片或
+  内部滚动模式。
 
 详细规则见 `docs/V2_LOADING_STANDARD.md`。
 

@@ -1,9 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import {
+  Rate8,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
 import type {
   CreateIdBusinessV2FinanceAccountDto,
   UpdateIdBusinessV2FinanceAccountDto
@@ -17,13 +19,18 @@ import {
   normalizeFinanceText
 } from './id-business-v2-finance-input';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
+import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
 const ACCOUNT_TYPES = new Set(['bank', 'cash', 'ewallet', 'usdt_wallet']);
 
 @Injectable()
 export class IdBusinessV2FinanceAccountsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly commandRepository: IdBusinessV2FinanceCommandRepository,
+    private readonly queryRepository: IdBusinessV2FinanceQueryRepository,
+    private readonly audit: V2TransactionalAuditService,
     private readonly fxService: IdBusinessV2FinanceFxService,
     private readonly postingService: IdBusinessV2FinancePostingService
   ) {}
@@ -33,11 +40,11 @@ export class IdBusinessV2FinanceAccountsService {
     if (status && status !== 'active' && status !== 'disabled') {
       throw new BadRequestException('资金账户状态不正确');
     }
-    const items = await this.prisma.idBusinessV2FinanceAccount.findMany({
-      where: { currency: normalizedCurrency, status: status as 'active' | 'disabled' | undefined },
-      orderBy: [{ status: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-    });
-    return { items: items.map((item) => this.toResponse(item)) };
+    const items = await this.queryRepository.listFinanceAccounts(
+      normalizedCurrency,
+      status as 'active' | 'disabled' | undefined
+    );
+    return { items };
   }
 
   async create(dto: CreateIdBusinessV2FinanceAccountDto, operator?: AuthenticatedUser) {
@@ -59,33 +66,31 @@ export class IdBusinessV2FinanceAccountsService {
       manualReason: dto.manualRateReason,
       operator
     });
-    const openingBalanceCny = roundV2Decimal(openingBalance.mul(rate.rateToCny));
+    const rateToCny = Rate8.from(rate.rateToCny);
+    const openingBalanceCny = rateToCny.apply(openingBalance);
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'finance_account');
     const remark = normalizeFinanceText(dto.remark, '备注', 2000);
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2FinanceJournal.findUnique({
-        where: { idempotencyKey: `${idempotencyKey}:opening` }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.commandRepository.findOpeningAccountReplay(
+        tx,
+        `${idempotencyKey}:opening`
+      );
       if (replay) {
-        const account = await tx.idBusinessV2FinanceAccount.findFirst({
-          where: { journalLines: { some: { journalId: replay.id, accountCode: 'cash' } } }
-        });
-        if (account) return this.toResponse(account);
+        const account = await this.commandRepository.findAccountForOpeningJournal(tx, replay.id);
+        if (account) return account;
       }
-      const account = await tx.idBusinessV2FinanceAccount.create({
-        data: {
-          id: randomUUID(),
-          name,
-          accountType: dto.accountType,
-          currency,
-          openingBalance,
-          currentBalance: 0,
-          openingBalanceCny,
-          currentBalanceCny: 0,
-          remark,
-          createdByUserId: operator?.id,
-          updatedByUserId: operator?.id
-        }
+      const account = await this.commandRepository.createFinanceAccount(tx, {
+        id: randomUUID(),
+        name,
+        accountType: dto.accountType,
+        currency,
+        openingBalance: openingBalance.toString(),
+        currentBalance: '0',
+        openingBalanceCny: openingBalanceCny.toString(),
+        currentBalanceCny: '0',
+        remark,
+        createdByUserId: operator?.id,
+        updatedByUserId: operator?.id
       });
       await this.postingService.post(tx, {
         journalType: 'opening_balance',
@@ -103,7 +108,7 @@ export class IdBusinessV2FinanceAccountsService {
             direction: 'debit',
             currency,
             amountOriginal: openingBalance,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny: openingBalanceCny,
             financeAccountId: account.id,
             fxRateSnapshotId: rate.id
@@ -113,88 +118,65 @@ export class IdBusinessV2FinanceAccountsService {
             direction: 'credit',
             currency,
             amountOriginal: openingBalance,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny: openingBalanceCny,
             fxRateSnapshotId: rate.id
           }
         ]
       });
-      await tx.auditLog.create({
-        data: {
-          userId: operator?.id,
-          module: 'id_business_v2_finance',
-          action: 'id_business_v2.finance_account.create',
-          objectType: 'id_business_v2_finance_account',
-          objectId: account.id,
-          afterData: {
-            name,
-            accountType: dto.accountType,
-            currency,
-            openingBalance: toV2DecimalString(openingBalance)
-          },
-          remark: `创建资金账户：${name}`
-        }
+      await this.audit.append(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2_finance',
+        action: 'id_business_v2.finance_account.create',
+        objectType: 'id_business_v2_finance_account',
+        objectId: account.id,
+        afterData: {
+          name,
+          accountType: dto.accountType,
+          currency,
+          openingBalance: openingBalance.toString()
+        },
+        remark: `创建资金账户：${name}`
       });
-      return this.toResponse(
-        await tx.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id: account.id } })
-      );
-    });
+      return this.commandRepository.findFinanceAccountOrThrow(tx, account.id);
+    }, this.commandOptions(operator));
   }
 
   async update(id: string, dto: UpdateIdBusinessV2FinanceAccountDto, operator?: AuthenticatedUser) {
-    const existing = await this.prisma.idBusinessV2FinanceAccount.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('资金账户不存在');
-    const name =
-      dto.name === undefined
-        ? existing.name
-        : normalizeFinanceText(dto.name, '账户名称', 160, true)!;
-    const status = dto.status ?? existing.status;
-    if (status !== 'active' && status !== 'disabled') {
-      throw new BadRequestException('资金账户状态不正确');
-    }
-    const remark =
-      dto.remark === undefined ? existing.remark : normalizeFinanceText(dto.remark, '备注', 2000);
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.idBusinessV2FinanceAccount.update({
-        where: { id },
-        data: { name, status, remark, updatedByUserId: operator?.id }
+    return this.commandTransactions.execute(async (tx) => {
+      const existing = await this.commandRepository.findFinanceAccount(tx, id);
+      if (!existing) throw new NotFoundException('资金账户不存在');
+      const name =
+        dto.name === undefined
+          ? existing.name
+          : normalizeFinanceText(dto.name, '账户名称', 160, true)!;
+      const status = dto.status ?? existing.status;
+      if (status !== 'active' && status !== 'disabled') {
+        throw new BadRequestException('资金账户状态不正确');
+      }
+      const remark =
+        dto.remark === undefined ? existing.remark : normalizeFinanceText(dto.remark, '备注', 2000);
+      const updated = await this.commandRepository.updateFinanceAccount(tx, id, {
+        name,
+        status,
+        remark,
+        updatedByUserId: operator?.id
       });
-      await tx.auditLog.create({
-        data: {
-          userId: operator?.id,
-          module: 'id_business_v2_finance',
-          action: 'id_business_v2.finance_account.update',
-          objectType: 'id_business_v2_finance_account',
-          objectId: id,
-          beforeData: { name: existing.name, status: existing.status, remark: existing.remark },
-          afterData: { name, status, remark },
-          remark: `更新资金账户：${name}`
-        }
+      await this.audit.append(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2_finance',
+        action: 'id_business_v2.finance_account.update',
+        objectType: 'id_business_v2_finance_account',
+        objectId: id,
+        beforeData: { name: existing.name, status: existing.status, remark: existing.remark },
+        afterData: { name, status, remark },
+        remark: `更新资金账户：${name}`
       });
-      return this.toResponse(updated);
-    });
+      return updated;
+    }, this.commandOptions(operator));
   }
 
-  private toResponse(account: {
-    id: string;
-    name: string;
-    accountType: string;
-    currency: string;
-    openingBalance: PrismaNamespace.Decimal;
-    currentBalance: PrismaNamespace.Decimal;
-    openingBalanceCny: PrismaNamespace.Decimal;
-    currentBalanceCny: PrismaNamespace.Decimal;
-    status: string;
-    remark: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }) {
-    return {
-      ...account,
-      openingBalance: toV2DecimalString(account.openingBalance),
-      currentBalance: toV2DecimalString(account.currentBalance),
-      openingBalanceCny: toV2DecimalString(account.openingBalanceCny),
-      currentBalanceCny: toV2DecimalString(account.currentBalanceCny)
-    };
+  private commandOptions(operator?: AuthenticatedUser) {
+    return { requestId: randomUUID(), operator } as const;
   }
 }

@@ -4,7 +4,9 @@ import type { IdBusinessV2Order } from '@prisma/client';
 import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderLifecycleService } from './id-business-v2-order-lifecycle.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -164,12 +166,13 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     post: vi.fn()
   };
   const service = new IdBusinessV2OrderLifecycleService(
-    prisma as never,
     fieldEncryption as never,
     new IdBusinessV2BalanceCalculatorService(),
     orderLockService as never,
     ordersService as never,
-    financePostingService as never
+    financePostingService as never,
+    new V2CommandTransactionManager(prisma as never),
+    new IdBusinessV2OrdersRepository(prisma as never)
   );
   let storedOrder = makeOrder();
   let consumption: ReturnType<typeof makeConsumption> | null = makeConsumption();
@@ -182,7 +185,23 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     consumption = makeConsumption();
     reversal = null;
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
-    tx.$queryRaw.mockResolvedValue([{ id: orderId }]);
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('id_business_v2_accounts')) {
+        return [
+          {
+            id: accountId,
+            appleIdMasked: 'us***@example.com',
+            currentBalance: decimal('10'),
+            balanceCostAmount: decimal('30'),
+            purchaseCost: decimal('25'),
+            soldByOrderId: null,
+            lossReportedAt: null
+          }
+        ];
+      }
+      return [{ id: orderId }];
+    });
     tx.idBusinessV2Order.findUnique.mockImplementation(async () => storedOrder);
     tx.idBusinessV2Order.update.mockImplementation(async ({ data }) => {
       storedOrder = {
@@ -300,9 +319,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          receivedAmount: decimal('200'),
-          platformFeeAmount: decimal('5'),
-          balanceAmount: decimal('25'),
+          receivedAmount: '200',
+          platformFeeAmount: '5',
+          balanceAmount: '25',
           profitAmount: null
         })
       })
@@ -348,7 +367,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           accountDisposition: 'sold',
-          accountCostAmount: decimal('25')
+          accountCostAmount: '25'
         })
       })
     );
@@ -394,9 +413,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          receivedAmount: decimal('120'),
-          platformFeeAmount: decimal('3.4'),
-          profitAmount: decimal('56.6'),
+          receivedAmount: '120',
+          platformFeeAmount: '3.4',
+          profitAmount: '56.6',
           remark: '金额校正'
         })
       })
@@ -459,10 +478,10 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          receivedOriginalAmount: decimal('60'),
-          receivedAmount: decimal('96'),
-          platformFeeAmount: decimal('2.92'),
-          profitAmount: decimal('33.08')
+          receivedOriginalAmount: '60',
+          receivedAmount: '96',
+          platformFeeAmount: '2.92',
+          profitAmount: '33.08'
         })
       })
     );
@@ -619,12 +638,12 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       data: expect.objectContaining({
         entryType: 'order_consumption_reversal',
         direction: 'credit',
-        balanceAmount: decimal('20'),
-        costAmount: decimal('60'),
-        balanceBefore: decimal('10'),
-        balanceAfter: decimal('30'),
-        costBefore: decimal('30'),
-        costAfter: decimal('90'),
+        balanceAmount: '20',
+        costAmount: '60',
+        balanceBefore: '10',
+        balanceAfter: '30',
+        costBefore: '30',
+        costAfter: '90',
         reversalOfEntryId: consumptionId,
         idempotencyKey: `order_reversal:${orderId}:lifecycle-key-1`
       })
@@ -632,8 +651,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
       where: { id: accountId },
       data: {
-        currentBalance: decimal('30'),
-        balanceCostAmount: decimal('90'),
+        currentBalance: '30',
+        balanceCostAmount: '90',
         updatedByUserId: operator.id
       }
     });
@@ -641,8 +660,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: 'cancelled',
-          balanceCostAmount: 0,
-          profitAmount: decimal('97')
+          balanceCostAmount: '0',
+          profitAmount: '97'
         })
       })
     );
@@ -687,9 +706,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          refundCostAmount: decimal('100'),
-          balanceCostAmount: decimal('60'),
-          profitAmount: decimal('-63'),
+          refundCostAmount: '100',
+          balanceCostAmount: '60',
+          profitAmount: '-63',
           status: 'refunded'
         })
       })

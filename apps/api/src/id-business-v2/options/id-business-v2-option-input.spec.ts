@@ -1,5 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import {
   buildOptionOrderBy,
@@ -10,8 +9,7 @@ import {
   normalizeOptionName,
   normalizeOptionSortOrder,
   parseOptionStatus,
-  parseOptionType,
-  rethrowOptionUniqueConstraint
+  parseOptionType
 } from './id-business-v2-option-input';
 
 describe('IdBusinessV2 option input', () => {
@@ -36,13 +34,5 @@ describe('IdBusinessV2 option input', () => {
     expect(() => normalizeOptionCurrencyCode('US')).toThrow(BadRequestException);
     expect(() => normalizeOptionSortOrder(100_000)).toThrow(BadRequestException);
     expect(() => normalizeOptionFees('country', '1', '0')).toThrow(BadRequestException);
-  });
-
-  it('maps Prisma uniqueness conflicts to the domain error', () => {
-    const error = new Prisma.PrismaClientKnownRequestError('duplicate', {
-      code: 'P2002',
-      clientVersion: 'test'
-    });
-    expect(() => rethrowOptionUniqueConstraint(error)).toThrow(ConflictException);
   });
 });

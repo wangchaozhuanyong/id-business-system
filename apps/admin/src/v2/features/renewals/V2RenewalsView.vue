@@ -119,13 +119,13 @@
       @retry="loadWorkbench"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.renewals.main"
           :aria-busy="loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="items"
-          row-key="id"
           :row-class-name="renewalRowClassName"
           @sort-change="handleSortChange"
         >
@@ -137,35 +137,28 @@
           </template>
 
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.renewals.main.columns[0]"
             prop="customer"
-            label="客户"
-            width-preset="standard"
-            fixed="left"
             sortable="custom"
           >
             <template #default="{ row }">{{ row.customer.name }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="identifier"
-            width-preset="identifier"
+            :definition="v2TableSchemas.renewals.main.columns[1]"
             prop="account"
-            label="ID账号"
             sortable="custom"
           >
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[2]">
             <template #default="{ row }">{{ row.account.country.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="wide" label="客户网站账号">
+          <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[3]">
             <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="compact"
+            :definition="v2TableSchemas.renewals.main.columns[4]"
             prop="currentBalance"
-            label="ID余额"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -175,24 +168,20 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.renewals.main.columns[5]"
             prop="service"
-            label="当前业务"
-            width-preset="standard"
             sortable="custom"
           >
             <template #default="{ row }">{{ row.service.name }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.renewals.main.columns[6]"
             prop="dueAt"
-            label="到期时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.dueAt) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" width-preset="compact" label="状态" fixed="right">
+          <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[7]">
             <template #default="{ row }">
               <span class="v2-renewal-status">
                 <el-tag :type="statusType(row.status.code)" effect="plain">
@@ -205,7 +194,7 @@
               </span>
             </template>
           </V2TableColumn>
-          <V2TableActionColumn layout="single">
+          <V2TableActionColumn :definition="v2TableSchemas.renewals.main.columns[8]">
             <template #default="{ row }">
               <el-tooltip
                 :disabled="!renewalActionDisabledReason(row)"
@@ -228,9 +217,9 @@
               </el-tooltip>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.renewals.main.id">
           <article
             v-for="item in items"
             :key="item.id"
@@ -360,6 +349,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { CirclePlus, Refresh, Search, Setting } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

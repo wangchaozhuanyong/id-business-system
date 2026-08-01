@@ -1,15 +1,75 @@
-import type { Prisma } from '@prisma/client';
+import type { Amount4, Rate8, V2CommandTransaction } from '../runtime/public-api';
 
 export interface LockedGiftCardCreditAccountRow {
   id: string;
   appleIdMasked: string;
-  currentBalance: Prisma.Decimal;
-  balanceCostAmount: Prisma.Decimal;
+  currentBalance: Amount4;
+  balanceCostAmount: Amount4;
   soldByOrderId: string | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   countryName: string;
   currencyCode: string | null;
+}
+
+export interface GiftCardCreditRecord {
+  id: string;
+  accountId: string;
+  cardNameOptionId: string;
+  cardNameSnapshot: string;
+  countryOptionId: string;
+  supplierOptionId: string | null;
+  sourceAttachmentId: string | null;
+  codeHash: string;
+  codeMasked: string;
+  codeTail: string;
+  faceValue: Amount4;
+  exchangeRate: Rate8;
+  exchangeRateSource: string;
+  exchangeRateSnapshotId: string | null;
+  exchangeRatePrefilledValue: Rate8 | null;
+  exchangeRateWasOverridden: boolean;
+  costAmount: Amount4;
+  purchaseOriginalAmount: Amount4;
+  purchaseCurrency: 'CNY' | 'MYR' | 'USDT';
+  purchaseFxRateToCny: Rate8;
+  purchaseFxSnapshotId: string | null;
+  purchaseFinanceAccountId: string | null;
+  purchaseSupplierAccountId: string | null;
+  paidAt: Date | null;
+  creditedAt: Date | null;
+  status: string;
+  statusChangedAt: Date;
+  remark: string | null;
+  createdAt: Date;
+}
+
+export interface GiftCardCreditLedgerRecord {
+  id: string;
+  accountId: string;
+  giftCardId: string | null;
+  orderId: string | null;
+  entryType: string;
+  direction: string;
+  balanceAmount: Amount4;
+  costAmount: Amount4;
+  balanceBefore: Amount4;
+  balanceAfter: Amount4;
+  costBefore: Amount4;
+  costAfter: Amount4;
+  averageCostBefore: Rate8;
+  averageCostAfter: Rate8;
+  reversalOfEntryId: string | null;
+  idempotencyKey: string;
+  remark: string | null;
+  createdAt: Date;
+}
+
+export interface GiftCardCreditAccountRecord {
+  id: string;
+  appleIdMasked: string;
+  currentBalance: Amount4;
+  balanceCostAmount: Amount4;
 }
 
 export interface CreditResponse {
@@ -79,7 +139,7 @@ export interface CreditAuditContext {
 }
 
 export interface CreditTransactionHookContext {
-  tx: Prisma.TransactionClient;
+  tx: V2CommandTransaction;
   accountId: string;
   giftCardId: string;
   ledgerEntryId: string;

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { ApiHttpException } from '../common/errors/api-http.exception';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
@@ -226,15 +227,21 @@ describe('AuthService', () => {
     const { service, prisma, jwtService, securityService } = await createService();
     (securityService.isRequestIpAllowed as jest.Mock).mockResolvedValueOnce(false);
 
-    await expect(
-      service.login(
-        {
-          username: 'admin',
-          password: fixturePassword
-        },
-        { ip: '10.0.1.25', userAgent: 'unit-test' }
-      )
-    ).rejects.toThrow(new UnauthorizedException('当前 IP 不在白名单内，无法登录。'));
+    const login = service.login(
+      {
+        username: 'admin',
+        password: fixturePassword
+      },
+      { ip: '10.0.1.25', userAgent: 'unit-test' }
+    );
+    const error = await login.catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiHttpException);
+    expect((error as ApiHttpException).getStatus()).toBe(403);
+    expect((error as ApiHttpException).getResponse()).toMatchObject({
+      errorCode: 'AUTH_IP_BLOCKED',
+      retryable: false
+    });
 
     expect(securityService.recordLoginAttempt).toHaveBeenCalledWith(
       expect.objectContaining({

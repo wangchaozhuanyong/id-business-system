@@ -1,0 +1,30 @@
+import { describe, expect, it } from 'vitest';
+import {
+  auditActionLabel,
+  dashboardOrderStatusMeta,
+  financeHistoryLabel,
+  formatDashboardDate,
+  formatDashboardMoney
+} from './dashboard-presentation';
+
+describe('dashboard presentation', () => {
+  it('keeps missing and invalid values explicit', () => {
+    expect(formatDashboardDate()).toBe('—');
+    expect(formatDashboardMoney(null)).toBe('—');
+    expect(formatDashboardMoney('not-money')).toBe('—');
+  });
+
+  it('maps controlled order and finance states', () => {
+    expect(dashboardOrderStatusMeta('completed')).toMatchObject({
+      label: '已完成',
+      type: 'success'
+    });
+    expect(dashboardOrderStatusMeta('failed')).toMatchObject({ label: '失败', type: 'danger' });
+    expect(financeHistoryLabel('incomplete')).toBe('历史数据待确认');
+  });
+
+  it('normalizes audit action labels without inventing translations', () => {
+    expect(auditActionLabel('order_update')).toBe('order update');
+    expect(auditActionLabel('')).toBe('未知操作');
+  });
+});

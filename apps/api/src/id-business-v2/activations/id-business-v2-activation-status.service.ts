@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
+import type { IdBusinessV2ActivationStatus } from '@prisma/client';
 
 export const ID_BUSINESS_V2_DUE_STATUS_CODES = [
   'active',
@@ -139,70 +139,6 @@ export class IdBusinessV2ActivationStatusService {
       kind: 'due_window',
       after: twentyThreeHourBoundary,
       atOrBefore: sevenDayBoundary
-    };
-  }
-
-  buildWhere(
-    dueStatus: IdBusinessV2ActivationDueStatus,
-    now = new Date()
-  ): Prisma.IdBusinessV2ActivationWhereInput {
-    const filter = this.getFilterWindow(dueStatus, now);
-    if (filter.kind === 'stored_status') {
-      return { status: filter.status };
-    }
-    if (filter.kind === 'expired') {
-      return {
-        OR: [
-          { status: 'expired' },
-          {
-            status: 'active',
-            dueAt: {
-              lte: filter.evaluatedAt
-            }
-          }
-        ]
-      };
-    }
-    if (filter.kind === 'active') {
-      return {
-        status: 'active',
-        OR: [{ dueAt: null }, { dueAt: { gt: filter.after } }]
-      };
-    }
-    return {
-      status: 'active',
-      dueAt: {
-        gt: filter.after,
-        lte: filter.atOrBefore
-      }
-    };
-  }
-
-  buildRenewalWorkbenchWhere(now = new Date()): Prisma.IdBusinessV2ActivationWhereInput {
-    const activeWindow = this.getFilterWindow('active', now);
-    if (activeWindow.kind !== 'active') {
-      throw new Error('续费工作台到期窗口配置无效');
-    }
-    return {
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                not: null,
-                lte: activeWindow.after
-              }
-            }
-          ]
-        }
-      ]
     };
   }
 

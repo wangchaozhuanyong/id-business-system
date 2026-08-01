@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpStatus,
   Injectable,
   Logger,
   Optional,
@@ -11,6 +12,7 @@ import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { authHttpError } from '../common/errors/api-http.exception';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
@@ -57,7 +59,11 @@ export class AuthService {
         ip: requestMeta?.ip,
         userAgent: requestMeta?.userAgent
       });
-      throw new UnauthorizedException('当前 IP 不在白名单内，无法登录。');
+      throw authHttpError(
+        HttpStatus.FORBIDDEN,
+        'AUTH_IP_BLOCKED',
+        '当前 IP 不在白名单内，无法登录。'
+      );
     }
 
     if (this.supabaseAuthService?.isEnabled()) {

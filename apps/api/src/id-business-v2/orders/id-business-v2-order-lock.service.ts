@@ -1,15 +1,11 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
-import type { IdBusinessV2OrderStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
+import { V2CommandTransactionManager, type V2CommandTransaction } from '../runtime/public-api';
 import {
   assertReservableOrder,
   assertReservationReplayMatches,
   buildConsumptionIdempotencyKey,
-  isUniqueConstraintError,
   normalizeIdempotencyKey,
   normalizeRequiredReason,
   normalizeReservationInput,
@@ -21,29 +17,36 @@ import {
   type PrepareOrderConsumptionInput,
   type ReserveAccountForOrderInput
 } from './id-business-v2-order-lock-support';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import type {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderStatus
+} from './id-business-v2-order.types';
 const CONSUMABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>(['pending', 'processing']);
 
 @Injectable()
 export class IdBusinessV2OrderLockService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly repository: IdBusinessV2OrdersRepository,
+    private readonly transactionManager: V2CommandTransactionManager
+  ) {}
 
   async reserveAccountForOrder(input: ReserveAccountForOrderInput, operator?: AuthenticatedUser) {
     const normalized = normalizeReservationInput(input);
 
-    try {
-      return await this.prisma.$transaction((tx) =>
-        this.reserveAccountForOrderInTransaction(tx, normalized, operator)
-      );
-    } catch (error) {
-      if (isUniqueConstraintError(error)) {
-        throw new ConflictException('ID 或订单刚被其他请求锁定，请重新匹配后再试');
+    return this.transactionManager.execute(
+      (tx) => this.reserveAccountForOrderInTransaction(tx, normalized, operator),
+      {
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none',
+        uniqueConflictMessage: 'ID 或订单刚被其他请求锁定，请重新匹配后再试'
       }
-      throw error;
-    }
+    );
   }
 
   async reserveAccountForOrderInTransaction(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: ReserveAccountForOrderInput,
     operator?: AuthenticatedUser
   ) {
@@ -59,51 +62,18 @@ export class IdBusinessV2OrderLockService {
     await this.assertAccountEligibleForOrder(tx, order, account);
     await this.expireStaleLocks(tx, order.id, account.id, now, operator);
 
-    const existingForOrder = await tx.idBusinessV2AccountLock.findFirst({
-      where: {
-        orderId: order.id,
-        status: 'active',
-        expiresAt: {
-          gt: now
-        }
-      },
-      orderBy: {
-        lockedAt: 'desc'
-      }
-    });
+    const existingForOrder = await this.repository.findValidLockForOrder(tx, order.id, now);
     if (existingForOrder) {
       assertReservationReplayMatches(existingForOrder, normalized, order.serviceOptionId);
       return toReservationResponse(order, account, existingForOrder, true);
     }
 
-    const conflictingLock = await tx.idBusinessV2AccountLock.findFirst({
-      where: {
-        accountId: account.id,
-        orderId: {
-          not: order.id
-        },
-        status: 'active',
-        expiresAt: {
-          gt: now
-        },
-        OR:
-          normalized.lockScope === 'global'
-            ? undefined
-            : [
-                {
-                  lockScope: 'global'
-                },
-                {
-                  lockScope: 'by_service',
-                  serviceOptionId: order.serviceOptionId
-                }
-              ]
-      },
-      select: {
-        id: true,
-        lockScope: true,
-        serviceOptionId: true
-      }
+    const conflictingLock = await this.repository.findReservationConflict(tx, {
+      accountId: account.id,
+      orderId: order.id,
+      serviceOptionId: order.serviceOptionId,
+      lockScope: normalized.lockScope,
+      now
     });
     if (conflictingLock) {
       throw new ConflictException(
@@ -115,38 +85,23 @@ export class IdBusinessV2OrderLockService {
       );
     }
 
-    let lock;
-    try {
-      lock = await tx.idBusinessV2AccountLock.create({
-        data: {
-          accountId: account.id,
-          serviceOptionId: normalized.lockScope === 'by_service' ? order.serviceOptionId : null,
-          orderId: order.id,
-          lockScope: normalized.lockScope,
-          status: 'active',
-          lockToken: randomUUID().replaceAll('-', ''),
-          reason: normalized.reason,
-          lockedAt: now,
-          expiresAt: normalized.expiresAt,
-          createdByUserId: operator?.id
-        }
-      });
-    } catch (error) {
-      if (isUniqueConstraintError(error)) {
-        throw new ConflictException('ID 或订单刚被其他请求锁定，请重新匹配后再试');
-      }
-      throw error;
-    }
+    const lock = await this.repository.createAccountLock(tx, {
+      accountId: account.id,
+      serviceOptionId: normalized.lockScope === 'by_service' ? order.serviceOptionId : null,
+      orderId: order.id,
+      lockScope: normalized.lockScope,
+      status: 'active',
+      lockToken: randomUUID().replaceAll('-', ''),
+      reason: normalized.reason,
+      lockedAt: now,
+      expiresAt: normalized.expiresAt,
+      createdByUserId: operator?.id
+    });
 
     if (!order.accountId) {
-      await tx.idBusinessV2Order.update({
-        where: {
-          id: order.id
-        },
-        data: {
-          accountId: account.id,
-          updatedByUserId: operator?.id
-        }
+      await this.repository.updateOrder(tx, order.id, {
+        accountId: account.id,
+        updatedByUserId: operator?.id
       });
     }
 
@@ -158,13 +113,18 @@ export class IdBusinessV2OrderLockService {
     const orderId = normalizeUuid(orderIdValue, '订单');
     const reason = normalizeRequiredReason(reasonValue, '释放原因');
 
-    return this.prisma.$transaction((tx) =>
-      this.releaseOrderLockInTransaction(tx, orderId, reason, operator)
+    return this.transactionManager.execute(
+      (tx) => this.releaseOrderLockInTransaction(tx, orderId, reason, operator),
+      {
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
     );
   }
 
   async releaseOrderLockInTransaction(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     orderIdValue: string,
     reasonValue: string,
     operator?: AuthenticatedUser
@@ -172,24 +132,9 @@ export class IdBusinessV2OrderLockService {
     const orderId = normalizeUuid(orderIdValue, '订单');
     const reason = normalizeRequiredReason(reasonValue, '释放原因');
     const order = await this.lockOrder(tx, orderId);
-    const activeLock = await tx.idBusinessV2AccountLock.findFirst({
-      where: {
-        orderId,
-        status: 'active'
-      },
-      orderBy: {
-        lockedAt: 'desc'
-      }
-    });
+    const activeLock = await this.repository.findActiveLockForOrder(tx, orderId);
     if (!activeLock) {
-      const latestLock = await tx.idBusinessV2AccountLock.findFirst({
-        where: {
-          orderId
-        },
-        orderBy: {
-          lockedAt: 'desc'
-        }
-      });
+      const latestLock = await this.repository.findLatestLockForOrder(tx, orderId);
       return {
         orderId,
         released: false,
@@ -201,37 +146,30 @@ export class IdBusinessV2OrderLockService {
     await this.lockAccount(tx, activeLock.accountId);
     const endedAt = new Date();
     const status = activeLock.expiresAt.getTime() <= endedAt.getTime() ? 'expired' : 'released';
-    const lock = await tx.idBusinessV2AccountLock.update({
-      where: {
-        id: activeLock.id
-      },
-      data: {
-        status,
-        endedAt,
-        endReason: reason,
-        endedByUserId: operator?.id
-      }
+    const lock = await this.repository.updateAccountLock(tx, activeLock.id, {
+      status,
+      endedAt,
+      endReason: reason,
+      endedByUserId: operator?.id
     });
 
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: `id_business_v2.order_lock.${status}`,
-        objectType: 'id_business_v2_account_lock',
-        objectId: lock.id,
-        beforeData: {
-          orderId: order.id,
-          accountId: lock.accountId,
-          status: 'active'
-        },
-        afterData: {
-          status,
-          endedAt,
-          endReason: reason
-        },
-        remark: `V2 订单锁${status === 'released' ? '释放' : '过期'}：${order.orderNo}`
-      }
+    await this.repository.appendAudit(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2',
+      action: `id_business_v2.order_lock.${status}`,
+      objectType: 'id_business_v2_account_lock',
+      objectId: lock.id,
+      beforeData: {
+        orderId: order.id,
+        accountId: lock.accountId,
+        status: 'active'
+      },
+      afterData: {
+        status,
+        endedAt,
+        endReason: reason
+      },
+      remark: `V2 订单锁${status === 'released' ? '释放' : '过期'}：${order.orderNo}`
     });
 
     return {
@@ -243,7 +181,7 @@ export class IdBusinessV2OrderLockService {
   }
 
   async prepareOrderConsumptionInTransaction(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: PrepareOrderConsumptionInput,
     operator?: AuthenticatedUser
   ) {
@@ -253,23 +191,17 @@ export class IdBusinessV2OrderLockService {
       normalizeIdempotencyKey(input.idempotencyKey)
     );
     const order = await this.lockOrder(tx, orderId);
-    const existingEntry = await tx.idBusinessV2BalanceLedger.findUnique({
-      where: {
-        orderId_entryType: {
-          orderId,
-          entryType: 'order_consumption'
-        }
-      }
-    });
+    const existingEntry = await this.repository.findLedgerByOrderAndType(
+      tx,
+      orderId,
+      'order_consumption'
+    );
     if (existingEntry) {
-      const existingReversal = await tx.idBusinessV2BalanceLedger.findUnique({
-        where: {
-          orderId_entryType: {
-            orderId,
-            entryType: 'order_consumption_reversal'
-          }
-        }
-      });
+      const existingReversal = await this.repository.findLedgerByOrderAndType(
+        tx,
+        orderId,
+        'order_consumption_reversal'
+      );
       if (existingEntry.idempotencyKey !== idempotencyKey) {
         throw new ConflictException('订单余额已经扣减，不能使用新的请求重复扣款');
       }
@@ -295,18 +227,10 @@ export class IdBusinessV2OrderLockService {
     await this.assertAccountEligibleForOrder(tx, order, account);
     const now = new Date();
     await this.expireStaleLocks(tx, order.id, account.id, now, operator);
-    const activeLock = await tx.idBusinessV2AccountLock.findFirst({
-      where: {
-        orderId: order.id,
-        accountId: account.id,
-        status: 'active',
-        expiresAt: {
-          gt: now
-        }
-      },
-      orderBy: {
-        lockedAt: 'desc'
-      }
+    const activeLock = await this.repository.findValidLockForOrderAccount(tx, {
+      orderId: order.id,
+      accountId: account.id,
+      now
     });
     if (!activeLock) {
       throw new ConflictException('订单没有有效的 ID 锁，不能扣减余额');
@@ -329,66 +253,16 @@ export class IdBusinessV2OrderLockService {
     };
   }
 
-  private async lockOrder(tx: Prisma.TransactionClient, orderId: string) {
-    const rows = await tx.$queryRaw<LockedOrderRow[]>(PrismaNamespace.sql`
-      SELECT
-        "id",
-        "order_no" AS "orderNo",
-        "service_option_id" AS "serviceOptionId",
-        "account_id" AS "accountId",
-        "received_amount" AS "receivedAmount",
-        "platform_fee_amount" AS "platformFeeAmount",
-        "account_cost_amount" AS "accountCostAmount",
-        "account_disposition" AS "accountDisposition",
-        "balance_amount" AS "balanceAmount",
-        "balance_cost_amount" AS "balanceCostAmount",
-        "refund_cost_amount" AS "refundCostAmount",
-        "profit_amount" AS "profitAmount",
-        "status"
-      FROM "id_business_v2_orders"
-      WHERE
-        "id" = CAST(${orderId} AS UUID)
-        AND "deleted_at" IS NULL
-      FOR UPDATE
-    `);
-    const order = rows[0];
+  private async lockOrder(tx: V2CommandTransaction, orderId: string) {
+    const order = await this.repository.lockOrder(tx, orderId);
     if (!order) {
       throw new NotFoundException('订单不存在或已删除');
     }
     return order;
   }
 
-  private async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
-    const rows = await tx.$queryRaw<LockedAccountRow[]>(PrismaNamespace.sql`
-      SELECT
-        account."id",
-        account."apple_id_masked" AS "appleIdMasked",
-        account."current_balance" AS "currentBalance",
-        account."balance_cost_amount" AS "balanceCostAmount",
-        account."purchase_cost" AS "purchaseCost",
-        account."sold_by_order_id" AS "soldByOrderId",
-        account."loss_reported_at" AS "lossReportedAt",
-        account."country_option_id" AS "countryOptionId",
-        status."code" AS "statusCode"
-      FROM "id_business_v2_accounts" account
-      INNER JOIN "id_business_v2_options" country
-        ON country."id" = account."country_option_id"
-        AND country."type" = 'country'
-        AND country."status" = 'active'
-        AND country."deleted_at" IS NULL
-      INNER JOIN "id_business_v2_options" status
-        ON status."id" = account."status_option_id"
-        AND status."type" = 'id_status'
-        AND status."status" = 'active'
-        AND status."deleted_at" IS NULL
-      WHERE
-        account."id" = CAST(${accountId} AS UUID)
-        AND account."deleted_at" IS NULL
-        AND account."record_status" = 'active'
-        AND account."loss_reported_at" IS NULL
-      FOR UPDATE OF account
-    `);
-    const account = rows[0];
+  private async lockAccount(tx: V2CommandTransaction, accountId: string) {
+    const account = await this.repository.lockAccount(tx, accountId);
     if (!account) {
       throw new NotFoundException('ID 不存在、已停用或关联选项不可用');
     }
@@ -396,7 +270,7 @@ export class IdBusinessV2OrderLockService {
   }
 
   private async assertAccountEligibleForOrder(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     order: LockedOrderRow,
     account: LockedAccountRow
   ) {
@@ -409,40 +283,13 @@ export class IdBusinessV2OrderLockService {
     if (account.soldByOrderId && account.soldByOrderId !== order.id) {
       throw new ConflictException('该 ID 已卖出，不能再次匹配、加卡或续费');
     }
-    if (account.currentBalance.lessThan(order.balanceAmount)) {
+    if (account.currentBalance.lt(order.balanceAmount)) {
       throw new ConflictException(
-        `ID 余额不足，需要 ${toV2DecimalString(order.balanceAmount)}，当前 ${toV2DecimalString(account.currentBalance)}`
+        `ID 余额不足，需要 ${order.balanceAmount.toString()}，当前 ${account.currentBalance.toString()}`
       );
     }
 
-    const service = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: order.serviceOptionId,
-        type: 'service',
-        status: 'active',
-        deletedAt: null,
-        businessAmount: {
-          gt: 0
-        },
-        parent: {
-          is: {
-            type: 'business_category',
-            status: 'active',
-            deletedAt: null
-          }
-        },
-        countryOption: {
-          is: {
-            type: 'country',
-            status: 'active',
-            deletedAt: null
-          }
-        }
-      },
-      select: {
-        countryOptionId: true
-      }
-    });
+    const service = await this.repository.findEligibleLockService(tx, order.serviceOptionId);
     if (!service?.countryOptionId) {
       throw new ConflictException('订单业务不存在、已停用或没有完整的国家和分类');
     }
@@ -452,78 +299,50 @@ export class IdBusinessV2OrderLockService {
   }
 
   private async expireStaleLocks(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     orderId: string,
     accountId: string,
     now: Date,
     operator?: AuthenticatedUser
   ) {
-    const staleLocks = await tx.idBusinessV2AccountLock.findMany({
-      where: {
-        status: 'active',
-        expiresAt: {
-          lte: now
-        },
-        OR: [
-          {
-            orderId
-          },
-          {
-            accountId
-          }
-        ]
-      },
-      select: {
-        id: true,
-        orderId: true,
-        accountId: true,
-        expiresAt: true
-      }
+    const staleLocks = await this.repository.findStaleLocksForOrderOrAccount(tx, {
+      orderId,
+      accountId,
+      now
     });
     if (staleLocks.length === 0) return;
 
-    await tx.idBusinessV2AccountLock.updateMany({
-      where: {
-        id: {
-          in: staleLocks.map((lock) => lock.id)
-        },
-        status: 'active'
-      },
-      data: {
-        status: 'expired',
-        endedAt: now,
-        endReason: '到期后由订单事务自动结束',
-        endedByUserId: operator?.id
-      }
+    await this.repository.expireSelectedLocks(tx, {
+      lockIds: staleLocks.map((lock) => lock.id),
+      endedAt: now,
+      endedByUserId: operator?.id
     });
 
     for (const lock of staleLocks) {
-      await tx.auditLog.create({
-        data: {
-          userId: operator?.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.order_lock.expired',
-          objectType: 'id_business_v2_account_lock',
-          objectId: lock.id,
-          beforeData: {
-            status: 'active',
-            orderId: lock.orderId,
-            accountId: lock.accountId,
-            expiresAt: lock.expiresAt
-          },
-          afterData: {
-            status: 'expired',
-            endedAt: now,
-            endReason: '到期后由订单事务自动结束'
-          },
-          remark: 'V2 订单锁到期后由订单事务自动结束'
-        }
+      await this.repository.appendAudit(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2',
+        action: 'id_business_v2.order_lock.expired',
+        objectType: 'id_business_v2_account_lock',
+        objectId: lock.id,
+        beforeData: {
+          status: 'active',
+          orderId: lock.orderId,
+          accountId: lock.accountId,
+          expiresAt: lock.expiresAt
+        },
+        afterData: {
+          status: 'expired',
+          endedAt: now,
+          endReason: '到期后由订单事务自动结束'
+        },
+        remark: 'V2 订单锁到期后由订单事务自动结束'
       });
     }
   }
 
   private async writeLockAuditLog(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     order: LockedOrderRow,
     account: LockedAccountRow,
     lock: {
@@ -537,26 +356,24 @@ export class IdBusinessV2OrderLockService {
     },
     operator?: AuthenticatedUser
   ) {
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: 'id_business_v2.order_lock.create',
-        objectType: 'id_business_v2_account_lock',
-        objectId: lock.id,
-        afterData: {
-          orderId: order.id,
-          accountId: account.id,
-          appleIdMasked: account.appleIdMasked,
-          serviceOptionId: lock.serviceOptionId,
-          lockScope: lock.lockScope,
-          status: lock.status,
-          lockedAt: lock.lockedAt,
-          expiresAt: lock.expiresAt,
-          reason: lock.reason
-        },
-        remark: `V2 订单锁定 ID：${order.orderNo} / ${account.appleIdMasked}`
-      }
+    await this.repository.appendAudit(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2',
+      action: 'id_business_v2.order_lock.create',
+      objectType: 'id_business_v2_account_lock',
+      objectId: lock.id,
+      afterData: {
+        orderId: order.id,
+        accountId: account.id,
+        appleIdMasked: account.appleIdMasked,
+        serviceOptionId: lock.serviceOptionId,
+        lockScope: lock.lockScope,
+        status: lock.status,
+        lockedAt: lock.lockedAt,
+        expiresAt: lock.expiresAt,
+        reason: lock.reason
+      },
+      remark: `V2 订单锁定 ID：${order.orderNo} / ${account.appleIdMasked}`
     });
   }
 }

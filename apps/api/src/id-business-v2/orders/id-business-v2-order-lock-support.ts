@@ -1,30 +1,33 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
-import type { IdBusinessV2OrderAccountDisposition, IdBusinessV2OrderStatus } from '@prisma/client';
-import { toV2DecimalString } from '../decimal-policy';
+import type { Amount4 } from '../runtime/public-api';
+import type {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderStatus
+} from './id-business-v2-order.types';
 
 export interface LockedOrderRow {
   id: string;
   orderNo: string;
   serviceOptionId: string;
   accountId: string | null;
-  receivedAmount: PrismaNamespace.Decimal;
-  platformFeeAmount: PrismaNamespace.Decimal;
-  accountCostAmount: PrismaNamespace.Decimal;
+  receivedAmount: Amount4;
+  platformFeeAmount: Amount4;
+  accountCostAmount: Amount4;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
-  balanceAmount: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  refundCostAmount: PrismaNamespace.Decimal | null;
-  profitAmount: PrismaNamespace.Decimal | null;
+  balanceAmount: Amount4;
+  balanceCostAmount: Amount4;
+  refundCostAmount: Amount4 | null;
+  profitAmount: Amount4 | null;
   status: IdBusinessV2OrderStatus;
 }
 
 export interface LockedAccountRow {
   id: string;
   appleIdMasked: string;
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  purchaseCost: PrismaNamespace.Decimal;
+  currentBalance: Amount4;
+  balanceCostAmount: Amount4;
+  purchaseCost: Amount4;
   soldByOrderId: string | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
@@ -99,8 +102,8 @@ export function toReservationResponse(
     account: {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
-      currentBalance: toV2DecimalString(account.currentBalance),
-      balanceCostAmount: toV2DecimalString(account.balanceCostAmount)
+      currentBalance: account.currentBalance.toString(),
+      balanceCostAmount: account.balanceCostAmount.toString()
     },
     lock: toLockSummary(lock),
     idempotentReplay
@@ -164,12 +167,9 @@ function normalizeFutureDate(value: unknown, label: string) {
 
 function normalizeLockScope(value: unknown): IdBusinessV2AccountLockScope {
   if (value === undefined || value === null || value === '') {
-    return IdBusinessV2AccountLockScope.by_service;
+    return 'by_service';
   }
-  if (
-    value === IdBusinessV2AccountLockScope.by_service ||
-    value === IdBusinessV2AccountLockScope.global
-  ) {
+  if (value === 'by_service' || value === 'global') {
     return value;
   }
   throw new BadRequestException('锁定范围无效');

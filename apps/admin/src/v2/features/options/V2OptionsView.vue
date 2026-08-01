@@ -87,14 +87,14 @@
             @retry="handleRetry"
           >
             <section class="v2-options-list">
-              <el-table
+              <V2Table
                 :key="renderedType"
+                :schema="v2TableSchemas.options.main"
                 :aria-busy="loading"
                 scrollbar-always-on
                 show-overflow-tooltip
                 class="v2-options-table"
                 :data="items"
-                row-key="id"
                 @sort-change="handleSortChange"
               >
                 <template #empty>
@@ -109,10 +109,8 @@
                 </template>
 
                 <V2TableColumn
-                  kind="text"
+                  :definition="v2TableSchemas.options.main.columns[0]"
                   prop="name"
-                  label="选项名称"
-                  width-preset="identifier"
                   sortable="custom"
                 >
                   <template #default="{ row }">
@@ -120,36 +118,28 @@
                   </template>
                 </V2TableColumn>
                 <V2TableColumn
-                  kind="text"
+                  :definition="v2TableSchemas.options.main.columns[1]"
                   prop="remark"
-                  label="备注"
-                  width-preset="identifier"
                   show-overflow-tooltip
                 />
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.parentType"
-                  kind="text"
-                  label="上级选项"
-                  width-preset="wide"
+                  :definition="v2TableSchemas.options.main.columns[2]"
                 >
                   <template #default="{ row }">{{ row.parent?.name ?? '—' }}</template>
                 </V2TableColumn>
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.requiresCountry"
-                  kind="text"
-                  label="上级国家"
-                  width-preset="wide"
+                  :definition="v2TableSchemas.options.main.columns[3]"
                 >
                   <template #default="{ row }">{{ row.country?.name ?? '—' }}</template>
                 </V2TableColumn>
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.supportsBusinessAmount"
-                  kind="numeric"
-                  width-preset="standard"
-                  label="业务金额"
+                  :definition="v2TableSchemas.options.main.columns[4]"
                 >
                   <template #default="{ row }">
                     {{ formatDecimal(row.businessAmount ?? '0') }} {{ row.currencyCode ?? '—' }}
@@ -158,40 +148,32 @@
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.supportsCurrency"
-                  kind="text"
-                  label="默认货币"
-                  width-preset="compact"
+                  :definition="v2TableSchemas.options.main.columns[5]"
                 >
                   <template #default="{ row }">{{ row.currencyCode ?? '—' }}</template>
                 </V2TableColumn>
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.supportsFees"
-                  kind="numeric"
-                  width-preset="standard"
-                  label="固定手续费"
+                  :definition="v2TableSchemas.options.main.columns[6]"
                 >
                   <template #default="{ row }">¥{{ formatDecimal(row.fixedFee) }}</template>
                 </V2TableColumn>
 
                 <V2TableColumn
                   v-if="activeTypeDefinition?.supportsFees"
-                  kind="numeric"
-                  width-preset="wide"
-                  label="百分比手续费"
+                  :definition="v2TableSchemas.options.main.columns[7]"
                 >
                   <template #default="{ row }">{{ formatDecimal(row.percentageFee) }}%</template>
                 </V2TableColumn>
 
                 <V2TableColumn
-                  kind="numeric"
-                  width-preset="compact"
+                  :definition="v2TableSchemas.options.main.columns[8]"
                   prop="sortOrder"
-                  label="排序"
                   sortable="custom"
                 />
 
-                <V2TableColumn kind="status" width-preset="compact" label="属性">
+                <V2TableColumn :definition="v2TableSchemas.options.main.columns[9]">
                   <template #default="{ row }">
                     <el-tag v-if="row.isSystem" type="warning" effect="plain">系统固定</el-tag>
                     <span v-else>—</span>
@@ -199,10 +181,8 @@
                 </V2TableColumn>
 
                 <V2TableColumn
-                  kind="status"
-                  width-preset="compact"
+                  :definition="v2TableSchemas.options.main.columns[10]"
                   prop="status"
-                  label="状态"
                   sortable="custom"
                 >
                   <template #default="{ row }">
@@ -213,16 +193,14 @@
                 </V2TableColumn>
 
                 <V2TableColumn
-                  kind="date"
-                  width-preset="dateTime"
+                  :definition="v2TableSchemas.options.main.columns[11]"
                   prop="updatedAt"
-                  label="更新时间"
                   sortable="custom"
                 >
                   <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
                 </V2TableColumn>
 
-                <V2TableActionColumn layout="double">
+                <V2TableActionColumn :definition="v2TableSchemas.options.main.columns[12]">
                   <template #default="{ row }">
                     <AppButton
                       size="small"
@@ -246,7 +224,7 @@
                     </AppButton>
                   </template>
                 </V2TableActionColumn>
-              </el-table>
+              </V2Table>
 
               <div class="v2-options-mobile-list">
                 <article v-for="item in items" :key="item.id" class="v2-options-mobile-item">
@@ -389,6 +367,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

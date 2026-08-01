@@ -10,13 +10,13 @@
     @retry="page.loadOrders"
   >
     <section class="v2-records-list">
-      <el-table
+      <V2Table
+        :schema="v2TableSchemas.orders.main"
         :aria-busy="page.loading"
         scrollbar-always-on
         show-overflow-tooltip
         class="v2-records-table"
         :data="page.items"
-        row-key="id"
         :default-sort="{ prop: 'openedAt', order: 'descending' }"
         @sort-change="page.handleSortChange"
       >
@@ -28,11 +28,8 @@
         </template>
 
         <V2TableColumn
-          kind="identifier"
-          width-preset="identifier"
+          :definition="v2TableSchemas.orders.main.columns[0]"
           prop="orderNo"
-          label="订单"
-          fixed="left"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -40,37 +37,28 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          kind="date"
-          width-preset="dateTime"
+          :definition="v2TableSchemas.orders.main.columns[1]"
           prop="createdAt"
-          label="创建时间"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="客户" width-preset="wide">
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[2]">
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.customer.name }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="业务" width-preset="wide">
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[3]">
           <template #default="{ row }">{{ row.service.name }}</template>
         </V2TableColumn>
-        <V2TableColumn
-          kind="identifier"
-          width-preset="identifier"
-          label="使用 ID"
-          show-overflow-tooltip
-        >
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[4]" show-overflow-tooltip>
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
           </template>
         </V2TableColumn>
         <V2TableColumn
-          kind="status"
-          width-preset="standard"
+          :definition="v2TableSchemas.orders.main.columns[5]"
           prop="accountDisposition"
-          label="ID 处理状态"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -80,38 +68,27 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          kind="numeric"
-          width-preset="standard"
+          :definition="v2TableSchemas.orders.main.columns[6]"
           prop="accountCostAmount"
-          label="本单 ID 成本"
           sortable="custom"
         >
           <template #default="{ row }">
             ¥{{ page.formatDecimal(row.appliedAccountCostAmount) }}
           </template>
         </V2TableColumn>
-        <V2TableColumn
-          kind="identifier"
-          width-preset="wide"
-          label="客户网站账号"
-          show-overflow-tooltip
-        >
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[7]" show-overflow-tooltip>
           <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn
-          kind="numeric"
-          width-preset="standard"
+          :definition="v2TableSchemas.orders.main.columns[8]"
           prop="receivedAmount"
-          label="实收金额"
           sortable="custom"
         >
           <template #default="{ row }">¥{{ page.formatDecimal(row.receivedAmount) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          kind="numeric"
-          width-preset="standard"
+          :definition="v2TableSchemas.orders.main.columns[9]"
           prop="profitAmount"
-          label="利润"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -120,7 +97,7 @@
             </strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" width-preset="standard" label="利润率">
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[10]">
           <template #default="{ row }">
             <strong :class="page.profitClass(row.profitRate)">
               {{ row.profitRate === null ? '—' : `${page.formatDecimal(row.profitRate)}%` }}
@@ -128,28 +105,22 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          kind="date"
-          width-preset="dateTime"
+          :definition="v2TableSchemas.orders.main.columns[11]"
           prop="openedAt"
-          label="开通时间"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.openedAt) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          kind="date"
-          width-preset="dateTime"
+          :definition="v2TableSchemas.orders.main.columns[12]"
           prop="dueAt"
-          label="到期时间"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.dueAt) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          kind="status"
-          width-preset="compact"
+          :definition="v2TableSchemas.orders.main.columns[13]"
           prop="status"
-          label="状态"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -158,7 +129,7 @@
             </el-tag>
           </template>
         </V2TableColumn>
-        <V2TableActionColumn layout="wide">
+        <V2TableActionColumn :definition="v2TableSchemas.orders.main.columns[14]">
           <template #default="{ row }">
             <AppButton
               v-if="page.canConsumeOrders && row.operations.canConsume"
@@ -235,9 +206,9 @@
             </el-dropdown>
           </template>
         </V2TableActionColumn>
-      </el-table>
+      </V2Table>
 
-      <div class="v2-records-mobile-list">
+      <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.orders.main.id">
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
@@ -393,6 +364,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

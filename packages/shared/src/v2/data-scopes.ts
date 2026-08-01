@@ -3,12 +3,15 @@ export const V2_DATA_SCOPES = [
   'accounts',
   'accounts-options',
   'activations',
+  'audit-logs',
   'balances',
   'balances-options',
   'balance-records',
   'balance-record-options',
   'customers',
   'customers-options',
+  'data-governance',
+  'dashboard',
   'exchange-rates',
   'employees',
   'finance-accounts',
@@ -26,6 +29,7 @@ export const V2_DATA_SCOPES = [
   'renewals-options',
   'renewal-warning-settings',
   'renewal-warning-summary',
+  'security',
   'supplier-funds',
   'supplier-payments'
 ] as const;
@@ -35,6 +39,7 @@ export type V2DataScope = (typeof V2_DATA_SCOPES)[number];
 export const V2_SCOPE_DEPENDENCIES = {
   'account-losses': [
     'account-losses',
+    'dashboard',
     'accounts',
     'balances',
     'balance-records',
@@ -50,6 +55,7 @@ export const V2_SCOPE_DEPENDENCIES = {
   accounts: [
     'account-losses',
     'accounts',
+    'dashboard',
     'balances',
     'balance-records',
     'orders',
@@ -62,6 +68,7 @@ export const V2_SCOPE_DEPENDENCIES = {
   'accounts-options': ['accounts-options'],
   activations: [
     'activations',
+    'dashboard',
     'orders',
     'renewals',
     'renewal-warning-summary',
@@ -70,8 +77,10 @@ export const V2_SCOPE_DEPENDENCIES = {
     'order-entry-matching',
     'order-entry-manual-candidates'
   ],
+  'audit-logs': ['audit-logs', 'dashboard'],
   balances: [
     'balances',
+    'dashboard',
     'accounts',
     'balance-records',
     'supplier-funds',
@@ -85,6 +94,7 @@ export const V2_SCOPE_DEPENDENCIES = {
   'balance-records': [
     'account-losses',
     'balance-records',
+    'dashboard',
     'supplier-funds',
     'supplier-payments',
     'balances',
@@ -97,13 +107,22 @@ export const V2_SCOPE_DEPENDENCIES = {
     'order-entry-manual-candidates'
   ],
   'balance-record-options': ['balance-record-options'],
-  customers: ['customers', 'orders', 'renewals', 'renewal-warning-summary', 'order-entry-options'],
+  customers: [
+    'customers',
+    'dashboard',
+    'orders',
+    'renewals',
+    'renewal-warning-summary',
+    'order-entry-options'
+  ],
   'customers-options': ['customers-options'],
-  'exchange-rates': ['exchange-rates'],
-  employees: ['employees'],
-  'finance-accounts': ['finance-accounts', 'finance-reports'],
-  'finance-ledger': ['finance-ledger', 'finance-accounts', 'finance-reports'],
-  'finance-reports': ['finance-reports'],
+  'data-governance': ['data-governance', 'audit-logs', 'dashboard'],
+  dashboard: ['dashboard'],
+  'exchange-rates': ['exchange-rates', 'dashboard'],
+  employees: ['employees', 'dashboard'],
+  'finance-accounts': ['finance-accounts', 'finance-reports', 'dashboard'],
+  'finance-ledger': ['finance-ledger', 'finance-accounts', 'finance-reports', 'dashboard'],
+  'finance-reports': ['finance-reports', 'dashboard'],
   options: [
     'options',
     'options-page',
@@ -129,6 +148,7 @@ export const V2_SCOPE_DEPENDENCIES = {
   'options-reference': ['options-reference'],
   orders: [
     'orders',
+    'dashboard',
     'activations',
     'renewals',
     'balances',
@@ -142,12 +162,14 @@ export const V2_SCOPE_DEPENDENCIES = {
   'order-entry-manual-candidates': ['order-entry-manual-candidates'],
   'order-entry-matching': ['order-entry-matching'],
   'order-entry-options': ['order-entry-options'],
-  renewals: ['renewals', 'renewal-warning-summary'],
+  renewals: ['renewals', 'renewal-warning-summary', 'dashboard'],
   'renewals-options': ['renewals-options'],
   'renewal-warning-settings': ['renewal-warning-settings', 'renewals', 'renewal-warning-summary'],
-  'renewal-warning-summary': ['renewal-warning-summary'],
+  'renewal-warning-summary': ['renewal-warning-summary', 'dashboard'],
+  security: ['security', 'audit-logs', 'dashboard'],
   'supplier-funds': [
     'supplier-funds',
+    'dashboard',
     'supplier-payments',
     'balance-records',
     'finance-accounts',
@@ -156,6 +178,7 @@ export const V2_SCOPE_DEPENDENCIES = {
   ],
   'supplier-payments': [
     'supplier-payments',
+    'dashboard',
     'supplier-funds',
     'finance-accounts',
     'finance-ledger',

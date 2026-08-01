@@ -4,6 +4,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2BalancesApi } from './api';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { V2_DECIMAL_PLACES, addDecimalStrings } from '@/v2/utils/decimal';
 import { buildManualGiftCardCreditPayload, normalizeGiftCardCode } from './gift-card-credit-form';
@@ -302,7 +303,7 @@ export function useTopupWorkbenchPage() {
   }
 
   function openAccountRecords(account: V2TopupWorkbenchItem, tab: 'giftCards' | 'ledger') {
-    void router.push({
+    void navigateSafely(router, {
       path: '/v2/records/topups',
       query: {
         tab,
@@ -318,7 +319,7 @@ export function useTopupWorkbenchPage() {
 
   function openCardNameOptions() {
     creditDrawerVisible.value = false;
-    void router.push({
+    void navigateSafely(router, {
       path: '/v2/options',
       query: { type: 'gift_card_name' }
     });

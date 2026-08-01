@@ -1,45 +1,47 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
+import {
+  V2_DECIMAL_PLACES,
+  V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
+  v2UnsignedDecimalPattern
+} from '@apple-business/shared';
+import { Amount4, Rate8, type V2DecimalInput } from '../runtime/public-api';
 
 export interface IdBusinessV2BalanceSnapshotInput {
-  currentBalance: PrismaNamespace.Decimal.Value;
-  balanceCostAmount: PrismaNamespace.Decimal.Value;
+  currentBalance: V2DecimalInput;
+  balanceCostAmount: V2DecimalInput;
 }
 
 export interface IdBusinessV2BalanceMovementSnapshot {
-  balanceAmount: PrismaNamespace.Decimal;
-  costAmount: PrismaNamespace.Decimal;
-  balanceBefore: PrismaNamespace.Decimal;
-  balanceAfter: PrismaNamespace.Decimal;
-  costBefore: PrismaNamespace.Decimal;
-  costAfter: PrismaNamespace.Decimal;
-  averageCostBefore: PrismaNamespace.Decimal;
-  averageCostAfter: PrismaNamespace.Decimal;
+  balanceAmount: Amount4;
+  costAmount: Amount4;
+  balanceBefore: Amount4;
+  balanceAfter: Amount4;
+  costBefore: Amount4;
+  costAfter: Amount4;
+  averageCostBefore: Rate8;
+  averageCostAfter: Rate8;
 }
 
 export interface IdBusinessV2NormalizedBalanceSnapshot {
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  averageCost: PrismaNamespace.Decimal;
+  currentBalance: Amount4;
+  balanceCostAmount: Amount4;
+  averageCost: Rate8;
 }
 
 export interface IdBusinessV2GiftCardCreditSnapshot extends IdBusinessV2BalanceMovementSnapshot {
-  exchangeRate: PrismaNamespace.Decimal;
+  exchangeRate: Rate8;
 }
 
-const AMOUNT_SCALE = V2_DECIMAL_PLACES;
-const RATE_SCALE = V2_DECIMAL_PLACES;
-const AVERAGE_COST_SCALE = V2_DECIMAL_PLACES;
-const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
-const MAX_RATE = new PrismaNamespace.Decimal('9999999999.99999999');
-const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
+const AMOUNT_PATTERN = v2UnsignedDecimalPattern(V2_DECIMAL_PLACES);
+const RATE_PATTERN = v2UnsignedDecimalPattern(V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES);
+const MAX_AMOUNT = Amount4.from('99999999999999.9999');
+const MAX_RATE = Rate8.from('9999999999.99999999');
 
 @Injectable()
 export class IdBusinessV2BalanceCalculatorService {
   normalizeSnapshot(
-    currentBalanceInput: PrismaNamespace.Decimal.Value,
-    balanceCostAmountInput: PrismaNamespace.Decimal.Value
+    currentBalanceInput: V2DecimalInput,
+    balanceCostAmountInput: V2DecimalInput
   ): IdBusinessV2NormalizedBalanceSnapshot {
     const currentBalance = this.normalizeAmount(currentBalanceInput, '当前余额');
     const balanceCostAmount = this.normalizeAmount(balanceCostAmountInput, '当前人民币总成本');
@@ -53,23 +55,23 @@ export class IdBusinessV2BalanceCalculatorService {
 
   calculateGiftCardCredit(
     snapshot: IdBusinessV2BalanceSnapshotInput,
-    faceValueInput: PrismaNamespace.Decimal.Value,
-    exchangeRateInput: PrismaNamespace.Decimal.Value
+    faceValueInput: V2DecimalInput,
+    exchangeRateInput: V2DecimalInput
   ): IdBusinessV2GiftCardCreditSnapshot {
     const balanceBefore = this.normalizeAmount(snapshot.currentBalance, '当前余额');
     const costBefore = this.normalizeAmount(snapshot.balanceCostAmount, '当前人民币总成本');
     const faceValue = this.normalizePositiveAmount(faceValueInput, '礼品卡面值');
     const exchangeRate = this.normalizePositiveRate(exchangeRateInput, '卡片汇率');
     const averageCostBefore = this.calculateAverageCost(balanceBefore, costBefore);
-    const costAmount = faceValue.mul(exchangeRate).toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
+    const costAmount = exchangeRate.apply(faceValue);
 
-    if (costAmount.lessThanOrEqualTo(0)) {
+    if (costAmount.lte(0)) {
       throw new BadRequestException('礼品卡人民币成本四舍五入后必须大于 0');
     }
     this.assertAmountWithinRange(costAmount, '礼品卡人民币成本');
 
-    const balanceAfter = balanceBefore.plus(faceValue).toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
-    const costAfter = costBefore.plus(costAmount).toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
+    const balanceAfter = balanceBefore.add(faceValue);
+    const costAfter = costBefore.add(costAmount);
     this.assertAmountWithinRange(balanceAfter, '加卡后余额');
     this.assertAmountWithinRange(costAfter, '加卡后人民币总成本');
 
@@ -88,32 +90,26 @@ export class IdBusinessV2BalanceCalculatorService {
 
   calculateConsumption(
     snapshot: IdBusinessV2BalanceSnapshotInput,
-    balanceAmountInput: PrismaNamespace.Decimal.Value
+    balanceAmountInput: V2DecimalInput
   ): IdBusinessV2BalanceMovementSnapshot {
     const balanceBefore = this.normalizeAmount(snapshot.currentBalance, '当前余额');
     const costBefore = this.normalizeAmount(snapshot.balanceCostAmount, '当前人民币总成本');
     const balanceAmount = this.normalizePositiveAmount(balanceAmountInput, '扣减余额');
     const averageCostBefore = this.calculateAverageCost(balanceBefore, costBefore);
 
-    if (balanceAmount.greaterThan(balanceBefore)) {
+    if (balanceAmount.gt(balanceBefore)) {
       throw new BadRequestException('扣减余额不能超过当前余额');
     }
 
     const consumesAllBalance = balanceAmount.equals(balanceBefore);
-    const calculatedCost = balanceAmount
-      .mul(averageCostBefore)
-      .toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
+    const calculatedCost = averageCostBefore.apply(balanceAmount);
     const costAmount = consumesAllBalance
       ? costBefore
-      : calculatedCost.greaterThan(costBefore)
+      : calculatedCost.gt(costBefore)
         ? costBefore
         : calculatedCost;
-    const balanceAfter = balanceBefore
-      .minus(balanceAmount)
-      .toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
-    const costAfter = consumesAllBalance
-      ? new PrismaNamespace.Decimal(0)
-      : costBefore.minus(costAmount).toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
+    const balanceAfter = balanceBefore.sub(balanceAmount);
+    const costAfter = consumesAllBalance ? Amount4.zero() : costBefore.sub(costAmount);
 
     return {
       balanceAmount,
@@ -129,17 +125,15 @@ export class IdBusinessV2BalanceCalculatorService {
 
   calculateReversalCredit(
     snapshot: IdBusinessV2BalanceSnapshotInput,
-    balanceAmountInput: PrismaNamespace.Decimal.Value,
-    costAmountInput: PrismaNamespace.Decimal.Value
+    balanceAmountInput: V2DecimalInput,
+    costAmountInput: V2DecimalInput
   ): IdBusinessV2BalanceMovementSnapshot {
     const balanceBefore = this.normalizeAmount(snapshot.currentBalance, '当前余额');
     const costBefore = this.normalizeAmount(snapshot.balanceCostAmount, '当前人民币总成本');
     const balanceAmount = this.normalizePositiveAmount(balanceAmountInput, '恢复余额');
     const costAmount = this.normalizeAmount(costAmountInput, '恢复人民币成本');
-    const balanceAfter = balanceBefore
-      .plus(balanceAmount)
-      .toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
-    const costAfter = costBefore.plus(costAmount).toDecimalPlaces(AMOUNT_SCALE, ROUNDING_MODE);
+    const balanceAfter = balanceBefore.add(balanceAmount);
+    const costAfter = costBefore.add(costAmount);
     this.assertAmountWithinRange(balanceAfter, '恢复后余额');
     this.assertAmountWithinRange(costAfter, '恢复后人民币总成本');
 
@@ -156,69 +150,69 @@ export class IdBusinessV2BalanceCalculatorService {
   }
 
   calculateAverageCost(
-    currentBalanceInput: PrismaNamespace.Decimal.Value,
-    balanceCostAmountInput: PrismaNamespace.Decimal.Value
-  ) {
+    currentBalanceInput: V2DecimalInput,
+    balanceCostAmountInput: V2DecimalInput
+  ): Rate8 {
     const currentBalance = this.normalizeAmount(currentBalanceInput, '当前余额');
     const balanceCostAmount = this.normalizeAmount(balanceCostAmountInput, '当前人民币总成本');
 
-    if (currentBalance.equals(0)) {
-      if (!balanceCostAmount.equals(0)) {
+    if (currentBalance.isZero()) {
+      if (!balanceCostAmount.isZero()) {
         throw new BadRequestException('当前余额为 0 时人民币总成本也必须为 0');
       }
-      return new PrismaNamespace.Decimal(0);
+      return Rate8.zero();
     }
 
-    const averageCost = balanceCostAmount
-      .div(currentBalance)
-      .toDecimalPlaces(AVERAGE_COST_SCALE, ROUNDING_MODE);
-    if (averageCost.greaterThan(MAX_RATE)) {
+    const averageCost = balanceCostAmount.ratio(currentBalance);
+    if (averageCost.gt(MAX_RATE)) {
       throw new BadRequestException('平均成本数值过大');
     }
     return averageCost;
   }
 
-  private normalizePositiveAmount(value: PrismaNamespace.Decimal.Value, label: string) {
+  private normalizePositiveAmount(value: V2DecimalInput, label: string) {
     const amount = this.normalizeAmount(value, label);
-    if (amount.lessThanOrEqualTo(0)) {
+    if (amount.lte(0)) {
       throw new BadRequestException(`${label}必须大于 0`);
     }
     return amount;
   }
 
-  private normalizeAmount(value: PrismaNamespace.Decimal.Value, label: string) {
-    return this.normalizeDecimal(value, label, AMOUNT_SCALE, MAX_AMOUNT);
+  private normalizeAmount(value: V2DecimalInput, label: string) {
+    return this.normalizeDecimal(value, label, AMOUNT_PATTERN, Amount4.from, MAX_AMOUNT);
   }
 
-  private normalizePositiveRate(value: PrismaNamespace.Decimal.Value, label: string) {
-    const rate = this.normalizeDecimal(value, label, RATE_SCALE, MAX_RATE);
-    if (rate.lessThanOrEqualTo(0)) {
+  private normalizePositiveRate(value: V2DecimalInput, label: string) {
+    const rate = this.normalizeDecimal(value, label, RATE_PATTERN, Rate8.from, MAX_RATE);
+    if (rate.lte(0)) {
       throw new BadRequestException(`${label}必须大于 0`);
     }
     return rate;
   }
 
-  private normalizeDecimal(
-    value: PrismaNamespace.Decimal.Value,
+  private normalizeDecimal<T extends Amount4 | Rate8>(
+    value: V2DecimalInput,
     label: string,
-    scale: number,
-    maximum: PrismaNamespace.Decimal
+    pattern: RegExp,
+    create: (input: V2DecimalInput) => T,
+    maximum: T
   ) {
     const normalized = String(value).trim();
-    const pattern = new RegExp(`^\\d+(\\.\\d{1,${scale}})?$`);
     if (!pattern.test(normalized)) {
+      const scale =
+        maximum instanceof Amount4 ? V2_DECIMAL_PLACES : V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES;
       throw new BadRequestException(`${label}必须是最多 ${scale} 位小数的非负数字`);
     }
 
-    const decimal = new PrismaNamespace.Decimal(normalized).toDecimalPlaces(scale, ROUNDING_MODE);
-    if (decimal.greaterThan(maximum)) {
+    const decimal = create(normalized);
+    if (decimal.gt(maximum)) {
       throw new BadRequestException(`${label}数值过大`);
     }
     return decimal;
   }
 
-  private assertAmountWithinRange(value: PrismaNamespace.Decimal, label: string) {
-    if (value.isNegative() || value.greaterThan(MAX_AMOUNT)) {
+  private assertAmountWithinRange(value: Amount4, label: string) {
+    if (value.isNegative() || value.gt(MAX_AMOUNT)) {
       throw new BadRequestException(`${label}数值超出数据库范围`);
     }
   }

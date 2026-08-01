@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { calculateFinanceHistoryAssetOpening } from './id-business-v2-finance-history-opening';
+import { calculateFinanceHistoryAssetOpening } from './persistence/id-business-v2-finance-history-opening.repository';
 
 describe('calculateFinanceHistoryAssetOpening', () => {
   it('normalizes Cloudflare-style aggregate decimals before calculating the opening difference', async () => {

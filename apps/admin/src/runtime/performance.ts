@@ -20,6 +20,10 @@ interface V2NavigationPerformanceState {
   moduleKey: string | null;
   codeReady: boolean;
   dataSettled: boolean;
+  pendingData?: {
+    outcome: 'ready' | 'error';
+    source?: V2RouteDataSource;
+  };
 }
 
 interface V2PerformanceDetail {
@@ -88,25 +92,68 @@ export function markV2RouteCodeReady(path: string, moduleKey?: string) {
   }
   if (!activeNavigation || activeNavigation.codeReady) return false;
 
-  activeNavigation.moduleKey = moduleKey ?? null;
+  const resolvedModuleKey = moduleKey ?? null;
+  if (
+    activeNavigation.pendingData &&
+    activeNavigation.moduleKey &&
+    activeNavigation.moduleKey !== resolvedModuleKey
+  ) {
+    activeNavigation.pendingData = undefined;
+  }
+  activeNavigation.moduleKey = resolvedModuleKey;
   activeNavigation.codeReady = true;
   const detail = navigationDetail(activeNavigation);
   markAppPerformance('v2:route-code-ready', detail);
   measureAppPerformance('v2:route-code-duration', 'v2:route-start', 'v2:route-code-ready', detail);
+  flushPendingRouteData(activeNavigation);
   return true;
 }
 
 export function markV2RouteDataReady(moduleKey: string, source: V2RouteDataSource) {
   const navigation = activeNavigation;
-  if (
-    !navigation ||
-    !navigation.codeReady ||
-    navigation.dataSettled ||
-    navigation.moduleKey !== moduleKey
-  ) {
-    return false;
-  }
+  if (!navigation || navigation.dataSettled) return false;
+  if (!navigation.codeReady) return queuePendingRouteData(navigation, moduleKey, 'ready', source);
+  if (navigation.moduleKey !== moduleKey) return false;
 
+  return completeRouteDataReady(navigation, source);
+}
+
+export function markV2RouteDataError(moduleKey: string) {
+  const navigation = activeNavigation;
+  if (!navigation || navigation.dataSettled) return false;
+  if (!navigation.codeReady) return queuePendingRouteData(navigation, moduleKey, 'error');
+  if (navigation.moduleKey !== moduleKey) return false;
+
+  return completeRouteDataError(navigation);
+}
+
+function queuePendingRouteData(
+  navigation: V2NavigationPerformanceState,
+  moduleKey: string,
+  outcome: 'ready' | 'error',
+  source?: V2RouteDataSource
+) {
+  if (navigation.moduleKey && navigation.moduleKey !== moduleKey) return false;
+  navigation.moduleKey = moduleKey;
+  navigation.pendingData = { outcome, source };
+  return true;
+}
+
+function flushPendingRouteData(navigation: V2NavigationPerformanceState) {
+  const pending = navigation.pendingData;
+  navigation.pendingData = undefined;
+  if (!pending || navigation.dataSettled) return;
+  if (pending.outcome === 'ready' && pending.source) {
+    completeRouteDataReady(navigation, pending.source);
+    return;
+  }
+  if (pending.outcome === 'error') completeRouteDataError(navigation);
+}
+
+function completeRouteDataReady(
+  navigation: V2NavigationPerformanceState,
+  source: V2RouteDataSource
+) {
   navigation.dataSettled = true;
   const detail = {
     ...navigationDetail(navigation),
@@ -124,17 +171,7 @@ export function markV2RouteDataReady(moduleKey: string, source: V2RouteDataSourc
   return true;
 }
 
-export function markV2RouteDataError(moduleKey: string) {
-  const navigation = activeNavigation;
-  if (
-    !navigation ||
-    !navigation.codeReady ||
-    navigation.dataSettled ||
-    navigation.moduleKey !== moduleKey
-  ) {
-    return false;
-  }
-
+function completeRouteDataError(navigation: V2NavigationPerformanceState) {
   navigation.dataSettled = true;
   const detail = {
     ...navigationDetail(navigation),

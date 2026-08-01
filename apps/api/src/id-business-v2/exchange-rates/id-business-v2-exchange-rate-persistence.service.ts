@@ -1,6 +1,11 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { Injectable } from '@nestjs/common';
+import {
+  Amount4,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  type V2CommandTransaction,
+  type V2JsonDocument
+} from '../runtime/public-api';
 import {
   IdBusinessV2OtcAverageError,
   type IdBusinessV2OtcPlatformAverage,
@@ -11,6 +16,7 @@ import {
   type IdBusinessV2OtcMidRateResult
 } from './id-business-v2-otc-mid-rate.service';
 import type { IdBusinessV2OtcProviderName, IdBusinessV2OtcSide } from './id-business-v2-otc.types';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 export type IdBusinessV2ExchangeRateTrigger = 'manual' | 'scheduled' | 'system';
 
@@ -20,7 +26,7 @@ interface NormalizedFailure {
   provider: 'binance' | 'okx' | 'multiple' | 'system';
   side: IdBusinessV2OtcSide | null;
   retryable: boolean;
-  details: Prisma.InputJsonObject;
+  details: V2JsonDocument;
 }
 
 export class IdBusinessV2ExchangeRateRunError extends Error {
@@ -39,50 +45,57 @@ export class IdBusinessV2ExchangeRateRunError extends Error {
 
 @Injectable()
 export class IdBusinessV2ExchangeRatePersistenceService {
-  private readonly logger = new Logger(IdBusinessV2ExchangeRatePersistenceService.name);
-
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly midRateService: IdBusinessV2OtcMidRateService
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
+    private readonly midRateService: IdBusinessV2OtcMidRateService,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService
   ) {}
 
   async collectAndPersist(input: {
     triggerType: IdBusinessV2ExchangeRateTrigger;
-    targetAmountRmb: Prisma.Decimal;
+    targetAmountRmb: Amount4;
     triggeredByUserId?: string;
+    requestId?: string;
   }) {
     const startedAt = new Date();
-    let run: { id: string };
-    try {
-      run = await this.prisma.idBusinessV2ExchangeRateRun.create({
-        data: {
-          status: 'running',
+    const run = await this.transactionManager.execute(
+      async (tx) => {
+        const created = await this.repository.createRun(tx, {
           triggerType: input.triggerType,
-          asset: 'USDT',
-          fiat: 'CNY',
-          targetAmountRmb: input.targetAmountRmb,
+          targetAmountRmb: input.targetAmountRmb.toString(),
           startedAt,
-          triggeredByUserId: input.triggerType === 'manual' ? input.triggeredByUserId : null
-        },
-        select: { id: true }
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('已有汇率采集正在运行，请稍后再试');
+          triggeredByUserId: input.triggeredByUserId
+        });
+        await this.audit.append(tx, {
+          userId: input.triggeredByUserId,
+          module: 'id_business_v2',
+          action: 'id_business_v2.exchange_rate.collect.started',
+          objectType: 'id_business_v2_exchange_rate_run',
+          objectId: created.id,
+          afterData: {
+            status: 'running',
+            triggerType: input.triggerType,
+            targetAmountRmb: input.targetAmountRmb.toString(),
+            startedAt: startedAt.toISOString()
+          },
+          remark: 'V2 汇率采集批次已开始'
+        });
+        return created;
+      },
+      {
+        requestId: input.requestId ?? `exchange-rate-run-start-${input.triggerType}`,
+        retryMode: 'none',
+        uniqueConflictMessage: '已有汇率采集正在运行，请稍后再试'
       }
-      throw error;
-    }
+    );
 
+    let result: IdBusinessV2OtcMidRateResult;
     try {
-      const result = await this.midRateService.collectAndCalculate(input.targetAmountRmb);
-      return await this.persistSuccess(run.id, input, startedAt, result);
+      result = await this.midRateService.collectAndCalculate(input.targetAmountRmb);
     } catch (error) {
       const failure = this.normalizeFailure(error);
-      try {
-        await this.persistFailure(run.id, input, startedAt, failure);
-      } catch {
-        this.logger.error(`汇率批次 ${run.id} 无法保存失败状态`);
-      }
+      await this.persistFailure(run.id, input, startedAt, failure);
       throw new IdBusinessV2ExchangeRateRunError(
         run.id,
         failure.code,
@@ -92,52 +105,49 @@ export class IdBusinessV2ExchangeRatePersistenceService {
         failure.retryable
       );
     }
+    return this.persistSuccess(run.id, input, startedAt, result);
   }
 
   private async persistSuccess(
     runId: string,
     input: {
       triggerType: IdBusinessV2ExchangeRateTrigger;
-      targetAmountRmb: Prisma.Decimal;
+      targetAmountRmb: Amount4;
       triggeredByUserId?: string;
+      requestId?: string;
     },
     startedAt: Date,
     result: IdBusinessV2OtcMidRateResult
   ) {
     const finishedAt = new Date();
-    return this.prisma.$transaction(async (tx) => {
-      const snapshot = await tx.idBusinessV2ExchangeRateSnapshot.create({
-        data: {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const snapshot = await this.repository.createSnapshot(tx, {
           runId,
           asset: result.asset,
           fiat: result.fiat,
           averagedAt: result.averagedAt,
-          combinedMerchantBuyAverageRateToRmb: result.combinedMerchantBuyAverageRateToRmb,
-          combinedMerchantSellAverageRateToRmb: result.combinedMerchantSellAverageRateToRmb,
-          midRateToRmb: result.midRateToRmb
-        },
-        select: { id: true }
-      });
+          combinedMerchantBuyAverageRateToRmb:
+            result.combinedMerchantBuyAverageRateToRmb.toString(),
+          combinedMerchantSellAverageRateToRmb:
+            result.combinedMerchantSellAverageRateToRmb.toString(),
+          midRateToRmb: result.midRateToRmb.toString()
+        });
 
-      let validSampleCount = 0;
-      for (const platform of result.platforms) {
-        validSampleCount += await this.persistPlatform(tx, snapshot.id, platform);
-      }
+        let validSampleCount = 0;
+        for (const platform of result.platforms) {
+          validSampleCount += await this.persistPlatform(tx, snapshot.id, platform);
+        }
 
-      await tx.idBusinessV2ExchangeRateRun.update({
-        where: { id: runId },
-        data: {
-          status: 'success',
+        await this.repository.updateRunSuccess(tx, runId, {
           finishedAt,
           policyMinCompletedOrderCount: result.policy.minCompletedOrderCount,
-          policyMinCompletionRate: result.policy.minCompletionRate,
-          policyMaxPriceDeviationRate: result.policy.maxPriceDeviationRate,
+          policyMinCompletionRate: result.policy.minCompletionRate.toString(),
+          policyMaxPriceDeviationRate: result.policy.maxPriceDeviationRate.toString(),
           policyMinValidAdsPerSide: result.policy.minValidAdsPerSide,
           policyDecimalPlaces: result.policy.decimalPlaces
-        }
-      });
-      await tx.auditLog.create({
-        data: {
+        });
+        await this.audit.append(tx, {
           userId: input.triggeredByUserId,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.collect.success',
@@ -151,64 +161,63 @@ export class IdBusinessV2ExchangeRatePersistenceService {
             midRateToRmb: result.midRateToRmb.toString(),
             providerSnapshotCount: 4,
             validSampleCount,
-            finishedAt
+            finishedAt: finishedAt.toISOString()
           },
           remark: 'V2 Binance 与 OKX 四方向汇率采集成功'
-        }
-      });
+        });
 
-      return {
-        runId,
-        snapshotId: snapshot.id,
-        status: 'success' as const,
-        triggerType: input.triggerType,
-        targetAmountRmb: input.targetAmountRmb.toString(),
-        startedAt,
-        finishedAt,
-        averagedAt: result.averagedAt,
-        combinedMerchantBuyAverageRateToRmb: result.combinedMerchantBuyAverageRateToRmb.toString(),
-        combinedMerchantSellAverageRateToRmb:
-          result.combinedMerchantSellAverageRateToRmb.toString(),
-        midRateToRmb: result.midRateToRmb.toString(),
-        providerSnapshotCount: 4,
-        validSampleCount
-      };
-    });
+        return {
+          runId,
+          snapshotId: snapshot.id,
+          status: 'success' as const,
+          triggerType: input.triggerType,
+          targetAmountRmb: input.targetAmountRmb.toString(),
+          startedAt,
+          finishedAt,
+          averagedAt: result.averagedAt,
+          combinedMerchantBuyAverageRateToRmb:
+            result.combinedMerchantBuyAverageRateToRmb.toString(),
+          combinedMerchantSellAverageRateToRmb:
+            result.combinedMerchantSellAverageRateToRmb.toString(),
+          midRateToRmb: result.midRateToRmb.toString(),
+          providerSnapshotCount: 4,
+          validSampleCount
+        };
+      },
+      { requestId: input.requestId ?? `exchange-rate-run-success-${runId}`, retryMode: 'none' }
+    );
   }
 
   private async persistPlatform(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     snapshotId: string,
     platform: IdBusinessV2OtcPlatformAverage
   ) {
     let count = 0;
     for (const side of [platform.merchantBuy, platform.merchantSell]) {
-      const providerSnapshot = await tx.idBusinessV2ExchangeRateProviderSnapshot.create({
-        data: {
-          snapshotId,
-          provider: this.providerValue(platform.provider),
-          side: side.side,
-          sourceContract: platform.sourceContract,
-          sourceUrl: side.sourceUrl,
-          collectedAt: platform.collectedAt,
-          receivedAdCount: side.receivedAdCount,
-          collectorAcceptedAdCount: side.collectorAcceptedAdCount,
-          collectorRejectedAdCount: side.collectorRejectedAdCount,
-          validAdCount: side.validAdCount,
-          filteredAdCount: side.filteredAdCount,
-          excludedMissingTradableAmount: side.excludedByReason.missing_tradable_amount,
-          excludedNonPositiveTradable: side.excludedByReason.non_positive_tradable_amount,
-          excludedMissingOrderCount: side.excludedByReason.missing_order_count,
-          excludedLowOrderCount: side.excludedByReason.low_order_count,
-          excludedMissingCompletionRate: side.excludedByReason.missing_completion_rate,
-          excludedLowCompletionRate: side.excludedByReason.low_completion_rate,
-          excludedPriceOutlier: side.excludedByReason.price_outlier,
-          medianRateToRmb: side.medianRateToRmb,
-          lowestValidRateToRmb: side.lowestValidRateToRmb,
-          highestValidRateToRmb: side.highestValidRateToRmb,
-          averageRateToRmb: side.averageRateToRmb
-        },
-        select: { id: true }
+      const providerSnapshot = await this.repository.createProviderSnapshot(tx, {
+        snapshotId,
+        provider: this.providerValue(platform.provider),
+        side: side.side,
+        sourceContract: platform.sourceContract,
+        sourceUrl: side.sourceUrl,
+        collectedAt: platform.collectedAt,
+        receivedAdCount: side.receivedAdCount,
+        collectorAcceptedAdCount: side.collectorAcceptedAdCount,
+        collectorRejectedAdCount: side.collectorRejectedAdCount,
+        validAdCount: side.validAdCount,
+        filteredAdCount: side.filteredAdCount,
+        excludedMissingTradableAmount: side.excludedByReason.missing_tradable_amount,
+        excludedNonPositiveTradable: side.excludedByReason.non_positive_tradable_amount,
+        excludedMissingOrderCount: side.excludedByReason.missing_order_count,
+        excludedLowOrderCount: side.excludedByReason.low_order_count,
+        excludedMissingCompletionRate: side.excludedByReason.missing_completion_rate,
+        excludedLowCompletionRate: side.excludedByReason.low_completion_rate,
+        excludedPriceOutlier: side.excludedByReason.price_outlier,
+        medianRateToRmb: side.medianRateToRmb.toString(),
+        lowestValidRateToRmb: side.lowestValidRateToRmb.toString(),
+        highestValidRateToRmb: side.highestValidRateToRmb.toString(),
+        averageRateToRmb: side.averageRateToRmb.toString()
       });
       await this.persistSamples(tx, providerSnapshot.id, side);
       count += side.validSamples.length;
@@ -217,25 +226,26 @@ export class IdBusinessV2ExchangeRatePersistenceService {
   }
 
   private async persistSamples(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     providerSnapshotId: string,
     side: IdBusinessV2OtcSideAverage
   ) {
-    await tx.idBusinessV2ExchangeRateQuoteSample.createMany({
-      data: side.validSamples.map((sample) => ({
+    await this.repository.createQuoteSamples(
+      tx,
+      side.validSamples.map((sample) => ({
         providerSnapshotId,
         sourceAdId: sample.sourceAdId,
-        priceToRmb: sample.priceToRmb,
-        minAmountRmb: sample.minAmountRmb,
-        maxAmountRmb: sample.maxAmountRmb,
-        tradableAmountUsdt: sample.tradableAmountUsdt,
+        priceToRmb: sample.priceToRmb.toString(),
+        minAmountRmb: sample.minAmountRmb.toString(),
+        maxAmountRmb: sample.maxAmountRmb.toString(),
+        tradableAmountUsdt: sample.tradableAmountUsdt.toString(),
         paymentMethods: sample.paymentMethods,
         merchantType: sample.merchantType,
         completedOrderCount: sample.completedOrderCount,
-        completionRate: sample.completionRate,
-        positiveReviewRate: sample.positiveReviewRate
+        completionRate: sample.completionRate.toString(),
+        positiveReviewRate: sample.positiveReviewRate?.toString() ?? null
       }))
-    });
+    );
   }
 
   private async persistFailure(
@@ -243,16 +253,15 @@ export class IdBusinessV2ExchangeRatePersistenceService {
     input: {
       triggerType: IdBusinessV2ExchangeRateTrigger;
       triggeredByUserId?: string;
+      requestId?: string;
     },
     startedAt: Date,
     failure: NormalizedFailure
   ) {
     const finishedAt = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.idBusinessV2ExchangeRateRun.update({
-        where: { id: runId },
-        data: {
-          status: 'failed',
+    await this.transactionManager.execute(
+      async (tx) => {
+        await this.repository.updateRunFailure(tx, runId, {
           finishedAt,
           errorCode: failure.code,
           errorMessage: failure.message,
@@ -260,10 +269,8 @@ export class IdBusinessV2ExchangeRatePersistenceService {
           errorSide: failure.side,
           errorRetryable: failure.retryable,
           errorDetails: failure.details
-        }
-      });
-      await tx.auditLog.create({
-        data: {
+        });
+        await this.audit.append(tx, {
           userId: input.triggeredByUserId,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.collect.failed',
@@ -275,13 +282,14 @@ export class IdBusinessV2ExchangeRatePersistenceService {
             errorCode: failure.code,
             errorProvider: failure.provider,
             errorSide: failure.side,
-            startedAt,
-            finishedAt
+            startedAt: startedAt.toISOString(),
+            finishedAt: finishedAt.toISOString()
           },
           remark: failure.message
-        }
-      });
-    });
+        });
+      },
+      { requestId: input.requestId ?? `exchange-rate-run-failure-${runId}`, retryMode: 'none' }
+    );
   }
 
   private normalizeFailure(error: unknown): NormalizedFailure {

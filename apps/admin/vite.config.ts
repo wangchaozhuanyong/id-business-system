@@ -24,18 +24,6 @@ export default defineConfig(({ mode }) => {
   const buildId = String(`v2-${Date.now().toString(36)}`)
     .replace(/[^a-zA-Z0-9._-]/g, '')
     .slice(0, 96);
-  const v2TableResolver = {
-    type: 'component' as const,
-    resolve(name: string) {
-      if (name !== 'ElTable') return;
-      return {
-        name: 'default',
-        from: '@/v2/components/V2ElTable.vue',
-        sideEffects: 'element-plus/es/components/table/style/css'
-      };
-    }
-  };
-
   return {
     define: {
       __V2_BUILD_ID__: JSON.stringify(buildId)
@@ -76,13 +64,7 @@ export default defineConfig(({ mode }) => {
       }),
       Components({
         dts: false,
-        resolvers: [
-          v2TableResolver,
-          ElementPlusResolver({
-            exclude: /^ElTable$/,
-            importStyle: 'css'
-          })
-        ]
+        resolvers: [ElementPlusResolver({ importStyle: 'css' })]
       }),
       vue()
     ],

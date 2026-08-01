@@ -1,6 +1,6 @@
-import { ForbiddenException } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
+import { ApiHttpException } from '../common/errors/api-http.exception';
 import { IS_PUBLIC_KEY, PERMISSIONS_KEY, REQUIRED_ROLES_KEY } from './auth.decorators';
 import { PermissionsGuard } from './permissions.guard';
 
@@ -57,7 +57,7 @@ describe('PermissionsGuard', () => {
       permissions: ['id.order.view']
     });
 
-    expect(() => guard.canActivate(context)).toThrow(new ForbiddenException('Permission denied'));
+    expectPermissionDenied(() => guard.canActivate(context));
   });
 
   it('requires exact permission names', () => {
@@ -67,7 +67,7 @@ describe('PermissionsGuard', () => {
       permissions: ['id.order.view']
     });
 
-    expect(() => guard.canActivate(context)).toThrow(new ForbiddenException('Permission denied'));
+    expectPermissionDenied(() => guard.canActivate(context));
   });
 
   it('allows a user with one of the required roles', () => {
@@ -87,8 +87,19 @@ describe('PermissionsGuard', () => {
       permissions: []
     });
 
-    expect(() => guard.canActivate(context)).toThrow(
-      new ForbiddenException('Required role is missing')
-    );
+    expectPermissionDenied(() => guard.canActivate(context));
   });
 });
+
+function expectPermissionDenied(execute: () => unknown) {
+  try {
+    execute();
+    throw new Error('Expected permission denial');
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiHttpException);
+    expect((error as ApiHttpException).getStatus()).toBe(403);
+    expect((error as ApiHttpException).getResponse()).toMatchObject({
+      errorCode: 'AUTH_PERMISSION_DENIED'
+    });
+  }
+}

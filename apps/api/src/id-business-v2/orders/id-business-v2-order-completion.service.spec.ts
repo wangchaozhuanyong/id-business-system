@@ -6,7 +6,9 @@ import type {
   IdBusinessV2Order
 } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -148,9 +150,10 @@ describe('IdBusinessV2OrderCompletionService', () => {
     post: vi.fn()
   };
   const service = new IdBusinessV2OrderCompletionService(
-    prisma as never,
     ordersService as never,
-    financePostingService as never
+    financePostingService as never,
+    new IdBusinessV2OrdersRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
   );
   let order = makeOrder();
   let consumption: IdBusinessV2BalanceLedger | null = makeConsumption();

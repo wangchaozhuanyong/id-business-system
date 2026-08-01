@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ExchangeRateRetentionService } from './id-business-v2-exchange-rate-retention.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 describe('IdBusinessV2ExchangeRateRetentionService', () => {
   const result = {
@@ -17,7 +19,11 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
   const prisma = {
     $transaction: vi.fn()
   };
-  const service = new IdBusinessV2ExchangeRateRetentionService(prisma as never);
+  const service = new IdBusinessV2ExchangeRateRetentionService(
+    new IdBusinessV2ExchangeRateRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never),
+    new V2TransactionalAuditService()
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();

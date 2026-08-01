@@ -278,6 +278,20 @@
         tabindex="-1"
         :aria-busy="isRoutePending"
       >
+        <section
+          v-if="authStore.isVerifiedDegraded"
+          class="v2-session-degraded"
+          role="status"
+          aria-live="polite"
+        >
+          <div>
+            <strong>登录服务连接中断，当前页面已切换为只读</strong>
+            <span>已保留最后成功内容；恢复连接前不会提交任何修改。</span>
+          </div>
+          <AppButton size="small" :disabled="sessionRetrying" @click="retryDegradedSession">
+            {{ sessionRetrying ? '正在重连' : '重新连接' }}
+          </AppButton>
+        </section>
         <div class="v2-content__inner">
           <section v-if="isRouteError" class="v2-route-error" role="alert">
             <strong>页面资源加载失败</strong>
@@ -308,6 +322,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { V2_DATA_SCOPES } from '@apple-business/shared';
 import {
   ArrowDown,
   Bell,
@@ -326,7 +341,7 @@ import {
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
-import { hasUserFeatureAccess, hasUserPermission } from '@/utils/permissions';
+import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
 import { v2ModuleDefinitions, v2NavigationSections } from '@/v2/config/modules';
@@ -336,7 +351,15 @@ import {
   setV2RouteNavigationState,
   v2RouteNavigationState
 } from '@/v2/router/routes';
-import { clearV2QueryCache, useV2Query, v2QueryActivity } from '@/v2/composables/useV2Query';
+import {
+  clearV2QueryCache,
+  invalidateV2Queries,
+  useV2Query,
+  v2QueryActivity
+} from '@/v2/composables/useV2Query';
+import { navigateSafely } from '@/v2/router/navigateSafely';
+import { requiresPasswordResetRedirect } from '@/v2/router/passwordReset';
+import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 import { createV2RoutePrefetchController } from '@/v2/runtime/routePrefetch';
 import { startV2ChangeSync, stopV2ChangeSync } from '@/v2/runtime/changeSync';
 import '@/v2/styles/v2.css';
@@ -360,6 +383,7 @@ const currentTheme = ref<V2Theme>(getPreferredV2Theme());
 const globalSearchQuery = ref('');
 const globalSearchOpen = ref(false);
 const notificationOpen = ref(false);
+const sessionRetrying = ref(false);
 const contentElement = ref<HTMLElement | null>(null);
 const pageTitleElement = ref<HTMLElement | null>(null);
 const liveMessage = ref('');
@@ -488,7 +512,7 @@ async function openSearchResult(path: string) {
   globalSearchQuery.value = '';
   if (route.path !== path) {
     beginNavigation(path);
-    await router.push(path);
+    await navigateSafely(router, path);
   }
 }
 
@@ -549,7 +573,7 @@ async function openRenewalWarnings() {
   const path = '/v2/workbench/renewals';
   if (route.path !== path) {
     beginNavigation(path);
-    await router.push(path);
+    await navigateSafely(router, path);
   }
 }
 
@@ -607,11 +631,11 @@ function retryCurrentRoute() {
 function handleAccountCommand(command: string | number | object) {
   if (command === 'profile') {
     beginNavigation('/v2/profile');
-    void router.push('/v2/profile');
+    void navigateSafely(router, '/v2/profile');
     return;
   }
   if (command === 'change-password') {
-    void router.push('/change-password');
+    void navigateSafely(router, '/change-password');
     return;
   }
   if (command === 'logout') {
@@ -622,8 +646,42 @@ function handleAccountCommand(command: string | number | object) {
 async function logout() {
   stopV2ChangeSync();
   clearV2QueryCache();
-  await authStore.logout();
-  await router.replace('/login');
+  try {
+    await authStore.logout();
+  } finally {
+    await navigateSafely(router, '/login', 'replace');
+  }
+}
+
+async function retryDegradedSession() {
+  if (sessionRetrying.value) return;
+  sessionRetrying.value = true;
+  try {
+    const resolution = await authStore.ensureSessionReady({
+      force: true,
+      source: 'manual-retry'
+    });
+    if (resolution !== 'ready') return;
+    invalidateV2Queries(V2_DATA_SCOPES);
+    if (
+      requiresPasswordResetRedirect(
+        authStore.user?.mustResetPassword,
+        route.meta.allowDuringPasswordReset
+      )
+    ) {
+      await navigateSafely(
+        router,
+        { path: '/change-password', query: { redirect: route.fullPath } },
+        'replace'
+      );
+      return;
+    }
+    if (!hasUserRouteAccess(authStore.user, route.meta.permission, route.meta.requiredRoles)) {
+      await navigateSafely(router, getFirstAllowedV2Route(authStore.user), 'replace');
+    }
+  } finally {
+    sessionRetrying.value = false;
+  }
 }
 
 onMounted(() => {

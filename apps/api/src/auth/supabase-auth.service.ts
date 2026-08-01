@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpStatus,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException
@@ -8,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
+import { authHttpError } from '../common/errors/api-http.exception';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { verifyPassword } from './password-hasher';
 
@@ -189,6 +191,14 @@ export class SupabaseAuthService {
     const claims = claimsResult.data?.claims;
     const authUserId = claims?.sub;
     const sessionId = claims?.session_id;
+    if (claimsResult.error && (claimsResult.error.status ?? 0) >= 500) {
+      throw authHttpError(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'AUTH_DEPENDENCY_UNAVAILABLE',
+        '登录服务暂时不可用，请稍后重试。',
+        claimsResult.error
+      );
+    }
     if (
       claimsResult.error ||
       !claims ||
@@ -197,7 +207,12 @@ export class SupabaseAuthService {
       !this.isUuid(sessionId)
     ) {
       this.tokenIdentityCache.delete(cacheKey);
-      throw new UnauthorizedException('登录状态无效或已过期，请重新登录。');
+      throw authHttpError(
+        HttpStatus.UNAUTHORIZED,
+        'AUTH_INVALID',
+        '登录状态无效或已过期，请重新登录。',
+        claimsResult.error ?? undefined
+      );
     }
 
     const identity = await this.prisma.v2AuthIdentity.findFirst({
@@ -214,7 +229,11 @@ export class SupabaseAuthService {
       }
     });
     if (!identity) {
-      throw new UnauthorizedException('登录账号未绑定到业务系统或已停用。');
+      throw authHttpError(
+        HttpStatus.UNAUTHORIZED,
+        'AUTH_ACCOUNT_DISABLED',
+        '登录账号未绑定到业务系统或已停用。'
+      );
     }
 
     const sessionIdentity = {
@@ -424,7 +443,11 @@ export class SupabaseAuthService {
 
   private getClaimsExpiry(exp?: number) {
     if (!exp || !Number.isFinite(exp) || exp * 1000 <= Date.now()) {
-      throw new UnauthorizedException('登录状态无效或已过期，请重新登录。');
+      throw authHttpError(
+        HttpStatus.UNAUTHORIZED,
+        'AUTH_EXPIRED',
+        '登录状态无效或已过期，请重新登录。'
+      );
     }
     return new Date(exp * 1000);
   }

@@ -1,11 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
+import { Amount4, V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES } from '../runtime/public-api';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
+import type { IdBusinessV2MatchingAccount } from './id-business-v2-order.types';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 export interface FindIdBusinessV2OrderCandidatesQuery {
   serviceOptionId?: string;
@@ -15,40 +14,13 @@ export interface FindIdBusinessV2OrderCandidatesQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_BALANCE = new PrismaNamespace.Decimal('99999999999999.9999');
+const MAX_BALANCE = Amount4.from('99999999999999.9999');
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
-const MATCHING_ACCOUNT_SELECT = {
-  id: true,
-  appleIdMasked: true,
-  currentBalance: true,
-  balanceCostAmount: true,
-  purchaseCost: true,
-  updatedAt: true,
-  countryOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  statusOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2AccountSelect;
-
-type MatchingAccount = Prisma.IdBusinessV2AccountGetPayload<{
-  select: typeof MATCHING_ACCOUNT_SELECT;
-}>;
-
 @Injectable()
 export class IdBusinessV2OrderMatchingService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2OrdersRepository,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly fieldEncryptionService: FieldEncryptionService
   ) {}
@@ -85,218 +57,43 @@ export class IdBusinessV2OrderMatchingService {
     const context = await this.resolveMatchingContext(serviceOptionId);
     const evaluatedAt = new Date();
 
-    const activeInCountryWhere: Prisma.IdBusinessV2AccountWhereInput = {
-      deletedAt: null,
-      recordStatus: 'active',
-      lossReportedAt: null,
+    const result = await this.repository.findMatchingCandidates({
       countryOptionId: context.country.id,
-      soldByOrderId: editingOrderId ? undefined : null,
-      AND: editingOrderId
-        ? [{ OR: [{ soldByOrderId: null }, { soldByOrderId: editingOrderId }] }]
-        : undefined
-    };
-    const normalStatusWhere: Prisma.IdBusinessV2AccountWhereInput = {
-      ...activeInCountryWhere,
-      statusOption: {
-        is: {
-          type: 'id_status',
-          code: 'normal',
-          status: 'active',
-          deletedAt: null
-        }
-      }
-    };
-    const sufficientBalanceWhere: Prisma.IdBusinessV2AccountWhereInput = {
-      ...normalStatusWhere,
-      currentBalance: {
-        gte: requiredBalance
-      }
-    };
-    const availableWhere: Prisma.IdBusinessV2AccountWhereInput = {
-      ...sufficientBalanceWhere,
-      locks: {
-        none: {
-          status: 'active',
-          expiresAt: {
-            gt: evaluatedAt
-          },
-          OR: [
-            {
-              lockScope: 'global'
-            },
-            {
-              lockScope: 'by_service',
-              serviceOptionId
-            }
-          ],
-          orderId: editingOrderId ? { not: editingOrderId } : undefined
-        }
-      }
-    };
-    const candidateWhere: Prisma.IdBusinessV2AccountWhereInput = keyword
-      ? {
-          ...availableWhere,
-          OR: [
-            {
-              appleIdMasked: {
-                contains: keyword,
-                mode: 'insensitive'
-              }
-            },
-            {
-              appleIdHash: this.fieldEncryptionService.hash(keyword.toLocaleLowerCase('en-US'))!
-            }
-          ]
-        }
-      : availableWhere;
-
-    const [activeInCountry, normalStatus, sufficientBalance, available, accounts, nextLock] =
-      await this.prisma.$transaction([
-        this.prisma.idBusinessV2Account.count({
-          where: activeInCountryWhere
-        }),
-        this.prisma.idBusinessV2Account.count({
-          where: normalStatusWhere
-        }),
-        this.prisma.idBusinessV2Account.count({
-          where: sufficientBalanceWhere
-        }),
-        this.prisma.idBusinessV2Account.count({
-          where: availableWhere
-        }),
-        this.prisma.idBusinessV2Account.findMany({
-          where: candidateWhere,
-          select: MATCHING_ACCOUNT_SELECT,
-          take: limit,
-          orderBy: [
-            {
-              currentBalance: 'asc'
-            },
-            {
-              updatedAt: 'asc'
-            },
-            {
-              id: 'asc'
-            }
-          ]
-        }),
-        this.prisma.idBusinessV2AccountLock.findFirst({
-          where: {
-            status: 'active',
-            expiresAt: {
-              gt: evaluatedAt
-            },
-            OR: [
-              {
-                lockScope: 'global'
-              },
-              {
-                lockScope: 'by_service',
-                serviceOptionId
-              }
-            ],
-            account: {
-              is: sufficientBalanceWhere
-            }
-          },
-          select: {
-            expiresAt: true
-          },
-          orderBy: {
-            expiresAt: 'asc'
-          }
-        })
-      ]);
+      serviceOptionId,
+      editingOrderId,
+      requiredBalance: requiredBalance.toString(),
+      evaluatedAt,
+      keyword,
+      keywordHash: keyword
+        ? this.fieldEncryptionService.hash(keyword.toLocaleLowerCase('en-US'))
+        : null,
+      limit
+    });
 
     return {
       criteria: {
         service: context.service,
         category: context.category,
         country: context.country,
-        requiredBalance: toV2DecimalString(requiredBalance),
+        requiredBalance: requiredBalance.toString(),
         requiredStatusCode: 'normal',
         evaluatedAt
       },
       counts: {
-        activeInCountry,
-        normalStatus,
-        sufficientBalance,
-        available
+        ...result.counts
       },
-      revalidateAt: nextLock?.expiresAt ?? null,
-      selectedCandidateId: autoSelect ? (accounts[0]?.id ?? null) : null,
-      items: accounts.map((account) => this.toCandidateResponse(account, requiredBalance))
+      revalidateAt: result.nextLockExpiresAt,
+      selectedCandidateId: autoSelect ? (result.accounts[0]?.id ?? null) : null,
+      items: result.accounts.map((account) => this.toCandidateResponse(account, requiredBalance))
     };
   }
 
   private async resolveMatchingContext(serviceOptionId: string) {
-    const service = await this.prisma.idBusinessV2Option.findFirst({
-      where: {
-        id: serviceOptionId,
-        type: 'service',
-        status: 'active',
-        deletedAt: null,
-        businessAmount: {
-          gt: 0
-        },
-        parent: {
-          is: {
-            type: 'business_category',
-            status: 'active',
-            deletedAt: null
-          }
-        },
-        countryOption: {
-          is: {
-            type: 'country',
-            status: 'active',
-            deletedAt: null
-          }
-        }
-      },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        parent: {
-          select: {
-            id: true,
-            code: true,
-            name: true
-          }
-        },
-        countryOption: {
-          select: {
-            id: true,
-            code: true,
-            name: true
-          }
-        }
-      }
-    });
-    const category = service?.parent;
-    const country = service?.countryOption;
-    if (!service || !category || !country) {
+    const context = await this.repository.findMatchingContext(serviceOptionId);
+    if (!context) {
       throw new BadRequestException('业务不存在、已停用或没有完整的国家和分类');
     }
-
-    return {
-      service: {
-        id: service.id,
-        code: service.code,
-        name: service.name
-      },
-      category: {
-        id: category.id,
-        code: category.code,
-        name: category.name
-      },
-      country: {
-        id: country.id,
-        code: country.code,
-        name: country.name
-      }
-    };
+    return context;
   }
 
   private normalizeRequiredBalance(value: unknown) {
@@ -304,11 +101,11 @@ export class IdBusinessV2OrderMatchingService {
     if (!normalized || !V2_DECIMAL_PATTERN.test(normalized)) {
       throw new BadRequestException(`消耗余额必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
     }
-    const balance = new PrismaNamespace.Decimal(normalized);
-    if (balance.lessThanOrEqualTo(0)) {
+    const balance = Amount4.from(normalized);
+    if (balance.lte(0)) {
       throw new BadRequestException('消耗余额必须大于 0');
     }
-    if (balance.greaterThan(MAX_BALANCE)) {
+    if (balance.gt(MAX_BALANCE)) {
       throw new BadRequestException('消耗余额数值过大');
     }
     return balance;
@@ -348,11 +145,12 @@ export class IdBusinessV2OrderMatchingService {
     return String(value).trim() || null;
   }
 
-  private toCandidateResponse(account: MatchingAccount, requiredBalance: PrismaNamespace.Decimal) {
+  private toCandidateResponse(account: IdBusinessV2MatchingAccount, requiredBalance: Amount4) {
+    const { currentBalance, balanceCostAmount, purchaseCost } = account;
     const consumption = this.balanceCalculator.calculateConsumption(
       {
-        currentBalance: account.currentBalance,
-        balanceCostAmount: account.balanceCostAmount
+        currentBalance,
+        balanceCostAmount
       },
       requiredBalance
     );
@@ -361,19 +159,14 @@ export class IdBusinessV2OrderMatchingService {
       appleIdMasked: account.appleIdMasked,
       country: account.countryOption,
       status: account.statusOption,
-      currentBalance: toV2DecimalString(account.currentBalance),
-      balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
-      estimatedBalanceCostAmount: toV2DecimalString(consumption.costAmount),
-      averageCost: toV2DecimalString(
-        this.balanceCalculator.calculateAverageCost(
-          account.currentBalance,
-          account.balanceCostAmount
-        )
-      ),
-      purchaseCost: toV2DecimalString(account.purchaseCost),
-      balanceAfterMatch: toV2DecimalString(
-        account.currentBalance.minus(requiredBalance.toString())
-      ),
+      currentBalance: currentBalance.toString(),
+      balanceCostAmount: balanceCostAmount.toString(),
+      estimatedBalanceCostAmount: consumption.costAmount.toString(),
+      averageCost: this.balanceCalculator
+        .calculateAverageCost(currentBalance, balanceCostAmount)
+        .toString(),
+      purchaseCost: purchaseCost.toString(),
+      balanceAfterMatch: currentBalance.sub(requiredBalance).toString(),
       updatedAt: account.updatedAt
     };
   }

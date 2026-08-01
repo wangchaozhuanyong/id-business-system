@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import { V2_DECIMAL_PLACES, v2UnsignedDecimalPattern } from '@apple-business/shared';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
+import { Amount4 } from '../runtime/public-api';
 import { IdBusinessV2BalanceCalculatorService } from './id-business-v2-balance-calculator.service';
+import {
+  IdBusinessV2BalanceQueryRepository,
+  type TopupWorkbenchBalanceRange,
+  type TopupWorkbenchSortField,
+  type WorkbenchAccountRow
+} from './persistence/id-business-v2-balance-query.repository';
 
 type TopupWorkbenchBalancePreset = 'zero' | 'positive_under_20' | 'custom';
 
@@ -18,81 +22,20 @@ export interface ListIdBusinessV2TopupWorkbenchQuery extends PaginationQuery {
   sortOrder?: string;
 }
 
-const WORKBENCH_ACCOUNT_INCLUDE = {
-  countryOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  statusOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      isSystem: true
-    }
-  },
-  giftCards: {
-    select: {
-      createdAt: true
-    },
-    orderBy: {
-      createdAt: 'desc'
-    },
-    take: 1
-  },
-  activations: {
-    select: {
-      id: true,
-      status: true,
-      openedAt: true,
-      dueAt: true,
-      serviceOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          parent: {
-            select: {
-              id: true,
-              name: true
-            }
-          }
-        }
-      }
-    },
-    orderBy: [{ openedAt: 'desc' }, { id: 'asc' }]
-  },
-  _count: {
-    select: {
-      giftCards: true,
-      balanceLedger: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2AccountInclude;
-
-type WorkbenchAccount = Prisma.IdBusinessV2AccountGetPayload<{
-  include: typeof WORKBENCH_ACCOUNT_INCLUDE;
-}>;
-
-const WORKBENCH_SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2AccountOrderByWithRelationInput
-> = {
+const WORKBENCH_SORT_FIELDS: Record<string, TopupWorkbenchSortField> = {
   appleId: 'appleIdMasked',
   currentBalance: 'currentBalance',
   balanceCostAmount: 'balanceCostAmount',
   updatedAt: 'updatedAt'
 };
 
-const MAX_BALANCE = new PrismaNamespace.Decimal('99999999999999.9999');
+const MAX_BALANCE = Amount4.from('99999999999999.9999');
+const BALANCE_PATTERN = v2UnsignedDecimalPattern(V2_DECIMAL_PLACES);
 
 @Injectable()
 export class IdBusinessV2TopupWorkbenchService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly queryRepository: IdBusinessV2BalanceQueryRepository,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService
   ) {}
 
@@ -103,39 +46,19 @@ export class IdBusinessV2TopupWorkbenchService {
     const balanceRange = this.buildBalanceRange(balancePreset, query.balanceMin, query.balanceMax);
     const onlyNormal = this.parseBoolean(query.onlyNormal, '只显示正常 ID');
     const countryOptionId = this.normalizeNullableString(query.countryOptionId);
-    const where: Prisma.IdBusinessV2AccountWhereInput = {
-      deletedAt: null,
-      recordStatus: 'active',
-      lossReportedAt: null,
-      soldByOrderId: null,
-      countryOptionId: countryOptionId ?? undefined,
-      currentBalance: balanceRange,
-      statusOption: onlyNormal
-        ? {
-            is: {
-              type: 'id_status',
-              code: 'normal',
-              status: 'active',
-              deletedAt: null
-            }
-          }
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2Account.findMany({
-        where,
-        include: WORKBENCH_ACCOUNT_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
-      }),
-      this.prisma.idBusinessV2Account.count({ where })
-    ]);
+    const result = await this.queryRepository.listTopupWorkbench({
+      countryOptionId,
+      balanceRange,
+      onlyNormal,
+      sortField: query.sortBy ? (WORKBENCH_SORT_FIELDS[query.sortBy] ?? null) : null,
+      sortDirection: query.sortOrder === 'desc' ? 'desc' : 'asc',
+      skip: pagination.skip,
+      take: pagination.take
+    });
 
     return {
-      items: items.map((account) => this.toResponse(account, evaluatedAt)),
-      total,
+      items: result.items.map((account) => this.toResponse(account, evaluatedAt)),
+      total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
       evaluatedAt
@@ -154,16 +77,16 @@ export class IdBusinessV2TopupWorkbenchService {
     preset: TopupWorkbenchBalancePreset | null,
     minimumValue: unknown,
     maximumValue: unknown
-  ): Prisma.DecimalFilter | undefined {
+  ): TopupWorkbenchBalanceRange | undefined {
     if (preset === 'zero') {
       this.assertNoCustomRange(minimumValue, maximumValue);
-      return { equals: new PrismaNamespace.Decimal(0) };
+      return { equals: '0' };
     }
     if (preset === 'positive_under_20') {
       this.assertNoCustomRange(minimumValue, maximumValue);
       return {
-        gt: new PrismaNamespace.Decimal(0),
-        lt: new PrismaNamespace.Decimal(20)
+        gt: '0',
+        lt: '20'
       };
     }
 
@@ -178,13 +101,13 @@ export class IdBusinessV2TopupWorkbenchService {
     if (!minimum && !maximum) {
       throw new BadRequestException('自定义余额范围至少填写一项');
     }
-    if (minimum && maximum && minimum.greaterThan(maximum)) {
+    if (minimum && maximum && minimum.gt(maximum)) {
       throw new BadRequestException('最低余额不能大于最高余额');
     }
 
     return {
-      gte: minimum ?? undefined,
-      lte: maximum ?? undefined
+      gte: minimum?.toString(),
+      lte: maximum?.toString()
     };
   }
 
@@ -197,12 +120,12 @@ export class IdBusinessV2TopupWorkbenchService {
   private parseOptionalBalance(value: unknown, label: string) {
     const normalized = this.normalizeNullableString(value);
     if (!normalized) return null;
-    if (!V2_DECIMAL_PATTERN.test(normalized)) {
+    if (!BALANCE_PATTERN.test(normalized)) {
       throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数字`);
     }
 
-    const balance = new PrismaNamespace.Decimal(normalized);
-    if (balance.greaterThan(MAX_BALANCE)) {
+    const balance = Amount4.from(normalized);
+    if (balance.gt(MAX_BALANCE)) {
       throw new BadRequestException(`${label}数值过大`);
     }
     return balance;
@@ -224,23 +147,7 @@ export class IdBusinessV2TopupWorkbenchService {
     return String(value).trim() || null;
   }
 
-  private buildOrderBy(query: ListIdBusinessV2TopupWorkbenchQuery) {
-    const field = query.sortBy ? WORKBENCH_SORT_FIELDS[query.sortBy] : undefined;
-    if (!field) {
-      return [
-        { updatedAt: 'desc' },
-        { id: 'desc' }
-      ] satisfies Prisma.IdBusinessV2AccountOrderByWithRelationInput[];
-    }
-    const direction = query.sortOrder === 'desc' ? 'desc' : 'asc';
-    return [
-      { [field]: direction },
-      { updatedAt: 'desc' },
-      { id: 'desc' }
-    ] as Prisma.IdBusinessV2AccountOrderByWithRelationInput[];
-  }
-
-  private toResponse(account: WorkbenchAccount, evaluatedAt: Date) {
+  private toResponse(account: WorkbenchAccountRow, evaluatedAt: Date) {
     const historicalServices = this.uniqueServices(account.activations);
     const currentServices = this.uniqueServices(
       account.activations.filter(
@@ -254,16 +161,13 @@ export class IdBusinessV2TopupWorkbenchService {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
       country: account.countryOption,
-      currentBalance: toV2DecimalString(account.currentBalance),
-      balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
-      averageCost: toV2DecimalString(
-        this.balanceCalculator.calculateAverageCost(
-          account.currentBalance,
-          account.balanceCostAmount
-        )
-      ),
-      topupRecordCount: account._count.giftCards,
-      balanceChangeCount: account._count.balanceLedger,
+      currentBalance: account.currentBalance.toString(),
+      balanceCostAmount: account.balanceCostAmount.toString(),
+      averageCost: this.balanceCalculator
+        .calculateAverageCost(account.currentBalance, account.balanceCostAmount)
+        .toString(),
+      topupRecordCount: account.counts.giftCards,
+      balanceChangeCount: account.counts.balanceLedger,
       lastTopupAt: account.giftCards[0]?.createdAt ?? null,
       updatedAt: account.updatedAt,
       status: account.statusOption,
@@ -274,9 +178,9 @@ export class IdBusinessV2TopupWorkbenchService {
   }
 
   private uniqueServices(
-    activations: Array<Pick<WorkbenchAccount['activations'][number], 'serviceOption'>>
+    activations: Array<Pick<WorkbenchAccountRow['activations'][number], 'serviceOption'>>
   ) {
-    const services = new Map<string, WorkbenchAccount['activations'][number]['serviceOption']>();
+    const services = new Map<string, WorkbenchAccountRow['activations'][number]['serviceOption']>();
     for (const activation of activations) {
       if (!services.has(activation.serviceOption.id)) {
         services.set(activation.serviceOption.id, activation.serviceOption);

@@ -1,4 +1,5 @@
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const orderEntryFeature = defineV2Feature({
   key: 'order-entry',
@@ -11,6 +12,6 @@ export const orderEntryFeature = defineV2Feature({
   freshnessPolicy: 'event-with-deadline',
   keepAlive: true,
   filters: [],
-  columns: [],
+  tables: v2TablesByFeature['order-entry'],
   loadView: () => import('./V2OrderEntryView.vue')
 });

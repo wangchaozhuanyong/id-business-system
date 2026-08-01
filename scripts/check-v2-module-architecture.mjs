@@ -31,27 +31,23 @@ const expectedFeatures = [
   'topup-records',
   'topups'
 ];
-const plannedFeatures = new Set([
-  'audit-logs',
-  'business-monitoring',
-  'dashboard',
-  'data-governance',
-  'profile',
-  'security',
-  'system-monitoring'
-]);
+const plannedFeatures = new Set();
 const expectedBackendDomains = [
   'accounts',
   'activations',
   'balances',
+  'business-monitoring',
   'change-sync',
   'customers',
+  'data-governance',
+  'dashboard',
   'exchange-rates',
   'finance',
   'gift-cards',
   'options',
   'orders',
-  'renewals'
+  'renewals',
+  'system-monitoring'
 ];
 
 checkFrontendFeatures();
@@ -146,7 +142,7 @@ function checkFrontendFeatures() {
       'kind',
       'freshnessPolicy',
       'filters',
-      'columns'
+      'tables'
     ]) {
       if (!new RegExp(`\\b${field}:`).test(manifestSource)) {
         issues.push(`${manifestPath}: 缺少 ${field}`);

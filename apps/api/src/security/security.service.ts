@@ -12,6 +12,7 @@ import type {
   SensitiveAccessLog
 } from '@prisma/client';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { TimedMemoryCache } from '../common/cache/timed-memory-cache';
@@ -37,7 +38,7 @@ interface ListLoginLogsQuery extends PaginationQuery {
   sortOrder?: string;
 }
 
-interface ListSessionsQuery extends PaginationQuery {
+export interface ListSessionsQuery extends PaginationQuery {
   keyword?: string;
   revoked?: string;
   sortBy?: string;
@@ -50,6 +51,10 @@ interface ListIpWhitelistsQuery extends PaginationQuery {
   enabled?: string;
   sortBy?: string;
   sortOrder?: string;
+}
+
+interface ListMfaUsersQuery extends PaginationQuery {
+  keyword?: string;
 }
 
 interface ListSensitiveAccessLogsQuery extends PaginationQuery {
@@ -116,6 +121,12 @@ export interface VerifyMfaInput {
 
 export interface DisableMfaInput extends VerifyMfaInput {
   reason?: string | null;
+}
+
+export interface UpdateMfaSettingsInput {
+  enabled?: boolean;
+  requiredForAdmins?: boolean;
+  issuer?: string;
 }
 
 export interface MfaLoginRequirement {
@@ -636,11 +647,32 @@ export class SecurityService {
     return [{ [sortField]: sortOrder }, { createdAt: 'desc' }];
   }
 
-  async listActiveSessions(query: ListSessionsQuery) {
+  listActiveSessions(query: ListSessionsQuery, currentSessionIdentifier?: string | null) {
+    return this.listActiveSessionsInternal(query, currentSessionIdentifier);
+  }
+
+  listUserActiveSessions(
+    userId: string,
+    query: ListSessionsQuery,
+    currentSessionIdentifier?: string | null
+  ) {
+    return this.listActiveSessionsInternal(
+      query,
+      currentSessionIdentifier,
+      this.normalizeRequiredUuid(userId, 'userId')
+    );
+  }
+
+  private async listActiveSessionsInternal(
+    query: ListSessionsQuery,
+    currentSessionIdentifier?: string | null,
+    userId?: string
+  ) {
     const pagination = getPagination(query);
     const keyword = query.keyword?.trim();
     const revoked = this.parseBoolean(query.revoked);
     const where: Prisma.ActiveSessionWhereInput = {
+      userId,
       revokedAt: revoked === undefined ? undefined : revoked ? { not: null } : null,
       OR: keyword
         ? [
@@ -663,8 +695,15 @@ export class SecurityService {
       this.prisma.activeSession.count({ where })
     ]);
 
+    const currentTokenHash = currentSessionIdentifier
+      ? this.hashToken(currentSessionIdentifier)
+      : undefined;
+
     return {
-      items: items.map((item) => this.toSessionResponse(item)),
+      items: items.map((item) => ({
+        ...this.toSessionResponse(item),
+        isCurrent: Boolean(currentTokenHash && item.tokenHash === currentTokenHash)
+      })),
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
@@ -720,6 +759,33 @@ export class SecurityService {
     return this.toSessionResponse(updated);
   }
 
+  async revokeOwnSession(
+    id: string,
+    user: AuthenticatedUser,
+    currentSessionIdentifier?: string | null
+  ) {
+    const sessionId = this.normalizeRequiredUuid(id, 'id');
+    const session = await this.prisma.activeSession.findUnique({
+      where: { id: sessionId },
+      include: this.getSessionInclude()
+    });
+    if (!session || session.userId !== user.id) {
+      throw new NotFoundException('Active session not found');
+    }
+
+    const currentTokenHash = currentSessionIdentifier
+      ? this.hashToken(currentSessionIdentifier)
+      : undefined;
+    if (currentTokenHash && session.tokenHash === currentTokenHash) {
+      throw new BadRequestException('当前会话请使用退出登录操作。');
+    }
+    if (session.revokedAt) {
+      return this.toSessionResponse(session);
+    }
+
+    return this.revokeSession(session.id, user);
+  }
+
   getMfaSettings() {
     return this.getSetting('mfa_settings', {
       enabled: false,
@@ -731,6 +797,95 @@ export class SecurityService {
 
   updateMfaSettings(value: Record<string, unknown>, operator?: AuthenticatedUser) {
     return this.upsertSetting('mfa_settings', value, 'MFA 设置', operator);
+  }
+
+  async updateMfaSettingsSafely(input: UpdateMfaSettingsInput, operator: AuthenticatedUser) {
+    if (typeof input.enabled !== 'boolean' || typeof input.requiredForAdmins !== 'boolean') {
+      throw new BadRequestException('MFA 策略启用状态必须明确填写。');
+    }
+    if (!input.enabled && input.requiredForAdmins) {
+      throw new BadRequestException('启用 MFA 后才能要求管理员强制使用。');
+    }
+    const issuer = this.normalizeRequiredString(input.issuer, 'issuer');
+    if (issuer.length > 80) {
+      throw new BadRequestException('MFA 签发方不能超过 80 个字符。');
+    }
+
+    if (input.enabled && input.requiredForAdmins) {
+      const unboundAdmins = await this.findUnboundActiveAdmins();
+      if (unboundAdmins.length) {
+        throw new BadRequestException(
+          `仍有 ${unboundAdmins.length} 个启用管理员未绑定 MFA，不能开启强制策略。`
+        );
+      }
+    }
+
+    return this.updateMfaSettings(
+      {
+        enabled: input.enabled,
+        requiredForAdmins: input.requiredForAdmins,
+        issuer,
+        recoveryCodeCount: MFA_RECOVERY_CODE_COUNT
+      },
+      operator
+    );
+  }
+
+  async listMfaUsers(query: ListMfaUsersQuery) {
+    const pagination = getPagination(query);
+    const keyword = query.keyword?.trim();
+    const where: Prisma.UserWhereInput = {
+      deletedAt: null,
+      OR: keyword
+        ? [
+            { username: { contains: keyword, mode: 'insensitive' } },
+            { displayName: { contains: keyword, mode: 'insensitive' } }
+          ]
+        : undefined
+    };
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        orderBy: [{ status: 'asc' }, { username: 'asc' }],
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          status: true,
+          userRoles: {
+            select: {
+              role: { select: { code: true } }
+            }
+          }
+        }
+      }),
+      this.prisma.user.count({ where })
+    ]);
+    const settings = await this.prisma.securitySetting.findMany({
+      where: {
+        key: { in: users.map((user) => this.getUserMfaSettingKey(user.id)) }
+      },
+      select: { key: true, value: true }
+    });
+    const settingsByKey = new Map(settings.map((setting) => [setting.key, setting.value]));
+
+    return {
+      items: users.map((user) => ({
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        status: user.status,
+        roles: user.userRoles.map(({ role }) => role.code),
+        ...this.toMfaStatusResponse(
+          this.parseUserMfaState(settingsByKey.get(this.getUserMfaSettingKey(user.id)))
+        )
+      })),
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize
+    };
   }
 
   async getMyMfaStatus(user: AuthenticatedUser) {
@@ -840,6 +995,15 @@ export class SecurityService {
   }
 
   async disableMyMfa(user: AuthenticatedUser, dto: DisableMfaInput) {
+    const settings = await this.getMfaSettings();
+    const settingsValue = settings.value as Record<string, unknown>;
+    if (
+      this.isAdminUser(user) &&
+      this.getSettingBoolean(settingsValue.enabled, false) &&
+      this.getSettingBoolean(settingsValue.requiredForAdmins, false)
+    ) {
+      throw new BadRequestException('管理员强制 MFA 已启用，不能停用当前绑定。');
+    }
     const state = await this.requireEnabledUserMfaState(user.id);
     await this.verifyMfaCode(user.id, this.normalizeMfaCode(dto.code), state);
     const updated = await this.saveUserMfaState(user.id, {
@@ -886,6 +1050,33 @@ export class SecurityService {
     });
 
     return this.toMfaStatusResponse(updated);
+  }
+
+  async resetUserMfaSafely(userId: string, operator: AuthenticatedUser) {
+    const normalizedUserId = this.normalizeRequiredUuid(userId, 'userId');
+    const target = await this.prisma.user.findUnique({
+      where: { id: normalizedUserId },
+      select: {
+        status: true,
+        userRoles: {
+          select: { role: { select: { code: true } } }
+        }
+      }
+    });
+    if (!target) throw new NotFoundException('User not found');
+
+    const settings = await this.getMfaSettings();
+    const value = settings.value as Record<string, unknown>;
+    const isProtectedAdmin =
+      target.status === 'active' &&
+      target.userRoles.some(({ role }) => role.code === 'admin') &&
+      this.getSettingBoolean(value.enabled, false) &&
+      this.getSettingBoolean(value.requiredForAdmins, false);
+    if (isProtectedAdmin) {
+      throw new BadRequestException('管理员强制 MFA 已启用，不能重置启用管理员的绑定。');
+    }
+
+    return this.resetUserMfa(normalizedUserId, operator);
   }
 
   async getMfaLoginRequirementForUser(user: AuthenticatedUser): Promise<MfaLoginRequirement> {
@@ -1039,6 +1230,23 @@ export class SecurityService {
     return this.toIpWhitelistResponse(record);
   }
 
+  async createIpWhitelistSafely(
+    dto: SaveIpWhitelistInput,
+    operator: AuthenticatedUser,
+    requestIp?: string | null
+  ) {
+    const candidate = {
+      id: '__new__',
+      ipOrCidr: this.normalizeIpOrCidr(dto.ipOrCidr),
+      enabled: dto.enabled ?? true
+    };
+    const records = await this.prisma.ipWhitelist.findMany({
+      select: { id: true, ipOrCidr: true, enabled: true }
+    });
+    this.assertWhitelistMutationKeepsRequestIpAllowed([...records, candidate], requestIp);
+    return this.createIpWhitelist(dto, operator);
+  }
+
   private buildIpWhitelistOrderBy(
     query: ListIpWhitelistsQuery
   ): Prisma.IpWhitelistOrderByWithRelationInput[] {
@@ -1086,6 +1294,30 @@ export class SecurityService {
     return this.toIpWhitelistResponse(updated);
   }
 
+  async updateIpWhitelistSafely(
+    id: string,
+    dto: SaveIpWhitelistInput,
+    operator: AuthenticatedUser,
+    requestIp?: string | null
+  ) {
+    const record = await this.findIpWhitelistOrThrow(id);
+    const records = await this.prisma.ipWhitelist.findMany({
+      select: { id: true, ipOrCidr: true, enabled: true }
+    });
+    const nextRecords = records.map((item) =>
+      item.id === record.id
+        ? {
+            ...item,
+            ipOrCidr:
+              dto.ipOrCidr === undefined ? item.ipOrCidr : this.normalizeIpOrCidr(dto.ipOrCidr),
+            enabled: dto.enabled === undefined ? item.enabled : dto.enabled
+          }
+        : item
+    );
+    this.assertWhitelistMutationKeepsRequestIpAllowed(nextRecords, requestIp);
+    return this.updateIpWhitelist(record.id, dto, operator);
+  }
+
   async removeIpWhitelist(id: string, operator?: AuthenticatedUser) {
     const record = await this.findIpWhitelistOrThrow(id);
     await this.prisma.ipWhitelist.delete({ where: { id: record.id } });
@@ -1103,6 +1335,22 @@ export class SecurityService {
     });
 
     return { deleted: true };
+  }
+
+  async removeIpWhitelistSafely(
+    id: string,
+    operator: AuthenticatedUser,
+    requestIp?: string | null
+  ) {
+    const record = await this.findIpWhitelistOrThrow(id);
+    const records = await this.prisma.ipWhitelist.findMany({
+      select: { id: true, ipOrCidr: true, enabled: true }
+    });
+    this.assertWhitelistMutationKeepsRequestIpAllowed(
+      records.filter((item) => item.id !== record.id),
+      requestIp
+    );
+    return this.removeIpWhitelist(record.id, operator);
   }
 
   async listSensitiveAccessLogs(query: ListSensitiveAccessLogsQuery) {
@@ -1369,6 +1617,32 @@ export class SecurityService {
       where: { key: this.getUserMfaSettingKey(userId) }
     });
     return this.parseUserMfaState(setting?.value);
+  }
+
+  private async findUnboundActiveAdmins() {
+    const admins = await this.prisma.user.findMany({
+      where: {
+        status: 'active',
+        deletedAt: null,
+        userRoles: {
+          some: { role: { code: 'admin' } }
+        }
+      },
+      select: { id: true }
+    });
+    if (!admins.length) return [];
+
+    const settings = await this.prisma.securitySetting.findMany({
+      where: {
+        key: { in: admins.map((user) => this.getUserMfaSettingKey(user.id)) }
+      },
+      select: { key: true, value: true }
+    });
+    const settingsByKey = new Map(settings.map((setting) => [setting.key, setting.value]));
+    return admins.filter((user) => {
+      const state = this.parseUserMfaState(settingsByKey.get(this.getUserMfaSettingKey(user.id)));
+      return !state.enabled || !state.secretEncrypted;
+    });
   }
 
   private async requireEnabledUserMfaState(userId: string) {
@@ -1761,10 +2035,22 @@ export class SecurityService {
 
   private normalizeIpOrCidr(value: unknown) {
     const normalized = this.normalizeRequiredString(value, 'ipOrCidr');
-    if (!/^[a-zA-Z0-9.:/_-]+$/.test(normalized)) {
-      throw new BadRequestException('ipOrCidr format is invalid');
+    if (!normalized.includes('/')) {
+      if (!isIP(normalized)) {
+        throw new BadRequestException('请输入有效的 IPv4 或 IPv6 地址。');
+      }
+      return normalized;
     }
-    return normalized;
+
+    const [network, prefixText, extra] = normalized.split('/');
+    if (extra !== undefined || isIP(network) !== 4) {
+      throw new BadRequestException('CIDR 当前仅支持 IPv4 网段；IPv6 请填写单个地址。');
+    }
+    const prefix = Number(prefixText);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+      throw new BadRequestException('IPv4 CIDR 前缀必须为 0 至 32。');
+    }
+    return `${network}/${prefix}`;
   }
 
   private normalizeRequestIp(value: string | null | undefined) {
@@ -1774,6 +2060,22 @@ export class SecurityService {
     }
 
     return firstIp.startsWith('::ffff:') ? firstIp.slice('::ffff:'.length) : firstIp;
+  }
+
+  private assertWhitelistMutationKeepsRequestIpAllowed(
+    records: Array<{ ipOrCidr: string; enabled: boolean }>,
+    requestIp?: string | null
+  ) {
+    const enabledRecords = records.filter((record) => record.enabled);
+    if (!enabledRecords.length) return;
+
+    const normalizedIp = this.normalizeRequestIp(requestIp);
+    if (!normalizedIp) {
+      throw new BadRequestException('无法确认当前请求 IP，不能修改启用的白名单。');
+    }
+    if (!enabledRecords.some((record) => this.matchesIpOrCidr(normalizedIp, record.ipOrCidr))) {
+      throw new BadRequestException('修改后当前请求 IP 将不在白名单内，已阻止本次操作。');
+    }
   }
 
   private matchesIpOrCidr(ip: string, ipOrCidr: string) {

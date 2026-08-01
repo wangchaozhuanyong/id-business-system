@@ -63,8 +63,8 @@ describe('V2 exchange-rate contracts', () => {
     const migration = read(
       'prisma/migrations/20260729000000_current_system_baseline/migration.sql'
     );
-    const settingsService = read(
-      'src/id-business-v2/exchange-rates/id-business-v2-exchange-rate-settings.service.ts'
+    const persistenceRepository = read(
+      'src/id-business-v2/exchange-rates/persistence/id-business-v2-exchange-rate.repository.ts'
     );
     const cleanupFunction =
       migration.match(
@@ -77,7 +77,7 @@ describe('V2 exchange-rate contracts', () => {
     expect(migration).toContain('id_business_v2_exchange_rate_cron_secret');
     expect(cleanupFunction).toContain('"exchange_rate_snapshot_id" = snapshot."id"');
     expect(cleanupFunction).not.toContain('id_business_v2_exchange_rate_entries');
-    expect(settingsService).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
-    expect(settingsService).toContain('FLOOR');
+    expect(persistenceRepository).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
+    expect(persistenceRepository).toContain('FLOOR');
   });
 });

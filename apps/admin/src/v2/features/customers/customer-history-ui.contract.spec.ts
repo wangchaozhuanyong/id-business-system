@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import view from './V2CustomersView.vue?raw';
 import historyServices from './components/V2CustomerHistoryServices.vue?raw';
 import mobileDetails from './components/V2CustomerMobileDetails.vue?raw';
-import manifest from './manifest.ts?raw';
+import tableSchemas from '@/v2/features/tableSchemas.ts?raw';
 
 describe('customer history and contact UI contract', () => {
   it('shows QQ and masked WhatsApp on desktop and mobile', () => {
@@ -12,8 +12,8 @@ describe('customer history and contact UI contract', () => {
     expect(mobileDetails).toContain('<dt>WhatsApp</dt>');
     expect(view).toContain('row.maskedWhatsapp');
     expect(view).toContain('openRevealWhatsapp');
-    expect(manifest).toContain("key: 'qq'");
-    expect(manifest).toContain("key: 'whatsapp'");
+    expect(tableSchemas).toContain("key: 'qq'");
+    expect(tableSchemas).toContain("label: 'WhatsApp'");
   });
 
   it('labels activation-backed data as history and does not expose manual editing', () => {
@@ -22,8 +22,8 @@ describe('customer history and contact UI contract', () => {
     expect(historyServices).toContain('serviceHistoryTitle(service)');
     expect(view).not.toContain('form.serviceOptionIds');
     expect(view).not.toContain('常开业务');
-    expect(manifest).toContain("key: 'historicalService'");
-    expect(manifest).not.toContain('常开业务');
+    expect(tableSchemas).toContain("label: '历史开通业务'");
+    expect(tableSchemas).not.toContain('常开业务');
   });
 
   it('explains the keep and clear behavior for stored WhatsApp', () => {

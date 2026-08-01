@@ -1,33 +1,34 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { IdBusinessV2AccountLockScope, Prisma as PrismaNamespace } from '@prisma/client';
-import type { IdBusinessV2BalanceLedger, IdBusinessV2Order, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import type { PrismaService } from '../../common/prisma/prisma.service';
 import type { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import {
+  Amount4,
+  Rate8,
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  V2CommandTransactionManager,
+  toV2JsonDocument,
+  type V2CommandTransaction,
+  type V2DecimalInput
+} from '../runtime/public-api';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
 import type { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import type { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import { maskWebsiteAccount } from './id-business-v2-order-entry-support';
-import {
-  V2_DECIMAL_PATTERN,
-  V2_DECIMAL_PLACES,
-  V2_DECIMAL_ROUNDING_MODE,
-  toV2Decimal,
-  toV2DecimalString
-} from '../decimal-policy';
-interface LockedAccountRow {
-  id: string;
-  appleIdMasked: string;
-  currentBalance: PrismaNamespace.Decimal;
-  balanceCostAmount: PrismaNamespace.Decimal;
-  lossReportedAt: Date | null;
-}
+import { toOrderReversalLedgerResponse } from './id-business-v2-order-lifecycle-input';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import type {
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2BalanceLedgerRecord,
+  IdBusinessV2OrderRecord
+} from './id-business-v2-order.types';
 
 export interface LifecycleTransactionResult {
   orderId: string;
-  reversalLedger: IdBusinessV2BalanceLedger | null;
+  reversalLedger: IdBusinessV2BalanceLedgerRecord | null;
   balanceRestored: boolean;
   lockReleased: boolean;
   idempotentReplay: boolean;
@@ -35,17 +36,17 @@ export interface LifecycleTransactionResult {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
-const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
+const MAX_AMOUNT = Amount4.from('99999999999999.9999');
 const DELETABLE_STATUSES = new Set(['refunded', 'cancelled', 'failed']);
 
 export class IdBusinessV2OrderLifecycleSupport {
   constructor(
-    private readonly prisma: PrismaService,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly orderLockService: IdBusinessV2OrderLockService,
-    private readonly ordersService: IdBusinessV2OrdersService
+    private readonly ordersService: IdBusinessV2OrdersService,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly repository: IdBusinessV2OrdersRepository
   ) {}
 
   async remove(
@@ -56,62 +57,67 @@ export class IdBusinessV2OrderLifecycleSupport {
     const orderId = this.normalizeUuid(orderIdValue, '订单');
     const reason = this.normalizeReason(dto.reason);
 
-    return this.prisma.$transaction(async (tx) => {
-      const order = await this.lockOrder(tx, orderId, true);
-      if (order.deletedAt) {
-        return {
-          deleted: true,
-          idempotentReplay: true
-        };
-      }
-      if (!DELETABLE_STATUSES.has(order.status)) {
-        throw new ConflictException('只有已退款、已取消或失败订单可以删除');
-      }
+    return this.transactionManager.execute(
+      async (tx) => {
+        const order = await this.lockOrder(tx, orderId, true);
+        if (order.deletedAt) {
+          return {
+            deleted: true,
+            idempotentReplay: true
+          };
+        }
+        if (!DELETABLE_STATUSES.has(order.status)) {
+          throw new ConflictException('只有已退款、已取消或失败订单可以删除');
+        }
 
-      const release = await this.orderLockService.releaseOrderLockInTransaction(
-        tx,
-        order.id,
-        `订单软删除：${reason}`,
-        operator
-      );
-      const deletedAt = new Date();
-      await tx.idBusinessV2Order.update({
-        where: {
-          id: order.id
-        },
-        data: {
+        const release = await this.orderLockService.releaseOrderLockInTransaction(
+          tx,
+          order.id,
+          `订单软删除：${reason}`,
+          operator
+        );
+        const deletedAt = new Date();
+        await this.repository.updateOrder(tx, order.id, {
           deletedAt,
           updatedByUserId: operator?.id
-        }
-      });
-      await this.writeLifecycleAudit(
-        tx,
-        'delete',
-        order,
-        {
-          deletedAt,
-          reason,
-          lockReleased: release.released,
-          dataPreserved: true
-        },
-        operator
-      );
-      return {
-        deleted: true,
-        idempotentReplay: false
-      };
-    });
+        });
+        await this.writeLifecycleAudit(
+          tx,
+          'delete',
+          order,
+          {
+            deletedAt,
+            reason,
+            lockReleased: release.released,
+            dataPreserved: true
+          },
+          operator
+        );
+        return {
+          deleted: true,
+          idempotentReplay: false
+        };
+      },
+      {
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
   }
 
   async runLifecycleTransaction<T>(
-    callback: (tx: Prisma.TransactionClient) => Promise<T>,
-    conflictMessage: string
+    callback: (tx: V2CommandTransaction) => Promise<T>,
+    conflictMessage: string,
+    operator?: AuthenticatedUser
   ) {
-    try {
-      return await this.prisma.$transaction(callback);
-    } catch (error) {
-      this.rethrowWriteConflict(error, conflictMessage);
-    }
+    return this.transactionManager.execute(callback, {
+      requestId: randomUUID(),
+      operator,
+      retryMode: 'none',
+      uniqueConflictMessage: conflictMessage,
+      writeConflictMessage: conflictMessage
+    });
   }
 
   async buildLifecycleResponse(result: LifecycleTransactionResult) {
@@ -127,9 +133,9 @@ export class IdBusinessV2OrderLifecycleSupport {
   }
 
   async restoreConsumption(
-    tx: Prisma.TransactionClient,
-    order: IdBusinessV2Order,
-    consumption: IdBusinessV2BalanceLedger,
+    tx: V2CommandTransaction,
+    order: IdBusinessV2OrderRecord,
+    consumption: IdBusinessV2BalanceLedgerRecord,
     idempotencyKey: string,
     remark: string,
     operator?: AuthenticatedUser
@@ -157,36 +163,29 @@ export class IdBusinessV2OrderLifecycleSupport {
       consumption.balanceAmount,
       consumption.costAmount
     );
-    const ledger = await tx.idBusinessV2BalanceLedger.create({
-      data: {
-        accountId: account.id,
-        giftCardId: null,
-        orderId: order.id,
-        entryType: 'order_consumption_reversal',
-        direction: 'credit',
-        balanceAmount: movement.balanceAmount,
-        costAmount: movement.costAmount,
-        balanceBefore: movement.balanceBefore,
-        balanceAfter: movement.balanceAfter,
-        costBefore: movement.costBefore,
-        costAfter: movement.costAfter,
-        averageCostBefore: movement.averageCostBefore,
-        averageCostAfter: movement.averageCostAfter,
-        reversalOfEntryId: consumption.id,
-        idempotencyKey,
-        remark,
-        createdByUserId: operator?.id
-      }
+    const ledger = await this.repository.createBalanceLedger(tx, {
+      accountId: account.id,
+      giftCardId: null,
+      orderId: order.id,
+      entryType: 'order_consumption_reversal',
+      direction: 'credit',
+      balanceAmount: movement.balanceAmount.toString(),
+      costAmount: movement.costAmount.toString(),
+      balanceBefore: movement.balanceBefore.toString(),
+      balanceAfter: movement.balanceAfter.toString(),
+      costBefore: movement.costBefore.toString(),
+      costAfter: movement.costAfter.toString(),
+      averageCostBefore: movement.averageCostBefore.toString(),
+      averageCostAfter: movement.averageCostAfter.toString(),
+      reversalOfEntryId: consumption.id,
+      idempotencyKey,
+      remark,
+      createdByUserId: operator?.id
     });
-    await tx.idBusinessV2Account.update({
-      where: {
-        id: account.id
-      },
-      data: {
-        currentBalance: movement.balanceAfter,
-        balanceCostAmount: movement.costAfter,
-        updatedByUserId: operator?.id
-      }
+    await this.repository.updateAccount(tx, account.id, {
+      currentBalance: movement.balanceAfter.toString(),
+      balanceCostAmount: movement.costAfter.toString(),
+      updatedByUserId: operator?.id
     });
     return {
       account,
@@ -194,136 +193,64 @@ export class IdBusinessV2OrderLifecycleSupport {
     };
   }
 
-  async lockOrder(tx: Prisma.TransactionClient, orderId: string, includeDeleted = false) {
-    const rows = includeDeleted
-      ? await tx.$queryRaw<Array<{ id: string }>>(PrismaNamespace.sql`
-          SELECT "id"
-          FROM "id_business_v2_orders"
-          WHERE "id" = CAST(${orderId} AS UUID)
-          FOR UPDATE
-        `)
-      : await tx.$queryRaw<Array<{ id: string }>>(PrismaNamespace.sql`
-          SELECT "id"
-          FROM "id_business_v2_orders"
-          WHERE
-            "id" = CAST(${orderId} AS UUID)
-            AND "deleted_at" IS NULL
-          FOR UPDATE
-        `);
-    if (!rows[0]) {
+  async lockOrder(tx: V2CommandTransaction, orderId: string, includeDeleted = false) {
+    if (!(await this.repository.lockOrderId(tx, orderId, includeDeleted))) {
       throw new NotFoundException('订单不存在或已删除');
     }
-    const order = await tx.idBusinessV2Order.findUnique({
-      where: {
-        id: orderId
-      }
-    });
+    const order = await this.repository.findOrderInTransaction(tx, orderId);
     if (!order || (!includeDeleted && order.deletedAt)) {
       throw new NotFoundException('订单不存在或已删除');
     }
     return order;
   }
 
-  async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
-    const rows = await tx.$queryRaw<LockedAccountRow[]>(PrismaNamespace.sql`
-      SELECT
-        "id",
-        "apple_id_masked" AS "appleIdMasked",
-        "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount",
-        "loss_reported_at" AS "lossReportedAt"
-      FROM "id_business_v2_accounts"
-      WHERE
-        "id" = CAST(${accountId} AS UUID)
-        AND "deleted_at" IS NULL
-      FOR UPDATE
-    `);
-    const account = rows[0];
+  async lockAccount(tx: V2CommandTransaction, accountId: string) {
+    const account = await this.repository.lockOrderBalanceAccount(tx, accountId);
     if (!account) {
       throw new NotFoundException('订单绑定的 ID 不存在或已删除');
     }
     return account;
   }
 
-  findConsumption(tx: Prisma.TransactionClient, orderId: string) {
-    return tx.idBusinessV2BalanceLedger.findUnique({
-      where: {
-        orderId_entryType: {
-          orderId,
-          entryType: 'order_consumption'
-        }
-      }
-    });
+  findConsumption(tx: V2CommandTransaction, orderId: string) {
+    return this.repository.findLedgerByOrderAndType(tx, orderId, 'order_consumption');
   }
 
-  findReversal(tx: Prisma.TransactionClient, orderId: string) {
-    return tx.idBusinessV2BalanceLedger.findUnique({
-      where: {
-        orderId_entryType: {
-          orderId,
-          entryType: 'order_consumption_reversal'
-        }
-      }
-    });
+  findReversal(tx: V2CommandTransaction, orderId: string) {
+    return this.repository.findLedgerByOrderAndType(tx, orderId, 'order_consumption_reversal');
   }
 
-  assertReversalReplay(reversal: IdBusinessV2BalanceLedger | null, idempotencyKey: string) {
+  assertReversalReplay(reversal: IdBusinessV2BalanceLedgerRecord | null, idempotencyKey: string) {
     if (reversal && reversal.idempotencyKey !== idempotencyKey) {
       throw new ConflictException('订单已经使用其他请求撤销消费，请刷新后核对');
     }
   }
 
-  async assertActiveCustomer(tx: Prisma.TransactionClient, customerId: string) {
-    const customer = await tx.idBusinessV2Customer.findFirst({
-      where: {
-        id: customerId,
-        recordStatus: 'active',
-        deletedAt: null
-      },
-      select: {
-        id: true
-      }
-    });
+  async assertActiveCustomer(tx: V2CommandTransaction, customerId: string) {
+    const customer = await this.repository.findActiveCustomer(tx, customerId);
     if (!customer) {
       throw new BadRequestException('客户不存在、已停用或已删除');
     }
   }
 
-  async assertActiveService(tx: Prisma.TransactionClient, serviceOptionId: string) {
-    const service = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: serviceOptionId,
-        type: 'service',
-        status: 'active',
-        deletedAt: null
-      },
-      select: {
-        id: true
-      }
-    });
+  async assertActiveService(tx: V2CommandTransaction, serviceOptionId: string) {
+    const service = await this.repository.findActiveService(tx, serviceOptionId);
     if (!service) {
       throw new BadRequestException('业务不存在或已停用');
     }
   }
 
   async resolveSettlementPlatform(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     platformId: string | null,
     allowDisabledExisting: boolean
   ) {
     if (!platformId) return null;
-    const platform = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: platformId,
-        type: 'settlement_platform',
-        status: allowDisabledExisting ? undefined : 'active',
-        deletedAt: null
-      },
-      select: {
-        fixedFee: true,
-        percentageFee: true
-      }
-    });
+    const platform = await this.repository.findSettlementPlatform(
+      tx,
+      platformId,
+      allowDisabledExisting
+    );
     if (!platform) {
       throw new BadRequestException('结算平台不存在、已停用或已删除');
     }
@@ -331,43 +258,41 @@ export class IdBusinessV2OrderLifecycleSupport {
   }
 
   calculatePlatformFee(
-    receivedAmount: PrismaNamespace.Decimal,
+    receivedAmount: V2DecimalInput,
     platform: {
-      fixedFee: PrismaNamespace.Decimal;
-      percentageFee: PrismaNamespace.Decimal;
+      fixedFee: V2DecimalInput;
+      percentageFee: V2DecimalInput;
     } | null
   ) {
-    if (!platform) return new PrismaNamespace.Decimal(0);
-    const normalizedReceivedAmount = toV2Decimal(receivedAmount);
-    const fee = toV2Decimal(platform.fixedFee)
-      .plus(normalizedReceivedAmount.mul(toV2Decimal(platform.percentageFee)).div(100))
-      .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
-    if (fee.greaterThan(MAX_AMOUNT)) {
+    if (!platform) return Amount4.zero();
+    const normalizedReceivedAmount = Amount4.from(receivedAmount);
+    const percentage = Rate8.from(platform.percentageFee).div(100);
+    const fee = Amount4.from(platform.fixedFee).add(percentage.apply(normalizedReceivedAmount));
+    if (fee.gt(MAX_AMOUNT)) {
       throw new BadRequestException('平台手续费数值过大');
     }
     return fee;
   }
 
   calculateProfit(
-    receivedAmount: PrismaNamespace.Decimal,
-    platformFeeAmount: PrismaNamespace.Decimal,
-    accountCostAmount: PrismaNamespace.Decimal,
-    balanceCostAmount: PrismaNamespace.Decimal,
-    refundCostAmount: PrismaNamespace.Decimal | null
+    receivedAmount: V2DecimalInput,
+    platformFeeAmount: V2DecimalInput,
+    accountCostAmount: V2DecimalInput,
+    balanceCostAmount: V2DecimalInput,
+    refundCostAmount: V2DecimalInput | null
   ) {
-    const profit = toV2Decimal(receivedAmount)
-      .minus(toV2Decimal(platformFeeAmount))
-      .minus(toV2Decimal(accountCostAmount))
-      .minus(toV2Decimal(balanceCostAmount))
-      .minus(toV2Decimal(refundCostAmount ?? 0))
-      .toDecimalPlaces(V2_DECIMAL_PLACES, ROUNDING_MODE);
-    if (profit.abs().greaterThan(MAX_AMOUNT)) {
+    const profit = Amount4.from(receivedAmount)
+      .sub(platformFeeAmount)
+      .sub(accountCostAmount)
+      .sub(balanceCostAmount)
+      .sub(refundCostAmount ?? 0);
+    if (profit.abs().gt(MAX_AMOUNT)) {
       throw new BadRequestException('订单利润数值超出数据库范围');
     }
     return profit;
   }
 
-  resolveWebsiteAccount(dto: UpdateIdBusinessV2OrderDto, order: IdBusinessV2Order) {
+  resolveWebsiteAccount(dto: UpdateIdBusinessV2OrderDto, order: IdBusinessV2OrderRecord) {
     if (dto.clearWebsiteAccount && dto.websiteAccount !== undefined) {
       const normalized = this.normalizeOptionalString(dto.websiteAccount, '客户网站账号', 255);
       if (normalized) {
@@ -397,10 +322,10 @@ export class IdBusinessV2OrderLifecycleSupport {
   }
 
   async writeLifecycleAudit(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     action: 'cancel' | 'refund' | 'delete',
-    order: IdBusinessV2Order,
-    afterData: Prisma.InputJsonValue,
+    order: IdBusinessV2OrderRecord,
+    afterData: unknown,
     operator?: AuthenticatedUser
   ) {
     const labels = {
@@ -408,22 +333,20 @@ export class IdBusinessV2OrderLifecycleSupport {
       refund: '退款',
       delete: '软删除'
     };
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: `id_business_v2.order.${action}`,
-        objectType: 'id_business_v2_order',
-        objectId: order.id,
-        beforeData: this.toOrderAuditSnapshot(order),
-        afterData,
-        remark: `${labels[action]} V2 订单：${order.orderNo}`
-      }
+    await this.repository.appendAudit(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2',
+      action: `id_business_v2.order.${action}`,
+      objectType: 'id_business_v2_order',
+      objectId: order.id,
+      beforeData: this.toOrderAuditSnapshot(order),
+      afterData: toV2JsonDocument(afterData),
+      remark: `${labels[action]} V2 订单：${order.orderNo}`
     });
   }
 
-  toOrderAuditSnapshot(order: IdBusinessV2Order): Prisma.InputJsonValue {
-    return {
+  toOrderAuditSnapshot(order: IdBusinessV2OrderRecord) {
+    return toV2JsonDocument({
       orderNo: order.orderNo,
       customerId: order.customerId,
       serviceOptionId: order.serviceOptionId,
@@ -445,26 +368,11 @@ export class IdBusinessV2OrderLifecycleSupport {
       status: order.status,
       statusChangedAt: order.statusChangedAt,
       deletedAt: order.deletedAt
-    };
+    });
   }
 
-  toReversalLedgerResponse(entry: IdBusinessV2BalanceLedger) {
-    return {
-      id: entry.id,
-      accountId: entry.accountId,
-      entryType: entry.entryType,
-      direction: entry.direction,
-      balanceAmount: toV2DecimalString(entry.balanceAmount),
-      costAmount: toV2DecimalString(entry.costAmount),
-      balanceBefore: toV2DecimalString(entry.balanceBefore),
-      balanceAfter: toV2DecimalString(entry.balanceAfter),
-      costBefore: toV2DecimalString(entry.costBefore),
-      costAfter: toV2DecimalString(entry.costAfter),
-      averageCostBefore: toV2DecimalString(entry.averageCostBefore),
-      averageCostAfter: toV2DecimalString(entry.averageCostAfter),
-      reversalOfEntryId: entry.reversalOfEntryId,
-      createdAt: entry.createdAt
-    };
+  toReversalLedgerResponse(entry: IdBusinessV2BalanceLedgerRecord) {
+    return toOrderReversalLedgerResponse(entry);
   }
 
   assertUpdateHasChanges(dto: UpdateIdBusinessV2OrderDto) {
@@ -536,11 +444,11 @@ export class IdBusinessV2OrderLifecycleSupport {
     if (!V2_DECIMAL_PATTERN.test(normalized)) {
       throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
     }
-    const amount = new PrismaNamespace.Decimal(normalized);
-    if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {
+    const amount = Amount4.from(normalized);
+    if ((!allowZero && amount.lte(0)) || (allowZero && amount.lt(0))) {
       throw new BadRequestException(`${label}${allowZero ? '不能为负数' : '必须大于 0'}`);
     }
-    if (amount.greaterThan(MAX_AMOUNT)) {
+    if (amount.gt(MAX_AMOUNT)) {
       throw new BadRequestException(`${label}数值过大`);
     }
     return amount;
@@ -558,10 +466,7 @@ export class IdBusinessV2OrderLifecycleSupport {
   }
 
   normalizeLockScope(value: unknown): IdBusinessV2AccountLockScope {
-    if (
-      value === IdBusinessV2AccountLockScope.by_service ||
-      value === IdBusinessV2AccountLockScope.global
-    ) {
+    if (value === 'by_service' || value === 'global') {
       return value;
     }
     throw new BadRequestException('锁定范围无效');
@@ -581,15 +486,5 @@ export class IdBusinessV2OrderLifecycleSupport {
       throw new BadRequestException('幂等键必须是 8 至 100 位字母、数字或 ._:-');
     }
     return normalized;
-  }
-
-  rethrowWriteConflict(error: unknown, message: string): never {
-    if (
-      error instanceof PrismaNamespace.PrismaClientKnownRequestError &&
-      (error.code === 'P2002' || error.code === 'P2034')
-    ) {
-      throw new ConflictException(message);
-    }
-    throw error;
   }
 }

@@ -89,13 +89,13 @@
       @retry="loadCustomers"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.customers.main"
           :aria-busy="loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="items"
-          row-key="id"
           @sort-change="handleSortChange"
         >
           <template #empty>
@@ -107,17 +107,15 @@
           </template>
 
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.customers.main.columns[0]"
             prop="name"
-            label="客户"
-            width-preset="identifier"
             sortable="custom"
           >
             <template #default="{ row }">
               <strong class="v2-table-cell">{{ row.name }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="wide" label="手机号">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[1]">
             <template #default="{ row }">
               <V2CustomerSensitiveContactCell
                 :masked-value="row.maskedPhone"
@@ -129,18 +127,16 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="identifier"
-            width-preset="wide"
+            :definition="v2TableSchemas.customers.main.columns[2]"
             prop="wechat"
-            label="微信"
             sortable="custom"
           >
             <template #default="{ row }">{{ row.wechat || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="wide" prop="qq" label="QQ">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[3]" prop="qq">
             <template #default="{ row }">{{ row.qq || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="wide" label="WhatsApp">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[4]">
             <template #default="{ row }">
               <V2CustomerSensitiveContactCell
                 :masked-value="row.maskedWhatsapp"
@@ -151,10 +147,10 @@
               />
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="来源" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[5]">
             <template #default="{ row }">{{ row.source?.name || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="标签" width-preset="identifier">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[6]">
             <template #default="{ row }">
               <div v-if="row.tags.length" class="v2-record-tags" :title="optionNames(row.tags)">
                 <el-tag v-for="tag in row.tags" :key="tag.id" effect="plain">{{ tag.name }}</el-tag>
@@ -162,16 +158,14 @@
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="历史开通业务" width-preset="identifier">
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[7]">
             <template #default="{ row }">
               <V2CustomerHistoryServices :services="row.services" />
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="status"
-            width-preset="compact"
+            :definition="v2TableSchemas.customers.main.columns[8]"
             prop="recordStatus"
-            label="状态"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -181,15 +175,13 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.customers.main.columns[9]"
             prop="updatedAt"
-            label="更新时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn layout="triple">
+          <V2TableActionColumn :definition="v2TableSchemas.customers.main.columns[10]">
             <template #default="{ row }">
               <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(row)">
                 <el-icon><Edit /></el-icon>
@@ -213,9 +205,9 @@
               </AppButton>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.customers.main.id">
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -414,6 +406,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import {
   Delete,

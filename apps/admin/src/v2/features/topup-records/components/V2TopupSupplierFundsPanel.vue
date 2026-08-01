@@ -62,10 +62,10 @@
       error-title="供应商资金加载失败"
       @retry="refresh"
     >
-      <el-table
+      <V2Table
+        :schema="v2TableSchemas.topupRecords.supplierFunds"
         class="v2-records-table"
         :data="items"
-        row-key="supplier.id"
         scrollbar-always-on
         show-overflow-tooltip
       >
@@ -75,19 +75,19 @@
             <span>请先在选项设置中新增加卡供应商</span>
           </div>
         </template>
-        <V2TableColumn kind="text" label="供应商" width-preset="identifier" fixed="left">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[0]">
           <template #default="{ row }">
             <strong>{{ row.supplier.name }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="status" label="资金状态" width-preset="compact">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[1]">
           <template #default="{ row }">
             <el-tag v-if="!row.initialized" type="info" effect="plain">未初始化</el-tag>
             <el-tag v-else-if="row.isNegative" type="danger" effect="plain">余额为负</el-tag>
             <el-tag v-else type="success" effect="plain">正常</el-tag>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" label="当前人民币余额" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[2]">
           <template #default="{ row }">
             <strong
               v-if="row.currentBalanceCny !== null"
@@ -98,22 +98,22 @@
             <span v-else>—</span>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" label="累计有效付款" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[3]">
           <template #default="{ row }">¥{{ formatDecimal(row.paymentsCny) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" label="累计加卡扣款" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[4]">
           <template #default="{ row }">¥{{ formatDecimal(row.topupDeductionsCny) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" label="期初及净调账" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[5]">
           <template #default="{ row }">{{ formatSignedCurrency(row.netAdjustmentsCny) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="date" label="最近付款" width-preset="dateTime">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[6]">
           <template #default="{ row }">{{ formatOptionalDate(row.lastPaymentAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="date" label="最近加卡" width-preset="dateTime">
+        <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[7]">
           <template #default="{ row }">{{ formatOptionalDate(row.lastTopupAt) }}</template>
         </V2TableColumn>
-        <V2TableActionColumn layout="triple">
+        <V2TableActionColumn :definition="v2TableSchemas.topupRecords.supplierFunds.columns[8]">
           <template #default="{ row }">
             <AppButton size="small" variant="ghost" @click="openDetails(row)">明细</AppButton>
             <template v-if="canManage">
@@ -136,9 +136,12 @@
             </template>
           </template>
         </V2TableActionColumn>
-      </el-table>
+      </V2Table>
 
-      <div class="v2-records-mobile-list">
+      <div
+        class="v2-records-mobile-list"
+        :data-mobile-for="v2TableSchemas.topupRecords.supplierFunds.id"
+      >
         <article v-for="item in items" :key="item.supplier.id" class="v2-records-mobile-item">
           <header>
             <div>
@@ -330,6 +333,8 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TopupSupplierFundDetailsDrawer from './V2TopupSupplierFundDetailsDrawer.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';

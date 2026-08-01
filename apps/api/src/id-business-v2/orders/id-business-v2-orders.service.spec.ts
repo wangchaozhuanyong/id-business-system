@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -27,6 +28,12 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     websiteAccountHash: 'website-account-hash',
     websiteAccountMasked: 'cu***@example.com',
     receivedAmount: decimal('99.9'),
+    receivedOriginalAmount: decimal('99.9'),
+    receivedCurrency: 'CNY',
+    receivedFxRateToCny: decimal('1'),
+    receivedFxSnapshotId: null,
+    receivedFinanceAccountId: null,
+    receivedAt: createdAt,
     platformFeeAmount: decimal('2.5'),
     accountDisposition: 'retained',
     accountCostAmount: decimal('10'),
@@ -88,7 +95,10 @@ describe('IdBusinessV2OrdersService', () => {
   const fieldEncryptionService = {
     hash: vi.fn()
   };
-  const service = new IdBusinessV2OrdersService(prisma as never, fieldEncryptionService as never);
+  const service = new IdBusinessV2OrdersService(
+    new IdBusinessV2OrdersRepository(prisma as never),
+    fieldEncryptionService as never
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();

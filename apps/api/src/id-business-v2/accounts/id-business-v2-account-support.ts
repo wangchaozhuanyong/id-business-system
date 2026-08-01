@@ -1,7 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import type { IdBusinessV2Account, IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import { toV2DecimalString } from '../decimal-policy';
+import { Amount4, Rate8, type V2DecimalInput } from '../runtime/public-api';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { PaginationQuery } from '../../common/pagination';
 import type { IdBusinessV2AccountSecretField } from './dto/reveal-id-business-v2-account-secret.dto';
@@ -23,40 +21,66 @@ interface SecretFieldConfig {
   label: string;
 }
 
-export const ACCOUNT_INCLUDE = {
-  countryOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  statusOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      isSystem: true
-    }
-  },
-  supplierOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  soldByOrder: {
-    select: {
-      id: true,
-      orderNo: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2AccountInclude;
+export type AccountRecordStatus = 'active' | 'disabled';
 
-export type AccountWithRelations = Prisma.IdBusinessV2AccountGetPayload<{
-  include: typeof ACCOUNT_INCLUDE;
-}>;
+export interface AccountWithRelations {
+  id: string;
+  appleIdEncrypted: string;
+  appleIdHash: string;
+  appleIdMasked: string;
+  passwordEncrypted: string | null;
+  phoneEncrypted: string | null;
+  phoneHash: string | null;
+  phoneMasked: string | null;
+  phoneTail: string | null;
+  securityInfoEncrypted: string | null;
+  countryOptionId: string;
+  statusOptionId: string;
+  supplierOptionId: string | null;
+  currentBalance: Amount4;
+  balanceCostAmount: Amount4;
+  purchaseCost: Amount4;
+  purchaseOriginalAmount: Amount4;
+  purchaseCurrency: 'CNY' | 'MYR' | 'USDT';
+  purchaseFxRateToCny: Rate8;
+  purchaseFxSnapshotId: string | null;
+  purchaseFinanceAccountId: string | null;
+  purchaseSupplierAccountId: string | null;
+  purchasedAt: Date;
+  soldByOrderId: string | null;
+  soldAt: Date | null;
+  lossReportedAt: Date | null;
+  recordStatus: AccountRecordStatus;
+  remark: string | null;
+  createdByUserId: string | null;
+  updatedByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt: Date | null;
+  countryOption: { id: string; code: string; name: string };
+  statusOption: { id: string; code: string; name: string; isSystem: boolean };
+  supplierOption: { id: string; code: string; name: string } | null;
+  soldByOrder: { id: string; orderNo: string } | null;
+}
+
+export interface AccountUpdateData {
+  appleIdEncrypted?: string;
+  appleIdHash?: string;
+  appleIdMasked?: string;
+  passwordEncrypted?: string | null;
+  phoneEncrypted?: string | null;
+  phoneHash?: string | null;
+  phoneMasked?: string | null;
+  phoneTail?: string | null;
+  securityInfoEncrypted?: string | null;
+  countryOptionId?: string;
+  statusOptionId?: string;
+  supplierOptionId?: string | null;
+  purchaseCost?: string;
+  recordStatus?: AccountRecordStatus;
+  remark?: string | null;
+  updatedByUserId?: string;
+}
 
 export const SECRET_FIELDS: Record<IdBusinessV2AccountSecretField, SecretFieldConfig> = {
   appleId: {
@@ -81,79 +105,7 @@ export const SECRET_FIELDS: Record<IdBusinessV2AccountSecretField, SecretFieldCo
   }
 };
 
-const ACCOUNT_SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2AccountOrderByWithRelationInput
-> = {
-  appleId: 'appleIdMasked',
-  currentBalance: 'currentBalance',
-  balanceCostAmount: 'balanceCostAmount',
-  purchaseCost: 'purchaseCost',
-  recordStatus: 'recordStatus',
-  createdAt: 'createdAt',
-  updatedAt: 'updatedAt'
-};
-
-export function buildAccountWhere(
-  query: AccountListQuery,
-  hash: (value: string | null) => string | null
-): Prisma.IdBusinessV2AccountWhereInput {
-  const keyword = normalizeNullableString(query.keyword);
-  const normalizedAppleId = keyword ? normalizeAppleId(keyword, false) : null;
-  const normalizedPhone = keyword ? normalizePhone(keyword) : null;
-  const saleState = parseSaleState(query.saleState);
-  return {
-    deletedAt: null,
-    countryOptionId: normalizeNullableString(query.countryOptionId) ?? undefined,
-    statusOptionId: normalizeNullableString(query.statusOptionId) ?? undefined,
-    supplierOptionId: normalizeNullableString(query.supplierOptionId) ?? undefined,
-    recordStatus: parseRecordStatus(query.recordStatus, false) ?? undefined,
-    soldByOrderId:
-      saleState === 'sold' ? { not: null } : saleState === 'available' ? null : undefined,
-    OR: keyword
-      ? [
-          { appleIdMasked: { contains: keyword, mode: 'insensitive' } },
-          { appleIdHash: hash(normalizedAppleId) ?? undefined },
-          {
-            phoneTail: {
-              contains: normalizedPhone?.slice(-8) ?? keyword,
-              mode: 'insensitive'
-            }
-          },
-          { phoneHash: hash(normalizedPhone) ?? undefined },
-          {
-            supplierOption: {
-              name: {
-                contains: keyword,
-                mode: 'insensitive'
-              }
-            }
-          }
-        ]
-      : undefined
-  };
-}
-
-export function buildAccountOrderBy(query: AccountListQuery) {
-  const field = query.sortBy ? ACCOUNT_SORT_FIELDS[query.sortBy] : undefined;
-  if (!field) {
-    return [
-      { updatedAt: 'desc' },
-      { id: 'desc' }
-    ] satisfies Prisma.IdBusinessV2AccountOrderByWithRelationInput[];
-  }
-  const direction = query.sortOrder === 'desc' ? 'desc' : 'asc';
-  return [
-    { [field]: direction },
-    { updatedAt: 'desc' },
-    { id: 'desc' }
-  ] as Prisma.IdBusinessV2AccountOrderByWithRelationInput[];
-}
-
-export function parseRecordStatus(
-  value: unknown,
-  required: boolean
-): IdBusinessV2RecordStatus | null {
+export function parseRecordStatus(value: unknown, required: boolean): AccountRecordStatus | null {
   if (value === undefined || value === null || value === '') {
     if (required) throw new BadRequestException('资料状态不能为空');
     return null;
@@ -203,7 +155,7 @@ export function assertBalanceAdjustmentPermission(operator?: AuthenticatedUser) 
 }
 
 export function getEncryptedSecretValue(
-  account: IdBusinessV2Account,
+  account: AccountWithRelations,
   field: IdBusinessV2AccountSecretField
 ) {
   if (field === 'appleId') return account.appleIdEncrypted;
@@ -238,9 +190,9 @@ export function normalizeNullableString(value: unknown) {
 export function normalizeMoney(value: unknown, label: string) {
   const raw = value === undefined || value === null || value === '' ? '0' : String(value);
   try {
-    const decimal = new PrismaNamespace.Decimal(raw);
+    const decimal = Amount4.from(raw);
     if (decimal.isNegative()) throw new BadRequestException(`${label}不能为负数`);
-    return toV2DecimalString(decimal);
+    return decimal.toString();
   } catch (error) {
     if (error instanceof BadRequestException) throw error;
     throw new BadRequestException(`${label}格式无效`);
@@ -251,7 +203,7 @@ export function requireBalanceSnapshotValue(value: unknown, label: string) {
   if (value === undefined || value === null || value === '') {
     throw new BadRequestException(`${label}不能为空`);
   }
-  return value as PrismaNamespace.Decimal.Value;
+  return value as V2DecimalInput;
 }
 
 export function normalizeBalanceAdjustmentReason(value: unknown) {
@@ -307,18 +259,16 @@ export function toAccountResponse(account: AccountWithRelations) {
     status: account.statusOption,
     supplierOptionId: account.supplierOptionId,
     supplier: account.supplierOption,
-    currentBalance: toV2DecimalString(account.currentBalance),
-    balanceCostAmount: toV2DecimalString(account.balanceCostAmount),
-    purchaseCost: toV2DecimalString(account.purchaseCost),
-    purchaseOriginalAmount: toV2DecimalString(
-      account.purchaseOriginalAmount ?? account.purchaseCost
-    ),
-    purchaseCurrency: account.purchaseCurrency ?? ('CNY' as const),
-    purchaseFxRateToCny: toV2DecimalString(account.purchaseFxRateToCny ?? 1),
-    purchaseFxSnapshotId: account.purchaseFxSnapshotId ?? null,
-    purchaseFinanceAccountId: account.purchaseFinanceAccountId ?? null,
-    purchaseSupplierAccountId: account.purchaseSupplierAccountId ?? null,
-    purchasedAt: account.purchasedAt ?? account.createdAt,
+    currentBalance: account.currentBalance.toString(),
+    balanceCostAmount: account.balanceCostAmount.toString(),
+    purchaseCost: account.purchaseCost.toString(),
+    purchaseOriginalAmount: account.purchaseOriginalAmount.toString(),
+    purchaseCurrency: account.purchaseCurrency,
+    purchaseFxRateToCny: account.purchaseFxRateToCny.toString(),
+    purchaseFxSnapshotId: account.purchaseFxSnapshotId,
+    purchaseFinanceAccountId: account.purchaseFinanceAccountId,
+    purchaseSupplierAccountId: account.purchaseSupplierAccountId,
+    purchasedAt: account.purchasedAt,
     saleState: account.soldByOrderId ? ('sold' as const) : ('available' as const),
     soldAt: account.soldAt,
     soldByOrder: account.soldByOrder,
@@ -331,26 +281,22 @@ export function toAccountResponse(account: AccountWithRelations) {
   };
 }
 
-export function toAuditJson(value: unknown) {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-}
-
 export function assertBalanceAdjustmentReplay(
   entry: {
     accountId: string;
     entryType: string;
-    balanceBefore: PrismaNamespace.Decimal;
-    balanceAfter: PrismaNamespace.Decimal;
-    costBefore: PrismaNamespace.Decimal;
-    costAfter: PrismaNamespace.Decimal;
+    balanceBefore: Amount4;
+    balanceAfter: Amount4;
+    costBefore: Amount4;
+    costAfter: Amount4;
     remark: string | null;
   },
   expected: {
     accountId: string;
-    expectedBalance: PrismaNamespace.Decimal;
-    expectedCost: PrismaNamespace.Decimal;
-    targetBalance: PrismaNamespace.Decimal;
-    targetCost: PrismaNamespace.Decimal;
+    expectedBalance: V2DecimalInput;
+    expectedCost: V2DecimalInput;
+    targetBalance: V2DecimalInput;
+    targetCost: V2DecimalInput;
     reason: string;
   }
 ) {

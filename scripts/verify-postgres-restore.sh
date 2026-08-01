@@ -71,6 +71,14 @@ docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T postgres \
     select 'id_business_v2_gift_cards=' || count(*) from public.id_business_v2_gift_cards;
     select 'id_business_v2_orders=' || count(*) from public.id_business_v2_orders;
     select 'id_business_v2_activations=' || count(*) from public.id_business_v2_activations;
+    select 'id_business_v2_governance_jobs=' || count(*) from public.id_business_v2_governance_jobs;
+    select 'id_business_v2_governance_job_items=' || count(*) from public.id_business_v2_governance_job_items;
+    select 'id_business_v2_governance_approvals=' || count(*) from public.id_business_v2_governance_approvals;
+    select 'id_business_v2_governance_checkpoints=' || count(*) from public.id_business_v2_governance_checkpoints;
+    select 'applied_migrations=' || count(*) from public._prisma_migrations
+      where finished_at is not null and rolled_back_at is null;
+    select 'failed_migrations=' || count(*) from public._prisma_migrations
+      where finished_at is null and rolled_back_at is null;
   "
 
 echo "Restore drill completed successfully for ${BACKUP_FILE}"

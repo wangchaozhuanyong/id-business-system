@@ -5,15 +5,16 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2AccountLossesService } from '../accounts/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { toV2DecimalString } from '../decimal-policy';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import {
+  Amount4,
+  V2CommandTransactionManager,
+  type V2CommandTransaction
+} from '../runtime/public-api';
 import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
 import type {
   IdBusinessV2GiftCardReversalAction,
@@ -23,10 +24,12 @@ import {
   buildGiftCardReversalResponse,
   writeGiftCardReversalAuditLog
 } from './id-business-v2-gift-card-reversal-result';
+import type { LockedGiftCardReversalAccountRow } from './id-business-v2-gift-card-reversal.types';
 import type {
-  LockedGiftCardReversalAccountRow,
-  LockedGiftCardReversalRow
-} from './id-business-v2-gift-card-reversal.types';
+  GiftCardCreditLedgerRecord,
+  GiftCardCreditRecord
+} from './id-business-v2-gift-card-credit.types';
+import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
@@ -34,74 +37,22 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
 @Injectable()
 export class IdBusinessV2GiftCardReversalService {
   constructor(
-    private readonly prisma: PrismaService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly accountLossesService: IdBusinessV2AccountLossesService,
     private readonly supplierFundsService: IdBusinessV2TopupSupplierGiftCardFundsService,
-    private readonly financePostingService: IdBusinessV2FinancePostingService
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
+    private readonly repository: IdBusinessV2GiftCardsRepository,
+    private readonly transactionManager: V2CommandTransactionManager
   ) {}
 
   async listReversible(accountIdValue: string) {
     const accountId = this.normalizeUuid(accountIdValue, '目标 ID');
-    const account = await this.prisma.idBusinessV2Account.findFirst({
-      where: {
-        id: accountId,
-        deletedAt: null,
-        recordStatus: 'active',
-        lossReportedAt: null
-      },
-      select: {
-        id: true,
-        appleIdMasked: true
-      }
-    });
+    const account = await this.repository.findReversibleAccount(accountId);
     if (!account) {
       throw new NotFoundException('目标 ID 不存在或已停用');
     }
 
-    const giftCards = await this.prisma.idBusinessV2GiftCard.findMany({
-      where: {
-        accountId,
-        status: 'credited',
-        ledgerEntries: {
-          some: {
-            entryType: 'gift_card_credit'
-          }
-        }
-      },
-      select: {
-        id: true,
-        cardNameSnapshot: true,
-        codeMasked: true,
-        codeTail: true,
-        faceValue: true,
-        exchangeRate: true,
-        costAmount: true,
-        status: true,
-        creditedAt: true,
-        createdAt: true,
-        supplierOption: {
-          select: {
-            id: true,
-            name: true
-          }
-        },
-        ledgerEntries: {
-          where: {
-            entryType: 'gift_card_credit'
-          },
-          select: {
-            id: true,
-            balanceBefore: true,
-            balanceAfter: true,
-            createdAt: true
-          },
-          take: 1
-        }
-      },
-      orderBy: { creditedAt: 'desc' },
-      take: 101
-    });
+    const giftCards = await this.repository.listReversibleGiftCards(accountId);
     const items = giftCards.slice(0, 100);
 
     return {
@@ -111,16 +62,16 @@ export class IdBusinessV2GiftCardReversalService {
         cardName: giftCard.cardNameSnapshot,
         codeMasked: giftCard.codeMasked,
         codeTail: giftCard.codeTail,
-        faceValue: toV2DecimalString(giftCard.faceValue),
-        exchangeRate: toV2DecimalString(giftCard.exchangeRate),
-        costAmount: toV2DecimalString(giftCard.costAmount),
+        faceValue: giftCard.faceValue.toString(),
+        exchangeRate: giftCard.exchangeRate.toString(),
+        costAmount: giftCard.costAmount.toString(),
         status: giftCard.status,
         supplier: giftCard.supplierOption,
         creditedLedger: giftCard.ledgerEntries[0]
           ? {
               id: giftCard.ledgerEntries[0].id,
-              balanceBefore: toV2DecimalString(giftCard.ledgerEntries[0].balanceBefore),
-              balanceAfter: toV2DecimalString(giftCard.ledgerEntries[0].balanceAfter),
+              balanceBefore: giftCard.ledgerEntries[0].balanceBefore.toString(),
+              balanceAfter: giftCard.ledgerEntries[0].balanceAfter.toString(),
               createdAt: giftCard.ledgerEntries[0].createdAt
             }
           : null,
@@ -154,198 +105,31 @@ export class IdBusinessV2GiftCardReversalService {
     }
     const accountLossRequestKey = this.buildAccountLossRequestKey(idempotencyKey);
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const locator = await tx.idBusinessV2GiftCard.findUnique({
-          where: { id: giftCardId },
-          select: { accountId: true }
-        });
-        if (!locator) {
-          throw new NotFoundException('礼品卡记录不存在');
-        }
+    const execute = async (tx: V2CommandTransaction) => {
+      const locator = await this.repository.findGiftCardLocator(tx, giftCardId);
+      if (!locator) {
+        throw new NotFoundException('礼品卡记录不存在');
+      }
 
-        const account = await this.lockAccount(tx, locator.accountId);
-        const existingEntry = await tx.idBusinessV2BalanceLedger.findUnique({
-          where: { idempotencyKey },
-          include: {
-            giftCard: true
-          }
-        });
-        if (existingEntry?.giftCard) {
-          this.assertReplayMatches(existingEntry, giftCardId, entryType, reason);
-          const accountLoss = await this.resolveReplayAccountLoss(
-            tx,
-            account,
-            existingEntry.giftCard,
-            existingEntry,
-            reportAccountLoss,
-            accountLossRequestKey,
-            reason,
-            operator
-          );
-          await this.postReversalJournal(
-            tx,
-            action,
-            existingEntry.giftCard,
-            existingEntry.costAmount,
-            reason,
-            operator
-          );
-          if (action === 'withdrawn') {
-            await this.supplierFundsService.reverseGiftCardDebit(tx, {
-              giftCardId,
-              reason,
-              operator
-            });
-          }
-          return buildGiftCardReversalResponse(
-            action,
-            account,
-            existingEntry.giftCard,
-            existingEntry,
-            true,
-            accountLoss
-          );
-        }
-        if (account.lossReportedAt) {
-          throw new ConflictException('已报损 ID 永久冻结，不能再处理余额');
-        }
-        if (account.recordStatus !== 'active') {
-          throw new NotFoundException('目标 ID 不存在或已停用');
-        }
-
-        const giftCard = await this.lockGiftCard(tx, giftCardId);
-        if (giftCard.accountId !== account.id) {
-          throw new ConflictException('礼品卡所属 ID 已变化，请刷新后重试');
-        }
-        if (giftCard.status !== 'credited') {
-          throw new ConflictException(
-            giftCard.status === 'redeemed' ? '礼品卡已标记被赎回' : '礼品卡已撤回'
-          );
-        }
-
-        const originalEntry = await tx.idBusinessV2BalanceLedger.findUnique({
-          where: {
-            giftCardId_entryType: {
-              giftCardId,
-              entryType: 'gift_card_credit'
-            }
-          },
-          select: {
-            id: true
-          }
-        });
-        if (!originalEntry) {
-          throw new ConflictException('礼品卡缺少原入账流水，不能执行反向处理');
-        }
-
-        const existingReversal = await tx.idBusinessV2BalanceLedger.findUnique({
-          where: {
-            reversalOfEntryId: originalEntry.id
-          },
-          select: {
-            id: true,
-            entryType: true
-          }
-        });
-        if (existingReversal) {
-          throw new ConflictException('原入账流水已经执行过反向处理');
-        }
-
-        const snapshot = this.balanceCalculator.calculateConsumption(
-          {
-            currentBalance: account.currentBalance,
-            balanceCostAmount: account.balanceCostAmount
-          },
-          giftCard.faceValue
+      const account = await this.lockAccount(tx, locator.accountId);
+      const existingEntry = await this.repository.findCreditReplay(tx, idempotencyKey);
+      if (existingEntry?.giftCard) {
+        this.assertReplayMatches(existingEntry, giftCardId, entryType, reason);
+        const accountLoss = await this.resolveReplayAccountLoss(
+          tx,
+          account,
+          existingEntry.giftCard,
+          existingEntry,
+          reportAccountLoss,
+          accountLossRequestKey,
+          reason,
+          operator
         );
-
-        const ledgerEntry = await tx.idBusinessV2BalanceLedger.create({
-          data: {
-            accountId: account.id,
-            giftCardId,
-            entryType,
-            direction: 'debit',
-            balanceAmount: snapshot.balanceAmount,
-            costAmount: snapshot.costAmount,
-            balanceBefore: snapshot.balanceBefore,
-            balanceAfter: snapshot.balanceAfter,
-            costBefore: snapshot.costBefore,
-            costAfter: snapshot.costAfter,
-            averageCostBefore: snapshot.averageCostBefore,
-            averageCostAfter: snapshot.averageCostAfter,
-            reversalOfEntryId: originalEntry.id,
-            idempotencyKey,
-            remark: reason,
-            createdByUserId: operator?.id
-          }
-        });
-
-        const statusChangedAt = new Date();
-        const updatedGiftCard = await tx.idBusinessV2GiftCard.update({
-          where: { id: giftCardId },
-          data: {
-            status: action,
-            statusChangedAt,
-            supplierRefundStatus: action === 'withdrawn' ? 'pending' : 'none',
-            supplierRefundAmount:
-              action === 'withdrawn' ? snapshot.costAmount : new PrismaNamespace.Decimal(0),
-            supplierRefundAmountCny:
-              action === 'withdrawn' ? snapshot.costAmount : new PrismaNamespace.Decimal(0),
-            updatedByUserId: operator?.id
-          },
-          select: {
-            id: true,
-            codeMasked: true,
-            codeTail: true,
-            faceValue: true,
-            exchangeRate: true,
-            costAmount: true,
-            status: true,
-            statusChangedAt: true,
-            createdAt: true
-          }
-        });
-
-        const updatedAccount = await tx.idBusinessV2Account.update({
-          where: { id: account.id },
-          data: {
-            currentBalance: snapshot.balanceAfter,
-            balanceCostAmount: snapshot.costAfter,
-            updatedByUserId: operator?.id
-          },
-          select: {
-            id: true,
-            appleIdMasked: true,
-            currentBalance: true,
-            balanceCostAmount: true
-          }
-        });
-
-        const accountLoss = reportAccountLoss
-          ? await this.accountLossesService.reportLossInTransaction(
-              tx,
-              account.id,
-              {
-                reason,
-                expectedCurrentBalance: toV2DecimalString(snapshot.balanceAfter),
-                expectedBalanceCostAmount: toV2DecimalString(snapshot.costAfter),
-                idempotencyKey: accountLossRequestKey
-              },
-              operator,
-              {
-                source: 'gift_card_redeemed',
-                giftCardId,
-                giftCardMasked: updatedGiftCard.codeMasked,
-                reversalLedgerEntryId: ledgerEntry.id
-              }
-            )
-          : null;
         await this.postReversalJournal(
           tx,
           action,
-          updatedGiftCard,
-          snapshot.costAmount,
+          existingEntry.giftCard,
+          existingEntry.costAmount,
           reason,
           operator
         );
@@ -356,33 +140,146 @@ export class IdBusinessV2GiftCardReversalService {
             operator
           });
         }
-        const result = buildGiftCardReversalResponse(
+        return buildGiftCardReversalResponse(
           action,
-          updatedAccount,
-          updatedGiftCard,
-          ledgerEntry,
-          false,
+          account,
+          existingEntry.giftCard,
+          existingEntry,
+          true,
           accountLoss
         );
-        await writeGiftCardReversalAuditLog(tx, result, reason, operator);
-        return result;
-      });
-    } catch (error) {
-      if (
-        error instanceof PrismaNamespace.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('礼品卡已经处理或请求已经完成，请刷新后核对');
       }
-      throw error;
-    }
+      if (account.lossReportedAt) {
+        throw new ConflictException('已报损 ID 永久冻结，不能再处理余额');
+      }
+      if (account.recordStatus !== 'active') {
+        throw new NotFoundException('目标 ID 不存在或已停用');
+      }
+
+      const giftCard = await this.lockGiftCard(tx, giftCardId);
+      if (giftCard.accountId !== account.id) {
+        throw new ConflictException('礼品卡所属 ID 已变化，请刷新后重试');
+      }
+      if (giftCard.status !== 'credited') {
+        throw new ConflictException(
+          giftCard.status === 'redeemed' ? '礼品卡已标记被赎回' : '礼品卡已撤回'
+        );
+      }
+
+      const originalEntry = await this.repository.findGiftCardCreditEntry(tx, giftCardId);
+      if (!originalEntry) {
+        throw new ConflictException('礼品卡缺少原入账流水，不能执行反向处理');
+      }
+
+      const existingReversal = await this.repository.findReversalForEntry(tx, originalEntry.id);
+      if (existingReversal) {
+        throw new ConflictException('原入账流水已经执行过反向处理');
+      }
+
+      const snapshot = this.balanceCalculator.calculateConsumption(
+        {
+          currentBalance: account.currentBalance,
+          balanceCostAmount: account.balanceCostAmount
+        },
+        giftCard.faceValue
+      );
+
+      const ledgerEntry = await this.repository.createCreditLedger(tx, {
+        accountId: account.id,
+        giftCardId,
+        entryType,
+        direction: 'debit',
+        balanceAmount: snapshot.balanceAmount.toString(),
+        costAmount: snapshot.costAmount.toString(),
+        balanceBefore: snapshot.balanceBefore.toString(),
+        balanceAfter: snapshot.balanceAfter.toString(),
+        costBefore: snapshot.costBefore.toString(),
+        costAfter: snapshot.costAfter.toString(),
+        averageCostBefore: snapshot.averageCostBefore.toString(),
+        averageCostAfter: snapshot.averageCostAfter.toString(),
+        reversalOfEntryId: originalEntry.id,
+        idempotencyKey,
+        remark: reason,
+        createdByUserId: operator?.id
+      });
+
+      const statusChangedAt = new Date();
+      const updatedGiftCard = await this.repository.updateMappedGiftCard(tx, giftCardId, {
+        status: action,
+        statusChangedAt,
+        supplierRefundStatus: action === 'withdrawn' ? 'pending' : 'none',
+        supplierRefundAmount: action === 'withdrawn' ? snapshot.costAmount.toString() : '0',
+        supplierRefundAmountCny: action === 'withdrawn' ? snapshot.costAmount.toString() : '0',
+        updatedByUserId: operator?.id
+      });
+
+      const updatedAccount = await this.repository.updateCreditAccount(tx, {
+        accountId: account.id,
+        currentBalance: snapshot.balanceAfter.toString(),
+        balanceCostAmount: snapshot.costAfter.toString(),
+        updatedByUserId: operator?.id
+      });
+
+      const accountLoss = reportAccountLoss
+        ? await this.accountLossesService.reportLossInTransaction(
+            tx,
+            account.id,
+            {
+              reason,
+              expectedCurrentBalance: snapshot.balanceAfter.toString(),
+              expectedBalanceCostAmount: snapshot.costAfter.toString(),
+              idempotencyKey: accountLossRequestKey
+            },
+            operator,
+            {
+              source: 'gift_card_redeemed',
+              giftCardId,
+              giftCardMasked: updatedGiftCard.codeMasked,
+              reversalLedgerEntryId: ledgerEntry.id
+            }
+          )
+        : null;
+      await this.postReversalJournal(
+        tx,
+        action,
+        updatedGiftCard,
+        snapshot.costAmount,
+        reason,
+        operator
+      );
+      if (action === 'withdrawn') {
+        await this.supplierFundsService.reverseGiftCardDebit(tx, {
+          giftCardId,
+          reason,
+          operator
+        });
+      }
+      const result = buildGiftCardReversalResponse(
+        action,
+        updatedAccount,
+        updatedGiftCard,
+        ledgerEntry,
+        false,
+        accountLoss
+      );
+      await writeGiftCardReversalAuditLog(tx, this.repository, result, reason, operator);
+      return result;
+    };
+    return this.transactionManager.execute(execute, {
+      requestId: randomUUID(),
+      operator,
+      retryMode: 'fullReplay',
+      idempotencyKey,
+      replay: execute,
+      uniqueConflictMessage: '礼品卡已经处理或请求已经完成，请刷新后核对'
+    });
   }
 
   private postReversalJournal(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     action: IdBusinessV2GiftCardReversalAction,
     giftCard: { id: string; codeMasked: string },
-    costAmount: PrismaNamespace.Decimal,
+    costAmount: Amount4,
     reason: string,
     operator?: AuthenticatedUser
   ) {
@@ -420,24 +317,8 @@ export class IdBusinessV2GiftCardReversalService {
     });
   }
 
-  private async lockAccount(tx: Prisma.TransactionClient, accountId: string) {
-    const accounts = await tx.$queryRaw<LockedGiftCardReversalAccountRow[]>(
-      PrismaNamespace.sql`
-      SELECT
-        account."id",
-        account."apple_id_masked" AS "appleIdMasked",
-        account."current_balance" AS "currentBalance",
-        account."balance_cost_amount" AS "balanceCostAmount",
-        account."record_status" AS "recordStatus",
-        account."loss_reported_at" AS "lossReportedAt"
-      FROM "id_business_v2_accounts" account
-      WHERE
-        account."id" = CAST(${accountId} AS UUID)
-        AND account."deleted_at" IS NULL
-      FOR UPDATE OF account
-    `
-    );
-    const account = accounts[0];
+  private async lockAccount(tx: V2CommandTransaction, accountId: string) {
+    const account = await this.repository.lockReversalAccount(tx, accountId);
     if (!account) {
       throw new NotFoundException('目标 ID 不存在或已停用');
     }
@@ -445,28 +326,19 @@ export class IdBusinessV2GiftCardReversalService {
   }
 
   private async resolveReplayAccountLoss(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     account: LockedGiftCardReversalAccountRow,
-    giftCard: {
-      id: string;
-      codeMasked: string;
-    },
-    ledgerEntry: {
-      id: string;
-      balanceAfter: PrismaNamespace.Decimal;
-      costAfter: PrismaNamespace.Decimal;
-    },
+    giftCard: Pick<GiftCardCreditRecord, 'id' | 'codeMasked'>,
+    ledgerEntry: Pick<GiftCardCreditLedgerRecord, 'id' | 'balanceAfter' | 'costAfter'>,
     reportAccountLoss: boolean,
     accountLossRequestKey: string,
     reason: string,
     operator?: AuthenticatedUser
   ) {
-    const linkedLoss = await tx.idBusinessV2AccountLoss.findUnique({
-      where: {
-        idempotencyKey: this.buildAccountLossIdempotencyKey(account.id, accountLossRequestKey)
-      },
-      select: { id: true }
-    });
+    const linkedLoss = await this.repository.findAccountLossByIdempotencyKey(
+      tx,
+      this.buildAccountLossIdempotencyKey(account.id, accountLossRequestKey)
+    );
     if (Boolean(linkedLoss) !== reportAccountLoss) {
       throw new ConflictException('相同幂等键对应的“同时报损 ID”选项不一致');
     }
@@ -477,8 +349,8 @@ export class IdBusinessV2GiftCardReversalService {
       account.id,
       {
         reason,
-        expectedCurrentBalance: toV2DecimalString(ledgerEntry.balanceAfter),
-        expectedBalanceCostAmount: toV2DecimalString(ledgerEntry.costAfter),
+        expectedCurrentBalance: ledgerEntry.balanceAfter.toString(),
+        expectedBalanceCostAmount: ledgerEntry.costAfter.toString(),
         idempotencyKey: accountLossRequestKey
       },
       operator,
@@ -491,25 +363,8 @@ export class IdBusinessV2GiftCardReversalService {
     );
   }
 
-  private async lockGiftCard(tx: Prisma.TransactionClient, giftCardId: string) {
-    const giftCards = await tx.$queryRaw<LockedGiftCardReversalRow[]>(PrismaNamespace.sql`
-      SELECT
-        "id",
-        "account_id" AS "accountId",
-        "supplier_option_id" AS "supplierOptionId",
-        "source_attachment_id" AS "sourceAttachmentId",
-        "code_masked" AS "codeMasked",
-        "code_tail" AS "codeTail",
-        "face_value" AS "faceValue",
-        "exchange_rate" AS "exchangeRate",
-        "cost_amount" AS "costAmount",
-        "status",
-        "created_at" AS "createdAt"
-      FROM "id_business_v2_gift_cards"
-      WHERE "id" = CAST(${giftCardId} AS UUID)
-      FOR UPDATE
-    `);
-    const giftCard = giftCards[0];
+  private async lockGiftCard(tx: V2CommandTransaction, giftCardId: string) {
+    const giftCard = await this.repository.lockGiftCard(tx, giftCardId);
     if (!giftCard) {
       throw new NotFoundException('礼品卡记录不存在');
     }

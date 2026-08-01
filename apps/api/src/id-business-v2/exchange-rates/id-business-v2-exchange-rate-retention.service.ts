@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 export interface IdBusinessV2ExchangeRateRetentionResult {
   cutoff: string;
@@ -13,18 +13,19 @@ export interface IdBusinessV2ExchangeRateRetentionResult {
 
 @Injectable()
 export class IdBusinessV2ExchangeRateRetentionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService
+  ) {}
 
   async cleanup(): Promise<IdBusinessV2ExchangeRateRetentionResult> {
-    return this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(
-        Prisma.sql`SELECT "cleanup_id_business_v2_exchange_rate_history"() AS "result"`
-      );
-      const result = this.parseResult(rows[0]?.result);
+    return this.transactionManager.execute(
+      async (tx) => {
+        const result = this.parseResult(await this.repository.cleanupHistory(tx));
 
-      if (result.deletedRuns > 0) {
-        await tx.auditLog.create({
-          data: {
+        if (result.deletedRuns > 0) {
+          await this.audit.append(tx, {
             module: 'id_business_v2',
             action: 'id_business_v2.exchange_rate.retention_cleanup',
             objectType: 'id_business_v2_exchange_rate_run',
@@ -37,22 +38,21 @@ export class IdBusinessV2ExchangeRateRetentionService {
               preservedReferencedRuns: result.preservedReferencedRuns
             },
             remark: 'V2 联网汇率历史保留最近一个月；账务引用证据除外'
-          }
-        });
-      }
+          });
+        }
 
-      return result;
-    });
+        return result;
+      },
+      { requestId: 'exchange-rate-retention', retryMode: 'none' }
+    );
   }
 
-  private parseResult(
-    value: Prisma.JsonValue | undefined
-  ): IdBusinessV2ExchangeRateRetentionResult {
+  private parseResult(value: unknown): IdBusinessV2ExchangeRateRetentionResult {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error('汇率保留清理返回格式无效');
     }
 
-    const result = value as Record<string, Prisma.JsonValue | undefined>;
+    const result = value as Record<string, unknown>;
     const cutoff = typeof result.cutoff === 'string' ? result.cutoff : '';
     const deletedRuns = this.parseCount(result.deletedRuns);
     const deletedSnapshots = this.parseCount(result.deletedSnapshots);
@@ -73,7 +73,7 @@ export class IdBusinessV2ExchangeRateRetentionService {
     };
   }
 
-  private parseCount(value: Prisma.JsonValue | undefined) {
+  private parseCount(value: unknown) {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
       throw new Error('汇率保留清理数量格式无效');
     }

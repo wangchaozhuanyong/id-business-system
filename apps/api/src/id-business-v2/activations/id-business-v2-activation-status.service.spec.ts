@@ -92,46 +92,4 @@ describe('IdBusinessV2ActivationStatusService', () => {
       status: 'cancelled'
     });
   });
-
-  it('builds one server query contract for activation filters and the renewal workbench', () => {
-    expect(service.buildWhere('due_within_23_hours', now)).toEqual({
-      status: 'active',
-      dueAt: {
-        gt: new Date(now.getTime() + hourMs),
-        lte: new Date(now.getTime() + 23 * hourMs)
-      }
-    });
-    expect(service.buildWhere('expired', now)).toEqual({
-      OR: [
-        { status: 'expired' },
-        {
-          status: 'active',
-          dueAt: {
-            lte: now
-          }
-        }
-      ]
-    });
-    expect(service.buildRenewalWorkbenchWhere(now)).toEqual({
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                not: null,
-                lte: new Date(now.getTime() + 7 * 24 * hourMs)
-              }
-            }
-          ]
-        }
-      ]
-    });
-  });
 });

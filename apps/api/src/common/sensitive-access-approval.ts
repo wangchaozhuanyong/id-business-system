@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import type { PrismaService } from './prisma/prisma.service';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -14,7 +15,7 @@ export interface SensitiveAccessApprovalCheckInput {
 }
 
 export async function verifySensitiveAccessApproval(
-  prisma: PrismaService,
+  prisma: PrismaService | Pick<Prisma.TransactionClient, 'sensitiveAccessApproval'>,
   input: SensitiveAccessApprovalCheckInput
 ) {
   const approvalId = input.approvalId?.trim();

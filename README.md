@@ -14,7 +14,13 @@
 - 开通记录
 - 汇率记录与 Binance / OKX 公开报价采集
 - 业务选项设置
-- 登录、权限与操作审计
+- 操作审计、敏感访问查询与导出留痕
+- 员工账号、角色权限与操作审计
+- 登录风险、在线会话强制下线、MFA 管理与 IP 白名单防锁死门禁
+- 我的账户：脱敏个人资料、修改密码、MFA 和在线设备自助管理
+- 经营仪表盘：权限感知的今日业务、风险待办、ID 库存成本和团队动态
+- 业务监控：按源业务状态识别订单、余额、续费、汇率和财务基线异常
+- 系统监控：API、数据库、版本补偿、汇率任务和认证状态只读探针
 
 当前没有外部消息推送、兑换码商城、平台 OAuth、旧版通知中心或 Apple 官网自动操作。
 
@@ -66,8 +72,13 @@ npm run check:v2-isolation
 npm run check:v2-loading-standard
 npm run check:v2-table-standard
 npm run check:v2-module-architecture
+npm run check:v2-prisma-runtime-boundary
 npm run check:v2-color-contrast
 npm run acceptance:v2-color-contrast
+npm run acceptance:v2-table-layout
+npm run acceptance:v2-session-reliability
+npm run acceptance:v2-navigation-performance
+npm run acceptance:v2-decimal-adapters
 npm run typecheck
 npm run test
 npm run build

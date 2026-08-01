@@ -1,16 +1,9 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import {
-  IdBusinessV2AccountLockScope,
-  IdBusinessV2OrderAccountDisposition,
-  Prisma as PrismaNamespace
-} from '@prisma/client';
-import type { IdBusinessV2BalanceLedger, IdBusinessV2OrderStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { roundV2Decimal, toV2Decimal } from '../decimal-policy';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
@@ -28,6 +21,11 @@ import {
   type LifecycleTransactionResult
 } from './id-business-v2-order-lifecycle-support';
 import { refundIdBusinessV2Order } from './id-business-v2-order-refund';
+import type {
+  IdBusinessV2BalanceLedgerRecord,
+  IdBusinessV2OrderStatus
+} from './id-business-v2-order.types';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const FULLY_EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['draft', 'pending']);
 const EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
@@ -49,19 +47,21 @@ export class IdBusinessV2OrderLifecycleService {
   private readonly support: IdBusinessV2OrderLifecycleSupport;
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly orderLockService: IdBusinessV2OrderLockService,
     private readonly ordersService: IdBusinessV2OrdersService,
-    private readonly financePostingService: IdBusinessV2FinancePostingService
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
+    transactionManager: V2CommandTransactionManager,
+    private readonly repository: IdBusinessV2OrdersRepository
   ) {
     this.support = new IdBusinessV2OrderLifecycleSupport(
-      prisma,
       fieldEncryptionService,
       balanceCalculator,
       orderLockService,
-      ordersService
+      ordersService,
+      transactionManager,
+      repository
     );
   }
 
@@ -74,8 +74,8 @@ export class IdBusinessV2OrderLifecycleService {
     const expectedUpdatedAt = this.support.normalizeDate(dto.expectedUpdatedAt, '订单版本');
     this.support.assertUpdateHasChanges(dto);
 
-    try {
-      await this.prisma.$transaction(async (tx) => {
+    await this.support.runLifecycleTransaction(
+      async (tx) => {
         const order = await this.support.lockOrder(tx, orderId);
         if (order.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
           throw new ConflictException('订单已被其他操作修改，请刷新后重新编辑');
@@ -112,23 +112,8 @@ export class IdBusinessV2OrderLifecycleService {
 
         const [consumption, activation, activeLock] = await Promise.all([
           this.support.findConsumption(tx, order.id),
-          tx.idBusinessV2Activation.findUnique({
-            where: {
-              orderId: order.id
-            },
-            select: {
-              id: true
-            }
-          }),
-          tx.idBusinessV2AccountLock.findFirst({
-            where: {
-              orderId: order.id,
-              status: 'active'
-            },
-            orderBy: {
-              lockedAt: 'desc'
-            }
-          })
+          this.repository.hasActivationByOrder(tx, order.id),
+          this.repository.findActiveLockForOrder(tx, order.id)
         ]);
         const coreFieldsRequested = this.support.hasCoreFieldChanges(dto);
         if (
@@ -177,7 +162,7 @@ export class IdBusinessV2OrderLifecycleService {
             ? null
             : this.support.normalizeAmount(dto.receivedOriginalAmount, '原币实收', true);
         const receivedAmount = requestedOriginalAmount
-          ? roundV2Decimal(requestedOriginalAmount.mul(order.receivedFxRateToCny))
+          ? order.receivedFxRateToCny.apply(requestedOriginalAmount)
           : dto.receivedAmount === undefined
             ? order.receivedAmount
             : this.support.normalizeAmount(dto.receivedAmount, '实收金额', true);
@@ -211,17 +196,14 @@ export class IdBusinessV2OrderLifecycleService {
 
         const requestedLockScope =
           dto.lockScope === undefined
-            ? (activeLock?.lockScope ?? IdBusinessV2AccountLockScope.by_service)
+            ? (activeLock?.lockScope ?? 'by_service')
             : this.support.normalizeLockScope(dto.lockScope);
-        const lockScope =
-          accountDisposition === IdBusinessV2OrderAccountDisposition.sold
-            ? IdBusinessV2AccountLockScope.global
-            : requestedLockScope;
+        const lockScope = accountDisposition === 'sold' ? 'global' : requestedLockScope;
         const reservationChanged =
           order.serviceOptionId !== serviceOptionId ||
           order.accountId !== accountId ||
           order.accountDisposition !== accountDisposition ||
-          !toV2Decimal(order.balanceAmount).equals(toV2Decimal(balanceAmount)) ||
+          !order.balanceAmount.equals(balanceAmount) ||
           order.dueAt?.getTime() !== dueAt.getTime() ||
           activeLock?.lockScope !== lockScope;
         const lockSensitiveChanged = !consumption && reservationChanged;
@@ -251,6 +233,7 @@ export class IdBusinessV2OrderLifecycleService {
         );
         const accountCostAmount = await applyUpdatedOrderAccountDisposition(
           tx,
+          this.repository,
           order,
           accountId,
           accountDisposition,
@@ -260,9 +243,7 @@ export class IdBusinessV2OrderLifecycleService {
           ? this.support.calculateProfit(
               receivedAmount,
               platformFeeAmount,
-              accountDisposition === IdBusinessV2OrderAccountDisposition.sold
-                ? accountCostAmount
-                : new PrismaNamespace.Decimal(0),
+              accountDisposition === 'sold' ? accountCostAmount : Amount4.zero(),
               order.balanceCostAmount,
               order.refundCostAmount
             )
@@ -284,72 +265,55 @@ export class IdBusinessV2OrderLifecycleService {
           lockReleased = release.released;
         }
 
-        await tx.idBusinessV2Order.update({
-          where: {
-            id: order.id
-          },
-          data: {
-            customerId,
-            serviceOptionId,
-            accountId,
-            settlementPlatformOptionId,
-            platformOrderNo,
-            websiteAccountEncrypted: website.encrypted,
-            websiteAccountHash: website.hash,
-            websiteAccountMasked: website.masked,
-            receivedAmount,
-            receivedOriginalAmount,
-            platformFeeAmount,
-            balanceAmount,
-            accountDisposition,
-            accountCostAmount,
-            profitAmount,
-            openedAt,
-            dueAt,
-            remark,
-            updatedByUserId: operator?.id
-          }
+        await this.repository.updateOrder(tx, order.id, {
+          customerId,
+          serviceOptionId,
+          accountId,
+          settlementPlatformOptionId,
+          platformOrderNo,
+          websiteAccountEncrypted: website.encrypted,
+          websiteAccountHash: website.hash,
+          websiteAccountMasked: website.masked,
+          receivedAmount: receivedAmount.toString(),
+          receivedOriginalAmount: receivedOriginalAmount.toString(),
+          platformFeeAmount: platformFeeAmount.toString(),
+          balanceAmount: balanceAmount.toString(),
+          accountDisposition,
+          accountCostAmount: accountCostAmount.toString(),
+          profitAmount: profitAmount?.toString() ?? null,
+          openedAt,
+          dueAt,
+          remark,
+          updatedByUserId: operator?.id
         });
 
         if (activation && (dto.openedAt !== undefined || dto.dueAt !== undefined)) {
-          await tx.idBusinessV2Activation.update({
-            where: {
-              orderId: order.id
-            },
-            data: {
-              openedAt,
-              dueAt,
-              updatedByUserId: operator?.id
-            }
+          await this.repository.updateActivation(tx, order.id, {
+            openedAt,
+            dueAt,
+            updatedByUserId: operator?.id
           });
         }
 
         if (consumedLockExpiryChanged && activeLock) {
-          await tx.idBusinessV2AccountLock.update({
-            where: {
-              id: activeLock.id
-            },
-            data: {
-              expiresAt: dueAt
-            }
+          await this.repository.updateAccountLock(tx, activeLock.id, {
+            expiresAt: dueAt
           });
-          await tx.auditLog.create({
-            data: {
-              userId: operator?.id,
-              module: 'id_business_v2',
-              action: 'id_business_v2.order_lock.update_expiry',
-              objectType: 'id_business_v2_account_lock',
-              objectId: activeLock.id,
-              beforeData: {
-                orderId: order.id,
-                expiresAt: activeLock.expiresAt
-              },
-              afterData: {
-                orderId: order.id,
-                expiresAt: dueAt
-              },
-              remark: `修改已扣款订单锁到期时间：${order.orderNo}`
-            }
+          await this.repository.appendAudit(tx, {
+            userId: operator?.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.order_lock.update_expiry',
+            objectType: 'id_business_v2_account_lock',
+            objectId: activeLock.id,
+            beforeData: {
+              orderId: order.id,
+              expiresAt: activeLock.expiresAt
+            },
+            afterData: {
+              orderId: order.id,
+              expiresAt: dueAt
+            },
+            remark: `修改已扣款订单锁到期时间：${order.orderNo}`
           });
         }
 
@@ -367,46 +331,44 @@ export class IdBusinessV2OrderLifecycleService {
           );
         }
 
-        await tx.auditLog.create({
-          data: {
-            userId: operator?.id,
-            module: 'id_business_v2',
-            action: 'id_business_v2.order.update',
-            objectType: 'id_business_v2_order',
-            objectId: order.id,
-            beforeData: this.support.toOrderAuditSnapshot(order),
-            afterData: {
-              customerId,
-              serviceOptionId,
-              accountId,
-              settlementPlatformOptionId,
-              platformOrderNo,
-              websiteAccountMasked: website.masked,
-              receivedAmount: receivedAmount.toString(),
-              receivedOriginalAmount: receivedOriginalAmount.toString(),
-              receivedCurrency: order.receivedCurrency,
-              receivedFxRateToCny: order.receivedFxRateToCny.toString(),
-              receivedFxSnapshotId: order.receivedFxSnapshotId,
-              platformFeeAmount: platformFeeAmount.toString(),
-              balanceAmount: balanceAmount.toString(),
-              accountDisposition,
-              accountCostAmount: accountCostAmount.toString(),
-              profitAmount: profitAmount?.toString() ?? null,
-              openedAt,
-              dueAt,
-              remark,
-              lockScope,
-              lockRecreated: lockSensitiveChanged,
-              consumedLockExpiryUpdated: consumedLockExpiryChanged,
-              previousLockReleased: lockReleased
-            },
-            remark: `修改 V2 订单：${order.orderNo}`
-          }
+        await this.repository.appendAudit(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.order.update',
+          objectType: 'id_business_v2_order',
+          objectId: order.id,
+          beforeData: this.support.toOrderAuditSnapshot(order),
+          afterData: {
+            customerId,
+            serviceOptionId,
+            accountId,
+            settlementPlatformOptionId,
+            platformOrderNo,
+            websiteAccountMasked: website.masked,
+            receivedAmount: receivedAmount.toString(),
+            receivedOriginalAmount: receivedOriginalAmount.toString(),
+            receivedCurrency: order.receivedCurrency,
+            receivedFxRateToCny: order.receivedFxRateToCny.toString(),
+            receivedFxSnapshotId: order.receivedFxSnapshotId,
+            platformFeeAmount: platformFeeAmount.toString(),
+            balanceAmount: balanceAmount.toString(),
+            accountDisposition,
+            accountCostAmount: accountCostAmount.toString(),
+            profitAmount: profitAmount?.toString() ?? null,
+            openedAt,
+            dueAt,
+            remark,
+            lockScope,
+            lockRecreated: lockSensitiveChanged,
+            consumedLockExpiryUpdated: consumedLockExpiryChanged,
+            previousLockReleased: lockReleased
+          },
+          remark: `修改 V2 订单：${order.orderNo}`
         });
-      });
-    } catch (error) {
-      this.support.rethrowWriteConflict(error, '平台订单号已存在或订单刚被其他请求修改');
-    }
+      },
+      '平台订单号已存在或订单刚被其他请求修改',
+      operator
+    );
 
     return this.ordersService.get(orderId);
   }
@@ -440,14 +402,7 @@ export class IdBusinessV2OrderLifecycleService {
         if (!CANCELLABLE_STATUSES.has(order.status)) {
           throw new ConflictException('只有草稿、待处理、处理中或失败订单可以取消');
         }
-        const activation = await tx.idBusinessV2Activation.findUnique({
-          where: {
-            orderId: order.id
-          },
-          select: {
-            id: true
-          }
-        });
+        const activation = await this.repository.hasActivationByOrder(tx, order.id);
         if (activation) {
           throw new ConflictException('订单已有开通记录，不能取消；请按真实结果执行退款');
         }
@@ -460,9 +415,9 @@ export class IdBusinessV2OrderLifecycleService {
           throw new ConflictException('订单消费已经撤销，请刷新后核对订单状态');
         }
 
-        let reversalLedger: IdBusinessV2BalanceLedger | null = null;
+        let reversalLedger: IdBusinessV2BalanceLedgerRecord | null = null;
         let balanceRestored = false;
-        let profitAmount: PrismaNamespace.Decimal | null = null;
+        let profitAmount: Amount4 | null = null;
         if (consumption) {
           const restoration = await this.support.restoreConsumption(
             tx,
@@ -477,16 +432,15 @@ export class IdBusinessV2OrderLifecycleService {
           profitAmount = this.support.calculateProfit(
             order.receivedAmount,
             order.platformFeeAmount,
-            new PrismaNamespace.Decimal(0),
-            new PrismaNamespace.Decimal(0),
+            Amount4.zero(),
+            Amount4.zero(),
             order.refundCostAmount
           );
         }
 
-        const accountRecovered =
-          order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold;
+        const accountRecovered = order.accountDisposition === 'sold';
         if (accountRecovered) {
-          await releaseSoldOrderAccount(tx, order, operator);
+          await releaseSoldOrderAccount(tx, this.repository, order, operator);
         }
 
         const release = await this.orderLockService.releaseOrderLockInTransaction(
@@ -496,20 +450,13 @@ export class IdBusinessV2OrderLifecycleService {
           operator
         );
         const statusChangedAt = new Date();
-        await tx.idBusinessV2Order.update({
-          where: {
-            id: order.id
-          },
-          data: {
-            status: 'cancelled',
-            statusChangedAt,
-            balanceCostAmount: balanceRestored ? 0 : order.balanceCostAmount,
-            accountDisposition: accountRecovered
-              ? IdBusinessV2OrderAccountDisposition.recovered
-              : order.accountDisposition,
-            profitAmount,
-            updatedByUserId: operator?.id
-          }
+        await this.repository.updateOrder(tx, order.id, {
+          status: 'cancelled',
+          statusChangedAt,
+          balanceCostAmount: balanceRestored ? '0' : order.balanceCostAmount.toString(),
+          accountDisposition: accountRecovered ? 'recovered' : order.accountDisposition,
+          profitAmount: profitAmount?.toString() ?? null,
+          updatedByUserId: operator?.id
         });
         await this.support.writeLifecycleAudit(
           tx,
@@ -521,9 +468,7 @@ export class IdBusinessV2OrderLifecycleService {
             reason,
             balanceRestored,
             accountRecovered,
-            accountDisposition: accountRecovered
-              ? IdBusinessV2OrderAccountDisposition.recovered
-              : order.accountDisposition,
+            accountDisposition: accountRecovered ? 'recovered' : order.accountDisposition,
             appliedAccountCostAmount: '0',
             reversalLedgerId: reversalLedger?.id ?? null,
             profitAmount: profitAmount?.toString() ?? null,
@@ -539,7 +484,8 @@ export class IdBusinessV2OrderLifecycleService {
           idempotentReplay: false
         };
       },
-      '订单已经取消或消费撤销正在并发处理，请刷新后核对'
+      '订单已经取消或消费撤销正在并发处理，请刷新后核对',
+      operator
     );
 
     return this.support.buildLifecycleResponse(result);
@@ -550,6 +496,7 @@ export class IdBusinessV2OrderLifecycleService {
       this.support,
       this.orderLockService,
       this.financePostingService,
+      this.repository,
       orderIdValue,
       dto,
       operator

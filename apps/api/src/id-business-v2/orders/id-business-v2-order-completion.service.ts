@@ -4,143 +4,122 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type {
-  IdBusinessV2Activation,
-  IdBusinessV2BalanceLedger,
-  IdBusinessV2Order,
-  Prisma
-} from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal } from '../decimal-policy';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import {
+  Rate8,
+  V2CommandTransactionManager,
+  type V2CommandTransaction
+} from '../runtime/public-api';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import type {
+  IdBusinessV2BalanceLedgerRecord,
+  IdBusinessV2OrderActivationRecord,
+  IdBusinessV2OrderRecord
+} from './id-business-v2-order.types';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class IdBusinessV2OrderCompletionService {
   constructor(
-    private readonly prisma: PrismaService,
     private readonly ordersService: IdBusinessV2OrdersService,
-    private readonly financePostingService: IdBusinessV2FinancePostingService
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
+    private readonly repository: IdBusinessV2OrdersRepository,
+    private readonly transactionManager: V2CommandTransactionManager
   ) {}
 
   async complete(orderIdValue: string, operator?: AuthenticatedUser) {
     const orderId = this.normalizeRequiredUuid(orderIdValue);
-    let result: {
-      orderId: string;
-      activation: IdBusinessV2Activation;
-      consumptionLedgerId: string;
-      idempotentReplay: boolean;
-    };
+    const execute = async (tx: V2CommandTransaction, context: { businessTime: Date }) => {
+      const order = await this.lockOrder(tx, orderId);
+      const [consumption, reversal, existingActivation] = await Promise.all([
+        this.findLedger(tx, order.id, 'order_consumption'),
+        this.findLedger(tx, order.id, 'order_consumption_reversal'),
+        this.repository.findActivationByOrder(tx, order.id)
+      ]);
 
-    try {
-      result = await this.prisma.$transaction(async (tx) => {
-        const order = await this.lockOrder(tx, orderId);
-        const [consumption, reversal, existingActivation] = await Promise.all([
-          this.findLedger(tx, order.id, 'order_consumption'),
-          this.findLedger(tx, order.id, 'order_consumption_reversal'),
-          tx.idBusinessV2Activation.findUnique({
-            where: {
-              orderId: order.id
-            }
-          })
-        ]);
+      this.assertCompletionEvidence(order, consumption, reversal);
 
-        this.assertCompletionEvidence(order, consumption, reversal);
-
-        if (existingActivation) {
-          this.assertReplayEvidence(order, existingActivation);
-          return {
-            orderId: order.id,
-            activation: existingActivation,
-            consumptionLedgerId: consumption.id,
-            idempotentReplay: true
-          };
-        }
-        if (order.status !== 'processing') {
-          throw new ConflictException('只有已真实扣款、等待开通的订单可以确认完成');
-        }
-
-        const completedAt = new Date();
-        const activation = await tx.idBusinessV2Activation.create({
-          data: {
-            orderId: order.id,
-            customerId: order.customerId,
-            accountId: order.accountId!,
-            serviceOptionId: order.serviceOptionId,
-            openedAt: order.openedAt!,
-            dueAt: order.dueAt,
-            status: 'active',
-            statusChangedAt: completedAt,
-            remark: order.remark,
-            createdByUserId: operator?.id,
-            updatedByUserId: operator?.id
-          }
-        });
-
-        await tx.idBusinessV2Order.update({
-          where: {
-            id: order.id
-          },
-          data: {
-            status: 'completed',
-            statusChangedAt: completedAt,
-            updatedByUserId: operator?.id
-          }
-        });
-        const releasedLocks = await tx.idBusinessV2AccountLock.updateMany({
-          where: {
-            orderId: order.id,
-            status: 'active'
-          },
-          data: {
-            status: 'released',
-            endedAt: completedAt,
-            endReason: '订单完成后释放'
-          }
-        });
-        const financeJournal = await this.postCompletionJournal(tx, order, completedAt, operator);
-
-        await tx.auditLog.create({
-          data: {
-            userId: operator?.id,
-            module: 'id_business_v2',
-            action: 'id_business_v2.order.complete',
-            objectType: 'id_business_v2_order',
-            objectId: order.id,
-            beforeData: {
-              status: order.status,
-              accountId: order.accountId,
-              consumptionLedgerId: consumption.id
-            },
-            afterData: {
-              status: 'completed',
-              activationId: activation.id,
-              openedAt: activation.openedAt,
-              dueAt: activation.dueAt,
-              releasedLockCount: releasedLocks.count,
-              financeJournalId: financeJournal.id
-            },
-            remark: `V2 订单完成并生成开通记录：${order.orderNo}`
-          }
-        });
-
+      if (existingActivation) {
+        this.assertReplayEvidence(order, existingActivation);
         return {
           orderId: order.id,
-          activation,
+          activation: existingActivation,
           consumptionLedgerId: consumption.id,
-          idempotentReplay: false
+          idempotentReplay: true
         };
-      });
-    } catch (error) {
-      if (this.isUniqueConstraintError(error)) {
-        throw new ConflictException('订单已生成开通记录，请刷新后核对');
       }
-      throw error;
-    }
+      if (order.status !== 'processing') {
+        throw new ConflictException('只有已真实扣款、等待开通的订单可以确认完成');
+      }
+
+      const completedAt = context.businessTime;
+      const activation = await this.repository.createActivation(tx, {
+        orderId: order.id,
+        customerId: order.customerId,
+        accountId: order.accountId!,
+        serviceOptionId: order.serviceOptionId,
+        openedAt: order.openedAt!,
+        dueAt: order.dueAt,
+        status: 'active',
+        statusChangedAt: completedAt,
+        remark: order.remark,
+        createdByUserId: operator?.id,
+        updatedByUserId: operator?.id
+      });
+
+      await this.repository.updateOrder(tx, order.id, {
+        status: 'completed',
+        statusChangedAt: completedAt,
+        updatedByUserId: operator?.id
+      });
+      const releasedLocks = await this.repository.releaseActiveLocksForOrder(tx, {
+        orderId: order.id,
+        endedAt: completedAt,
+        endReason: '订单完成后释放'
+      });
+      const financeJournal = await this.postCompletionJournal(tx, order, completedAt, operator);
+
+      await this.repository.appendAudit(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2',
+        action: 'id_business_v2.order.complete',
+        objectType: 'id_business_v2_order',
+        objectId: order.id,
+        beforeData: {
+          status: order.status,
+          accountId: order.accountId,
+          consumptionLedgerId: consumption.id
+        },
+        afterData: {
+          status: 'completed',
+          activationId: activation.id,
+          openedAt: activation.openedAt,
+          dueAt: activation.dueAt,
+          releasedLockCount: releasedLocks.count,
+          financeJournalId: financeJournal.id
+        },
+        remark: `V2 订单完成并生成开通记录：${order.orderNo}`
+      });
+
+      return {
+        orderId: order.id,
+        activation,
+        consumptionLedgerId: consumption.id,
+        idempotentReplay: false
+      };
+    };
+    const result = await this.transactionManager.execute(execute, {
+      requestId: randomUUID(),
+      operator,
+      retryMode: 'fullReplay',
+      idempotencyKey: `order_complete:${orderId}`,
+      replay: execute,
+      uniqueConflictMessage: '订单已生成开通记录，请刷新后核对'
+    });
 
     return {
       order: await this.ordersService.get(result.orderId),
@@ -151,21 +130,23 @@ export class IdBusinessV2OrderCompletionService {
   }
 
   private postCompletionJournal(
-    tx: Prisma.TransactionClient,
-    order: IdBusinessV2Order,
+    tx: V2CommandTransaction,
+    order: IdBusinessV2OrderRecord,
     completedAt: Date,
     operator?: AuthenticatedUser
   ) {
-    const hasOriginalEvidence = order.receivedOriginalAmount.gt(0);
+    const receivedOriginalAmount = order.receivedOriginalAmount;
+    const receivedAmount = order.receivedAmount;
+    const rate = order.receivedFxRateToCny;
+    const platformFeeAmount = order.platformFeeAmount;
+    const balanceCostAmount = order.balanceCostAmount;
+    const accountCostAmount = order.accountCostAmount;
+    const hasOriginalEvidence = receivedOriginalAmount.gt(0);
     const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
-    const receivedOriginal = hasOriginalEvidence
-      ? order.receivedOriginalAmount
-      : order.receivedAmount;
-    const rate = hasOriginalEvidence ? order.receivedFxRateToCny : new PrismaNamespace.Decimal(1);
+    const receivedOriginal = hasOriginalEvidence ? receivedOriginalAmount : receivedAmount;
+    const effectiveRate = hasOriginalEvidence ? rate : Rate8.one();
     const platformFeeOriginal =
-      currency === 'CNY'
-        ? order.platformFeeAmount
-        : roundV2Decimal(order.platformFeeAmount.div(rate));
+      currency === 'CNY' ? platformFeeAmount : platformFeeAmount.div(effectiveRate);
     return this.financePostingService.post(tx, {
       journalType: 'order_completed',
       sourceType: 'order',
@@ -181,8 +162,8 @@ export class IdBusinessV2OrderCompletionService {
           direction: 'debit',
           currency,
           amountOriginal: receivedOriginal,
-          fxRateToCny: rate,
-          amountCny: order.receivedAmount,
+          fxRateToCny: effectiveRate,
+          amountCny: receivedAmount,
           financeAccountId: order.receivedFinanceAccountId,
           fxRateSnapshotId: order.receivedFxSnapshotId,
           memo: '订单收款'
@@ -192,8 +173,8 @@ export class IdBusinessV2OrderCompletionService {
           direction: 'credit',
           currency,
           amountOriginal: receivedOriginal,
-          fxRateToCny: rate,
-          amountCny: order.receivedAmount,
+          fxRateToCny: effectiveRate,
+          amountCny: receivedAmount,
           fxRateSnapshotId: order.receivedFxSnapshotId,
           memo: '已完成订单收入'
         },
@@ -202,8 +183,8 @@ export class IdBusinessV2OrderCompletionService {
           direction: 'debit',
           currency,
           amountOriginal: platformFeeOriginal,
-          fxRateToCny: rate,
-          amountCny: order.platformFeeAmount,
+          fxRateToCny: effectiveRate,
+          amountCny: platformFeeAmount,
           fxRateSnapshotId: order.receivedFxSnapshotId,
           memo: '订单平台手续费'
         },
@@ -212,8 +193,8 @@ export class IdBusinessV2OrderCompletionService {
           direction: 'credit',
           currency,
           amountOriginal: platformFeeOriginal,
-          fxRateToCny: rate,
-          amountCny: order.platformFeeAmount,
+          fxRateToCny: effectiveRate,
+          amountCny: platformFeeAmount,
           financeAccountId: order.receivedFinanceAccountId,
           fxRateSnapshotId: order.receivedFxSnapshotId,
           memo: '平台手续费扣款'
@@ -222,59 +203,47 @@ export class IdBusinessV2OrderCompletionService {
           accountCode: 'gift_card_cost',
           direction: 'debit',
           currency: 'CNY',
-          amountOriginal: order.balanceCostAmount,
+          amountOriginal: balanceCostAmount,
           fxRateToCny: 1,
-          amountCny: order.balanceCostAmount,
+          amountCny: balanceCostAmount,
           memo: '已消耗礼品卡余额成本'
         },
         {
           accountCode: 'gift_card_inventory',
           direction: 'credit',
           currency: 'CNY',
-          amountOriginal: order.balanceCostAmount,
+          amountOriginal: balanceCostAmount,
           fxRateToCny: 1,
-          amountCny: order.balanceCostAmount,
+          amountCny: balanceCostAmount,
           memo: '结转礼品卡库存成本'
         },
         {
           accountCode: 'id_cost',
           direction: 'debit',
           currency: 'CNY',
-          amountOriginal: order.accountCostAmount,
+          amountOriginal: accountCostAmount,
           fxRateToCny: 1,
-          amountCny: order.accountCostAmount,
+          amountCny: accountCostAmount,
           memo: '已卖出 ID 成本'
         },
         {
           accountCode: 'id_inventory',
           direction: 'credit',
           currency: 'CNY',
-          amountOriginal: order.accountCostAmount,
+          amountOriginal: accountCostAmount,
           fxRateToCny: 1,
-          amountCny: order.accountCostAmount,
+          amountCny: accountCostAmount,
           memo: '结转 ID 库存成本'
         }
       ]
     });
   }
 
-  private async lockOrder(tx: Prisma.TransactionClient, orderId: string) {
-    const rows = await tx.$queryRaw<Array<{ id: string }>>(PrismaNamespace.sql`
-      SELECT "id"
-      FROM "id_business_v2_orders"
-      WHERE
-        "id" = CAST(${orderId} AS UUID)
-        AND "deleted_at" IS NULL
-      FOR UPDATE
-    `);
-    if (!rows[0]) {
+  private async lockOrder(tx: V2CommandTransaction, orderId: string) {
+    if (!(await this.repository.lockOrderId(tx, orderId))) {
       throw new NotFoundException('订单不存在或已删除');
     }
-    const order = await tx.idBusinessV2Order.findUnique({
-      where: {
-        id: orderId
-      }
-    });
+    const order = await this.repository.findOrderInTransaction(tx, orderId);
     if (!order || order.deletedAt) {
       throw new NotFoundException('订单不存在或已删除');
     }
@@ -282,25 +251,18 @@ export class IdBusinessV2OrderCompletionService {
   }
 
   private findLedger(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     orderId: string,
     entryType: 'order_consumption' | 'order_consumption_reversal'
   ) {
-    return tx.idBusinessV2BalanceLedger.findUnique({
-      where: {
-        orderId_entryType: {
-          orderId,
-          entryType
-        }
-      }
-    });
+    return this.repository.findLedgerByOrderAndType(tx, orderId, entryType);
   }
 
   private assertCompletionEvidence(
-    order: IdBusinessV2Order,
-    consumption: IdBusinessV2BalanceLedger | null,
-    reversal: IdBusinessV2BalanceLedger | null
-  ): asserts consumption is IdBusinessV2BalanceLedger {
+    order: IdBusinessV2OrderRecord,
+    consumption: IdBusinessV2BalanceLedgerRecord | null,
+    reversal: IdBusinessV2BalanceLedgerRecord | null
+  ): asserts consumption is IdBusinessV2BalanceLedgerRecord {
     if (!order.accountId || !order.openedAt || order.profitAmount === null) {
       throw new ConflictException('订单缺少绑定 ID、开通时间或利润证据，不能确认完成');
     }
@@ -323,7 +285,10 @@ export class IdBusinessV2OrderCompletionService {
     }
   }
 
-  private assertReplayEvidence(order: IdBusinessV2Order, activation: IdBusinessV2Activation) {
+  private assertReplayEvidence(
+    order: IdBusinessV2OrderRecord,
+    activation: IdBusinessV2OrderActivationRecord
+  ) {
     const dueAtMatches =
       activation.dueAt === null
         ? order.dueAt === null
@@ -348,7 +313,7 @@ export class IdBusinessV2OrderCompletionService {
     return value.trim();
   }
 
-  private toActivationResponse(activation: IdBusinessV2Activation) {
+  private toActivationResponse(activation: IdBusinessV2OrderActivationRecord) {
     return {
       id: activation.id,
       orderId: activation.orderId,
@@ -360,14 +325,5 @@ export class IdBusinessV2OrderCompletionService {
       status: activation.status,
       createdAt: activation.createdAt
     };
-  }
-
-  private isUniqueConstraintError(error: unknown) {
-    return (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code?: unknown }).code === 'P2002'
-    );
   }
 }

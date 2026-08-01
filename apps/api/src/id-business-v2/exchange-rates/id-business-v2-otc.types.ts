@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Amount4, Rate8 } from '../runtime/public-api';
 
 export type IdBusinessV2OtcProviderName = 'Binance' | 'OKX';
 export type IdBusinessV2OtcSide = 'merchant_buy' | 'merchant_sell';
@@ -6,15 +6,15 @@ export type IdBusinessV2OtcSide = 'merchant_buy' | 'merchant_sell';
 export interface IdBusinessV2OtcQuote {
   sourceAdId: string;
   side: IdBusinessV2OtcSide;
-  priceToRmb: Prisma.Decimal;
-  minAmountRmb: Prisma.Decimal;
-  maxAmountRmb: Prisma.Decimal;
-  tradableAmountUsdt: Prisma.Decimal | null;
+  priceToRmb: Rate8;
+  minAmountRmb: Amount4;
+  maxAmountRmb: Amount4;
+  tradableAmountUsdt: Amount4 | null;
   paymentMethods: string[];
   merchantType: string;
   completedOrderCount: number | null;
-  completionRate: Prisma.Decimal | null;
-  positiveReviewRate: Prisma.Decimal | null;
+  completionRate: Rate8 | null;
+  positiveReviewRate: Rate8 | null;
 }
 
 export interface IdBusinessV2OtcSideCollection {
@@ -31,7 +31,7 @@ export interface IdBusinessV2OtcCollection {
   sourceContract: 'binance-p2p-friendly-adv-search-v2' | 'okx-public-trading-orders-books-v3';
   asset: 'USDT';
   fiat: 'CNY';
-  targetAmountRmb: Prisma.Decimal;
+  targetAmountRmb: Amount4;
   collectedAt: Date;
   merchantBuy: IdBusinessV2OtcSideCollection;
   merchantSell: IdBusinessV2OtcSideCollection;
@@ -45,5 +45,5 @@ export interface IdBusinessV2OtcProviderFailure {
 }
 
 export interface IdBusinessV2OtcCollector {
-  collect(targetAmountRmb: Prisma.Decimal): Promise<IdBusinessV2OtcCollection>;
+  collect(targetAmountRmb: Amount4): Promise<IdBusinessV2OtcCollection>;
 }

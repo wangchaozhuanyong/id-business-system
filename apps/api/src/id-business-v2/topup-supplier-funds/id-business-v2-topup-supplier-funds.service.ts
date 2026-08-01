@@ -6,9 +6,8 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import type {
   AdjustIdBusinessV2TopupSupplierFundDto,
   CreateIdBusinessV2TopupSupplierPaymentDto,
@@ -16,14 +15,17 @@ import type {
   ReverseIdBusinessV2TopupSupplierPaymentDto
 } from './dto/topup-supplier-fund.dto';
 import { IdBusinessV2TopupSupplierFundsSupport } from './id-business-v2-topup-supplier-funds-support';
+import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-business-v2-topup-supplier-command.repository';
 
 @Injectable()
 export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupplierFundsSupport {
   constructor(
-    prisma: PrismaService,
+    repository: IdBusinessV2TopupSupplierCommandRepository,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    transactionalAudit: V2TransactionalAuditService,
     private readonly financePostingService: IdBusinessV2FinancePostingService
   ) {
-    super(prisma);
+    super(repository, transactionalAudit);
   }
 
   async initialize(
@@ -40,11 +42,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       dto.idempotencyKey
     );
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-        where: { idempotencyKey },
-        include: { supplierAccount: { include: { supplierOption: true } } }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) {
         this.assertLedgerReplay(replay, {
           entryType: 'opening_balance',
@@ -55,59 +54,30 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       }
 
       const supplier = await this.requireSupplierOption(tx, supplierOptionId);
-      const existing = await tx.idBusinessV2TopupSupplierAccount.findUnique({
-        where: {
-          supplierOptionId_currency: {
-            supplierOptionId,
-            currency: 'CNY'
-          }
-        }
-      });
+      const existing = await this.repository.findSupplierAccountRecord(tx, supplierOptionId);
       if (existing?.initializedAt) {
         throw new ConflictException('该加卡供应商已经初始化，后续请使用余额调整');
       }
 
       const now = new Date();
-      const account = existing
-        ? await tx.idBusinessV2TopupSupplierAccount.update({
-            where: { id: existing.id },
-            data: {
-              openingBalance: targetBalance,
-              currentBalance: targetBalance,
-              openingBalanceCny: targetBalance,
-              currentBalanceCny: targetBalance,
-              initializedAt: now,
-              initializedByUserId: operator?.id,
-              updatedByUserId: operator?.id
-            }
-          })
-        : await tx.idBusinessV2TopupSupplierAccount.create({
-            data: {
-              id: randomUUID(),
-              supplierOptionId,
-              currency: 'CNY',
-              openingBalance: targetBalance,
-              currentBalance: targetBalance,
-              openingBalanceCny: targetBalance,
-              currentBalanceCny: targetBalance,
-              initializedAt: now,
-              initializedByUserId: operator?.id,
-              updatedByUserId: operator?.id
-            }
-          });
+      const account = await this.repository.initializeSupplierAccount(tx, {
+        id: randomUUID(),
+        existingId: existing?.id,
+        supplierOptionId,
+        balance: targetBalance.toString(),
+        initializedAt: now,
+        operatorId: operator?.id
+      });
 
-      const entry = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          supplierAccountId: account.id,
-          entryType: 'opening_balance',
-          direction: 'adjustment',
-          ...this.cnyLedgerAmounts(targetBalance.abs(), 0, targetBalance),
-          supplierNameSnapshot: supplier.name,
-          idempotencyKey,
-          reason,
-          createdByUserId: operator?.id
-        },
-        include: { supplierAccount: { include: { supplierOption: true } } }
+      const entry = await this.repository.createLedgerWithSupplier(tx, {
+        supplierAccountId: account.id,
+        entryType: 'opening_balance',
+        direction: 'adjustment',
+        ...this.cnyLedgerAmounts(targetBalance.abs(), 0, targetBalance),
+        supplierNameSnapshot: supplier.name,
+        idempotencyKey,
+        reason,
+        createdByUserId: operator?.id
       });
       await this.financePostingService.post(tx, {
         journalType: 'opening_balance',
@@ -146,13 +116,13 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         objectId: account.id,
         afterData: {
           supplierOptionId,
-          targetBalanceCny: toV2DecimalString(targetBalance),
+          targetBalanceCny: targetBalance.toString(),
           reason
         },
         remark: `初始化加卡供应商资金：${supplier.name}`
       });
       return this.toFundMutationResponse(entry, false);
-    });
+    }, commandOptions(operator));
   }
 
   async createPayment(
@@ -168,7 +138,7 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       true
     );
     const settlementRate = this.normalizeRate(dto.settlementRateCnyUsdt);
-    const creditedCny = roundV2Decimal(receivedUsdt.mul(settlementRate));
+    const creditedCny = receivedUsdt.mul(settlementRate);
     if (creditedCny.lte(0)) {
       throw new BadRequestException('折算人民币必须大于 0');
     }
@@ -182,14 +152,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       dto.idempotencyKey
     );
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierPayment.findUnique({
-        where: { idempotencyKey },
-        include: {
-          supplierAccount: { include: { supplierOption: true } },
-          ledgerEntries: { where: { entryType: 'payment_credit' }, take: 1 }
-        }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findPaymentReplay(tx, idempotencyKey);
       if (replay) {
         this.assertPaymentReplay(replay, {
           receivedUsdt,
@@ -205,50 +169,44 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
 
       const account = await this.lockSupplierAccount(tx, supplierOptionId);
       this.assertInitialized(account);
-      const balanceAfter = roundV2Decimal(account.currentBalanceCny.add(creditedCny));
-      const payment = await tx.idBusinessV2TopupSupplierPayment.create({
-        data: {
-          supplierAccountId: account.id,
-          supplierNameSnapshot: account.supplierName,
-          paidCurrency: 'USDT',
-          paidAmount: receivedUsdt,
-          networkFeeAmount: networkFeeUsdt,
-          fxRateToCny: settlementRate,
-          creditedAmount: receivedUsdt,
-          receivedUsdt,
-          networkFeeUsdt,
-          settlementRateCnyUsdt: settlementRate,
-          creditedCny,
-          network,
-          transactionHash,
-          paidAt,
-          remark,
-          idempotencyKey,
-          createdByUserId: operator?.id
-        }
+      const balanceAfter = account.currentBalanceCny.add(creditedCny);
+      const payment = await this.repository.createPayment(tx, {
+        supplierAccountId: account.id,
+        supplierNameSnapshot: account.supplierName,
+        paidCurrency: 'USDT',
+        paidAmount: receivedUsdt.toString(),
+        networkFeeAmount: networkFeeUsdt.toString(),
+        fxRateToCny: settlementRate.toString(),
+        creditedAmount: receivedUsdt.toString(),
+        receivedUsdt: receivedUsdt.toString(),
+        networkFeeUsdt: networkFeeUsdt.toString(),
+        settlementRateCnyUsdt: settlementRate.toString(),
+        creditedCny: creditedCny.toString(),
+        network,
+        transactionHash,
+        paidAt,
+        remark,
+        idempotencyKey,
+        createdByUserId: operator?.id
       });
-      const ledgerEntry = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          supplierAccountId: account.id,
-          paymentId: payment.id,
-          entryType: 'payment_credit',
-          direction: 'credit',
-          ...this.cnyLedgerAmounts(creditedCny, account.currentBalanceCny, balanceAfter),
-          supplierNameSnapshot: account.supplierName,
-          idempotencyKey: `${idempotencyKey}:ledger`,
-          reason: remark,
-          createdByUserId: operator?.id
-        }
+      const ledgerEntry = await this.repository.createLedger(tx, {
+        supplierAccountId: account.id,
+        paymentId: payment.id,
+        entryType: 'payment_credit',
+        direction: 'credit',
+        ...this.cnyLedgerAmounts(creditedCny, account.currentBalanceCny, balanceAfter),
+        supplierNameSnapshot: account.supplierName,
+        idempotencyKey: `${idempotencyKey}:ledger`,
+        reason: remark,
+        createdByUserId: operator?.id
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: account.id },
-        data: {
-          currentBalance: balanceAfter,
-          currentBalanceCny: balanceAfter,
-          updatedByUserId: operator?.id
-        }
+      await this.repository.updateSupplierAccountBalances(tx, {
+        accountId: account.id,
+        currentBalance: balanceAfter.toString(),
+        currentBalanceCny: balanceAfter.toString(),
+        operatorId: operator?.id
       });
-      const feeCny = roundV2Decimal(networkFeeUsdt.mul(settlementRate));
+      const feeCny = networkFeeUsdt.mul(settlementRate);
       await this.financePostingService.post(tx, {
         journalType: 'supplier_deposit',
         sourceType: 'supplier_payment',
@@ -293,12 +251,12 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         objectId: payment.id,
         afterData: {
           supplierOptionId,
-          receivedUsdt: toV2DecimalString(receivedUsdt),
-          networkFeeUsdt: toV2DecimalString(networkFeeUsdt),
+          receivedUsdt: receivedUsdt.toString(),
+          networkFeeUsdt: networkFeeUsdt.toString(),
           settlementRateCnyUsdt: settlementRate.toString(),
-          creditedCny: toV2DecimalString(creditedCny),
-          balanceBeforeCny: toV2DecimalString(account.currentBalanceCny),
-          balanceAfterCny: toV2DecimalString(balanceAfter),
+          creditedCny: creditedCny.toString(),
+          balanceBeforeCny: account.currentBalanceCny.toString(),
+          balanceAfterCny: balanceAfter.toString(),
           paidAt: paidAt.toISOString()
         },
         remark: `记录加卡供应商付款：${account.supplierName}`
@@ -316,7 +274,7 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         },
         false
       );
-    });
+    }, commandOptions(operator));
   }
 
   async adjust(
@@ -334,11 +292,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       dto.idempotencyKey
     );
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-        where: { idempotencyKey },
-        include: { supplierAccount: { include: { supplierOption: true } } }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) {
         this.assertLedgerReplay(replay, {
           entryType: 'manual_adjustment',
@@ -350,33 +305,28 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
 
       const account = await this.lockSupplierAccount(tx, supplierOptionId);
       this.assertInitialized(account);
-      if (account.currentBalanceCny.eq(targetBalance)) {
+      if (account.currentBalanceCny.equals(targetBalance)) {
         throw new BadRequestException('目标余额与当前余额相同，无需调整');
       }
-      const entry = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          supplierAccountId: account.id,
-          entryType: 'manual_adjustment',
-          direction: 'adjustment',
-          ...this.cnyLedgerAmounts(
-            targetBalance.sub(account.currentBalanceCny).abs(),
-            account.currentBalanceCny,
-            targetBalance
-          ),
-          supplierNameSnapshot: account.supplierName,
-          idempotencyKey,
-          reason,
-          createdByUserId: operator?.id
-        },
-        include: { supplierAccount: { include: { supplierOption: true } } }
+      const entry = await this.repository.createLedgerWithSupplier(tx, {
+        supplierAccountId: account.id,
+        entryType: 'manual_adjustment',
+        direction: 'adjustment',
+        ...this.cnyLedgerAmounts(
+          targetBalance.sub(account.currentBalanceCny).abs(),
+          account.currentBalanceCny,
+          targetBalance
+        ),
+        supplierNameSnapshot: account.supplierName,
+        idempotencyKey,
+        reason,
+        createdByUserId: operator?.id
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: account.id },
-        data: {
-          currentBalance: targetBalance,
-          currentBalanceCny: targetBalance,
-          updatedByUserId: operator?.id
-        }
+      await this.repository.updateSupplierAccountBalances(tx, {
+        accountId: account.id,
+        currentBalance: targetBalance.toString(),
+        currentBalanceCny: targetBalance.toString(),
+        operatorId: operator?.id
       });
       const adjustment = targetBalance.sub(account.currentBalanceCny);
       await this.financePostingService.post(tx, {
@@ -414,15 +364,15 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         action: 'id_business_v2.topup_supplier_fund.adjust',
         objectType: 'id_business_v2_topup_supplier_account',
         objectId: account.id,
-        beforeData: { currentBalanceCny: toV2DecimalString(account.currentBalanceCny) },
+        beforeData: { currentBalanceCny: account.currentBalanceCny.toString() },
         afterData: {
-          currentBalanceCny: toV2DecimalString(targetBalance),
+          currentBalanceCny: targetBalance.toString(),
           reason
         },
         remark: `调整加卡供应商余额：${account.supplierName}`
       });
       return this.toFundMutationResponse(entry, false);
-    });
+    }, commandOptions(operator));
   }
 
   async reversePayment(
@@ -435,11 +385,8 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
     const requestKey = this.normalizeIdempotencyKey(dto.idempotencyKey);
     const idempotencyKey = `supplier_payment_reversal:${paymentId}:${requestKey}`;
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-        where: { idempotencyKey },
-        include: { supplierAccount: { include: { supplierOption: true } } }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) {
         this.assertLedgerReplay(replay, {
           entryType: 'payment_reversal',
@@ -448,15 +395,7 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         return this.toFundMutationResponse(replay, true);
       }
 
-      const payment = await tx.idBusinessV2TopupSupplierPayment.findUnique({
-        where: { id: paymentId },
-        include: {
-          supplierAccount: true,
-          ledgerEntries: {
-            include: { reversedBy: true }
-          }
-        }
-      });
+      const payment = await this.repository.findPaymentForReversal(tx, paymentId);
       if (!payment) {
         throw new NotFoundException('付款记录不存在');
       }
@@ -471,43 +410,34 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
       }
 
       const account = await this.lockSupplierAccountById(tx, payment.supplierAccountId);
-      const creditedCny = roundV2Decimal(payment.creditedCny);
-      const balanceAfter = roundV2Decimal(account.currentBalanceCny.sub(creditedCny));
-      const entry = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          supplierAccountId: account.id,
-          paymentId: payment.id,
-          entryType: 'payment_reversal',
-          direction: 'debit',
-          ...this.cnyLedgerAmounts(creditedCny, account.currentBalanceCny, balanceAfter),
-          supplierNameSnapshot: account.supplierName,
-          reversalOfEntryId: creditEntry.id,
-          idempotencyKey,
-          reason,
-          createdByUserId: operator?.id
-        },
-        include: { supplierAccount: { include: { supplierOption: true } } }
+      const creditedCny = payment.creditedCny;
+      const balanceAfter = account.currentBalanceCny.sub(creditedCny);
+      const entry = await this.repository.createLedgerWithSupplier(tx, {
+        supplierAccountId: account.id,
+        paymentId: payment.id,
+        entryType: 'payment_reversal',
+        direction: 'debit',
+        ...this.cnyLedgerAmounts(creditedCny, account.currentBalanceCny, balanceAfter),
+        supplierNameSnapshot: account.supplierName,
+        reversalOfEntryId: creditEntry.id,
+        idempotencyKey,
+        reason,
+        createdByUserId: operator?.id
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: account.id },
-        data: {
-          currentBalance: balanceAfter,
-          currentBalanceCny: balanceAfter,
-          updatedByUserId: operator?.id
-        }
+      await this.repository.updateSupplierAccountBalances(tx, {
+        accountId: account.id,
+        currentBalance: balanceAfter.toString(),
+        currentBalanceCny: balanceAfter.toString(),
+        operatorId: operator?.id
       });
-      const originalFinanceJournal = await tx.idBusinessV2FinanceJournal.findFirst({
-        where: {
-          journalType: 'supplier_deposit',
-          sourceType: 'supplier_payment',
-          sourceId: payment.id
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-      if (originalFinanceJournal) {
+      const originalFinanceJournalId = await this.repository.findFinanceJournalIdForPayment(
+        tx,
+        payment.id
+      );
+      if (originalFinanceJournalId) {
         await this.financePostingService.reverse(
           tx,
-          originalFinanceJournal.id,
+          originalFinanceJournalId,
           reason,
           `auto:${idempotencyKey}:finance`,
           operator
@@ -519,17 +449,21 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
         objectType: 'id_business_v2_topup_supplier_payment',
         objectId: payment.id,
         beforeData: {
-          creditedCny: toV2DecimalString(payment.creditedCny),
-          balanceCny: toV2DecimalString(account.currentBalanceCny)
+          creditedCny: payment.creditedCny.toString(),
+          balanceCny: account.currentBalanceCny.toString()
         },
         afterData: {
           reversed: true,
-          balanceCny: toV2DecimalString(balanceAfter),
+          balanceCny: balanceAfter.toString(),
           reason
         },
         remark: `撤销加卡供应商付款：${account.supplierName}`
       });
       return this.toFundMutationResponse(entry, false);
-    });
+    }, commandOptions(operator));
   }
+}
+
+function commandOptions(operator?: AuthenticatedUser) {
+  return { requestId: randomUUID(), operator } as const;
 }

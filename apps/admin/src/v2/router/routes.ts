@@ -122,7 +122,7 @@ export const v2Routes: RouteRecordRaw[] = [
     children: [
       {
         path: '',
-        redirect: '/v2/workbench/renewals'
+        redirect: '/v2/dashboard'
       },
       ...v2ModuleDefinitions.map(
         (module): RouteRecordRaw => ({

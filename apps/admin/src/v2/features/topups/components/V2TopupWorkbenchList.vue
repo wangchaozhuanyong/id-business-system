@@ -10,13 +10,13 @@
     @retry="page.loadWorkbench"
   >
     <section class="v2-records-list">
-      <el-table
+      <V2Table
+        :schema="v2TableSchemas.topups.main"
         :aria-busy="page.loading"
         scrollbar-always-on
         show-overflow-tooltip
         class="v2-records-table v2-topup-table"
         :data="page.items"
-        row-key="id"
         @sort-change="page.handleSortChange"
       >
         <template #empty>
@@ -28,33 +28,28 @@
         </template>
 
         <V2TableColumn
-          kind="identifier"
-          width-preset="identifier"
+          :definition="v2TableSchemas.topups.main.columns[0]"
           prop="appleId"
-          label="ID 账号"
-          fixed="left"
           sortable="custom"
         >
           <template #default="{ row }">
             <strong class="v2-topup-account v2-table-cell">{{ row.appleIdMasked }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="国家" width-preset="compact">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[1]">
           <template #default="{ row }">{{ row.country.name }}</template>
         </V2TableColumn>
         <V2TableColumn
-          kind="numeric"
-          width-preset="compact"
+          :definition="v2TableSchemas.topups.main.columns[2]"
           prop="currentBalance"
-          label="余额"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDecimal(row.currentBalance) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[3]">
           <template #default="{ row }">¥{{ page.formatDecimal(row.averageCost) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="加卡记录" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[4]">
           <template #default="{ row }">
             <div class="v2-topup-record-links">
               <AppButton
@@ -79,7 +74,7 @@
             </div>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="余额流水" width-preset="standard">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[5]">
           <template #default="{ row }">
             <AppButton
               size="small"
@@ -92,7 +87,7 @@
             </AppButton>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="date" width-preset="dateTime" label="最近加卡">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[6]">
           <template #default="{ row }">
             <span :title="row.lastTopupAt ? page.formatDate(row.lastTopupAt) : undefined">
               {{ page.formatElapsed(row.lastTopupAt) }}
@@ -100,15 +95,13 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          kind="date"
-          width-preset="dateTime"
+          :definition="v2TableSchemas.topups.main.columns[7]"
           prop="updatedAt"
-          label="更新时间"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatElapsed(row.updatedAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn kind="text" label="当前业务" width-preset="identifier">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[8]">
           <template #default="{ row }">
             <div
               v-if="row.currentServices.length"
@@ -128,14 +121,14 @@
             <span v-else>—</span>
           </template>
         </V2TableColumn>
-        <V2TableColumn kind="status" width-preset="compact" label="ID 状态">
+        <V2TableColumn :definition="v2TableSchemas.topups.main.columns[9]">
           <template #default="{ row }">
             <el-tag :type="row.status.code === 'normal' ? 'success' : 'warning'" effect="plain">
               {{ row.status.name }}
             </el-tag>
           </template>
         </V2TableColumn>
-        <V2TableActionColumn layout="single">
+        <V2TableActionColumn :definition="v2TableSchemas.topups.main.columns[10]">
           <template #default="{ row }">
             <AppButton
               v-if="page.canTopup"
@@ -150,9 +143,9 @@
             <span v-else>—</span>
           </template>
         </V2TableActionColumn>
-      </el-table>
+      </V2Table>
 
-      <div class="v2-records-mobile-list">
+      <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.topups.main.id">
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
@@ -300,6 +293,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { DataAnalysis, Plus, RefreshLeft, Tickets } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

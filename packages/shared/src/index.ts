@@ -2,6 +2,7 @@ export interface ApiSuccessResponse<TData> {
   success: true;
   data: TData;
   message: string;
+  requestId: string;
   timestamp: string;
 }
 
@@ -9,7 +10,12 @@ export interface ApiErrorResponse {
   success: false;
   errorCode: string;
   message: string;
+  retryable: boolean;
+  /** Legacy response compatibility only. Clients must not display or log this payload. */
   details?: Record<string, unknown>;
+  requestId: string;
+  retryAfterMs?: number;
+  fieldErrors?: Record<string, string[]>;
   timestamp: string;
 }
 

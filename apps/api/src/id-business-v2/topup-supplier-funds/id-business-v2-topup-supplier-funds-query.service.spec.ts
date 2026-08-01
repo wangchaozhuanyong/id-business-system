@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2TopupSupplierFundsQueryService } from './id-business-v2-topup-supplier-funds-query.service';
+import { IdBusinessV2TopupSupplierQueryRepository } from './persistence/id-business-v2-topup-supplier-query.repository';
 
 const supplierOptionId = '11111111-1111-4111-8111-111111111111';
 const supplierAccountId = '22222222-2222-4222-8222-222222222222';
@@ -19,7 +20,9 @@ describe('IdBusinessV2TopupSupplierFundsQueryService', () => {
       aggregate: vi.fn()
     }
   };
-  const service = new IdBusinessV2TopupSupplierFundsQueryService(prisma as never);
+  const service = new IdBusinessV2TopupSupplierFundsQueryService(
+    new IdBusinessV2TopupSupplierQueryRepository(prisma as never)
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,6 +71,7 @@ describe('IdBusinessV2TopupSupplierFundsQueryService', () => {
           {
             id: '55555555-5555-4555-8555-555555555555',
             entryType: 'payment_credit',
+            amountCny: decimal('6800'),
             balanceBeforeCny: decimal('0'),
             balanceAfterCny: decimal('6800'),
             reversedBy: null,
@@ -83,6 +87,7 @@ describe('IdBusinessV2TopupSupplierFundsQueryService', () => {
           {
             id: '66666666-6666-4666-8666-666666666666',
             entryType: 'payment_credit',
+            amountCny: decimal('6800'),
             balanceBeforeCny: decimal('6800'),
             balanceAfterCny: decimal('13600'),
             reversedBy: {
@@ -96,6 +101,7 @@ describe('IdBusinessV2TopupSupplierFundsQueryService', () => {
           {
             id: '77777777-7777-4777-8777-777777777777',
             entryType: 'payment_reversal',
+            amountCny: decimal('6800'),
             balanceBeforeCny: decimal('13600'),
             balanceAfterCny: decimal('6800'),
             reversedBy: null,

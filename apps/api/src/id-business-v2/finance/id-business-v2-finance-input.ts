@@ -1,7 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
-import type { IdBusinessV2FinanceCurrency, Prisma } from '@prisma/client';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import { roundV2Decimal, toV2Decimal } from '../decimal-policy';
+import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
+import { Amount4, Rate8, type V2DecimalInput } from '../runtime/public-api';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MONEY_PATTERN = /^(?:0|[1-9]\d{0,13})(?:\.\d{1,4})?$/;
@@ -37,7 +36,7 @@ export function normalizeFinanceMoney(value: unknown, label: string, allowZero =
   if (!MONEY_PATTERN.test(normalized)) {
     throw new BadRequestException(`${label}最多支持 4 位小数`);
   }
-  const amount = roundV2Decimal(normalized);
+  const amount = Amount4.from(normalized);
   if (allowZero ? amount.lt(0) : amount.lte(0)) {
     throw new BadRequestException(`${label}${allowZero ? '不能小于 0' : '必须大于 0'}`);
   }
@@ -45,12 +44,12 @@ export function normalizeFinanceMoney(value: unknown, label: string, allowZero =
 }
 
 export function normalizeFinanceRate(value: unknown, currency: IdBusinessV2FinanceCurrency) {
-  if (currency === 'CNY') return new PrismaNamespace.Decimal(1);
+  if (currency === 'CNY') return Rate8.one();
   const normalized = String(value ?? '').trim();
   if (!RATE_PATTERN.test(normalized)) {
     throw new BadRequestException('汇率必须大于 0，且最多支持 8 位小数');
   }
-  const rate = toV2Decimal(normalized).toDecimalPlaces(8, PrismaNamespace.Decimal.ROUND_HALF_UP);
+  const rate = Rate8.from(normalized);
   if (rate.lte(0)) throw new BadRequestException('汇率必须大于 0');
   return rate;
 }
@@ -108,6 +107,6 @@ export function toKualaLumpurBusinessDate(value: Date) {
   };
 }
 
-export function decimalJson(value: Prisma.Decimal.Value) {
-  return roundV2Decimal(value).toString();
+export function decimalJson(value: V2DecimalInput) {
+  return Amount4.from(value).toString();
 }

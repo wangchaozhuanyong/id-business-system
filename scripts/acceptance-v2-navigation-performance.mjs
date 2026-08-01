@@ -57,6 +57,7 @@ function checkSourceContracts() {
   const app = read('apps/admin/src/App.vue');
   const appRuntimeError = read('apps/admin/src/runtime/appRuntimeError.ts');
   const auth = read('apps/admin/src/stores/auth.ts');
+  const sessionCoordinator = read('apps/admin/src/auth/sessionCoordinator.ts');
   const layout = read('apps/admin/src/v2/layouts/V2AdminLayout.vue');
   const performanceRuntime = read('apps/admin/src/runtime/performance.ts');
   const routes = read('apps/admin/src/v2/router/routes.ts');
@@ -80,7 +81,12 @@ function checkSourceContracts() {
   const renewalsPage = read('apps/admin/src/v2/features/renewals/useRenewalsPage.ts');
   const routedPageSources = [
     ['续费', renewalsPage],
-    ['订单录入', read('apps/admin/src/v2/features/order-entry/useOrderEntryPage.ts')],
+    [
+      '订单录入',
+      `${read('apps/admin/src/v2/features/order-entry/useOrderEntryPage.ts')}\n${read(
+        'apps/admin/src/v2/features/order-entry/useOrderEntryOptionsQuery.ts'
+      )}`
+    ],
     [
       '加卡',
       `${read('apps/admin/src/v2/features/topups/useTopupWorkbenchPage.ts')}\n${read(
@@ -143,8 +149,21 @@ function checkSourceContracts() {
     /plugins\/element-plus|V2_WORKSPACE_COMPONENTS|V2_LOGIN_COMPONENTS/,
     '路由仍预加载完整 Element Plus 组件合集'
   );
-  assert.match(auth, /ensureSessionReady\s*\(/, 'auth store 缺少统一会话门');
-  assert.match(auth, /sessionReadyPromise/, '会话门缺少进行中 Promise 复用');
+  assert.match(
+    auth,
+    /ensureSessionReady:\s*sessionCoordinator\.ensureSession/,
+    'auth store 缺少统一会话门映射'
+  );
+  assert.match(
+    sessionCoordinator,
+    /async function ensureSession\s*\(/,
+    '统一会话协调器缺少会话门实现'
+  );
+  assert.match(
+    sessionCoordinator,
+    /if \(validationPromise\) return validationPromise/,
+    '会话门缺少进行中 Promise 复用'
+  );
   for (const stage of [
     'booting',
     'session-checking',
@@ -156,10 +175,12 @@ function checkSourceContracts() {
     assert.ok(app.includes(`'${stage}'`), `V2 Boot Gate 缺少 ${stage} 状态`);
   }
   assert.doesNotMatch(app, /currentRouteLoadError/, '路由错误仍触发 V2App 全屏遮罩');
-  assert.match(
+  assert.match(appRuntimeError, /isApiError/, '应用错误边界没有识别结构化 API 错误');
+  assert.match(appRuntimeError, /isNavigationFailure/, '应用错误边界没有识别结构化路由失败');
+  assert.doesNotMatch(
     appRuntimeError,
-    /routeResourceErrorPatterns/,
-    '动态路由资源错误仍会升级成应用级 fatal'
+    /failed to fetch dynamically imported module|couldn't resolve component/i,
+    '应用错误边界仍依赖不稳定的浏览器错误文案'
   );
   assert.match(recovery, /vite:preloadError/, '缺少 Vite preload error 恢复');
   assert.match(recovery, /sessionStorage/, 'Chunk 恢复缺少会话级防循环记录');
@@ -423,12 +444,12 @@ async function checkBrowserRuntime() {
     await verifyRepeatedInitialChunkFailure(browser, authenticatedStorageState);
 
     await verifyIntentPrefetch(page, '/v2/customers', 'V2CustomersView');
-    expectedChunkFailureView = 'V2AccountsView';
-    try {
-      await verifySpeculativeChunkFailure(page, '/v2/accounts', 'V2AccountsView');
-    } finally {
-      expectedChunkFailureView = '';
-    }
+    await verifySpeculativeChunkFailureInFreshContext(
+      browser,
+      authenticatedStorageState,
+      '/v2/accounts',
+      'V2AccountsView'
+    );
     expectedChunkFailureView = 'V2ActivationsView';
     try {
       await verifyRouteChunkRecovery(page, '/v2/records/activations', 'V2ActivationsView');
@@ -729,6 +750,14 @@ async function verifyInitialChunkRecovery(browser, storageState) {
   const routePattern = routeChunkPattern('V2TopupRecordsView');
   let chunkAttempts = 0;
   let documentNavigations = 0;
+  const runtimeErrors = [];
+
+  page.on('pageerror', (error) => runtimeErrors.push(`pageerror:${error.message}`));
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !message.text().includes('net::ERR_FAILED')) {
+      runtimeErrors.push(`console:${message.text()}`);
+    }
+  });
 
   page.on('request', (request) => {
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
@@ -753,7 +782,23 @@ async function verifyInitialChunkRecovery(browser, storageState) {
       .goto(`${ADMIN_BASE_URL}${targetPath}`, { waitUntil: 'domcontentloaded' })
       .catch(() => null);
     await page.waitForURL((url) => url.pathname === targetPath, { timeout: HTTP_TIMEOUT_MS });
-    await waitForPageReady(page);
+    try {
+      await waitForPageReady(page);
+    } catch (error) {
+      const diagnostics = await page.evaluate(() => ({
+        body: document.body.innerText.slice(0, 2_000),
+        credentialPresent: Boolean(localStorage.getItem('apple_business_auth_v2')),
+        path: location.pathname,
+        reloadBuild: sessionStorage.getItem('apple-business:v2-preload-reload-build'),
+        routeErrors: performance
+          .getEntriesByName('v2:route-data-error')
+          .map((entry) => entry.detail ?? null)
+      }));
+      throw new Error(
+        `首次 Chunk 恢复未就绪：${JSON.stringify({ chunkAttempts, documentNavigations, diagnostics, runtimeErrors })}`,
+        { cause: error }
+      );
+    }
 
     const recovery = await page.evaluate(() => ({
       buildId: document.querySelector('meta[name="v2-build-id"]')?.getAttribute('content') ?? null,
@@ -871,10 +916,34 @@ async function verifyIntentPrefetch(page, targetPath, targetViewName) {
   }
 }
 
+async function verifySpeculativeChunkFailureInFreshContext(
+  browser,
+  storageState,
+  targetPath,
+  targetViewName
+) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    storageState
+  });
+  const page = await context.newPage();
+  await page.route('**/api/id-business-v2/**', async (route) => {
+    await delay(API_DELAY_MS);
+    await route.continue();
+  });
+
+  try {
+    await page.goto(`${ADMIN_BASE_URL}/v2/dashboard`, { waitUntil: 'domcontentloaded' });
+    await waitForPageReady(page);
+    await verifySpeculativeChunkFailure(page, targetPath, targetViewName);
+  } finally {
+    await context.close();
+  }
+}
+
 async function verifySpeculativeChunkFailure(page, targetPath, targetViewName) {
   const previousPath = new URL(page.url()).pathname;
   const routePattern = routeChunkPattern(targetViewName);
-  const link = await ensureNavigationLinkVisible(page, targetPath);
   let chunkAttempts = 0;
 
   await page.route(routePattern, async (route) => {
@@ -887,6 +956,7 @@ async function verifySpeculativeChunkFailure(page, targetPath, targetViewName) {
   });
 
   try {
+    const link = await ensureNavigationLinkVisible(page, targetPath);
     const firstAttempt = page.waitForRequest((request) => routePattern.test(request.url()), {
       timeout: HTTP_TIMEOUT_MS
     });
@@ -1174,7 +1244,22 @@ async function navigateAndMeasure(page, path) {
     await page.waitForTimeout(20);
   }
   await page.waitForURL((url) => url.pathname === path, { timeout: HTTP_TIMEOUT_MS });
-  await waitForPageReady(page);
+  try {
+    await waitForPageReady(page);
+  } catch (error) {
+    const diagnostics = await page.evaluate(() => ({
+      currentPath: location.pathname,
+      dataReadyPaths: performance
+        .getEntriesByName('v2:route-data-ready')
+        .map((entry) => entry.detail?.path ?? null),
+      dataErrors: performance
+        .getEntriesByName('v2:route-data-error')
+        .map((entry) => entry.detail ?? null),
+      loadingRegions: document.querySelectorAll('#v2-main .v2-page-state--loading').length,
+      routeError: document.querySelector('.v2-route-error')?.textContent?.trim() ?? ''
+    }));
+    throw new Error(`${path} 页面就绪失败：${JSON.stringify(diagnostics)}`, { cause: error });
+  }
   const result = {
     path,
     feedbackMs,

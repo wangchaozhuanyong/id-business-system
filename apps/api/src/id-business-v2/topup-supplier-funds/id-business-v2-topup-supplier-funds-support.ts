@@ -4,34 +4,20 @@ import {
   ForbiddenException,
   NotFoundException
 } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import {
-  roundV2Decimal,
-  toV2Decimal,
-  toV2DecimalString,
-  V2_DECIMAL_ROUNDING_MODE
-} from '../decimal-policy';
+  Amount4,
+  Rate8,
+  V2TransactionalAuditService,
+  toV2JsonDocument,
+  type V2CommandTransaction,
+  type V2DecimalInput,
+  type V2JsonDocument
+} from '../runtime/public-api';
+import { type LockedSupplierAccountRow } from './persistence/id-business-v2-topup-supplier-account.repository';
+import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-business-v2-topup-supplier-command.repository';
 
-export interface LockedSupplierAccountRow {
-  id: string;
-  supplierOptionId: string;
-  supplierName: string;
-  currency: 'CNY' | 'MYR' | 'USDT';
-  currentBalance: PrismaNamespace.Decimal;
-  currentBalanceCny: PrismaNamespace.Decimal;
-  initializedAt: Date | null;
-}
-
-type RawLockedSupplierAccountRow = Omit<
-  LockedSupplierAccountRow,
-  'currentBalance' | 'currentBalanceCny'
-> & {
-  currentBalance: PrismaNamespace.Decimal.Value;
-  currentBalanceCny: PrismaNamespace.Decimal.Value;
-};
+export type { LockedSupplierAccountRow } from './persistence/id-business-v2-topup-supplier-account.repository';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
@@ -40,107 +26,34 @@ const UNSIGNED_AMOUNT_PATTERN = /^(?:0|[1-9]\d{0,13})(?:\.\d{1,4})?$/;
 const RATE_PATTERN = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,8})?$/;
 
 export abstract class IdBusinessV2TopupSupplierFundsSupport {
-  protected constructor(protected readonly prisma: PrismaService) {}
+  protected constructor(
+    protected readonly repository: IdBusinessV2TopupSupplierCommandRepository,
+    private readonly transactionalAudit: V2TransactionalAuditService
+  ) {}
 
-  protected async requireSupplierOption(tx: Prisma.TransactionClient, supplierOptionId: string) {
-    const supplier = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: supplierOptionId,
-        type: 'topup_supplier',
-        status: 'active',
-        deletedAt: null
-      },
-      select: { id: true, code: true, name: true }
-    });
+  protected async requireSupplierOption(tx: V2CommandTransaction, supplierOptionId: string) {
+    const supplier = await this.repository.findActiveSupplier(tx, supplierOptionId);
     if (!supplier) throw new BadRequestException('加卡供应商不存在或已停用');
     return supplier;
   }
 
-  protected async lockSupplierAccount(tx: Prisma.TransactionClient, supplierOptionId: string) {
-    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
-      SELECT
-        account."id",
-        account."supplier_option_id" AS "supplierOptionId",
-        supplier."name" AS "supplierName",
-        account."currency",
-        account."current_balance" AS "currentBalance",
-        account."current_balance_cny" AS "currentBalanceCny",
-        account."initialized_at" AS "initializedAt"
-      FROM "id_business_v2_topup_supplier_accounts" account
-      INNER JOIN "id_business_v2_options" supplier
-        ON supplier."id" = account."supplier_option_id"
-      WHERE
-        account."supplier_option_id" = CAST(${supplierOptionId} AS UUID)
-        AND account."currency" = 'CNY'
-        AND supplier."type" = 'topup_supplier'
-        AND supplier."status" = 'active'
-        AND supplier."deleted_at" IS NULL
-      FOR UPDATE OF account
-    `);
-    if (!rows[0]) {
+  protected async lockSupplierAccount(tx: V2CommandTransaction, supplierOptionId: string) {
+    const account = await this.repository.lockSupplierAccount(tx, supplierOptionId);
+    if (!account) {
       const supplier = await this.requireSupplierOption(tx, supplierOptionId);
       throw new ConflictException(`供应商“${supplier.name}”资金账户尚未初始化`);
     }
-    return this.normalizeLockedSupplierAccount(rows[0]);
+    return account;
   }
 
-  protected async lockSupplierAccountById(tx: Prisma.TransactionClient, accountId: string) {
-    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
-      SELECT
-        account."id",
-        account."supplier_option_id" AS "supplierOptionId",
-        supplier."name" AS "supplierName",
-        account."currency",
-        account."current_balance" AS "currentBalance",
-        account."current_balance_cny" AS "currentBalanceCny",
-        account."initialized_at" AS "initializedAt"
-      FROM "id_business_v2_topup_supplier_accounts" account
-      INNER JOIN "id_business_v2_options" supplier
-        ON supplier."id" = account."supplier_option_id"
-      WHERE
-        account."id" = CAST(${accountId} AS UUID)
-      FOR UPDATE OF account
-    `);
-    if (!rows[0]) throw new NotFoundException('供应商资金账户不存在');
-    return this.normalizeLockedSupplierAccount(rows[0]);
+  protected async lockSupplierAccountById(tx: V2CommandTransaction, accountId: string) {
+    const account = await this.repository.lockSupplierAccountById(tx, accountId);
+    if (!account) throw new NotFoundException('供应商资金账户不存在');
+    return account;
   }
 
-  protected async lockSupplierAccountsByIds(tx: Prisma.TransactionClient, accountIds: string[]) {
-    const uniqueIds = [...new Set(accountIds)].sort();
-    const rows = await tx.$queryRaw<RawLockedSupplierAccountRow[]>(PrismaNamespace.sql`
-      SELECT
-        account."id",
-        account."supplier_option_id" AS "supplierOptionId",
-        supplier."name" AS "supplierName",
-        account."currency",
-        account."current_balance" AS "currentBalance",
-        account."current_balance_cny" AS "currentBalanceCny",
-        account."initialized_at" AS "initializedAt"
-      FROM "id_business_v2_topup_supplier_accounts" account
-      INNER JOIN "id_business_v2_options" supplier
-        ON supplier."id" = account."supplier_option_id"
-      WHERE
-        account."id" IN (${PrismaNamespace.join(uniqueIds.map((id) => PrismaNamespace.sql`CAST(${id} AS UUID)`))})
-        AND account."currency" = 'CNY'
-      ORDER BY account."id"
-      FOR UPDATE OF account
-    `);
-    return new Map(
-      rows.map((row) => {
-        const normalized = this.normalizeLockedSupplierAccount(row);
-        return [normalized.id, normalized];
-      })
-    );
-  }
-
-  private normalizeLockedSupplierAccount(
-    row: RawLockedSupplierAccountRow
-  ): LockedSupplierAccountRow {
-    return {
-      ...row,
-      currentBalance: toV2Decimal(row.currentBalance),
-      currentBalanceCny: toV2Decimal(row.currentBalanceCny)
-    };
+  protected lockSupplierAccountsByIds(tx: V2CommandTransaction, accountIds: string[]) {
+    return this.repository.lockSupplierAccountsByIds(tx, accountIds);
   }
 
   protected assertInitialized(account: LockedSupplierAccountRow) {
@@ -160,13 +73,13 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
   }
 
   protected cnyLedgerAmounts(
-    amount: PrismaNamespace.Decimal.Value,
-    balanceBefore: PrismaNamespace.Decimal.Value,
-    balanceAfter: PrismaNamespace.Decimal.Value
+    amount: V2DecimalInput,
+    balanceBefore: V2DecimalInput,
+    balanceAfter: V2DecimalInput
   ) {
-    const normalizedAmount = roundV2Decimal(amount);
-    const normalizedBefore = roundV2Decimal(balanceBefore);
-    const normalizedAfter = roundV2Decimal(balanceAfter);
+    const normalizedAmount = Amount4.from(amount).toString();
+    const normalizedBefore = Amount4.from(balanceBefore).toString();
+    const normalizedAfter = Amount4.from(balanceAfter).toString();
     return {
       currency: 'CNY' as const,
       amount: normalizedAmount,
@@ -189,7 +102,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     if (!SIGNED_AMOUNT_PATTERN.test(normalized)) {
       throw new BadRequestException(`${label}必须是最多 4 位小数的有效金额`);
     }
-    return roundV2Decimal(normalized);
+    return Amount4.from(normalized);
   }
 
   protected normalizeUnsignedAmount(value: unknown, label: string, allowZero: boolean) {
@@ -197,7 +110,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     if (!UNSIGNED_AMOUNT_PATTERN.test(normalized)) {
       throw new BadRequestException(`${label}必须是最多 4 位小数的有效金额`);
     }
-    const decimal = roundV2Decimal(normalized);
+    const decimal = Amount4.from(normalized);
     if (allowZero ? decimal.lt(0) : decimal.lte(0)) {
       throw new BadRequestException(`${label}${allowZero ? '不能小于 0' : '必须大于 0'}`);
     }
@@ -209,7 +122,7 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     if (!RATE_PATTERN.test(normalized)) {
       throw new BadRequestException('结算汇率必须是最多 8 位小数的正数');
     }
-    const rate = toV2Decimal(normalized).toDecimalPlaces(8, V2_DECIMAL_ROUNDING_MODE);
+    const rate = Rate8.from(normalized);
     if (rate.lte(0)) throw new BadRequestException('结算汇率必须大于 0');
     return rate;
   }
@@ -257,19 +170,18 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
   protected assertLedgerReplay(
     replay: {
       entryType: string;
-      balanceAfterCny: PrismaNamespace.Decimal;
+      balanceAfterCny: Amount4;
       reason: string | null;
     },
     expected: {
       entryType: string;
-      balanceAfter?: PrismaNamespace.Decimal;
+      balanceAfter?: Amount4;
       reason: string;
     }
   ) {
-    const balanceAfterCny = toV2Decimal(replay.balanceAfterCny);
     if (
       replay.entryType !== expected.entryType ||
-      (expected.balanceAfter && !balanceAfterCny.eq(expected.balanceAfter)) ||
+      (expected.balanceAfter && !replay.balanceAfterCny.equals(expected.balanceAfter)) ||
       replay.reason !== expected.reason
     ) {
       throw new ConflictException('幂等键已用于不同的供应商资金操作');
@@ -278,34 +190,34 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
 
   protected assertPaymentReplay(
     replay: {
-      receivedUsdt: PrismaNamespace.Decimal | null;
-      networkFeeUsdt: PrismaNamespace.Decimal | null;
-      settlementRateCnyUsdt: PrismaNamespace.Decimal | null;
-      paidAmount: PrismaNamespace.Decimal;
-      networkFeeAmount: PrismaNamespace.Decimal;
-      fxRateToCny: PrismaNamespace.Decimal;
+      receivedUsdt: Amount4 | null;
+      networkFeeUsdt: Amount4 | null;
+      settlementRateCnyUsdt: Rate8 | null;
+      paidAmount: Amount4;
+      networkFeeAmount: Amount4;
+      fxRateToCny: Rate8;
       paidAt: Date;
       network: string | null;
       transactionHash: string | null;
       remark: string | null;
     },
     expected: {
-      receivedUsdt: PrismaNamespace.Decimal;
-      networkFeeUsdt: PrismaNamespace.Decimal;
-      settlementRate: PrismaNamespace.Decimal;
+      receivedUsdt: Amount4;
+      networkFeeUsdt: Amount4;
+      settlementRate: Rate8;
       paidAt: Date;
       network: string | null;
       transactionHash: string | null;
       remark: string | null;
     }
   ) {
-    const receivedUsdt = toV2Decimal(replay.receivedUsdt ?? replay.paidAmount);
-    const networkFeeUsdt = toV2Decimal(replay.networkFeeUsdt ?? replay.networkFeeAmount);
-    const settlementRate = toV2Decimal(replay.settlementRateCnyUsdt ?? replay.fxRateToCny);
+    const receivedUsdt = replay.receivedUsdt ?? replay.paidAmount;
+    const networkFeeUsdt = replay.networkFeeUsdt ?? replay.networkFeeAmount;
+    const settlementRate = replay.settlementRateCnyUsdt ?? replay.fxRateToCny;
     if (
-      !receivedUsdt.eq(expected.receivedUsdt) ||
-      !networkFeeUsdt.eq(expected.networkFeeUsdt) ||
-      !settlementRate.eq(expected.settlementRate) ||
+      !receivedUsdt.equals(expected.receivedUsdt) ||
+      !networkFeeUsdt.equals(expected.networkFeeUsdt) ||
+      !settlementRate.equals(expected.settlementRate) ||
       replay.paidAt.getTime() !== expected.paidAt.getTime() ||
       replay.network !== expected.network ||
       replay.transactionHash !== expected.transactionHash ||
@@ -319,9 +231,9 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     entry: {
       id: string;
       entryType: string;
-      amountCny: PrismaNamespace.Decimal;
-      balanceBeforeCny: PrismaNamespace.Decimal;
-      balanceAfterCny: PrismaNamespace.Decimal;
+      amountCny: Amount4;
+      balanceBeforeCny: Amount4;
+      balanceAfterCny: Amount4;
       createdAt: Date;
       supplierAccount: {
         supplierOptionId: string;
@@ -338,10 +250,10 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       ledgerEntry: {
         id: entry.id,
         entryType: entry.entryType,
-        amountCny: toV2DecimalString(entry.amountCny),
-        balanceBeforeCny: toV2DecimalString(entry.balanceBeforeCny),
-        balanceAfterCny: toV2DecimalString(entry.balanceAfterCny),
-        isNegative: entry.balanceAfterCny.lt(0),
+        amountCny: entry.amountCny.toString(),
+        balanceBeforeCny: entry.balanceBeforeCny.toString(),
+        balanceAfterCny: entry.balanceAfterCny.toString(),
+        isNegative: entry.balanceAfterCny.isNegative(),
         createdAt: entry.createdAt
       },
       idempotentReplay
@@ -351,13 +263,13 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
   protected toPaymentMutationResponse(
     payment: {
       id: string;
-      receivedUsdt: PrismaNamespace.Decimal | null;
-      networkFeeUsdt: PrismaNamespace.Decimal | null;
-      settlementRateCnyUsdt: PrismaNamespace.Decimal | null;
-      paidAmount: PrismaNamespace.Decimal;
-      networkFeeAmount: PrismaNamespace.Decimal;
-      fxRateToCny: PrismaNamespace.Decimal;
-      creditedCny: PrismaNamespace.Decimal;
+      receivedUsdt: Amount4 | null;
+      networkFeeUsdt: Amount4 | null;
+      settlementRateCnyUsdt: Rate8 | null;
+      paidAmount: Amount4;
+      networkFeeAmount: Amount4;
+      fxRateToCny: Rate8;
+      creditedCny: Amount4;
       paidAt: Date;
       createdAt: Date;
       supplierAccount: {
@@ -365,8 +277,8 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       };
       ledgerEntries: Array<{
         id: string;
-        balanceBeforeCny: PrismaNamespace.Decimal;
-        balanceAfterCny: PrismaNamespace.Decimal;
+        balanceBeforeCny: Amount4;
+        balanceAfterCny: Amount4;
         createdAt: Date;
       }>;
     },
@@ -381,18 +293,18 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       payment: {
         id: payment.id,
         supplier: payment.supplierAccount.supplierOption,
-        receivedUsdt: toV2DecimalString(receivedUsdt),
-        networkFeeUsdt: toV2DecimalString(networkFeeUsdt),
+        receivedUsdt: receivedUsdt.toString(),
+        networkFeeUsdt: networkFeeUsdt.toString(),
         settlementRateCnyUsdt: settlementRate.toString(),
-        creditedCny: toV2DecimalString(payment.creditedCny),
+        creditedCny: payment.creditedCny.toString(),
         paidAt: payment.paidAt,
         createdAt: payment.createdAt
       },
       ledgerEntry: {
         id: ledgerEntry.id,
-        balanceBeforeCny: toV2DecimalString(ledgerEntry.balanceBeforeCny),
-        balanceAfterCny: toV2DecimalString(ledgerEntry.balanceAfterCny),
-        isNegative: ledgerEntry.balanceAfterCny.lt(0),
+        balanceBeforeCny: ledgerEntry.balanceBeforeCny.toString(),
+        balanceAfterCny: ledgerEntry.balanceAfterCny.toString(),
+        isNegative: ledgerEntry.balanceAfterCny.isNegative(),
         createdAt: ledgerEntry.createdAt
       },
       idempotentReplay
@@ -403,9 +315,9 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
     entry: {
       id: string;
       supplierAccountId: string;
-      amountCny: PrismaNamespace.Decimal;
-      balanceBeforeCny: PrismaNamespace.Decimal;
-      balanceAfterCny: PrismaNamespace.Decimal;
+      amountCny: Amount4;
+      balanceBeforeCny: Amount4;
+      balanceAfterCny: Amount4;
       supplierNameSnapshot: string;
       createdAt: Date;
     },
@@ -415,12 +327,12 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
       ledgerEntryId: entry.id,
       supplierAccountId: entry.supplierAccountId,
       supplierName: entry.supplierNameSnapshot,
-      amountCny: toV2DecimalString(entry.amountCny),
-      balanceBeforeCny: toV2DecimalString(entry.balanceBeforeCny),
-      balanceAfterCny: toV2DecimalString(entry.balanceAfterCny),
-      isNegative: entry.balanceAfterCny.lt(0),
-      shortfallCny: entry.balanceAfterCny.lt(0)
-        ? toV2DecimalString(entry.balanceAfterCny.abs())
+      amountCny: entry.amountCny.toString(),
+      balanceBeforeCny: entry.balanceBeforeCny.toString(),
+      balanceAfterCny: entry.balanceAfterCny.toString(),
+      isNegative: entry.balanceAfterCny.isNegative(),
+      shortfallCny: entry.balanceAfterCny.isNegative()
+        ? entry.balanceAfterCny.abs().toString()
         : '0',
       createdAt: entry.createdAt,
       idempotentReplay
@@ -428,28 +340,26 @@ export abstract class IdBusinessV2TopupSupplierFundsSupport {
   }
 
   protected async writeAudit(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: {
       operator?: AuthenticatedUser;
       action: string;
       objectType: string;
       objectId: string;
-      beforeData?: Prisma.InputJsonValue;
-      afterData?: Prisma.InputJsonValue;
+      beforeData?: V2JsonDocument;
+      afterData?: V2JsonDocument;
       remark: string;
     }
   ) {
-    await tx.auditLog.create({
-      data: {
-        userId: input.operator?.id,
-        module: 'id_business_v2',
-        action: input.action,
-        objectType: input.objectType,
-        objectId: input.objectId,
-        beforeData: input.beforeData,
-        afterData: input.afterData,
-        remark: input.remark
-      }
+    await this.transactionalAudit.append(tx, {
+      userId: input.operator?.id,
+      module: 'id_business_v2',
+      action: input.action,
+      objectType: input.objectType,
+      objectId: input.objectId,
+      beforeData: input.beforeData ? toV2JsonDocument(input.beforeData) : undefined,
+      afterData: input.afterData ? toV2JsonDocument(input.afterData) : undefined,
+      remark: input.remark
     });
   }
 }

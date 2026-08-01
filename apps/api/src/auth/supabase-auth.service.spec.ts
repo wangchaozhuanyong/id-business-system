@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
+import { ApiHttpException } from '../common/errors/api-http.exception';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { hashPassword } from './password-hasher';
 import { SupabaseAuthService } from './supabase-auth.service';
@@ -342,9 +343,7 @@ describe('SupabaseAuthService', () => {
       claimsValid: false
     });
 
-    await expect(service.authenticateAccessToken('invalid-token')).rejects.toThrow(
-      new UnauthorizedException('登录状态无效或已过期，请重新登录。')
-    );
+    await expectAuthApiError(service.authenticateAccessToken('invalid-token'), 'AUTH_INVALID');
     expect(prisma.v2AuthIdentity.findFirst).not.toHaveBeenCalled();
   });
 
@@ -353,9 +352,7 @@ describe('SupabaseAuthService', () => {
       claimsExpiresAt: Math.floor(Date.now() / 1000) - 1
     });
 
-    await expect(service.authenticateAccessToken(accessToken)).rejects.toThrow(
-      new UnauthorizedException('登录状态无效或已过期，请重新登录。')
-    );
+    await expectAuthApiError(service.authenticateAccessToken(accessToken), 'AUTH_EXPIRED');
     expect(prisma.v2AuthIdentity.findFirst).toHaveBeenCalledTimes(1);
   });
 
@@ -384,3 +381,13 @@ describe('SupabaseAuthService', () => {
     expect(serviceClient.auth.admin.signOut).not.toHaveBeenCalled();
   });
 });
+
+async function expectAuthApiError(promise: Promise<unknown>, errorCode: string) {
+  try {
+    await promise;
+    throw new Error('Expected authentication to fail');
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiHttpException);
+    expect((error as ApiHttpException).getResponse()).toMatchObject({ errorCode });
+  }
+}

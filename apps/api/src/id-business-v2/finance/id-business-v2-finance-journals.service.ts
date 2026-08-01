@@ -1,9 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import {
   normalizeFinanceCurrency,
   normalizeFinanceDate,
@@ -12,6 +11,7 @@ import {
   normalizeFinanceUuid
 } from './id-business-v2-finance-input';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
 interface ListJournalsQuery extends PaginationQuery {
   journalType?: string;
@@ -28,35 +28,17 @@ interface ListJournalsQuery extends PaginationQuery {
 @Injectable()
 export class IdBusinessV2FinanceJournalsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly queryRepository: IdBusinessV2FinanceQueryRepository,
+    private readonly audit: V2TransactionalAuditService,
     private readonly postingService: IdBusinessV2FinancePostingService
   ) {}
 
   async list(query: ListJournalsQuery) {
     const pagination = getPagination(query);
-    const lineFilter: Prisma.IdBusinessV2FinanceJournalLineWhereInput = {
-      currency: query.currency ? normalizeFinanceCurrency(query.currency) : undefined,
-      financeAccountId: query.financeAccountId
-        ? normalizeFinanceUuid(query.financeAccountId, '资金账户')
-        : undefined,
-      supplierAccount: query.supplierOptionId
-        ? {
-            is: {
-              supplierOptionId: normalizeFinanceUuid(query.supplierOptionId, '供应商')
-            }
-          }
-        : undefined
-    };
-    const hasLineFilter = Boolean(
-      lineFilter.currency || lineFilter.financeAccountId || lineFilter.supplierAccount
-    );
-    const where: Prisma.IdBusinessV2FinanceJournalWhereInput = {
-      journalType: query.journalType
-        ? (query.journalType as Prisma.EnumIdBusinessV2FinanceJournalTypeFilter)
-        : undefined,
-      sourceType: query.sourceType
-        ? (query.sourceType as Prisma.EnumIdBusinessV2FinanceSourceTypeFilter)
-        : undefined,
+    const filter = {
+      journalType: query.journalType,
+      sourceType: query.sourceType,
       sourceId: query.sourceId || undefined,
       periodMonth: query.periodMonth || undefined,
       businessDate:
@@ -70,28 +52,21 @@ export class IdBusinessV2FinanceJournalsService {
                 : undefined
             }
           : undefined,
-      lines: hasLineFilter ? { some: lineFilter } : undefined
+      currency: query.currency ? normalizeFinanceCurrency(query.currency) : undefined,
+      financeAccountId: query.financeAccountId
+        ? normalizeFinanceUuid(query.financeAccountId, '资金账户')
+        : undefined,
+      supplierOptionId: query.supplierOptionId
+        ? normalizeFinanceUuid(query.supplierOptionId, '供应商')
+        : undefined
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2FinanceJournal.findMany({
-        where,
-        include: { lines: { orderBy: { lineNo: 'asc' } } },
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2FinanceJournal.count({ where })
-    ]);
+    const { items, total } = await this.queryRepository.listJournals(
+      filter,
+      pagination.skip,
+      pagination.take
+    );
     return {
-      items: items.map((item) => ({
-        ...item,
-        lines: item.lines.map((line) => ({
-          ...line,
-          amountOriginal: toV2DecimalString(line.amountOriginal),
-          fxRateToCny: line.fxRateToCny.toString(),
-          amountCny: toV2DecimalString(line.amountCny)
-        }))
-      })),
+      items,
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
@@ -106,16 +81,16 @@ export class IdBusinessV2FinanceJournalsService {
   ) {
     const reason = normalizeFinanceText(reasonValue, '冲销原因', 500, true)!;
     const idempotencyKey = normalizeFinanceIdempotencyKey(idempotencyKeyValue, 'finance_reversal');
-    return this.prisma.$transaction(async (tx) => {
-      const reversal = await this.postingService.reverse(
-        tx,
-        journalId,
-        reason,
-        idempotencyKey,
-        operator
-      );
-      await tx.auditLog.create({
-        data: {
+    return this.commandTransactions.execute(
+      async (tx) => {
+        const reversal = await this.postingService.reverse(
+          tx,
+          journalId,
+          reason,
+          idempotencyKey,
+          operator
+        );
+        await this.audit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_finance',
           action: 'id_business_v2.finance_journal.reverse',
@@ -123,9 +98,10 @@ export class IdBusinessV2FinanceJournalsService {
           objectId: journalId,
           afterData: { reversalJournalId: reversal.id, reason },
           remark: `冲销财务日记：${reversal.sourceReference ?? journalId}`
-        }
-      });
-      return reversal;
-    });
+        });
+        return reversal;
+      },
+      { requestId: randomUUID(), operator }
+    );
   }
 }

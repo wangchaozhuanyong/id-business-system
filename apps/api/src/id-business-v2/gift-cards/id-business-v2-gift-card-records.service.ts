@@ -4,57 +4,34 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import type {
-  IdBusinessV2BalanceLedgerEntryType,
-  IdBusinessV2GiftCardStatus,
-  Prisma
-} from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { randomUUID } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
+import { getPagination } from '../../common/pagination';
 import { IdBusinessV2OptionsService } from '../options/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import type { UpdateIdBusinessV2GiftCardMetadataDto } from './dto/update-id-business-v2-gift-card-metadata.dto';
 import {
-  BALANCE_LEDGER_INCLUDE,
-  GIFT_CARD_RECORD_INCLUDE,
   type BalanceLedgerRecord,
-  type GiftCardRecord
+  type GiftCardRecord,
+  type IdBusinessV2BalanceLedgerEntryType,
+  type IdBusinessV2GiftCardStatus
 } from './id-business-v2-gift-card-record-includes';
+import type {
+  ListIdBusinessV2BalanceLedgerQuery,
+  ListIdBusinessV2GiftCardRecordsQuery
+} from './id-business-v2-gift-card-record-query';
+import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
-export interface ListIdBusinessV2GiftCardRecordsQuery extends PaginationQuery {
-  keyword?: string;
-  accountId?: string;
-  cardNameOptionId?: string;
-  countryOptionId?: string;
-  supplierOptionId?: string;
-  status?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  sortBy?: string;
-  sortOrder?: string;
-}
-
-export interface ListIdBusinessV2BalanceLedgerQuery extends PaginationQuery {
-  keyword?: string;
-  accountId?: string;
-  countryOptionId?: string;
-  supplierOptionId?: string;
-  entryType?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  sortBy?: string;
-  sortOrder?: string;
-}
+export type {
+  ListIdBusinessV2BalanceLedgerQuery,
+  ListIdBusinessV2GiftCardRecordsQuery
+} from './id-business-v2-gift-card-record-query';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-const GIFT_CARD_SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2GiftCardOrderByWithRelationInput
-> = {
+const GIFT_CARD_SORT_FIELDS: Record<string, string> = {
   faceValue: 'faceValue',
   exchangeRate: 'exchangeRate',
   costAmount: 'costAmount',
@@ -65,10 +42,7 @@ const GIFT_CARD_SORT_FIELDS: Record<
   updatedAt: 'updatedAt'
 };
 
-const LEDGER_SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2BalanceLedgerOrderByWithRelationInput
-> = {
+const LEDGER_SORT_FIELDS: Record<string, string> = {
   balanceAmount: 'balanceAmount',
   costAmount: 'costAmount',
   balanceAfter: 'balanceAfter',
@@ -79,9 +53,10 @@ const LEDGER_SORT_FIELDS: Record<
 @Injectable()
 export class IdBusinessV2GiftCardRecordsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2GiftCardsRepository,
     private readonly optionsService: IdBusinessV2OptionsService,
-    private readonly fieldEncryptionService: FieldEncryptionService
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly transactionManager: V2CommandTransactionManager
   ) {}
 
   async listGiftCards(query: ListIdBusinessV2GiftCardRecordsQuery) {
@@ -92,46 +67,19 @@ export class IdBusinessV2GiftCardRecordsService {
     const countryOptionId = this.normalizeOptionalUuid(query.countryOptionId, '国家');
     const supplierOptionId = this.normalizeOptionalUuid(query.supplierOptionId, '供应商');
     const status = this.parseGiftCardStatus(query.status);
-    const where: Prisma.IdBusinessV2GiftCardWhereInput = {
-      accountId: accountId ?? undefined,
-      cardNameOptionId: cardNameOptionId ?? undefined,
-      supplierOptionId: supplierOptionId ?? undefined,
-      countryOptionId: countryOptionId ?? undefined,
-      status: status ?? undefined,
+    const { items, total } = await this.repository.listGiftCards({
+      accountId,
+      cardNameOptionId,
+      supplierOptionId,
+      countryOptionId,
+      status,
       creditedAt: this.parseDateRange(query.dateFrom, query.dateTo),
-      OR: keyword
-        ? [
-            { cardNameSnapshot: { contains: keyword, mode: 'insensitive' } },
-            { codeMasked: { contains: keyword, mode: 'insensitive' } },
-            { codeTail: { contains: keyword.slice(-8), mode: 'insensitive' } },
-            {
-              account: {
-                is: {
-                  appleIdMasked: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            },
-            {
-              supplierOption: {
-                is: {
-                  name: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            }
-          ]
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2GiftCard.findMany({
-        where,
-        include: GIFT_CARD_RECORD_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query, GIFT_CARD_SORT_FIELDS, 'creditedAt')
-      }),
-      this.prisma.idBusinessV2GiftCard.count({ where })
-    ]);
+      keyword,
+      sortField: this.resolveSortField(query, GIFT_CARD_SORT_FIELDS, 'creditedAt'),
+      sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
+      skip: pagination.skip,
+      take: pagination.take
+    });
 
     return {
       items: items.map((item) => this.toGiftCardResponse(item)),
@@ -148,72 +96,18 @@ export class IdBusinessV2GiftCardRecordsService {
     const countryOptionId = this.normalizeOptionalUuid(query.countryOptionId, '国家');
     const supplierOptionId = this.normalizeOptionalUuid(query.supplierOptionId, '供应商');
     const entryType = this.parseEntryType(query.entryType);
-    const where: Prisma.IdBusinessV2BalanceLedgerWhereInput = {
-      accountId: accountId ?? undefined,
-      entryType: entryType ?? undefined,
+    const { items, total } = await this.repository.listBalanceLedger({
+      accountId,
+      countryOptionId,
+      supplierOptionId,
+      entryType,
       createdAt: this.parseDateRange(query.dateFrom, query.dateTo),
-      account: countryOptionId
-        ? {
-            is: {
-              countryOptionId
-            }
-          }
-        : undefined,
-      giftCard: supplierOptionId
-        ? {
-            is: {
-              supplierOptionId
-            }
-          }
-        : undefined,
-      OR: keyword
-        ? [
-            {
-              account: {
-                is: {
-                  appleIdMasked: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            },
-            {
-              giftCard: {
-                is: {
-                  codeMasked: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            },
-            {
-              giftCard: {
-                is: {
-                  codeTail: { contains: keyword.slice(-8), mode: 'insensitive' }
-                }
-              }
-            },
-            {
-              giftCard: {
-                is: {
-                  supplierOption: {
-                    is: {
-                      name: { contains: keyword, mode: 'insensitive' }
-                    }
-                  }
-                }
-              }
-            }
-          ]
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2BalanceLedger.findMany({
-        where,
-        include: BALANCE_LEDGER_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query, LEDGER_SORT_FIELDS, 'createdAt')
-      }),
-      this.prisma.idBusinessV2BalanceLedger.count({ where })
-    ]);
+      keyword,
+      sortField: this.resolveSortField(query, LEDGER_SORT_FIELDS, 'createdAt'),
+      sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
+      skip: pagination.skip,
+      take: pagination.take
+    });
 
     return {
       items: items.map((item) => this.toLedgerResponse(item)),
@@ -244,38 +138,22 @@ export class IdBusinessV2GiftCardRecordsService {
     const remark =
       dto.remark === undefined ? undefined : this.normalizeRemark(dto.remark, '备注', 2000);
 
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.idBusinessV2GiftCard.findUnique({
-        where: { id: giftCardId },
-        select: {
-          id: true,
-          codeMasked: true,
-          supplierOptionId: true,
-          remark: true,
-          account: {
-            select: {
-              lossReportedAt: true
-            }
-          }
+    return this.transactionManager.execute(
+      async (tx) => {
+        const existing = await this.repository.findMetadataInTransaction(tx, giftCardId);
+        if (!existing) {
+          throw new NotFoundException('礼品卡记录不存在');
         }
-      });
-      if (!existing) {
-        throw new NotFoundException('礼品卡记录不存在');
-      }
-      if (existing.account.lossReportedAt) {
-        throw new ConflictException('已报损 ID 永久冻结，不能修改加卡记录');
-      }
+        if (existing.account.lossReportedAt) {
+          throw new ConflictException('已报损 ID 永久冻结，不能修改加卡记录');
+        }
 
-      const updated = await tx.idBusinessV2GiftCard.update({
-        where: { id: giftCardId },
-        data: {
+        const updated = await this.repository.updateMetadataInTransaction(tx, {
+          giftCardId,
           remark,
           updatedByUserId: operator?.id
-        },
-        include: GIFT_CARD_RECORD_INCLUDE
-      });
-      await tx.auditLog.create({
-        data: {
+        });
+        await this.repository.appendAudit(tx, {
           userId: operator?.id,
           module: 'id_business_v2',
           action: 'id_business_v2.gift_card.metadata_update',
@@ -291,11 +169,16 @@ export class IdBusinessV2GiftCardRecordsService {
             financialFieldsChanged: false
           },
           remark: `V2 礼品卡非账务信息修改：${existing.codeMasked}`
-        }
-      });
+        });
 
-      return this.toGiftCardResponse(updated);
-    });
+        return this.toGiftCardResponse(updated);
+      },
+      {
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
   }
 
   private toGiftCardResponse(item: GiftCardRecord) {
@@ -311,27 +194,25 @@ export class IdBusinessV2GiftCardRecordsService {
       code: this.decryptGiftCardCode(item.codeEncrypted),
       codeMasked: item.codeMasked,
       codeTail: item.codeTail,
-      faceValue: toV2DecimalString(item.faceValue),
-      exchangeRate: toV2DecimalString(item.exchangeRate),
+      faceValue: item.faceValue.toString(),
+      exchangeRate: item.exchangeRate.toString(),
       exchangeRateSource: item.exchangeRateSource,
       exchangeRateSnapshotId: item.exchangeRateSnapshotId,
       exchangeRatePrefilledValue:
-        item.exchangeRatePrefilledValue == null
-          ? null
-          : toV2DecimalString(item.exchangeRatePrefilledValue),
+        item.exchangeRatePrefilledValue == null ? null : item.exchangeRatePrefilledValue.toString(),
       exchangeRateWasOverridden: item.exchangeRateWasOverridden,
-      costAmount: toV2DecimalString(item.costAmount),
-      purchaseOriginalAmount: toV2DecimalString(item.purchaseOriginalAmount ?? item.costAmount),
+      costAmount: item.costAmount.toString(),
+      purchaseOriginalAmount: item.purchaseOriginalAmount.toString(),
       purchaseCurrency: item.purchaseCurrency ?? ('CNY' as const),
-      purchaseFxRateToCny: (item.purchaseFxRateToCny ?? 1).toString(),
+      purchaseFxRateToCny: item.purchaseFxRateToCny.toString(),
       purchaseFxSnapshotId: item.purchaseFxSnapshotId ?? null,
       purchaseFinanceAccountId: item.purchaseFinanceAccountId ?? null,
       purchaseSupplierAccountId: item.purchaseSupplierAccountId ?? null,
       paidAt: item.paidAt ?? null,
       creditedAt: item.creditedAt,
       supplierRefundStatus: item.supplierRefundStatus ?? ('none' as const),
-      supplierRefundAmount: toV2DecimalString(item.supplierRefundAmount ?? 0),
-      supplierRefundAmountCny: toV2DecimalString(item.supplierRefundAmountCny ?? 0),
+      supplierRefundAmount: item.supplierRefundAmount.toString(),
+      supplierRefundAmountCny: item.supplierRefundAmountCny.toString(),
       supplierRefundClosedAt: item.supplierRefundClosedAt ?? null,
       status: item.status,
       statusChangedAt: item.statusChangedAt,
@@ -358,12 +239,12 @@ export class IdBusinessV2GiftCardRecordsService {
       creditedLedger: creditedLedger
         ? {
             id: creditedLedger.id,
-            balanceBefore: toV2DecimalString(creditedLedger.balanceBefore),
-            balanceAfter: toV2DecimalString(creditedLedger.balanceAfter),
-            costBefore: toV2DecimalString(creditedLedger.costBefore),
-            costAfter: toV2DecimalString(creditedLedger.costAfter),
-            averageCostBefore: toV2DecimalString(creditedLedger.averageCostBefore),
-            averageCostAfter: toV2DecimalString(creditedLedger.averageCostAfter),
+            balanceBefore: creditedLedger.balanceBefore.toString(),
+            balanceAfter: creditedLedger.balanceAfter.toString(),
+            costBefore: creditedLedger.costBefore.toString(),
+            costAfter: creditedLedger.costAfter.toString(),
+            averageCostBefore: creditedLedger.averageCostBefore.toString(),
+            averageCostAfter: creditedLedger.averageCostAfter.toString(),
             createdAt: creditedLedger.createdAt
           }
         : null,
@@ -372,8 +253,8 @@ export class IdBusinessV2GiftCardRecordsService {
         ? {
             id: creditedLedger.reversedByEntry.id,
             entryType: creditedLedger.reversedByEntry.entryType,
-            balanceAmount: toV2DecimalString(creditedLedger.reversedByEntry.balanceAmount),
-            costAmount: toV2DecimalString(creditedLedger.reversedByEntry.costAmount),
+            balanceAmount: creditedLedger.reversedByEntry.balanceAmount.toString(),
+            costAmount: creditedLedger.reversedByEntry.costAmount.toString(),
             reason: creditedLedger.reversedByEntry.remark,
             createdAt: creditedLedger.reversedByEntry.createdAt
           }
@@ -388,20 +269,21 @@ export class IdBusinessV2GiftCardRecordsService {
   }
 
   private toLedgerResponse(item: BalanceLedgerRecord) {
+    const { balanceAmount, costAmount, balanceBefore, balanceAfter, costBefore, costAfter } = item;
     return {
       id: item.id,
       entryType: item.entryType,
       direction: item.direction,
-      balanceAmount: toV2DecimalString(item.balanceAmount),
-      costAmount: toV2DecimalString(item.costAmount),
-      balanceDelta: toV2DecimalString(item.balanceAfter.minus(item.balanceBefore)),
-      costDelta: toV2DecimalString(item.costAfter.minus(item.costBefore)),
-      balanceBefore: toV2DecimalString(item.balanceBefore),
-      balanceAfter: toV2DecimalString(item.balanceAfter),
-      costBefore: toV2DecimalString(item.costBefore),
-      costAfter: toV2DecimalString(item.costAfter),
-      averageCostBefore: toV2DecimalString(item.averageCostBefore),
-      averageCostAfter: toV2DecimalString(item.averageCostAfter),
+      balanceAmount: balanceAmount.toString(),
+      costAmount: costAmount.toString(),
+      balanceDelta: balanceAfter.sub(balanceBefore).toString(),
+      costDelta: costAfter.sub(costBefore).toString(),
+      balanceBefore: balanceBefore.toString(),
+      balanceAfter: balanceAfter.toString(),
+      costBefore: costBefore.toString(),
+      costAfter: costAfter.toString(),
+      averageCostBefore: item.averageCostBefore.toString(),
+      averageCostAfter: item.averageCostAfter.toString(),
       reason: item.remark,
       account: {
         id: item.account.id,
@@ -414,7 +296,7 @@ export class IdBusinessV2GiftCardRecordsService {
             code: this.decryptGiftCardCode(item.giftCard.codeEncrypted),
             codeMasked: item.giftCard.codeMasked,
             codeTail: item.giftCard.codeTail,
-            faceValue: toV2DecimalString(item.giftCard.faceValue),
+            faceValue: item.giftCard.faceValue.toString(),
             status: item.giftCard.status,
             supplier: item.giftCard.supplierOption
           }
@@ -481,14 +363,13 @@ export class IdBusinessV2GiftCardRecordsService {
     return date;
   }
 
-  private buildOrderBy(
+  private resolveSortField(
     query: { sortBy?: string; sortOrder?: string },
     fields: Record<string, string>,
     fallback: string
   ) {
     const field = fields[query.sortBy ?? fallback] ?? fallback;
-    const direction = query.sortOrder === 'asc' ? 'asc' : 'desc';
-    return [{ [field]: direction }, { id: 'desc' }] as Array<Record<string, 'asc' | 'desc'>>;
+    return field;
   }
 
   private normalizeKeyword(value: unknown) {

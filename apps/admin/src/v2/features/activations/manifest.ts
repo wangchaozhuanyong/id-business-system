@@ -1,5 +1,5 @@
-import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const activationsFeature = defineV2Feature({
   key: 'activation-records',
@@ -20,27 +20,6 @@ export const activationsFeature = defineV2Feature({
     },
     { key: 'dueAt', label: '到期时间', kind: 'date-range' }
   ],
-  columns: [
-    { key: 'order', label: '订单', kind: 'identifier', widthPreset: 'identifier' },
-    { key: 'customer', label: '客户', kind: 'text', widthPreset: 'wide' },
-    { key: 'service', label: '业务', kind: 'text', widthPreset: 'wide' },
-    { key: 'account', label: '苹果ID', kind: 'identifier', widthPreset: 'identifier' },
-    {
-      key: 'websiteAccount',
-      label: '客户网站账号',
-      kind: 'identifier',
-      widthPreset: 'wide'
-    },
-    { key: 'openedAt', label: '开通日期', kind: 'date', widthPreset: 'dateTime' },
-    { key: 'dueAt', label: '到期日期', kind: 'date', widthPreset: 'dateTime' },
-    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-    {
-      key: 'actions',
-      label: '操作',
-      kind: 'actions',
-      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.single,
-      fixed: 'right'
-    }
-  ],
+  tables: v2TablesByFeature['activation-records'],
   loadView: () => import('./V2ActivationsView.vue')
 });

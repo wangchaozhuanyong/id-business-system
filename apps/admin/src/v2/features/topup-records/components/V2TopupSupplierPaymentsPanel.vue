@@ -92,10 +92,10 @@
       @retry="refresh"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.topupRecords.supplierPayments"
           class="v2-records-table"
           :data="items"
-          row-key="id"
           scrollbar-always-on
           show-overflow-tooltip
           @sort-change="handleSortChange"
@@ -106,42 +106,36 @@
               <span>可从“加卡供应商”标签记录供应商付款</span>
             </div>
           </template>
-          <V2TableColumn kind="text" label="供应商" width-preset="identifier" fixed="left">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[0]">
             <template #default="{ row }">
               <strong>{{ row.supplierNameSnapshot }}</strong>
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[1]"
             prop="receivedUsdt"
-            label="到账 USDT"
-            width-preset="standard"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDecimal(row.receivedUsdt) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="手续费 USDT" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[2]">
             <template #default="{ row }">{{ formatDecimal(row.networkFeeUsdt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[3]"
             prop="settlementRateCnyUsdt"
-            label="结算汇率"
-            width-preset="standard"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ formatRate(row.settlementRateCnyUsdt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[4]"
             prop="creditedCny"
-            label="折算人民币"
-            width-preset="standard"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ formatDecimal(row.creditedCny) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="供应商余额快照" width-preset="identifier">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[5]">
             <template #default="{ row }">
               <span v-if="row.balanceBeforeCny !== null && row.balanceAfterCny !== null">
                 ¥{{ formatDecimal(row.balanceBeforeCny) }} → ¥{{
@@ -151,7 +145,7 @@
               <span v-else>—</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="网络和交易哈希" width-preset="longText">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[6]">
             <template #default="{ row }">
               <div class="v2-payment-chain">
                 <span>{{ row.network || '—' }}</span>
@@ -160,39 +154,37 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[7]"
             prop="paidAt"
-            label="实际付款时间"
-            width-preset="dateTime"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.paidAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[8]"
             prop="createdAt"
-            label="系统入账时间"
-            width-preset="dateTime"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.postedAt) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" label="状态" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[9]">
             <template #default="{ row }">
               <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
                 {{ row.status === 'active' ? '有效' : '已撤销' }}
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="备注" width-preset="wide">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[10]">
             <template #default="{ row }">{{ row.remark || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[11]">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>
           </V2TableColumn>
-          <V2TableActionColumn layout="triple">
+          <V2TableActionColumn
+            :definition="v2TableSchemas.topupRecords.supplierPayments.columns[12]"
+          >
             <template #default="{ row }">
               <AppButton
                 v-if="canManage && row.status === 'active'"
@@ -205,9 +197,12 @@
               <span v-else>—</span>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div
+          class="v2-records-mobile-list"
+          :data-mobile-for="v2TableSchemas.topupRecords.supplierPayments.id"
+        >
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -330,6 +325,8 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';

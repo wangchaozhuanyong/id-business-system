@@ -109,6 +109,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { getSafeV2Redirect } from '@/v2/router/passwordReset';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 
@@ -165,12 +166,16 @@ async function submit() {
     } else {
       ElMessage.success('密码已修改，请使用新密码重新登录。');
     }
-    await router.replace({
-      path: '/login',
-      query: {
-        redirect: getSafeV2Redirect(route.query.redirect)
-      }
-    });
+    await navigateSafely(
+      router,
+      {
+        path: '/login',
+        query: {
+          redirect: getSafeV2Redirect(route.query.redirect)
+        }
+      },
+      'replace'
+    );
   } catch (error) {
     submitError.value = getApiErrorMessage(error);
     ElMessage.error(submitError.value);
@@ -189,12 +194,16 @@ async function logout() {
     ElMessage.warning(`${getApiErrorMessage(error)} 本机登录信息已清除。`);
   } finally {
     try {
-      await router.replace({
-        path: '/login',
-        query: {
-          redirect: getSafeV2Redirect(route.query.redirect)
-        }
-      });
+      await navigateSafely(
+        router,
+        {
+          path: '/login',
+          query: {
+            redirect: getSafeV2Redirect(route.query.redirect)
+          }
+        },
+        'replace'
+      );
     } finally {
       loggingOut.value = false;
     }

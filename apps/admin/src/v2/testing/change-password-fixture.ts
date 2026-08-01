@@ -3,6 +3,7 @@ import { createApp, h } from 'vue';
 import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import V2ChangePasswordView from '@/v2/views/V2ChangePasswordView.vue';
 
 const router = createRouter({
@@ -36,10 +37,9 @@ authStore.$patch({
     roles: ['admin'],
     permissions: [],
     mustResetPassword: true
-  },
-  sessionStatus: 'ready'
+  }
 });
 
-await router.push('/');
+await navigateSafely(router, '/');
 await router.isReady();
 app.mount('#app');

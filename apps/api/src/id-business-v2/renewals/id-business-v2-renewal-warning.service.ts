@@ -1,8 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import type { UpdateIdBusinessV2RenewalWarningSettingsDto } from './dto/update-id-business-v2-renewal-warning-settings.dto';
+import type {
+  IdBusinessV2ActivationStatus,
+  RenewalBaseCriteria,
+  RenewalDueFilter
+} from './id-business-v2-renewal.types';
+import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
 export const ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS = 3;
 export const ID_BUSINESS_V2_RENEWAL_WARNING_MIN_DAYS = 1;
@@ -10,44 +16,15 @@ export const ID_BUSINESS_V2_RENEWAL_WARNING_MAX_DAYS = 365;
 export const ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE = 'global';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SUMMARY_ITEM_SELECT = {
-  id: true,
-  dueAt: true,
-  status: true,
-  customer: {
-    select: {
-      id: true,
-      name: true
-    }
-  },
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true
-    }
-  },
-  serviceOption: {
-    select: {
-      id: true,
-      name: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2ActivationSelect;
-
 @Injectable()
 export class IdBusinessV2RenewalWarningService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly repository: IdBusinessV2RenewalsRepository,
+    private readonly transactionManager: V2CommandTransactionManager
+  ) {}
 
   async getSettings() {
-    const setting = await this.prisma.idBusinessV2RenewalWarningSetting.findUnique({
-      where: {
-        scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
-      },
-      select: {
-        warningDays: true,
-        updatedAt: true
-      }
-    });
+    const setting = await this.repository.getWarningSetting(ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE);
     const warningDays = setting
       ? this.parseStoredWarningDays(setting.warningDays)
       : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
@@ -70,36 +47,22 @@ export class IdBusinessV2RenewalWarningService {
     }
     const warningDays = this.validateWarningDays(dto.warningDays);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const existing = await tx.idBusinessV2RenewalWarningSetting.findUnique({
-        where: {
-          scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
-        },
-        select: {
-          id: true,
-          warningDays: true
-        }
-      });
-      const previousWarningDays = existing
-        ? this.parseStoredWarningDays(existing.warningDays)
-        : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
-      const setting = await tx.idBusinessV2RenewalWarningSetting.upsert({
-        where: {
-          scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
-        },
-        create: {
+    const updated = await this.transactionManager.execute(
+      async (tx) => {
+        const existing = await this.repository.getWarningSettingInTransaction(
+          tx,
+          ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
+        );
+        const previousWarningDays = existing
+          ? this.parseStoredWarningDays(existing.warningDays)
+          : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
+        const setting = await this.repository.upsertWarningSetting(tx, {
           scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE,
           warningDays,
           updatedByUserId: operator.id
-        },
-        update: {
-          warningDays,
-          updatedByUserId: operator.id
-        }
-      });
+        });
 
-      await tx.auditLog.create({
-        data: {
+        await this.repository.appendAudit(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.renewal.warning_settings.update',
@@ -112,10 +75,15 @@ export class IdBusinessV2RenewalWarningService {
             warningDays
           },
           remark: `V2 续费到期预警已设为提前 ${warningDays} 天`
-        }
-      });
-      return setting;
-    });
+        });
+        return setting;
+      },
+      {
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
 
     return {
       warningDays,
@@ -128,43 +96,11 @@ export class IdBusinessV2RenewalWarningService {
 
   async getSummary(now = new Date()) {
     const settings = await this.getSettings();
-    const [counts, upcoming, expired, nextTimedActivation] = await Promise.all([
+    const [counts, summary] = await Promise.all([
       this.getWarningCounts({}, now, settings.warningDays),
-      this.prisma.idBusinessV2Activation.findMany({
-        where: this.buildUpcomingWarningWhere(now, settings.warningDays),
-        select: SUMMARY_ITEM_SELECT,
-        orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
-        take: 5
-      }),
-      this.prisma.idBusinessV2Activation.findMany({
-        where: this.buildExpiredWhere(now),
-        select: SUMMARY_ITEM_SELECT,
-        orderBy: [{ dueAt: 'desc' }, { id: 'asc' }],
-        take: 5
-      }),
-      this.prisma.idBusinessV2Activation.findFirst({
-        where: {
-          renewedBy: {
-            is: null
-          },
-          status: 'active',
-          dueAt: {
-            gt: now
-          },
-          account: {
-            is: {
-              soldByOrderId: null
-            }
-          }
-        },
-        select: {
-          dueAt: true
-        },
-        orderBy: {
-          dueAt: 'asc'
-        }
-      })
+      this.repository.getWarningSummary(now, settings.warningDays)
     ]);
+    const { upcoming, expired } = summary;
     const items = [...upcoming, ...expired].slice(0, 5).map((item) => ({
       id: item.id,
       customer: item.customer,
@@ -179,11 +115,7 @@ export class IdBusinessV2RenewalWarningService {
       ...counts,
       items,
       evaluatedAt: now,
-      revalidateAt: this.getNextRevalidateAt(
-        nextTimedActivation?.dueAt ?? null,
-        now,
-        settings.warningDays
-      )
+      revalidateAt: this.getNextRevalidateAt(summary.nextTimedDueAt, now, settings.warningDays)
     };
   }
 
@@ -201,123 +133,20 @@ export class IdBusinessV2RenewalWarningService {
     return nextBoundary === undefined ? null : new Date(nextBoundary);
   }
 
-  async getWarningCounts(
-    baseWhere: Prisma.IdBusinessV2ActivationWhereInput,
-    now: Date,
-    warningDays: number
-  ) {
-    const [upcomingCount, expiredCount] = await Promise.all([
-      this.prisma.idBusinessV2Activation.count({
-        where: {
-          AND: [baseWhere, this.buildUpcomingWarningWhere(now, warningDays)]
-        }
-      }),
-      this.prisma.idBusinessV2Activation.count({
-        where: {
-          AND: [baseWhere, this.buildExpiredWhere(now)]
-        }
-      })
-    ]);
-    return {
-      upcomingCount,
-      expiredCount,
-      totalCount: upcomingCount + expiredCount
-    };
+  async getWarningCounts(baseCriteria: RenewalBaseCriteria, now: Date, warningDays: number) {
+    return this.repository.getWarningCounts(baseCriteria, now, warningDays);
   }
 
-  buildUpcomingWarningWhere(
-    now: Date,
-    warningDays: number
-  ): Prisma.IdBusinessV2ActivationWhereInput {
-    return {
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          status: 'active',
-          dueAt: {
-            gt: now,
-            lte: new Date(now.getTime() + warningDays * DAY_MS)
-          }
-        }
-      ]
-    };
+  buildUpcomingWarningFilter(now: Date, warningDays: number): RenewalDueFilter {
+    return { kind: 'warning', evaluatedAt: now, warningDays };
   }
 
-  buildExpiredWhere(now: Date): Prisma.IdBusinessV2ActivationWhereInput {
-    return {
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                lte: now
-              }
-            }
-          ]
-        }
-      ]
-    };
+  buildDefaultWorkbenchFilter(now: Date, warningDays: number): RenewalDueFilter {
+    return { kind: 'default', evaluatedAt: now, warningDays };
   }
 
-  buildDefaultWorkbenchWhere(
-    now: Date,
-    warningDays: number
-  ): Prisma.IdBusinessV2ActivationWhereInput {
-    return {
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                not: null,
-                lte: new Date(now.getTime() + warningDays * DAY_MS)
-              }
-            }
-          ]
-        }
-      ]
-    };
-  }
-
-  buildAllDueWhere(): Prisma.IdBusinessV2ActivationWhereInput {
-    return {
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                not: null
-              }
-            }
-          ]
-        }
-      ]
-    };
+  buildAllDueFilter(): RenewalDueFilter {
+    return { kind: 'all_due' };
   }
 
   resolveWarningState(

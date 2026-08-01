@@ -1,19 +1,22 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import {
-  IdBusinessV2AccountLockScope,
-  IdBusinessV2OrderAccountDisposition,
-  Prisma as PrismaNamespace
-} from '@prisma/client';
-import type { IdBusinessV2AccountLock, IdBusinessV2Order, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import {
+  Amount4,
+  Rate8,
   V2_DECIMAL_PATTERN,
   V2_DECIMAL_PLACES,
-  V2_DECIMAL_ROUNDING_MODE,
-  toV2Decimal
-} from '../decimal-policy';
+  type V2CommandTransaction,
+  type V2DecimalInput
+} from '../runtime/public-api';
+import type {
+  IdBusinessV2AccountLockRecord,
+  IdBusinessV2AccountLockScope,
+  IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderRecord
+} from './id-business-v2-order.types';
+import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 export interface NormalizedCreateOrderInput {
   customerId: string;
@@ -24,8 +27,8 @@ export interface NormalizedCreateOrderInput {
   platformOrderNo: string | null;
   websiteAccount: string | null;
   websiteAccountHash: string | null;
-  receivedAmount: PrismaNamespace.Decimal;
-  balanceAmount: PrismaNamespace.Decimal;
+  receivedAmount: Amount4;
+  balanceAmount: Amount4;
   openedAt: Date;
   dueAt: Date;
   lockScope: IdBusinessV2AccountLockScope;
@@ -47,7 +50,7 @@ export interface OrderEntryLockSummary {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
+const MAX_AMOUNT = Amount4.from('99999999999999.9999');
 
 export function normalizeCreateOrderInput(
   dto: CreateIdBusinessV2OrderDto,
@@ -88,36 +91,34 @@ export function normalizeCreateOrderInput(
     balanceAmount,
     openedAt,
     dueAt,
-    lockScope:
-      accountDisposition === IdBusinessV2OrderAccountDisposition.sold
-        ? IdBusinessV2AccountLockScope.global
-        : normalizeLockScope(dto.lockScope),
+    lockScope: accountDisposition === 'sold' ? 'global' : normalizeLockScope(dto.lockScope),
     idempotencyKey: buildIdempotencyKey(normalizeIdempotencyKey(dto.idempotencyKey)),
     remark: normalizeOptionalString(dto.remark, '备注', 2000)
   };
 }
 
 export function calculatePlatformFee(
-  receivedAmount: PrismaNamespace.Decimal,
+  receivedAmount: V2DecimalInput,
   platform: {
-    fixedFee: PrismaNamespace.Decimal;
-    percentageFee: PrismaNamespace.Decimal;
+    fixedFee: V2DecimalInput;
+    percentageFee: V2DecimalInput;
   } | null
 ) {
-  if (!platform) return new PrismaNamespace.Decimal(0);
-  const normalizedReceivedAmount = toV2Decimal(receivedAmount);
-  const platformFeeAmount = toV2Decimal(platform.fixedFee)
-    .plus(normalizedReceivedAmount.mul(toV2Decimal(platform.percentageFee)).div(100))
-    .toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE);
-  if (platformFeeAmount.greaterThan(MAX_AMOUNT)) {
+  if (!platform) return Amount4.zero();
+  const normalizedReceivedAmount = Amount4.from(receivedAmount);
+  const percentage = Rate8.from(platform.percentageFee).div(100);
+  const platformFeeAmount = Amount4.from(platform.fixedFee).add(
+    percentage.apply(normalizedReceivedAmount)
+  );
+  if (platformFeeAmount.gt(MAX_AMOUNT)) {
     throw new BadRequestException('平台手续费数值过大');
   }
   return platformFeeAmount;
 }
 
 export function assertOrderEntryReplayMatches(
-  order: IdBusinessV2Order,
-  lock: IdBusinessV2AccountLock | null,
+  order: IdBusinessV2OrderRecord,
+  lock: IdBusinessV2AccountLockRecord | null,
   input: NormalizedCreateOrderInput
 ) {
   if (order.deletedAt) {
@@ -131,8 +132,8 @@ export function assertOrderEntryReplayMatches(
     order.settlementPlatformOptionId !== input.settlementPlatformOptionId ||
     order.platformOrderNo !== input.platformOrderNo ||
     order.websiteAccountHash !== input.websiteAccountHash ||
-    !toV2Decimal(order.receivedAmount).equals(toV2Decimal(input.receivedAmount)) ||
-    !toV2Decimal(order.balanceAmount).equals(toV2Decimal(input.balanceAmount)) ||
+    !order.receivedAmount.equals(input.receivedAmount) ||
+    !order.balanceAmount.equals(input.balanceAmount) ||
     order.openedAt?.getTime() !== input.openedAt.getTime() ||
     order.dueAt?.getTime() !== input.dueAt.getTime() ||
     order.remark !== input.remark ||
@@ -144,10 +145,11 @@ export function assertOrderEntryReplayMatches(
 }
 
 export async function writeOrderEntryAuditLog(
-  tx: Prisma.TransactionClient,
-  order: IdBusinessV2Order,
+  tx: V2CommandTransaction,
+  repository: IdBusinessV2OrdersRepository,
+  order: IdBusinessV2OrderRecord,
   input: NormalizedCreateOrderInput,
-  platformFeeAmount: PrismaNamespace.Decimal,
+  platformFeeAmount: Amount4,
   lock: {
     id: string;
     lockScope: IdBusinessV2AccountLockScope;
@@ -155,41 +157,39 @@ export async function writeOrderEntryAuditLog(
   },
   operator?: AuthenticatedUser
 ) {
-  await tx.auditLog.create({
-    data: {
-      userId: operator?.id,
-      module: 'id_business_v2',
-      action: 'id_business_v2.order.create_pending',
-      objectType: 'id_business_v2_order',
-      objectId: order.id,
-      afterData: {
-        orderNo: order.orderNo,
-        customerId: input.customerId,
-        serviceOptionId: input.serviceOptionId,
-        accountId: input.accountId,
-        accountDisposition: input.accountDisposition,
-        accountCostAmount: order.accountCostAmount.toString(),
-        settlementPlatformOptionId: input.settlementPlatformOptionId,
-        platformOrderNo: input.platformOrderNo,
-        websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
-        receivedAmount: input.receivedAmount.toString(),
-        platformFeeAmount: platformFeeAmount.toString(),
-        balanceAmount: input.balanceAmount.toString(),
-        openedAt: input.openedAt,
-        dueAt: input.dueAt,
-        status: 'pending',
-        lockId: lock.id,
-        lockScope: lock.lockScope,
-        lockExpiresAt: lock.expiresAt,
-        nextStep: 'waiting_balance_consumption'
-      },
-      remark: `创建 V2 待处理订单并锁定 ID：${order.orderNo}`
-    }
+  await repository.appendAudit(tx, {
+    userId: operator?.id,
+    module: 'id_business_v2',
+    action: 'id_business_v2.order.create_pending',
+    objectType: 'id_business_v2_order',
+    objectId: order.id,
+    afterData: {
+      orderNo: order.orderNo,
+      customerId: input.customerId,
+      serviceOptionId: input.serviceOptionId,
+      accountId: input.accountId,
+      accountDisposition: input.accountDisposition,
+      accountCostAmount: order.accountCostAmount.toString(),
+      settlementPlatformOptionId: input.settlementPlatformOptionId,
+      platformOrderNo: input.platformOrderNo,
+      websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
+      receivedAmount: input.receivedAmount.toString(),
+      platformFeeAmount: platformFeeAmount.toString(),
+      balanceAmount: input.balanceAmount.toString(),
+      openedAt: input.openedAt,
+      dueAt: input.dueAt,
+      status: 'pending',
+      lockId: lock.id,
+      lockScope: lock.lockScope,
+      lockExpiresAt: lock.expiresAt,
+      nextStep: 'waiting_balance_consumption'
+    },
+    remark: `创建 V2 待处理订单并锁定 ID：${order.orderNo}`
   });
 }
 
 export function toOrderEntryLockSummary(
-  lock: IdBusinessV2AccountLock | null
+  lock: IdBusinessV2AccountLockRecord | null
 ): OrderEntryLockSummary | null {
   if (!lock) return null;
   return {
@@ -239,26 +239,17 @@ export function maskWebsiteAccount(value: string | null) {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
-export function isUniqueConstraintError(error: unknown) {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'P2002'
-  );
-}
-
 function normalizeAmount(value: unknown, label: string, allowZero: boolean) {
   const normalized =
     typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!V2_DECIMAL_PATTERN.test(normalized)) {
     throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
   }
-  const amount = new PrismaNamespace.Decimal(normalized);
-  if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {
+  const amount = Amount4.from(normalized);
+  if ((!allowZero && amount.lte(0)) || (allowZero && amount.lt(0))) {
     throw new BadRequestException(`${label}${allowZero ? '不能为负数' : '必须大于 0'}`);
   }
-  if (amount.greaterThan(MAX_AMOUNT)) throw new BadRequestException(`${label}数值过大`);
+  if (amount.gt(MAX_AMOUNT)) throw new BadRequestException(`${label}数值过大`);
   return amount;
 }
 
@@ -273,23 +264,20 @@ function normalizeDate(value: unknown, label: string) {
 
 function normalizeLockScope(value: unknown): IdBusinessV2AccountLockScope {
   if (value === undefined || value === null || value === '') {
-    return IdBusinessV2AccountLockScope.by_service;
+    return 'by_service';
   }
-  if (
-    value === IdBusinessV2AccountLockScope.by_service ||
-    value === IdBusinessV2AccountLockScope.global
-  ) {
+  if (value === 'by_service' || value === 'global') {
     return value;
   }
   throw new BadRequestException('锁定范围无效');
 }
 
 function normalizeAccountDisposition(value: unknown): IdBusinessV2OrderAccountDisposition {
-  if (value === IdBusinessV2OrderAccountDisposition.retained) {
-    return IdBusinessV2OrderAccountDisposition.retained;
+  if (value === 'retained') {
+    return 'retained';
   }
-  if (value === IdBusinessV2OrderAccountDisposition.sold) {
-    return IdBusinessV2OrderAccountDisposition.sold;
+  if (value === 'sold') {
+    return 'sold';
   }
   throw new BadRequestException('ID 处理方式必须选择保留或卖出');
 }

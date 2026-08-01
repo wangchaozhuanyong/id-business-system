@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { V2_DATA_SCOPES } from '@apple-business/shared';
 import { IdBusinessV2ChangeSyncService } from './id-business-v2-change-sync.service';
+import { IdBusinessV2ChangeSyncRepository } from './persistence/id-business-v2-change-sync.repository';
 
 describe('IdBusinessV2ChangeSyncService', () => {
   it('returns every whitelisted scope with bigint versions serialized as strings', async () => {
@@ -14,7 +15,9 @@ describe('IdBusinessV2ChangeSyncService', () => {
         ])
       }
     };
-    const service = new IdBusinessV2ChangeSyncService(prisma as never);
+    const service = new IdBusinessV2ChangeSyncService(
+      new IdBusinessV2ChangeSyncRepository(prisma as never)
+    );
 
     const result = await service.getVersions();
 
@@ -23,9 +26,8 @@ describe('IdBusinessV2ChangeSyncService', () => {
     expect(result.versions.customers).toBe('0');
     expect(result.generatedAt).toEqual(expect.any(String));
     expect(prisma.idBusinessV2ScopeVersion.findMany).toHaveBeenCalledWith({
-      orderBy: {
-        scope: 'asc'
-      }
+      orderBy: { scope: 'asc' },
+      select: { scope: true, version: true }
     });
   });
 });

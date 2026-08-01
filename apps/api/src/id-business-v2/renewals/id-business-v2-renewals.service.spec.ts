@@ -2,8 +2,10 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ActivationStatusService } from '../activations/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2RenewalWarningService } from './id-business-v2-renewal-warning.service';
 import { IdBusinessV2RenewalsService } from './id-business-v2-renewals.service';
+import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
 const customerId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
@@ -81,8 +83,12 @@ describe('IdBusinessV2RenewalsService', () => {
     }
   };
   const statusService = new IdBusinessV2ActivationStatusService();
-  const warningService = new IdBusinessV2RenewalWarningService(prisma as never);
-  const service = new IdBusinessV2RenewalsService(prisma as never, statusService, warningService);
+  const repository = new IdBusinessV2RenewalsRepository(prisma as never);
+  const warningService = new IdBusinessV2RenewalWarningService(
+    repository,
+    new V2CommandTransactionManager(prisma as never)
+  );
+  const service = new IdBusinessV2RenewalsService(repository, statusService, warningService);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -165,23 +171,17 @@ describe('IdBusinessV2RenewalsService', () => {
     expect(call.take).toBe(10);
     expect(call.orderBy).toEqual([{ account: { currentBalance: 'desc' } }, { id: 'asc' }]);
     expect(call.where.AND[1]).toEqual({
-      AND: [
+      renewedBy: {
+        is: null
+      },
+      OR: [
+        { status: 'expired' },
         {
-          renewedBy: {
-            is: null
+          status: 'active',
+          dueAt: {
+            not: null,
+            lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
           }
-        },
-        {
-          OR: [
-            { status: 'expired' },
-            {
-              status: 'active',
-              dueAt: {
-                not: null,
-                lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
-              }
-            }
-          ]
         }
       ]
     });
@@ -214,26 +214,22 @@ describe('IdBusinessV2RenewalsService', () => {
     expect(call.where.AND[1]).toEqual({
       AND: [
         {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
+          renewedBy: { is: null },
           status: 'active',
           dueAt: {
             gt: new Date(now.getTime() + 60 * 60 * 1000),
             lte: new Date(now.getTime() + 23 * 60 * 60 * 1000)
           }
+        },
+        {
+          dueAt: {
+            gte: new Date('2026-07-26T00:00:00.000Z'),
+            lte: new Date('2026-07-27T23:59:59.999Z')
+          }
         }
       ]
     });
-    expect(call.where.AND[0].AND[0].OR).toHaveLength(5);
-    expect(call.where.AND[2]).toEqual({
-      dueAt: {
-        gte: new Date('2026-07-26T00:00:00.000Z'),
-        lte: new Date('2026-07-27T23:59:59.999Z')
-      }
-    });
+    expect(call.where.AND[0].OR).toHaveLength(5);
   });
 
   it('allows an arbitrary date range for viewing without widening the seven-day action window', async () => {
@@ -253,11 +249,7 @@ describe('IdBusinessV2RenewalsService', () => {
     expect(call.where.AND[1]).toEqual({
       AND: [
         {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
+          renewedBy: { is: null },
           OR: [
             { status: 'expired' },
             {
@@ -267,6 +259,12 @@ describe('IdBusinessV2RenewalsService', () => {
               }
             }
           ]
+        },
+        {
+          dueAt: {
+            gte: new Date('2026-08-01T00:00:00.000Z'),
+            lte: new Date('2026-08-10T23:59:59.999Z')
+          }
         }
       ]
     });
@@ -285,20 +283,12 @@ describe('IdBusinessV2RenewalsService', () => {
 
     const call = prisma.idBusinessV2Activation.findMany.mock.calls[0]?.[0];
     expect(call.where.AND[1]).toEqual({
-      AND: [
-        {
-          renewedBy: {
-            is: null
-          }
-        },
-        {
-          status: 'active',
-          dueAt: {
-            gt: now,
-            lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
-          }
-        }
-      ]
+      renewedBy: { is: null },
+      status: 'active',
+      dueAt: {
+        gt: now,
+        lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
+      }
     });
     await expect(service.listWorkbench({ warningOnly: 'yes' })).rejects.toBeInstanceOf(
       BadRequestException
@@ -326,7 +316,8 @@ describe('IdBusinessV2RenewalsService', () => {
         type: 'service',
         activationsByService: {
           some: expect.objectContaining({
-            AND: expect.any(Array)
+            renewedBy: { is: null },
+            OR: expect.any(Array)
           })
         }
       })

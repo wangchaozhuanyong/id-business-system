@@ -76,99 +76,105 @@
       <section class="v2-finance-panel v2-finance-ledger-tabs">
         <el-tabs v-model="page.activeTab">
           <el-tab-pane label="资金账户" name="accounts">
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.financeLedger.accounts"
               class="v2-records-table"
               :data="page.accounts"
-              row-key="id"
               scrollbar-always-on
               show-overflow-tooltip
             >
               <template #empty>
                 <FinanceEmpty title="暂无资金账户" description="先建立银行卡、现金或钱包账户" />
               </template>
-              <V2TableColumn kind="text" label="账户" width-preset="identifier" fixed="left">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[0]">
                 <template #default="{ row }"
                   ><strong>{{ row.name }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="status" label="类型" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[1]">
                 <template #default="{ row }">{{ accountTypeLabel(row.accountType) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="status" label="币种" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[2]">
                 <template #default="{ row }"
                   ><el-tag effect="plain">{{ row.currency }}</el-tag></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="期初余额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[3]">
                 <template #default="{ row }">{{
                   formatOriginal(row.openingBalance, row.currency)
                 }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="当前余额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[4]">
                 <template #default="{ row }">
                   <strong :class="amountTone(row.currentBalance)">
                     {{ formatOriginal(row.currentBalance, row.currency) }}
                   </strong>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="账面人民币" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[5]">
                 <template #default="{ row }">{{ formatCny(row.currentBalanceCny) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="status" label="状态" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[6]">
                 <template #default="{ row }">
                   <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
                     {{ row.status === 'active' ? '启用' : '停用' }}
                   </el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableActionColumn v-if="page.canManage" layout="single">
+              <V2TableActionColumn
+                v-if="page.canManage"
+                :definition="v2TableSchemas.financeLedger.accounts.columns[7]"
+              >
                 <template #default="{ row }">
                   <AppButton size="small" variant="ghost" @click="page.openAccount(row)">
                     编辑
                   </AppButton>
                 </template>
               </V2TableActionColumn>
-            </el-table>
+            </V2Table>
           </el-tab-pane>
 
           <el-tab-pane label="供应商钱包" name="wallets">
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.financeLedger.supplierWallets"
               class="v2-records-table"
               :data="page.wallets"
-              row-key="id"
               scrollbar-always-on
               show-overflow-tooltip
             >
               <template #empty>
                 <FinanceEmpty title="暂无供应商钱包" description="一个供应商可按币种分别建立钱包" />
               </template>
-              <V2TableColumn kind="text" label="供应商" width-preset="identifier" fixed="left">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[0]">
                 <template #default="{ row }"
                   ><strong>{{ row.supplierName }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="status" label="币种" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[1]">
                 <template #default="{ row }"
                   ><el-tag effect="plain">{{ row.currency }}</el-tag></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="期初余额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[2]">
                 <template #default="{ row }">{{
                   formatOriginal(row.openingBalance, row.currency)
                 }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="当前余额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[3]">
                 <template #default="{ row }">
                   <strong>{{ formatOriginal(row.currentBalance, row.currency) }}</strong>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="账面人民币" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[4]">
                 <template #default="{ row }">{{ formatCny(row.currentBalanceCny) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="date" label="初始化时间" width-preset="dateTime">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.supplierWallets.columns[5]">
                 <template #default="{ row }">{{ formatDate(row.initializedAt) }}</template>
               </V2TableColumn>
-              <V2TableActionColumn v-if="page.canPost || page.canAdjust" layout="single">
+              <V2TableActionColumn
+                v-if="page.canPost || page.canAdjust"
+                :definition="v2TableSchemas.financeLedger.supplierWallets.columns[6]"
+              >
                 <template #default="{ row }">
                   <el-dropdown trigger="click" @command="handleWalletMutationCommand(row, $event)">
                     <AppButton size="small" variant="ghost">更多操作</AppButton>
@@ -188,49 +194,49 @@
                   </el-dropdown>
                 </template>
               </V2TableActionColumn>
-            </el-table>
+            </V2Table>
           </el-tab-pane>
 
           <el-tab-pane label="额外开支" name="expenses">
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.financeLedger.expenses"
               class="v2-records-table"
               :data="page.expenses"
-              row-key="id"
               scrollbar-always-on
               show-overflow-tooltip
             >
               <template #empty>
                 <FinanceEmpty title="暂无额外开支" description="手机、办公、工资等开支在这里入账" />
               </template>
-              <V2TableColumn kind="date" label="发生时间" width-preset="dateTime" fixed="left">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[0]">
                 <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="分类" width-preset="identifier">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[1]">
                 <template #default="{ row }"
                   ><strong>{{ row.categoryName }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="text" label="付款账户" width-preset="wide">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[2]">
                 <template #default="{ row }">{{ row.financeAccountName }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="原币金额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[3]">
                 <template #default="{ row }">{{
                   formatOriginal(row.amountOriginal, row.currency)
                 }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="交易汇率" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[4]">
                 <template #default="{ row }">{{ row.fxRateToCny }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="人民币金额" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[5]">
                 <template #default="{ row }">{{ formatCny(row.amountCny) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="收款方" width-preset="wide">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[6]">
                 <template #default="{ row }">{{ row.payee || '—' }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="备注" width-preset="longText">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[7]">
                 <template #default="{ row }">{{ row.remark || '—' }}</template>
               </V2TableColumn>
-            </el-table>
+            </V2Table>
             <footer class="v2-records-pagination">
               <span>共 {{ page.expenseTotal }} 条</span>
               <el-pagination
@@ -245,17 +251,17 @@
           </el-tab-pane>
 
           <el-tab-pane label="不可变流水" name="journals">
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.financeLedger.journals"
               class="v2-records-table"
               :data="page.journals"
-              row-key="id"
               scrollbar-always-on
               show-overflow-tooltip
             >
               <template #empty>
                 <FinanceEmpty title="暂无财务流水" description="业务完成或手工记账后自动生成" />
               </template>
-              <V2TableColumn kind="text" type="expand" width="52" label="明细">
+              <V2TableControlColumn :definition="v2TableSchemas.financeLedger.journals.columns[0]">
                 <template #default="{ row }">
                   <div class="v2-finance-lines">
                     <div v-for="line in row.lines" :key="line.id">
@@ -267,32 +273,38 @@
                     </div>
                   </div>
                 </template>
-              </V2TableColumn>
-              <V2TableColumn kind="identifier" label="流水号" width-preset="wide" fixed="left">
+              </V2TableControlColumn>
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.journals.columns[1]">
                 <template #default="{ row }"
                   ><strong>{{ row.journalNo }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="date" label="发生时间" width-preset="dateTime">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.journals.columns[2]">
                 <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="status" label="业务类型" width-preset="wide">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.journals.columns[3]">
                 <template #default="{ row }">
                   <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="摘要" width-preset="longText" prop="summary" />
-              <V2TableColumn kind="identifier" label="来源" width-preset="identifier">
+              <V2TableColumn
+                :definition="v2TableSchemas.financeLedger.journals.columns[4]"
+                prop="summary"
+              />
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.journals.columns[5]">
                 <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="status" label="状态" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.journals.columns[6]">
                 <template #default="{ row }">
                   <el-tag :type="row.status === 'posted' ? 'success' : 'info'" effect="plain">
                     {{ row.status === 'posted' ? '已发布' : '已冲销' }}
                   </el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableActionColumn v-if="page.canAdjust" layout="single">
+              <V2TableActionColumn
+                v-if="page.canAdjust"
+                :definition="v2TableSchemas.financeLedger.journals.columns[7]"
+              >
                 <template #default="{ row }">
                   <AppButton
                     size="small"
@@ -304,7 +316,7 @@
                   </AppButton>
                 </template>
               </V2TableActionColumn>
-            </el-table>
+            </V2Table>
             <footer class="v2-records-pagination">
               <span>共 {{ page.journalTotal }} 条</span>
               <el-pagination
@@ -359,38 +371,41 @@
                 </AppButton>
               </div>
             </section>
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.financeLedger.periods"
               class="v2-records-table"
               :data="page.periods"
-              row-key="month"
               scrollbar-always-on
               show-overflow-tooltip
             >
               <template #empty>
                 <FinanceEmpty title="暂无关账月份" description="未关账月份默认保持开放" />
               </template>
-              <V2TableColumn kind="identifier" label="月份" width-preset="identifier" fixed="left">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.periods.columns[0]">
                 <template #default="{ row }"
                   ><strong>{{ row.month }}</strong></template
                 >
               </V2TableColumn>
-              <V2TableColumn kind="status" label="状态" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.periods.columns[1]">
                 <template #default="{ row }">
                   <el-tag :type="periodStatusType(row.status)" effect="plain">
                     {{ periodStatusLabel(row.status) }}
                   </el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="date" label="关账时间" width-preset="dateTime">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.periods.columns[2]">
                 <template #default="{ row }">{{ formatDate(row.closedAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="date" label="重开时间" width-preset="dateTime">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.periods.columns[3]">
                 <template #default="{ row }">{{ formatDate(row.reopenedAt) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="text" label="重开原因" width-preset="longText">
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.periods.columns[4]">
                 <template #default="{ row }">{{ row.reopenReason || '—' }}</template>
               </V2TableColumn>
-              <V2TableActionColumn v-if="page.canClose" layout="single">
+              <V2TableActionColumn
+                v-if="page.canClose"
+                :definition="v2TableSchemas.financeLedger.periods.columns[5]"
+              >
                 <template #default="{ row }">
                   <AppButton
                     v-if="row.status === 'closed'"
@@ -403,7 +418,7 @@
                   <span v-else>—</span>
                 </template>
               </V2TableActionColumn>
-            </el-table>
+            </V2Table>
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -420,7 +435,10 @@ import type { V2FinanceSupplierWallet } from './contracts';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
 import V2FinanceLedgerDrawers from './components/V2FinanceLedgerDrawers.vue';
 import {
   accountCodeLabel,

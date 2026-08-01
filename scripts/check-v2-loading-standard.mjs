@@ -286,6 +286,8 @@ function validateViewSource(source, pageSource = source, requiresRemoteData = tr
 function validateStartupArchitecture() {
   const files = {
     app: 'apps/admin/src/App.vue',
+    apiClient: 'apps/admin/src/api/client.ts',
+    apiError: 'apps/admin/src/api/apiError.ts',
     appRuntimeError: 'apps/admin/src/runtime/appRuntimeError.ts',
     auth: 'apps/admin/src/stores/auth.ts',
     bootGate: 'apps/admin/src/v2/components/V2BootGate.vue',
@@ -296,14 +298,22 @@ function validateStartupArchitecture() {
     query: 'apps/admin/src/v2/composables/useV2Query.ts',
     recovery: 'apps/admin/src/v2/runtime/preloadRecovery.ts',
     prefetch: 'apps/admin/src/v2/runtime/routePrefetch.ts',
+    requestPolicy: 'apps/admin/src/api/requestPolicy.ts',
     router: 'apps/admin/src/v2-router.ts',
     routes: 'apps/admin/src/v2/router/routes.ts',
+    credential: 'apps/admin/src/auth/credential.ts',
+    sessionCoordinator: 'apps/admin/src/auth/sessionCoordinator.ts',
     orderEntryManifest: 'apps/admin/src/v2/features/order-entry/manifest.ts',
     vite: 'apps/admin/vite.config.ts'
   };
   const sources = Object.fromEntries(
     Object.entries(files).map(([key, projectPath]) => [key, read(projectPath)])
   );
+  if (existsSync(path.join(rootDir, 'apps/admin/src/auth/session.ts'))) {
+    issues.push(
+      'apps/admin/src/auth/session.ts: 旧会话 shim 必须删除，会话真相只能由 SessionCoordinator 管理'
+    );
+  }
 
   requirePatterns(files.html, sources.html, [
     [/id-business-v2-theme/, '缺少同步主题初始化'],
@@ -352,27 +362,81 @@ function validateStartupArchitecture() {
     }
   }
   requirePatterns(files.app, sources.app, [
-    [/AUTH_SESSION_EXPIRED_EVENT/, '缺少会话过期处理'],
-    [/AUTH_IDENTITY_CHANGED_EVENT/, '身份变化时没有统一清理 V2 运行态'],
-    [/clearV2QueryCache/, '身份变化时没有清理 V2 查询缓存']
+    [/authIdentityEpoch/, '应用根节点没有以身份代次隔离组件运行态'],
+    [/await router\.isReady\(\)/, '应用根节点没有收敛首次路由就绪结果'],
+    [/navigateSafely/, 'Boot Gate 重试没有使用统一安全导航边界']
+  ]);
+  requirePatterns(files.query, sources.query, [
+    [
+      /sessionCoordinator\.subscribeIdentityChange\(ensureCacheIdentity\)/,
+      '查询缓存没有订阅统一身份代际变化'
+    ],
+    [/resetQueryCache\(currentIdentityEpoch\)/, '身份变化时没有清理 V2 查询缓存']
   ]);
   forbidPatterns(files.app, sources.app, [
-    [/currentRouteLoadError/, '路由资源错误不得再触发 V2App 全屏错误']
+    [/currentRouteLoadError/, '路由资源错误不得再触发 V2App 全屏错误'],
+    [/\bwatch\s*\(/, 'App 不得观察或修改会话路由状态'],
+    [
+      /subscribeAuthIdentityChange|clearV2QueryCache|resetV2RouteNavigationState/,
+      'App 不得接管会话恢复或缓存清理'
+    ],
+    [
+      /router\.isReady\(\)\.finally/,
+      'router.isReady 拒绝不得通过 finally 泄漏为 unhandled rejection'
+    ]
   ]);
   requirePatterns(files.appRuntimeError, sources.appRuntimeError, [
-    [/routeResourceErrorPatterns/, '动态路由资源错误没有从应用级 fatal 分类中排除'],
-    [/failed to fetch dynamically imported module/i, '缺少动态模块失败分类'],
-    [/couldn't resolve component/i, '缺少 Vue Router 组件解析失败分类']
+    [/isApiError/, 'API 错误没有交给结构化请求边界'],
+    [/isNavigationFailure/, 'Vue Router 导航失败没有交给路由边界']
+  ]);
+  forbidPatterns(files.appRuntimeError, sources.appRuntimeError, [
+    [
+      /routeResourceErrorPatterns|failed to fetch dynamically imported module|couldn't resolve component/i,
+      '应用级错误不得按路由错误文案正则分类'
+    ]
   ]);
 
   requirePatterns(files.auth, sources.auth, [
+    [/sessionCoordinator\.state/, 'auth store 没有直接暴露唯一 SessionCoordinator 状态'],
     [
-      /SessionStatus[\s\S]*'idle'[\s\S]*'checking'[\s\S]*'ready'[\s\S]*'anonymous'[\s\S]*'error'/,
-      'auth store 缺少完整 sessionStatus'
-    ],
-    [/ensureSessionReady\s*\(/, 'auth store 缺少 ensureSessionReady'],
-    [/sessionReadyPromise/, 'ensureSessionReady 缺少进行中请求复用'],
-    [/sessionGeneration/, '身份变化后缺少过期响应隔离']
+      /ensureSessionReady:\s*sessionCoordinator\.ensureSession/,
+      'auth store 缺少 ensureSessionReady'
+    ]
+  ]);
+  forbidPatterns(files.auth, sources.auth, [
+    [/\bSessionStatus\b|\bsessionStatus\b/, 'auth store 不得保留旧 sessionStatus 兼容层']
+  ]);
+  requirePatterns(files.sessionCoordinator, sources.sessionCoordinator, [
+    [/validationPromise/, 'ensureSessionReady 缺少进行中请求复用'],
+    [/mutableIdentityEpoch/, '身份变化后缺少统一代次'],
+    [/isSameCredentialSnapshot/, '身份变化后缺少过期响应隔离'],
+    [/abortIdentityRequests/, '身份变化后缺少进行中请求中止'],
+    [/LEGAL_SESSION_TRANSITIONS/, '会话状态缺少显式合法转换图'],
+    [/transitionSessionState/, '会话状态写入没有收敛到唯一 transition']
+  ]);
+  const directSessionWrites = [
+    ...sources.sessionCoordinator.matchAll(/mutableSessionState\.value\s*=/g)
+  ];
+  if (directSessionWrites.length !== 2) {
+    issues.push(
+      `${files.sessionCoordinator}: 除 transition 和测试 reset 外不得直接写会话状态，当前 ${directSessionWrites.length} 处`
+    );
+  }
+  requirePatterns(files.credential, sources.credential, [
+    [/apple_business_auth_v2/, '会话凭据没有收敛为单一原子 V2 记录'],
+    [/tokenRevision/, '原子凭据缺少 token 修订隔离'],
+    [/typeof localStorage === 'undefined'/, '凭据存储没有兼容 SSR 和无存储测试环境']
+  ]);
+  requirePatterns(files.requestPolicy, sources.requestPolicy, [
+    [/ENDPOINT_POLICIES/, '会话例外没有通过结构化 endpoint registry 声明'],
+    [/pathname === ['"][/]auth[/]me['"]/, 'auth/me 缺少精确端点重试策略']
+  ]);
+  forbidPatterns(files.requestPolicy, sources.requestPolicy, [
+    [/\.includes\s*\(/, '不得用 URL 子串匹配会话例外或重试策略']
+  ]);
+  requirePatterns(files.apiClient, sources.apiClient, [
+    [/new ApiError/, '客户端错误没有收敛为 ApiError'],
+    [/assertWriteAllowed/, '非安全请求没有经过中央会话写门禁']
   ]);
   requirePatterns(files.vite, sources.vite, [
     [/unplugin-auto-import\/vite/, 'V2 未配置 unplugin-auto-import'],
@@ -425,7 +489,13 @@ function validateStartupArchitecture() {
   requirePatterns(files.router, sources.router, [
     [/beginV2RoutePerformance\(to\.path\)/, '路由开始没有建立独立性能代际'],
     [/markV2RouteCodeReady/, 'afterEach 没有只记录代码就绪'],
-    [/resetV2RouteNavigationState/, '非 V2 跳转没有清理旧工作区加载状态']
+    [/resetV2RouteNavigationState/, '非 V2 跳转没有清理旧工作区加载状态'],
+    [/watch\([\s\S]*sessionState/, '路由层没有统一观察会话恢复'],
+    [/invalidateV2Queries\(V2_DATA_SCOPES\)/, '会话恢复后没有失效并刷新已保留查询'],
+    [/restoreVerifiedRoute/, '已验证降级时没有保留原工作区路由']
+  ]);
+  forbidPatterns(files.router, sources.router, [
+    [/return false;/, '会话守卫不得通过 return false 中止导航']
   ]);
   requirePatterns(files.routes, sources.routes, [
     [/export function resetV2RouteNavigationState/, '路由状态缺少显式重置入口']

@@ -63,13 +63,13 @@
       @retry="loadActivations"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.activations.main"
           :aria-busy="loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="items"
-          row-key="id"
           @sort-change="handleSortChange"
         >
           <template #empty>
@@ -79,49 +79,45 @@
             </div>
           </template>
 
-          <V2TableColumn kind="identifier" width-preset="identifier" label="订单" fixed="left">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[0]">
             <template #default="{ row }">
               <strong class="v2-activation-order">{{ row.order.orderNo }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="客户" width-preset="wide">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[1]">
             <template #default="{ row }">{{ row.customer.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="业务" width-preset="wide">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[2]">
             <template #default="{ row }">{{ row.service.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="苹果 ID">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[3]">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="wide" label="客户网站账号">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[4]">
             <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.activations.main.columns[5]"
             prop="openedAt"
-            label="开通日期"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.openedAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.activations.main.columns[6]"
             prop="dueAt"
-            label="到期日期"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.dueAt) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" width-preset="compact" prop="status" label="状态">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[7]" prop="status">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status.code)" effect="plain">
                 {{ row.status.label }}
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableActionColumn layout="single">
+          <V2TableActionColumn :definition="v2TableSchemas.activations.main.columns[8]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="openDetail(row)">
                 <el-icon><View /></el-icon>
@@ -129,9 +125,9 @@
               </AppButton>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.activations.main.id">
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -261,6 +257,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { computed, reactive, ref } from 'vue';
 import { Refresh, Search, View } from '@element-plus/icons-vue';

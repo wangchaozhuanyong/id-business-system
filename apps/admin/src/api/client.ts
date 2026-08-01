@@ -1,16 +1,15 @@
 import type { ApiResponse } from '@apple-business/shared';
 import axios, { AxiosError, type GenericAbortSignal, type InternalAxiosRequestConfig } from 'axios';
+import { ApiError, isApiError, type ApiErrorKind } from '@/api/apiError';
+import type { CredentialSnapshot } from '@/auth/credential';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import {
-  AuthSessionExpiredError,
-  getAuthSessionAbortSignal,
-  isAuthSessionExpired,
-  isAuthSessionExpiredError,
-  notifyAuthSessionExpired,
-  TOKEN_STORAGE_KEY
-} from '@/auth/session';
-import { getTransientReadRetryDelay } from './transientReadRetry';
+  getApiEndpointPolicy,
+  getApiRequestPolicy,
+  getApiRequestRetryDelay
+} from './requestPolicy';
 
-export { TOKEN_STORAGE_KEY };
+export { AUTH_CREDENTIAL_STORAGE_KEY } from '@/auth/credential';
 
 const supabaseFunctionRegion = String(import.meta.env.VITE_SUPABASE_FUNCTION_REGION ?? '').trim();
 
@@ -24,7 +23,8 @@ export interface ApiRequestOptions {
 }
 
 interface RetryableReadRequestConfig extends InternalAxiosRequestConfig {
-  __transientReadRetryCount?: number;
+  __credentialSnapshot?: CredentialSnapshot | null;
+  __requestPolicyRetryCount?: number;
 }
 
 const serverMessageMap: Record<string, string> = {
@@ -67,20 +67,26 @@ const serverTermMap: Record<string, string> = {
 };
 
 http.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
   const requestUrl = String(config.url ?? '');
-  const bypassAuthGate = isAuthGateBypassRequest(requestUrl);
+  const endpointPolicy = getApiEndpointPolicy(requestUrl);
+  const bypassAuthGate = endpointPolicy.bypassSessionGate;
+  const requestConfig = config as RetryableReadRequestConfig;
+  const credentialSnapshot = sessionCoordinator.getCredentialSnapshot();
+  requestConfig.__credentialSnapshot = credentialSnapshot;
 
-  if (isAuthSessionExpired() && !bypassAuthGate) {
-    throw new AuthSessionExpiredError();
+  const requestPolicy = getApiRequestPolicy(config.method, requestUrl);
+  if (requestPolicy) config.timeout = requestPolicy.timeoutMs;
+
+  if (!bypassAuthGate && isWriteMethod(config.method)) {
+    sessionCoordinator.assertWriteAllowed();
   }
 
   if (!bypassAuthGate) {
-    config.signal = mergeAbortSignals(config.signal, getAuthSessionAbortSignal());
+    config.signal = mergeAbortSignals(config.signal, sessionCoordinator.getRequestAbortSignal());
   }
 
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  if (credentialSnapshot?.token) {
+    config.headers.Authorization = `Bearer ${credentialSnapshot.token}`;
   }
 
   if (supabaseFunctionRegion) {
@@ -90,36 +96,51 @@ http.interceptors.request.use((config) => {
   return config;
 });
 
-http.interceptors.response.use(undefined, async (error: unknown) => {
-  if (!axios.isAxiosError(error)) {
-    throw error;
+http.interceptors.response.use(
+  (response) => {
+    const config = response.config as RetryableReadRequestConfig;
+    const requestUrl = String(config.url ?? '');
+    if (
+      !isAuthGateBypassRequest(requestUrl) &&
+      !isRequestCredentialCurrent(config.__credentialSnapshot)
+    ) {
+      throw new DOMException('请求所属的登录身份已变化。', 'AbortError');
+    }
+    return response;
+  },
+  async (error: unknown) => {
+    if (!axios.isAxiosError(error)) {
+      throw error;
+    }
+
+    const config = error.config as RetryableReadRequestConfig | undefined;
+    const retryCount = config?.__requestPolicyRetryCount ?? 0;
+    const delayMs = getApiRequestRetryDelay({
+      aborted: config?.signal?.aborted,
+      isNetworkError: !error.response,
+      method: config?.method,
+      retryCount,
+      status: error.response?.status,
+      url: config?.url
+    });
+
+    if (!config || delayMs === null) {
+      throw error;
+    }
+
+    config.__requestPolicyRetryCount = retryCount + 1;
+    await waitForRetry(delayMs, config.signal);
+
+    if (config.signal?.aborted || !isRequestCredentialCurrent(config.__credentialSnapshot)) {
+      throw error;
+    }
+
+    return http.request(config);
   }
-
-  const config = error.config as RetryableReadRequestConfig | undefined;
-  const retryCount = config?.__transientReadRetryCount ?? 0;
-  const delayMs = getTransientReadRetryDelay({
-    aborted: config?.signal?.aborted,
-    method: config?.method,
-    retryCount,
-    status: error.response?.status,
-    url: config?.url
-  });
-
-  if (!config || delayMs === null) {
-    throw error;
-  }
-
-  config.__transientReadRetryCount = retryCount + 1;
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
-
-  if (config.signal?.aborted || isAuthSessionExpired()) {
-    throw error;
-  }
-
-  return http.request(config);
-});
+);
 
 export function getApiErrorMessage(error: unknown) {
+  if (isApiError(error)) return error.message;
   if (error instanceof Error) {
     return normalizeServerMessage(error.message);
   }
@@ -167,6 +188,10 @@ function getGenericServerMessage(status?: number) {
 
   if (status === 409) {
     return '当前数据状态有变化，请刷新后重试。';
+  }
+
+  if (status === 502 || status === 503 || status === 504) {
+    return `服务暂时不可用（${status}），请稍后重试。`;
   }
 
   if (status && status >= 500) {
@@ -259,6 +284,10 @@ function getAxiosErrorMessage(error: AxiosError<ApiResponse<unknown>>) {
     return '请求的接口不存在，请确认后端服务和前端版本是否匹配。';
   }
 
+  if (status === 502 || status === 503 || status === 504) {
+    return `服务暂时不可用（${status}），请稍后重试。`;
+  }
+
   if (status && status >= 500) {
     return `服务器内部错误（${status}），请稍后重试或联系管理员。`;
   }
@@ -275,10 +304,6 @@ function getAxiosErrorMessage(error: AxiosError<ApiResponse<unknown>>) {
 }
 
 export function isRequestCanceled(error: unknown) {
-  if (isAuthSessionExpiredError(error)) {
-    return true;
-  }
-
   if (axios.isCancel(error)) {
     return true;
   }
@@ -302,13 +327,7 @@ export function isRequestCanceled(error: unknown) {
 }
 
 function isAuthGateBypassRequest(url: string) {
-  return (
-    url.includes('/auth/login') ||
-    url.includes('/health/ready') ||
-    url.includes('/maintenance/mode/public') ||
-    url.startsWith('data:') ||
-    url.startsWith('blob:')
-  );
+  return getApiEndpointPolicy(url).bypassSessionGate;
 }
 
 function mergeAbortSignals(
@@ -351,43 +370,145 @@ export async function request<TData>(promise: Promise<{ data: ApiResponse<TData>
     const body = response.data;
 
     if (!body.success) {
-      throw new Error(normalizeServerMessage(body.message));
+      const code = String(body.errorCode ?? '').trim() || 'REQUEST_FAILED';
+      throw new ApiError(normalizeServerMessage(body.message), {
+        code,
+        fieldErrors: body.fieldErrors,
+        kind: getApiErrorKind(null, code),
+        requestId: body.requestId,
+        retryAfterMs: body.retryAfterMs,
+        retryable: body.retryable ?? isRetryableApiFailure(null, code),
+        status: null
+      });
     }
 
     return body.data;
   } catch (error) {
-    if (isAuthSessionExpiredError(error)) {
-      throw error;
-    }
-
     if (isRequestCanceled(error)) {
-      if (isAuthSessionExpired()) {
-        throw new AuthSessionExpiredError();
-      }
-
       throw error;
     }
 
-    if (error instanceof AxiosError) {
+    if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError<ApiResponse<unknown>>;
-      const message = getAxiosErrorMessage(axiosError);
-
+      const apiError = createApiError(axiosError);
       const requestUrl = String(axiosError.config?.url ?? '');
       if (axiosError.response?.status === 401 && !isAuthGateBypassRequest(requestUrl)) {
-        notifyAuthSessionExpired({
-          message,
-          reason: 'unauthorized'
-        });
-        throw new AuthSessionExpiredError(message, {
-          cause: error
-        });
+        sessionCoordinator.handleUnauthorized(
+          apiError,
+          (axiosError.config as RetryableReadRequestConfig | undefined)?.__credentialSnapshot
+        );
+      } else if (axiosError.response?.status === 403 && !isAuthGateBypassRequest(requestUrl)) {
+        sessionCoordinator.handleForbidden(
+          apiError,
+          (axiosError.config as RetryableReadRequestConfig | undefined)?.__credentialSnapshot
+        );
       }
-
-      throw new Error(message, {
-        cause: error
-      });
+      throw apiError;
     }
 
     throw error;
   }
+}
+
+function createApiError(error: AxiosError<ApiResponse<unknown>>) {
+  const body = error.response?.data;
+  const errorBody = body && !body.success ? body : null;
+  const status = error.response?.status ?? null;
+  const code = String(errorBody?.errorCode ?? '').trim() || getFallbackErrorCode(status, error);
+  const retryAfterMs =
+    errorBody?.retryAfterMs ?? parseRetryAfter(error.response?.headers?.['retry-after']);
+  const responseRequestId = String(error.response?.headers?.['x-request-id'] ?? '').trim();
+  return new ApiError(getAxiosErrorMessage(error), {
+    cause: error,
+    code,
+    fieldErrors: errorBody?.fieldErrors,
+    kind: getApiErrorKind(status, code, error),
+    requestId: errorBody?.requestId ?? (responseRequestId || undefined),
+    retryAfterMs,
+    retryable: errorBody?.retryable ?? isRetryableApiFailure(status, code),
+    status
+  });
+}
+
+function isRetryableApiFailure(status: number | null, code: string) {
+  return (
+    status === null ||
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    code === 'AUTH_DEPENDENCY_UNAVAILABLE' ||
+    code === 'SERVICE_UNAVAILABLE' ||
+    code === 'NETWORK_UNAVAILABLE'
+  );
+}
+
+function getApiErrorKind(
+  status: number | null,
+  code: string,
+  error?: AxiosError<ApiResponse<unknown>>
+): ApiErrorKind {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 400 || status === 422) return 'validation';
+  if (status === 409) return 'conflict';
+  if (
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    code === 'AUTH_DEPENDENCY_UNAVAILABLE' ||
+    code === 'SERVICE_UNAVAILABLE'
+  ) {
+    return 'transient';
+  }
+  if (!status && error && !error.response) return 'network';
+  return 'server';
+}
+
+function getFallbackErrorCode(status: number | null, error: AxiosError) {
+  if (status === 401) return 'AUTH_INVALID';
+  if (status === 403) return 'AUTH_PERMISSION_DENIED';
+  if (status === 429) return 'RATE_LIMITED';
+  if (status === 502 || status === 503 || status === 504) return 'SERVICE_UNAVAILABLE';
+  if (status && status >= 500) return 'INTERNAL_SERVER_ERROR';
+  if (!error.response) return 'NETWORK_UNAVAILABLE';
+  return 'REQUEST_FAILED';
+}
+
+function parseRetryAfter(value: unknown) {
+  const text = String(value ?? '').trim();
+  if (!text) return undefined;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = new Date(text).getTime();
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
+function isWriteMethod(method?: string) {
+  return !['get', 'head', 'options'].includes(String(method ?? 'get').toLowerCase());
+}
+
+function isRequestCredentialCurrent(snapshot: CredentialSnapshot | null | undefined) {
+  const current = sessionCoordinator.getCredentialSnapshot();
+  if (!snapshot || !current) return snapshot === current;
+  return (
+    snapshot.credentialId === current.credentialId &&
+    snapshot.tokenRevision === current.tokenRevision
+  );
+}
+
+function waitForRetry(delayMs: number, signal?: GenericAbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener?.(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        const reason = (signal as GenericAbortSignal & { reason?: unknown }).reason;
+        reject(reason ?? new DOMException('请求已取消。', 'AbortError'));
+      },
+      { once: true }
+    );
+  });
 }

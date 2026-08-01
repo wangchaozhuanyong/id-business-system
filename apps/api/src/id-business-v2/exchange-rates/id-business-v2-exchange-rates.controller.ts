@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, Public, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
@@ -117,15 +117,16 @@ export class IdBusinessV2ExchangeRatesController {
   @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
   updateSettings(
     @Body() dto: UpdateIdBusinessV2ExchangeRateSettingsDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
   ) {
-    return this.settingsService.update(dto, operator);
+    return this.settingsService.update(dto, operator, request?.requestId);
   }
 
   @Post('collect')
   @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.collect')
-  collect(@CurrentUser() operator?: AuthenticatedUser) {
-    return this.worker.collectManual(operator);
+  collect(@CurrentUser() operator?: AuthenticatedUser, @Req() request?: { requestId?: string }) {
+    return this.worker.collectManual(operator, request?.requestId);
   }
 
   @Get('runs')
@@ -183,9 +184,10 @@ export class IdBusinessV2ExchangeRatesController {
   @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.create')
   create(
     @Body() dto: CreateIdBusinessV2ExchangeRateEntryDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
   ) {
-    return this.exchangeRatesService.create(dto, operator);
+    return this.exchangeRatesService.create(dto, operator, request?.requestId);
   }
 
   @Get('manual-entries/:id')

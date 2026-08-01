@@ -1,27 +1,31 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal } from '../decimal-policy';
 import {
   IdBusinessV2FinanceFxService,
   normalizeFinanceCurrency,
   normalizeFinanceMoney,
   normalizeFinanceRate
 } from '../finance/public-api';
+import {
+  Amount4,
+  Rate8,
+  V2CommandTransactionManager,
+  type V2CommandTransaction,
+  type V2DecimalInput
+} from '../runtime/public-api';
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import type { QuoteIdBusinessV2OrderReceiptFxDto } from './dto/quote-id-business-v2-order-receipt-fx.dto';
 import { applyNewOrderAccountDisposition } from './id-business-v2-order-account-disposition';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { getIdBusinessV2OrderEntryOptions } from './id-business-v2-order-entry-options';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 import {
   assertOrderEntryReplayMatches,
   calculatePlatformFee,
   generateOrderNo,
-  isUniqueConstraintError,
   maskWebsiteAccount,
   normalizeCreateOrderInput,
   toOrderEntryLockSummary,
@@ -38,8 +42,8 @@ export interface CreateWaitingExternalOrderInput {
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
   websiteAccountMasked: string | null;
-  receivedAmount: PrismaNamespace.Decimal;
-  balanceAmount: PrismaNamespace.Decimal;
+  receivedAmount: V2DecimalInput;
+  balanceAmount: V2DecimalInput;
   openedAt: Date;
   dueAt: Date;
   idempotencyKey: string;
@@ -56,8 +60,8 @@ export interface CreateManualRenewalOrderInput {
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
   websiteAccountMasked: string | null;
-  receivedAmount: PrismaNamespace.Decimal;
-  balanceAmount: PrismaNamespace.Decimal;
+  receivedAmount: V2DecimalInput;
+  balanceAmount: V2DecimalInput;
   openedAt: Date;
   dueAt: Date;
   idempotencyKey: string;
@@ -67,17 +71,18 @@ export interface CreateManualRenewalOrderInput {
 @Injectable()
 export class IdBusinessV2OrderEntryService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2OrdersRepository,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly ordersService: IdBusinessV2OrdersService,
     private readonly orderLockService: IdBusinessV2OrderLockService,
-    private readonly financeFxService: IdBusinessV2FinanceFxService
+    private readonly financeFxService: IdBusinessV2FinanceFxService,
+    private readonly transactionManager: V2CommandTransactionManager
   ) {}
 
   async getEntryOptions(customerKeywordValue?: string) {
     const [options, latestFxRates] = await Promise.all([
       getIdBusinessV2OrderEntryOptions(
-        this.prisma,
+        this.repository,
         this.fieldEncryptionService,
         customerKeywordValue
       ),
@@ -100,10 +105,11 @@ export class IdBusinessV2OrderEntryService {
     if (dto.receivedOriginalAmount === undefined && dto.receivedAmount === undefined) {
       throw new BadRequestException('原币收款金额不能为空');
     }
-    const receivedOriginalAmount =
+    const receivedOriginalAmount = Amount4.from(
       dto.receivedOriginalAmount === undefined
         ? normalizeFinanceMoney(dto.receivedAmount, '实收金额', true)
-        : normalizeFinanceMoney(dto.receivedOriginalAmount, '原币收款金额', true);
+        : normalizeFinanceMoney(dto.receivedOriginalAmount, '原币收款金额', true)
+    );
     const inputBeforeRate = normalizeCreateOrderInput(
       {
         ...dto,
@@ -114,7 +120,7 @@ export class IdBusinessV2OrderEntryService {
     const manualRate =
       dto.receivedFxRateToCny === undefined
         ? null
-        : normalizeFinanceRate(dto.receivedFxRateToCny, receivedCurrency);
+        : Rate8.from(normalizeFinanceRate(dto.receivedFxRateToCny, receivedCurrency));
     const receiptRate = await this.financeFxService.resolve({
       currency: receivedCurrency,
       occurredAt: orderTimestamp,
@@ -123,7 +129,8 @@ export class IdBusinessV2OrderEntryService {
       manualReason: dto.receivedManualRateReason,
       operator
     });
-    const derivedReceivedAmount = roundV2Decimal(receivedOriginalAmount.mul(receiptRate.rateToCny));
+    const receiptFxRate = Rate8.from(receiptRate.rateToCny);
+    const derivedReceivedAmount = receiptFxRate.apply(receivedOriginalAmount);
     if (
       dto.receivedAmount !== undefined &&
       !derivedReceivedAmount.equals(inputBeforeRate.receivedAmount)
@@ -140,41 +147,36 @@ export class IdBusinessV2OrderEntryService {
             (value) => this.fieldEncryptionService.hash(value)
           )
         : inputBeforeRate;
-    let transactionResult: {
+    type TransactionResult = {
       orderId: string;
       lock: OrderEntryLockSummary | null;
       idempotentReplay: boolean;
     };
+    const verifyReplay = async (tx: V2CommandTransaction): Promise<TransactionResult> => {
+      const existing = await this.repository.findOrderEntryReplay(tx, input.idempotencyKey);
+      if (!existing) {
+        throw new ConflictException('平台订单号已存在或订单刚被其他请求创建，请刷新后核对');
+      }
+      assertOrderEntryReplayMatches(existing, existing.locks[0] ?? null, input);
+      if (
+        existing.receivedCurrency !== receivedCurrency ||
+        !existing.receivedOriginalAmount.equals(receivedOriginalAmount) ||
+        (manualRate !== null && !existing.receivedFxRateToCny.equals(manualRate))
+      ) {
+        throw new ConflictException('幂等键已用于其他收款证据');
+      }
+      return {
+        orderId: existing.id,
+        lock: toOrderEntryLockSummary(existing.locks[0] ?? null),
+        idempotentReplay: true
+      };
+    };
 
-    try {
-      transactionResult = await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.idBusinessV2Order.findUnique({
-          where: {
-            idempotencyKey: input.idempotencyKey
-          },
-          include: {
-            locks: {
-              orderBy: {
-                lockedAt: 'desc'
-              },
-              take: 1
-            }
-          }
-        });
+    const transactionResult = await this.transactionManager.execute<TransactionResult>(
+      async (tx) => {
+        const existing = await this.repository.findOrderEntryReplay(tx, input.idempotencyKey);
         if (existing) {
-          assertOrderEntryReplayMatches(existing, existing.locks[0] ?? null, input);
-          if (
-            existing.receivedCurrency !== receivedCurrency ||
-            !existing.receivedOriginalAmount.equals(receivedOriginalAmount) ||
-            (manualRate !== null && !existing.receivedFxRateToCny.equals(manualRate))
-          ) {
-            throw new ConflictException('幂等键已用于其他收款证据');
-          }
-          return {
-            orderId: existing.id,
-            lock: toOrderEntryLockSummary(existing.locks[0] ?? null),
-            idempotentReplay: true
-          };
+          return verifyReplay(tx);
         }
 
         await this.assertActiveCustomer(tx, input.customerId);
@@ -184,40 +186,38 @@ export class IdBusinessV2OrderEntryService {
           input.settlementPlatformOptionId
         );
         const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
-        const order = await tx.idBusinessV2Order.create({
-          data: {
-            orderNo: generateOrderNo(),
-            customerId: input.customerId,
-            serviceOptionId: input.serviceOptionId,
-            accountId: null,
-            settlementPlatformOptionId: input.settlementPlatformOptionId,
-            platformOrderNo: input.platformOrderNo,
-            websiteAccountEncrypted: this.fieldEncryptionService.encrypt(input.websiteAccount),
-            websiteAccountHash: input.websiteAccountHash,
-            websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
-            receivedAmount: input.receivedAmount,
-            receivedOriginalAmount,
-            receivedCurrency,
-            receivedFxRateToCny: receiptRate.rateToCny,
-            receivedFxSnapshotId: receiptRate.id,
-            receivedFinanceAccountId: null,
-            receivedAt: orderTimestamp,
-            platformFeeAmount,
-            accountCostAmount: 0,
-            accountDisposition: input.accountDisposition,
-            balanceAmount: input.balanceAmount,
-            balanceCostAmount: 0,
-            refundCostAmount: null,
-            profitAmount: null,
-            status: 'pending',
-            openedAt: input.openedAt,
-            dueAt: input.dueAt,
-            idempotencyKey: input.idempotencyKey,
-            remark: input.remark,
-            createdByUserId: operator?.id,
-            updatedByUserId: operator?.id,
-            createdAt: orderTimestamp
-          }
+        const order = await this.repository.createOrder(tx, {
+          orderNo: generateOrderNo(),
+          customerId: input.customerId,
+          serviceOptionId: input.serviceOptionId,
+          accountId: null,
+          settlementPlatformOptionId: input.settlementPlatformOptionId,
+          platformOrderNo: input.platformOrderNo,
+          websiteAccountEncrypted: this.fieldEncryptionService.encrypt(input.websiteAccount),
+          websiteAccountHash: input.websiteAccountHash,
+          websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
+          receivedAmount: input.receivedAmount.toString(),
+          receivedOriginalAmount: receivedOriginalAmount.toString(),
+          receivedCurrency,
+          receivedFxRateToCny: receiptFxRate.toString(),
+          receivedFxSnapshotId: receiptRate.id,
+          receivedFinanceAccountId: null,
+          receivedAt: orderTimestamp,
+          platformFeeAmount: platformFeeAmount.toString(),
+          accountCostAmount: 0,
+          accountDisposition: input.accountDisposition,
+          balanceAmount: input.balanceAmount.toString(),
+          balanceCostAmount: 0,
+          refundCostAmount: null,
+          profitAmount: null,
+          status: 'pending',
+          openedAt: input.openedAt,
+          dueAt: input.dueAt,
+          idempotencyKey: input.idempotencyKey,
+          remark: input.remark,
+          createdByUserId: operator?.id,
+          updatedByUserId: operator?.id,
+          createdAt: orderTimestamp
         });
         const reservation = await this.orderLockService.reserveAccountForOrderInTransaction(
           tx,
@@ -232,19 +232,17 @@ export class IdBusinessV2OrderEntryService {
         );
         await applyNewOrderAccountDisposition(
           tx,
+          this.repository,
           order.id,
           input.accountId,
           input.accountDisposition,
           operator
         );
-        const auditedOrder = await tx.idBusinessV2Order.findUniqueOrThrow({
-          where: {
-            id: order.id
-          }
-        });
+        const auditedOrder = await this.repository.requireOrderInTransaction(tx, order.id);
 
         await writeOrderEntryAuditLog(
           tx,
+          this.repository,
           auditedOrder,
           input,
           platformFeeAmount,
@@ -256,35 +254,17 @@ export class IdBusinessV2OrderEntryService {
           lock: reservation.lock,
           idempotentReplay: false
         };
-      });
-    } catch (error) {
-      if (!isUniqueConstraintError(error)) {
-        throw error;
+      },
+      {
+        requestId: randomUUID(),
+        operator,
+        businessTime: orderTimestamp,
+        retryMode: 'fullReplay',
+        idempotencyKey: input.idempotencyKey,
+        replay: verifyReplay,
+        uniqueConflictMessage: '平台订单号已存在或订单刚被其他请求创建，请刷新后核对'
       }
-
-      const existing = await this.prisma.idBusinessV2Order.findUnique({
-        where: {
-          idempotencyKey: input.idempotencyKey
-        },
-        include: {
-          locks: {
-            orderBy: {
-              lockedAt: 'desc'
-            },
-            take: 1
-          }
-        }
-      });
-      if (!existing) {
-        throw new ConflictException('平台订单号已存在或订单刚被其他请求创建，请刷新后核对');
-      }
-      assertOrderEntryReplayMatches(existing, existing.locks[0] ?? null, input);
-      transactionResult = {
-        orderId: existing.id,
-        lock: toOrderEntryLockSummary(existing.locks[0] ?? null),
-        idempotentReplay: true
-      };
-    }
+    );
 
     return {
       order: await this.ordersService.get(transactionResult.orderId),
@@ -295,7 +275,7 @@ export class IdBusinessV2OrderEntryService {
   }
 
   async createWaitingExternalOrderInTransaction(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: CreateWaitingExternalOrderInput,
     operator?: AuthenticatedUser
   ) {
@@ -305,72 +285,70 @@ export class IdBusinessV2OrderEntryService {
       tx,
       input.settlementPlatformOptionId
     );
-    const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
+    const receivedAmount = Amount4.from(input.receivedAmount);
+    const balanceAmount = Amount4.from(input.balanceAmount);
+    const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
     const orderTimestamp = new Date();
-    const order = await tx.idBusinessV2Order.create({
-      data: {
-        orderNo: generateOrderNo(),
+    const order = await this.repository.createOrder(tx, {
+      orderNo: generateOrderNo(),
+      customerId: input.customerId,
+      serviceOptionId: input.serviceOptionId,
+      accountId: input.accountId,
+      settlementPlatformOptionId: input.settlementPlatformOptionId,
+      platformOrderNo: input.platformOrderNo,
+      websiteAccountEncrypted: input.websiteAccountEncrypted,
+      websiteAccountHash: input.websiteAccountHash,
+      websiteAccountMasked: input.websiteAccountMasked,
+      receivedAmount: receivedAmount.toString(),
+      receivedOriginalAmount: receivedAmount.toString(),
+      receivedCurrency: 'CNY',
+      receivedFxRateToCny: 1,
+      receivedFinanceAccountId: null,
+      receivedAt: orderTimestamp,
+      platformFeeAmount: platformFeeAmount.toString(),
+      accountCostAmount: 0,
+      accountDisposition: 'retained',
+      balanceAmount: balanceAmount.toString(),
+      balanceCostAmount: 0,
+      refundCostAmount: null,
+      profitAmount: null,
+      status: 'waiting_external',
+      statusChangedAt: orderTimestamp,
+      openedAt: input.openedAt,
+      dueAt: input.dueAt,
+      idempotencyKey: input.idempotencyKey,
+      remark: input.remark,
+      createdByUserId: operator?.id,
+      updatedByUserId: operator?.id,
+      createdAt: orderTimestamp
+    });
+
+    await this.repository.appendAudit(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2',
+      action: 'id_business_v2.renewal.open_request.order_create',
+      objectType: 'id_business_v2_order',
+      objectId: order.id,
+      afterData: {
+        orderNo: order.orderNo,
+        sourceActivationId: input.sourceActivationId,
         customerId: input.customerId,
         serviceOptionId: input.serviceOptionId,
         accountId: input.accountId,
         settlementPlatformOptionId: input.settlementPlatformOptionId,
         platformOrderNo: input.platformOrderNo,
-        websiteAccountEncrypted: input.websiteAccountEncrypted,
-        websiteAccountHash: input.websiteAccountHash,
         websiteAccountMasked: input.websiteAccountMasked,
-        receivedAmount: input.receivedAmount,
-        receivedOriginalAmount: input.receivedAmount,
-        receivedCurrency: 'CNY',
-        receivedFxRateToCny: 1,
-        receivedFinanceAccountId: null,
-        receivedAt: orderTimestamp,
-        platformFeeAmount,
-        accountCostAmount: 0,
-        accountDisposition: 'retained',
-        balanceAmount: input.balanceAmount,
-        balanceCostAmount: 0,
-        refundCostAmount: null,
-        profitAmount: null,
-        status: 'waiting_external',
-        statusChangedAt: orderTimestamp,
+        receivedAmount: receivedAmount.toString(),
+        platformFeeAmount: platformFeeAmount.toString(),
+        balanceAmount: balanceAmount.toString(),
         openedAt: input.openedAt,
         dueAt: input.dueAt,
-        idempotencyKey: input.idempotencyKey,
-        remark: input.remark,
-        createdByUserId: operator?.id,
-        updatedByUserId: operator?.id,
-        createdAt: orderTimestamp
-      }
-    });
-
-    await tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2',
-        action: 'id_business_v2.renewal.open_request.order_create',
-        objectType: 'id_business_v2_order',
-        objectId: order.id,
-        afterData: {
-          orderNo: order.orderNo,
-          sourceActivationId: input.sourceActivationId,
-          customerId: input.customerId,
-          serviceOptionId: input.serviceOptionId,
-          accountId: input.accountId,
-          settlementPlatformOptionId: input.settlementPlatformOptionId,
-          platformOrderNo: input.platformOrderNo,
-          websiteAccountMasked: input.websiteAccountMasked,
-          receivedAmount: input.receivedAmount.toString(),
-          platformFeeAmount: platformFeeAmount.toString(),
-          balanceAmount: input.balanceAmount.toString(),
-          openedAt: input.openedAt,
-          dueAt: input.dueAt,
-          status: 'waiting_external',
-          balanceConsumed: false,
-          appleOfficialOpenExecuted: false,
-          nextStep: 'waiting_apple_execution'
-        },
-        remark: `创建 V2 续费待执行订单：${order.orderNo}`
-      }
+        status: 'waiting_external',
+        balanceConsumed: false,
+        appleOfficialOpenExecuted: false,
+        nextStep: 'waiting_apple_execution'
+      },
+      remark: `创建 V2 续费待执行订单：${order.orderNo}`
     });
 
     return {
@@ -380,7 +358,7 @@ export class IdBusinessV2OrderEntryService {
   }
 
   async createManualRenewalOrderInTransaction(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: CreateManualRenewalOrderInput,
     operator?: AuthenticatedUser
   ) {
@@ -390,42 +368,42 @@ export class IdBusinessV2OrderEntryService {
       tx,
       input.settlementPlatformOptionId
     );
-    const platformFeeAmount = calculatePlatformFee(input.receivedAmount, settlementPlatform);
+    const receivedAmount = Amount4.from(input.receivedAmount);
+    const balanceAmount = Amount4.from(input.balanceAmount);
+    const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
     const orderTimestamp = new Date();
-    const order = await tx.idBusinessV2Order.create({
-      data: {
-        orderNo: generateOrderNo(),
-        customerId: input.customerId,
-        serviceOptionId: input.serviceOptionId,
-        accountId: input.accountId,
-        settlementPlatformOptionId: input.settlementPlatformOptionId,
-        platformOrderNo: input.platformOrderNo,
-        websiteAccountEncrypted: input.websiteAccountEncrypted,
-        websiteAccountHash: input.websiteAccountHash,
-        websiteAccountMasked: input.websiteAccountMasked,
-        receivedAmount: input.receivedAmount,
-        receivedOriginalAmount: input.receivedAmount,
-        receivedCurrency: 'CNY',
-        receivedFxRateToCny: 1,
-        receivedFinanceAccountId: null,
-        receivedAt: orderTimestamp,
-        platformFeeAmount,
-        accountCostAmount: 0,
-        accountDisposition: 'retained',
-        balanceAmount: input.balanceAmount,
-        balanceCostAmount: 0,
-        refundCostAmount: null,
-        profitAmount: null,
-        status: 'processing',
-        statusChangedAt: orderTimestamp,
-        openedAt: input.openedAt,
-        dueAt: input.dueAt,
-        idempotencyKey: input.idempotencyKey,
-        remark: input.remark,
-        createdByUserId: operator?.id,
-        updatedByUserId: operator?.id,
-        createdAt: orderTimestamp
-      }
+    const order = await this.repository.createOrder(tx, {
+      orderNo: generateOrderNo(),
+      customerId: input.customerId,
+      serviceOptionId: input.serviceOptionId,
+      accountId: input.accountId,
+      settlementPlatformOptionId: input.settlementPlatformOptionId,
+      platformOrderNo: input.platformOrderNo,
+      websiteAccountEncrypted: input.websiteAccountEncrypted,
+      websiteAccountHash: input.websiteAccountHash,
+      websiteAccountMasked: input.websiteAccountMasked,
+      receivedAmount: receivedAmount.toString(),
+      receivedOriginalAmount: receivedAmount.toString(),
+      receivedCurrency: 'CNY',
+      receivedFxRateToCny: 1,
+      receivedFinanceAccountId: null,
+      receivedAt: orderTimestamp,
+      platformFeeAmount: platformFeeAmount.toString(),
+      accountCostAmount: 0,
+      accountDisposition: 'retained',
+      balanceAmount: balanceAmount.toString(),
+      balanceCostAmount: 0,
+      refundCostAmount: null,
+      profitAmount: null,
+      status: 'processing',
+      statusChangedAt: orderTimestamp,
+      openedAt: input.openedAt,
+      dueAt: input.dueAt,
+      idempotencyKey: input.idempotencyKey,
+      remark: input.remark,
+      createdByUserId: operator?.id,
+      updatedByUserId: operator?.id,
+      createdAt: orderTimestamp
     });
 
     return {
@@ -434,77 +412,29 @@ export class IdBusinessV2OrderEntryService {
     };
   }
 
-  private async assertActiveCustomer(tx: Prisma.TransactionClient, customerId: string) {
-    const customer = await tx.idBusinessV2Customer.findFirst({
-      where: {
-        id: customerId,
-        recordStatus: 'active',
-        deletedAt: null
-      },
-      select: {
-        id: true
-      }
-    });
+  private async assertActiveCustomer(tx: V2CommandTransaction, customerId: string) {
+    const customer = await this.repository.findActiveCustomer(tx, customerId);
     if (!customer) {
       throw new BadRequestException('客户不存在、已停用或已删除');
     }
   }
 
-  private async assertActiveService(tx: Prisma.TransactionClient, serviceOptionId: string) {
-    const service = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: serviceOptionId,
-        type: 'service',
-        status: 'active',
-        deletedAt: null,
-        businessAmount: {
-          gt: 0
-        },
-        parent: {
-          is: {
-            type: 'business_category',
-            status: 'active',
-            deletedAt: null
-          }
-        },
-        countryOption: {
-          is: {
-            type: 'country',
-            status: 'active',
-            deletedAt: null,
-            currencyCode: {
-              not: null
-            }
-          }
-        }
-      },
-      select: {
-        id: true
-      }
-    });
+  private async assertActiveService(tx: V2CommandTransaction, serviceOptionId: string) {
+    const service = await this.repository.findEligibleOrderEntryService(tx, serviceOptionId);
     if (!service) {
       throw new BadRequestException('业务不存在、已停用或尚未配置国家、金额和货币');
     }
   }
 
   private async resolveSettlementPlatform(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     settlementPlatformOptionId: string | null
   ) {
     if (!settlementPlatformOptionId) return null;
-    const platform = await tx.idBusinessV2Option.findFirst({
-      where: {
-        id: settlementPlatformOptionId,
-        type: 'settlement_platform',
-        status: 'active',
-        deletedAt: null
-      },
-      select: {
-        id: true,
-        fixedFee: true,
-        percentageFee: true
-      }
-    });
+    const platform = await this.repository.findActiveSettlementPlatform(
+      tx,
+      settlementPlatformOptionId
+    );
     if (!platform) {
       throw new BadRequestException('结算平台不存在或已停用');
     }

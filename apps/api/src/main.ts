@@ -17,7 +17,8 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ApiResponseInterceptor());
   app.enableCors({
     origin: allowedOrigins?.length ? allowedOrigins : true,
-    credentials: true
+    credentials: true,
+    exposedHeaders: ['X-Request-Id']
   });
 
   const port = Number(process.env.APP_PORT ?? 3000);

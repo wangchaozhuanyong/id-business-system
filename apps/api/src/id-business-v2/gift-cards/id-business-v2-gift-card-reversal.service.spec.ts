@@ -7,7 +7,9 @@ import {
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2GiftCardReversalService } from './id-business-v2-gift-card-reversal.service';
+import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
 const accountId = '11111111-1111-4111-8111-111111111111';
 const giftCardId = '22222222-2222-4222-8222-222222222222';
@@ -45,7 +47,15 @@ function makeLockedGiftCard(overrides: Record<string, unknown> = {}) {
     codeTail: 'CDEF',
     faceValue: decimal('20'),
     exchangeRate: decimal('5.4'),
+    exchangeRatePrefilledValue: null,
     costAmount: decimal('108'),
+    purchaseOriginalAmount: decimal('108'),
+    purchaseCurrency: 'CNY',
+    purchaseFxRateToCny: decimal('1'),
+    purchaseFxSnapshotId: null,
+    purchaseFinanceAccountId: null,
+    purchaseSupplierAccountId: null,
+    paidAt: null,
     status: 'credited',
     createdAt,
     ...overrides
@@ -142,11 +152,12 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     post: vi.fn()
   };
   const service = new IdBusinessV2GiftCardReversalService(
-    prisma as never,
     new IdBusinessV2BalanceCalculatorService(),
     accountLossesService as never,
     supplierFundsService as never,
-    financePostingService as never
+    financePostingService as never,
+    new IdBusinessV2GiftCardsRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {
@@ -274,14 +285,14 @@ describe('IdBusinessV2GiftCardReversalService', () => {
         giftCardId,
         entryType: 'gift_card_redeemed',
         direction: 'debit',
-        balanceAmount: decimal('20'),
-        costAmount: decimal('112'),
-        balanceBefore: decimal('150'),
-        balanceAfter: decimal('130'),
-        costBefore: decimal('840'),
-        costAfter: decimal('728'),
-        averageCostBefore: decimal('5.6'),
-        averageCostAfter: decimal('5.6'),
+        balanceAmount: '20',
+        costAmount: '112',
+        balanceBefore: '150',
+        balanceAfter: '130',
+        costBefore: '840',
+        costAfter: '728',
+        averageCostBefore: '5.6',
+        averageCostAfter: '5.6',
         reversalOfEntryId: originalEntryId,
         idempotencyKey: `gift_card_reversal:${giftCardId}:reversal-12345678`
       })
@@ -298,8 +309,8 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
       where: { id: accountId },
       data: {
-        currentBalance: decimal('130'),
-        balanceCostAmount: decimal('728'),
+        currentBalance: '130',
+        balanceCostAmount: '728',
         updatedByUserId: operator.id
       },
       select: {

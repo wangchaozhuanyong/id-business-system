@@ -150,38 +150,34 @@
             </div>
           </dl>
           <div class="v2-exchange-samples">
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.exchangeRates.offers"
               scrollbar-always-on
               show-overflow-tooltip
               :data="provider.validSamples"
               size="small"
-              row-key="sourceAdId"
             >
               <V2TableColumn
-                kind="identifier"
-                width-preset="identifier"
+                :definition="v2TableSchemas.exchangeRates.offers.columns[0]"
                 prop="sourceAdId"
-                label="公开广告编号"
               />
-              <V2TableColumn kind="numeric" width-preset="compact" label="价格">
+              <V2TableColumn :definition="v2TableSchemas.exchangeRates.offers.columns[1]">
                 <template #default="{ row }">{{ page.formatRate(row.priceToRmb) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" width-preset="standard" label="最低成交额">
+              <V2TableColumn :definition="v2TableSchemas.exchangeRates.offers.columns[2]">
                 <template #default="{ row }">¥{{ page.formatAmount(row.minAmountRmb) }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" width-preset="standard" label="最高成交额">
+              <V2TableColumn :definition="v2TableSchemas.exchangeRates.offers.columns[3]">
                 <template #default="{ row }">¥{{ page.formatAmount(row.maxAmountRmb) }}</template>
               </V2TableColumn>
               <V2TableColumn
-                kind="numeric"
-                width-preset="compact"
+                :definition="v2TableSchemas.exchangeRates.offers.columns[4]"
                 prop="completedOrderCount"
-                label="完成订单"
               />
-              <V2TableColumn kind="numeric" width-preset="compact" label="完成率">
+              <V2TableColumn :definition="v2TableSchemas.exchangeRates.offers.columns[5]">
                 <template #default="{ row }">{{ page.formatPercent(row.completionRate) }}</template>
               </V2TableColumn>
-            </el-table>
+            </V2Table>
           </div>
         </section>
       </section>
@@ -300,6 +296,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';

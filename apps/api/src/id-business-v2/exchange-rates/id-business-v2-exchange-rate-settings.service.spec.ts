@@ -2,6 +2,8 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 const operator = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -28,15 +30,19 @@ function settingsRecord(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2ExchangeRateSettingsService', () => {
   const tx = {
-    idBusinessV2ExchangeRateSettings: { upsert: vi.fn() },
+    idBusinessV2ExchangeRateSettings: { create: vi.fn(), upsert: vi.fn() },
+    $queryRaw: vi.fn(),
     auditLog: { create: vi.fn() }
   };
   const prisma = {
-    idBusinessV2ExchangeRateSettings: { upsert: vi.fn() },
-    $transaction: vi.fn(),
-    $queryRaw: vi.fn()
+    idBusinessV2ExchangeRateSettings: { findUnique: vi.fn() },
+    $transaction: vi.fn()
   };
-  const service = new IdBusinessV2ExchangeRateSettingsService(prisma as never);
+  const service = new IdBusinessV2ExchangeRateSettingsService(
+    new IdBusinessV2ExchangeRateRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never),
+    new V2TransactionalAuditService()
+  );
   const originalEmergencySwitch = process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
 
   beforeEach(() => {
@@ -44,8 +50,9 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
     vi.setSystemTime(now);
     vi.clearAllMocks();
     delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
-    prisma.idBusinessV2ExchangeRateSettings.upsert.mockResolvedValue(settingsRecord());
+    prisma.idBusinessV2ExchangeRateSettings.findUnique.mockResolvedValue(null);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
+    tx.idBusinessV2ExchangeRateSettings.create.mockResolvedValue(settingsRecord());
     tx.idBusinessV2ExchangeRateSettings.upsert.mockImplementation(async ({ update }) =>
       settingsRecord({
         ...update,
@@ -71,15 +78,13 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
       targetAmountRmb: '5000',
       emergencyNetworkEnabled: true
     });
-    expect(prisma.idBusinessV2ExchangeRateSettings.upsert).toHaveBeenCalledWith({
-      where: { id: 1 },
-      create: expect.objectContaining({
+    expect(tx.idBusinessV2ExchangeRateSettings.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
         id: 1,
         autoEnabled: true,
         intervalMinutes: 30,
-        targetAmountRmb: new Prisma.Decimal('5000')
-      }),
-      update: {}
+        targetAmountRmb: '5000'
+      })
     });
   });
 
@@ -100,7 +105,7 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
         update: expect.objectContaining({
           autoEnabled: true,
           intervalMinutes: 30,
-          targetAmountRmb: new Prisma.Decimal('8000.13'),
+          targetAmountRmb: '8000.13',
           nextRunAt: now,
           updatedByUserId: operator.id
         })
@@ -143,22 +148,21 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
   });
 
   it('atomically returns only the database schedule claim result', async () => {
-    prisma.$queryRaw.mockResolvedValue([
+    tx.$queryRaw.mockResolvedValue([
       {
         targetAmountRmb: new Prisma.Decimal('5000'),
         intervalMinutes: 15,
         nextRunAt: new Date('2026-07-27T10:15:00.000Z')
       }
     ]);
-    await expect(service.claimDueSchedule()).resolves.toMatchObject({
-      targetAmountRmb: new Prisma.Decimal('5000'),
-      intervalMinutes: 15
-    });
-    const query = prisma.$queryRaw.mock.calls[0]?.[0] as { strings?: string[] };
+    const claimed = await service.claimDueSchedule();
+    expect(claimed?.targetAmountRmb.toString()).toBe('5000');
+    expect(claimed?.intervalMinutes).toBe(15);
+    const query = tx.$queryRaw.mock.calls[0]?.[0] as { strings?: string[] };
     expect(query.strings?.join('')).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
     expect(query.strings?.join('')).toContain('FLOOR');
 
-    prisma.$queryRaw.mockResolvedValue([]);
+    tx.$queryRaw.mockResolvedValue([]);
     await expect(service.claimDueSchedule()).resolves.toBeNull();
   });
 
