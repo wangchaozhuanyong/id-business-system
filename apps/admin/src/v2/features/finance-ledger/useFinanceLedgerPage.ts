@@ -5,7 +5,6 @@ import type {
   V2FinanceAccountType,
   V2FinanceCurrency,
   V2FinanceExpense,
-  V2FinanceHistoryBackfillPreview,
   V2FinanceJournal,
   V2FinanceJournalType,
   V2FinancePeriod,
@@ -20,6 +19,7 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { V2OptionSelector } from '@/v2/types/options';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { idBusinessV2FinanceApi, idBusinessV2OptionsApi } from './api';
+import { useFinanceHistory } from './useFinanceHistory';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
 
 export type FinanceLedgerTab = 'accounts' | 'wallets' | 'expenses' | 'journals' | 'periods';
@@ -210,22 +210,11 @@ export function useFinanceLedgerPage() {
   const periodMutationMode = ref<PeriodMutationMode>('close');
   const periodForm = reactive({ month: currentKualaLumpurMonth(), reason: '' });
 
-  const historyDrawerVisible = ref(false);
-  const historySubmitting = ref(false);
-  const historyNote = ref('');
-  const historyPreviewVisible = ref(false);
-  const historyPreviewLoading = ref(false);
-  const historyPreview = ref<V2FinanceHistoryBackfillPreview | null>(null);
-  const historyPreviewConfirmDisabledReason = computed(() => {
-    if (!historyPreview.value) return '请先加载回填预览';
-    if (!historyPreview.value.canBackfill) return '当前历史状态不允许再次回填';
-    return '';
-  });
-
   function refresh() {
     return ledgerQuery.refresh();
   }
   const walletActions = useFinanceLedgerWallets({ accounts, refresh });
+  const historyActions = useFinanceHistory({ refresh });
 
   function applyFilters() {
     expensePage.value = 1;
@@ -407,59 +396,6 @@ export function useFinanceLedgerPage() {
     }
   }
 
-  async function openHistoryBackfillPreview() {
-    historyPreviewLoading.value = true;
-    try {
-      historyPreview.value = await idBusinessV2FinanceApi.previewHistoryBackfill();
-      historyPreviewVisible.value = true;
-    } catch (cause) {
-      ElMessage.error(getApiErrorMessage(cause));
-    } finally {
-      historyPreviewLoading.value = false;
-    }
-  }
-
-  async function runHistoryBackfill() {
-    if (!historyPreview.value?.canBackfill) {
-      return showWarning('请先完成历史回填预览');
-    }
-    historySubmitting.value = true;
-    try {
-      const result = await idBusinessV2FinanceApi.backfillHistory(
-        historyPreview.value.fingerprint,
-        historyPreview.value.asOf
-      );
-      historyPreviewVisible.value = false;
-      historyPreview.value = null;
-      ElMessage.success(`历史回填完成：${result.summary.orders} 个订单`);
-      await refresh();
-    } catch (cause) {
-      ElMessage.error(getApiErrorMessage(cause));
-    } finally {
-      historySubmitting.value = false;
-    }
-  }
-
-  function openHistoryConfirmation() {
-    historyNote.value = '';
-    historyDrawerVisible.value = true;
-  }
-
-  async function confirmHistory() {
-    if (historyNote.value.trim().length < 2) return showWarning('请填写完整性确认说明');
-    historySubmitting.value = true;
-    try {
-      await idBusinessV2FinanceApi.confirmHistory(historyNote.value.trim());
-      historyDrawerVisible.value = false;
-      ElMessage.success('历史数据完整性已确认');
-      await refresh();
-    } catch (cause) {
-      ElMessage.error(getApiErrorMessage(cause));
-    } finally {
-      historySubmitting.value = false;
-    }
-  }
-
   function setExpensePage(page: number) {
     expensePage.value = page;
     void refresh();
@@ -512,13 +448,7 @@ export function useFinanceLedgerPage() {
     periodSubmitting,
     periodMutationMode,
     periodForm,
-    historyDrawerVisible,
-    historySubmitting,
-    historyNote,
-    historyPreviewVisible,
-    historyPreviewLoading,
-    historyPreview,
-    historyPreviewConfirmDisabledReason,
+    ...historyActions,
     refresh,
     applyFilters,
     resetFilters,
@@ -530,10 +460,6 @@ export function useFinanceLedgerPage() {
     submitReversal,
     openPeriod,
     submitPeriod,
-    openHistoryBackfillPreview,
-    runHistoryBackfill,
-    openHistoryConfirmation,
-    confirmHistory,
     setExpensePage,
     setJournalPage
   };

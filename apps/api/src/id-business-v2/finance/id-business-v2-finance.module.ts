@@ -5,6 +5,7 @@ import { IdBusinessV2FinanceController } from './id-business-v2-finance.controll
 import { IdBusinessV2FinanceExpensesService } from './id-business-v2-finance-expenses.service';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
 import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-finance-gift-card-refunds.service';
+import { IdBusinessV2FinanceHistoryConfirmationService } from './id-business-v2-finance-history-confirmation.service';
 import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
 import { IdBusinessV2FinanceJournalsService } from './id-business-v2-finance-journals.service';
@@ -21,6 +22,7 @@ import { IdBusinessV2FinanceSupplierWalletsService } from './id-business-v2-fina
     IdBusinessV2FinanceExpensesService,
     IdBusinessV2FinanceFxService,
     IdBusinessV2FinanceGiftCardRefundsService,
+    IdBusinessV2FinanceHistoryConfirmationService,
     IdBusinessV2FinanceHistoryPreviewService,
     IdBusinessV2FinanceHistoryService,
     IdBusinessV2FinanceJournalsService,

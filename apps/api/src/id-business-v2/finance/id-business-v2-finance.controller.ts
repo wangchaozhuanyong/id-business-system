@@ -12,6 +12,7 @@ import type {
   CreateIdBusinessV2SupplierRefundDto,
   CreateIdBusinessV2SupplierWalletDto,
   ManualIdBusinessV2FinanceFxRateDto,
+  ReopenIdBusinessV2FinanceHistoryDto,
   ReopenIdBusinessV2FinancePeriodDto,
   ReverseIdBusinessV2FinanceJournalDto,
   UpdateIdBusinessV2FinanceAccountDto
@@ -20,6 +21,7 @@ import { IdBusinessV2FinanceAccountsService } from './id-business-v2-finance-acc
 import { IdBusinessV2FinanceExpensesService } from './id-business-v2-finance-expenses.service';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
 import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-finance-gift-card-refunds.service';
+import { IdBusinessV2FinanceHistoryConfirmationService } from './id-business-v2-finance-history-confirmation.service';
 import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
 import {
@@ -46,7 +48,8 @@ export class IdBusinessV2FinanceController {
     private readonly fxService: IdBusinessV2FinanceFxService,
     private readonly giftCardRefundsService: IdBusinessV2FinanceGiftCardRefundsService,
     private readonly historyPreviewService: IdBusinessV2FinanceHistoryPreviewService,
-    private readonly historyService: IdBusinessV2FinanceHistoryService
+    private readonly historyService: IdBusinessV2FinanceHistoryService,
+    private readonly historyConfirmationService: IdBusinessV2FinanceHistoryConfirmationService
   ) {}
 
   @Get('accounts')
@@ -289,7 +292,22 @@ export class IdBusinessV2FinanceController {
     @Body() dto: ConfirmIdBusinessV2FinanceHistoryDto,
     @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.historyService.confirm(dto.confirmed, dto.note, operator);
+    return this.historyConfirmationService.confirm(dto, operator);
+  }
+
+  @Get('history/confirmation-preview')
+  @RequirePermissions('finance.view', 'finance.manage')
+  previewHistoryConfirmation() {
+    return this.historyConfirmationService.preview();
+  }
+
+  @Post('history/reopen-confirmation')
+  @RequirePermissions('finance.view', 'finance.manage')
+  reopenHistoryConfirmation(
+    @Body() dto: ReopenIdBusinessV2FinanceHistoryDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.historyConfirmationService.reopen(dto.reason, operator);
   }
 
   @Get('fx-rates/latest')

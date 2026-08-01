@@ -258,6 +258,28 @@ export interface V2FinanceHistoryBackfillPreview {
   };
 }
 
+export interface V2FinanceHistoryConfirmationPreview {
+  generatedAt: IsoDateTimeString;
+  enabledAt: IsoDateTimeString;
+  historyStatus: V2FinanceHistoryStatus;
+  canConfirm: boolean;
+  fingerprint: string;
+  financeAccounts: {
+    count: number;
+    openingBalanceCny: DecimalString;
+    currentBalanceCny: DecimalString;
+  };
+  supplierWallets: {
+    count: number;
+    openingBalanceCny: DecimalString;
+    currentBalanceCny: DecimalString;
+  };
+  historicalExpenses: {
+    count: number;
+    amountCny: DecimalString;
+  };
+}
+
 export interface V2FinanceCurrencyBreakdown {
   currency: V2FinanceCurrency;
   income: DecimalString;
