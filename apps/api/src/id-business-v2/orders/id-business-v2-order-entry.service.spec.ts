@@ -602,7 +602,7 @@ describe('IdBusinessV2OrderEntryService', () => {
         }
       ]);
 
-    const result = await service.getEntryOptions('13800135678');
+    const result = await service.getEntryOptions(' 138 (0013)-5678 ');
 
     expect(result).toEqual({
       customers: [
@@ -648,7 +648,16 @@ describe('IdBusinessV2OrderEntryService', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           deletedAt: null,
-          recordStatus: 'active'
+          recordStatus: 'active',
+          OR: [
+            { name: { contains: '138 (0013)-5678', mode: 'insensitive' } },
+            { wechat: { contains: '138 (0013)-5678', mode: 'insensitive' } },
+            { qq: { contains: '138 (0013)-5678', mode: 'insensitive' } },
+            { phoneTail: { contains: '00135678', mode: 'insensitive' } },
+            { phoneHash: 'website-hash' },
+            { whatsappTail: { contains: '00135678', mode: 'insensitive' } },
+            { whatsappHash: 'website-hash' }
+          ]
         }),
         select: {
           id: true,
@@ -661,6 +670,7 @@ describe('IdBusinessV2OrderEntryService', () => {
         take: 50
       })
     );
+    expect(fieldEncryptionService.hash).toHaveBeenCalledWith('13800135678');
     expect(JSON.stringify(result)).not.toContain('phoneEncrypted');
   });
 });
