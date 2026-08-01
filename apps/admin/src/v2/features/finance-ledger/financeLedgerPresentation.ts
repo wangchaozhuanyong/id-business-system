@@ -68,6 +68,11 @@ export function historyStatusLabel(value?: V2FinanceHistoryStatus) {
   )[value ?? 'not_started'];
 }
 
+export function isMeaningfulHistoryStatement(value: string) {
+  const normalized = value.trim();
+  return normalized.length >= 6 && /\p{L}/u.test(normalized) && !/^(.)\1+$/u.test(normalized);
+}
+
 export function journalTypeLabel(value: V2FinanceJournalType) {
   const labels: Partial<Record<V2FinanceJournalType, string>> = {
     supplier_deposit: '供应商充值',

@@ -343,14 +343,19 @@
                   预览历史回填
                 </AppButton>
                 <AppButton
-                  v-if="
-                    page.settings?.historyStatus === 'incomplete' ||
-                    page.settings?.historyStatus === 'completed'
-                  "
+                  v-if="page.settings?.historyStatus === 'incomplete'"
                   variant="ghost"
+                  :loading="page.historyConfirmationLoading"
                   @click="page.openHistoryConfirmation"
                 >
                   确认期初与旧开支
+                </AppButton>
+                <AppButton
+                  v-if="page.settings?.historyStatus === 'completed'"
+                  variant="ghost"
+                  @click="page.openHistoryReopen"
+                >
+                  重新核对历史
                 </AppButton>
               </div>
             </section>

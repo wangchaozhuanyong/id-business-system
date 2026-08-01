@@ -365,36 +365,116 @@
 
   <V2FormDrawer
     v-model="page.historyDrawerVisible"
-    title="确认历史数据完整性"
-    confirm-text="确认完整"
+    :title="historyDrawerTitle"
+    :confirm-text="page.historyDrawerMode === 'confirm' ? '确认完整' : '重新开启核对'"
     :confirm-loading="page.historySubmitting"
-    :dirty="Boolean(page.historyNote)"
-    @confirm="page.confirmHistory"
+    :confirm-disabled-reason="page.historyConfirmationDisabledReason"
+    :dirty="page.historyDrawerDirty"
+    @confirm="page.submitHistoryDrawer"
   >
-    <el-alert
-      type="warning"
-      title="这是生命周期利润完整性的人工确认"
-      description="确认前必须已经核对自有资金、卡商期初余额，并补录系统外历史开支。"
-      show-icon
-      :closable="false"
-    />
-    <el-form
-      class="v2-horizontal-form v2-finance-drawer-form"
-      label-position="left"
-      label-width="126px"
-      require-asterisk-position="right"
-    >
-      <el-form-item label="确认说明" required>
-        <el-input
-          v-model="page.historyNote"
-          type="textarea"
-          :rows="5"
-          maxlength="1000"
-          show-word-limit
-          placeholder="例如：已核对 2026-07-29 期初账户、卡商余额和全部旧开支"
-        />
-      </el-form-item>
-    </el-form>
+    <template v-if="page.historyDrawerMode === 'confirm'">
+      <el-alert
+        type="warning"
+        title="这是生命周期利润完整性的人工确认"
+        description="下方为本次确认的实时快照；即使数量为 0，也必须代表明确核对后的业务结论。"
+        show-icon
+        :closable="false"
+      />
+      <div
+        v-if="page.historyConfirmationPreview"
+        class="v2-finance-history-preview v2-finance-confirmation-preview"
+      >
+        <dl>
+          <div>
+            <dt>自有资金账户</dt>
+            <dd>
+              {{ page.historyConfirmationPreview.financeAccounts.count }} 个 · 期初
+              {{ formatCny(page.historyConfirmationPreview.financeAccounts.openingBalanceCny) }} ·
+              当前
+              {{ formatCny(page.historyConfirmationPreview.financeAccounts.currentBalanceCny) }}
+            </dd>
+          </div>
+          <div>
+            <dt>卡商余额</dt>
+            <dd>
+              {{ page.historyConfirmationPreview.supplierWallets.count }} 个 · 期初
+              {{ formatCny(page.historyConfirmationPreview.supplierWallets.openingBalanceCny) }} ·
+              当前
+              {{ formatCny(page.historyConfirmationPreview.supplierWallets.currentBalanceCny) }}
+            </dd>
+          </div>
+          <div>
+            <dt>系统外旧开支</dt>
+            <dd>
+              {{ page.historyConfirmationPreview.historicalExpenses.count }} 条 · 合计
+              {{ formatCny(page.historyConfirmationPreview.historicalExpenses.amountCny) }}
+            </dd>
+          </div>
+        </dl>
+        <p>
+          财务启用时间
+          {{
+            formatDate(page.historyConfirmationPreview.enabledAt)
+          }}；提交时系统会重新校验以上快照。
+        </p>
+      </div>
+      <el-form
+        class="v2-horizontal-form v2-finance-drawer-form"
+        label-position="left"
+        label-width="126px"
+        require-asterisk-position="right"
+      >
+        <el-form-item label="核对清单" required>
+          <div class="v2-finance-history-checklist">
+            <el-checkbox v-model="page.historyChecklist.financeAccountsConfirmed">
+              已核对全部自有资金账户；0 个表示期初与当前资金均确认为 0
+            </el-checkbox>
+            <el-checkbox v-model="page.historyChecklist.supplierBalancesConfirmed">
+              已核对全部卡商期初余额和当前余额
+            </el-checkbox>
+            <el-checkbox v-model="page.historyChecklist.historicalExpensesConfirmed">
+              已补录全部系统外旧开支；0 条表示确认没有遗漏开支
+            </el-checkbox>
+          </div>
+        </el-form-item>
+        <el-form-item label="确认说明" required>
+          <el-input
+            v-model="page.historyNote"
+            type="textarea"
+            :rows="5"
+            maxlength="1000"
+            show-word-limit
+            placeholder="例如：已核对 2026-07-29 期初账户、卡商余额和全部旧开支"
+          />
+        </el-form-item>
+      </el-form>
+    </template>
+    <template v-else>
+      <el-alert
+        type="warning"
+        title="重新开启后，财务历史状态将恢复为待人工确认"
+        description="原确认记录会保留，新原因会单独写入审计日志。重新核对完成前，生命周期利润将继续提示历史数据不完整。"
+        show-icon
+        :closable="false"
+      />
+      <el-form
+        class="v2-horizontal-form v2-finance-drawer-form"
+        label-position="left"
+        label-width="126px"
+        require-asterisk-position="right"
+      >
+        <el-form-item label="重新核对原因" required>
+          <el-input
+            v-model="page.historyReopenReason"
+            type="textarea"
+            :rows="5"
+            maxlength="1000"
+            show-word-limit
+            placeholder="例如：原确认说明为测试值，需重新核对自有资金和系统外旧开支"
+          />
+        </el-form-item>
+      </el-form>
+    </template>
   </V2FormDrawer>
 
   <V2ConfirmDialog
@@ -492,6 +572,10 @@ const historyPreviewRows = computed(() => {
     { label: '礼品卡撤回', value: summary.withdrawnGiftCards }
   ];
 });
+
+const historyDrawerTitle = computed(() =>
+  page.historyDrawerMode === 'confirm' ? '确认历史数据完整性' : '重新核对历史数据'
+);
 
 function formatOriginal(value: string, currency: V2FinanceCurrency) {
   const prefix = currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : '₮';

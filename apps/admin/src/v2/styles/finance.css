@@ -126,6 +126,32 @@
   line-height: 1.6;
 }
 
+.v2-finance-confirmation-preview {
+  margin-top: 16px;
+}
+
+.v2-finance-history-checklist {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.v2-finance-history-checklist .el-checkbox {
+  align-items: flex-start;
+  height: auto;
+  margin-right: 0;
+  white-space: normal;
+}
+
+.v2-finance-history-checklist .el-checkbox__input {
+  margin-top: 3px;
+}
+
+.v2-finance-history-checklist .el-checkbox__label {
+  line-height: 1.5;
+  white-space: normal;
+}
+
 .v2-finance-metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));

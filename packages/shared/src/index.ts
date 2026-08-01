@@ -60,6 +60,7 @@ export {
   type V2FinanceHistoryBackfillPreview,
   type V2FinanceHistoryBackfillPreviewCategory,
   type V2FinanceHistoryBackfillResult,
+  type V2FinanceHistoryConfirmationPreview,
   type V2FinanceHistoryStatus,
   type V2FinanceLatestRate,
   type V2FinanceJournal,

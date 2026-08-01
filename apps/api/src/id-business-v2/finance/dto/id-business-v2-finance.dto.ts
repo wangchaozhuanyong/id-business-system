@@ -108,7 +108,15 @@ export interface ManualIdBusinessV2FinanceFxRateDto {
 
 export interface ConfirmIdBusinessV2FinanceHistoryDto {
   confirmed: boolean;
+  financeAccountsConfirmed: boolean;
+  supplierBalancesConfirmed: boolean;
+  historicalExpensesConfirmed: boolean;
+  previewFingerprint: string;
   note: string;
+}
+
+export interface ReopenIdBusinessV2FinanceHistoryDto {
+  reason: string;
 }
 
 export interface BackfillIdBusinessV2FinanceHistoryDto {

@@ -8,6 +8,7 @@ export type {
   CreateIdBusinessV2SupplierRefundDto,
   CreateIdBusinessV2SupplierWalletDto,
   ManualIdBusinessV2FinanceFxRateDto,
+  ReopenIdBusinessV2FinanceHistoryDto,
   ReopenIdBusinessV2FinancePeriodDto,
   ReverseIdBusinessV2FinanceJournalDto,
   UpdateIdBusinessV2FinanceAccountDto

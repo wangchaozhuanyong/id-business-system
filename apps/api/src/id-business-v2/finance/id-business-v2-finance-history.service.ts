@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { toV2Decimal } from '../decimal-policy';
-import { normalizeFinanceText, toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
+import { toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
 import {
   createHistoricalCnyLine,
   createHistoricalCnyPair,
@@ -283,58 +283,6 @@ export class IdBusinessV2FinanceHistoryService {
       },
       { timeout: 120_000 }
     );
-  }
-
-  async confirm(confirmation: boolean, noteValue: string, operator?: AuthenticatedUser) {
-    if (confirmation !== true) {
-      throw new ConflictException('必须明确确认期初余额和系统外历史开支已经核对');
-    }
-    const note = normalizeFinanceText(noteValue, '历史确认说明', 1000, true)!;
-    return this.prisma.$transaction(async (tx) => {
-      const settings = await tx.idBusinessV2FinanceSettings.findUnique({ where: { id: 1 } });
-      if (!settings?.enabledAt || settings.historyStatus === 'not_started') {
-        throw new ConflictException('请先执行历史自动回填');
-      }
-      if (settings.historyStatus === 'in_progress') {
-        throw new ConflictException('历史自动回填仍在进行中');
-      }
-      const now = new Date();
-      const updated = await tx.idBusinessV2FinanceSettings.update({
-        where: { id: 1 },
-        data: {
-          historyStatus: 'completed',
-          historyCompletedAt: now,
-          historyNote: note,
-          updatedByUserId: operator?.id
-        }
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: operator?.id,
-          module: 'id_business_v2_finance',
-          action: 'id_business_v2.finance.history_confirm',
-          objectType: 'id_business_v2_finance_settings',
-          objectId: null,
-          beforeData: {
-            settingsId: 1,
-            historyStatus: settings.historyStatus,
-            historyNote: settings.historyNote
-          },
-          afterData: {
-            settingsId: 1,
-            historyStatus: updated.historyStatus,
-            historyCompletedAt: now.toISOString(),
-            historyNote: note
-          },
-          remark: '财务历史数据完整性已人工确认'
-        }
-      });
-      return {
-        historyStatus: updated.historyStatus,
-        historyCompletedAt: updated.historyCompletedAt,
-        historyNote: updated.historyNote
-      };
-    });
   }
 
   private async ensureLegacyCnyRate(

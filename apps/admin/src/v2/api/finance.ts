@@ -8,6 +8,7 @@ import type {
   V2FinanceLatestRate,
   V2FinanceHistoryBackfillPreview,
   V2FinanceHistoryBackfillResult,
+  V2FinanceHistoryConfirmationPreview,
   V2FinanceJournal,
   V2FinanceJournalPage,
   V2FinanceJournalType,
@@ -36,6 +37,14 @@ export interface V2FinanceJournalQuery extends V2FinanceReportQuery {
   sourceType?: string;
   sourceId?: string;
   periodMonth?: string;
+}
+
+export interface V2FinanceHistoryConfirmationInput {
+  financeAccountsConfirmed: boolean;
+  supplierBalancesConfirmed: boolean;
+  historicalExpensesConfirmed: boolean;
+  previewFingerprint: string;
+  note: string;
 }
 
 export interface V2FinanceExpenseQuery {
@@ -272,13 +281,26 @@ export const idBusinessV2FinanceApi = {
       FINANCE_SCOPES
     );
   },
-  confirmHistory(note: string) {
+  previewHistoryConfirmation() {
+    return request<V2FinanceHistoryConfirmationPreview>(
+      http.get('/id-business-v2/finance/history/confirmation-preview')
+    );
+  },
+  confirmHistory(input: V2FinanceHistoryConfirmationInput) {
     return withV2QueryInvalidation(
       request<V2FinanceSettings>(
         http.post('/id-business-v2/finance/history/confirm', {
           confirmed: true,
-          note
+          ...input
         })
+      ),
+      FINANCE_SCOPES
+    );
+  },
+  reopenHistoryConfirmation(reason: string) {
+    return withV2QueryInvalidation(
+      request<V2FinanceSettings>(
+        http.post('/id-business-v2/finance/history/reopen-confirmation', { reason })
       ),
       FINANCE_SCOPES
     );
