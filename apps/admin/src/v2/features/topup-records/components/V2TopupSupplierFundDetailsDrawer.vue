@@ -37,20 +37,25 @@
             <span>人民币成本 ¥{{ formatDecimal(country.costCny) }}</span>
           </article>
         </section>
-        <el-table :data="detail.items" row-key="id" scrollbar-always-on show-overflow-tooltip>
-          <V2TableColumn kind="text" label="类型" width-preset="wide">
+        <V2Table
+          :schema="v2TableSchemas.topupRecords.supplierFundDetails"
+          :data="detail.items"
+          scrollbar-always-on
+          show-overflow-tooltip
+        >
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[0]">
             <template #default="{ row }">{{ ledgerTypeLabel(row.entryType) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="余额变动" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[1]">
             <template #default="{ row }">{{ formatSignedCurrency(row.balanceDeltaCny) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="变动前" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[2]">
             <template #default="{ row }">¥{{ formatDecimal(row.balanceBeforeCny) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="变动后" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[3]">
             <template #default="{ row }">¥{{ formatDecimal(row.balanceAfterCny) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" label="关联记录" width-preset="identifier">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[4]">
             <template #default="{ row }">
               {{
                 row.giftCard?.codeMasked ||
@@ -58,13 +63,13 @@
               }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="原因" width-preset="identifier">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[5]">
             <template #default="{ row }">{{ row.reason || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="date" label="入账时间" width-preset="dateTime">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[6]">
             <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
           </V2TableColumn>
-        </el-table>
+        </V2Table>
         <footer class="v2-records-pagination">
           <span>共 {{ detail.total }} 条</span>
           <el-pagination
@@ -88,6 +93,8 @@
 import { reactive, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
 import {

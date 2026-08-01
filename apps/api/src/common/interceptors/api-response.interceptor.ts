@@ -7,12 +7,14 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { map, Observable } from 'rxjs';
+import { getRequestIdFromExecutionContext } from '../http/request-id';
 import { SKIP_API_RESPONSE_KEY } from './skip-api-response.decorator';
 
 interface ApiSuccessResponse<TData> {
   success: true;
   data: TData;
   message: string;
+  requestId: string;
   timestamp: string;
 }
 
@@ -31,6 +33,7 @@ export class ApiResponseInterceptor<TData> implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler<TData>
   ): Observable<ApiSuccessResponse<TData> | TData> {
+    const requestId = getRequestIdFromExecutionContext(context);
     const skipApiResponse = this.reflector.getAllAndOverride<boolean>(SKIP_API_RESPONSE_KEY, [
       context.getHandler(),
       context.getClass()
@@ -54,6 +57,7 @@ export class ApiResponseInterceptor<TData> implements NestInterceptor<
           success: true,
           data,
           message: 'ok',
+          requestId,
           timestamp: new Date().toISOString()
         };
       })

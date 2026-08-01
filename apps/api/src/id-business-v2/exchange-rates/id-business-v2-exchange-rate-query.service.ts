@@ -1,9 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, toV2DecimalString } from '../decimal-policy';
+import { Rate8 } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 export interface ListIdBusinessV2ExchangeRateRunsQuery extends PaginationQuery {
   keyword?: string;
@@ -16,44 +15,26 @@ export interface ListIdBusinessV2ExchangeRateRunsQuery extends PaginationQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const RUN_INCLUDE = {
-  triggeredBy: {
-    select: { id: true, username: true, displayName: true }
-  },
-  snapshot: {
-    include: {
-      providerSnapshots: {
-        select: {
-          provider: true,
-          side: true,
-          validAdCount: true,
-          averageRateToRmb: true
-        }
-      }
-    }
-  }
-} satisfies Prisma.IdBusinessV2ExchangeRateRunInclude;
+type RunRecord = NonNullable<
+  Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findLatestRun']>>
+>;
 
 @Injectable()
 export class IdBusinessV2ExchangeRateQueryService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
     private readonly settingsService: IdBusinessV2ExchangeRateSettingsService
   ) {}
 
   async listRuns(query: ListIdBusinessV2ExchangeRateRunsQuery) {
     const pagination = getPagination(query);
-    const where = this.runWhere(query);
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2ExchangeRateRun.findMany({
-        where,
-        include: RUN_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: [{ startedAt: query.sortOrder === 'asc' ? 'asc' : 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2ExchangeRateRun.count({ where })
-    ]);
+    const filters = this.runFilters(query);
+    const [items, total] = await this.repository.listRuns({
+      ...filters,
+      skip: pagination.skip,
+      take: pagination.take,
+      sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc'
+    });
     return {
       items: items.map((item) => this.runResponse(item)),
       total,
@@ -64,26 +45,7 @@ export class IdBusinessV2ExchangeRateQueryService {
 
   async getRun(idValue: string) {
     const id = this.uuid(idValue, '采集批次编号');
-    const run = await this.prisma.idBusinessV2ExchangeRateRun.findUnique({
-      where: { id },
-      include: {
-        triggeredBy: {
-          select: { id: true, username: true, displayName: true }
-        },
-        snapshot: {
-          include: {
-            providerSnapshots: {
-              include: {
-                validSamples: {
-                  orderBy: [{ priceToRmb: 'asc' }, { sourceAdId: 'asc' }]
-                }
-              },
-              orderBy: [{ provider: 'asc' }, { side: 'asc' }]
-            }
-          }
-        }
-      }
-    });
+    const run = await this.repository.findRun(id);
     if (!run) throw new NotFoundException('汇率采集批次不存在');
 
     return {
@@ -92,13 +54,11 @@ export class IdBusinessV2ExchangeRateQueryService {
         ? {
             id: run.snapshot.id,
             averagedAt: run.snapshot.averagedAt,
-            combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
-              run.snapshot.combinedMerchantBuyAverageRateToRmb
-            ),
-            combinedMerchantSellAverageRateToRmb: toV2DecimalString(
-              run.snapshot.combinedMerchantSellAverageRateToRmb
-            ),
-            midRateToRmb: toV2DecimalString(run.snapshot.midRateToRmb)
+            combinedMerchantBuyAverageRateToRmb:
+              run.snapshot.combinedMerchantBuyAverageRateToRmb.toString(),
+            combinedMerchantSellAverageRateToRmb:
+              run.snapshot.combinedMerchantSellAverageRateToRmb.toString(),
+            midRateToRmb: run.snapshot.midRateToRmb.toString()
           }
         : null,
       providerSnapshots:
@@ -125,24 +85,21 @@ export class IdBusinessV2ExchangeRateQueryService {
             lowCompletionRate: provider.excludedLowCompletionRate,
             priceOutlier: provider.excludedPriceOutlier
           },
-          medianRateToRmb: toV2DecimalString(provider.medianRateToRmb),
-          lowestValidRateToRmb: toV2DecimalString(provider.lowestValidRateToRmb),
-          highestValidRateToRmb: toV2DecimalString(provider.highestValidRateToRmb),
-          averageRateToRmb: toV2DecimalString(provider.averageRateToRmb),
+          medianRateToRmb: provider.medianRateToRmb.toString(),
+          lowestValidRateToRmb: provider.lowestValidRateToRmb.toString(),
+          highestValidRateToRmb: provider.highestValidRateToRmb.toString(),
+          averageRateToRmb: provider.averageRateToRmb.toString(),
           validSamples: provider.validSamples.map((sample) => ({
             sourceAdId: sample.sourceAdId,
-            priceToRmb: toV2DecimalString(sample.priceToRmb),
-            minAmountRmb: sample.minAmountRmb ? toV2DecimalString(sample.minAmountRmb) : null,
-            maxAmountRmb: sample.maxAmountRmb ? toV2DecimalString(sample.maxAmountRmb) : null,
-            tradableAmountUsdt: toV2DecimalString(sample.tradableAmountUsdt),
+            priceToRmb: sample.priceToRmb.toString(),
+            minAmountRmb: sample.minAmountRmb?.toString() ?? null,
+            maxAmountRmb: sample.maxAmountRmb?.toString() ?? null,
+            tradableAmountUsdt: sample.tradableAmountUsdt.toString(),
             paymentMethods: sample.paymentMethods,
             merchantType: sample.merchantType,
             completedOrderCount: sample.completedOrderCount,
-            completionRate: toV2DecimalString(sample.completionRate),
-            positiveReviewRate:
-              sample.positiveReviewRate === null
-                ? null
-                : toV2DecimalString(sample.positiveReviewRate)
+            completionRate: sample.completionRate.toString(),
+            positiveReviewRate: sample.positiveReviewRate?.toString() ?? null
           }))
         })) ?? []
     };
@@ -150,15 +107,8 @@ export class IdBusinessV2ExchangeRateQueryService {
 
   async getOverview() {
     const [latestRun, lastSuccess, settings] = await Promise.all([
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        include: RUN_INCLUDE,
-        orderBy: [{ startedAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        where: { status: 'success' },
-        include: RUN_INCLUDE,
-        orderBy: [{ finishedAt: 'desc' }, { id: 'desc' }]
-      }),
+      this.repository.findLatestRun(),
+      this.repository.findLatestRun('success'),
       this.settingsService.getRecord()
     ]);
     const effective = this.evaluateEffective(latestRun, lastSuccess, settings.intervalMinutes);
@@ -178,15 +128,8 @@ export class IdBusinessV2ExchangeRateQueryService {
 
   async getEffective() {
     const [latestRun, lastSuccess, settings] = await Promise.all([
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        include: RUN_INCLUDE,
-        orderBy: [{ startedAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        where: { status: 'success' },
-        include: RUN_INCLUDE,
-        orderBy: [{ finishedAt: 'desc' }, { id: 'desc' }]
-      }),
+      this.repository.findLatestRun(),
+      this.repository.findLatestRun('success'),
       this.settingsService.getRecord()
     ]);
     return this.publicEffective(
@@ -202,24 +145,20 @@ export class IdBusinessV2ExchangeRateQueryService {
     }
     const prefilled = this.decimal(prefilledValue, '预填汇率');
     const finalRate = this.decimal(finalValue, '最终汇率');
-    if (!prefilled.eq(effective.midRateToRmb)) {
+    if (!prefilled.equals(effective.midRateToRmb)) {
       throw new BadRequestException('预填汇率与来源快照不一致');
     }
     return {
       exchangeRateSource: 'automatic_snapshot',
       exchangeRateSnapshotId: snapshotId,
       exchangeRatePrefilledValue: prefilled,
-      exchangeRateWasOverridden: !finalRate.eq(prefilled)
+      exchangeRateWasOverridden: !finalRate.equals(prefilled)
     };
   }
 
   private evaluateEffective(
-    latestRun: Prisma.IdBusinessV2ExchangeRateRunGetPayload<{
-      include: typeof RUN_INCLUDE;
-    }> | null,
-    lastSuccess: Prisma.IdBusinessV2ExchangeRateRunGetPayload<{
-      include: typeof RUN_INCLUDE;
-    }> | null,
+    latestRun: RunRecord | null,
+    lastSuccess: RunRecord | null,
     intervalMinutes: number
   ) {
     if (!this.settingsService.isNetworkEnabled()) {
@@ -258,7 +197,7 @@ export class IdBusinessV2ExchangeRateQueryService {
       reason: null,
       runId: candidate.id,
       snapshotId: candidate.snapshot.id,
-      midRateToRmb: toV2DecimalString(candidate.snapshot.midRateToRmb),
+      midRateToRmb: candidate.snapshot.midRateToRmb.toString(),
       averagedAt: candidate.snapshot.averagedAt,
       expiresAt
     };
@@ -276,53 +215,39 @@ export class IdBusinessV2ExchangeRateQueryService {
       : null;
   }
 
-  private runWhere(query: ListIdBusinessV2ExchangeRateRunsQuery) {
-    const where: Prisma.IdBusinessV2ExchangeRateRunWhereInput = {};
+  private runFilters(query: ListIdBusinessV2ExchangeRateRunsQuery) {
     const keyword = query.keyword?.trim();
-    if (keyword) {
-      where.OR = [
-        ...(UUID_PATTERN.test(keyword) ? [{ id: keyword }] : []),
-        { errorCode: { contains: keyword, mode: 'insensitive' } },
-        { errorMessage: { contains: keyword, mode: 'insensitive' } }
-      ];
-    }
-    if (['running', 'success', 'failed'].includes(query.status ?? '')) {
-      where.status = query.status as 'running' | 'success' | 'failed';
-    }
-    if (['manual', 'scheduled', 'system'].includes(query.triggerType ?? '')) {
-      where.triggerType = query.triggerType as 'manual' | 'scheduled' | 'system';
-    }
-    if (query.provider === 'binance' || query.provider === 'okx') {
-      where.snapshot = {
-        is: {
-          providerSnapshots: {
-            some: { provider: query.provider }
-          }
-        }
-      };
-    }
     const gte = this.dateBoundary(query.collectedFrom, false);
     const lte = this.dateBoundary(query.collectedTo, true);
-    if (gte || lte) where.startedAt = { gte, lte };
-    return where;
+    return {
+      keyword,
+      keywordIsUuid: Boolean(keyword && UUID_PATTERN.test(keyword)),
+      status: ['running', 'success', 'failed'].includes(query.status ?? '')
+        ? (query.status as 'running' | 'success' | 'failed')
+        : undefined,
+      triggerType: ['manual', 'scheduled', 'system'].includes(query.triggerType ?? '')
+        ? (query.triggerType as 'manual' | 'scheduled' | 'system')
+        : undefined,
+      provider:
+        query.provider === 'binance' || query.provider === 'okx'
+          ? (query.provider as 'binance' | 'okx')
+          : undefined,
+      startedAt: gte || lte ? { gte, lte } : undefined
+    };
   }
 
-  private runResponse(
-    run: Prisma.IdBusinessV2ExchangeRateRunGetPayload<{ include: typeof RUN_INCLUDE }>
-  ) {
+  private runResponse(run: RunRecord) {
     return {
       ...this.runBase(run),
       snapshot: run.snapshot
         ? {
             id: run.snapshot.id,
             averagedAt: run.snapshot.averagedAt,
-            combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
-              run.snapshot.combinedMerchantBuyAverageRateToRmb
-            ),
-            combinedMerchantSellAverageRateToRmb: toV2DecimalString(
-              run.snapshot.combinedMerchantSellAverageRateToRmb
-            ),
-            midRateToRmb: toV2DecimalString(run.snapshot.midRateToRmb),
+            combinedMerchantBuyAverageRateToRmb:
+              run.snapshot.combinedMerchantBuyAverageRateToRmb.toString(),
+            combinedMerchantSellAverageRateToRmb:
+              run.snapshot.combinedMerchantSellAverageRateToRmb.toString(),
+            midRateToRmb: run.snapshot.midRateToRmb.toString(),
             providerSnapshotCount: run.snapshot.providerSnapshots.length,
             validSampleCount: run.snapshot.providerSnapshots.reduce(
               (sum, item) => sum + item.validAdCount,
@@ -332,7 +257,7 @@ export class IdBusinessV2ExchangeRateQueryService {
               provider: provider.provider,
               side: provider.side,
               validAdCount: provider.validAdCount,
-              averageRateToRmb: toV2DecimalString(provider.averageRateToRmb)
+              averageRateToRmb: provider.averageRateToRmb.toString()
             }))
           }
         : null
@@ -343,7 +268,7 @@ export class IdBusinessV2ExchangeRateQueryService {
     id: string;
     status: string;
     triggerType: string;
-    targetAmountRmb: Prisma.Decimal | null;
+    targetAmountRmb: { toString(): string } | null;
     startedAt: Date;
     finishedAt: Date | null;
     errorCode: string | null;
@@ -357,7 +282,7 @@ export class IdBusinessV2ExchangeRateQueryService {
       id: run.id,
       status: run.status,
       triggerType: run.triggerType,
-      targetAmountRmb: run.targetAmountRmb === null ? null : toV2DecimalString(run.targetAmountRmb),
+      targetAmountRmb: run.targetAmountRmb?.toString() ?? null,
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
       triggeredBy: run.triggeredBy,
@@ -388,10 +313,10 @@ export class IdBusinessV2ExchangeRateQueryService {
 
   private decimal(value: unknown, label: string) {
     try {
-      const decimal = new Prisma.Decimal(
+      const decimal = Rate8.from(
         typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
-      ).toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE);
-      if (!decimal.isFinite() || decimal.lte(0)) throw new Error('invalid');
+      );
+      if (decimal.lte(0)) throw new Error('invalid');
       return decimal;
     } catch {
       throw new BadRequestException(`${label}格式无效`);

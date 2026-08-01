@@ -1,7 +1,14 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
-import { CURRENT_USER_STORAGE_KEY, TOKEN_STORAGE_KEY } from '@/auth/session';
+import {
+  AUTH_CREDENTIAL_STORAGE_KEY,
+  createStoredCredential,
+  LEGACY_CURRENT_USER_STORAGE_KEY as CURRENT_USER_STORAGE_KEY,
+  LEGACY_TOKEN_STORAGE_KEY as TOKEN_STORAGE_KEY,
+  writeStoredCredential
+} from '@/auth/credential';
+import { resetSessionCoordinatorForTests } from '@/auth/sessionCoordinator';
 import type { CurrentUser } from '@/types/system';
 
 const authApiMocks = vi.hoisted(() => ({
@@ -93,6 +100,7 @@ function createSupabaseSession(accessToken: string, authUserId: string) {
 
 describe('auth session gate', () => {
   beforeEach(() => {
+    resetSessionCoordinatorForTests();
     vi.clearAllMocks();
     supabaseConfigMock.configured = false;
     supabaseSessionListener = null;
@@ -107,21 +115,12 @@ describe('auth session gate', () => {
     );
     vi.stubGlobal('localStorage', new MemoryStorage());
     vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('BroadcastChannel', undefined);
     setActivePinia(createPinia());
   });
 
-  it('rejects a cached current user that predates the password-reset flag', async () => {
-    localStorage.setItem(TOKEN_STORAGE_KEY, 'legacy-token');
-    localStorage.setItem(
-      CURRENT_USER_STORAGE_KEY,
-      JSON.stringify({
-        id: verifiedUser.id,
-        username: verifiedUser.username,
-        displayName: verifiedUser.displayName,
-        roles: verifiedUser.roles,
-        permissions: verifiedUser.permissions
-      })
-    );
+  it('validates a credential without trusting an incomplete cached profile', async () => {
+    writeStoredCredential(createStoredCredential('legacy-token', null));
     authApiMocks.me.mockResolvedValueOnce(verifiedUser);
 
     const authStore = useAuthStore();
@@ -132,13 +131,15 @@ describe('auth session gate', () => {
     await expect(authStore.ensureSessionReady()).resolves.toBe('ready');
     expect(authApiMocks.me).toHaveBeenCalledTimes(1);
     expect(authStore.user).toEqual(verifiedUser);
-    expect(JSON.parse(localStorage.getItem(CURRENT_USER_STORAGE_KEY) ?? '{}')).toEqual(
+    expect(JSON.parse(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').userCache).toEqual(
       verifiedUser
     );
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
   });
 
   it('deduplicates concurrent session checks through one current-user request', async () => {
-    localStorage.setItem(TOKEN_STORAGE_KEY, 'test-token');
+    writeStoredCredential(createStoredCredential('test-token', null));
     const deferred = createDeferred<CurrentUser>();
     authApiMocks.me.mockReturnValueOnce(deferred.promise);
     const authStore = useAuthStore();
@@ -146,7 +147,7 @@ describe('auth session gate', () => {
     const first = authStore.ensureSessionReady();
     const second = authStore.ensureSessionReady();
 
-    expect(authStore.sessionStatus).toBe('checking');
+    expect(authStore.session.kind).toBe('validating');
     expect(authApiMocks.me).toHaveBeenCalledTimes(0);
     await vi.waitFor(() => {
       expect(authApiMocks.me).toHaveBeenCalledTimes(1);
@@ -158,7 +159,7 @@ describe('auth session gate', () => {
   });
 
   it('ignores a stale user response after the identity is cleared', async () => {
-    localStorage.setItem(TOKEN_STORAGE_KEY, 'test-token');
+    writeStoredCredential(createStoredCredential('test-token', null));
     const deferred = createDeferred<CurrentUser>();
     authApiMocks.me.mockReturnValueOnce(deferred.promise);
     const authStore = useAuthStore();
@@ -168,13 +169,12 @@ describe('auth session gate', () => {
       expect(authApiMocks.me).toHaveBeenCalledTimes(1);
     });
     authStore.clearLocalSession({
-      reason: 'logout',
-      supabase: false
+      reason: 'logout'
     });
     deferred.resolve(verifiedUser);
 
     await sessionCheck;
-    expect(authStore.sessionStatus).toBe('anonymous');
+    expect(authStore.session.kind).toBe('anonymous');
     expect(authStore.user).toBeNull();
   });
 
@@ -188,11 +188,12 @@ describe('auth session gate', () => {
     await expect(authStore.logout()).rejects.toThrow('remote logout unavailable');
 
     expect(supabaseAuthMocks.clearSupabaseSession).toHaveBeenCalledTimes(1);
-    expect(authStore.sessionStatus).toBe('anonymous');
+    expect(authStore.session.kind).toBe('anonymous');
     expect(authStore.token).toBe('');
     expect(authStore.user).toBeNull();
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
   });
 
   it('clears both the Supabase and local sessions after changing the password', async () => {
@@ -223,11 +224,12 @@ describe('auth session gate', () => {
       'new-secure-password'
     );
     expect(supabaseAuthMocks.clearSupabaseSession).toHaveBeenCalledTimes(1);
-    expect(authStore.sessionStatus).toBe('anonymous');
+    expect(authStore.session.kind).toBe('anonymous');
     expect(authStore.token).toBe('');
     expect(authStore.user).toBeNull();
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
   });
 
   it('keeps the business identity ready when Supabase refreshes the same auth user token', async () => {
@@ -244,12 +246,19 @@ describe('auth session gate', () => {
     await expect(authStore.ensureSessionReady()).resolves.toBe('ready');
     expect(supabaseSessionListener).not.toBeNull();
 
+    supabaseAuthMocks.getSupabaseSession.mockResolvedValue(refreshedSession);
+    authApiMocks.me.mockResolvedValueOnce(verifiedUser);
     supabaseSessionListener?.('TOKEN_REFRESHED', refreshedSession);
 
-    expect(authStore.sessionStatus).toBe('ready');
+    await vi.waitFor(() => expect(authStore.session.kind).toBe('ready'));
+
+    expect(authStore.session.kind).toBe('ready');
     expect(authStore.user).toEqual(verifiedUser);
     expect(authStore.token).toBe('refreshed-access-token');
-    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe('refreshed-access-token');
-    expect(authApiMocks.me).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').token).toBe(
+      'refreshed-access-token'
+    );
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+    expect(authApiMocks.me).toHaveBeenCalledTimes(2);
   });
 });

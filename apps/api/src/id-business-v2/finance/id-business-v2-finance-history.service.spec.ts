@@ -1,8 +1,11 @@
 import { ConflictException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { IdBusinessV2FinanceHistoryConfirmationService } from './id-business-v2-finance-history-confirmation.service';
 import type { FinancePostingLineInput } from './id-business-v2-finance-posting.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
+import { IdBusinessV2FinanceHistoryCommandRepository } from './persistence/id-business-v2-finance-history-command.repository';
+import { IdBusinessV2FinanceHistoryConfirmationRepository } from './persistence/id-business-v2-finance-history-confirmation.repository';
 
 describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
   it('previews Cloudflare-style decimals and stores the checked snapshot in audit data', async () => {
@@ -58,7 +61,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       ...tx,
       $transaction: vi.fn(async (callback) => callback(tx))
     };
-    const service = new IdBusinessV2FinanceHistoryConfirmationService(prisma as never);
+    const service = createConfirmationService(prisma);
 
     const preview = await service.preview();
     expect(preview).toMatchObject({
@@ -93,7 +96,6 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         objectType: 'id_business_v2_finance_settings',
-        objectId: null,
         beforeData: expect.objectContaining({ settingsId: 1 }),
         afterData: expect.objectContaining({
           settingsId: 1,
@@ -118,7 +120,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
 
   it('requires every checklist item and rejects numeric-only notes before the transaction', async () => {
     const prisma = { $transaction: vi.fn() };
-    const service = new IdBusinessV2FinanceHistoryConfirmationService(prisma as never);
+    const service = createConfirmationService(prisma);
 
     await expect(
       service.confirm({
@@ -157,7 +159,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       auditLog: { create: vi.fn() }
     };
     const prisma = { $transaction: vi.fn(async (callback) => callback(tx)) };
-    const service = new IdBusinessV2FinanceHistoryConfirmationService(prisma as never);
+    const service = createConfirmationService(prisma);
 
     await expect(
       service.confirm({
@@ -219,7 +221,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       ...tx,
       $transaction: vi.fn(async (callback) => callback(tx))
     };
-    const service = new IdBusinessV2FinanceHistoryConfirmationService(prisma as never);
+    const service = createConfirmationService(prisma);
     const preview = await service.preview();
 
     await expect(
@@ -258,7 +260,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       auditLog: { create: vi.fn().mockResolvedValue({}) }
     };
     const prisma = { $transaction: vi.fn(async (callback) => callback(tx)) };
-    const service = new IdBusinessV2FinanceHistoryConfirmationService(prisma as never);
+    const service = createConfirmationService(prisma);
 
     await expect(service.reopen('原确认说明为测试值，重新核对历史资料')).resolves.toMatchObject({
       historyStatus: 'incomplete',
@@ -267,7 +269,6 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'id_business_v2.finance.history_reopen',
-        objectId: null,
         beforeData: expect.objectContaining({ historyStatus: 'completed' }),
         afterData: expect.objectContaining({ historyStatus: 'incomplete' })
       })
@@ -291,7 +292,9 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       })
     };
     const service = new IdBusinessV2FinanceHistoryService(
-      prisma as never,
+      new V2CommandTransactionManager(prisma as never),
+      new IdBusinessV2FinanceHistoryCommandRepository(),
+      new V2TransactionalAuditService(),
       {} as never,
       historyPreviewService as never
     );
@@ -370,7 +373,9 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       })
     };
     const service = new IdBusinessV2FinanceHistoryService(
-      prisma as never,
+      new V2CommandTransactionManager(prisma as never),
+      new IdBusinessV2FinanceHistoryCommandRepository(),
+      new V2TransactionalAuditService(),
       postingService as never,
       historyPreviewService as never
     );
@@ -404,6 +409,14 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
     ]);
   });
 });
+
+function createConfirmationService(prisma: object) {
+  return new IdBusinessV2FinanceHistoryConfirmationService(
+    new V2CommandTransactionManager(prisma as never),
+    new IdBusinessV2FinanceHistoryConfirmationRepository(prisma as never),
+    new V2TransactionalAuditService()
+  );
+}
 
 function cloudflareDecimal(value: string) {
   return { toString: () => value };

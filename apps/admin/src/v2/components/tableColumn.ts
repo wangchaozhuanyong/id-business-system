@@ -13,7 +13,6 @@ export type V2TableColumnWidthPreset = keyof typeof V2_TABLE_COLUMN_WIDTH;
 export type V2TableColumnKind = 'text' | 'identifier' | 'index' | 'numeric' | 'date' | 'status';
 
 export type V2TableColumnAlignment = 'left' | 'center' | 'right';
-export type V2TableColumnWidthMode = 'fixed' | 'flex';
 
 export const V2_TABLE_COLUMN_ALIGNMENT: Record<V2TableColumnKind, V2TableColumnAlignment> = {
   text: 'left',
@@ -24,22 +23,13 @@ export const V2_TABLE_COLUMN_ALIGNMENT: Record<V2TableColumnKind, V2TableColumnA
   status: 'center'
 };
 
-export const V2_TABLE_COLUMN_WIDTH_MODE: Record<V2TableColumnKind, V2TableColumnWidthMode> = {
-  text: 'flex',
-  identifier: 'fixed',
-  index: 'fixed',
-  numeric: 'fixed',
-  date: 'fixed',
-  status: 'fixed'
-};
-
 export function getV2TableColumnWidthProps(
   kind: V2TableColumnKind,
   widthPreset: V2TableColumnWidthPreset,
-  widthMode = V2_TABLE_COLUMN_WIDTH_MODE[kind]
+  pinned = false
 ) {
   const width = V2_TABLE_COLUMN_WIDTH[widthPreset];
-  return widthMode === 'fixed' ? { width } : { minWidth: width };
+  return kind === 'index' || pinned ? { width } : { minWidth: width };
 }
 
 export function getV2TableColumnClass(kind: V2TableColumnKind) {

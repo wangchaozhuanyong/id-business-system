@@ -5,18 +5,14 @@ import {
   type V2ChangeVersionsResult,
   type V2DataScope
 } from '@apple-business/shared';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { IdBusinessV2ChangeSyncRepository } from './persistence/id-business-v2-change-sync.repository';
 
 @Injectable()
 export class IdBusinessV2ChangeSyncService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly repository: IdBusinessV2ChangeSyncRepository) {}
 
   async getVersions(): Promise<V2ChangeVersionsResult> {
-    const records = await this.prisma.idBusinessV2ScopeVersion.findMany({
-      orderBy: {
-        scope: 'asc'
-      }
-    });
+    const records = await this.repository.listScopeVersions();
     const versions = Object.fromEntries(V2_DATA_SCOPES.map((scope) => [scope, '0'])) as Record<
       V2DataScope,
       string
@@ -24,7 +20,7 @@ export class IdBusinessV2ChangeSyncService {
 
     for (const record of records) {
       if (isV2DataScope(record.scope)) {
-        versions[record.scope] = record.version.toString();
+        versions[record.scope] = record.version;
       }
     }
 

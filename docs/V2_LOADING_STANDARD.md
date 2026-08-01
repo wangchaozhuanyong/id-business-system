@@ -8,6 +8,9 @@
 | -------------------------- | -------------------------------------------------------------------------- |
 | HTML 启动阶段              | 只显示路由中性的极简品牌占位；不得伪造工作区侧边栏、导航或业务表格。       |
 | 会话确认                   | Vue 应用先挂载，再由 Boot Gate 核验会话；未确认时不渲染敏感业务内容。      |
+| 冷启动认证 503             | 进入中性“登录服务暂时不可用”边界，不挂载业务外壳、权限导航或缓存业务页。   |
+| 已验证会话认证 503         | 保留当前外壳和最后成功内容，显示只读降级条；阻止写操作和新的受保护导航。   |
+| 会话自动恢复               | 原路由保持不变，统一失效已保留查询并后台刷新；恢复前不得重放写请求。       |
 | 首次路由加载               | 会话门保持同一中性画面；真实布局就绪后一次进入工作区骨架，不允许空白帧。   |
 | 路由资源加载               | 保留 V2 外壳和当前页面，只显示顶部路由进度；禁止白屏、整页卸载和交叉动画。 |
 | 路由资源失败               | 已有页面时只显示一个布局内错误；保留当前页面，由用户决定是否重试。         |
@@ -25,8 +28,21 @@
 
 - 入口必须静态导入 Vue、Pinia、App 和 Router；安装运行时错误处理、Pinia 和 Router 后立即
   `mount`，不得等待鉴权、`router.isReady()` 或 Element Plus 组件合集。
-- `useAuthStore().ensureSessionReady()` 是会话初始化唯一入口。它必须复用进行中的 Promise，并使用
-  `idle | checking | ready | anonymous | error` 表达状态；受保护路由只有在 `ready` 后才允许渲染。
+- `SessionCoordinator` 是会话和凭据的唯一真相源，`useAuthStore()` 只做响应式投影。状态固定为
+  `cold | anonymous | validating | ready | refreshing | degraded | blocked`，一切转换必须通过合法转换图；
+  不得在 App、页面或另一个 store 中维护平行会话状态。
+- 持久化只允许一条 `apple_business_auth_v2`原子记录，同时包含 `credentialId`、`token`、
+  `tokenRevision`、`userCache` 和 `updatedAt`。旧 token/user 键只允许一次迁移，不得再分开写入。
+- 会话验证必须 singleflight，且每个响应在提交前同时匹配 `credentialId + tokenRevision`。登出、
+  身份切换或凭据被其他标签页替换后，迟到的 200/401/403 均不得改写新身份。
+- `/auth/me` 使用 8 秒超时和 200/800ms 带抖动的有界重试，只重试网络错误、502、503、504。
+  30 秒内连续失败三个完整周期后开启 15/30/60 秒熔断；人工重试只允许一个 half-open 探针。
+- 认证例外只能由精确 endpoint registry 声明。`/auth/change-password` 允许密码重置阻断期使用，
+  `/auth/logout` 允许在 degraded/blocked 期使用；禁止用 URL 子串或错误文案猜测。
+- 路由守卫和会话恢复路由由 Router + SessionCoordinator 独占；App 只计算 Boot Gate 展示状态。
+  已验证 degraded 期的新受保护导航必须显式重定向回 `from`，不得 `return false`。
+- API 失败必须是结构化 `ApiError`；Vue Router 导航失败必须检查其 resolve 结果。全局运行时边界不得按
+  “Navigation aborted”、动态 import 或组件文案做正则分类。
 - `booting`、`session-checking` 和首次 `route-loading` 只能复用同一中性会话门结构和文案；不得在
   真实布局挂载前临时伪造深色侧边栏、顶部栏或工作区。身份和目标路由确认后，必须一次进入真实布局及
   对应内容骨架。
@@ -89,6 +105,9 @@
 
 - 在 `app.mount()` 前等待 `initializeSession()`、`ensureSessionReady()`、`router.isReady()` 或
   组件集合预加载。
+- 在 App 中 watch 会话、自行 push/replace 恢复路由，或在 `router.isReady().finally(...)` 中泄漏拒绝。
+- 保留旧 `auth/session.ts`、Window 自定义 session event、分开 token/user 键或第二个会话 Promise/generation。
+- 在 degraded/cold/blocked 状态绕过中央写门禁，或在恢复时自动重放之前失败的 POST。
 - 在 `index.html` 中复制后台侧边栏、导航、顶部栏、表格或业务数据骨架。
 - 在首次 `route-loading` 中短暂切换成另一套工作区占位，导致侧边栏、顶部栏或页面重心闪跳。
 - 入口安装全量 Element Plus 插件或预加载完整工作区组件集合。

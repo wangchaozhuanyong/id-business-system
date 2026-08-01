@@ -1,4 +1,18 @@
-import type { IdBusinessV2OptionType } from '@prisma/client';
+export type IdBusinessV2OptionType =
+  | 'id_status'
+  | 'id_region'
+  | 'customer_source'
+  | 'customer_tag'
+  | 'country'
+  | 'business_category'
+  | 'service'
+  | 'id_supplier'
+  | 'topup_supplier'
+  | 'gift_card_name'
+  | 'settlement_platform'
+  | 'expense_category';
+
+export type IdBusinessV2OptionStatus = 'active' | 'disabled';
 
 export interface IdBusinessV2OptionTypeDefinition {
   type: IdBusinessV2OptionType;

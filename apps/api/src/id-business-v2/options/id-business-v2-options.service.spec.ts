@@ -1,7 +1,10 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2OptionQuery } from './id-business-v2-option-query';
 import { IdBusinessV2OptionsService } from './id-business-v2-options.service';
+import { IdBusinessV2OptionRepository } from './persistence/id-business-v2-option.repository';
 
 const operator = {
   id: '20000000-0000-4000-8000-000000000001',
@@ -96,19 +99,25 @@ describe('IdBusinessV2OptionsService', () => {
     },
     idBusinessV2Account: {
       count: vi.fn()
+    },
+    auditLog: {
+      create: vi.fn()
     }
   };
-  const auditLogsService = {
-    create: vi.fn()
-  };
-  const service = new IdBusinessV2OptionsService(prisma as never, auditLogsService as never);
+  const service = new IdBusinessV2OptionsService(
+    new IdBusinessV2OptionRepository(prisma as never),
+    new IdBusinessV2OptionQuery(new IdBusinessV2OptionRepository(prisma as never)),
+    new V2CommandTransactionManager(prisma as never),
+    new V2TransactionalAuditService()
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
-    auditLogsService.create.mockResolvedValue({ id: 'audit-1' });
+    prisma.auditLog.create.mockResolvedValue({ id: 'audit-1' });
     prisma.idBusinessV2Account.count.mockResolvedValue(0);
-    prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
-      Promise.all(operations)
+    prisma.$transaction.mockImplementation(
+      async (work: Array<Promise<unknown>> | ((tx: typeof prisma) => Promise<unknown>)) =>
+        typeof work === 'function' ? work(prisma) : Promise.all(work)
     );
   });
 
@@ -295,11 +304,13 @@ describe('IdBusinessV2OptionsService', () => {
         })
       })
     );
-    expect(auditLogsService.create).toHaveBeenCalledWith(
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: 'id_business_v2.option.create',
-        objectId: created.id,
-        userId: operator.id
+        data: expect.objectContaining({
+          action: 'id_business_v2.option.create',
+          objectId: created.id,
+          userId: operator.id
+        })
       })
     );
     expect(result.parent?.name).toBe('AI服务');
@@ -360,6 +371,37 @@ describe('IdBusinessV2OptionsService', () => {
     );
     expect(result.fixedFee).toBe('0.5');
     expect(result.percentageFee).toBe('1.25');
+  });
+
+  it('keeps option write and audit in the same awaited transaction', async () => {
+    const created = makeOption({
+      type: 'settlement_platform',
+      name: '平台B',
+      uniqueKey: 'settlement_platform:root:平台b'
+    });
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Option.create.mockResolvedValue(created);
+    prisma.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(
+      service.create({ type: 'settlement_platform', name: '平台B' }, operator)
+    ).rejects.toThrow('audit unavailable');
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.idBusinessV2Option.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a conflict for a non-idempotent uniqueness race without replaying the write', async () => {
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Option.create.mockRejectedValueOnce({ code: 'P2002' });
+
+    await expect(
+      service.create({ type: 'settlement_platform', name: '平台C' }, operator)
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.idBusinessV2Option.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('prevents editing a system fixed status', async () => {

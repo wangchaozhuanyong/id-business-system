@@ -69,13 +69,13 @@
       @retry="page.loadAccountLosses"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.accountLosses.main"
           :aria-busy="page.loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="page.items"
-          row-key="id"
           @sort-change="page.handleSortChange"
         >
           <template #empty>
@@ -84,31 +84,35 @@
               <span>报损操作成功后会自动生成不可修改的记录</span>
             </div>
           </template>
-          <V2TableColumn kind="index" width-preset="index" prop="rowNumber" label="序号" />
-          <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号" fixed="left">
+          <V2TableColumn
+            :definition="v2TableSchemas.accountLosses.main.columns[0]"
+            prop="rowNumber"
+          />
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[1]">
             <template #default="{ row }">
               <strong class="v2-account-losses__account">{{ row.appleIdMasked }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" prop="countryName" label="国家" width-preset="compact" />
-          <V2TableColumn kind="text" label="供应商" width-preset="standard">
+          <V2TableColumn
+            :definition="v2TableSchemas.accountLosses.main.columns[2]"
+            prop="countryName"
+          />
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[3]">
             <template #default="{ row }">{{ row.supplierName || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" width-preset="compact" label="销售状态">
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[4]">
             <template #default="{ row }">
               <el-tag :type="row.saleState === 'sold' ? 'danger' : 'info'" effect="plain">
                 {{ row.saleState === 'sold' ? '已卖出' : '可用' }}
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="来源订单">
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[5]">
             <template #default="{ row }">{{ row.soldOrderNo || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.accountLosses.main.columns[6]"
             prop="lossBalance"
-            label="损失余额"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -117,10 +121,8 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.accountLosses.main.columns[7]"
             prop="lossCostAmount"
-            label="人民币亏损"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -130,13 +132,11 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.accountLosses.main.columns[8]"
             prop="reason"
-            label="报损原因"
-            width-preset="longText"
             show-overflow-tooltip
           />
-          <V2TableColumn kind="text" label="操作人" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[9]">
             <template #default="{ row }">
               {{
                 row.reportedByName || row.reportedBy?.displayName || row.reportedBy?.username || '—'
@@ -144,17 +144,15 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.accountLosses.main.columns[10]"
             prop="reportedAt"
-            label="报损时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.reportedAt) }}</template>
           </V2TableColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.accountLosses.main.id">
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -227,6 +225,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { reactive } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';

@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import {
+  Rate8,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
 import type { CreateIdBusinessV2FinanceExpenseDto } from './dto/id-business-v2-finance.dto';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
 import {
@@ -18,6 +20,8 @@ import {
   normalizeOptionalFinanceUuid
 } from './id-business-v2-finance-input';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
+import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
 interface ListExpenseQuery extends PaginationQuery {
   categoryOptionId?: string;
@@ -30,7 +34,10 @@ interface ListExpenseQuery extends PaginationQuery {
 @Injectable()
 export class IdBusinessV2FinanceExpensesService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly commandRepository: IdBusinessV2FinanceCommandRepository,
+    private readonly queryRepository: IdBusinessV2FinanceQueryRepository,
+    private readonly audit: V2TransactionalAuditService,
     private readonly fxService: IdBusinessV2FinanceFxService,
     private readonly postingService: IdBusinessV2FinancePostingService
   ) {}
@@ -45,22 +52,17 @@ export class IdBusinessV2FinanceExpensesService {
       : undefined;
     const currency = query.currency ? normalizeFinanceCurrency(query.currency) : undefined;
     const occurredAt = this.parseDateRange(query.dateFrom, query.dateTo);
-    const where: Prisma.IdBusinessV2FinanceExpenseWhereInput = {
+    const where = {
       categoryOptionId,
       financeAccountId,
       currency,
       occurredAt
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2FinanceExpense.findMany({
-        where,
-        include: { categoryOption: true, financeAccount: true, journal: true },
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2FinanceExpense.count({ where })
-    ]);
+    const { items, total } = await this.queryRepository.listExpenses(
+      where,
+      pagination.skip,
+      pagination.take
+    );
     return {
       items: items.map((item) => ({
         id: item.id,
@@ -70,9 +72,9 @@ export class IdBusinessV2FinanceExpensesService {
         financeAccountId: item.financeAccountId,
         financeAccountName: item.financeAccount.name,
         currency: item.currency,
-        amountOriginal: toV2DecimalString(item.amountOriginal),
-        fxRateToCny: item.fxRateToCny.toString(),
-        amountCny: toV2DecimalString(item.amountCny),
+        amountOriginal: item.amountOriginal,
+        fxRateToCny: item.fxRateToCny,
+        amountCny: item.amountCny,
         occurredAt: item.occurredAt,
         payee: item.payee,
         receiptAttachmentId: item.receiptAttachmentId,
@@ -99,11 +101,8 @@ export class IdBusinessV2FinanceExpensesService {
     const receiptAttachmentId = normalizeOptionalFinanceUuid(dto.receiptAttachmentId, '凭证');
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'finance_expense');
 
-    const [category, account, rate] = await Promise.all([
-      this.prisma.idBusinessV2Option.findFirst({
-        where: { id: categoryOptionId, type: 'expense_category', status: 'active', deletedAt: null }
-      }),
-      this.prisma.idBusinessV2FinanceAccount.findUnique({ where: { id: financeAccountId } }),
+    const [{ category, account }, rate] = await Promise.all([
+      this.queryRepository.findExpensePrerequisites(categoryOptionId, financeAccountId),
       this.fxService.resolve({
         currency,
         occurredAt,
@@ -119,13 +118,11 @@ export class IdBusinessV2FinanceExpensesService {
     }
     if (account.currency !== currency)
       throw new BadRequestException('开支币种与资金账户币种不一致');
-    const amountCny = roundV2Decimal(amount.mul(rate.rateToCny));
+    const rateToCny = Rate8.from(rate.rateToCny);
+    const amountCny = rateToCny.apply(amount);
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2FinanceExpense.findUnique({
-        where: { idempotencyKey },
-        include: { categoryOption: true, financeAccount: true, journal: true }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.commandRepository.findExpenseReplay(tx, idempotencyKey);
       if (replay) return this.toResponse(replay);
       const expenseId = randomUUID();
       const journal = await this.postingService.post(tx, {
@@ -144,7 +141,7 @@ export class IdBusinessV2FinanceExpensesService {
             direction: 'debit',
             currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             fxRateSnapshotId: rate.id,
             memo: category.name
@@ -154,7 +151,7 @@ export class IdBusinessV2FinanceExpensesService {
             direction: 'credit',
             currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             financeAccountId,
             fxRateSnapshotId: rate.id,
@@ -162,46 +159,41 @@ export class IdBusinessV2FinanceExpensesService {
           }
         ]
       });
-      const expense = await tx.idBusinessV2FinanceExpense.create({
-        data: {
-          id: expenseId,
-          journalId: journal.id,
+      const expense = await this.commandRepository.createExpense(tx, {
+        id: expenseId,
+        journalId: journal.id,
+        categoryOptionId,
+        financeAccountId,
+        fxRateSnapshotId: rate.id,
+        currency,
+        amountOriginal: amount.toString(),
+        fxRateToCny: rateToCny.toString(),
+        amountCny: amountCny.toString(),
+        occurredAt,
+        payee,
+        receiptAttachmentId,
+        remark,
+        idempotencyKey,
+        createdByUserId: operator?.id
+      });
+      await this.audit.append(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2_finance',
+        action: 'id_business_v2.finance_expense.create',
+        objectType: 'id_business_v2_finance_expense',
+        objectId: expense.id,
+        afterData: {
           categoryOptionId,
           financeAccountId,
-          fxRateSnapshotId: rate.id,
           currency,
-          amountOriginal: amount,
-          fxRateToCny: rate.rateToCny,
-          amountCny,
-          occurredAt,
-          payee,
-          receiptAttachmentId,
-          remark,
-          idempotencyKey,
-          createdByUserId: operator?.id
+          amount: amount.toString(),
+          amountCny: amountCny.toString(),
+          occurredAt: occurredAt.toISOString()
         },
-        include: { categoryOption: true, financeAccount: true, journal: true }
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: operator?.id,
-          module: 'id_business_v2_finance',
-          action: 'id_business_v2.finance_expense.create',
-          objectType: 'id_business_v2_finance_expense',
-          objectId: expense.id,
-          afterData: {
-            categoryOptionId,
-            financeAccountId,
-            currency,
-            amount: toV2DecimalString(amount),
-            amountCny: toV2DecimalString(amountCny),
-            occurredAt: occurredAt.toISOString()
-          },
-          remark: `记录经营开支：${category.name}`
-        }
+        remark: `记录经营开支：${category.name}`
       });
       return this.toResponse(expense);
-    });
+    }, this.commandOptions(operator));
   }
 
   private toResponse(item: {
@@ -210,9 +202,9 @@ export class IdBusinessV2FinanceExpensesService {
     categoryOptionId: string;
     financeAccountId: string;
     currency: string;
-    amountOriginal: { toString(): string };
-    fxRateToCny: { toString(): string };
-    amountCny: { toString(): string };
+    amountOriginal: string;
+    fxRateToCny: string;
+    amountCny: string;
     occurredAt: Date;
     payee: string | null;
     receiptAttachmentId: string | null;
@@ -230,9 +222,9 @@ export class IdBusinessV2FinanceExpensesService {
       financeAccountId: item.financeAccountId,
       financeAccountName: item.financeAccount.name,
       currency: item.currency,
-      amountOriginal: item.amountOriginal.toString(),
-      fxRateToCny: item.fxRateToCny.toString(),
-      amountCny: item.amountCny.toString(),
+      amountOriginal: item.amountOriginal,
+      fxRateToCny: item.fxRateToCny,
+      amountCny: item.amountCny,
       occurredAt: item.occurredAt,
       payee: item.payee,
       receiptAttachmentId: item.receiptAttachmentId,
@@ -242,10 +234,14 @@ export class IdBusinessV2FinanceExpensesService {
     };
   }
 
-  private parseDateRange(from?: string, to?: string): Prisma.DateTimeFilter | undefined {
+  private parseDateRange(from?: string, to?: string) {
     if (!from && !to) return undefined;
     const start = from ? normalizeFinanceDate(`${from}T00:00:00+08:00`, '开始日期') : undefined;
     const end = to ? normalizeFinanceDate(`${to}T23:59:59.999+08:00`, '结束日期') : undefined;
     return { gte: start, lte: end };
+  }
+
+  private commandOptions(operator?: AuthenticatedUser) {
+    return { requestId: randomUUID(), operator } as const;
   }
 }

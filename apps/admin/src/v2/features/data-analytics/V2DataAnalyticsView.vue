@@ -144,44 +144,44 @@
                 <strong>CNY / MYR / USDT 分币种核算</strong>
               </div>
             </header>
-            <el-table
+            <V2Table
+              :schema="v2TableSchemas.dataAnalytics.currencies"
               class="v2-records-table"
               :data="overview.currencyBreakdown"
-              row-key="currency"
               scrollbar-always-on
               show-overflow-tooltip
             >
-              <V2TableColumn kind="status" label="币种" width-preset="compact">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[0]">
                 <template #default="{ row }">
                   <el-tag effect="plain">{{ row.currency }}</el-tag>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="收入" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[1]">
                 <template #default="{ row }">{{
                   formatOriginal(row.income, row.currency)
                 }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="支出" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[2]">
                 <template #default="{ row }">{{
                   formatOriginal(row.expense, row.currency)
                 }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="净现金流" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[3]">
                 <template #default="{ row }">
                   <strong :class="amountTone(row.netCashFlow)">
                     {{ formatOriginal(row.netCashFlow, row.currency) }}
                   </strong>
                 </template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="最新汇率" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[4]">
                 <template #default="{ row }">{{ row.latestRateToCny ?? '缺失' }}</template>
               </V2TableColumn>
-              <V2TableColumn kind="numeric" label="最新估值" width-preset="standard">
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[5]">
                 <template #default="{ row }">
                   {{ row.netCashFlowCny === null ? '—' : formatCny(row.netCashFlowCny) }}
                 </template>
               </V2TableColumn>
-            </el-table>
+            </V2Table>
           </article>
 
           <article class="v2-finance-panel">
@@ -231,10 +231,10 @@
               <strong>充值不计亏损，购卡、退款与调整形成余额变化</strong>
             </div>
           </header>
-          <el-table
+          <V2Table
+            :schema="v2TableSchemas.dataAnalytics.supplierWallets"
             class="v2-records-table"
             :data="wallets"
-            row-key="id"
             scrollbar-always-on
             show-overflow-tooltip
           >
@@ -244,37 +244,37 @@
                 <span>请到财务记账创建供应商多币种钱包</span>
               </div>
             </template>
-            <V2TableColumn kind="text" label="供应商" width-preset="identifier" fixed="left">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[0]">
               <template #default="{ row }"
                 ><strong>{{ row.supplierName }}</strong></template
               >
             </V2TableColumn>
-            <V2TableColumn kind="status" label="币种" width-preset="compact">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[1]">
               <template #default="{ row }"
                 ><el-tag effect="plain">{{ row.currency }}</el-tag></template
               >
             </V2TableColumn>
-            <V2TableColumn kind="numeric" label="期初余额" width-preset="standard">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[2]">
               <template #default="{ row }">{{
                 formatOriginal(row.openingBalance, row.currency)
               }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="numeric" label="当前余额" width-preset="standard">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[3]">
               <template #default="{ row }">
                 <strong>{{ formatOriginal(row.currentBalance, row.currency) }}</strong>
               </template>
             </V2TableColumn>
-            <V2TableColumn kind="numeric" label="账面人民币" width-preset="standard">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[4]">
               <template #default="{ row }">{{ formatCny(row.currentBalanceCny) }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="status" label="状态" width-preset="compact">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[5]">
               <template #default="{ row }">
                 <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
                   {{ row.status === 'active' ? '启用' : '停用' }}
                 </el-tag>
               </template>
             </V2TableColumn>
-          </el-table>
+          </V2Table>
         </section>
 
         <section class="v2-finance-panel">
@@ -284,10 +284,10 @@
               <strong>可追溯订单、卡片、ID、损失和开支来源</strong>
             </div>
           </header>
-          <el-table
+          <V2Table
+            :schema="v2TableSchemas.dataAnalytics.journals"
             class="v2-records-table"
             :data="journals"
-            row-key="id"
             scrollbar-always-on
             show-overflow-tooltip
           >
@@ -297,7 +297,7 @@
                 <span>完成订单或记账后会自动出现在这里</span>
               </div>
             </template>
-            <V2TableColumn kind="text" type="expand" width="52" label="明细">
+            <V2TableControlColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[0]">
               <template #default="{ row }">
                 <div class="v2-finance-lines">
                   <div v-for="line in row.lines" :key="line.id">
@@ -309,28 +309,31 @@
                   </div>
                 </div>
               </template>
-            </V2TableColumn>
-            <V2TableColumn kind="identifier" label="财务流水号" width-preset="wide" fixed="left">
+            </V2TableControlColumn>
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[1]">
               <template #default="{ row }"
                 ><strong>{{ row.journalNo }}</strong></template
               >
             </V2TableColumn>
-            <V2TableColumn kind="date" label="发生时间" width-preset="dateTime">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[2]">
               <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="status" label="业务类型" width-preset="wide">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[3]">
               <template #default="{ row }">
                 <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
               </template>
             </V2TableColumn>
-            <V2TableColumn kind="text" label="摘要" width-preset="longText" prop="summary" />
-            <V2TableColumn kind="identifier" label="来源单号" width-preset="identifier">
+            <V2TableColumn
+              :definition="v2TableSchemas.dataAnalytics.journals.columns[4]"
+              prop="summary"
+            />
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[5]">
               <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
             </V2TableColumn>
-            <V2TableColumn kind="numeric" label="人民币金额" width-preset="standard">
+            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[6]">
               <template #default="{ row }">{{ formatCny(journalAmount(row)) }}</template>
             </V2TableColumn>
-          </el-table>
+          </V2Table>
         </section>
 
         <section class="v2-finance-panel">
@@ -394,7 +397,10 @@
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
 import V2SettlementPlatformReport from './components/V2SettlementPlatformReport.vue';
 import { useDataAnalyticsPage } from './useDataAnalyticsPage';
 import '@/v2/styles/records.css';

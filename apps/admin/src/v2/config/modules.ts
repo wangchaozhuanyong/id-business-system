@@ -7,11 +7,10 @@ export type {
   V2ModuleStatus,
   V2NavigationSection,
   V2FreshnessPolicy,
-  V2PlannedSectionDefinition,
-  V2TableDataColumnDefinition,
-  V2TableColumnDefinition,
-  V2TableColumnKind
+  V2PlannedSectionDefinition
 } from '@/v2/features/feature';
+
+export type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export {
   getV2ModuleDefinition,

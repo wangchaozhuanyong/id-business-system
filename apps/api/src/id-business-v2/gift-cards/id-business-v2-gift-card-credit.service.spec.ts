@@ -2,7 +2,9 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2GiftCardCreditService } from './id-business-v2-gift-card-credit.service';
+import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
 const accountId = '11111111-1111-4111-8111-111111111111';
 const supplierOptionId = '22222222-2222-4222-8222-222222222222';
@@ -149,13 +151,14 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     resolve: vi.fn()
   };
   const service = new IdBusinessV2GiftCardCreditService(
-    prisma as never,
     fieldEncryptionService as never,
     new IdBusinessV2BalanceCalculatorService(),
     exchangeRateQueryService as never,
     supplierFundsService as never,
     financePostingService as never,
-    financeFxService as never
+    financeFxService as never,
+    new IdBusinessV2GiftCardsRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {
@@ -253,9 +256,9 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         codeHash: 'hashed-code',
         codeMasked: 'X123****CDEF',
         codeTail: 'CDEF',
-        faceValue: decimal('10'),
-        exchangeRate: decimal('2.5'),
-        costAmount: decimal('25'),
+        faceValue: '10',
+        exchangeRate: '2.5',
+        costAmount: '25',
         creditedAt: createdAt,
         status: 'credited'
       })
@@ -265,20 +268,20 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         accountId,
         entryType: 'gift_card_credit',
         direction: 'credit',
-        balanceBefore: decimal('20'),
-        balanceAfter: decimal('30'),
-        costBefore: decimal('50'),
-        costAfter: decimal('75'),
-        averageCostBefore: decimal('2.5'),
-        averageCostAfter: decimal('2.5'),
+        balanceBefore: '20',
+        balanceAfter: '30',
+        costBefore: '50',
+        costAfter: '75',
+        averageCostBefore: '2.5',
+        averageCostAfter: '2.5',
         idempotencyKey: `gift_card_credit:${accountId}:request-12345678`
       })
     });
     expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
       where: { id: accountId },
       data: {
-        currentBalance: decimal('30'),
-        balanceCostAmount: decimal('75'),
+        currentBalance: '30',
+        balanceCostAmount: '75',
         updatedByUserId: operator.id
       },
       select: {
@@ -378,35 +381,37 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       operator
     );
 
-    expect(financeFxService.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currency: 'MYR',
-        manualRate: decimal('1.7'),
-        manualReason: '银行成交回单'
-      })
-    );
+    expect(financeFxService.resolve).toHaveBeenCalledOnce();
+    const fxInput = financeFxService.resolve.mock.calls[0]?.[0];
+    expect(fxInput).toMatchObject({
+      currency: 'MYR',
+      manualReason: '银行成交回单'
+    });
+    expect(fxInput?.manualRate.toString()).toBe('1.7');
     expect(supplierFundsService.debitGiftCard).not.toHaveBeenCalled();
-    expect(financePostingService.post).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        journalType: 'gift_card_purchase',
-        lines: [
-          expect.objectContaining({
-            accountCode: 'gift_card_inventory',
-            currency: 'MYR',
-            amountOriginal: decimal('100'),
-            amountCny: decimal('170')
-          }),
-          expect.objectContaining({
-            accountCode: 'cash',
-            financeAccountId,
-            currency: 'MYR',
-            amountOriginal: decimal('100'),
-            amountCny: decimal('170')
-          })
-        ]
-      })
-    );
+    expect(financePostingService.post).toHaveBeenCalledOnce();
+    const [postingTx, postingInput] = financePostingService.post.mock.calls[0] ?? [];
+    expect(postingTx).toBe(tx);
+    expect(postingInput).toMatchObject({
+      journalType: 'gift_card_purchase',
+      lines: [
+        expect.objectContaining({
+          accountCode: 'gift_card_inventory',
+          currency: 'MYR'
+        }),
+        expect.objectContaining({
+          accountCode: 'cash',
+          financeAccountId,
+          currency: 'MYR'
+        })
+      ]
+    });
+    expect(
+      postingInput?.lines.map((line: { amountOriginal: unknown }) => String(line.amountOriginal))
+    ).toEqual(['100', '100']);
+    expect(
+      postingInput?.lines.map((line: { amountCny: unknown }) => String(line.amountCny))
+    ).toEqual(['170', '170']);
     expect(result.giftCard).toMatchObject({
       purchaseOriginalAmount: '100',
       purchaseCurrency: 'MYR',
@@ -479,10 +484,10 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     expect(exchangeRateQueryService.validatePrefill).toHaveBeenCalledWith(snapshotId, '2.5', '2.6');
     expect(tx.idBusinessV2GiftCard.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        exchangeRate: decimal('2.6'),
+        exchangeRate: '2.6',
         exchangeRateSource: 'automatic_snapshot',
         exchangeRateSnapshotId: snapshotId,
-        exchangeRatePrefilledValue: decimal('2.5'),
+        exchangeRatePrefilledValue: '2.5',
         exchangeRateWasOverridden: true
       })
     });

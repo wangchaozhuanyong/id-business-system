@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2GiftCardRecordsService } from './id-business-v2-gift-card-records.service';
+import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gift-cards.repository';
 
 const accountId = '11111111-1111-4111-8111-111111111111';
 const giftCardId = '22222222-2222-4222-8222-222222222222';
@@ -46,7 +48,22 @@ function makeGiftCardRecord(overrides: Record<string, unknown> = {}) {
     codeTail: 'CDEF',
     faceValue: decimal('20'),
     exchangeRate: decimal('5.4'),
+    exchangeRateSource: 'manual',
+    exchangeRateSnapshotId: null,
+    exchangeRatePrefilledValue: null,
+    exchangeRateWasOverridden: false,
     costAmount: decimal('108'),
+    purchaseOriginalAmount: decimal('108'),
+    purchaseCurrency: 'CNY',
+    purchaseFxRateToCny: decimal('1'),
+    purchaseFxSnapshotId: null,
+    purchaseFinanceAccountId: null,
+    purchaseSupplierAccountId: null,
+    paidAt: null,
+    supplierRefundStatus: 'none',
+    supplierRefundAmount: decimal('0'),
+    supplierRefundAmountCny: decimal('0'),
+    supplierRefundClosedAt: null,
     countryOptionId: country.id,
     countryNameSnapshot: country.name,
     currencyCodeSnapshot: 'USD',
@@ -168,9 +185,10 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     decrypt: vi.fn()
   };
   const service = new IdBusinessV2GiftCardRecordsService(
-    prisma as never,
+    new IdBusinessV2GiftCardsRepository(prisma as never),
     optionsService as never,
-    fieldEncryptionService as never
+    fieldEncryptionService as never,
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {

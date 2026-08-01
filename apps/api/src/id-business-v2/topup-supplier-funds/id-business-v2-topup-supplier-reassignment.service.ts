@@ -4,16 +4,21 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import type { ReassignIdBusinessV2GiftCardSupplierDto } from './dto/topup-supplier-fund.dto';
 import { IdBusinessV2TopupSupplierFundsSupport } from './id-business-v2-topup-supplier-funds-support';
+import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-business-v2-topup-supplier-command.repository';
 
 @Injectable()
 export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2TopupSupplierFundsSupport {
-  constructor(prisma: PrismaService) {
-    super(prisma);
+  constructor(
+    repository: IdBusinessV2TopupSupplierCommandRepository,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    transactionalAudit: V2TransactionalAuditService
+  ) {
+    super(repository, transactionalAudit);
   }
 
   async reassignGiftCardSupplier(
@@ -29,142 +34,111 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
     const outgoingKey = `supplier_reassign_out:${giftCardId}:${requestKey}`;
     const incomingKey = `supplier_reassign_in:${giftCardId}:${requestKey}`;
 
-    return this.prisma.$transaction(async (tx) => {
-      const giftCard = await tx.idBusinessV2GiftCard.findUnique({
-        where: { id: giftCardId },
-        include: { supplierOption: true }
-      });
-      if (!giftCard) throw new NotFoundException('礼品卡记录不存在');
-      const [existingOutgoing, existingIncoming] = await Promise.all([
-        tx.idBusinessV2TopupSupplierLedger.findUnique({
-          where: { idempotencyKey: outgoingKey },
-          include: { supplierAccount: true }
-        }),
-        tx.idBusinessV2TopupSupplierLedger.findUnique({
-          where: { idempotencyKey: incomingKey },
-          include: { supplierAccount: true }
-        })
-      ]);
-      if (existingOutgoing || existingIncoming) {
-        if (
-          !existingOutgoing ||
-          !existingIncoming ||
-          existingOutgoing.giftCardId !== giftCardId ||
-          existingIncoming.giftCardId !== giftCardId ||
-          existingIncoming.supplierAccount.supplierOptionId !== newSupplierOptionId ||
-          existingOutgoing.reason !== `供应商更正返还：${reason}` ||
-          existingIncoming.reason !== `供应商更正扣款：${reason}` ||
-          giftCard.supplierOptionId !== newSupplierOptionId
-        ) {
-          throw new ConflictException('幂等键已用于不同的供应商更正操作');
-        }
-        return {
-          giftCardId,
-          supplier: await this.requireSupplierOption(tx, newSupplierOptionId),
-          legacyCutoverRecord: false,
-          oldSupplierBalance: {
-            supplierOptionId: existingOutgoing.supplierAccount.supplierOptionId,
-            beforeCny: toV2DecimalString(existingOutgoing.balanceBeforeCny),
-            afterCny: toV2DecimalString(existingOutgoing.balanceAfterCny)
-          },
-          newSupplierBalance: {
-            supplierOptionId: existingIncoming.supplierAccount.supplierOptionId,
-            beforeCny: toV2DecimalString(existingIncoming.balanceBeforeCny),
-            afterCny: toV2DecimalString(existingIncoming.balanceAfterCny),
-            isNegative: existingIncoming.balanceAfterCny.lt(0)
-          },
-          idempotentReplay: true
-        };
-      }
-      if (giftCard.supplierOptionId === newSupplierOptionId) {
-        const activeDebit = await tx.idBusinessV2TopupSupplierLedger.findFirst({
-          where: {
-            giftCardId,
-            entryType: 'gift_card_debit',
-            reversedBy: null
-          },
-          select: { id: true }
-        });
-        if (!activeDebit) {
+    return this.commandTransactions.execute(
+      async (tx) => {
+        const giftCard = await this.repository.findGiftCard(tx, giftCardId);
+        if (!giftCard) throw new NotFoundException('礼品卡记录不存在');
+        const { outgoing: existingOutgoing, incoming: existingIncoming } =
+          await this.repository.findReassignmentReplays(tx, outgoingKey, incomingKey);
+        if (existingOutgoing || existingIncoming) {
+          if (
+            !existingOutgoing ||
+            !existingIncoming ||
+            existingOutgoing.giftCardId !== giftCardId ||
+            existingIncoming.giftCardId !== giftCardId ||
+            existingIncoming.supplierAccount.supplierOptionId !== newSupplierOptionId ||
+            existingOutgoing.reason !== `供应商更正返还：${reason}` ||
+            existingIncoming.reason !== `供应商更正扣款：${reason}` ||
+            giftCard.supplierOptionId !== newSupplierOptionId
+          ) {
+            throw new ConflictException('幂等键已用于不同的供应商更正操作');
+          }
           return {
             giftCardId,
             supplier: await this.requireSupplierOption(tx, newSupplierOptionId),
-            legacyCutoverRecord: true,
-            oldSupplierBalance: null,
-            newSupplierBalance: null,
+            legacyCutoverRecord: false,
+            oldSupplierBalance: {
+              supplierOptionId: existingOutgoing.supplierAccount.supplierOptionId,
+              beforeCny: existingOutgoing.balanceBeforeCny.toString(),
+              afterCny: existingOutgoing.balanceAfterCny.toString()
+            },
+            newSupplierBalance: {
+              supplierOptionId: existingIncoming.supplierAccount.supplierOptionId,
+              beforeCny: existingIncoming.balanceBeforeCny.toString(),
+              afterCny: existingIncoming.balanceAfterCny.toString(),
+              isNegative: existingIncoming.balanceAfterCny.isNegative()
+            },
             idempotentReplay: true
           };
         }
-        throw new BadRequestException('新供应商与当前供应商相同');
-      }
-      const newSupplier = await this.requireSupplierOption(tx, newSupplierOptionId);
-      const activeDebit = await tx.idBusinessV2TopupSupplierLedger.findFirst({
-        where: {
-          giftCardId,
-          entryType: 'gift_card_debit',
-          reversedBy: null
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-
-      if (!activeDebit) {
-        const updated = await tx.idBusinessV2GiftCard.update({
-          where: { id: giftCardId },
-          data: {
-            supplierOptionId: newSupplier.id,
-            supplierNameSnapshot: newSupplier.name,
-            updatedByUserId: operator?.id
+        if (giftCard.supplierOptionId === newSupplierOptionId) {
+          const activeDebit = await this.repository.hasActiveGiftCardDebit(tx, giftCardId);
+          if (!activeDebit) {
+            return {
+              giftCardId,
+              supplier: await this.requireSupplierOption(tx, newSupplierOptionId),
+              legacyCutoverRecord: true,
+              oldSupplierBalance: null,
+              newSupplierBalance: null,
+              idempotentReplay: true
+            };
           }
-        });
-        await this.writeAudit(tx, {
-          operator,
-          action: 'id_business_v2.gift_card.supplier_reassign',
-          objectType: 'id_business_v2_gift_card',
-          objectId: giftCardId,
-          beforeData: { supplierOptionId: giftCard.supplierOptionId },
-          afterData: {
-            supplierOptionId: newSupplier.id,
-            financialTransferApplied: false,
-            reason
-          },
-          remark: `更正切账前礼品卡供应商：${giftCard.codeMasked}`
-        });
-        return {
-          giftCardId: updated.id,
-          supplier: newSupplier,
-          legacyCutoverRecord: true,
-          oldSupplierBalance: null,
-          newSupplierBalance: null,
-          idempotentReplay: false
-        };
-      }
-
-      const newAccountRecord = await tx.idBusinessV2TopupSupplierAccount.findUnique({
-        where: {
-          supplierOptionId_currency: {
-            supplierOptionId: newSupplierOptionId,
-            currency: 'CNY'
-          }
+          throw new BadRequestException('新供应商与当前供应商相同');
         }
-      });
-      if (!newAccountRecord?.initializedAt) {
-        throw new ConflictException('新供应商资金账户尚未初始化');
-      }
-      const locked = await this.lockSupplierAccountsByIds(tx, [
-        activeDebit.supplierAccountId,
-        newAccountRecord.id
-      ]);
-      const oldAccount = locked.get(activeDebit.supplierAccountId);
-      const newAccount = locked.get(newAccountRecord.id);
-      if (!oldAccount || !newAccount) {
-        throw new ConflictException('供应商资金账户状态已变化，请刷新后重试');
-      }
+        const newSupplier = await this.requireSupplierOption(tx, newSupplierOptionId);
+        const activeDebit = await this.repository.findActiveGiftCardDebit(tx, giftCardId);
 
-      const activeDebitAmountCny = roundV2Decimal(activeDebit.amountCny);
-      const oldAfter = roundV2Decimal(oldAccount.currentBalanceCny.add(activeDebitAmountCny));
-      const newAfter = roundV2Decimal(newAccount.currentBalanceCny.sub(activeDebitAmountCny));
-      await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
+        if (!activeDebit) {
+          const updated = await this.repository.updateGiftCardSupplier(tx, {
+            giftCardId,
+            supplierOptionId: newSupplier.id,
+            supplierName: newSupplier.name,
+            operatorId: operator?.id
+          });
+          await this.writeAudit(tx, {
+            operator,
+            action: 'id_business_v2.gift_card.supplier_reassign',
+            objectType: 'id_business_v2_gift_card',
+            objectId: giftCardId,
+            beforeData: { supplierOptionId: giftCard.supplierOptionId },
+            afterData: {
+              supplierOptionId: newSupplier.id,
+              financialTransferApplied: false,
+              reason
+            },
+            remark: `更正切账前礼品卡供应商：${giftCard.codeMasked}`
+          });
+          return {
+            giftCardId: updated.id,
+            supplier: newSupplier,
+            legacyCutoverRecord: true,
+            oldSupplierBalance: null,
+            newSupplierBalance: null,
+            idempotentReplay: false
+          };
+        }
+
+        const newAccountRecord = await this.repository.findSupplierAccountRecord(
+          tx,
+          newSupplierOptionId
+        );
+        if (!newAccountRecord?.initializedAt) {
+          throw new ConflictException('新供应商资金账户尚未初始化');
+        }
+        const locked = await this.lockSupplierAccountsByIds(tx, [
+          activeDebit.supplierAccountId,
+          newAccountRecord.id
+        ]);
+        const oldAccount = locked.get(activeDebit.supplierAccountId);
+        const newAccount = locked.get(newAccountRecord.id);
+        if (!oldAccount || !newAccount) {
+          throw new ConflictException('供应商资金账户状态已变化，请刷新后重试');
+        }
+
+        const activeDebitAmountCny = activeDebit.amountCny;
+        const oldAfter = oldAccount.currentBalanceCny.add(activeDebitAmountCny);
+        const newAfter = newAccount.currentBalanceCny.sub(activeDebitAmountCny);
+        await this.repository.createLedger(tx, {
           supplierAccountId: oldAccount.id,
           giftCardId,
           entryType: 'gift_card_withdrawal_reversal',
@@ -175,10 +149,8 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           idempotencyKey: outgoingKey,
           reason: `供应商更正返还：${reason}`,
           createdByUserId: operator?.id
-        }
-      });
-      await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
+        });
+        await this.repository.createLedger(tx, {
           supplierAccountId: newAccount.id,
           giftCardId,
           entryType: 'gift_card_debit',
@@ -188,69 +160,64 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           idempotencyKey: incomingKey,
           reason: `供应商更正扣款：${reason}`,
           createdByUserId: operator?.id
-        }
-      });
-      await Promise.all([
-        tx.idBusinessV2TopupSupplierAccount.update({
-          where: { id: oldAccount.id },
-          data: {
-            currentBalance: oldAfter,
-            currentBalanceCny: oldAfter,
-            updatedByUserId: operator?.id
-          }
-        }),
-        tx.idBusinessV2TopupSupplierAccount.update({
-          where: { id: newAccount.id },
-          data: {
-            currentBalance: newAfter,
-            currentBalanceCny: newAfter,
-            updatedByUserId: operator?.id
-          }
-        })
-      ]);
-      await tx.idBusinessV2GiftCard.update({
-        where: { id: giftCardId },
-        data: {
+        });
+        await Promise.all([
+          this.repository.updateSupplierAccountBalances(tx, {
+            accountId: oldAccount.id,
+            currentBalance: oldAfter.toString(),
+            currentBalanceCny: oldAfter.toString(),
+            operatorId: operator?.id
+          }),
+          this.repository.updateSupplierAccountBalances(tx, {
+            accountId: newAccount.id,
+            currentBalance: newAfter.toString(),
+            currentBalanceCny: newAfter.toString(),
+            operatorId: operator?.id
+          })
+        ]);
+        await this.repository.updateGiftCardSupplier(tx, {
+          giftCardId,
           supplierOptionId: newSupplier.id,
-          supplierNameSnapshot: newSupplier.name,
-          updatedByUserId: operator?.id
-        }
-      });
-      await this.writeAudit(tx, {
-        operator,
-        action: 'id_business_v2.gift_card.supplier_reassign',
-        objectType: 'id_business_v2_gift_card',
-        objectId: giftCardId,
-        beforeData: {
-          supplierOptionId: giftCard.supplierOptionId,
-          supplierBalanceCny: toV2DecimalString(oldAccount.currentBalanceCny)
-        },
-        afterData: {
-          supplierOptionId: newSupplier.id,
-          oldSupplierBalanceCny: toV2DecimalString(oldAfter),
-          newSupplierBalanceCny: toV2DecimalString(newAfter),
-          transferredCny: toV2DecimalString(activeDebit.amountCny),
-          reason
-        },
-        remark: `更正礼品卡供应商并转移资金：${giftCard.codeMasked}`
-      });
-      return {
-        giftCardId,
-        supplier: newSupplier,
-        legacyCutoverRecord: false,
-        oldSupplierBalance: {
-          supplierOptionId: oldAccount.supplierOptionId,
-          beforeCny: toV2DecimalString(oldAccount.currentBalanceCny),
-          afterCny: toV2DecimalString(oldAfter)
-        },
-        newSupplierBalance: {
-          supplierOptionId: newAccount.supplierOptionId,
-          beforeCny: toV2DecimalString(newAccount.currentBalanceCny),
-          afterCny: toV2DecimalString(newAfter),
-          isNegative: newAfter.lt(0)
-        },
-        idempotentReplay: false
-      };
-    });
+          supplierName: newSupplier.name,
+          operatorId: operator?.id
+        });
+        await this.writeAudit(tx, {
+          operator,
+          action: 'id_business_v2.gift_card.supplier_reassign',
+          objectType: 'id_business_v2_gift_card',
+          objectId: giftCardId,
+          beforeData: {
+            supplierOptionId: giftCard.supplierOptionId,
+            supplierBalanceCny: oldAccount.currentBalanceCny.toString()
+          },
+          afterData: {
+            supplierOptionId: newSupplier.id,
+            oldSupplierBalanceCny: oldAfter.toString(),
+            newSupplierBalanceCny: newAfter.toString(),
+            transferredCny: activeDebitAmountCny.toString(),
+            reason
+          },
+          remark: `更正礼品卡供应商并转移资金：${giftCard.codeMasked}`
+        });
+        return {
+          giftCardId,
+          supplier: newSupplier,
+          legacyCutoverRecord: false,
+          oldSupplierBalance: {
+            supplierOptionId: oldAccount.supplierOptionId,
+            beforeCny: oldAccount.currentBalanceCny.toString(),
+            afterCny: oldAfter.toString()
+          },
+          newSupplierBalance: {
+            supplierOptionId: newAccount.supplierOptionId,
+            beforeCny: newAccount.currentBalanceCny.toString(),
+            afterCny: newAfter.toString(),
+            isNegative: newAfter.isNegative()
+          },
+          idempotentReplay: false
+        };
+      },
+      { requestId: randomUUID(), operator }
+    );
   }
 }

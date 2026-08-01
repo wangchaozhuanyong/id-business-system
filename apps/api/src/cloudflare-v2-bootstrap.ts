@@ -37,7 +37,7 @@ export async function createCloudflareV2HttpServer(globalPrefix = 'api') {
       }
     },
     credentials: true,
-    exposedHeaders: ['Server-Timing']
+    exposedHeaders: ['Server-Timing', 'X-Request-Id']
   });
 
   await app.init();

@@ -5,6 +5,7 @@ import {
   IdBusinessV2OtcAverageService
 } from './id-business-v2-otc-average.service';
 import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.service';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import type {
   IdBusinessV2OtcCollection,
   IdBusinessV2OtcProviderName,
@@ -21,15 +22,15 @@ function quote(
   return {
     sourceAdId: id,
     side,
-    priceToRmb: new Prisma.Decimal(price),
-    minAmountRmb: new Prisma.Decimal('1000'),
-    maxAmountRmb: new Prisma.Decimal('10000'),
-    tradableAmountUsdt: new Prisma.Decimal('2000'),
+    priceToRmb: Rate8.from(price),
+    minAmountRmb: Amount4.from('1000'),
+    maxAmountRmb: Amount4.from('10000'),
+    tradableAmountUsdt: Amount4.from('2000'),
     paymentMethods: ['BANK'],
     merchantType: 'merchant',
     completedOrderCount: 100,
-    completionRate: new Prisma.Decimal('0.99'),
-    positiveReviewRate: new Prisma.Decimal('0.98'),
+    completionRate: Rate8.from('0.99'),
+    positiveReviewRate: Rate8.from('0.98'),
     ...overrides
   };
 }
@@ -66,7 +67,7 @@ function collection(
         : 'okx-public-trading-orders-books-v3',
     asset: 'USDT',
     fiat: 'CNY',
-    targetAmountRmb: new Prisma.Decimal('5000'),
+    targetAmountRmb: Amount4.from('5000'),
     collectedAt: new Date(),
     merchantBuy: side('merchant_buy', buyBase),
     merchantSell: side('merchant_sell', sellBase)
@@ -100,10 +101,10 @@ describe('IdBusinessV2OtcAverageService', () => {
       } as never
     );
 
-    await expect(service.collectAndAverage(new Prisma.Decimal('5000'))).rejects.toBeInstanceOf(
+    await expect(service.collectAndAverage(Amount4.from('5000'))).rejects.toBeInstanceOf(
       IdBusinessV2OtcAverageError
     );
-    await expect(service.collectAndAverage(new Prisma.Decimal('5000'))).rejects.toMatchObject({
+    await expect(service.collectAndAverage(Amount4.from('5000'))).rejects.toMatchObject({
       code: 'otc_average_provider_collection_failed',
       provider: 'OKX'
     });

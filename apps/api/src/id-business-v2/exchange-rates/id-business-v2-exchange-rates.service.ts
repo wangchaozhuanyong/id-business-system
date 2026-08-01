@@ -1,15 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
+  v2UnsignedDecimalPattern
+} from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
 import {
-  V2_DECIMAL_PATTERN,
-  V2_DECIMAL_PLACES,
-  V2_DECIMAL_ROUNDING_MODE,
-  toV2DecimalString
-} from '../decimal-policy';
+  Rate8,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 export interface ListIdBusinessV2ExchangeRatesQuery extends PaginationQuery {
   keyword?: string;
@@ -21,75 +23,33 @@ export interface ListIdBusinessV2ExchangeRatesQuery extends PaginationQuery {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_RATE = new Prisma.Decimal('9999999999.99999999');
-const TWO = new Prisma.Decimal(2);
-const DECIMAL_PLACES = V2_DECIMAL_PLACES;
-const ROUNDING_MODE = V2_DECIMAL_ROUNDING_MODE;
-
-const ENTRY_INCLUDE = {
-  createdBy: {
-    select: {
-      id: true,
-      username: true,
-      displayName: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2ExchangeRateEntryInclude;
-
-type ExchangeRateEntryRecord = Prisma.IdBusinessV2ExchangeRateEntryGetPayload<{
-  include: typeof ENTRY_INCLUDE;
-}>;
-
-const SORT_FIELDS: Record<
-  string,
-  keyof Prisma.IdBusinessV2ExchangeRateEntryOrderByWithRelationInput
-> = {
-  recordedAt: 'recordedAt',
-  createdAt: 'createdAt'
-};
+const MAX_RATE = Rate8.from('9999999999.99999999');
+const EXCHANGE_RATE_PATTERN = v2UnsignedDecimalPattern(V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES);
+type ExchangeRateEntryRecord = NonNullable<
+  Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findEntry']>>
+>;
 
 @Injectable()
 export class IdBusinessV2ExchangeRatesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService
+  ) {}
 
   async list(query: ListIdBusinessV2ExchangeRatesQuery) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const recordedAt = this.parseDateRange(query.recordedFrom, query.recordedTo);
-    const where: Prisma.IdBusinessV2ExchangeRateEntryWhereInput = {
+    const [items, total] = await this.repository.listEntries({
+      keyword,
+      keywordIsUuid: Boolean(keyword && UUID_PATTERN.test(keyword)),
       recordedAt,
-      OR: keyword
-        ? [
-            ...(UUID_PATTERN.test(keyword) ? [{ id: keyword }] : []),
-            { remark: { contains: keyword, mode: 'insensitive' } },
-            {
-              createdBy: {
-                is: {
-                  username: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            },
-            {
-              createdBy: {
-                is: {
-                  displayName: { contains: keyword, mode: 'insensitive' }
-                }
-              }
-            }
-          ]
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2ExchangeRateEntry.findMany({
-        where,
-        include: ENTRY_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
-      }),
-      this.prisma.idBusinessV2ExchangeRateEntry.count({ where })
-    ]);
+      skip: pagination.skip,
+      take: pagination.take,
+      sortBy: query.sortBy === 'createdAt' ? 'createdAt' : 'recordedAt',
+      sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc'
+    });
 
     return {
       items: items.map((entry) => this.toResponse(entry)),
@@ -101,11 +61,8 @@ export class IdBusinessV2ExchangeRatesService {
 
   async getOverview() {
     const [latestEntry, total] = await Promise.all([
-      this.prisma.idBusinessV2ExchangeRateEntry.findFirst({
-        include: ENTRY_INCLUDE,
-        orderBy: [{ recordedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2ExchangeRateEntry.count()
+      this.repository.findLatestEntry(),
+      this.repository.countEntries()
     ]);
 
     return {
@@ -117,10 +74,7 @@ export class IdBusinessV2ExchangeRatesService {
 
   async get(idValue: string) {
     const id = this.normalizeUuid(idValue);
-    const entry = await this.prisma.idBusinessV2ExchangeRateEntry.findUnique({
-      where: { id },
-      include: ENTRY_INCLUDE
-    });
+    const entry = await this.repository.findEntry(id);
 
     if (!entry) {
       throw new NotFoundException('手工汇率记录不存在');
@@ -129,7 +83,11 @@ export class IdBusinessV2ExchangeRatesService {
     return this.toResponse(entry);
   }
 
-  async create(dto: CreateIdBusinessV2ExchangeRateEntryDto, operator?: AuthenticatedUser) {
+  async create(
+    dto: CreateIdBusinessV2ExchangeRateEntryDto,
+    operator?: AuthenticatedUser,
+    requestId = 'exchange-rate-manual'
+  ) {
     if (!operator?.id) {
       throw new BadRequestException('无法识别当前操作人');
     }
@@ -159,25 +117,21 @@ export class IdBusinessV2ExchangeRatesService {
     const recordedAt = this.parseRecordedAt(dto.recordedAt);
     const remark = this.normalizeRemark(dto.remark);
 
-    const entry = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.idBusinessV2ExchangeRateEntry.create({
-        data: {
-          binanceMerchantBuyRateToRmb,
-          binanceMerchantSellRateToRmb,
-          okxMerchantBuyRateToRmb,
-          okxMerchantSellRateToRmb,
-          combinedMerchantBuyAverageRateToRmb,
-          combinedMerchantSellAverageRateToRmb,
-          midRateToRmb,
+    const entry = await this.transactionManager.execute(
+      async (tx) => {
+        const created = await this.repository.createEntry(tx, {
+          binanceMerchantBuyRateToRmb: binanceMerchantBuyRateToRmb.toString(),
+          binanceMerchantSellRateToRmb: binanceMerchantSellRateToRmb.toString(),
+          okxMerchantBuyRateToRmb: okxMerchantBuyRateToRmb.toString(),
+          okxMerchantSellRateToRmb: okxMerchantSellRateToRmb.toString(),
+          combinedMerchantBuyAverageRateToRmb: combinedMerchantBuyAverageRateToRmb.toString(),
+          combinedMerchantSellAverageRateToRmb: combinedMerchantSellAverageRateToRmb.toString(),
+          midRateToRmb: midRateToRmb.toString(),
           recordedAt,
           remark,
           createdByUserId: operator.id
-        },
-        include: ENTRY_INCLUDE
-      });
-
-      await tx.auditLog.create({
-        data: {
+        });
+        await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.manual.create',
@@ -195,17 +149,17 @@ export class IdBusinessV2ExchangeRatesService {
             remark
           },
           remark: 'V2 手工汇率录入'
-        }
-      });
-
-      return created;
-    });
+        });
+        return created;
+      },
+      { requestId, operator, retryMode: 'none' }
+    );
 
     return this.toResponse(entry);
   }
 
-  private average(left: Prisma.Decimal, right: Prisma.Decimal) {
-    return left.plus(right).dividedBy(TWO).toDecimalPlaces(DECIMAL_PLACES, ROUNDING_MODE);
+  private average(left: Rate8, right: Rate8) {
+    return left.add(right).div(2);
   }
 
   private parseRate(value: unknown, label: string) {
@@ -215,27 +169,21 @@ export class IdBusinessV2ExchangeRatesService {
     if (!normalized) {
       throw new BadRequestException(`${label}不能为空`);
     }
-    if (!V2_DECIMAL_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
+    if (!EXCHANGE_RATE_PATTERN.test(normalized)) {
+      throw new BadRequestException(
+        `${label}必须是最多 ${V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES} 位小数的正数`
+      );
     }
 
-    let rate: Prisma.Decimal;
+    let rate: Rate8;
     try {
-      rate = new Prisma.Decimal(normalized);
+      rate = Rate8.from(normalized);
     } catch {
       throw new BadRequestException(`${label}格式无效`);
     }
-
-    if (!rate.isFinite() || rate.lte(0)) {
-      throw new BadRequestException(`${label}必须大于 0`);
-    }
-
-    const rounded = rate.toDecimalPlaces(DECIMAL_PLACES, ROUNDING_MODE);
-    if (rounded.gt(MAX_RATE)) {
-      throw new BadRequestException(`${label}超出允许范围`);
-    }
-
-    return rounded;
+    if (rate.lte(0)) throw new BadRequestException(`${label}必须大于 0`);
+    if (rate.gt(MAX_RATE)) throw new BadRequestException(`${label}超出允许范围`);
+    return rate;
   }
 
   private parseRecordedAt(value: unknown) {
@@ -278,16 +226,6 @@ export class IdBusinessV2ExchangeRatesService {
     return date;
   }
 
-  private buildOrderBy(query: ListIdBusinessV2ExchangeRatesQuery) {
-    const field = SORT_FIELDS[query.sortBy ?? 'recordedAt'] ?? 'recordedAt';
-    const direction = query.sortOrder === 'asc' ? 'asc' : 'desc';
-    return [
-      { [field]: direction },
-      { createdAt: 'desc' },
-      { id: 'desc' }
-    ] as Prisma.IdBusinessV2ExchangeRateEntryOrderByWithRelationInput[];
-  }
-
   private normalizeKeyword(value?: string) {
     const normalized = value?.trim();
     if (!normalized) return undefined;
@@ -321,17 +259,13 @@ export class IdBusinessV2ExchangeRatesService {
   private toResponse(entry: ExchangeRateEntryRecord) {
     return {
       id: entry.id,
-      binanceMerchantBuyRateToRmb: toV2DecimalString(entry.binanceMerchantBuyRateToRmb),
-      binanceMerchantSellRateToRmb: toV2DecimalString(entry.binanceMerchantSellRateToRmb),
-      okxMerchantBuyRateToRmb: toV2DecimalString(entry.okxMerchantBuyRateToRmb),
-      okxMerchantSellRateToRmb: toV2DecimalString(entry.okxMerchantSellRateToRmb),
-      combinedMerchantBuyAverageRateToRmb: toV2DecimalString(
-        entry.combinedMerchantBuyAverageRateToRmb
-      ),
-      combinedMerchantSellAverageRateToRmb: toV2DecimalString(
-        entry.combinedMerchantSellAverageRateToRmb
-      ),
-      midRateToRmb: toV2DecimalString(entry.midRateToRmb),
+      binanceMerchantBuyRateToRmb: entry.binanceMerchantBuyRateToRmb.toString(),
+      binanceMerchantSellRateToRmb: entry.binanceMerchantSellRateToRmb.toString(),
+      okxMerchantBuyRateToRmb: entry.okxMerchantBuyRateToRmb.toString(),
+      okxMerchantSellRateToRmb: entry.okxMerchantSellRateToRmb.toString(),
+      combinedMerchantBuyAverageRateToRmb: entry.combinedMerchantBuyAverageRateToRmb.toString(),
+      combinedMerchantSellAverageRateToRmb: entry.combinedMerchantSellAverageRateToRmb.toString(),
+      midRateToRmb: entry.midRateToRmb.toString(),
       recordedAt: entry.recordedAt,
       remark: entry.remark,
       createdBy: entry.createdBy,

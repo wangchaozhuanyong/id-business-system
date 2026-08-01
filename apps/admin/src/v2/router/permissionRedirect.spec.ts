@@ -18,12 +18,12 @@ function createUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
 
 describe('V2 permission redirect', () => {
   it('redirects an administrator to the first V2 workspace', () => {
-    expect(getFirstAllowedV2Route(createUser({ roles: ['admin'] }))).toBe('/v2/workbench/renewals');
+    expect(getFirstAllowedV2Route(createUser({ roles: ['admin'] }))).toBe('/v2/dashboard');
   });
 
   it('redirects a user to the first allowed module', () => {
     expect(getFirstAllowedV2Route(createUser({ permissions: ['apple.order.create'] }))).toBe(
-      '/v2/workbench/order-entry'
+      '/v2/dashboard'
     );
   });
 

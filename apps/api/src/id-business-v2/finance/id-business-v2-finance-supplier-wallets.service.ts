@@ -4,12 +4,15 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import {
+  Amount4,
+  Rate8,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
 import type {
   AdjustIdBusinessV2SupplierWalletDto,
   CreateIdBusinessV2SupplierDepositDto,
@@ -30,17 +33,14 @@ import {
   IdBusinessV2FinancePostingService,
   type FinancePostingLineInput
 } from './id-business-v2-finance-posting.service';
-import {
-  lockFinanceSupplierWallet,
-  toFinanceSupplierPaymentResponse,
-  toFinanceSupplierWalletResponse,
-  writeFinanceSupplierWalletAudit
-} from './id-business-v2-finance-supplier-wallet-support';
+import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
 
 @Injectable()
 export class IdBusinessV2FinanceSupplierWalletsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly repository: IdBusinessV2FinanceSupplierWalletRepository,
+    private readonly audit: V2TransactionalAuditService,
     private readonly fxService: IdBusinessV2FinanceFxService,
     private readonly postingService: IdBusinessV2FinancePostingService
   ) {}
@@ -50,12 +50,8 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     const normalizedSupplierId = supplierOptionId
       ? normalizeFinanceUuid(supplierOptionId, '供应商')
       : undefined;
-    const items = await this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-      where: { currency: normalizedCurrency, supplierOptionId: normalizedSupplierId },
-      include: { supplierOption: true },
-      orderBy: [{ supplierOption: { name: 'asc' } }, { currency: 'asc' }]
-    });
-    return { items: items.map(toFinanceSupplierWalletResponse) };
+    const items = await this.repository.list(normalizedCurrency, normalizedSupplierId);
+    return { items };
   }
 
   async create(dto: CreateIdBusinessV2SupplierWalletDto, operator?: AuthenticatedUser) {
@@ -74,56 +70,46 @@ export class IdBusinessV2FinanceSupplierWalletsService {
       manualReason: dto.manualRateReason,
       operator
     });
-    const openingBalanceCny = roundV2Decimal(openingBalance.mul(rate.rateToCny));
+    const rateToCny = Rate8.from(rate.rateToCny);
+    const openingBalanceCny = rateToCny.apply(openingBalance);
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'supplier_wallet');
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.idBusinessV2TopupSupplierAccount.findUnique({
-        where: { supplierOptionId_currency: { supplierOptionId, currency } },
-        include: { supplierOption: true }
-      });
-      if (existing) return toFinanceSupplierWalletResponse(existing);
-      const supplier = await tx.idBusinessV2Option.findFirst({
-        where: {
-          id: supplierOptionId,
-          type: { in: ['topup_supplier', 'id_supplier'] },
-          status: 'active',
-          deletedAt: null
-        }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const existing = await this.repository.findWalletBySupplierCurrency(
+        tx,
+        supplierOptionId,
+        currency
+      );
+      if (existing) return existing;
+      const supplier = await this.repository.findActiveSupplier(tx, supplierOptionId);
       if (!supplier) throw new BadRequestException('供应商不存在或已停用');
-      const wallet = await tx.idBusinessV2TopupSupplierAccount.create({
-        data: {
-          id: randomUUID(),
-          supplierOptionId,
-          currency,
-          openingBalance,
-          currentBalance: openingBalance,
-          openingBalanceCny,
-          currentBalanceCny: openingBalanceCny,
-          initializedAt: now,
-          initializedByUserId: operator?.id,
-          updatedByUserId: operator?.id
-        },
-        include: { supplierOption: true }
+      const wallet = await this.repository.createWallet(tx, {
+        id: randomUUID(),
+        supplierOptionId,
+        currency,
+        openingBalance: openingBalance.toString(),
+        currentBalance: openingBalance.toString(),
+        openingBalanceCny: openingBalanceCny.toString(),
+        currentBalanceCny: openingBalanceCny.toString(),
+        initializedAt: now,
+        initializedByUserId: operator?.id,
+        updatedByUserId: operator?.id
       });
-      await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          id: randomUUID(),
-          supplierAccountId: wallet.id,
-          entryType: 'opening_balance',
-          direction: 'adjustment',
-          currency,
-          amount: openingBalance,
-          balanceBefore: 0,
-          balanceAfter: openingBalance,
-          amountCny: openingBalanceCny,
-          balanceBeforeCny: 0,
-          balanceAfterCny: openingBalanceCny,
-          supplierNameSnapshot: supplier.name,
-          idempotencyKey: `${idempotencyKey}:ledger`,
-          reason,
-          createdByUserId: operator?.id
-        }
+      await this.repository.createLedger(tx, {
+        id: randomUUID(),
+        supplierAccountId: wallet.id,
+        entryType: 'opening_balance',
+        direction: 'adjustment',
+        currency,
+        amount: openingBalance.toString(),
+        balanceBefore: '0',
+        balanceAfter: openingBalance.toString(),
+        amountCny: openingBalanceCny.toString(),
+        balanceBeforeCny: '0',
+        balanceAfterCny: openingBalanceCny.toString(),
+        supplierNameSnapshot: supplier.name,
+        idempotencyKey: `${idempotencyKey}:ledger`,
+        reason,
+        createdByUserId: operator?.id
       });
       await this.postingService.post(tx, {
         journalType: 'opening_balance',
@@ -141,7 +127,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: 'debit',
             currency,
             amountOriginal: openingBalance,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny: openingBalanceCny,
             supplierAccountId: wallet.id,
             fxRateSnapshotId: rate.id
@@ -151,20 +137,20 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: 'credit',
             currency,
             amountOriginal: openingBalance,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny: openingBalanceCny,
             fxRateSnapshotId: rate.id
           }
         ]
       });
-      await writeFinanceSupplierWalletAudit(tx, operator, 'create', wallet.id, {
+      await this.writeAudit(tx, operator, 'create', wallet.id, {
         supplierOptionId,
         currency,
-        openingBalance: toV2DecimalString(openingBalance),
+        openingBalance: openingBalance.toString(),
         reason
       });
-      return toFinanceSupplierWalletResponse(wallet);
-    });
+      return wallet;
+    }, this.commandOptions(operator));
   }
 
   async deposit(
@@ -179,13 +165,10 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     const creditedAmount = normalizeFinanceMoney(dto.creditedAmount ?? dto.paidAmount, '到账金额');
     const paidAt = normalizeFinanceDate(dto.paidAt, '付款时间');
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'supplier_deposit');
-    const [wallet, financeAccount] = await Promise.all([
-      this.prisma.idBusinessV2TopupSupplierAccount.findUnique({
-        where: { id: walletId },
-        include: { supplierOption: true }
-      }),
-      this.prisma.idBusinessV2FinanceAccount.findUnique({ where: { id: financeAccountId } })
-    ]);
+    const { wallet, financeAccount } = await this.repository.findWalletAndFinanceAccount(
+      walletId,
+      financeAccountId
+    );
     if (!wallet || wallet.status !== 'active')
       throw new BadRequestException('供应商钱包不存在或已停用');
     if (!financeAccount || financeAccount.status !== 'active') {
@@ -207,65 +190,59 @@ export class IdBusinessV2FinanceSupplierWalletsService {
       wallet.currency === financeAccount.currency
         ? paidRate
         : await this.fxService.resolve({ currency: wallet.currency, occurredAt: paidAt, operator });
-    const creditedCny = roundV2Decimal(creditedAmount.mul(walletRate.rateToCny));
-    const paidCny = roundV2Decimal(paidAmount.mul(paidRate.rateToCny));
-    const feeCny = roundV2Decimal(networkFee.mul(paidRate.rateToCny));
+    const walletRateToCny = Rate8.from(walletRate.rateToCny);
+    const paidRateToCny = Rate8.from(paidRate.rateToCny);
+    const creditedCny = walletRateToCny.apply(creditedAmount);
+    const paidCny = paidRateToCny.apply(paidAmount);
+    const feeCny = paidRateToCny.apply(networkFee);
     const cashOutCny = paidCny.add(feeCny);
     const remark = normalizeFinanceText(dto.remark, '备注', 2000);
 
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierPayment.findUnique({
-        where: { idempotencyKey },
-        include: { supplierAccount: { include: { supplierOption: true } } }
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findPaymentReplay(tx, idempotencyKey);
+      if (replay) return replay;
+      const locked = await this.repository.lock(tx, walletId);
+      const nextBalance = locked.currentBalance.add(creditedAmount);
+      const nextBalanceCny = locked.currentBalanceCny.add(creditedCny);
+      const payment = await this.repository.createPayment(tx, {
+        id: randomUUID(),
+        supplierAccountId: walletId,
+        financeAccountId,
+        fxRateSnapshotId: paidRate.id,
+        supplierNameSnapshot: locked.supplierName,
+        paidCurrency: financeAccount.currency,
+        paidAmount: paidAmount.toString(),
+        networkFeeAmount: networkFee.toString(),
+        fxRateToCny: paidRateToCny.toString(),
+        creditedAmount: creditedAmount.toString(),
+        creditedCny: creditedCny.toString(),
+        receivedUsdt: financeAccount.currency === 'USDT' ? paidAmount.toString() : null,
+        networkFeeUsdt: financeAccount.currency === 'USDT' ? networkFee.toString() : null,
+        settlementRateCnyUsdt: financeAccount.currency === 'USDT' ? paidRateToCny.toString() : null,
+        network: normalizeFinanceText(dto.network, '网络', 40),
+        transactionHash: normalizeFinanceText(dto.transactionHash, '交易哈希', 180),
+        paidAt,
+        remark,
+        idempotencyKey,
+        createdByUserId: operator?.id
       });
-      if (replay) return toFinanceSupplierPaymentResponse(replay);
-      const locked = await lockFinanceSupplierWallet(tx, walletId);
-      const nextBalance = roundV2Decimal(locked.currentBalance.add(creditedAmount));
-      const nextBalanceCny = roundV2Decimal(locked.currentBalanceCny.add(creditedCny));
-      const payment = await tx.idBusinessV2TopupSupplierPayment.create({
-        data: {
-          id: randomUUID(),
-          supplierAccountId: walletId,
-          financeAccountId,
-          fxRateSnapshotId: paidRate.id,
-          supplierNameSnapshot: locked.supplierName,
-          paidCurrency: financeAccount.currency,
-          paidAmount,
-          networkFeeAmount: networkFee,
-          fxRateToCny: paidRate.rateToCny,
-          creditedAmount,
-          creditedCny,
-          receivedUsdt: financeAccount.currency === 'USDT' ? paidAmount : null,
-          networkFeeUsdt: financeAccount.currency === 'USDT' ? networkFee : null,
-          settlementRateCnyUsdt: financeAccount.currency === 'USDT' ? paidRate.rateToCny : null,
-          network: normalizeFinanceText(dto.network, '网络', 40),
-          transactionHash: normalizeFinanceText(dto.transactionHash, '交易哈希', 180),
-          paidAt,
-          remark,
-          idempotencyKey,
-          createdByUserId: operator?.id
-        },
-        include: { supplierAccount: { include: { supplierOption: true } } }
-      });
-      await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          id: randomUUID(),
-          supplierAccountId: walletId,
-          paymentId: payment.id,
-          entryType: 'payment_credit',
-          direction: 'credit',
-          currency: wallet.currency,
-          amount: creditedAmount,
-          balanceBefore: locked.currentBalance,
-          balanceAfter: nextBalance,
-          amountCny: creditedCny,
-          balanceBeforeCny: locked.currentBalanceCny,
-          balanceAfterCny: nextBalanceCny,
-          supplierNameSnapshot: locked.supplierName,
-          idempotencyKey: `${idempotencyKey}:ledger`,
-          reason: remark,
-          createdByUserId: operator?.id
-        }
+      await this.repository.createLedger(tx, {
+        id: randomUUID(),
+        supplierAccountId: walletId,
+        paymentId: payment.id,
+        entryType: 'payment_credit',
+        direction: 'credit',
+        currency: wallet.currency,
+        amount: creditedAmount.toString(),
+        balanceBefore: locked.currentBalance.toString(),
+        balanceAfter: nextBalance.toString(),
+        amountCny: creditedCny.toString(),
+        balanceBeforeCny: locked.currentBalanceCny.toString(),
+        balanceAfterCny: nextBalanceCny.toString(),
+        supplierNameSnapshot: locked.supplierName,
+        idempotencyKey: `${idempotencyKey}:ledger`,
+        reason: remark,
+        createdByUserId: operator?.id
       });
       const lines: FinancePostingLineInput[] = [
         {
@@ -273,7 +250,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
           direction: 'debit',
           currency: wallet.currency,
           amountOriginal: creditedAmount,
-          fxRateToCny: walletRate.rateToCny,
+          fxRateToCny: walletRateToCny,
           amountCny: creditedCny,
           supplierAccountId: walletId,
           fxRateSnapshotId: walletRate.id
@@ -285,7 +262,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
                 direction: 'debit' as const,
                 currency: financeAccount.currency,
                 amountOriginal: networkFee,
-                fxRateToCny: paidRate.rateToCny,
+                fxRateToCny: paidRateToCny,
                 amountCny: feeCny,
                 fxRateSnapshotId: paidRate.id
               }
@@ -296,7 +273,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
           direction: 'credit',
           currency: financeAccount.currency,
           amountOriginal: paidAmount.add(networkFee),
-          fxRateToCny: paidRate.rateToCny,
+          fxRateToCny: paidRateToCny,
           amountCny: cashOutCny,
           financeAccountId,
           fxRateSnapshotId: paidRate.id
@@ -325,22 +302,21 @@ export class IdBusinessV2FinanceSupplierWalletsService {
         operator,
         lines
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: walletId },
-        data: {
-          currentBalance: nextBalance,
-          currentBalanceCny: nextBalanceCny,
-          updatedByUserId: operator?.id
-        }
-      });
-      await writeFinanceSupplierWalletAudit(tx, operator, 'deposit', payment.id, {
+      await this.repository.updateBalances(
+        tx,
         walletId,
-        paidAmount: toV2DecimalString(paidAmount),
-        creditedAmount: toV2DecimalString(creditedAmount),
-        creditedCny: toV2DecimalString(creditedCny)
+        nextBalance.toString(),
+        nextBalanceCny.toString(),
+        operator?.id
+      );
+      await this.writeAudit(tx, operator, 'deposit', payment.id, {
+        walletId,
+        paidAmount: paidAmount.toString(),
+        creditedAmount: creditedAmount.toString(),
+        creditedCny: creditedCny.toString()
       });
-      return toFinanceSupplierPaymentResponse(payment);
-    });
+      return payment;
+    }, this.commandOptions(operator));
   }
 
   async refund(
@@ -354,13 +330,10 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     const receivedAt = normalizeFinanceDate(dto.receivedAt, '退款时间');
     const reason = normalizeFinanceText(dto.reason, '退款原因', 500, true)!;
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'supplier_refund');
-    const [wallet, financeAccount] = await Promise.all([
-      this.prisma.idBusinessV2TopupSupplierAccount.findUnique({
-        where: { id: walletId },
-        include: { supplierOption: true }
-      }),
-      this.prisma.idBusinessV2FinanceAccount.findUnique({ where: { id: financeAccountId } })
-    ]);
+    const { wallet, financeAccount } = await this.repository.findWalletAndFinanceAccount(
+      walletId,
+      financeAccountId
+    );
     if (!wallet || wallet.status !== 'active')
       throw new BadRequestException('供应商钱包不存在或已停用');
     if (!financeAccount || financeAccount.status !== 'active') {
@@ -379,37 +352,32 @@ export class IdBusinessV2FinanceSupplierWalletsService {
       manualReason: dto.manualRateReason,
       operator
     });
-    const amountCny = roundV2Decimal(amount.mul(rate.rateToCny));
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-        where: { idempotencyKey }
-      });
+    const rateToCny = Rate8.from(rate.rateToCny);
+    const amountCny = rateToCny.apply(amount);
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) return replay;
-      const locked = await lockFinanceSupplierWallet(tx, walletId);
+      const locked = await this.repository.lock(tx, walletId);
       if (locked.currentBalance.lt(amount)) throw new ConflictException('供应商钱包余额不足');
       const nextBalance = locked.currentBalance.sub(amount);
-      const nextBalanceCny = PrismaNamespace.Decimal.max(
-        0,
-        locked.currentBalanceCny.sub(amountCny)
-      );
-      const ledger = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          id: randomUUID(),
-          supplierAccountId: walletId,
-          entryType: 'supplier_refund',
-          direction: 'debit',
-          currency: wallet.currency,
-          amount,
-          balanceBefore: locked.currentBalance,
-          balanceAfter: nextBalance,
-          amountCny,
-          balanceBeforeCny: locked.currentBalanceCny,
-          balanceAfterCny: nextBalanceCny,
-          supplierNameSnapshot: locked.supplierName,
-          idempotencyKey,
-          reason,
-          createdByUserId: operator?.id
-        }
+      const rawNextBalanceCny = locked.currentBalanceCny.sub(amountCny);
+      const nextBalanceCny = rawNextBalanceCny.isNegative() ? Amount4.zero() : rawNextBalanceCny;
+      const ledger = await this.repository.createLedger(tx, {
+        id: randomUUID(),
+        supplierAccountId: walletId,
+        entryType: 'supplier_refund',
+        direction: 'debit',
+        currency: wallet.currency,
+        amount: amount.toString(),
+        balanceBefore: locked.currentBalance.toString(),
+        balanceAfter: nextBalance.toString(),
+        amountCny: amountCny.toString(),
+        balanceBeforeCny: locked.currentBalanceCny.toString(),
+        balanceAfterCny: nextBalanceCny.toString(),
+        supplierNameSnapshot: locked.supplierName,
+        idempotencyKey,
+        reason,
+        createdByUserId: operator?.id
       });
       await this.postingService.post(tx, {
         journalType: 'supplier_refund',
@@ -426,7 +394,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: 'debit',
             currency: wallet.currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             financeAccountId,
             fxRateSnapshotId: rate.id
@@ -436,29 +404,28 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: 'credit',
             currency: wallet.currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             supplierAccountId: walletId,
             fxRateSnapshotId: rate.id
           }
         ]
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: walletId },
-        data: {
-          currentBalance: nextBalance,
-          currentBalanceCny: nextBalanceCny,
-          updatedByUserId: operator?.id
-        }
-      });
-      await writeFinanceSupplierWalletAudit(tx, operator, 'refund', ledger.id, {
+      await this.repository.updateBalances(
+        tx,
         walletId,
-        amount: toV2DecimalString(amount),
-        amountCny: toV2DecimalString(amountCny),
+        nextBalance.toString(),
+        nextBalanceCny.toString(),
+        operator?.id
+      );
+      await this.writeAudit(tx, operator, 'refund', ledger.id, {
+        walletId,
+        amount: amount.toString(),
+        amountCny: amountCny.toString(),
         reason
       });
       return ledger;
-    });
+    }, this.commandOptions(operator));
   }
 
   async adjust(
@@ -470,10 +437,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
     const target = normalizeFinanceMoney(dto.targetBalance, '目标余额', true);
     const reason = normalizeFinanceText(dto.reason, '调整原因', 500, true)!;
     const idempotencyKey = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'supplier_adjust');
-    const wallet = await this.prisma.idBusinessV2TopupSupplierAccount.findUnique({
-      where: { id: walletId },
-      include: { supplierOption: true }
-    });
+    const wallet = await this.repository.findWallet(walletId);
     if (!wallet) throw new NotFoundException('供应商钱包不存在');
     const manualRate =
       dto.fxRateToCny === undefined ? null : normalizeFinanceRate(dto.fxRateToCny, wallet.currency);
@@ -486,36 +450,33 @@ export class IdBusinessV2FinanceSupplierWalletsService {
       manualReason: dto.manualRateReason,
       operator
     });
-    return this.prisma.$transaction(async (tx) => {
-      const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-        where: { idempotencyKey }
-      });
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.repository.findLedgerReplay(tx, idempotencyKey);
       if (replay) return replay;
-      const locked = await lockFinanceSupplierWallet(tx, walletId);
-      const difference = roundV2Decimal(target.sub(locked.currentBalance));
+      const locked = await this.repository.lock(tx, walletId);
+      const difference = target.sub(locked.currentBalance);
       if (difference.equals(0)) throw new BadRequestException('目标余额与当前余额相同');
       const amount = difference.abs();
-      const amountCny = roundV2Decimal(amount.mul(rate.rateToCny));
-      const targetCny = roundV2Decimal(target.mul(rate.rateToCny));
+      const rateToCny = Rate8.from(rate.rateToCny);
+      const amountCny = rateToCny.apply(amount);
+      const targetCny = rateToCny.apply(target);
       const increase = difference.gt(0);
-      const ledger = await tx.idBusinessV2TopupSupplierLedger.create({
-        data: {
-          id: randomUUID(),
-          supplierAccountId: walletId,
-          entryType: 'manual_adjustment',
-          direction: 'adjustment',
-          currency: wallet.currency,
-          amount,
-          balanceBefore: locked.currentBalance,
-          balanceAfter: target,
-          amountCny,
-          balanceBeforeCny: locked.currentBalanceCny,
-          balanceAfterCny: targetCny,
-          supplierNameSnapshot: locked.supplierName,
-          idempotencyKey,
-          reason,
-          createdByUserId: operator?.id
-        }
+      const ledger = await this.repository.createLedger(tx, {
+        id: randomUUID(),
+        supplierAccountId: walletId,
+        entryType: 'manual_adjustment',
+        direction: 'adjustment',
+        currency: wallet.currency,
+        amount: amount.toString(),
+        balanceBefore: locked.currentBalance.toString(),
+        balanceAfter: target.toString(),
+        amountCny: amountCny.toString(),
+        balanceBeforeCny: locked.currentBalanceCny.toString(),
+        balanceAfterCny: targetCny.toString(),
+        supplierNameSnapshot: locked.supplierName,
+        idempotencyKey,
+        reason,
+        createdByUserId: operator?.id
       });
       await this.postingService.post(tx, {
         journalType: 'supplier_adjustment',
@@ -533,7 +494,7 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: increase ? 'debit' : 'credit',
             currency: wallet.currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             supplierAccountId: walletId,
             fxRateSnapshotId: rate.id
@@ -543,57 +504,59 @@ export class IdBusinessV2FinanceSupplierWalletsService {
             direction: increase ? 'credit' : 'debit',
             currency: wallet.currency,
             amountOriginal: amount,
-            fxRateToCny: rate.rateToCny,
+            fxRateToCny: rateToCny,
             amountCny,
             fxRateSnapshotId: rate.id
           }
         ]
       });
-      await tx.idBusinessV2TopupSupplierAccount.update({
-        where: { id: walletId },
-        data: {
-          currentBalance: target,
-          currentBalanceCny: targetCny,
-          updatedByUserId: operator?.id
-        }
-      });
-      await writeFinanceSupplierWalletAudit(tx, operator, 'adjust', ledger.id, {
+      await this.repository.updateBalances(
+        tx,
         walletId,
-        before: toV2DecimalString(locked.currentBalance),
-        after: toV2DecimalString(target),
+        target.toString(),
+        targetCny.toString(),
+        operator?.id
+      );
+      await this.writeAudit(tx, operator, 'adjust', ledger.id, {
+        walletId,
+        before: locked.currentBalance.toString(),
+        after: target.toString(),
         reason
       });
       return ledger;
-    });
+    }, this.commandOptions(operator));
   }
 
   async ledger(walletIdValue: string, query: PaginationQuery) {
     const walletId = normalizeFinanceUuid(walletIdValue, '供应商钱包');
     const pagination = getPagination(query);
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2TopupSupplierLedger.findMany({
-        where: { supplierAccountId: walletId },
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
-      }),
-      this.prisma.idBusinessV2TopupSupplierLedger.count({
-        where: { supplierAccountId: walletId }
-      })
-    ]);
-    return {
-      items: items.map((item) => ({
-        ...item,
-        amount: toV2DecimalString(item.amount),
-        balanceBefore: toV2DecimalString(item.balanceBefore),
-        balanceAfter: toV2DecimalString(item.balanceAfter),
-        amountCny: toV2DecimalString(item.amountCny),
-        balanceBeforeCny: toV2DecimalString(item.balanceBeforeCny),
-        balanceAfterCny: toV2DecimalString(item.balanceAfterCny)
-      })),
-      total,
-      page: pagination.page,
-      pageSize: pagination.pageSize
-    };
+    const { items, total } = await this.repository.listLedger(
+      walletId,
+      pagination.skip,
+      pagination.take
+    );
+    return { items, total, page: pagination.page, pageSize: pagination.pageSize };
+  }
+
+  private writeAudit(
+    tx: Parameters<V2TransactionalAuditService['append']>[0],
+    operator: AuthenticatedUser | undefined,
+    action: string,
+    objectId: string,
+    afterData: Parameters<V2TransactionalAuditService['append']>[1]['afterData']
+  ) {
+    return this.audit.append(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2_finance',
+      action: `id_business_v2.finance_supplier_wallet.${action}`,
+      objectType: 'id_business_v2_topup_supplier_account',
+      objectId,
+      afterData,
+      remark: '供应商资金账务变更'
+    });
+  }
+
+  private commandOptions(operator?: AuthenticatedUser) {
+    return { requestId: randomUUID(), operator } as const;
   }
 }

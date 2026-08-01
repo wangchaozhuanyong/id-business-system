@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2OrderMatchingService } from './id-business-v2-order-matching.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const serviceOptionId = '11111111-1111-4111-8111-111111111111';
 const categoryOptionId = '22222222-2222-4222-8222-222222222222';
@@ -78,7 +79,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
     hash: vi.fn()
   };
   const service = new IdBusinessV2OrderMatchingService(
-    prisma as never,
+    new IdBusinessV2OrdersRepository(prisma as never),
     balanceCalculator as never,
     fieldEncryptionService as never
   );
@@ -153,7 +154,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
     });
   });
 
-  it('serializes the required balance before subtracting from a Cloudflare runtime decimal', async () => {
+  it('maps a Cloudflare runtime decimal before applying Amount4 subtraction', async () => {
     const runtimeCurrentBalance = {
       toString: () => '25',
       minus: vi.fn((value: unknown) => {
@@ -175,7 +176,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
       balanceAmount: '20'
     });
 
-    expect(runtimeCurrentBalance.minus).toHaveBeenCalledWith('20');
+    expect(runtimeCurrentBalance.minus).not.toHaveBeenCalled();
     expect(result.items[0]?.balanceAfterMatch).toBe('5');
   });
 
@@ -193,7 +194,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
       where: {
         countryOptionId,
         currentBalance: {
-          gte: decimal('20')
+          gte: '20'
         },
         OR: [
           {
@@ -223,13 +224,11 @@ describe('IdBusinessV2OrderMatchingService', () => {
       balanceAmount: '25'
     });
 
-    expect(balanceCalculator.calculateConsumption).toHaveBeenCalledWith(
-      {
-        currentBalance: decimal('25'),
-        balanceCostAmount: decimal('150')
-      },
-      decimal('25')
-    );
+    expect(balanceCalculator.calculateConsumption).toHaveBeenCalledOnce();
+    const [snapshot, requestedAmount] = balanceCalculator.calculateConsumption.mock.calls[0] ?? [];
+    expect(snapshot?.currentBalance.toString()).toBe('25');
+    expect(snapshot?.balanceCostAmount.toString()).toBe('150');
+    expect(requestedAmount?.toString()).toBe('25');
     expect(result.items[0]?.estimatedBalanceCostAmount).toBe('150');
   });
 
@@ -254,7 +253,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
           }
         },
         currentBalance: {
-          gte: decimal('20')
+          gte: '20'
         },
         locks: {
           none: {

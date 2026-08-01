@@ -72,15 +72,6 @@
       <el-tag type="info" effect="plain">服务端复核</el-tag>
     </div>
   </el-form-item>
-
-  <el-form-item label="预计利润率">
-    <div class="v2-order-entry-readonly">
-      <strong>
-        {{ estimatedProfitRatePreview === null ? '—' : `${estimatedProfitRatePreview}%` }}
-      </strong>
-      <span>预计利润 ¥{{ formatDecimal(estimatedProfitPreview) }}</span>
-    </div>
-  </el-form-item>
 </template>
 
 <script setup lang="ts">
@@ -96,8 +87,6 @@ const props = defineProps<{
   recommendationApplied: boolean;
   appliedSuggestedOriginal: string;
   platformFeePreview: string;
-  estimatedProfitPreview: string;
-  estimatedProfitRatePreview: string | null;
   profitRateInputValue: string;
   pricingInputMode: OrderPricingInputMode;
   profitRateInputHint: string;

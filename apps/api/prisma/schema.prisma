@@ -302,6 +302,49 @@ enum IdBusinessV2ExchangeRateErrorProvider {
   system
 }
 
+enum IdBusinessV2GovernanceJobType {
+  recycle_restore
+  exchange_rate_cleanup
+}
+
+enum IdBusinessV2GovernanceJobStatus {
+  pending_approval
+  approved
+  running
+  succeeded
+  partially_succeeded
+  failed
+  rejected
+  cancelled
+}
+
+enum IdBusinessV2GovernanceEntityType {
+  account
+  customer
+  option
+  order
+  exchange_rate_run
+}
+
+enum IdBusinessV2GovernanceItemStatus {
+  pending
+  processing
+  succeeded
+  skipped
+  failed
+}
+
+enum IdBusinessV2GovernanceApprovalDecision {
+  approved
+  rejected
+}
+
+enum IdBusinessV2GovernanceCheckpointStatus {
+  running
+  completed
+  failed
+}
+
 model User {
   id           String     @id @default(uuid()) @db.Uuid
   username     String     @unique @db.VarChar(100)
@@ -315,49 +358,52 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
-  userRoles                          UserRole[]
-  v2AuthIdentity                     V2AuthIdentity?
-  auditLogs                          AuditLog[]
-  attachments                        Attachment[]
-  loginLogs                          LoginLog[]                          @relation("LoginLogUser")
-  activeSessions                     ActiveSession[]                     @relation("ActiveSessionUser")
-  securitySettingsUpdated            SecuritySetting[]                   @relation("SecuritySettingUpdatedBy")
-  ipWhitelistsCreated                IpWhitelist[]                       @relation("IpWhitelistCreatedBy")
-  sensitiveAccessLogs                SensitiveAccessLog[]                @relation("SensitiveAccessLogUser")
-  sensitiveApprovalsAsked            SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalRequester")
-  sensitiveApprovalsDone             SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalApprover")
-  idBusinessV2OptionsCreated         IdBusinessV2Option[]                @relation("IdBusinessV2OptionCreatedBy")
-  idBusinessV2OptionsUpdated         IdBusinessV2Option[]                @relation("IdBusinessV2OptionUpdatedBy")
-  idBusinessV2CustomersCreated       IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerCreatedBy")
-  idBusinessV2CustomersUpdated       IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerUpdatedBy")
-  idBusinessV2AccountsCreated        IdBusinessV2Account[]               @relation("IdBusinessV2AccountCreatedBy")
-  idBusinessV2AccountsUpdated        IdBusinessV2Account[]               @relation("IdBusinessV2AccountUpdatedBy")
-  idBusinessV2AccountLossesReported  IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReportedBy")
-  idBusinessV2GiftCardsCreated       IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardCreatedBy")
-  idBusinessV2GiftCardsUpdated       IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardUpdatedBy")
-  idBusinessV2BalanceEntriesCreated  IdBusinessV2BalanceLedger[]         @relation("IdBusinessV2BalanceLedgerCreatedBy")
-  idBusinessV2TopupFundsInitialized  IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountInitializedBy")
-  idBusinessV2TopupFundsUpdated      IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountUpdatedBy")
-  idBusinessV2TopupPaymentsCreated   IdBusinessV2TopupSupplierPayment[]  @relation("IdBusinessV2TopupSupplierPaymentCreatedBy")
-  idBusinessV2TopupFundEntries       IdBusinessV2TopupSupplierLedger[]   @relation("IdBusinessV2TopupSupplierLedgerCreatedBy")
-  idBusinessV2OrdersCreated          IdBusinessV2Order[]                 @relation("IdBusinessV2OrderCreatedBy")
-  idBusinessV2OrdersUpdated          IdBusinessV2Order[]                 @relation("IdBusinessV2OrderUpdatedBy")
-  idBusinessV2LocksCreated           IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockCreatedBy")
-  idBusinessV2LocksEnded             IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockEndedBy")
-  idBusinessV2ActivationsCreated     IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationCreatedBy")
-  idBusinessV2ActivationsUpdated     IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationUpdatedBy")
-  idBusinessV2RenewalWarningUpdated  IdBusinessV2RenewalWarningSetting[] @relation("IdBusinessV2RenewalWarningUpdatedBy")
-  idBusinessV2ExchangeRateRuns       IdBusinessV2ExchangeRateRun[]       @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
-  idBusinessV2ExchangeRateEntries    IdBusinessV2ExchangeRateEntry[]     @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
-  idBusinessV2ExchangeRateSettings   IdBusinessV2ExchangeRateSettings[]  @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
-  idBusinessV2FinanceSettings        IdBusinessV2FinanceSettings[]       @relation("IdBusinessV2FinanceSettingsUpdatedBy")
-  idBusinessV2FinanceAccountsCreated IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountCreatedBy")
-  idBusinessV2FinanceAccountsUpdated IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountUpdatedBy")
-  idBusinessV2FinanceFxRatesCreated  IdBusinessV2FinanceFxRateSnapshot[] @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy")
-  idBusinessV2FinanceJournalsCreated IdBusinessV2FinanceJournal[]        @relation("IdBusinessV2FinanceJournalCreatedBy")
-  idBusinessV2FinanceExpensesCreated IdBusinessV2FinanceExpense[]        @relation("IdBusinessV2FinanceExpenseCreatedBy")
-  idBusinessV2FinancePeriodsClosed   IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodClosedBy")
-  idBusinessV2FinancePeriodsReopened IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodReopenedBy")
+  userRoles                           UserRole[]
+  v2AuthIdentity                      V2AuthIdentity?
+  auditLogs                           AuditLog[]
+  attachments                         Attachment[]
+  loginLogs                           LoginLog[]                          @relation("LoginLogUser")
+  activeSessions                      ActiveSession[]                     @relation("ActiveSessionUser")
+  securitySettingsUpdated             SecuritySetting[]                   @relation("SecuritySettingUpdatedBy")
+  ipWhitelistsCreated                 IpWhitelist[]                       @relation("IpWhitelistCreatedBy")
+  sensitiveAccessLogs                 SensitiveAccessLog[]                @relation("SensitiveAccessLogUser")
+  sensitiveApprovalsAsked             SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalRequester")
+  sensitiveApprovalsDone              SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalApprover")
+  idBusinessV2OptionsCreated          IdBusinessV2Option[]                @relation("IdBusinessV2OptionCreatedBy")
+  idBusinessV2OptionsUpdated          IdBusinessV2Option[]                @relation("IdBusinessV2OptionUpdatedBy")
+  idBusinessV2CustomersCreated        IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerCreatedBy")
+  idBusinessV2CustomersUpdated        IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerUpdatedBy")
+  idBusinessV2AccountsCreated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountCreatedBy")
+  idBusinessV2AccountsUpdated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountUpdatedBy")
+  idBusinessV2AccountLossesReported   IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReportedBy")
+  idBusinessV2GiftCardsCreated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardCreatedBy")
+  idBusinessV2GiftCardsUpdated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardUpdatedBy")
+  idBusinessV2BalanceEntriesCreated   IdBusinessV2BalanceLedger[]         @relation("IdBusinessV2BalanceLedgerCreatedBy")
+  idBusinessV2TopupFundsInitialized   IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountInitializedBy")
+  idBusinessV2TopupFundsUpdated       IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountUpdatedBy")
+  idBusinessV2TopupPaymentsCreated    IdBusinessV2TopupSupplierPayment[]  @relation("IdBusinessV2TopupSupplierPaymentCreatedBy")
+  idBusinessV2TopupFundEntries        IdBusinessV2TopupSupplierLedger[]   @relation("IdBusinessV2TopupSupplierLedgerCreatedBy")
+  idBusinessV2OrdersCreated           IdBusinessV2Order[]                 @relation("IdBusinessV2OrderCreatedBy")
+  idBusinessV2OrdersUpdated           IdBusinessV2Order[]                 @relation("IdBusinessV2OrderUpdatedBy")
+  idBusinessV2LocksCreated            IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockCreatedBy")
+  idBusinessV2LocksEnded              IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockEndedBy")
+  idBusinessV2ActivationsCreated      IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationCreatedBy")
+  idBusinessV2ActivationsUpdated      IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationUpdatedBy")
+  idBusinessV2RenewalWarningUpdated   IdBusinessV2RenewalWarningSetting[] @relation("IdBusinessV2RenewalWarningUpdatedBy")
+  idBusinessV2ExchangeRateRuns        IdBusinessV2ExchangeRateRun[]       @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
+  idBusinessV2ExchangeRateEntries     IdBusinessV2ExchangeRateEntry[]     @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
+  idBusinessV2ExchangeRateSettings    IdBusinessV2ExchangeRateSettings[]  @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
+  idBusinessV2FinanceSettings         IdBusinessV2FinanceSettings[]       @relation("IdBusinessV2FinanceSettingsUpdatedBy")
+  idBusinessV2FinanceAccountsCreated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountCreatedBy")
+  idBusinessV2FinanceAccountsUpdated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountUpdatedBy")
+  idBusinessV2FinanceFxRatesCreated   IdBusinessV2FinanceFxRateSnapshot[] @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy")
+  idBusinessV2FinanceJournalsCreated  IdBusinessV2FinanceJournal[]        @relation("IdBusinessV2FinanceJournalCreatedBy")
+  idBusinessV2FinanceExpensesCreated  IdBusinessV2FinanceExpense[]        @relation("IdBusinessV2FinanceExpenseCreatedBy")
+  idBusinessV2FinancePeriodsClosed    IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodClosedBy")
+  idBusinessV2FinancePeriodsReopened  IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodReopenedBy")
+  idBusinessV2GovernanceJobsRequested IdBusinessV2GovernanceJob[]         @relation("IdBusinessV2GovernanceJobRequestedBy")
+  idBusinessV2GovernanceJobsExecuted  IdBusinessV2GovernanceJob[]         @relation("IdBusinessV2GovernanceJobExecutedBy")
+  idBusinessV2GovernanceApprovals     IdBusinessV2GovernanceApproval[]    @relation("IdBusinessV2GovernanceApprovalApprover")
 
   @@index([status])
   @@index([deletedAt])
@@ -1501,13 +1547,120 @@ model AuditLog {
   remark     String?  @db.Text
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user               User?                           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  governanceJobItems IdBusinessV2GovernanceJobItem[] @relation("IdBusinessV2GovernanceItemAudit")
 
   @@index([userId])
   @@index([module, action])
   @@index([objectType, objectId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+model IdBusinessV2GovernanceJob {
+  id                String                          @id @default(uuid()) @db.Uuid
+  jobNo             String                          @unique @map("job_no") @db.VarChar(48)
+  type              IdBusinessV2GovernanceJobType
+  status            IdBusinessV2GovernanceJobStatus @default(pending_approval)
+  reason            String                          @db.Text
+  backupEvidence    String                          @map("backup_evidence") @db.Text
+  previewHash       String                          @map("preview_hash") @db.VarChar(64)
+  previewSummary    Json                            @map("preview_summary")
+  requestedByUserId String                          @map("requested_by_user_id") @db.Uuid
+  executedByUserId  String?                         @map("executed_by_user_id") @db.Uuid
+  totalItems        Int                             @default(0) @map("total_items")
+  succeededItems    Int                             @default(0) @map("succeeded_items")
+  skippedItems      Int                             @default(0) @map("skipped_items")
+  failedItems       Int                             @default(0) @map("failed_items")
+  idempotencyKey    String                          @unique @map("idempotency_key") @db.VarChar(160)
+  approvedAt        DateTime?                       @map("approved_at") @db.Timestamptz(6)
+  startedAt         DateTime?                       @map("started_at") @db.Timestamptz(6)
+  completedAt       DateTime?                       @map("completed_at") @db.Timestamptz(6)
+  createdAt         DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  requestedBy User                               @relation("IdBusinessV2GovernanceJobRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  executedBy  User?                              @relation("IdBusinessV2GovernanceJobExecutedBy", fields: [executedByUserId], references: [id], onDelete: Restrict)
+  items       IdBusinessV2GovernanceJobItem[]
+  approval    IdBusinessV2GovernanceApproval?
+  checkpoints IdBusinessV2GovernanceCheckpoint[]
+
+  @@index([status, createdAt])
+  @@index([type, createdAt])
+  @@index([requestedByUserId, createdAt])
+  @@index([executedByUserId])
+  @@map("id_business_v2_governance_jobs")
+}
+
+model IdBusinessV2GovernanceJobItem {
+  id               String                           @id @default(uuid()) @db.Uuid
+  jobId            String                           @map("job_id") @db.Uuid
+  sequence         Int
+  entityType       IdBusinessV2GovernanceEntityType @map("entity_type")
+  entityId         String                           @map("entity_id") @db.Uuid
+  safeLabel        String                           @map("safe_label") @db.VarChar(255)
+  sourceDeletedAt  DateTime?                        @map("source_deleted_at") @db.Timestamptz(6)
+  eligibility      Json
+  status           IdBusinessV2GovernanceItemStatus @default(pending)
+  resultCode       String?                          @map("result_code") @db.VarChar(120)
+  resultMessage    String?                          @map("result_message") @db.Text
+  resultAuditLogId String?                          @map("result_audit_log_id") @db.Uuid
+  processedAt      DateTime?                        @map("processed_at") @db.Timestamptz(6)
+  createdAt        DateTime                         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job            IdBusinessV2GovernanceJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  resultAuditLog AuditLog?                 @relation("IdBusinessV2GovernanceItemAudit", fields: [resultAuditLogId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, sequence])
+  @@unique([jobId, entityType, entityId])
+  @@index([jobId, status, sequence])
+  @@index([entityType, entityId])
+  @@index([resultAuditLogId])
+  @@map("id_business_v2_governance_job_items")
+}
+
+model IdBusinessV2GovernanceApproval {
+  id             String                                 @id @default(uuid()) @db.Uuid
+  jobId          String                                 @unique @map("job_id") @db.Uuid
+  approverUserId String                                 @map("approver_user_id") @db.Uuid
+  decision       IdBusinessV2GovernanceApprovalDecision
+  reason         String                                 @db.Text
+  previewHash    String                                 @map("preview_hash") @db.VarChar(64)
+  decidedAt      DateTime                               @default(now()) @map("decided_at") @db.Timestamptz(6)
+  createdAt      DateTime                               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job      IdBusinessV2GovernanceJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  approver User                      @relation("IdBusinessV2GovernanceApprovalApprover", fields: [approverUserId], references: [id], onDelete: Restrict)
+
+  @@index([approverUserId, decidedAt])
+  @@index([decision, decidedAt])
+  @@map("id_business_v2_governance_approvals")
+}
+
+model IdBusinessV2GovernanceCheckpoint {
+  id             String                                 @id @default(uuid()) @db.Uuid
+  jobId          String                                 @map("job_id") @db.Uuid
+  batchNo        Int                                    @map("batch_no")
+  idempotencyKey String                                 @unique @map("idempotency_key") @db.VarChar(160)
+  status         IdBusinessV2GovernanceCheckpointStatus @default(running)
+  cursorSequence Int                                    @map("cursor_sequence")
+  attemptedItems Int                                    @default(0) @map("attempted_items")
+  succeededItems Int                                    @default(0) @map("succeeded_items")
+  skippedItems   Int                                    @default(0) @map("skipped_items")
+  failedItems    Int                                    @default(0) @map("failed_items")
+  errorCode      String?                                @map("error_code") @db.VarChar(120)
+  startedAt      DateTime                               @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt    DateTime?                              @map("completed_at") @db.Timestamptz(6)
+  createdAt      DateTime                               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                               @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job IdBusinessV2GovernanceJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, batchNo])
+  @@index([jobId, status])
+  @@index([createdAt])
+  @@map("id_business_v2_governance_checkpoints")
 }
 
 model V2AuthIdentity {

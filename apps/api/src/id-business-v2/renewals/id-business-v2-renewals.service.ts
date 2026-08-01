@@ -1,13 +1,16 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { toV2DecimalString } from '../decimal-policy';
 import {
   IdBusinessV2ActivationStatusService,
   type IdBusinessV2ActivationDueStatus
 } from '../activations/public-api';
 import { IdBusinessV2RenewalWarningService } from './id-business-v2-renewal-warning.service';
+import type {
+  RenewalBaseCriteria,
+  RenewalDueFilter,
+  RenewalRecord
+} from './id-business-v2-renewal.types';
+import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
 export type IdBusinessV2RenewalDueStatus = Extract<
   IdBusinessV2ActivationDueStatus,
@@ -36,60 +39,10 @@ const RENEWAL_DUE_STATUSES = new Set<IdBusinessV2RenewalDueStatus>([
   'expired'
 ]);
 
-const RENEWAL_INCLUDE = {
-  order: {
-    select: {
-      id: true,
-      orderNo: true,
-      websiteAccountMasked: true
-    }
-  },
-  customer: {
-    select: {
-      id: true,
-      name: true
-    }
-  },
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true,
-      currentBalance: true,
-      balanceCostAmount: true,
-      recordStatus: true,
-      soldByOrderId: true,
-      countryOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  serviceOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      parent: {
-        select: {
-          id: true,
-          name: true
-        }
-      }
-    }
-  }
-} satisfies Prisma.IdBusinessV2ActivationInclude;
-
-type RenewalRecord = Prisma.IdBusinessV2ActivationGetPayload<{
-  include: typeof RENEWAL_INCLUDE;
-}>;
-
 @Injectable()
 export class IdBusinessV2RenewalsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2RenewalsRepository,
     private readonly activationStatusService: IdBusinessV2ActivationStatusService,
     private readonly renewalWarningService: IdBusinessV2RenewalWarningService
   ) {}
@@ -102,115 +55,42 @@ export class IdBusinessV2RenewalsService {
     const now = new Date();
     const dueDateRange = this.parseDateRange(query.dueFrom, query.dueTo);
     const warningSettings = await this.renewalWarningService.getSettings();
-    const dueCondition = dueStatus
-      ? ({
-          AND: [
-            {
-              renewedBy: {
-                is: null
-              }
-            },
-            this.activationStatusService.buildWhere(dueStatus, now)
-          ]
-        } satisfies Prisma.IdBusinessV2ActivationWhereInput)
-      : dueDateRange
-        ? this.renewalWarningService.buildAllDueWhere()
-        : warningOnly
-          ? this.renewalWarningService.buildUpcomingWarningWhere(now, warningSettings.warningDays)
-          : this.renewalWarningService.buildDefaultWorkbenchWhere(now, warningSettings.warningDays);
-    const baseWhere: Prisma.IdBusinessV2ActivationWhereInput = {
-      customerId: this.normalizeOptionalUuid(query.customerId, '客户') ?? undefined,
-      serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务') ?? undefined,
-      accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID') ?? undefined,
-      account: {
-        is: {
-          soldByOrderId: null
+    const base: RenewalBaseCriteria = {
+      keyword,
+      customerId: this.normalizeOptionalUuid(query.customerId, '客户'),
+      serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务'),
+      accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID'),
+      requireAvailableAccount: true
+    };
+    const primaryDueFilter: RenewalDueFilter = dueStatus
+      ? { kind: 'due_status', status: dueStatus, evaluatedAt: now }
+      : warningOnly
+        ? this.renewalWarningService.buildUpcomingWarningFilter(now, warningSettings.warningDays)
+        : this.renewalWarningService.buildDefaultWorkbenchFilter(now, warningSettings.warningDays);
+    const dueFilter: RenewalDueFilter = dueDateRange
+      ? {
+          kind: 'date_range',
+          dueAt: dueDateRange,
+          base: dueStatus
+            ? (primaryDueFilter as Exclude<RenewalDueFilter, { kind: 'date_range' }>)
+            : { kind: 'all_due' }
         }
-      },
-      AND: [
-        ...(keyword
-          ? [
-              {
-                OR: [
-                  { order: { is: { orderNo: { contains: keyword, mode: 'insensitive' } } } },
-                  { customer: { is: { name: { contains: keyword, mode: 'insensitive' } } } },
-                  {
-                    serviceOption: {
-                      is: { name: { contains: keyword, mode: 'insensitive' } }
-                    }
-                  },
-                  {
-                    account: {
-                      is: { appleIdMasked: { contains: keyword, mode: 'insensitive' } }
-                    }
-                  },
-                  {
-                    order: {
-                      is: {
-                        websiteAccountMasked: {
-                          contains: keyword,
-                          mode: 'insensitive'
-                        }
-                      }
-                    }
-                  }
-                ]
-              } satisfies Prisma.IdBusinessV2ActivationWhereInput
-            ]
-          : [])
-      ]
-    };
-    const where: Prisma.IdBusinessV2ActivationWhereInput = {
-      AND: [
-        baseWhere,
-        dueCondition,
-        ...(dueDateRange
-          ? [
-              {
-                dueAt: dueDateRange
-              } satisfies Prisma.IdBusinessV2ActivationWhereInput
-            ]
-          : [])
-      ]
-    };
-
-    const [items, total, warningCounts, nextTimedActivation] = await Promise.all([
-      this.prisma.idBusinessV2Activation.findMany({
-        where,
-        include: RENEWAL_INCLUDE,
+      : primaryDueFilter;
+    const [result, warningCounts] = await Promise.all([
+      this.repository.listWorkbench({
+        base,
+        dueFilter,
+        sortField: query.sortBy ?? 'dueAt',
+        sortDirection: query.sortOrder === 'desc' ? 'desc' : 'asc',
         skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
+        take: pagination.take
       }),
-      this.prisma.idBusinessV2Activation.count({ where }),
-      this.renewalWarningService.getWarningCounts(baseWhere, now, warningSettings.warningDays),
-      this.prisma.idBusinessV2Activation.findFirst({
-        where: {
-          AND: [
-            baseWhere,
-            {
-              renewedBy: {
-                is: null
-              },
-              status: 'active',
-              dueAt: {
-                gt: now
-              }
-            }
-          ]
-        },
-        select: {
-          dueAt: true
-        },
-        orderBy: {
-          dueAt: 'asc'
-        }
-      })
+      this.renewalWarningService.getWarningCounts(base, now, warningSettings.warningDays)
     ]);
 
     return {
-      items: items.map((item) => this.toResponse(item, now, warningSettings.warningDays)),
-      total,
+      items: result.items.map((item) => this.toResponse(item, now, warningSettings.warningDays)),
+      total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
       warningSummary: {
@@ -219,7 +99,7 @@ export class IdBusinessV2RenewalsService {
       },
       evaluatedAt: now,
       revalidateAt: this.activationStatusService.getNextRevalidateAt(
-        nextTimedActivation?.dueAt ?? null,
+        result.nextTimedDueAt,
         now,
         warningSettings.warningDays
       )
@@ -227,76 +107,7 @@ export class IdBusinessV2RenewalsService {
   }
 
   async listFilterOptions() {
-    const actionableWhere = this.renewalWarningService.buildAllDueWhere();
-    const [customers, accounts, services] = await Promise.all([
-      this.prisma.idBusinessV2Customer.findMany({
-        where: {
-          activations: {
-            some: actionableWhere
-          }
-        },
-        select: {
-          id: true,
-          name: true
-        },
-        orderBy: [{ name: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Account.findMany({
-        where: {
-          soldByOrderId: null,
-          activations: {
-            some: actionableWhere
-          }
-        },
-        select: {
-          id: true,
-          appleIdMasked: true
-        },
-        orderBy: [{ appleIdMasked: 'asc' }, { id: 'asc' }]
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: {
-          type: 'service',
-          activationsByService: {
-            some: actionableWhere
-          }
-        },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          parent: {
-            select: {
-              id: true,
-              name: true
-            }
-          }
-        },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }]
-      })
-    ]);
-
-    return {
-      customers,
-      accounts,
-      services
-    };
-  }
-
-  private buildOrderBy(
-    query: ListIdBusinessV2RenewalsQuery
-  ): Prisma.IdBusinessV2ActivationOrderByWithRelationInput[] {
-    const direction = query.sortOrder === 'desc' ? 'desc' : 'asc';
-    const field = query.sortBy ?? 'dueAt';
-    const supported: Record<string, Prisma.IdBusinessV2ActivationOrderByWithRelationInput> = {
-      customer: { customer: { name: direction } },
-      account: { account: { appleIdMasked: direction } },
-      currentBalance: { account: { currentBalance: direction } },
-      service: { serviceOption: { name: direction } },
-      openedAt: { openedAt: direction },
-      dueAt: { dueAt: direction }
-    };
-    return [supported[field] ?? supported.dueAt, { id: 'asc' }];
+    return this.repository.listFilterOptions();
   }
 
   private parseDueStatus(value: unknown) {
@@ -379,8 +190,8 @@ export class IdBusinessV2RenewalsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
-        currentBalance: toV2DecimalString(item.account.currentBalance),
-        balanceCostAmount: toV2DecimalString(item.account.balanceCostAmount),
+        currentBalance: item.account.currentBalance.toString(),
+        balanceCostAmount: item.account.balanceCostAmount.toString(),
         recordStatus: item.account.recordStatus,
         country: item.account.countryOption
       },

@@ -40,7 +40,8 @@
       </article>
     </div>
 
-    <el-table
+    <V2Table
+      :schema="v2TableSchemas.dataAnalytics.settlementPlatforms"
       class="v2-records-table"
       :data="report.rows"
       :row-key="settlementPlatformRowKey"
@@ -53,57 +54,57 @@
           <span>完成订单后会按财务流水汇总到这里</span>
         </div>
       </template>
-      <V2TableColumn kind="text" label="结算平台" width-preset="identifier" fixed="left">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[0]">
         <template #default="{ row }">
           <strong>{{ row.settlementPlatform?.name || '未指定平台（历史）' }}</strong>
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="已结算订单" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[1]">
         <template #default="{ row }">{{ row.completedOrderCount }}</template>
       </V2TableColumn>
-      <V2TableColumn kind="text" label="原币实收" width-preset="identifier">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[2]">
         <template #default="{ row }">
           {{ formatOriginalAmounts(row.originalAmounts, 'grossReceived') }}
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="text" label="原币退款" width-preset="identifier">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[3]">
         <template #default="{ row }">
           {{ formatOriginalAmounts(row.originalAmounts, 'refunded') }}
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="人民币实收" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[4]">
         <template #default="{ row }">{{ formatCny(row.grossReceivedCny) }}</template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="退款" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[5]">
         <template #default="{ row }">{{ formatCny(row.refundedCny) }}</template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="手续费" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[6]">
         <template #default="{ row }">{{ formatCny(row.platformFeeCny) }}</template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="净入账" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[7]">
         <template #default="{ row }">
           <strong>{{ formatCny(row.netSettlementCny) }}</strong>
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="已实现利润" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[8]">
         <template #default="{ row }">
           <strong :class="amountTone(row.realizedProfitCny)">
             {{ formatCny(row.realizedProfitCny) }}
           </strong>
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="利润率" width-preset="standard">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[9]">
         <template #default="{ row }">
           {{ row.realizedProfitRate === null ? '—' : `${row.realizedProfitRate}%` }}
         </template>
       </V2TableColumn>
-      <V2TableColumn kind="numeric" label="处理中预计" width-preset="wide">
+      <V2TableColumn :definition="v2TableSchemas.dataAnalytics.settlementPlatforms.columns[10]">
         <template #default="{ row }">
           {{ row.pendingOrderCount }} 笔 / {{ formatCny(row.pendingReceivedCny) }} / 利润
           {{ formatCny(row.pendingProfitCny) }}
         </template>
       </V2TableColumn>
-    </el-table>
+    </V2Table>
   </section>
 </template>
 
@@ -114,6 +115,8 @@ import type {
   V2SettlementPlatformReport,
   V2SettlementPlatformReportRow
 } from '@apple-business/shared';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 

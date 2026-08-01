@@ -32,7 +32,6 @@
   font-size: var(--v3-font-size-body);
   font-weight: var(--v3-font-weight-regular);
   line-height: var(--v3-line-height-body);
-  transition: grid-template-columns 220ms var(--v3-ease);
 }
 
 .v2-shell.is-sidebar-collapsed {
@@ -784,6 +783,29 @@
   margin: 0 auto;
 }
 
+.v2-session-degraded {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--v3-danger-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v3-danger-soft);
+  color: var(--v3-text);
+}
+
+.v2-session-degraded > div {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-session-degraded span {
+  color: var(--v3-text-soft);
+  font-size: 12px;
+}
+
 .v2-route-progress {
   position: absolute;
   z-index: 12;
@@ -1311,10 +1333,19 @@
   vertical-align: middle;
 }
 
-.v2-shell .v2-adaptive-table {
-  --v2-table-cell-inline-padding: 12px;
+.v2-shell .v2-unified-table {
+  --v2-table-cell-inline-padding: 10px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   container-name: v2-data-table;
   container-type: inline-size;
+}
+
+@supports (width: 1cqi) {
+  .v2-shell .v2-unified-table {
+    --v2-table-cell-inline-padding: clamp(8px, 1cqi, 12px);
+  }
 }
 
 .v2-shell .el-table .cell {
@@ -1370,16 +1401,8 @@
   margin-left: 0;
 }
 
-@container v2-data-table (max-width: 1199px) {
-  .v2-shell .v2-adaptive-table .cell {
-    --v2-table-cell-inline-padding: 10px;
-  }
-}
-
-@container v2-data-table (max-width: 839px) {
-  .v2-shell .v2-adaptive-table .cell {
-    --v2-table-cell-inline-padding: 8px;
-  }
+.v2-shell .v2-unified-table .el-scrollbar__wrap {
+  scroll-behavior: auto !important;
 }
 
 .v2-shell .el-tag {
@@ -1670,6 +1693,11 @@
 
   .v2-content {
     padding: 14px 12px 24px;
+  }
+
+  .v2-session-degraded {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .v2-route-progress {

@@ -2,17 +2,24 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { parse as parseSfc } from '@vue/compiler-sfc';
+import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
+import ts from 'typescript';
 
 const rootDir = process.cwd();
-const featuresPath = 'apps/admin/src/v2/features';
-const schemaPath = 'apps/api/prisma/schema.prisma';
-const tableStylePath = 'apps/admin/src/v2/styles/v2.css';
+const featuresRoot = path.join(rootDir, 'apps/admin/src/v2/features');
+const v2Root = path.join(rootDir, 'apps/admin/src/v2');
+const schemasPath = 'apps/admin/src/v2/features/tableSchemas.ts';
+const tableComponentPath = 'apps/admin/src/v2/components/V2Table.vue';
 const tableColumnPath = 'apps/admin/src/v2/components/V2TableColumn.vue';
-const tableColumnDefinitionPath = 'apps/admin/src/v2/components/tableColumn.ts';
-const tableActionColumnPath = 'apps/admin/src/v2/components/V2TableActionColumn.vue';
-const tableActionLayoutPath = 'apps/admin/src/v2/components/tableActionLayout.ts';
-const validColumnKinds = new Set(['text', 'identifier', 'index', 'numeric', 'date', 'status']);
-const validColumnWidthPresets = new Set([
+const controlColumnPath = 'apps/admin/src/v2/components/V2TableControlColumn.vue';
+const actionColumnPath = 'apps/admin/src/v2/components/V2TableActionColumn.vue';
+const layoutFixturePath = 'apps/admin/src/v2/testing/V2TableActionLayoutFixture.vue';
+const sanctionedRawColumnFiles = new Set([tableColumnPath, controlColumnPath, actionColumnPath]);
+const tableStylePath = 'apps/admin/src/v2/styles/v2.css';
+const recordsStylePath = 'apps/admin/src/v2/styles/records.css';
+const validKinds = new Set(['text', 'identifier', 'index', 'numeric', 'date', 'status']);
+const validPresets = new Set([
   'index',
   'compact',
   'standard',
@@ -22,297 +29,70 @@ const validColumnWidthPresets = new Set([
   'longText'
 ]);
 const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'wide']);
+const positionalKeyPattern = /^(?:text|identifier|index|numeric|date|status|control)-\d+$/;
 const issues = [];
 
-runSelfTests();
-
-const featureManifests = readdirSync(path.join(rootDir, featuresPath), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => `${featuresPath}/${entry.name}/manifest.ts`)
-  .filter((projectPath) => existsSync(path.join(rootDir, projectPath)))
-  .map((projectPath) => ({ projectPath, source: read(projectPath) }));
-const modulesSource = featureManifests.map(({ source }) => source).join('\n');
-const routedViewEntries = featureManifests
-  .map(({ projectPath, source }) => {
-    const view = source.match(
-      /loadView:\s*\(\)\s*=>\s*import\('\.\/(V2[A-Za-z0-9]+View\.vue)'\)/
-    )?.[1];
-    return view ? { view, projectPath: `${path.posix.dirname(projectPath)}/${view}` } : null;
-  })
-  .filter(Boolean);
-const routedViews = [...new Set(routedViewEntries.map(({ view }) => view))];
-const featureVueFiles = walk(path.join(rootDir, featuresPath))
-  .filter((file) => file.endsWith('.vue'))
-  .map((file) => path.relative(rootDir, file));
-
-if (!routedViews.length) issues.push(`${featuresPath}: 没有发现 V2 路由业务页面`);
-if (
-  !featureVueFiles.some(
-    (projectPath) =>
-      projectPath.includes('/components/') && extractActionLayouts(read(projectPath)).length > 0
-  )
-) {
-  issues.push(`${featuresPath}: 递归扫描未覆盖包含操作列的子组件`);
-}
-if (/label:\s*['"][^'"]*(?:\/|／)[^'"]*['"]/.test(modulesSource)) {
-  issues.push(`${featuresPath}: 列定义禁止使用斜杠合并独立业务字段`);
-}
-const configuredSortColumns = [...modulesSource.matchAll(/key:\s*'sortOrder',\s*label:\s*'排序'/g)];
-if (configuredSortColumns.length !== 1) {
-  issues.push(`${featuresPath}: 仅选项设置允许且必须保留一个排序列定义`);
-}
-const optionsModuleStart = modulesSource.indexOf("  key: 'options',");
-if (
-  optionsModuleStart < 0 ||
-  modulesSource.indexOf("key: 'sortOrder', label: '排序'", optionsModuleStart) < 0
-) {
-  issues.push(`${featuresPath}: 选项设置列定义必须保留排序`);
-}
-for (const { projectPath, source } of featureManifests) {
-  const columnsBlock = extractFeatureColumnsBlock(source);
-  for (const entry of columnsBlock.match(/\{[\s\S]*?\}/g) ?? []) {
-    const key = entry.match(/\bkey:\s*'([^']+)'/)?.[1];
-    const kind = entry.match(/\bkind:\s*'([^']+)'/)?.[1];
-    const widthPreset = entry.match(/\bwidthPreset:\s*'([^']+)'/)?.[1];
-    if (!key) continue;
-    if (key === 'actions') {
-      if (kind !== 'actions') {
-        issues.push(`${projectPath}: 操作列清单 kind 必须为 actions`);
-      }
-    } else if (!kind || !validColumnKinds.has(kind)) {
-      issues.push(`${projectPath}: 数据列 ${key} 缺少有效语义 kind`);
-    } else if (!widthPreset || !validColumnWidthPresets.has(widthPreset)) {
-      issues.push(`${projectPath}: 数据列 ${key} 缺少有效共享宽度档位`);
-    } else if (/\bminWidth\s*:/.test(entry)) {
-      issues.push(`${projectPath}: 数据列 ${key} 禁止维护任意 minWidth`);
-    }
+const schemaRegistry = loadSchemaRegistry();
+const schemaByExpression = new Map();
+for (const [group, schemas] of Object.entries(schemaRegistry.v2TableSchemas)) {
+  for (const [name, schema] of Object.entries(schemas)) {
+    schemaByExpression.set(`v2TableSchemas.${group}.${name}`, schema);
   }
 }
 
-let tableCount = 0;
+validateSchemaRegistry(schemaRegistry, schemaByExpression);
+validateFeatureManifests();
+
+let businessTableCount = 0;
+let fixtureTableCount = 0;
 let actionColumnCount = 0;
-for (const projectPath of featureVueFiles) {
+const consumedSchemas = new Map();
+for (const file of walk(v2Root).filter((target) => target.endsWith('.vue'))) {
+  const projectPath = path.relative(rootDir, file);
   const source = read(projectPath);
-  const tables = extractTableBlocks(source);
-  if (!tables.length) continue;
-  const viewIssues = validateViewSource(source, projectPath.includes('/options/'));
-  tableCount += tables.length;
-  actionColumnCount += extractActionLayouts(source).length;
-  for (const issue of viewIssues) issues.push(`${projectPath}: ${issue}`);
-}
+  const template = parseSfc(source, { filename: projectPath }).descriptor.template;
+  if (!template) continue;
+  const ast = parseTemplate(template.content, { comments: false });
+  const tableSchemasInFile = [];
+  const mobileClaims = new Map();
 
-const tableStyleSource = read(tableStylePath);
-const elementPlusSource = read('apps/admin/src/v2/components/V2ElTable.vue');
-const tableColumnSource = read(tableColumnPath);
-const tableColumnDefinitionSource = read(tableColumnDefinitionPath);
-const tableActionColumnSource = read(tableActionColumnPath);
-const tableActionLayoutSource = read(tableActionLayoutPath);
-if (!elementPlusSource.includes('fit: true') || elementPlusSource.includes('fit: false')) {
-  issues.push('apps/admin/src/v2/components/V2ElTable.vue: 表格必须默认 fit: true 自动填满容器');
-}
-if (
-  !elementPlusSource.includes('scrollbarAlwaysOn: true') ||
-  !elementPlusSource.includes('v2-adaptive-table')
-) {
-  issues.push('apps/admin/src/v2/components/V2ElTable.vue: 表格必须启用自适应容器和常显滚动条');
-}
-for (const [pattern, message] of [
-  [/\.v2-shell \.el-table \.cell[\s\S]*?white-space:\s*nowrap/, '表格单元格未强制单行'],
-  [/\.v2-shell \.el-table \.cell[\s\S]*?text-overflow:\s*ellipsis/, '表格长内容未使用省略号'],
-  [
-    /\.v2-shell \.el-table td\.el-table__cell[\s\S]*?vertical-align:\s*middle/,
-    '表格单元格未垂直居中'
-  ],
-  [
-    /\.v2-shell \.v2-adaptive-table[\s\S]*?container-name:\s*v2-data-table/,
-    '表格未建立容器级自适应上下文'
-  ],
-  [
-    /\.v2-shell \.el-table \.cell[\s\S]*?padding-inline:\s*var\(--v2-table-cell-inline-padding/,
-    '表格单元格未使用统一自适应横向间距'
-  ],
-  [
-    /@container v2-data-table \(max-width:\s*1199px\)[\s\S]*?--v2-table-cell-inline-padding:\s*10px/,
-    '中等表格容器未使用 10px 横向间距'
-  ],
-  [
-    /@container v2-data-table \(max-width:\s*839px\)[\s\S]*?--v2-table-cell-inline-padding:\s*8px/,
-    '紧凑表格容器未使用 8px 横向间距'
-  ]
-]) {
-  if (!pattern.test(tableStyleSource)) issues.push(`${tableStylePath}: ${message}`);
-}
-for (const issue of validateActionStyleSource(tableStyleSource)) {
-  issues.push(`${tableStylePath}: ${issue}`);
-}
-for (const [pattern, message] of [
-  [
-    /\.v2-table-column--numeric[\s\S]*?font-variant-numeric:\s*tabular-nums/,
-    '数字列未启用等宽数字'
-  ],
-  [/\.v2-table-column--date[\s\S]*?font-variant-numeric:\s*tabular-nums/, '日期列未启用等宽数字'],
-  [
-    /\.v2-table-column--identifier[\s\S]*?font-variant-numeric:\s*tabular-nums/,
-    '标识列未启用等宽数字'
-  ]
-]) {
-  if (!pattern.test(tableStyleSource)) issues.push(`${tableStylePath}: ${message}`);
-}
-for (const issue of validateTableColumnSource(tableColumnSource)) {
-  issues.push(`${tableColumnPath}: ${issue}`);
-}
-for (const issue of validateActionColumnSource(tableActionColumnSource)) {
-  issues.push(`${tableActionColumnPath}: ${issue}`);
-}
-for (const [preset, width] of Object.entries({
-  index: 72,
-  compact: 112,
-  standard: 128,
-  wide: 160,
-  dateTime: 165,
-  identifier: 192,
-  longText: 224
-})) {
-  if (!new RegExp(`\\b${preset}:\\s*${width}\\b`).test(tableColumnDefinitionSource)) {
-    issues.push(`${tableColumnDefinitionPath}: ${preset} 列宽必须为 ${width}`);
-  }
-}
-for (const [kind, mode] of Object.entries({
-  text: 'flex',
-  identifier: 'fixed',
-  index: 'fixed',
-  numeric: 'fixed',
-  date: 'fixed',
-  status: 'fixed'
-})) {
-  if (!new RegExp(`\\b${kind}:\\s*'${mode}'`).test(tableColumnDefinitionSource)) {
-    issues.push(`${tableColumnDefinitionPath}: ${kind} 列宽模式必须为 ${mode}`);
-  }
-}
-for (const [layout, width] of Object.entries({
-  icon: 76,
-  single: 126,
-  double: 180,
-  triple: 260,
-  wide: 272
-})) {
-  if (!new RegExp(`\\b${layout}:\\s*${width}\\b`).test(tableActionLayoutSource)) {
-    issues.push(`${tableActionLayoutPath}: ${layout} 操作列宽度必须为 ${width}`);
-  }
-}
-
-for (const { projectPath, source } of featureManifests) {
-  const actionDefinition = source.match(
-    /key:\s*'actions'[\s\S]{0,240}?minWidth:\s*V2_TABLE_ACTION_COLUMN_WIDTH\.(\w+)[\s\S]{0,120}?fixed:\s*'right'/
-  );
-  const featureDirectory = path.posix.dirname(projectPath);
-  const featureLayouts = featureVueFiles
-    .filter((file) => file.startsWith(`${featureDirectory}/`))
-    .flatMap((file) => extractActionLayouts(read(file)));
-
-  if (!featureLayouts.length) {
-    if (/key:\s*'actions'/.test(source)) {
-      issues.push(`${projectPath}: manifest 声明了操作列，但页面未使用 V2TableActionColumn`);
+  walkTemplate(ast, (node) => {
+    if (node.type !== NodeTypes.ELEMENT) return;
+    if (node.tag === 'el-table') {
+      issues.push(`${projectPath}: 禁止原始 <el-table>，必须显式使用 V2Table`);
+      return;
     }
-    continue;
-  }
-  if (!actionDefinition?.[1]) {
-    issues.push(`${projectPath}: 操作列必须复用 V2_TABLE_ACTION_COLUMN_WIDTH 并固定在右侧`);
-    continue;
-  }
-  if (!source.includes('import { V2_TABLE_ACTION_COLUMN_WIDTH }')) {
-    issues.push(`${projectPath}: 缺少统一操作列宽度常量导入`);
-  }
-  if (featureLayouts.some((layout) => layout !== actionDefinition[1])) {
-    issues.push(
-      `${projectPath}: manifest 操作列档位 ${actionDefinition[1]} 与页面档位 ${[
-        ...new Set(featureLayouts)
-      ].join('、')} 不一致`
-    );
+    if (node.tag === 'el-table-column' && !sanctionedRawColumnFiles.has(projectPath)) {
+      issues.push(`${projectPath}: 禁止原始 <el-table-column>，必须使用共享 schema 列组件`);
+      return;
+    }
+    if (hasStaticClass(node, 'v2-records-mobile-list')) {
+      collectMobileClaims(node, projectPath, mobileClaims);
+    }
+    if (node.tag !== 'V2Table') return;
+    if (projectPath === layoutFixturePath) fixtureTableCount += 1;
+    else businessTableCount += 1;
+    const schemaExpression = validateTableNode(node, projectPath, consumedSchemas);
+    if (schemaExpression) tableSchemasInFile.push(schemaExpression);
+    actionColumnCount += collectOwnedColumns(node).filter(
+      (column) => column.tag === 'V2TableActionColumn'
+    ).length;
+  });
+  validateMobileContracts(projectPath, tableSchemasInFile, mobileClaims);
+}
+
+for (const schemaExpression of schemaByExpression.keys()) {
+  const consumers = consumedSchemas.get(schemaExpression) ?? [];
+  if (consumers.length === 0)
+    issues.push(`${schemasPath}: ${schemaExpression} 没有真实 V2Table 消费者`);
+  if (consumers.length > 1) {
+    issues.push(`${schemasPath}: ${schemaExpression} 被多张表重复消费: ${consumers.join('、')}`);
   }
 }
 
-const uiRulesSource = read('docs/UI_DESIGN.md');
-for (const snippet of [
-  'V2TableColumn',
-  '数字、金额、汇率和百分比',
-  '空值统一显示 `—`',
-  '固定语义宽度',
-  '表格单元格横向间距',
-  '`width-preset`',
-  'V2TableActionColumn',
-  '禁止同时叠加 `gap` 与 Element Plus 相邻按钮默认边距',
-  '操作按钮不得被裁切'
-]) {
-  if (!uiRulesSource.includes(snippet)) {
-    issues.push(`docs/UI_DESIGN.md: 缺少操作列规则 ${snippet}`);
-  }
-}
-
-const schemaSource = read(schemaPath);
-for (const modelName of [
-  'IdBusinessV2Customer',
-  'IdBusinessV2Account',
-  'IdBusinessV2Order',
-  'IdBusinessV2Activation'
-]) {
-  const block = extractPrismaModel(schemaSource, modelName);
-  if (!block) {
-    issues.push(`${schemaPath}: 缺少模型 ${modelName}`);
-  } else if (/\bsortOrder\b/.test(block)) {
-    issues.push(`${schemaPath}: ${modelName} 禁止保留业务数字排序字段 sortOrder`);
-  }
-}
-
-const optionModel = extractPrismaModel(schemaSource, 'IdBusinessV2Option');
-if (!optionModel || !/\bsortOrder\s+Int\b/.test(optionModel)) {
-  issues.push(`${schemaPath}: 选项设置必须保留数字排序字段 sortOrder`);
-}
-
-for (const projectPath of [
-  'apps/api/src/id-business-v2/accounts/dto/create-id-business-v2-account.dto.ts',
-  'apps/api/src/id-business-v2/accounts/dto/update-id-business-v2-account.dto.ts',
-  'apps/api/src/id-business-v2/customers/dto/create-id-business-v2-customer.dto.ts',
-  'apps/api/src/id-business-v2/customers/dto/update-id-business-v2-customer.dto.ts',
-  'apps/api/src/id-business-v2/orders/dto/create-id-business-v2-order.dto.ts',
-  'apps/api/src/id-business-v2/orders/dto/update-id-business-v2-order.dto.ts',
-  'apps/api/src/id-business-v2/renewals/dto/create-id-business-v2-manual-renewal.dto.ts'
-]) {
-  if (/\bsortOrder\b/.test(read(projectPath))) {
-    issues.push(`${projectPath}: 业务录入 DTO 禁止出现 sortOrder`);
-  }
-}
-
-for (const projectPath of [
-  'apps/admin/src/v2/types/records.ts',
-  'apps/admin/src/v2/types/activations.ts',
-  'apps/admin/src/v2/types/renewals.ts',
-  'apps/admin/src/v2/types/orders.ts',
-  'apps/admin/src/v2/types/balances.ts'
-]) {
-  const source = read(projectPath);
-  if (/\bsortOrder\s*:\s*number\b/.test(source)) {
-    issues.push(`${projectPath}: 业务响应类型禁止出现数字 sortOrder`);
-  }
-  if (/sortBy[\s\S]{0,160}['"]sortOrder['"]/.test(source)) {
-    issues.push(`${projectPath}: 业务 sortBy 白名单禁止包含 sortOrder`);
-  }
-}
-
-const optionsViewPath = 'apps/admin/src/v2/features/options/V2OptionsView.vue';
-const optionsFormPath = 'apps/admin/src/v2/features/options/components/V2OptionFormDrawer.vue';
-const optionsViewSource = `${read(optionsViewPath)}\n${read(optionsFormPath)}`;
-for (const [pattern, message] of [
-  [
-    /<V2TableColumn[\s\S]{0,180}?prop="sortOrder"[\s\S]{0,120}?label="排序"/,
-    '选项设置必须保留排序列'
-  ],
-  [/v-model:sort-order="form\.sortOrder"/, '选项设置必须保留排序输入']
-]) {
-  if (!pattern.test(optionsViewSource)) {
-    issues.push(`${optionsViewPath}: ${message}`);
-  }
-}
+validateSharedImplementation();
+validateBusinessSortRules();
+runSelfTests();
 
 if (issues.length) {
   console.error('V2 table standard check failed:');
@@ -322,236 +102,478 @@ if (issues.length) {
   console.log(
     JSON.stringify({
       ok: true,
-      routedViews: routedViews.length,
-      desktopTables: tableCount,
+      businessTables: businessTableCount,
+      fixtureTables: fixtureTableCount,
+      registeredSchemas: schemaByExpression.size,
       actionColumns: actionColumnCount,
-      businessSortFields: 0,
-      optionSortPreserved: true,
-      exceptions: 0
+      layout: 'fixed',
+      responsiveColumns: 'proportional-min-width',
+      mobileBreakpoint: 900
     })
   );
 }
 
-function validateViewSource(source, isOptionsView) {
-  const viewIssues = [];
-  const tables = extractTableBlocks(source);
+function loadSchemaRegistry() {
+  const source = read(schemasPath)
+    .replace(/^import[^\n]+\n/m, '')
+    .replace('const table = defineV2TableSchema;', 'const table = (schema) => schema;')
+    .replaceAll('export const ', 'const ')
+    .replaceAll(' as const', '');
+  return new Function(`${source}\nreturn { v2TableSchemas, v2TablesByFeature };`)();
+}
 
-  for (const table of tables) {
-    const openingTag = table.match(/<el-table(?=\s|>)[\s\S]*?>/)?.[0] ?? '';
-    if (!/\bshow-overflow-tooltip\b/.test(openingTag)) {
-      viewIssues.push('桌面表格必须启用统一溢出提示');
+function validateSchemaRegistry(registry, schemas) {
+  const ids = new Set();
+  const objectsInFeatureRegistry = new Set(Object.values(registry.v2TablesByFeature).flat());
+  for (const [schemaExpression, schema] of schemas) {
+    if (!schema.id || ids.has(schema.id))
+      issues.push(`${schemasPath}: 重复或空 schema id ${schema.id ?? ''}`);
+    ids.add(schema.id);
+    if (!objectsInFeatureRegistry.has(schema)) {
+      issues.push(`${schemasPath}: ${schemaExpression} 未登记到 v2TablesByFeature`);
     }
-    if (/<el-table-column\b/.test(table)) {
-      viewIssues.push('业务数据列必须使用 V2TableColumn 声明语义类型');
+    if (!['primary', 'secondary', 'embedded'].includes(schema.role)) {
+      issues.push(`${schemasPath}: ${schemaExpression} role 无效`);
     }
-    if (/<V2TableColumn\b[^>]*\blabel=["'][^"']*(?:\/|／)[^"']*["']/.test(table)) {
-      viewIssues.push('表头禁止使用斜杠合并独立业务字段');
+    if (!['cards', 'scroll'].includes(schema.mobileMode)) {
+      issues.push(`${schemasPath}: ${schemaExpression} mobileMode 无效`);
     }
-    if (/<(?:br|small)\b/.test(table)) {
-      viewIssues.push('桌面表格单元格禁止用 br 或 small 堆叠为两行');
+    if (schema.role === 'primary' && !schema.rowKey) {
+      issues.push(`${schemasPath}: ${schemaExpression} 主表必须声明 rowKey`);
     }
-    if (/\b(?:v2-table-stack|v2-renewal-account|v2-topup-records-account)\b/.test(table)) {
-      viewIssues.push('桌面表格禁止使用堆叠单元格样式');
+    if (!Array.isArray(schema.columns) || schema.columns.length === 0) {
+      issues.push(`${schemasPath}: ${schemaExpression} 必须有非空 columns 契约`);
+      continue;
     }
-    if (!isOptionsView && /<V2TableColumn\b[^>]*\blabel=["']排序["']/.test(table)) {
-      viewIssues.push('业务数据表禁止显示人工排序列');
-    }
-    if (/<V2TableColumn\b[^>]*\blabel=["']操作["']/.test(table)) {
-      viewIssues.push('操作列禁止使用 V2TableColumn，必须使用 V2TableActionColumn');
-    }
-    for (const openingTag of table.match(/<V2TableColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
-      const kind = openingTag.match(/\bkind=["']([^"']+)["']/)?.[1];
-      const widthPreset = openingTag.match(/\bwidth-preset=["']([^"']+)["']/)?.[1];
-      const widthMode = openingTag.match(/\bwidth-mode=["']([^"']+)["']/)?.[1];
-      const isExpandControl =
-        /\btype=["']expand["']/.test(openingTag) && /(?<!min-)\bwidth=["']52["']/.test(openingTag);
-      if (!kind || !validColumnKinds.has(kind)) {
-        viewIssues.push('V2TableColumn 必须声明有效的语义 kind');
+
+    const keys = new Set();
+    let seenNonStart = false;
+    let seenEnd = false;
+    let fluidDataColumns = 0;
+    schema.columns.forEach((column, index) => {
+      if (!column.key || keys.has(column.key)) {
+        issues.push(`${schemasPath}: ${schemaExpression} 列 key 空值或重复: ${column.key ?? ''}`);
       }
-      if (!isExpandControl && (!widthPreset || !validColumnWidthPresets.has(widthPreset))) {
-        viewIssues.push('V2TableColumn 必须使用共享 width-preset');
+      keys.add(column.key);
+      if (positionalKeyPattern.test(column.key)) {
+        issues.push(`${schemasPath}: ${schemaExpression}.${column.key} 禁止位置型合成 key`);
       }
-      if (/\bmin-width=["'][^"']+["']/.test(openingTag)) {
-        viewIssues.push('V2TableColumn 禁止使用页面级 min-width');
+      if (column.pin === 'start') {
+        if (seenNonStart)
+          issues.push(`${schemasPath}: ${schemaExpression} start 固定列必须是连续前缀`);
+      } else {
+        seenNonStart = true;
       }
-      if (/(?<!min-)\bwidth=["'][^"']+["']/.test(openingTag) && !isExpandControl) {
-        viewIssues.push('V2TableColumn 仅展开控制列允许固定 52px width');
+      if (column.pin === 'end') seenEnd = true;
+      else if (seenEnd) issues.push(`${schemasPath}: ${schemaExpression} end 固定列必须是连续后缀`);
+
+      if (column.kind === 'actions') {
+        if (index !== schema.columns.length - 1 || column.pin !== 'end') {
+          issues.push(`${schemasPath}: ${schemaExpression} 操作列必须唯一位于最后并固定 end`);
+        }
+        if (!validActionLayouts.has(column.layout)) {
+          issues.push(`${schemasPath}: ${schemaExpression} 操作列 layout 无效`);
+        }
+      } else if (column.kind === 'control') {
+        const expectedWidth =
+          column.control === 'selection' ? 46 : column.control === 'expand' ? 52 : null;
+        if (expectedWidth === null || column.width !== expectedWidth) {
+          issues.push(`${schemasPath}: ${schemaExpression}.${column.key} 控制列宽度无效`);
+        }
+      } else {
+        if (!validKinds.has(column.kind) || !validPresets.has(column.widthPreset)) {
+          issues.push(
+            `${schemasPath}: ${schemaExpression}.${column.key} 数据列语义或 widthPreset 无效`
+          );
+        }
+        if (column.kind !== 'index' && !column.pin) fluidDataColumns += 1;
       }
-      if (widthMode && !['fixed', 'flex'].includes(widthMode)) {
-        viewIssues.push('V2TableColumn width-mode 只能为 fixed 或 flex');
-      }
+    });
+    if (fluidDataColumns === 0) {
+      issues.push(`${schemasPath}: ${schemaExpression} 至少需要一个弹性数据列`);
     }
-    for (const openingTag of table.match(/<V2TableActionColumn(?=\s|>)[\s\S]*?>/g) ?? []) {
-      const layout = openingTag.match(/\blayout=["']([^"']+)["']/)?.[1];
-      if (!layout || !validActionLayouts.has(layout)) {
-        viewIssues.push('V2TableActionColumn 必须使用 icon、single、double、triple 或 wide 档位');
+  }
+}
+
+function validateFeatureManifests() {
+  const manifestFiles = readdirSync(featuresRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(featuresRoot, entry.name, 'manifest.ts'))
+    .filter(existsSync);
+
+  for (const file of manifestFiles) {
+    const projectPath = path.relative(rootDir, file);
+    const source = read(projectPath);
+    const ast = ts.createSourceFile(
+      projectPath,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS
+    );
+    let featureObject = null;
+    function visit(node) {
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.getText(ast) === 'defineV2Feature' &&
+        node.arguments[0] &&
+        ts.isObjectLiteralExpression(node.arguments[0])
+      ) {
+        featureObject = node.arguments[0];
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(ast);
+    if (!featureObject) {
+      issues.push(`${projectPath}: 未找到 defineV2Feature`);
+      continue;
+    }
+    const properties = new Map(
+      featureObject.properties
+        .filter(ts.isPropertyAssignment)
+        .map((property) => [property.name.getText(ast).replaceAll(/["']/g, ''), property])
+    );
+    const key = properties.get('key')?.initializer.getText(ast).replaceAll("'", '');
+    if (properties.has('columns')) issues.push(`${projectPath}: manifest 禁止复制 columns`);
+    const tablesExpression = properties.get('tables')?.initializer.getText(ast);
+    if (!key || tablesExpression !== `v2TablesByFeature['${key}']`) {
+      issues.push(`${projectPath}: tables 必须引用 v2TablesByFeature 的同 feature schema`);
+    }
+  }
+}
+
+function validateTableNode(tableNode, projectPath, consumedSchemas) {
+  const schemaExpression = boundExpression(tableNode, 'schema');
+  if (!schemaExpression) {
+    issues.push(`${projectPath}: V2Table 必须显式绑定 schema`);
+    return null;
+  }
+  const schema = schemaByExpression.get(schemaExpression);
+  const columns = collectOwnedColumns(tableNode);
+
+  for (const columnNode of columns) {
+    for (const forbidden of [
+      'kind',
+      'label',
+      'width-preset',
+      'width-mode',
+      'width',
+      'min-width',
+      'fixed',
+      'layout',
+      'control'
+    ]) {
+      if (hasProp(columnNode, forbidden)) {
+        issues.push(`${projectPath}: ${columnNode.tag} 禁止页面级 ${forbidden}，必须来自 schema`);
       }
     }
   }
 
+  if (!schema) {
+    if (projectPath !== layoutFixturePath && !schemaExpression.startsWith('fixtureSchemas.')) {
+      issues.push(`${projectPath}: 未登记的 schema ${schemaExpression}`);
+    }
+    return schemaExpression;
+  }
+  const consumers = consumedSchemas.get(schemaExpression) ?? [];
+  consumers.push(projectPath);
+  consumedSchemas.set(schemaExpression, consumers);
+
+  if (columns.length !== schema.columns.length) {
+    issues.push(
+      `${projectPath}: ${schemaExpression} 模板列 ${columns.length} 与 schema 列 ${schema.columns.length} 不一致`
+    );
+  }
+  columns.forEach((columnNode, index) => {
+    const expectedDefinition = `${schemaExpression}.columns[${index}]`;
+    if (boundExpression(columnNode, 'definition') !== expectedDefinition) {
+      issues.push(
+        `${projectPath}: ${schemaExpression} 第 ${index + 1} 列必须引用 ${expectedDefinition}`
+      );
+    }
+    const definition = schema.columns[index];
+    const expectedTag =
+      definition?.kind === 'actions'
+        ? 'V2TableActionColumn'
+        : definition?.kind === 'control'
+          ? 'V2TableControlColumn'
+          : 'V2TableColumn';
+    if (definition && columnNode.tag !== expectedTag) {
+      issues.push(`${projectPath}: ${schemaExpression}.${definition.key} 必须使用 ${expectedTag}`);
+    }
+  });
+
+  const plainRowKey = staticAttribute(tableNode, 'row-key');
+  const bindingRowKey = boundExpression(tableNode, 'row-key');
+  if (schema.rowKey?.kind === 'path' && (plainRowKey || bindingRowKey)) {
+    issues.push(
+      `${projectPath}: ${schemaExpression} path rowKey 由 V2Table 注入，页面禁止重复 row-key`
+    );
+  } else if (schema.rowKey?.kind === 'binding' && bindingRowKey !== schema.rowKey.value) {
+    issues.push(`${projectPath}: ${schemaExpression} :row-key 必须为 ${schema.rowKey.value}`);
+  } else if (schema.rowKey === null && (plainRowKey || bindingRowKey)) {
+    issues.push(`${projectPath}: ${schemaExpression} schema 必须声明已使用的 rowKey`);
+  }
+  return schemaExpression;
+}
+
+function collectOwnedColumns(tableNode) {
+  const result = [];
+  function visit(node) {
+    if (node.type !== NodeTypes.ELEMENT) return;
+    if (node !== tableNode && node.tag === 'V2Table') return;
+    if (['V2TableColumn', 'V2TableActionColumn', 'V2TableControlColumn'].includes(node.tag)) {
+      result.push(node);
+      return;
+    }
+    node.children?.forEach(visit);
+  }
+  tableNode.children.forEach(visit);
+  return result;
+}
+
+function validateSharedImplementation() {
+  const componentSource = read(tableComponentPath);
+  const columnSource = read(tableColumnPath);
+  const controlSource = read(controlColumnPath);
+  const actionSource = read(actionColumnPath);
+  const styleSource = read(tableStylePath);
+  const recordsStyleSource = read(recordsStylePath);
+  const viteSource = read('apps/admin/vite.config.ts');
+  const fixtureSource = read(layoutFixturePath);
+
+  for (const [pattern, message] of [
+    [/fit:\s*true/, 'V2Table 必须 fit=true'],
+    [/flexible:\s*true/, 'V2Table 必须 flexible=true'],
+    [/tableLayout:\s*'fixed'/, 'V2Table 必须使用 fixed 布局'],
+    [/scrollbarAlwaysOn:\s*true/, 'V2Table 必须常显滚动条'],
+    [/showOverflowTooltip:\s*true/, 'V2Table 必须统一溢出提示'],
+    [
+      /props\.schema\.rowKey\?\.kind === 'path'[\s\S]*?delete tableAttrs\['row-key'\][\s\S]*?tableAttrs\.rowKey = props\.schema\.rowKey\.value/,
+      'path rowKey 必须由 schema 强制注入'
+    ],
+    [/scrollToStart\(\);[\s\S]*?resetViewScroll/, 'schema/viewKey 变化必须同步归零并 nextTick 校正']
+  ]) {
+    if (!pattern.test(componentSource)) issues.push(`${tableComponentPath}: ${message}`);
+  }
+  if (!/columnKey:\s*props\.definition\.key/.test(columnSource)) {
+    issues.push(`${tableColumnPath}: 数据列必须传递 schema columnKey`);
+  }
+  if (!/definition:[\s\S]{0,100}?required:\s*true/.test(columnSource)) {
+    issues.push(`${tableColumnPath}: definition 必须为 required`);
+  }
+  if (/\n\s+(?:kind|widthPreset|widthMode):\s*\{/.test(columnSource)) {
+    issues.push(`${tableColumnPath}: 禁止保留 kind/widthPreset/widthMode legacy props`);
+  }
+  for (const [source, projectPath] of [
+    [controlSource, controlColumnPath],
+    [actionSource, actionColumnPath]
+  ]) {
+    if (!/:column-key="definition\.key"/.test(source)) {
+      issues.push(`${projectPath}: 必须传递 schema columnKey`);
+    }
+  }
   if (
-    source.includes('<V2TableColumn') &&
-    !/import\s+V2TableColumn\s+from\s+['"]@\/v2\/components\/V2TableColumn\.vue['"]/.test(source)
+    /definition\?:/.test(controlSource) ||
+    !/definition:\s*V2TableControlColumnDefinition/.test(controlSource)
   ) {
-    viewIssues.push('使用语义列时必须显式导入 V2TableColumn');
+    issues.push(`${controlColumnPath}: definition 必须为唯一必填契约`);
   }
+  if (/definition\?:|\blayout\?:/.test(actionSource)) {
+    issues.push(`${actionColumnPath}: 禁止 optional definition 或 layout legacy prop`);
+  }
+  for (const [pattern, message] of [
+    [/\.v2-unified-table[\s\S]*?container-type:\s*inline-size/, '缺少容器查询上下文'],
+    [/clamp\(8px,\s*1cqi,\s*12px\)/, '单元格间距未连续自适应'],
+    [/scroll-behavior:\s*auto/, '表格横向滚动必须禁用 smooth']
+  ]) {
+    if (!pattern.test(styleSource)) issues.push(`${tableStylePath}: ${message}`);
+  }
+  if (!/data-mobile-mode='cards'/.test(recordsStyleSource)) {
+    issues.push(`${recordsStylePath}: 900px 移动切换必须由 schema mobileMode 控制`);
+  }
+  if (/transition:\s*grid-template-columns/.test(styleSource)) {
+    issues.push(`${tableStylePath}: 禁止侧栏宽度过渡连续触发表格重排`);
+  }
+  if (/v2TableResolver|V2ElTable|exclude:\s*\/\^ElTable\$\//.test(viteSource)) {
+    issues.push('apps/admin/vite.config.ts: 禁止隐式 ElTable 替换 resolver');
+  }
+  if (existsSync(path.join(rootDir, 'apps/admin/src/v2/components/V2ElTable.vue'))) {
+    issues.push('apps/admin/src/v2/components/V2ElTable.vue: 旧适配器必须删除');
+  }
+  for (const [pattern, message] of [
+    [/Object\.values\(v2TableSchemas\)\.flatMap/, '必须从最终 schema registry 动态生成验收夹具'],
+    [/v-for="schema in registeredSchemas"/, '必须遍历所有最终 schema'],
+    [/:data-schema-fixture="schema\.id"/, '每个 schema 验收夹具必须暴露稳定 id'],
+    [/:schema="lifecycleSchema"/, '滚动生命周期夹具必须支持 schema 切换']
+  ]) {
+    if (!pattern.test(fixtureSource)) issues.push(`${layoutFixturePath}: ${message}`);
+  }
+
+  for (const [preset, width] of Object.entries({
+    index: 72,
+    compact: 112,
+    standard: 128,
+    wide: 160,
+    dateTime: 165,
+    identifier: 192,
+    longText: 224
+  })) {
+    if (
+      !new RegExp(`\\b${preset}:\\s*${width}\\b`).test(
+        read('apps/admin/src/v2/components/tableColumn.ts')
+      )
+    ) {
+      issues.push(`apps/admin/src/v2/components/tableColumn.ts: ${preset} 必须为 ${width}`);
+    }
+  }
+  for (const [layout, width] of Object.entries({
+    icon: 76,
+    single: 126,
+    double: 180,
+    triple: 260,
+    wide: 272
+  })) {
+    if (
+      !new RegExp(`\\b${layout}:\\s*${width}\\b`).test(
+        read('apps/admin/src/v2/components/tableActionLayout.ts')
+      )
+    ) {
+      issues.push(`apps/admin/src/v2/components/tableActionLayout.ts: ${layout} 必须为 ${width}`);
+    }
+  }
+}
+
+function validateBusinessSortRules() {
+  const prismaPath = 'apps/api/prisma/schema.prisma';
+  const prismaSource = read(prismaPath);
+  for (const modelName of [
+    'IdBusinessV2Customer',
+    'IdBusinessV2Account',
+    'IdBusinessV2Order',
+    'IdBusinessV2Activation'
+  ]) {
+    const block =
+      prismaSource.match(new RegExp(`model ${modelName} \\{[\\s\\S]*?\\n\\}`))?.[0] ?? '';
+    if (!block) issues.push(`${prismaPath}: 缺少模型 ${modelName}`);
+    else if (/\bsortOrder\b/.test(block)) issues.push(`${prismaPath}: ${modelName} 禁止 sortOrder`);
+  }
+  const optionBlock = prismaSource.match(/model IdBusinessV2Option \{[\s\S]*?\n\}/)?.[0] ?? '';
+  if (!/\bsortOrder\s+Int\b/.test(optionBlock))
+    issues.push(`${prismaPath}: 选项设置必须保留 sortOrder`);
+
+  const optionSchema = schemaRegistry.v2TableSchemas.options.main;
   if (
-    source.includes('<V2TableActionColumn') &&
-    !/import\s+V2TableActionColumn\s+from\s+['"]@\/v2\/components\/V2TableActionColumn\.vue['"]/.test(
-      source
-    )
+    !optionSchema.columns.some((column) => column.key === 'sortOrder' && column.label === '排序')
   ) {
-    viewIssues.push('使用操作列时必须显式导入 V2TableActionColumn');
+    issues.push(`${schemasPath}: 选项设置必须保留排序列`);
   }
-
-  if (!isOptionsView) {
-    if (/\b(?:row|item|form)\.sortOrder\b/.test(source)) {
-      viewIssues.push('业务页面禁止读取或录入数字 sortOrder');
-    }
-    if (/(?:sortBy\s*:|query\.sortBy\s*=)[\s]*["']sortOrder["']/.test(source)) {
-      viewIssues.push('业务 sortBy 白名单禁止包含 sortOrder');
-    }
-  }
-
-  return viewIssues;
-}
-
-function extractTableBlocks(source) {
-  return [...source.matchAll(/<el-table(?=\s|>)[\s\S]*?<\/el-table>/g)].map((match) => match[0]);
-}
-
-function extractActionLayouts(source) {
-  return [...source.matchAll(/<V2TableActionColumn\b[^>]*\blayout=["']([^"']+)["']/g)].map(
-    (match) => match[1]
-  );
-}
-
-function extractFeatureColumnsBlock(source) {
-  return source.match(/columns:\s*\[([\s\S]*?)\n\s*\],\n\s*loadView:/)?.[1] ?? '';
-}
-
-function extractPrismaModel(source, modelName) {
-  return source.match(new RegExp(`model ${modelName} \\{[\\s\\S]*?\\n\\}`))?.[0] ?? '';
 }
 
 function runSelfTests() {
-  const valid = `
-    <el-table show-overflow-tooltip>
-      <V2TableColumn kind="identifier" width-preset="identifier" label="账号" />
-      <V2TableActionColumn layout="triple"><AppButton>编辑</AppButton></V2TableActionColumn>
-    </el-table>
-    <script setup>
-    import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-    import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
-    </script>
-  `;
-  assert.deepEqual(validateViewSource(valid, false), []);
-  for (const invalid of [
-    '<el-table><el-table-column label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="账号 / 国家" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="账号"><small>国家</small></V2TableColumn></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="排序" /></el-table>',
-    '<el-table show-overflow-tooltip><div class="v2-table-stack"></div></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" label="操作" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="custom" label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" min-width="140" label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableColumn kind="text" width-preset="custom" label="账号" /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableActionColumn /></el-table>',
-    '<el-table show-overflow-tooltip><V2TableActionColumn layout="custom" /></el-table>'
-  ]) {
-    assert.ok(validateViewSource(invalid, false).length > 0);
-  }
-  assert.deepEqual(
-    validateViewSource(
-      `<el-table show-overflow-tooltip><V2TableColumn kind="numeric" width-preset="compact" label="排序" /></el-table>
-       <script setup>
-       import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-       </script>`,
-      true
-    ),
-    []
+  const ast = parseTemplate(
+    '<V2Table :schema="v2TableSchemas.demo.main"><V2TableColumn :definition="v2TableSchemas.demo.main.columns[0]" /></V2Table>'
   );
+  const table = ast.children[0];
+  assert.equal(boundExpression(table, 'schema'), 'v2TableSchemas.demo.main');
+  assert.equal(staticAttribute(table, 'row-key'), null);
+  assert.equal(collectOwnedColumns(table).length, 1);
+}
 
-  const validActionColumn = `
-    <el-table-column
-      label="操作"
-      :width="V2_TABLE_ACTION_COLUMN_WIDTH[layout]"
-      fixed="right"
-      align="right"
-      header-align="right"
-    >
-      <div class="v2-table-actions" :data-action-layout="layout"></div>
-    </el-table-column>
-  `;
-  assert.deepEqual(validateActionColumnSource(validActionColumn), []);
-  assert.ok(validateActionColumnSource(validActionColumn.replace('fixed="right"', '')).length > 0);
+function collectMobileClaims(node, projectPath, claims) {
+  const expression = boundExpression(node, 'data-mobile-for');
+  if (!expression) {
+    issues.push(`${projectPath}: 移动卡片列表必须绑定 data-mobile-for="schema.id"`);
+    return;
+  }
+  const references = [
+    ...expression.matchAll(/\bv2TableSchemas\.[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.id\b/g)
+  ].map((match) => match[0].slice(0, -3));
+  if (references.length === 0) {
+    issues.push(`${projectPath}: data-mobile-for 必须直接引用 table schema id`);
+  }
+  for (const reference of references) {
+    claims.set(reference, (claims.get(reference) ?? 0) + 1);
+  }
+}
 
-  const validActionStyles = `
-    .v2-table-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 6px;
-      flex-wrap: nowrap;
+function validateMobileContracts(projectPath, tableExpressions, claims) {
+  const tables = new Set(tableExpressions);
+  for (const schemaExpression of tableExpressions) {
+    const schema = schemaByExpression.get(schemaExpression);
+    if (!schema || schema.mobileMode !== 'cards') continue;
+    if (claims.get(schemaExpression) !== 1) {
+      issues.push(
+        `${projectPath}: ${schemaExpression} cards 模式必须与唯一 data-mobile-for 一一对应`
+      );
     }
-    .v2-table-actions .el-button + .el-button { margin-left: 0; }
-  `;
-  assert.deepEqual(validateActionStyleSource(validActionStyles), []);
-  assert.ok(
-    validateActionStyleSource(
-      validActionStyles.replace('.v2-table-actions .el-button + .el-button { margin-left: 0; }', '')
-    ).some((issue) => issue.includes('默认边距'))
+  }
+  for (const [schemaExpression, count] of claims) {
+    const schema = schemaByExpression.get(schemaExpression);
+    if (!tables.has(schemaExpression)) {
+      issues.push(`${projectPath}: data-mobile-for 引用了同文件不存在的 ${schemaExpression}`);
+    } else if (schema?.mobileMode !== 'cards') {
+      issues.push(`${projectPath}: ${schemaExpression} 不是 cards 模式，禁止绑定移动卡片列表`);
+    }
+    if (count !== 1) {
+      issues.push(`${projectPath}: ${schemaExpression} data-mobile-for 重复 ${count} 次`);
+    }
+  }
+}
+
+function walkTemplate(node, visitor) {
+  visitor(node);
+  node.children?.forEach((child) => walkTemplate(child, visitor));
+  if (node.branches) {
+    for (const branch of node.branches)
+      branch.children?.forEach((child) => walkTemplate(child, visitor));
+  }
+}
+
+function hasProp(node, name) {
+  return node.props.some((property) => {
+    if (property.type === NodeTypes.ATTRIBUTE) return property.name === name;
+    return (
+      property.name === 'bind' &&
+      property.arg?.type === NodeTypes.SIMPLE_EXPRESSION &&
+      property.arg.content === name
+    );
+  });
+}
+
+function staticAttribute(node, name) {
+  const property = node.props.find(
+    (candidate) => candidate.type === NodeTypes.ATTRIBUTE && candidate.name === name
   );
+  return property?.value?.content ?? null;
 }
 
-function validateActionStyleSource(source) {
-  const styleIssues = [];
-  if (!/\.v2-table-actions[\s\S]*?flex-wrap:\s*nowrap/.test(source)) {
-    styleIssues.push('操作按钮组未强制桌面端单行');
-  }
-  if (!/\.v2-table-actions[\s\S]*?justify-content:\s*flex-end/.test(source)) {
-    styleIssues.push('操作按钮组未靠右对齐');
-  }
-  if (!/\.v2-table-actions \.el-button \+ \.el-button[\s\S]*?margin-left:\s*0/.test(source)) {
-    styleIssues.push('操作按钮组未清除 Element Plus 相邻按钮默认边距');
-  }
-  return styleIssues;
+function hasStaticClass(node, className) {
+  const value = staticAttribute(node, 'class');
+  return value?.split(/\s+/).includes(className) ?? false;
 }
 
-function validateTableColumnSource(source) {
-  return [
-    'ElTableColumn',
-    'V2_TABLE_COLUMN_ALIGNMENT[props.kind]',
-    'getV2TableColumnWidthProps(props.kind, widthPreset, props.widthMode)',
-    'align:',
-    'headerAlign:',
-    'getV2TableColumnClass(props.kind)'
-  ]
-    .filter((snippet) => !source.includes(snippet))
-    .map((snippet) => `缺少 ${snippet}`);
+function boundExpression(node, name) {
+  const property = node.props.find(
+    (candidate) =>
+      candidate.type === NodeTypes.DIRECTIVE &&
+      candidate.name === 'bind' &&
+      candidate.arg?.type === NodeTypes.SIMPLE_EXPRESSION &&
+      candidate.arg.content === name
+  );
+  return property?.exp?.type === NodeTypes.SIMPLE_EXPRESSION ? property.exp.content.trim() : null;
 }
 
-function validateActionColumnSource(source) {
-  return [
-    'label="操作"',
-    ':width="V2_TABLE_ACTION_COLUMN_WIDTH[layout]"',
-    'fixed="right"',
-    'align="right"',
-    'header-align="right"',
-    'class="v2-table-actions"',
-    ':data-action-layout="layout"'
-  ]
-    .filter((snippet) => !source.includes(snippet))
-    .map((snippet) => `缺少 ${snippet}`);
+function walk(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory)) {
+    const target = path.join(directory, entry);
+    if (statSync(target).isDirectory()) files.push(...walk(target));
+    else files.push(target);
+  }
+  return files;
 }
 
 function read(projectPath) {
   return readFileSync(path.join(rootDir, projectPath), 'utf8');
-}
-
-function walk(directory) {
-  return readdirSync(directory).flatMap((entry) => {
-    const file = path.join(directory, entry);
-    return statSync(file).isDirectory() ? walk(file) : [file];
-  });
 }

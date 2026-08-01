@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Amount4 } from '../runtime/public-api';
 import type { FinancePostingLineInput } from './id-business-v2-finance-posting.service';
 
 export function createHistoricalCnyPair(
@@ -6,7 +6,7 @@ export function createHistoricalCnyPair(
   debitDirection: FinancePostingLineInput['direction'],
   creditCode: FinancePostingLineInput['accountCode'],
   creditDirection: FinancePostingLineInput['direction'],
-  amount: Prisma.Decimal,
+  amount: Amount4,
   rateSnapshotId: string,
   memo: string
 ) {
@@ -22,7 +22,7 @@ export function pushHistoricalCnyPair(
   debitDirection: FinancePostingLineInput['direction'],
   creditCode: FinancePostingLineInput['accountCode'],
   creditDirection: FinancePostingLineInput['direction'],
-  amount: Prisma.Decimal,
+  amount: Amount4,
   rateSnapshotId: string,
   memo: string
 ) {
@@ -36,7 +36,7 @@ export function pushHistoricalCnyPair(
 export function createHistoricalCnyLine(
   accountCode: FinancePostingLineInput['accountCode'],
   direction: FinancePostingLineInput['direction'],
-  amount: Prisma.Decimal,
+  amount: Amount4,
   rateSnapshotId: string,
   memo: string
 ): FinancePostingLineInput {

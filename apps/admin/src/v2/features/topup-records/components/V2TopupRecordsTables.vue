@@ -11,13 +11,13 @@
   >
     <section class="v2-records-list">
       <template v-if="activeTab === 'giftCards'">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.topupRecords.giftCards"
           :aria-busy="giftCardLoading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table v2-topup-records-table"
           :data="giftCards"
-          row-key="id"
           @sort-change="handleGiftCardSortChange"
         >
           <template #empty>
@@ -28,22 +28,20 @@
             </div>
           </template>
 
-          <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[0]">
             <template #default="{ $index }">{{ giftCardRowNumber($index) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡号" fixed="left">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[1]">
             <template #default="{ row }">
               <strong class="v2-topup-records-code">{{ row.code }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" width-preset="standard" label="卡片名称">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[2]">
             <template #default="{ row }">{{ row.cardName.name }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="compact"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[3]"
             prop="faceValue"
-            label="面值"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -51,24 +49,20 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="compact"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[4]"
             prop="exchangeRate"
-            label="卡片汇率"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ formatDecimal(row.exchangeRate) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[5]"
             prop="costAmount"
-            label="卡片价值（人民币）"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ formatDecimal(row.costAmount) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="加入 ID">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[6]">
             <template #default="{ row }">
               {{ row.account.appleIdMasked }}
               <el-tag
@@ -81,50 +75,44 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[7]">
             <template #default="{ row }">{{ row.country.name }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="供应商" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[8]">
             <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡前余额">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[9]">
             <template #default="{ row }">
               {{ formatOptionalDecimal(row.creditedLedger?.balanceBefore) }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="ID 加卡后余额">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[10]">
             <template #default="{ row }">
               {{ formatOptionalDecimal(row.creditedLedger?.balanceAfter) }}
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[11]">
             <template #default="{ row }">
               {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="text"
-            width-preset="wide"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[12]"
             prop="remark"
-            label="备注"
             show-overflow-tooltip
           >
             <template #default="{ row }">{{ row.remark || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[13]"
             prop="creditedAt"
-            label="加卡时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.creditedAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="status"
-            width-preset="compact"
+            :definition="v2TableSchemas.topupRecords.giftCards.columns[14]"
             prop="status"
-            label="状态"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -133,7 +121,7 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableActionColumn layout="triple">
+          <V2TableActionColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[15]">
             <template #default="{ row }">
               <template
                 v-if="
@@ -180,9 +168,12 @@
               <span v-else>—</span>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div
+          class="v2-records-mobile-list"
+          :data-mobile-for="v2TableSchemas.topupRecords.giftCards.id"
+        >
           <article v-for="item in giftCards" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -288,13 +279,13 @@
       </template>
 
       <template v-else>
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.topupRecords.balanceLedger"
           :aria-busy="ledgerLoading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table v2-topup-ledger-table"
           :data="ledgerEntries"
-          row-key="id"
           @sort-change="handleLedgerSortChange"
         >
           <template #empty>
@@ -305,36 +296,28 @@
             </div>
           </template>
 
-          <V2TableColumn kind="index" width-preset="index" label="序号" fixed="left">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[0]">
             <template #default="{ $index }">{{ ledgerRowNumber($index) }}</template>
           </V2TableColumn>
-          <V2TableColumn
-            kind="text"
-            label="变动类型"
-            width-preset="standard"
-            width-mode="fixed"
-            fixed="left"
-          >
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[1]">
             <template #default="{ row }">
               <el-tag :type="ledgerTypeTag(row.entryType)" effect="plain">
                 {{ ledgerTypeLabel(row.entryType) }}
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="礼品卡">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[2]">
             <template #default="{ row }">{{ row.giftCard?.code || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="identifier" width-preset="identifier" label="ID 账号">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[3]">
             <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[4]">
             <template #default="{ row }">{{ row.account.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.topupRecords.balanceLedger.columns[5]"
             prop="balanceAmount"
-            label="余额变动"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -343,17 +326,15 @@
               </strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="变动前余额">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[6]">
             <template #default="{ row }">{{ formatDecimal(row.balanceBefore) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="变动后余额">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[7]">
             <template #default="{ row }">{{ formatDecimal(row.balanceAfter) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.topupRecords.balanceLedger.columns[8]"
             prop="costAmount"
-            label="成本变动"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -362,39 +343,40 @@
               </strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="变动前成本">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[9]">
             <template #default="{ row }">¥{{ formatDecimal(row.costBefore) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="变动后成本">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[10]">
             <template #default="{ row }">¥{{ formatDecimal(row.costAfter) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="standard" label="平均成本">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[11]">
             <template #default="{ row }"> ¥{{ formatDecimal(row.averageCostAfter) }} </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="关联" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[12]">
             <template #default="{ row }">
               <el-tag v-if="row.reversalOf" type="warning" effect="plain">反向流水</el-tag>
               <el-tag v-else-if="row.reversedBy" type="info" effect="plain">已反冲</el-tag>
               <span v-else>正常</span>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="操作人" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[13]">
             <template #default="{ row }">
               {{ row.operator?.displayName || row.operator?.username || '系统' }}
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.topupRecords.balanceLedger.columns[14]"
             prop="createdAt"
-            label="变动时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
           </V2TableColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div
+          class="v2-records-mobile-list"
+          :data-mobile-for="v2TableSchemas.topupRecords.balanceLedger.id"
+        >
           <article v-for="item in ledgerEntries" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -463,6 +445,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

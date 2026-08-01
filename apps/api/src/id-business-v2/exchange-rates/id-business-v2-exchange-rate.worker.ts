@@ -8,12 +8,13 @@ import {
   ServiceUnavailableException
 } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import {
   IdBusinessV2ExchangeRatePersistenceService,
   IdBusinessV2ExchangeRateRunError
 } from './id-business-v2-exchange-rate-persistence.service';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 const TICK_MS = 30_000;
 const STALE_RUN_MS = 5 * 60_000;
@@ -26,9 +27,11 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
   private lastTickAt: Date | null = null;
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
     private readonly settingsService: IdBusinessV2ExchangeRateSettingsService,
-    private readonly persistenceService: IdBusinessV2ExchangeRatePersistenceService
+    private readonly persistenceService: IdBusinessV2ExchangeRatePersistenceService,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService
   ) {}
 
   onModuleInit() {
@@ -52,7 +55,7 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
     this.timer = null;
   }
 
-  async collectManual(operator?: AuthenticatedUser) {
+  async collectManual(operator?: AuthenticatedUser, requestId = 'exchange-rate-manual-collect') {
     if (!operator?.id) throw new BadRequestException('无法识别当前操作人');
     this.assertNetworkEnabled();
     await this.recoverStaleRuns();
@@ -61,7 +64,8 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
       return await this.persistenceService.collectAndPersist({
         triggerType: 'manual',
         targetAmountRmb: settings.targetAmountRmb,
-        triggeredByUserId: operator.id
+        triggeredByUserId: operator.id,
+        requestId
       });
     } catch (error) {
       if (error instanceof IdBusinessV2ExchangeRateRunError) {
@@ -78,14 +82,15 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
     }
   }
 
-  async collectSystem() {
+  async collectSystem(requestId = 'exchange-rate-system-collect') {
     this.assertNetworkEnabled();
     await this.recoverStaleRuns();
     const settings = await this.settingsService.getRecord();
     try {
       return await this.persistenceService.collectAndPersist({
         triggerType: 'system',
-        targetAmountRmb: settings.targetAmountRmb
+        targetAmountRmb: settings.targetAmountRmb,
+        requestId
       });
     } catch (error) {
       if (error instanceof IdBusinessV2ExchangeRateRunError) {
@@ -105,11 +110,7 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
   async getRuntime() {
     const [settings, databaseRunning] = await Promise.all([
       this.settingsService.get(),
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        where: { status: 'running' },
-        select: { id: true, triggerType: true, targetAmountRmb: true, startedAt: true },
-        orderBy: [{ startedAt: 'asc' }, { id: 'asc' }]
-      })
+      this.repository.findRunningRun()
     ]);
     return {
       settings,
@@ -172,7 +173,7 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
     this.running = true;
     try {
       await this.recoverStaleRuns();
-      const claimed = await this.settingsService.claimDueSchedule();
+      const claimed = await this.settingsService.claimDueSchedule('exchange-rate-scheduled-claim');
       if (!claimed) {
         return {
           status: 'skipped' as const,
@@ -181,7 +182,8 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
       }
       const result = await this.persistenceService.collectAndPersist({
         triggerType: 'scheduled',
-        targetAmountRmb: claimed.targetAmountRmb
+        targetAmountRmb: claimed.targetAmountRmb,
+        requestId: 'exchange-rate-scheduled-collect'
       });
       return {
         status: 'collected' as const,
@@ -196,27 +198,24 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
 
   private async recoverStaleRuns() {
     const staleBefore = new Date(Date.now() - STALE_RUN_MS);
-    const staleRuns = await this.prisma.idBusinessV2ExchangeRateRun.findMany({
-      where: { status: 'running', startedAt: { lt: staleBefore } },
-      select: { id: true, startedAt: true },
-      take: 10
-    });
+    const staleRuns = await this.repository.findStaleRuns(staleBefore);
     for (const run of staleRuns) {
-      await this.prisma.idBusinessV2ExchangeRateRun.updateMany({
-        where: { id: run.id, status: 'running', startedAt: run.startedAt },
-        data: {
-          status: 'failed',
-          finishedAt: new Date(),
-          errorCode: 'exchange_rate_stale_run_recovered',
-          errorMessage: '汇率采集超过运行时限，系统已结束该批次',
-          errorProvider: 'system',
-          errorRetryable: true,
-          errorDetails: {
-            source: 'exchange_rate_scheduler',
-            staleAfterMs: STALE_RUN_MS
+      await this.transactionManager.execute(
+        async (tx) => {
+          const updated = await this.repository.recoverStaleRun(tx, run, new Date());
+          if (updated.count > 0) {
+            await this.audit.append(tx, {
+              module: 'id_business_v2',
+              action: 'id_business_v2.exchange_rate.collect.stale_recovered',
+              objectType: 'id_business_v2_exchange_rate_run',
+              objectId: run.id,
+              afterData: { status: 'failed', errorCode: 'exchange_rate_stale_run_recovered' },
+              remark: '汇率采集超时批次已关闭'
+            });
           }
-        }
-      });
+        },
+        { requestId: `exchange-rate-stale-${run.id}`, retryMode: 'none' }
+      );
     }
   }
 

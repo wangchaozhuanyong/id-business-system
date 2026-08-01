@@ -1,9 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import {
   ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE,
   IdBusinessV2RenewalWarningService
 } from './id-business-v2-renewal-warning.service';
+import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
 const now = new Date('2026-07-29T12:00:00.000Z');
 const operator = {
@@ -60,7 +62,10 @@ describe('IdBusinessV2RenewalWarningService', () => {
     },
     $transaction: vi.fn()
   };
-  const service = new IdBusinessV2RenewalWarningService(prisma as never);
+  const service = new IdBusinessV2RenewalWarningService(
+    new IdBusinessV2RenewalsRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
+  );
 
   beforeEach(() => {
     vi.useFakeTimers();

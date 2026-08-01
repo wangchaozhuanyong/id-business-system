@@ -122,24 +122,22 @@ export const v2Routes: RouteRecordRaw[] = [
     children: [
       {
         path: '',
-        redirect: '/v2/workbench/renewals'
+        redirect: '/v2/dashboard'
       },
-      ...v2ModuleDefinitions.map(
-        (module): RouteRecordRaw => ({
-          path: module.route.replace(/^\/v2\//, ''),
-          name: `v2-${module.key}`,
-          component: getModuleView(module.key),
-          meta: {
-            title: module.title,
-            group: module.group,
-            status: module.status ?? 'ready',
-            permission: 'permission' in module ? module.permission : undefined,
-            requiredRoles: 'requiredRoles' in module ? module.requiredRoles : undefined,
-            v2ModuleKey: module.key,
-            keepAlive: 'keepAlive' in module && module.keepAlive === true
-          }
-        })
-      )
+      ...v2ModuleDefinitions.map((module): RouteRecordRaw => ({
+        path: module.route.replace(/^\/v2\//, ''),
+        name: `v2-${module.key}`,
+        component: getModuleView(module.key),
+        meta: {
+          title: module.title,
+          group: module.group,
+          status: module.status ?? 'ready',
+          permission: 'permission' in module ? module.permission : undefined,
+          requiredRoles: 'requiredRoles' in module ? module.requiredRoles : undefined,
+          v2ModuleKey: module.key,
+          keepAlive: 'keepAlive' in module && module.keepAlive === true
+        }
+      }))
     ]
   }
 ];

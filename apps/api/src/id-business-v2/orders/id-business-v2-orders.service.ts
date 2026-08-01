@@ -1,10 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { IdBusinessV2OrderAccountDisposition } from '@prisma/client';
-import type { IdBusinessV2OrderStatus, Prisma } from '@prisma/client';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2DecimalString } from '../decimal-policy';
+import { Amount4 } from '../runtime/public-api';
+import type {
+  IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderListRecord,
+  IdBusinessV2OrderStatus
+} from './id-business-v2-order.types';
+import {
+  IdBusinessV2OrdersRepository,
+  type IdBusinessV2OrderSortField
+} from './persistence/id-business-v2-orders.repository';
 
 export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   keyword?: string;
@@ -59,73 +65,7 @@ const DELETABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'failed'
 ]);
 
-const ORDER_INCLUDE = {
-  customer: {
-    select: {
-      id: true,
-      name: true
-    }
-  },
-  serviceOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      parent: {
-        select: {
-          id: true,
-          name: true
-        }
-      }
-    }
-  },
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true,
-      countryOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  settlementPlatform: {
-    select: {
-      id: true,
-      code: true,
-      name: true
-    }
-  },
-  locks: {
-    where: {
-      status: 'active' as const
-    },
-    select: {
-      id: true,
-      serviceOptionId: true,
-      lockScope: true,
-      status: true,
-      lockedAt: true,
-      expiresAt: true,
-      endedAt: true,
-      endReason: true,
-      reason: true
-    },
-    orderBy: {
-      lockedAt: 'desc' as const
-    },
-    take: 1
-  }
-} satisfies Prisma.IdBusinessV2OrderInclude;
-
-type OrderRecord = Prisma.IdBusinessV2OrderGetPayload<{
-  include: typeof ORDER_INCLUDE;
-}>;
-
-const ORDER_SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2OrderOrderByWithRelationInput> = {
+const ORDER_SORT_FIELDS: Record<string, IdBusinessV2OrderSortField> = {
   orderNo: 'orderNo',
   receivedAmount: 'receivedAmount',
   platformFeeAmount: 'platformFeeAmount',
@@ -145,7 +85,7 @@ const ORDER_SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2OrderOrderByWit
 @Injectable()
 export class IdBusinessV2OrdersService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2OrdersRepository,
     private readonly fieldEncryptionService: FieldEncryptionService
   ) {}
 
@@ -162,43 +102,21 @@ export class IdBusinessV2OrdersService {
     );
     const status = this.parseStatus(query.status);
     const accountDisposition = this.parseAccountDisposition(query.accountDisposition);
-    const where: Prisma.IdBusinessV2OrderWhereInput = {
-      deletedAt: null,
-      customerId: customerId ?? undefined,
-      serviceOptionId: serviceOptionId ?? undefined,
-      accountId: accountId ?? undefined,
-      settlementPlatformOptionId: settlementPlatformOptionId ?? undefined,
-      status: status ?? undefined,
-      accountDisposition: accountDisposition ?? undefined,
+    const { items, total } = await this.repository.listOrders({
+      keyword,
+      websiteAccountHash,
+      customerId,
+      serviceOptionId,
+      accountId,
+      settlementPlatformOptionId,
+      status,
+      accountDisposition,
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo),
-      OR: keyword
-        ? [
-            { orderNo: { contains: keyword, mode: 'insensitive' } },
-            { platformOrderNo: { contains: keyword, mode: 'insensitive' } },
-            { websiteAccountMasked: { contains: keyword, mode: 'insensitive' } },
-            { websiteAccountHash: websiteAccountHash ?? undefined },
-            { customer: { is: { name: { contains: keyword, mode: 'insensitive' } } } },
-            { serviceOption: { is: { name: { contains: keyword, mode: 'insensitive' } } } },
-            { account: { is: { appleIdMasked: { contains: keyword, mode: 'insensitive' } } } },
-            {
-              settlementPlatform: {
-                is: { name: { contains: keyword, mode: 'insensitive' } }
-              }
-            }
-          ]
-        : undefined
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2Order.findMany({
-        where,
-        include: ORDER_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
-      }),
-      this.prisma.idBusinessV2Order.count({ where })
-    ]);
+      sortField: this.parseSortField(query.sortBy),
+      sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
+      skip: pagination.skip,
+      take: pagination.take
+    });
 
     return {
       items: items.map((order) => this.toResponse(order)),
@@ -210,33 +128,16 @@ export class IdBusinessV2OrdersService {
 
   async get(idValue: string) {
     const id = this.normalizeRequiredUuid(idValue, '订单');
-    const order = await this.prisma.idBusinessV2Order.findFirst({
-      where: {
-        id,
-        deletedAt: null
-      },
-      include: ORDER_INCLUDE
-    });
+    const order = await this.repository.findOrder(id);
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
     return this.toResponse(order);
   }
 
-  private buildOrderBy(query: ListIdBusinessV2OrdersQuery) {
-    const field = ORDER_SORT_FIELDS[query.sortBy ?? 'openedAt'] ?? 'openedAt';
-    const direction = query.sortOrder === 'asc' ? 'asc' : 'desc';
-    if (field === 'openedAt') {
-      return [
-        { openedAt: { sort: direction, nulls: 'last' } },
-        { createdAt: 'desc' },
-        { id: 'desc' }
-      ] satisfies Prisma.IdBusinessV2OrderOrderByWithRelationInput[];
-    }
-    return [
-      { [field]: direction },
-      { id: 'desc' }
-    ] as Prisma.IdBusinessV2OrderOrderByWithRelationInput[];
+  private parseSortField(value: unknown): IdBusinessV2OrderSortField {
+    const normalized = this.normalizeNullableString(value) ?? 'openedAt';
+    return ORDER_SORT_FIELDS[normalized] ?? 'openedAt';
   }
 
   private parseStatus(value: unknown): IdBusinessV2OrderStatus | null {
@@ -251,11 +152,7 @@ export class IdBusinessV2OrdersService {
   private parseAccountDisposition(value: unknown): IdBusinessV2OrderAccountDisposition | null {
     const normalized = this.normalizeNullableString(value);
     if (!normalized) return null;
-    if (
-      normalized === IdBusinessV2OrderAccountDisposition.retained ||
-      normalized === IdBusinessV2OrderAccountDisposition.sold ||
-      normalized === IdBusinessV2OrderAccountDisposition.recovered
-    ) {
+    if (normalized === 'retained' || normalized === 'sold' || normalized === 'recovered') {
       return normalized;
     }
     throw new BadRequestException('ID 处理状态无效');
@@ -316,12 +213,21 @@ export class IdBusinessV2OrdersService {
     return String(value).trim() || null;
   }
 
-  private toResponse(order: OrderRecord) {
+  private toResponse(order: IdBusinessV2OrderListRecord) {
     const activeLock = order.locks?.[0] ?? null;
+    const receivedAmount = order.receivedAmount;
+    const receivedOriginalAmount = order.receivedOriginalAmount;
+    const receivedFxRateToCny = order.receivedFxRateToCny;
+    const platformFeeAmount = order.platformFeeAmount;
+    const accountCostAmount = order.accountCostAmount;
+    const balanceAmount = order.balanceAmount;
+    const balanceCostAmount = order.balanceCostAmount;
+    const refundCostAmount = order.refundCostAmount;
+    const profitAmount = order.profitAmount;
     const profitRate =
-      order.profitAmount === null || order.receivedAmount.lessThanOrEqualTo(0)
+      profitAmount === null || receivedAmount.lte(0)
         ? null
-        : roundV2Decimal(order.profitAmount.div(order.receivedAmount).mul(100));
+        : Amount4.from(profitAmount.ratio(receivedAmount).mul(100));
     return {
       id: order.id,
       orderNo: order.orderNo,
@@ -338,29 +244,25 @@ export class IdBusinessV2OrdersService {
       platformOrderNo: order.platformOrderNo,
       maskedWebsiteAccount: order.websiteAccountMasked,
       hasWebsiteAccount: Boolean(order.websiteAccountEncrypted),
-      receivedAmount: toV2DecimalString(order.receivedAmount),
-      receivedOriginalAmount: toV2DecimalString(
-        order.receivedOriginalAmount ?? order.receivedAmount
-      ),
-      receivedCurrency: order.receivedCurrency ?? 'CNY',
-      receivedFxRateToCny: toV2DecimalString(order.receivedFxRateToCny ?? 1),
-      receivedFxSnapshotId: order.receivedFxSnapshotId ?? null,
-      receivedFinanceAccountId: order.receivedFinanceAccountId ?? null,
+      receivedAmount: receivedAmount.toString(),
+      receivedOriginalAmount: receivedOriginalAmount.toString(),
+      receivedCurrency: order.receivedCurrency,
+      receivedFxRateToCny: receivedFxRateToCny.toString(),
+      receivedFxSnapshotId: order.receivedFxSnapshotId,
+      receivedFinanceAccountId: order.receivedFinanceAccountId,
       receivedAt: order.receivedAt ?? order.openedAt ?? order.createdAt,
-      platformFeeAmount: toV2DecimalString(order.platformFeeAmount),
+      platformFeeAmount: platformFeeAmount.toString(),
       accountDisposition: order.accountDisposition,
-      accountCostAmount: toV2DecimalString(order.accountCostAmount),
-      appliedAccountCostAmount: toV2DecimalString(
-        order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold
-          ? order.accountCostAmount
-          : 0
-      ),
-      balanceAmount: toV2DecimalString(order.balanceAmount),
-      balanceCostAmount: toV2DecimalString(order.balanceCostAmount),
-      refundCostAmount:
-        order.refundCostAmount === null ? null : toV2DecimalString(order.refundCostAmount),
-      profitAmount: order.profitAmount === null ? null : toV2DecimalString(order.profitAmount),
-      profitRate: profitRate === null ? null : toV2DecimalString(profitRate),
+      accountCostAmount: accountCostAmount.toString(),
+      appliedAccountCostAmount: (order.accountDisposition === 'sold'
+        ? accountCostAmount
+        : Amount4.zero()
+      ).toString(),
+      balanceAmount: balanceAmount.toString(),
+      balanceCostAmount: balanceCostAmount.toString(),
+      refundCostAmount: refundCostAmount?.toString() ?? null,
+      profitAmount: profitAmount?.toString() ?? null,
+      profitRate: profitRate?.toString() ?? null,
       status: order.status,
       statusChangedAt: order.statusChangedAt,
       openedAt: order.openedAt,

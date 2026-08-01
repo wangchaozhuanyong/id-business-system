@@ -4,6 +4,9 @@ import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/cl
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2TopupSupplierFundsService } from './id-business-v2-topup-supplier-funds.service';
 import { IdBusinessV2TopupSupplierGiftCardFundsService } from './id-business-v2-topup-supplier-gift-card-funds.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2TopupSupplierAccountRepository } from './persistence/id-business-v2-topup-supplier-account.repository';
+import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-business-v2-topup-supplier-command.repository';
 
 const supplierOptionId = '11111111-1111-4111-8111-111111111111';
 const supplierAccountId = '22222222-2222-4222-8222-222222222222';
@@ -18,10 +21,6 @@ const operator = {
   permissions: ['apple.topup_supplier_fund.manage']
 };
 const createdAt = new Date('2026-07-29T12:00:00.000Z');
-
-function decimal(value: Prisma.Decimal.Value) {
-  return new Prisma.Decimal(value);
-}
 
 function cloudflareDecimal(value: Prisma.Decimal.Value) {
   return new CloudflarePrisma.Decimal(String(value));
@@ -71,11 +70,20 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     post: vi.fn(),
     reverse: vi.fn()
   };
+  const repository = new IdBusinessV2TopupSupplierCommandRepository(
+    new IdBusinessV2TopupSupplierAccountRepository()
+  );
+  const transactionalAudit = new V2TransactionalAuditService();
   const service = new IdBusinessV2TopupSupplierFundsService(
-    prisma as never,
+    repository,
+    new V2CommandTransactionManager(prisma as never),
+    transactionalAudit,
     financePostingService as never
   );
-  const giftCardFundsService = new IdBusinessV2TopupSupplierGiftCardFundsService(prisma as never);
+  const giftCardFundsService = new IdBusinessV2TopupSupplierGiftCardFundsService(
+    repository,
+    transactionalAudit
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -126,27 +134,27 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierPayment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         paidCurrency: 'USDT',
-        paidAmount: decimal('1000'),
-        networkFeeAmount: decimal('1.5'),
-        fxRateToCny: decimal('6.8'),
-        creditedCny: decimal('6800'),
-        creditedAmount: decimal('1000')
+        paidAmount: '1000',
+        networkFeeAmount: '1.5',
+        fxRateToCny: '6.8',
+        creditedCny: '6800',
+        creditedAmount: '1000'
       })
     });
     expect(tx.idBusinessV2TopupSupplierLedger.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         entryType: 'payment_credit',
-        amountCny: decimal('6800'),
-        balanceBeforeCny: decimal('0'),
-        balanceAfterCny: decimal('6800'),
+        amountCny: '6800',
+        balanceBeforeCny: '0',
+        balanceAfterCny: '6800',
         currency: 'CNY'
       })
     });
     expect(tx.idBusinessV2TopupSupplierAccount.update).toHaveBeenCalledWith({
       where: { id: supplierAccountId },
       data: expect.objectContaining({
-        currentBalance: decimal('6800'),
-        currentBalanceCny: decimal('6800')
+        currentBalance: '6800',
+        currentBalanceCny: '6800'
       })
     });
     expect(financePostingService.post).toHaveBeenCalledWith(
@@ -155,14 +163,17 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
         lines: expect.arrayContaining([
           expect.objectContaining({
             accountCode: 'platform_fee',
-            currency: 'USDT',
-            amountOriginal: decimal('1.5'),
-            fxRateToCny: decimal('6.8'),
-            amountCny: decimal('10.2')
+            currency: 'USDT'
           })
         ])
       })
     );
+    const feeLine = financePostingService.post.mock.calls[0]?.[1].lines.find(
+      (line: { accountCode: string }) => line.accountCode === 'platform_fee'
+    );
+    expect(feeLine?.amountOriginal.toString()).toBe('1.5');
+    expect(feeLine?.fxRateToCny.toString()).toBe('6.8');
+    expect(feeLine?.amountCny.toString()).toBe('10.2');
     expect(result).toMatchObject({
       payment: {
         receivedUsdt: '1000',
@@ -204,10 +215,10 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierPayment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         paidCurrency: 'USDT',
-        paidAmount: decimal('100'),
-        networkFeeAmount: decimal('0'),
-        networkFeeUsdt: decimal('0'),
-        creditedCny: decimal('680')
+        paidAmount: '100',
+        networkFeeAmount: '0',
+        networkFeeUsdt: '0',
+        creditedCny: '680'
       })
     });
     expect(financePostingService.post).toHaveBeenCalledWith(
@@ -216,13 +227,16 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
         lines: expect.arrayContaining([
           expect.objectContaining({
             accountCode: 'platform_fee',
-            currency: 'USDT',
-            amountOriginal: decimal('0'),
-            amountCny: decimal('0')
+            currency: 'USDT'
           })
         ])
       })
     );
+    const feeLine = financePostingService.post.mock.calls[0]?.[1].lines.find(
+      (line: { accountCode: string }) => line.accountCode === 'platform_fee'
+    );
+    expect(feeLine?.amountOriginal.toString()).toBe('0');
+    expect(feeLine?.amountCny.toString()).toBe('0');
     expect(result).toMatchObject({
       payment: {
         receivedUsdt: '100',
@@ -247,6 +261,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       paidAmount: cloudflareDecimal('1000'),
       networkFeeAmount: cloudflareDecimal('1.5'),
       fxRateToCny: cloudflareDecimal('6.8'),
+      creditedAmount: cloudflareDecimal('1000'),
       creditedCny: cloudflareDecimal('6800'),
       paidAt: createdAt,
       createdAt,
@@ -262,6 +277,10 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       ledgerEntries: [
         {
           id: ledgerId,
+          amount: cloudflareDecimal('6800'),
+          balanceBefore: cloudflareDecimal('0'),
+          balanceAfter: cloudflareDecimal('6800'),
+          amountCny: cloudflareDecimal('6800'),
           balanceBeforeCny: cloudflareDecimal('0'),
           balanceAfterCny: cloudflareDecimal('6800'),
           createdAt
@@ -325,8 +344,8 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierAccount.update).toHaveBeenCalledWith({
       where: { id: supplierAccountId },
       data: expect.objectContaining({
-        currentBalance: decimal('6230'),
-        currentBalanceCny: decimal('6230')
+        currentBalance: '6230',
+        currentBalanceCny: '6230'
       })
     });
   });
@@ -355,8 +374,8 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierAccount.update).toHaveBeenCalledWith({
       where: { id: supplierAccountId },
       data: expect.objectContaining({
-        currentBalance: decimal('-470'),
-        currentBalanceCny: decimal('-470')
+        currentBalance: '-470',
+        currentBalanceCny: '-470'
       })
     });
   });
@@ -387,6 +406,11 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       supplierAccountId,
       giftCardId,
       entryType: 'gift_card_debit',
+      amount: cloudflareDecimal('570'),
+      balanceBefore: cloudflareDecimal('6800'),
+      balanceAfter: cloudflareDecimal('6230'),
+      balanceBeforeCny: cloudflareDecimal('6800'),
+      balanceAfterCny: cloudflareDecimal('6230'),
       amountCny: cloudflareDecimal('570')
     });
     tx.$queryRaw.mockResolvedValue([lockedAccount('6230')]);
@@ -410,7 +434,7 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierLedger.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reversalOfEntryId: ledgerId,
-        amountCny: decimal('570')
+        amountCny: '570'
       })
     });
   });
@@ -419,7 +443,16 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     tx.idBusinessV2TopupSupplierPayment.findUnique.mockResolvedValue({
       id: paymentId,
       supplierAccountId,
+      paidAmount: cloudflareDecimal('1000'),
+      networkFeeAmount: cloudflareDecimal('1.5'),
+      fxRateToCny: cloudflareDecimal('6.8'),
+      creditedAmount: cloudflareDecimal('1000'),
+      receivedUsdt: cloudflareDecimal('1000'),
+      networkFeeUsdt: cloudflareDecimal('1.5'),
+      settlementRateCnyUsdt: cloudflareDecimal('6.8'),
       creditedCny: cloudflareDecimal('6800'),
+      paidAt: createdAt,
+      createdAt,
       supplierAccount: {
         id: supplierAccountId
       },
@@ -427,6 +460,12 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
         {
           id: ledgerId,
           entryType: 'payment_credit',
+          amount: cloudflareDecimal('6800'),
+          balanceBefore: cloudflareDecimal('0'),
+          balanceAfter: cloudflareDecimal('6800'),
+          amountCny: cloudflareDecimal('6800'),
+          balanceBeforeCny: cloudflareDecimal('0'),
+          balanceAfterCny: cloudflareDecimal('6800'),
           reversedBy: null
         }
       ]
@@ -466,8 +505,8 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     expect(tx.idBusinessV2TopupSupplierAccount.update).toHaveBeenCalledWith({
       where: { id: supplierAccountId },
       data: expect.objectContaining({
-        currentBalance: decimal('200'),
-        currentBalanceCny: decimal('200')
+        currentBalance: '200',
+        currentBalanceCny: '200'
       })
     });
   });

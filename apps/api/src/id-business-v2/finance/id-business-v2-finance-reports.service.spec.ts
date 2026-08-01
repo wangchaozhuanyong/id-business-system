@@ -2,7 +2,9 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-reports.service';
+import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
 
 const platformId = '11111111-1111-4111-8111-111111111111';
 const orderId = '22222222-2222-4222-8222-222222222222';
@@ -41,7 +43,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
       findMany: vi.fn()
     }
   };
-  const service = new IdBusinessV2FinanceReportsService(prisma as never);
+  const service = createReportsService(prisma);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -266,7 +268,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
         ])
       }
     };
-    const assetService = new IdBusinessV2FinanceReportsService(assetPrisma as never);
+    const assetService = createReportsService(assetPrisma);
 
     await expect(assetService.assets()).resolves.toMatchObject({
       cashCny: '100',
@@ -280,3 +282,10 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
     });
   });
 });
+
+function createReportsService(prisma: object) {
+  return new IdBusinessV2FinanceReportsService(
+    new V2CommandTransactionManager(prisma as never),
+    new IdBusinessV2FinanceReportRepository(prisma as never)
+  );
+}

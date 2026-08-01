@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
@@ -25,9 +27,21 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
   return {
     id: orderId,
     orderNo: 'V2-20260726-0001',
+    customerId: '88888888-8888-4888-8888-888888888888',
     serviceOptionId,
     accountId: null,
+    settlementPlatformOptionId: null,
+    platformOrderNo: null,
+    websiteAccountEncrypted: null,
+    websiteAccountHash: null,
+    websiteAccountMasked: null,
     receivedAmount: decimal('100'),
+    receivedOriginalAmount: decimal('100'),
+    receivedCurrency: 'CNY',
+    receivedFxRateToCny: decimal('1'),
+    receivedFxSnapshotId: null,
+    receivedFinanceAccountId: null,
+    receivedAt: lockedAt,
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
     accountCostAmount: decimal('0'),
@@ -36,6 +50,16 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     refundCostAmount: null,
     profitAmount: null,
     status: 'pending',
+    statusChangedAt: lockedAt,
+    openedAt: lockedAt,
+    dueAt: expiresAt,
+    idempotencyKey: 'order-lock-service-spec',
+    remark: null,
+    createdByUserId: operator.id,
+    updatedByUserId: operator.id,
+    createdAt: lockedAt,
+    updatedAt: lockedAt,
+    deletedAt: null,
     ...overrides
   };
 }
@@ -123,7 +147,10 @@ describe('IdBusinessV2OrderLockService', () => {
   const prisma = {
     $transaction: vi.fn()
   };
-  const service = new IdBusinessV2OrderLockService(prisma as never);
+  const service = new IdBusinessV2OrderLockService(
+    new IdBusinessV2OrdersRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -143,7 +170,12 @@ describe('IdBusinessV2OrderLockService', () => {
         ...data
       })
     );
-    tx.idBusinessV2Order.update.mockResolvedValue({ id: orderId, accountId });
+    tx.idBusinessV2Order.update.mockImplementation(async ({ data }) =>
+      makeOrder({
+        accountId,
+        ...data
+      })
+    );
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
@@ -168,10 +200,10 @@ describe('IdBusinessV2OrderLockService', () => {
       operator
     );
 
-    const orderSql = tx.$queryRaw.mock.calls[0]?.[0] as Prisma.Sql;
-    const accountSql = tx.$queryRaw.mock.calls[1]?.[0] as Prisma.Sql;
-    expect(orderSql.strings.join('')).toContain('FOR UPDATE');
-    expect(accountSql.strings.join('')).toContain('FOR UPDATE OF account');
+    const orderSql = tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray;
+    const accountSql = tx.$queryRaw.mock.calls[1]?.[0] as TemplateStringsArray;
+    expect(Array.from(orderSql).join('')).toContain('FOR UPDATE');
+    expect(Array.from(accountSql).join('')).toContain('FOR UPDATE OF account');
     expect(tx.idBusinessV2AccountLock.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({

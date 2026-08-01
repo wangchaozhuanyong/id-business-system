@@ -8,7 +8,7 @@ import {
   type SupabaseRealtimeStatus
 } from '@/auth/supabase';
 import { isSupabaseAuthConfigured } from '@/auth/supabase-config';
-import { AUTH_IDENTITY_CHANGED_EVENT } from '@/auth/session';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { idBusinessV2ChangeSyncApi } from '@/v2/api/changeSync';
 import { invalidateV2Queries } from '@/v2/composables/useV2Query';
 import { showV2Warning } from '@/v2/services/feedback';
@@ -48,6 +48,7 @@ let consecutiveFailures = 0;
 let degradationNotified = false;
 let realtimeSubscribed = false;
 let hiddenAt: number | null = null;
+let unsubscribeIdentityChange: (() => void) | null = null;
 const localVersions = new Map<V2DataScope, bigint>(V2_DATA_SCOPES.map((scope) => [scope, 0n]));
 
 function applyVersions(scopes: readonly { scope: V2DataScope; version: string }[]) {
@@ -239,7 +240,7 @@ export function startV2ChangeSync() {
   hiddenAt = null;
   mutableChangeSyncState.status = REALTIME_ENABLED ? 'connecting' : 'degraded';
   window.addEventListener('online', handleOnline);
-  window.addEventListener(AUTH_IDENTITY_CHANGED_EVENT, handleAuthIdentityChanged);
+  unsubscribeIdentityChange = sessionCoordinator.subscribeIdentityChange(handleAuthIdentityChanged);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   void reconcileVersions();
   if (REALTIME_ENABLED) void connectRealtime();
@@ -259,7 +260,8 @@ export function stopV2ChangeSync() {
   realtimeSubscribed = false;
   hiddenAt = null;
   window.removeEventListener('online', handleOnline);
-  window.removeEventListener(AUTH_IDENTITY_CHANGED_EVENT, handleAuthIdentityChanged);
+  unsubscribeIdentityChange?.();
+  unsubscribeIdentityChange = null;
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   void removeSupabaseRealtimeChannel(channel).catch(() => undefined);
   channel = null;

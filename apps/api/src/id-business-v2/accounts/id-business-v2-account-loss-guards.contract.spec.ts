@@ -11,42 +11,52 @@ function read(relativePath: string) {
 describe('permanently reported account loss guards', () => {
   it('blocks account editing, balance adjustment and deletion', () => {
     const source = read('accounts/id-business-v2-accounts.service.ts');
+    const balanceAdjustment = read('accounts/id-business-v2-account-balance-adjustment.service.ts');
+    const repository = read('accounts/persistence/id-business-v2-accounts.repository.ts');
 
     expect(source).toContain('已报损 ID 永久冻结，不能再修改');
-    expect(source).toContain('已报损 ID 永久冻结，不能调整余额');
+    expect(balanceAdjustment).toContain('已报损 ID 永久冻结，不能调整余额');
     expect(source).toContain('已报损 ID 必须保留历史记录，不能删除');
-    expect(source).toMatch(/updateMany\(\{\s*where: \{ id: existing\.id, lossReportedAt: null \}/s);
+    expect(repository).toMatch(
+      /updateMany\(\{\s*where: \{ id: accountId, lossReportedAt: null \}/s
+    );
   });
 
   it('excludes loss-reported IDs from top-up, matching, locking and deduction paths', () => {
-    const topupList = read('balances/id-business-v2-topup-workbench.service.ts');
+    const topupRepository = read('balances/persistence/id-business-v2-balance-query.repository.ts');
     const giftCardCredit = read('gift-cards/id-business-v2-gift-card-credit.service.ts');
+    const giftCardRepository = read(
+      'gift-cards/persistence/id-business-v2-gift-cards.repository.ts'
+    );
     const giftCardReversal = read('gift-cards/id-business-v2-gift-card-reversal.service.ts');
-    const matching = read('orders/id-business-v2-order-matching.service.ts');
     const locking = read('orders/id-business-v2-order-lock.service.ts');
+    const orderRepository = read('orders/persistence/id-business-v2-orders.repository.ts');
     const consumption = read('orders/id-business-v2-order-consumption.service.ts');
 
-    expect(topupList).toMatch(/lossReportedAt:\s*null/);
-    expect(giftCardCredit).toContain('"loss_reported_at" IS NULL');
+    expect(topupRepository).toMatch(/lossReportedAt:\s*null/);
+    expect(giftCardRepository).toContain('account."loss_reported_at" IS NULL');
     expect(giftCardCredit).toContain('已报损 ID 永久冻结，不能继续加卡');
     expect(giftCardReversal).toContain('if (account.lossReportedAt)');
     expect(giftCardReversal.indexOf('if (existingEntry?.giftCard)')).toBeLessThan(
       giftCardReversal.indexOf('if (account.lossReportedAt)')
     );
-    expect(matching).toMatch(/lossReportedAt:\s*null/);
-    expect(locking).toContain('account."loss_reported_at" IS NULL');
+    expect(orderRepository).toMatch(/lossReportedAt:\s*null/);
+    expect(orderRepository).toContain('account."loss_reported_at" IS NULL');
+    expect(locking).toContain('已报损 ID 永久冻结，不能锁定或扣减余额');
     expect(consumption).toContain('prepareOrderConsumptionInTransaction');
   });
 
   it('blocks manual renewal, refund restore and sold-account recovery', () => {
     const manualRenewal = read('renewals/id-business-v2-manual-renewal.service.ts');
+    const renewalRepository = read('renewals/persistence/id-business-v2-renewals.repository.ts');
     const lifecycle = read('orders/id-business-v2-order-lifecycle-support.ts');
     const accountDisposition = read('orders/id-business-v2-order-account-disposition.ts');
+    const orderRepository = read('orders/persistence/id-business-v2-orders.repository.ts');
 
-    expect(manualRenewal).toContain('"loss_reported_at" IS NULL');
+    expect(renewalRepository).toContain('"loss_reported_at" IS NULL');
     expect(manualRenewal).toContain('已报损 ID 永久冻结，不能续费');
     expect(lifecycle).toContain('已报损 ID 永久冻结，不能恢复余额');
-    expect(accountDisposition).toContain('lossReportedAt: null');
+    expect(orderRepository).toMatch(/releaseSoldAccount[\s\S]*lossReportedAt:\s*null/);
     expect(accountDisposition).toContain('已报损 ID 永久冻结，不能标记为收回或恢复可用');
   });
 });

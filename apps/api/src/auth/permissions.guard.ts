@@ -1,5 +1,6 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, HttpStatus, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { authHttpError } from '../common/errors/api-http.exception';
 import type { AuthenticatedUser } from './auth.types';
 import { IS_PUBLIC_KEY, PERMISSIONS_KEY, REQUIRED_ROLES_KEY } from './auth.decorators';
 
@@ -38,14 +39,18 @@ export class PermissionsGuard implements CanActivate {
     const user = request.user;
 
     if (!user) {
-      throw new ForbiddenException('Permission check requires authenticated user');
+      throw authHttpError(HttpStatus.FORBIDDEN, 'AUTH_PERMISSION_DENIED', '权限校验缺少登录身份。');
     }
 
     if (
       requiredRoles?.length &&
       !requiredRoles.some((requiredRole) => user.roles.includes(requiredRole))
     ) {
-      throw new ForbiddenException('Required role is missing');
+      throw authHttpError(
+        HttpStatus.FORBIDDEN,
+        'AUTH_PERMISSION_DENIED',
+        '当前角色没有权限访问该功能。'
+      );
     }
 
     if (!requiredPermissions?.length) {
@@ -60,7 +65,11 @@ export class PermissionsGuard implements CanActivate {
     const allowed = requiredPermissions.every((permission) => permissionSet.has(permission));
 
     if (!allowed) {
-      throw new ForbiddenException('Permission denied');
+      throw authHttpError(
+        HttpStatus.FORBIDDEN,
+        'AUTH_PERMISSION_DENIED',
+        '没有权限操作，请联系管理员检查角色权限。'
+      );
     }
 
     return true;

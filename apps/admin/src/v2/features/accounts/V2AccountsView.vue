@@ -123,13 +123,13 @@
       @retry="page.loadAccounts"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.accounts.main"
           :aria-busy="page.loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="page.items"
-          row-key="id"
           @sort-change="page.handleSortChange"
         >
           <template #empty>
@@ -143,10 +143,8 @@
           </template>
 
           <V2TableColumn
-            kind="identifier"
-            width-preset="identifier"
+            :definition="v2TableSchemas.accounts.main.columns[0]"
             prop="appleId"
-            label="ID 账号"
             sortable="custom"
             show-overflow-tooltip
           >
@@ -154,7 +152,7 @@
               <strong class="v2-table-cell">{{ row.appleIdMasked }}</strong>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="status" width-preset="compact" label="销售状态">
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[1]">
             <template #default="{ row }">
               <el-tag :type="row.saleState === 'sold' ? 'danger' : 'success'" effect="plain">
                 {{ row.saleState === 'sold' ? '已卖出' : '可用' }}
@@ -162,9 +160,7 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="identifier"
-            width-preset="identifier"
-            label="来源订单"
+            :definition="v2TableSchemas.accounts.main.columns[2]"
             show-overflow-tooltip
           >
             <template #header>
@@ -180,34 +176,30 @@
             </template>
             <template #default="{ row }">{{ row.soldByOrder?.orderNo || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="国家" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[3]">
             <template #default="{ row }">{{ row.country.name }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="compact"
+            :definition="v2TableSchemas.accounts.main.columns[4]"
             prop="currentBalance"
-            label="余额"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDecimal(row.currentBalance) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" width-preset="compact" label="汇率">
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[5]">
             <template #default="{ row }">{{ page.getAccountExchangeRate(row) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="numeric"
-            width-preset="standard"
+            :definition="v2TableSchemas.accounts.main.columns[6]"
             prop="balanceCostAmount"
-            label="人民币成本"
             sortable="custom"
           >
             <template #default="{ row }">¥{{ page.formatDecimal(row.balanceCostAmount) }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="text" label="供应商" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[7]">
             <template #default="{ row }">{{ row.supplier?.name || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" width-preset="compact" label="ID 状态">
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[8]">
             <template #default="{ row }">
               <el-tag
                 :type="
@@ -224,10 +216,8 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="status"
-            width-preset="compact"
+            :definition="v2TableSchemas.accounts.main.columns[9]"
             prop="recordStatus"
-            label="资料状态"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -237,15 +227,13 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
-            width-preset="dateTime"
+            :definition="v2TableSchemas.accounts.main.columns[10]"
             prop="updatedAt"
-            label="更新时间"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn layout="triple">
+          <V2TableActionColumn :definition="v2TableSchemas.accounts.main.columns[11]">
             <template #default="{ row }">
               <V2AccountRowActions
                 :record-status="row.recordStatus"
@@ -262,9 +250,9 @@
               />
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.accounts.main.id">
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -395,6 +383,8 @@
 </template>
 
 <script setup lang="ts">
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { reactive } from 'vue';
 import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue';

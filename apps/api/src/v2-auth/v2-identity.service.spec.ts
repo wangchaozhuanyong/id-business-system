@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ApiHttpException } from '../common/errors/api-http.exception';
 import type { PrismaService } from '../common/prisma/prisma.service';
 import { V2IdentityService } from './v2-identity.service';
 
@@ -44,8 +44,17 @@ describe('V2IdentityService', () => {
       }
     } as unknown as PrismaService;
 
-    await expect(
-      new V2IdentityService(prisma).getAuthenticatedUser('33333333-3333-4333-8333-333333333333')
-    ).rejects.toBeInstanceOf(NotFoundException);
+    const request = new V2IdentityService(prisma).getAuthenticatedUser(
+      '33333333-3333-4333-8333-333333333333'
+    );
+
+    await expect(request).rejects.toBeInstanceOf(ApiHttpException);
+    await expect(request).rejects.toMatchObject({
+      response: {
+        errorCode: 'AUTH_ACCOUNT_DISABLED',
+        retryable: false
+      },
+      status: 401
+    });
   });
 });

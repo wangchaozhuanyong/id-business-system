@@ -171,7 +171,7 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
         service.calculateGiftCardCredit(
           { currentBalance: '0', balanceCostAmount: '0' },
           '50',
-          '5.12345'
+          '5.123456789'
         )
     ],
     ['inconsistent zero balance cost', () => service.calculateAverageCost('0', '1')],

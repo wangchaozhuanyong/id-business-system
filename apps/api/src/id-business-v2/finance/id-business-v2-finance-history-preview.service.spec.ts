@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
+import { IdBusinessV2FinanceHistoryPreviewRepository } from './persistence/id-business-v2-finance-history-preview.repository';
 
 const decimal = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
@@ -35,12 +36,16 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
     },
     idBusinessV2FinanceJournalLine: {
       groupBy: vi.fn()
-    }
+    },
+    $transaction: vi.fn()
   };
-  const service = new IdBusinessV2FinanceHistoryPreviewService(prisma as never);
+  const service = new IdBusinessV2FinanceHistoryPreviewService(
+    new IdBusinessV2FinanceHistoryPreviewRepository(prisma as never)
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.$transaction.mockImplementation(async (work) => work(prisma));
     giftCardInventoryAmount = '12.5';
     prisma.idBusinessV2FinanceSettings.findUnique.mockResolvedValue({
       enabledAt: new Date('2026-07-30T00:00:00.000Z'),

@@ -1,4 +1,4 @@
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import type { JwtService } from '@nestjs/jwt';
@@ -8,6 +8,8 @@ import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorator
 import type { AuthenticatedUser } from './auth.types';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { SupabaseAuthService } from './supabase-auth.service';
+import { ApiHttpException, authHttpError } from '../common/errors/api-http.exception';
+import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 
 interface GuardFixtureOptions {
   allowDuringPasswordReset?: boolean;
@@ -83,7 +85,8 @@ function createFixture(options: GuardFixtureOptions = {}) {
       jwtService,
       identityService,
       securityService,
-      supabaseAuthService
+      supabaseAuthService,
+      new AuthAvailabilityMonitor()
     ),
     identityService,
     request,
@@ -121,8 +124,10 @@ describe('JwtAuthGuard', () => {
       }
     });
 
-    await expect(fixture.guard.canActivate(fixture.context)).rejects.toEqual(
-      new ForbiddenException('必须先修改临时密码后才能访问业务功能。')
+    await expectApiError(
+      fixture.guard.canActivate(fixture.context),
+      403,
+      'AUTH_PASSWORD_RESET_REQUIRED'
     );
   });
 
@@ -147,22 +152,28 @@ describe('JwtAuthGuard', () => {
     const fixture = createFixture();
     jest
       .mocked(fixture.securityService.ensureActiveSession)
-      .mockRejectedValueOnce(new UnauthorizedException('会话已被撤销。'));
+      .mockRejectedValueOnce(
+        authHttpError(
+          HttpStatus.UNAUTHORIZED,
+          'AUTH_REVOKED',
+          '登录状态已过期或已被下线，请重新登录。'
+        )
+      );
 
-    await expect(fixture.guard.canActivate(fixture.context)).rejects.toEqual(
-      new UnauthorizedException('会话已被撤销。')
-    );
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
     expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
   });
 
-  it('fails closed when SecurityService cannot find a registered session', async () => {
+  it('classifies an unexpected active-session dependency failure as retryable 503', async () => {
     const fixture = createFixture();
     jest
       .mocked(fixture.securityService.ensureActiveSession)
       .mockRejectedValueOnce(new Error('session_not_registered'));
 
-    await expect(fixture.guard.canActivate(fixture.context)).rejects.toEqual(
-      new UnauthorizedException('登录状态无效或已过期，请重新登录。')
+    await expectApiError(
+      fixture.guard.canActivate(fixture.context),
+      503,
+      'AUTH_DEPENDENCY_UNAVAILABLE'
     );
     expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
   });
@@ -171,9 +182,18 @@ describe('JwtAuthGuard', () => {
     const fixture = createFixture();
     jest.mocked(fixture.securityService.ensureActiveSession).mockResolvedValueOnce(false);
 
-    await expect(fixture.guard.canActivate(fixture.context)).rejects.toEqual(
-      new UnauthorizedException('登录状态已过期或已被下线，请重新登录。')
-    );
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
     expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
   });
 });
+
+async function expectApiError(promise: Promise<unknown>, status: number, errorCode: string) {
+  try {
+    await promise;
+    throw new Error('Expected authentication to fail');
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiHttpException);
+    expect((error as ApiHttpException).getStatus()).toBe(status);
+    expect((error as ApiHttpException).getResponse()).toMatchObject({ errorCode });
+  }
+}

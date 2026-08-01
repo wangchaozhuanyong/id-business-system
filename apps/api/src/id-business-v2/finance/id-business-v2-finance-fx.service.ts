@@ -1,17 +1,25 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import type { IdBusinessV2FinanceCurrency, Prisma } from '@prisma/client';
-import { Prisma as PrismaNamespace } from '@prisma/client';
+import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
 import { IdBusinessV2ExchangeRateOrderQuoteService } from '../exchange-rates/public-api';
+import {
+  Rate8,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  type V2CommandTransaction,
+  type V2DecimalInput,
+  type V2JsonDocument
+} from '../runtime/public-api';
 import { toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
+import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
 interface ResolveFinanceRateInput {
   currency: IdBusinessV2FinanceCurrency;
   occurredAt: Date;
   fxRateSnapshotId?: string | null;
-  manualRate?: PrismaNamespace.Decimal | null;
+  manualRate?: V2DecimalInput | null;
   manualReason?: string | null;
   operator?: AuthenticatedUser;
 }
@@ -20,11 +28,14 @@ interface ResolveFinanceRateInput {
 export class IdBusinessV2FinanceFxService {
   private readonly automaticQuoteInFlight = new Map<
     'MYR' | 'USDT',
-    Promise<Prisma.IdBusinessV2FinanceFxRateSnapshotGetPayload<object>>
+    ReturnType<IdBusinessV2FinanceCommandRepository['createFxSnapshot']>
   >();
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly commandRepository: IdBusinessV2FinanceCommandRepository,
+    private readonly queryRepository: IdBusinessV2FinanceQueryRepository,
+    private readonly audit: V2TransactionalAuditService,
     private readonly exchangeRateOrderQuoteService: IdBusinessV2ExchangeRateOrderQuoteService
   ) {}
 
@@ -33,49 +44,49 @@ export class IdBusinessV2FinanceFxService {
       return {
         id: null,
         currency: 'CNY' as const,
-        rateToCny: new PrismaNamespace.Decimal(1),
+        rateToCny: '1',
         source: 'cny_fixed' as const
       };
     }
     if (input.fxRateSnapshotId) {
-      const existing = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findUnique({
-        where: { id: input.fxRateSnapshotId }
-      });
+      const existing = await this.queryRepository.findFxSnapshotById(input.fxRateSnapshotId);
       if (!existing || existing.currency !== input.currency) {
         throw new BadRequestException('汇率快照不存在或币种不一致');
       }
       if (existing.expiresAt && existing.expiresAt.getTime() < input.occurredAt.getTime()) {
         throw new BadRequestException('汇率快照已过期，请重新获取或填写人工汇率');
       }
-      return existing;
+      return this.normalizeResolvedRate(existing);
     }
     if (input.manualRate) {
+      const manualRate = Rate8.from(input.manualRate);
       const reason = input.manualReason?.trim();
       if (!reason || reason.length < 2) {
         throw new BadRequestException('人工汇率必须填写原因');
       }
-      return this.prisma.$transaction(async (tx) => {
-        const snapshot = await tx.idBusinessV2FinanceFxRateSnapshot.create({
-          data: {
+      return this.commandTransactions.execute(
+        async (tx) => {
+          const snapshot = await this.commandRepository.createFxSnapshot(tx, {
             id: randomUUID(),
             currency: input.currency,
-            rateToCny: input.manualRate!,
+            rateToCny: manualRate.toString(),
             source: 'manual',
             businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
             capturedAt: new Date(),
             manualReason: reason,
             createdByUserId: input.operator?.id
-          }
-        });
-        await this.writeAudit(tx, input.operator, snapshot.id, {
-          currency: input.currency,
-          rateToCny: input.manualRate!.toString(),
-          reason
-        });
-        return snapshot;
-      });
+          });
+          await this.writeAudit(tx, input.operator, snapshot.id, {
+            currency: input.currency,
+            rateToCny: manualRate.toString(),
+            reason
+          });
+          return this.normalizeResolvedRate(snapshot);
+        },
+        { requestId: randomUUID(), operator: input.operator }
+      );
     }
-    return this.ensureAutomaticRate(input);
+    return this.normalizeResolvedRate(await this.ensureAutomaticRate(input));
   }
 
   async quoteOrderRate(
@@ -110,36 +121,38 @@ export class IdBusinessV2FinanceFxService {
 
   async createManual(
     currency: IdBusinessV2FinanceCurrency,
-    rateToCny: PrismaNamespace.Decimal,
+    rateToCnyInput: V2DecimalInput,
     businessDate: Date,
     reason: string,
     sourceReference: string | null,
     operator?: AuthenticatedUser
   ) {
+    const rateToCny = Rate8.from(rateToCnyInput);
     if (currency === 'CNY' && !rateToCny.equals(1)) {
       throw new BadRequestException('CNY 汇率固定为 1');
     }
-    return this.prisma.$transaction(async (tx) => {
-      const snapshot = await tx.idBusinessV2FinanceFxRateSnapshot.create({
-        data: {
+    return this.commandTransactions.execute(
+      async (tx) => {
+        const snapshot = await this.commandRepository.createFxSnapshot(tx, {
           id: randomUUID(),
           currency,
-          rateToCny,
+          rateToCny: rateToCny.toString(),
           source: currency === 'CNY' ? 'cny_fixed' : 'manual',
           sourceReference,
           businessDate,
           manualReason: currency === 'CNY' ? null : reason,
           createdByUserId: operator?.id
-        }
-      });
-      await this.writeAudit(tx, operator, snapshot.id, {
-        currency,
-        rateToCny: rateToCny.toString(),
-        businessDate: businessDate.toISOString(),
-        reason
-      });
-      return snapshot;
-    });
+        });
+        await this.writeAudit(tx, operator, snapshot.id, {
+          currency,
+          rateToCny: rateToCny.toString(),
+          businessDate: businessDate.toISOString(),
+          reason
+        });
+        return snapshot;
+      },
+      { requestId: randomUUID(), operator }
+    );
   }
 
   async listLatest() {
@@ -155,10 +168,7 @@ export class IdBusinessV2FinanceFxService {
             expiresAt: null
           };
         }
-        const item = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
-          where: { currency },
-          orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-        });
+        const item = await this.queryRepository.findLatestFxSnapshot(currency);
         return item
           ? { ...item, rateToCny: item.rateToCny.toString() }
           : {
@@ -193,47 +203,43 @@ export class IdBusinessV2FinanceFxService {
     });
   }
 
+  private normalizeResolvedRate<TSnapshot extends { rateToCny: string }>(
+    snapshot: TSnapshot
+  ): TSnapshot {
+    return snapshot;
+  }
+
   private async snapshotEffectiveUsdtRate(input: ResolveFinanceRateInput) {
     const effective = await this.exchangeRateOrderQuoteService.ensureEffective();
-    const existing = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
-      where: {
-        currency: 'USDT',
-        source: 'combined_p2p',
-        sourceReference: effective.snapshotId,
-        expiresAt: { gt: input.occurredAt }
-      },
-      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-    });
+    const existing = await this.queryRepository.findUsdtAutomaticSnapshot(
+      effective.snapshotId,
+      input.occurredAt
+    );
     if (existing) return existing;
-    return this.prisma.idBusinessV2FinanceFxRateSnapshot.create({
-      data: {
-        id: randomUUID(),
-        currency: 'USDT',
-        rateToCny: effective.midRateToRmb,
-        source: 'combined_p2p',
-        sourceReference: effective.snapshotId,
-        sourceEvidence: {
-          exchangeRateRunId: effective.runId,
-          exchangeRateSnapshotId: effective.snapshotId,
-          averagedAt: effective.averagedAt.toISOString()
-        },
-        businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
-        capturedAt: effective.averagedAt,
-        expiresAt: effective.expiresAt,
-        createdByUserId: input.operator?.id
-      }
-    });
+    return this.commandTransactions.execute(
+      (tx) =>
+        this.commandRepository.createFxSnapshot(tx, {
+          id: randomUUID(),
+          currency: 'USDT',
+          rateToCny: Rate8.from(effective.midRateToRmb).toString(),
+          source: 'combined_p2p',
+          sourceReference: effective.snapshotId,
+          sourceEvidence: {
+            exchangeRateRunId: effective.runId,
+            exchangeRateSnapshotId: effective.snapshotId,
+            averagedAt: effective.averagedAt.toISOString()
+          },
+          businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
+          capturedAt: effective.averagedAt,
+          expiresAt: effective.expiresAt,
+          createdByUserId: input.operator?.id
+        }),
+      { requestId: randomUUID(), operator: input.operator }
+    );
   }
 
   private async findOrCollectMyrCrossRate(input: ResolveFinanceRateInput) {
-    const existing = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
-      where: {
-        currency: 'MYR',
-        source: 'ecb_cross',
-        expiresAt: { gt: input.occurredAt }
-      },
-      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-    });
+    const existing = await this.queryRepository.findMyrAutomaticSnapshot(input.occurredAt);
     return existing ?? this.collectMyrCrossRate(input);
   }
 
@@ -245,27 +251,27 @@ export class IdBusinessV2FinanceFxService {
     if (cny.businessDate !== myr.businessDate) {
       throw new ServiceUnavailableException('ECB CNY 与 MYR 参考汇率日期不一致');
     }
-    const crossRate = cny.rate
-      .div(myr.rate)
-      .toDecimalPlaces(8, PrismaNamespace.Decimal.ROUND_HALF_UP);
-    return this.prisma.idBusinessV2FinanceFxRateSnapshot.create({
-      data: {
-        id: randomUUID(),
-        currency: 'MYR',
-        rateToCny: crossRate,
-        source: 'ecb_cross',
-        sourceReference: 'ECB EXR.D.CNY.EUR.SP00.A / EXR.D.MYR.EUR.SP00.A',
-        sourceEvidence: {
-          cnyPerEur: cny.rate.toString(),
-          myrPerEur: myr.rate.toString(),
-          referenceDate: cny.businessDate
-        },
-        businessDate: new Date(`${cny.businessDate}T00:00:00.000Z`),
-        capturedAt: new Date(),
-        expiresAt: new Date(Date.now() + 36 * 60 * 60 * 1000),
-        createdByUserId: input.operator?.id
-      }
-    });
+    const crossRate = cny.rate.div(myr.rate);
+    return this.commandTransactions.execute(
+      (tx) =>
+        this.commandRepository.createFxSnapshot(tx, {
+          id: randomUUID(),
+          currency: 'MYR',
+          rateToCny: crossRate.toString(),
+          source: 'ecb_cross',
+          sourceReference: 'ECB EXR.D.CNY.EUR.SP00.A / EXR.D.MYR.EUR.SP00.A',
+          sourceEvidence: {
+            cnyPerEur: cny.rate.toString(),
+            myrPerEur: myr.rate.toString(),
+            referenceDate: cny.businessDate
+          },
+          businessDate: new Date(`${cny.businessDate}T00:00:00.000Z`),
+          capturedAt: new Date(),
+          expiresAt: new Date(Date.now() + 36 * 60 * 60 * 1000),
+          createdByUserId: input.operator?.id
+        }),
+      { requestId: randomUUID(), operator: input.operator }
+    );
   }
 
   private async fetchEcbReferenceRate(currency: 'CNY' | 'MYR') {
@@ -292,7 +298,7 @@ export class IdBusinessV2FinanceFxService {
     if (!businessDate || !value) {
       throw new ServiceUnavailableException(`ECB ${currency}/EUR 响应缺少有效数据`);
     }
-    return { businessDate, rate: new PrismaNamespace.Decimal(value) };
+    return { businessDate, rate: Rate8.from(value) };
   }
 
   private parseCsvLine(line: string) {
@@ -311,21 +317,19 @@ export class IdBusinessV2FinanceFxService {
   }
 
   private writeAudit(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     operator: AuthenticatedUser | undefined,
     objectId: string,
-    afterData: Prisma.InputJsonValue
+    afterData: V2JsonDocument
   ) {
-    return tx.auditLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2_finance',
-        action: 'id_business_v2.finance.fx_rate.manual',
-        objectType: 'id_business_v2_finance_fx_rate_snapshot',
-        objectId,
-        afterData,
-        remark: '记录财务人工汇率'
-      }
+    return this.audit.append(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2_finance',
+      action: 'id_business_v2.finance.fx_rate.manual',
+      objectType: 'id_business_v2_finance_fx_rate_snapshot',
+      objectId,
+      afterData,
+      remark: '记录财务人工汇率'
     });
   }
 }

@@ -2,6 +2,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ExchangeRatesService } from './id-business-v2-exchange-rates.service';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 const entryId = '11111111-1111-4111-8111-111111111111';
 const operator = {
@@ -55,7 +57,11 @@ describe('IdBusinessV2ExchangeRatesService', () => {
       findUnique: vi.fn()
     }
   };
-  const service = new IdBusinessV2ExchangeRatesService(prisma as never);
+  const service = new IdBusinessV2ExchangeRatesService(
+    new IdBusinessV2ExchangeRateRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never),
+    new V2TransactionalAuditService()
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -102,7 +108,7 @@ describe('IdBusinessV2ExchangeRatesService', () => {
     });
     expect(prisma.idBusinessV2ExchangeRateEntry.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        orderBy: [{ createdAt: 'asc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         where: expect.objectContaining({
           recordedAt: {
             gte: new Date('2026-07-26T00:00:00.000Z'),
@@ -128,13 +134,13 @@ describe('IdBusinessV2ExchangeRatesService', () => {
 
     expect(tx.idBusinessV2ExchangeRateEntry.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        binanceMerchantBuyRateToRmb: decimal('6.7'),
-        binanceMerchantSellRateToRmb: decimal('6.8'),
-        okxMerchantBuyRateToRmb: decimal('6.72'),
-        okxMerchantSellRateToRmb: decimal('6.82'),
-        combinedMerchantBuyAverageRateToRmb: decimal('6.71'),
-        combinedMerchantSellAverageRateToRmb: decimal('6.81'),
-        midRateToRmb: decimal('6.76'),
+        binanceMerchantBuyRateToRmb: '6.7',
+        binanceMerchantSellRateToRmb: '6.8',
+        okxMerchantBuyRateToRmb: '6.72',
+        okxMerchantSellRateToRmb: '6.82',
+        combinedMerchantBuyAverageRateToRmb: '6.71',
+        combinedMerchantSellAverageRateToRmb: '6.81',
+        midRateToRmb: '6.76',
         recordedAt,
         remark: '晚班手工记录',
         createdByUserId: operator.id

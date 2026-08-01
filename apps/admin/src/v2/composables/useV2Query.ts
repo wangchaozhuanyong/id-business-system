@@ -8,11 +8,12 @@ import {
   readonly,
   ref,
   shallowRef,
+  watch,
   type ComputedRef,
   type Ref
 } from 'vue';
 import { expandV2DataScopes, type V2DataScope } from '@apple-business/shared';
-import { AUTH_IDENTITY_CHANGED_EVENT, getAuthIdentityEpoch } from '@/auth/session';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { markV2RouteDataError, markV2RouteDataReady } from '@/runtime/performance';
 import { abortAllV2Requests } from '@/v2/api/requestControl';
 import { getV2ModuleDefinition, type V2ModuleKey } from '@/v2/config/modules';
@@ -78,6 +79,10 @@ interface V2QueryEntry<T = unknown> {
 const queryCache = new Map<string, V2QueryEntry>();
 const MAX_INACTIVE_QUERY_ENTRIES = 200;
 const INVALIDATION_COALESCE_MS = 100;
+
+function getAuthIdentityEpoch() {
+  return sessionCoordinator.identityEpoch.value;
+}
 let invalidationTimer: ReturnType<typeof setTimeout> | undefined;
 let cacheIdentityEpoch = getAuthIdentityEpoch();
 const mutableV2QueryActivity = reactive({
@@ -368,7 +373,7 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     scheduleEntryDeadline(entry);
   }
 
-  async function execute(force: boolean) {
+  async function execute(force: boolean, retryAfterCacheReset = true) {
     const cacheKey = resolveKey(options.scope, options.key);
     const entry = getEntry<T>(cacheKey, options.scope);
     subscribe(entry);
@@ -387,6 +392,9 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
       // 错误已写入当前查询条目；有旧数据时继续保留旧内容。
     } finally {
       if (subscribedEntry === entry) syncFromEntry(entry);
+    }
+    if (retryAfterCacheReset && queryCache.get(cacheKey) !== entry) {
+      return execute(force, false);
     }
     return entry.hasData ? entry.data : data.value;
   }
@@ -486,6 +494,10 @@ export function useV2ModuleQuery<T>(
     getRevalidateAt: options.getRevalidateAt
   });
   let mounted = false;
+
+  watch(query.hasCurrentData, (hasCurrentData) => {
+    if (hasCurrentData) markV2RouteDataReady(options.moduleKey, 'network');
+  });
 
   async function ensureModuleFresh() {
     const hadCurrentData = query.hasCurrentData.value;
@@ -612,9 +624,7 @@ function resetQueryCache(identityEpoch: number) {
 }
 
 export function clearV2QueryCache() {
-  resetQueryCache(getAuthIdentityEpoch());
+  resetQueryCache(sessionCoordinator.identityEpoch.value);
 }
 
-if (typeof window !== 'undefined') {
-  window.addEventListener(AUTH_IDENTITY_CHANGED_EVENT, ensureCacheIdentity);
-}
+sessionCoordinator.subscribeIdentityChange(ensureCacheIdentity);

@@ -1,6 +1,6 @@
 import { effectScope, ref } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { notifyAuthIdentityChanged } from '@/auth/session';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import {
   clearV2QueryCache,
   createV2QueryKey,
@@ -203,9 +203,38 @@ describe('V2 query cache', () => {
     });
     expect(getV2QueryData('orders', 'page-1')).toEqual({ items: ['private-order'] });
 
-    notifyAuthIdentityChanged('identity-switched');
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched' });
 
     expect(getV2QueryData('orders', 'page-1')).toBeUndefined();
+  });
+
+  it('retries once against the current cache after identity cleanup replaces an in-flight entry', async () => {
+    const staleRequest = createDeferred<{ items: string[] }>();
+    const query = vi
+      .fn<() => Promise<{ items: string[] }>>()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockResolvedValueOnce({ items: ['current-identity'] });
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({
+        scope: 'orders',
+        key: 'identity-race',
+        freshnessPolicy: 'event-driven',
+        query
+      })
+    );
+    if (!result) return;
+
+    const pending = result.ensureFresh();
+    await Promise.resolve();
+    clearV2QueryCache();
+    staleRequest.resolve({ items: ['previous-identity'] });
+    await pending;
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(result.data.value).toEqual({ items: ['current-identity'] });
+    expect(result.hasCurrentData.value).toBe(true);
+    scope.stop();
   });
 
   it('keeps a clean cache hit indefinitely instead of expiring after the old TTL', async () => {

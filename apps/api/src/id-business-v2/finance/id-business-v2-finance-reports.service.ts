@@ -1,14 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import {
-  IdBusinessV2FinanceAccountCode,
-  IdBusinessV2FinanceCurrency,
-  Prisma as PrismaNamespace
-} from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2Decimal, toV2DecimalString } from '../decimal-policy';
+import type { IdBusinessV2FinanceAccountCode, IdBusinessV2FinanceCurrency } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { Amount4, Rate8, V2CommandTransactionManager } from '../runtime/public-api';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
 import { getIdBusinessV2SettlementPlatformReport } from './id-business-v2-finance-settlement-platform-report';
+import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
 
 interface FinanceReportQuery {
   dateFrom?: string;
@@ -32,7 +28,10 @@ const EXPENSE_CODES = [
 ] as const;
 @Injectable()
 export class IdBusinessV2FinanceReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly commandTransactions: V2CommandTransactionManager,
+    private readonly repository: IdBusinessV2FinanceReportRepository
+  ) {}
 
   async overview(query: FinanceReportQuery) {
     const [
@@ -62,136 +61,86 @@ export class IdBusinessV2FinanceReportsService {
 
   async profitLoss(query: FinanceReportQuery) {
     const where = this.buildLineWhere(query);
-    const grouped = await this.prisma.idBusinessV2FinanceJournalLine.groupBy({
-      by: ['accountCode', 'direction'],
-      where,
-      _sum: { amountCny: true }
-    });
+    const grouped = await this.repository.groupProfitLoss(where);
     const amount = (code: IdBusinessV2FinanceAccountCode, natural: 'debit' | 'credit') => {
       const naturalTotal = grouped
         .filter((item) => item.accountCode === code && item.direction === natural)
-        .reduce(
-          (sum, item) => sum.add(toV2Decimal(item._sum.amountCny ?? 0)),
-          new PrismaNamespace.Decimal(0)
-        );
+        .reduce((sum, item) => sum.add(item.amountCny), Amount4.zero());
       const opposite = natural === 'debit' ? 'credit' : 'debit';
       const oppositeTotal = grouped
         .filter((item) => item.accountCode === code && item.direction === opposite)
-        .reduce(
-          (sum, item) => sum.add(toV2Decimal(item._sum.amountCny ?? 0)),
-          new PrismaNamespace.Decimal(0)
-        );
-      return roundV2Decimal(naturalTotal.sub(oppositeTotal));
+        .reduce((sum, item) => sum.add(item.amountCny), Amount4.zero());
+      return naturalTotal.sub(oppositeTotal);
     };
     const salesRevenue = amount('sales_revenue', 'credit');
     const values = new Map(EXPENSE_CODES.map((code) => [code, amount(code, 'debit')] as const));
     const realizedFx = amount('realized_fx_gain_loss', 'credit');
     const totalExpense = [...values.values()].reduce(
       (sum, value) => sum.add(value),
-      new PrismaNamespace.Decimal(0)
+      Amount4.zero()
     );
-    const estimated = await this.prisma.idBusinessV2Order.aggregate({
-      where: {
-        status: { in: ['pending', 'waiting_external', 'processing'] },
-        deletedAt: null,
-        openedAt: this.parseOccurredAt(query.dateFrom, query.dateTo)
-      },
-      _sum: { profitAmount: true }
-    });
+    const estimated = await this.repository.estimatedPendingProfit(
+      this.parseOccurredAt(query.dateFrom, query.dateTo)
+    );
     return {
-      salesRevenueCny: toV2DecimalString(salesRevenue),
-      platformFeeCny: toV2DecimalString(values.get('platform_fee') ?? 0),
-      giftCardCostCny: toV2DecimalString(values.get('gift_card_cost') ?? 0),
-      idCostCny: toV2DecimalString(values.get('id_cost') ?? 0),
-      refundLossCny: toV2DecimalString(values.get('refund_loss') ?? 0),
-      redemptionLossCny: toV2DecimalString(values.get('gift_card_redemption_loss') ?? 0),
-      balanceLossCny: toV2DecimalString(values.get('balance_loss') ?? 0),
-      idPurchaseLossCny: toV2DecimalString(values.get('id_purchase_loss') ?? 0),
-      operatingExpenseCny: toV2DecimalString(values.get('operating_expense') ?? 0),
-      realizedFxGainLossCny: toV2DecimalString(realizedFx),
-      netProfitCny: toV2DecimalString(salesRevenue.sub(totalExpense).add(realizedFx)),
-      estimatedProfitCny: toV2DecimalString(estimated._sum.profitAmount ?? 0)
+      salesRevenueCny: salesRevenue.toString(),
+      platformFeeCny: (values.get('platform_fee') ?? Amount4.zero()).toString(),
+      giftCardCostCny: (values.get('gift_card_cost') ?? Amount4.zero()).toString(),
+      idCostCny: (values.get('id_cost') ?? Amount4.zero()).toString(),
+      refundLossCny: (values.get('refund_loss') ?? Amount4.zero()).toString(),
+      redemptionLossCny: (values.get('gift_card_redemption_loss') ?? Amount4.zero()).toString(),
+      balanceLossCny: (values.get('balance_loss') ?? Amount4.zero()).toString(),
+      idPurchaseLossCny: (values.get('id_purchase_loss') ?? Amount4.zero()).toString(),
+      operatingExpenseCny: (values.get('operating_expense') ?? Amount4.zero()).toString(),
+      realizedFxGainLossCny: realizedFx.toString(),
+      netProfitCny: salesRevenue.sub(totalExpense).add(realizedFx).toString(),
+      estimatedProfitCny: estimated.toString()
     };
   }
 
   async currencyBreakdown(query: FinanceReportQuery) {
-    const where: Prisma.IdBusinessV2FinanceJournalLineWhereInput = {
-      ...this.buildLineWhere(query),
-      accountCode: 'cash'
-    };
-    const grouped = await this.prisma.idBusinessV2FinanceJournalLine.groupBy({
-      by: ['currency', 'direction'],
-      where,
-      _sum: { amountOriginal: true }
-    });
+    const grouped = await this.repository.groupCashFlow(this.buildLineWhere(query));
     const latestRates = await this.loadLatestRates();
     return (['CNY', 'MYR', 'USDT'] as const).map((currency) => {
       const income = grouped
         .filter((item) => item.currency === currency && item.direction === 'debit')
-        .reduce(
-          (sum, item) => sum.add(toV2Decimal(item._sum.amountOriginal ?? 0)),
-          new PrismaNamespace.Decimal(0)
-        );
+        .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
       const expense = grouped
         .filter((item) => item.currency === currency && item.direction === 'credit')
-        .reduce(
-          (sum, item) => sum.add(toV2Decimal(item._sum.amountOriginal ?? 0)),
-          new PrismaNamespace.Decimal(0)
-        );
+        .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
       const net = income.sub(expense);
       const rate = latestRates.get(currency);
       return {
         currency,
-        income: toV2DecimalString(income),
-        expense: toV2DecimalString(expense),
-        netCashFlow: toV2DecimalString(net),
+        income: income.toString(),
+        expense: expense.toString(),
+        netCashFlow: net.toString(),
         latestRateToCny: rate?.toString() ?? null,
-        netCashFlowCny: rate ? toV2DecimalString(net.mul(rate)) : null
+        netCashFlowCny: rate ? rate.apply(net).toString() : null
       };
     });
   }
 
   async settlementPlatformReport(query: FinanceReportQuery) {
-    return getIdBusinessV2SettlementPlatformReport(this.prisma, query);
+    return getIdBusinessV2SettlementPlatformReport(this.repository, query);
   }
   async assets() {
-    const [financeAccounts, supplierWallets, accountAssets, pendingRefunds, latestRates] =
-      await Promise.all([
-        this.prisma.idBusinessV2FinanceAccount.findMany({
-          where: { status: 'active' },
-          select: { currency: true, currentBalance: true, currentBalanceCny: true }
-        }),
-        this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-          where: { status: 'active' },
-          select: { currency: true, currentBalance: true, currentBalanceCny: true }
-        }),
-        this.prisma.idBusinessV2Account.aggregate({
-          where: { deletedAt: null, lossReportedAt: null },
-          _sum: { balanceCostAmount: true, purchaseCost: true }
-        }),
-        this.prisma.idBusinessV2GiftCard.aggregate({
-          where: { supplierRefundStatus: 'pending' },
-          _sum: { supplierRefundAmountCny: true }
-        }),
-        this.loadLatestRates()
-      ]);
-    const unsoldId = await this.prisma.idBusinessV2Account.aggregate({
-      where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
-      _sum: { purchaseCost: true }
-    });
+    const [
+      { financeAccounts, supplierWallets, giftCardInventory, pendingRefunds, unsoldIds },
+      latestRates
+    ] = await Promise.all([this.repository.loadAssets(), this.loadLatestRates()]);
     const cashBook = financeAccounts.reduce(
-      (sum, item) => sum.add(toV2Decimal(item.currentBalanceCny)),
-      new PrismaNamespace.Decimal(0)
+      (sum, item) => sum.add(item.currentBalanceCny),
+      Amount4.zero()
     );
     const supplierBook = supplierWallets.reduce(
-      (sum, item) => sum.add(toV2Decimal(item.currentBalanceCny)),
-      new PrismaNamespace.Decimal(0)
+      (sum, item) => sum.add(item.currentBalanceCny),
+      Amount4.zero()
     );
     const cashLatest = this.latestValuation(financeAccounts, latestRates);
     const supplierLatest = this.latestValuation(supplierWallets, latestRates);
-    const giftCardInventory = toV2Decimal(accountAssets._sum.balanceCostAmount ?? 0);
-    const idInventory = toV2Decimal(unsoldId._sum.purchaseCost ?? 0);
-    const refundReceivable = toV2Decimal(pendingRefunds._sum.supplierRefundAmountCny ?? 0);
+    const idInventory = unsoldIds;
+    const refundReceivable = pendingRefunds;
     const totalBook = cashBook
       .add(supplierBook)
       .add(giftCardInventory)
@@ -204,14 +153,14 @@ export class IdBusinessV2FinanceReportsService {
       ? cashLatest.add(supplierLatest).add(giftCardInventory).add(idInventory).add(refundReceivable)
       : null;
     return {
-      cashCny: toV2DecimalString(cashBook),
-      supplierPrepaymentCny: toV2DecimalString(supplierBook),
-      giftCardInventoryCny: toV2DecimalString(giftCardInventory),
-      unsoldIdInventoryCny: toV2DecimalString(idInventory),
-      supplierRefundReceivableCny: toV2DecimalString(refundReceivable),
-      totalBookValueCny: toV2DecimalString(totalBook),
-      totalLatestValuationCny: latest ? toV2DecimalString(latest) : null,
-      unrealizedFxChangeCny: latest ? toV2DecimalString(latest.sub(totalBook)) : null
+      cashCny: cashBook.toString(),
+      supplierPrepaymentCny: supplierBook.toString(),
+      giftCardInventoryCny: giftCardInventory.toString(),
+      unsoldIdInventoryCny: idInventory.toString(),
+      supplierRefundReceivableCny: refundReceivable.toString(),
+      totalBookValueCny: totalBook.toString(),
+      totalLatestValuationCny: latest ? latest.toString() : null,
+      unrealizedFxChangeCny: latest ? latest.sub(totalBook).toString() : null
     };
   }
 
@@ -235,60 +184,8 @@ export class IdBusinessV2FinanceReportsService {
         amountCny: null
       });
     }
-    const [completedOrders, missingPurchaseEvidence, pendingRefunds, wallets] = await Promise.all([
-      this.prisma.idBusinessV2Order.findMany({
-        where: {
-          status: 'completed',
-          profitAmount: { not: null },
-          deletedAt: null,
-          openedAt: this.parseOccurredAt(query.dateFrom, query.dateTo)
-        },
-        select: { id: true, orderNo: true, profitAmount: true },
-        orderBy: [{ statusChangedAt: 'desc' }, { id: 'desc' }],
-        take: 50
-      }),
-      this.prisma.idBusinessV2Account.findMany({
-        where: {
-          purchaseCurrency: { not: 'CNY' },
-          purchaseCost: { gt: 0 },
-          purchaseFxSnapshotId: null,
-          deletedAt: null
-        },
-        select: { id: true, appleIdMasked: true, purchaseCost: true },
-        take: 50
-      }),
-      this.prisma.idBusinessV2GiftCard.findMany({
-        where: { supplierRefundStatus: 'pending' },
-        select: { id: true, codeMasked: true, supplierRefundAmountCny: true },
-        take: 50
-      }),
-      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-        include: {
-          ledgerEntries: { orderBy: { createdAt: 'desc' }, take: 1 }
-        }
-      })
-    ]);
-    const orderLines = completedOrders.length
-      ? await this.prisma.idBusinessV2FinanceJournalLine.findMany({
-          where: {
-            journal: {
-              is: {
-                sourceType: 'order',
-                sourceId: { in: completedOrders.map((order) => order.id) }
-              }
-            },
-            accountCode: {
-              in: ['sales_revenue', ...EXPENSE_CODES, 'realized_fx_gain_loss']
-            }
-          },
-          select: {
-            accountCode: true,
-            direction: true,
-            amountCny: true,
-            journal: { select: { sourceId: true } }
-          }
-        })
-      : [];
+    const { completedOrders, missingPurchaseEvidence, pendingRefunds, wallets, orderLines } =
+      await this.repository.loadReconciliation(this.parseOccurredAt(query.dateFrom, query.dateTo));
     for (const order of completedOrders) {
       const lines = orderLines.filter((line) => line.journal.sourceId === order.id);
       if (lines.length === 0) {
@@ -298,12 +195,12 @@ export class IdBusinessV2FinanceReportsService {
           sourceType: 'order',
           sourceId: order.id,
           message: `订单 ${order.orderNo} 尚未生成财务日记`,
-          amountCny: order.profitAmount ? toV2DecimalString(order.profitAmount) : null
+          amountCny: order.profitAmount?.toString() ?? null
         });
         continue;
       }
       const net = lines.reduce((total, line) => {
-        const amountCny = toV2Decimal(line.amountCny);
+        const amountCny = line.amountCny;
         const naturalCredit =
           line.accountCode === 'sales_revenue' || line.accountCode === 'realized_fx_gain_loss';
         const positive =
@@ -313,8 +210,8 @@ export class IdBusinessV2FinanceReportsService {
           return positive ? total.add(amountCny) : total.sub(amountCny);
         }
         return line.direction === 'debit' ? total.sub(amountCny) : total.add(amountCny);
-      }, new PrismaNamespace.Decimal(0));
-      const difference = net.sub(toV2Decimal(order.profitAmount ?? 0)).abs();
+      }, Amount4.zero());
+      const difference = net.sub(order.profitAmount ?? 0).abs();
       if (difference.gt('0.01')) {
         issues.push({
           code: 'order_profit_difference',
@@ -322,7 +219,7 @@ export class IdBusinessV2FinanceReportsService {
           sourceType: 'order',
           sourceId: order.id,
           message: `订单 ${order.orderNo} 的逐单利润与财务分解不一致`,
-          amountCny: toV2DecimalString(difference)
+          amountCny: difference.toString()
         });
       }
     }
@@ -333,7 +230,7 @@ export class IdBusinessV2FinanceReportsService {
         sourceType: 'account',
         sourceId: account.id,
         message: `${account.appleIdMasked} 缺少采购汇率快照`,
-        amountCny: toV2DecimalString(account.purchaseCost)
+        amountCny: account.purchaseCost.toString()
       });
     }
     for (const card of pendingRefunds) {
@@ -343,21 +240,19 @@ export class IdBusinessV2FinanceReportsService {
         sourceType: 'gift_card',
         sourceId: card.id,
         message: `礼品卡 ${card.codeMasked} 的卡商退款尚未闭环`,
-        amountCny: toV2DecimalString(card.supplierRefundAmountCny)
+        amountCny: card.supplierRefundAmountCny.toString()
       });
     }
     for (const wallet of wallets) {
       const latest = wallet.ledgerEntries[0];
-      if (latest && !toV2Decimal(latest.balanceAfter).equals(toV2Decimal(wallet.currentBalance))) {
+      if (latest && !latest.balanceAfter.equals(wallet.currentBalance)) {
         issues.push({
           code: 'supplier_balance_difference',
           severity: 'error',
           sourceType: 'supplier_wallet',
           sourceId: wallet.id,
           message: '供应商钱包余额与最后一条流水不一致',
-          amountCny: toV2DecimalString(
-            toV2Decimal(wallet.currentBalanceCny).sub(toV2Decimal(latest.balanceAfterCny)).abs()
-          )
+          amountCny: wallet.currentBalanceCny.sub(latest.balanceAfterCny).abs().toString()
         });
       }
     }
@@ -394,17 +289,12 @@ export class IdBusinessV2FinanceReportsService {
   }
 
   async getSettings() {
-    const settings = await this.prisma.idBusinessV2FinanceSettings.upsert({
-      where: { id: 1 },
-      update: {},
-      create: {
-        id: 1,
-        baseCurrency: 'CNY',
-        timezone: 'Asia/Kuala_Lumpur',
-        historyStatus: 'incomplete',
-        historyNote: '等待确认期初余额和系统外历史开支'
-      }
-    });
+    const existing = await this.repository.findSettings();
+    const settings =
+      existing ??
+      (await this.commandTransactions.execute((tx) => this.repository.ensureSettings(tx), {
+        requestId: randomUUID()
+      }));
     return {
       baseCurrency: settings.baseCurrency,
       timezone: settings.timezone,
@@ -415,29 +305,20 @@ export class IdBusinessV2FinanceReportsService {
     };
   }
 
-  private buildLineWhere(
-    query: FinanceReportQuery
-  ): Prisma.IdBusinessV2FinanceJournalLineWhereInput {
+  private buildLineWhere(query: FinanceReportQuery) {
     return {
       currency: query.currency
         ? (query.currency.toUpperCase() as IdBusinessV2FinanceCurrency)
         : undefined,
       financeAccountId: query.financeAccountId || undefined,
-      supplierAccount: query.supplierOptionId
-        ? { is: { supplierOptionId: query.supplierOptionId } }
-        : undefined,
-      journal: {
-        is: {
-          businessDate: this.parseBusinessDate(query.dateFrom, query.dateTo),
-          journalType: query.journalType
-            ? (query.journalType as Prisma.EnumIdBusinessV2FinanceJournalTypeFilter)
-            : undefined
-        }
-      }
+      supplierOptionId: query.supplierOptionId || undefined,
+      journalType: query.journalType || undefined,
+      dateFrom: this.parseBusinessDate(query.dateFrom, query.dateTo)?.gte,
+      dateTo: this.parseBusinessDate(query.dateFrom, query.dateTo)?.lte
     };
   }
 
-  private parseBusinessDate(from?: string, to?: string): Prisma.DateTimeFilter | undefined {
+  private parseBusinessDate(from?: string, to?: string) {
     if (!from && !to) return undefined;
     return {
       gte: from ? normalizeFinanceDate(`${from}T00:00:00.000Z`, '开始日期') : undefined,
@@ -445,7 +326,7 @@ export class IdBusinessV2FinanceReportsService {
     };
   }
 
-  private parseOccurredAt(from?: string, to?: string): Prisma.DateTimeFilter | undefined {
+  private parseOccurredAt(from?: string, to?: string) {
     if (!from && !to) return undefined;
     return {
       gte: from ? normalizeFinanceDate(`${from}T00:00:00+08:00`, '开始日期') : undefined,
@@ -455,37 +336,27 @@ export class IdBusinessV2FinanceReportsService {
 
   private async loadLatestRates() {
     const rows = await this.loadLatestRateRows();
-    const rates = new Map<IdBusinessV2FinanceCurrency, PrismaNamespace.Decimal>([
-      ['CNY', new PrismaNamespace.Decimal(1)]
-    ]);
-    for (const [currency, row] of rows) rates.set(currency, toV2Decimal(row.rateToCny));
+    const rates = new Map<IdBusinessV2FinanceCurrency, Rate8>([['CNY', Rate8.one()]]);
+    for (const [currency, row] of rows) {
+      rates.set(currency, row.rateToCny);
+    }
     return rates;
   }
 
   private async loadLatestRateRows() {
-    const rows = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findMany({
-      where: { currency: { in: ['MYR', 'USDT'] } },
-      orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-    });
-    const map = new Map<'MYR' | 'USDT', (typeof rows)[number]>();
-    for (const row of rows) {
-      if ((row.currency === 'MYR' || row.currency === 'USDT') && !map.has(row.currency)) {
-        map.set(row.currency, row);
-      }
-    }
-    return map;
+    return this.repository.loadLatestRateRows();
   }
 
   private latestValuation(
     items: Array<{
       currency: IdBusinessV2FinanceCurrency;
-      currentBalance: PrismaNamespace.Decimal;
+      currentBalance: Amount4;
     }>,
-    rates: Map<IdBusinessV2FinanceCurrency, PrismaNamespace.Decimal>
+    rates: Map<IdBusinessV2FinanceCurrency, Rate8>
   ) {
     return items.reduce((sum, item) => {
       const rate = rates.get(item.currency);
-      return rate ? sum.add(toV2Decimal(item.currentBalance).mul(rate)) : sum;
-    }, new PrismaNamespace.Decimal(0));
+      return rate ? sum.add(rate.apply(item.currentBalance)) : sum;
+    }, Amount4.zero());
   }
 }

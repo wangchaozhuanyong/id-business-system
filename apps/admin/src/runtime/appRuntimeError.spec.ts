@@ -1,15 +1,30 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/api/apiError';
 import { shouldIgnoreRuntimeError } from './appRuntimeError';
 
 describe('V2 app runtime error classification', () => {
-  it.each([
-    'Failed to fetch dynamically imported module: /assets/V2OrdersView.js',
-    'error loading dynamically imported module',
-    'Importing a module script failed.',
-    'Unable to preload CSS for /assets/V2OrdersView.css',
-    `Couldn't resolve component "default" at "/v2/orders"`
-  ])('leaves route resource failures to the router recovery boundary: %s', (message) => {
-    expect(shouldIgnoreRuntimeError(new Error(message))).toBe(true);
+  it('ignores typed API failures that belong to the request/session boundary', () => {
+    expect(
+      shouldIgnoreRuntimeError(
+        new ApiError('登录服务暂时不可用', {
+          code: 'AUTH_DEPENDENCY_UNAVAILABLE',
+          kind: 'transient',
+          retryable: true,
+          status: 503
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('does not classify route failures from message text', () => {
+    expect(
+      shouldIgnoreRuntimeError(
+        new Error('Failed to fetch dynamically imported module: /assets/V2OrdersView.js')
+      )
+    ).toBe(false);
+    expect(
+      shouldIgnoreRuntimeError(new Error(`Couldn't resolve component "default" at "/v2/orders"`))
+    ).toBe(false);
   });
 
   it('keeps real application errors fatal', () => {

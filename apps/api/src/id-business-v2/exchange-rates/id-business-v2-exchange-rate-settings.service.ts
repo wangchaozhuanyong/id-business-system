@@ -1,23 +1,31 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
+import {
+  Amount4,
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService
+} from '../runtime/public-api';
 import type { UpdateIdBusinessV2ExchangeRateSettingsDto } from './dto/update-id-business-v2-exchange-rate-settings.dto';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
-const SETTINGS_ID = 1;
 const ALLOWED_INTERVALS = new Set([5, 15, 30, 60, 180, 360, 720, 1440]);
-const MAX_TARGET_AMOUNT = new Prisma.Decimal('1000000');
+const MAX_TARGET_AMOUNT = Amount4.from('1000000');
 
 interface ClaimedSettings {
-  targetAmountRmb: Prisma.Decimal;
+  targetAmountRmb: Amount4;
   intervalMinutes: number;
   nextRunAt: Date;
 }
 
 @Injectable()
 export class IdBusinessV2ExchangeRateSettingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly repository: IdBusinessV2ExchangeRateRepository,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService
+  ) {}
 
   isNetworkEnabled() {
     return process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED !== 'false';
@@ -32,7 +40,11 @@ export class IdBusinessV2ExchangeRateSettingsService {
     return this.ensureSettings();
   }
 
-  async update(dto: UpdateIdBusinessV2ExchangeRateSettingsDto, operator?: AuthenticatedUser) {
+  async update(
+    dto: UpdateIdBusinessV2ExchangeRateSettingsDto,
+    operator?: AuthenticatedUser,
+    requestId = 'exchange-rate-settings'
+  ) {
     if (!operator?.id) {
       throw new BadRequestException('无法识别当前操作人');
     }
@@ -48,28 +60,16 @@ export class IdBusinessV2ExchangeRateSettingsService {
     const targetAmountRmb = this.parseTargetAmount(dto.targetAmountRmb);
     const now = new Date();
 
-    const settings = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.idBusinessV2ExchangeRateSettings.upsert({
-        where: { id: SETTINGS_ID },
-        create: {
-          id: SETTINGS_ID,
+    const settings = await this.transactionManager.execute(
+      async (tx) => {
+        const updated = await this.repository.upsertSettings(tx, {
           autoEnabled: dto.autoEnabled,
           intervalMinutes: dto.intervalMinutes,
-          targetAmountRmb,
+          targetAmountRmb: targetAmountRmb.toString(),
           nextRunAt: dto.autoEnabled ? now : null,
           updatedByUserId: operator.id
-        },
-        update: {
-          autoEnabled: dto.autoEnabled,
-          intervalMinutes: dto.intervalMinutes,
-          targetAmountRmb,
-          nextRunAt: dto.autoEnabled ? now : null,
-          updatedByUserId: operator.id
-        }
-      });
-
-      await tx.auditLog.create({
-        data: {
+        });
+        await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.settings.update',
@@ -78,56 +78,68 @@ export class IdBusinessV2ExchangeRateSettingsService {
             autoEnabled: updated.autoEnabled,
             intervalMinutes: updated.intervalMinutes,
             targetAmountRmb: updated.targetAmountRmb.toString(),
-            nextRunAt: updated.nextRunAt
+            nextRunAt: updated.nextRunAt?.toISOString() ?? null
           },
           remark: updated.autoEnabled
             ? 'V2 汇率设置已保存，并安排立即采集'
             : 'V2 汇率自动采集已关闭'
-        }
-      });
-      return updated;
-    });
+        });
+        return updated;
+      },
+      { requestId, operator, retryMode: 'none' }
+    );
 
     return this.toResponse(settings);
   }
 
-  async claimDueSchedule(): Promise<ClaimedSettings | null> {
-    const rows = await this.prisma.$queryRaw<ClaimedSettings[]>(Prisma.sql`
-      UPDATE "id_business_v2_exchange_rate_settings"
-      SET
-        "next_run_at" = to_timestamp(
-          (
-            FLOOR(
-              EXTRACT(EPOCH FROM clock_timestamp())
-              / ("interval_minutes" * 60)
-            ) + 1
-          ) * ("interval_minutes" * 60)
-        ),
-        "updated_at" = clock_timestamp()
-      WHERE
-        "id" = 1
-        AND "auto_enabled" = true
-        AND "next_run_at" <= clock_timestamp()
-      RETURNING
-        "target_amount_rmb" AS "targetAmountRmb",
-        "interval_minutes" AS "intervalMinutes",
-        "next_run_at" AS "nextRunAt"
-    `);
-    return rows[0] ?? null;
+  async claimDueSchedule(
+    requestId = 'exchange-rate-schedule-claim'
+  ): Promise<ClaimedSettings | null> {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const row = await this.repository.claimDueSchedule(tx);
+        if (!row) return null;
+        await this.audit.append(tx, {
+          module: 'id_business_v2',
+          action: 'id_business_v2.exchange_rate.schedule.claim',
+          objectType: 'id_business_v2_exchange_rate_settings',
+          afterData: {
+            intervalMinutes: row.intervalMinutes,
+            targetAmountRmb: row.targetAmountRmb.toString(),
+            nextRunAt: row.nextRunAt.toISOString()
+          },
+          remark: 'V2 汇率定时任务已原子领取'
+        });
+        return row;
+      },
+      { requestId, retryMode: 'none' }
+    );
   }
 
   private async ensureSettings() {
-    return this.prisma.idBusinessV2ExchangeRateSettings.upsert({
-      where: { id: SETTINGS_ID },
-      create: {
-        id: SETTINGS_ID,
-        autoEnabled: true,
-        intervalMinutes: 30,
-        targetAmountRmb: new Prisma.Decimal('5000'),
-        nextRunAt: new Date()
-      },
-      update: {}
-    });
+    const existing = await this.repository.findSettings();
+    if (existing) return existing;
+    try {
+      const created = await this.transactionManager.execute(
+        async (tx) => {
+          const row = await this.repository.createDefaultSettings(tx, new Date());
+          await this.audit.append(tx, {
+            module: 'id_business_v2',
+            action: 'id_business_v2.exchange_rate.settings.initialize',
+            objectType: 'id_business_v2_exchange_rate_settings',
+            afterData: { autoEnabled: true, intervalMinutes: 30, targetAmountRmb: '5000' },
+            remark: 'V2 汇率设置初始化'
+          });
+          return row;
+        },
+        { requestId: 'exchange-rate-settings-initialize', retryMode: 'none' }
+      );
+      return created;
+    } catch {
+      const raced = await this.repository.findSettings();
+      if (raced) return raced;
+      throw new ServiceUnavailableException('汇率设置暂时无法初始化');
+    }
   }
 
   private parseTargetAmount(value: unknown) {
@@ -136,23 +148,22 @@ export class IdBusinessV2ExchangeRateSettingsService {
     if (!V2_DECIMAL_PATTERN.test(normalized)) {
       throw new BadRequestException(`目标成交额必须是最多 ${V2_DECIMAL_PLACES} 位小数的正数`);
     }
-    let amount: Prisma.Decimal;
+    let amount: Amount4;
     try {
-      amount = new Prisma.Decimal(normalized);
+      amount = Amount4.from(normalized);
     } catch {
       throw new BadRequestException('目标成交额格式无效');
     }
-    const rounded = amount.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-    if (!rounded.isFinite() || rounded.lte(0) || rounded.gt(MAX_TARGET_AMOUNT)) {
+    if (amount.lte(0) || amount.gt(MAX_TARGET_AMOUNT)) {
       throw new BadRequestException('目标成交额必须大于 0 且不超过 1,000,000 元');
     }
-    return rounded;
+    return Amount4.from(amount.toFixed(2));
   }
 
   private toResponse(settings: {
     autoEnabled: boolean;
     intervalMinutes: number;
-    targetAmountRmb: Prisma.Decimal;
+    targetAmountRmb: Amount4;
     nextRunAt: Date | null;
     updatedByUserId: string | null;
     createdAt: Date;
@@ -161,7 +172,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
     return {
       autoEnabled: settings.autoEnabled,
       intervalMinutes: settings.intervalMinutes,
-      targetAmountRmb: toV2DecimalString(settings.targetAmountRmb),
+      targetAmountRmb: settings.targetAmountRmb.toString(),
       nextRunAt: settings.nextRunAt,
       emergencyNetworkEnabled: this.isNetworkEnabled(),
       updatedByUserId: settings.updatedByUserId,

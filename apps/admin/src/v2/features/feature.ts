@@ -1,7 +1,5 @@
 import type { Component } from 'vue';
-import type { V2TableColumnKind, V2TableColumnWidthPreset } from '@/v2/components/tableColumn';
-
-export type { V2TableColumnKind, V2TableColumnWidthPreset } from '@/v2/components/tableColumn';
+import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export type V2ModuleKey =
   | 'renewal-workbench'
@@ -41,24 +39,6 @@ export interface V2FilterDefinition {
   options?: readonly string[];
 }
 
-export interface V2TableDataColumnDefinition {
-  key: string;
-  label: string;
-  kind: V2TableColumnKind;
-  widthPreset: V2TableColumnWidthPreset;
-  fixed?: 'left' | 'right';
-}
-
-export interface V2TableActionColumnDefinition {
-  key: string;
-  label: string;
-  kind: 'actions';
-  minWidth: number;
-  fixed?: 'left' | 'right';
-}
-
-export type V2TableColumnDefinition = V2TableDataColumnDefinition | V2TableActionColumnDefinition;
-
 export interface V2PlannedSectionDefinition {
   title: string;
   description: string;
@@ -81,7 +61,7 @@ export interface V2FeatureManifest {
   plannedSections?: readonly V2PlannedSectionDefinition[];
   safetyNotice?: string;
   filters: readonly V2FilterDefinition[];
-  columns: readonly V2TableColumnDefinition[];
+  tables: readonly V2TableSchema[];
   loadView: V2ViewLoader;
 }
 

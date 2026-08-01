@@ -1,20 +1,20 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import {
   IdBusinessV2OtcAverageService,
   type IdBusinessV2OtcAverageResult
 } from './id-business-v2-otc-average.service';
-import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE } from '../decimal-policy';
 
 export interface IdBusinessV2OtcMidRateResult extends IdBusinessV2OtcAverageResult {
-  midRateToRmb: Prisma.Decimal;
+  midRateToRmb: Rate8;
 }
 
 @Injectable()
 export class IdBusinessV2OtcMidRateService {
   constructor(private readonly averageService: IdBusinessV2OtcAverageService) {}
 
-  async collectAndCalculate(targetAmountRmb: Prisma.Decimal) {
+  async collectAndCalculate(targetAmountRmb: Amount4) {
     return this.calculate(await this.averageService.collectAndAverage(targetAmountRmb));
   }
 
@@ -22,7 +22,7 @@ export class IdBusinessV2OtcMidRateService {
     if (
       result.asset !== 'USDT' ||
       result.fiat !== 'CNY' ||
-      result.policy.decimalPlaces !== V2_DECIMAL_PLACES ||
+      result.policy.decimalPlaces !== V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES ||
       result.combinedMerchantBuyAverageRateToRmb.lte(0) ||
       result.combinedMerchantSellAverageRateToRmb.lte(0)
     ) {
@@ -31,9 +31,8 @@ export class IdBusinessV2OtcMidRateService {
     return {
       ...result,
       midRateToRmb: result.combinedMerchantBuyAverageRateToRmb
-        .plus(result.combinedMerchantSellAverageRateToRmb)
+        .add(result.combinedMerchantSellAverageRateToRmb)
         .div(2)
-        .toDecimalPlaces(V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE)
     };
   }
 }

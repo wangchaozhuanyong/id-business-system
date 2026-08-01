@@ -1,34 +1,34 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { IdBusinessV2OrderAccountDisposition, Prisma as PrismaNamespace } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { Amount4, type V2CommandTransaction } from '../runtime/public-api';
+import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import type { IdBusinessV2OrderAccountDisposition } from './id-business-v2-order.types';
 
 export interface AccountDispositionOrder {
   id: string;
   accountId: string | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
-  accountCostAmount: PrismaNamespace.Decimal;
+  accountCostAmount: Amount4;
 }
 
 export function normalizeOrderAccountDisposition(
   value: unknown
 ): IdBusinessV2OrderAccountDisposition {
-  if (
-    value === IdBusinessV2OrderAccountDisposition.retained ||
-    value === IdBusinessV2OrderAccountDisposition.sold
-  ) {
+  if (value === 'retained' || value === 'sold') {
     return value;
   }
   throw new BadRequestException('ID 处理方式无效');
 }
 
 export async function applyNewOrderAccountDisposition(
-  tx: PrismaNamespace.TransactionClient,
+  tx: V2CommandTransaction,
+  repository: IdBusinessV2OrdersRepository,
   orderId: string,
   accountId: string,
   disposition: IdBusinessV2OrderAccountDisposition,
   operator?: AuthenticatedUser
 ) {
-  const account = await lockAccountForSale(tx, accountId);
+  const account = await repository.lockAccountForSale(tx, accountId);
   if (!account) {
     throw new ConflictException('使用 ID 不存在，请重新匹配');
   }
@@ -36,32 +36,34 @@ export async function applyNewOrderAccountDisposition(
     throw new ConflictException('已报损 ID 永久冻结，不能用于订单');
   }
 
-  if (disposition === IdBusinessV2OrderAccountDisposition.sold) {
+  if (disposition === 'sold') {
     assertAccountCanBeSold(account.soldByOrderId, orderId);
-    await markAccountSold(tx, account.id, orderId, account.soldByOrderId === orderId, operator);
+    await markAccountSold(
+      tx,
+      repository,
+      account.id,
+      orderId,
+      account.soldByOrderId === orderId,
+      operator
+    );
   }
 
-  await tx.idBusinessV2Order.update({
-    where: {
-      id: orderId
-    },
-    data: {
-      accountCostAmount:
-        disposition === IdBusinessV2OrderAccountDisposition.sold ? account.purchaseCost : 0,
-      accountDisposition: disposition,
-      updatedByUserId: operator?.id
-    }
+  await repository.updateOrder(tx, orderId, {
+    accountCostAmount: disposition === 'sold' ? account.purchaseCost.toString() : '0',
+    accountDisposition: disposition,
+    updatedByUserId: operator?.id
   });
 }
 
 export async function applyUpdatedOrderAccountDisposition(
-  tx: PrismaNamespace.TransactionClient,
+  tx: V2CommandTransaction,
+  repository: IdBusinessV2OrdersRepository,
   order: AccountDispositionOrder,
   accountId: string,
   disposition: IdBusinessV2OrderAccountDisposition,
   operator?: AuthenticatedUser
 ) {
-  const account = await lockAccountForSale(tx, accountId);
+  const account = await repository.lockAccountForSale(tx, accountId);
   if (!account) {
     throw new ConflictException('使用 ID 不存在或已删除');
   }
@@ -70,79 +72,49 @@ export async function applyUpdatedOrderAccountDisposition(
   }
 
   if (
-    order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold &&
+    order.accountDisposition === 'sold' &&
     order.accountId &&
-    (order.accountId !== accountId || disposition !== IdBusinessV2OrderAccountDisposition.sold)
+    (order.accountId !== accountId || disposition !== 'sold')
   ) {
-    await releaseSoldOrderAccount(tx, order, operator);
+    await releaseSoldOrderAccount(tx, repository, order, operator);
   }
 
-  if (disposition !== IdBusinessV2OrderAccountDisposition.sold) {
-    return new PrismaNamespace.Decimal(0);
+  if (disposition !== 'sold') {
+    return Amount4.zero();
   }
 
   assertAccountCanBeSold(account.soldByOrderId, order.id);
-  await markAccountSold(tx, account.id, order.id, account.soldByOrderId === order.id, operator);
-  return order.accountDisposition === IdBusinessV2OrderAccountDisposition.sold &&
-    order.accountId === accountId
+  await markAccountSold(
+    tx,
+    repository,
+    account.id,
+    order.id,
+    account.soldByOrderId === order.id,
+    operator
+  );
+  return order.accountDisposition === 'sold' && order.accountId === accountId
     ? order.accountCostAmount
     : account.purchaseCost;
 }
 
 export async function releaseSoldOrderAccount(
-  tx: PrismaNamespace.TransactionClient,
+  tx: V2CommandTransaction,
+  repository: IdBusinessV2OrdersRepository,
   order: Pick<AccountDispositionOrder, 'id' | 'accountId'>,
   operator?: AuthenticatedUser
 ) {
   if (!order.accountId) return;
-  const result = await tx.idBusinessV2Account.updateMany({
-    where: {
-      id: order.accountId,
-      soldByOrderId: order.id,
-      lossReportedAt: null
-    },
-    data: {
-      soldByOrderId: null,
-      soldAt: null,
-      updatedByUserId: operator?.id
-    }
+  const result = await repository.releaseSoldAccount(tx, {
+    accountId: order.accountId,
+    orderId: order.id,
+    updatedByUserId: operator?.id
   });
   if (result.count === 0) {
-    const lostAccount = await tx.idBusinessV2Account.findFirst({
-      where: {
-        id: order.accountId,
-        soldByOrderId: order.id,
-        lossReportedAt: { not: null }
-      },
-      select: { id: true }
-    });
+    const lostAccount = await repository.findLostSoldAccount(tx, order.accountId, order.id);
     if (lostAccount) {
       throw new ConflictException('已报损 ID 永久冻结，不能标记为收回或恢复可用');
     }
   }
-}
-
-async function lockAccountForSale(tx: PrismaNamespace.TransactionClient, accountId: string) {
-  const rows = await tx.$queryRaw<
-    Array<{
-      id: string;
-      purchaseCost: PrismaNamespace.Decimal;
-      soldByOrderId: string | null;
-      lossReportedAt: Date | null;
-    }>
-  >(PrismaNamespace.sql`
-    SELECT
-      "id",
-      "purchase_cost" AS "purchaseCost",
-      "sold_by_order_id" AS "soldByOrderId",
-      "loss_reported_at" AS "lossReportedAt"
-    FROM "id_business_v2_accounts"
-    WHERE
-      "id" = CAST(${accountId} AS UUID)
-      AND "deleted_at" IS NULL
-    FOR UPDATE
-  `);
-  return rows[0] ?? null;
 }
 
 function assertAccountCanBeSold(soldByOrderId: string | null, orderId: string) {
@@ -152,20 +124,17 @@ function assertAccountCanBeSold(soldByOrderId: string | null, orderId: string) {
 }
 
 function markAccountSold(
-  tx: PrismaNamespace.TransactionClient,
+  tx: V2CommandTransaction,
+  repository: IdBusinessV2OrdersRepository,
   accountId: string,
   orderId: string,
   replay: boolean,
   operator?: AuthenticatedUser
 ) {
-  return tx.idBusinessV2Account.update({
-    where: {
-      id: accountId
-    },
-    data: {
-      soldByOrderId: orderId,
-      soldAt: replay ? undefined : new Date(),
-      updatedByUserId: operator?.id
-    }
+  return repository.markAccountSold(tx, {
+    accountId,
+    orderId,
+    soldAt: replay ? undefined : new Date(),
+    updatedByUserId: operator?.id
   });
 }

@@ -1,5 +1,5 @@
-import { V2_TABLE_ACTION_COLUMN_WIDTH } from '@/v2/components/tableActionLayout';
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const topupRecordsFeature = defineV2Feature({
   key: 'topup-records',
@@ -25,49 +25,6 @@ export const topupRecordsFeature = defineV2Feature({
     },
     { key: 'changedAt', label: '变动时间', kind: 'date-range' }
   ],
-  columns: [
-    { key: 'rowNumber', label: '序号', kind: 'index', widthPreset: 'index' },
-    {
-      key: 'giftCardCode',
-      label: '礼品卡号',
-      kind: 'identifier',
-      widthPreset: 'identifier'
-    },
-    { key: 'cardName', label: '卡片名称', kind: 'text', widthPreset: 'standard' },
-    { key: 'faceValue', label: '面值', kind: 'numeric', widthPreset: 'compact' },
-    { key: 'exchangeRate', label: '卡片汇率', kind: 'numeric', widthPreset: 'compact' },
-    {
-      key: 'costAmount',
-      label: '卡片价值（人民币）',
-      kind: 'numeric',
-      widthPreset: 'standard'
-    },
-    { key: 'account', label: '加入 ID', kind: 'identifier', widthPreset: 'identifier' },
-    { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
-    { key: 'supplier', label: '供应商', kind: 'text', widthPreset: 'standard' },
-    {
-      key: 'balanceBefore',
-      label: 'ID 加卡前余额',
-      kind: 'numeric',
-      widthPreset: 'wide'
-    },
-    {
-      key: 'balanceAfter',
-      label: 'ID 加卡后余额',
-      kind: 'numeric',
-      widthPreset: 'wide'
-    },
-    { key: 'operator', label: '操作人', kind: 'text', widthPreset: 'standard' },
-    { key: 'remark', label: '备注', kind: 'text', widthPreset: 'wide' },
-    { key: 'changedAt', label: '加卡时间', kind: 'date', widthPreset: 'dateTime' },
-    { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-    {
-      key: 'actions',
-      label: '操作',
-      kind: 'actions',
-      minWidth: V2_TABLE_ACTION_COLUMN_WIDTH.triple,
-      fixed: 'right'
-    }
-  ],
+  tables: v2TablesByFeature['topup-records'],
   loadView: () => import('./V2TopupRecordsView.vue')
 });

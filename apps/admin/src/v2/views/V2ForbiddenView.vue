@@ -17,6 +17,7 @@ import { useRouter } from 'vue-router';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -26,7 +27,7 @@ async function returnToAllowedPage() {
   if (returning.value) return;
   returning.value = true;
   try {
-    await router.replace(getFirstAllowedV2Route(authStore.user));
+    await navigateSafely(router, getFirstAllowedV2Route(authStore.user), 'replace');
   } finally {
     returning.value = false;
   }

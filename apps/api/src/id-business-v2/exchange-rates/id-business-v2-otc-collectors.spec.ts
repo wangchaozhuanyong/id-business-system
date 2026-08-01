@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
+import { Amount4 } from '../runtime/public-api';
 import { IdBusinessV2BinanceOtcCollector } from './id-business-v2-binance-otc.collector';
 import { IdBusinessV2OkxOtcCollector } from './id-business-v2-okx-otc.collector';
 
@@ -72,7 +72,7 @@ describe('V2 OTC collectors', () => {
     });
     collector.setFetchImplementationForTest(fetcher as typeof fetch);
 
-    const result = await collector.collect(new Prisma.Decimal('5000'));
+    const result = await collector.collect(Amount4.from('5000'));
 
     expect(result.merchantBuy.quotes[0]?.side).toBe('merchant_buy');
     expect(result.merchantSell.quotes[0]?.side).toBe('merchant_sell');
@@ -113,7 +113,7 @@ describe('V2 OTC collectors', () => {
     });
     collector.setFetchImplementationForTest(fetcher as typeof fetch);
 
-    const result = await collector.collect(new Prisma.Decimal('5000'));
+    const result = await collector.collect(Amount4.from('5000'));
 
     expect(result.merchantBuy.acceptedAdCount).toBe(1);
     expect(result.merchantSell.acceptedAdCount).toBe(1);

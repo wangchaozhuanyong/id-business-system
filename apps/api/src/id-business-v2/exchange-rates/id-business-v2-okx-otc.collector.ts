@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import type {
   IdBusinessV2OtcCollection,
   IdBusinessV2OtcCollector,
@@ -21,7 +21,7 @@ interface OkxResponse {
 const SOURCE_URL = 'https://www.okx.com/v3/c2c/tradingOrders/books';
 const SOURCE_CONTRACT = 'okx-public-trading-orders-books-v3';
 const REQUEST_TIMEOUT_MS = 12_000;
-const MAX_DECIMAL = new Prisma.Decimal('999999999999999999');
+const MAX_DECIMAL = Amount4.from('999999999999999999');
 const NON_MERCHANT_TYPES = new Set(['common', 'ordinary', 'personal', 'user']);
 
 export class IdBusinessV2OkxOtcError extends Error {
@@ -50,7 +50,7 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     this.requestTimeoutMs = Math.max(1, Math.trunc(timeoutMs));
   }
 
-  async collect(targetAmountRmb: Prisma.Decimal): Promise<IdBusinessV2OtcCollection> {
+  async collect(targetAmountRmb: Amount4): Promise<IdBusinessV2OtcCollection> {
     const target = this.normalizeTarget(targetAmountRmb);
     const [merchantBuy, merchantSell] = await Promise.all([
       this.collectSide('merchant_buy', target),
@@ -71,7 +71,7 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
 
   private async collectSide(
     side: IdBusinessV2OtcSide,
-    targetAmountRmb: Prisma.Decimal
+    targetAmountRmb: Amount4
   ): Promise<IdBusinessV2OtcSideCollection> {
     const sideParam: OkxSide = side === 'merchant_buy' ? 'buy' : 'sell';
     const sourceUrl = this.buildSourceUrl(sideParam);
@@ -137,7 +137,7 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     side: IdBusinessV2OtcSide,
     sideParam: OkxSide,
     sourceUrl: string,
-    targetAmountRmb: Prisma.Decimal
+    targetAmountRmb: Amount4
   ): IdBusinessV2OtcSideCollection {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw this.invalidResponse(side, '响应根节点格式无效');
@@ -185,14 +185,14 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     value: unknown,
     side: IdBusinessV2OtcSide,
     sideParam: OkxSide,
-    targetAmountRmb: Prisma.Decimal
+    targetAmountRmb: Amount4
   ): IdBusinessV2OtcQuote | null {
     const row = this.toObject(value);
     const sourceAdId = this.readString(row?.id);
     const merchantType = this.readString(row?.creatorType)?.toLowerCase();
-    const priceToRmb = this.positiveDecimal(row?.price);
-    const minAmountRmb = this.positiveDecimal(row?.quoteMinAmountPerOrder);
-    const maxAmountRmb = this.positiveDecimal(row?.quoteMaxAmountPerOrder);
+    const priceToRmb = this.positiveRate(row?.price);
+    const minAmountRmb = this.positiveAmount(row?.quoteMinAmountPerOrder);
+    const maxAmountRmb = this.positiveAmount(row?.quoteMaxAmountPerOrder);
 
     if (
       !sourceAdId ||
@@ -239,9 +239,9 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     return url.toString();
   }
 
-  private normalizeTarget(value: Prisma.Decimal) {
-    const target = new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-    if (!target.isFinite() || target.lte(0)) {
+  private normalizeTarget(value: Amount4) {
+    const target = Amount4.from(value);
+    if (target.lte(0)) {
       throw new IdBusinessV2OkxOtcError(
         'okx_otc_invalid_target',
         'OKX P2P 目标成交额无效',
@@ -252,28 +252,43 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     return target;
   }
 
-  private positiveDecimal(value: unknown) {
-    const decimal = this.decimal(value);
+  private positiveAmount(value: unknown) {
+    const decimal = this.amount(value);
     return decimal?.gt(0) ? decimal : null;
   }
 
   private nonNegativeDecimal(value: unknown) {
-    const decimal = this.decimal(value);
+    const decimal = this.amount(value);
     return decimal?.gte(0) ? decimal : null;
   }
 
   private ratioDecimal(value: unknown) {
-    const decimal = this.nonNegativeDecimal(value);
+    const decimal = this.rate(value);
     if (!decimal) return null;
     const normalized = decimal.gt(1) && decimal.lte(100) ? decimal.div(100) : decimal;
     return normalized.lte(1) ? normalized : null;
   }
 
-  private decimal(value: unknown) {
+  private positiveRate(value: unknown) {
+    const decimal = this.rate(value);
+    return decimal?.gt(0) ? decimal : null;
+  }
+
+  private amount(value: unknown) {
     if (typeof value !== 'string' && typeof value !== 'number') return null;
     try {
-      const decimal = new Prisma.Decimal(String(value));
-      return decimal.isFinite() && decimal.abs().lte(MAX_DECIMAL) ? decimal : null;
+      const decimal = Amount4.from(String(value));
+      return decimal.abs().lte(MAX_DECIMAL) ? decimal : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private rate(value: unknown) {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    try {
+      const decimal = Rate8.from(String(value));
+      return decimal.abs().lte(MAX_DECIMAL) ? decimal : null;
     } catch {
       return null;
     }

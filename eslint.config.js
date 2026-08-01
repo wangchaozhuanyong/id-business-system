@@ -81,5 +81,13 @@ export default [
       }
     }
   },
+  {
+    files: ['deploy/cloudflare-free/worker.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.worker
+      }
+    }
+  },
   eslintConfigPrettier
 ];

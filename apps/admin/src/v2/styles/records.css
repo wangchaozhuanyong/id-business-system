@@ -258,7 +258,7 @@
     flex: 1 1 calc(50% - 6px);
   }
 
-  .v2-records-table {
+  .v2-unified-table[data-mobile-mode='cards'] {
     display: none;
   }
 

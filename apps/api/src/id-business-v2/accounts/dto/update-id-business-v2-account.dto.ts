@@ -1,5 +1,3 @@
-import type { IdBusinessV2RecordStatus } from '@prisma/client';
-
 export interface UpdateIdBusinessV2AccountDto {
   appleId?: string;
   password?: string | null;
@@ -15,6 +13,6 @@ export interface UpdateIdBusinessV2AccountDto {
   balanceAdjustmentReason?: string;
   balanceAdjustmentIdempotencyKey?: string;
   purchaseCost?: string | number;
-  recordStatus?: IdBusinessV2RecordStatus | string;
+  recordStatus?: 'active' | 'disabled' | string;
   remark?: string | null;
 }

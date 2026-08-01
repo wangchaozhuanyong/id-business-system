@@ -1,6 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
+import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
 const operator = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -53,12 +56,16 @@ describe('IdBusinessV2FinanceFxService order receipt quotes', () => {
     ensureEffective: vi.fn()
   };
   const service = new IdBusinessV2FinanceFxService(
-    prisma as never,
+    new V2CommandTransactionManager(prisma as never),
+    new IdBusinessV2FinanceCommandRepository(),
+    new IdBusinessV2FinanceQueryRepository(prisma as never),
+    new V2TransactionalAuditService(),
     exchangeRateOrderQuoteService as never
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.$transaction.mockImplementation(async (work) => work(prisma));
     prisma.idBusinessV2FinanceFxRateSnapshot.findFirst.mockResolvedValue(null);
     prisma.idBusinessV2FinanceFxRateSnapshot.create.mockImplementation(
       async ({ data }: { data: Record<string, unknown> }) => ({
@@ -126,7 +133,7 @@ describe('IdBusinessV2FinanceFxService order receipt quotes', () => {
     expect(prisma.idBusinessV2FinanceFxRateSnapshot.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         currency: 'MYR',
-        rateToCny: new Prisma.Decimal('1.69565217'),
+        rateToCny: '1.69565217',
         source: 'ecb_cross',
         createdByUserId: operator.id
       })

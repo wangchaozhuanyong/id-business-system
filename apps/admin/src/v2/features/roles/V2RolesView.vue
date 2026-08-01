@@ -37,13 +37,13 @@
       @retry="page.loadRoles"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.roles.main"
           :aria-busy="page.loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="page.items"
-          row-key="id"
           @sort-change="page.handleSortChange"
         >
           <template #empty>
@@ -54,11 +54,8 @@
             </div>
           </template>
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.roles.main.columns[0]"
             prop="name"
-            label="角色名称"
-            width-preset="wide"
-            fixed="left"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -69,31 +66,27 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="identifier"
+            :definition="v2TableSchemas.roles.main.columns[1]"
             prop="code"
-            label="角色编码"
-            width-preset="identifier"
             sortable="custom"
           />
-          <V2TableColumn kind="text" prop="description" label="角色说明" width-preset="wide">
+          <V2TableColumn :definition="v2TableSchemas.roles.main.columns[2]" prop="description">
             <template #default="{ row }">{{ row.description || '—' }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="权限数量" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.roles.main.columns[3]">
             <template #default="{ row }">{{ row.permissionCount }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="成员数量" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.roles.main.columns[4]">
             <template #default="{ row }">{{ row.memberCount }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
+            :definition="v2TableSchemas.roles.main.columns[5]"
             prop="updatedAt"
-            label="更新时间"
-            width-preset="dateTime"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn layout="single">
+          <V2TableActionColumn :definition="v2TableSchemas.roles.main.columns[6]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="page.openEdit(row)">
                 <el-icon>
@@ -104,9 +97,9 @@
               </AppButton>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.roles.main.id">
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -177,6 +170,8 @@ import { reactive } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2RoleDrawer from './components/V2RoleDrawer.vue';
 import { useRolesPage } from './useRolesPage';

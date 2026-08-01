@@ -20,6 +20,7 @@ import { IdBusinessV2CustomersService } from './id-business-v2-customers.service
 
 interface RequestWithAuditMeta {
   ip?: string;
+  requestId?: string;
   headers: Record<string, string | string[] | undefined>;
 }
 
@@ -104,8 +105,12 @@ export class IdBusinessV2CustomersController {
 
   @Post()
   @RequirePermissions('customer.create')
-  create(@Body() dto: CreateIdBusinessV2CustomerDto, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.customersService.create(dto, operator);
+  create(
+    @Body() dto: CreateIdBusinessV2CustomerDto,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
+  ) {
+    return this.customersService.create(dto, operator, this.requestMeta(request));
   }
 
   @Patch(':id')
@@ -113,9 +118,10 @@ export class IdBusinessV2CustomersController {
   update(
     @Param('id') id: string,
     @Body() dto: UpdateIdBusinessV2CustomerDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
   ) {
-    return this.customersService.update(id, dto, operator);
+    return this.customersService.update(id, dto, operator, this.requestMeta(request));
   }
 
   @Post(':id/reveal-phone')
@@ -128,10 +134,7 @@ export class IdBusinessV2CustomersController {
     @CurrentUser() operator: AuthenticatedUser | undefined,
     @Req() request: RequestWithAuditMeta
   ) {
-    return this.customersService.revealPhone(id, dto, operator, {
-      ip: request.ip,
-      userAgent: this.getHeaderValue(request.headers['user-agent'])
-    });
+    return this.customersService.revealPhone(id, dto, operator, this.requestMeta(request));
   }
 
   @Post(':id/reveal-whatsapp')
@@ -144,16 +147,25 @@ export class IdBusinessV2CustomersController {
     @CurrentUser() operator: AuthenticatedUser | undefined,
     @Req() request: RequestWithAuditMeta
   ) {
-    return this.customersService.revealWhatsapp(id, dto, operator, {
-      ip: request.ip,
-      userAgent: this.getHeaderValue(request.headers['user-agent'])
-    });
+    return this.customersService.revealWhatsapp(id, dto, operator, this.requestMeta(request));
   }
 
   @Delete(':id')
   @RequirePermissions('customer.delete')
-  remove(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.customersService.remove(id, operator);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
+  ) {
+    return this.customersService.remove(id, operator, this.requestMeta(request));
+  }
+
+  private requestMeta(request: RequestWithAuditMeta) {
+    return {
+      requestId: request.requestId,
+      ip: request.ip,
+      userAgent: this.getHeaderValue(request.headers['user-agent'])
+    };
   }
 
   private getHeaderValue(value: string | string[] | undefined) {

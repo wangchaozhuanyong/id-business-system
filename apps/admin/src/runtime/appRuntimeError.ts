@@ -1,4 +1,6 @@
 import { ref } from 'vue';
+import { isNavigationFailure } from 'vue-router';
+import { isApiError } from '@/api/apiError';
 
 type AppRuntimeErrorSource = 'vue' | 'window' | 'promise';
 
@@ -13,22 +15,14 @@ const ignoredBrowserErrorMessages = new Set([
   'ResizeObserver loop limit exceeded',
   'ResizeObserver loop completed with undelivered notifications.'
 ]);
-const routeResourceErrorPatterns = [
-  /failed to fetch dynamically imported module/i,
-  /error loading dynamically imported module/i,
-  /importing a module script failed/i,
-  /unable to preload css/i,
-  /couldn't resolve component "default" at "\/[^"]+"/i
-];
 
 export const appRuntimeError = ref<AppRuntimeErrorState | null>(null);
 
 export function shouldIgnoreRuntimeError(reason: unknown) {
+  if (isApiError(reason) || isNavigationFailure(reason)) return true;
+  if (reason instanceof DOMException && reason.name === 'AbortError') return true;
   const message = getRuntimeErrorMessage(reason);
-  return message
-    ? ignoredBrowserErrorMessages.has(message) ||
-        routeResourceErrorPatterns.some((pattern) => pattern.test(message))
-    : false;
+  return message ? ignoredBrowserErrorMessages.has(message) : false;
 }
 
 export function setAppRuntimeError(source: AppRuntimeErrorSource, message = runtimeErrorMessage) {
@@ -44,13 +38,8 @@ export function clearAppRuntimeError() {
 }
 
 function getRuntimeErrorMessage(reason: unknown) {
-  if (typeof reason === 'string') {
-    return reason;
-  }
-  if (!reason || typeof reason !== 'object' || !('message' in reason)) {
-    return '';
-  }
-
+  if (typeof reason === 'string') return reason;
+  if (!reason || typeof reason !== 'object' || !('message' in reason)) return '';
   const message = reason.message;
   return typeof message === 'string' ? message : '';
 }

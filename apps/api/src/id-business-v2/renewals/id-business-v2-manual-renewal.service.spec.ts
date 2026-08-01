@@ -1,9 +1,10 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IdBusinessV2ActivationStatusService } from '../activations/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2ManualRenewalService } from './id-business-v2-manual-renewal.service';
+import { IdBusinessV2RenewalsRepository } from './persistence/id-business-v2-renewals.repository';
 
 const activationId = '11111111-1111-4111-8111-111111111111';
 const sourceOrderId = '22222222-2222-4222-8222-222222222222';
@@ -133,15 +134,16 @@ describe('IdBusinessV2ManualRenewalService', () => {
     get: vi.fn()
   };
   const service = new IdBusinessV2ManualRenewalService(
-    prisma as never,
-    new IdBusinessV2ActivationStatusService(),
     new IdBusinessV2BalanceCalculatorService(),
     orderEntryService as never,
-    ordersService as never
+    ordersService as never,
+    new IdBusinessV2RenewalsRepository(prisma as never),
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
+    tx.$queryRaw.mockReset();
     vi.useFakeTimers();
     vi.setSystemTime(now);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
@@ -211,24 +213,26 @@ describe('IdBusinessV2ManualRenewalService', () => {
         websiteAccountEncrypted: 'v1:encrypted-website',
         websiteAccountHash: 'website-account-hash',
         websiteAccountMasked: 'cu***@example.com',
-        receivedAmount: decimal('100'),
-        balanceAmount: decimal('20'),
         openedAt: nextOpenedAt,
         dueAt: nextDueAt
       }),
       operator
     );
+    const renewalOrderInput =
+      orderEntryService.createManualRenewalOrderInTransaction.mock.calls[0]?.[1];
+    expect(renewalOrderInput?.receivedAmount.toString()).toBe('100');
+    expect(renewalOrderInput?.balanceAmount.toString()).toBe('20');
     expect(tx.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orderId: targetOrderId,
         accountId,
         entryType: 'order_consumption',
         direction: 'debit',
-        balanceBefore: decimal('30'),
-        balanceAfter: decimal('10'),
-        costBefore: decimal('90'),
-        costAfter: decimal('30'),
-        costAmount: decimal('60')
+        balanceBefore: '30',
+        balanceAfter: '10',
+        costBefore: '90',
+        costAfter: '30',
+        costAmount: '60'
       })
     });
     expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
@@ -236,8 +240,8 @@ describe('IdBusinessV2ManualRenewalService', () => {
         id: accountId
       },
       data: {
-        currentBalance: decimal('10'),
-        balanceCostAmount: decimal('30'),
+        currentBalance: '10',
+        balanceCostAmount: '30',
         updatedByUserId: operator.id
       }
     });
@@ -246,8 +250,8 @@ describe('IdBusinessV2ManualRenewalService', () => {
         id: targetOrderId
       },
       data: expect.objectContaining({
-        balanceCostAmount: decimal('60'),
-        profitAmount: decimal('37'),
+        balanceCostAmount: '60',
+        profitAmount: '37',
         status: 'completed'
       })
     });
@@ -510,8 +514,10 @@ describe('IdBusinessV2ManualRenewalService', () => {
   });
 
   it('maps a concurrent unique collision without matching idempotency evidence to conflict', async () => {
-    prisma.$transaction.mockRejectedValue({ code: 'P2002' });
-    prisma.idBusinessV2Order.findUnique.mockResolvedValue(null);
+    prisma.$transaction
+      .mockRejectedValueOnce({ code: 'P2002' })
+      .mockImplementationOnce(async (callback) => callback(tx));
+    tx.idBusinessV2Order.findUnique.mockResolvedValue(null);
 
     await expect(service.create(activationId, makeDto())).rejects.toThrow(
       new ConflictException('平台订单号已存在或续费刚被其他请求处理，请刷新后核对')

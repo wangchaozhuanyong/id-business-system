@@ -1,12 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
+import type { IdBusinessV2ActivationStatus } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import type { ActivationRecord, ActivationSortField } from './activation.types';
 import {
   ID_BUSINESS_V2_DUE_STATUS_CODES,
   IdBusinessV2ActivationStatusService,
   type IdBusinessV2ActivationDueStatus
 } from './id-business-v2-activation-status.service';
+import { IdBusinessV2ActivationRepository } from './persistence/id-business-v2-activation.repository';
 
 export interface ListIdBusinessV2ActivationsQuery extends PaginationQuery {
   keyword?: string;
@@ -33,56 +34,7 @@ const ACTIVATION_STATUSES = new Set<IdBusinessV2ActivationStatus>([
 ]);
 const DUE_STATUSES = new Set<IdBusinessV2ActivationDueStatus>(ID_BUSINESS_V2_DUE_STATUS_CODES);
 
-const ACTIVATION_INCLUDE = {
-  order: {
-    select: {
-      id: true,
-      orderNo: true,
-      status: true,
-      websiteAccountMasked: true,
-      receivedAmount: true,
-      profitAmount: true
-    }
-  },
-  customer: {
-    select: {
-      id: true,
-      name: true
-    }
-  },
-  account: {
-    select: {
-      id: true,
-      appleIdMasked: true,
-      countryOption: {
-        select: {
-          id: true,
-          code: true,
-          name: true
-        }
-      }
-    }
-  },
-  serviceOption: {
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      parent: {
-        select: {
-          id: true,
-          name: true
-        }
-      }
-    }
-  }
-} satisfies Prisma.IdBusinessV2ActivationInclude;
-
-type ActivationRecord = Prisma.IdBusinessV2ActivationGetPayload<{
-  include: typeof ACTIVATION_INCLUDE;
-}>;
-
-const SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2ActivationOrderByWithRelationInput> = {
+const SORT_FIELDS: Record<string, ActivationSortField> = {
   openedAt: 'openedAt',
   dueAt: 'dueAt',
   status: 'status',
@@ -93,7 +45,7 @@ const SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2ActivationOrderByWith
 @Injectable()
 export class IdBusinessV2ActivationsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly repository: IdBusinessV2ActivationRepository,
     private readonly activationStatusService: IdBusinessV2ActivationStatusService
   ) {}
 
@@ -103,103 +55,43 @@ export class IdBusinessV2ActivationsService {
     const now = new Date();
     const status = this.parseStoredStatus(query.status);
     const dueStatus = this.parseDueStatus(query.dueStatus);
-    const where: Prisma.IdBusinessV2ActivationWhereInput = {
-      customerId: this.normalizeOptionalUuid(query.customerId, '客户') ?? undefined,
-      serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务') ?? undefined,
-      accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID') ?? undefined,
-      status: status ?? undefined,
+    const result = await this.repository.list({
+      keyword,
+      customerId: this.normalizeOptionalUuid(query.customerId, '客户'),
+      serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务'),
+      accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID'),
+      status,
+      dueFilter: dueStatus ? this.activationStatusService.getFilterWindow(dueStatus, now) : null,
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo, '开通日期'),
       dueAt: this.parseDateRange(query.dueFrom, query.dueTo, '到期日期'),
-      AND: dueStatus ? this.buildDueStatusConditions(dueStatus, now) : undefined,
-      OR: keyword
-        ? [
-            { order: { is: { orderNo: { contains: keyword, mode: 'insensitive' } } } },
-            { customer: { is: { name: { contains: keyword, mode: 'insensitive' } } } },
-            { serviceOption: { is: { name: { contains: keyword, mode: 'insensitive' } } } },
-            { account: { is: { appleIdMasked: { contains: keyword, mode: 'insensitive' } } } },
-            {
-              order: {
-                is: {
-                  websiteAccountMasked: {
-                    contains: keyword,
-                    mode: 'insensitive'
-                  }
-                }
-              }
-            }
-          ]
-        : undefined
-    };
-
-    const [items, total, nextTimedActivation] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2Activation.findMany({
-        where,
-        include: ACTIVATION_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: this.buildOrderBy(query)
-      }),
-      this.prisma.idBusinessV2Activation.count({ where }),
-      this.prisma.idBusinessV2Activation.findFirst({
-        where: {
-          AND: [
-            where,
-            {
-              status: 'active',
-              dueAt: {
-                gt: now
-              }
-            }
-          ]
-        },
-        select: {
-          dueAt: true
-        },
-        orderBy: {
-          dueAt: 'asc'
-        }
-      })
-    ]);
+      sortField: this.buildSortField(query),
+      sortDirection: query.sortOrder === 'desc' ? 'desc' : 'asc',
+      skip: pagination.skip,
+      take: pagination.take,
+      evaluatedAt: now
+    });
 
     return {
-      items: items.map((activation) => this.toResponse(activation, now)),
-      total,
+      items: result.items.map((activation) => this.toResponse(activation, now)),
+      total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
       evaluatedAt: now,
-      revalidateAt: this.activationStatusService.getNextRevalidateAt(
-        nextTimedActivation?.dueAt ?? null,
-        now
-      )
+      revalidateAt: this.activationStatusService.getNextRevalidateAt(result.nextTimedDueAt, now)
     };
   }
 
   async get(idValue: string) {
     const id = this.normalizeRequiredUuid(idValue, '开通记录');
-    const activation = await this.prisma.idBusinessV2Activation.findUnique({
-      where: { id },
-      include: ACTIVATION_INCLUDE
-    });
+    const activation = await this.repository.findById(id);
     if (!activation) {
       throw new NotFoundException('开通记录不存在');
     }
     return this.toResponse(activation, new Date());
   }
 
-  private buildOrderBy(query: ListIdBusinessV2ActivationsQuery) {
-    const field = SORT_FIELDS[query.sortBy ?? 'dueAt'] ?? 'dueAt';
-    const direction = query.sortOrder === 'desc' ? 'desc' : 'asc';
-    return [
-      { [field]: direction },
-      { id: 'desc' }
-    ] as Prisma.IdBusinessV2ActivationOrderByWithRelationInput[];
-  }
-
-  private buildDueStatusConditions(
-    dueStatus: IdBusinessV2ActivationDueStatus,
-    now: Date
-  ): Prisma.IdBusinessV2ActivationWhereInput[] {
-    return [this.activationStatusService.buildWhere(dueStatus, now)];
+  private buildSortField(query: ListIdBusinessV2ActivationsQuery): ActivationSortField {
+    return SORT_FIELDS[query.sortBy ?? 'dueAt'] ?? 'dueAt';
   }
 
   private parseDateRange(

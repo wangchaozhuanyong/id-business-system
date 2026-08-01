@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
+import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2FinanceAccountsService } from './id-business-v2-finance-accounts.service';
 import { IdBusinessV2FinanceController } from './id-business-v2-finance.controller';
 import { IdBusinessV2FinanceExpensesService } from './id-business-v2-finance-expenses.service';
@@ -13,9 +14,17 @@ import { IdBusinessV2FinancePeriodsService } from './id-business-v2-finance-peri
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
 import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-reports.service';
 import { IdBusinessV2FinanceSupplierWalletsService } from './id-business-v2-finance-supplier-wallets.service';
+import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
+import { IdBusinessV2FinanceGiftCardRefundRepository } from './persistence/id-business-v2-finance-gift-card-refund.repository';
+import { IdBusinessV2FinanceHistoryPreviewRepository } from './persistence/id-business-v2-finance-history-preview.repository';
+import { IdBusinessV2FinanceHistoryCommandRepository } from './persistence/id-business-v2-finance-history-command.repository';
+import { IdBusinessV2FinanceHistoryConfirmationRepository } from './persistence/id-business-v2-finance-history-confirmation.repository';
+import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
+import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
+import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
 
 @Module({
-  imports: [IdBusinessV2ExchangeRatesModule],
+  imports: [IdBusinessV2ExchangeRatesModule, IdBusinessV2RuntimeModule],
   controllers: [IdBusinessV2FinanceController],
   providers: [
     IdBusinessV2FinanceAccountsService,
@@ -29,7 +38,15 @@ import { IdBusinessV2FinanceSupplierWalletsService } from './id-business-v2-fina
     IdBusinessV2FinancePeriodsService,
     IdBusinessV2FinancePostingService,
     IdBusinessV2FinanceReportsService,
-    IdBusinessV2FinanceSupplierWalletsService
+    IdBusinessV2FinanceSupplierWalletsService,
+    IdBusinessV2FinanceCommandRepository,
+    IdBusinessV2FinanceGiftCardRefundRepository,
+    IdBusinessV2FinanceHistoryCommandRepository,
+    IdBusinessV2FinanceHistoryConfirmationRepository,
+    IdBusinessV2FinanceHistoryPreviewRepository,
+    IdBusinessV2FinanceQueryRepository,
+    IdBusinessV2FinanceReportRepository,
+    IdBusinessV2FinanceSupplierWalletRepository
   ],
   exports: [IdBusinessV2FinanceFxService, IdBusinessV2FinancePostingService]
 })

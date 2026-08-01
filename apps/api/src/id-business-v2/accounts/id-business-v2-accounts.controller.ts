@@ -21,6 +21,7 @@ import { IdBusinessV2AccountsService } from './id-business-v2-accounts.service';
 
 interface RequestWithAuditMeta {
   ip?: string;
+  requestId?: string;
   headers: Record<string, string | string[] | undefined>;
 }
 
@@ -112,7 +113,8 @@ export class IdBusinessV2AccountsController {
     @Query('saleState') saleState?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
   ) {
     return this.accountsService.exportRows(
       {
@@ -125,7 +127,8 @@ export class IdBusinessV2AccountsController {
         sortBy,
         sortOrder
       },
-      operator
+      operator,
+      { requestId: request?.requestId }
     );
   }
 
@@ -143,17 +146,22 @@ export class IdBusinessV2AccountsController {
 
   @Post()
   @RequirePermissions('apple.account.create')
-  create(@Body() dto: CreateIdBusinessV2AccountDto, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.accountsService.create(dto, operator);
+  create(
+    @Body() dto: CreateIdBusinessV2AccountDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
+  ) {
+    return this.accountsService.create(dto, operator, { requestId: request?.requestId });
   }
 
   @Post('import')
   @RequirePermissions('apple.account.import')
   importRows(
     @Body() dto: ImportIdBusinessV2AccountsDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
   ) {
-    return this.accountsService.importRows(dto, operator);
+    return this.accountsService.importRows(dto, operator, { requestId: request?.requestId });
   }
 
   @Patch(':id')
@@ -161,9 +169,10 @@ export class IdBusinessV2AccountsController {
   update(
     @Param('id') id: string,
     @Body() dto: UpdateIdBusinessV2AccountDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
   ) {
-    return this.accountsService.update(id, dto, operator);
+    return this.accountsService.update(id, dto, operator, { requestId: request?.requestId });
   }
 
   @Post(':id/reveal-secret')
@@ -177,6 +186,7 @@ export class IdBusinessV2AccountsController {
     @Req() request: RequestWithAuditMeta
   ) {
     return this.accountsService.revealSecret(id, dto, operator, {
+      requestId: request.requestId,
       ip: request.ip,
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
@@ -184,8 +194,12 @@ export class IdBusinessV2AccountsController {
 
   @Delete(':id')
   @RequirePermissions('apple.account.delete')
-  remove(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.accountsService.remove(id, operator);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
+  ) {
+    return this.accountsService.remove(id, operator, { requestId: request?.requestId });
   }
 
   private getHeaderValue(value: string | string[] | undefined) {

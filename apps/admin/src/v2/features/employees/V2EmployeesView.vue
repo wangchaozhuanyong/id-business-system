@@ -62,13 +62,13 @@
       @retry="page.loadEmployees"
     >
       <section class="v2-records-list">
-        <el-table
+        <V2Table
+          :schema="v2TableSchemas.employees.main"
           :aria-busy="page.loading"
           scrollbar-always-on
           show-overflow-tooltip
           class="v2-records-table"
           :data="page.items"
-          row-key="id"
           @sort-change="page.handleSortChange"
         >
           <template #empty>
@@ -79,11 +79,8 @@
             </div>
           </template>
           <V2TableColumn
-            kind="identifier"
+            :definition="v2TableSchemas.employees.main.columns[0]"
             prop="username"
-            label="登录账号"
-            width-preset="identifier"
-            fixed="left"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -91,22 +88,18 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="text"
+            :definition="v2TableSchemas.employees.main.columns[1]"
             prop="displayName"
-            label="员工姓名"
-            width-preset="wide"
             sortable="custom"
           />
-          <V2TableColumn kind="text" label="角色" width-preset="wide">
+          <V2TableColumn :definition="v2TableSchemas.employees.main.columns[2]">
             <template #default="{ row }">
               {{ row.roles.map((role: V2EmployeeRole) => role.name).join('、') || '—' }}
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="status"
+            :definition="v2TableSchemas.employees.main.columns[3]"
             prop="status"
-            label="状态"
-            width-preset="compact"
             sortable="custom"
           >
             <template #default="{ row }">
@@ -115,10 +108,10 @@
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableColumn kind="numeric" label="在线会话" width-preset="compact">
+          <V2TableColumn :definition="v2TableSchemas.employees.main.columns[4]">
             <template #default="{ row }">{{ row.activeSessionCount }}</template>
           </V2TableColumn>
-          <V2TableColumn kind="status" label="密码状态" width-preset="standard">
+          <V2TableColumn :definition="v2TableSchemas.employees.main.columns[5]">
             <template #default="{ row }">
               <el-tag :type="row.mustResetPassword ? 'warning' : 'success'" effect="plain">
                 {{ row.mustResetPassword ? '待首次修改' : '正常' }}
@@ -126,24 +119,20 @@
             </template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
+            :definition="v2TableSchemas.employees.main.columns[6]"
             prop="lastLoginAt"
-            label="最近登录"
-            width-preset="dateTime"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.lastLoginAt) }}</template>
           </V2TableColumn>
           <V2TableColumn
-            kind="date"
+            :definition="v2TableSchemas.employees.main.columns[7]"
             prop="createdAt"
-            label="开通时间"
-            width-preset="dateTime"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn layout="single">
+          <V2TableActionColumn :definition="v2TableSchemas.employees.main.columns[8]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="page.openEdit(row)">
                 <el-icon><Edit /></el-icon>
@@ -151,9 +140,9 @@
               </AppButton>
             </template>
           </V2TableActionColumn>
-        </el-table>
+        </V2Table>
 
-        <div class="v2-records-mobile-list">
+        <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.employees.main.id">
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
@@ -223,6 +212,8 @@ import { reactive } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2EmployeeDrawer from './components/V2EmployeeDrawer.vue';
 import type { V2EmployeeRole } from './contracts';

@@ -1,47 +1,49 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { roundV2Decimal, toV2Decimal } from '../decimal-policy';
+import {
+  Amount4,
+  V2TransactionalAuditService,
+  type V2CommandTransaction,
+  type V2DecimalInput
+} from '../runtime/public-api';
 import { IdBusinessV2TopupSupplierFundsSupport } from './id-business-v2-topup-supplier-funds-support';
+import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-business-v2-topup-supplier-command.repository';
 
 interface GiftCardFundInput {
   supplierOptionId: string;
   supplierAccountId?: string;
   giftCardId: string;
   currency?: 'CNY' | 'MYR' | 'USDT';
-  amountOriginal?: PrismaNamespace.Decimal.Value;
-  amountCny: PrismaNamespace.Decimal.Value;
+  amountOriginal?: V2DecimalInput;
+  amountCny: V2DecimalInput;
   operator?: AuthenticatedUser;
 }
 
 @Injectable()
 export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2TopupSupplierFundsSupport {
-  constructor(prisma: PrismaService) {
-    super(prisma);
+  constructor(
+    repository: IdBusinessV2TopupSupplierCommandRepository,
+    transactionalAudit: V2TransactionalAuditService
+  ) {
+    super(repository, transactionalAudit);
   }
 
-  async debitGiftCard(tx: Prisma.TransactionClient, input: GiftCardFundInput) {
+  async debitGiftCard(tx: V2CommandTransaction, input: GiftCardFundInput) {
     const supplierOptionId = this.normalizeUuid(input.supplierOptionId, '加卡供应商');
     const giftCardId = this.normalizeUuid(input.giftCardId, '礼品卡');
     const currency = input.currency ?? 'CNY';
-    const amountOriginal = roundV2Decimal(input.amountOriginal ?? input.amountCny);
-    const amountCny = roundV2Decimal(input.amountCny);
+    const amountOriginal = Amount4.from(input.amountOriginal ?? input.amountCny);
+    const amountCny = Amount4.from(input.amountCny);
     if (amountOriginal.lte(0) || amountCny.lte(0)) {
       throw new BadRequestException('礼品卡原币金额和人民币成本必须大于 0');
     }
     const idempotencyKey = `supplier_gift_card_debit:${giftCardId}:${supplierOptionId}`;
-    const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-      where: { idempotencyKey }
-    });
+    const replay = await this.repository.findLedgerReplayWithoutSupplier(tx, idempotencyKey);
     if (replay) {
-      const replayAmount = toV2Decimal(replay.amount);
-      const replayAmountCny = toV2Decimal(replay.amountCny);
       if (
         replay.currency !== currency ||
-        !replayAmount.eq(amountOriginal) ||
-        !replayAmountCny.eq(amountCny)
+        !replay.amount.equals(amountOriginal) ||
+        !replay.amountCny.equals(amountCny)
       ) {
         throw new ConflictException('礼品卡供应商扣款请求与已入账内容不一致');
       }
@@ -60,40 +62,36 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
     if (account.supplierOptionId !== supplierOptionId || accountCurrency !== currency) {
       throw new BadRequestException('供应商钱包与加卡供应商或付款币种不一致');
     }
-    const balanceAfter = roundV2Decimal(currentBalance.sub(amountOriginal));
-    const balanceAfterCny = roundV2Decimal(account.currentBalanceCny.sub(amountCny));
-    const entry = await tx.idBusinessV2TopupSupplierLedger.create({
-      data: {
-        supplierAccountId: account.id,
-        giftCardId,
-        entryType: 'gift_card_debit',
-        direction: 'debit',
-        currency,
-        amount: amountOriginal,
-        balanceBefore: currentBalance,
-        balanceAfter,
-        amountCny,
-        balanceBeforeCny: account.currentBalanceCny,
-        balanceAfterCny,
-        supplierNameSnapshot: account.supplierName,
-        idempotencyKey,
-        reason: '礼品卡入账扣减供应商人民币余额',
-        createdByUserId: input.operator?.id
-      }
+    const balanceAfter = currentBalance.sub(amountOriginal);
+    const balanceAfterCny = account.currentBalanceCny.sub(amountCny);
+    const entry = await this.repository.createLedger(tx, {
+      supplierAccountId: account.id,
+      giftCardId,
+      entryType: 'gift_card_debit',
+      direction: 'debit',
+      currency,
+      amount: amountOriginal.toString(),
+      balanceBefore: currentBalance.toString(),
+      balanceAfter: balanceAfter.toString(),
+      amountCny: amountCny.toString(),
+      balanceBeforeCny: account.currentBalanceCny.toString(),
+      balanceAfterCny: balanceAfterCny.toString(),
+      supplierNameSnapshot: account.supplierName,
+      idempotencyKey,
+      reason: '礼品卡入账扣减供应商人民币余额',
+      createdByUserId: input.operator?.id
     });
-    await tx.idBusinessV2TopupSupplierAccount.update({
-      where: { id: account.id },
-      data: {
-        currentBalance: balanceAfter,
-        currentBalanceCny: balanceAfterCny,
-        updatedByUserId: input.operator?.id
-      }
+    await this.repository.updateSupplierAccountBalances(tx, {
+      accountId: account.id,
+      currentBalance: balanceAfter.toString(),
+      currentBalanceCny: balanceAfterCny.toString(),
+      operatorId: input.operator?.id
     });
     return this.toSupplierSnapshot(entry, false);
   }
 
   async reverseGiftCardDebit(
-    tx: Prisma.TransactionClient,
+    tx: V2CommandTransaction,
     input: {
       giftCardId: string;
       reason: string;
@@ -102,54 +100,41 @@ export class IdBusinessV2TopupSupplierGiftCardFundsService extends IdBusinessV2T
   ) {
     const giftCardId = this.normalizeUuid(input.giftCardId, '礼品卡');
     const idempotencyKey = `supplier_gift_card_withdrawal:${giftCardId}`;
-    const replay = await tx.idBusinessV2TopupSupplierLedger.findUnique({
-      where: { idempotencyKey }
-    });
+    const replay = await this.repository.findLedgerReplayWithoutSupplier(tx, idempotencyKey);
     if (replay) return this.toSupplierSnapshot(replay, true);
 
-    const debitEntry = await tx.idBusinessV2TopupSupplierLedger.findFirst({
-      where: {
-        giftCardId,
-        entryType: 'gift_card_debit',
-        reversedBy: null
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const debitEntry = await this.repository.findActiveGiftCardDebit(tx, giftCardId);
     if (!debitEntry) return null;
 
     const account = await this.lockSupplierAccountById(tx, debitEntry.supplierAccountId);
-    const debitAmount = roundV2Decimal(debitEntry.amount ?? debitEntry.amountCny);
-    const debitAmountCny = roundV2Decimal(debitEntry.amountCny);
+    const debitAmount = debitEntry.amount;
+    const debitAmountCny = debitEntry.amountCny;
     const balanceBefore = account.currentBalance ?? account.currentBalanceCny;
-    const balanceAfter = roundV2Decimal(balanceBefore.add(debitAmount));
-    const balanceAfterCny = roundV2Decimal(account.currentBalanceCny.add(debitAmountCny));
-    const entry = await tx.idBusinessV2TopupSupplierLedger.create({
-      data: {
-        supplierAccountId: account.id,
-        giftCardId,
-        entryType: 'gift_card_withdrawal_reversal',
-        direction: 'credit',
-        currency: debitEntry.currency ?? 'CNY',
-        amount: debitAmount,
-        balanceBefore,
-        balanceAfter,
-        amountCny: debitAmountCny,
-        balanceBeforeCny: account.currentBalanceCny,
-        balanceAfterCny,
-        supplierNameSnapshot: account.supplierName,
-        reversalOfEntryId: debitEntry.id,
-        idempotencyKey,
-        reason: input.reason,
-        createdByUserId: input.operator?.id
-      }
+    const balanceAfter = balanceBefore.add(debitAmount);
+    const balanceAfterCny = account.currentBalanceCny.add(debitAmountCny);
+    const entry = await this.repository.createLedger(tx, {
+      supplierAccountId: account.id,
+      giftCardId,
+      entryType: 'gift_card_withdrawal_reversal',
+      direction: 'credit',
+      currency: debitEntry.currency ?? 'CNY',
+      amount: debitAmount.toString(),
+      balanceBefore: balanceBefore.toString(),
+      balanceAfter: balanceAfter.toString(),
+      amountCny: debitAmountCny.toString(),
+      balanceBeforeCny: account.currentBalanceCny.toString(),
+      balanceAfterCny: balanceAfterCny.toString(),
+      supplierNameSnapshot: account.supplierName,
+      reversalOfEntryId: debitEntry.id,
+      idempotencyKey,
+      reason: input.reason,
+      createdByUserId: input.operator?.id
     });
-    await tx.idBusinessV2TopupSupplierAccount.update({
-      where: { id: account.id },
-      data: {
-        currentBalance: balanceAfter,
-        currentBalanceCny: balanceAfterCny,
-        updatedByUserId: input.operator?.id
-      }
+    await this.repository.updateSupplierAccountBalances(tx, {
+      accountId: account.id,
+      currentBalance: balanceAfter.toString(),
+      currentBalanceCny: balanceAfterCny.toString(),
+      operatorId: input.operator?.id
     });
     return this.toSupplierSnapshot(entry, false);
   }

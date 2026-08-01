@@ -24,7 +24,7 @@
             <AppButton
               v-if="missingOptionsConfiguration && canManageOptions"
               variant="ghost"
-              @click="router.push('/v2/options')"
+              @click="openRoute('/v2/options')"
             >
               前往选项设置
             </AppButton>
@@ -38,7 +38,7 @@
             <AppButton
               v-if="missingCustomersConfiguration && canViewCustomers"
               variant="ghost"
-              @click="router.push('/v2/customers')"
+              @click="openRoute('/v2/customers')"
             >
               前往客户管理
             </AppButton>
@@ -273,8 +273,6 @@
               :recommendation-applied="recommendationApplied"
               :applied-suggested-original="appliedSuggestedOriginal"
               :platform-fee-preview="platformFeePreview"
-              :estimated-profit-preview="estimatedProfitPreview"
-              :estimated-profit-rate-preview="estimatedProfitRatePreview"
               :pricing-input-mode="pricingInputMode"
               :profit-rate-input-hint="profitRateInputHint"
               :format-decimal="formatDecimal"
@@ -384,7 +382,7 @@
         :consuming="consuming"
         :format-decimal="formatDecimal"
         @retry="retryConsumption"
-        @view-orders="router.push('/v2/orders')"
+        @view-orders="openRoute('/v2/orders')"
       />
 
       <V2QuickCustomerDrawer v-model="quickCustomerVisible" @created="handleCustomerCreated" />
@@ -398,6 +396,7 @@ import { CircleCheck, Plus } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import V2OrderEntryCandidates from './components/V2OrderEntryCandidates.vue';
 import V2OrderPricingFields from './components/V2OrderPricingFields.vue';
 import V2OrderReceiptFields from './components/V2OrderReceiptFields.vue';
@@ -448,7 +447,6 @@ const {
   estimatedBalanceCostPreview,
   totalCostPreview,
   estimatedProfitPreview,
-  estimatedProfitRatePreview,
   pricingInputMode,
   profitRateInputValue,
   profitRateInputHint,
@@ -482,4 +480,8 @@ const {
   formatDecimal
 } = useOrderEntryPage();
 const quickCustomerVisible = ref(false);
+
+function openRoute(path: string) {
+  void navigateSafely(router, path);
+}
 </script>

@@ -1,9 +1,5 @@
 export type V2AsyncRegionState =
-  | 'forbidden'
-  | 'initial-loading'
-  | 'initial-error'
-  | 'empty'
-  | 'content';
+  'forbidden' | 'initial-loading' | 'initial-error' | 'empty' | 'content';
 
 interface ResolveV2AsyncRegionStateInput {
   forbidden: boolean;

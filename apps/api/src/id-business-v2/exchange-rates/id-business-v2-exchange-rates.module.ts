@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2BinanceOtcCollector } from './id-business-v2-binance-otc.collector';
 import { IdBusinessV2ExchangeRateCronService } from './id-business-v2-exchange-rate-cron.service';
 import { IdBusinessV2ExchangeRateOrderQuoteService } from './id-business-v2-exchange-rate-order-quote.service';
@@ -12,8 +13,10 @@ import { IdBusinessV2ExchangeRatesService } from './id-business-v2-exchange-rate
 import { IdBusinessV2OkxOtcCollector } from './id-business-v2-okx-otc.collector';
 import { IdBusinessV2OtcAverageService } from './id-business-v2-otc-average.service';
 import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.service';
+import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 @Module({
+  imports: [IdBusinessV2RuntimeModule],
   controllers: [IdBusinessV2ExchangeRatesController],
   providers: [
     IdBusinessV2ExchangeRatesService,
@@ -21,6 +24,7 @@ import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.ser
     IdBusinessV2OkxOtcCollector,
     IdBusinessV2OtcAverageService,
     IdBusinessV2OtcMidRateService,
+    IdBusinessV2ExchangeRateRepository,
     IdBusinessV2ExchangeRateSettingsService,
     IdBusinessV2ExchangeRatePersistenceService,
     IdBusinessV2ExchangeRateQueryService,

@@ -1,5 +1,5 @@
 <template>
-  <ElConfigProvider :locale="zhCn" :message="messageConfig">
+  <ElConfigProvider :locale="elementLocale" :message="messageConfig">
     <RouterView v-slot="{ Component: RouteComponent }">
       <V2BootGate
         v-if="bootStage !== 'ready'"
@@ -40,24 +40,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
-import zhCn from 'element-plus/es/locale/lang/zh-cn.mjs';
-import { AUTH_IDENTITY_CHANGED_EVENT, AUTH_SESSION_EXPIRED_EVENT } from '@/auth/session';
+import type { Language } from 'element-plus/es/locale/index.mjs';
+import { authIdentityEpoch } from '@/auth/sessionCoordinator';
 import { appRuntimeError, clearAppRuntimeError } from '@/runtime/appRuntimeError';
 import { useAuthStore } from '@/stores/auth';
 import V2BootGate from '@/v2/components/V2BootGate.vue';
-import { clearV2QueryCache } from '@/v2/composables/useV2Query';
-import {
-  resetV2RouteNavigationState,
-  setV2RouteNavigationState,
-  v2RouteNavigationState
-} from '@/v2/router/routes';
+import { navigateSafely } from '@/v2/router/navigateSafely';
+import { setV2RouteNavigationState, v2RouteNavigationState } from '@/v2/router/routes';
 
 const router = useRouter();
 const authStore = useAuthStore();
+const elementLocale = shallowRef<Language>();
 const routerSettled = ref(false);
-const runtimeEpoch = ref(0);
+const runtimeEpoch = authIdentityEpoch;
 const currentRuntimeError = computed(() => appRuntimeError.value);
 const isProtectedRoute = computed(
   () => router.currentRoute.value.matched.length > 0 && !router.currentRoute.value.meta.public
@@ -65,14 +62,19 @@ const isProtectedRoute = computed(
 const hasBootRouteError = computed(
   () => !v2RouteNavigationState.stablePath && v2RouteNavigationState.state === 'error'
 );
+const isSessionUnavailableRoute = computed(
+  () => router.currentRoute.value.meta.sessionBoundary === 'unavailable'
+);
 type BootStage = 'booting' | 'session-checking' | 'route-loading' | 'ready' | 'degraded' | 'fatal';
 const bootStage = computed<BootStage>(() => {
   if (currentRuntimeError.value && !v2RouteNavigationState.stablePath) return 'fatal';
-  if (authStore.sessionStatus === 'error' || hasBootRouteError.value) return 'degraded';
-  if (authStore.sessionStatus === 'idle') return 'booting';
+  if (hasBootRouteError.value) return 'degraded';
+  if (isSessionUnavailableRoute.value) return routerSettled.value ? 'ready' : 'route-loading';
+  if (authStore.session.kind === 'cold') return 'booting';
   if (
-    authStore.sessionStatus === 'checking' ||
-    (authStore.sessionStatus === 'anonymous' && isProtectedRoute.value)
+    authStore.session.kind === 'validating' ||
+    (authStore.session.kind === 'degraded' && !authStore.session.verifiedInRuntime) ||
+    (authStore.session.kind === 'anonymous' && isProtectedRoute.value)
   ) {
     return 'session-checking';
   }
@@ -93,30 +95,9 @@ const messageConfig = {
   showClose: true
 };
 
-function handleAuthSessionExpired(rawEvent: Event) {
-  const event = rawEvent as CustomEvent<{ message?: string }>;
-  const currentRoute = router.currentRoute.value;
-
-  authStore.clearLocalSession({
-    reason: 'session-expired'
-  });
-  void import('@/v2/services/feedback').then(({ showV2Warning }) => {
-    showV2Warning(event.detail?.message || '登录状态已过期，请重新登录。');
-  });
-
-  if (currentRoute.path !== '/login') {
-    void router.replace({
-      path: '/login',
-      query: { redirect: currentRoute.fullPath }
-    });
-  }
-}
-
-function handleAuthIdentityChanged() {
-  clearV2QueryCache();
-  resetV2RouteNavigationState(router.currentRoute.value.fullPath);
-  runtimeEpoch.value += 1;
-}
+void import('element-plus/es/locale/lang/zh-cn.mjs').then(({ default: locale }) => {
+  elementLocale.value = locale;
+});
 
 function reloadApp() {
   window.location.reload();
@@ -132,48 +113,26 @@ async function retryBoot() {
     return;
   }
 
-  const status = await authStore.ensureSessionReady({ force: true });
-  if (status === 'error') return;
-
   const target =
     v2RouteNavigationState.path ||
     `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (target.startsWith('/v2')) {
     setV2RouteNavigationState(target, 'pending');
   }
-  try {
-    await router.replace(target);
-  } catch (error) {
-    setV2RouteNavigationState(target, 'error', error);
-  }
+  await navigateSafely(router, target, 'replace');
 }
 
 function dismissRuntimeError() {
   clearAppRuntimeError();
 }
 
-void router.isReady().finally(() => {
-  routerSettled.value = true;
-});
-
-watch(
-  () => authStore.sessionStatus,
-  (status) => {
-    const currentRoute = router.currentRoute.value;
-    if (status === 'anonymous' && currentRoute.path.startsWith('/v2')) {
-      void router.replace({
-        path: '/login',
-        query: { redirect: currentRoute.fullPath }
-      });
-    }
+void (async () => {
+  try {
+    await router.isReady();
+  } catch (error) {
+    setV2RouteNavigationState(router.currentRoute.value.fullPath, 'error', error);
+  } finally {
+    routerSettled.value = true;
   }
-);
-
-window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleAuthSessionExpired);
-window.addEventListener(AUTH_IDENTITY_CHANGED_EVENT, handleAuthIdentityChanged);
-
-onBeforeUnmount(() => {
-  window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleAuthSessionExpired);
-  window.removeEventListener(AUTH_IDENTITY_CHANGED_EVENT, handleAuthIdentityChanged);
-});
+})();
 </script>

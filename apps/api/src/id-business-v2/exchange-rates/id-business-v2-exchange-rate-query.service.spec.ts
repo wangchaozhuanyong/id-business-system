@@ -38,16 +38,12 @@ function run(
 }
 
 describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
-  const prisma = {
-    idBusinessV2ExchangeRateRun: {
-      findFirst: vi.fn()
-    }
-  };
+  const repository = { findLatestRun: vi.fn() };
   const settings = {
     getRecord: vi.fn(),
     isNetworkEnabled: vi.fn()
   };
-  const service = new IdBusinessV2ExchangeRateQueryService(prisma as never, settings as never);
+  const service = new IdBusinessV2ExchangeRateQueryService(repository as never, settings as never);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,9 +53,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
 
   it('returns a fresh latest successful snapshot for topup prefill', async () => {
     const success = run('success');
-    prisma.idBusinessV2ExchangeRateRun.findFirst
-      .mockResolvedValueOnce(success)
-      .mockResolvedValueOnce(success);
+    repository.findLatestRun.mockResolvedValueOnce(success).mockResolvedValueOnce(success);
 
     await expect(service.getEffective()).resolves.toMatchObject({
       available: true,
@@ -70,7 +64,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
   });
 
   it('blocks prefill immediately when the latest attempt failed', async () => {
-    prisma.idBusinessV2ExchangeRateRun.findFirst
+    repository.findLatestRun
       .mockResolvedValueOnce(run('failed'))
       .mockResolvedValueOnce(run('success'));
 
@@ -83,9 +77,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
 
   it('blocks an expired successful snapshot instead of serving a cached default', async () => {
     const expired = run('success', new Date(Date.now() - 20 * 60_000));
-    prisma.idBusinessV2ExchangeRateRun.findFirst
-      .mockResolvedValueOnce(expired)
-      .mockResolvedValueOnce(expired);
+    repository.findLatestRun.mockResolvedValueOnce(expired).mockResolvedValueOnce(expired);
 
     await expect(service.getEffective()).resolves.toMatchObject({
       available: false,
@@ -94,7 +86,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
   });
 
   it('rejects a topup prefill whose source snapshot is no longer effective', async () => {
-    prisma.idBusinessV2ExchangeRateRun.findFirst
+    repository.findLatestRun
       .mockResolvedValueOnce(run('failed'))
       .mockResolvedValueOnce(run('success'));
 
@@ -106,9 +98,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
   it('keeps the last fresh success effective while the next collection is running', async () => {
     const running = run('running');
     const success = run('success');
-    prisma.idBusinessV2ExchangeRateRun.findFirst
-      .mockResolvedValueOnce(running)
-      .mockResolvedValueOnce(success);
+    repository.findLatestRun.mockResolvedValueOnce(running).mockResolvedValueOnce(success);
 
     await expect(service.getEffective()).resolves.toMatchObject({
       available: true,
@@ -119,9 +109,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
   });
 
   it('reports first collection in progress when there is no successful snapshot yet', async () => {
-    prisma.idBusinessV2ExchangeRateRun.findFirst
-      .mockResolvedValueOnce(run('running'))
-      .mockResolvedValueOnce(null);
+    repository.findLatestRun.mockResolvedValueOnce(run('running')).mockResolvedValueOnce(null);
 
     await expect(service.getEffective()).resolves.toMatchObject({
       available: false,

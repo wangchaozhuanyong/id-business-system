@@ -1,6 +1,4 @@
 import { ConflictException } from '@nestjs/common';
-import { IdBusinessV2OrderAccountDisposition, Prisma as PrismaNamespace } from '@prisma/client';
-import type { IdBusinessV2BalanceLedger, IdBusinessV2OrderStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import { releaseSoldOrderAccount } from './id-business-v2-order-account-disposition';
@@ -14,7 +12,13 @@ import type {
 } from './id-business-v2-order-lifecycle-support';
 import type { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import type { IdBusinessV2FinancePostingService } from '../finance/public-api';
-import { roundV2Decimal } from '../decimal-policy';
+import { Amount4, Rate8 } from '../runtime/public-api';
+import type {
+  IdBusinessV2BalanceLedgerRecord,
+  IdBusinessV2OrderRecord,
+  IdBusinessV2OrderStatus
+} from './id-business-v2-order.types';
+import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
 
@@ -22,6 +26,7 @@ export async function refundIdBusinessV2Order(
   support: IdBusinessV2OrderLifecycleSupport,
   orderLockService: IdBusinessV2OrderLockService,
   financePostingService: IdBusinessV2FinancePostingService,
+  repository: IdBusinessV2OrdersRepository,
   orderIdValue: string,
   dto: RefundIdBusinessV2OrderDto,
   operator?: AuthenticatedUser
@@ -45,8 +50,7 @@ export async function refundIdBusinessV2Order(
           order.refundCostAmount === null ||
           !order.refundCostAmount.equals(refundCostAmount) ||
           Boolean(existingReversal) !== restoreBalance ||
-          (order.accountDisposition === IdBusinessV2OrderAccountDisposition.recovered) !==
-            accountReturned
+          (order.accountDisposition === 'recovered') !== accountReturned
         ) {
           throw new ConflictException('订单已经按其他退款内容处理，请刷新后核对');
         }
@@ -62,10 +66,7 @@ export async function refundIdBusinessV2Order(
       if (!REFUNDABLE_STATUSES.has(order.status)) {
         throw new ConflictException('只有处理中或已完成订单可以退款');
       }
-      if (
-        accountReturned &&
-        order.accountDisposition !== IdBusinessV2OrderAccountDisposition.sold
-      ) {
+      if (accountReturned && order.accountDisposition !== 'sold') {
         throw new ConflictException('只有已卖出的 ID 才能在退款时标记为已收回');
       }
 
@@ -76,19 +77,12 @@ export async function refundIdBusinessV2Order(
       if (existingReversal) {
         throw new ConflictException('订单消费已经撤销，不能再次退款');
       }
-      const activation = await tx.idBusinessV2Activation.findUnique({
-        where: {
-          orderId: order.id
-        },
-        select: {
-          id: true
-        }
-      });
+      const activation = await repository.hasActivationByOrder(tx, order.id);
       if (restoreBalance && activation) {
         throw new ConflictException('订单已有开通记录，不能把 Apple 余额自动恢复');
       }
 
-      let reversalLedger: IdBusinessV2BalanceLedger | null = null;
+      let reversalLedger: IdBusinessV2BalanceLedgerRecord | null = null;
       if (restoreBalance) {
         const restoration = await support.restoreConsumption(
           tx,
@@ -100,19 +94,13 @@ export async function refundIdBusinessV2Order(
         );
         reversalLedger = restoration.ledger;
       }
-      const effectiveBalanceCost = restoreBalance
-        ? new PrismaNamespace.Decimal(0)
-        : order.balanceCostAmount;
+      const effectiveBalanceCost = restoreBalance ? Amount4.zero() : order.balanceCostAmount;
       if (accountReturned) {
-        await releaseSoldOrderAccount(tx, order, operator);
+        await releaseSoldOrderAccount(tx, repository, order, operator);
       }
-      const nextAccountDisposition = accountReturned
-        ? IdBusinessV2OrderAccountDisposition.recovered
-        : order.accountDisposition;
+      const nextAccountDisposition = accountReturned ? 'recovered' : order.accountDisposition;
       const appliedAccountCostAmount =
-        nextAccountDisposition === IdBusinessV2OrderAccountDisposition.sold
-          ? order.accountCostAmount
-          : new PrismaNamespace.Decimal(0);
+        nextAccountDisposition === 'sold' ? order.accountCostAmount : Amount4.zero();
       const profitAmount = support.calculateProfit(
         order.receivedAmount,
         order.platformFeeAmount,
@@ -127,19 +115,14 @@ export async function refundIdBusinessV2Order(
         operator
       );
       const statusChangedAt = new Date();
-      await tx.idBusinessV2Order.update({
-        where: {
-          id: order.id
-        },
-        data: {
-          refundCostAmount,
-          balanceCostAmount: effectiveBalanceCost,
-          accountDisposition: nextAccountDisposition,
-          profitAmount,
-          status: 'refunded',
-          statusChangedAt,
-          updatedByUserId: operator?.id
-        }
+      await repository.updateOrder(tx, order.id, {
+        refundCostAmount: refundCostAmount.toString(),
+        balanceCostAmount: effectiveBalanceCost.toString(),
+        accountDisposition: nextAccountDisposition,
+        profitAmount: profitAmount.toString(),
+        status: 'refunded',
+        statusChangedAt,
+        updatedByUserId: operator?.id
       });
       const financeJournal = await financePostingService.post(tx, {
         journalType: 'order_refund',
@@ -188,37 +171,41 @@ export async function refundIdBusinessV2Order(
         idempotentReplay: false
       };
     },
-    '订单已经退款或消费撤销正在并发处理，请刷新后核对'
+    '订单已经退款或消费撤销正在并发处理，请刷新后核对',
+    operator
   );
 
   return support.buildLifecycleResponse(result);
 }
 
 function buildRefundFinanceLines(
-  order: {
-    receivedAmount: PrismaNamespace.Decimal;
-    receivedOriginalAmount: PrismaNamespace.Decimal;
-    receivedCurrency: 'CNY' | 'MYR' | 'USDT';
-    receivedFxRateToCny: PrismaNamespace.Decimal;
-    receivedFxSnapshotId: string | null;
-    receivedFinanceAccountId: string | null;
-    balanceCostAmount: PrismaNamespace.Decimal;
-    accountCostAmount: PrismaNamespace.Decimal;
-    status: IdBusinessV2OrderStatus;
-  },
-  refundCostAmount: PrismaNamespace.Decimal,
+  order: Pick<
+    IdBusinessV2OrderRecord,
+    | 'receivedAmount'
+    | 'receivedOriginalAmount'
+    | 'receivedCurrency'
+    | 'receivedFxRateToCny'
+    | 'receivedFxSnapshotId'
+    | 'receivedFinanceAccountId'
+    | 'balanceCostAmount'
+    | 'accountCostAmount'
+    | 'status'
+  >,
+  refundCostAmount: Amount4,
   restoreBalance: boolean,
   accountReturned: boolean
 ) {
   const completed = order.status === 'completed';
-  const hasOriginalEvidence = order.receivedOriginalAmount.gt(0);
+  const receivedOriginalAmount = order.receivedOriginalAmount;
+  const receivedAmount = order.receivedAmount;
+  const receivedFxRateToCny = order.receivedFxRateToCny;
+  const balanceCostAmount = order.balanceCostAmount;
+  const accountCostAmount = order.accountCostAmount;
+  const hasOriginalEvidence = receivedOriginalAmount.gt(0);
   const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
-  const rate = hasOriginalEvidence ? order.receivedFxRateToCny : new PrismaNamespace.Decimal(1);
-  const receivedOriginal = hasOriginalEvidence
-    ? order.receivedOriginalAmount
-    : order.receivedAmount;
-  const refundCostOriginal =
-    currency === 'CNY' ? refundCostAmount : roundV2Decimal(refundCostAmount.div(rate));
+  const rate = hasOriginalEvidence ? receivedFxRateToCny : Rate8.one();
+  const receivedOriginal = hasOriginalEvidence ? receivedOriginalAmount : receivedAmount;
+  const refundCostOriginal = currency === 'CNY' ? refundCostAmount : refundCostAmount.div(rate);
   const lines = [];
   if (completed) {
     lines.push(
@@ -228,7 +215,7 @@ function buildRefundFinanceLines(
         currency,
         amountOriginal: receivedOriginal,
         fxRateToCny: rate,
-        amountCny: order.receivedAmount,
+        amountCny: receivedAmount,
         fxRateSnapshotId: order.receivedFxSnapshotId,
         memo: '冲回已完成订单收入'
       },
@@ -238,7 +225,7 @@ function buildRefundFinanceLines(
         currency,
         amountOriginal: receivedOriginal,
         fxRateToCny: rate,
-        amountCny: order.receivedAmount,
+        amountCny: receivedAmount,
         financeAccountId: order.receivedFinanceAccountId,
         fxRateSnapshotId: order.receivedFxSnapshotId,
         memo: '订单退款支出'
@@ -274,18 +261,18 @@ function buildRefundFinanceLines(
         accountCode: 'gift_card_inventory' as const,
         direction: 'debit' as const,
         currency: 'CNY' as const,
-        amountOriginal: order.balanceCostAmount,
+        amountOriginal: balanceCostAmount,
         fxRateToCny: 1,
-        amountCny: order.balanceCostAmount,
+        amountCny: balanceCostAmount,
         memo: '退款恢复礼品卡余额资产'
       },
       {
         accountCode: 'gift_card_cost' as const,
         direction: 'credit' as const,
         currency: 'CNY' as const,
-        amountOriginal: order.balanceCostAmount,
+        amountOriginal: balanceCostAmount,
         fxRateToCny: 1,
-        amountCny: order.balanceCostAmount,
+        amountCny: balanceCostAmount,
         memo: '冲回礼品卡销售成本'
       }
     );
@@ -296,18 +283,18 @@ function buildRefundFinanceLines(
         accountCode: 'id_inventory' as const,
         direction: 'debit' as const,
         currency: 'CNY' as const,
-        amountOriginal: order.accountCostAmount,
+        amountOriginal: accountCostAmount,
         fxRateToCny: 1,
-        amountCny: order.accountCostAmount,
+        amountCny: accountCostAmount,
         memo: '退款收回 ID 库存'
       },
       {
         accountCode: 'id_cost' as const,
         direction: 'credit' as const,
         currency: 'CNY' as const,
-        amountOriginal: order.accountCostAmount,
+        amountOriginal: accountCostAmount,
         fxRateToCny: 1,
-        amountCny: order.accountCostAmount,
+        amountCny: accountCostAmount,
         memo: '冲回已卖 ID 成本'
       }
     );

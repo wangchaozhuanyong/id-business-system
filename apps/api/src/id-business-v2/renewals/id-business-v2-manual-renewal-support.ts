@@ -1,41 +1,26 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
 import type { CreateIdBusinessV2ManualRenewalDto } from './dto/create-id-business-v2-manual-renewal.dto';
-import { V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES, toV2DecimalString } from '../decimal-policy';
+import { Amount4, V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES } from '../runtime/public-api';
+import type {
+  ManualRenewalLedgerRecord,
+  ManualRenewalReplayOrder
+} from './id-business-v2-renewal.types';
 
 export interface NormalizedManualRenewal {
   serviceOptionId: string;
   settlementPlatformOptionId: string;
   platformOrderNo: string | null;
-  receivedAmount: PrismaNamespace.Decimal;
-  balanceAmount: PrismaNamespace.Decimal;
+  receivedAmount: Amount4;
+  balanceAmount: Amount4;
   openedAt: Date;
   dueAt: Date;
   idempotencyKey: string;
   remark: string | null;
 }
 
-export const MANUAL_RENEWAL_REPLAY_INCLUDE = {
-  activation: true,
-  balanceLedger: {
-    where: {
-      entryType: 'order_consumption' as const
-    },
-    take: 1,
-    orderBy: {
-      createdAt: 'asc' as const
-    }
-  }
-} satisfies Prisma.IdBusinessV2OrderInclude;
-
-export type ManualRenewalReplayOrder = Prisma.IdBusinessV2OrderGetPayload<{
-  include: typeof MANUAL_RENEWAL_REPLAY_INCLUDE;
-}>;
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
-const MAX_AMOUNT = new PrismaNamespace.Decimal('99999999999999.9999');
+const MAX_AMOUNT = Amount4.from('99999999999999.9999');
 
 export function normalizeManualRenewalInput(
   activationId: string,
@@ -131,41 +116,20 @@ export function normalizeUuid(value: unknown, label: string) {
   return normalized;
 }
 
-export function toManualRenewalLedgerResponse(entry: {
-  id: string;
-  accountId: string;
-  balanceAmount: PrismaNamespace.Decimal;
-  costAmount: PrismaNamespace.Decimal;
-  balanceBefore: PrismaNamespace.Decimal;
-  balanceAfter: PrismaNamespace.Decimal;
-  costBefore: PrismaNamespace.Decimal;
-  costAfter: PrismaNamespace.Decimal;
-  averageCostBefore: PrismaNamespace.Decimal;
-  averageCostAfter: PrismaNamespace.Decimal;
-  createdAt: Date;
-}) {
+export function toManualRenewalLedgerResponse(entry: ManualRenewalLedgerRecord) {
   return {
     id: entry.id,
     accountId: entry.accountId,
-    balanceAmount: toV2DecimalString(entry.balanceAmount),
-    costAmount: toV2DecimalString(entry.costAmount),
-    balanceBefore: toV2DecimalString(entry.balanceBefore),
-    balanceAfter: toV2DecimalString(entry.balanceAfter),
-    costBefore: toV2DecimalString(entry.costBefore),
-    costAfter: toV2DecimalString(entry.costAfter),
-    averageCostBefore: toV2DecimalString(entry.averageCostBefore),
-    averageCostAfter: toV2DecimalString(entry.averageCostAfter),
+    balanceAmount: entry.balanceAmount.toString(),
+    costAmount: entry.costAmount.toString(),
+    balanceBefore: entry.balanceBefore.toString(),
+    balanceAfter: entry.balanceAfter.toString(),
+    costBefore: entry.costBefore.toString(),
+    costAfter: entry.costAfter.toString(),
+    averageCostBefore: entry.averageCostBefore.toString(),
+    averageCostAfter: entry.averageCostAfter.toString(),
     createdAt: entry.createdAt
   };
-}
-
-export function isUniqueConstraintError(error: unknown) {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'P2002'
-  );
 }
 
 function normalizeOptionalString(value: unknown, label: string, maxLength: number) {
@@ -186,11 +150,11 @@ function normalizeAmount(value: unknown, label: string, allowZero: boolean) {
   if (!V2_DECIMAL_PATTERN.test(normalized)) {
     throw new BadRequestException(`${label}必须是最多 ${V2_DECIMAL_PLACES} 位小数的非负数`);
   }
-  const amount = new PrismaNamespace.Decimal(normalized);
-  if ((!allowZero && amount.lessThanOrEqualTo(0)) || (allowZero && amount.lessThan(0))) {
+  const amount = Amount4.from(normalized);
+  if ((!allowZero && amount.lte(0)) || (allowZero && amount.lt(0))) {
     throw new BadRequestException(`${label}${allowZero ? '不能为负数' : '必须大于 0'}`);
   }
-  if (amount.greaterThan(MAX_AMOUNT)) throw new BadRequestException(`${label}数值过大`);
+  if (amount.gt(MAX_AMOUNT)) throw new BadRequestException(`${label}数值过大`);
   return amount;
 }
 

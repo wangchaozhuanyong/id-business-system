@@ -1,9 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import type { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
-import { toAuditJson } from './id-business-v2-account-support';
 
 const MAX_ACCOUNT_IMPORT_ROWS = 500;
 
@@ -13,7 +11,6 @@ export async function importAccountRows(
     input: CreateIdBusinessV2AccountDto,
     operator?: AuthenticatedUser
   ) => Promise<unknown>,
-  auditLogsService: AuditLogsService,
   operator?: AuthenticatedUser
 ) {
   if (!Array.isArray(dto?.rows) || dto.rows.length === 0) {
@@ -39,20 +36,6 @@ export async function importAccountRows(
       failures.push({ rowNumber, reason: getImportErrorMessage(error) });
     }
   }
-
-  await auditLogsService.create({
-    userId: operator?.id,
-    module: 'id_business_v2_accounts',
-    action: 'id_business_v2.account.import',
-    objectType: 'id_business_v2_account',
-    afterData: toAuditJson({
-      totalCount: dto.rows.length,
-      successCount,
-      failedCount: failures.length,
-      failedRowNumbers: failures.map((item) => item.rowNumber)
-    }),
-    remark: `导入 V2 ID：成功 ${successCount} 条，失败 ${failures.length} 条`
-  });
 
   return {
     totalCount: dto.rows.length,

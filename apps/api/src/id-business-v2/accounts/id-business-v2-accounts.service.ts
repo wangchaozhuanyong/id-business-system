@@ -4,45 +4,37 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { Prisma as PrismaNamespace } from '@prisma/client';
-import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { getPagination } from '../../common/pagination';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { verifySensitiveAccessApproval } from '../../common/sensitive-access-approval';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { toV2DecimalString } from '../decimal-policy';
 import {
   IdBusinessV2FinanceFxService,
   IdBusinessV2FinancePostingService
 } from '../finance/public-api';
 import { IdBusinessV2OptionsService } from '../options/public-api';
+import {
+  Amount4,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  toV2JsonDocument,
+  type V2CommandTransaction
+} from '../runtime/public-api';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
 import type { RevealIdBusinessV2AccountSecretDto } from './dto/reveal-id-business-v2-account-secret.dto';
 import type { UpdateIdBusinessV2AccountDto } from './dto/update-id-business-v2-account.dto';
-import {
-  assertAccountLossNotReported,
-  type LockedAccountBalanceRow
-} from './id-business-v2-account-balance-guard';
-import { importAccountRows } from './id-business-v2-account-import';
+import { assertAccountLossNotReported } from './id-business-v2-account-balance-guard';
+import { IdBusinessV2AccountBalanceAdjustmentService } from './id-business-v2-account-balance-adjustment.service';
 import { createIdBusinessV2Account } from './id-business-v2-account-create';
+import { importAccountRows } from './id-business-v2-account-import';
 import {
-  ACCOUNT_INCLUDE,
   SECRET_FIELDS,
-  assertBalanceAdjustmentPermission,
-  assertBalanceAdjustmentReplay,
   assertSecretPermission,
-  buildAccountOrderBy,
-  buildAccountWhere,
   getEncryptedSecretValue,
   maskAppleId,
   maskPhone,
   normalizeAppleId,
-  normalizeBalanceAdjustmentIdempotencyKey,
-  normalizeBalanceAdjustmentReason,
   normalizeMoney,
   normalizeNullableString,
   normalizePhone,
@@ -50,17 +42,22 @@ import {
   parseRecordStatus,
   parseSaleState,
   parseSecretField,
-  requireBalanceSnapshotValue,
   toAccountResponse,
-  toAuditJson,
   type AccountListQuery,
+  type AccountUpdateData,
   type AccountWithRelations
 } from './id-business-v2-account-support';
+import { IdBusinessV2AccountsRepository } from './persistence/id-business-v2-accounts.repository';
 
 export type ListIdBusinessV2AccountsQuery = AccountListQuery;
 export interface AuditRequestMeta {
+  requestId?: string;
   ip?: string | null;
   userAgent?: string | null;
+}
+
+export interface AccountCommandMeta {
+  requestId?: string;
 }
 
 const MAX_ACCOUNT_EXPORT_ROWS = 10_000;
@@ -68,186 +65,306 @@ const MAX_ACCOUNT_EXPORT_ROWS = 10_000;
 @Injectable()
 export class IdBusinessV2AccountsService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly auditLogsService: AuditLogsService,
+    private readonly repository: IdBusinessV2AccountsRepository,
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly optionsService: IdBusinessV2OptionsService,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly financeFxService: IdBusinessV2FinanceFxService,
-    private readonly financePostingService: IdBusinessV2FinancePostingService
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly transactionalAudit: V2TransactionalAuditService,
+    private readonly balanceAdjustmentService: IdBusinessV2AccountBalanceAdjustmentService
   ) {}
 
   async list(query: ListIdBusinessV2AccountsQuery) {
-    const result = await this.findList(query);
-    return {
-      ...result,
-      items: result.items.map((account) => toAccountResponse(account))
-    };
+    const result = await this.repository.list(query, (value) =>
+      this.fieldEncryptionService.hash(value)
+    );
+    return { ...result, items: result.items.map((account) => toAccountResponse(account)) };
   }
 
-  async listPurchaseSources() {
-    const [financeAccounts, supplierWallets] = await Promise.all([
-      this.prisma.idBusinessV2FinanceAccount.findMany({
-        where: { status: 'active' },
-        select: {
-          id: true,
-          name: true,
-          currency: true,
-          currentBalance: true
-        },
-        orderBy: [{ currency: 'asc' }, { name: 'asc' }]
-      }),
-      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-        where: { status: 'active' },
-        select: {
-          id: true,
-          supplierOptionId: true,
-          currency: true,
-          currentBalance: true,
-          supplierOption: {
-            select: {
-              name: true
-            }
-          }
-        },
-        orderBy: [{ currency: 'asc' }, { supplierOption: { name: 'asc' } }]
-      })
-    ]);
-
-    return {
-      financeAccounts: financeAccounts.map((account) => ({
-        ...account,
-        currentBalance: toV2DecimalString(account.currentBalance)
-      })),
-      supplierWallets: supplierWallets.map((wallet) => ({
-        id: wallet.id,
-        supplierOptionId: wallet.supplierOptionId,
-        supplierName: wallet.supplierOption.name,
-        currency: wallet.currency,
-        currentBalance: toV2DecimalString(wallet.currentBalance)
-      }))
-    };
+  listPurchaseSources() {
+    return this.repository.listPurchaseSources();
   }
 
-  private async findList(query: ListIdBusinessV2AccountsQuery) {
-    const pagination = getPagination(query);
-    const where = buildAccountWhere(query, (value) => this.fieldEncryptionService.hash(value));
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.idBusinessV2Account.findMany({
-        where,
-        include: ACCOUNT_INCLUDE,
-        skip: pagination.skip,
-        take: pagination.take,
-        orderBy: buildAccountOrderBy(query)
-      }),
-      this.prisma.idBusinessV2Account.count({ where })
-    ]);
-
-    return {
-      items,
-      total,
-      page: pagination.page,
-      pageSize: pagination.pageSize
-    };
-  }
-
-  async exportRows(query: ListIdBusinessV2AccountsQuery, operator?: AuthenticatedUser) {
-    const where = buildAccountWhere(query, (value) => this.fieldEncryptionService.hash(value));
-    const total = await this.prisma.idBusinessV2Account.count({ where });
-    if (total > MAX_ACCOUNT_EXPORT_ROWS) {
-      throw new BadRequestException(`单次最多导出 ${MAX_ACCOUNT_EXPORT_ROWS} 条 ID 资料`);
-    }
-
-    const accounts = await this.prisma.idBusinessV2Account.findMany({
-      where,
-      include: ACCOUNT_INCLUDE,
-      orderBy: buildAccountOrderBy(query)
-    });
-    const items = accounts.map((account) => toAccountResponse(account));
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_accounts',
-      action: 'id_business_v2.account.export',
-      objectType: 'id_business_v2_account',
-      afterData: toAuditJson({
-        count: items.length,
-        containsSensitiveFields: false,
-        filters: {
-          hasKeyword: Boolean(normalizeNullableString(query.keyword)),
-          countryOptionId: normalizeNullableString(query.countryOptionId),
-          statusOptionId: normalizeNullableString(query.statusOptionId),
-          supplierOptionId: normalizeNullableString(query.supplierOptionId),
-          recordStatus: parseRecordStatus(query.recordStatus, false),
-          saleState: parseSaleState(query.saleState)
+  exportRows(
+    query: ListIdBusinessV2AccountsQuery,
+    operator?: AuthenticatedUser,
+    metadata: AccountCommandMeta = {}
+  ) {
+    return this.transactionManager.execute(
+      async (tx, context) => {
+        const result = await this.repository.listForExport(
+          query,
+          (value) => this.fieldEncryptionService.hash(value),
+          tx
+        );
+        if (result.total > MAX_ACCOUNT_EXPORT_ROWS) {
+          throw new BadRequestException(`单次最多导出 ${MAX_ACCOUNT_EXPORT_ROWS} 条 ID 资料`);
         }
-      }),
-      remark: `导出 V2 ID 脱敏资料：${items.length} 条`
-    });
-
-    return {
-      items,
-      total: items.length,
-      containsSensitiveFields: false as const,
-      exportedAt: new Date().toISOString()
-    };
-  }
-
-  async importRows(dto: ImportIdBusinessV2AccountsDto, operator?: AuthenticatedUser) {
-    return importAccountRows(
-      dto,
-      (input, currentOperator) => this.create(input, currentOperator),
-      this.auditLogsService,
-      operator
+        const items = result.items.map((account) => toAccountResponse(account));
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_accounts',
+          action: 'id_business_v2.account.export',
+          objectType: 'id_business_v2_account',
+          afterData: toV2JsonDocument({
+            count: items.length,
+            containsSensitiveFields: false,
+            filters: {
+              hasKeyword: Boolean(normalizeNullableString(query.keyword)),
+              countryOptionId: normalizeNullableString(query.countryOptionId),
+              statusOptionId: normalizeNullableString(query.statusOptionId),
+              supplierOptionId: normalizeNullableString(query.supplierOptionId),
+              recordStatus: parseRecordStatus(query.recordStatus, false),
+              saleState: parseSaleState(query.saleState)
+            }
+          }),
+          remark: `导出 V2 ID 脱敏资料：${items.length} 条`
+        });
+        return {
+          items,
+          total: items.length,
+          containsSensitiveFields: false as const,
+          exportedAt: context.businessTime.toISOString()
+        };
+      },
+      { requestId: metadata.requestId ?? randomUUID(), operator }
     );
   }
 
-  async get(id: string) {
-    return toAccountResponse(await this.findAccountOrThrow(id));
+  async importRows(
+    dto: ImportIdBusinessV2AccountsDto,
+    operator?: AuthenticatedUser,
+    metadata: AccountCommandMeta = {}
+  ) {
+    const requestId = metadata.requestId ?? randomUUID();
+    let sequence = 0;
+    const result = await importAccountRows(
+      dto,
+      (input, currentOperator) => {
+        sequence += 1;
+        return this.create(input, currentOperator, { requestId: `${requestId}:row:${sequence}` });
+      },
+      operator
+    );
+    await this.transactionManager.execute(
+      async (tx) => {
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_accounts',
+          action: 'id_business_v2.account.import',
+          objectType: 'id_business_v2_account',
+          afterData: toV2JsonDocument({
+            totalCount: result.totalCount,
+            successCount: result.successCount,
+            failedCount: result.failedCount,
+            failedRowNumbers: result.failures.map((item) => item.rowNumber)
+          }),
+          remark: `导入 V2 ID：成功 ${result.successCount} 条，失败 ${result.failedCount} 条`
+        });
+      },
+      { requestId: `${requestId}:summary`, operator }
+    );
+    return result;
   }
 
-  async create(dto: CreateIdBusinessV2AccountDto, operator?: AuthenticatedUser) {
+  async get(id: string) {
+    return toAccountResponse(await this.repository.findByIdOrThrow(id));
+  }
+
+  create(
+    dto: CreateIdBusinessV2AccountDto,
+    operator?: AuthenticatedUser,
+    metadata: AccountCommandMeta = {}
+  ) {
     return createIdBusinessV2Account(
       {
-        prisma: this.prisma,
-        auditLogsService: this.auditLogsService,
+        repository: this.repository,
         fieldEncryptionService: this.fieldEncryptionService,
         optionsService: this.optionsService,
         balanceCalculator: this.balanceCalculator,
         financeFxService: this.financeFxService,
-        financePostingService: this.financePostingService
+        financePostingService: this.financePostingService,
+        transactionManager: this.transactionManager,
+        transactionalAudit: this.transactionalAudit
       },
       dto,
-      operator
+      operator,
+      metadata.requestId ?? randomUUID()
     );
   }
 
-  async update(id: string, dto: UpdateIdBusinessV2AccountDto, operator?: AuthenticatedUser) {
-    const existing = await this.findAccountOrThrow(id);
+  async update(
+    id: string,
+    dto: UpdateIdBusinessV2AccountDto,
+    operator?: AuthenticatedUser,
+    metadata: AccountCommandMeta = {}
+  ) {
+    const requestId = metadata.requestId ?? randomUUID();
+    const adjustsBalance = dto.currentBalance !== undefined || dto.balanceCostAmount !== undefined;
+    const buildUpdateData = (tx: V2CommandTransaction, existing: AccountWithRelations) =>
+      this.buildUpdateData(tx, existing, dto, operator);
+
+    if (adjustsBalance) {
+      const account = await this.balanceAdjustmentService.update(
+        id,
+        dto,
+        buildUpdateData,
+        operator,
+        requestId
+      );
+      return toAccountResponse(account);
+    }
+
+    return this.transactionManager.execute(
+      async (tx) => {
+        const existing = await this.repository.lockAccount(tx, id);
+        const updateData = await buildUpdateData(tx, existing);
+        const account = await this.repository.updateActive(tx, id, updateData);
+        const response = toAccountResponse(account);
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_accounts',
+          action: 'id_business_v2.account.update',
+          objectType: 'id_business_v2_account',
+          objectId: account.id,
+          beforeData: toV2JsonDocument(toAccountResponse(existing)),
+          afterData: toV2JsonDocument(response),
+          remark: `修改 V2 ID：${existing.appleIdMasked}`
+        });
+        return response;
+      },
+      { requestId, operator, uniqueConflictMessage: '该 Apple ID 已存在' }
+    );
+  }
+
+  remove(id: string, operator?: AuthenticatedUser, metadata: AccountCommandMeta = {}) {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const existing = await this.repository.lockAccount(tx, id);
+        assertAccountLossNotReported(
+          existing.lossReportedAt,
+          '已报损 ID 必须保留历史记录，不能删除'
+        );
+        if (existing.soldByOrderId) {
+          throw new ConflictException('已卖出的 ID 不能删除，请先通过退款流程确认收回');
+        }
+        await this.repository.softDelete(tx, existing.id, operator?.id);
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_accounts',
+          action: 'id_business_v2.account.delete',
+          objectType: 'id_business_v2_account',
+          objectId: existing.id,
+          beforeData: toV2JsonDocument(toAccountResponse(existing)),
+          remark: `删除 V2 ID：${existing.appleIdMasked}`
+        });
+        return { deleted: true };
+      },
+      { requestId: metadata.requestId ?? randomUUID(), operator }
+    );
+  }
+
+  async revealSecret(
+    id: string,
+    dto: RevealIdBusinessV2AccountSecretDto,
+    operator?: AuthenticatedUser,
+    requestMeta: AuditRequestMeta = {}
+  ) {
+    const field = parseSecretField(dto.field);
+    const config = SECRET_FIELDS[field];
+    assertSecretPermission(config, operator);
+    const reason = normalizeRevealReason(dto.reason);
+
+    return this.transactionManager.execute(
+      async (tx, context) => {
+        const account = await this.repository.findByIdOrThrow(id, tx);
+        const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
+        if (!value) throw new NotFoundException(`${config.label}未填写`);
+        const approved = await this.repository.verifySensitiveApproval(tx, {
+          approvalId: dto.approvalId,
+          requesterId: operator?.id,
+          module: 'id_business_v2_account',
+          fieldName: field,
+          objectType: 'id_business_v2_account',
+          objectId: account.id,
+          now: context.businessTime
+        });
+        await this.repository.appendSensitiveAccess(tx, {
+          userId: operator?.id,
+          fieldName: field,
+          objectId: account.id,
+          accessReason: reason,
+          approved,
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined
+        });
+        await this.transactionalAudit.append(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2_accounts',
+          action: 'id_business_v2.account.secret.reveal',
+          objectType: 'id_business_v2_account',
+          objectId: account.id,
+          afterData: toV2JsonDocument({ field, reason, approved }),
+          ip: requestMeta.ip ?? undefined,
+          userAgent: requestMeta.userAgent ?? undefined,
+          remark: `查看 V2 ID 敏感字段：${config.label} / ${account.appleIdMasked}`
+        });
+        return {
+          accountId: account.id,
+          field,
+          value,
+          revealedAt: context.businessTime.toISOString()
+        };
+      },
+      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+    );
+  }
+
+  private async buildUpdateData(
+    tx: V2CommandTransaction,
+    existing: AccountWithRelations,
+    dto: UpdateIdBusinessV2AccountDto,
+    operator?: AuthenticatedUser
+  ): Promise<AccountUpdateData> {
     assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 永久冻结，不能再修改');
     if (
       dto.purchaseCost !== undefined &&
-      !new PrismaNamespace.Decimal(normalizeMoney(dto.purchaseCost, 'ID 购买成本')).equals(
-        existing.purchaseCost
-      )
+      !Amount4.from(normalizeMoney(dto.purchaseCost, 'ID 购买成本')).equals(existing.purchaseCost)
     ) {
       throw new BadRequestException('已入账的 ID 采购成本不能直接修改，请冲销原账务后重记');
     }
     const appleId = dto.appleId === undefined ? undefined : normalizeAppleId(dto.appleId, true)!;
     const appleIdHash =
       appleId === undefined ? undefined : this.fieldEncryptionService.hash(appleId)!;
-    if (appleIdHash && appleIdHash !== existing.appleIdHash) {
-      await this.assertAppleIdAvailable(appleIdHash, existing.id);
+    if (
+      appleIdHash &&
+      appleIdHash !== existing.appleIdHash &&
+      (await this.repository.findByAppleIdHash(appleIdHash, tx, existing.id))
+    ) {
+      throw new ConflictException('该 Apple ID 已存在');
     }
     const country =
       dto.countryOptionId === undefined
         ? undefined
-        : await this.optionsService.requireActiveOption(dto.countryOptionId, 'country', '国家');
+        : await this.optionsService.requireActiveOption(
+            dto.countryOptionId,
+            'country',
+            '国家',
+            false,
+            tx
+          );
     const status =
       dto.statusOptionId === undefined
         ? undefined
-        : await this.optionsService.requireActiveOption(dto.statusOptionId, 'id_status', 'ID 状态');
+        : await this.optionsService.requireActiveOption(
+            dto.statusOptionId,
+            'id_status',
+            'ID 状态',
+            false,
+            tx
+          );
     const supplier =
       dto.supplierOptionId === undefined
         ? undefined
@@ -255,11 +372,11 @@ export class IdBusinessV2AccountsService {
             dto.supplierOptionId,
             'id_supplier',
             'ID 供应商',
-            true
+            true,
+            tx
           );
     const phone = dto.phone === undefined ? undefined : normalizePhone(dto.phone);
-
-    const updateData: Prisma.IdBusinessV2AccountUncheckedUpdateInput = {
+    return {
       appleIdEncrypted:
         appleId === undefined ? undefined : this.fieldEncryptionService.encrypt(appleId)!,
       appleIdHash,
@@ -290,286 +407,5 @@ export class IdBusinessV2AccountsService {
       remark: dto.remark === undefined ? undefined : normalizeNullableString(dto.remark),
       updatedByUserId: operator?.id
     };
-    const adjustsBalance = dto.currentBalance !== undefined || dto.balanceCostAmount !== undefined;
-    const account = adjustsBalance
-      ? await this.updateWithBalanceAdjustment(existing.id, dto, updateData, operator)
-      : await this.updateActiveAccount(existing.id, updateData);
-
-    const response = toAccountResponse(account);
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_accounts',
-      action: 'id_business_v2.account.update',
-      objectType: 'id_business_v2_account',
-      objectId: account.id,
-      beforeData: toAuditJson(toAccountResponse(existing)),
-      afterData: toAuditJson(response),
-      remark: `修改 V2 ID：${existing.appleIdMasked}`
-    });
-
-    return response;
-  }
-
-  async remove(id: string, operator?: AuthenticatedUser) {
-    const existing = await this.findAccountOrThrow(id);
-    assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 必须保留历史记录，不能删除');
-    if (existing.soldByOrderId) {
-      throw new ConflictException('已卖出的 ID 不能删除，请先通过退款流程确认收回');
-    }
-    const result = await this.prisma.idBusinessV2Account.updateMany({
-      where: { id: existing.id, lossReportedAt: null },
-      data: {
-        deletedAt: new Date(),
-        recordStatus: 'disabled',
-        updatedByUserId: operator?.id
-      }
-    });
-    if (result.count !== 1) {
-      throw new ConflictException('该 ID 已报损，不能删除');
-    }
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_accounts',
-      action: 'id_business_v2.account.delete',
-      objectType: 'id_business_v2_account',
-      objectId: existing.id,
-      beforeData: toAuditJson(toAccountResponse(existing)),
-      remark: `删除 V2 ID：${existing.appleIdMasked}`
-    });
-
-    return { deleted: true };
-  }
-
-  async revealSecret(
-    id: string,
-    dto: RevealIdBusinessV2AccountSecretDto,
-    operator?: AuthenticatedUser,
-    requestMeta?: AuditRequestMeta
-  ) {
-    const field = parseSecretField(dto.field);
-    const config = SECRET_FIELDS[field];
-    assertSecretPermission(config, operator);
-    const reason = normalizeRevealReason(dto.reason);
-    const account = await this.findAccountOrThrow(id);
-    const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
-    if (!value) {
-      throw new NotFoundException(`${config.label}未填写`);
-    }
-
-    const approved = await verifySensitiveAccessApproval(this.prisma, {
-      approvalId: dto.approvalId,
-      requesterId: operator?.id,
-      module: 'id_business_v2_account',
-      fieldName: field,
-      objectType: 'id_business_v2_account',
-      objectId: account.id
-    });
-
-    await this.prisma.sensitiveAccessLog.create({
-      data: {
-        userId: operator?.id,
-        module: 'id_business_v2_account',
-        fieldName: field,
-        objectType: 'id_business_v2_account',
-        objectId: account.id,
-        accessReason: reason,
-        approved,
-        ip: requestMeta?.ip ?? undefined,
-        userAgent: requestMeta?.userAgent ?? undefined
-      }
-    });
-
-    await this.auditLogsService.create({
-      userId: operator?.id,
-      module: 'id_business_v2_accounts',
-      action: 'id_business_v2.account.secret.reveal',
-      objectType: 'id_business_v2_account',
-      objectId: account.id,
-      afterData: toAuditJson({
-        field,
-        reason,
-        approved
-      }),
-      ip: requestMeta?.ip ?? undefined,
-      userAgent: requestMeta?.userAgent ?? undefined,
-      remark: `查看 V2 ID 敏感字段：${config.label} / ${account.appleIdMasked}`
-    });
-
-    return {
-      accountId: account.id,
-      field,
-      value,
-      revealedAt: new Date().toISOString()
-    };
-  }
-
-  private async updateWithBalanceAdjustment(
-    accountId: string,
-    dto: UpdateIdBusinessV2AccountDto,
-    updateData: Prisma.IdBusinessV2AccountUncheckedUpdateInput,
-    operator?: AuthenticatedUser
-  ) {
-    assertBalanceAdjustmentPermission(operator);
-    const expected = this.balanceCalculator.normalizeSnapshot(
-      requireBalanceSnapshotValue(dto.expectedCurrentBalance, '修改前余额'),
-      requireBalanceSnapshotValue(dto.expectedBalanceCostAmount, '修改前人民币成本')
-    );
-    const target = this.balanceCalculator.normalizeSnapshot(
-      dto.currentBalance ?? expected.currentBalance,
-      dto.balanceCostAmount ?? expected.balanceCostAmount
-    );
-    const reason = normalizeBalanceAdjustmentReason(dto.balanceAdjustmentReason);
-    const idempotencyKey = normalizeBalanceAdjustmentIdempotencyKey(
-      dto.balanceAdjustmentIdempotencyKey
-    );
-
-    return this.prisma.$transaction(async (tx) => {
-      const existingEntry = await tx.idBusinessV2BalanceLedger.findUnique({
-        where: { idempotencyKey }
-      });
-      if (existingEntry) {
-        assertBalanceAdjustmentReplay(existingEntry, {
-          accountId,
-          expectedBalance: expected.currentBalance,
-          expectedCost: expected.balanceCostAmount,
-          targetBalance: target.currentBalance,
-          targetCost: target.balanceCostAmount,
-          reason
-        });
-        const replayedAccount = await tx.idBusinessV2Account.findFirst({
-          where: { id: accountId, deletedAt: null },
-          include: ACCOUNT_INCLUDE
-        });
-        if (!replayedAccount) throw new NotFoundException('ID 资料不存在');
-        assertAccountLossNotReported(
-          replayedAccount.lossReportedAt,
-          '已报损 ID 永久冻结，不能调整余额'
-        );
-        return replayedAccount;
-      }
-
-      const locked = await this.lockAccountBalance(tx, accountId);
-      assertAccountLossNotReported(locked.lossReportedAt, '已报损 ID 永久冻结，不能调整余额');
-      if (locked.soldByOrderId) {
-        throw new ConflictException('该 ID 已卖出，不能调整余额或人民币成本');
-      }
-      if (
-        !locked.currentBalance.equals(expected.currentBalance) ||
-        !locked.balanceCostAmount.equals(expected.balanceCostAmount)
-      ) {
-        throw new ConflictException('ID 余额或人民币成本已发生变化，请刷新后重新修改');
-      }
-
-      const balanceDelta = target.currentBalance.minus(locked.currentBalance);
-      const costDelta = target.balanceCostAmount.minus(locked.balanceCostAmount);
-      if (balanceDelta.equals(0) && costDelta.equals(0)) {
-        return tx.idBusinessV2Account.update({
-          where: { id: accountId },
-          data: updateData,
-          include: ACCOUNT_INCLUDE
-        });
-      }
-
-      const before = this.balanceCalculator.normalizeSnapshot(
-        locked.currentBalance,
-        locked.balanceCostAmount
-      );
-      await tx.idBusinessV2BalanceLedger.create({
-        data: {
-          accountId,
-          giftCardId: null,
-          orderId: null,
-          entryType: 'manual_adjustment',
-          direction: 'adjustment',
-          balanceAmount: balanceDelta.abs(),
-          costAmount: costDelta.abs(),
-          balanceBefore: before.currentBalance,
-          balanceAfter: target.currentBalance,
-          costBefore: before.balanceCostAmount,
-          costAfter: target.balanceCostAmount,
-          averageCostBefore: before.averageCost,
-          averageCostAfter: target.averageCost,
-          reversalOfEntryId: null,
-          idempotencyKey,
-          remark: reason,
-          createdByUserId: operator?.id
-        }
-      });
-
-      return tx.idBusinessV2Account.update({
-        where: { id: accountId },
-        data: {
-          ...updateData,
-          currentBalance: target.currentBalance,
-          balanceCostAmount: target.balanceCostAmount
-        },
-        include: ACCOUNT_INCLUDE
-      });
-    });
-  }
-
-  private async lockAccountBalance(tx: Prisma.TransactionClient, accountId: string) {
-    const rows = await tx.$queryRaw<LockedAccountBalanceRow[]>(PrismaNamespace.sql`
-      SELECT
-        "id",
-        "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount",
-        "sold_by_order_id" AS "soldByOrderId",
-        "loss_reported_at" AS "lossReportedAt"
-      FROM "id_business_v2_accounts"
-      WHERE
-        "id" = CAST(${accountId} AS UUID)
-        AND "deleted_at" IS NULL
-      FOR UPDATE
-    `);
-    const account = rows[0];
-    if (!account) throw new NotFoundException('ID 资料不存在');
-    return account;
-  }
-
-  private async updateActiveAccount(
-    accountId: string,
-    updateData: Prisma.IdBusinessV2AccountUncheckedUpdateInput
-  ) {
-    const result = await this.prisma.idBusinessV2Account.updateMany({
-      where: {
-        id: accountId,
-        deletedAt: null,
-        lossReportedAt: null
-      },
-      data: updateData
-    });
-    if (result.count !== 1) {
-      throw new ConflictException('该 ID 已报损，不能修改');
-    }
-    return this.findAccountOrThrow(accountId);
-  }
-
-  private async findAccountOrThrow(id: string): Promise<AccountWithRelations> {
-    const account = await this.prisma.idBusinessV2Account.findFirst({
-      where: {
-        id,
-        deletedAt: null
-      },
-      include: ACCOUNT_INCLUDE
-    });
-    if (!account) {
-      throw new NotFoundException('ID 资料不存在');
-    }
-    return account;
-  }
-
-  private async assertAppleIdAvailable(hash: string, excludedId?: string) {
-    const existing = await this.prisma.idBusinessV2Account.findFirst({
-      where: {
-        appleIdHash: hash,
-        id: excludedId ? { not: excludedId } : undefined
-      },
-      select: { id: true }
-    });
-    if (existing) {
-      throw new ConflictException('该 Apple ID 已存在');
-    }
   }
 }

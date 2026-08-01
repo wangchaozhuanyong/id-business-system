@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import {
   IdBusinessV2BinanceOtcCollector,
   IdBusinessV2BinanceOtcError
@@ -16,7 +17,6 @@ import type {
   IdBusinessV2OtcSide,
   IdBusinessV2OtcSideCollection
 } from './id-business-v2-otc.types';
-import { V2_DECIMAL_PLACES, V2_DECIMAL_ROUNDING_MODE, roundV2Decimal } from '../decimal-policy';
 
 export type IdBusinessV2OtcExclusionReason =
   | 'missing_tradable_amount'
@@ -29,8 +29,8 @@ export type IdBusinessV2OtcExclusionReason =
 
 export interface IdBusinessV2OtcPolicy {
   minCompletedOrderCount: number;
-  minCompletionRate: Prisma.Decimal;
-  maxPriceDeviationRate: Prisma.Decimal;
+  minCompletionRate: Rate8;
+  maxPriceDeviationRate: Rate8;
   minValidAdsPerSide: number;
   decimalPlaces: number;
 }
@@ -44,21 +44,21 @@ export interface IdBusinessV2OtcSideAverage {
   validAdCount: number;
   filteredAdCount: number;
   excludedByReason: Record<IdBusinessV2OtcExclusionReason, number>;
-  medianRateToRmb: Prisma.Decimal;
-  lowestValidRateToRmb: Prisma.Decimal;
-  highestValidRateToRmb: Prisma.Decimal;
-  averageRateToRmb: Prisma.Decimal;
+  medianRateToRmb: Rate8;
+  lowestValidRateToRmb: Rate8;
+  highestValidRateToRmb: Rate8;
+  averageRateToRmb: Rate8;
   validSamples: Array<{
     sourceAdId: string;
-    priceToRmb: Prisma.Decimal;
-    minAmountRmb: Prisma.Decimal;
-    maxAmountRmb: Prisma.Decimal;
-    tradableAmountUsdt: Prisma.Decimal;
+    priceToRmb: Rate8;
+    minAmountRmb: Amount4;
+    maxAmountRmb: Amount4;
+    tradableAmountUsdt: Amount4;
     paymentMethods: string[];
     merchantType: string;
     completedOrderCount: number;
-    completionRate: Prisma.Decimal;
-    positiveReviewRate: Prisma.Decimal | null;
+    completionRate: Rate8;
+    positiveReviewRate: Rate8 | null;
   }>;
 }
 
@@ -73,20 +73,20 @@ export interface IdBusinessV2OtcPlatformAverage {
 export interface IdBusinessV2OtcAverageResult {
   asset: 'USDT';
   fiat: 'CNY';
-  targetAmountRmb: Prisma.Decimal;
+  targetAmountRmb: Amount4;
   averagedAt: Date;
   policy: IdBusinessV2OtcPolicy;
   platforms: [IdBusinessV2OtcPlatformAverage, IdBusinessV2OtcPlatformAverage];
-  combinedMerchantBuyAverageRateToRmb: Prisma.Decimal;
-  combinedMerchantSellAverageRateToRmb: Prisma.Decimal;
+  combinedMerchantBuyAverageRateToRmb: Rate8;
+  combinedMerchantSellAverageRateToRmb: Rate8;
 }
 
 const POLICY: IdBusinessV2OtcPolicy = {
   minCompletedOrderCount: 10,
-  minCompletionRate: new Prisma.Decimal('0.9'),
-  maxPriceDeviationRate: new Prisma.Decimal('0.03'),
+  minCompletionRate: Rate8.from('0.9'),
+  maxPriceDeviationRate: Rate8.from('0.03'),
   minValidAdsPerSide: 3,
-  decimalPlaces: V2_DECIMAL_PLACES
+  decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
 };
 
 const EXCLUSION_REASONS: IdBusinessV2OtcExclusionReason[] = [
@@ -122,7 +122,7 @@ export class IdBusinessV2OtcAverageService {
     private readonly okxCollector: IdBusinessV2OkxOtcCollector
   ) {}
 
-  async collectAndAverage(targetAmountRmb: Prisma.Decimal) {
+  async collectAndAverage(targetAmountRmb: Amount4) {
     const [binance, okx] = await Promise.allSettled([
       this.binanceCollector.collect(targetAmountRmb),
       this.okxCollector.collect(targetAmountRmb)
@@ -159,7 +159,7 @@ export class IdBusinessV2OtcAverageService {
     if (
       binance.provider !== 'Binance' ||
       okx.provider !== 'OKX' ||
-      !binance.targetAmountRmb.eq(okx.targetAmountRmb)
+      !binance.targetAmountRmb.equals(okx.targetAmountRmb)
     ) {
       throw new IdBusinessV2OtcAverageError(
         'otc_average_invalid_collection',
@@ -175,7 +175,7 @@ export class IdBusinessV2OtcAverageService {
     return {
       asset: 'USDT',
       fiat: 'CNY',
-      targetAmountRmb: new Prisma.Decimal(binance.targetAmountRmb),
+      targetAmountRmb: Amount4.from(binance.targetAmountRmb),
       averagedAt: new Date(),
       policy: this.policySnapshot(),
       platforms: [binanceAverage, okxAverage],
@@ -217,7 +217,7 @@ export class IdBusinessV2OtcAverageService {
       : null;
     const validQuotes = median
       ? qualityQuotes.filter((quote) => {
-          const deviation = quote.priceToRmb.minus(median).abs().div(median);
+          const deviation = quote.priceToRmb.sub(median).abs().div(median);
           if (deviation.gt(POLICY.maxPriceDeviationRate)) {
             excludedByReason.price_outlier += 1;
             return false;
@@ -239,7 +239,7 @@ export class IdBusinessV2OtcAverageService {
     }
 
     const prices = validQuotes.map((quote) => quote.priceToRmb);
-    const sorted = [...prices].sort((left, right) => left.comparedTo(right));
+    const sorted = [...prices].sort((left, right) => left.compare(right));
     return {
       side: collection.side,
       sourceUrl: collection.sourceUrl,
@@ -249,9 +249,9 @@ export class IdBusinessV2OtcAverageService {
       validAdCount: validQuotes.length,
       filteredAdCount: collection.acceptedAdCount - validQuotes.length,
       excludedByReason,
-      medianRateToRmb: roundV2Decimal(median!),
-      lowestValidRateToRmb: roundV2Decimal(sorted[0]!),
-      highestValidRateToRmb: roundV2Decimal(sorted[sorted.length - 1]!),
+      medianRateToRmb: Rate8.from(median!),
+      lowestValidRateToRmb: Rate8.from(sorted[0]!),
+      highestValidRateToRmb: Rate8.from(sorted[sorted.length - 1]!),
       averageRateToRmb: this.averageDecimals(prices),
       validSamples: validQuotes.map((quote) => ({
         sourceAdId: quote.sourceAdId,
@@ -278,17 +278,14 @@ export class IdBusinessV2OtcAverageService {
     return null;
   }
 
-  private averageDecimals(values: Prisma.Decimal[]) {
-    return values
-      .reduce((sum, value) => sum.plus(value), new Prisma.Decimal(0))
-      .div(values.length)
-      .toDecimalPlaces(POLICY.decimalPlaces, V2_DECIMAL_ROUNDING_MODE);
+  private averageDecimals(values: Rate8[]) {
+    return values.reduce((sum, value) => sum.add(value), Rate8.zero()).div(values.length);
   }
 
-  private median(values: Prisma.Decimal[]) {
-    const sorted = [...values].sort((left, right) => left.comparedTo(right));
+  private median(values: Rate8[]) {
+    const sorted = [...values].sort((left, right) => left.compare(right));
     const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle]! : sorted[middle - 1]!.plus(sorted[middle]!).div(2);
+    return sorted.length % 2 ? sorted[middle]! : sorted[middle - 1]!.add(sorted[middle]!).div(2);
   }
 
   private collectFailures(
@@ -321,8 +318,8 @@ export class IdBusinessV2OtcAverageService {
   private policySnapshot(): IdBusinessV2OtcPolicy {
     return {
       ...POLICY,
-      minCompletionRate: new Prisma.Decimal(POLICY.minCompletionRate),
-      maxPriceDeviationRate: new Prisma.Decimal(POLICY.maxPriceDeviationRate)
+      minCompletionRate: Rate8.from(POLICY.minCompletionRate),
+      maxPriceDeviationRate: Rate8.from(POLICY.maxPriceDeviationRate)
     };
   }
 

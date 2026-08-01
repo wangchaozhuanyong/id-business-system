@@ -1,4 +1,5 @@
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const dataAnalyticsFeature = defineV2Feature({
   key: 'analytics',
@@ -18,24 +19,6 @@ export const dataAnalyticsFeature = defineV2Feature({
     { key: 'journalType', label: '业务类型', kind: 'select' },
     { key: 'financeAccount', label: '资金账户', kind: 'select' }
   ],
-  columns: [
-    {
-      key: 'journalNo',
-      label: '财务流水号',
-      kind: 'identifier',
-      widthPreset: 'identifier',
-      fixed: 'left'
-    },
-    { key: 'occurredAt', label: '发生时间', kind: 'date', widthPreset: 'dateTime' },
-    { key: 'journalType', label: '业务类型', kind: 'status', widthPreset: 'wide' },
-    { key: 'summary', label: '摘要', kind: 'text', widthPreset: 'longText' },
-    {
-      key: 'sourceReference',
-      label: '来源单号',
-      kind: 'identifier',
-      widthPreset: 'identifier'
-    },
-    { key: 'amountCny', label: '人民币金额', kind: 'numeric', widthPreset: 'wide' }
-  ],
+  tables: v2TablesByFeature['analytics'],
   loadView: () => import('./V2DataAnalyticsView.vue')
 });

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from './id-business-v2-balance-calculator.service';
 import { IdBusinessV2TopupWorkbenchService } from './id-business-v2-topup-workbench.service';
+import { IdBusinessV2BalanceQueryRepository } from './persistence/id-business-v2-balance-query.repository';
 
 const country = { id: 'country-1', code: 'us', name: '美国' };
 const status = { id: 'status-1', code: 'normal', name: '正常', isSystem: true };
@@ -82,7 +83,7 @@ describe('IdBusinessV2TopupWorkbenchService', () => {
     }
   };
   const service = new IdBusinessV2TopupWorkbenchService(
-    prisma as never,
+    new IdBusinessV2BalanceQueryRepository(prisma as never),
     new IdBusinessV2BalanceCalculatorService()
   );
 

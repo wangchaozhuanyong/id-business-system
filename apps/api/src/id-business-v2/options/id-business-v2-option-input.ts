@@ -1,21 +1,22 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
+import { V2_DECIMAL_PLACES } from '@apple-business/shared';
+import { Amount4 } from '../runtime/public-api';
 import {
-  IdBusinessV2OptionStatus,
-  IdBusinessV2OptionType,
-  Prisma as PrismaNamespace
-} from '@prisma/client';
-import type { Prisma } from '@prisma/client';
-import { V2_DECIMAL_PLACES } from '../decimal-policy';
-import { ID_BUSINESS_V2_OPTION_TYPE_MAP } from './id-business-v2-options.constants';
+  ID_BUSINESS_V2_OPTION_TYPE_MAP,
+  ID_BUSINESS_V2_OPTION_TYPES,
+  type IdBusinessV2OptionStatus,
+  type IdBusinessV2OptionType
+} from './id-business-v2-options.constants';
 
-const OPTION_SORT_FIELDS: Record<string, keyof Prisma.IdBusinessV2OptionOrderByWithRelationInput> =
-  {
-    name: 'name',
-    sortOrder: 'sortOrder',
-    status: 'status',
-    createdAt: 'createdAt',
-    updatedAt: 'updatedAt'
-  };
+const OPTION_SORT_FIELDS: Readonly<
+  Record<string, 'name' | 'sortOrder' | 'status' | 'createdAt' | 'updatedAt'>
+> = {
+  name: 'name',
+  sortOrder: 'sortOrder',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const;
 
 export function normalizeOptionFees(
   type: IdBusinessV2OptionType,
@@ -34,7 +35,7 @@ export function normalizeOptionFees(
     throw new BadRequestException('只有结算平台可以设置手续费');
   }
 
-  if (new PrismaNamespace.Decimal(percentageFee).greaterThan(100)) {
+  if (Amount4.from(percentageFee).gt('100')) {
     throw new BadRequestException('百分比手续费不能超过 100%');
   }
 
@@ -50,7 +51,7 @@ export function normalizeOptionCurrencyCode(value: unknown) {
 }
 
 export function normalizeOptionDecimal(
-  value: string | number | Prisma.Decimal | undefined,
+  value: string | number | { toString(): string } | undefined,
   field: string,
   scale: number
 ) {
@@ -64,8 +65,8 @@ export function normalizeOptionDecimal(
     throw new BadRequestException(`${field}必须是最多 ${scale} 位小数的非负数字`);
   }
 
-  const decimal = new PrismaNamespace.Decimal(normalized);
-  if (decimal.greaterThan('99999999999999')) {
+  const decimal = Amount4.from(normalized);
+  if (decimal.gt('99999999999999')) {
     throw new BadRequestException(`${field}数值过大`);
   }
 
@@ -119,8 +120,7 @@ export function parseOptionType(value: unknown, required: boolean) {
 
   if (
     typeof value === 'string' &&
-    Object.values(IdBusinessV2OptionType).includes(value as IdBusinessV2OptionType) &&
-    ID_BUSINESS_V2_OPTION_TYPE_MAP.has(value as IdBusinessV2OptionType)
+    ID_BUSINESS_V2_OPTION_TYPES.some((definition) => definition.type === value)
   ) {
     return value as IdBusinessV2OptionType;
   }
@@ -138,10 +138,7 @@ export function parseOptionStatus(value: unknown, required: boolean) {
     return undefined;
   }
 
-  if (
-    typeof value === 'string' &&
-    Object.values(IdBusinessV2OptionStatus).includes(value as IdBusinessV2OptionStatus)
-  ) {
+  if (typeof value === 'string' && (value === 'active' || value === 'disabled')) {
     return value as IdBusinessV2OptionStatus;
   }
 
@@ -170,12 +167,4 @@ export function buildOptionOrderBy(sortBy?: string, sortOrder?: string) {
   }
 
   return [{ [sortField]: direction }, { id: 'asc' as const }];
-}
-
-export function rethrowOptionUniqueConstraint(error: unknown): never {
-  if (error instanceof PrismaNamespace.PrismaClientKnownRequestError && error.code === 'P2002') {
-    throw new ConflictException('同一类型和上级下已存在同名选项');
-  }
-
-  throw error;
 }

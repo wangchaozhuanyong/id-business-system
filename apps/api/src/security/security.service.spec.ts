@@ -167,7 +167,11 @@ describe('SecurityService', () => {
       },
       ipWhitelist: {
         findMany: jest.fn().mockResolvedValue([ipWhitelist]),
-        count: jest.fn().mockResolvedValue(1)
+        findUnique: jest.fn().mockResolvedValue(ipWhitelist),
+        count: jest.fn().mockResolvedValue(1),
+        create: jest.fn().mockResolvedValue(ipWhitelist),
+        update: jest.fn().mockResolvedValue(ipWhitelist),
+        delete: jest.fn().mockResolvedValue(ipWhitelist)
       },
       sensitiveAccessLog: {
         findMany: jest.fn().mockResolvedValue([sensitiveAccessLog]),
@@ -206,6 +210,31 @@ describe('SecurityService', () => {
             createdAt: now,
             updatedAt: now
           });
+        }),
+        findMany: jest.fn().mockImplementation(({ where }) => {
+          const keys = (where?.key?.in ?? []) as string[];
+          return Promise.resolve(
+            keys.flatMap((key) => {
+              const value = securitySettingStore.get(key);
+              return value ? [{ key, value }] : [];
+            })
+          );
+        })
+      },
+      user: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: userId,
+            username: 'admin',
+            displayName: '管理员',
+            status: 'active',
+            userRoles: [{ role: { code: 'admin' } }]
+          }
+        ]),
+        count: jest.fn().mockResolvedValue(1),
+        findUnique: jest.fn().mockResolvedValue({
+          status: 'active',
+          userRoles: [{ role: { code: 'admin' } }]
         })
       }
     } as unknown as PrismaService;
@@ -534,6 +563,29 @@ describe('SecurityService', () => {
     ).rejects.toThrow('scope is invalid');
   });
 
+  it('rejects malformed addresses and unsupported IPv6 CIDR whitelist entries', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createIpWhitelist(
+        {
+          ipOrCidr: 'not-an-ip',
+          scope: 'admin'
+        },
+        authenticatedUser
+      )
+    ).rejects.toThrow('请输入有效的 IPv4 或 IPv6 地址。');
+    await expect(
+      service.createIpWhitelist(
+        {
+          ipOrCidr: '2001:db8::/32',
+          scope: 'admin'
+        },
+        authenticatedUser
+      )
+    ).rejects.toThrow('CIDR 当前仅支持 IPv4 网段；IPv6 请填写单个地址。');
+  });
+
   it('applies whitelisted login log sorting', async () => {
     const { service, prisma } = createService();
 
@@ -604,6 +656,68 @@ describe('SecurityService', () => {
       })
     );
     expect(prisma.activeSession.count).toHaveBeenCalled();
+  });
+
+  it('limits self-service session lists to the authenticated user', async () => {
+    const { service, prisma } = createService();
+
+    await service.listUserActiveSessions(
+      userId,
+      { page: 1, pageSize: 20 },
+      'current-session-token'
+    );
+
+    expect(prisma.activeSession.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId,
+          revokedAt: undefined
+        })
+      })
+    );
+    expect(prisma.activeSession.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ userId })
+    });
+  });
+
+  it('blocks self-service revocation of another user or the current session', async () => {
+    const { service, prisma } = createService();
+    const currentToken = 'current-session-token';
+
+    (prisma.activeSession.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 'session-id',
+      userId: '44444444-4444-4444-8444-444444444444',
+      tokenHash: 'other-token-hash',
+      revokedAt: null,
+      user: {
+        id: '44444444-4444-4444-8444-444444444444',
+        username: 'other',
+        displayName: '其他用户'
+      }
+    });
+    await expect(
+      service.revokeOwnSession('55555555-5555-4555-8555-555555555555', authenticatedUser)
+    ).rejects.toThrow('Active session not found');
+
+    (prisma.activeSession.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 'session-id',
+      userId,
+      tokenHash: createHash('sha256').update(currentToken).digest('hex'),
+      revokedAt: null,
+      user: {
+        id: userId,
+        username: 'admin',
+        displayName: '管理员'
+      }
+    });
+    await expect(
+      service.revokeOwnSession(
+        '55555555-5555-4555-8555-555555555555',
+        authenticatedUser,
+        currentToken
+      )
+    ).rejects.toThrow('当前会话请使用退出登录操作。');
+    expect(prisma.activeSession.update).not.toHaveBeenCalled();
   });
 
   it('applies whitelisted sensitive access log sorting', async () => {
@@ -704,6 +818,66 @@ describe('SecurityService', () => {
     });
   });
 
+  it('blocks the required-admin MFA policy until every active admin is bound', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.updateMfaSettingsSafely(
+        {
+          enabled: true,
+          requiredForAdmins: true,
+          issuer: 'Unit Test'
+        },
+        authenticatedUser
+      )
+    ).rejects.toThrow('仍有 1 个启用管理员未绑定 MFA，不能开启强制策略。');
+
+    const setup = await service.setupMyMfa(authenticatedUser);
+    await service.enableMyMfa(authenticatedUser, {
+      code: generateTestTotp(setup.secret)
+    });
+
+    await expect(
+      service.updateMfaSettingsSafely(
+        {
+          enabled: true,
+          requiredForAdmins: true,
+          issuer: 'Unit Test'
+        },
+        authenticatedUser
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        value: expect.objectContaining({
+          enabled: true,
+          requiredForAdmins: true
+        })
+      })
+    );
+  });
+
+  it('lists MFA users without exposing encrypted secrets or recovery hashes', async () => {
+    const { service } = createService();
+    const setup = await service.setupMyMfa(authenticatedUser);
+    await service.enableMyMfa(authenticatedUser, {
+      code: generateTestTotp(setup.secret)
+    });
+
+    const result = await service.listMfaUsers({ page: 1, pageSize: 20 });
+    const serialized = JSON.stringify(result);
+
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        id: userId,
+        roles: ['admin'],
+        enabled: true,
+        configured: true
+      })
+    );
+    expect(serialized).not.toContain('secretEncrypted');
+    expect(serialized).not.toContain('recoveryCodeHashes');
+  });
+
   it('requires MFA for a user with bound MFA even when admin forcing is off', async () => {
     const { service } = createService();
     const setup = await service.setupMyMfa(authenticatedUser);
@@ -752,6 +926,74 @@ describe('SecurityService', () => {
       expect.objectContaining({
         action: 'security.mfa.admin_reset',
         objectId: userId
+      })
+    );
+  });
+
+  it('prevents disabling or resetting an active admin while required MFA is enabled', async () => {
+    const { service } = createService();
+    const setup = await service.setupMyMfa(authenticatedUser);
+    await service.enableMyMfa(authenticatedUser, {
+      code: generateTestTotp(setup.secret)
+    });
+    await service.updateMfaSettingsSafely(
+      {
+        enabled: true,
+        requiredForAdmins: true,
+        issuer: 'Unit Test'
+      },
+      authenticatedUser
+    );
+
+    await expect(
+      service.disableMyMfa(authenticatedUser, {
+        code: generateTestTotp(setup.secret),
+        reason: 'unit test'
+      })
+    ).rejects.toThrow('管理员强制 MFA 已启用，不能停用当前绑定。');
+    await expect(service.resetUserMfaSafely(userId, authenticatedUser)).rejects.toThrow(
+      '管理员强制 MFA 已启用，不能重置启用管理员的绑定。'
+    );
+  });
+
+  it('blocks an IP whitelist mutation that would exclude the current request IP', async () => {
+    const { service, prisma } = createService();
+
+    await expect(
+      service.createIpWhitelistSafely(
+        {
+          ipOrCidr: '192.168.1.0/24',
+          scope: 'admin',
+          enabled: true,
+          remark: 'unit test'
+        },
+        authenticatedUser,
+        '10.0.0.25'
+      )
+    ).rejects.toThrow('修改后当前请求 IP 将不在白名单内，已阻止本次操作。');
+    expect(prisma.ipWhitelist.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an IP whitelist mutation when the current request IP remains included', async () => {
+    const { service, prisma } = createService();
+
+    await service.createIpWhitelistSafely(
+      {
+        ipOrCidr: '10.0.0.0/24',
+        scope: 'admin',
+        enabled: true,
+        remark: 'unit test'
+      },
+      authenticatedUser,
+      '10.0.0.25'
+    );
+
+    expect(prisma.ipWhitelist.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          ipOrCidr: '10.0.0.0/24',
+          enabled: true
+        })
       })
     );
   });

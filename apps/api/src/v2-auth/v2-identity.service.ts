@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { authHttpError } from '../common/errors/api-http.exception';
 import { TimedMemoryCache } from '../common/cache/timed-memory-cache';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -45,7 +46,11 @@ export class V2IdentityService {
         });
 
         if (!user) {
-          throw new NotFoundException('登录账号不存在或已停用。');
+          throw authHttpError(
+            HttpStatus.UNAUTHORIZED,
+            'AUTH_ACCOUNT_DISABLED',
+            '登录账号不存在或已停用。'
+          );
         }
 
         return {

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ActivationStatusService } from './id-business-v2-activation-status.service';
 import { IdBusinessV2ActivationsService } from './id-business-v2-activations.service';
+import { IdBusinessV2ActivationRepository } from './persistence/id-business-v2-activation.repository';
 
 const activationId = '11111111-1111-4111-8111-111111111111';
 const orderId = '22222222-2222-4222-8222-222222222222';
@@ -68,7 +69,7 @@ describe('IdBusinessV2ActivationsService', () => {
     }
   };
   const service = new IdBusinessV2ActivationsService(
-    prisma as never,
+    new IdBusinessV2ActivationRepository(prisma as never),
     new IdBusinessV2ActivationStatusService()
   );
 

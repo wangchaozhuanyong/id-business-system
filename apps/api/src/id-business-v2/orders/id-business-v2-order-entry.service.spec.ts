@@ -2,7 +2,9 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
 import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
+import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const customerId = '22222222-2222-4222-8222-222222222222';
@@ -177,11 +179,12 @@ describe('IdBusinessV2OrderEntryService', () => {
     quoteOrderRate: vi.fn()
   };
   const service = new IdBusinessV2OrderEntryService(
-    prisma as never,
+    new IdBusinessV2OrdersRepository(prisma as never),
     fieldEncryptionService as never,
     ordersService as never,
     orderLockService as never,
-    financeFxService as never
+    financeFxService as never,
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {
@@ -219,7 +222,11 @@ describe('IdBusinessV2OrderEntryService', () => {
       soldByOrderId: null
     });
     tx.idBusinessV2Account.update.mockResolvedValue({});
-    tx.idBusinessV2Order.update.mockResolvedValue({});
+    tx.idBusinessV2Order.update.mockImplementation(async ({ data }) =>
+      makeStoredOrder({
+        ...data
+      })
+    );
     orderLockService.reserveAccountForOrderInTransaction.mockResolvedValue({
       order: {
         id: orderId,
@@ -285,11 +292,11 @@ describe('IdBusinessV2OrderEntryService', () => {
         websiteAccountEncrypted: 'v1:encrypted',
         websiteAccountHash: 'website-hash',
         websiteAccountMasked: 'cu***@example.com',
-        receivedAmount: decimal('100'),
-        platformFeeAmount: decimal('3'),
+        receivedAmount: '100',
+        platformFeeAmount: '3',
         accountDisposition: 'retained',
         accountCostAmount: 0,
-        balanceAmount: decimal('20'),
+        balanceAmount: '20',
         balanceCostAmount: 0,
         refundCostAmount: null,
         profitAmount: null,
@@ -324,7 +331,7 @@ describe('IdBusinessV2OrderEntryService', () => {
       where: { id: orderId },
       data: expect.objectContaining({
         accountDisposition: 'retained',
-        accountCostAmount: 0
+        accountCostAmount: '0'
       })
     });
     expect(tx.auditLog.create).toHaveBeenCalledOnce();
@@ -365,15 +372,14 @@ describe('IdBusinessV2OrderEntryService', () => {
     await service.create(makeDto({ receivedAmount: '128' }), operator);
 
     const orderCreate = tx.idBusinessV2Order.create.mock.calls[0]?.[0];
-    expect(orderCreate.data.platformFeeAmount).toEqual(decimal('6.37'));
-    expect(orderCreate.data.platformFeeAmount.minus('1.25')).toEqual(decimal('5.12'));
+    expect(orderCreate.data.platformFeeAmount).toBe('6.37');
   });
 
   it('globally occupies a sold ID and snapshots its purchase cost in the same transaction', async () => {
     tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValueOnce(
       makeStoredOrder({
         accountDisposition: 'sold',
-        accountCostAmount: decimal('25')
+        accountCostAmount: '25'
       })
     );
     orderLockService.reserveAccountForOrderInTransaction.mockResolvedValueOnce({
@@ -424,7 +430,7 @@ describe('IdBusinessV2OrderEntryService', () => {
       where: { id: orderId },
       data: expect.objectContaining({
         accountDisposition: 'sold',
-        accountCostAmount: decimal('25')
+        accountCostAmount: '25'
       })
     });
   });
@@ -514,8 +520,10 @@ describe('IdBusinessV2OrderEntryService', () => {
   });
 
   it('maps a concurrent idempotency unique race to the committed original order', async () => {
-    prisma.$transaction.mockRejectedValue({ code: 'P2002' });
-    prisma.idBusinessV2Order.findUnique.mockResolvedValue({
+    prisma.$transaction
+      .mockRejectedValueOnce({ code: 'P2002' })
+      .mockImplementationOnce(async (callback) => callback(tx));
+    tx.idBusinessV2Order.findUnique.mockResolvedValue({
       ...makeStoredOrder(),
       locks: [makeLock()]
     });
@@ -527,8 +535,10 @@ describe('IdBusinessV2OrderEntryService', () => {
   });
 
   it('rejects an unrelated unique conflict instead of claiming the order was created', async () => {
-    prisma.$transaction.mockRejectedValue({ code: 'P2002' });
-    prisma.idBusinessV2Order.findUnique.mockResolvedValue(null);
+    prisma.$transaction
+      .mockRejectedValueOnce({ code: 'P2002' })
+      .mockImplementationOnce(async (callback) => callback(tx));
+    tx.idBusinessV2Order.findUnique.mockResolvedValue(null);
 
     await expect(service.create(makeDto(), operator)).rejects.toThrow(
       '平台订单号已存在或订单刚被其他请求创建'

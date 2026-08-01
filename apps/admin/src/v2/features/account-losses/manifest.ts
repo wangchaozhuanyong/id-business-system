@@ -1,4 +1,5 @@
 import { defineV2Feature } from '@/v2/features/feature';
+import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const accountLossesFeature = defineV2Feature({
   key: 'account-losses',
@@ -15,28 +16,6 @@ export const accountLossesFeature = defineV2Feature({
     { key: 'saleState', label: '销售状态', kind: 'select', options: ['可用', '已卖出'] },
     { key: 'reportedAt', label: '报损时间', kind: 'date-range' }
   ],
-  columns: [
-    { key: 'rowNumber', label: '序号', kind: 'index', widthPreset: 'index' },
-    { key: 'account', label: 'ID账号', kind: 'identifier', widthPreset: 'identifier' },
-    { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
-    { key: 'supplier', label: '供应商', kind: 'text', widthPreset: 'standard' },
-    { key: 'saleState', label: '销售状态', kind: 'status', widthPreset: 'compact' },
-    {
-      key: 'soldOrderNo',
-      label: '来源订单',
-      kind: 'identifier',
-      widthPreset: 'identifier'
-    },
-    { key: 'lossBalance', label: '损失余额', kind: 'numeric', widthPreset: 'standard' },
-    {
-      key: 'lossCostAmount',
-      label: '人民币亏损',
-      kind: 'numeric',
-      widthPreset: 'standard'
-    },
-    { key: 'reason', label: '报损原因', kind: 'text', widthPreset: 'longText' },
-    { key: 'reportedBy', label: '操作人', kind: 'text', widthPreset: 'standard' },
-    { key: 'reportedAt', label: '报损时间', kind: 'date', widthPreset: 'dateTime' }
-  ],
+  tables: v2TablesByFeature['account-losses'],
   loadView: () => import('./V2AccountLossesView.vue')
 });

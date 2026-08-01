@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Header, Post, Req } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
 import { AllowDuringPasswordReset, CurrentUser, Public } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -31,6 +31,7 @@ export class V2AuthController {
   }
 
   @Get('me')
+  @Header('Cache-Control', 'no-store')
   @AllowDuringPasswordReset()
   me(@CurrentUser() user: AuthenticatedUser) {
     return user;

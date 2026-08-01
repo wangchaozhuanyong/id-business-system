@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2OptionDto } from './dto/create-id-business-v2-option.dto';
@@ -89,21 +89,30 @@ export class IdBusinessV2OptionsController {
   }
 
   @Post()
-  create(@Body() dto: CreateIdBusinessV2OptionDto, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.optionsService.create(dto, operator);
+  create(
+    @Body() dto: CreateIdBusinessV2OptionDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.optionsService.create(dto, operator, { requestId: request?.requestId });
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateIdBusinessV2OptionDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
   ) {
-    return this.optionsService.update(id, dto, operator);
+    return this.optionsService.update(id, dto, operator, { requestId: request?.requestId });
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
-    return this.optionsService.remove(id, operator);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.optionsService.remove(id, operator, { requestId: request?.requestId });
   }
 }

@@ -172,9 +172,11 @@ import { Key, List, Lock, PieChart, Sunny, User } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage, http, request } from '@/api/client';
+import { isApiError } from '@/api/apiError';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
 import { getSafeV2Redirect } from '@/v2/router/passwordReset';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
 
@@ -235,7 +237,7 @@ async function submit() {
   loginError.value = '';
   try {
     await authStore.login(form.username, form.password, form.mfaCode || undefined);
-    await router.push(getLoginRedirectPath());
+    await navigateSafely(router, getLoginRedirectPath());
   } catch (error) {
     loginError.value = getLoginErrorMessage(error);
     ElMessage.error(loginError.value);
@@ -249,13 +251,10 @@ function getLoginRedirectPath() {
 }
 
 function getLoginErrorMessage(error: unknown) {
-  const message = getApiErrorMessage(error);
-
-  if (message.includes('登录状态无效') || message.includes('登录状态已过期')) {
+  if (isApiError(error) && (error.code === 'AUTH_INVALID' || error.status === 401)) {
     return '账号、密码或动态验证码不正确，请检查后重试。';
   }
-
-  return message;
+  return getApiErrorMessage(error);
 }
 
 watch(

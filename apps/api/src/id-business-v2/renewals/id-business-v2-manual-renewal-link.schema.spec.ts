@@ -28,16 +28,16 @@ describe('V2 manual renewal source link', () => {
       ),
       'utf8'
     );
-    const statusService = readFileSync(
+    const renewalsRepository = readFileSync(
       resolve(
         process.cwd(),
-        'src/id-business-v2/activations/id-business-v2-activation-status.service.ts'
+        'src/id-business-v2/renewals/persistence/id-business-v2-renewals.repository.ts'
       ),
       'utf8'
     );
 
     expect(manualRenewal).toContain('renewedFromActivationId: sourceActivation.id');
-    expect(statusService).toContain('renewedBy:');
-    expect(statusService).toContain('is: null');
+    expect(renewalsRepository).toContain('renewedBy:');
+    expect(renewalsRepository).toContain('is: null');
   });
 });

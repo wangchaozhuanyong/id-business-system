@@ -10,6 +10,7 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { idBusinessV2BalancesApi } from './api';
 import {
   deltaType,
@@ -326,7 +327,7 @@ export function useTopupRecordsPage() {
       query.accountId = filters.accountId;
       if (filters.accountLabel) query.accountLabel = filters.accountLabel;
     }
-    void router.replace({ path: '/v2/records/topups', query });
+    void navigateSafely(router, { path: '/v2/records/topups', query }, 'replace');
   }
 
   function handleGiftCardPageSizeChange() {

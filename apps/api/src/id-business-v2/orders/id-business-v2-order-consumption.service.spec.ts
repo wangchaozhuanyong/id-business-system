@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Amount4, Rate8, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
@@ -17,12 +16,8 @@ const operator = {
   permissions: ['apple.order.create']
 };
 
-function decimal(value: Prisma.Decimal.Value) {
-  return new Prisma.Decimal(value);
-}
-
-function cloudflareDecimal(value: Prisma.Decimal.Value) {
-  return new CloudflarePrisma.Decimal(String(value));
+function amount(value: string) {
+  return Amount4.from(value);
 }
 
 function makeOrder(overrides: Record<string, unknown> = {}) {
@@ -31,12 +26,12 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     orderNo: 'V2-20260726-0001',
     serviceOptionId: '66666666-6666-4666-8666-666666666666',
     accountId,
-    receivedAmount: decimal('100'),
-    platformFeeAmount: decimal('3'),
+    receivedAmount: amount('100'),
+    platformFeeAmount: amount('3'),
     accountDisposition: 'retained',
-    accountCostAmount: decimal('0'),
-    balanceAmount: decimal('20'),
-    balanceCostAmount: decimal('0'),
+    accountCostAmount: amount('0'),
+    balanceAmount: amount('20'),
+    balanceCostAmount: amount('0'),
     refundCostAmount: null,
     profitAmount: null,
     status: 'pending',
@@ -48,9 +43,9 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
   return {
     id: accountId,
     appleIdMasked: 'us***@example.com',
-    currentBalance: decimal('30'),
-    balanceCostAmount: decimal('90'),
-    purchaseCost: decimal('25'),
+    currentBalance: amount('30'),
+    balanceCostAmount: amount('90'),
+    purchaseCost: amount('25'),
     soldByOrderId: null,
     countryOptionId: '77777777-7777-4777-8777-777777777777',
     statusCode: 'normal',
@@ -60,14 +55,14 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
 
 function makeMovement(overrides: Record<string, unknown> = {}) {
   return {
-    balanceAmount: decimal('20'),
-    costAmount: decimal('60'),
-    balanceBefore: decimal('30'),
-    balanceAfter: decimal('10'),
-    costBefore: decimal('90'),
-    costAfter: decimal('30'),
-    averageCostBefore: decimal('3'),
-    averageCostAfter: decimal('3'),
+    balanceAmount: amount('20'),
+    costAmount: amount('60'),
+    balanceBefore: amount('30'),
+    balanceAfter: amount('10'),
+    costBefore: amount('90'),
+    costAfter: amount('30'),
+    averageCostBefore: Rate8.from('3'),
+    averageCostAfter: Rate8.from('3'),
     ...overrides
   };
 }
@@ -129,11 +124,26 @@ describe('IdBusinessV2OrderConsumptionService', () => {
   const ordersService = {
     get: vi.fn()
   };
+  const repository = {
+    createBalanceLedger: vi.fn((transaction: typeof tx, data: Record<string, unknown>) =>
+      transaction.idBusinessV2BalanceLedger.create({ data })
+    ),
+    updateAccount: vi.fn((transaction: typeof tx, id: string, data: Record<string, unknown>) =>
+      transaction.idBusinessV2Account.update({ where: { id }, data })
+    ),
+    updateOrder: vi.fn((transaction: typeof tx, id: string, data: Record<string, unknown>) =>
+      transaction.idBusinessV2Order.update({ where: { id }, data })
+    ),
+    appendAudit: vi.fn((transaction: typeof tx, data: Record<string, unknown>) =>
+      transaction.auditLog.create({ data })
+    )
+  };
   const service = new IdBusinessV2OrderConsumptionService(
-    prisma as never,
     orderLockService as never,
     balanceCalculator as never,
-    ordersService as never
+    ordersService as never,
+    repository as never,
+    new V2CommandTransactionManager(prisma as never)
   );
 
   beforeEach(() => {
@@ -184,10 +194,10 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     );
     expect(balanceCalculator.calculateConsumption).toHaveBeenCalledWith(
       {
-        currentBalance: decimal('30'),
-        balanceCostAmount: decimal('90')
+        currentBalance: amount('30'),
+        balanceCostAmount: amount('90')
       },
-      decimal('20')
+      amount('20')
     );
     expect(tx.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -195,12 +205,12 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         orderId,
         entryType: 'order_consumption',
         direction: 'debit',
-        balanceAmount: decimal('20'),
-        costAmount: decimal('60'),
-        balanceBefore: decimal('30'),
-        balanceAfter: decimal('10'),
-        costBefore: decimal('90'),
-        costAfter: decimal('30'),
+        balanceAmount: '20',
+        costAmount: '60',
+        balanceBefore: '30',
+        balanceAfter: '10',
+        costBefore: '90',
+        costAfter: '30',
         idempotencyKey: `order_consumption:${orderId}:consume-request-1`
       })
     });
@@ -209,8 +219,8 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         id: accountId
       },
       data: {
-        currentBalance: decimal('10'),
-        balanceCostAmount: decimal('30'),
+        currentBalance: '10',
+        balanceCostAmount: '30',
         updatedByUserId: operator.id
       }
     });
@@ -219,9 +229,9 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         id: orderId
       },
       data: {
-        accountCostAmount: decimal('0'),
-        balanceCostAmount: decimal('60'),
-        profitAmount: decimal('37'),
+        accountCostAmount: '0',
+        balanceCostAmount: '60',
+        profitAmount: '37',
         status: 'processing',
         statusChangedAt: expect.any(Date),
         updatedByUserId: operator.id
@@ -247,20 +257,20 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     });
   });
 
-  it('normalizes Cloudflare Prisma order amounts before calculating profit', async () => {
+  it('calculates profit from persistence-mapped domain amounts', async () => {
     orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
       idempotentReplay: false,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        receivedAmount: cloudflareDecimal('128'),
-        platformFeeAmount: cloudflareDecimal('5.12'),
-        accountCostAmount: cloudflareDecimal('0'),
-        balanceAmount: cloudflareDecimal('20'),
-        refundCostAmount: cloudflareDecimal('0')
+        receivedAmount: amount('128'),
+        platformFeeAmount: amount('5.12'),
+        accountCostAmount: amount('0'),
+        balanceAmount: amount('20'),
+        refundCostAmount: amount('0')
       }),
       account: makeAccount({
-        currentBalance: cloudflareDecimal('30'),
-        balanceCostAmount: cloudflareDecimal('90')
+        currentBalance: amount('30'),
+        balanceCostAmount: amount('90')
       }),
       activeLock: {
         id: lockId
@@ -277,9 +287,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotencyKey: 'consume-request-1'
     });
 
-    expect(tx.idBusinessV2Order.update.mock.calls[0]?.[0].data.profitAmount).toEqual(
-      decimal('62.88')
-    );
+    expect(tx.idBusinessV2Order.update.mock.calls[0]?.[0].data.profitAmount).toBe('62.88');
   });
 
   it('keeps a retained ID purchase-cost snapshot without charging it in order profit', async () => {
@@ -287,7 +295,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: false,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        accountCostAmount: decimal('25')
+        accountCostAmount: amount('25')
       }),
       account: makeAccount(),
       activeLock: {
@@ -311,7 +319,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
         accountDisposition: 'sold',
-        accountCostAmount: decimal('25')
+        accountCostAmount: amount('25')
       }),
       account: makeAccount({
         soldByOrderId: orderId
@@ -336,8 +344,8 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: false,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        receivedAmount: decimal('50'),
-        platformFeeAmount: decimal('5')
+        receivedAmount: amount('50'),
+        platformFeeAmount: amount('5')
       }),
       account: makeAccount(),
       activeLock: {
@@ -364,9 +372,9 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: true,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        accountCostAmount: decimal('25'),
-        balanceCostAmount: decimal('60'),
-        profitAmount: decimal('37'),
+        accountCostAmount: amount('25'),
+        balanceCostAmount: amount('60'),
+        profitAmount: amount('37'),
         status: 'processing'
       }),
       account: null,
@@ -391,7 +399,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: true,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        balanceCostAmount: decimal('0'),
+        balanceCostAmount: amount('0'),
         profitAmount: null,
         status: 'pending'
       }),
@@ -428,9 +436,9 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       idempotentReplay: false,
       idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
       order: makeOrder({
-        receivedAmount: decimal('0'),
-        platformFeeAmount: decimal('99999999999999.9999'),
-        refundCostAmount: decimal('99999999999999.9999')
+        receivedAmount: amount('0'),
+        platformFeeAmount: amount('99999999999999.9999'),
+        refundCostAmount: amount('99999999999999.9999')
       }),
       account: makeAccount(),
       activeLock: {
@@ -440,7 +448,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     });
     balanceCalculator.calculateConsumption.mockReturnValueOnce(
       makeMovement({
-        costAmount: decimal('99999999999999.9999')
+        costAmount: amount('99999999999999.9999')
       })
     );
 

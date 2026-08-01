@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Amount4 } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
 
 const operator = {
@@ -11,12 +11,10 @@ const operator = {
 };
 
 describe('IdBusinessV2ExchangeRateWorker', () => {
-  const prisma = {
-    idBusinessV2ExchangeRateRun: {
-      findMany: vi.fn(),
-      findFirst: vi.fn(),
-      updateMany: vi.fn()
-    }
+  const repository = {
+    findStaleRuns: vi.fn(),
+    findRunningRun: vi.fn(),
+    recoverStaleRun: vi.fn()
   };
   const settings = {
     isNetworkEnabled: vi.fn(),
@@ -27,10 +25,16 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
   const persistence = {
     collectAndPersist: vi.fn()
   };
+  const transactionManager = {
+    execute: vi.fn(async (work) => work({}))
+  };
+  const audit = { append: vi.fn() };
   const worker = new IdBusinessV2ExchangeRateWorker(
-    prisma as never,
+    repository as never,
     settings as never,
-    persistence as never
+    persistence as never,
+    transactionManager as never,
+    audit as never
   );
 
   beforeEach(() => {
@@ -42,7 +46,7 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
     settings.isNetworkEnabled.mockReturnValue(true);
     settings.claimDueSchedule.mockResolvedValue(null);
     settings.getRecord.mockResolvedValue({
-      targetAmountRmb: new Prisma.Decimal('5000')
+      targetAmountRmb: Amount4.from('5000')
     });
     settings.get.mockResolvedValue({
       autoEnabled: true,
@@ -50,9 +54,9 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
       targetAmountRmb: '5000',
       nextRunAt: new Date()
     });
-    prisma.idBusinessV2ExchangeRateRun.findMany.mockResolvedValue([]);
-    prisma.idBusinessV2ExchangeRateRun.findFirst.mockResolvedValue(null);
-    prisma.idBusinessV2ExchangeRateRun.updateMany.mockResolvedValue({ count: 1 });
+    repository.findStaleRuns.mockResolvedValue([]);
+    repository.findRunningRun.mockResolvedValue(null);
+    repository.recoverStaleRun.mockResolvedValue({ count: 1 });
     persistence.collectAndPersist.mockResolvedValue({ status: 'success' });
   });
 
@@ -80,7 +84,7 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
   });
 
   it('runs a claimed scheduled collection with the database target amount', async () => {
-    const targetAmountRmb = new Prisma.Decimal('8000');
+    const targetAmountRmb = Amount4.from('8000');
     settings.claimDueSchedule.mockResolvedValue({
       targetAmountRmb,
       intervalMinutes: 30,
@@ -91,12 +95,13 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
 
     expect(persistence.collectAndPersist).toHaveBeenCalledWith({
       triggerType: 'scheduled',
-      targetAmountRmb
+      targetAmountRmb,
+      requestId: 'exchange-rate-scheduled-collect'
     });
   });
 
   it('returns a structured result for a database Cron collection', async () => {
-    const targetAmountRmb = new Prisma.Decimal('5000');
+    const targetAmountRmb = Amount4.from('5000');
     settings.claimDueSchedule.mockResolvedValue({
       targetAmountRmb,
       intervalMinutes: 30,
@@ -129,29 +134,22 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
 
   it('recovers a timed-out running batch before checking the next schedule', async () => {
     const startedAt = new Date(Date.now() - 6 * 60_000);
-    prisma.idBusinessV2ExchangeRateRun.findMany.mockResolvedValue([
+    repository.findStaleRuns.mockResolvedValue([
       { id: '22222222-2222-4222-8222-222222222222', startedAt }
     ]);
 
     await worker.tick();
 
-    expect(prisma.idBusinessV2ExchangeRateRun.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: '22222222-2222-4222-8222-222222222222',
-        status: 'running',
-        startedAt
-      },
-      data: expect.objectContaining({
-        status: 'failed',
-        errorCode: 'exchange_rate_stale_run_recovered',
-        errorProvider: 'system',
-        errorRetryable: true
-      })
-    });
+    expect(repository.recoverStaleRun).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: '22222222-2222-4222-8222-222222222222', startedAt },
+      expect.any(Date)
+    );
+    expect(audit.append).toHaveBeenCalled();
   });
 
   it('uses the current database target for an operator-triggered collection', async () => {
-    const targetAmountRmb = new Prisma.Decimal('5000');
+    const targetAmountRmb = Amount4.from('5000');
     settings.getRecord.mockResolvedValue({ targetAmountRmb });
 
     await worker.collectManual(operator);
@@ -159,19 +157,21 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
     expect(persistence.collectAndPersist).toHaveBeenCalledWith({
       triggerType: 'manual',
       targetAmountRmb,
-      triggeredByUserId: operator.id
+      triggeredByUserId: operator.id,
+      requestId: 'exchange-rate-manual-collect'
     });
   });
 
   it('records an order-triggered refresh as a system collection', async () => {
-    const targetAmountRmb = new Prisma.Decimal('5000');
+    const targetAmountRmb = Amount4.from('5000');
     settings.getRecord.mockResolvedValue({ targetAmountRmb });
 
     await worker.collectSystem();
 
     expect(persistence.collectAndPersist).toHaveBeenCalledWith({
       triggerType: 'system',
-      targetAmountRmb
+      targetAmountRmb,
+      requestId: 'exchange-rate-system-collect'
     });
   });
 });

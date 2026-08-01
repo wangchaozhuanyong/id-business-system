@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { ReportIdBusinessV2AccountLossDto } from './dto/report-id-business-v2-account-loss.dto';
@@ -13,9 +13,12 @@ export class IdBusinessV2AccountLossCommandsController {
   reportLoss(
     @Param('id') id: string,
     @Body() dto: ReportIdBusinessV2AccountLossDto,
-    @CurrentUser() operator?: AuthenticatedUser
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
   ) {
-    return this.accountLossesService.reportLoss(id, dto, operator);
+    return this.accountLossesService.reportLoss(id, dto, operator, {
+      requestId: request?.requestId
+    });
   }
 }
 
