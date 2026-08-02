@@ -4,18 +4,18 @@
 
 ## 当前生产基线
 
-- Git `main`：`c7c431c9af90b8113208908e179d28143e2abda5`
-- Cloudflare Worker 版本：`b6db5654-7a9a-464c-b14e-bf7e67232bbb`
-- Prisma：生产 `_prisma_migrations` 保留 77 条历史成功记录，其中当前纯净链已应用原 16 个
-  migration，无失败记录；本分支新增两个 migration，
-  `20260802010000_normal_id_status_seed` 补齐系统“正常”状态，
-  `20260802011000_exchange_rate_validation_function` 补齐延迟约束触发器依赖的汇率运行校验函数；
-  两者均尚未部署到生产
+- 已部署 Git 提交：`0dd1f84b279e639eb5c2ce588f7e2e770ac84c80`
+- Cloudflare Worker 版本：`d394845e-e485-43ce-b334-85fc83ecf079`
+- Prisma：生产 `_prisma_migrations` 保留 79 条历史成功记录，当前纯净链 18 个 migration 已全部
+  应用，无失败记录、无本地待应用记录；`20260802010000_normal_id_status_seed` 已补齐系统“正常”
+  状态，`20260802011000_exchange_rate_validation_function` 已补齐汇率运行校验函数
 - 数据治理：三个增量 migration 已应用，四张治理表已存在
 - 财务：`2026-07-30T17:38:02.617Z` 启用，自动回填留有 4 条审计记录，但历史确认因测试说明和
   未核对自有资金账户、历史开支而重新打开；当前状态为 `incomplete`
 - 财务基础资料：0 个自有资金账户、1 个供应商钱包；历史开支是否确实为 0 仍需负责人确认
 - 账号：一个真实管理员和一个 `production_smoke_readonly` 自动巡检账号
+- 最近部署验收：主页、live/ready 健康、只读登录/登出及订单、续费、ID、客户、开通、余额和有效汇率
+  接口已通过生产 smoke
 
 生产聚合状态必须通过只读命令重新生成，不得直接照抄本文中的数量：
 
