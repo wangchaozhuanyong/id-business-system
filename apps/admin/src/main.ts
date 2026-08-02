@@ -2,7 +2,7 @@ import './v2/styles/base.css';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
-import { setAppRuntimeError, shouldIgnoreRuntimeError } from './runtime/appRuntimeError';
+import { captureAppRuntimeError, resolveWindowRuntimeErrorReason } from './runtime/appRuntimeError';
 import { markAppPerformance, measureAppPerformance } from './runtime/performance';
 import { v2PaginationLabel } from './v2/directives/paginationLabel';
 import { setV2RouteNavigationState, v2RouteNavigationState } from './v2/router/routes';
@@ -17,18 +17,19 @@ window.__V2_APP_MOUNTED__ = false;
 function bootstrapV2() {
   const app = createApp(App);
   const pinia = createPinia();
+  const runtimeContext = () => ({
+    route: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    buildId: __V2_BUILD_ID__
+  });
 
   app.config.errorHandler = (error) => {
-    if (shouldIgnoreRuntimeError(error)) return;
-    setAppRuntimeError('vue');
+    captureAppRuntimeError('vue', error, runtimeContext());
   };
   window.addEventListener('error', (event) => {
-    if (shouldIgnoreRuntimeError(event)) return;
-    setAppRuntimeError('window');
+    captureAppRuntimeError('window', resolveWindowRuntimeErrorReason(event), runtimeContext());
   });
   window.addEventListener('unhandledrejection', (event) => {
-    if (shouldIgnoreRuntimeError(event.reason)) return;
-    setAppRuntimeError('promise');
+    captureAppRuntimeError('promise', event.reason, runtimeContext());
   });
 
   installV2PreloadRecovery({

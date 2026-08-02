@@ -760,6 +760,12 @@ p {
   line-height: 1.6;
 }
 
+.app-route-error__copy small {
+  color: var(--v3-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .app-route-error__actions {
   display: flex;
   flex-wrap: wrap;

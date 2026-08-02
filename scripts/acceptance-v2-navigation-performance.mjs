@@ -663,6 +663,8 @@ async function checkBrowserRuntime() {
       );
     }
 
+    await verifyRuntimeErrorFreeNavigationSequence(page, errors);
+
     assert.deepEqual(errors, [], `浏览器运行错误：${errors.join('; ')}`);
 
     const storageState = await desktop.storageState();
@@ -1049,6 +1051,27 @@ async function ensureNavigationLinkVisible(page, path) {
     await link.waitFor({ state: 'visible', timeout: HTTP_TIMEOUT_MS });
   }
   return link;
+}
+
+async function verifyRuntimeErrorFreeNavigationSequence(page, runtimeErrors) {
+  const paths = [
+    '/v2/monitoring/business',
+    '/v2/monitoring/system',
+    '/v2/dashboard',
+    '/v2/monitoring/business'
+  ];
+
+  for (const path of paths) {
+    const link = await ensureNavigationLinkVisible(page, path);
+    await link.click();
+    await page.waitForURL((url) => url.pathname === path, { timeout: HTTP_TIMEOUT_MS });
+    await waitForPageReady(page);
+    assert.equal(
+      await page.locator('.app-route-error').count(),
+      0,
+      `${path} 可恢复导航错误触发全局运行时弹窗：${runtimeErrors.slice(-3).join('; ')}`
+    );
+  }
 }
 
 async function verifyCachedOptionTypeSwitch(page, label, expectedColumns) {

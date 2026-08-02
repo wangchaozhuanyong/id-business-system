@@ -14,7 +14,7 @@ export function useSystemMonitoringPage() {
   const systemQuery = useV2ModuleQuery<V2SystemMonitoringResponse>({
     moduleKey: 'system-monitoring',
     scope: 'dashboard',
-    key: 'overview',
+    key: 'system-monitoring:overview',
     keepPreviousData: true,
     getRevalidateAt: () => Date.now() + 30_000,
     query: ({ signal }) => v2SystemMonitoringApi.overview({ signal })
