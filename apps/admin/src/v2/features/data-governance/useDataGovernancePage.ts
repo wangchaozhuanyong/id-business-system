@@ -4,10 +4,11 @@ import { computed, reactive, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2DataGovernanceApi } from './api';
+import { createDataGovernanceQueryKey } from './data-governance-query-key';
 import {
   formatGovernanceDate,
   getGovernanceItemStatusMeta,
@@ -114,14 +115,14 @@ export function useDataGovernancePage() {
   const recycleQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
     scope: 'data-governance',
-    key: () => createV2QueryKey(recycleListQuery()),
+    key: () => createDataGovernanceQueryKey('recycle', recycleListQuery()),
     keepPreviousData: true,
     query: ({ signal }) => v2DataGovernanceApi.recycleBin(recycleListQuery(), { signal })
   });
   const jobsQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
     scope: 'data-governance',
-    key: () => createV2QueryKey(jobListQuery()),
+    key: () => createDataGovernanceQueryKey('jobs', jobListQuery()),
     keepPreviousData: true,
     query: ({ signal }) => v2DataGovernanceApi.jobs(jobListQuery(), { signal })
   });
