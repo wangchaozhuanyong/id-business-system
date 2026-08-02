@@ -290,11 +290,20 @@ export class IdBusinessV2OrderLockService {
     }
 
     const service = await this.repository.findEligibleLockService(tx, order.serviceOptionId);
-    if (!service?.countryOptionId) {
+    if (!service?.countryOptionId || !service.parent?.id) {
       throw new ConflictException('订单业务不存在、已停用或没有完整的国家和分类');
     }
     if (service.countryOptionId !== account.countryOptionId) {
       throw new ConflictException('ID 国家与订单业务所属国家不一致');
+    }
+    const categoryActivation = await this.repository.findActiveCategoryActivationForAccount(tx, {
+      accountId: account.id,
+      categoryOptionId: service.parent.id,
+      evaluatedAt: new Date(),
+      editingOrderId: order.id
+    });
+    if (categoryActivation) {
+      throw new ConflictException('该 ID 已有同类业务未到期，不能再次匹配');
     }
   }
 

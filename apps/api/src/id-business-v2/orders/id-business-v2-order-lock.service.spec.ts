@@ -9,6 +9,7 @@ const orderId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const serviceOptionId = '33333333-3333-4333-8333-333333333333';
 const lockId = '44444444-4444-4444-8444-444444444444';
+const categoryOptionId = '99999999-9999-4999-8999-999999999999';
 const operator = {
   id: '55555555-5555-4555-8555-555555555555',
   username: 'admin',
@@ -140,6 +141,9 @@ describe('IdBusinessV2OrderLockService', () => {
     idBusinessV2BalanceLedger: {
       findUnique: vi.fn()
     },
+    idBusinessV2Activation: {
+      findFirst: vi.fn()
+    },
     auditLog: {
       create: vi.fn()
     }
@@ -159,8 +163,10 @@ describe('IdBusinessV2OrderLockService', () => {
     );
     tx.$queryRaw.mockResolvedValueOnce([makeOrder()]).mockResolvedValueOnce([makeAccount()]);
     tx.idBusinessV2Option.findFirst.mockResolvedValue({
-      countryOptionId: '66666666-6666-4666-8666-666666666666'
+      countryOptionId: '66666666-6666-4666-8666-666666666666',
+      parent: { id: categoryOptionId }
     });
+    tx.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     tx.idBusinessV2AccountLock.updateMany.mockResolvedValue({ count: 0 });
     tx.idBusinessV2AccountLock.findMany.mockResolvedValue([]);
     tx.idBusinessV2AccountLock.findFirst.mockResolvedValue(null);
@@ -343,6 +349,47 @@ describe('IdBusinessV2OrderLockService', () => {
     expect(conflictQuery.where.OR).toBeUndefined();
   });
 
+  it('rejects reserving an ID that has an active unrenewed activation in the same category', async () => {
+    tx.idBusinessV2Activation.findFirst.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      dueAt: expiresAt
+    });
+
+    await expect(
+      service.reserveAccountForOrder({
+        orderId,
+        accountId,
+        expiresAt
+      })
+    ).rejects.toThrow('该 ID 已有同类业务未到期，不能再次匹配');
+
+    expect(tx.idBusinessV2Activation.findFirst).toHaveBeenCalledWith({
+      where: {
+        accountId,
+        status: 'active',
+        renewedBy: { is: null },
+        orderId: { not: orderId },
+        serviceOption: {
+          is: {
+            type: 'service',
+            parentId: categoryOptionId
+          }
+        },
+        OR: [
+          { dueAt: null },
+          {
+            dueAt: {
+              gt: expect.any(Date)
+            }
+          }
+        ]
+      },
+      select: { id: true, dueAt: true },
+      orderBy: [{ dueAt: 'asc' }, { id: 'asc' }]
+    });
+    expect(tx.idBusinessV2AccountLock.create).not.toHaveBeenCalled();
+  });
+
   it('rechecks normal status, balance, and country after taking row locks', async () => {
     tx.$queryRaw
       .mockReset()
@@ -373,7 +420,8 @@ describe('IdBusinessV2OrderLockService', () => {
       .mockResolvedValueOnce([makeOrder()])
       .mockResolvedValueOnce([makeAccount()]);
     tx.idBusinessV2Option.findFirst.mockResolvedValueOnce({
-      countryOptionId: '77777777-7777-4777-8777-777777777777'
+      countryOptionId: '77777777-7777-4777-8777-777777777777',
+      parent: { id: categoryOptionId }
     });
     await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
       'ID 国家与订单业务所属国家不一致'
@@ -388,7 +436,8 @@ describe('IdBusinessV2OrderLockService', () => {
         })
       ]);
     tx.idBusinessV2Option.findFirst.mockResolvedValueOnce({
-      countryOptionId: '66666666-6666-4666-8666-666666666666'
+      countryOptionId: '66666666-6666-4666-8666-666666666666',
+      parent: { id: categoryOptionId }
     });
     await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
       '该 ID 已卖出，不能再次匹配、加卡或续费'

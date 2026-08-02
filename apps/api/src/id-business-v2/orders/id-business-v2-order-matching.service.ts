@@ -59,6 +59,7 @@ export class IdBusinessV2OrderMatchingService {
 
     const result = await this.repository.findMatchingCandidates({
       countryOptionId: context.country.id,
+      categoryOptionId: context.category.id,
       serviceOptionId,
       editingOrderId,
       requiredBalance: requiredBalance.toString(),
@@ -82,7 +83,7 @@ export class IdBusinessV2OrderMatchingService {
       counts: {
         ...result.counts
       },
-      revalidateAt: result.nextLockExpiresAt,
+      revalidateAt: result.nextAvailabilityChangesAt,
       selectedCandidateId: autoSelect ? (result.accounts[0]?.id ?? null) : null,
       items: result.accounts.map((account) => this.toCandidateResponse(account, requiredBalance))
     };
