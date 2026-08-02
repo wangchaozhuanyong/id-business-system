@@ -506,6 +506,10 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     expect(tx.idBusinessV2GiftCard.update).not.toHaveBeenCalled();
     expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ occurredAt: replayEntry.createdAt })
+    );
   });
 
   it('returns both linked results for an idempotent combined replay after the ID is frozen', async () => {

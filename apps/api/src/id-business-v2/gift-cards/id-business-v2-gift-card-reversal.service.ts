@@ -131,6 +131,7 @@ export class IdBusinessV2GiftCardReversalService {
           existingEntry.giftCard,
           existingEntry.costAmount,
           reason,
+          existingEntry.createdAt,
           operator
         );
         if (action === 'withdrawn') {
@@ -203,7 +204,7 @@ export class IdBusinessV2GiftCardReversalService {
         createdByUserId: operator?.id
       });
 
-      const statusChangedAt = new Date();
+      const statusChangedAt = ledgerEntry.createdAt;
       const updatedGiftCard = await this.repository.updateMappedGiftCard(tx, giftCardId, {
         status: action,
         statusChangedAt,
@@ -245,6 +246,7 @@ export class IdBusinessV2GiftCardReversalService {
         updatedGiftCard,
         snapshot.costAmount,
         reason,
+        ledgerEntry.createdAt,
         operator
       );
       if (action === 'withdrawn') {
@@ -281,6 +283,7 @@ export class IdBusinessV2GiftCardReversalService {
     giftCard: { id: string; codeMasked: string },
     costAmount: Amount4,
     reason: string,
+    occurredAt: Date,
     operator?: AuthenticatedUser
   ) {
     const redeemed = action === 'redeemed';
@@ -289,7 +292,7 @@ export class IdBusinessV2GiftCardReversalService {
       sourceType: 'gift_card',
       sourceId: giftCard.id,
       sourceReference: giftCard.codeMasked,
-      occurredAt: new Date(),
+      occurredAt,
       summary: `${redeemed ? '礼品卡赎回损失' : '礼品卡撤回待退款'}：${giftCard.codeMasked}`,
       metadata: { reason },
       idempotencyKey: `auto:gift_card_${action}:${giftCard.id}`,

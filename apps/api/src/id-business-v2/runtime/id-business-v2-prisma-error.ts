@@ -1,6 +1,11 @@
 interface PrismaErrorLike {
   code?: unknown;
+  meta?: unknown;
   name?: unknown;
+}
+
+interface PrismaErrorMetaLike {
+  code?: unknown;
 }
 
 export function getPrismaErrorCode(error: unknown) {
@@ -19,5 +24,10 @@ export function isUniqueConstraintError(error: unknown) {
 }
 
 export function isWriteConflictError(error: unknown) {
-  return isPrismaErrorCode(error, 'P2034');
+  if (isPrismaErrorCode(error, 'P2034')) return true;
+  if (!isPrismaErrorCode(error, 'P2010')) return false;
+  const meta = (error as PrismaErrorLike).meta;
+  return Boolean(
+    meta && typeof meta === 'object' && (meta as PrismaErrorMetaLike).code === '40001'
+  );
 }

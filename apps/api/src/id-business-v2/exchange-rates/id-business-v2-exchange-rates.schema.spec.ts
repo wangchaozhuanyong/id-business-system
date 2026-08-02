@@ -21,6 +21,23 @@ describe('V2 exchange-rate contracts', () => {
     expect(seed).toContain('apple.exchange_rate.create');
   });
 
+  it('defines the deferred run validator that the clean baseline triggers invoke', () => {
+    const baseline = read('prisma/migrations/20260729000000_current_system_baseline/migration.sql');
+    const validatorMigration = read(
+      'prisma/migrations/20260802011000_exchange_rate_validation_function/migration.sql'
+    );
+
+    expect(baseline).toContain('PERFORM "validate_id_business_v2_exchange_rate_run"');
+    expect(baseline).not.toContain(
+      'CREATE OR REPLACE FUNCTION public.validate_id_business_v2_exchange_rate_run(target_run_id'
+    );
+    expect(validatorMigration).toContain(
+      'CREATE OR REPLACE FUNCTION public.validate_id_business_v2_exchange_rate_run(target_run_id UUID)'
+    );
+    expect(validatorMigration).toContain('provider_count <> 4');
+    expect(validatorMigration).toContain('valid_ad_count');
+  });
+
   it('keeps manual history isolated while exposing real collector endpoints', () => {
     const controller = read(
       'src/id-business-v2/exchange-rates/id-business-v2-exchange-rates.controller.ts'

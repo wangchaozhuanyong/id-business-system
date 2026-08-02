@@ -266,7 +266,7 @@ export class IdBusinessV2OkxOtcCollector implements IdBusinessV2OtcCollector {
     const decimal = this.rate(value);
     if (!decimal) return null;
     const normalized = decimal.gt(1) && decimal.lte(100) ? decimal.div(100) : decimal;
-    return normalized.lte(1) ? normalized : null;
+    return normalized.gte(0) && normalized.lte(1) ? normalized : null;
   }
 
   private positiveRate(value: unknown) {

@@ -6,12 +6,8 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { assertLocalAcceptanceDatabase } from './lib/development-data-cleanup.mjs';
 
 const require = createRequire(import.meta.url);
-const {
-  FieldEncryptionService
-} = require('../apps/api/dist/common/crypto/field-encryption.service.js');
-const {
-  IdBusinessV2BalanceCalculatorService
-} = require('../apps/api/dist/id-business-v2/balances/id-business-v2-balance-calculator.service.js');
+const { NestFactory } = require('@nestjs/core');
+const { AppModule } = require('../apps/api/dist/app.module.js');
 const {
   IdBusinessV2GiftCardCreditService
 } = require('../apps/api/dist/id-business-v2/gift-cards/id-business-v2-gift-card-credit.service.js');
@@ -75,8 +71,10 @@ async function main() {
   const accountIds = [];
   const giftCardIds = [];
   const orderIds = [];
+  const supplierAccountIds = [];
   const objectIds = new Set();
   let token = '';
+  let serviceContext = null;
   let primaryError = null;
   const cleanupErrors = [];
   let resultSummary = null;
@@ -148,16 +146,16 @@ async function main() {
     idempotencyKey,
     remark
   }) {
-    const form = new FormData();
-    form.set('code', code);
-    form.set('faceValue', faceValue);
-    form.set('exchangeRate', exchangeRate);
-    form.set('supplierOptionId', supplierOptionId);
-    form.set('idempotencyKey', idempotencyKey);
-    form.set('remark', remark);
     const result = await api(`/id-business-v2/gift-cards/${accountId}/credits`, {
       method: 'POST',
-      body: form
+      body: JSON.stringify({
+        code,
+        faceValue,
+        exchangeRate,
+        supplierOptionId,
+        idempotencyKey,
+        remark
+      })
     });
     if (!giftCardIds.includes(result.giftCard.id)) giftCardIds.push(result.giftCard.id);
     objectIds.add(result.giftCard.id);
@@ -187,6 +185,7 @@ async function main() {
       websiteAccount: `v2802.${idempotencyKey}@example.com`,
       receivedAmount,
       balanceAmount,
+      accountDisposition: 'retained',
       openedAt: openedAt.toISOString(),
       dueAt: dueAt.toISOString(),
       lockScope: 'by_service',
@@ -226,55 +225,93 @@ async function main() {
   }
 
   async function cleanup() {
-    const knownObjectIds = [...objectIds].filter(Boolean);
-    if (knownObjectIds.length) {
-      await prisma.sensitiveAccessLog.deleteMany({
-        where: { objectId: { in: knownObjectIds } }
-      });
-      await prisma.auditLog.deleteMany({
-        where: { objectId: { in: knownObjectIds } }
-      });
-    }
-    if (accountIds.length || orderIds.length || giftCardIds.length) {
-      await prisma.idBusinessV2BalanceLedger.deleteMany({
-        where: {
-          OR: [
-            ...(accountIds.length ? [{ accountId: { in: accountIds } }] : []),
-            ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
-            ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : [])
-          ]
-        }
-      });
-    }
-    if (orderIds.length) {
-      await prisma.idBusinessV2Activation.deleteMany({
-        where: { orderId: { in: orderIds } }
-      });
-      await prisma.idBusinessV2AccountLock.deleteMany({
-        where: { orderId: { in: orderIds } }
-      });
-      await prisma.idBusinessV2Order.deleteMany({
-        where: { id: { in: orderIds } }
-      });
-    }
-    if (giftCardIds.length) {
-      await prisma.idBusinessV2GiftCard.deleteMany({
-        where: { id: { in: giftCardIds } }
-      });
-    }
-    if (accountIds.length) {
-      await prisma.idBusinessV2Account.deleteMany({
-        where: { id: { in: accountIds } }
-      });
-    }
-    if (customerIds.length) {
-      await prisma.idBusinessV2Customer.deleteMany({
-        where: { id: { in: customerIds } }
-      });
-    }
-    for (const optionId of [...optionIds].reverse()) {
-      await prisma.idBusinessV2Option.deleteMany({ where: { id: optionId } });
-    }
+    await prisma.$transaction(async (cleanupTx) => {
+      // This script is already hard-gated to a loopback-only, disposable database.
+      // Replica mode is required to remove immutable ledger fixtures after assertions.
+      await cleanupTx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`);
+      const knownObjectIds = [...objectIds, ...supplierAccountIds].filter(Boolean);
+      const financeJournals = knownObjectIds.length
+        ? await cleanupTx.idBusinessV2FinanceJournal.findMany({
+            where: { sourceId: { in: knownObjectIds } },
+            select: { id: true }
+          })
+        : [];
+      const financeJournalIds = financeJournals.map((journal) => journal.id);
+      const allAuditObjectIds = [...knownObjectIds, ...financeJournalIds];
+      if (allAuditObjectIds.length) {
+        await cleanupTx.sensitiveAccessLog.deleteMany({
+          where: { objectId: { in: allAuditObjectIds } }
+        });
+        await cleanupTx.auditLog.deleteMany({
+          where: { objectId: { in: allAuditObjectIds } }
+        });
+      }
+      if (financeJournalIds.length) {
+        await cleanupTx.idBusinessV2FinanceJournalLine.deleteMany({
+          where: { journalId: { in: financeJournalIds } }
+        });
+        await cleanupTx.idBusinessV2FinanceJournal.deleteMany({
+          where: { id: { in: financeJournalIds } }
+        });
+      }
+      if (giftCardIds.length || supplierAccountIds.length) {
+        await cleanupTx.idBusinessV2TopupSupplierLedger.deleteMany({
+          where: {
+            OR: [
+              ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : []),
+              ...(supplierAccountIds.length
+                ? [{ supplierAccountId: { in: supplierAccountIds } }]
+                : [])
+            ]
+          }
+        });
+      }
+      if (accountIds.length || orderIds.length || giftCardIds.length) {
+        await cleanupTx.idBusinessV2BalanceLedger.deleteMany({
+          where: {
+            OR: [
+              ...(accountIds.length ? [{ accountId: { in: accountIds } }] : []),
+              ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
+              ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : [])
+            ]
+          }
+        });
+      }
+      if (orderIds.length) {
+        await cleanupTx.idBusinessV2Activation.deleteMany({
+          where: { orderId: { in: orderIds } }
+        });
+        await cleanupTx.idBusinessV2AccountLock.deleteMany({
+          where: { orderId: { in: orderIds } }
+        });
+        await cleanupTx.idBusinessV2Order.deleteMany({
+          where: { id: { in: orderIds } }
+        });
+      }
+      if (giftCardIds.length) {
+        await cleanupTx.idBusinessV2GiftCard.deleteMany({
+          where: { id: { in: giftCardIds } }
+        });
+      }
+      if (accountIds.length) {
+        await cleanupTx.idBusinessV2Account.deleteMany({
+          where: { id: { in: accountIds } }
+        });
+      }
+      if (customerIds.length) {
+        await cleanupTx.idBusinessV2Customer.deleteMany({
+          where: { id: { in: customerIds } }
+        });
+      }
+      if (supplierAccountIds.length) {
+        await cleanupTx.idBusinessV2TopupSupplierAccount.deleteMany({
+          where: { id: { in: supplierAccountIds } }
+        });
+      }
+      for (const optionId of [...optionIds].reverse()) {
+        await cleanupTx.idBusinessV2Option.deleteMany({ where: { id: optionId } });
+      }
+    });
   }
 
   try {
@@ -296,11 +333,12 @@ async function main() {
       currencyCode: 'USD'
     });
     const category = await createOption('business_category', `V2802 分类 ${suffix}`);
+    const secondaryCategory = await createOption('business_category', `V2802 分类 B ${suffix}`);
     const serviceA = await createOption('service', `V2802 业务 A ${suffix}`, category.id, {
       countryOptionId: country.id,
       businessAmount: '10'
     });
-    const serviceB = await createOption('service', `V2802 业务 B ${suffix}`, category.id, {
+    const serviceB = await createOption('service', `V2802 业务 B ${suffix}`, secondaryCategory.id, {
       countryOptionId: country.id,
       businessAmount: '15'
     });
@@ -312,6 +350,27 @@ async function main() {
       null,
       { fixedFee: '1', percentageFee: '2' }
     );
+
+    const supplierOpening = await api(
+      `/id-business-v2/topup-supplier-funds/suppliers/${topupSupplier.id}/initialize`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          targetBalanceCny: '1000',
+          reason: 'V2802 隔离验收期初余额',
+          idempotencyKey: `v2802-supplier-opening-${suffix}`
+        })
+      }
+    );
+    objectIds.add(supplierOpening.ledgerEntry.id);
+    const supplierAccount = await prisma.idBusinessV2TopupSupplierAccount.findUniqueOrThrow({
+      where: {
+        supplierOptionId_currency: { supplierOptionId: topupSupplier.id, currency: 'CNY' }
+      },
+      select: { id: true }
+    });
+    supplierAccountIds.push(supplierAccount.id);
+    objectIds.add(supplierAccount.id);
 
     const customer = await api('/id-business-v2/customers', {
       method: 'POST',
@@ -394,16 +453,8 @@ async function main() {
       '重复加卡创建了多余礼品卡'
     );
 
-    const configService = {
-      get(key) {
-        return process.env[key];
-      }
-    };
-    const creditService = new IdBusinessV2GiftCardCreditService(
-      prisma,
-      new FieldEncryptionService(configService),
-      new IdBusinessV2BalanceCalculatorService()
-    );
+    serviceContext = await NestFactory.createApplicationContext(AppModule, { logger: false });
+    const creditService = serviceContext.get(IdBusinessV2GiftCardCreditService);
     let transactionHookReached = false;
     let injectedGiftCardId = null;
     let injectedFailure = null;
@@ -418,7 +469,6 @@ async function main() {
           idempotencyKey: `rollback-credit-${suffix}`,
           remark: 'V2802 injected transaction failure'
         },
-        undefined,
         undefined,
         undefined,
         async (context) => {
@@ -660,7 +710,7 @@ async function main() {
     const orderC = await createOrder(
       buildOrderInput({
         customerId: customer.id,
-        serviceOptionId: serviceA.id,
+        serviceOptionId: serviceB.id,
         accountId: mainAccount.id,
         settlementPlatformOptionId: settlementPlatform.id,
         platformOrderNo: `V2802-REFUND-YES-${suffix}`,
@@ -824,6 +874,7 @@ async function main() {
   } catch (error) {
     primaryError = error;
   } finally {
+    if (serviceContext) await serviceContext.close();
     try {
       await cleanup();
     } catch (error) {

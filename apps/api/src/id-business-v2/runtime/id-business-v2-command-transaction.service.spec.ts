@@ -1,6 +1,10 @@
 import { ConflictException } from '@nestjs/common';
 import { V2CommandTransactionManager } from './id-business-v2-command-transaction.service';
-import { getPrismaErrorCode, isPrismaErrorCode } from './id-business-v2-prisma-error';
+import {
+  getPrismaErrorCode,
+  isPrismaErrorCode,
+  isWriteConflictError
+} from './id-business-v2-prisma-error';
 
 describe('V2CommandTransactionManager', () => {
   it('classifies Prisma errors structurally across runtimes', () => {
@@ -9,6 +13,9 @@ describe('V2CommandTransactionManager', () => {
     expect(getPrismaErrorCode(foreignRuntimeError)).toBe('P2002');
     expect(isPrismaErrorCode(foreignRuntimeError, 'P2002')).toBe(true);
     expect(getPrismaErrorCode({ code: 'NOT_PRISMA' })).toBeNull();
+    expect(isWriteConflictError({ code: 'P2034' })).toBe(true);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: '40001' } })).toBe(true);
+    expect(isWriteConflictError({ code: 'P2010', meta: { code: '23505' } })).toBe(false);
   });
 
   it('does not retry a command by default and uses explicit serializable isolation', async () => {
@@ -53,6 +60,26 @@ describe('V2CommandTransactionManager', () => {
     });
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
     expect(work).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a serializable conflict surfaced by a raw locking query', async () => {
+    const prisma = {
+      $transaction: vi
+        .fn()
+        .mockRejectedValueOnce({ code: 'P2010', meta: { code: '40001' } })
+        .mockImplementationOnce(async (work) => work({ marker: 'tx-2' }))
+    };
+    const manager = new V2CommandTransactionManager(prisma as never);
+
+    await expect(
+      manager.execute(async (_tx, context) => context.attempt, {
+        requestId: 'request-raw-conflict',
+        retryMode: 'fullReplay',
+        idempotencyKey: 'consume:raw-conflict',
+        replay: async () => 99
+      })
+    ).resolves.toBe(2);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
   it('runs the complete P2002 replay verifier in a new transaction', async () => {
