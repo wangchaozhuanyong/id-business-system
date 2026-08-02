@@ -29,7 +29,7 @@ export function useDashboardPage() {
   const dashboardQuery = useV2ModuleQuery<V2DashboardOverview>({
     moduleKey: 'dashboard',
     scope: 'dashboard',
-    key: 'overview',
+    key: 'dashboard:overview',
     keepPreviousData: true,
     getRevalidateAt: () => Date.now() + 30_000,
     query: ({ signal }) => v2DashboardApi.overview({ signal })

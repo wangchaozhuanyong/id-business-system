@@ -20,6 +20,7 @@
           <div class="app-route-error__copy">
             <strong>页面运行时遇到问题</strong>
             <p>{{ currentRuntimeError.message }}</p>
+            <small>参考编号：{{ currentRuntimeError.referenceId }}</small>
           </div>
           <div class="app-route-error__actions">
             <button
