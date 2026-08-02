@@ -95,6 +95,7 @@ export interface IdBusinessV2OrderListCriteria {
 
 export interface IdBusinessV2MatchingCriteria {
   countryOptionId: string;
+  categoryOptionId: string;
   serviceOptionId: string;
   editingOrderId: string | null;
   requiredBalance: string;
@@ -145,6 +146,14 @@ export interface LockedOrderBalanceAccount {
   currentBalance: ReturnType<typeof mapAmount4>;
   balanceCostAmount: ReturnType<typeof mapAmount4>;
   lossReportedAt: Date | null;
+}
+
+function minNullableDate(...values: Array<Date | null | undefined>) {
+  const dates = values.filter((value): value is Date => value instanceof Date);
+  if (dates.length === 0) return null;
+  return dates.reduce((earliest, value) =>
+    value.getTime() < earliest.getTime() ? value : earliest
+  );
 }
 
 @Injectable()
@@ -348,6 +357,11 @@ export class IdBusinessV2OrdersRepository {
   }
 
   async findMatchingCandidates(criteria: IdBusinessV2MatchingCriteria) {
+    const activeCategoryActivationWhere = this.buildActiveCategoryActivationWhere({
+      categoryOptionId: criteria.categoryOptionId,
+      evaluatedAt: criteria.evaluatedAt,
+      editingOrderId: criteria.editingOrderId
+    });
     const activeInCountryWhere: Prisma.IdBusinessV2AccountWhereInput = {
       deletedAt: null,
       recordStatus: 'active',
@@ -384,6 +398,9 @@ export class IdBusinessV2OrdersRepository {
           ],
           orderId: criteria.editingOrderId ? { not: criteria.editingOrderId } : undefined
         }
+      },
+      activations: {
+        none: activeCategoryActivationWhere
       }
     };
     const candidateWhere: Prisma.IdBusinessV2AccountWhereInput = criteria.keyword
@@ -395,37 +412,74 @@ export class IdBusinessV2OrdersRepository {
           ]
         }
       : availableWhere;
-    const [activeInCountry, normalStatus, sufficientBalance, available, rows, nextLock] =
-      await Promise.all([
-        this.prisma.idBusinessV2Account.count({ where: activeInCountryWhere }),
-        this.prisma.idBusinessV2Account.count({ where: normalStatusWhere }),
-        this.prisma.idBusinessV2Account.count({ where: sufficientBalanceWhere }),
-        this.prisma.idBusinessV2Account.count({ where: availableWhere }),
-        this.prisma.idBusinessV2Account.findMany({
-          where: candidateWhere,
-          select: MATCHING_ACCOUNT_SELECT,
-          take: criteria.limit,
-          orderBy: [{ currentBalance: 'asc' }, { updatedAt: 'asc' }, { id: 'asc' }]
-        }),
-        this.prisma.idBusinessV2AccountLock.findFirst({
-          where: {
-            status: 'active',
-            expiresAt: { gt: criteria.evaluatedAt },
-            OR: [
-              { lockScope: 'global' },
-              { lockScope: 'by_service', serviceOptionId: criteria.serviceOptionId }
-            ],
-            account: { is: sufficientBalanceWhere }
-          },
-          select: { expiresAt: true },
-          orderBy: { expiresAt: 'asc' }
-        })
-      ]);
+    const [
+      activeInCountry,
+      normalStatus,
+      sufficientBalance,
+      available,
+      rows,
+      nextLock,
+      nextCategoryActivation
+    ] = await Promise.all([
+      this.prisma.idBusinessV2Account.count({ where: activeInCountryWhere }),
+      this.prisma.idBusinessV2Account.count({ where: normalStatusWhere }),
+      this.prisma.idBusinessV2Account.count({ where: sufficientBalanceWhere }),
+      this.prisma.idBusinessV2Account.count({ where: availableWhere }),
+      this.prisma.idBusinessV2Account.findMany({
+        where: candidateWhere,
+        select: MATCHING_ACCOUNT_SELECT,
+        take: criteria.limit,
+        orderBy: [{ currentBalance: 'asc' }, { updatedAt: 'asc' }, { id: 'asc' }]
+      }),
+      this.prisma.idBusinessV2AccountLock.findFirst({
+        where: {
+          status: 'active',
+          expiresAt: { gt: criteria.evaluatedAt },
+          OR: [
+            { lockScope: 'global' },
+            { lockScope: 'by_service', serviceOptionId: criteria.serviceOptionId }
+          ],
+          orderId: criteria.editingOrderId ? { not: criteria.editingOrderId } : undefined,
+          account: { is: sufficientBalanceWhere }
+        },
+        select: { expiresAt: true },
+        orderBy: { expiresAt: 'asc' }
+      }),
+      this.prisma.idBusinessV2Activation.findFirst({
+        where: {
+          ...this.buildActiveCategoryActivationWhere({
+            categoryOptionId: criteria.categoryOptionId,
+            evaluatedAt: criteria.evaluatedAt,
+            editingOrderId: criteria.editingOrderId,
+            expiringOnly: true
+          }),
+          account: { is: sufficientBalanceWhere }
+        },
+        select: { dueAt: true },
+        orderBy: { dueAt: 'asc' }
+      })
+    ]);
     return {
       counts: { activeInCountry, normalStatus, sufficientBalance, available },
       accounts: rows.map(mapMatchingAccount),
-      nextLockExpiresAt: nextLock?.expiresAt ?? null
+      nextAvailabilityChangesAt: minNullableDate(nextLock?.expiresAt, nextCategoryActivation?.dueAt)
     };
+  }
+
+  findActiveCategoryActivationForAccount(
+    tx: V2CommandTransaction,
+    input: {
+      accountId: string;
+      categoryOptionId: string;
+      evaluatedAt: Date;
+      editingOrderId: string | null;
+    }
+  ) {
+    return tx.idBusinessV2Activation.findFirst({
+      where: this.buildActiveCategoryActivationWhere(input),
+      select: { id: true, dueAt: true },
+      orderBy: [{ dueAt: 'asc' }, { id: 'asc' }]
+    });
   }
 
   async findOrderInTransaction(tx: V2CommandTransaction, orderId: string) {
@@ -686,8 +740,31 @@ export class IdBusinessV2OrdersRepository {
           is: { type: 'country', status: 'active', deletedAt: null }
         }
       },
-      select: { countryOptionId: true }
+      select: { countryOptionId: true, parent: { select: { id: true } } }
     });
+  }
+
+  private buildActiveCategoryActivationWhere(input: {
+    accountId?: string;
+    categoryOptionId: string;
+    evaluatedAt: Date;
+    editingOrderId: string | null;
+    expiringOnly?: boolean;
+  }): Prisma.IdBusinessV2ActivationWhereInput {
+    return {
+      accountId: input.accountId,
+      status: 'active',
+      renewedBy: { is: null },
+      orderId: input.editingOrderId ? { not: input.editingOrderId } : undefined,
+      serviceOption: {
+        is: {
+          type: 'service',
+          parentId: input.categoryOptionId
+        }
+      },
+      dueAt: input.expiringOnly ? { gt: input.evaluatedAt } : undefined,
+      OR: input.expiringOnly ? undefined : [{ dueAt: null }, { dueAt: { gt: input.evaluatedAt } }]
+    };
   }
 
   findStaleLocks(tx: V2CommandTransaction, now: Date, take: number) {

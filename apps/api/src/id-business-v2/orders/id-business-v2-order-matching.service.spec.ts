@@ -69,6 +69,9 @@ describe('IdBusinessV2OrderMatchingService', () => {
     },
     idBusinessV2AccountLock: {
       findFirst: vi.fn()
+    },
+    idBusinessV2Activation: {
+      findFirst: vi.fn()
     }
   };
   const balanceCalculator = {
@@ -94,6 +97,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
       .mockResolvedValueOnce(2);
     prisma.idBusinessV2Account.findMany.mockResolvedValue([makeAccount()]);
     prisma.idBusinessV2AccountLock.findFirst.mockResolvedValue(null);
+    prisma.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
       Promise.all(operations)
     );
@@ -196,6 +200,18 @@ describe('IdBusinessV2OrderMatchingService', () => {
         currentBalance: {
           gte: '20'
         },
+        activations: {
+          none: expect.objectContaining({
+            status: 'active',
+            renewedBy: { is: null },
+            serviceOption: {
+              is: {
+                type: 'service',
+                parentId: categoryOptionId
+              }
+            }
+          })
+        },
         OR: [
           {
             appleIdMasked: {
@@ -286,6 +302,81 @@ describe('IdBusinessV2OrderMatchingService', () => {
         }
       ]
     });
+  });
+
+  it('excludes active unrenewed same-category activations from automatic matching', async () => {
+    await service.findCandidates({
+      serviceOptionId,
+      balanceAmount: '20'
+    });
+
+    const findManyCall = prisma.idBusinessV2Account.findMany.mock.calls[0]?.[0];
+    expect(findManyCall).toMatchObject({
+      where: {
+        activations: {
+          none: {
+            status: 'active',
+            renewedBy: { is: null },
+            serviceOption: {
+              is: {
+                type: 'service',
+                parentId: categoryOptionId
+              }
+            },
+            OR: [
+              { dueAt: null },
+              {
+                dueAt: {
+                  gt: expect.any(Date)
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
+  it('uses the earliest lock or same-category activation expiry as the revalidation time', async () => {
+    const lockExpiresAt = new Date('2026-08-01T00:00:00.000Z');
+    const activationDueAt = new Date('2026-07-30T00:00:00.000Z');
+    prisma.idBusinessV2AccountLock.findFirst.mockResolvedValue({ expiresAt: lockExpiresAt });
+    prisma.idBusinessV2Activation.findFirst.mockResolvedValue({ dueAt: activationDueAt });
+
+    const result = await service.findCandidates({
+      serviceOptionId,
+      balanceAmount: '20'
+    });
+
+    expect(result.revalidateAt).toBe(activationDueAt);
+    expect(prisma.idBusinessV2Activation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'active',
+          renewedBy: { is: null },
+          serviceOption: {
+            is: {
+              type: 'service',
+              parentId: categoryOptionId
+            }
+          },
+          dueAt: {
+            gt: expect.any(Date)
+          },
+          account: {
+            is: expect.objectContaining({
+              countryOptionId,
+              currentBalance: {
+                gte: '20'
+              }
+            })
+          }
+        }),
+        orderBy: {
+          dueAt: 'asc'
+        }
+      })
+    );
   });
 
   it('does not expose encrypted account fields, hashes, passwords, or lock tokens', async () => {
