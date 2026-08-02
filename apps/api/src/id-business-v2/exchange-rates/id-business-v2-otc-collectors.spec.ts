@@ -123,4 +123,41 @@ describe('V2 OTC collectors', () => {
       expect(['buy', 'sell']).toContain(url.searchParams.get('side'));
     }
   });
+
+  it('normalizes provider negative review-rate sentinels to missing data', async () => {
+    const binance = new IdBusinessV2BinanceOtcCollector();
+    binance.setFetchImplementationForTest((async (
+      _input: RequestInfo | URL,
+      init?: RequestInit
+    ) => {
+      const body = JSON.parse(String(init?.body)) as { tradeType: 'BUY' | 'SELL' };
+      const responseTradeType = body.tradeType === 'SELL' ? 'BUY' : 'SELL';
+      const item = binanceItem(responseTradeType);
+      item.advertiser.positiveRate = -1;
+      return jsonResponse({ code: '000000', data: [item] });
+    }) as typeof fetch);
+
+    const okx = new IdBusinessV2OkxOtcCollector();
+    okx.setFetchImplementationForTest((async (input: RequestInfo | URL) => {
+      const side = new URL(String(input)).searchParams.get('side') as 'buy' | 'sell';
+      return jsonResponse({
+        code: 0,
+        data: {
+          buy: [okxItem('buy', { posReviewPercentage: -1 })],
+          sell: [okxItem('sell', { posReviewPercentage: -1 })],
+          requestedSide: side
+        }
+      });
+    }) as typeof fetch);
+
+    const [binanceResult, okxResult] = await Promise.all([
+      binance.collect(Amount4.from('5000')),
+      okx.collect(Amount4.from('5000'))
+    ]);
+
+    expect(binanceResult.merchantBuy.quotes[0]?.positiveReviewRate).toBeNull();
+    expect(binanceResult.merchantSell.quotes[0]?.positiveReviewRate).toBeNull();
+    expect(okxResult.merchantBuy.quotes[0]?.positiveReviewRate).toBeNull();
+    expect(okxResult.merchantSell.quotes[0]?.positiveReviewRate).toBeNull();
+  });
 });

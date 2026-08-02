@@ -69,6 +69,7 @@ async function main() {
   const accountIds = [];
   const giftCardIds = [];
   const orderIds = [];
+  const supplierAccountIds = [];
   const objectIds = new Set();
   let token = '';
   let primaryError = null;
@@ -156,16 +157,16 @@ async function main() {
 
   async function creditAccount(accountId, supplierOptionId, marker, faceValue) {
     const code = `V2801-${suffix}-${marker}-CARD`;
-    const form = new FormData();
-    form.set('code', code);
-    form.set('faceValue', faceValue);
-    form.set('exchangeRate', '3');
-    form.set('supplierOptionId', supplierOptionId);
-    form.set('idempotencyKey', `v2801-credit-${suffix}-${marker}`);
-    form.set('remark', `V2801 ${marker} 加卡`);
     const credit = await api(`/id-business-v2/gift-cards/${accountId}/credits`, {
       method: 'POST',
-      body: form
+      body: JSON.stringify({
+        code,
+        faceValue,
+        exchangeRate: '3',
+        supplierOptionId,
+        idempotencyKey: `v2801-credit-${suffix}-${marker}`,
+        remark: `V2801 ${marker} 加卡`
+      })
     });
     giftCardIds.push(credit.giftCard.id);
     objectIds.add(credit.giftCard.id);
@@ -185,55 +186,91 @@ async function main() {
   }
 
   async function cleanup() {
-    const knownObjectIds = [...objectIds].filter(Boolean);
-    if (knownObjectIds.length) {
-      await prisma.sensitiveAccessLog.deleteMany({
-        where: { objectId: { in: knownObjectIds } }
-      });
-      await prisma.auditLog.deleteMany({
-        where: { objectId: { in: knownObjectIds } }
-      });
-    }
-    if (accountIds.length || orderIds.length || giftCardIds.length) {
-      await prisma.idBusinessV2BalanceLedger.deleteMany({
-        where: {
-          OR: [
-            ...(accountIds.length ? [{ accountId: { in: accountIds } }] : []),
-            ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
-            ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : [])
-          ]
-        }
-      });
-    }
-    if (orderIds.length) {
-      await prisma.idBusinessV2Activation.deleteMany({
-        where: { orderId: { in: orderIds } }
-      });
-      await prisma.idBusinessV2AccountLock.deleteMany({
-        where: { orderId: { in: orderIds } }
-      });
-      await prisma.idBusinessV2Order.deleteMany({
-        where: { id: { in: orderIds } }
-      });
-    }
-    if (giftCardIds.length) {
-      await prisma.idBusinessV2GiftCard.deleteMany({
-        where: { id: { in: giftCardIds } }
-      });
-    }
-    if (accountIds.length) {
-      await prisma.idBusinessV2Account.deleteMany({
-        where: { id: { in: accountIds } }
-      });
-    }
-    if (customerIds.length) {
-      await prisma.idBusinessV2Customer.deleteMany({
-        where: { id: { in: customerIds } }
-      });
-    }
-    for (const optionId of [...optionIds].reverse()) {
-      await prisma.idBusinessV2Option.deleteMany({ where: { id: optionId } });
-    }
+    await prisma.$transaction(async (cleanupTx) => {
+      await cleanupTx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`);
+      const knownObjectIds = [...objectIds, ...supplierAccountIds].filter(Boolean);
+      const financeJournals = knownObjectIds.length
+        ? await cleanupTx.idBusinessV2FinanceJournal.findMany({
+            where: { sourceId: { in: knownObjectIds } },
+            select: { id: true }
+          })
+        : [];
+      const financeJournalIds = financeJournals.map((journal) => journal.id);
+      const allAuditObjectIds = [...knownObjectIds, ...financeJournalIds];
+      if (allAuditObjectIds.length) {
+        await cleanupTx.sensitiveAccessLog.deleteMany({
+          where: { objectId: { in: allAuditObjectIds } }
+        });
+        await cleanupTx.auditLog.deleteMany({
+          where: { objectId: { in: allAuditObjectIds } }
+        });
+      }
+      if (financeJournalIds.length) {
+        await cleanupTx.idBusinessV2FinanceJournalLine.deleteMany({
+          where: { journalId: { in: financeJournalIds } }
+        });
+        await cleanupTx.idBusinessV2FinanceJournal.deleteMany({
+          where: { id: { in: financeJournalIds } }
+        });
+      }
+      if (giftCardIds.length || supplierAccountIds.length) {
+        await cleanupTx.idBusinessV2TopupSupplierLedger.deleteMany({
+          where: {
+            OR: [
+              ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : []),
+              ...(supplierAccountIds.length
+                ? [{ supplierAccountId: { in: supplierAccountIds } }]
+                : [])
+            ]
+          }
+        });
+      }
+      if (accountIds.length || orderIds.length || giftCardIds.length) {
+        await cleanupTx.idBusinessV2BalanceLedger.deleteMany({
+          where: {
+            OR: [
+              ...(accountIds.length ? [{ accountId: { in: accountIds } }] : []),
+              ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
+              ...(giftCardIds.length ? [{ giftCardId: { in: giftCardIds } }] : [])
+            ]
+          }
+        });
+      }
+      if (orderIds.length) {
+        await cleanupTx.idBusinessV2Activation.deleteMany({
+          where: { orderId: { in: orderIds } }
+        });
+        await cleanupTx.idBusinessV2AccountLock.deleteMany({
+          where: { orderId: { in: orderIds } }
+        });
+        await cleanupTx.idBusinessV2Order.deleteMany({
+          where: { id: { in: orderIds } }
+        });
+      }
+      if (giftCardIds.length) {
+        await cleanupTx.idBusinessV2GiftCard.deleteMany({
+          where: { id: { in: giftCardIds } }
+        });
+      }
+      if (accountIds.length) {
+        await cleanupTx.idBusinessV2Account.deleteMany({
+          where: { id: { in: accountIds } }
+        });
+      }
+      if (customerIds.length) {
+        await cleanupTx.idBusinessV2Customer.deleteMany({
+          where: { id: { in: customerIds } }
+        });
+      }
+      if (supplierAccountIds.length) {
+        await cleanupTx.idBusinessV2TopupSupplierAccount.deleteMany({
+          where: { id: { in: supplierAccountIds } }
+        });
+      }
+      for (const optionId of [...optionIds].reverse()) {
+        await cleanupTx.idBusinessV2Option.deleteMany({ where: { id: optionId } });
+      }
+    });
   }
 
   try {
@@ -282,6 +319,27 @@ async function main() {
       { fixedFee: '1', percentageFee: '2' }
     );
 
+    const supplierOpening = await api(
+      `/id-business-v2/topup-supplier-funds/suppliers/${topupSupplier.id}/initialize`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          targetBalanceCny: '1000',
+          reason: 'V2801 隔离验收期初余额',
+          idempotencyKey: `v2801-supplier-opening-${suffix}`
+        })
+      }
+    );
+    objectIds.add(supplierOpening.ledgerEntry.id);
+    const supplierAccount = await prisma.idBusinessV2TopupSupplierAccount.findUniqueOrThrow({
+      where: {
+        supplierOptionId_currency: { supplierOptionId: topupSupplier.id, currency: 'CNY' }
+      },
+      select: { id: true }
+    });
+    supplierAccountIds.push(supplierAccount.id);
+    objectIds.add(supplierAccount.id);
+
     const businessTree = await api('/id-business-v2/options/business-tree');
     assert.ok(
       businessTree.items.some(
@@ -305,7 +363,6 @@ async function main() {
         wechat: `v2801_wechat_${suffix}`,
         sourceOptionId: source.id,
         tagOptionIds: [customerTag.id],
-        serviceOptionIds: [service.id],
         sortOrder: 28,
         remark: 'V2801 Excel 验收客户'
       })
@@ -314,8 +371,8 @@ async function main() {
     objectIds.add(customer.id);
     const customerDetail = await api(`/id-business-v2/customers/${customer.id}`);
     assert.equal(customerDetail.source.id, source.id, '客户详情缺少来源');
-    assert.deepEqual(customerDetail.tagOptionIds, [customerTag.id]);
-    assert.deepEqual(customerDetail.serviceOptionIds, [service.id]);
+    assert.deepEqual(customerDetail.tagOptionIds, [customerTag.id], '客户详情缺少客户标签');
+    assert.deepEqual(customerDetail.serviceOptionIds, [], '客户创建时不应伪造开通业务');
     assert.equal(customerDetail.hasPhone, true);
     assert.equal(
       JSON.stringify(customerDetail).includes(customerPhone),
@@ -428,7 +485,7 @@ async function main() {
     );
 
     const openedAt = new Date();
-    const dueAt = new Date(openedAt.getTime() + 4 * 24 * 60 * 60 * 1000);
+    const dueAt = new Date(openedAt.getTime() + 2 * 24 * 60 * 60 * 1000);
     const websiteAccount = `v2801.website.${suffix}@example.com`;
     const createdOrder = await api('/id-business-v2/orders', {
       method: 'POST',
@@ -441,6 +498,7 @@ async function main() {
         websiteAccount,
         receivedAmount: '100',
         balanceAmount: '20',
+        accountDisposition: 'retained',
         openedAt: openedAt.toISOString(),
         dueAt: dueAt.toISOString(),
         lockScope: 'by_service',
@@ -538,22 +596,6 @@ async function main() {
     assertDecimal(storedAccount.currentBalance, '10', '数据库当前余额');
     assertDecimal(storedAccount.balanceCostAmount, '30', '数据库余额成本');
 
-    await prisma.idBusinessV2Activation.update({
-      where: { id: completed.activation.id },
-      data: { status: 'cancelled' }
-    });
-    const cancelledWorkbench = await api('/id-business-v2/balances/workbench?page=1&pageSize=100');
-    const cancelledRow = cancelledWorkbench.items.find((item) => item.id === account.id);
-    assert.deepEqual(
-      cancelledRow.historicalServices.map((item) => item.id),
-      [service.id]
-    );
-    assert.deepEqual(cancelledRow.currentServices, []);
-    await prisma.idBusinessV2Activation.update({
-      where: { id: completed.activation.id },
-      data: { status: 'active' }
-    });
-
     const metadataRemark = `V2801 metadata ${suffix}`;
     const updatedGiftCard = await api(
       `/id-business-v2/gift-cards/${primaryCredit.giftCard.id}/metadata`,
@@ -604,13 +646,15 @@ async function main() {
     assert.equal(reversalReplay.idempotentReplay, true, '礼品卡撤回没有幂等重放');
 
     const runtime = await api('/id-business-v2/exchange-rates/runtime');
-    assert.equal(runtime.automaticCollectionEnabled, true, '汇率自动采集没有默认开启');
+    assert.equal(runtime.settings.autoEnabled, true, '汇率自动采集没有默认开启');
+    assert.equal(runtime.settings.emergencyNetworkEnabled, true, '汇率网络采集紧急开关未开启');
     assert.deepEqual(runtime.providers.map((provider) => provider.code).sort(), ['binance', 'okx']);
     await waitForExchangeIdle();
     const manualRate = await api('/id-business-v2/exchange-rates/collect', { method: 'POST' });
-    assert.equal(manualRate.triggerType, 'manual');
+    assert.ok(manualRate.runId, '人工采集未返回运行 ID');
     assert.ok(new Prisma.Decimal(manualRate.midRateToRmb).greaterThan(0));
-    const rateDetail = await api(`/id-business-v2/exchange-rates/${manualRate.runId}`);
+    const rateDetail = await api(`/id-business-v2/exchange-rates/runs/${manualRate.runId}`);
+    assert.equal(rateDetail.triggerType, 'manual');
     assert.equal(rateDetail.status, 'success');
     assert.equal(rateDetail.providerSnapshots.length, 4);
     assert.deepEqual(

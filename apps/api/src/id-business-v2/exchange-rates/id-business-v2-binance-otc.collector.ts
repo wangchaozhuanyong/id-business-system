@@ -265,7 +265,7 @@ export class IdBusinessV2BinanceOtcCollector implements IdBusinessV2OtcCollector
 
   private ratioDecimal(value: unknown) {
     const decimal = this.rate(value);
-    return decimal?.lte(1) ? decimal : null;
+    return decimal?.gte(0) && decimal.lte(1) ? decimal : null;
   }
 
   private positiveRate(value: unknown) {
