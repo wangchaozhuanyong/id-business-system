@@ -5,6 +5,7 @@ import {
   RELEASE_ACCOUNT_ID,
   RELEASE_PUBLIC_URL,
   RELEASE_REPOSITORY,
+  RELEASE_SUPABASE_API_BASE_URL,
   RELEASE_V2_REALTIME_CHANGES_ENABLED,
   RELEASE_WORKER_NAME,
   createCloudflareProductionBuildEnvironment,
@@ -32,14 +33,9 @@ const validConfig = {
     not_found_handling: 'single-page-application',
     run_worker_first: ['/api/*']
   },
-  hyperdrive: [{ binding: 'HYPERDRIVE', id: 'a'.repeat(32) }],
   vars: {
-    NODE_ENV: 'production',
-    CLOUDFLARE_WORKER: 'true',
     APP_PUBLIC_URL: RELEASE_PUBLIC_URL,
-    CORS_ORIGIN: RELEASE_PUBLIC_URL,
-    ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: 'true',
-    ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS: '600000'
+    SUPABASE_API_BASE_URL: RELEASE_SUPABASE_API_BASE_URL
   }
 };
 
@@ -55,6 +51,7 @@ test('forces the Cloudflare production frontend to use version polling', () => {
   });
 
   assert.equal(RELEASE_V2_REALTIME_CHANGES_ENABLED, 'false');
+  assert.equal(buildEnvironment.VITE_API_BASE_URL, '/api');
   assert.equal(buildEnvironment.VITE_V2_REALTIME_CHANGES_ENABLED, 'false');
   assert.equal(buildEnvironment.KEEP_ME, 'yes');
 });
@@ -70,6 +67,23 @@ test('builds the shared package before the Cloudflare admin bundle', async () =>
   assert.notEqual(sharedBuild, -1);
   assert.notEqual(adminBuild, -1);
   assert.ok(sharedBuild < adminBuild);
+  assert.equal(buildScript.includes('build:cloudflare'), false);
+  assert.equal(buildScript.includes('prisma:generate'), false);
+});
+
+test('builds shared contracts before both Supabase API bundles', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  );
+
+  for (const scriptName of ['build:supabase-v2-api', 'build:supabase-v2-api:perf']) {
+    const buildScript = packageJson.scripts[scriptName];
+    const sharedBuild = buildScript.indexOf('build --workspace @apple-business/shared');
+    const apiBuild = buildScript.indexOf('build:cloudflare --workspace @apple-business/api');
+    assert.notEqual(sharedBuild, -1);
+    assert.notEqual(apiBuild, -1);
+    assert.ok(sharedBuild < apiBuild);
+  }
 });
 
 test('rejects local database, weak smoke credentials and target drift', () => {
@@ -84,10 +98,40 @@ test('rejects local database, weak smoke credentials and target drift', () => {
   const configErrors = validateWranglerConfig({
     ...validConfig,
     account_id: 'wrong',
-    name: 'wrong-worker'
+    name: 'wrong-worker',
+    alias: { '@cloudflare-prisma/client': './generated/client.ts' },
+    compatibility_flags: ['nodejs_compat'],
+    hyperdrive: [{ binding: 'HYPERDRIVE', id: 'a'.repeat(32) }]
   });
   assert.ok(configErrors.some((error) => error.includes('account_id')));
   assert.ok(configErrors.some((error) => error.includes('Worker 名称')));
+  assert.ok(configErrors.some((error) => error.includes('NestJS/Prisma')));
+  assert.ok(configErrors.some((error) => error.includes('Hyperdrive')));
+  assert.ok(configErrors.some((error) => error.includes('nodejs_compat')));
+});
+
+test('deploys and verifies Supabase API before switching the Cloudflare proxy', async () => {
+  const source = await readFile(new URL('./deploy-cloudflare-free.mjs', import.meta.url), 'utf8');
+  const supabaseDeploy = source.indexOf("'functions',\n  'deploy',\n  'v2-api'");
+  const apiVerification = source.indexOf("RELEASE_SUPABASE_API_BASE_URL,\n  '--api-only'");
+  const cloudflareDeploy = source.indexOf("'wrangler@4.114.0',\n  'deploy'");
+
+  assert.notEqual(supabaseDeploy, -1);
+  assert.notEqual(apiVerification, -1);
+  assert.notEqual(cloudflareDeploy, -1);
+  assert.ok(supabaseDeploy < apiVerification);
+  assert.ok(apiVerification < cloudflareDeploy);
+});
+
+test('keeps Supabase Edge authentication configurable for the current local accounts', async () => {
+  const source = await readFile(
+    new URL('../supabase/functions/v2-api/index.ts', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /Deno\.env\.get\('AUTH_PROVIDER'\)/);
+  assert.doesNotMatch(source, /AUTH_PROVIDER:\s*'supabase'/);
+  assert.match(source, /authProvider === 'local'[\s\S]*requireEnv\('JWT_SECRET'\)/);
 });
 
 test('requires a clean main checkout synchronized with origin', () => {

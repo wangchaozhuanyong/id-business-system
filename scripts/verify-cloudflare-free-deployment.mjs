@@ -1,19 +1,24 @@
 import process from 'node:process';
 import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE } from './lib/cloudflare-release.mjs';
 
-const baseUrl = process.argv[2]?.replace(/\/+$/, '');
+const baseUrl = process.argv
+  .find((argument, index) => index >= 2 && !argument.startsWith('--'))
+  ?.replace(/\/+$/, '');
+const apiOnly = process.argv.includes('--api-only');
 const username = process.env.SMOKE_TEST_USERNAME?.trim();
 const password = process.env.SMOKE_TEST_PASSWORD;
 
 if (!baseUrl || !baseUrl.startsWith('https://')) {
-  throw new Error('请传入 Cloudflare Workers HTTPS 地址');
+  throw new Error('请传入生产 HTTPS 地址');
 }
 
 if (!username || !password) {
   throw new Error('缺少 SMOKE_TEST_USERNAME 或 SMOKE_TEST_PASSWORD');
 }
 
-const publicEndpoints = ['/', '/api/health/live', '/api/health/ready'];
+const publicEndpoints = apiOnly
+  ? ['/api/health/live', '/api/health/ready']
+  : ['/', '/api/health/live', '/api/health/ready'];
 const checks = [];
 for (const endpoint of publicEndpoints) {
   const response = await fetch(`${baseUrl}${endpoint}`);
@@ -78,6 +83,27 @@ for (const endpoint of endpoints) {
   }
 }
 
+const deniedFinanceWrite = await fetch(`${baseUrl}/api/id-business-v2/finance/accounts`, {
+  method: 'POST',
+  headers: {
+    authorization: `Bearer ${accessToken}`,
+    'content-type': 'application/json'
+  },
+  body: JSON.stringify({
+    currency: 'CNY',
+    name: 'production-smoke-must-not-create'
+  })
+});
+checks.push({
+  path: '/api/id-business-v2/finance/accounts [denied-write]',
+  status: deniedFinanceWrite.status
+});
+if (deniedFinanceWrite.status !== 403) {
+  throw new Error(
+    `财务写入最小权限门禁验证失败，期望 HTTP 403，实际 HTTP ${deniedFinanceWrite.status}`
+  );
+}
+
 const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
   method: 'POST',
   headers: {
@@ -93,6 +119,7 @@ console.log(
   JSON.stringify(
     {
       baseUrl,
+      apiOnly,
       ok: true,
       checks
     },

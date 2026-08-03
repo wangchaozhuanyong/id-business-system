@@ -109,7 +109,7 @@ npm run deploy:admin
 实际发布前必须确认当前分支、提交、远端、生产账号和目标环境。详细说明见
 `docs/DEPLOYMENT.md`。
 
-当前 Cloudflare 单体生产发布：
+当前生产发布（Supabase Edge Function 运行 API，Cloudflare 承载静态管理端和轻量同源转发）：
 
 ```bash
 npm run deploy:production

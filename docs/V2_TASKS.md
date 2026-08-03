@@ -106,6 +106,7 @@ migration 已在本地开发库和生产环境应用；生产仍需使用两名�
 - [ ] 对新增真实员工逐账号复核 Supabase 身份、强制改密标记并验证会话撤销
 - [x] 在 Supabase 兼容隔离环境完成全量恢复和备份后新数据对比
 - [ ] 使用两名真实管理员完成数据治理预览、审批、分批执行和幂等重放演练
+- [ ] 将生产 API 从 Cloudflare Free Worker 迁移到 Supabase Edge Function，并完成财务写入验收
 
 生产闭环步骤、负责人输入和验收门禁见 `docs/V2_PRODUCTION_CLOSURE.md`。只读聚合审计命令为
 `npm run audit:v2-production-closure:production`。

@@ -85,7 +85,7 @@ curl --fail https://your-api-domain.com/api/health/ready
 
 ## 6. Cloudflare / Supabase
 
-Cloudflare 单体构建：
+Cloudflare 静态管理端与轻量 API 转发构建：
 
 ```bash
 npm run build:cloudflare-free
@@ -112,8 +112,9 @@ npm run prisma:validate
 npm run git:readiness
 ```
 
-当前生产使用 Cloudflare 单体 Worker，同时承载管理端和 API。确认当前分支、提交、远端和目标环境
-后，执行一次：
+当前生产使用 Cloudflare 承载静态管理端，`/api/*` 仅做轻量同源转发；NestJS、
+Prisma、认证和业务事务运行在 Supabase Edge Function。确认当前分支、提交、远端和目标
+环境后，执行一次：
 
 ```bash
 npm run deploy:production
@@ -124,8 +125,10 @@ Cloudflare 发布命令包含以下硬门禁：
 - 当前分支必须为干净的 `main`，且 `HEAD` 与 `origin/main` 完全一致。
 - GitHub `quality`、`production-images` 必须成功，`main` 必须启用 PR、管理员约束、线性历史、
   对话解决和禁止强推/删除的保护规则。
-- Cloudflare account、Worker、Hyperdrive、公开域名和 CORS 必须与仓库固定生产配置一致。
-- `.deploy/cloudflare-free.secrets.json` 必须包含四项运行时密钥及
+- Supabase project/function、Cloudflare account/Worker 和公开域名必须与仓库固定生产配置一致。
+- 发布顺序固定为：构建并发布 Supabase API、完成 API 独立巡检、发布 Cloudflare 静态端与转发层、完成整站巡检。
+- Cloudflare Worker 不得绑定 Hyperdrive，不得打包 NestJS/Prisma；前端固定使用同源 `/api`。
+- `.deploy/cloudflare-free.secrets.json` 必须包含用于 Supabase API 的四项运行时密钥及
   `SMOKE_TEST_USERNAME`、`SMOKE_TEST_PASSWORD`，该文件必须保持 Git 忽略且权限为 `0600`。
 - Wrangler 版本消息和标签写入完整/短 Git commit；部署成功后自动检查首页、健康端点、只读账号
   登录、最小权限集合和核心只读接口。
@@ -143,6 +146,6 @@ npm run prod:smoke-user:provision
 ## 8. 回滚
 
 - 前端回滚到上一份已验证静态构建。
-- API 回滚到上一份已验证提交和镜像。
+- API 回滚到 Supabase Edge Function 的上一个已验证版本。
 - migration 默认只向前，不直接回滚数据结构。
 - 若发布包含数据库变更，先按该 migration 的专用回滚方案和备份执行。
