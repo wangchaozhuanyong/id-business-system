@@ -102,8 +102,8 @@
   z-index: 2;
   margin-left: auto;
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -481,7 +481,7 @@
 
 .v2-theme-switcher button {
   display: flex;
-  min-height: 28px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
   gap: 5px;
@@ -531,8 +531,8 @@
 .v2-notification > button {
   position: relative;
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -1564,7 +1564,7 @@
   }
 
   .v2-theme-switcher button {
-    width: 30px;
+    width: 36px;
     padding-inline: 0;
   }
 }

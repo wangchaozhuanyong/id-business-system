@@ -300,7 +300,7 @@
     <el-alert
       type="warning"
       :title="page.selectedJournal?.journalNo || '财务流水'"
-      description="已发布账务不能编辑或删除。冲销后，请按正确业务证据重新记账。"
+      description="冲销不会删除原流水。系统会新增一笔金额相反的流水，抵消原流水对余额和损益的影响，原流水随后显示“已冲销”。如果原记录有误，冲销后请按正确业务证据重新记账。"
       show-icon
       :closable="false"
     />

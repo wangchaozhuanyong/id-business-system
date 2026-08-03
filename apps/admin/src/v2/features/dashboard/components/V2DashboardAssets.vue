@@ -1,21 +1,21 @@
 <template>
   <section v-if="page.overview" class="v2-dashboard-section">
-    <V2SectionHeading
-      title="ID 库存与财务基线"
-      help="账面成本只合计人民币余额成本和未售 ID 采购成本，不混合各国原币余额，也不代表完整资产。"
-    >
-      <template #actions>
-        <AppButton
-          v-if="page.overview.access.finance"
-          size="small"
-          variant="soft"
-          @click="page.openRoute('/v2/data/analytics')"
-        >
-          打开经营分析
-        </AppButton>
-      </template>
-    </V2SectionHeading>
     <article class="v2-dashboard-assets">
+      <V2SectionHeading
+        title="ID 库存与财务基线"
+        help="账面成本只合计人民币余额成本和未售 ID 采购成本，不混合各国原币余额，也不代表完整资产。"
+      >
+        <template #actions>
+          <AppButton
+            v-if="page.overview.access.finance"
+            size="small"
+            variant="ghost"
+            @click="page.openRoute('/v2/data/analytics')"
+          >
+            打开经营分析
+          </AppButton>
+        </template>
+      </V2SectionHeading>
       <dl>
         <div>
           <dt>ID 记录总数</dt>
@@ -64,30 +64,39 @@ defineProps<{ page: DashboardPage }>();
 .v2-dashboard-assets {
   display: grid;
   min-width: 0;
-  gap: 12px;
 }
 
 .v2-dashboard-assets {
-  padding: 16px;
+  overflow: hidden;
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
   background: var(--v2-surface);
 }
 
+.v2-dashboard-assets > :deep(.v2-section-heading) {
+  box-sizing: border-box;
+  min-height: 42px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
 .v2-dashboard-assets dl {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
   margin: 0;
+  padding: 0 14px;
 }
 
 .v2-dashboard-assets dl div {
   display: grid;
   min-width: 0;
   gap: 5px;
-  padding: 12px;
-  border-radius: var(--v3-radius-sm);
-  background: var(--v2-surface-soft);
+  padding: 7px 14px;
+  border-right: 1px solid var(--v2-border-soft);
+}
+
+.v2-dashboard-assets dl div:last-child {
+  border-right: 0;
 }
 
 .v2-dashboard-assets dt {
@@ -103,15 +112,37 @@ defineProps<{ page: DashboardPage }>();
   overflow-wrap: anywhere;
 }
 
+.v2-dashboard-assets > :deep(.el-alert) {
+  margin: 0 14px 14px;
+}
+
 @media (max-width: 900px) {
   .v2-dashboard-assets dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-dashboard-assets dl div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .v2-dashboard-assets dl div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--v2-border-soft);
   }
 }
 
 @media (max-width: 540px) {
   .v2-dashboard-assets dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-dashboard-assets dl div,
+  .v2-dashboard-assets dl div:nth-child(2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--v2-border-soft);
+  }
+
+  .v2-dashboard-assets dl div:last-child {
+    border-bottom: 0;
   }
 }
 </style>

@@ -1,67 +1,75 @@
 <template>
   <section class="v2-finance-page">
-    <section class="v2-finance-toolbar" aria-label="经营分析筛选">
-      <el-date-picker
-        v-model="filters.dateRange"
-        type="daterange"
-        value-format="YYYY-MM-DD"
-        range-separator="至"
-        start-placeholder="开始日期"
-        end-placeholder="结束日期"
-        aria-label="筛选业务日期"
-      />
-      <el-select v-model="filters.currency" clearable placeholder="全部币种">
-        <el-option v-for="item in currencies" :key="item" :label="item" :value="item" />
-      </el-select>
-      <el-select v-model="filters.supplierOptionId" clearable placeholder="全部供应商">
-        <el-option
-          v-for="item in supplierOptions"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        />
-      </el-select>
-      <el-select v-model="filters.journalType" clearable placeholder="全部业务类型">
-        <el-option
-          v-for="item in journalTypeOptions"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        />
-      </el-select>
-      <el-select v-model="filters.financeAccountId" clearable placeholder="全部资金账户">
-        <el-option
-          v-for="item in accounts"
-          :key="item.id"
-          :label="`${item.name} · ${item.currency}`"
-          :value="item.id"
-        />
-      </el-select>
-      <el-select
-        v-model="filters.settlementPlatformOptionId"
-        clearable
-        filterable
-        placeholder="全部结算平台"
-      >
-        <el-option
-          v-for="item in settlementPlatformOptions"
-          :key="item.id"
-          :label="item.name"
-          :value="item.id"
-        />
-      </el-select>
-      <div class="v2-records-toolbar__actions">
-        <AppButton title="应用筛选" @click="applyFilters">
-          <el-icon><Search /></el-icon>
-          查询
-        </AppButton>
-        <AppButton icon-only title="重置筛选" @click="resetFilters">
-          <el-icon><RefreshLeft /></el-icon>
-        </AppButton>
-        <AppButton icon-only title="刷新经营分析" :disabled="loading" @click="refresh">
-          <el-icon><Refresh /></el-icon>
-        </AppButton>
+    <section class="v2-finance-filter-summary" aria-label="经营分析范围">
+      <div>
+        <span>分析范围</span>
+        <strong>{{ analysisRangeLabel }}</strong>
+        <small>Asia/Kuala_Lumpur · {{ activeFilterLabel }}</small>
       </div>
+      <V2FilterDisclosure label="展开筛选">
+        <el-date-picker
+          v-model="filters.dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          aria-label="筛选业务日期"
+        />
+        <el-select v-model="filters.currency" clearable placeholder="全部币种">
+          <el-option v-for="item in currencies" :key="item" :label="item" :value="item" />
+        </el-select>
+        <el-select v-model="filters.supplierOptionId" clearable placeholder="全部供应商">
+          <el-option
+            v-for="item in supplierOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+        <el-select v-model="filters.journalType" clearable placeholder="全部业务类型">
+          <el-option
+            v-for="item in journalTypeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+        <el-select v-model="filters.financeAccountId" clearable placeholder="全部资金账户">
+          <el-option
+            v-for="item in accounts"
+            :key="item.id"
+            :label="`${item.name} · ${item.currency}`"
+            :value="item.id"
+          />
+        </el-select>
+        <el-select
+          v-model="filters.settlementPlatformOptionId"
+          clearable
+          filterable
+          placeholder="全部结算平台"
+        >
+          <el-option
+            v-for="item in settlementPlatformOptions"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
+        </el-select>
+        <div class="v2-finance-filter-actions">
+          <AppButton title="应用筛选" @click="applyFilters">
+            <el-icon><Search /></el-icon>
+            查询
+          </AppButton>
+          <AppButton title="重置筛选" variant="ghost" @click="resetFilters">
+            <el-icon><RefreshLeft /></el-icon>
+            重置
+          </AppButton>
+          <AppButton icon-only title="刷新经营分析" :disabled="loading" @click="refresh">
+            <el-icon><Refresh /></el-icon>
+          </AppButton>
+        </div>
+      </V2FilterDisclosure>
     </section>
 
     <V2AsyncRegion
@@ -87,56 +95,73 @@
           :closable="false"
         />
 
-        <section class="v2-finance-metrics" aria-label="经营利润指标">
-          <article class="v2-finance-metric v2-finance-metric--primary">
-            <span>人民币净利润</span>
-            <strong :class="amountTone(overview.profitLoss.netProfitCny)">
-              {{ formatCny(overview.profitLoss.netProfitCny) }}
-            </strong>
-            <small>只含已实现经营结果</small>
-          </article>
-          <article class="v2-finance-metric">
-            <span>销售收入</span>
-            <strong>{{ formatCny(overview.profitLoss.salesRevenueCny) }}</strong>
-            <small>仅已完成订单</small>
-          </article>
-          <article class="v2-finance-metric">
-            <span>销售成本</span>
-            <strong>{{
-              formatCny(
-                addAmounts(overview.profitLoss.giftCardCostCny, overview.profitLoss.idCostCny)
-              )
-            }}</strong>
-            <small>余额成本＋已卖 ID 成本</small>
-          </article>
-          <article class="v2-finance-metric">
-            <span>额外经营开支</span>
-            <strong>{{ formatCny(overview.profitLoss.operatingExpenseCny) }}</strong>
-            <small>手机、办公、工资等</small>
-          </article>
-          <article class="v2-finance-metric">
-            <span>赎回及报损</span>
-            <strong>{{
-              formatCny(
-                addAmounts(
-                  overview.profitLoss.redemptionLossCny,
-                  overview.profitLoss.balanceLossCny,
-                  overview.profitLoss.idPurchaseLossCny
+        <nav class="v2-finance-analysis-nav" aria-label="经营分析分区">
+          <button
+            v-for="section in analysisSections"
+            :key="section.key"
+            type="button"
+            :class="{ 'is-active': activeAnalysisSection === section.key }"
+            :aria-current="activeAnalysisSection === section.key ? 'page' : undefined"
+            @click="activeAnalysisSection = section.key"
+          >
+            {{ section.label }}
+          </button>
+        </nav>
+
+        <div v-show="activeAnalysisSection === 'profit'" class="v2-finance-analysis-stack">
+          <section class="v2-finance-metrics" aria-label="经营利润指标">
+            <article class="v2-finance-metric v2-finance-metric--primary">
+              <span>人民币净利润</span>
+              <strong :class="amountTone(overview.profitLoss.netProfitCny)">
+                {{ formatCny(overview.profitLoss.netProfitCny) }}
+              </strong>
+              <small>只含已实现经营结果</small>
+              <small class="v2-finance-metric__pending">
+                待确认利润 {{ formatCny(overview.profitLoss.estimatedProfitCny) }}，不计入净利润
+              </small>
+            </article>
+            <article class="v2-finance-metric">
+              <span>销售收入</span>
+              <strong>{{ formatCny(overview.profitLoss.salesRevenueCny) }}</strong>
+              <small>仅已完成订单</small>
+            </article>
+            <article class="v2-finance-metric">
+              <span>销售成本</span>
+              <strong>{{
+                formatCny(
+                  addAmounts(overview.profitLoss.giftCardCostCny, overview.profitLoss.idCostCny)
                 )
-              )
-            }}</strong>
-            <small>均进入已实现亏损</small>
-          </article>
-          <article class="v2-finance-metric">
-            <span>待确认利润</span>
-            <strong>{{ formatCny(overview.profitLoss.estimatedProfitCny) }}</strong>
-            <small>处理中订单，不计入净利润</small>
-          </article>
-        </section>
+              }}</strong>
+              <small>余额成本＋已卖 ID 成本</small>
+            </article>
+            <article class="v2-finance-metric">
+              <span>额外经营开支</span>
+              <strong>{{ formatCny(overview.profitLoss.operatingExpenseCny) }}</strong>
+              <small>手机、办公、工资等</small>
+            </article>
+            <article class="v2-finance-metric">
+              <span>赎回及报损</span>
+              <strong>{{
+                formatCny(
+                  addAmounts(
+                    overview.profitLoss.redemptionLossCny,
+                    overview.profitLoss.balanceLossCny,
+                    overview.profitLoss.idPurchaseLossCny
+                  )
+                )
+              }}</strong>
+              <small>均进入已实现亏损</small>
+            </article>
+          </section>
 
-        <V2SettlementPlatformReport :report="overview.settlementPlatformReport" />
+          <V2SettlementPlatformReport :report="overview.settlementPlatformReport" />
+        </div>
 
-        <section class="v2-finance-grid">
+        <section
+          v-show="activeAnalysisSection === 'cash-flow'"
+          class="v2-finance-analysis-stack"
+          aria-label="原币资金收支"
+        >
           <article class="v2-finance-panel">
             <header>
               <div>
@@ -183,7 +208,9 @@
               </V2TableColumn>
             </V2Table>
           </article>
+        </section>
 
+        <div v-show="activeAnalysisSection === 'assets'" class="v2-finance-analysis-stack">
           <article class="v2-finance-panel">
             <header>
               <div>
@@ -222,181 +249,188 @@
               </div>
             </dl>
           </article>
-        </section>
 
-        <section class="v2-finance-panel">
-          <header>
-            <div>
-              <span>卡商资金</span>
-              <strong>充值不计亏损，购卡、退款与调整形成余额变化</strong>
-            </div>
-          </header>
-          <V2Table
-            :schema="v2TableSchemas.dataAnalytics.supplierWallets"
-            class="v2-records-table"
-            :data="wallets"
-            scrollbar-always-on
-            show-overflow-tooltip
-          >
-            <template #empty>
-              <div class="v2-records-empty">
-                <strong>暂无卡商钱包</strong>
-                <span>请到财务记账创建供应商多币种钱包</span>
+          <section class="v2-finance-panel">
+            <header>
+              <div>
+                <span>卡商资金</span>
+                <strong>充值不计亏损，购卡、退款与调整形成余额变化</strong>
               </div>
-            </template>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[0]">
-              <template #default="{ row }"
-                ><strong>{{ row.supplierName }}</strong></template
-              >
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[1]">
-              <template #default="{ row }"
-                ><el-tag effect="plain">{{ row.currency }}</el-tag></template
-              >
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[2]">
-              <template #default="{ row }">{{
-                formatOriginal(row.openingBalance, row.currency)
-              }}</template>
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[3]">
-              <template #default="{ row }">
-                <strong>{{ formatOriginal(row.currentBalance, row.currency) }}</strong>
-              </template>
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[4]">
-              <template #default="{ row }">{{ formatCny(row.currentBalanceCny) }}</template>
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[5]">
-              <template #default="{ row }">
-                <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
-                  {{ row.status === 'active' ? '启用' : '停用' }}
-                </el-tag>
-              </template>
-            </V2TableColumn>
-          </V2Table>
-        </section>
-
-        <section class="v2-finance-panel">
-          <header>
-            <div>
-              <span>盈亏与账务明细</span>
-              <strong>可追溯订单、卡片、ID、损失和开支来源</strong>
-            </div>
-          </header>
-          <V2Table
-            :schema="v2TableSchemas.dataAnalytics.journals"
-            class="v2-records-table"
-            :data="journals"
-            scrollbar-always-on
-            show-overflow-tooltip
-          >
-            <template #empty>
-              <div class="v2-records-empty">
-                <strong>当前筛选范围没有财务流水</strong>
-                <span>完成订单或记账后会自动出现在这里</span>
-              </div>
-            </template>
-            <V2TableControlColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[0]">
-              <template #default="{ row }">
-                <div class="v2-finance-lines">
-                  <div v-for="line in row.lines" :key="line.id">
-                    <span>{{ accountCodeLabel(line.accountCode) }}</span>
-                    <strong>{{ directionLabel(line.direction) }}</strong>
-                    <span>{{ formatOriginal(line.amountOriginal, line.currency) }}</span>
-                    <span>{{ formatCny(line.amountCny) }}</span>
-                    <span>{{ line.memo || '—' }}</span>
-                  </div>
+            </header>
+            <V2Table
+              :schema="v2TableSchemas.dataAnalytics.supplierWallets"
+              class="v2-records-table"
+              :data="wallets"
+              scrollbar-always-on
+              show-overflow-tooltip
+            >
+              <template #empty>
+                <div class="v2-records-empty">
+                  <strong>暂无卡商钱包</strong>
+                  <span>请到财务记账创建供应商多币种钱包</span>
                 </div>
               </template>
-            </V2TableControlColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[1]">
-              <template #default="{ row }"
-                ><strong>{{ row.journalNo }}</strong></template
-              >
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[2]">
-              <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[3]">
-              <template #default="{ row }">
-                <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
-              </template>
-            </V2TableColumn>
-            <V2TableColumn
-              :definition="v2TableSchemas.dataAnalytics.journals.columns[4]"
-              prop="summary"
-            />
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[5]">
-              <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
-            </V2TableColumn>
-            <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[6]">
-              <template #default="{ row }">{{ formatCny(journalAmount(row)) }}</template>
-            </V2TableColumn>
-          </V2Table>
-        </section>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[0]">
+                <template #default="{ row }"
+                  ><strong>{{ row.supplierName }}</strong></template
+                >
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[1]">
+                <template #default="{ row }"
+                  ><el-tag effect="plain">{{ row.currency }}</el-tag></template
+                >
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[2]">
+                <template #default="{ row }">{{
+                  formatOriginal(row.openingBalance, row.currency)
+                }}</template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[3]">
+                <template #default="{ row }">
+                  <strong>{{ formatOriginal(row.currentBalance, row.currency) }}</strong>
+                </template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[4]">
+                <template #default="{ row }">{{ formatCny(row.currentBalanceCny) }}</template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[5]">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">
+                    {{ row.status === 'active' ? '启用' : '停用' }}
+                  </el-tag>
+                </template>
+              </V2TableColumn>
+            </V2Table>
+          </section>
+        </div>
 
-        <section class="v2-finance-panel">
-          <header>
-            <div>
-              <span>闭环对账</span>
-              <strong>
-                {{
-                  overview.reconciliation.isComplete
-                    ? '关键证据完整'
-                    : `${overview.reconciliation.issueCount} 项待处理`
-                }}
-              </strong>
-            </div>
-            <el-tag
-              :type="overview.reconciliation.isComplete ? 'success' : 'warning'"
-              effect="plain"
-            >
-              {{ overview.reconciliation.isComplete ? '已闭环' : '待核对' }}
-            </el-tag>
-          </header>
-          <div v-if="overview.reconciliation.issues.length" class="v2-finance-issues">
-            <article
-              v-for="issue in overview.reconciliation.issues"
-              :key="`${issue.code}:${issue.sourceId ?? issue.message}`"
-              :class="`is-${issue.severity}`"
-            >
-              <el-tag
-                :type="
-                  issue.severity === 'error'
-                    ? 'danger'
-                    : issue.severity === 'warning'
-                      ? 'warning'
-                      : 'info'
-                "
-                effect="plain"
-                size="small"
-              >
-                {{
-                  issue.severity === 'error'
-                    ? '错误'
-                    : issue.severity === 'warning'
-                      ? '提醒'
-                      : '信息'
-                }}
-              </el-tag>
+        <div
+          v-show="activeAnalysisSection === 'reconciliation'"
+          class="v2-finance-reconciliation-grid"
+        >
+          <section class="v2-finance-panel">
+            <header>
               <div>
-                <strong>{{ issue.message }}</strong>
-                <span v-if="issue.amountCny">{{ formatCny(issue.amountCny) }}</span>
+                <span>盈亏与账务明细</span>
+                <strong>可追溯订单、卡片、ID、损失和开支来源</strong>
               </div>
-            </article>
-          </div>
-          <el-empty v-else description="当前筛选范围没有对账问题" />
-        </section>
+            </header>
+            <V2Table
+              :schema="v2TableSchemas.dataAnalytics.journals"
+              class="v2-records-table"
+              :data="journals"
+              scrollbar-always-on
+              show-overflow-tooltip
+            >
+              <template #empty>
+                <div class="v2-records-empty">
+                  <strong>当前筛选范围没有财务流水</strong>
+                  <span>完成订单或记账后会自动出现在这里</span>
+                </div>
+              </template>
+              <V2TableControlColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[0]">
+                <template #default="{ row }">
+                  <div class="v2-finance-lines">
+                    <div v-for="line in row.lines" :key="line.id">
+                      <span>{{ accountCodeLabel(line.accountCode) }}</span>
+                      <strong>{{ directionLabel(line.direction) }}</strong>
+                      <span>{{ formatOriginal(line.amountOriginal, line.currency) }}</span>
+                      <span>{{ formatCny(line.amountCny) }}</span>
+                      <span>{{ line.memo || '—' }}</span>
+                    </div>
+                  </div>
+                </template>
+              </V2TableControlColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[1]">
+                <template #default="{ row }"
+                  ><strong>{{ row.journalNo }}</strong></template
+                >
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[2]">
+                <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[3]">
+                <template #default="{ row }">
+                  <el-tag effect="plain">{{ journalTypeLabel(row.journalType) }}</el-tag>
+                </template>
+              </V2TableColumn>
+              <V2TableColumn
+                :definition="v2TableSchemas.dataAnalytics.journals.columns[4]"
+                prop="summary"
+              />
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[5]">
+                <template #default="{ row }">{{ row.sourceReference || '—' }}</template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.dataAnalytics.journals.columns[6]">
+                <template #default="{ row }">{{ formatCny(journalAmount(row)) }}</template>
+              </V2TableColumn>
+            </V2Table>
+          </section>
+
+          <section class="v2-finance-panel">
+            <header>
+              <div>
+                <span>闭环对账</span>
+                <strong>
+                  {{
+                    overview.reconciliation.isComplete
+                      ? '关键证据完整'
+                      : `${overview.reconciliation.issueCount} 项待处理`
+                  }}
+                </strong>
+              </div>
+              <el-tag
+                :type="overview.reconciliation.isComplete ? 'success' : 'warning'"
+                effect="plain"
+              >
+                {{ overview.reconciliation.isComplete ? '已闭环' : '待核对' }}
+              </el-tag>
+            </header>
+            <div v-if="overview.reconciliation.issues.length" class="v2-finance-issues">
+              <article
+                v-for="issue in overview.reconciliation.issues"
+                :key="`${issue.code}:${issue.sourceId ?? issue.message}`"
+                :class="`is-${issue.severity}`"
+              >
+                <el-tag
+                  :type="
+                    issue.severity === 'error'
+                      ? 'danger'
+                      : issue.severity === 'warning'
+                        ? 'warning'
+                        : 'info'
+                  "
+                  effect="plain"
+                  size="small"
+                >
+                  {{
+                    issue.severity === 'error'
+                      ? '错误'
+                      : issue.severity === 'warning'
+                        ? '提醒'
+                        : '信息'
+                  }}
+                </el-tag>
+                <div>
+                  <strong>{{ issue.message }}</strong>
+                  <span v-if="issue.amountCny">{{ formatCny(issue.amountCny) }}</span>
+                </div>
+              </article>
+            </div>
+            <el-empty v-else description="当前筛选范围没有对账问题" />
+          </section>
+        </div>
       </template>
     </V2AsyncRegion>
   </section>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
@@ -420,6 +454,8 @@ const {
   supplierOptions,
   settlementPlatformOptions,
   assetRows,
+  analysisRangeLabel,
+  activeFilterLabel,
   applyFilters,
   resetFilters,
   refresh,
@@ -433,4 +469,13 @@ const {
   accountCodeLabel,
   directionLabel
 } = useDataAnalyticsPage();
+
+const analysisSections = [
+  { key: 'profit', label: '利润总览' },
+  { key: 'cash-flow', label: '原币收支' },
+  { key: 'assets', label: '资产余额' },
+  { key: 'reconciliation', label: '对账明细' }
+] as const;
+
+const activeAnalysisSection = ref<(typeof analysisSections)[number]['key']>('profit');
 </script>

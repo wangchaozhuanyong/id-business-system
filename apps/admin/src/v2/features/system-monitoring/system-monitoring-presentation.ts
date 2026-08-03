@@ -28,6 +28,15 @@ export function formatSystemMonitoringDate(value?: string | null) {
   }).format(date);
 }
 
+const SYSTEM_MONITORING_ISO_DATE_PATTERN =
+  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z\b/g;
+
+export function formatSystemMonitoringDetail(detail: string) {
+  return detail.replace(SYSTEM_MONITORING_ISO_DATE_PATTERN, (value) =>
+    formatSystemMonitoringDate(value)
+  );
+}
+
 export function exchangeRunStatusLabel(status?: 'running' | 'success' | 'failed') {
   if (status === 'running') return '运行中';
   if (status === 'success') return '成功';

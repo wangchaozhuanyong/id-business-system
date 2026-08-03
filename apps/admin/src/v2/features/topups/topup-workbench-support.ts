@@ -24,11 +24,6 @@ export function calculateCreditCostPreview(form: GiftCardValueForm) {
   return multiplyDecimalStrings(form.faceValue, form.exchangeRate);
 }
 
-export function maskGiftCardCode(value: string) {
-  if (value.length < 8) return value;
-  return `${value.slice(0, 4)}****${value.slice(-4)}`;
-}
-
 export function formatDecimal(value: string) {
   return formatV2Decimal(value);
 }

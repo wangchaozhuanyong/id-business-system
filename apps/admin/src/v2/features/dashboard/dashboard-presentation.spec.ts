@@ -4,7 +4,8 @@ import {
   dashboardOrderStatusMeta,
   financeHistoryLabel,
   formatDashboardDate,
-  formatDashboardMoney
+  formatDashboardMoney,
+  formatDashboardTime
 } from './dashboard-presentation';
 
 describe('dashboard presentation', () => {
@@ -12,6 +13,8 @@ describe('dashboard presentation', () => {
     expect(formatDashboardDate()).toBe('—');
     expect(formatDashboardMoney(null)).toBe('—');
     expect(formatDashboardMoney('not-money')).toBe('—');
+    expect(formatDashboardTime()).toBe('—');
+    expect(formatDashboardTime('2026-08-02T07:52:00+08:00')).toBe('07:52');
   });
 
   it('maps controlled order and finance states', () => {

@@ -5,6 +5,7 @@ import { v2SystemMonitoringApi } from './api';
 import {
   exchangeRunStatusLabel,
   formatSystemMonitoringDate,
+  formatSystemMonitoringDetail,
   systemMonitorStatusMeta,
   systemOverallStatusMeta
 } from './system-monitoring-presentation';
@@ -37,6 +38,7 @@ export function useSystemMonitoringPage() {
     systemMonitorStatusMeta,
     systemOverallStatusMeta,
     formatSystemMonitoringDate,
+    formatSystemMonitoringDetail,
     exchangeRunStatusLabel
   };
 }
