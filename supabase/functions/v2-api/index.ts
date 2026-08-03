@@ -4,6 +4,10 @@ import { createCloudflareV2HttpServer } from '@v2-bootstrap';
 
 declare const __V2_FUNCTION_NAME__: string;
 
+type AuthProvider = 'local' | 'supabase';
+
+const defaultAdminPublicUrl = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
+
 const requiredSecrets = [
   'FIELD_ENCRYPTION_KEY',
   'HASH_SECRET',
@@ -24,6 +28,14 @@ function firstEnv(...names: string[]) {
     if (value) return value;
   }
   throw new Error(`${names.join(' or ')} is required`);
+}
+
+function resolveAuthProvider(): AuthProvider {
+  const value = Deno.env.get('AUTH_PROVIDER')?.trim() || 'local';
+  if (value !== 'local' && value !== 'supabase') {
+    throw new Error('AUTH_PROVIDER must be local or supabase');
+  }
+  return value;
 }
 
 function resolveEdgeDatabaseUrl() {
@@ -49,14 +61,20 @@ for (const name of requiredSecrets) {
   requireEnv(name);
 }
 
+const authProvider = resolveAuthProvider();
+const appPublicUrl = Deno.env.get('APP_PUBLIC_URL')?.trim() || defaultAdminPublicUrl;
+
 Object.assign(process.env, {
   NODE_ENV: 'production',
   APP_PORT: '9999',
-  APP_PUBLIC_URL: `${requireEnv('SUPABASE_URL').replace(/\/$/, '')}/functions/v1/v2-api`,
-  CORS_ORIGIN: Deno.env.get('CORS_ORIGIN')?.trim() || 'https://daichongxitong-v2.pages.dev',
+  APP_PUBLIC_URL: appPublicUrl,
+  CORS_ORIGIN: Deno.env.get('CORS_ORIGIN')?.trim() || appPublicUrl,
   DATABASE_URL: resolveEdgeDatabaseUrl(),
-  JWT_SECRET: 'supabase-auth-provider-local-jwt-disabled',
-  AUTH_PROVIDER: 'supabase',
+  JWT_SECRET:
+    authProvider === 'local'
+      ? requireEnv('JWT_SECRET')
+      : 'supabase-auth-provider-local-jwt-disabled',
+  AUTH_PROVIDER: authProvider,
   SUPABASE_EDGE_FUNCTION: 'true',
   SUPABASE_URL: requireEnv('SUPABASE_URL'),
   SUPABASE_ANON_KEY: firstEnv('SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY'),

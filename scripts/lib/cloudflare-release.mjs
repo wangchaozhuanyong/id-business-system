@@ -3,6 +3,8 @@ export const RELEASE_BRANCH = 'main';
 export const RELEASE_WORKER_NAME = 'daichongxitong-v2-free-20260727';
 export const RELEASE_ACCOUNT_ID = 'a7e061557092f924beb4a7c8adc39c3d';
 export const RELEASE_PUBLIC_URL = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
+export const RELEASE_SUPABASE_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
+export const RELEASE_SUPABASE_API_BASE_URL = `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v2-api`;
 export const RELEASE_V2_REALTIME_CHANGES_ENABLED = 'false';
 export const REQUIRED_CHECKS = ['quality', 'production-images'];
 export const SMOKE_ROLE_CODE = 'production_smoke_readonly';
@@ -22,6 +24,7 @@ const unsafeValuePattern =
 export function createCloudflareProductionBuildEnvironment(env) {
   return {
     ...env,
+    VITE_API_BASE_URL: '/api',
     VITE_V2_REALTIME_CHANGES_ENABLED: RELEASE_V2_REALTIME_CHANGES_ENABLED
   };
 }
@@ -65,31 +68,22 @@ export function validateWranglerConfig(config) {
     errors.push('API 必须优先由 Worker 处理');
   }
 
-  const hyperdrive = config.hyperdrive?.find((item) => item.binding === 'HYPERDRIVE');
-  if (!hyperdrive || !/^[a-f0-9]{32}$/i.test(hyperdrive.id ?? '')) {
-    errors.push('HYPERDRIVE 绑定缺失或 ID 无效');
+  if (config.alias && Object.keys(config.alias).length) {
+    errors.push('Cloudflare 前端代理不得打包 NestJS/Prisma alias');
+  }
+  if (Array.isArray(config.hyperdrive) && config.hyperdrive.length) {
+    errors.push('Cloudflare 前端代理不得绑定 Hyperdrive');
+  }
+  if (config.compatibility_flags?.includes('nodejs_compat')) {
+    errors.push('Cloudflare 前端代理不得启用 nodejs_compat');
   }
 
   const vars = config.vars ?? {};
-  if (vars.NODE_ENV !== 'production') {
-    errors.push('NODE_ENV 必须为 production');
-  }
-  if (vars.CLOUDFLARE_WORKER !== 'true') {
-    errors.push('CLOUDFLARE_WORKER 必须为 true');
-  }
   if (vars.APP_PUBLIC_URL !== RELEASE_PUBLIC_URL) {
     errors.push(`APP_PUBLIC_URL 必须固定为 ${RELEASE_PUBLIC_URL}`);
   }
-  if (vars.CORS_ORIGIN !== RELEASE_PUBLIC_URL) {
-    errors.push(`CORS_ORIGIN 必须固定为 ${RELEASE_PUBLIC_URL}`);
-  }
-  if (!['true', 'false'].includes(vars.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED)) {
-    errors.push('汇率自动采集开关必须是 true 或 false');
-  }
-
-  const staleMs = Number(vars.ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS);
-  if (!Number.isInteger(staleMs) || staleMs < 60_000 || staleMs > 3_600_000) {
-    errors.push('汇率缓存时长必须在 60000 到 3600000 毫秒之间');
+  if (vars.SUPABASE_API_BASE_URL !== RELEASE_SUPABASE_API_BASE_URL) {
+    errors.push(`SUPABASE_API_BASE_URL 必须固定为 ${RELEASE_SUPABASE_API_BASE_URL}`);
   }
 
   return errors;
