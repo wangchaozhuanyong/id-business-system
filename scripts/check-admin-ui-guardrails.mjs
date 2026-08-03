@@ -10,6 +10,22 @@ for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
   const source = readFileSync(file, 'utf8');
   const projectPath = path.relative(rootDir, file);
 
+  if (/apps\/admin\/src\/v2\/features\/.*\/V2[^/]*View\.vue$/.test(projectPath)) {
+    if (/<h1(?=\s|>)/.test(source)) {
+      failures.push(`${projectPath}: 页面级 h1 只能由 V2AdminLayout 渲染`);
+    }
+    if (/<header(?=\s|>)/.test(source.slice(0, 2500))) {
+      failures.push(`${projectPath}: 页面首屏说明必须使用不带标题能力的 V2PageContext`);
+    }
+  }
+
+  if (
+    projectPath === 'apps/admin/src/v2/components/V2PlannedFeatureView.vue' &&
+    /<h[1-6][^>]*>[\s\S]*?moduleDefinition\.title[\s\S]*?<\/h[1-6]>/.test(source)
+  ) {
+    failures.push(`${projectPath}: 规划页不得重复渲染路由页面标题`);
+  }
+
   if (/label-position\s*=\s*["']top["']/.test(source)) {
     failures.push(`${projectPath}: 禁止顶部标签布局`);
   }
@@ -70,6 +86,8 @@ requireSnippets('apps/admin/src/v2/features/order-entry/components/V2QuickCustom
   "emit('created'"
 ]);
 requireSnippets('docs/UI_DESIGN.md', [
+  '业务页面不得再次渲染同名或同义标题',
+  'V2PageContext',
   '标签必须在控件左侧',
   '必填星号紧跟字段标题右侧',
   '使用右侧抽屉',
@@ -77,6 +95,17 @@ requireSnippets('docs/UI_DESIGN.md', [
   '可修正错误不得用于禁用提交按钮',
   'validateV2Form',
   'confirmDisabledReason'
+]);
+requireSnippets('apps/admin/src/v2/components/V2PageContext.vue', [
+  'description: string',
+  '<slot name="meta" />',
+  '<slot name="status" />',
+  '<slot name="actions" />'
+]);
+requireSnippets('apps/admin/src/v2/components/V2PlannedFeatureView.vue', [
+  '<V2PageContext',
+  '功能范围预览',
+  '尚未开放'
 ]);
 
 for (const projectPath of [

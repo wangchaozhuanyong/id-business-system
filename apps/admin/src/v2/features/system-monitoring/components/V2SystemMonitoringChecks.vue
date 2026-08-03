@@ -8,7 +8,7 @@
         </el-tag>
       </header>
       <span>{{ check.value }}</span>
-      <p>{{ check.detail }}</p>
+      <p>{{ page.formatSystemMonitoringDetail(check.detail) }}</p>
     </article>
   </section>
 </template>

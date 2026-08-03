@@ -9,7 +9,8 @@ import {
   dashboardOrderStatusMeta,
   financeHistoryLabel,
   formatDashboardDate,
-  formatDashboardMoney
+  formatDashboardMoney,
+  formatDashboardTime
 } from './dashboard-presentation';
 import type { V2DashboardOverview } from './contracts';
 
@@ -19,6 +20,7 @@ export interface DashboardMetricItem {
   value: number | string | null;
   suffix?: string;
   description: string;
+  actionLabel: string;
   route?: string;
   tone?: 'primary' | 'success' | 'warning' | 'danger' | 'neutral';
   money?: boolean;
@@ -54,6 +56,7 @@ export function useDashboardPage() {
         value: data.business.todayOrders,
         suffix: '单',
         description: '今日新建订单',
+        actionLabel: '查看今日订单',
         route: data.access.orders ? '/v2/orders' : undefined,
         tone: 'primary'
       },
@@ -63,6 +66,7 @@ export function useDashboardPage() {
         value: data.business.todayCompletedOrders,
         suffix: '单',
         description: '今日进入且仍为完成状态',
+        actionLabel: '查看今日完成订单',
         route: data.access.orders ? '/v2/orders' : undefined,
         tone: 'success'
       },
@@ -72,6 +76,7 @@ export function useDashboardPage() {
         value: data.business.todayActivations,
         suffix: '条',
         description: '今日生成开通记录',
+        actionLabel: '查看今日开通记录',
         route: data.access.activations ? '/v2/records/activations' : undefined,
         tone: 'success'
       },
@@ -84,6 +89,7 @@ export function useDashboardPage() {
           data.business.todayTopupCostCny === null
             ? '无余额查看权限'
             : `成本 ${formatDashboardMoney(data.business.todayTopupCostCny)}`,
+        actionLabel: '查看今日加卡记录',
         route: data.access.balances ? '/v2/records/topups' : undefined,
         tone: 'primary'
       },
@@ -92,6 +98,7 @@ export function useDashboardPage() {
         label: '今日收入',
         value: data.business.todayRevenueCny,
         description: '只计当前仍为已完成的订单',
+        actionLabel: '查看今日收入分析',
         route: data.access.finance ? '/v2/data/analytics' : undefined,
         tone: 'primary',
         money: true
@@ -101,6 +108,7 @@ export function useDashboardPage() {
         label: '今日利润',
         value: data.business.todayProfitCny,
         description: '仅展示已确认的订单利润',
+        actionLabel: '查看今日利润分析',
         route: data.access.finance ? '/v2/data/analytics' : undefined,
         tone: 'success',
         money: true
@@ -118,6 +126,7 @@ export function useDashboardPage() {
         value: data.risks.pendingOrders,
         suffix: '单',
         description: '草稿、待处理、等待外部或处理中',
+        actionLabel: '处理待处理订单',
         route: data.access.orders ? '/v2/orders' : undefined,
         tone: 'warning'
       },
@@ -127,6 +136,7 @@ export function useDashboardPage() {
         value: data.risks.failedOrders,
         suffix: '单',
         description: '当前状态为失败',
+        actionLabel: '查看失败订单',
         route: data.access.orders ? '/v2/orders' : undefined,
         tone: 'danger'
       },
@@ -136,6 +146,7 @@ export function useDashboardPage() {
         value: data.risks.overdueRenewals,
         suffix: '条',
         description: '服务到期时间早于今日',
+        actionLabel: '处理逾期续费',
         route: data.access.renewals ? '/v2/workbench/renewals' : undefined,
         tone: 'danger'
       },
@@ -145,6 +156,7 @@ export function useDashboardPage() {
         value: data.risks.dueSoonRenewals,
         suffix: '条',
         description: `${data.warningDays} 天预警窗口内`,
+        actionLabel: '查看即将到期',
         route: data.access.renewals ? '/v2/workbench/renewals' : undefined,
         tone: 'warning'
       },
@@ -154,6 +166,7 @@ export function useDashboardPage() {
         value: data.risks.lowBalanceAccounts,
         suffix: '个 ID',
         description: '未售、未报损且当前余额不大于 0',
+        actionLabel: '处理余额不足',
         route: data.access.accounts && data.access.balances ? '/v2/accounts' : undefined,
         tone: 'warning'
       },
@@ -163,11 +176,20 @@ export function useDashboardPage() {
         value: data.risks.failedExchangeRuns,
         suffix: '次',
         description: '最近 24 小时失败运行',
+        actionLabel: '查看汇率采集失败',
         route: data.access.exchangeRates ? '/v2/exchange-rates' : undefined,
         tone: 'danger'
       }
     ];
   });
+
+  const activeRiskCategoryCount = computed(
+    () =>
+      riskMetrics.value.filter((item) => {
+        if (item.value === null) return false;
+        return typeof item.value === 'number' ? item.value > 0 : Number(item.value) > 0;
+      }).length
+  );
 
   function refresh() {
     return dashboardQuery.refresh();
@@ -190,10 +212,12 @@ export function useDashboardPage() {
     error,
     businessMetrics,
     riskMetrics,
+    activeRiskCategoryCount,
     refresh,
     openRoute,
     metricValue,
     formatDashboardDate,
+    formatDashboardTime,
     formatDashboardMoney,
     dashboardOrderStatusMeta,
     financeHistoryLabel,

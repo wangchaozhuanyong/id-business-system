@@ -26,7 +26,6 @@ import {
   formatElapsed,
   formatTime,
   isValidBalanceInput,
-  maskGiftCardCode,
   servicePath,
   toLocalDateTimeInput
 } from './topup-workbench-support';
@@ -129,7 +128,7 @@ export function useTopupWorkbenchPage() {
         : '';
     return `确认向 ${selectedAccount.value.appleIdMasked} 入账${
       selectedCardName.value?.name ?? '礼品卡'
-    } ${maskGiftCardCode(normalizedCreditCode.value)}，国家为 ${
+    } ${normalizedCreditCode.value}，国家为 ${
       selectedCountry.value?.name ?? selectedAccount.value.country.name
     }，面值 ${creditForm.faceValue}，卡片汇率 ${creditForm.exchangeRate}，卡片价值${
       creditCostPreview.value ? ` ¥${formatDecimal(creditCostPreview.value)}` : '由系统计算'

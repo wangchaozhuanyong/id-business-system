@@ -23,7 +23,15 @@
         <template #empty>
           <div class="v2-records-empty">
             <strong>暂无订单</strong>
-            <span>当前筛选条件下没有数据</span>
+            <span>{{ page.hasActiveFilters ? '当前筛选条件下没有数据' : '系统中暂无订单' }}</span>
+            <AppButton
+              v-if="page.canConsumeOrders"
+              size="small"
+              variant="primary"
+              @click="page.openOrderEntry"
+            >
+              录入新订单
+            </AppButton>
           </div>
         </template>
 
@@ -341,7 +349,15 @@
         </article>
         <div v-if="!page.items.length" class="v2-records-empty">
           <strong>暂无订单</strong>
-          <span>当前筛选条件下没有数据</span>
+          <span>{{ page.hasActiveFilters ? '当前筛选条件下没有数据' : '系统中暂无订单' }}</span>
+          <AppButton
+            v-if="page.canConsumeOrders"
+            size="small"
+            variant="primary"
+            @click="page.openOrderEntry"
+          >
+            录入新订单
+          </AppButton>
         </div>
       </div>
 

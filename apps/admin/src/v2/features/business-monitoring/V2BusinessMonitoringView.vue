@@ -1,14 +1,13 @@
 <template>
   <section class="v2-records-page v2-business-monitoring-page">
-    <header class="v2-business-monitoring-header">
-      <div>
-        <strong>业务监控</strong>
-        <p>异常由当前订单、开通、余额、汇率和财务状态实时计算；修正源数据后自动消失。</p>
-      </div>
-      <span v-if="page.generatedAt">
-        更新于 {{ page.formatBusinessMonitoringDate(page.generatedAt) }}
-      </span>
-    </header>
+    <V2PageContext
+      description="异常由当前订单、开通、余额、汇率和财务状态实时计算；修正源数据后自动消失。"
+      aria-label="业务监控说明"
+    >
+      <template v-if="page.generatedAt" #status>
+        <span>更新于 {{ page.formatBusinessMonitoringDate(page.generatedAt) }}</span>
+      </template>
+    </V2PageContext>
 
     <section class="v2-records-toolbar v2-business-monitoring-toolbar" aria-label="业务异常筛选">
       <el-select
@@ -179,6 +178,7 @@ import { reactive } from 'vue';
 import { Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
@@ -191,31 +191,6 @@ const page = reactive(useBusinessMonitoringPage());
 </script>
 
 <style scoped>
-.v2-business-monitoring-header {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
-}
-
-.v2-business-monitoring-header > div {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.v2-business-monitoring-header strong {
-  color: var(--v2-text);
-  font-size: 20px;
-}
-
-.v2-business-monitoring-header p,
-.v2-business-monitoring-header > span,
 .v2-records-mobile-item footer > span {
   margin: 0;
   color: var(--v2-text-soft);
@@ -238,11 +213,6 @@ const page = reactive(useBusinessMonitoringPage());
 }
 
 @media (max-width: 900px) {
-  .v2-business-monitoring-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .v2-business-monitoring-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

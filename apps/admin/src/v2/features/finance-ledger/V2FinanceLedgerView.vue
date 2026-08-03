@@ -250,7 +250,18 @@
             </footer>
           </el-tab-pane>
 
-          <el-tab-pane label="不可变流水" name="journals">
+          <el-tab-pane name="journals">
+            <template #label>
+              <span class="v2-records-help-title">
+                不可变流水
+                <FeatureHelp
+                  title="不可变流水与冲销"
+                  :text="journalReversalHelp"
+                  placement="bottom"
+                  :width="360"
+                />
+              </span>
+            </template>
             <V2Table
               :schema="v2TableSchemas.financeLedger.journals"
               class="v2-records-table"
@@ -433,6 +444,7 @@ import { defineComponent, h, reactive } from 'vue';
 import { Lock, Plus, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import type { V2FinanceSupplierWallet } from './contracts';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
@@ -457,6 +469,12 @@ import '@/v2/styles/records.css';
 import '@/v2/styles/finance.css';
 
 const page = reactive(useFinanceLedgerPage());
+const journalReversalHelp = [
+  '已发布流水不能直接修改或删除，系统会保留原始记录，方便以后核对。',
+  '冲销会新增一笔金额相反的流水，抵消原流水对余额和损益的影响；原流水随后显示“已冲销”。',
+  '例如原流水是 +1000 元，冲销流水就是 -1000 元，两笔合计净影响为 0 元。',
+  '冲销不是删除，也不一定代表退款。如果原记录有误，请冲销后再按正确业务证据重新记账。'
+];
 
 function handleWalletMutationCommand(row: V2FinanceSupplierWallet, command: unknown) {
   if (command === 'deposit' || command === 'refund' || command === 'adjust') {

@@ -172,15 +172,15 @@ export const v2TableSchemas = {
           key: 'orderNo',
           label: '订单号',
           kind: 'identifier',
-          widthPreset: 'identifier',
+          widthPreset: 'standard',
           pin: 'start'
         },
-        { key: 'customer.name', label: '客户', kind: 'text', widthPreset: 'wide' },
-        { key: 'serviceOption.name', label: '业务', kind: 'text', widthPreset: 'wide' },
+        { key: 'customer.name', label: '客户', kind: 'text', widthPreset: 'compact' },
+        { key: 'serviceOption.name', label: '业务', kind: 'text', widthPreset: 'standard' },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'receivedAmount', label: '收款', kind: 'numeric', widthPreset: 'wide' },
-        { key: 'createdAt', label: '创建时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+        { key: 'receivedAmount', label: '收款', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'createdAt', label: '创建时间', kind: 'date', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'icon', pin: 'end' }
       ]
     })
   },

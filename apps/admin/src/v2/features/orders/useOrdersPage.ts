@@ -1,5 +1,6 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { computed, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from './api';
@@ -10,6 +11,7 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { useAuthStore } from '@/stores/auth';
 import type {
   RefundV2OrderInput,
@@ -49,6 +51,7 @@ const ORDERS_OPTIONS_SCOPE = 'orders-options';
 const ORDERS_OPTIONS_KEY = 'selectors';
 
 export function useOrdersPage() {
+  const router = useRouter();
   const authStore = useAuthStore();
   const openedRange = ref<[string, string] | []>([]);
   const detailVisible = ref(false);
@@ -82,6 +85,15 @@ export function useOrdersPage() {
     sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
+  const hasActiveFilters = computed(
+    () =>
+      Boolean(query.keyword.trim()) ||
+      Boolean(query.serviceOptionId) ||
+      Boolean(query.settlementPlatformOptionId) ||
+      Boolean(query.status) ||
+      Boolean(query.accountDisposition) ||
+      Boolean(openedRange.value.length)
+  );
 
   function getOrdersListQuery(): V2OrderListQuery {
     return {
@@ -167,6 +179,11 @@ export function useOrdersPage() {
 
   function handlePageChange() {
     loadCurrentOrders();
+  }
+
+  function openOrderEntry() {
+    if (!canConsumeOrders.value) return;
+    void navigateSafely(router, '/v2/workbench/order-entry');
   }
 
   function handleSortChange(sort: { prop?: string; order?: 'ascending' | 'descending' | null }) {
@@ -520,12 +537,14 @@ export function useOrdersPage() {
     canConsumeOrders,
     canUpdateOrders,
     canDeleteOrders,
+    hasActiveFilters,
     query,
     loadOrders,
     handleSearch,
     handleFilterChange,
     handlePageSizeChange,
     handlePageChange,
+    openOrderEntry,
     handleSortChange,
     openDetail,
     retryDetail,

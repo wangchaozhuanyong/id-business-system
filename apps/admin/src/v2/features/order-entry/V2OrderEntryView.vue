@@ -23,14 +23,14 @@
           <div>
             <AppButton
               v-if="missingOptionsConfiguration && canManageOptions"
-              variant="ghost"
+              variant="primary"
               @click="openRoute('/v2/options')"
             >
               前往选项设置
             </AppButton>
             <AppButton
               v-if="missingCustomersConfiguration && canCreateCustomer"
-              variant="ghost"
+              variant="soft"
               @click="quickCustomerVisible = true"
             >
               快速新增客户

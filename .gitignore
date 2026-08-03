@@ -49,6 +49,7 @@ backups/
 exports/
 
 # Generated visual QA evidence
+.codex-audit/
 artifacts/design-qa/
 qa-artifacts/
 design-qa.md

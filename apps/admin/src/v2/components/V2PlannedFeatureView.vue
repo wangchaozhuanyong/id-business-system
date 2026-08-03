@@ -1,15 +1,17 @@
 <template>
   <section v-if="moduleDefinition" class="v2-module-page v2-planned-page">
-    <header class="v2-planned-hero">
-      <div class="v2-planned-hero__copy">
+    <V2PageContext
+      :description="moduleDefinition.summary ?? '当前功能仍在规划中，详细范围以后续开发任务为准。'"
+      aria-label="功能规划状态"
+    >
+      <template #meta>
         <span class="v2-planned-badge">规划中</span>
-        <h2>{{ moduleDefinition.title }}</h2>
-        <p>{{ moduleDefinition.summary }}</p>
-      </div>
-      <AppButton variant="soft" disabled title="当前仅提供页面结构，详细功能将在后续任务中接入">
-        功能尚未开放
-      </AppButton>
-    </header>
+        <span>功能范围预览</span>
+      </template>
+      <template #status>
+        <span class="v2-planned-state">尚未开放</span>
+      </template>
+    </V2PageContext>
 
     <section class="v2-planned-capabilities" aria-labelledby="v2-planned-capabilities-title">
       <V2SectionHeading
@@ -56,7 +58,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
-import AppButton from '@/components/ui/AppButton.vue';
+import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2PageState from '@/v2/components/V2PageState.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { getV2ModuleDefinition } from '@/v2/config/modules';
@@ -73,26 +75,6 @@ const moduleDefinition = computed(() => {
   gap: 16px;
 }
 
-.v2-planned-hero {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 28px;
-  padding: 22px 24px;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius-lg);
-  background: linear-gradient(135deg, var(--v2-accent-soft), transparent 58%), var(--v2-surface);
-  box-shadow: var(--v3-shadow-sm);
-}
-
-.v2-planned-hero__copy {
-  display: grid;
-  min-width: 0;
-  max-width: 720px;
-  gap: 8px;
-}
-
 .v2-planned-badge {
   width: fit-content;
   padding: 3px 8px;
@@ -105,24 +87,20 @@ const moduleDefinition = computed(() => {
   line-height: 18px;
 }
 
-.v2-planned-hero h2,
-.v2-planned-hero p,
 .v2-planned-card p,
 .v2-planned-boundary p {
   margin: 0;
 }
 
-.v2-planned-hero h2 {
-  color: var(--v2-text);
-  font-size: 20px;
-  font-weight: var(--v3-font-weight-bold);
-  line-height: var(--v3-line-height-tight);
-}
-
-.v2-planned-hero p {
+.v2-planned-state {
+  padding: 3px 9px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 999px;
+  background: var(--v2-surface-muted);
   color: var(--v2-text-soft);
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 11px;
+  font-weight: var(--v3-font-weight-semibold);
+  line-height: 20px;
 }
 
 .v2-planned-capabilities {
@@ -227,14 +205,9 @@ const moduleDefinition = computed(() => {
 }
 
 @media (max-width: 900px) {
-  .v2-planned-hero,
   .v2-planned-boundary {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .v2-planned-hero .app-button {
-    width: 100%;
   }
 
   .v2-planned-grid {
@@ -247,10 +220,6 @@ const moduleDefinition = computed(() => {
 }
 
 @media (max-width: 560px) {
-  .v2-planned-hero {
-    padding: 18px 16px;
-  }
-
   .v2-planned-card {
     grid-template-columns: 32px minmax(0, 1fr);
   }

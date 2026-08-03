@@ -82,6 +82,19 @@ export function useDataAnalyticsPage() {
   const settlementPlatformOptions = computed(
     () => overview.value?.settlementPlatformReport.options ?? []
   );
+  const analysisRangeLabel = computed(() => {
+    const { dateFrom, dateTo } = applied.value;
+    if (dateFrom && dateTo) return `${dateFrom} 至 ${dateTo}`;
+    if (dateFrom) return `${dateFrom} 起`;
+    if (dateTo) return `截至 ${dateTo}`;
+    return '全部已记账业务日期';
+  });
+  const activeFilterLabel = computed(() => {
+    const count = Object.values(applied.value).filter(
+      (value) => value !== undefined && value !== null && value !== ''
+    ).length;
+    return count ? `已应用 ${count} 项筛选` : '未附加筛选';
+  });
   const assetRows = computed(() => {
     if (!overview.value) return [];
     return [
@@ -130,6 +143,8 @@ export function useDataAnalyticsPage() {
     supplierOptions,
     settlementPlatformOptions,
     assetRows,
+    analysisRangeLabel,
+    activeFilterLabel,
     applyFilters,
     resetFilters,
     refresh: () => void query.refresh(),
