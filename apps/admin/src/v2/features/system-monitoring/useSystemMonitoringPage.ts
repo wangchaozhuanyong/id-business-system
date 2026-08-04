@@ -6,6 +6,8 @@ import {
   exchangeRunStatusLabel,
   formatSystemMonitoringDate,
   formatSystemMonitoringDetail,
+  sortSystemMonitoringChecks,
+  summarizeSystemMonitoringChecks,
   systemMonitorStatusMeta,
   systemOverallStatusMeta
 } from './system-monitoring-presentation';
@@ -22,6 +24,10 @@ export function useSystemMonitoringPage() {
   });
 
   const overview = computed(() => systemQuery.data.value ?? null);
+  const sortedChecks = computed(() => sortSystemMonitoringChecks(overview.value?.checks ?? []));
+  const evidenceSummary = computed(() =>
+    summarizeSystemMonitoringChecks(overview.value?.checks ?? [])
+  );
   const loading = computed(
     () => systemQuery.isInitialLoading.value || systemQuery.isRefreshing.value
   );
@@ -31,6 +37,8 @@ export function useSystemMonitoringPage() {
 
   return {
     overview,
+    sortedChecks,
+    evidenceSummary,
     loading,
     error,
     hasData: systemQuery.hasData,

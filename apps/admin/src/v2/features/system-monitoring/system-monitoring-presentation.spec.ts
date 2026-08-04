@@ -3,6 +3,8 @@ import {
   exchangeRunStatusLabel,
   formatSystemMonitoringDate,
   formatSystemMonitoringDetail,
+  sortSystemMonitoringChecks,
+  summarizeSystemMonitoringChecks,
   systemMonitorStatusMeta,
   systemOverallStatusMeta
 } from './system-monitoring-presentation';
@@ -28,5 +30,39 @@ describe('system monitoring presentation', () => {
       '下次计划时间：2026/08/02 09:02:03'
     );
     expect(formatSystemMonitoringDetail('未提供时间')).toBe('未提供时间');
+  });
+
+  it('prioritizes attention states and reports evidence coverage', () => {
+    const checks = [
+      { key: 'api', title: 'API', status: 'healthy' as const, value: '可用', detail: '通过' },
+      {
+        key: 'history',
+        title: '历史错误率',
+        status: 'unknown' as const,
+        value: '未知',
+        detail: '缺少证据'
+      },
+      {
+        key: 'database',
+        title: '数据库',
+        status: 'degraded' as const,
+        value: '超时',
+        detail: '探针失败'
+      }
+    ];
+
+    expect(sortSystemMonitoringChecks(checks).map((check) => check.status)).toEqual([
+      'degraded',
+      'unknown',
+      'healthy'
+    ]);
+    expect(summarizeSystemMonitoringChecks(checks)).toEqual({
+      healthy: 1,
+      degraded: 1,
+      unknown: 1,
+      total: 3,
+      observable: 2,
+      coverageRate: 67
+    });
   });
 });

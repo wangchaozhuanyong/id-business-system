@@ -17,8 +17,9 @@
         </template>
       </template>
       <template #actions>
-        <AppButton icon-only title="刷新系统监控" :disabled="page.loading" @click="page.refresh">
+        <AppButton variant="soft" :loading="page.loading" @click="page.refresh">
           <el-icon><Refresh /></el-icon>
+          重新执行探针
         </AppButton>
       </template>
     </V2PageContext>
@@ -59,6 +60,14 @@ const page = reactive(useSystemMonitoringPage());
 .v2-system-monitoring-content {
   display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  align-items: start;
   gap: 14px;
+}
+
+@media (max-width: 1080px) {
+  .v2-system-monitoring-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>
