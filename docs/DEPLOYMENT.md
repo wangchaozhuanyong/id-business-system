@@ -128,8 +128,15 @@ Cloudflare 发布命令包含以下硬门禁：
 - Supabase project/function、Cloudflare account/Worker 和公开域名必须与仓库固定生产配置一致。
 - 发布顺序固定为：构建并发布 Supabase API、完成 API 独立巡检、发布 Cloudflare 静态端与转发层、完成整站巡检。
 - Cloudflare Worker 不得绑定 Hyperdrive，不得打包 NestJS/Prisma；前端固定使用同源 `/api`。
-- `.deploy/cloudflare-free.secrets.json` 必须包含用于 Supabase API 的四项运行时密钥及
-  `SMOKE_TEST_USERNAME`、`SMOKE_TEST_PASSWORD`，该文件必须保持 Git 忽略且权限为 `0600`。
+- `.deploy/cloudflare-free.secrets.json` 必须将数据库凭据拆分为
+  `V2_RUNTIME_DATABASE_URL`、`AUDIT_DATABASE_URL`、`MIGRATION_DATABASE_URL`，并包含
+  `JWT_SECRET`、`FIELD_ENCRYPTION_KEY`、`HASH_SECRET`、`SMOKE_TEST_USERNAME`、
+  `SMOKE_TEST_PASSWORD`。该文件必须保持 Git 忽略且权限为 `0600`。
+- `V2_RUNTIME_DATABASE_URL` 只允许当前业务表 DML，不拥有表、不具备 `ALTER`、`TRUNCATE`、
+  禁用触发器或修改 `_prisma_migrations` 的权限；`AUDIT_DATABASE_URL` 只读；
+  `MIGRATION_DATABASE_URL` 仅供离线迁移管理员使用，不会注入发布、巡检或应用运行时。
+- 生产凭据启动器只接受 `closure-audit`、`release-check`、`smoke-user-provision`、`deploy`
+  四个固定操作，不接受 `-- node -e` 或任意命令。
 - Wrangler 版本消息和标签写入完整/短 Git commit；部署成功后自动检查首页、健康端点、只读账号
   登录、最小权限集合和核心只读接口。
 
@@ -142,6 +149,32 @@ npm run prod:smoke-user:provision
 该命令只同步所需的七项查看权限并创建/刷新 `production_smoke_readonly` 角色和专用账号，不修改
 数据库结构，也不授予新增、修改、删除、密文查看或业务选项管理权限。巡检账号凭据只保存在被 Git
 忽略的本机部署凭据文件中，不上传为 Worker 运行时密钥。
+
+首次拆分或轮换数据库角色时，先预览，再绑定最新生产备份指纹显式执行：
+
+```bash
+node scripts/provision-production-database-roles.mjs
+node scripts/provision-production-database-roles.mjs --apply \
+  --backup=/absolute/path/to/backups/postgres/pre-migration.dump \
+  --backup-sha256=<最新备份 SHA-256> \
+  --confirmation=<脚本预期的固定确认口令>
+```
+
+生产 migration 只能在干净且与 `origin/main` 完全一致的 `main` 上执行，并必须绑定当前项目内最新
+生产备份的绝对路径、SHA-256 和派生确认口令：
+
+```bash
+npm run prisma:migrate:production -- \
+  --backup=/absolute/path/to/backups/postgres/pre-migration.dump \
+  --backup-sha256=<最新备份 SHA-256> \
+  --confirmation=MIGRATE_fjquufgbnxyocmuzltxi_<SHA-256 前 12 位>
+```
+
+该固定脚本只会执行 `prisma migrate deploy`，不会把 `MIGRATION_DATABASE_URL` 注入通用命令、应用
+运行时或发布流程。
+
+仓库不提供通用生产清理入口。所有验收脚本继续同时校验 API 与数据库均为 loopback；若未来确需
+生产清理，必须新增专用固定脚本、只读预览清单、二次确认和最新备份指纹，禁止临时命令直接执行。
 
 ## 8. 回滚
 

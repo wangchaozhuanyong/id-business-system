@@ -66,7 +66,12 @@ console.log(
 );
 
 async function syncSupabaseRuntimeSecrets() {
-  const requiredSecrets = ['JWT_SECRET', 'FIELD_ENCRYPTION_KEY', 'HASH_SECRET'];
+  const requiredSecrets = [
+    'V2_RUNTIME_DATABASE_URL',
+    'JWT_SECRET',
+    'FIELD_ENCRYPTION_KEY',
+    'HASH_SECRET'
+  ];
   for (const key of requiredSecrets) {
     if (typeof process.env[key] !== 'string' || !process.env[key]) {
       throw new Error(`Supabase 运行密钥缺少 ${key}`);
@@ -81,7 +86,8 @@ async function syncSupabaseRuntimeSecrets() {
     CORS_ORIGIN: RELEASE_PUBLIC_URL,
     FIELD_ENCRYPTION_KEY: process.env.FIELD_ENCRYPTION_KEY,
     HASH_SECRET: process.env.HASH_SECRET,
-    JWT_SECRET: process.env.JWT_SECRET
+    JWT_SECRET: process.env.JWT_SECRET,
+    V2_RUNTIME_DATABASE_URL: process.env.V2_RUNTIME_DATABASE_URL
   };
 
   try {

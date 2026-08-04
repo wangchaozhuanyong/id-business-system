@@ -39,7 +39,7 @@ function resolveAuthProvider(): AuthProvider {
 }
 
 function resolveEdgeDatabaseUrl() {
-  const rawConnectionString = firstEnv('SUPABASE_DB_URL', 'DATABASE_URL');
+  const rawConnectionString = requireEnv('V2_RUNTIME_DATABASE_URL');
   const connectionUrl = new URL(rawConnectionString);
   const projectUrl = new URL(requireEnv('SUPABASE_URL'));
   const projectRef = projectUrl.hostname.split('.', 1)[0];
@@ -48,12 +48,17 @@ function resolveEdgeDatabaseUrl() {
   const isSupabasePooler = connectionUrl.hostname.endsWith('.pooler.supabase.com');
 
   if (!isSupabaseDirect && !isSupabasePooler) {
-    return rawConnectionString;
+    throw new Error('V2_RUNTIME_DATABASE_URL must target the current Supabase project');
   }
-
-  connectionUrl.hostname = requireEnv('V2_DB_POOLER_HOST');
-  connectionUrl.port = '6543';
-  connectionUrl.username = `postgres.${projectRef}`;
+  if (
+    connectionUrl.hostname === directHost &&
+    connectionUrl.username !== 'id_business_v2_runtime'
+  ) {
+    throw new Error('V2_RUNTIME_DATABASE_URL must use id_business_v2_runtime');
+  }
+  if (isSupabasePooler && connectionUrl.username !== `id_business_v2_runtime.${projectRef}`) {
+    throw new Error('V2_RUNTIME_DATABASE_URL must use the scoped runtime pooler role');
+  }
   return connectionUrl.toString();
 }
 

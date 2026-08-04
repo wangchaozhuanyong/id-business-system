@@ -33,6 +33,7 @@ export function validateReleaseEnvironment(env) {
   const errors = [];
 
   validateProductionPostgresUrl(env.DATABASE_URL, 'DATABASE_URL', errors);
+  validateRuntimeDatabaseRole(env.DATABASE_URL, errors);
   validateSecret(env.JWT_SECRET, 'JWT_SECRET', 32, errors);
   validateSecret(env.FIELD_ENCRYPTION_KEY, 'FIELD_ENCRYPTION_KEY', 32, errors);
   validateSecret(env.HASH_SECRET, 'HASH_SECRET', 32, errors);
@@ -44,6 +45,21 @@ export function validateReleaseEnvironment(env) {
   validateSecret(env.SMOKE_TEST_PASSWORD, 'SMOKE_TEST_PASSWORD', 20, errors);
 
   return errors;
+}
+
+function validateRuntimeDatabaseRole(value, errors) {
+  try {
+    const url = new URL(value);
+    const direct =
+      url.hostname === `db.${RELEASE_SUPABASE_PROJECT_REF}.supabase.co` &&
+      url.username === 'id_business_v2_runtime';
+    const pooler =
+      url.hostname.endsWith('.pooler.supabase.com') &&
+      url.username === `id_business_v2_runtime.${RELEASE_SUPABASE_PROJECT_REF}`;
+    if (!direct && !pooler) throw new Error();
+  } catch {
+    errors.push('DATABASE_URL 必须使用当前项目的 id_business_v2_runtime 最小权限角色');
+  }
 }
 
 export function validateWranglerConfig(config) {
