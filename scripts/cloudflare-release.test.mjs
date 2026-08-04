@@ -17,7 +17,8 @@ import {
 } from './lib/cloudflare-release.mjs';
 
 const validEnvironment = {
-  DATABASE_URL: 'postgresql://user:password@db.production.internal:5432/app',
+  DATABASE_URL:
+    'postgresql://id_business_v2_runtime.fjquufgbnxyocmuzltxi:password@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true',
   JWT_SECRET: 'j'.repeat(32),
   FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
   HASH_SECRET: 'h'.repeat(32),
@@ -132,6 +133,38 @@ test('keeps Supabase Edge authentication configurable for the current local acco
   assert.match(source, /Deno\.env\.get\('AUTH_PROVIDER'\)/);
   assert.doesNotMatch(source, /AUTH_PROVIDER:\s*'supabase'/);
   assert.match(source, /authProvider === 'local'[\s\S]*requireEnv\('JWT_SECRET'\)/);
+});
+
+test('requires the scoped runtime database role without an admin fallback', async () => {
+  const source = await readFile(
+    new URL('../supabase/functions/v2-api/index.ts', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /requireEnv\('V2_RUNTIME_DATABASE_URL'\)/);
+  assert.doesNotMatch(source, /firstEnv\('SUPABASE_DB_URL', 'DATABASE_URL'\)/);
+  assert.match(source, /id_business_v2_runtime/);
+
+  const errors = validateReleaseEnvironment({
+    ...validEnvironment,
+    DATABASE_URL:
+      'postgresql://postgres.fjquufgbnxyocmuzltxi:password@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres'
+  });
+  assert.ok(errors.some((error) => error.includes('id_business_v2_runtime')));
+});
+
+test('keeps production migrations behind a backup fingerprint and clean main gate', async () => {
+  const source = await readFile(
+    new URL('./deploy-production-migrations.mjs', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /--backup-sha256/);
+  assert.match(source, /MIGRATE_/);
+  assert.match(source, /branch !== 'main'/);
+  assert.match(source, /head !== originHead/);
+  assert.match(source, /prisma:migrate:deploy/);
+  assert.doesNotMatch(source, /shell:\s*true/);
 });
 
 test('requires a clean main checkout synchronized with origin', () => {
