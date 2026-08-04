@@ -112,6 +112,8 @@ const secrets = JSON.parse(await readFile(secretsPath, 'utf8'));
 const migrationDatabaseUrl = secrets.MIGRATION_DATABASE_URL ?? secrets.DATABASE_URL;
 if (!migrationDatabaseUrl) throw new Error('部署凭据缺少 MIGRATION_DATABASE_URL 或旧 DATABASE_URL');
 assertExpectedProductionDatabase(migrationDatabaseUrl);
+const previousRuntimeDatabaseUrl = secrets.V2_RUNTIME_DATABASE_URL;
+const previousAuditDatabaseUrl = secrets.AUDIT_DATABASE_URL;
 
 const runtimePassword = randomBytes(36).toString('base64url');
 const auditPassword = randomBytes(36).toString('base64url');
@@ -195,13 +197,26 @@ try {
   await admin.end().catch(() => undefined);
 }
 
-const runtimeCounts = await verifyRoleLogin(runtimeDatabaseUrl, RUNTIME_ROLE, false);
-const auditCounts = await verifyRoleLogin(auditDatabaseUrl, AUDIT_ROLE, true);
-if (
-  JSON.stringify(runtimeCounts) !== JSON.stringify(expectedCounts) ||
-  JSON.stringify(auditCounts) !== JSON.stringify(expectedCounts)
-) {
-  throw new Error('运行时或审计角色受 RLS 过滤，拒绝写入新凭据');
+try {
+  const runtimeCounts = await verifyRoleLoginWithRetry(runtimeDatabaseUrl, RUNTIME_ROLE, false);
+  const auditCounts = await verifyRoleLoginWithRetry(auditDatabaseUrl, AUDIT_ROLE, true);
+  if (
+    JSON.stringify(runtimeCounts) !== JSON.stringify(expectedCounts) ||
+    JSON.stringify(auditCounts) !== JSON.stringify(expectedCounts)
+  ) {
+    throw new Error('运行时或审计角色受 RLS 过滤，拒绝写入新凭据');
+  }
+} catch (error) {
+  if (previousRuntimeDatabaseUrl && previousAuditDatabaseUrl) {
+    await restorePreviousRolePasswords(
+      migrationDatabaseUrl,
+      previousRuntimeDatabaseUrl,
+      previousAuditDatabaseUrl
+    );
+    await verifyRoleLoginWithRetry(previousRuntimeDatabaseUrl, RUNTIME_ROLE, false);
+    await verifyRoleLoginWithRetry(previousAuditDatabaseUrl, AUDIT_ROLE, true);
+  }
+  throw error;
 }
 
 const updatedSecrets = {
@@ -418,6 +433,57 @@ async function verifyRoleLogin(databaseUrl, expectedRole, readOnly) {
   } finally {
     await client.end().catch(() => undefined);
   }
+}
+
+async function verifyRoleLoginWithRetry(databaseUrl, expectedRole, readOnly) {
+  let lastError;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      return await verifyRoleLogin(databaseUrl, expectedRole, readOnly);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 10) await delay(3_000);
+    }
+  }
+  throw lastError;
+}
+
+async function restorePreviousRolePasswords(
+  migrationDatabaseUrl,
+  previousRuntimeDatabaseUrl,
+  previousAuditDatabaseUrl
+) {
+  const adminClient = new Client({
+    ...normalizeDatabaseConnection(migrationDatabaseUrl),
+    application_name: 'id-v2-role-provisioner-compensation'
+  });
+  try {
+    await adminClient.connect();
+    await adminClient.query('BEGIN');
+    await adminClient.query(
+      "SELECT pg_advisory_xact_lock(hashtext('id_business_v2_database_role_provisioning'))"
+    );
+    await ensureLoginRole(
+      adminClient,
+      RUNTIME_ROLE,
+      decodeURIComponent(new URL(previousRuntimeDatabaseUrl).password)
+    );
+    await ensureLoginRole(
+      adminClient,
+      AUDIT_ROLE,
+      decodeURIComponent(new URL(previousAuditDatabaseUrl).password)
+    );
+    await adminClient.query('COMMIT');
+  } catch (error) {
+    await adminClient.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    await adminClient.end().catch(() => undefined);
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function readCounts(client, tables) {
