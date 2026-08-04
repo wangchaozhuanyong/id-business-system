@@ -167,6 +167,17 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.doesNotMatch(source, /shell:\s*true/);
 });
 
+test('retries database role authentication and restores prior passwords on failure', async () => {
+  const source = await readFile(
+    new URL('./provision-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /verifyRoleLoginWithRetry/);
+  assert.match(source, /restorePreviousRolePasswords/);
+  assert.match(source, /id-v2-role-provisioner-compensation/);
+});
+
 test('requires a clean main checkout synchronized with origin', () => {
   assert.equal(
     parseGitHubRepository('git@github.com:wangchaozhuanyong/id-business-system.git'),
