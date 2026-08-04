@@ -1,16 +1,18 @@
-import { computed, reactive } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { v2BusinessMonitoringApi } from './api';
 import {
+  businessMonitoringCategoryBreakdown,
   businessMonitoringCategoryLabel,
   businessMonitoringSeverityMeta,
   formatBusinessMonitoringDate
 } from './business-monitoring-presentation';
 import type {
   V2BusinessMonitoringCategory,
+  V2BusinessMonitoringFinding,
   V2BusinessMonitoringListQuery,
   V2BusinessMonitoringResponse,
   V2BusinessMonitoringSeverity
@@ -18,6 +20,7 @@ import type {
 
 export function useBusinessMonitoringPage() {
   const router = useRouter();
+  const selectedFindingId = ref<string | null>(null);
   const query = reactive({
     page: 1,
     pageSize: 20,
@@ -46,6 +49,9 @@ export function useBusinessMonitoringPage() {
   const items = computed(() => monitoringQuery.data.value?.result.items ?? []);
   const total = computed(() => monitoringQuery.data.value?.result.total ?? 0);
   const summary = computed(() => monitoringQuery.data.value?.summary ?? null);
+  const categoryBreakdown = computed(() =>
+    summary.value ? businessMonitoringCategoryBreakdown(summary.value) : []
+  );
   const rules = computed(() => monitoringQuery.data.value?.rules ?? []);
   const generatedAt = computed(() => monitoringQuery.data.value?.generatedAt ?? null);
   const loading = computed(
@@ -53,6 +59,9 @@ export function useBusinessMonitoringPage() {
   );
   const error = computed(() =>
     monitoringQuery.error.value ? getApiErrorMessage(monitoringQuery.error.value) : ''
+  );
+  const selectedFinding = computed(
+    () => items.value.find((item) => item.id === selectedFindingId.value) ?? items.value[0] ?? null
   );
 
   function refresh() {
@@ -62,6 +71,25 @@ export function useBusinessMonitoringPage() {
   function handleFilterChange() {
     query.page = 1;
     void refresh();
+  }
+
+  function applySeverity(severity: V2BusinessMonitoringSeverity | '') {
+    if (query.severity === severity) return;
+    query.severity = severity;
+    handleFilterChange();
+  }
+
+  function applyCategory(category: V2BusinessMonitoringCategory) {
+    query.category = query.category === category ? '' : category;
+    handleFilterChange();
+  }
+
+  function selectFinding(finding: V2BusinessMonitoringFinding) {
+    selectedFindingId.value = finding.id;
+  }
+
+  function businessMonitoringRowClassName({ row }: { row: V2BusinessMonitoringFinding }) {
+    return row.id === selectedFinding.value?.id ? 'is-monitoring-selected' : '';
   }
 
   function resetFilters() {
@@ -91,13 +119,19 @@ export function useBusinessMonitoringPage() {
     items,
     total,
     summary,
+    categoryBreakdown,
     rules,
     generatedAt,
     loading,
     error,
+    selectedFinding,
     hasData: monitoringQuery.hasData,
     refresh,
     handleFilterChange,
+    applySeverity,
+    applyCategory,
+    selectFinding,
+    businessMonitoringRowClassName,
     resetFilters,
     handlePageChange,
     handlePageSizeChange,

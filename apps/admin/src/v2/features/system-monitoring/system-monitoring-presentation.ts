@@ -1,4 +1,10 @@
-import type { V2SystemMonitorStatus } from './contracts';
+import type { V2SystemMonitoringCheck, V2SystemMonitorStatus } from './contracts';
+
+const SYSTEM_MONITOR_STATUS_PRIORITY: Record<V2SystemMonitorStatus, number> = {
+  degraded: 0,
+  unknown: 1,
+  healthy: 2
+};
 
 export function systemMonitorStatusMeta(status: V2SystemMonitorStatus) {
   if (status === 'healthy') return { label: '正常', type: 'success' as const };
@@ -10,6 +16,31 @@ export function systemOverallStatusMeta(status: 'healthy' | 'degraded' | 'partia
   if (status === 'healthy') return { label: '已检查项正常', type: 'success' as const };
   if (status === 'degraded') return { label: '存在异常', type: 'danger' as const };
   return { label: '部分可观测', type: 'warning' as const };
+}
+
+export function sortSystemMonitoringChecks(checks: V2SystemMonitoringCheck[]) {
+  return [...checks].sort(
+    (left, right) =>
+      SYSTEM_MONITOR_STATUS_PRIORITY[left.status] - SYSTEM_MONITOR_STATUS_PRIORITY[right.status]
+  );
+}
+
+export function summarizeSystemMonitoringChecks(checks: V2SystemMonitoringCheck[]) {
+  const summary = checks.reduce(
+    (result, check) => {
+      result[check.status] += 1;
+      return result;
+    },
+    { healthy: 0, degraded: 0, unknown: 0 }
+  );
+  const observable = summary.healthy + summary.degraded;
+
+  return {
+    ...summary,
+    total: checks.length,
+    observable,
+    coverageRate: checks.length > 0 ? Math.round((observable / checks.length) * 100) : 0
+  };
 }
 
 export function formatSystemMonitoringDate(value?: string | null) {

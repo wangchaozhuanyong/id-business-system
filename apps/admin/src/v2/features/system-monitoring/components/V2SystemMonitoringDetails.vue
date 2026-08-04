@@ -1,7 +1,37 @@
 <template>
-  <div v-if="page.overview" class="v2-system-details">
+  <aside v-if="page.overview" class="v2-system-details" aria-label="系统监控证据摘要">
+    <section class="v2-system-details__coverage">
+      <header>
+        <div>
+          <span>证据覆盖</span>
+          <strong>{{ page.evidenceSummary.coverageRate }}%</strong>
+        </div>
+        <small
+          >{{ page.evidenceSummary.observable }}/{{ page.evidenceSummary.total }} 项可判定</small
+        >
+      </header>
+      <div class="v2-system-details__coverage-bar" aria-hidden="true">
+        <i :style="{ width: `${page.evidenceSummary.coverageRate}%` }" />
+      </div>
+      <dl>
+        <div>
+          <dt>正常</dt>
+          <dd class="is-healthy">{{ page.evidenceSummary.healthy }}</dd>
+        </div>
+        <div>
+          <dt>异常</dt>
+          <dd class="is-degraded">{{ page.evidenceSummary.degraded }}</dd>
+        </div>
+        <div>
+          <dt>未知</dt>
+          <dd>{{ page.evidenceSummary.unknown }}</dd>
+        </div>
+      </dl>
+      <p>覆盖率只表示有可信证据，不等同于健康率。</p>
+    </section>
+
     <section>
-      <V2SectionHeading title="认证运行快照" help="只展示聚合计数，不返回账号、IP 或设备信息。" />
+      <V2SectionHeading title="认证快照" help="仅展示聚合计数，不返回账号、IP 或设备信息。" />
       <dl class="v2-system-details__metrics">
         <div>
           <dt>24 小时登录</dt>
@@ -91,10 +121,10 @@
           <strong>{{ gap.title }}</strong>
           <p>{{ gap.detail }}</p>
         </div>
-        <el-tag type="info" effect="plain">未知</el-tag>
+        <span>未知</span>
       </article>
     </section>
-  </div>
+  </aside>
 </template>
 
 <script setup lang="ts">
@@ -118,8 +148,10 @@ function formatRate(value: number) {
 .v2-system-details {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
 }
 
 .v2-system-details > section {
@@ -127,27 +159,123 @@ function formatRate(value: number) {
   min-width: 0;
   align-content: start;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
+  padding: 18px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-system-details > section:last-child {
+  border-bottom: 0;
+}
+
+.v2-system-details__coverage {
+  background: color-mix(in srgb, var(--v2-accent) 5%, var(--v2-surface));
+}
+
+.v2-system-details__coverage header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-system-details__coverage header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.v2-system-details__coverage header span,
+.v2-system-details__coverage header small,
+.v2-system-details__coverage > p {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-system-details__coverage header strong {
+  color: var(--v2-text);
+  font-size: 32px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.v2-system-details__coverage-bar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--v2-border-soft);
+}
+
+.v2-system-details__coverage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--v2-accent);
+}
+
+.v2-system-details__coverage dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.v2-system-details__coverage dl div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.v2-system-details__coverage dt {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-system-details__coverage dd {
+  margin: 0;
+  color: var(--v2-text);
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-system-details__coverage dd.is-healthy {
+  color: var(--v2-success);
+}
+
+.v2-system-details__coverage dd.is-degraded {
+  color: var(--v2-danger);
+}
+
+.v2-system-details__coverage > p {
+  margin: 0;
+  line-height: 1.6;
 }
 
 .v2-system-details__metrics,
 .v2-system-details__list {
   display: grid;
   margin: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
 }
 
 .v2-system-details__metrics div,
 .v2-system-details__list div {
+  display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-system-details__metrics div:last-child,
+.v2-system-details__list div:last-child {
+  border-bottom: 0;
 }
 
 .v2-system-details dt {
-  margin-bottom: 4px;
   color: var(--v2-text-soft);
   font-size: 11px;
 }
@@ -158,10 +286,6 @@ function formatRate(value: number) {
   font-size: 14px;
   font-weight: 700;
   overflow-wrap: anywhere;
-}
-
-.v2-system-details__gaps {
-  grid-column: 1 / -1;
 }
 
 .v2-system-details__gaps article {
@@ -190,20 +314,23 @@ function formatRate(value: number) {
   line-height: 1.6;
 }
 
-@media (max-width: 800px) {
-  .v2-system-details {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .v2-system-details__gaps {
-    grid-column: auto;
-  }
+.v2-system-details__gaps article > span {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--v2-text-soft);
+  background: var(--v2-bg);
+  font-size: 10px;
 }
 
 @media (max-width: 480px) {
-  .v2-system-details__metrics,
-  .v2-system-details__list {
-    grid-template-columns: minmax(0, 1fr);
+  .v2-system-details > section {
+    padding: 16px;
+  }
+
+  .v2-system-details__coverage header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

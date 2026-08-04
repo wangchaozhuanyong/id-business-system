@@ -1,4 +1,16 @@
-import type { V2BusinessMonitoringCategory, V2BusinessMonitoringSeverity } from './contracts';
+import type {
+  V2BusinessMonitoringCategory,
+  V2BusinessMonitoringSeverity,
+  V2BusinessMonitoringSummary
+} from './contracts';
+
+const BUSINESS_MONITORING_CATEGORY_ORDER: V2BusinessMonitoringCategory[] = [
+  'order',
+  'balance',
+  'renewal',
+  'exchange_rate',
+  'finance'
+];
 
 export function businessMonitoringSeverityMeta(severity: V2BusinessMonitoringSeverity) {
   const labels: Record<V2BusinessMonitoringSeverity, string> = {
@@ -20,6 +32,18 @@ export function businessMonitoringCategoryLabel(category: V2BusinessMonitoringCa
     finance: '财务基线'
   };
   return labels[category];
+}
+
+export function businessMonitoringCategoryBreakdown(summary: V2BusinessMonitoringSummary) {
+  return BUSINESS_MONITORING_CATEGORY_ORDER.map((category) => {
+    const count = summary.byCategory[category];
+    return {
+      category,
+      label: businessMonitoringCategoryLabel(category),
+      count,
+      share: summary.total > 0 ? Math.round((count / summary.total) * 100) : 0
+    };
+  });
 }
 
 export function formatBusinessMonitoringDate(value?: string | null) {
