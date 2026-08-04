@@ -166,14 +166,24 @@ html[data-v2-theme='dark'] {
 }
 
 html,
-body,
 #app {
   height: 100%;
+}
+
+html,
+body,
+#app {
   margin: 0;
 }
 
+html {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 body {
-  overflow: hidden;
+  min-height: 100%;
+  overflow-x: hidden;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--v3-font-sans);
