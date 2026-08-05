@@ -167,6 +167,25 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.doesNotMatch(source, /shell:\s*true/);
 });
 
+test('guards the legacy auth identity cleanup against relation drift', async () => {
+  const migration = await readFile(
+    new URL(
+      '../apps/api/prisma/migrations/20260805083000_v2_auth_identity_legacy_column_cleanup/migration.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const consistencyGuard = migration.indexOf('legacy_user_id IS DISTINCT FROM user_id');
+  const cleanup = migration.indexOf('DROP COLUMN IF EXISTS legacy_user_id');
+
+  assert.notEqual(consistencyGuard, -1);
+  assert.notEqual(cleanup, -1);
+  assert.ok(consistencyGuard < cleanup);
+  assert.match(migration, /RAISE EXCEPTION/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS v2_auth_identities_legacy_user_id_fkey/);
+  assert.match(migration, /DROP INDEX IF EXISTS public\.v2_auth_identities_legacy_user_id_key/);
+});
+
 test('retries database role authentication and restores prior passwords on failure', async () => {
   const source = await readFile(
     new URL('./provision-production-database-roles.mjs', import.meta.url),
