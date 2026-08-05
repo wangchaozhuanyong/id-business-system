@@ -1,0 +1,137 @@
+name: Production Database Backup
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      keep_daily:
+        description: Keep this encrypted backup for 30 days
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: production-database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-backup
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+      MAX_BACKUP_ARTIFACT_STORAGE_BYTES: '419430400'
+
+    steps:
+      - name: Checkout pinned main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Enforce free artifact capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          used_bytes="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false and (.name | startswith("production-"))) | .size_in_bytes' \
+            | awk '{ total += $1 } END { print total + 0 }')"
+          projected_bytes=$((used_bytes + 25165824))
+          if (( projected_bytes > MAX_BACKUP_ARTIFACT_STORAGE_BYTES )); then
+            echo "::error::Encrypted backup artifacts would exceed the 400 MiB free-plan guard."
+            exit 1
+          fi
+          echo "Current encrypted backup artifact usage: ${used_bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and validate encrypted backup
+        id: backup
+        env:
+          BACKUP_CONFIRMATION: BACKUP_fjquufgbnxyocmuzltxi_github-hourly
+        run: |
+          node scripts/backup-production-database.mjs \
+            --label=github-hourly \
+            --confirmation="${BACKUP_CONFIRMATION}" \
+            --public-key=deploy/backup-recovery-public.pem \
+            --ephemeral-plaintext
+
+      - name: Decide daily retention
+        id: retention
+        env:
+          MANUAL_DAILY: ${{ inputs.keep_daily || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(date -u +%H)" == "19" || "${MANUAL_DAILY}" == "true" ]]; then
+            echo 'daily=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'daily=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload encrypted hourly backup
+        id: upload_hourly
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-hourly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.backup.outputs.archive }}
+            ${{ steps.backup.outputs.receipt }}
+          if-no-files-found: error
+          retention-days: 2
+          compression-level: 0
+
+      - name: Upload encrypted daily backup
+        if: steps.retention.outputs.daily == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-daily-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.backup.outputs.archive }}
+            ${{ steps.backup.outputs.receipt }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Keep only two hourly backups
+        env:
+          CURRENT_ARTIFACT_ID: ${{ steps.upload_hourly.outputs.artifact-id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false and (.name | startswith("production-hourly-"))) | [.created_at, .id] | @tsv' \
+            | sort -r \
+            | awk 'NR > 2 { print $2 }' \
+            | while IFS= read -r artifact_id; do
+                [[ -n "$artifact_id" && "$artifact_id" != "$CURRENT_ARTIFACT_ID" ]] || continue
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+              done
+
+      - name: Publish non-sensitive receipt
+        env:
+          ARCHIVE_SIZE_BYTES: ${{ steps.backup.outputs.archive_size_bytes }}
+          ARCHIVE_SHA256: ${{ steps.backup.outputs.archive_sha256 }}
+          DAILY: ${{ steps.retention.outputs.daily }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### Production backup completed'
+            echo
+            echo "- Encrypted archive bytes: ${ARCHIVE_SIZE_BYTES}"
+            echo "- Encrypted archive SHA-256: ${ARCHIVE_SHA256}"
+            echo "- Daily retention copy: ${DAILY}"
+            echo '- Plaintext persisted: no'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove plaintext and transient files
+        if: always()
+        shell: bash
+        run: |
+          find backups/postgres -maxdepth 1 -type f \
+            \( -name '*.dump' -o -name '*.partial' -o -name '.*.partial' -o -name '*.manifest.json' \) \
+            -delete 2>/dev/null || true
