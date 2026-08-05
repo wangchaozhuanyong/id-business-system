@@ -285,6 +285,7 @@ test('workflow is hourly, encrypted, capacity-capped and never persists plaintex
   assert.doesNotMatch(source, /\.size_in_bytes' \|\| true/u);
   assert.match(source, /retention-days: 30/u);
   assert.match(source, /Keep only two hourly backups/u);
+  assert.match(source, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/u);
   assert.doesNotMatch(source, /MIGRATION_DATABASE_URL/u);
 });
 
