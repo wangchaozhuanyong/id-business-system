@@ -129,12 +129,16 @@ Cloudflare 发布命令包含以下硬门禁：
 - 发布顺序固定为：构建并发布 Supabase API、完成 API 独立巡检、发布 Cloudflare 静态端与转发层、完成整站巡检。
 - Cloudflare Worker 不得绑定 Hyperdrive，不得打包 NestJS/Prisma；前端固定使用同源 `/api`。
 - `.deploy/cloudflare-free.secrets.json` 必须将数据库凭据拆分为
-  `V2_RUNTIME_DATABASE_URL`、`AUDIT_DATABASE_URL`、`MIGRATION_DATABASE_URL`，并包含
+  `V2_RUNTIME_DATABASE_URL`、`AUDIT_DATABASE_URL`、`MIGRATION_DATABASE_URL`、
+  `BACKUP_DATABASE_URL`，并包含
   `JWT_SECRET`、`FIELD_ENCRYPTION_KEY`、`HASH_SECRET`、`SMOKE_TEST_USERNAME`、
   `SMOKE_TEST_PASSWORD`。该文件必须保持 Git 忽略且权限为 `0600`。
 - `V2_RUNTIME_DATABASE_URL` 只允许当前业务表 DML，不拥有表、不具备 `ALTER`、`TRUNCATE`、
   禁用触发器或修改 `_prisma_migrations` 的权限；`AUDIT_DATABASE_URL` 只读；
   `MIGRATION_DATABASE_URL` 仅供离线迁移管理员使用，不会注入发布、巡检或应用运行时。
+- `BACKUP_DATABASE_URL` 只属于 `id_v2_backup`，允许读取完整备份所需数据并绕过 RLS，但禁止任何
+  写入和 DDL；只注入 GitHub `production-backup` Environment。免费备份与恢复流程详见
+  `docs/V2_PRODUCTION_BACKUP.md`。
 - 生产凭据启动器只接受 `closure-audit`、`release-check`、`smoke-user-provision`、`deploy`
   四个固定操作，不接受 `-- node -e` 或任意命令。
 - Wrangler 版本消息和标签写入完整/短 Git commit；部署成功后自动检查首页、健康端点、只读账号
