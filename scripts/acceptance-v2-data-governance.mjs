@@ -104,7 +104,7 @@ try {
     ])
   );
   const expectedState = {
-    migrations: 18,
+    migrations: 19,
     failedMigrations: 0,
     users: 2,
     customers: 1,
