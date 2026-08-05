@@ -1,10 +1,11 @@
 <template>
   <section class="v2-finance-page">
     <section class="v2-finance-filter-summary" aria-label="经营分析范围">
-      <div>
-        <span>分析范围</span>
+      <div class="v2-finance-filter-summary__copy">
+        <span class="v2-finance-eyebrow">经营决策台</span>
         <strong>{{ analysisRangeLabel }}</strong>
         <small>Asia/Kuala_Lumpur · {{ activeFilterLabel }}</small>
+        <span class="v2-finance-filter-summary__currency">本位币 CNY</span>
       </div>
       <V2FilterDisclosure label="展开筛选">
         <el-date-picker
@@ -104,55 +105,19 @@
             :aria-current="activeAnalysisSection === section.key ? 'page' : undefined"
             @click="activeAnalysisSection = section.key"
           >
-            {{ section.label }}
+            <span>{{ section.label }}</span>
+            <small>{{ section.description }}</small>
           </button>
         </nav>
 
         <div v-show="activeAnalysisSection === 'profit'" class="v2-finance-analysis-stack">
-          <section class="v2-finance-metrics" aria-label="经营利润指标">
-            <article class="v2-finance-metric v2-finance-metric--primary">
-              <span>人民币净利润</span>
-              <strong :class="amountTone(overview.profitLoss.netProfitCny)">
-                {{ formatCny(overview.profitLoss.netProfitCny) }}
-              </strong>
-              <small>只含已实现经营结果</small>
-              <small class="v2-finance-metric__pending">
-                待确认利润 {{ formatCny(overview.profitLoss.estimatedProfitCny) }}，不计入净利润
-              </small>
-            </article>
-            <article class="v2-finance-metric">
-              <span>销售收入</span>
-              <strong>{{ formatCny(overview.profitLoss.salesRevenueCny) }}</strong>
-              <small>仅已完成订单</small>
-            </article>
-            <article class="v2-finance-metric">
-              <span>销售成本</span>
-              <strong>{{
-                formatCny(
-                  addAmounts(overview.profitLoss.giftCardCostCny, overview.profitLoss.idCostCny)
-                )
-              }}</strong>
-              <small>余额成本＋已卖 ID 成本</small>
-            </article>
-            <article class="v2-finance-metric">
-              <span>额外经营开支</span>
-              <strong>{{ formatCny(overview.profitLoss.operatingExpenseCny) }}</strong>
-              <small>手机、办公、工资等</small>
-            </article>
-            <article class="v2-finance-metric">
-              <span>赎回及报损</span>
-              <strong>{{
-                formatCny(
-                  addAmounts(
-                    overview.profitLoss.redemptionLossCny,
-                    overview.profitLoss.balanceLossCny,
-                    overview.profitLoss.idPurchaseLossCny
-                  )
-                )
-              }}</strong>
-              <small>均进入已实现亏损</small>
-            </article>
-          </section>
+          <V2ProfitOverview
+            :overview="overview"
+            :analysis-range-label="analysisRangeLabel"
+            :format-cny="formatCny"
+            :add-amounts="addAmounts"
+            :amount-tone="amountTone"
+          />
 
           <V2SettlementPlatformReport :report="overview.settlementPlatformReport" />
         </div>
@@ -162,6 +127,22 @@
           class="v2-finance-analysis-stack"
           aria-label="原币资金收支"
         >
+          <div class="v2-finance-currency-strip" aria-label="分币种净现金流摘要">
+            <article v-for="row in overview.currencyBreakdown" :key="row.currency">
+              <header>
+                <el-tag effect="plain">{{ row.currency }}</el-tag>
+                <small>最新汇率 {{ row.latestRateToCny ?? '缺失' }}</small>
+              </header>
+              <strong :class="amountTone(row.netCashFlow)">
+                {{ formatOriginal(row.netCashFlow, row.currency) }}
+              </strong>
+              <span
+                >收入 {{ formatOriginal(row.income, row.currency) }} · 支出
+                {{ formatOriginal(row.expense, row.currency) }}</span
+              >
+            </article>
+          </div>
+
           <article class="v2-finance-panel">
             <header>
               <div>
@@ -211,41 +192,47 @@
         </section>
 
         <div v-show="activeAnalysisSection === 'assets'" class="v2-finance-analysis-stack">
+          <section class="v2-finance-asset-overview" aria-label="资产总览">
+            <article class="is-primary">
+              <span>资产账面合计</span>
+              <strong>{{ formatCny(overview.assets.totalBookValueCny) }}</strong>
+              <small>以历史交易汇率记录</small>
+            </article>
+            <article>
+              <span>最新人民币估值</span>
+              <strong>
+                {{
+                  overview.assets.totalLatestValuationCny === null
+                    ? '汇率不完整'
+                    : formatCny(overview.assets.totalLatestValuationCny)
+                }}
+              </strong>
+              <small>只用于当前资产估值</small>
+            </article>
+            <article>
+              <span>未实现汇兑变化</span>
+              <strong :class="amountTone(overview.assets.unrealizedFxChangeCny)">
+                {{
+                  overview.assets.unrealizedFxChangeCny === null
+                    ? '—'
+                    : formatCny(overview.assets.unrealizedFxChangeCny)
+                }}
+              </strong>
+              <small>不进入经营净利润</small>
+            </article>
+          </section>
+
           <article class="v2-finance-panel">
             <header>
               <div>
-                <span>资产余额</span>
-                <strong>账面价值与最新汇率估值分开</strong>
+                <span>资产构成</span>
+                <strong>自有资金、预付款、库存成本与待退款</strong>
               </div>
             </header>
             <dl class="v2-finance-asset-list">
               <div v-for="item in assetRows" :key="item.label">
                 <dt>{{ item.label }}</dt>
                 <dd>{{ formatCny(item.value) }}</dd>
-              </div>
-              <div class="is-total">
-                <dt>资产账面合计</dt>
-                <dd>{{ formatCny(overview.assets.totalBookValueCny) }}</dd>
-              </div>
-              <div>
-                <dt>最新人民币估值</dt>
-                <dd>
-                  {{
-                    overview.assets.totalLatestValuationCny === null
-                      ? '汇率不完整'
-                      : formatCny(overview.assets.totalLatestValuationCny)
-                  }}
-                </dd>
-              </div>
-              <div>
-                <dt>未实现汇兑变化</dt>
-                <dd :class="amountTone(overview.assets.unrealizedFxChangeCny)">
-                  {{
-                    overview.assets.unrealizedFxChangeCny === null
-                      ? '—'
-                      : formatCny(overview.assets.unrealizedFxChangeCny)
-                  }}
-                </dd>
               </div>
             </dl>
           </article>
@@ -435,6 +422,7 @@ import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
+import V2ProfitOverview from './components/V2ProfitOverview.vue';
 import V2SettlementPlatformReport from './components/V2SettlementPlatformReport.vue';
 import { useDataAnalyticsPage } from './useDataAnalyticsPage';
 import '@/v2/styles/records.css';
@@ -471,10 +459,10 @@ const {
 } = useDataAnalyticsPage();
 
 const analysisSections = [
-  { key: 'profit', label: '利润总览' },
-  { key: 'cash-flow', label: '原币收支' },
-  { key: 'assets', label: '资产余额' },
-  { key: 'reconciliation', label: '对账明细' }
+  { key: 'profit', label: '经营利润', description: '收入、成本与损益' },
+  { key: 'cash-flow', label: '资金收支', description: 'CNY / MYR / USDT' },
+  { key: 'assets', label: '资产余额', description: '账面值与最新估值' },
+  { key: 'reconciliation', label: '账务对账', description: '日记与闭环问题' }
 ] as const;
 
 const activeAnalysisSection = ref<(typeof analysisSections)[number]['key']>('profit');
