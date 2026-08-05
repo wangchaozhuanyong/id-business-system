@@ -24,7 +24,9 @@
   --v2-on-danger-solid: var(--v3-on-danger-solid);
   --v2-focus: var(--v3-focus-ring);
   display: grid;
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   grid-template-columns: 230px minmax(0, 1fr);
   background: var(--v2-bg);
   color: var(--v2-text);
@@ -310,8 +312,9 @@
 .v2-workspace {
   position: relative;
   display: grid;
+  height: 100dvh;
   min-width: 0;
-  min-height: 100dvh;
+  min-height: 0;
   grid-template-rows: 64px minmax(0, 1fr);
 }
 
@@ -772,6 +775,7 @@
 
 .v2-content {
   min-width: 0;
+  min-height: 0;
   overflow: auto;
   padding: 20px 18px 28px;
 }

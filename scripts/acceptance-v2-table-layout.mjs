@@ -93,6 +93,7 @@ try {
   await warmLayoutFixture(browser);
   await warmCustomerPage(browser);
   await verifyLayoutFixture(browser);
+  await verifyPublicPageScroll(browser);
   for (const scenario of permissionScenarios) {
     await verifyCustomerPage(browser, scenario);
   }
@@ -272,9 +273,146 @@ async function verifyLayoutFixture(browserInstance) {
       );
       assertRegisteredSchemaFixtures(await measureRegisteredSchemaFixtures(page), width);
       assert.equal(await getDocumentOverflow(page), 0, `布局夹具 ${width}px 出现页面横向溢出`);
+      await verifyPrimaryVerticalScroll(page, `布局夹具 ${width}px`);
     }
     await verifyScrollLifecycle(page);
     assert.deepEqual(runtimeErrors, [], `布局夹具出现浏览器错误：${runtimeErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+}
+
+async function verifyPrimaryVerticalScroll(page, label) {
+  const content = page.locator('.v2-content');
+  const before = await content.evaluate((node) => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    scrollTop: node.scrollTop
+  }));
+  const maxScrollTop = before.scrollHeight - before.clientHeight;
+  assert.ok(maxScrollTop > 100, `${label} 未形成可用的主内容纵向滚动区`);
+
+  const requestedScrollTop = Math.min(320, maxScrollTop);
+  const scrolledTop = await content.evaluate((node, top) => {
+    node.scrollTop = top;
+    return node.scrollTop;
+  }, requestedScrollTop);
+  assert.ok(scrolledTop > 0, `${label} 主内容滚动位置无法更新`);
+
+  const documentMetrics = await page.evaluate(() => {
+    const root = document.scrollingElement ?? document.documentElement;
+    return {
+      clientHeight: root.clientHeight,
+      scrollHeight: root.scrollHeight,
+      scrollTop: root.scrollTop
+    };
+  });
+  assert.ok(
+    documentMetrics.scrollHeight - documentMetrics.clientHeight <= 1,
+    `${label} 后台外壳与主内容同时产生纵向滚动`
+  );
+  assert.ok(Math.abs(documentMetrics.scrollTop) <= 1, `${label} 文档滚动位置不为零`);
+  await content.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+}
+
+async function verifyPublicPageScroll(browserInstance) {
+  const context = await browserInstance.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const runtimeErrors = collectRuntimeErrors(page);
+  await page.addInitScript(() => {
+    localStorage.removeItem('apple_business_auth_v2');
+    localStorage.removeItem('apple_business_access_token');
+    localStorage.removeItem('apple_business_current_user');
+  });
+  await page.route('**/api/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (!pathname.startsWith('/api/')) {
+      await route.continue();
+      return;
+    }
+    if (pathname.endsWith('/api/health/ready')) {
+      await fulfillSuccess(route, { status: 'ready', database: 'ok' });
+      return;
+    }
+    if (pathname.endsWith('/api/auth/me')) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          errorCode: 'AUTH_MISSING',
+          message: '请先登录后再操作。',
+          retryable: false,
+          timestamp: new Date().toISOString()
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: false,
+        errorCode: 'PUBLIC_SCROLL_ACCEPTANCE_UNAVAILABLE',
+        message: '登录页滚动验收不依赖后端',
+        retryable: true,
+        timestamp: new Date().toISOString()
+      })
+    });
+  });
+
+  try {
+    await page.goto(new URL('/login', adminUrl).href, { waitUntil: 'domcontentloaded' });
+    try {
+      await page.locator('#v2-admin-login-form').waitFor({ state: 'visible', timeout: 10_000 });
+    } catch (error) {
+      const diagnostics = await page.evaluate(() => ({
+        bodyText: document.body.innerText.slice(0, 1200),
+        storageKeys: Array.from({ length: localStorage.length }, (_, index) =>
+          String(localStorage.key(index) ?? '')
+        ),
+        url: location.href
+      }));
+      throw new Error(`登录页滚动验收未进入登录界面：${JSON.stringify(diagnostics)}`, {
+        cause: error
+      });
+    }
+    const before = await page.evaluate(() => {
+      const root = document.scrollingElement ?? document.documentElement;
+      return {
+        clientHeight: root.clientHeight,
+        rootOverflowY: getComputedStyle(document.documentElement).overflowY,
+        scrollHeight: root.scrollHeight
+      };
+    });
+    const maxScrollTop = before.scrollHeight - before.clientHeight;
+    assert.equal(before.rootOverflowY, 'auto', '公共页面没有恢复文档纵向滚动');
+    assert.ok(maxScrollTop > 0, '390px 登录页验收没有产生长内容');
+
+    const after = await page.evaluate((top) => {
+      const root = document.scrollingElement ?? document.documentElement;
+      root.scrollTop = top;
+      const security = document.querySelector('.v2-login-security');
+      const bounds = security?.getBoundingClientRect();
+      return {
+        scrollTop: root.scrollTop,
+        securityBottom: bounds?.bottom ?? Number.POSITIVE_INFINITY,
+        securityTop: bounds?.top ?? Number.POSITIVE_INFINITY,
+        viewportHeight: window.innerHeight
+      };
+    }, maxScrollTop);
+    assert.ok(after.scrollTop > 0, '390px 登录页无法更新文档滚动位置');
+    assert.ok(
+      after.securityTop < after.viewportHeight && after.securityBottom <= after.viewportHeight + 1,
+      '390px 登录页底部安全提示无法通过滚动到达'
+    );
+    assert.deepEqual(
+      runtimeErrors,
+      [],
+      `登录页滚动验收出现浏览器错误：${runtimeErrors.join('\n')}`
+    );
   } finally {
     await context.close();
   }
@@ -319,9 +457,11 @@ async function verifyCustomerPage(browserInstance, scenario) {
     runtimeErrors.length = 0;
 
     for (const width of viewportWidths) {
-      await page.setViewportSize({ width, height: width <= mobileBreakpoint ? 844 : 900 });
+      const viewportHeight = width <= mobileBreakpoint ? 844 : 900;
+      await page.setViewportSize({ width, height: viewportHeight });
       await assertCustomerContentReady(page, user.displayName, customerTableInstance, width);
       assertLayoutStable(await sampleLayoutTimeline(page), `客户页 ${scenario.key} ${width}px`);
+      await assertShellViewportContract(page, viewportHeight, `客户页 ${scenario.key} ${width}px`);
       if (width > mobileBreakpoint) {
         await verifyDesktopCustomerLayout(page, scenario, width);
       } else {
@@ -329,6 +469,8 @@ async function verifyCustomerPage(browserInstance, scenario) {
       }
       await maybeCaptureScreenshot(page, scenario.key, width);
     }
+
+    if (scenario.key === 'all') await verifyRouteScrollRestoration(page);
 
     assert.deepEqual(
       unexpectedRequests,
@@ -343,6 +485,83 @@ async function verifyCustomerPage(browserInstance, scenario) {
   } finally {
     await context.close();
   }
+}
+
+async function assertShellViewportContract(page, viewportHeight, label) {
+  const metrics = await page.evaluate(() => {
+    const root = document.scrollingElement ?? document.documentElement;
+    const shell = document.querySelector('.v2-shell');
+    const workspace = document.querySelector('.v2-workspace');
+    const content = document.querySelector('.v2-content');
+    return {
+      contentOverflowY: content ? getComputedStyle(content).overflowY : '',
+      documentClientHeight: root.clientHeight,
+      documentScrollHeight: root.scrollHeight,
+      shellHeight: shell?.clientHeight ?? 0,
+      workspaceHeight: workspace?.clientHeight ?? 0
+    };
+  });
+  assert.ok(Math.abs(metrics.shellHeight - viewportHeight) <= 1, `${label} 外壳没有约束在视口内`);
+  assert.ok(
+    Math.abs(metrics.workspaceHeight - viewportHeight) <= 1,
+    `${label} 工作区没有约束在视口内`
+  );
+  assert.equal(metrics.contentOverflowY, 'auto', `${label} 主内容未保持独立滚动`);
+  assert.ok(
+    metrics.documentScrollHeight - metrics.documentClientHeight <= 1,
+    `${label} 出现额外的文档纵向滚动`
+  );
+}
+
+async function verifyRouteScrollRestoration(page) {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const content = page.locator('.v2-content');
+  const inner = page.locator('.v2-content__inner');
+  const originalUrl = page.url();
+  await inner.evaluate((node) => {
+    node.style.minHeight = '1800px';
+  });
+  const initialScrollTop = await content.evaluate((node) => {
+    node.scrollTop = 280;
+    return node.scrollTop;
+  });
+  assert.ok(initialScrollTop >= 279, '路由滚动恢复验收未能设置初始位置');
+
+  await page.evaluate(async () => {
+    const { v2Router } = await import('/src/v2-router.ts');
+    await v2Router.push({ path: '/v2/customers', query: { scrollAcceptance: '1' } });
+  });
+  await settleLayout(page);
+  const newRouteScrollTop = await content.evaluate((node) => node.scrollTop);
+  assert.ok(newRouteScrollTop <= 1, '新路由没有从顶部开始');
+
+  await page.evaluate(async () => {
+    const { v2Router } = await import('/src/v2-router.ts');
+    await v2Router.push('/v2/customers');
+  });
+  await settleLayout(page);
+  const restoredMetrics = await content.evaluate((node) => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    scrollTop: node.scrollTop
+  }));
+  assert.ok(
+    Math.abs(restoredMetrics.scrollTop - initialScrollTop) <= 3,
+    `返回原路由时未恢复主内容滚动位置：${JSON.stringify({
+      currentUrl: page.url(),
+      initialScrollTop,
+      newRouteScrollTop,
+      originalUrl,
+      restoredMetrics
+    })}`
+  );
+
+  await inner.evaluate((node) => {
+    node.style.minHeight = '';
+  });
+  await content.evaluate((node) => {
+    node.scrollTop = 0;
+  });
 }
 
 async function waitForCustomerContentReady(page, expectedDisplayName) {
