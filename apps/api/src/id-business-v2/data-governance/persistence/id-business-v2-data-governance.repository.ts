@@ -109,6 +109,21 @@ export class IdBusinessV2DataGovernanceRepository {
     });
   }
 
+  cancelJob(
+    tx: V2CommandTransaction,
+    input: { jobId: string; requestedByUserId: string; completedAt: Date }
+  ) {
+    return tx.idBusinessV2GovernanceJob.updateMany({
+      where: {
+        id: input.jobId,
+        requestedByUserId: input.requestedByUserId,
+        status: 'pending_approval',
+        approval: null
+      },
+      data: { status: 'cancelled', completedAt: input.completedAt }
+    });
+  }
+
   findCheckpointByIdempotencyKey(idempotencyKey: string) {
     return this.prisma.idBusinessV2GovernanceCheckpoint.findUnique({
       where: { idempotencyKey }

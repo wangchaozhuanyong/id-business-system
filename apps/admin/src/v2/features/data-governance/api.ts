@@ -51,6 +51,11 @@ export const v2DataGovernanceApi = {
       http.post(`/id-business-v2/data-governance/jobs/${id}/decision`, input)
     );
   },
+  cancel(id: string, input: { reason: string }) {
+    return request<V2GovernanceJobDetail>(
+      http.post(`/id-business-v2/data-governance/jobs/${id}/cancel`, input)
+    );
+  },
   execute(id: string, input: { batchSize: number; idempotencyKey: string }) {
     return request<V2GovernanceExecutionResult>(
       http.post(`/id-business-v2/data-governance/jobs/${id}/execute`, input)

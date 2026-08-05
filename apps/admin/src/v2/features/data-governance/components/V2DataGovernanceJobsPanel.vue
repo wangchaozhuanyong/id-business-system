@@ -105,6 +105,15 @@
                 审批
               </AppButton>
               <AppButton
+                v-if="page.canCancel(row)"
+                size="small"
+                variant="danger"
+                :loading="page.mutationBusy === `cancel:${row.id}`"
+                @click="page.cancelJob(row)"
+              >
+                取消任务
+              </AppButton>
+              <AppButton
                 v-if="row.status === 'approved'"
                 size="small"
                 variant="primary"
@@ -160,6 +169,15 @@
                 @click="page.openDecisionDrawer(job)"
               >
                 审批
+              </AppButton>
+              <AppButton
+                v-if="page.canCancel(job)"
+                size="small"
+                variant="danger"
+                :loading="page.mutationBusy === `cancel:${job.id}`"
+                @click="page.cancelJob(job)"
+              >
+                取消任务
               </AppButton>
               <AppButton
                 v-if="job.status === 'approved'"

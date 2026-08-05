@@ -13,12 +13,23 @@ const OPERATOR = {
 };
 
 function createService() {
+  const countActiveAdmins = vi
+    .fn()
+    .mockImplementation(async (input: { where: { id?: { not?: string } } }) =>
+      input.where.id?.not ? 1 : 2
+    );
+  const countActiveAdminsInTransaction = vi
+    .fn()
+    .mockImplementation(async (input: { where: { id?: { not?: string } } }) =>
+      input.where.id?.not ? 1 : 2
+    );
   const tx = {
     idBusinessV2GovernanceJob: {
       create: vi.fn().mockResolvedValue({}),
       findUnique: vi.fn().mockResolvedValue(null)
     },
-    auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-id' }) }
+    auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-id' }) },
+    user: { count: countActiveAdminsInTransaction }
   };
   const prisma = {
     idBusinessV2GovernanceJob: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -27,6 +38,7 @@ function createService() {
     idBusinessV2Option: { findMany: vi.fn().mockResolvedValue([]) },
     idBusinessV2Order: { findMany: vi.fn().mockResolvedValue([]) },
     idBusinessV2ExchangeRateRun: { findMany: vi.fn(), count: vi.fn() },
+    user: { count: countActiveAdmins },
     $transaction: vi.fn(async (callback) => callback(tx))
   };
   const queryService = { job: vi.fn(async (id: string) => ({ id })) };
@@ -119,6 +131,57 @@ describe('IdBusinessV2DataGovernancePreviewService', () => {
         OPERATOR
       )
     ).rejects.toThrow('不能重复选择');
+    expect(tx.idBusinessV2GovernanceJob.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a new preview before reading business data when no independent approver exists', async () => {
+    const { service, prisma, tx } = createService();
+    prisma.user.count.mockImplementation(async (input: { where: { id?: { not?: string } } }) =>
+      input.where.id?.not ? 0 : 1
+    );
+
+    await expect(
+      service.createRestoreJob(
+        {
+          items: [{ entity: 'account', id: '20000000-0000-4000-8000-000000000001' }],
+          reason: '恢复误删除的测试 ID',
+          backupEvidence: '本地备份编号 backup-20260731',
+          idempotencyKey: 'restore:preview:blocked'
+        },
+        OPERATOR
+      )
+    ).rejects.toMatchObject({ status: 409 });
+    expect(prisma.idBusinessV2Account.findMany).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2GovernanceJob.create).not.toHaveBeenCalled();
+  });
+
+  it('re-checks approval readiness inside the creation transaction', async () => {
+    const { service, prisma, tx } = createService();
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([
+      {
+        id: '20000000-0000-4000-8000-000000000001',
+        appleIdMasked: 'ab***@example.com',
+        deletedAt: new Date('2026-07-31T10:00:00.000Z'),
+        lossReportedAt: null,
+        soldByOrderId: null
+      }
+    ]);
+    tx.user.count.mockImplementation(async (input: { where: { id?: { not?: string } } }) =>
+      input.where.id?.not ? 0 : 1
+    );
+
+    await expect(
+      service.createRestoreJob(
+        {
+          items: [{ entity: 'account', id: '20000000-0000-4000-8000-000000000001' }],
+          reason: '恢复误删除的测试 ID',
+          backupEvidence: '本地备份编号 backup-20260731',
+          idempotencyKey: 'restore:preview:transaction-blocked'
+        },
+        OPERATOR
+      )
+    ).rejects.toMatchObject({ status: 409 });
+    expect(prisma.idBusinessV2Account.findMany).toHaveBeenCalledOnce();
     expect(tx.idBusinessV2GovernanceJob.create).not.toHaveBeenCalled();
   });
 

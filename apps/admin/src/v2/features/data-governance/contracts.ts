@@ -18,6 +18,12 @@ export interface V2GovernanceUser {
 }
 
 export interface V2GovernanceOverview {
+  approvalReadiness: {
+    activeAdminCount: number;
+    eligibleApproverCount: number;
+    ready: boolean;
+    blockedReason: string | null;
+  };
   recycleBin: {
     total: number;
     byEntity: Record<V2GovernanceRecycleEntity, number>;

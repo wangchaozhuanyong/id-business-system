@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { GOVERNANCE_APPROVAL_NOT_READY_MESSAGE, requireOperator } from './data-governance.types';
 import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-business-v2-data-governance-query.repository';
 
 type RecycleEntity = 'account' | 'customer' | 'option' | 'order';
@@ -17,9 +19,19 @@ interface RecycleItem {
 export class IdBusinessV2DataGovernanceService {
   constructor(private readonly repository: IdBusinessV2DataGovernanceQueryRepository) {}
 
-  async overview(now = new Date()) {
-    const { counts, accounts, customers, options, orders, latestRetentionAudit } =
-      await this.repository.overviewRows();
+  async overview(operator?: AuthenticatedUser, now = new Date()) {
+    const currentOperator = requireOperator(operator);
+    const {
+      counts,
+      accounts,
+      customers,
+      options,
+      orders,
+      latestRetentionAudit,
+      approvalReadiness
+    } = await this.repository.overviewRows(currentOperator.id);
+    const approvalReady = approvalReadiness.eligibleApproverCount > 0;
+    const approvalBlockedReason = approvalReady ? null : GOVERNANCE_APPROVAL_NOT_READY_MESSAGE;
 
     const recentItems: RecycleItem[] = [
       ...accounts.map((item) =>
@@ -91,14 +103,18 @@ export class IdBusinessV2DataGovernanceService {
         {
           key: 'recycle_restore',
           title: '回收站恢复',
-          status: 'available' as const,
-          detail: '支持不可变预览、异人审批、分批检查点和逐项审计后恢复。'
+          status: approvalReady ? ('available' as const) : ('blocked' as const),
+          detail: approvalReady
+            ? '支持不可变预览、异人审批、分批检查点和逐项审计后恢复。'
+            : GOVERNANCE_APPROVAL_NOT_READY_MESSAGE
         },
         {
           key: 'general_cleanup',
           title: '受控清理任务',
-          status: 'available' as const,
-          detail: '仅支持无账务引用的过期汇率历史；通用业务数据硬删除保持关闭。'
+          status: approvalReady ? ('available' as const) : ('blocked' as const),
+          detail: approvalReady
+            ? '仅支持无账务引用的过期汇率历史；通用业务数据硬删除保持关闭。'
+            : GOVERNANCE_APPROVAL_NOT_READY_MESSAGE
         },
         {
           key: 'managed_backup',
@@ -114,10 +130,15 @@ export class IdBusinessV2DataGovernanceService {
         evidenceStatus: latestRetentionAudit ? ('observed' as const) : ('not_observed' as const)
       },
       safety: {
-        restoreEnabled: true,
-        cleanupEnabled: true,
+        restoreEnabled: approvalReady,
+        cleanupEnabled: approvalReady,
         generalHardDeleteEnabled: false,
         approvalWorkflowConfigured: true
+      },
+      approvalReadiness: {
+        ...approvalReadiness,
+        ready: approvalReady,
+        blockedReason: approvalBlockedReason
       },
       proposedWorkflow: [
         '生成不可变影响预览',

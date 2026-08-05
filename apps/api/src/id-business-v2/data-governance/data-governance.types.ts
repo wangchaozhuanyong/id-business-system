@@ -1,6 +1,9 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 
+export const GOVERNANCE_APPROVAL_NOT_READY_MESSAGE =
+  '当前没有其他启用管理员可完成异人审批，请先在员工账户中启用至少一名管理员';
+
 export type GovernanceJobType = 'recycle_restore' | 'exchange_rate_cleanup';
 export type GovernanceJobStatus =
   | 'pending_approval'
@@ -44,6 +47,10 @@ export interface CreateCleanupGovernanceJobDto {
 
 export interface DecideGovernanceJobDto {
   decision?: GovernanceApprovalDecision | string;
+  reason?: string;
+}
+
+export interface CancelGovernanceJobDto {
   reason?: string;
 }
 

@@ -9,6 +9,7 @@ import {
 import {
   type CreateCleanupGovernanceJobDto,
   type CreateRestoreGovernanceJobDto,
+  GOVERNANCE_APPROVAL_NOT_READY_MESSAGE,
   type GovernanceEligibility,
   type GovernanceJobType,
   type GovernancePreviewItem,
@@ -63,6 +64,7 @@ export class IdBusinessV2DataGovernancePreviewService {
       requestFingerprint
     );
     if (replay) return replay;
+    await this.assertApprovalReady(currentOperator.id);
 
     const previewItems = await this.buildRestorePreview(selectedItems);
     const eligibleItems = previewItems.filter((item) => item.eligibility.eligible).length;
@@ -111,6 +113,7 @@ export class IdBusinessV2DataGovernancePreviewService {
       requestFingerprint
     );
     if (replay) return replay;
+    await this.assertApprovalReady(currentOperator.id);
 
     const cutoff = new Date(Date.now() - olderThanDays * ONE_DAY_MS);
     const { runs, eligibleTotal } = await this.queryRepository.cleanupPreviewRows(
@@ -328,6 +331,7 @@ export class IdBusinessV2DataGovernancePreviewService {
     const jobId = randomUUID();
     const result = await this.transactionManager.execute(
       async (tx, context) => {
+        await this.assertApprovalReady(operator.id, tx);
         const jobNo = `GOV-${context.businessTime.toISOString().slice(0, 10).replaceAll('-', '')}-${jobId.slice(0, 8)}`;
         await this.repository.createJob(tx, {
           id: jobId,
@@ -377,6 +381,13 @@ export class IdBusinessV2DataGovernancePreviewService {
       }
     );
     return this.queryService.job(result.jobId);
+  }
+
+  private async assertApprovalReady(requesterUserId: string, tx?: V2CommandTransaction) {
+    const readiness = await this.queryRepository.approvalReadiness(requesterUserId, tx);
+    if (readiness.eligibleApproverCount < 1) {
+      throw new ConflictException(GOVERNANCE_APPROVAL_NOT_READY_MESSAGE);
+    }
   }
 
   private async requireReplayId(
