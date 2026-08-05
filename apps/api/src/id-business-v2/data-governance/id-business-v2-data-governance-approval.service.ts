@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import {
+  type CancelGovernanceJobDto,
   type DecideGovernanceJobDto,
   normalizeRequiredText,
   normalizeUuid,
@@ -39,8 +40,11 @@ export class IdBusinessV2DataGovernanceApprovalService {
       async (tx, context) => {
         const job = await this.repository.findApprovalJob(tx, jobId);
         if (!job) throw new NotFoundException('数据治理任务不存在');
-        if (job.approval || job.status !== 'pending_approval') {
+        if (job.approval) {
           throw new ConflictException('该数据治理任务已经完成审批');
+        }
+        if (job.status !== 'pending_approval') {
+          throw new ConflictException('该数据治理任务已不在待审批状态');
         }
         if (job.requestedByUserId === currentOperator.id) {
           throw new ConflictException('申请人不能审批自己的数据治理任务');
@@ -77,6 +81,54 @@ export class IdBusinessV2DataGovernanceApprovalService {
         operator: currentOperator,
         retryMode: 'none',
         uniqueConflictMessage: '该数据治理任务已完成审批'
+      }
+    );
+
+    return this.queryService.job(jobId);
+  }
+
+  async cancel(
+    jobIdValue: string,
+    dto: CancelGovernanceJobDto,
+    operator?: AuthenticatedUser,
+    metadata: GovernanceCommandMetadata = {}
+  ) {
+    const currentOperator = requireOperator(operator);
+    const jobId = normalizeUuid(jobIdValue, '数据治理任务');
+    const reason = normalizeRequiredText(dto.reason, '取消原因', { min: 4, max: 1_000 });
+    await this.transactionManager.execute(
+      async (tx, context) => {
+        const job = await this.repository.findApprovalJob(tx, jobId);
+        if (!job) throw new NotFoundException('数据治理任务不存在');
+        if (job.requestedByUserId !== currentOperator.id) {
+          throw new ConflictException('只有申请人可以取消数据治理任务');
+        }
+        if (job.approval || job.status !== 'pending_approval') {
+          throw new ConflictException('只有待审批的数据治理任务可以取消');
+        }
+
+        const updated = await this.repository.cancelJob(tx, {
+          jobId: job.id,
+          requestedByUserId: currentOperator.id,
+          completedAt: context.businessTime
+        });
+        if (updated.count !== 1) throw new ConflictException('任务状态已变化，请刷新后重试');
+        await this.transactionalAudit.append(tx, {
+          userId: currentOperator.id,
+          module: 'id_business_v2_data_governance',
+          action: 'id_business_v2.data_governance.job_cancelled',
+          objectType: 'id_business_v2_governance_job',
+          objectId: job.id,
+          beforeData: { status: job.status, previewHash: job.previewHash },
+          afterData: { status: 'cancelled', previewHash: job.previewHash, reason },
+          remark: `取消数据治理任务：${job.jobNo}`
+        });
+      },
+      {
+        requestId: metadata.requestId ?? randomUUID(),
+        operator: currentOperator,
+        retryMode: 'none',
+        uniqueConflictMessage: '该数据治理任务无法取消'
       }
     );
 

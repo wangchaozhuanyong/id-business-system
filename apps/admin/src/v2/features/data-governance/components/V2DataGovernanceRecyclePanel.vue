@@ -1,5 +1,12 @@
 <template>
   <section class="v2-governance-panel">
+    <el-alert
+      v-if="page.previewBlockedReason"
+      type="warning"
+      :title="page.previewBlockedReason"
+      :closable="false"
+      show-icon
+    />
     <div class="v2-records-toolbar v2-governance-toolbar">
       <el-select
         v-model="page.recycleQueryModel.entity"
@@ -17,8 +24,28 @@
       </el-select>
       <span>已选择 {{ page.selectedRecycleItems.length }} 条</span>
       <div class="v2-records-toolbar__actions">
-        <AppButton variant="ghost" @click="page.openCleanupDrawer">生成清理预览</AppButton>
-        <AppButton variant="primary" @click="page.openRestoreDrawer"> 生成恢复预览 </AppButton>
+        <AppButton
+          variant="ghost"
+          :disabled="Boolean(page.previewBlockedReason)"
+          :title="page.previewBlockedReason || '生成汇率历史清理预览'"
+          :aria-label="
+            page.previewBlockedReason ? `生成清理预览：${page.previewBlockedReason}` : undefined
+          "
+          @click="page.openCleanupDrawer"
+        >
+          生成清理预览
+        </AppButton>
+        <AppButton
+          variant="primary"
+          :disabled="Boolean(page.previewBlockedReason)"
+          :title="page.previewBlockedReason || '生成回收站恢复预览'"
+          :aria-label="
+            page.previewBlockedReason ? `生成恢复预览：${page.previewBlockedReason}` : undefined
+          "
+          @click="page.openRestoreDrawer"
+        >
+          生成恢复预览
+        </AppButton>
         <AppButton
           icon-only
           title="刷新"

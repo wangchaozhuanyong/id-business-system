@@ -29,8 +29,21 @@
             <strong>安全边界</strong>
             <span>当前能力与仍需外部验证的边界</span>
           </div>
-          <el-tag type="success" effect="plain">审批工作流已启用</el-tag>
+          <el-tag
+            :type="page.overview.approvalReadiness.ready ? 'success' : 'danger'"
+            effect="plain"
+          >
+            {{ page.overview.approvalReadiness.ready ? '审批工作流可执行' : '审批工作流阻塞' }}
+          </el-tag>
         </header>
+        <el-alert
+          v-if="!page.overview.approvalReadiness.ready"
+          type="error"
+          :title="page.overview.approvalReadiness.blockedReason ?? '异人审批条件未就绪'"
+          :description="`当前启用管理员 ${page.overview.approvalReadiness.activeAdminCount} 人，可作为其他审批人的管理员 ${page.overview.approvalReadiness.eligibleApproverCount} 人。`"
+          :closable="false"
+          show-icon
+        />
         <div class="v2-governance-capability-grid">
           <article v-for="capability in page.overview.capabilities" :key="capability.key">
             <div>

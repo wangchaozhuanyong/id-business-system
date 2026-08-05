@@ -95,4 +95,77 @@ describe('IdBusinessV2DataGovernanceApprovalService', () => {
     expect(tx.idBusinessV2GovernanceJob.updateMany).toHaveBeenCalledOnce();
     expect(queryService.job).not.toHaveBeenCalled();
   });
+
+  it('lets the requester cancel a pending approval task and writes the reason to audit', async () => {
+    const requester = { ...APPROVER, id: REQUESTER_ID };
+    const { service, tx, queryService } = createService();
+    queryService.job.mockResolvedValue({ id: JOB_ID, status: 'cancelled' });
+
+    const result = await service.cancel(JOB_ID, { reason: '影响范围需要重新确认' }, requester);
+
+    expect(tx.idBusinessV2GovernanceJob.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: JOB_ID,
+        requestedByUserId: REQUESTER_ID,
+        status: 'pending_approval',
+        approval: null
+      },
+      data: { status: 'cancelled', completedAt: expect.any(Date) }
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'id_business_v2.data_governance.job_cancelled',
+        afterData: expect.objectContaining({
+          status: 'cancelled',
+          reason: '影响范围需要重新确认'
+        })
+      })
+    });
+    expect(result).toMatchObject({ status: 'cancelled' });
+  });
+
+  it('rejects cancellation by an administrator who did not request the task', async () => {
+    const { service, tx } = createService();
+
+    await expect(service.cancel(JOB_ID, { reason: '非申请人尝试取消' }, APPROVER)).rejects.toThrow(
+      '只有申请人可以取消'
+    );
+
+    expect(tx.idBusinessV2GovernanceJob.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects cancellation after the task has left pending approval', async () => {
+    const requester = { ...APPROVER, id: REQUESTER_ID };
+    const { service, tx } = createService();
+    tx.idBusinessV2GovernanceJob.findUnique.mockResolvedValue({
+      id: JOB_ID,
+      jobNo: 'GOV-20260731-00000001',
+      status: 'approved',
+      previewHash: 'a'.repeat(64),
+      requestedByUserId: REQUESTER_ID,
+      approval: { id: 'approval-id' }
+    });
+
+    await expect(
+      service.cancel(JOB_ID, { reason: '审批后尝试取消任务' }, requester)
+    ).rejects.toThrow('只有待审批的数据治理任务可以取消');
+
+    expect(tx.idBusinessV2GovernanceJob.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not return a cancelled task when transactional audit fails', async () => {
+    const requester = { ...APPROVER, id: REQUESTER_ID };
+    const { service, tx, queryService } = createService();
+    tx.auditLog.create.mockRejectedValue(new Error('audit unavailable'));
+
+    await expect(
+      service.cancel(JOB_ID, { reason: '影响范围需要重新确认' }, requester, {
+        requestId: 'request-cancel-audit'
+      })
+    ).rejects.toThrow('audit unavailable');
+
+    expect(tx.idBusinessV2GovernanceJob.updateMany).toHaveBeenCalledOnce();
+    expect(queryService.job).not.toHaveBeenCalled();
+  });
 });

@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2DataGovernanceController } from './id-business-v2-data-governance.controller';
 
+const OPERATOR = {
+  id: 'operator-id',
+  username: 'admin',
+  displayName: '管理员',
+  roles: ['admin'],
+  permissions: []
+};
+
 function createController() {
   const overview = vi.fn().mockResolvedValue({ safety: { restoreEnabled: true } });
   const recycleBin = vi.fn().mockResolvedValue({ items: [] });
@@ -9,13 +17,14 @@ function createController() {
   const createRestoreJob = vi.fn().mockResolvedValue({ id: 'restore-job' });
   const createCleanupJob = vi.fn().mockResolvedValue({ id: 'cleanup-job' });
   const decide = vi.fn().mockResolvedValue({ status: 'approved' });
+  const cancel = vi.fn().mockResolvedValue({ status: 'cancelled' });
   const execute = vi.fn().mockResolvedValue({ status: 'succeeded' });
   return {
     controller: new IdBusinessV2DataGovernanceController(
       { overview } as never,
       { recycleBin, jobs, job } as never,
       { createRestoreJob, createCleanupJob } as never,
-      { decide } as never,
+      { decide, cancel } as never,
       { execute } as never
     ),
     mocks: {
@@ -26,6 +35,7 @@ function createController() {
       createRestoreJob,
       createCleanupJob,
       decide,
+      cancel,
       execute
     }
   };
@@ -35,12 +45,12 @@ describe('IdBusinessV2DataGovernanceController', () => {
   it('exposes overview, recycle-bin and job queries', async () => {
     const { controller, mocks } = createController();
 
-    await controller.overview();
+    await controller.overview(OPERATOR);
     await controller.recycleBin('2', '25', 'account');
     await controller.jobs('1', '20', 'recycle_restore', 'approved');
     await controller.job('job-id');
 
-    expect(mocks.overview).toHaveBeenCalledWith();
+    expect(mocks.overview).toHaveBeenCalledWith(OPERATOR);
     expect(mocks.recycleBin).toHaveBeenCalledWith({
       page: '2',
       pageSize: '25',
@@ -57,13 +67,6 @@ describe('IdBusinessV2DataGovernanceController', () => {
 
   it('passes the authenticated administrator to preview, approval and execution services', async () => {
     const { controller, mocks } = createController();
-    const operator = {
-      id: 'operator-id',
-      username: 'admin',
-      displayName: '管理员',
-      roles: ['admin'],
-      permissions: []
-    };
     const restoreDto = {
       items: [{ entity: 'account', id: 'account-id' }],
       reason: 'restore reason',
@@ -78,37 +81,41 @@ describe('IdBusinessV2DataGovernanceController', () => {
     };
 
     const request = { requestId: 'request-governance-001' };
-    await controller.previewRestore(restoreDto, operator, request);
-    await controller.previewCleanup(cleanupDto, operator, request);
+    await controller.previewRestore(restoreDto, OPERATOR, request);
+    await controller.previewCleanup(cleanupDto, OPERATOR, request);
     await controller.decide(
       'job-id',
       { decision: 'approved', reason: '同意执行' },
-      operator,
+      OPERATOR,
       request
     );
+    await controller.cancel('job-id', { reason: '重新确认治理范围' }, OPERATOR, request);
     await controller.execute(
       'job-id',
       { batchSize: 50, idempotencyKey: 'batch:0001' },
-      operator,
+      OPERATOR,
       request
     );
 
-    expect(mocks.createRestoreJob).toHaveBeenCalledWith(restoreDto, operator, {
+    expect(mocks.createRestoreJob).toHaveBeenCalledWith(restoreDto, OPERATOR, {
       requestId: request.requestId
     });
-    expect(mocks.createCleanupJob).toHaveBeenCalledWith(cleanupDto, operator, {
+    expect(mocks.createCleanupJob).toHaveBeenCalledWith(cleanupDto, OPERATOR, {
       requestId: request.requestId
     });
     expect(mocks.decide).toHaveBeenCalledWith(
       'job-id',
       { decision: 'approved', reason: '同意执行' },
-      operator,
+      OPERATOR,
       { requestId: request.requestId }
     );
+    expect(mocks.cancel).toHaveBeenCalledWith('job-id', { reason: '重新确认治理范围' }, OPERATOR, {
+      requestId: request.requestId
+    });
     expect(mocks.execute).toHaveBeenCalledWith(
       'job-id',
       { batchSize: 50, idempotencyKey: 'batch:0001' },
-      operator,
+      OPERATOR,
       { requestId: request.requestId }
     );
   });

@@ -10,9 +10,11 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2DataGovernanceApi } from './api';
 import { createDataGovernanceQueryKey } from './data-governance-query-key';
 import {
+  canCancelGovernanceJob,
   formatGovernanceDate,
   getGovernanceItemStatusMeta,
   getGovernanceJobStatusMeta,
+  governancePreviewBlockedReason,
   governanceItemStatusMeta,
   governanceJobStatusMeta,
   governanceJobTypeLabel,
@@ -174,6 +176,12 @@ export function useDataGovernancePage() {
   const detailError = computed(() =>
     detailQuery.error.value ? getApiErrorMessage(detailQuery.error.value) : ''
   );
+  const previewBlockedReason = computed(() =>
+    governancePreviewBlockedReason(overview.value, {
+      loading: overviewLoading.value,
+      error: overviewError.value
+    })
+  );
   const restoreDirty = computed(() => JSON.stringify(restoreForm) !== restoreBaseline.value);
   const cleanupDirty = computed(() => JSON.stringify(cleanupForm) !== cleanupBaseline.value);
   const decisionDirty = computed(() => JSON.stringify(decisionForm) !== decisionBaseline.value);
@@ -246,6 +254,10 @@ export function useDataGovernancePage() {
   }
 
   function openRestoreDrawer() {
+    if (previewBlockedReason.value) {
+      ElMessage.warning(previewBlockedReason.value);
+      return;
+    }
     if (!selectedRecycleItems.value.length) {
       ElMessage.warning('请先选择需要恢复的回收站记录');
       return;
@@ -257,6 +269,10 @@ export function useDataGovernancePage() {
   }
 
   function openCleanupDrawer() {
+    if (previewBlockedReason.value) {
+      ElMessage.warning(previewBlockedReason.value);
+      return;
+    }
     Object.assign(cleanupForm, CLEANUP_INITIAL);
     cleanupBaseline.value = JSON.stringify(cleanupForm);
     mutationError.value = '';
@@ -309,6 +325,49 @@ export function useDataGovernancePage() {
 
   function canApprove(job: V2GovernanceJob) {
     return job.status === 'pending_approval' && job.requestedByUserId !== authStore.user?.id;
+  }
+
+  function canCancel(job: V2GovernanceJob) {
+    return canCancelGovernanceJob(job, authStore.user?.id);
+  }
+
+  async function cancelJob(job: V2GovernanceJob) {
+    if (!canCancel(job)) return;
+    let reason: string;
+    try {
+      const result = await ElMessageBox.prompt(
+        '取消后任务不能审批或执行，预览和审计记录仍会保留。',
+        `取消治理任务 · ${job.jobNo}`,
+        {
+          type: 'warning',
+          inputType: 'textarea',
+          inputPlaceholder: '请输入 4 至 1000 个字符的取消原因',
+          inputValidator: (input) => {
+            const length = input.trim().length;
+            return length >= 4 && length <= 1_000 ? true : '取消原因必须为 4 至 1000 个字符';
+          },
+          confirmButtonText: '确认取消任务',
+          cancelButtonText: '返回'
+        }
+      );
+      reason = result.value.trim();
+    } catch {
+      return;
+    }
+
+    mutationBusy.value = `cancel:${job.id}`;
+    mutationError.value = '';
+    try {
+      await v2DataGovernanceApi.cancel(job.id, { reason });
+      await Promise.all([refreshJobs(), refreshOverview()]);
+      if (detailId.value === job.id) await detailQuery.refresh();
+      ElMessage.success('治理任务已取消，预览和审计记录已保留');
+    } catch (error) {
+      mutationError.value = getApiErrorMessage(error);
+      ElMessage.error(mutationError.value);
+    } finally {
+      mutationBusy.value = '';
+    }
   }
 
   function openDecisionDrawer(job: V2GovernanceJob) {
@@ -426,6 +485,7 @@ export function useDataGovernancePage() {
     recycleError,
     jobsError,
     detailError,
+    previewBlockedReason,
     restoreDirty,
     cleanupDirty,
     decisionDirty,
@@ -450,6 +510,8 @@ export function useDataGovernancePage() {
     submitRestore,
     submitCleanup,
     canApprove,
+    canCancel,
+    cancelJob,
     openDecisionDrawer,
     submitDecision,
     executeJob,

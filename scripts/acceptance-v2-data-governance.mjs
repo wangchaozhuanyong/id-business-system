@@ -104,15 +104,15 @@ try {
     ])
   );
   const expectedState = {
-    migrations: 18,
+    migrations: 19,
     failedMigrations: 0,
     users: 2,
     customers: 1,
-    jobs: 1,
-    items: 1,
+    jobs: 2,
+    items: 2,
     approvals: 1,
     checkpoints: 1,
-    auditLogs: 4
+    auditLogs: 6
   };
   if (JSON.stringify(state) !== JSON.stringify(expectedState)) {
     throw new Error(`数据治理隔离库终态不符合预期：${JSON.stringify(state)}`);
@@ -124,6 +124,9 @@ try {
       database: databaseName,
       workflow: [
         'requester-preview',
+        'requester-cancel',
+        'cancelled-task-approval-rejected',
+        'replacement-preview',
         'self-approval-rejected',
         'independent-approval',
         'immutable-preview',

@@ -1,5 +1,11 @@
 .v2-orders-toolbar {
-  grid-template-columns: minmax(260px, 1fr) minmax(150px, 180px) auto auto;
+  grid-template-columns:
+    minmax(260px, 1fr) minmax(150px, 180px) minmax(170px, 210px) minmax(126px, max-content)
+    auto;
+}
+
+.v2-orders-toolbar .v2-records-toolbar__actions {
+  flex-wrap: nowrap;
 }
 
 .v2-order-number {
@@ -100,13 +106,34 @@
 
 @media (max-width: 1320px) {
   .v2-orders-toolbar {
-    grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) auto auto;
+    grid-template-columns:
+      minmax(220px, 1fr) minmax(140px, 170px) minmax(160px, 190px)
+      minmax(126px, max-content) auto;
+  }
+}
+
+@media (max-width: 1180px) {
+  .v2-orders-toolbar {
+    grid-template-columns: minmax(220px, 1fr) minmax(140px, 170px) minmax(160px, 190px);
+  }
+
+  .v2-orders-toolbar > .v2-filter-disclosure {
+    grid-column: 2;
+  }
+
+  .v2-orders-toolbar .v2-records-toolbar__actions {
+    grid-column: 3;
   }
 }
 
 @media (max-width: 900px) {
   .v2-orders-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-orders-toolbar > .v2-filter-disclosure,
+  .v2-orders-toolbar .v2-records-toolbar__actions {
+    grid-column: 1 / -1;
   }
 
   .v2-orders-toolbar .el-date-editor {

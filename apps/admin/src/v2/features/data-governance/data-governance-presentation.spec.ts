@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canCancelGovernanceJob,
   formatGovernanceDate,
   getGovernanceItemStatusMeta,
   getGovernanceJobStatusMeta,
+  governancePreviewBlockedReason,
   governanceJobTypeLabel,
   recycleEntityLabel,
   shortHash
@@ -32,5 +34,48 @@ describe('data governance presentation', () => {
     expect(formatGovernanceDate('not-a-date')).toBe('—');
     expect(shortHash('')).toBe('—');
     expect(shortHash('0123456789abcdefghijklmnop')).toBe('0123456789…klmnop');
+  });
+
+  it('keeps governance preview creation blocked until an independent approver is ready', () => {
+    const blockedReason = '当前没有其他启用管理员可完成异人审批';
+    expect(
+      governancePreviewBlockedReason(
+        {
+          approvalReadiness: {
+            activeAdminCount: 1,
+            eligibleApproverCount: 0,
+            ready: false,
+            blockedReason
+          }
+        },
+        { loading: false, error: '' }
+      )
+    ).toBe(blockedReason);
+    expect(
+      governancePreviewBlockedReason(
+        {
+          approvalReadiness: {
+            activeAdminCount: 2,
+            eligibleApproverCount: 1,
+            ready: true,
+            blockedReason: null
+          }
+        },
+        { loading: false, error: '' }
+      )
+    ).toBe('');
+    expect(governancePreviewBlockedReason(null, { loading: true, error: '' })).toContain('核验');
+    expect(governancePreviewBlockedReason(null, { loading: false, error: '503' })).toContain(
+      '无法确认'
+    );
+  });
+
+  it('only exposes cancellation to the requester while approval is pending', () => {
+    const job = { status: 'pending_approval' as const, requestedByUserId: 'requester-id' };
+
+    expect(canCancelGovernanceJob(job, 'requester-id')).toBe(true);
+    expect(canCancelGovernanceJob(job, 'other-admin-id')).toBe(false);
+    expect(canCancelGovernanceJob({ ...job, status: 'approved' }, 'requester-id')).toBe(false);
+    expect(canCancelGovernanceJob(job, undefined)).toBe(false);
   });
 });

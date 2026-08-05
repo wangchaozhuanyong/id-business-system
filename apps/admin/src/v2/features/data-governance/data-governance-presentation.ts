@@ -1,7 +1,9 @@
 import type {
   V2GovernanceItemStatus,
+  V2GovernanceJob,
   V2GovernanceJobStatus,
   V2GovernanceJobType,
+  V2GovernanceOverview,
   V2GovernanceRecycleEntity
 } from './contracts';
 
@@ -66,6 +68,17 @@ export function getGovernanceItemStatusMeta(value: unknown) {
     : { label: '未知状态', type: 'info' as const };
 }
 
+export function canCancelGovernanceJob(
+  job: Pick<V2GovernanceJob, 'status' | 'requestedByUserId'>,
+  currentUserId: string | null | undefined
+) {
+  return (
+    Boolean(currentUserId) &&
+    job.status === 'pending_approval' &&
+    job.requestedByUserId === currentUserId
+  );
+}
+
 export function formatGovernanceDate(value: string | null | undefined) {
   if (!value) return '—';
   const date = new Date(value);
@@ -83,4 +96,14 @@ export function formatGovernanceDate(value: string | null | undefined) {
 
 export function shortHash(value: string) {
   return value ? `${value.slice(0, 10)}…${value.slice(-6)}` : '—';
+}
+
+export function governancePreviewBlockedReason(
+  overview: Pick<V2GovernanceOverview, 'approvalReadiness'> | null | undefined,
+  state: { loading: boolean; error: string }
+) {
+  if (overview) return overview.approvalReadiness.blockedReason ?? '';
+  if (state.loading) return '正在核验异人审批条件，请稍候';
+  if (state.error) return '无法确认异人审批条件，请先刷新治理概况';
+  return '异人审批条件尚未就绪，请先刷新治理概况';
 }

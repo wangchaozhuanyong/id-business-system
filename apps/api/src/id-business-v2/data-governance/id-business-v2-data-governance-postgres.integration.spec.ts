@@ -27,6 +27,7 @@ const APPROVER: AuthenticatedUser = {
   permissions: []
 };
 const CUSTOMER_ID = 'd2000000-0000-4000-8000-000000000001';
+const CANCELLED_RESTORE_KEY = 'governance:integration:restore:cancelled';
 const RESTORE_KEY = 'governance:integration:restore:001';
 const EXECUTION_KEY = 'governance:integration:execute:001';
 
@@ -88,6 +89,19 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
         }
       ]
     });
+    const adminRole = await prisma.role.create({
+      data: {
+        name: '隔离测试管理员',
+        code: 'admin',
+        description: '数据治理双管理员隔离测试角色'
+      }
+    });
+    await prisma.userRole.createMany({
+      data: [
+        { userId: REQUESTER.id, roleId: adminRole.id },
+        { userId: APPROVER.id, roleId: adminRole.id }
+      ]
+    });
     await prisma.idBusinessV2Customer.create({
       data: {
         id: CUSTOMER_ID,
@@ -104,7 +118,34 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
     await prisma.$disconnect();
   });
 
-  it('freezes the preview, rejects self approval, executes once and replays idempotently', async () => {
+  it('cancels safely, freezes the replacement preview and executes it idempotently', async () => {
+    const cancelledPreview = await previewService.createRestoreJob(
+      {
+        items: [{ entity: 'customer', id: CUSTOMER_ID }],
+        reason: '隔离库取消治理任务演练',
+        backupEvidence: '本地恢复演练备份 SHA256 已核对',
+        idempotencyKey: CANCELLED_RESTORE_KEY
+      },
+      REQUESTER,
+      { requestId: 'governance-integration-cancel-preview' }
+    );
+    const cancelled = await approvalService.cancel(
+      cancelledPreview.id,
+      { reason: '重新核对影响范围后再提交' },
+      REQUESTER,
+      { requestId: 'governance-integration-cancel' }
+    );
+    expect(cancelled).toMatchObject({ status: 'cancelled', completedAt: expect.any(Date) });
+    await expect(
+      approvalService.decide(
+        cancelledPreview.id,
+        { decision: 'approved', reason: '已取消任务不能再审批' },
+        APPROVER,
+        { requestId: 'governance-integration-cancelled-approval' }
+      )
+    ).rejects.toThrow('已不在待审批状态');
+    expect(await prisma.idBusinessV2GovernanceApproval.count()).toBe(0);
+
     const preview = await previewService.createRestoreJob(
       {
         items: [{ entity: 'customer', id: CUSTOMER_ID }],
@@ -184,7 +225,7 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
     expect(customer).toMatchObject({ deletedAt: null, updatedByUserId: APPROVER.id });
     expect(item).toMatchObject({ status: 'succeeded', resultCode: 'customer_restored' });
     expect(item.resultAuditLogId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(auditCount).toBe(4);
+    expect(auditCount).toBe(6);
     expect(checkpointCount).toBe(1);
 
     const replay = await executionService.execute(

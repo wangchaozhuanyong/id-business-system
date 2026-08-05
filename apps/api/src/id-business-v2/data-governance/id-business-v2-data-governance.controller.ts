@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type {
+  CancelGovernanceJobDto,
   CreateCleanupGovernanceJobDto,
   CreateRestoreGovernanceJobDto,
   DecideGovernanceJobDto,
@@ -29,8 +30,8 @@ export class IdBusinessV2DataGovernanceController {
   ) {}
 
   @Get('overview')
-  overview() {
-    return this.dataGovernanceService.overview();
+  overview(@CurrentUser() operator: AuthenticatedUser | undefined) {
+    return this.dataGovernanceService.overview(operator);
   }
 
   @Get('recycle-bin')
@@ -83,6 +84,16 @@ export class IdBusinessV2DataGovernanceController {
     @Req() request?: RequestWithCommandMeta
   ) {
     return this.approvalService.decide(id, dto, operator, { requestId: request?.requestId });
+  }
+
+  @Post('jobs/:id/cancel')
+  cancel(
+    @Param('id') id: string,
+    @Body() dto: CancelGovernanceJobDto,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request?: RequestWithCommandMeta
+  ) {
+    return this.approvalService.cancel(id, dto, operator, { requestId: request?.requestId });
   }
 
   @Post('jobs/:id/execute')

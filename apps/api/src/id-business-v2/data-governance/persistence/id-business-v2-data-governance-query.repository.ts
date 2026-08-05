@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import type { V2CommandTransaction } from '../../runtime/public-api';
 import type {
   GovernanceJobStatus,
   GovernanceJobType,
@@ -30,40 +31,69 @@ const GOVERNANCE_JOB_LIST_INCLUDE = {
 export class IdBusinessV2DataGovernanceQueryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async overviewRows() {
-    const [counts, accounts, customers, options, orders, latestRetentionAudit] = await Promise.all([
-      this.recycleCounts(),
-      this.prisma.idBusinessV2Account.findMany({
-        where: { deletedAt: { not: null } },
-        select: { id: true, appleIdMasked: true, deletedAt: true },
-        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-        take: 20
-      }),
-      this.prisma.idBusinessV2Customer.findMany({
-        where: { deletedAt: { not: null } },
-        select: { id: true, name: true, deletedAt: true },
-        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-        take: 20
-      }),
-      this.prisma.idBusinessV2Option.findMany({
-        where: { deletedAt: { not: null } },
-        select: { id: true, name: true, deletedAt: true },
-        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-        take: 20
-      }),
-      this.prisma.idBusinessV2Order.findMany({
-        where: { deletedAt: { not: null } },
-        select: { id: true, orderNo: true, deletedAt: true },
-        orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
-        take: 20
-      }),
-      this.prisma.auditLog.findFirst({
-        where: { action: 'id_business_v2.exchange_rate.retention_cleanup' },
-        select: { id: true, createdAt: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+  async overviewRows(requesterUserId: string) {
+    const [counts, accounts, customers, options, orders, latestRetentionAudit, approvalReadiness] =
+      await Promise.all([
+        this.recycleCounts(),
+        this.prisma.idBusinessV2Account.findMany({
+          where: { deletedAt: { not: null } },
+          select: { id: true, appleIdMasked: true, deletedAt: true },
+          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+          take: 20
+        }),
+        this.prisma.idBusinessV2Customer.findMany({
+          where: { deletedAt: { not: null } },
+          select: { id: true, name: true, deletedAt: true },
+          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+          take: 20
+        }),
+        this.prisma.idBusinessV2Option.findMany({
+          where: { deletedAt: { not: null } },
+          select: { id: true, name: true, deletedAt: true },
+          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+          take: 20
+        }),
+        this.prisma.idBusinessV2Order.findMany({
+          where: { deletedAt: { not: null } },
+          select: { id: true, orderNo: true, deletedAt: true },
+          orderBy: [{ deletedAt: 'desc' }, { id: 'desc' }],
+          take: 20
+        }),
+        this.prisma.auditLog.findFirst({
+          where: { action: 'id_business_v2.exchange_rate.retention_cleanup' },
+          select: { id: true, createdAt: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+        }),
+        this.approvalReadiness(requesterUserId)
+      ]);
+    return {
+      counts,
+      accounts,
+      customers,
+      options,
+      orders,
+      latestRetentionAudit,
+      approvalReadiness
+    };
+  }
+
+  async approvalReadiness(requesterUserId: string, tx?: V2CommandTransaction) {
+    const database = tx ?? this.prisma;
+    const activeAdminWhere = {
+      status: 'active' as const,
+      deletedAt: null,
+      userRoles: { some: { role: { code: 'admin' } } }
+    };
+    const [activeAdminCount, eligibleApproverCount] = await Promise.all([
+      database.user.count({ where: activeAdminWhere }),
+      database.user.count({
+        where: {
+          ...activeAdminWhere,
+          id: { not: requesterUserId }
+        }
       })
     ]);
-    return { counts, accounts, customers, options, orders, latestRetentionAudit };
+    return { activeAdminCount, eligibleApproverCount };
   }
 
   async recycleBinRows(input: { entity: RecycleEntity | null; skip: number; take: number }) {
