@@ -27,7 +27,9 @@
           "
         >
           按人民币目标价与汇率
-          {{ form.receivedFxRateToCny || form.automaticFxRateToCny }}
+          {{
+            form.receivedFxMode === 'manual' ? form.receivedFxRateToCny : form.automaticFxRateToCny
+          }}
           精确换算；推荐整数折合 ¥{{ formatDecimal(suggestedReceipt.equivalentCnyAmount) }}
         </small>
         <small v-if="suggestedReceipt.estimatedProfit">
@@ -65,13 +67,6 @@
       </div>
     </div>
   </el-form-item>
-
-  <el-form-item label="预计平台手续费">
-    <div class="v2-order-entry-readonly">
-      <strong>¥{{ formatDecimal(platformFeePreview) }}</strong>
-      <el-tag type="info" effect="plain">服务端复核</el-tag>
-    </div>
-  </el-form-item>
 </template>
 
 <script setup lang="ts">
@@ -86,7 +81,6 @@ const props = defineProps<{
   suggestedReceipt: SuggestedReceiptQuote;
   recommendationApplied: boolean;
   appliedSuggestedOriginal: string;
-  platformFeePreview: string;
   profitRateInputValue: string;
   pricingInputMode: OrderPricingInputMode;
   profitRateInputHint: string;

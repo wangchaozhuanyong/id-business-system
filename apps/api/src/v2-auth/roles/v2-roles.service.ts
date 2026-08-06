@@ -20,17 +20,25 @@ const ROLE_SORT_FIELDS: Record<string, keyof Prisma.RoleOrderByWithRelationInput
   updatedAt: 'updatedAt'
 };
 
+const PERMISSION_SELECT = {
+  id: true,
+  name: true,
+  code: true,
+  module: true,
+  action: true
+} satisfies Prisma.PermissionSelect;
+
+const PERMISSION_ORDER_BY = [
+  { module: 'asc' as const },
+  { action: 'asc' as const },
+  { code: 'asc' as const }
+] satisfies Prisma.PermissionOrderByWithRelationInput[];
+
 const ROLE_LIST_INCLUDE = {
   rolePermissions: {
     include: {
       permission: {
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          module: true,
-          action: true
-        }
+        select: PERMISSION_SELECT
       }
     },
     orderBy: {
@@ -80,6 +88,7 @@ const ROLE_DETAIL_INCLUDE = {
 
 type RoleListRecord = Prisma.RoleGetPayload<{ include: typeof ROLE_LIST_INCLUDE }>;
 type RoleDetailRecord = Prisma.RoleGetPayload<{ include: typeof ROLE_DETAIL_INCLUDE }>;
+type PermissionCatalogRecord = Prisma.PermissionGetPayload<{ select: typeof PERMISSION_SELECT }>;
 
 @Injectable()
 export class V2RolesService {
@@ -90,6 +99,17 @@ export class V2RolesService {
   ) {}
 
   async list(query: ListV2RolesQuery) {
+    const [list, permissions] = await Promise.all([
+      this.listRoleRecords(query),
+      this.listPermissionCatalog()
+    ]);
+    return {
+      ...list,
+      items: list.items.map((role) => this.toResponse(role, permissions))
+    };
+  }
+
+  private async listRoleRecords(query: ListV2RolesQuery) {
     const pagination = getPagination(query);
     const keyword = this.normalizeOptionalText(query.keyword, '搜索关键词', 100);
     const where: Prisma.RoleWhereInput = {
@@ -113,7 +133,7 @@ export class V2RolesService {
     ]);
 
     return {
-      items: items.map((role) => this.toResponse(role)),
+      items,
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
@@ -122,27 +142,25 @@ export class V2RolesService {
 
   async bootstrap(query: ListV2RolesQuery) {
     const [list, permissions] = await Promise.all([
-      this.list(query),
-      this.prisma.permission.findMany({
-        select: {
-          id: true,
-          name: true,
-          code: true,
-          module: true,
-          action: true
-        },
-        orderBy: [{ module: 'asc' }, { action: 'asc' }, { code: 'asc' }]
-      })
+      this.listRoleRecords(query),
+      this.listPermissionCatalog()
     ]);
     return {
-      list,
+      list: {
+        ...list,
+        items: list.items.map((role) => this.toResponse(role, permissions))
+      },
       permissions,
       generatedAt: new Date().toISOString()
     };
   }
 
   async get(idInput: string) {
-    return this.toDetailResponse(await this.findRoleOrThrow(idInput));
+    const [role, permissions] = await Promise.all([
+      this.findRoleOrThrow(idInput),
+      this.listPermissionCatalog()
+    ]);
+    return this.toDetailResponse(role, permissions);
   }
 
   async create(dto: CreateV2RoleDto, operator: AuthenticatedUser) {
@@ -181,7 +199,7 @@ export class V2RolesService {
         );
         return created;
       });
-      return this.toDetailResponse(role);
+      return this.toDetailResponse(role, []);
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         throw new ConflictException('角色编码已存在。');
@@ -252,7 +270,7 @@ export class V2RolesService {
     for (const assignment of existing.userRoles) {
       this.identityService.invalidateAuthenticatedUser(assignment.userId);
     }
-    return this.toDetailResponse(role);
+    return this.toDetailResponse(role, []);
   }
 
   private async findRoleOrThrow(idInput: string) {
@@ -267,6 +285,13 @@ export class V2RolesService {
       throw new NotFoundException('角色不存在或已删除。');
     }
     return role;
+  }
+
+  private listPermissionCatalog() {
+    return this.prisma.permission.findMany({
+      select: PERMISSION_SELECT,
+      orderBy: PERMISSION_ORDER_BY
+    });
   }
 
   private async assertCodeAvailable(code: string) {
@@ -381,8 +406,14 @@ export class V2RolesService {
     return [{ [sortField]: sortOrder }, { code: 'asc' }];
   }
 
-  private toResponse(role: RoleListRecord | RoleDetailRecord) {
-    const permissions = role.rolePermissions.map(({ permission }) => permission);
+  private toResponse(
+    role: RoleListRecord | RoleDetailRecord,
+    allPermissions: PermissionCatalogRecord[]
+  ) {
+    const permissions =
+      role.code === 'admin' && allPermissions.length
+        ? allPermissions
+        : role.rolePermissions.map(({ permission }) => permission);
     return {
       id: role.id,
       name: role.name,
@@ -398,9 +429,9 @@ export class V2RolesService {
     };
   }
 
-  private toDetailResponse(role: RoleDetailRecord) {
+  private toDetailResponse(role: RoleDetailRecord, allPermissions: PermissionCatalogRecord[]) {
     return {
-      ...this.toResponse(role),
+      ...this.toResponse(role, allPermissions),
       members: role.userRoles.map(({ user }) => ({
         id: user.id,
         username: user.username,

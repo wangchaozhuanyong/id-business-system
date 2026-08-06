@@ -94,6 +94,7 @@ describe('useOrderReceiptPricing', () => {
 
     form.receivedCurrency = 'MYR';
     const loading = pricing.loadReceiptFxQuote();
+    form.receivedFxMode = 'manual';
     form.receivedFxRateToCny = '1.70000000';
     form.receivedManualRateReason = '客户确认成交汇率';
     pricing.handleManualFxRateInput();
@@ -109,6 +110,7 @@ describe('useOrderReceiptPricing', () => {
   it('converts the exact CNY target before rounding the final original-currency recommendation', () => {
     const form = reactive(createInitialOrderEntryForm());
     form.receivedCurrency = 'MYR';
+    form.receivedFxMode = 'manual';
     form.receivedFxRateToCny = '0.10000000';
     const pricing = useOrderReceiptPricing({
       form,
@@ -128,6 +130,33 @@ describe('useOrderReceiptPricing', () => {
 
     expect(pricing.suggestedReceipt.value.originalAmount).toBe('1005');
     expect(pricing.suggestedReceipt.value.equivalentCnyAmount).toBe('100.5');
+    pricing.resetOrderReceiptPricing();
+  });
+
+  it('switches between automatic and manual receipt FX modes without mixing evidence', async () => {
+    vi.spyOn(idBusinessV2OrdersApi, 'quoteReceiptFx').mockResolvedValue(
+      createQuote('MYR', '1.65000000', 'myr-snapshot')
+    );
+    const { form, pricing } = createPricing();
+
+    form.receivedCurrency = 'MYR';
+    await pricing.loadReceiptFxQuote();
+    expect(form.receivedFxSnapshotId).toBe('myr-snapshot');
+
+    pricing.handleFxModeChange('manual');
+    form.receivedFxRateToCny = '1.70000000';
+    form.receivedManualRateReason = '客户确认成交汇率';
+    pricing.handleManualFxRateInput();
+
+    expect(form.receivedFxSnapshotId).toBe('');
+    expect(form.automaticFxRateToCny).toBe('');
+
+    pricing.handleFxModeChange('automatic');
+
+    expect(form.receivedFxRateToCny).toBe('');
+    expect(form.receivedManualRateReason).toBe('');
+    expect(form.receivedFxSnapshotId).toBe('myr-snapshot');
+    expect(form.automaticFxRateToCny).toBe('1.65000000');
     pricing.resetOrderReceiptPricing();
   });
 });

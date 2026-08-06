@@ -195,6 +195,40 @@ describe('V2RolesService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('returns every catalog permission for the system administrator role', async () => {
+    const fixture = createService();
+    fixture.prisma.role.findUnique.mockResolvedValue(
+      createRole({
+        name: '管理员',
+        code: 'admin'
+      })
+    );
+    fixture.prisma.permission.findMany.mockResolvedValue([permissionView, permissionUpdate]);
+
+    const result = await fixture.service.get('22222222-2222-4222-8222-222222222222');
+
+    expect(result).toMatchObject({
+      code: 'admin',
+      isSystemRole: true,
+      permissionCount: 2,
+      permissionIds: [permissionView.id, permissionUpdate.id]
+    });
+  });
+
+  it('keeps custom role permissions scoped to assigned permissions', async () => {
+    const fixture = createService();
+    fixture.prisma.role.findUnique.mockResolvedValue(createRole());
+    fixture.prisma.permission.findMany.mockResolvedValue([permissionView, permissionUpdate]);
+
+    const result = await fixture.service.get('22222222-2222-4222-8222-222222222222');
+
+    expect(result).toMatchObject({
+      code: 'operation',
+      permissionCount: 1,
+      permissionIds: [permissionView.id]
+    });
+  });
+
   it('replaces permissions atomically, audits the diff and invalidates assigned users', async () => {
     const fixture = createService();
     const existing = createRole();

@@ -194,6 +194,23 @@
   margin-right: 0;
 }
 
+.v2-order-entry-fx-control {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+}
+
+.v2-order-entry-fx-mode {
+  align-self: start;
+}
+
+.v2-order-entry-fx-manual {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
 .v2-order-entry-readonly {
   display: flex;
   width: 100%;
@@ -265,6 +282,15 @@
   line-height: 1.35;
 }
 
+.v2-order-entry-cost-check {
+  justify-content: flex-start;
+}
+
+.v2-order-entry-cost-check span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .v2-order-entry-recommendation {
   display: flex;
   width: 100%;
@@ -305,9 +331,6 @@
 }
 
 .v2-order-entry-actions {
-  position: sticky;
-  z-index: 5;
-  bottom: -20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -348,6 +371,55 @@
   display: grid;
   margin: 0 0 16px;
   gap: 0;
+}
+
+.v2-order-entry-candidate-controls {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.v2-order-entry-candidate-controls > section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface-muted);
+}
+
+.v2-order-entry-candidate-controls header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v2-order-entry-candidate-controls header span {
+  color: var(--v2-text);
+  font-size: 12px;
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+.v2-order-entry-candidate-controls header small {
+  overflow: hidden;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-order-entry-disposition-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.v2-order-entry-disposition-mode .el-radio {
+  margin-right: 0;
 }
 
 .v2-order-entry-live-summary > div {
@@ -394,13 +466,13 @@
   white-space: nowrap;
 }
 
-.v2-order-entry-live-summary > div:nth-child(8) {
+.v2-order-entry-live-summary > div:nth-last-child(2) {
   min-height: 44px;
   border-top: 1px solid var(--v2-border);
 }
 
-.v2-order-entry-live-summary > div:nth-child(8) dt,
-.v2-order-entry-live-summary > div:nth-child(8) dd {
+.v2-order-entry-live-summary > div:nth-last-child(2) dt,
+.v2-order-entry-live-summary > div:nth-last-child(2) dd {
   color: var(--v2-text);
   font-weight: var(--v3-font-weight-bold);
 }

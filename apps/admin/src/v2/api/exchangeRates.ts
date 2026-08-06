@@ -12,6 +12,7 @@ import type {
   V2ExchangeRateRunListQuery,
   V2ExchangeRateRunListResult,
   V2ExchangeRateRuntime,
+  V2ExchangeRateReceiptFxRate,
   V2ExchangeRateSettings
 } from '@/v2/types/exchangeRates';
 
@@ -106,6 +107,7 @@ export const idBusinessV2ExchangeRatesApi = {
       runtime: V2ExchangeRateRuntime;
       runs: V2ExchangeRateRunListResult;
       manualEntries: V2ExchangeRateListResult;
+      latestReceiptFxRates: V2ExchangeRateReceiptFxRate[];
       generatedAt: string;
     }>(
       http.get('/id-business-v2/exchange-rates/bootstrap', {

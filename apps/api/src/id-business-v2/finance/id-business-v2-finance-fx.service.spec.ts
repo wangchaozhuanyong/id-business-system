@@ -93,6 +93,19 @@ describe('IdBusinessV2FinanceFxService order receipt quotes', () => {
     expect(prisma.idBusinessV2FinanceFxRateSnapshot.create).not.toHaveBeenCalled();
   });
 
+  it('requires a reason when resolving a manual order receipt rate', async () => {
+    await expect(
+      service.resolve({
+        currency: 'MYR',
+        occurredAt: quotedAt,
+        manualRate: '1.65000000',
+        manualReason: '',
+        operator
+      })
+    ).rejects.toThrow('人工汇率必须填写原因');
+    expect(prisma.idBusinessV2FinanceFxRateSnapshot.create).not.toHaveBeenCalled();
+  });
+
   it('reuses an unexpired ECB MYR quote', async () => {
     const existing = snapshot({
       id: '22222222-2222-4222-8222-222222222222',

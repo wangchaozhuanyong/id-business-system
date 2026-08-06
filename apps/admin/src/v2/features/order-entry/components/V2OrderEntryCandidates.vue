@@ -9,9 +9,39 @@
       :help="
         idSelectionMode === 'manual'
           ? '搜索并选择符合国家、状态、余额和锁定规则的 ID。'
-          : '根据当前订单内容自动匹配可用 ID，并预览余额、成本、手续费与利润。'
+          : '根据当前订单内容自动匹配可用 ID，并预览余额、成本与利润。'
       "
     />
+
+    <div class="v2-order-entry-candidate-controls">
+      <section>
+        <header>
+          <span>ID 选择方式</span>
+          <small>{{ idSelectionMode === 'manual' ? '搜索指定 ID' : '系统自动匹配' }}</small>
+        </header>
+        <el-radio-group
+          v-model="idSelectionMode"
+          class="v2-order-entry-selection-mode"
+          @change="emitSelectionModeChange"
+        >
+          <el-radio value="auto">自动匹配</el-radio>
+          <el-radio value="manual">手动选择</el-radio>
+        </el-radio-group>
+      </section>
+
+      <section>
+        <header>
+          <span>ID 处理方式</span>
+          <small>{{
+            accountDisposition === 'sold' ? '本单售出并全局锁定' : '本单保留继续复用'
+          }}</small>
+        </header>
+        <el-radio-group v-model="accountDisposition" class="v2-order-entry-disposition-mode">
+          <el-radio value="retained">保留 ID</el-radio>
+          <el-radio value="sold">卖出 ID</el-radio>
+        </el-radio-group>
+      </section>
+    </div>
 
     <dl class="v2-order-entry-live-summary">
       <div>
@@ -26,26 +56,9 @@
         <dt>账号余额（可用）</dt>
         <dd>{{ formatDecimal(selectedCandidate?.currentBalance ?? '0') }}</dd>
       </div>
-      <div class="is-divider">
-        <dt>ID 处理方式</dt>
-        <dd>{{ accountDisposition === 'sold' ? '卖出 ID' : '保留 ID' }}</dd>
-      </div>
-      <div>
-        <dt>ID 购买成本</dt>
-        <dd>
-          ¥{{ formatDecimal(appliedAccountCostPreview) }}
-          <small v-if="accountDisposition === 'retained'">
-            （快照 ¥{{ formatDecimal(accountPurchaseCostPreview) }}，本单不计）
-          </small>
-        </dd>
-      </div>
       <div>
         <dt>余额成本</dt>
         <dd>¥{{ formatDecimal(estimatedBalanceCostPreview) }}</dd>
-      </div>
-      <div>
-        <dt>平台手续费</dt>
-        <dd>¥{{ formatDecimal(platformFeePreview) }}</dd>
       </div>
       <div>
         <dt>总成本</dt>
@@ -122,15 +135,10 @@ import type { V2OrderCandidate, V2OrderMatchingResult } from '../contracts';
 import type { IdSelectionMode } from '../useOrderCandidateSelection';
 
 defineProps<{
-  idSelectionMode: IdSelectionMode;
   selectedCandidate: V2OrderCandidate | null;
   selectedCountryName: string;
-  accountDisposition: 'retained' | 'sold';
-  accountPurchaseCostPreview: string;
-  appliedAccountCostPreview: string;
   estimatedBalanceCostPreview: string;
   totalCostPreview: string;
-  platformFeePreview: string;
   estimatedProfitPreview: string;
   canMatch: boolean;
   matchingLoading: boolean;
@@ -141,9 +149,20 @@ defineProps<{
   formatDecimal: (value: string) => string;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   retry: [];
+  selectionModeChange: [value: IdSelectionMode];
 }>();
 
 const accountId = defineModel<string>('accountId', { required: true });
+const idSelectionMode = defineModel<IdSelectionMode>('idSelectionMode', { required: true });
+const accountDisposition = defineModel<'retained' | 'sold'>('accountDisposition', {
+  required: true
+});
+
+function emitSelectionModeChange(value: unknown) {
+  if (value === 'auto' || value === 'manual') {
+    emit('selectionModeChange', value);
+  }
+}
 </script>
