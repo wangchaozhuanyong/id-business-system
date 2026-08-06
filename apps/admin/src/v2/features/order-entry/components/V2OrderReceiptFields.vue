@@ -19,60 +19,71 @@
   </el-form-item>
 
   <template v-if="form.receivedCurrency !== 'CNY'">
-    <el-form-item label="手工汇率" prop="receivedFxRateToCny">
-      <el-input
-        v-model="form.receivedFxRateToCny"
-        inputmode="decimal"
-        placeholder="留空则保存时自动采集"
-        @input="emit('manualRateInput')"
-      />
-    </el-form-item>
-    <el-form-item v-if="!form.receivedFxRateToCny" label="自动汇率">
-      <div
-        class="v2-order-entry-readonly v2-order-entry-fx-quote"
-        :class="{ 'is-error': receiptFxError }"
-        role="status"
-        aria-live="polite"
-      >
-        <div>
-          <strong>
-            {{
-              receiptFxLoading
-                ? `正在采集 ${form.receivedCurrency}/CNY 汇率`
-                : form.automaticFxRateToCny
-                  ? `1 ${form.receivedCurrency} = ¥${form.automaticFxRateToCny}`
-                  : '暂无可用汇率'
-            }}
-          </strong>
-          <span v-if="receiptFxQuote && form.automaticFxRateToCny">
-            {{ sourceLabel(receiptFxQuote.source) }} · 采集于
-            {{ formatQuoteTime(receiptFxQuote.capturedAt) }}
-            <template v-if="receiptFxQuote.expiresAt">
-              · 有效至 {{ formatQuoteTime(receiptFxQuote.expiresAt) }}
-            </template>
-          </span>
-          <span v-else-if="receiptFxError">{{ receiptFxError }}</span>
-          <span v-else-if="!receiptFxLoading">可改用人工汇率，并填写真实来源</span>
-        </div>
-        <AppButton
-          v-if="receiptFxError && !receiptFxLoading"
-          variant="ghost"
-          @click="emit('retryFxQuote')"
+    <el-form-item label="汇率方式" prop="receivedManualRateReason">
+      <div class="v2-order-entry-fx-control">
+        <el-radio-group
+          :model-value="form.receivedFxMode"
+          class="v2-order-entry-fx-mode"
+          @change="handleFxModeChange"
         >
-          重新采集
-        </AppButton>
+          <el-radio-button value="automatic">自动</el-radio-button>
+          <el-radio-button value="manual">手动</el-radio-button>
+        </el-radio-group>
+
+        <div
+          v-if="form.receivedFxMode === 'automatic'"
+          class="v2-order-entry-readonly v2-order-entry-fx-quote"
+          :class="{ 'is-error': receiptFxError }"
+          role="status"
+          aria-live="polite"
+        >
+          <div>
+            <strong>
+              {{
+                receiptFxLoading
+                  ? `正在采集 ${form.receivedCurrency}/CNY 汇率`
+                  : form.automaticFxRateToCny
+                    ? `1 ${form.receivedCurrency} = ¥${form.automaticFxRateToCny}`
+                    : '暂无可用汇率'
+              }}
+            </strong>
+            <span v-if="receiptFxQuote && form.automaticFxRateToCny">
+              {{ sourceLabel(receiptFxQuote.source) }} · 采集于
+              {{ formatQuoteTime(receiptFxQuote.capturedAt) }}
+              <template v-if="receiptFxQuote.expiresAt">
+                · 有效至 {{ formatQuoteTime(receiptFxQuote.expiresAt) }}
+              </template>
+            </span>
+            <span v-else-if="receiptFxError">{{ receiptFxError }}</span>
+            <span v-else-if="!receiptFxLoading">暂无快照时不会用 0 代替，请重新采集或切到手动</span>
+          </div>
+          <AppButton
+            v-if="receiptFxError && !receiptFxLoading"
+            variant="ghost"
+            @click="emit('retryFxQuote')"
+          >
+            重新采集
+          </AppButton>
+        </div>
+
+        <div v-else class="v2-order-entry-fx-manual">
+          <el-input
+            v-model="form.receivedFxRateToCny"
+            inputmode="decimal"
+            placeholder="填写 1 原币折算人民币汇率"
+            @input="emit('manualRateInput')"
+          />
+          <el-input
+            v-model="form.receivedManualRateReason"
+            maxlength="200"
+            placeholder="说明手动汇率来源/原因，至少 2 个字符"
+          />
+        </div>
       </div>
-    </el-form-item>
-    <el-form-item v-if="form.receivedFxRateToCny" label="汇率来源" prop="receivedManualRateReason">
-      <el-input
-        v-model="form.receivedManualRateReason"
-        maxlength="200"
-        placeholder="说明人工汇率来源，至少 2 个字符"
-      />
     </el-form-item>
   </template>
 
-  <el-form-item label="人民币实收">
+  <el-form-item label="折算人民币">
     <div class="v2-order-entry-readonly">
       <strong>
         {{
@@ -105,9 +116,16 @@ defineProps<{
 const emit = defineEmits<{
   currencyChange: [];
   priceInput: [];
+  fxModeChange: [mode: V2OrderEntryForm['receivedFxMode']];
   manualRateInput: [];
   retryFxQuote: [];
 }>();
+
+function handleFxModeChange(value: unknown) {
+  if (value === 'automatic' || value === 'manual') {
+    emit('fxModeChange', value);
+  }
+}
 
 function sourceLabel(source: V2FinanceFxRateSnapshot['source']) {
   if (source === 'ecb_cross') return 'ECB 国际参考交叉汇率';

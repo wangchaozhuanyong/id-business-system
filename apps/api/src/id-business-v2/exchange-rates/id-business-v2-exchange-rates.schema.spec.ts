@@ -52,6 +52,7 @@ describe('V2 exchange-rate contracts', () => {
     expect(controller).toContain('@Public()');
     expect(controller).toContain("@Get('runtime')");
     expect(controller).toContain("@Patch('settings')");
+    expect(controller).toContain('latestReceiptFxRates: overview.latestReceiptFxRates');
     expect(moduleSource).toContain('IdBusinessV2BinanceOtcCollector');
     expect(moduleSource).toContain('IdBusinessV2OkxOtcCollector');
     expect(moduleSource).toContain('IdBusinessV2ExchangeRateWorker');

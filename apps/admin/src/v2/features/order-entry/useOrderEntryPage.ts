@@ -108,6 +108,13 @@ export function useOrderEntryPage() {
     return '';
   });
   const receivedAmountPreview = computed(() => calculateReceivedAmountPreview(form));
+  const hasEffectiveReceiptFxRate = computed(
+    () =>
+      form.receivedCurrency === 'CNY' ||
+      Boolean(
+        form.receivedFxMode === 'manual' ? form.receivedFxRateToCny : form.automaticFxRateToCny
+      )
+  );
   const platformFeePreview = computed(() => {
     const platform = selectedSettlementPlatform.value;
     return (
@@ -148,11 +155,7 @@ export function useOrderEntryPage() {
       return '填写原币实收后，将按当前成本自动反算';
     }
     if (!isPositiveOrderAmount(form.receivedAmount)) {
-      if (
-        form.receivedCurrency !== 'CNY' &&
-        !form.receivedFxRateToCny &&
-        !form.automaticFxRateToCny
-      ) {
+      if (form.receivedCurrency !== 'CNY' && !hasEffectiveReceiptFxRate.value) {
         return `等待有效的 ${form.receivedCurrency}/CNY 汇率后自动反算`;
       }
       return '原币实收必须大于 0 才能反算利润率';
@@ -221,6 +224,7 @@ export function useOrderEntryPage() {
     receiptFxLoading,
     receiptFxError,
     handleReceivedCurrencyChange: resetReceiptPricingForCurrencyChange,
+    handleFxModeChange,
     handleManualFxRateInput,
     loadReceiptFxQuote,
     ensureReceiptFxReadyForSubmit,
@@ -349,6 +353,9 @@ export function useOrderEntryPage() {
       return;
     }
     if (!form.openedAt || !form.dueAt) return;
+    const usesManualReceiptFx = form.receivedCurrency !== 'CNY' && form.receivedFxMode === 'manual';
+    const usesAutomaticReceiptFx =
+      form.receivedCurrency !== 'CNY' && form.receivedFxMode === 'automatic';
     submitting.value = true;
     createdResult.value = null;
     consumptionError.value = '';
@@ -365,12 +372,16 @@ export function useOrderEntryPage() {
         receivedAmount: form.receivedAmount.trim() || undefined,
         receivedOriginalAmount: form.receivedOriginalAmount.trim(),
         receivedCurrency: form.receivedCurrency,
-        receivedFxRateToCny: form.receivedFxRateToCny.trim() || undefined,
+        receivedFxRateToCny: usesManualReceiptFx
+          ? form.receivedFxRateToCny.trim() || undefined
+          : undefined,
         receivedFxSnapshotId:
-          !form.receivedFxRateToCny && form.receivedFxSnapshotId
+          usesAutomaticReceiptFx && form.receivedFxSnapshotId
             ? form.receivedFxSnapshotId
             : undefined,
-        receivedManualRateReason: form.receivedManualRateReason.trim() || undefined,
+        receivedManualRateReason: usesManualReceiptFx
+          ? form.receivedManualRateReason.trim() || undefined
+          : undefined,
         accountDisposition: form.accountDisposition,
         balanceAmount: form.balanceAmount.trim(),
         openedAt: form.openedAt.toISOString(),
@@ -386,7 +397,7 @@ export function useOrderEntryPage() {
       if (!createdResult.value) {
         const message = getApiErrorMessage(error);
         if (
-          !form.receivedFxRateToCny &&
+          form.receivedFxMode === 'automatic' &&
           (message.includes('汇率快照已过期') || message.includes('汇率快照不存在'))
         ) {
           await loadReceiptFxQuote();
@@ -527,6 +538,7 @@ export function useOrderEntryPage() {
     handleCategoryChange,
     handleSettlementPlatformChange,
     handleReceivedCurrencyChange,
+    handleFxModeChange,
     handleIdSelectionModeChange,
     searchManualCandidates,
     loadCandidates,

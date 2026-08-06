@@ -324,6 +324,18 @@ export class IdBusinessV2ExchangeRateRepository {
     return row ? mapExchangeRateRun(row) : null;
   }
 
+  async findLatestReceiptFxSnapshots(currencies: Array<'MYR' | 'USDT'>) {
+    const rows = await Promise.all(
+      currencies.map((currency) =>
+        this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
+          where: { currency },
+          orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
+        })
+      )
+    );
+    return rows.filter((row) => row !== null).map(mapReceiptFxSnapshot);
+  }
+
   async findRunningRun() {
     const row = await this.prisma.idBusinessV2ExchangeRateRun.findFirst({
       where: { status: 'running' },
@@ -531,5 +543,12 @@ function mapExchangeRateSnapshot<
       snapshot.midRateToRmb,
       'id_business_v2_exchange_rate_snapshots.mid_rate_to_rmb'
     )
+  };
+}
+
+function mapReceiptFxSnapshot<T extends { rateToCny: unknown }>(snapshot: T) {
+  return {
+    ...snapshot,
+    rateToCny: mapRate8(snapshot.rateToCny, 'id_business_v2_finance_fx_rate_snapshots.rate_to_cny')
   };
 }

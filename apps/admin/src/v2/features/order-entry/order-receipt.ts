@@ -7,7 +7,8 @@ import type { V2OrderEntryForm } from './order-entry-form';
 export function calculateReceivedAmountPreview(form: V2OrderEntryForm) {
   if (!isNonNegativeOrderAmount(form.receivedOriginalAmount)) return '';
   if (form.receivedCurrency === 'CNY') return form.receivedOriginalAmount;
-  const rate = form.receivedFxRateToCny || form.automaticFxRateToCny;
+  const rate =
+    form.receivedFxMode === 'manual' ? form.receivedFxRateToCny : form.automaticFxRateToCny;
   if (
     !isV2UnsignedDecimal(rate, {
       allowZero: false,
@@ -39,6 +40,10 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
       {
         validator: (_rule, value, callback) => {
           const normalized = String(value ?? '').trim();
+          if (form.receivedCurrency !== 'CNY' && form.receivedFxMode === 'manual' && !normalized) {
+            callback(new Error('手动汇率方式下必须填写手工汇率'));
+            return;
+          }
           callback(
             !normalized ||
               isV2UnsignedDecimal(normalized, {
@@ -56,10 +61,23 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
       {
         validator: (_rule, value, callback) => {
           const reason = String(value ?? '').trim();
+          if (form.receivedCurrency === 'CNY' || form.receivedFxMode !== 'manual') {
+            callback();
+            return;
+          }
+          if (
+            !isV2UnsignedDecimal(form.receivedFxRateToCny, {
+              allowZero: false,
+              decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
+            })
+          ) {
+            callback(
+              new Error(`汇率必须是最多 ${V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES} 位小数的正数`)
+            );
+            return;
+          }
           callback(
-            form.receivedFxRateToCny && reason.length < 2
-              ? new Error('手工填写汇率时必须填写至少 2 个字符的来源')
-              : undefined
+            reason.length < 2 ? new Error('手工填写汇率时必须填写至少 2 个字符的来源') : undefined
           );
         },
         trigger: 'blur'
@@ -69,6 +87,7 @@ export function createOrderReceiptRules(form: V2OrderEntryForm): FormRules {
 }
 
 export function resetReceiptCurrencyEvidence(form: V2OrderEntryForm) {
+  form.receivedFxMode = 'automatic';
   form.receivedFxRateToCny = '';
   form.receivedFxSnapshotId = '';
   form.automaticFxRateToCny = '';

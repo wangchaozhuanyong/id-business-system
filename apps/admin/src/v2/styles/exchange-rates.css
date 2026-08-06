@@ -73,6 +73,74 @@
   background: var(--v2-surface-muted);
 }
 
+.v2-exchange-receipt-rates {
+  display: grid;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(160px, 0.24fr) minmax(0, 1fr);
+  border-top: 1px solid var(--v2-border-soft);
+  background: color-mix(in srgb, var(--v2-surface-muted) 72%, var(--v2-surface));
+}
+
+.v2-exchange-receipt-rates > header {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 14px 22px;
+  border-right: 1px solid var(--v2-border-soft);
+}
+
+.v2-exchange-receipt-rates > header span,
+.v2-exchange-receipt-rates dt,
+.v2-exchange-receipt-rates small {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-exchange-receipt-rates > header strong {
+  color: var(--v2-text);
+  font-size: 14px;
+}
+
+.v2-exchange-receipt-rates > dl {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.v2-exchange-receipt-rates > dl > div {
+  min-width: 0;
+  padding: 12px 18px;
+  border-right: 1px solid var(--v2-border-soft);
+}
+
+.v2-exchange-receipt-rates > dl > div:last-child {
+  border-right: 0;
+}
+
+.v2-exchange-receipt-rates > dl > div.is-muted dd {
+  color: var(--v2-text-soft);
+}
+
+.v2-exchange-receipt-rates dt {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+}
+
+.v2-exchange-receipt-rates dd {
+  margin: 6px 0 2px;
+  overflow-wrap: anywhere;
+  color: var(--v2-accent);
+  font-size: 18px;
+  font-weight: var(--v3-font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
 .v2-exchange-rate-pairs > div,
 .v2-exchange-runtime > div {
   min-width: 0;
@@ -249,6 +317,15 @@
     border-left: 0;
   }
 
+  .v2-exchange-receipt-rates {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-exchange-receipt-rates > header {
+    border-right: 0;
+    border-bottom: 1px solid var(--v2-border-soft);
+  }
+
   .v2-exchange-toolbar {
     grid-template-columns: minmax(180px, 1fr) 130px 140px 36px;
   }
@@ -275,6 +352,19 @@
 
   .v2-exchange-runtime {
     grid-column: auto;
+  }
+
+  .v2-exchange-receipt-rates > dl {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-exchange-receipt-rates > dl > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--v2-border-soft);
+  }
+
+  .v2-exchange-receipt-rates > dl > div:last-child {
+    border-bottom: 0;
   }
 
   .v2-exchange-toolbar,

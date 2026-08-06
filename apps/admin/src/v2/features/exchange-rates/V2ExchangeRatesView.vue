@@ -138,6 +138,31 @@
             <dd>最近 {{ page.runtime?.retention.days ?? 30 }} 天</dd>
           </div>
         </dl>
+        <section class="v2-exchange-receipt-rates" aria-label="订单收款汇率状态">
+          <header>
+            <span>订单收款汇率</span>
+            <strong>最新可用状态</strong>
+          </header>
+          <dl>
+            <div
+              v-for="rate in page.receiptFxRates"
+              :key="rate.currency"
+              :class="{ 'is-muted': rate.status === 'missing' }"
+            >
+              <dt>
+                <span>{{ rate.currency }}</span>
+                <el-tag :type="page.receiptFxStatusType(rate.status)" size="small" effect="plain">
+                  {{ page.receiptFxStatusLabel(rate.status) }}
+                </el-tag>
+              </dt>
+              <dd>{{ rate.rateToCny ? page.formatRate(rate.rateToCny) : '—' }}</dd>
+              <small>
+                {{ page.receiptFxSourceLabel(rate.source) }} ·
+                {{ page.receiptFxCapturedLabel(rate) }}
+              </small>
+            </div>
+          </dl>
+        </section>
       </section>
     </V2AsyncRegion>
 
