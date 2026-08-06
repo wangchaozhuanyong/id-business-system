@@ -80,6 +80,7 @@ export class IdBusinessV2FinanceExpensesService {
         receiptAttachmentId: item.receiptAttachmentId,
         remark: item.remark,
         status: item.journal.status,
+        createdBy: item.createdBy,
         createdAt: item.createdAt
       })),
       total,

@@ -145,7 +145,7 @@ export class IdBusinessV2GiftCardRecordsService {
           throw new NotFoundException('礼品卡记录不存在');
         }
         if (existing.account.lossReportedAt) {
-          throw new ConflictException('已报损 ID 永久冻结，不能修改加卡记录');
+          throw new ConflictException('已报损冻结 ID 不能修改加卡记录');
         }
 
         const updated = await this.repository.updateMetadataInTransaction(tx, {

@@ -23,7 +23,7 @@ export function ledgerTypeLabel(entryType: V2BalanceLedgerEntryType) {
     order_consumption_reversal: '订单退款恢复',
     opening_balance: '期初余额',
     manual_adjustment: '手工修正',
-    account_loss: 'ID 永久报损'
+    account_loss: 'ID 报损冻结'
   }[entryType];
 }
 

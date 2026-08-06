@@ -234,6 +234,9 @@
                 <template #default="{ row }">{{ row.payee || '—' }}</template>
               </V2TableColumn>
               <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[7]">
+                <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+              </V2TableColumn>
+              <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[8]">
                 <template #default="{ row }">{{ row.remark || '—' }}</template>
               </V2TableColumn>
             </V2Table>
@@ -440,7 +443,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineComponent, h, reactive } from 'vue';
+import { reactive } from 'vue';
 import { Lock, Plus, Refresh, RefreshLeft } from '@element-plus/icons-vue';
 import type { V2FinanceSupplierWallet } from './contracts';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -451,6 +454,8 @@ import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
+import FinanceEmpty from './components/FinanceEmpty';
 import V2FinanceLedgerDrawers from './components/V2FinanceLedgerDrawers.vue';
 import {
   accountCodeLabel,
@@ -481,18 +486,4 @@ function handleWalletMutationCommand(row: V2FinanceSupplierWallet, command: unkn
     page.openWalletMutation(row, command);
   }
 }
-
-const FinanceEmpty = defineComponent({
-  props: {
-    title: { type: String, required: true },
-    description: { type: String, required: true }
-  },
-  setup(props) {
-    return () =>
-      h('div', { class: 'v2-records-empty' }, [
-        h('strong', props.title),
-        h('span', props.description)
-      ]);
-  }
-});
 </script>

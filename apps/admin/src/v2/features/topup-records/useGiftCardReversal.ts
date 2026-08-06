@@ -37,7 +37,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
     if (!pendingReversal.value) return '未选择需要处理的礼品卡';
     if (pendingReversal.value.giftCard.status !== 'credited') return '该礼品卡已不是入账状态';
     if (pendingReversal.value.giftCard.account.lossStatus === 'reported') {
-      return '该 ID 已永久报损';
+      return '该 ID 已报损冻结';
     }
     return '';
   });
@@ -74,7 +74,7 @@ export function useGiftCardReversal(options: GiftCardReversalOptions) {
         )
       );
       const successMessage = result.accountLoss
-        ? '礼品卡已被赎回，该 ID 已永久报损并清零'
+        ? '礼品卡已被赎回，该 ID 已报损冻结并计入损耗'
         : result.action === 'redeemed'
           ? '礼品卡已标记被赎回，反向流水已生成'
           : '礼品卡已撤回，反向流水已生成';

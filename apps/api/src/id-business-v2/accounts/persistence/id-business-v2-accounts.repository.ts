@@ -28,7 +28,8 @@ const ACCOUNT_INCLUDE = {
   countryOption: { select: { id: true, code: true, name: true } },
   statusOption: { select: { id: true, code: true, name: true, isSystem: true } },
   supplierOption: { select: { id: true, code: true, name: true } },
-  soldByOrder: { select: { id: true, orderNo: true } }
+  soldByOrder: { select: { id: true, orderNo: true } },
+  createdBy: { select: { id: true, username: true, displayName: true } }
 } satisfies Prisma.IdBusinessV2AccountInclude;
 
 type PersistedAccount = Prisma.IdBusinessV2AccountGetPayload<{ include: typeof ACCOUNT_INCLUDE }>;

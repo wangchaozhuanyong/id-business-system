@@ -20,7 +20,7 @@ contracts 和模块样式。跨模块能力只允许放在 `components`、`compo
 
 业务模块全部位于 `apps/api/src/id-business-v2`：
 
-- `accounts`（含 ID 永久报损与报损记录）
+- `accounts`（含 ID 报损冻结、解除冻结与报损记录）
 - `customers`
 - `options`
 - `balances`
@@ -73,11 +73,12 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
 - 订单保留 `accountCostAmount` 购买成本快照；仅 `accountDisposition=sold` 时由
   `appliedAccountCostAmount` 计入利润，`retained` 与 `recovered` 的实际计入值为 0。
 - ID 通过唯一的 `soldByOrderId` 与 `soldAt` 保存当前卖出证据；普通订单锁释放不解除销售占用。
-- ID 报损通过唯一 `IdBusinessV2AccountLoss` 快照和 `account_loss` 余额流水保存，账户余额与余额
-  人民币成本原子归零，`lossReportedAt` 一旦写入不得清除。
-- 数据库触发器禁止修改或删除报损快照，并在 ID 首次报损时校验冻结、停用、余额清零和快照必须
-  同一事务成立；已报损 ID 的后续账户更新会被数据库直接拒绝。
-- 报损亏损只包含余额人民币成本；已卖出关系和历史订单利润保持不变，报损 ID 不能通过退款收回恢复。
+- ID 报损通过 `IdBusinessV2AccountLoss` 快照、`activeLossRecordId` 和 `account_loss` 余额流水保存；
+  报损冻结不清零账户余额与余额人民币成本，余额流水只记录冻结证据，损耗由财务日记确认。
+- 数据库触发器禁止修改或删除报损快照，并在报损时校验冻结、停用和 active loss 必须同一事务成立；
+  冻结期间账户业务更新会被数据库拒绝，解除冻结前必须先把 active loss 标记为已冲回并写入冲回财务日记。
+- 报损亏损包含余额人民币成本，未售 ID 同时确认 ID 采购成本；已卖出关系和历史订单利润保持不变，
+  解除冻结不会自动恢复历史开通记录。
 - 礼品卡“被赎回”可在同一事务内调用账户报损核心逻辑：先写 `gift_card_redeemed` 扣卡流水，再以
   扣卡后快照写 `account_loss` 流水和报损记录；任一步失败都回滚。
 - 礼品卡损失与 ID 剩余余额损失分开记账，共用处理原因；扣卡后余额为零也保留 0 元 ID 报损记录。
@@ -93,16 +94,18 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
 - 订单、余额、开通记录和审计必须处于同一事务或明确的补偿边界内。
 - 幂等键相同且请求一致时返回原结果；内容不一致时拒绝。
 
-### ID 永久报损接口
+### ID 报损冻结接口
 
 ```text
 POST /api/id-business-v2/accounts/:id/report-loss
+POST /api/id-business-v2/accounts/:id/unfreeze-loss
 GET  /api/id-business-v2/account-losses
 ```
 
 - 报损写操作同时需要 ID 修改和余额调整权限；记录页使用余额查看权限。
 - 报损原因、余额快照与幂等键由服务端校验，有活动订单锁时拒绝。
-- 报损事务同步冻结 ID、清零余额与成本、写入损失流水和快照，并把未结束开通记录标记为异常。
+- 报损事务同步冻结 ID、保留余额与成本、写入损失财务日记和快照，并把未结束开通记录标记为异常。
+- 解除冻结复用报损权限组合，校验当前 active loss，自动冲回原损耗财务日记，恢复 ID 可用状态但不自动恢复开通记录。
 
 ### 礼品卡被赎回联动报损
 

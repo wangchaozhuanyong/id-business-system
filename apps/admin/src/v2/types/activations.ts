@@ -12,6 +12,12 @@ export type V2ActivationDueStatus =
   | 'cancelled'
   | 'abnormal';
 
+export interface V2ActivationOperator {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface V2Activation {
   id: string;
   orderId: string;
@@ -56,6 +62,7 @@ export interface V2Activation {
   };
   remark: string | null;
   statusChangedAt: string;
+  createdBy: V2ActivationOperator | null;
   createdAt: string;
   updatedAt: string;
 }

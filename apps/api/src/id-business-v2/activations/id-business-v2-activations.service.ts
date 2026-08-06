@@ -201,6 +201,7 @@ export class IdBusinessV2ActivationsService {
       status,
       remark: activation.remark,
       statusChangedAt: activation.statusChangedAt,
+      createdBy: activation.createdBy,
       createdAt: activation.createdAt,
       updatedAt: activation.updatedAt
     };

@@ -139,6 +139,7 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
     countryOption: { id: string; code: string; name: string };
   } | null;
   settlementPlatform: { id: string; code: string; name: string } | null;
+  createdBy: { id: string; username: string; displayName: string } | null;
   locks: IdBusinessV2AccountLockRecord[];
 }
 

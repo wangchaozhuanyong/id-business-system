@@ -2,7 +2,7 @@
   <V2FormDrawer
     v-model="page.creditDrawerVisible"
     title="礼品卡入账"
-    size="min(720px, 94vw)"
+    size="min(780px, 94vw)"
     confirm-text="确认入账"
     :confirm-disabled-reason="page.creditDisabledReason"
     :confirm-loading="page.creditSubmitting"
@@ -12,7 +12,7 @@
     <div v-if="page.selectedAccount" class="v2-topup-credit-entry">
       <section class="v2-topup-credit-entry-target">
         <div>
-          <span>目标 ID</span>
+          <span>加卡 ID</span>
           <strong>{{ page.selectedAccount.appleIdMasked }}</strong>
         </div>
         <div>
@@ -23,11 +23,42 @@
       </section>
 
       <el-alert
-        title="卡片价值按“礼品卡面值 × 卡片汇率”计算，确认后将扣减卡商预付款并写入余额与成本流水"
+        title="卡片价值按“礼品卡面值 × 卡片汇率”计算，确认后扣减卡商预付款，并写入 ID 余额与成本流水。"
         type="info"
         show-icon
         :closable="false"
       />
+
+      <section class="v2-topup-credit-summary" aria-label="礼品卡入账预览">
+        <div>
+          <span>卡片价值</span>
+          <strong>
+            {{
+              page.creditCostPreview ? `¥${page.formatDecimal(page.creditCostPreview)}` : '待计算'
+            }}
+          </strong>
+        </div>
+        <div>
+          <span>卡商余额</span>
+          <strong>
+            {{
+              page.selectedTopupSupplier?.initialized
+                ? `¥${page.formatDecimal(page.selectedTopupSupplier.currentBalanceCny || '0')}`
+                : '请选择供应商'
+            }}
+          </strong>
+        </div>
+        <div>
+          <span>入账后余额</span>
+          <strong :class="{ 'is-negative': page.creditWillOverdraw }">
+            {{
+              page.creditProjectedSupplierBalance !== null
+                ? `¥${page.formatDecimal(page.creditProjectedSupplierBalance)}`
+                : '待计算'
+            }}
+          </strong>
+        </div>
+      </section>
 
       <el-form
         ref="creditFormRef"
@@ -41,145 +72,136 @@
         scroll-to-error
         :scroll-into-view-options="{ block: 'center', behavior: 'smooth' }"
       >
-        <div class="v2-topup-credit-grid">
-          <el-form-item label="卡片名称" prop="cardNameOptionId">
-            <el-select
-              v-model="page.creditForm.cardNameOptionId"
-              filterable
-              placeholder="选择卡片名称"
-            >
-              <el-option
-                v-for="option in page.cardNameOptions"
-                :key="option.id"
-                :label="option.name"
-                :value="option.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="国家" prop="countryOptionId">
-            <el-select
-              v-model="page.creditForm.countryOptionId"
-              disabled
-              placeholder="跟随目标 ID 国家"
-            >
-              <el-option
-                v-for="option in page.countryOptions"
-                :key="option.id"
-                :label="option.name"
-                :value="option.id"
-              />
-            </el-select>
-            <small class="v2-form-help">跟随目标 ID 国家，不可修改</small>
-          </el-form-item>
-        </div>
+        <section class="v2-topup-credit-fieldset">
+          <header>
+            <strong>卡片信息</strong>
+            <span>国家跟随目标 ID，价值自动计算。</span>
+          </header>
+          <div class="v2-topup-credit-grid">
+            <el-form-item label="卡片名称" prop="cardNameOptionId">
+              <el-select
+                v-model="page.creditForm.cardNameOptionId"
+                filterable
+                placeholder="选择卡片名称"
+              >
+                <el-option
+                  v-for="option in page.cardNameOptions"
+                  :key="option.id"
+                  :label="option.name"
+                  :value="option.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="国家" prop="countryOptionId">
+              <el-select
+                v-model="page.creditForm.countryOptionId"
+                disabled
+                placeholder="跟随目标 ID 国家"
+              >
+                <el-option
+                  v-for="option in page.countryOptions"
+                  :key="option.id"
+                  :label="option.name"
+                  :value="option.id"
+                />
+              </el-select>
+              <small class="v2-form-help">跟随目标 ID 国家，不可修改</small>
+            </el-form-item>
+          </div>
 
-        <div v-if="!page.cardNameOptions.length" class="v2-topup-credit-option-empty">
+          <div v-if="!page.cardNameOptions.length" class="v2-topup-credit-option-empty">
+            <el-alert
+              title="暂无启用的卡片名称，请先到选项设置完成配置"
+              type="error"
+              show-icon
+              :closable="false"
+            />
+            <AppButton variant="ghost" @click="page.openCardNameOptions">前往选项设置</AppButton>
+          </div>
+
+          <el-form-item label="礼品卡号" prop="code" class="v2-topup-credit-entry-code">
+            <el-input
+              v-model="page.creditForm.code"
+              maxlength="64"
+              autocomplete="off"
+              placeholder="手工输入礼品卡号"
+              @blur="page.normalizeCandidateCode"
+            />
+          </el-form-item>
+
+          <div class="v2-topup-credit-grid">
+            <el-form-item label="礼品卡面值" prop="faceValue">
+              <el-input
+                v-model="page.creditForm.faceValue"
+                inputmode="decimal"
+                maxlength="19"
+                placeholder="例如 100"
+              />
+            </el-form-item>
+            <el-form-item label="卡片汇率" prop="exchangeRate">
+              <el-input
+                v-model="page.creditForm.exchangeRate"
+                inputmode="decimal"
+                maxlength="19"
+                placeholder="例如 5.40000000"
+              />
+              <small class="v2-form-help">1 单位礼品卡面值等于多少人民币</small>
+            </el-form-item>
+            <el-form-item label="卡片价值">
+              <el-input
+                :model-value="
+                  page.creditCostPreview
+                    ? `¥${page.formatDecimal(page.creditCostPreview)}`
+                    : '输入面值和汇率后自动计算'
+                "
+                readonly
+                aria-label="卡片价值（人民币）"
+              />
+            </el-form-item>
+            <el-form-item label="加卡时间" prop="creditedAt">
+              <el-input v-model="page.creditForm.creditedAt" type="datetime-local" />
+            </el-form-item>
+          </div>
+        </section>
+
+        <section class="v2-topup-credit-fieldset">
+          <header>
+            <strong>卡商与备注</strong>
+            <span>保存后记录卡商余额变动明细。</span>
+          </header>
+          <el-form-item label="加卡供应商" prop="supplierOptionId">
+            <el-select
+              v-model="page.creditForm.supplierOptionId"
+              filterable
+              placeholder="选择启用的加卡供应商"
+            >
+              <el-option
+                v-for="option in page.topupSupplierOptions"
+                :key="option.id"
+                :label="`${option.name}${option.initialized ? '' : '（资金未初始化）'}`"
+                :value="option.id"
+              />
+            </el-select>
+          </el-form-item>
           <el-alert
-            title="暂无启用的卡片名称，请先到选项设置完成配置"
+            v-if="!page.topupSupplierOptions.length"
+            title="暂无启用的加卡供应商，请先到选项设置完成配置"
             type="error"
             show-icon
             :closable="false"
           />
-          <AppButton variant="ghost" @click="page.openCardNameOptions">前往选项设置</AppButton>
-        </div>
 
-        <el-form-item label="礼品卡号" prop="code" class="v2-topup-credit-entry-code">
-          <el-input
-            v-model="page.creditForm.code"
-            maxlength="64"
-            autocomplete="off"
-            placeholder="手工输入礼品卡号"
-            @blur="page.normalizeCandidateCode"
-          />
-        </el-form-item>
-
-        <div class="v2-topup-credit-grid">
-          <el-form-item label="礼品卡面值" prop="faceValue">
+          <el-form-item label="备注">
             <el-input
-              v-model="page.creditForm.faceValue"
-              inputmode="decimal"
-              maxlength="19"
-              placeholder="例如 100"
+              v-model="page.creditForm.remark"
+              type="textarea"
+              :rows="3"
+              maxlength="2000"
+              show-word-limit
+              placeholder="选填，记录卡片批次或人工核对说明"
             />
           </el-form-item>
-          <el-form-item label="卡片汇率" prop="exchangeRate">
-            <el-input
-              v-model="page.creditForm.exchangeRate"
-              inputmode="decimal"
-              maxlength="19"
-              placeholder="例如 5.40000000"
-            />
-            <small class="v2-form-help">1 单位礼品卡面值等于多少人民币</small>
-          </el-form-item>
-          <el-form-item label="卡片价值">
-            <el-input
-              :model-value="
-                page.creditCostPreview
-                  ? `¥${page.formatDecimal(page.creditCostPreview)}`
-                  : '输入面值和汇率后自动计算'
-              "
-              readonly
-              aria-label="卡片价值（人民币）"
-            />
-          </el-form-item>
-          <el-form-item label="加卡时间" prop="creditedAt">
-            <el-input v-model="page.creditForm.creditedAt" type="datetime-local" />
-          </el-form-item>
-        </div>
-
-        <el-form-item label="加卡供应商" prop="supplierOptionId">
-          <el-select
-            v-model="page.creditForm.supplierOptionId"
-            filterable
-            placeholder="选择启用的加卡供应商"
-          >
-            <el-option
-              v-for="option in page.topupSupplierOptions"
-              :key="option.id"
-              :label="`${option.name}${option.initialized ? '' : '（资金未初始化）'}`"
-              :value="option.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-alert
-          v-if="!page.topupSupplierOptions.length"
-          title="暂无启用的加卡供应商，请先到选项设置完成配置"
-          type="error"
-          show-icon
-          :closable="false"
-        />
-
-        <el-form-item label="备注">
-          <el-input
-            v-model="page.creditForm.remark"
-            type="textarea"
-            :rows="3"
-            maxlength="2000"
-            show-word-limit
-            placeholder="选填，记录卡片批次或人工核对说明"
-          />
-        </el-form-item>
-
-        <div class="v2-topup-credit-preview">
-          <span>卡片价值（人民币）</span>
-          <strong>
-            {{
-              page.creditCostPreview
-                ? `¥${page.formatDecimal(page.creditCostPreview)}`
-                : '输入面值和汇率后自动计算'
-            }}
-          </strong>
-          <template v-if="page.selectedTopupSupplier?.initialized">
-            <span>卡商预付款余额</span>
-            <strong>
-              ¥{{ page.formatDecimal(page.selectedTopupSupplier.currentBalanceCny || '0') }}
-            </strong>
-            <span>扣款后预付款余额</span>
-            <strong :class="{ 'is-negative': page.creditWillOverdraw }">
-              ¥{{ page.formatDecimal(page.creditProjectedSupplierBalance || '0') }}
-            </strong>
-          </template>
-        </div>
+        </section>
         <el-alert
           v-if="page.creditWillOverdraw"
           type="warning"
@@ -295,11 +317,57 @@
   <V2ConfirmDialog
     v-model="page.creditConfirmationVisible"
     title="确认礼品卡入账"
-    :message="page.creditConfirmationMessage"
+    message=""
     confirm-text="确认并入账"
     :confirm-loading="page.creditSubmitting"
     @confirm="page.submitGiftCardCredit"
-  />
+  >
+    <dl v-if="page.selectedAccount" class="v2-topup-credit-confirm">
+      <div>
+        <dt>加卡ID</dt>
+        <dd>{{ page.selectedAccount.appleIdMasked }}</dd>
+      </div>
+      <div>
+        <dt>卡号</dt>
+        <dd>{{ page.normalizedCreditCode || page.creditForm.code || '—' }}</dd>
+      </div>
+      <div>
+        <dt>国家</dt>
+        <dd>{{ page.selectedCountry?.name || page.selectedAccount.country.name }}</dd>
+      </div>
+      <div>
+        <dt>卡片汇率</dt>
+        <dd>{{ page.creditForm.exchangeRate || '—' }}</dd>
+      </div>
+      <div>
+        <dt>卡片价值</dt>
+        <dd>
+          {{ page.creditCostPreview ? `¥${page.formatDecimal(page.creditCostPreview)}` : '待计算' }}
+        </dd>
+      </div>
+      <div>
+        <dt>卡商余额</dt>
+        <dd>
+          <span>{{ page.selectedTopupSupplier?.name || '未选择卡商' }}</span>
+          <strong>
+            {{
+              page.selectedTopupSupplier?.initialized
+                ? `¥${page.formatDecimal(page.selectedTopupSupplier.currentBalanceCny || '0')}`
+                : '—'
+            }}
+          </strong>
+          <span>→</span>
+          <strong :class="{ 'is-negative': page.creditWillOverdraw }">
+            {{
+              page.creditProjectedSupplierBalance !== null
+                ? `¥${page.formatDecimal(page.creditProjectedSupplierBalance)}`
+                : '—'
+            }}
+          </strong>
+        </dd>
+      </div>
+    </dl>
+  </V2ConfirmDialog>
 
   <V2ConfirmDialog
     v-model="page.reversalConfirmationVisible"

@@ -136,7 +136,7 @@ export class IdBusinessV2ManualRenewalService {
           throw new ConflictException('该 ID 已卖出，不能续费');
         }
         if (account.lossReportedAt) {
-          throw new ConflictException('已报损 ID 永久冻结，不能续费');
+          throw new ConflictException('已报损冻结 ID 不能续费');
         }
         const { activeOrderLock, duplicateRenewalOrder } =
           await this.renewalsRepository.findManualRenewalConflicts(tx, {

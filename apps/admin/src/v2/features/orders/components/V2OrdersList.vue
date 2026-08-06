@@ -52,20 +52,26 @@
           <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.orders.main.columns[2]">
+          <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+        </V2TableColumn>
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[3]">
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.customer.name }}</strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[3]">
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[4]">
+          <template #default="{ row }">{{ row.service.parent?.name || '—' }}</template>
+        </V2TableColumn>
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[5]">
           <template #default="{ row }">{{ row.service.name }}</template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[4]" show-overflow-tooltip>
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[6]" show-overflow-tooltip>
           <template #default="{ row }">
             <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
           </template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[5]"
+          :definition="v2TableSchemas.orders.main.columns[7]"
           prop="accountDisposition"
           sortable="custom"
         >
@@ -76,7 +82,7 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[6]"
+          :definition="v2TableSchemas.orders.main.columns[8]"
           prop="accountCostAmount"
           sortable="custom"
         >
@@ -84,18 +90,18 @@
             ¥{{ page.formatDecimal(row.appliedAccountCostAmount) }}
           </template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[7]" show-overflow-tooltip>
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[9]" show-overflow-tooltip>
           <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[8]"
+          :definition="v2TableSchemas.orders.main.columns[10]"
           prop="receivedAmount"
           sortable="custom"
         >
           <template #default="{ row }">¥{{ page.formatDecimal(row.receivedAmount) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[9]"
+          :definition="v2TableSchemas.orders.main.columns[11]"
           prop="profitAmount"
           sortable="custom"
         >
@@ -105,7 +111,7 @@
             </strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[10]">
+        <V2TableColumn :definition="v2TableSchemas.orders.main.columns[12]">
           <template #default="{ row }">
             <strong :class="page.profitClass(row.profitRate)">
               {{ row.profitRate === null ? '—' : `${page.formatDecimal(row.profitRate)}%` }}
@@ -113,21 +119,21 @@
           </template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[11]"
+          :definition="v2TableSchemas.orders.main.columns[13]"
           prop="openedAt"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.openedAt) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[12]"
+          :definition="v2TableSchemas.orders.main.columns[14]"
           prop="dueAt"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.dueAt) }}</template>
         </V2TableColumn>
         <V2TableColumn
-          :definition="v2TableSchemas.orders.main.columns[13]"
+          :definition="v2TableSchemas.orders.main.columns[15]"
           prop="status"
           sortable="custom"
         >
@@ -137,7 +143,7 @@
             </el-tag>
           </template>
         </V2TableColumn>
-        <V2TableActionColumn :definition="v2TableSchemas.orders.main.columns[14]">
+        <V2TableActionColumn :definition="v2TableSchemas.orders.main.columns[16]">
           <template #default="{ row }">
             <AppButton
               v-if="page.canConsumeOrders && row.operations.canConsume"
@@ -221,13 +227,20 @@
           <header>
             <div>
               <strong>{{ item.orderNo }}</strong>
-              <span>{{ item.customer.name }} / {{ item.service.name }}</span>
+              <span>
+                {{ item.customer.name }} / {{ item.service.parent?.name || '未分类' }} /
+                {{ item.service.name }}
+              </span>
             </div>
             <el-tag :type="page.statusMeta(item.status).type" effect="plain">
               {{ page.statusMeta(item.status).label }}
             </el-tag>
           </header>
           <dl>
+            <div>
+              <dt>业务分类</dt>
+              <dd>{{ item.service.parent?.name || '—' }}</dd>
+            </div>
             <div>
               <dt>使用 ID</dt>
               <dd>{{ item.account?.appleIdMasked || '—' }}</dd>
@@ -237,7 +250,7 @@
               <dd>{{ page.accountDispositionMeta(item.accountDisposition).label }}</dd>
             </div>
             <div>
-              <dt>本单 ID 成本</dt>
+              <dt>ID成本</dt>
               <dd>{{ page.formatDecimal(item.appliedAccountCostAmount) }}</dd>
             </div>
             <div>
@@ -263,6 +276,10 @@
             <div>
               <dt>订单时间</dt>
               <dd>{{ page.formatDate(item.createdAt) }}</dd>
+            </div>
+            <div>
+              <dt>操作人</dt>
+              <dd>{{ operatorUsername(item.createdBy) }}</dd>
             </div>
             <div>
               <dt>开通时间</dt>
@@ -387,6 +404,7 @@ import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-v
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useOrdersPage } from '../useOrdersPage';
 

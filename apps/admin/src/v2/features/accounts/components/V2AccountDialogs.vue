@@ -283,68 +283,7 @@
     </template>
   </el-dialog>
 
-  <V2ConfirmDialog
-    v-model="page.lossDialogVisible"
-    title="永久报损 ID"
-    message=""
-    confirm-text="确认永久报损"
-    danger
-    :confirm-loading="page.lossSubmitting"
-    :confirm-disabled-reason="lossDisabledReason"
-    @confirm="reportLoss"
-  >
-    <div v-if="page.lossTarget" class="v2-account-loss-dialog">
-      <dl>
-        <div>
-          <dt>ID 账号</dt>
-          <dd>{{ page.lossTarget.appleIdMasked }}</dd>
-        </div>
-        <div>
-          <dt>损失余额</dt>
-          <dd>{{ page.formatDecimal(page.lossTarget.currentBalance) }}</dd>
-        </div>
-        <div>
-          <dt>人民币亏损</dt>
-          <dd>¥{{ page.formatDecimal(page.lossTarget.balanceCostAmount) }}</dd>
-        </div>
-      </dl>
-      <el-alert
-        type="error"
-        title="报损后余额与人民币成本会永久清零，ID 将冻结且无法恢复。"
-        :closable="false"
-        show-icon
-      />
-      <el-form
-        ref="lossFormRef"
-        class="v2-horizontal-form"
-        :model="lossFormModel"
-        :rules="lossRules"
-        label-position="left"
-        label-width="88px"
-        require-asterisk-position="right"
-        status-icon
-        scroll-to-error
-        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
-      >
-        <el-form-item label="报损原因" prop="reason">
-          <el-input
-            v-model="page.lossReason"
-            type="textarea"
-            :rows="3"
-            minlength="2"
-            maxlength="500"
-            show-word-limit
-            placeholder="说明 ID 死亡、冻结或无法继续使用的原因"
-          />
-        </el-form-item>
-        <el-form-item label="不可逆确认" prop="confirmed">
-          <el-checkbox v-model="page.lossConfirmed">
-            我确认永久清零余额并冻结该 ID，操作无法撤销
-          </el-checkbox>
-        </el-form-item>
-      </el-form>
-    </div>
-  </V2ConfirmDialog>
+  <V2AccountLossDialogs :page="page" />
 
   <V2ConfirmDialog
     v-model="page.deleteDialogVisible"
@@ -369,6 +308,7 @@ import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
+import V2AccountLossDialogs from './V2AccountLossDialogs.vue';
 import V2AccountPurchaseFields from './V2AccountPurchaseFields.vue';
 
 type AccountsPage = UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
@@ -379,7 +319,6 @@ const props = defineProps<{
 
 const formRef = ref<FormInstance>();
 const revealFormRef = ref<FormInstance>();
-const lossFormRef = ref<FormInstance>();
 const formRules = computed<FormRules>(() => ({
   appleId: props.page.editingItem
     ? []
@@ -500,39 +439,6 @@ const revealRules: FormRules = {
     }
   ]
 };
-const lossFormModel = computed(() => ({
-  reason: props.page.lossReason,
-  confirmed: props.page.lossConfirmed
-}));
-const lossRules: FormRules = {
-  reason: [
-    {
-      required: true,
-      validator: (_rule, value, callback) => {
-        const normalized = String(value ?? '').trim();
-        callback(
-          normalized.length >= 2 && normalized.length <= 500
-            ? undefined
-            : new Error('报损原因必须为 2 至 500 个字符')
-        );
-      },
-      trigger: 'blur'
-    }
-  ],
-  confirmed: [
-    {
-      validator: (_rule, value, callback) =>
-        callback(value === true ? undefined : new Error('请确认永久报损的不可逆后果')),
-      trigger: 'change'
-    }
-  ]
-};
-const lossDisabledReason = computed(() => {
-  if (!props.page.canReportLoss) return '当前账号无永久报损权限';
-  if (!props.page.lossTarget) return '未选择需要报损的 ID';
-  if (props.page.lossTarget.lossStatus === 'reported') return '该 ID 已永久报损';
-  return '';
-});
 const importDisabledReason = computed(() =>
   !props.page.importCompleted && !props.page.importRows.length ? '当前没有可导入的有效记录' : ''
 );
@@ -547,43 +453,7 @@ async function revealSecret() {
   await props.page.revealSecret();
 }
 
-async function reportLoss() {
-  if (lossDisabledReason.value || !(await validateV2Form(lossFormRef.value))) return;
-  await props.page.confirmReportLoss();
-}
-
 function isZero(value: unknown) {
   return Number(String(value ?? '').trim() || '0') === 0;
 }
 </script>
-
-<style scoped>
-.v2-account-loss-dialog {
-  display: grid;
-  gap: 16px;
-}
-
-.v2-account-loss-dialog dl {
-  display: grid;
-  margin: 0;
-  gap: 8px;
-}
-
-.v2-account-loss-dialog dl > div {
-  display: flex;
-  min-width: 0;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.v2-account-loss-dialog dt {
-  color: var(--v2-text-soft);
-}
-
-.v2-account-loss-dialog dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-weight: 700;
-  text-align: right;
-}
-</style>

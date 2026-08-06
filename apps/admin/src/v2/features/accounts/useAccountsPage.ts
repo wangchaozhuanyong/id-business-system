@@ -132,7 +132,7 @@ export function useAccountsPage() {
     );
   });
   const formDisabledReason = computed(() => {
-    if (editingItem.value?.lossStatus === 'reported') return '已报损 ID 永久冻结，不能编辑';
+    if (editingItem.value?.lossStatus === 'reported') return '已报损冻结 ID 不能编辑';
     if (!countryOptions.value.length) return '系统缺少国家选项';
     if (!formStatusOptions.value.length) return '系统缺少 ID 状态选项';
     return '';
@@ -329,7 +329,7 @@ export function useAccountsPage() {
 
   function openEdit(item: V2Account) {
     if (item.lossStatus === 'reported') {
-      ElMessage.warning('已报损 ID 永久冻结，不能编辑');
+      ElMessage.warning('已报损冻结 ID 不能编辑');
       return;
     }
     editingItem.value = item;
@@ -481,7 +481,7 @@ export function useAccountsPage() {
 
   async function toggleStatus(item: V2Account) {
     if (item.lossStatus === 'reported') {
-      ElMessage.warning('已报损 ID 永久冻结，不能启用或停用');
+      ElMessage.warning('已报损冻结 ID 不能启用或停用');
       return;
     }
     try {

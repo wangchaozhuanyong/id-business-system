@@ -138,9 +138,7 @@
           />
           <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[9]">
             <template #default="{ row }">
-              {{
-                row.reportedByName || row.reportedBy?.displayName || row.reportedBy?.username || '—'
-              }}
+              {{ operatorUsername(row.reportedBy) }}
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -159,7 +157,9 @@
                 <strong>{{ item.appleIdMasked }}</strong>
                 <span>{{ item.countryName }} / {{ item.supplierName || '未设置供应商' }}</span>
               </div>
-              <el-tag type="danger" effect="plain">已报损</el-tag>
+              <el-tag :type="item.status === 'reversed' ? 'info' : 'danger'" effect="plain">
+                {{ item.status === 'reversed' ? '已冲回' : '已报损冻结' }}
+              </el-tag>
             </header>
             <dl>
               <div>
@@ -180,14 +180,7 @@
               </div>
               <div>
                 <dt>操作人</dt>
-                <dd>
-                  {{
-                    item.reportedByName ||
-                    item.reportedBy?.displayName ||
-                    item.reportedBy?.username ||
-                    '—'
-                  }}
-                </dd>
+                <dd>{{ operatorUsername(item.reportedBy) }}</dd>
               </div>
               <div>
                 <dt>报损时间</dt>
@@ -233,6 +226,7 @@ import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import { useAccountLossesPage } from './useAccountLossesPage';
 import '@/v2/styles/records.css';
 

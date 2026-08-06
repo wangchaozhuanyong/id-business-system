@@ -52,6 +52,13 @@ export const CUSTOMER_INCLUDE = {
       }
     },
     orderBy: [{ lastOpenedAt: 'desc' }, { option: { sortOrder: 'asc' } }]
+  },
+  createdBy: {
+    select: {
+      id: true,
+      username: true,
+      displayName: true
+    }
   }
 } satisfies Prisma.IdBusinessV2CustomerInclude;
 

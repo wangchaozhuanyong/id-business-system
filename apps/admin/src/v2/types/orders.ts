@@ -16,6 +16,12 @@ export interface V2OrderOption {
   name: string;
 }
 
+export interface V2OrderOperator {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface V2OrderService extends V2OrderOption {
   parent: {
     id: string;
@@ -63,6 +69,7 @@ export interface V2Order {
   openedAt: string | null;
   dueAt: string | null;
   remark: string | null;
+  createdBy: V2OrderOperator | null;
   createdAt: string;
   updatedAt: string;
   activeLock: V2OrderLockSummary | null;

@@ -5,7 +5,7 @@ describe('audit log presentation', () => {
   it('renders an explicit system actor when a user no longer exists', () => {
     expect(auditUserLabel(null)).toBe('系统或未知员工');
     expect(auditUserLabel({ id: 'user-1', username: 'operator01', displayName: '运营一号' })).toBe(
-      '运营一号（operator01）'
+      'operator01'
     );
   });
 
