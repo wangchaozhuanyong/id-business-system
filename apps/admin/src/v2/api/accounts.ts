@@ -5,6 +5,8 @@ import type {
   ImportV2AccountRowInput,
   ReportV2AccountLossInput,
   ReportV2AccountLossResult,
+  UnfreezeV2AccountLossInput,
+  UnfreezeV2AccountLossResult,
   UpdateV2AccountInput,
   V2Account,
   V2AccountExportResult,
@@ -112,7 +114,31 @@ export const idBusinessV2AccountsApi = {
         'order-entry-matching',
         'renewals',
         'renewals-options',
-        'renewal-warning-summary'
+        'renewal-warning-summary',
+        'finance-ledger',
+        'finance-reports'
+      ]
+    );
+  },
+  unfreezeLoss(id: string, payload: UnfreezeV2AccountLossInput) {
+    return withV2QueryInvalidation(
+      request<UnfreezeV2AccountLossResult>(
+        http.post(`/id-business-v2/accounts/${id}/unfreeze-loss`, payload)
+      ),
+      [
+        'account-losses',
+        'accounts',
+        'balances',
+        'balance-records',
+        'orders',
+        'activations',
+        'order-entry-options',
+        'order-entry-matching',
+        'renewals',
+        'renewals-options',
+        'renewal-warning-summary',
+        'finance-ledger',
+        'finance-reports'
       ]
     );
   },

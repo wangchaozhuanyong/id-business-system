@@ -125,14 +125,17 @@
           >
             <template #default="{ row }">{{ page.formatDate(row.lastLoginAt) }}</template>
           </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.employees.main.columns[7]">
+            <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+          </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.employees.main.columns[7]"
+            :definition="v2TableSchemas.employees.main.columns[8]"
             prop="createdAt"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.createdAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.employees.main.columns[8]">
+          <V2TableActionColumn :definition="v2TableSchemas.employees.main.columns[9]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="page.openEdit(row)">
                 <el-icon><Edit /></el-icon>
@@ -169,6 +172,14 @@
               <div>
                 <dt>最近登录</dt>
                 <dd>{{ page.formatDate(item.lastLoginAt) }}</dd>
+              </div>
+              <div>
+                <dt>操作人</dt>
+                <dd>{{ operatorUsername(item.createdBy) }}</dd>
+              </div>
+              <div>
+                <dt>开通时间</dt>
+                <dd>{{ page.formatDate(item.createdAt) }}</dd>
               </div>
             </dl>
             <footer>
@@ -215,6 +226,7 @@ import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import V2EmployeeDrawer from './components/V2EmployeeDrawer.vue';
 import type { V2EmployeeRole } from './contracts';
 import { useEmployeesPage } from './useEmployeesPage';

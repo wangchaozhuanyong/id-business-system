@@ -7,6 +7,12 @@ export interface V2EmployeeRole {
   description?: string | null;
 }
 
+export interface V2EmployeeOperator {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface V2Employee {
   id: string;
   username: string;
@@ -17,6 +23,7 @@ export interface V2Employee {
   activeSessionCount: number;
   lastLoginAt: string | null;
   lastAuthenticatedAt: string | null;
+  createdBy: V2EmployeeOperator | null;
   createdAt: string;
   updatedAt: string;
 }

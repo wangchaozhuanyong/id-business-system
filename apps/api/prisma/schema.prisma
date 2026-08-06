@@ -260,6 +260,11 @@ enum IdBusinessV2AccountLossSaleState {
   sold
 }
 
+enum IdBusinessV2AccountLossStatus {
+  active
+  reversed
+}
+
 enum IdBusinessV2ActivationStatus {
   active
   expired
@@ -354,10 +359,13 @@ model User {
   email        String?    @db.VarChar(255)
   status       UserStatus @default(active)
   lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
+  createdBy                           User?                                @relation("UserCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  usersCreated                        User[]                               @relation("UserCreatedBy")
   userRoles                           UserRole[]
   v2AuthIdentity                      V2AuthIdentity?
   auditLogs                           AuditLog[]
@@ -376,6 +384,7 @@ model User {
   idBusinessV2AccountsCreated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountCreatedBy")
   idBusinessV2AccountsUpdated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountUpdatedBy")
   idBusinessV2AccountLossesReported   IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReportedBy")
+  idBusinessV2AccountLossesReversed   IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReversedBy")
   idBusinessV2GiftCardsCreated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardCreatedBy")
   idBusinessV2GiftCardsUpdated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardUpdatedBy")
   idBusinessV2BalanceEntriesCreated   IdBusinessV2BalanceLedger[]         @relation("IdBusinessV2BalanceLedgerCreatedBy")
@@ -406,6 +415,7 @@ model User {
   idBusinessV2GovernanceApprovals     IdBusinessV2GovernanceApproval[]    @relation("IdBusinessV2GovernanceApprovalApprover")
 
   @@index([status])
+  @@index([createdByUserId])
   @@index([deletedAt])
   @@map("users")
 }
@@ -689,6 +699,7 @@ model IdBusinessV2Account {
   soldByOrderId             String?                     @unique @map("sold_by_order_id") @db.Uuid
   soldAt                    DateTime?                   @map("sold_at") @db.Timestamptz(6)
   lossReportedAt            DateTime?                   @map("loss_reported_at") @db.Timestamptz(6)
+  activeLossRecordId        String?                     @unique @map("active_loss_record_id") @db.Uuid
   recordStatus              IdBusinessV2RecordStatus    @default(active) @map("record_status")
   remark                    String?                     @db.Text
   createdByUserId           String?                     @map("created_by_user_id") @db.Uuid
@@ -708,7 +719,8 @@ model IdBusinessV2Account {
   soldByOrder             IdBusinessV2Order?                 @relation("IdBusinessV2AccountSoldByOrder", fields: [soldByOrderId], references: [id], onDelete: Restrict)
   locks                   IdBusinessV2AccountLock[]
   activations             IdBusinessV2Activation[]
-  lossRecord              IdBusinessV2AccountLoss?
+  activeLossRecord        IdBusinessV2AccountLoss?       @relation("IdBusinessV2AccountActiveLoss", fields: [activeLossRecordId], references: [id], onDelete: SetNull)
+  lossRecords             IdBusinessV2AccountLoss[]      @relation("IdBusinessV2AccountLossAccount")
   purchaseFxSnapshot      IdBusinessV2FinanceFxRateSnapshot? @relation("IdBusinessV2AccountPurchaseFxSnapshot", fields: [purchaseFxSnapshotId], references: [id], onDelete: Restrict)
   purchaseFinanceAccount  IdBusinessV2FinanceAccount?        @relation("IdBusinessV2AccountPurchaseFinanceAccount", fields: [purchaseFinanceAccountId], references: [id], onDelete: Restrict)
   purchaseSupplierAccount IdBusinessV2TopupSupplierAccount?  @relation("IdBusinessV2AccountPurchaseSupplierAccount", fields: [purchaseSupplierAccountId], references: [id], onDelete: Restrict)
@@ -1147,8 +1159,9 @@ model IdBusinessV2BalanceLedger {
 
 model IdBusinessV2AccountLoss {
   id                       String                           @id @default(uuid()) @db.Uuid
-  accountId                String                           @unique @map("account_id") @db.Uuid
+  accountId                String                           @map("account_id") @db.Uuid
   ledgerEntryId            String                           @unique @map("ledger_entry_id") @db.Uuid
+  status                   IdBusinessV2AccountLossStatus    @default(active)
   appleIdMasked            String                           @map("apple_id_masked") @db.VarChar(255)
   countryOptionId          String                           @map("country_option_id") @db.Uuid
   countryName              String                           @map("country_name") @db.VarChar(160)
@@ -1166,11 +1179,24 @@ model IdBusinessV2AccountLoss {
   reportedByUserId         String?                          @map("reported_by_user_id") @db.Uuid
   reportedByName           String?                          @map("reported_by_name") @db.VarChar(160)
   reportedAt               DateTime                         @default(now()) @map("reported_at") @db.Timestamptz(6)
+  previousStatusOptionId   String?                          @map("previous_status_option_id") @db.Uuid
+  previousStatusName       String?                          @map("previous_status_name") @db.VarChar(160)
+  previousRecordStatus     IdBusinessV2RecordStatus?        @map("previous_record_status")
+  financeJournalId         String?                          @unique @map("finance_journal_id") @db.Uuid
+  reversalFinanceJournalId String?                          @unique @map("reversal_finance_journal_id") @db.Uuid
+  reversedByUserId         String?                          @map("reversed_by_user_id") @db.Uuid
+  reversedByName           String?                          @map("reversed_by_name") @db.VarChar(160)
+  reversalReason           String?                          @map("reversal_reason") @db.Text
+  reversedAt               DateTime?                        @map("reversed_at") @db.Timestamptz(6)
 
-  account     IdBusinessV2Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account          IdBusinessV2Account  @relation("IdBusinessV2AccountLossAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  activeForAccount IdBusinessV2Account? @relation("IdBusinessV2AccountActiveLoss")
   ledgerEntry IdBusinessV2BalanceLedger @relation(fields: [ledgerEntryId], references: [id], onDelete: Restrict)
   reportedBy  User?                     @relation("IdBusinessV2AccountLossReportedBy", fields: [reportedByUserId], references: [id], onDelete: SetNull)
+  reversedBy  User?                     @relation("IdBusinessV2AccountLossReversedBy", fields: [reversedByUserId], references: [id], onDelete: SetNull)
 
+  @@index([accountId])
+  @@index([status, reportedAt])
   @@index([reportedAt])
   @@index([countryOptionId, reportedAt])
   @@index([countryName])
@@ -1178,6 +1204,7 @@ model IdBusinessV2AccountLoss {
   @@index([soldOrderId])
   @@index([soldOrderNo])
   @@index([reportedByUserId])
+  @@index([reversedByUserId])
   @@map("id_business_v2_account_losses")
 }
 

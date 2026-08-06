@@ -268,6 +268,7 @@ export class IdBusinessV2OrdersService {
       openedAt: order.openedAt,
       dueAt: order.dueAt,
       remark: order.remark,
+      createdBy: order.createdBy,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       activeLock: activeLock

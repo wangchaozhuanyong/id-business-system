@@ -328,7 +328,7 @@ export class IdBusinessV2AccountsService {
     dto: UpdateIdBusinessV2AccountDto,
     operator?: AuthenticatedUser
   ): Promise<AccountUpdateData> {
-    assertAccountLossNotReported(existing.lossReportedAt, '已报损 ID 永久冻结，不能再修改');
+    assertAccountLossNotReported(existing.lossReportedAt, '已报损冻结 ID 不能再修改');
     if (
       dto.purchaseCost !== undefined &&
       !Amount4.from(normalizeMoney(dto.purchaseCost, 'ID 购买成本')).equals(existing.purchaseCost)

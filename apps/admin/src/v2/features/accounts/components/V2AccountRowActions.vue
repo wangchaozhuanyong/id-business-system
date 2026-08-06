@@ -3,6 +3,14 @@
     <AppButton v-if="canViewSensitive" size="small" variant="ghost" @click="emit('view-sensitive')">
       敏感资料
     </AppButton>
+    <AppButton
+      v-if="canReportLoss && lossReported"
+      size="small"
+      variant="ghost"
+      @click="emit('unfreeze-loss')"
+    >
+      解除冻结
+    </AppButton>
     <AppButton v-if="canUpdate && !lossReported" size="small" variant="ghost" @click="emit('edit')">
       <el-icon><Edit /></el-icon>
       编辑
@@ -65,6 +73,7 @@ const emit = defineEmits<{
   edit: [];
   'toggle-status': [];
   'report-loss': [];
+  'unfreeze-loss': [];
   delete: [];
 }>();
 
@@ -72,6 +81,7 @@ const dropdownRef = ref<{ handleClose: () => void } | null>(null);
 const hasActions = computed(
   () =>
     props.canViewSensitive ||
+    (props.lossReported && props.canReportLoss) ||
     (!props.lossReported && (props.canUpdate || props.canDelete || props.canReportLoss))
 );
 const hasSecondaryActions = computed(

@@ -3,7 +3,7 @@ import type { V2AuditLogRecord, V2AuditUser, V2SensitiveAccessLogRecord } from '
 
 export function auditUserLabel(user?: V2AuditUser | null) {
   if (!user) return '系统或未知员工';
-  return user.displayName ? `${user.displayName}（${user.username}）` : user.username;
+  return user.username;
 }
 
 export function formatAuditDate(value: string) {

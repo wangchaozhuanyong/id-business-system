@@ -36,6 +36,10 @@ function makeLockedAccount(overrides: Record<string, unknown> = {}) {
     soldByOrderId: null,
     soldOrderNo: null,
     lossReportedAt: null,
+    activeLossRecordId: null,
+    statusOptionId: 'normal-status-id',
+    statusName: '正常',
+    recordStatus: 'active',
     ...overrides
   };
 }
@@ -60,13 +64,24 @@ function makeLossRecord(overrides: Record<string, unknown> = {}) {
     reason: 'ID 已死亡无法登录',
     idempotencyKey: `account_loss:${accountId}:loss-request-0001`,
     reportedByUserId: operator.id,
-    reportedByName: operator.displayName,
+    reportedByName: operator.username,
     reportedAt,
+    status: 'active' as const,
+    previousStatusOptionId: 'normal-status-id',
+    previousStatusName: '正常',
+    previousRecordStatus: 'active' as const,
+    financeJournalId: 'finance-journal-1',
+    reversalFinanceJournalId: null,
+    reversalReason: null,
+    reversedAt: null,
+    reversedByUserId: null,
+    reversedByName: null,
     reportedBy: {
       id: operator.id,
       username: operator.username,
       displayName: operator.displayName
     },
+    reversedBy: null,
     ...overrides
   };
 }
@@ -76,7 +91,9 @@ describe('IdBusinessV2AccountLossesService', () => {
     $queryRaw: vi.fn(),
     idBusinessV2AccountLoss: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
       findMany: vi.fn(),
       count: vi.fn()
     },
@@ -118,7 +135,8 @@ describe('IdBusinessV2AccountLossesService', () => {
     $transaction: vi.fn()
   };
   const financePostingService = {
-    post: vi.fn()
+    post: vi.fn(),
+    reverse: vi.fn()
   };
   const transactionHarness = {
     commits: 0,
@@ -134,6 +152,7 @@ describe('IdBusinessV2AccountLossesService', () => {
   const commandHandler = new IdBusinessV2AccountLossCommandHandler(
     repository,
     postingCoordinator,
+    financePostingService as never,
     new V2CommandTransactionManager(prisma as never),
     new V2TransactionalAuditService()
   );
@@ -143,7 +162,7 @@ describe('IdBusinessV2AccountLossesService', () => {
   );
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     transactionHarness.commits = 0;
     transactionHarness.rollbacks = 0;
     prisma.$transaction.mockImplementation(
@@ -160,6 +179,7 @@ describe('IdBusinessV2AccountLossesService', () => {
       }
     );
     tx.idBusinessV2AccountLoss.findUnique.mockResolvedValue(null);
+    tx.idBusinessV2AccountLoss.findFirst.mockResolvedValue(null);
     tx.$queryRaw.mockResolvedValue([makeLockedAccount()]);
     tx.idBusinessV2AccountLock.count.mockResolvedValue(0);
     tx.idBusinessV2Option.findFirst.mockResolvedValue({
@@ -168,7 +188,32 @@ describe('IdBusinessV2AccountLossesService', () => {
     tx.idBusinessV2BalanceLedger.create.mockResolvedValue({
       id: '60000000-0000-4000-8000-000000000001'
     });
-    tx.idBusinessV2AccountLoss.create.mockResolvedValue(makeLossRecord());
+    tx.idBusinessV2AccountLoss.create.mockImplementation(
+      (input: { data?: Record<string, unknown> }) => Promise.resolve(makeLossRecord(input.data))
+    );
+    tx.idBusinessV2AccountLoss.update.mockImplementation(
+      (input: { data?: Record<string, unknown> }) =>
+        Promise.resolve(
+          makeLossRecord({
+            ...(tx.idBusinessV2AccountLoss.create.mock.calls.at(-1)?.[0]?.data ?? {}),
+            ...(input.data ?? {}),
+            financeJournalId: input.data?.financeJournalId ?? 'finance-journal-1',
+            status: input.data?.status ?? 'active',
+            reversalFinanceJournalId: input.data?.reversalFinanceJournalId ?? null,
+            reversalReason: input.data?.reversalReason ?? null,
+            reversedAt: input.data?.reversedAt ?? null,
+            reversedByUserId: input.data?.reversedByUserId ?? null,
+            reversedByName: input.data?.reversedByName ?? null,
+            reversedBy: input.data?.reversedByUserId
+              ? {
+                  id: operator.id,
+                  username: operator.username,
+                  displayName: operator.displayName
+                }
+              : null
+          })
+        )
+    );
     tx.idBusinessV2Account.update.mockResolvedValue({});
     tx.idBusinessV2Activation.updateMany.mockResolvedValue({ count: 1 });
     tx.idBusinessV2FinanceJournal.findUnique.mockResolvedValue(null);
@@ -178,9 +223,10 @@ describe('IdBusinessV2AccountLossesService', () => {
     });
     tx.auditLog.create.mockResolvedValue({});
     financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
+    financePostingService.reverse.mockResolvedValue({ id: 'finance-reversal-1' });
   });
 
-  it('atomically freezes the ID, clears balance, writes loss ledger and marks activations abnormal', async () => {
+  it('atomically freezes the ID without clearing balance, writes loss ledger and marks activations abnormal', async () => {
     const result = await service.reportLoss(
       accountId,
       {
@@ -199,23 +245,27 @@ describe('IdBusinessV2AccountLossesService', () => {
         data: expect.objectContaining({
           entryType: 'account_loss',
           direction: 'debit',
+          balanceAmount: '0',
+          costAmount: '0',
           balanceBefore: '20',
-          balanceAfter: '0',
+          balanceAfter: '20',
           costBefore: '70',
-          costAfter: '0'
+          costAfter: '70'
         })
       })
     );
-    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith(
+    const freezeInput = tx.idBusinessV2Account.update.mock.calls[0]?.[0];
+    expect(freezeInput).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
-          currentBalance: '0',
-          balanceCostAmount: '0',
+          activeLossRecordId: '50000000-0000-4000-8000-000000000001',
           lossReportedAt: expect.any(Date),
           recordStatus: 'disabled'
         })
       })
     );
+    expect(freezeInput.data).not.toHaveProperty('currentBalance');
+    expect(freezeInput.data).not.toHaveProperty('balanceCostAmount');
     expect(tx.idBusinessV2Activation.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { accountId, status: 'active' },
@@ -248,6 +298,7 @@ describe('IdBusinessV2AccountLossesService', () => {
         balanceCalculator,
         new IdBusinessV2FinancePostingService(financeCommandRepository as never)
       ),
+      new IdBusinessV2FinancePostingService(financeCommandRepository as never),
       new V2CommandTransactionManager(prisma as never),
       new V2TransactionalAuditService()
     );
@@ -309,7 +360,7 @@ describe('IdBusinessV2AccountLossesService', () => {
     });
   });
 
-  it('allows a zero-balance ID to create a permanent zero-loss record', async () => {
+  it('allows a zero-balance ID to create a zero-loss freeze record', async () => {
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
         currentBalance: new Prisma.Decimal(0),
@@ -326,7 +377,7 @@ describe('IdBusinessV2AccountLossesService', () => {
     const result = await service.reportLoss(
       accountId,
       {
-        reason: 'ID 已永久冻结',
+        reason: 'ID 已报损冻结',
         expectedCurrentBalance: '0',
         expectedBalanceCostAmount: '0',
         idempotencyKey: 'loss-request-zero'
@@ -536,9 +587,8 @@ describe('IdBusinessV2AccountLossesService', () => {
   });
 
   it('returns the committed result when identical requests race on the account lock', async () => {
-    tx.idBusinessV2AccountLoss.findUnique
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(makeLossRecord());
+    tx.idBusinessV2AccountLoss.findUnique.mockResolvedValueOnce(null);
+    tx.idBusinessV2AccountLoss.findFirst.mockResolvedValueOnce(makeLossRecord());
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
         currentBalance: new Prisma.Decimal(0),
@@ -628,6 +678,67 @@ describe('IdBusinessV2AccountLossesService', () => {
     ).rejects.toThrow('该 ID 已报损');
   });
 
+  it('unfreezes an active loss, restores the account status and creates a finance reversal', async () => {
+    tx.$queryRaw.mockResolvedValue([
+      makeLockedAccount({
+        lossReportedAt: reportedAt,
+        activeLossRecordId: '50000000-0000-4000-8000-000000000001',
+        statusOptionId: 'frozen-status-id',
+        statusName: '冻结',
+        recordStatus: 'disabled'
+      })
+    ]);
+    tx.idBusinessV2AccountLoss.findUnique.mockResolvedValueOnce(makeLossRecord());
+
+    const result = await service.unfreezeLoss(
+      accountId,
+      {
+        expectedLossId: '50000000-0000-4000-8000-000000000001',
+        reason: '确认 ID 可继续使用',
+        idempotencyKey: 'unfreeze-request-0001'
+      },
+      operator
+    );
+
+    expect(financePostingService.reverse).toHaveBeenCalledWith(
+      tx,
+      'finance-journal-1',
+      '确认 ID 可继续使用',
+      `account_loss_unfreeze:${accountId}:50000000-0000-4000-8000-000000000001:unfreeze-request-0001`,
+      operator
+    );
+    expect(tx.idBusinessV2AccountLoss.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: '50000000-0000-4000-8000-000000000001' },
+        data: expect.objectContaining({
+          status: 'reversed',
+          reversalFinanceJournalId: 'finance-reversal-1',
+          reversalReason: '确认 ID 可继续使用'
+        })
+      })
+    );
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: accountId },
+        data: expect.objectContaining({
+          statusOptionId: 'normal-status-id',
+          lossReportedAt: null,
+          activeLossRecordId: null,
+          recordStatus: 'active'
+        })
+      })
+    );
+    expect(tx.idBusinessV2Activation.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledOnce();
+    expect(result.account).toMatchObject({
+      lossStatus: 'active',
+      lossReportedAt: null,
+      activeLossId: null,
+      currentBalance: '20',
+      balanceCostAmount: '70'
+    });
+  });
+
   it('filters and sorts the immutable loss-record list', async () => {
     tx.idBusinessV2AccountLoss.findMany.mockResolvedValue([makeLossRecord()]);
     tx.idBusinessV2AccountLoss.count.mockResolvedValue(1);
@@ -646,7 +757,7 @@ describe('IdBusinessV2AccountLossesService', () => {
 
     expect(result.items[0]).toMatchObject({
       rowNumber: 1,
-      reportedByName: operator.displayName
+      reportedByName: operator.username
     });
     expect(tx.idBusinessV2AccountLoss.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

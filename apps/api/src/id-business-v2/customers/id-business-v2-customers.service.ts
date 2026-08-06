@@ -366,6 +366,7 @@ export class IdBusinessV2CustomersService {
       })),
       recordStatus: customer.recordStatus,
       remark: customer.remark,
+      createdBy: customer.createdBy,
       createdAt: customer.createdAt,
       updatedAt: customer.updatedAt
     };

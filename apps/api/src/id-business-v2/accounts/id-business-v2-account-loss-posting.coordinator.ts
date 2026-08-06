@@ -36,14 +36,14 @@ export class IdBusinessV2AccountLossPostingCoordinator {
       orderId: null,
       entryType: 'account_loss',
       direction: 'debit',
-      balanceAmount: account.currentBalance.toString(),
-      costAmount: account.balanceCostAmount.toString(),
+      balanceAmount: '0',
+      costAmount: '0',
       balanceBefore: account.currentBalance.toString(),
-      balanceAfter: '0',
+      balanceAfter: account.currentBalance.toString(),
       costBefore: account.balanceCostAmount.toString(),
-      costAfter: '0',
+      costAfter: account.balanceCostAmount.toString(),
       averageCostBefore,
-      averageCostAfter: '0',
+      averageCostAfter: averageCostBefore,
       reversalOfEntryId: null,
       idempotencyKey,
       remark: reason,
@@ -70,8 +70,12 @@ export class IdBusinessV2AccountLossPostingCoordinator {
       reason,
       idempotencyKey,
       reportedByUserId: operator?.id,
-      reportedByName: operator?.displayName || operator?.username,
-      reportedAt: now
+      reportedByName: operator?.username,
+      reportedAt: now,
+      status: 'active',
+      previousStatusOptionId: account.statusOptionId,
+      previousStatusName: account.statusName,
+      previousRecordStatus: account.recordStatus
     });
 
     const financeJournal = await this.financePostingService.post(tx, {
@@ -128,6 +132,16 @@ export class IdBusinessV2AccountLossPostingCoordinator {
       ]
     });
 
-    return { ledgerEntry, lossRecord, financeJournal, idPurchaseCostLossAmount };
+    const lossRecordWithJournal = await this.repository.attachFinanceJournalToLoss(tx, {
+      lossRecordId: lossRecord.id,
+      financeJournalId: financeJournal.id
+    });
+
+    return {
+      ledgerEntry,
+      lossRecord: lossRecordWithJournal,
+      financeJournal,
+      idPurchaseCostLossAmount
+    };
   }
 }

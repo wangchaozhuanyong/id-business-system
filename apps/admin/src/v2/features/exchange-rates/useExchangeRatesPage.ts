@@ -469,7 +469,7 @@ export function useExchangeRatesPage() {
     return failureReasonByCode[error.code] || error.message || '采集失败，请查看批次详情';
   }
   function operatorName(entry: V2ExchangeRateEntry) {
-    return entry.createdBy?.displayName || entry.createdBy?.username || '-';
+    return entry.createdBy?.username || '-';
   }
 
   watch(activeTab, () => {

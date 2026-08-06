@@ -23,7 +23,7 @@ function makeGiftCard(lossStatus: 'active' | 'reported' = 'active') {
 }
 
 describe('gift card reversal account-loss form', () => {
-  it('offers permanent ID loss only for redeemed, active IDs with both permissions', () => {
+  it('offers ID loss freeze only for redeemed, active IDs with both permissions', () => {
     const giftCard = makeGiftCard();
 
     expect(canOfferGiftCardAccountLoss({ giftCard, action: 'redeemed' }, true)).toBe(true);
@@ -42,7 +42,7 @@ describe('gift card reversal account-loss form', () => {
     expect(copy.message).not.toContain('永久报损');
   });
 
-  it('shows permanent-loss copy and sends the selected option with the shared reason', () => {
+  it('shows loss-freeze copy and sends the selected option with the shared reason', () => {
     const pending = { giftCard: makeGiftCard(), action: 'redeemed' as const };
     const copy = getGiftCardReversalCopy(pending, true);
     const payload = buildGiftCardReversalPayload(
@@ -53,7 +53,7 @@ describe('gift card reversal account-loss form', () => {
     );
 
     expect(copy.confirmText).toBe('确认被赎回并报损 ID');
-    expect(copy.message).toContain('清零扣卡后的全部剩余余额和人民币成本');
+    expect(copy.message).toContain('保留扣卡后的剩余余额和人民币成本并计入损耗');
     expect(payload).toEqual({
       action: 'redeemed',
       reason: '卡片和 ID 同时报损',
@@ -62,7 +62,7 @@ describe('gift card reversal account-loss form', () => {
     });
   });
 
-  it('never carries permanent ID loss into a withdrawal request', () => {
+  it('never carries ID loss freeze into a withdrawal request', () => {
     expect(
       buildGiftCardReversalPayload(
         { giftCard: makeGiftCard(), action: 'withdrawn' },

@@ -3,6 +3,12 @@ import type { V2OptionSelector } from './options';
 
 export type V2RecordStatus = 'active' | 'disabled';
 
+export interface V2OperatorSummary {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface V2Customer {
   id: string;
   name: string;
@@ -29,6 +35,7 @@ export interface V2Customer {
   >;
   recordStatus: V2RecordStatus;
   remark: string | null;
+  createdBy: V2OperatorSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -91,8 +98,10 @@ export interface V2Account {
   } | null;
   lossStatus: 'active' | 'reported';
   lossReportedAt: string | null;
+  activeLossId: string | null;
   recordStatus: V2RecordStatus;
   remark: string | null;
+  createdBy: V2OperatorSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -191,11 +200,18 @@ export interface ReportV2AccountLossInput {
   idempotencyKey: string;
 }
 
+export interface UnfreezeV2AccountLossInput {
+  reason: string;
+  expectedLossId: string;
+  idempotencyKey: string;
+}
+
 export interface V2AccountLossRecord {
   rowNumber?: number;
   id: string;
   accountId: string;
   ledgerEntryId: string;
+  status: 'active' | 'reversed';
   appleIdMasked: string;
   countryOptionId: string;
   countryName: string;
@@ -207,14 +223,20 @@ export interface V2AccountLossRecord {
   soldOrderNo: string | null;
   lossBalance: string;
   lossCostAmount: string;
+  idPurchaseCostLossAmount: string;
   reason: string;
   reportedByName: string | null;
-  reportedBy: {
-    id: string;
-    username: string;
-    displayName: string;
-  } | null;
+  reportedBy: V2OperatorSummary | null;
   reportedAt: string;
+  previousStatusOptionId: string | null;
+  previousStatusName: string | null;
+  previousRecordStatus: V2RecordStatus | null;
+  financeJournalId: string | null;
+  reversalFinanceJournalId: string | null;
+  reversalReason: string | null;
+  reversedAt: string | null;
+  reversedByName: string | null;
+  reversedBy: V2OperatorSummary | null;
 }
 
 export type V2AccountLossListResult = PaginatedResult<V2AccountLossRecord>;
@@ -237,11 +259,14 @@ export interface ReportV2AccountLossResult {
     | 'appleIdMasked'
     | 'lossStatus'
     | 'lossReportedAt'
+    | 'activeLossId'
     | 'currentBalance'
     | 'balanceCostAmount'
   >;
   idempotentReplay: boolean;
 }
+
+export type UnfreezeV2AccountLossResult = ReportV2AccountLossResult;
 
 export type V2AccountSecretField = 'appleId' | 'password' | 'phone' | 'securityInfo';
 

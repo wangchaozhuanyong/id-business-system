@@ -179,7 +179,7 @@
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierPayments.columns[11]">
             <template #default="{ row }">
-              {{ row.operator?.displayName || row.operator?.username || '系统' }}
+              {{ operatorUsername(row.operator, 'system') }}
             </template>
           </V2TableColumn>
           <V2TableActionColumn
@@ -332,6 +332,7 @@ import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query'
 import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import { operatorUsername } from '@/v2/utils/operator';
 import type { V2OptionSelector } from '@/v2/types/options';
 import type {
   V2TopupSupplierPaymentItem,

@@ -211,7 +211,7 @@
                 "
                 effect="plain"
               >
-                {{ row.lossStatus === 'reported' ? '已报损（冻结）' : row.status.name }}
+                {{ row.lossStatus === 'reported' ? '已报损冻结' : row.status.name }}
               </el-tag>
             </template>
           </V2TableColumn>
@@ -226,14 +226,17 @@
               </el-tag>
             </template>
           </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[10]">
+            <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+          </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.accounts.main.columns[10]"
+            :definition="v2TableSchemas.accounts.main.columns[11]"
             prop="updatedAt"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.accounts.main.columns[11]">
+          <V2TableActionColumn :definition="v2TableSchemas.accounts.main.columns[12]">
             <template #default="{ row }">
               <V2AccountRowActions
                 :record-status="row.recordStatus"
@@ -246,6 +249,7 @@
                 @edit="page.openEdit(row)"
                 @toggle-status="page.toggleStatus(row)"
                 @report-loss="page.openReportLoss(row)"
+                @unfreeze-loss="page.openUnfreezeLoss(row)"
                 @delete="page.openDelete(row)"
               />
             </template>
@@ -271,7 +275,7 @@
               >
                 {{
                   item.lossStatus === 'reported'
-                    ? '已报损（冻结）'
+                    ? '已报损冻结'
                     : item.recordStatus === 'active'
                       ? '启用'
                       : '停用'
@@ -282,7 +286,7 @@
               <div>
                 <dt>ID 状态</dt>
                 <dd>
-                  {{ item.lossStatus === 'reported' ? '已报损（冻结）' : item.status.name }}
+                  {{ item.lossStatus === 'reported' ? '已报损冻结' : item.status.name }}
                 </dd>
               </div>
               <div>
@@ -332,6 +336,10 @@
                 <dd>¥{{ page.formatDecimal(item.purchaseCost) }}</dd>
               </div>
               <div>
+                <dt>操作人</dt>
+                <dd>{{ operatorUsername(item.createdBy) }}</dd>
+              </div>
+              <div>
                 <dt>更新时间</dt>
                 <dd>{{ page.formatDate(item.updatedAt) }}</dd>
               </div>
@@ -348,6 +356,7 @@
                 @edit="page.openEdit(item)"
                 @toggle-status="page.toggleStatus(item)"
                 @report-loss="page.openReportLoss(item)"
+                @unfreeze-loss="page.openUnfreezeLoss(item)"
                 @delete="page.openDelete(item)"
               />
             </footer>
@@ -393,6 +402,7 @@ import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
 import V2AccountRowActions from './components/V2AccountRowActions.vue';
 import { useAccountsPage } from './useAccountsPage';

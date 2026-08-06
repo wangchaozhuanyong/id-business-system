@@ -151,7 +151,7 @@ export class IdBusinessV2GiftCardReversalService {
         );
       }
       if (account.lossReportedAt) {
-        throw new ConflictException('已报损 ID 永久冻结，不能再处理余额');
+        throw new ConflictException('已报损冻结 ID 不能再处理余额');
       }
       if (account.recordStatus !== 'active') {
         throw new NotFoundException('目标 ID 不存在或已停用');

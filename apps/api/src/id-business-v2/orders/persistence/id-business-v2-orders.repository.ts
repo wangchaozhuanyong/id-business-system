@@ -36,6 +36,7 @@ const ORDER_INCLUDE = {
     }
   },
   settlementPlatform: { select: { id: true, code: true, name: true } },
+  createdBy: { select: { id: true, username: true, displayName: true } },
   locks: {
     where: { status: 'active' as const },
     orderBy: { lockedAt: 'desc' as const },
@@ -1195,6 +1196,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
     serviceOption: row.serviceOption,
     account: row.account,
     settlementPlatform: row.settlementPlatform,
+    createdBy: row.createdBy,
     locks: row.locks
   };
 }

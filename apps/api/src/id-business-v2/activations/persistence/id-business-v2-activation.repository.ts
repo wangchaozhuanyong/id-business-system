@@ -31,6 +31,13 @@ const ACTIVATION_INCLUDE = {
       name: true,
       parent: { select: { id: true, name: true } }
     }
+  },
+  createdBy: {
+    select: {
+      id: true,
+      username: true,
+      displayName: true
+    }
   }
 } satisfies Prisma.IdBusinessV2ActivationInclude;
 

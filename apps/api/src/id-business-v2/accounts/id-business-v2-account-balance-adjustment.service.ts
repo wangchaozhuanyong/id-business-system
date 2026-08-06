@@ -83,10 +83,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
         reason
       });
       const replayedAccount = await this.repository.findByIdOrThrow(accountId, tx);
-      assertAccountLossNotReported(
-        replayedAccount.lossReportedAt,
-        '已报损 ID 永久冻结，不能调整余额'
-      );
+      assertAccountLossNotReported(replayedAccount.lossReportedAt, '已报损冻结 ID 不能调整余额');
       return replayedAccount;
     };
 
@@ -99,7 +96,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
         if (existingEntry) return verifyReplay(tx);
 
         const locked = await this.lockAccountBalance(tx, accountId);
-        assertAccountLossNotReported(locked.lossReportedAt, '已报损 ID 永久冻结，不能调整余额');
+        assertAccountLossNotReported(locked.lossReportedAt, '已报损冻结 ID 不能调整余额');
         if (locked.soldByOrderId) {
           throw new ConflictException('该 ID 已卖出，不能调整余额或人民币成本');
         }

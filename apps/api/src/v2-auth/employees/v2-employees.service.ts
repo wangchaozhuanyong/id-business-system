@@ -53,6 +53,13 @@ const EMPLOYEE_INCLUDE = {
       mustResetPassword: true,
       lastAuthenticatedAt: true
     }
+  },
+  createdBy: {
+    select: {
+      id: true,
+      username: true,
+      displayName: true
+    }
   }
 } satisfies Prisma.UserInclude;
 
@@ -181,6 +188,7 @@ export class V2EmployeesService {
             displayName,
             passwordHash,
             status: 'active',
+            createdByUserId: operator.id,
             userRoles: {
               create: roles.map((role) => ({
                 roleId: role.id
@@ -451,6 +459,7 @@ export class V2EmployeesService {
       lastLoginAt: employee.lastLoginAt?.toISOString() ?? null,
       createdAt: employee.createdAt.toISOString(),
       updatedAt: employee.updatedAt.toISOString(),
+      createdBy: employee.createdBy,
       roles: employee.userRoles.map(({ role }) => role),
       mustResetPassword: employee.v2AuthIdentity?.mustResetPassword ?? false,
       lastAuthenticatedAt: employee.v2AuthIdentity?.lastAuthenticatedAt?.toISOString() ?? null,

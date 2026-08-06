@@ -37,7 +37,7 @@ export function getGiftCardReversalCopy(
         giftCard.account.appleIdMasked
       } 扣减余额 ${formatV2Decimal(
         giftCard.faceValue
-      )}；随后永久报损该 ID，并清零扣卡后的全部剩余余额和人民币成本。`
+      )}；随后报损冻结该 ID，保留扣卡后的剩余余额和人民币成本并计入损耗。`
     };
   }
   const actionLabel = action === 'redeemed' ? '标记为被赎回' : '撤回';
