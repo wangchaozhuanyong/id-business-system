@@ -8,7 +8,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(22);
+    expect(v2FeatureRegistry).toHaveLength(23);
   });
 
   it('keeps routing, access and loading behavior in each feature manifest', () => {
@@ -151,6 +151,18 @@ describe('V2 feature registry', () => {
     });
     expect(systemMonitoring?.status).not.toBe('planned');
     expect(systemMonitoring?.tables).toEqual([]);
+  });
+
+  it('registers branding settings as an administrator-only settings module', () => {
+    const branding = v2FeatureRegistry.find((feature) => feature.key === 'branding');
+
+    expect(branding).toMatchObject({
+      kind: 'list',
+      requiredRoles: ['admin'],
+      freshnessPolicy: 'event-driven'
+    });
+    expect(branding?.status).not.toBe('planned');
+    expect(branding?.tables).toEqual([]);
   });
 
   it('derives navigation from the same registered feature objects', () => {

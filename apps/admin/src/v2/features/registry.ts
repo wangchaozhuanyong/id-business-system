@@ -2,6 +2,7 @@ import { accountsFeature } from '@/v2/features/accounts/manifest';
 import { accountLossesFeature } from '@/v2/features/account-losses/manifest';
 import { activationsFeature } from '@/v2/features/activations/manifest';
 import { auditLogsFeature } from '@/v2/features/audit-logs/manifest';
+import { brandingFeature } from '@/v2/features/branding/manifest';
 import { businessMonitoringFeature } from '@/v2/features/business-monitoring/manifest';
 import { customersFeature } from '@/v2/features/customers/manifest';
 import { dashboardFeature } from '@/v2/features/dashboard/manifest';
@@ -40,6 +41,7 @@ export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   dataGovernanceFeature,
   businessMonitoringFeature,
   systemMonitoringFeature,
+  brandingFeature,
   employeesFeature,
   rolesFeature,
   auditLogsFeature,

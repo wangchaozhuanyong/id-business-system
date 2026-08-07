@@ -16,10 +16,14 @@
       :class="{ 'is-mobile-open': mobileMenuOpen }"
     >
       <div class="v2-brand">
-        <span class="v2-brand__mark">ID</span>
+        <V2BrandLogo
+          class="v2-brand__mark"
+          :logo-url="branding.logoUrl"
+          :logo-text="branding.logoText"
+        />
         <div class="v2-brand__copy">
-          <strong>ID 业务管理</strong>
-          <span>Apple ID 订阅运营</span>
+          <strong>{{ branding.appName }}</strong>
+          <span>{{ branding.appSubtitle }}</span>
         </div>
         <button
           class="v2-sidebar-toggle"
@@ -345,6 +349,7 @@ import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
+import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
 import { v2ModuleDefinitions, v2NavigationSections } from '@/v2/config/modules';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
@@ -359,6 +364,7 @@ import {
   useV2Query,
   v2QueryActivity
 } from '@/v2/composables/useV2Query';
+import { useV2Branding } from '@/v2/composables/useV2Branding';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { requiresPasswordResetRedirect } from '@/v2/router/passwordReset';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
@@ -374,6 +380,7 @@ const RENEWAL_WARNING_REFRESH_EVENT = 'v2:renewal-warning-refresh';
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const { branding, loadBranding } = useV2Branding();
 const routePrefetch = createV2RoutePrefetchController({
   currentPath: () => route.path,
   load: prefetchV2Route
@@ -687,6 +694,7 @@ async function retryDegradedSession() {
 }
 
 onMounted(() => {
+  void loadBranding().catch(() => undefined);
   startV2ChangeSync();
   window.addEventListener('keydown', handleKeydown);
   window.addEventListener('focus', handleWindowFocus);

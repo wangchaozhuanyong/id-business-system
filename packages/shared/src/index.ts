@@ -41,6 +41,13 @@ export {
   v2UnsignedDecimalPattern
 } from './v2/decimal.js';
 export {
+  V2_BRANDING_DEFAULTS,
+  V2_BRANDING_LIMITS,
+  splitV2BrandingHeroTitle,
+  type UpdateV2BrandingSettingsInput,
+  type V2BrandingSettings
+} from './v2/branding.js';
+export {
   V2_DATA_SCOPES,
   V2_SCOPE_DEPENDENCIES,
   expandV2DataScopes,

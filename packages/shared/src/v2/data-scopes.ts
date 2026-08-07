@@ -8,6 +8,7 @@ export const V2_DATA_SCOPES = [
   'balances-options',
   'balance-records',
   'balance-record-options',
+  'branding',
   'customers',
   'customers-options',
   'data-governance',
@@ -107,6 +108,7 @@ export const V2_SCOPE_DEPENDENCIES = {
     'order-entry-manual-candidates'
   ],
   'balance-record-options': ['balance-record-options'],
+  branding: ['branding'],
   customers: [
     'customers',
     'dashboard',

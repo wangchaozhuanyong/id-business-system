@@ -13,6 +13,7 @@ export interface ApiEndpointPolicy {
     | 'auth-change-password'
     | 'auth-refresh'
     | 'health'
+    | 'public-branding'
     | 'public-maintenance'
     | 'ordinary';
 }
@@ -44,6 +45,7 @@ const ENDPOINT_POLICIES = new Map<string, ApiEndpointPolicy>([
   ['/auth/refresh', { bypassSessionGate: true, key: 'auth-refresh' }],
   ['/health/ready', { bypassSessionGate: true, key: 'health' }],
   ['/health/live', { bypassSessionGate: true, key: 'health' }],
+  ['/id-business-v2/branding/public', { bypassSessionGate: true, key: 'public-branding' }],
   ['/maintenance/mode/public', { bypassSessionGate: true, key: 'public-maintenance' }]
 ]);
 

@@ -1,188 +1,181 @@
 <template>
   <main class="login-page">
-    <aside class="login-showcase" aria-label="系统说明">
+    <section class="login-canvas" aria-label="系统登录">
       <div class="login-brand">
-        <span class="login-brand__mark">ID</span>
+        <V2BrandLogo
+          class="login-brand__mark"
+          :logo-url="branding.logoUrl"
+          :logo-text="branding.logoText"
+        />
         <div>
-          <strong>ID 业务管理</strong>
-          <span>Apple ID 订阅运营</span>
+          <strong>{{ branding.appName }}</strong>
+          <span>{{ branding.appSubtitle }}</span>
         </div>
       </div>
 
-      <div class="login-showcase__content">
-        <h1>把订单、余额与续费任务<br />放进同一套工作流</h1>
-      </div>
-
-      <ul class="login-capabilities" aria-label="系统能力">
-        <li>
-          <span
-            ><el-icon><List /></el-icon
-          ></span>
-          <div>
-            <strong>清晰的任务流</strong>
-            <small>从客户、订单到续费，一条路径高效处理。</small>
+      <div class="login-shell">
+        <section class="login-showcase" aria-label="登录页说明">
+          <div class="login-showcase__content">
+            <h1>
+              <template v-for="(line, index) in heroTitleLines" :key="`${index}-${line}`">
+                {{ line }}<br v-if="index < heroTitleLines.length - 1" />
+              </template>
+            </h1>
           </div>
-        </li>
-        <li>
-          <span
-            ><el-icon><PieChart /></el-icon
-          ></span>
-          <div>
-            <strong>完整的账务视图</strong>
-            <small>余额、账单、收款一体化，数据实时可追溯。</small>
-          </div>
-        </li>
-        <li>
-          <span
-            ><el-icon><Lock /></el-icon
-          ></span>
-          <div>
-            <strong>受控的敏感访问</strong>
-            <small>最小权限、操作留痕，保障数据与资金安全。</small>
-          </div>
-        </li>
-      </ul>
 
-      <p class="login-showcase__footer">© 2026 Apple 内部系统 · 仅限授权人员访问</p>
-    </aside>
+          <div class="login-workflow" aria-label="登录后处理流程">
+            <span>订单接入</span>
+            <i />
+            <span>余额核对</span>
+            <i />
+            <span>续费排程</span>
+            <i />
+            <span>财务留痕</span>
+          </div>
+        </section>
 
-    <section class="login-panel">
-      <div class="v2-login-appearance">
-        <div class="v2-login-theme" role="group" aria-label="登录页主题">
-          <span
-            ><el-icon><Sunny /></el-icon>浅色</span
-          >
-          <el-switch
-            :model-value="currentTheme === 'dark'"
-            aria-label="切换深色主题"
-            @change="handleThemeSwitch"
-          />
-          <span>深色</span>
-        </div>
-        <span
-          class="v2-login-status"
-          :class="`is-${systemHealthStatus}`"
-          role="status"
-          aria-live="polite"
-        >
+        <section class="login-panel" aria-label="登录表单">
+          <div class="login-panel__card">
+            <div class="v2-login-appearance">
+              <div class="v2-login-theme" role="group" aria-label="登录页主题">
+                <span
+                  ><el-icon><Sunny /></el-icon>浅色</span
+                >
+                <el-switch
+                  :model-value="currentTheme === 'dark'"
+                  aria-label="切换深色主题"
+                  @change="handleThemeSwitch"
+                />
+                <span>深色</span>
+              </div>
+              <span
+                class="v2-login-status"
+                :class="`is-${systemHealthStatus}`"
+                role="status"
+                aria-live="polite"
+              >
+                <i />
+                {{ systemHealthText }}
+              </span>
+            </div>
+            <el-form
+              id="v2-admin-login-form"
+              ref="formRef"
+              :model="form"
+              :rules="rules"
+              :aria-busy="loading"
+              :aria-describedby="loginError ? 'v2-login-error-message' : undefined"
+              class="v2-horizontal-form v2-login-form"
+              label-position="left"
+              label-width="120px"
+              require-asterisk-position="right"
+              @submit.prevent="submit"
+            >
+              <el-form-item prop="username">
+                <template #label>管理员账号</template>
+                <el-input
+                  v-model.trim="form.username"
+                  autocomplete="username"
+                  maxlength="80"
+                  name="username"
+                  placeholder="请输入管理员账号"
+                >
+                  <template #prefix>
+                    <el-icon><User /></el-icon>
+                  </template>
+                </el-input>
+              </el-form-item>
+
+              <el-form-item prop="password">
+                <template #label>密码</template>
+                <el-input
+                  v-model="form.password"
+                  type="password"
+                  autocomplete="current-password"
+                  maxlength="160"
+                  name="password"
+                  placeholder="请输入密码"
+                  show-password
+                >
+                  <template #prefix>
+                    <el-icon><Lock /></el-icon>
+                  </template>
+                </el-input>
+              </el-form-item>
+
+              <el-form-item prop="mfaCode">
+                <template #label>验证码</template>
+                <el-input
+                  v-model.trim="form.mfaCode"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  maxlength="64"
+                  name="one-time-code"
+                  placeholder="可选 MFA 或恢复码"
+                >
+                  <template #prefix>
+                    <el-icon><Key /></el-icon>
+                  </template>
+                </el-input>
+              </el-form-item>
+
+              <div
+                v-if="loginError"
+                id="v2-login-error-message"
+                class="login-error"
+                role="alert"
+                aria-live="assertive"
+              >
+                <strong>登录失败</strong>
+                <span>{{ loginError }}</span>
+              </div>
+
+              <AppButton
+                variant="primary"
+                class="full-button"
+                native-type="submit"
+                :disabled="loading"
+                :loading="loading"
+              >
+                进入运营后台
+              </AppButton>
+            </el-form>
+          </div>
+        </section>
+
+        <div class="login-mobile-ground" aria-hidden="true">
           <i />
-          {{ systemHealthText }}
-        </span>
-      </div>
-
-      <div class="login-heading">
-        <h2>管理员登录</h2>
-        <p class="v2-login-note">使用内部管理员账号继续，本系统不提供用户注册</p>
-      </div>
-
-      <el-form
-        id="v2-admin-login-form"
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        :aria-busy="loading"
-        :aria-describedby="loginError ? 'v2-login-error-message' : undefined"
-        class="v2-horizontal-form v2-login-form"
-        label-position="left"
-        label-width="168px"
-        require-asterisk-position="right"
-        @submit.prevent="submit"
-      >
-        <el-form-item prop="username">
-          <template #label>管理员账号</template>
-          <el-input
-            v-model.trim="form.username"
-            autocomplete="username"
-            maxlength="80"
-            name="username"
-            placeholder="请输入管理员账号"
-          >
-            <template #prefix>
-              <el-icon><User /></el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <el-form-item prop="password">
-          <template #label>密码</template>
-          <el-input
-            v-model="form.password"
-            type="password"
-            autocomplete="current-password"
-            maxlength="160"
-            name="password"
-            placeholder="请输入密码"
-            show-password
-          >
-            <template #prefix>
-              <el-icon><Lock /></el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <el-form-item prop="mfaCode">
-          <template #label>动态验证码 / 恢复码（未启用 MFA 可留空）</template>
-          <el-input
-            v-model.trim="form.mfaCode"
-            autocomplete="one-time-code"
-            inputmode="numeric"
-            maxlength="64"
-            name="one-time-code"
-            placeholder="请输入 6 位动态验证码或恢复码（可留空）"
-          >
-            <template #prefix>
-              <el-icon><Key /></el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <div
-          v-if="loginError"
-          id="v2-login-error-message"
-          class="login-error"
-          role="alert"
-          aria-live="assertive"
-        >
-          <strong>登录失败</strong>
-          <span>{{ loginError }}</span>
+          <i />
+          <i />
+          <i />
         </div>
 
-        <AppButton
-          variant="primary"
-          class="full-button"
-          native-type="submit"
-          :disabled="loading"
-          :loading="loading"
-        >
-          登录新版后台
-        </AppButton>
-
-        <p class="v2-login-security">
-          <el-icon><Lock /></el-icon>
-          为保障安全，请勿将账号密码泄露给他人。所有操作均会被记录。
-        </p>
-      </el-form>
+        <p class="login-showcase__footer">{{ branding.footerText }}</p>
+      </div>
     </section>
   </main>
 </template>
 
 <script setup lang="ts">
 import type { FormInstance, FormRules } from 'element-plus';
-import { Key, List, Lock, PieChart, Sunny, User } from '@element-plus/icons-vue';
+import { Key, Lock, Sunny, User } from '@element-plus/icons-vue';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage, http, request } from '@/api/client';
 import { isApiError } from '@/api/apiError';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
+import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import { getSafeV2Redirect } from '@/v2/router/passwordReset';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
+import { useV2Branding } from '@/v2/composables/useV2Branding';
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const { branding, heroTitleLines, loadBranding } = useV2Branding();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
 const loginError = ref('');
@@ -265,37 +258,36 @@ watch(
 );
 
 onMounted(() => {
+  void loadBranding().catch(() => undefined);
   void checkSystemHealth();
 });
 </script>
 
 <style scoped>
-.v2-login-note {
-  margin: 14px 0 0;
-  color: var(--v3-text-soft);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
 .v2-login-appearance {
-  position: absolute;
-  top: 34px;
-  right: clamp(28px, 5vw, 72px);
-  left: clamp(28px, 5vw, 72px);
   display: flex;
-  width: auto;
+  width: 100%;
   align-items: center;
-  justify-content: flex-end;
-  gap: 22px;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--v3-border) 72%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--v3-surface-2) 78%, var(--v3-surface));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 50%, transparent);
+  color: var(--v3-text);
 }
 
 .v2-login-theme {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 9px;
   color: var(--v3-text);
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .v2-login-theme span {
@@ -311,11 +303,17 @@ onMounted(() => {
 
 .v2-login-status {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 7px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--v3-success-soft) 72%, var(--v3-surface));
   color: var(--v3-text);
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .v2-login-status i {
@@ -337,36 +335,21 @@ onMounted(() => {
   background: var(--v3-danger-solid);
 }
 
-.v2-login-security {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 18px 0 0;
-  color: var(--v3-text-soft);
-  font-size: 13px;
-  line-height: 1.55;
-  text-align: left;
-}
-
-.v2-login-security .el-icon {
-  flex: 0 0 auto;
-  color: var(--v3-muted);
-  font-size: 17px;
-}
-
 .login-panel :deep(.el-form) {
   display: grid;
-  gap: 22px;
+  gap: 18px;
 }
 
 .login-panel :deep(.el-form-item) {
+  align-items: center;
   margin: 0;
 }
 
 .login-panel :deep(.el-form-item__label) {
+  width: 120px !important;
   height: auto;
-  margin: 0 0 9px;
-  padding: 0;
+  margin: 0;
+  padding: 0 18px 0 0;
   color: var(--v3-text);
   font-size: 14px;
   font-weight: 600;
@@ -377,9 +360,14 @@ onMounted(() => {
   min-height: 56px;
   padding: 0 16px;
   border: 1px solid var(--v3-border);
-  border-radius: 7px;
+  border-radius: 16px;
   background: var(--v3-surface);
   box-shadow: none;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease,
+    background-color 180ms ease;
 }
 
 .login-panel :deep(.el-input__wrapper:hover) {
@@ -390,6 +378,7 @@ onMounted(() => {
 .login-panel :deep(.el-input__wrapper.is-focus) {
   border-color: var(--v3-primary);
   box-shadow: var(--v3-focus-ring);
+  transform: translateY(-1px);
 }
 
 .login-panel :deep(.el-input__prefix) {
@@ -414,20 +403,101 @@ onMounted(() => {
 
 .login-panel :deep(.full-button) {
   min-height: 56px;
-  margin-top: 4px;
+  margin-top: 2px;
+  border-radius: 18px;
   font-size: 15px;
   font-weight: 700;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.login-panel :deep(.full-button:active) {
+  transform: translateY(1px) scale(0.99);
 }
 
 @media (max-width: 620px) {
   .v2-login-appearance {
-    position: static;
-    width: 100%;
-    margin-bottom: 30px;
-    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 9px 10px;
+    border-radius: 16px;
   }
 
   .v2-login-status {
+    font-size: 12px;
+  }
+
+  .v2-login-theme {
+    gap: 8px;
+  }
+
+  .v2-login-theme span {
+    font-size: 12px;
+  }
+
+  .login-panel :deep(.el-form) {
+    gap: 17px;
+  }
+
+  .login-panel :deep(.el-form-item) {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+    align-items: start;
+    column-gap: 10px;
+  }
+
+  .login-panel :deep(.el-form-item__label) {
+    width: 76px !important;
+    min-height: 50px;
+    margin: 0;
+    padding: 14px 0 0;
+    color: var(--v3-text-soft);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .login-panel :deep(.el-form-item__content) {
+    min-width: 0;
+  }
+
+  .login-panel :deep(.el-input__wrapper) {
+    min-height: 50px;
+    padding: 0 13px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--v3-surface) 88%, var(--color-bg));
+  }
+
+  .login-panel :deep(.el-input__prefix) {
+    margin-right: 8px;
+    font-size: 18px;
+  }
+
+  .login-panel :deep(.full-button) {
+    min-height: 52px;
+    border-radius: 16px;
+  }
+}
+
+@media (max-width: 430px) {
+  .v2-login-appearance {
+    gap: 10px;
+  }
+
+  .v2-login-status {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .login-panel :deep(.el-form-item) {
+    grid-template-columns: 66px minmax(0, 1fr);
+    column-gap: 8px;
+  }
+
+  .login-panel :deep(.el-form-item__label) {
+    width: 66px !important;
     font-size: 12px;
   }
 }

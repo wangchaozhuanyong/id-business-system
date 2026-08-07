@@ -918,6 +918,7 @@ export const v2TablesByFeature = {
   ],
   'business-monitoring': [v2TableSchemas.businessMonitoring.main],
   'system-monitoring': [],
+  branding: [],
   employees: [v2TableSchemas.employees.main],
   roles: [v2TableSchemas.roles.main],
   'audit-logs': [v2TableSchemas.auditLogs.operations, v2TableSchemas.auditLogs.sensitiveAccess],
