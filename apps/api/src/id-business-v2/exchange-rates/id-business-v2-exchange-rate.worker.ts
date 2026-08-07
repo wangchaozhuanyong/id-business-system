@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   Injectable,
   Logger,
@@ -7,8 +6,16 @@ import {
   OnModuleInit,
   ServiceUnavailableException
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import {
+  Rate8,
+  toKualaLumpurBusinessDate,
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  type Amount4,
+  type V2JsonDocument
+} from '../runtime/public-api';
 import {
   IdBusinessV2ExchangeRatePersistenceService,
   IdBusinessV2ExchangeRateRunError
@@ -18,6 +25,31 @@ import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2
 
 const TICK_MS = 30_000;
 const STALE_RUN_MS = 5 * 60_000;
+type TrackedFxCurrency = 'MYR' | 'USD' | 'USDT';
+type CurrencyCollectionResult =
+  | {
+      currency: TrackedFxCurrency;
+      status: 'success';
+      source: 'combined_p2p' | 'ecb_cross';
+      snapshotId: string;
+      rateToCny: string;
+      capturedAt: Date;
+      expiresAt: Date;
+      exchangeRateRunId?: string;
+      exchangeRateSnapshotId?: string;
+      validSampleCount?: number;
+    }
+  | {
+      currency: TrackedFxCurrency;
+      status: 'failed';
+      error: {
+        code: string;
+        message: string;
+        provider: 'binance' | 'okx' | 'multiple' | 'system';
+        side: 'merchant_buy' | 'merchant_sell' | null;
+        retryable: boolean;
+      };
+    };
 
 @Injectable()
 export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDestroy {
@@ -60,51 +92,25 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
     this.assertNetworkEnabled();
     await this.recoverStaleRuns();
     const settings = await this.settingsService.getRecord();
-    try {
-      return await this.persistenceService.collectAndPersist({
-        triggerType: 'manual',
-        targetAmountRmb: settings.targetAmountRmb,
-        triggeredByUserId: operator.id,
-        requestId
-      });
-    } catch (error) {
-      if (error instanceof IdBusinessV2ExchangeRateRunError) {
-        throw new BadGatewayException({
-          message: error.message,
-          code: error.code,
-          runId: error.runId,
-          provider: error.provider,
-          side: error.side,
-          retryable: error.retryable
-        });
-      }
-      throw error;
-    }
+    return this.collectAllCurrencies({
+      triggerType: 'manual',
+      targetAmountRmb: settings.targetAmountRmb,
+      intervalMinutes: settings.intervalMinutes,
+      triggeredByUserId: operator.id,
+      requestId
+    });
   }
 
   async collectSystem(requestId = 'exchange-rate-system-collect') {
     this.assertNetworkEnabled();
     await this.recoverStaleRuns();
     const settings = await this.settingsService.getRecord();
-    try {
-      return await this.persistenceService.collectAndPersist({
-        triggerType: 'system',
-        targetAmountRmb: settings.targetAmountRmb,
-        requestId
-      });
-    } catch (error) {
-      if (error instanceof IdBusinessV2ExchangeRateRunError) {
-        throw new BadGatewayException({
-          message: error.message,
-          code: error.code,
-          runId: error.runId,
-          provider: error.provider,
-          side: error.side,
-          retryable: error.retryable
-        });
-      }
-      throw error;
-    }
+    return this.collectAllCurrencies({
+      triggerType: 'system',
+      targetAmountRmb: settings.targetAmountRmb,
+      intervalMinutes: settings.intervalMinutes,
+      requestId
+    });
   }
 
   async getRuntime() {
@@ -135,11 +141,17 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
           code: 'okx',
           source: 'https://www.okx.com/',
           contract: 'okx-public-trading-orders-books-v3'
+        },
+        {
+          code: 'ecb',
+          source: 'https://data-api.ecb.europa.eu/',
+          contract: 'ecb-exr-reference-cross-rate'
         }
       ],
-      successBoundary: '只有 Binance 与 OKX 四个方向都达到有效样本要求并原子保存，才会生成成功快照',
+      successBoundary:
+        'USDT 需要 Binance 与 OKX 四方向有效样本；MYR 与 USD 使用 ECB 参考交叉汇率，各币种独立记录成功或失败',
       retention: {
-        days: 30,
+        days: settings.retentionDays,
         preservesReferencedSnapshots: true
       }
     };
@@ -147,7 +159,10 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
 
   async tick() {
     try {
-      await this.runScheduled();
+      const result = await this.runScheduled();
+      if (result.status === 'failed' || result.status === 'partial_failed') {
+        this.logger.warn(`定时汇率采集未全部成功：${result.failedCurrencies.join(', ')}`);
+      }
     } catch (error) {
       if (error instanceof IdBusinessV2ExchangeRateRunError) {
         this.logger.warn(`定时汇率采集失败：${error.code}`);
@@ -180,20 +195,329 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
           reason: 'not_due' as const
         };
       }
-      const result = await this.persistenceService.collectAndPersist({
+      return this.collectAllCurrencies({
         triggerType: 'scheduled',
         targetAmountRmb: claimed.targetAmountRmb,
+        intervalMinutes: claimed.intervalMinutes,
         requestId: 'exchange-rate-scheduled-collect'
       });
-      return {
-        status: 'collected' as const,
-        runId: result.runId,
-        midRateToRmb: result.midRateToRmb,
-        validSampleCount: result.validSampleCount
-      };
     } finally {
       this.running = false;
     }
+  }
+
+  private async collectAllCurrencies(input: {
+    triggerType: 'manual' | 'scheduled' | 'system';
+    targetAmountRmb: Amount4;
+    intervalMinutes: number;
+    triggeredByUserId?: string;
+    requestId: string;
+  }) {
+    const usdtResult = await this.collectUsdtP2p(input);
+    const collection = await this.collectFinanceSnapshots({
+      ...input,
+      usdtResult: usdtResult.status === 'success' ? usdtResult.result : undefined
+    });
+    if (usdtResult.status === 'failed') {
+      collection.push({
+        currency: 'USDT',
+        status: 'failed',
+        error: usdtResult.error
+      });
+    }
+    return this.collectionResponse(collection);
+  }
+
+  private async collectUsdtP2p(input: {
+    triggerType: 'manual' | 'scheduled' | 'system';
+    targetAmountRmb: Amount4;
+    triggeredByUserId?: string;
+    requestId: string;
+  }) {
+    try {
+      return {
+        status: 'success' as const,
+        result: await this.persistenceService.collectAndPersist({
+          triggerType: input.triggerType,
+          targetAmountRmb: input.targetAmountRmb,
+          triggeredByUserId: input.triggeredByUserId,
+          requestId: input.requestId
+        })
+      };
+    } catch (error) {
+      if (error instanceof IdBusinessV2ExchangeRateRunError) {
+        return {
+          status: 'failed' as const,
+          error: {
+            code: error.code,
+            message: error.message,
+            provider: error.provider,
+            side: error.side,
+            retryable: error.retryable
+          }
+        };
+      }
+      return {
+        status: 'failed' as const,
+        error: {
+          code: 'exchange_rate_usdt_unexpected_failure',
+          message: error instanceof Error ? error.message : 'USDT 汇率采集失败',
+          provider: 'system' as const,
+          side: null,
+          retryable: true
+        }
+      };
+    }
+  }
+
+  private async collectFinanceSnapshots(input: {
+    triggerType: 'manual' | 'scheduled' | 'system';
+    intervalMinutes: number;
+    triggeredByUserId?: string;
+    requestId: string;
+    usdtResult?: Awaited<
+      ReturnType<IdBusinessV2ExchangeRatePersistenceService['collectAndPersist']>
+    >;
+  }) {
+    const tasks: Array<Promise<CurrencyCollectionResult>> = [];
+    if (input.usdtResult) {
+      tasks.push(this.createUsdtFinanceSnapshot(input.usdtResult, input));
+    }
+    tasks.push(this.collectEcbCrossRate('MYR', input), this.collectEcbCrossRate('USD', input));
+    return Promise.all(tasks);
+  }
+
+  private async createUsdtFinanceSnapshot(
+    result: Awaited<ReturnType<IdBusinessV2ExchangeRatePersistenceService['collectAndPersist']>>,
+    input: {
+      triggerType: 'manual' | 'scheduled' | 'system';
+      intervalMinutes: number;
+      triggeredByUserId?: string;
+      requestId: string;
+    }
+  ): Promise<CurrencyCollectionResult> {
+    try {
+      const capturedAt = result.averagedAt;
+      const expiresAt = this.expiresAt(capturedAt, input.intervalMinutes);
+      const snapshot = await this.createFinanceSnapshot({
+        currency: 'USDT',
+        rateToCny: result.midRateToRmb,
+        source: 'combined_p2p',
+        sourceReference: result.snapshotId,
+        sourceEvidence: {
+          exchangeRateRunId: result.runId,
+          exchangeRateSnapshotId: result.snapshotId,
+          averagedAt: result.averagedAt.toISOString()
+        },
+        businessDate: toKualaLumpurBusinessDate(capturedAt).date,
+        capturedAt,
+        expiresAt,
+        triggeredByUserId: input.triggeredByUserId,
+        requestId: `${input.requestId}-finance-usdt`
+      });
+      return {
+        currency: 'USDT',
+        status: 'success',
+        source: 'combined_p2p',
+        snapshotId: snapshot.id,
+        rateToCny: snapshot.rateToCny,
+        capturedAt,
+        expiresAt,
+        exchangeRateRunId: result.runId,
+        exchangeRateSnapshotId: result.snapshotId,
+        validSampleCount: result.validSampleCount
+      };
+    } catch (error) {
+      return this.failedCurrency('USDT', error);
+    }
+  }
+
+  private async collectEcbCrossRate(
+    currency: 'MYR' | 'USD',
+    input: {
+      triggerType: 'manual' | 'scheduled' | 'system';
+      intervalMinutes: number;
+      triggeredByUserId?: string;
+      requestId: string;
+    }
+  ): Promise<CurrencyCollectionResult> {
+    try {
+      const [cny, quote] = await Promise.all([
+        this.fetchEcbReferenceRate('CNY'),
+        this.fetchEcbReferenceRate(currency)
+      ]);
+      if (cny.businessDate !== quote.businessDate) {
+        throw new ServiceUnavailableException(`ECB CNY 与 ${currency} 参考汇率日期不一致`);
+      }
+      const capturedAt = new Date();
+      const rateToCny = cny.rate.div(quote.rate).toString();
+      const expiresAt = this.expiresAt(capturedAt, input.intervalMinutes);
+      const snapshot = await this.createFinanceSnapshot({
+        currency,
+        rateToCny,
+        source: 'ecb_cross',
+        sourceReference: `ECB EXR.D.CNY.EUR.SP00.A / EXR.D.${currency}.EUR.SP00.A`,
+        sourceEvidence: {
+          cnyPerEur: cny.rate.toString(),
+          quotePerEur: quote.rate.toString(),
+          quoteCurrency: currency,
+          referenceDate: cny.businessDate
+        },
+        businessDate: new Date(`${cny.businessDate}T00:00:00.000Z`),
+        capturedAt,
+        expiresAt,
+        triggeredByUserId: input.triggeredByUserId,
+        requestId: `${input.requestId}-finance-${currency.toLowerCase()}`
+      });
+      return {
+        currency,
+        status: 'success',
+        source: 'ecb_cross',
+        snapshotId: snapshot.id,
+        rateToCny: snapshot.rateToCny,
+        capturedAt,
+        expiresAt
+      };
+    } catch (error) {
+      return this.failedCurrency(currency, error);
+    }
+  }
+
+  private async createFinanceSnapshot(input: {
+    currency: TrackedFxCurrency;
+    rateToCny: string;
+    source: 'combined_p2p' | 'ecb_cross';
+    sourceReference: string;
+    sourceEvidence: V2JsonDocument;
+    businessDate: Date;
+    capturedAt: Date;
+    expiresAt: Date;
+    triggeredByUserId?: string;
+    requestId: string;
+  }) {
+    return this.transactionManager.execute(
+      async (tx) => {
+        const snapshot = await this.repository.createFinanceFxRateSnapshot(tx, {
+          id: randomUUID(),
+          currency: input.currency,
+          rateToCny: input.rateToCny,
+          source: input.source,
+          sourceReference: input.sourceReference,
+          sourceEvidence: input.sourceEvidence,
+          businessDate: input.businessDate,
+          capturedAt: input.capturedAt,
+          expiresAt: input.expiresAt,
+          createdByUserId: input.triggeredByUserId
+        });
+        await this.audit.append(tx, {
+          userId: input.triggeredByUserId,
+          module: 'id_business_v2',
+          action: 'id_business_v2.exchange_rate.fx_snapshot.collect',
+          objectType: 'id_business_v2_finance_fx_rate_snapshot',
+          objectId: snapshot.id,
+          afterData: {
+            currency: input.currency,
+            rateToCny: input.rateToCny,
+            source: input.source,
+            sourceReference: input.sourceReference,
+            capturedAt: input.capturedAt.toISOString(),
+            expiresAt: input.expiresAt.toISOString()
+          },
+          remark: 'V2 自动汇率按币种快照已保存'
+        });
+        return snapshot;
+      },
+      { requestId: `${input.requestId}-${randomUUID()}`, retryMode: 'none' }
+    );
+  }
+
+  private async fetchEcbReferenceRate(currency: 'CNY' | 'MYR' | 'USD') {
+    const url =
+      `https://data-api.ecb.europa.eu/service/data/EXR/D.${currency}.EUR.SP00.A` +
+      '?format=csvdata&detail=dataonly&lastNObservations=1';
+    let response: Response;
+    try {
+      response = await fetch(url, { headers: { accept: 'text/csv' } });
+    } catch {
+      throw new ServiceUnavailableException(`ECB ${currency}/EUR 汇率采集失败`);
+    }
+    if (!response.ok) {
+      throw new ServiceUnavailableException(`ECB ${currency}/EUR 返回 ${response.status}`);
+    }
+    const csv = await response.text();
+    const lines = csv.trim().split(/\r?\n/);
+    const headers = this.parseCsvLine(lines[0] ?? '');
+    const values = this.parseCsvLine(lines.at(-1) ?? '');
+    const dateIndex = headers.indexOf('TIME_PERIOD');
+    const valueIndex = headers.indexOf('OBS_VALUE');
+    const businessDate = values[dateIndex]?.trim();
+    const value = values[valueIndex]?.trim();
+    if (!businessDate || !value) {
+      throw new ServiceUnavailableException(`ECB ${currency}/EUR 响应缺少有效数据`);
+    }
+    return { businessDate, rate: Rate8.from(value) };
+  }
+
+  private parseCsvLine(line: string) {
+    const values: string[] = [];
+    let current = '';
+    let quoted = false;
+    for (const character of line) {
+      if (character === '"') quoted = !quoted;
+      else if (character === ',' && !quoted) {
+        values.push(current);
+        current = '';
+      } else current += character;
+    }
+    values.push(current);
+    return values;
+  }
+
+  private collectionResponse(results: CurrencyCollectionResult[]) {
+    const success = results.filter((item) => item.status === 'success');
+    const failed = results.filter((item) => item.status === 'failed');
+    return {
+      status:
+        failed.length === 0
+          ? ('success' as const)
+          : success.length > 0
+            ? ('partial_failed' as const)
+            : ('failed' as const),
+      successfulCurrencies: success.map((item) => item.currency),
+      failedCurrencies: failed.map((item) => item.currency),
+      results
+    };
+  }
+
+  private failedCurrency(currency: TrackedFxCurrency, error: unknown): CurrencyCollectionResult {
+    if (error instanceof IdBusinessV2ExchangeRateRunError) {
+      return {
+        currency,
+        status: 'failed',
+        error: {
+          code: error.code,
+          message: error.message,
+          provider: error.provider,
+          side: error.side,
+          retryable: error.retryable
+        }
+      };
+    }
+    return {
+      currency,
+      status: 'failed',
+      error: {
+        code: `exchange_rate_${currency.toLowerCase()}_collection_failed`,
+        message: error instanceof Error ? error.message : `${currency} 汇率采集失败`,
+        provider: 'system',
+        side: null,
+        retryable: true
+      }
+    };
+  }
+
+  private expiresAt(capturedAt: Date, intervalMinutes: number) {
+    return new Date(capturedAt.getTime() + intervalMinutes * 60_000 + 2 * 60_000);
   }
 
   private async recoverStaleRuns() {

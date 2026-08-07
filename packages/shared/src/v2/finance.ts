@@ -1,6 +1,6 @@
 import type { DecimalString, IsoDateTimeString, PaginatedResult } from './common.js';
 
-export const V2_FINANCE_CURRENCIES = ['CNY', 'MYR', 'USDT'] as const;
+export const V2_FINANCE_CURRENCIES = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 export type V2FinanceCurrency = (typeof V2_FINANCE_CURRENCIES)[number];
 
 export const V2_FINANCE_ACCOUNT_TYPES = ['bank', 'cash', 'ewallet', 'usdt_wallet'] as const;

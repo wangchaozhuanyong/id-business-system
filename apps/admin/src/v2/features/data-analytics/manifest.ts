@@ -14,7 +14,7 @@ export const dataAnalyticsFeature = defineV2Feature({
   summary: '按经营利润、原币现金流和资产余额三套口径展示多币种盈亏闭环。',
   filters: [
     { key: 'businessDate', label: '业务日期', kind: 'date-range' },
-    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USDT'] },
+    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USD', 'USDT'] },
     { key: 'supplier', label: '供应商', kind: 'select' },
     { key: 'journalType', label: '业务类型', kind: 'select' },
     { key: 'financeAccount', label: '资金账户', kind: 'select' }

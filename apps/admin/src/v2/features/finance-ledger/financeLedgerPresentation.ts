@@ -17,7 +17,8 @@ export function formatCny(value: string) {
 }
 
 export function formatOriginal(value: string, currency: V2FinanceCurrency) {
-  const prefix = currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : '₮';
+  const prefix =
+    currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : currency === 'USD' ? '$' : '₮';
   return `${prefix}${formatNumber(value)}`;
 }
 

@@ -12,6 +12,8 @@ import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2
 
 const ALLOWED_INTERVALS = new Set([5, 15, 30, 60, 180, 360, 720, 1440]);
 const MAX_TARGET_AMOUNT = Amount4.from('1000000');
+const MIN_RETENTION_DAYS = 7;
+const MAX_RETENTION_DAYS = 3650;
 
 interface ClaimedSettings {
   targetAmountRmb: Amount4;
@@ -58,6 +60,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
       throw new BadRequestException('采集周期必须是允许的分钟数');
     }
     const targetAmountRmb = this.parseTargetAmount(dto.targetAmountRmb);
+    const retentionDays = this.parseRetentionDays(dto.retentionDays);
     const now = new Date();
 
     const settings = await this.transactionManager.execute(
@@ -66,6 +69,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
           autoEnabled: dto.autoEnabled,
           intervalMinutes: dto.intervalMinutes,
           targetAmountRmb: targetAmountRmb.toString(),
+          retentionDays,
           nextRunAt: dto.autoEnabled ? now : null,
           updatedByUserId: operator.id
         });
@@ -78,6 +82,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
             autoEnabled: updated.autoEnabled,
             intervalMinutes: updated.intervalMinutes,
             targetAmountRmb: updated.targetAmountRmb.toString(),
+            retentionDays: updated.retentionDays,
             nextRunAt: updated.nextRunAt?.toISOString() ?? null
           },
           remark: updated.autoEnabled
@@ -127,7 +132,12 @@ export class IdBusinessV2ExchangeRateSettingsService {
             module: 'id_business_v2',
             action: 'id_business_v2.exchange_rate.settings.initialize',
             objectType: 'id_business_v2_exchange_rate_settings',
-            afterData: { autoEnabled: true, intervalMinutes: 30, targetAmountRmb: '5000' },
+            afterData: {
+              autoEnabled: true,
+              intervalMinutes: 30,
+              targetAmountRmb: '5000',
+              retentionDays: 30
+            },
             remark: 'V2 汇率设置初始化'
           });
           return row;
@@ -160,10 +170,22 @@ export class IdBusinessV2ExchangeRateSettingsService {
     return Amount4.from(amount.toFixed(2));
   }
 
+  private parseRetentionDays(value: unknown) {
+    if (value === undefined || value === null || value === '') return 30;
+    const days = Number(value);
+    if (!Number.isInteger(days) || days < MIN_RETENTION_DAYS || days > MAX_RETENTION_DAYS) {
+      throw new BadRequestException(
+        `数据保留天数必须是 ${MIN_RETENTION_DAYS} 到 ${MAX_RETENTION_DAYS} 之间的整数`
+      );
+    }
+    return days;
+  }
+
   private toResponse(settings: {
     autoEnabled: boolean;
     intervalMinutes: number;
     targetAmountRmb: Amount4;
+    retentionDays: number;
     nextRunAt: Date | null;
     updatedByUserId: string | null;
     createdAt: Date;
@@ -173,12 +195,17 @@ export class IdBusinessV2ExchangeRateSettingsService {
       autoEnabled: settings.autoEnabled,
       intervalMinutes: settings.intervalMinutes,
       targetAmountRmb: settings.targetAmountRmb.toString(),
+      retentionDays: settings.retentionDays,
       nextRunAt: settings.nextRunAt,
       emergencyNetworkEnabled: this.isNetworkEnabled(),
       updatedByUserId: settings.updatedByUserId,
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
-      allowedIntervals: [...ALLOWED_INTERVALS]
+      allowedIntervals: [...ALLOWED_INTERVALS],
+      allowedRetentionDays: {
+        min: MIN_RETENTION_DAYS,
+        max: MAX_RETENTION_DAYS
+      }
     };
   }
 }

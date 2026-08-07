@@ -147,7 +147,7 @@
             <header>
               <div>
                 <span>原币资金收支</span>
-                <strong>CNY / MYR / USDT 分币种核算</strong>
+                <strong>CNY / MYR / USD / USDT 分币种核算</strong>
               </div>
             </header>
             <V2Table
@@ -460,7 +460,7 @@ const {
 
 const analysisSections = [
   { key: 'profit', label: '经营利润', description: '收入、成本与损益' },
-  { key: 'cash-flow', label: '资金收支', description: 'CNY / MYR / USDT' },
+  { key: 'cash-flow', label: '资金收支', description: 'CNY / MYR / USD / USDT' },
   { key: 'assets', label: '资产余额', description: '账面值与最新估值' },
   { key: 'reconciliation', label: '账务对账', description: '日记与闭环问题' }
 ] as const;

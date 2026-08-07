@@ -5,5 +5,5 @@ test('loads the compiled shared package with standard Node ESM resolution', asyn
   const shared = await import('../dist/index.js');
 
   assert.equal(typeof shared.multiplyDecimalStrings, 'function');
-  assert.deepEqual(shared.V2_FINANCE_CURRENCIES, ['CNY', 'MYR', 'USDT']);
+  assert.deepEqual(shared.V2_FINANCE_CURRENCIES, ['CNY', 'MYR', 'USD', 'USDT']);
 });

@@ -77,23 +77,36 @@ describe('V2 exchange-rate contracts', () => {
     expect(migration).not.toContain('DROP TABLE "id_business_v2_exchange_rate_entries"');
   });
 
-  it('schedules a 30-minute Supabase Cron and limits network history to one month', () => {
+  it('schedules a 30-minute Supabase Cron and applies configurable FX retention', () => {
     const migration = read(
       'prisma/migrations/20260729000000_current_system_baseline/migration.sql'
+    );
+    const fourCurrencyMigration = read(
+      'prisma/migrations/20260807010000_four_currency_exchange_rates/migration.sql'
     );
     const persistenceRepository = read(
       'src/id-business-v2/exchange-rates/persistence/id-business-v2-exchange-rate.repository.ts'
     );
     const cleanupFunction =
-      migration.match(
+      fourCurrencyMigration.match(
         /CREATE OR REPLACE FUNCTION public\.cleanup_id_business_v2_exchange_rate_history\(\)[\s\S]*?\$function\$;/
       )?.[0] ?? '';
 
     expect(migration).toContain("'*/30 * * * *'");
     expect(migration).toContain('cleanup_id_business_v2_exchange_rate_history');
-    expect(migration).toContain("INTERVAL '1 month'");
     expect(migration).toContain('id_business_v2_exchange_rate_cron_secret');
-    expect(cleanupFunction).toContain('"exchange_rate_snapshot_id" = snapshot."id"');
+    expect(fourCurrencyMigration).toContain("ADD VALUE IF NOT EXISTS 'USD'");
+    expect(fourCurrencyMigration).toContain('"retention_days" INTEGER NOT NULL DEFAULT 30');
+    expect(fourCurrencyMigration).toContain(
+      '"id_business_v2_exchange_rate_settings_retention_days_check"'
+    );
+    expect(cleanupFunction).toContain('make_interval(days => configured_retention_days)');
+    expect(cleanupFunction).toContain('"id_business_v2_finance_fx_rate_snapshots"');
+    expect(cleanupFunction).toContain(
+      "fx_snapshot.\"source\" IN ('combined_p2p', 'binance', 'okx', 'ecb_cross')"
+    );
+    expect(cleanupFunction).toContain('"received_fx_snapshot_id" = fx_snapshot."id"');
+    expect(cleanupFunction).toContain("'deletedFxRateSnapshots'");
     expect(cleanupFunction).not.toContain('id_business_v2_exchange_rate_entries');
     expect(persistenceRepository).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
     expect(persistenceRepository).toContain('FLOOR');

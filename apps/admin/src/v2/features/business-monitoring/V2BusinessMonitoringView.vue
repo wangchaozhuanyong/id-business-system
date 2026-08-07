@@ -66,7 +66,7 @@
           <el-icon><RefreshLeft /></el-icon>
           重置筛选
         </AppButton>
-        <AppButton variant="soft" :loading="page.loading" @click="page.refresh">
+        <AppButton variant="soft" :disabled="page.loading" @click="page.refresh">
           <el-icon><Refresh /></el-icon>
           刷新快照
         </AppButton>

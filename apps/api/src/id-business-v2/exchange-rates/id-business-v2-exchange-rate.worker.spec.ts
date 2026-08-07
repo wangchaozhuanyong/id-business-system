@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Amount4 } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
 
@@ -14,7 +14,8 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
   const repository = {
     findStaleRuns: vi.fn(),
     findRunningRun: vi.fn(),
-    recoverStaleRun: vi.fn()
+    recoverStaleRun: vi.fn(),
+    createFinanceFxRateSnapshot: vi.fn()
   };
   const settings = {
     isNetworkEnabled: vi.fn(),
@@ -39,6 +40,21 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const rate = url.includes('/D.CNY.')
+          ? '7.3000'
+          : url.includes('/D.MYR.')
+            ? '4.7000'
+            : '1.1000';
+        return {
+          ok: true,
+          text: async () => `TIME_PERIOD,OBS_VALUE\n2026-08-06,${rate}\n`
+        } as Response;
+      })
+    );
     delete process.env.CLOUDFLARE_WORKER;
     delete process.env.SUPABASE_EDGE_FUNCTION;
     delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP;
@@ -57,7 +73,21 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
     repository.findStaleRuns.mockResolvedValue([]);
     repository.findRunningRun.mockResolvedValue(null);
     repository.recoverStaleRun.mockResolvedValue({ count: 1 });
-    persistence.collectAndPersist.mockResolvedValue({ status: 'success' });
+    repository.createFinanceFxRateSnapshot.mockImplementation(async (_tx, input) => ({
+      id: input.id,
+      rateToCny: input.rateToCny
+    }));
+    persistence.collectAndPersist.mockResolvedValue({
+      runId: '33333333-3333-4333-8333-333333333333',
+      snapshotId: '44444444-4444-4444-8444-444444444444',
+      midRateToRmb: '6.81234567',
+      averagedAt: new Date('2026-08-06T08:00:00.000Z'),
+      validSampleCount: 96
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('does not start a persistent timer inside Cloudflare Workers', () => {
@@ -109,16 +139,29 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
     });
     persistence.collectAndPersist.mockResolvedValue({
       runId: '33333333-3333-4333-8333-333333333333',
+      snapshotId: '44444444-4444-4444-8444-444444444444',
       midRateToRmb: '6.81234567',
+      averagedAt: new Date('2026-08-06T08:00:00.000Z'),
       validSampleCount: 96
     });
 
-    await expect(worker.runScheduled()).resolves.toEqual({
-      status: 'collected',
-      runId: '33333333-3333-4333-8333-333333333333',
-      midRateToRmb: '6.81234567',
-      validSampleCount: 96
+    await expect(worker.runScheduled()).resolves.toMatchObject({
+      status: 'success',
+      successfulCurrencies: ['USDT', 'MYR', 'USD'],
+      failedCurrencies: [],
+      results: [
+        expect.objectContaining({
+          currency: 'USDT',
+          status: 'success',
+          source: 'combined_p2p',
+          exchangeRateRunId: '33333333-3333-4333-8333-333333333333',
+          validSampleCount: 96
+        }),
+        expect.objectContaining({ currency: 'MYR', status: 'success', source: 'ecb_cross' }),
+        expect.objectContaining({ currency: 'USD', status: 'success', source: 'ecb_cross' })
+      ]
     });
+    expect(repository.createFinanceFxRateSnapshot).toHaveBeenCalledTimes(3);
   });
 
   it('does not collect when automatic networking is disabled or another instance won the claim', async () => {

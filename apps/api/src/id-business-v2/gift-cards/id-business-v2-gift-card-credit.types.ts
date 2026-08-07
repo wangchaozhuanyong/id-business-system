@@ -31,7 +31,7 @@ export interface GiftCardCreditRecord {
   exchangeRateWasOverridden: boolean;
   costAmount: Amount4;
   purchaseOriginalAmount: Amount4;
-  purchaseCurrency: 'CNY' | 'MYR' | 'USDT';
+  purchaseCurrency: 'CNY' | 'MYR' | 'USD' | 'USDT';
   purchaseFxRateToCny: Rate8;
   purchaseFxSnapshotId: string | null;
   purchaseFinanceAccountId: string | null;
@@ -88,7 +88,7 @@ export interface CreditResponse {
     exchangeRateWasOverridden: boolean;
     costAmount: string;
     purchaseOriginalAmount: string;
-    purchaseCurrency: 'CNY' | 'MYR' | 'USDT';
+    purchaseCurrency: 'CNY' | 'MYR' | 'USD' | 'USDT';
     purchaseFxRateToCny: string;
     purchaseFxSnapshotId: string | null;
     purchaseFinanceAccountId: string | null;

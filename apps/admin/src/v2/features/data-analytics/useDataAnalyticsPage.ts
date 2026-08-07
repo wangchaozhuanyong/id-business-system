@@ -13,7 +13,7 @@ import type {
   V2FinanceSupplierWallet
 } from './contracts';
 
-const currencies = ['CNY', 'MYR', 'USDT'] as const;
+const currencies = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 const journalTypeOptions: Array<{ value: V2FinanceJournalType; label: string }> = [
   { value: 'order_completed', label: '订单完成' },
   { value: 'order_refund', label: '订单退款' },
@@ -166,7 +166,8 @@ function formatCny(value: string | null | undefined) {
 }
 
 function formatOriginal(value: string, currency: V2FinanceCurrency) {
-  const prefix = currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : '₮';
+  const prefix =
+    currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : currency === 'USD' ? '$' : '₮';
   return `${prefix}${formatNumber(value)}`;
 }
 

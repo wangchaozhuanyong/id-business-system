@@ -19,7 +19,7 @@ function line(
   accountCode: string,
   direction: 'debit' | 'credit',
   amountCny: string,
-  currency: 'CNY' | 'MYR' | 'USDT' = 'CNY',
+  currency: 'CNY' | 'MYR' | 'USD' | 'USDT' = 'CNY',
   amountOriginal = amountCny
 ) {
   return {
@@ -158,6 +158,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
         originalAmounts: [
           { currency: 'CNY', grossReceived: '100', refunded: '0' },
           { currency: 'MYR', grossReceived: '0', refunded: '0' },
+          { currency: 'USD', grossReceived: '0', refunded: '0' },
           { currency: 'USDT', grossReceived: '0', refunded: '0' }
         ]
       }),
@@ -169,6 +170,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
         originalAmounts: [
           { currency: 'CNY', grossReceived: '0', refunded: '0' },
           { currency: 'MYR', grossReceived: '20', refunded: '0' },
+          { currency: 'USD', grossReceived: '0', refunded: '0' },
           { currency: 'USDT', grossReceived: '0', refunded: '0' }
         ]
       })

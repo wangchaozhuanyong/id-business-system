@@ -13,7 +13,7 @@ interface GiftCardFundInput {
   supplierOptionId: string;
   supplierAccountId?: string;
   giftCardId: string;
-  currency?: 'CNY' | 'MYR' | 'USDT';
+  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
   amountOriginal?: V2DecimalInput;
   amountCny: V2DecimalInput;
   operator?: AuthenticatedUser;

@@ -17,7 +17,7 @@
         </template>
       </template>
       <template #actions>
-        <AppButton variant="soft" :loading="page.loading" @click="page.refresh">
+        <AppButton variant="soft" :disabled="page.loading" @click="page.refresh">
           <el-icon><Refresh /></el-icon>
           重新执行探针
         </AppButton>

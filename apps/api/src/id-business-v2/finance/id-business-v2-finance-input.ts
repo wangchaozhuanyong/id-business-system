@@ -1,12 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { Amount4, Rate8, type V2DecimalInput } from '../runtime/public-api';
+export { toKualaLumpurBusinessDate } from '../runtime/public-api';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MONEY_PATTERN = /^(?:0|[1-9]\d{0,13})(?:\.\d{1,4})?$/;
 const RATE_PATTERN = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,8})?$/;
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
-const CURRENCIES = new Set<IdBusinessV2FinanceCurrency>(['CNY', 'MYR', 'USDT']);
+const CURRENCIES = new Set<IdBusinessV2FinanceCurrency>(['CNY', 'MYR', 'USD', 'USDT']);
 
 export function normalizeFinanceUuid(value: unknown, label: string) {
   const normalized = String(value ?? '').trim();
@@ -26,7 +27,7 @@ export function normalizeFinanceCurrency(value: unknown, label = '币种') {
     .trim()
     .toUpperCase() as IdBusinessV2FinanceCurrency;
   if (!CURRENCIES.has(normalized)) {
-    throw new BadRequestException(`${label}仅支持 CNY、MYR、USDT`);
+    throw new BadRequestException(`${label}仅支持 CNY、MYR、USD、USDT`);
   }
   return normalized;
 }
@@ -88,23 +89,6 @@ export function normalizeFinanceIdempotencyKey(value: unknown, prefix: string) {
     throw new BadRequestException('幂等键需为 8–120 位字母、数字或 . _ : -');
   }
   return `${prefix}:${normalized}`;
-}
-
-export function toKualaLumpurBusinessDate(value: Date) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kuala_Lumpur',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(value);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? '';
-  const text = `${get('year')}-${get('month')}-${get('day')}`;
-  return {
-    text,
-    month: text.slice(0, 7),
-    date: new Date(`${text}T00:00:00.000Z`)
-  };
 }
 
 export function decimalJson(value: V2DecimalInput) {

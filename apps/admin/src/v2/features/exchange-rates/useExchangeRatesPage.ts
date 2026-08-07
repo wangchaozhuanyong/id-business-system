@@ -1,68 +1,62 @@
 import { computed, reactive, ref, watch } from 'vue';
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
 import {
-  addDecimalStrings,
-  divideDecimalStrings,
-  formatV2Decimal,
-  isV2UnsignedDecimal,
-  multiplyDecimalStrings
-} from '@/v2/utils/decimal';
+  currencyLabel,
+  currencySymbol,
+  defaultIntervals,
+  failureLabel,
+  failureReason,
+  providerLabel,
+  receiptFxSourceLabel,
+  receiptFxStatusLabel,
+  receiptFxStatusType,
+  recordStatusLabel,
+  recordStatusType,
+  runStatusLabel,
+  runStatusType,
+  sideLabel,
+  trackedCurrencies,
+  triggerLabel
+} from './exchangeRatePresentation';
 import type {
-  V2ExchangeRateEntry,
-  V2ExchangeRateListResult,
+  V2ExchangeRateRecord,
+  V2ExchangeRateRecordListResult,
   V2ExchangeRateOverview,
   V2ExchangeRateReceiptFxRate,
-  V2ExchangeRateRun,
   V2ExchangeRateRunDetail,
   V2ExchangeRateRunListResult,
-  V2ExchangeRateRuntime
+  V2ExchangeRateRuntime,
+  V2ManualFxRate,
+  V2ManualFxRateListResult,
+  V2TrackedExchangeRateCurrency
 } from './contracts';
 
 interface ExchangeRatePageSnapshot {
   overview: V2ExchangeRateOverview;
   runtime: V2ExchangeRateRuntime;
   runs?: V2ExchangeRateRunListResult;
-  manualEntries?: V2ExchangeRateListResult;
+  records?: V2ExchangeRateRecordListResult;
+  manualEntries?: V2ManualFxRateListResult;
 }
 
-const defaultIntervals = [5, 15, 30, 60, 180, 360, 720, 1440];
-const failureReasonByCode: Record<string, string> = {
-  binance_otc_http_error: '平台接口返回异常',
-  binance_otc_timeout: '请求超时',
-  binance_otc_network_error: '网络连接失败',
-  binance_otc_invalid_response: '返回数据格式异常',
-  binance_otc_provider_error: '平台拒绝了采集请求',
-  binance_otc_empty_side: '未返回有效报价',
-  binance_otc_invalid_target: '成交额参数无效',
-  okx_otc_http_error: '平台接口返回异常',
-  okx_otc_timeout: '请求超时',
-  okx_otc_network_error: '网络连接失败',
-  okx_otc_invalid_response: '返回数据格式异常',
-  okx_otc_provider_error: '平台拒绝了采集请求',
-  okx_otc_empty_side: '未返回有效报价',
-  okx_otc_invalid_target: '成交额参数无效',
-  otc_average_provider_collection_failed: '至少一个平台采集失败',
-  otc_average_invalid_collection: '采集结果无效',
-  otc_average_insufficient_valid_quotes: '有效报价数量不足',
-  exchange_rate_stale_run_recovered: '超时采集任务已自动终止',
-  exchange_rate_unexpected_failure: '采集过程发生未知错误'
-};
 export function useExchangeRatesPage() {
   const authStore = useAuthStore();
   const activeTab = ref<'automatic' | 'manual'>('automatic');
   const overview = ref<V2ExchangeRateOverview | null>(null);
   const runtime = ref<V2ExchangeRateRuntime | null>(null);
   const collecting = ref(false);
-  const runs = ref<V2ExchangeRateRun[]>([]);
-  const runTotal = ref(0);
-  const runResolved = ref(false);
-  const runDateRange = ref<[string, string] | []>([]);
-  const manualEntries = ref<V2ExchangeRateEntry[]>([]);
+  const records = ref<V2ExchangeRateRecord[]>([]);
+  const recordTotal = ref(0);
+  const recordResolved = ref(false);
+  const recordDateRange = ref<[string, string] | []>([]);
+  const manualEntries = ref<V2ManualFxRate[]>([]);
   const manualTotal = ref(0);
   const manualResolved = ref(false);
   const manualDateRange = ref<[string, string] | []>([]);
@@ -72,37 +66,42 @@ export function useExchangeRatesPage() {
   const detailLoading = ref(false);
   const detailError = ref('');
   const runDetail = ref<V2ExchangeRateRunDetail | null>(null);
-  const runDetailTarget = ref<V2ExchangeRateRun | null>(null);
+  const runDetailTarget = ref<string | null>(null);
   const manualCreateVisible = ref(false);
   const manualCreating = ref(false);
   const manualDetailVisible = ref(false);
-  const manualDetail = ref<V2ExchangeRateEntry | null>(null);
+  const manualDetail = ref<V2ManualFxRate | null>(null);
 
   const canCollect = computed(() =>
     hasUserPermission(authStore.user, 'apple.exchange_rate.collect')
   );
   const canManage = computed(() => hasUserPermission(authStore.user, 'apple.exchange_rate.manage'));
   const canCreate = computed(() => hasUserPermission(authStore.user, 'apple.exchange_rate.create'));
-  const runQuery = reactive({
+  const recordQuery = reactive({
+    page: 1,
+    pageSize: 20,
+    currency: '' as '' | V2TrackedExchangeRateCurrency,
+    source: '' as '' | 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross',
+    status: '' as '' | 'available' | 'expired'
+  });
+  const manualQuery = reactive({
     page: 1,
     pageSize: 20,
     keyword: '',
-    status: '' as '' | 'running' | 'success' | 'failed',
-    triggerType: '' as '' | 'manual' | 'scheduled' | 'system'
+    currency: '' as '' | V2TrackedExchangeRateCurrency
   });
-  const manualQuery = reactive({ page: 1, pageSize: 20, keyword: '' });
   const settingsForm = reactive({
     autoEnabled: true,
     intervalMinutes: 15,
-    targetAmountRmb: '5000'
+    targetAmountRmb: '5000',
+    retentionDays: 30
   });
   const manualForm = reactive({
-    binanceMerchantBuyRateToRmb: '',
-    binanceMerchantSellRateToRmb: '',
-    okxMerchantBuyRateToRmb: '',
-    okxMerchantSellRateToRmb: '',
+    currency: 'MYR' as V2TrackedExchangeRateCurrency,
+    rateToCny: '',
     recordedAt: new Date(),
-    remark: ''
+    reason: '',
+    sourceReference: ''
   });
 
   const latestFailureDescription = computed(() => {
@@ -113,25 +112,19 @@ export function useExchangeRatesPage() {
     )}。上次成功值已标记过期，不会自动带入加卡。`;
   });
   const manualPreview = computed(() => {
-    const values = [
-      manualForm.binanceMerchantBuyRateToRmb,
-      manualForm.binanceMerchantSellRateToRmb,
-      manualForm.okxMerchantBuyRateToRmb,
-      manualForm.okxMerchantSellRateToRmb
-    ].map(parseRate);
-    if (values.some((value) => value === null)) return '-';
-    const total = (values as string[]).reduce((sum, value) => addDecimalStrings(sum, value), '0');
-    return divideDecimalStrings(total, '4');
+    const value = parseRate(manualForm.rateToCny);
+    return value ? `${currencyLabel(manualForm.currency)} / CNY ${formatRate(value)}` : '-';
   });
 
-  function getRunRequest() {
+  function getRecordRequest() {
     return {
-      ...runQuery,
-      keyword: runQuery.keyword.trim() || undefined,
-      status: runQuery.status || undefined,
-      triggerType: runQuery.triggerType || undefined,
-      collectedFrom: runDateRange.value[0] || undefined,
-      collectedTo: runDateRange.value[1] || undefined
+      ...recordQuery,
+      currency: recordQuery.currency || undefined,
+      source: recordQuery.source || undefined,
+      status: recordQuery.status || undefined,
+      capturedFrom: recordDateRange.value[0] || undefined,
+      capturedTo: recordDateRange.value[1] || undefined,
+      sortOrder: 'desc' as const
     };
   }
 
@@ -139,9 +132,9 @@ export function useExchangeRatesPage() {
     return {
       ...manualQuery,
       keyword: manualQuery.keyword.trim() || undefined,
+      currency: manualQuery.currency || undefined,
       recordedFrom: manualDateRange.value[0] || undefined,
       recordedTo: manualDateRange.value[1] || undefined,
-      sortBy: 'recordedAt' as const,
       sortOrder: 'desc' as const
     };
   }
@@ -149,22 +142,23 @@ export function useExchangeRatesPage() {
   function getPageKey(tab = activeTab.value) {
     return createV2QueryKey({
       tab,
-      query: tab === 'automatic' ? getRunRequest() : getManualRequest()
+      query: tab === 'automatic' ? getRecordRequest() : getManualRequest()
     });
   }
 
   function isDefaultAutomaticRequest() {
     return (
       activeTab.value === 'automatic' &&
-      runQuery.page === 1 &&
-      runQuery.pageSize === 20 &&
-      !runQuery.keyword.trim() &&
-      !runQuery.status &&
-      !runQuery.triggerType &&
-      !runDateRange.value.length &&
+      recordQuery.page === 1 &&
+      recordQuery.pageSize === 20 &&
+      !recordQuery.currency &&
+      !recordQuery.source &&
+      !recordQuery.status &&
+      !recordDateRange.value.length &&
       manualQuery.page === 1 &&
       manualQuery.pageSize === 20 &&
       !manualQuery.keyword.trim() &&
+      !manualQuery.currency &&
       !manualDateRange.value.length
     );
   }
@@ -180,8 +174,10 @@ export function useExchangeRatesPage() {
       if (isDefaultAutomaticRequest()) {
         const result = await idBusinessV2ExchangeRatesApi.bootstrap(
           {
-            runPage: runQuery.page,
-            runPageSize: runQuery.pageSize,
+            runPage: 1,
+            runPageSize: 10,
+            recordPage: recordQuery.page,
+            recordPageSize: recordQuery.pageSize,
             manualPage: manualQuery.page,
             manualPageSize: manualQuery.pageSize
           },
@@ -193,6 +189,7 @@ export function useExchangeRatesPage() {
           data: {
             overview: result.overview,
             runtime: result.runtime,
+            records: result.records,
             manualEntries: result.manualEntries
           }
         });
@@ -200,6 +197,7 @@ export function useExchangeRatesPage() {
           overview: result.overview,
           runtime: result.runtime,
           runs: result.runs,
+          records: result.records,
           manualEntries: result.manualEntries
         };
       }
@@ -208,19 +206,19 @@ export function useExchangeRatesPage() {
         idBusinessV2ExchangeRatesApi.overview({ signal }),
         idBusinessV2ExchangeRatesApi.runtime({ signal }),
         activeTab.value === 'automatic'
-          ? idBusinessV2ExchangeRatesApi.listRuns(getRunRequest(), { signal })
-          : idBusinessV2ExchangeRatesApi.listManualEntries(getManualRequest(), { signal })
+          ? idBusinessV2ExchangeRatesApi.listRecords(getRecordRequest(), { signal })
+          : idBusinessV2ExchangeRatesApi.listManualRates(getManualRequest(), { signal })
       ]);
       return activeTab.value === 'automatic'
         ? {
             overview: nextOverview,
             runtime: nextRuntime,
-            runs: list as V2ExchangeRateRunListResult
+            records: list as V2ExchangeRateRecordListResult
           }
         : {
             overview: nextOverview,
             runtime: nextRuntime,
-            manualEntries: list as V2ExchangeRateListResult
+            manualEntries: list as V2ManualFxRateListResult
           };
     }
   });
@@ -230,10 +228,10 @@ export function useExchangeRatesPage() {
       if (!snapshot) return;
       overview.value = snapshot.overview;
       runtime.value = snapshot.runtime;
-      if (snapshot.runs) {
-        runs.value = snapshot.runs.items;
-        runTotal.value = snapshot.runs.total;
-        runResolved.value = true;
+      if (snapshot.records) {
+        records.value = snapshot.records.items;
+        recordTotal.value = snapshot.records.total;
+        recordResolved.value = true;
       }
       if (snapshot.manualEntries) {
         manualEntries.value = snapshot.manualEntries.items;
@@ -249,9 +247,9 @@ export function useExchangeRatesPage() {
   const headerError = computed(() =>
     exchangeRateQuery.error.value ? getApiErrorMessage(exchangeRateQuery.error.value) : ''
   );
-  const runLoading = computed(() => activeTab.value === 'automatic' && headerLoading.value);
+  const recordLoading = computed(() => activeTab.value === 'automatic' && headerLoading.value);
   const manualLoading = computed(() => activeTab.value === 'manual' && headerLoading.value);
-  const runError = computed(() => (activeTab.value === 'automatic' ? headerError.value : ''));
+  const recordError = computed(() => (activeTab.value === 'automatic' ? headerError.value : ''));
   const manualError = computed(() => (activeTab.value === 'manual' ? headerError.value : ''));
   const receiptFxRates = computed(() => overview.value?.latestReceiptFxRates ?? []);
 
@@ -259,7 +257,7 @@ export function useExchangeRatesPage() {
     return exchangeRateQuery.refresh();
   }
 
-  function loadRuns() {
+  function loadRecords() {
     return activeTab.value === 'automatic'
       ? exchangeRateQuery.refresh()
       : Promise.resolve(undefined);
@@ -273,12 +271,12 @@ export function useExchangeRatesPage() {
     return exchangeRateQuery.refresh();
   }
 
-  function searchRuns() {
-    runQuery.page = 1;
+  function searchRecords() {
+    recordQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
-  function resetRunPage() {
-    runQuery.page = 1;
+  function resetRecordPage() {
+    recordQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
   function searchManual() {
@@ -294,7 +292,15 @@ export function useExchangeRatesPage() {
     collecting.value = true;
     try {
       const result = await idBusinessV2ExchangeRatesApi.collect();
-      ElMessage.success(`双平台采集成功，中间价 ${formatRate(result.midRateToRmb)}`);
+      if (result.status === 'success') {
+        ElMessage.success(`汇率采集成功：${result.successfulCurrencies.join('、')}`);
+      } else if (result.status === 'partial_failed') {
+        ElMessage.warning(
+          `汇率部分成功：${result.successfulCurrencies.join('、')}；失败：${result.failedCurrencies.join('、')}`
+        );
+      } else {
+        ElMessage.error(`汇率采集失败：${result.failedCurrencies.join('、')}`);
+      }
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -309,7 +315,8 @@ export function useExchangeRatesPage() {
       Object.assign(settingsForm, {
         autoEnabled: current.autoEnabled,
         intervalMinutes: current.intervalMinutes,
-        targetAmountRmb: current.targetAmountRmb
+        targetAmountRmb: current.targetAmountRmb,
+        retentionDays: current.retentionDays
       });
     }
     settingsVisible.value = true;
@@ -320,7 +327,10 @@ export function useExchangeRatesPage() {
     if (
       !isV2UnsignedDecimal(settingsForm.targetAmountRmb, { allowZero: false }) ||
       !Number.isFinite(amount) ||
-      amount > 1_000_000
+      amount > 1_000_000 ||
+      !Number.isInteger(settingsForm.retentionDays) ||
+      settingsForm.retentionDays < (runtime.value?.settings.allowedRetentionDays.min ?? 7) ||
+      settingsForm.retentionDays > (runtime.value?.settings.allowedRetentionDays.max ?? 3650)
     ) {
       return;
     }
@@ -329,7 +339,8 @@ export function useExchangeRatesPage() {
       await idBusinessV2ExchangeRatesApi.updateSettings({
         autoEnabled: settingsForm.autoEnabled,
         intervalMinutes: settingsForm.intervalMinutes,
-        targetAmountRmb: settingsForm.targetAmountRmb.trim()
+        targetAmountRmb: settingsForm.targetAmountRmb.trim(),
+        retentionDays: settingsForm.retentionDays
       });
       settingsVisible.value = false;
       ElMessage.success(settingsForm.autoEnabled ? '设置已保存，已安排立即采集' : '自动采集已关闭');
@@ -341,14 +352,14 @@ export function useExchangeRatesPage() {
     }
   }
 
-  async function openRun(run: V2ExchangeRateRun) {
-    runDetailTarget.value = run;
+  async function openRun(runId: string) {
+    runDetailTarget.value = runId;
     runDetailVisible.value = true;
     detailLoading.value = true;
     detailError.value = '';
     runDetail.value = null;
     try {
-      runDetail.value = await idBusinessV2ExchangeRatesApi.getRun(run.id);
+      runDetail.value = await idBusinessV2ExchangeRatesApi.getRun(runId);
     } catch (error) {
       detailError.value = getApiErrorMessage(error);
     } finally {
@@ -360,37 +371,33 @@ export function useExchangeRatesPage() {
     if (runDetailTarget.value) void openRun(runDetailTarget.value);
   }
 
+  function openRecordEvidence(record: V2ExchangeRateRecord) {
+    if (record.exchangeRateRunId) void openRun(record.exchangeRateRunId);
+  }
+
   function openManualCreate() {
     Object.assign(manualForm, {
-      binanceMerchantBuyRateToRmb: '',
-      binanceMerchantSellRateToRmb: '',
-      okxMerchantBuyRateToRmb: '',
-      okxMerchantSellRateToRmb: '',
+      currency: 'MYR',
+      rateToCny: '',
       recordedAt: new Date(),
-      remark: ''
+      reason: '',
+      sourceReference: ''
     });
     manualCreateVisible.value = true;
   }
 
   async function createManualEntry() {
-    const values = [
-      manualForm.binanceMerchantBuyRateToRmb,
-      manualForm.binanceMerchantSellRateToRmb,
-      manualForm.okxMerchantBuyRateToRmb,
-      manualForm.okxMerchantSellRateToRmb
-    ];
-    if (values.some((value) => parseRate(value) === null)) {
+    if (!parseRate(manualForm.rateToCny) || manualForm.reason.trim().length < 2) {
       return;
     }
     manualCreating.value = true;
     try {
-      await idBusinessV2ExchangeRatesApi.createManualEntry({
-        binanceMerchantBuyRateToRmb: manualForm.binanceMerchantBuyRateToRmb.trim(),
-        binanceMerchantSellRateToRmb: manualForm.binanceMerchantSellRateToRmb.trim(),
-        okxMerchantBuyRateToRmb: manualForm.okxMerchantBuyRateToRmb.trim(),
-        okxMerchantSellRateToRmb: manualForm.okxMerchantSellRateToRmb.trim(),
+      await idBusinessV2ExchangeRatesApi.createManualRate({
+        currency: manualForm.currency,
+        rateToCny: manualForm.rateToCny.trim(),
         recordedAt: manualForm.recordedAt.toISOString(),
-        remark: manualForm.remark.trim() || null
+        reason: manualForm.reason.trim(),
+        sourceReference: manualForm.sourceReference.trim() || null
       });
       manualCreateVisible.value = false;
       activeTab.value = 'manual';
@@ -403,14 +410,19 @@ export function useExchangeRatesPage() {
     }
   }
 
-  function openManualDetail(entry: V2ExchangeRateEntry) {
+  function openManualDetail(entry: V2ManualFxRate) {
     manualDetail.value = entry;
     manualDetailVisible.value = true;
   }
 
   function parseRate(value: string) {
     const normalized = value.trim();
-    return isV2UnsignedDecimal(normalized, { allowZero: false }) ? normalized : null;
+    return isV2UnsignedDecimal(normalized, {
+      allowZero: false,
+      decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
+    })
+      ? normalized
+      : null;
   }
   function formatRate(value: string | null | undefined) {
     return formatV2Decimal(value);
@@ -440,61 +452,8 @@ export function useExchangeRatesPage() {
     if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
     return `${minutes / 60} 小时`;
   }
-  function runStatusLabel(status: V2ExchangeRateRun['status']) {
-    return { running: '采集中', success: '成功', failed: '失败' }[status];
-  }
-  function runStatusType(status: V2ExchangeRateRun['status']) {
-    return status === 'success' ? 'success' : status === 'failed' ? 'danger' : 'warning';
-  }
-  function triggerLabel(trigger: V2ExchangeRateRun['triggerType']) {
-    return { scheduled: '定时采集', manual: '立即采集', system: '系统采集' }[trigger];
-  }
-  function providerLabel(provider: string | null | undefined) {
-    if (provider === 'binance') return 'Binance';
-    if (provider === 'okx') return 'OKX';
-    if (provider === 'multiple') return 'Binance、OKX';
-    if (provider === 'system') return '系统';
-    return '-';
-  }
-  function sideLabel(side: string | null | undefined) {
-    if (side === 'merchant_buy') return '商家买入';
-    if (side === 'merchant_sell') return '商家卖出';
-    return '';
-  }
-  function failureLabel(run: Pick<V2ExchangeRateRun, 'error'>) {
-    if (!run.error) return '-';
-    return `${providerLabel(run.error.provider)} ${sideLabel(run.error.side)} ${failureReason(
-      run.error
-    )}`.trim();
-  }
-  function failureReason(error: NonNullable<V2ExchangeRateRun['error']>) {
-    return failureReasonByCode[error.code] || error.message || '采集失败，请查看批次详情';
-  }
-  function operatorName(entry: V2ExchangeRateEntry) {
+  function operatorName(entry: { createdBy: { username: string } | null }) {
     return entry.createdBy?.username || '-';
-  }
-  function receiptFxStatusLabel(status: V2ExchangeRateReceiptFxRate['status']) {
-    return {
-      fixed: '固定',
-      available: '有效',
-      expired: '已过期',
-      missing: '缺失'
-    }[status];
-  }
-  function receiptFxStatusType(status: V2ExchangeRateReceiptFxRate['status']) {
-    return {
-      fixed: 'success',
-      available: 'success',
-      expired: 'warning',
-      missing: 'danger'
-    }[status] as 'success' | 'warning' | 'danger';
-  }
-  function receiptFxSourceLabel(source: string | null | undefined) {
-    if (source === 'cny_fixed') return '人民币固定汇率';
-    if (source === 'combined_p2p') return 'Binance + OKX P2P';
-    if (source === 'ecb_cross') return 'ECB 交叉汇率';
-    if (source === 'manual') return '人工汇率';
-    return source || '暂无来源';
   }
   function receiptFxCapturedLabel(rate: V2ExchangeRateReceiptFxRate) {
     return rate.capturedAt ? `采集于 ${formatDate(rate.capturedAt)}` : '暂无记录';
@@ -506,18 +465,19 @@ export function useExchangeRatesPage() {
 
   return {
     defaultIntervals,
+    trackedCurrencies,
     activeTab,
     overview,
     runtime,
     headerLoading,
     headerError,
     collecting,
-    runs,
-    runTotal,
-    runLoading,
-    runError,
-    runResolved,
-    runDateRange,
+    records,
+    recordTotal,
+    recordLoading,
+    recordError,
+    recordResolved,
+    recordDateRange,
     receiptFxRates,
     manualEntries,
     manualTotal,
@@ -539,24 +499,25 @@ export function useExchangeRatesPage() {
     canCollect,
     canManage,
     canCreate,
-    runQuery,
+    recordQuery,
     manualQuery,
     settingsForm,
     manualForm,
     latestFailureDescription,
     manualPreview,
     loadHeader,
-    loadRuns,
+    loadRecords,
     loadManualEntries,
     loadAll,
-    searchRuns,
-    resetRunPage,
+    searchRecords,
+    resetRecordPage,
     searchManual,
     resetManualPage,
     collectNow,
     openSettings,
     saveSettings,
     openRun,
+    openRecordEvidence,
     retryRunDetail,
     openManualCreate,
     createManualEntry,
@@ -569,11 +530,15 @@ export function useExchangeRatesPage() {
     runStatusLabel,
     runStatusType,
     triggerLabel,
+    currencyLabel,
+    currencySymbol,
     providerLabel,
     sideLabel,
     failureLabel,
     failureReason,
     operatorName,
+    recordStatusLabel,
+    recordStatusType,
     receiptFxStatusLabel,
     receiptFxStatusType,
     receiptFxSourceLabel,

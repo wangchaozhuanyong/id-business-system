@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
   v2UnsignedDecimalPattern
@@ -6,8 +7,10 @@ import {
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
+import type { CreateIdBusinessV2ManualFxRateDto } from './dto/create-id-business-v2-manual-fx-rate.dto';
 import {
   Rate8,
+  toKualaLumpurBusinessDate,
   V2CommandTransactionManager,
   V2TransactionalAuditService
 } from '../runtime/public-api';
@@ -21,12 +24,23 @@ export interface ListIdBusinessV2ExchangeRatesQuery extends PaginationQuery {
   sortOrder?: string;
 }
 
+export interface ListIdBusinessV2ManualFxRatesQuery extends PaginationQuery {
+  keyword?: string;
+  currency?: string;
+  recordedFrom?: string;
+  recordedTo?: string;
+  sortOrder?: string;
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RATE = Rate8.from('9999999999.99999999');
 const EXCHANGE_RATE_PATTERN = v2UnsignedDecimalPattern(V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES);
 type ExchangeRateEntryRecord = NonNullable<
   Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findEntry']>>
+>;
+type ManualFxRateRecord = NonNullable<
+  Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findManualFxRateSnapshot']>>
 >;
 
 @Injectable()
@@ -158,6 +172,83 @@ export class IdBusinessV2ExchangeRatesService {
     return this.toResponse(entry);
   }
 
+  async listManualFxRates(query: ListIdBusinessV2ManualFxRatesQuery) {
+    const pagination = getPagination(query);
+    const [items, total] = await this.repository.listManualFxRateSnapshots({
+      keyword: this.normalizeKeyword(query.keyword),
+      currency: this.normalizeManualCurrencyFilter(query.currency),
+      recordedAt: this.parseDateRange(query.recordedFrom, query.recordedTo),
+      skip: pagination.skip,
+      take: pagination.take,
+      sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc'
+    });
+    return {
+      items: items.map((item) => this.manualFxRateResponse(item)),
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize
+    };
+  }
+
+  async getManualFxRate(idValue: string) {
+    const id = this.normalizeUuid(idValue);
+    const entry = await this.repository.findManualFxRateSnapshot(id);
+    if (!entry) {
+      throw new NotFoundException('人工汇率记录不存在');
+    }
+    return this.manualFxRateResponse(entry);
+  }
+
+  async createManualFxRate(
+    dto: CreateIdBusinessV2ManualFxRateDto,
+    operator?: AuthenticatedUser,
+    requestId = 'exchange-rate-manual-fx-rate'
+  ) {
+    if (!operator?.id) {
+      throw new BadRequestException('无法识别当前操作人');
+    }
+    const currency = this.normalizeManualCurrency(dto.currency);
+    const rateToCny = this.parseRate(dto.rateToCny, '交易汇率');
+    const recordedAt = this.parseRecordedAt(dto.recordedAt);
+    const reason = this.normalizeManualReason(dto.reason);
+    const sourceReference = this.normalizeSourceReference(dto.sourceReference);
+
+    const entry = await this.transactionManager.execute(
+      async (tx) => {
+        const created = await this.repository.createFinanceFxRateSnapshot(tx, {
+          id: randomUUID(),
+          currency,
+          rateToCny: rateToCny.toString(),
+          source: 'manual',
+          sourceReference,
+          businessDate: toKualaLumpurBusinessDate(recordedAt).date,
+          capturedAt: recordedAt,
+          manualReason: reason,
+          createdByUserId: operator.id
+        });
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.exchange_rate.manual.fx_rate.create',
+          objectType: 'id_business_v2_finance_fx_rate_snapshot',
+          objectId: created.id,
+          afterData: {
+            currency,
+            rateToCny: rateToCny.toString(),
+            recordedAt: recordedAt.toISOString(),
+            reason,
+            sourceReference
+          },
+          remark: 'V2 人工汇率按币种录入'
+        });
+        return created;
+      },
+      { requestId, operator, retryMode: 'none' }
+    );
+
+    return this.manualFxRateResponse(entry);
+  }
+
   private average(left: Rate8, right: Rate8) {
     return left.add(right).div(2);
   }
@@ -248,6 +339,47 @@ export class IdBusinessV2ExchangeRatesService {
     return normalized;
   }
 
+  private normalizeManualCurrency(value: unknown) {
+    const currency = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    if (currency !== 'MYR' && currency !== 'USD' && currency !== 'USDT') {
+      throw new BadRequestException('人工汇率币种仅支持 MYR、USD、USDT');
+    }
+    return currency;
+  }
+
+  private normalizeManualCurrencyFilter(value: unknown) {
+    const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    if (!normalized) return undefined;
+    if (normalized !== 'MYR' && normalized !== 'USD' && normalized !== 'USDT') {
+      throw new BadRequestException('人工汇率币种筛选无效');
+    }
+    return normalized;
+  }
+
+  private normalizeManualReason(value: unknown) {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (normalized.length < 2) {
+      throw new BadRequestException('人工汇率原因至少填写 2 个字符');
+    }
+    if (normalized.length > 500) {
+      throw new BadRequestException('人工汇率原因不能超过 500 个字符');
+    }
+    return normalized;
+  }
+
+  private normalizeSourceReference(value: unknown) {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'string') {
+      throw new BadRequestException('汇率来源说明格式无效');
+    }
+    const normalized = value.trim();
+    if (!normalized) return null;
+    if (normalized.length > 500) {
+      throw new BadRequestException('汇率来源说明不能超过 500 个字符');
+    }
+    return normalized;
+  }
+
   private normalizeUuid(value: unknown) {
     const normalized = typeof value === 'string' ? value.trim() : '';
     if (!UUID_PATTERN.test(normalized)) {
@@ -268,6 +400,23 @@ export class IdBusinessV2ExchangeRatesService {
       midRateToRmb: entry.midRateToRmb.toString(),
       recordedAt: entry.recordedAt,
       remark: entry.remark,
+      createdBy: entry.createdBy,
+      createdAt: entry.createdAt
+    };
+  }
+
+  private manualFxRateResponse(entry: ManualFxRateRecord) {
+    return {
+      id: entry.id,
+      currency: entry.currency,
+      rateToCny: entry.rateToCny,
+      source: entry.source,
+      sourceReference: entry.sourceReference,
+      businessDate: entry.businessDate.toISOString().slice(0, 10),
+      recordedAt: entry.capturedAt,
+      capturedAt: entry.capturedAt,
+      expiresAt: entry.expiresAt,
+      reason: entry.manualReason,
       createdBy: entry.createdBy,
       createdAt: entry.createdAt
     };

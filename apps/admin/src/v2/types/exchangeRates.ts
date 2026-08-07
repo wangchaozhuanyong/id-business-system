@@ -21,6 +21,39 @@ export interface V2ExchangeRateEntry {
   createdAt: string;
 }
 
+export type V2ExchangeRateCurrency = 'CNY' | 'MYR' | 'USD' | 'USDT';
+export type V2TrackedExchangeRateCurrency = Exclude<V2ExchangeRateCurrency, 'CNY'>;
+
+export interface V2ExchangeRateRecord {
+  id: string;
+  currency: V2TrackedExchangeRateCurrency;
+  rateToCny: string;
+  source: 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross';
+  sourceReference: string | null;
+  sourceEvidence: Record<string, unknown> | null;
+  businessDate: string;
+  capturedAt: string;
+  expiresAt: string | null;
+  status: 'available' | 'expired';
+  exchangeRateRunId: string | null;
+  createdBy: V2ExchangeRateOperator | null;
+}
+
+export interface V2ManualFxRate {
+  id: string;
+  currency: V2TrackedExchangeRateCurrency;
+  rateToCny: string;
+  source: 'manual';
+  sourceReference: string | null;
+  businessDate: string;
+  recordedAt: string;
+  capturedAt: string;
+  expiresAt: string | null;
+  reason: string | null;
+  createdBy: V2ExchangeRateOperator | null;
+  createdAt: string;
+}
+
 export interface V2ExchangeRateSnapshotSummary {
   id: string;
   averagedAt: string;
@@ -112,7 +145,7 @@ export interface V2ExchangeRateEffective {
 }
 
 export interface V2ExchangeRateReceiptFxRate {
-  currency: 'CNY' | 'MYR' | 'USDT';
+  currency: V2ExchangeRateCurrency;
   snapshotId: string | null;
   rateToCny: string | null;
   source: string | null;
@@ -133,12 +166,17 @@ export interface V2ExchangeRateSettings {
   autoEnabled: boolean;
   intervalMinutes: number;
   targetAmountRmb: string;
+  retentionDays: number;
   nextRunAt: string | null;
   emergencyNetworkEnabled: boolean;
   updatedByUserId: string | null;
   createdAt: string;
   updatedAt: string;
   allowedIntervals: number[];
+  allowedRetentionDays: {
+    min: number;
+    max: number;
+  };
 }
 
 export interface V2ExchangeRateRuntime {
@@ -155,7 +193,7 @@ export interface V2ExchangeRateRuntime {
     } | null;
   };
   providers: Array<{
-    code: 'binance' | 'okx';
+    code: 'binance' | 'okx' | 'ecb';
     source: string;
     contract: string;
   }>;
@@ -178,6 +216,17 @@ export interface V2ExchangeRateRunListQuery extends V2PageQuery {
 
 export type V2ExchangeRateRunListResult = PaginatedResult<V2ExchangeRateRun>;
 
+export interface V2ExchangeRateRecordListQuery extends V2PageQuery {
+  currency?: '' | V2TrackedExchangeRateCurrency;
+  source?: '' | 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross';
+  status?: '' | 'available' | 'expired';
+  capturedFrom?: string;
+  capturedTo?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export type V2ExchangeRateRecordListResult = PaginatedResult<V2ExchangeRateRecord>;
+
 export interface V2ExchangeRateListQuery extends V2PageQuery {
   keyword?: string;
   recordedFrom?: string;
@@ -187,6 +236,16 @@ export interface V2ExchangeRateListQuery extends V2PageQuery {
 }
 
 export type V2ExchangeRateListResult = PaginatedResult<V2ExchangeRateEntry>;
+
+export interface V2ManualFxRateListQuery extends V2PageQuery {
+  keyword?: string;
+  currency?: '' | V2TrackedExchangeRateCurrency;
+  recordedFrom?: string;
+  recordedTo?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export type V2ManualFxRateListResult = PaginatedResult<V2ManualFxRate>;
 
 export interface CreateV2ExchangeRateEntryInput {
   binanceMerchantBuyRateToRmb: string;
@@ -201,4 +260,13 @@ export interface UpdateV2ExchangeRateSettingsInput {
   autoEnabled: boolean;
   intervalMinutes: number;
   targetAmountRmb: string;
+  retentionDays: number;
+}
+
+export interface CreateV2ManualFxRateInput {
+  currency: V2TrackedExchangeRateCurrency;
+  rateToCny: string;
+  recordedAt: string;
+  reason: string;
+  sourceReference?: string | null;
 }

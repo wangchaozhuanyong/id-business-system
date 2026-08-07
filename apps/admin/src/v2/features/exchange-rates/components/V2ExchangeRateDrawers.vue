@@ -33,10 +33,21 @@
           placeholder="5000"
         />
       </el-form-item>
+      <el-form-item label="数据保留天数" prop="retentionDays">
+        <el-input-number
+          v-model="page.settingsForm.retentionDays"
+          :min="page.runtime?.settings.allowedRetentionDays.min ?? 7"
+          :max="page.runtime?.settings.allowedRetentionDays.max ?? 3650"
+          :step="1"
+          step-strictly
+          controls-position="right"
+          style="width: 100%"
+        />
+      </el-form-item>
       <el-alert
         type="info"
         title="保存后会安排一次立即采集"
-        description="设置关闭时仍可由有权限的操作员点击立即采集。"
+        description="CNY 固定为 1 不入库；MYR、USD、USDT 会按采集周期形成自动快照，并按保留天数清理未引用记录。"
         show-icon
         :closable="false"
       />
@@ -197,44 +208,46 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <section class="v2-exchange-form__group">
-        <h2>Binance</h2>
-        <div class="v2-exchange-form__grid">
-          <el-form-item label="商家买入价" prop="binanceMerchantBuyRateToRmb"
-            ><el-input v-model="page.manualForm.binanceMerchantBuyRateToRmb" inputmode="decimal"
-          /></el-form-item>
-          <el-form-item label="商家卖出价" prop="binanceMerchantSellRateToRmb"
-            ><el-input v-model="page.manualForm.binanceMerchantSellRateToRmb" inputmode="decimal"
-          /></el-form-item>
-        </div>
-      </section>
-      <section class="v2-exchange-form__group">
-        <h2>OKX</h2>
-        <div class="v2-exchange-form__grid">
-          <el-form-item label="商家买入价" prop="okxMerchantBuyRateToRmb"
-            ><el-input v-model="page.manualForm.okxMerchantBuyRateToRmb" inputmode="decimal"
-          /></el-form-item>
-          <el-form-item label="商家卖出价" prop="okxMerchantSellRateToRmb"
-            ><el-input v-model="page.manualForm.okxMerchantSellRateToRmb" inputmode="decimal"
-          /></el-form-item>
-        </div>
-      </section>
+      <el-form-item label="币种" prop="currency">
+        <el-select v-model="page.manualForm.currency">
+          <el-option
+            v-for="currency in page.trackedCurrencies"
+            :key="currency"
+            :label="page.currencyLabel(currency)"
+            :value="currency"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="兑人民币汇率" prop="rateToCny">
+        <el-input
+          v-model="page.manualForm.rateToCny"
+          inputmode="decimal"
+          placeholder="1.65000000"
+        />
+      </el-form-item>
       <el-form-item label="记录时间" prop="recordedAt">
         <el-date-picker v-model="page.manualForm.recordedAt" type="datetime" style="width: 100%" />
       </el-form-item>
-      <el-form-item label="备注">
+      <el-form-item label="来源说明" prop="sourceReference">
         <el-input
-          v-model="page.manualForm.remark"
+          v-model="page.manualForm.sourceReference"
+          maxlength="500"
+          placeholder="银行成交单、平台截图或人工核对来源"
+        />
+      </el-form-item>
+      <el-form-item label="原因" prop="reason">
+        <el-input
+          v-model="page.manualForm.reason"
           type="textarea"
           :rows="3"
-          maxlength="2000"
+          maxlength="500"
           show-word-limit
         />
       </el-form-item>
       <el-alert
         type="warning"
         title="人工记录只进入人工历史，不会覆盖自动采集汇率"
-        :description="`中间价预览：${page.manualPreview}`"
+        :description="`汇率预览：${page.manualPreview}`"
         show-icon
         :closable="false"
       />
@@ -269,26 +282,20 @@
           <dd>{{ page.operatorName(page.manualDetail) }}</dd>
         </div>
         <div>
-          <dt>Binance 买入 / 卖出</dt>
-          <dd>
-            {{ page.formatRate(page.manualDetail.binanceMerchantBuyRateToRmb) }} /
-            {{ page.formatRate(page.manualDetail.binanceMerchantSellRateToRmb) }}
-          </dd>
+          <dt>币种</dt>
+          <dd>{{ page.currencyLabel(page.manualDetail.currency) }}</dd>
         </div>
         <div>
-          <dt>OKX 买入 / 卖出</dt>
-          <dd>
-            {{ page.formatRate(page.manualDetail.okxMerchantBuyRateToRmb) }} /
-            {{ page.formatRate(page.manualDetail.okxMerchantSellRateToRmb) }}
-          </dd>
+          <dt>来源说明</dt>
+          <dd>{{ page.manualDetail.sourceReference || '—' }}</dd>
         </div>
         <div class="v2-exchange-detail__primary">
-          <dt>中间价</dt>
-          <dd>{{ page.formatRate(page.manualDetail.midRateToRmb) }}</dd>
+          <dt>兑人民币汇率</dt>
+          <dd>{{ page.formatRate(page.manualDetail.rateToCny) }}</dd>
         </div>
         <div class="v2-exchange-detail__wide">
-          <dt>备注</dt>
-          <dd>{{ page.manualDetail.remark || '—' }}</dd>
+          <dt>原因</dt>
+          <dd>{{ page.manualDetail.reason || '—' }}</dd>
         </div>
       </dl>
     </section>
@@ -303,6 +310,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
@@ -355,24 +363,53 @@ const settingsRules = computed<FormRules>(() => ({
       },
       trigger: 'blur'
     }
+  ],
+  retentionDays: [
+    {
+      required: true,
+      validator: (_rule, value, callback) => {
+        const min = props.page.runtime?.settings.allowedRetentionDays.min ?? 7;
+        const max = props.page.runtime?.settings.allowedRetentionDays.max ?? 3650;
+        const days = Number(value);
+        callback(
+          Number.isInteger(days) && days >= min && days <= max
+            ? undefined
+            : new Error(`数据保留天数必须是 ${min} 到 ${max} 之间的整数`)
+        );
+      },
+      trigger: 'change'
+    }
   ]
 }));
 const rateRule = {
   required: true,
   validator: (_rule: unknown, value: unknown, callback: (error?: Error) => void) =>
     callback(
-      isV2UnsignedDecimal(value, { allowZero: false })
+      isV2UnsignedDecimal(value, {
+        allowZero: false,
+        decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
+      })
         ? undefined
-        : new Error(`请输入大于 0、最多 ${V2_DECIMAL_PLACES} 位小数的汇率`)
+        : new Error(`请输入大于 0、最多 ${V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES} 位小数的汇率`)
     ),
   trigger: 'blur'
 };
 const manualRules: FormRules = {
-  binanceMerchantBuyRateToRmb: [rateRule],
-  binanceMerchantSellRateToRmb: [rateRule],
-  okxMerchantBuyRateToRmb: [rateRule],
-  okxMerchantSellRateToRmb: [rateRule],
-  recordedAt: [{ required: true, message: '请选择记录时间', trigger: 'change' }]
+  currency: [{ required: true, message: '请选择币种', trigger: 'change' }],
+  rateToCny: [rateRule],
+  recordedAt: [{ required: true, message: '请选择记录时间', trigger: 'change' }],
+  reason: [
+    {
+      required: true,
+      validator: (_rule, value, callback) =>
+        callback(
+          String(value ?? '').trim().length >= 2
+            ? undefined
+            : new Error('人工汇率原因至少填写 2 个字符')
+        ),
+      trigger: 'blur'
+    }
+  ]
 };
 
 async function saveSettings() {

@@ -119,7 +119,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
     });
   });
 
-  it('returns receipt FX status for CNY, MYR and USDT', async () => {
+  it('returns receipt FX status for CNY, MYR, USD and USDT', async () => {
     const now = new Date('2026-08-06T10:00:00.000Z');
     repository.findLatestReceiptFxSnapshots.mockResolvedValue([
       {
@@ -143,6 +143,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
     await expect(service.getLatestReceiptFxRates(now)).resolves.toEqual([
       expect.objectContaining({ currency: 'CNY', rateToCny: '1', status: 'fixed' }),
       expect.objectContaining({ currency: 'MYR', rateToCny: '1.63000000', status: 'available' }),
+      expect.objectContaining({ currency: 'USD', rateToCny: null, status: 'missing' }),
       expect.objectContaining({ currency: 'USDT', rateToCny: '7.18000000', status: 'expired' })
     ]);
   });

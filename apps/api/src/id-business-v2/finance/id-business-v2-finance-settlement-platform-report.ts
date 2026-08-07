@@ -17,7 +17,7 @@ const ORDER_REPORT_EXPENSE_CODES = [
   'id_cost',
   'refund_loss'
 ] as const;
-const REPORT_CURRENCIES = ['CNY', 'MYR', 'USDT'] as const;
+const REPORT_CURRENCIES = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface SettlementReportBucket {

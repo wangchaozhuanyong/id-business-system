@@ -115,6 +115,7 @@ enum IdBusinessV2TopupSupplierLedgerEntryType {
 enum IdBusinessV2FinanceCurrency {
   CNY
   MYR
+  USD
   USDT
 }
 
@@ -1440,6 +1441,7 @@ model IdBusinessV2ExchangeRateSettings {
   autoEnabled     Boolean   @default(true) @map("auto_enabled")
   intervalMinutes Int       @default(30) @map("interval_minutes")
   targetAmountRmb Decimal   @default(5000) @map("target_amount_rmb") @db.Decimal(18, 2)
+  retentionDays   Int       @default(30) @map("retention_days")
   nextRunAt       DateTime? @map("next_run_at") @db.Timestamptz(6)
   updatedByUserId String?   @map("updated_by_user_id") @db.Uuid
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

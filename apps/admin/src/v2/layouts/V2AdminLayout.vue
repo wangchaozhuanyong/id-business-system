@@ -73,7 +73,9 @@
               @pointerenter="queueNavigationPrefetch(item.route, 'hover', $event)"
               @pointerleave="cancelNavigationPrefetch(item.route)"
               @focus="queueNavigationPrefetch(item.route, 'focus')"
+              @focusin="queueNavigationPrefetch(item.route, 'focus')"
               @blur="cancelNavigationPrefetch(item.route)"
+              @focusout="cancelNavigationPrefetch(item.route)"
               @pointerdown="beginNavigation(item.route, $event)"
               @click="closeMobileMenu"
             >

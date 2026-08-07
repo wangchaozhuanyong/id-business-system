@@ -27,6 +27,7 @@
         <el-select v-model="page.accountForm.currency" :disabled="Boolean(page.editingAccount)">
           <el-option label="CNY" value="CNY" />
           <el-option label="MYR" value="MYR" />
+          <el-option label="USD" value="USD" />
           <el-option label="USDT" value="USDT" />
         </el-select>
       </el-form-item>
@@ -159,6 +160,7 @@
         <el-select v-model="page.walletForm.currency">
           <el-option label="CNY" value="CNY" />
           <el-option label="MYR" value="MYR" />
+          <el-option label="USD" value="USD" />
           <el-option label="USDT" value="USDT" />
         </el-select>
       </el-form-item>
@@ -578,7 +580,8 @@ const historyDrawerTitle = computed(() =>
 );
 
 function formatOriginal(value: string, currency: V2FinanceCurrency) {
-  const prefix = currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : '₮';
+  const prefix =
+    currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : currency === 'USD' ? '$' : '₮';
   return `${prefix}${formatV2Decimal(value, { minimumFractionDigits: 2 })}`;
 }
 </script>
