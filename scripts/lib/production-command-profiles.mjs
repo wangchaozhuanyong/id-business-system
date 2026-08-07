@@ -53,6 +53,14 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'SMOKE_TEST_PASSWORD'
     ]
   },
+  'data-maintenance': {
+    command: 'node',
+    args: ['scripts/production-data-maintenance.mjs'],
+    requiredSecrets: ['MIGRATION_DATABASE_URL'],
+    databaseSecret: 'MIGRATION_DATABASE_URL',
+    forwardedSecrets: [],
+    allowExtraArgs: true
+  },
   deploy: {
     command: 'npm',
     args: ['run', 'deploy:production:with-env'],

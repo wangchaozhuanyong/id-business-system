@@ -52,3 +52,15 @@ test('deploy receives runtime credential but never migration or audit credential
   assert.equal(environment.MIGRATION_DATABASE_URL, undefined);
   assert.equal(environment.JWT_SECRET, secrets.JWT_SECRET);
 });
+
+test('data maintenance receives migration credential only and allows explicit arguments', () => {
+  const profile = resolveProductionCommand('data-maintenance');
+  const environment = buildProductionCommandEnvironment({}, secrets, profile);
+
+  assert.deepEqual(profile.args, ['scripts/production-data-maintenance.mjs']);
+  assert.equal(profile.allowExtraArgs, true);
+  assert.equal(environment.DATABASE_URL, secrets.MIGRATION_DATABASE_URL);
+  assert.equal(environment.MIGRATION_DATABASE_URL, undefined);
+  assert.equal(environment.V2_RUNTIME_DATABASE_URL, undefined);
+  assert.equal(environment.AUDIT_DATABASE_URL, undefined);
+});
