@@ -88,6 +88,12 @@ CHECK (
   )
 );
 
+DROP TRIGGER IF EXISTS id_business_v2_account_losses_immutable
+ON public.id_business_v2_account_losses;
+
+DROP TRIGGER IF EXISTS id_business_v2_accounts_permanent_loss
+ON public.id_business_v2_accounts;
+
 UPDATE "id_business_v2_account_losses" loss
 SET "finance_journal_id" = journal."id"
 FROM "id_business_v2_finance_journals" journal
@@ -95,12 +101,6 @@ WHERE
   journal."source_type" = 'account_loss'
   AND journal."journal_type" = 'account_loss'
   AND journal."source_id" = loss."id"::text;
-
-DROP TRIGGER IF EXISTS id_business_v2_account_losses_immutable
-ON public.id_business_v2_account_losses;
-
-DROP TRIGGER IF EXISTS id_business_v2_accounts_permanent_loss
-ON public.id_business_v2_accounts;
 
 UPDATE "id_business_v2_accounts" account
 SET "active_loss_record_id" = loss."id"

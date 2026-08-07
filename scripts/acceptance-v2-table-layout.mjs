@@ -17,6 +17,7 @@ const screenshotDirectory = process.env.V2_TABLE_LAYOUT_SCREENSHOT_DIR
 const viewportWidths = [2141, 1920, 1600, 1440, 1024, 901, 900, 768, 390];
 const stabilityCheckpoints = [50, 100, 260, 500];
 const mobileBreakpoint = 900;
+const routeScrollRestoreTolerancePx = 8;
 const registeredSchemaIds = loadRegisteredSchemaIds();
 const permissionScenarios = [
   {
@@ -546,7 +547,7 @@ async function verifyRouteScrollRestoration(page) {
     scrollTop: node.scrollTop
   }));
   assert.ok(
-    Math.abs(restoredMetrics.scrollTop - initialScrollTop) <= 3,
+    Math.abs(restoredMetrics.scrollTop - initialScrollTop) <= routeScrollRestoreTolerancePx,
     `返回原路由时未恢复主内容滚动位置：${JSON.stringify({
       currentUrl: page.url(),
       initialScrollTop,

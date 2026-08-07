@@ -58,6 +58,16 @@ describe('ID Business V2 account loss schema contract', () => {
     expect(freezeReversalMigration).toContain('OLD.loss_reported_at IS NOT NULL');
     expect(freezeReversalMigration).toContain('NEW.loss_reported_at IS NULL');
     expect(freezeReversalMigration).toContain('loss_record.id = NEW.active_loss_record_id');
+    expect(
+      freezeReversalMigration.indexOf(
+        'DROP TRIGGER IF EXISTS id_business_v2_account_losses_immutable'
+      )
+    ).toBeLessThan(freezeReversalMigration.indexOf('UPDATE "id_business_v2_account_losses" loss'));
+    expect(
+      freezeReversalMigration.indexOf(
+        'DROP TRIGGER IF EXISTS id_business_v2_accounts_permanent_loss'
+      )
+    ).toBeLessThan(freezeReversalMigration.indexOf('UPDATE "id_business_v2_accounts" account'));
     expect(migration).toContain('id_business_v2_account_losses_amount_check');
     expect(migration).toContain('id_business_v2_account_losses_reason_check');
     expect(migration).toContain('id_business_v2_account_losses_sale_evidence_check');
