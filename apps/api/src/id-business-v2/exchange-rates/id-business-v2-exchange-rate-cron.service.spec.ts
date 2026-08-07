@@ -20,11 +20,14 @@ describe('IdBusinessV2ExchangeRateCronService', () => {
     worker.runScheduled.mockResolvedValue({ status: 'skipped', reason: 'not_due' });
     retention.cleanup.mockResolvedValue({
       cutoff: '2026-06-28T10:00:00.000Z',
+      retentionDays: 30,
       deletedRuns: 0,
       deletedSnapshots: 0,
       deletedProviderSnapshots: 0,
       deletedQuoteSamples: 0,
-      preservedReferencedRuns: 0
+      deletedFxRateSnapshots: 0,
+      preservedReferencedRuns: 0,
+      preservedReferencedFxRateSnapshots: 0
     });
   });
 

@@ -6,6 +6,7 @@ export {
   V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
   type V2DecimalInput
 } from './id-business-v2-decimal';
+export { toKualaLumpurBusinessDate } from './id-business-v2-business-date';
 export {
   V2CommandTransactionManager,
   type V2CommandContext,

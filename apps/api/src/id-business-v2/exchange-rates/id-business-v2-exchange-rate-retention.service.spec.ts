@@ -6,11 +6,14 @@ import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2
 describe('IdBusinessV2ExchangeRateRetentionService', () => {
   const result = {
     cutoff: '2026-06-28T10:00:00.000Z',
+    retentionDays: 30,
     deletedRuns: 2,
     deletedSnapshots: 1,
     deletedProviderSnapshots: 4,
     deletedQuoteSamples: 96,
-    preservedReferencedRuns: 1
+    deletedFxRateSnapshots: 3,
+    preservedReferencedRuns: 1,
+    preservedReferencedFxRateSnapshots: 2
   };
   const tx = {
     $queryRaw: vi.fn(),
@@ -32,7 +35,7 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
-  it('runs the fixed one-month cleanup and records aggregate audit evidence', async () => {
+  it('runs configured retention cleanup and records aggregate audit evidence', async () => {
     await expect(service.cleanup()).resolves.toEqual(result);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
     expect(tx.auditLog.create).toHaveBeenCalledWith({
@@ -55,7 +58,8 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
       deletedRuns: 0,
       deletedSnapshots: 0,
       deletedProviderSnapshots: 0,
-      deletedQuoteSamples: 0
+      deletedQuoteSamples: 0,
+      deletedFxRateSnapshots: 0
     };
     tx.$queryRaw.mockResolvedValue([{ result: emptyResult }]);
 

@@ -20,6 +20,7 @@ function settingsRecord(overrides: Record<string, unknown> = {}) {
     autoEnabled: true,
     intervalMinutes: 30,
     targetAmountRmb: new Prisma.Decimal('5000'),
+    retentionDays: 30,
     nextRunAt: now,
     updatedByUserId: null,
     createdAt: now,
@@ -36,6 +37,7 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
   };
   const prisma = {
     idBusinessV2ExchangeRateSettings: { findUnique: vi.fn() },
+    $queryRaw: vi.fn(),
     $transaction: vi.fn()
   };
   const service = new IdBusinessV2ExchangeRateSettingsService(
@@ -51,6 +53,7 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
     vi.clearAllMocks();
     delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
     prisma.idBusinessV2ExchangeRateSettings.findUnique.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValueOnce([{ exists: true }]).mockResolvedValueOnce([]);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.idBusinessV2ExchangeRateSettings.create.mockResolvedValue(settingsRecord());
     tx.idBusinessV2ExchangeRateSettings.upsert.mockImplementation(async ({ update }) =>

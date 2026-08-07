@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { mapAmount4, mapRate8 } from '../../runtime/public-api';
+import { isUnsupportedFinanceCurrencyEnumError } from '../id-business-v2-finance-currency-compat';
 import {
   mapExpense,
   mapFinanceAccount,
@@ -11,7 +12,7 @@ import {
 export interface FinanceExpenseFilter {
   categoryOptionId?: string;
   financeAccountId?: string;
-  currency?: 'CNY' | 'MYR' | 'USDT';
+  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
   occurredAt?: { gte?: Date; lte?: Date };
 }
 
@@ -21,7 +22,7 @@ export interface FinanceJournalFilter {
   sourceId?: string;
   periodMonth?: string;
   businessDate?: { gte?: Date; lte?: Date };
-  currency?: 'CNY' | 'MYR' | 'USDT';
+  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
   financeAccountId?: string;
   supplierOptionId?: string;
 }
@@ -30,7 +31,7 @@ export interface FinanceJournalFilter {
 export class IdBusinessV2FinanceQueryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  listFinanceAccounts(currency?: 'CNY' | 'MYR' | 'USDT', status?: 'active' | 'disabled') {
+  listFinanceAccounts(currency?: 'CNY' | 'MYR' | 'USD' | 'USDT', status?: 'active' | 'disabled') {
     return this.prisma.idBusinessV2FinanceAccount
       .findMany({
         where: { currency, status },
@@ -143,10 +144,14 @@ export class IdBusinessV2FinanceQueryRepository {
       .then((row) => (row ? mapFxSnapshot(row) : null));
   }
 
-  findLatestFxSnapshot(currency: 'MYR' | 'USDT') {
+  findLatestFxSnapshot(currency: 'MYR' | 'USD' | 'USDT') {
     return this.prisma.idBusinessV2FinanceFxRateSnapshot
       .findFirst({ where: { currency }, orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }] })
-      .then((row) => (row ? mapFxSnapshot(row) : null));
+      .then((row) => (row ? mapFxSnapshot(row) : null))
+      .catch((error: unknown) => {
+        if (isUnsupportedFinanceCurrencyEnumError(error, currency)) return null;
+        throw error;
+      });
   }
 
   findUsdtAutomaticSnapshot(sourceReference: string, occurredAt: Date) {
@@ -163,10 +168,10 @@ export class IdBusinessV2FinanceQueryRepository {
       .then((row) => (row ? mapFxSnapshot(row) : null));
   }
 
-  findMyrAutomaticSnapshot(occurredAt: Date) {
+  findCrossAutomaticSnapshot(currency: 'MYR' | 'USD', occurredAt: Date) {
     return this.prisma.idBusinessV2FinanceFxRateSnapshot
       .findFirst({
-        where: { currency: 'MYR', source: 'ecb_cross', expiresAt: { gt: occurredAt } },
+        where: { currency, source: 'ecb_cross', expiresAt: { gt: occurredAt } },
         orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
       })
       .then((row) => (row ? mapFxSnapshot(row) : null));

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2ExchangeRateOrderQuoteService } from '../exchange-rates/public-api';
 import {
@@ -27,7 +28,7 @@ interface ResolveFinanceRateInput {
 @Injectable()
 export class IdBusinessV2FinanceFxService {
   private readonly automaticQuoteInFlight = new Map<
-    'MYR' | 'USDT',
+    'MYR' | 'USD' | 'USDT',
     ReturnType<IdBusinessV2FinanceCommandRepository['createFxSnapshot']>
   >();
 
@@ -157,7 +158,7 @@ export class IdBusinessV2FinanceFxService {
 
   async listLatest() {
     const items = await Promise.all(
-      (['CNY', 'MYR', 'USDT'] as const).map(async (currency) => {
+      V2_FINANCE_CURRENCIES.map(async (currency) => {
         if (currency === 'CNY') {
           return {
             id: null,
@@ -194,7 +195,7 @@ export class IdBusinessV2FinanceFxService {
     const quote =
       currency === 'USDT'
         ? this.snapshotEffectiveUsdtRate(input)
-        : this.findOrCollectMyrCrossRate(input);
+        : this.findOrCollectCrossRate(input);
     this.automaticQuoteInFlight.set(currency, quote);
     return quote.finally(() => {
       if (this.automaticQuoteInFlight.get(currency) === quote) {
@@ -238,31 +239,38 @@ export class IdBusinessV2FinanceFxService {
     );
   }
 
-  private async findOrCollectMyrCrossRate(input: ResolveFinanceRateInput) {
-    const existing = await this.queryRepository.findMyrAutomaticSnapshot(input.occurredAt);
-    return existing ?? this.collectMyrCrossRate(input);
+  private async findOrCollectCrossRate(input: ResolveFinanceRateInput) {
+    if (input.currency !== 'MYR' && input.currency !== 'USD') {
+      throw new BadRequestException('该币种不支持 ECB 自动交叉汇率');
+    }
+    const existing = await this.queryRepository.findCrossAutomaticSnapshot(
+      input.currency,
+      input.occurredAt
+    );
+    return existing ?? this.collectCrossRate(input.currency, input);
   }
 
-  private async collectMyrCrossRate(input: ResolveFinanceRateInput) {
-    const [cny, myr] = await Promise.all([
+  private async collectCrossRate(currency: 'MYR' | 'USD', input: ResolveFinanceRateInput) {
+    const [cny, quote] = await Promise.all([
       this.fetchEcbReferenceRate('CNY'),
-      this.fetchEcbReferenceRate('MYR')
+      this.fetchEcbReferenceRate(currency)
     ]);
-    if (cny.businessDate !== myr.businessDate) {
-      throw new ServiceUnavailableException('ECB CNY 与 MYR 参考汇率日期不一致');
+    if (cny.businessDate !== quote.businessDate) {
+      throw new ServiceUnavailableException(`ECB CNY 与 ${currency} 参考汇率日期不一致`);
     }
-    const crossRate = cny.rate.div(myr.rate);
+    const crossRate = cny.rate.div(quote.rate);
     return this.commandTransactions.execute(
       (tx) =>
         this.commandRepository.createFxSnapshot(tx, {
           id: randomUUID(),
-          currency: 'MYR',
+          currency,
           rateToCny: crossRate.toString(),
           source: 'ecb_cross',
-          sourceReference: 'ECB EXR.D.CNY.EUR.SP00.A / EXR.D.MYR.EUR.SP00.A',
+          sourceReference: `ECB EXR.D.CNY.EUR.SP00.A / EXR.D.${currency}.EUR.SP00.A`,
           sourceEvidence: {
             cnyPerEur: cny.rate.toString(),
-            myrPerEur: myr.rate.toString(),
+            quotePerEur: quote.rate.toString(),
+            quoteCurrency: currency,
             referenceDate: cny.businessDate
           },
           businessDate: new Date(`${cny.businessDate}T00:00:00.000Z`),
@@ -274,7 +282,7 @@ export class IdBusinessV2FinanceFxService {
     );
   }
 
-  private async fetchEcbReferenceRate(currency: 'CNY' | 'MYR') {
+  private async fetchEcbReferenceRate(currency: 'CNY' | 'MYR' | 'USD') {
     const url =
       `https://data-api.ecb.europa.eu/service/data/EXR/D.${currency}.EUR.SP00.A` +
       '?format=csvdata&detail=dataonly&lastNObservations=1';

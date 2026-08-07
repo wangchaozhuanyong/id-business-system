@@ -97,6 +97,8 @@ function formatReceiptAmount(value: string) {
   if (props.form.receivedCurrency === 'CNY') return `¥${props.formatDecimal(value)}`;
   const [integerPart = '0'] = value.split('.');
   const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return props.form.receivedCurrency === 'MYR' ? `RM ${groupedInteger}` : `${groupedInteger} USDT`;
+  if (props.form.receivedCurrency === 'MYR') return `RM ${groupedInteger}`;
+  if (props.form.receivedCurrency === 'USD') return `$${groupedInteger}`;
+  return `${groupedInteger} USDT`;
 }
 </script>

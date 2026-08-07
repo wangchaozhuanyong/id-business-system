@@ -41,7 +41,7 @@ export interface AccountWithRelations {
   balanceCostAmount: Amount4;
   purchaseCost: Amount4;
   purchaseOriginalAmount: Amount4;
-  purchaseCurrency: 'CNY' | 'MYR' | 'USDT';
+  purchaseCurrency: 'CNY' | 'MYR' | 'USD' | 'USDT';
   purchaseFxRateToCny: Rate8;
   purchaseFxSnapshotId: string | null;
   purchaseFinanceAccountId: string | null;

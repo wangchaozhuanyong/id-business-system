@@ -101,7 +101,7 @@ export class IdBusinessV2FinanceReportsService {
   async currencyBreakdown(query: FinanceReportQuery) {
     const grouped = await this.repository.groupCashFlow(this.buildLineWhere(query));
     const latestRates = await this.loadLatestRates();
-    return (['CNY', 'MYR', 'USDT'] as const).map((currency) => {
+    return (['CNY', 'MYR', 'USD', 'USDT'] as const).map((currency) => {
       const income = grouped
         .filter((item) => item.currency === currency && item.direction === 'debit')
         .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
@@ -257,7 +257,7 @@ export class IdBusinessV2FinanceReportsService {
       }
     }
     const latestRates = await this.loadLatestRateRows();
-    for (const currency of ['MYR', 'USDT'] as const) {
+    for (const currency of ['MYR', 'USD', 'USDT'] as const) {
       const latest = latestRates.get(currency);
       if (!latest) {
         issues.push({

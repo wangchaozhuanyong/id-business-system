@@ -44,12 +44,11 @@ export interface V2PlannedSectionDefinition {
   description: string;
 }
 
-export interface V2FeatureManifest {
+export interface V2RuntimeFeatureManifest {
   key: V2ModuleKey;
   title: string;
   group: string;
   route: string;
-  sourceSheet: string;
   permission?: string;
   requiredRoles?: readonly string[];
   status?: V2ModuleStatus;
@@ -60,17 +59,27 @@ export interface V2FeatureManifest {
   summary?: string;
   plannedSections?: readonly V2PlannedSectionDefinition[];
   safetyNotice?: string;
+  loadView: V2ViewLoader;
+}
+
+export interface V2FeatureManifest extends V2RuntimeFeatureManifest {
+  sourceSheet: string;
   filters: readonly V2FilterDefinition[];
   tables: readonly V2TableSchema[];
-  loadView: V2ViewLoader;
 }
 
 export interface V2NavigationSection {
   key: string;
   title: string;
-  items: readonly V2FeatureManifest[];
+  items: readonly V2RuntimeFeatureManifest[];
 }
 
 export function defineV2Feature<const TFeature extends V2FeatureManifest>(feature: TFeature) {
+  return feature;
+}
+
+export function defineV2RuntimeFeature<const TFeature extends V2RuntimeFeatureManifest>(
+  feature: TFeature
+) {
   return feature;
 }

@@ -4,11 +4,14 @@ import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2
 
 export interface IdBusinessV2ExchangeRateRetentionResult {
   cutoff: string;
+  retentionDays: number;
   deletedRuns: number;
   deletedSnapshots: number;
   deletedProviderSnapshots: number;
   deletedQuoteSamples: number;
+  deletedFxRateSnapshots: number;
   preservedReferencedRuns: number;
+  preservedReferencedFxRateSnapshots: number;
 }
 
 @Injectable()
@@ -24,20 +27,30 @@ export class IdBusinessV2ExchangeRateRetentionService {
       async (tx) => {
         const result = this.parseResult(await this.repository.cleanupHistory(tx));
 
-        if (result.deletedRuns > 0) {
+        const deletedCount =
+          result.deletedRuns +
+          result.deletedSnapshots +
+          result.deletedProviderSnapshots +
+          result.deletedQuoteSamples +
+          result.deletedFxRateSnapshots;
+
+        if (deletedCount > 0) {
           await this.audit.append(tx, {
             module: 'id_business_v2',
             action: 'id_business_v2.exchange_rate.retention_cleanup',
             objectType: 'id_business_v2_exchange_rate_run',
             afterData: {
               cutoff: result.cutoff,
+              retentionDays: result.retentionDays,
               deletedRuns: result.deletedRuns,
               deletedSnapshots: result.deletedSnapshots,
               deletedProviderSnapshots: result.deletedProviderSnapshots,
               deletedQuoteSamples: result.deletedQuoteSamples,
-              preservedReferencedRuns: result.preservedReferencedRuns
+              deletedFxRateSnapshots: result.deletedFxRateSnapshots,
+              preservedReferencedRuns: result.preservedReferencedRuns,
+              preservedReferencedFxRateSnapshots: result.preservedReferencedFxRateSnapshots
             },
-            remark: 'V2 联网汇率历史保留最近一个月；账务引用证据除外'
+            remark: `V2 联网汇率历史保留最近 ${result.retentionDays} 天；账务引用证据除外`
           });
         }
 
@@ -54,22 +67,30 @@ export class IdBusinessV2ExchangeRateRetentionService {
 
     const result = value as Record<string, unknown>;
     const cutoff = typeof result.cutoff === 'string' ? result.cutoff : '';
+    const retentionDays = this.parseCount(result.retentionDays);
     const deletedRuns = this.parseCount(result.deletedRuns);
     const deletedSnapshots = this.parseCount(result.deletedSnapshots);
     const deletedProviderSnapshots = this.parseCount(result.deletedProviderSnapshots);
     const deletedQuoteSamples = this.parseCount(result.deletedQuoteSamples);
+    const deletedFxRateSnapshots = this.parseCount(result.deletedFxRateSnapshots);
     const preservedReferencedRuns = this.parseCount(result.preservedReferencedRuns);
+    const preservedReferencedFxRateSnapshots = this.parseCount(
+      result.preservedReferencedFxRateSnapshots
+    );
     if (!cutoff) {
       throw new Error('汇率保留清理缺少截止时间');
     }
 
     return {
       cutoff,
+      retentionDays,
       deletedRuns,
       deletedSnapshots,
       deletedProviderSnapshots,
       deletedQuoteSamples,
-      preservedReferencedRuns
+      deletedFxRateSnapshots,
+      preservedReferencedRuns,
+      preservedReferencedFxRateSnapshots
     };
   }
 

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { isUnsupportedFinanceCurrencyEnumError } from '../../finance/id-business-v2-finance-currency-compat';
 import {
   mapAmount4,
   mapOptionalAmount4,
@@ -23,6 +24,10 @@ export const EXCHANGE_RATE_RUN_INCLUDE = {
     }
   }
 } satisfies Prisma.IdBusinessV2ExchangeRateRunInclude;
+
+export const FINANCE_FX_RATE_SNAPSHOT_INCLUDE = {
+  createdBy: { select: { id: true, username: true, displayName: true } }
+} satisfies Prisma.IdBusinessV2FinanceFxRateSnapshotInclude;
 
 const EXCHANGE_RATE_RUN_DETAIL_INCLUDE = {
   triggeredBy: { select: { id: true, username: true, displayName: true } },
@@ -49,6 +54,21 @@ type ExchangeRateRunRow = Prisma.IdBusinessV2ExchangeRateRunGetPayload<{
 type ExchangeRateRunDetailRow = Prisma.IdBusinessV2ExchangeRateRunGetPayload<{
   include: typeof EXCHANGE_RATE_RUN_DETAIL_INCLUDE;
 }>;
+
+type FinanceFxRateSnapshotRow = Prisma.IdBusinessV2FinanceFxRateSnapshotGetPayload<{
+  include: typeof FINANCE_FX_RATE_SNAPSHOT_INCLUDE;
+}>;
+
+export type IdBusinessV2TrackedFxCurrency = 'MYR' | 'USD' | 'USDT';
+export type IdBusinessV2AutomaticFxRateSource = 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross';
+export type IdBusinessV2ManualFxRateSource = 'manual';
+
+const AUTOMATIC_FX_RATE_SOURCES: IdBusinessV2AutomaticFxRateSource[] = [
+  'combined_p2p',
+  'binance',
+  'okx',
+  'ecb_cross'
+];
 
 @Injectable()
 export class IdBusinessV2ExchangeRateRepository {
@@ -130,8 +150,51 @@ export class IdBusinessV2ExchangeRateRepository {
   }
 
   async findSettings() {
-    const row = await this.prisma.idBusinessV2ExchangeRateSettings.findUnique({ where: { id: 1 } });
+    const retentionDaysExpression = (await this.hasRetentionDaysColumn())
+      ? Prisma.sql`"retention_days"`
+      : Prisma.sql`30`;
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: number;
+        autoEnabled: boolean;
+        intervalMinutes: number;
+        targetAmountRmb: Prisma.Decimal;
+        retentionDays: number;
+        nextRunAt: Date | null;
+        updatedByUserId: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+      }>
+    >(Prisma.sql`
+      SELECT
+        "id",
+        "auto_enabled" AS "autoEnabled",
+        "interval_minutes" AS "intervalMinutes",
+        "target_amount_rmb" AS "targetAmountRmb",
+        ${retentionDaysExpression} AS "retentionDays",
+        "next_run_at" AS "nextRunAt",
+        "updated_by_user_id" AS "updatedByUserId",
+        "created_at" AS "createdAt",
+        "updated_at" AS "updatedAt"
+      FROM "id_business_v2_exchange_rate_settings"
+      WHERE "id" = 1
+      LIMIT 1
+    `);
+    const row = rows[0];
     return row ? mapExchangeRateSettings(row) : null;
+  }
+
+  private async hasRetentionDaysColumn() {
+    const rows = await this.prisma.$queryRaw<Array<{ exists: boolean }>>(Prisma.sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'id_business_v2_exchange_rate_settings'
+          AND column_name = 'retention_days'
+      ) AS "exists"
+    `);
+    return rows[0]?.exists ?? false;
   }
 
   async createDefaultSettings(tx: V2CommandTransaction, now: Date) {
@@ -141,6 +204,7 @@ export class IdBusinessV2ExchangeRateRepository {
         autoEnabled: true,
         intervalMinutes: 30,
         targetAmountRmb: '5000',
+        retentionDays: 30,
         nextRunAt: now
       }
     });
@@ -153,6 +217,7 @@ export class IdBusinessV2ExchangeRateRepository {
       autoEnabled: boolean;
       intervalMinutes: number;
       targetAmountRmb: string;
+      retentionDays: number;
       nextRunAt: Date | null;
       updatedByUserId: string;
     }
@@ -242,6 +307,18 @@ export class IdBusinessV2ExchangeRateRepository {
     return tx.idBusinessV2ExchangeRateQuoteSample.createMany({ data });
   }
 
+  createFinanceFxRateSnapshot(
+    tx: V2CommandTransaction,
+    data: Prisma.IdBusinessV2FinanceFxRateSnapshotUncheckedCreateInput
+  ) {
+    return tx.idBusinessV2FinanceFxRateSnapshot
+      .create({
+        data,
+        include: FINANCE_FX_RATE_SNAPSHOT_INCLUDE
+      })
+      .then(mapFinanceFxRateSnapshot);
+  }
+
   updateRunSuccess(
     tx: V2CommandTransaction,
     runId: string,
@@ -324,16 +401,107 @@ export class IdBusinessV2ExchangeRateRepository {
     return row ? mapExchangeRateRun(row) : null;
   }
 
-  async findLatestReceiptFxSnapshots(currencies: Array<'MYR' | 'USDT'>) {
+  async findLatestReceiptFxSnapshots(currencies: IdBusinessV2TrackedFxCurrency[]) {
     const rows = await Promise.all(
       currencies.map((currency) =>
-        this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
-          where: { currency },
-          orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
-        })
+        this.prisma.idBusinessV2FinanceFxRateSnapshot
+          .findFirst({
+            where: { currency },
+            orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
+          })
+          .catch((error: unknown) => {
+            if (isUnsupportedFinanceCurrencyEnumError(error, currency)) return null;
+            throw error;
+          })
       )
     );
     return rows.filter((row) => row !== null).map(mapReceiptFxSnapshot);
+  }
+
+  async listAutomaticFxRateSnapshots(input: {
+    currency?: IdBusinessV2TrackedFxCurrency;
+    source?: IdBusinessV2AutomaticFxRateSource;
+    status?: 'available' | 'expired';
+    capturedAt?: { gte?: Date; lte?: Date };
+    now: Date;
+    skip: number;
+    take: number;
+    sortOrder: 'asc' | 'desc';
+  }) {
+    const where: Prisma.IdBusinessV2FinanceFxRateSnapshotWhereInput = {
+      currency: input.currency,
+      source: input.source ?? { in: AUTOMATIC_FX_RATE_SOURCES },
+      capturedAt: input.capturedAt,
+      expiresAt:
+        input.status === 'available'
+          ? { gt: input.now }
+          : input.status === 'expired'
+            ? { lte: input.now }
+            : undefined
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.idBusinessV2FinanceFxRateSnapshot.findMany({
+        where,
+        skip: input.skip,
+        take: input.take,
+        orderBy: [{ capturedAt: input.sortOrder }, { id: input.sortOrder }],
+        include: FINANCE_FX_RATE_SNAPSHOT_INCLUDE
+      }),
+      this.prisma.idBusinessV2FinanceFxRateSnapshot.count({ where })
+    ]).catch((error: unknown) => {
+      if (input.currency && isUnsupportedFinanceCurrencyEnumError(error, input.currency)) {
+        return [[], 0] as const;
+      }
+      throw error;
+    });
+    return [rows.map(mapFinanceFxRateSnapshot), total] as const;
+  }
+
+  async listManualFxRateSnapshots(input: {
+    keyword?: string;
+    currency?: 'CNY' | IdBusinessV2TrackedFxCurrency;
+    recordedAt?: { gte?: Date; lte?: Date };
+    skip: number;
+    take: number;
+    sortOrder: 'asc' | 'desc';
+  }) {
+    const where: Prisma.IdBusinessV2FinanceFxRateSnapshotWhereInput = {
+      source: 'manual',
+      currency: input.currency,
+      capturedAt: input.recordedAt,
+      OR: input.keyword
+        ? [
+            { manualReason: { contains: input.keyword, mode: 'insensitive' } },
+            { sourceReference: { contains: input.keyword, mode: 'insensitive' } },
+            { createdBy: { is: { username: { contains: input.keyword, mode: 'insensitive' } } } },
+            { createdBy: { is: { displayName: { contains: input.keyword, mode: 'insensitive' } } } }
+          ]
+        : undefined
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.idBusinessV2FinanceFxRateSnapshot.findMany({
+        where,
+        skip: input.skip,
+        take: input.take,
+        orderBy: [{ capturedAt: input.sortOrder }, { id: input.sortOrder }],
+        include: FINANCE_FX_RATE_SNAPSHOT_INCLUDE
+      }),
+      this.prisma.idBusinessV2FinanceFxRateSnapshot.count({ where })
+    ]).catch((error: unknown) => {
+      if (input.currency && isUnsupportedFinanceCurrencyEnumError(error, input.currency)) {
+        return [[], 0] as const;
+      }
+      throw error;
+    });
+    return [rows.map(mapFinanceFxRateSnapshot), total] as const;
+  }
+
+  async findManualFxRateSnapshot(id: string) {
+    const row = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findFirst({
+      where: { id, source: 'manual' },
+      include: FINANCE_FX_RATE_SNAPSHOT_INCLUDE
+    });
+    return row ? mapFinanceFxRateSnapshot(row) : null;
   }
 
   async findRunningRun() {
@@ -549,6 +717,19 @@ function mapExchangeRateSnapshot<
 function mapReceiptFxSnapshot<T extends { rateToCny: unknown }>(snapshot: T) {
   return {
     ...snapshot,
-    rateToCny: mapRate8(snapshot.rateToCny, 'id_business_v2_finance_fx_rate_snapshots.rate_to_cny')
+    rateToCny: mapRate8(
+      snapshot.rateToCny,
+      'id_business_v2_finance_fx_rate_snapshots.rate_to_cny'
+    ).toString()
+  };
+}
+
+function mapFinanceFxRateSnapshot(row: FinanceFxRateSnapshotRow) {
+  return {
+    ...row,
+    rateToCny: mapRate8(
+      row.rateToCny,
+      'id_business_v2_finance_fx_rate_snapshots.rate_to_cny'
+    ).toString()
   };
 }

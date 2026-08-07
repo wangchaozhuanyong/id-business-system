@@ -381,14 +381,13 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         { key: '采集时间', label: '采集时间', kind: 'date', widthPreset: 'dateTime', pin: 'start' },
+        { key: '币种', label: '币种', kind: 'status', widthPreset: 'compact' },
+        { key: '汇率', label: '兑人民币汇率', kind: 'numeric', widthPreset: 'standard' },
+        { key: '来源', label: '来源', kind: 'text', widthPreset: 'wide' },
         { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: '触发', label: '触发', kind: 'text', widthPreset: 'compact' },
-        { key: '成交档位', label: '成交档位', kind: 'numeric', widthPreset: 'standard' },
-        { key: '综合买入', label: '综合买入', kind: 'numeric', widthPreset: 'standard' },
-        { key: '综合卖出', label: '综合卖出', kind: 'numeric', widthPreset: 'standard' },
-        { key: '中间价', label: '中间价', kind: 'numeric', widthPreset: 'standard' },
-        { key: '有效样本', label: '有效样本', kind: 'numeric', widthPreset: 'compact' },
-        { key: '失败来源', label: '失败来源', kind: 'text', widthPreset: 'wide' },
+        { key: '业务日期', label: '业务日期', kind: 'date', widthPreset: 'standard' },
+        { key: '过期时间', label: '过期时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: '证据', label: '证据', kind: 'text', widthPreset: 'identifier' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'icon', pin: 'end' }
       ]
     }),
@@ -400,13 +399,11 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         { key: '记录时间', label: '记录时间', kind: 'date', widthPreset: 'dateTime', pin: 'start' },
-        { key: 'Binance 买入', label: 'Binance 买入', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'Binance 卖出', label: 'Binance 卖出', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'OKX 买入', label: 'OKX 买入', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'OKX 卖出', label: 'OKX 卖出', kind: 'numeric', widthPreset: 'standard' },
-        { key: '中间价', label: '中间价', kind: 'numeric', widthPreset: 'standard' },
+        { key: '币种', label: '币种', kind: 'status', widthPreset: 'compact' },
+        { key: '汇率', label: '兑人民币汇率', kind: 'numeric', widthPreset: 'standard' },
+        { key: '来源', label: '来源说明', kind: 'text', widthPreset: 'identifier' },
+        { key: '原因', label: '原因', kind: 'text', widthPreset: 'longText' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: 'remark', label: '备注', kind: 'text', widthPreset: 'identifier' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'icon', pin: 'end' }
       ]
     }),

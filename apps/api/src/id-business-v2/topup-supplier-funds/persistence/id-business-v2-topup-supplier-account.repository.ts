@@ -6,7 +6,7 @@ interface LockedSupplierAccountPersistenceRow {
   id: string;
   supplierOptionId: string;
   supplierName: string;
-  currency: 'CNY' | 'MYR' | 'USDT';
+  currency: 'CNY' | 'MYR' | 'USD' | 'USDT';
   currentBalance: unknown;
   currentBalanceCny: unknown;
   initializedAt: Date | null;

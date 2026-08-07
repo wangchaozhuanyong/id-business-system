@@ -35,6 +35,7 @@
         >
           <el-option label="CNY" value="CNY" />
           <el-option label="MYR" value="MYR" />
+          <el-option label="USD" value="USD" />
           <el-option label="USDT" value="USDT" />
         </el-select>
         <el-input

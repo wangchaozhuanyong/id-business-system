@@ -3,6 +3,7 @@
     <el-select v-model="form.receivedCurrency" @change="emit('currencyChange')">
       <el-option label="人民币 CNY" value="CNY" />
       <el-option label="马币 MYR" value="MYR" />
+      <el-option label="美元 USD" value="USD" />
       <el-option label="USDT" value="USDT" />
     </el-select>
   </el-form-item>

@@ -239,15 +239,18 @@ export class IdBusinessV2FinanceReportRepository {
 
   async loadLatestRateRows() {
     const rows = await this.prisma.idBusinessV2FinanceFxRateSnapshot.findMany({
-      where: { currency: { in: ['MYR', 'USDT'] } },
+      where: { currency: { in: ['MYR', 'USD', 'USDT'] } },
       orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }]
     });
     const result = new Map<
-      'MYR' | 'USDT',
+      'MYR' | 'USD' | 'USDT',
       { id: string; rateToCny: Rate8; expiresAt: Date | null }
     >();
     for (const row of rows) {
-      if ((row.currency === 'MYR' || row.currency === 'USDT') && !result.has(row.currency)) {
+      if (
+        (row.currency === 'MYR' || row.currency === 'USD' || row.currency === 'USDT') &&
+        !result.has(row.currency)
+      ) {
         result.set(row.currency, {
           id: row.id,
           rateToCny: mapRate8(row.rateToCny, 'finance_exchange_rates.rate_to_cny'),

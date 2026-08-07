@@ -13,7 +13,7 @@ export const financeLedgerFeature = defineV2Feature({
   freshnessPolicy: 'event-driven',
   summary: '管理资金账户、供应商钱包、经营开支、不可变流水和月度关账。',
   filters: [
-    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USDT'] },
+    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USD', 'USDT'] },
     { key: 'periodMonth', label: '月份', kind: 'select' },
     { key: 'journalType', label: '业务类型', kind: 'select' }
   ],

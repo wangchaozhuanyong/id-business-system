@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req } from '
 import { CurrentUser, Public, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
+import type { CreateIdBusinessV2ManualFxRateDto } from './dto/create-id-business-v2-manual-fx-rate.dto';
 import type { UpdateIdBusinessV2ExchangeRateSettingsDto } from './dto/update-id-business-v2-exchange-rate-settings.dto';
 import { IdBusinessV2ExchangeRateCronService } from './id-business-v2-exchange-rate-cron.service';
 import { IdBusinessV2ExchangeRateQueryService } from './id-business-v2-exchange-rate-query.service';
@@ -35,13 +36,21 @@ export class IdBusinessV2ExchangeRatesController {
     @Query('runTriggerType') runTriggerType?: string,
     @Query('runCollectedFrom') runCollectedFrom?: string,
     @Query('runCollectedTo') runCollectedTo?: string,
+    @Query('recordPage') recordPage?: string,
+    @Query('recordPageSize') recordPageSize?: string,
+    @Query('recordCurrency') recordCurrency?: string,
+    @Query('recordSource') recordSource?: string,
+    @Query('recordStatus') recordStatus?: string,
+    @Query('recordCapturedFrom') recordCapturedFrom?: string,
+    @Query('recordCapturedTo') recordCapturedTo?: string,
     @Query('manualPage') manualPage?: string,
     @Query('manualPageSize') manualPageSize?: string,
     @Query('manualKeyword') manualKeyword?: string,
+    @Query('manualCurrency') manualCurrency?: string,
     @Query('manualRecordedFrom') manualRecordedFrom?: string,
     @Query('manualRecordedTo') manualRecordedTo?: string
   ) {
-    const [overview, runtime, runs, manualEntries] = await Promise.all([
+    const [overview, runtime, runs, records, manualEntries] = await Promise.all([
       this.queryService.getOverview(),
       this.worker.getRuntime(),
       this.queryService.listRuns({
@@ -53,13 +62,22 @@ export class IdBusinessV2ExchangeRatesController {
         collectedFrom: runCollectedFrom,
         collectedTo: runCollectedTo
       }),
-      this.exchangeRatesService.list({
+      this.queryService.listRecords({
+        page: recordPage,
+        pageSize: recordPageSize,
+        currency: recordCurrency,
+        source: recordSource,
+        status: recordStatus,
+        capturedFrom: recordCapturedFrom,
+        capturedTo: recordCapturedTo
+      }),
+      this.exchangeRatesService.listManualFxRates({
         page: manualPage,
         pageSize: manualPageSize,
         keyword: manualKeyword,
+        currency: manualCurrency,
         recordedFrom: manualRecordedFrom,
         recordedTo: manualRecordedTo,
-        sortBy: 'recordedAt',
         sortOrder: 'desc'
       })
     ]);
@@ -67,6 +85,7 @@ export class IdBusinessV2ExchangeRatesController {
       overview,
       runtime,
       runs,
+      records,
       manualEntries,
       latestReceiptFxRates: overview.latestReceiptFxRates,
       generatedAt: new Date().toISOString()
@@ -107,6 +126,29 @@ export class IdBusinessV2ExchangeRatesController {
   @Get('effective')
   getEffective() {
     return this.queryService.getEffective();
+  }
+
+  @Get('records')
+  listRecords(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('currency') currency?: string,
+    @Query('source') source?: string,
+    @Query('status') status?: string,
+    @Query('capturedFrom') capturedFrom?: string,
+    @Query('capturedTo') capturedTo?: string,
+    @Query('sortOrder') sortOrder?: string
+  ) {
+    return this.queryService.listRecords({
+      page,
+      pageSize,
+      currency,
+      source,
+      status,
+      capturedFrom,
+      capturedTo,
+      sortOrder
+    });
   }
 
   @Get('settings')
@@ -194,6 +236,42 @@ export class IdBusinessV2ExchangeRatesController {
   @Get('manual-entries/:id')
   getManualEntry(@Param('id') id: string) {
     return this.exchangeRatesService.get(id);
+  }
+
+  @Get('manual-rates')
+  listManualRates(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('keyword') keyword?: string,
+    @Query('currency') currency?: string,
+    @Query('recordedFrom') recordedFrom?: string,
+    @Query('recordedTo') recordedTo?: string,
+    @Query('sortOrder') sortOrder?: string
+  ) {
+    return this.exchangeRatesService.listManualFxRates({
+      page,
+      pageSize,
+      keyword,
+      currency,
+      recordedFrom,
+      recordedTo,
+      sortOrder
+    });
+  }
+
+  @Post('manual-rates')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.create')
+  createManualRate(
+    @Body() dto: CreateIdBusinessV2ManualFxRateDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.exchangeRatesService.createManualFxRate(dto, operator, request?.requestId);
+  }
+
+  @Get('manual-rates/:id')
+  getManualRate(@Param('id') id: string) {
+    return this.exchangeRatesService.getManualFxRate(id);
   }
 
   @Get(':id')

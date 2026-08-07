@@ -2,18 +2,24 @@ import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
   CreateV2ExchangeRateEntryInput,
+  CreateV2ManualFxRateInput,
   UpdateV2ExchangeRateSettingsInput,
   V2ExchangeRateEffective,
   V2ExchangeRateEntry,
   V2ExchangeRateListQuery,
   V2ExchangeRateListResult,
   V2ExchangeRateOverview,
+  V2ExchangeRateRecordListQuery,
+  V2ExchangeRateRecordListResult,
   V2ExchangeRateRunDetail,
   V2ExchangeRateRunListQuery,
   V2ExchangeRateRunListResult,
   V2ExchangeRateRuntime,
   V2ExchangeRateReceiptFxRate,
-  V2ExchangeRateSettings
+  V2ExchangeRateSettings,
+  V2ManualFxRate,
+  V2ManualFxRateListQuery,
+  V2ManualFxRateListResult
 } from '@/v2/types/exchangeRates';
 
 export const idBusinessV2ExchangeRatesApi = {
@@ -48,6 +54,14 @@ export const idBusinessV2ExchangeRatesApi = {
       http.get('/id-business-v2/exchange-rates/settings', { signal: options.signal })
     );
   },
+  listRecords(params: V2ExchangeRateRecordListQuery, options: ApiRequestOptions = {}) {
+    return request<V2ExchangeRateRecordListResult>(
+      http.get('/id-business-v2/exchange-rates/records', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
   updateSettings(input: UpdateV2ExchangeRateSettingsInput) {
     return withV2QueryInvalidation(
       request<V2ExchangeRateSettings>(http.patch('/id-business-v2/exchange-rates/settings', input)),
@@ -57,10 +71,35 @@ export const idBusinessV2ExchangeRatesApi = {
   collect() {
     return withV2QueryInvalidation(
       request<{
-        runId: string;
-        midRateToRmb: string;
-        validSampleCount: number;
+        status: 'success' | 'partial_failed' | 'failed';
+        successfulCurrencies: string[];
+        failedCurrencies: string[];
+        results: Array<{
+          currency: string;
+          status: 'success' | 'failed';
+          rateToCny?: string;
+          snapshotId?: string;
+          source?: string;
+          error?: { code: string; message: string };
+        }>;
       }>(http.post('/id-business-v2/exchange-rates/collect')),
+      'exchange-rates'
+    );
+  },
+  listManualRates(params: V2ManualFxRateListQuery, options: ApiRequestOptions = {}) {
+    return request<V2ManualFxRateListResult>(
+      http.get('/id-business-v2/exchange-rates/manual-rates', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
+  getManualRate(id: string) {
+    return request<V2ManualFxRate>(http.get(`/id-business-v2/exchange-rates/manual-rates/${id}`));
+  },
+  createManualRate(input: CreateV2ManualFxRateInput) {
+    return withV2QueryInvalidation(
+      request<V2ManualFxRate>(http.post('/id-business-v2/exchange-rates/manual-rates', input)),
       'exchange-rates'
     );
   },
@@ -94,9 +133,17 @@ export const idBusinessV2ExchangeRatesApi = {
       runTriggerType?: string;
       runCollectedFrom?: string;
       runCollectedTo?: string;
+      recordPage: number;
+      recordPageSize: number;
+      recordCurrency?: string;
+      recordSource?: string;
+      recordStatus?: string;
+      recordCapturedFrom?: string;
+      recordCapturedTo?: string;
       manualPage: number;
       manualPageSize: number;
       manualKeyword?: string;
+      manualCurrency?: string;
       manualRecordedFrom?: string;
       manualRecordedTo?: string;
     },
@@ -106,7 +153,8 @@ export const idBusinessV2ExchangeRatesApi = {
       overview: V2ExchangeRateOverview;
       runtime: V2ExchangeRateRuntime;
       runs: V2ExchangeRateRunListResult;
-      manualEntries: V2ExchangeRateListResult;
+      records: V2ExchangeRateRecordListResult;
+      manualEntries: V2ManualFxRateListResult;
       latestReceiptFxRates: V2ExchangeRateReceiptFxRate[];
       generatedAt: string;
     }>(

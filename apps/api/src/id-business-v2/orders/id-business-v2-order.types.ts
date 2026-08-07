@@ -1,6 +1,6 @@
 import type { Amount4, Rate8 } from '../runtime/public-api';
 
-export type IdBusinessV2FinanceCurrency = 'CNY' | 'MYR' | 'USDT';
+export type IdBusinessV2FinanceCurrency = 'CNY' | 'MYR' | 'USD' | 'USDT';
 
 export type IdBusinessV2OrderStatus =
   | 'draft'

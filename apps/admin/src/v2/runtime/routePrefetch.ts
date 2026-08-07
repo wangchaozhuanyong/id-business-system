@@ -23,6 +23,10 @@ interface V2RoutePrefetchControllerOptions {
   load: (path: string, intent: V2RoutePrefetchIntent) => Promise<unknown>;
 }
 
+interface V2NavigationFocusPrefetchOptions extends V2RoutePrefetchControllerOptions {
+  linkSelector?: string;
+}
+
 export function getV2PrefetchDelay(input: V2PrefetchDecisionInput): number | null {
   if (normalizePath(input.currentPath) === normalizePath(input.targetPath)) return null;
   if (!input.documentVisible || !input.online) return null;
@@ -107,6 +111,37 @@ export function createV2RoutePrefetchController(options: V2RoutePrefetchControll
     schedule,
     cancel,
     dispose
+  };
+}
+
+export function installV2NavigationFocusPrefetch(options: V2NavigationFocusPrefetchOptions) {
+  const controller = createV2RoutePrefetchController(options);
+  const linkSelector = options.linkSelector ?? 'a.v2-navigation__item[href]';
+
+  function getFocusedPath(event: FocusEvent) {
+    if (!(event.target instanceof Element)) return null;
+    const link = event.target.closest<HTMLAnchorElement>(linkSelector);
+    if (!link?.closest('.v2-navigation')) return null;
+    return link.getAttribute('href');
+  }
+
+  function handleFocus(event: FocusEvent) {
+    const path = getFocusedPath(event);
+    if (path) controller.schedule(path, 'focus');
+  }
+
+  function handleBlur(event: FocusEvent) {
+    const path = getFocusedPath(event);
+    if (path) controller.cancel(path);
+  }
+
+  document.addEventListener('focus', handleFocus, true);
+  document.addEventListener('blur', handleBlur, true);
+
+  return () => {
+    document.removeEventListener('focus', handleFocus, true);
+    document.removeEventListener('blur', handleBlur, true);
+    controller.dispose();
   };
 }
 

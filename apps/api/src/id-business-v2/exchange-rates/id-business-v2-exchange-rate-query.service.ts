@@ -1,9 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { Rate8 } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
-import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
+import {
+  IdBusinessV2ExchangeRateRepository,
+  type IdBusinessV2AutomaticFxRateSource,
+  type IdBusinessV2TrackedFxCurrency
+} from './persistence/id-business-v2-exchange-rate.repository';
 
 export interface ListIdBusinessV2ExchangeRateRunsQuery extends PaginationQuery {
   keyword?: string;
@@ -15,6 +20,15 @@ export interface ListIdBusinessV2ExchangeRateRunsQuery extends PaginationQuery {
   sortOrder?: string;
 }
 
+export interface ListIdBusinessV2ExchangeRateRecordsQuery extends PaginationQuery {
+  currency?: string;
+  source?: string;
+  status?: string;
+  capturedFrom?: string;
+  capturedTo?: string;
+  sortOrder?: string;
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type RunRecord = NonNullable<
   Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findLatestRun']>>
@@ -22,6 +36,19 @@ type RunRecord = NonNullable<
 type ReceiptFxSnapshot = Awaited<
   ReturnType<IdBusinessV2ExchangeRateRepository['findLatestReceiptFxSnapshots']>
 >[number];
+type FxRecordSnapshot = Awaited<
+  ReturnType<IdBusinessV2ExchangeRateRepository['listAutomaticFxRateSnapshots']>
+>[0][number];
+
+const TRACKED_FX_CURRENCIES = V2_FINANCE_CURRENCIES.filter(
+  (currency): currency is IdBusinessV2TrackedFxCurrency => currency !== 'CNY'
+);
+const AUTOMATIC_FX_RATE_SOURCES = new Set<IdBusinessV2AutomaticFxRateSource>([
+  'combined_p2p',
+  'binance',
+  'okx',
+  'ecb_cross'
+]);
 
 @Injectable()
 export class IdBusinessV2ExchangeRateQueryService {
@@ -132,6 +159,26 @@ export class IdBusinessV2ExchangeRateQueryService {
     };
   }
 
+  async listRecords(query: ListIdBusinessV2ExchangeRateRecordsQuery, now = new Date()) {
+    const pagination = getPagination(query);
+    const [items, total] = await this.repository.listAutomaticFxRateSnapshots({
+      currency: this.recordCurrency(query.currency),
+      source: this.recordSource(query.source),
+      status: this.recordStatus(query.status),
+      capturedAt: this.recordDateRange(query.capturedFrom, query.capturedTo),
+      now,
+      skip: pagination.skip,
+      take: pagination.take,
+      sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc'
+    });
+    return {
+      items: items.map((item) => this.fxRecordResponse(item, now)),
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize
+    };
+  }
+
   async getEffective() {
     const [latestRun, lastSuccess, settings] = await Promise.all([
       this.repository.findLatestRun(),
@@ -163,11 +210,11 @@ export class IdBusinessV2ExchangeRateQueryService {
   }
 
   async getLatestReceiptFxRates(now = new Date()) {
-    const snapshots = await this.repository.findLatestReceiptFxSnapshots(['MYR', 'USDT']);
+    const snapshots = await this.repository.findLatestReceiptFxSnapshots(TRACKED_FX_CURRENCIES);
     const byCurrency = new Map<IdBusinessV2FinanceCurrency, ReceiptFxSnapshot>(
       snapshots.map((snapshot) => [snapshot.currency, snapshot])
     );
-    return (['CNY', 'MYR', 'USDT'] as const).map((currency) => {
+    return V2_FINANCE_CURRENCIES.map((currency) => {
       if (currency === 'CNY') {
         return {
           currency,
@@ -282,6 +329,63 @@ export class IdBusinessV2ExchangeRateQueryService {
           : undefined,
       startedAt: gte || lte ? { gte, lte } : undefined
     };
+  }
+
+  private recordCurrency(value: string | undefined) {
+    if (!value?.trim()) return undefined;
+    const currency = value.trim().toUpperCase();
+    if (!TRACKED_FX_CURRENCIES.includes(currency as IdBusinessV2TrackedFxCurrency)) {
+      throw new BadRequestException('自动汇率记录仅支持 MYR、USD、USDT');
+    }
+    return currency as IdBusinessV2TrackedFxCurrency;
+  }
+
+  private recordSource(value: string | undefined) {
+    if (!value?.trim()) return undefined;
+    const source = value.trim() as IdBusinessV2AutomaticFxRateSource;
+    if (!AUTOMATIC_FX_RATE_SOURCES.has(source)) {
+      throw new BadRequestException('汇率来源筛选无效');
+    }
+    return source;
+  }
+
+  private recordStatus(value: string | undefined) {
+    if (!value?.trim()) return undefined;
+    if (value === 'available' || value === 'expired') return value;
+    throw new BadRequestException('汇率状态筛选无效');
+  }
+
+  private recordDateRange(fromValue?: string, toValue?: string) {
+    const gte = this.dateBoundary(fromValue, false);
+    const lte = this.dateBoundary(toValue, true);
+    if (gte && lte && gte > lte) {
+      throw new BadRequestException('采集开始日期不能晚于结束日期');
+    }
+    return gte || lte ? { gte, lte } : undefined;
+  }
+
+  private fxRecordResponse(snapshot: FxRecordSnapshot, now: Date) {
+    const expiresAt = snapshot.expiresAt;
+    return {
+      id: snapshot.id,
+      currency: snapshot.currency,
+      rateToCny: snapshot.rateToCny,
+      source: snapshot.source,
+      sourceReference: snapshot.sourceReference,
+      sourceEvidence: snapshot.sourceEvidence,
+      businessDate: snapshot.businessDate.toISOString().slice(0, 10),
+      capturedAt: snapshot.capturedAt,
+      expiresAt,
+      status: expiresAt && expiresAt.getTime() <= now.getTime() ? 'expired' : 'available',
+      exchangeRateRunId: this.exchangeRateRunId(snapshot.sourceEvidence),
+      createdBy: snapshot.createdBy
+    };
+  }
+
+  private exchangeRateRunId(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const candidate = (value as Record<string, unknown>).exchangeRateRunId;
+    return typeof candidate === 'string' ? candidate : null;
   }
 
   private runResponse(run: RunRecord) {

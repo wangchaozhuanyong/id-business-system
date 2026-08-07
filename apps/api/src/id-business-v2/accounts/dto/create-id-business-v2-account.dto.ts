@@ -10,7 +10,7 @@ export interface CreateIdBusinessV2AccountDto {
   balanceCostAmount?: string | number;
   purchaseCost?: string | number;
   purchaseOriginalAmount?: string | number;
-  purchaseCurrency?: 'CNY' | 'MYR' | 'USDT';
+  purchaseCurrency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
   purchaseFxRateToCny?: string | number;
   purchaseFxSnapshotId?: string | null;
   purchaseFinanceAccountId?: string | null;
