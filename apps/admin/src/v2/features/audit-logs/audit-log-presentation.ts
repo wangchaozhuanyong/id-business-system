@@ -1,5 +1,34 @@
 import { exportRowsToCsv } from '@/utils/exportCsv';
+import type { V2GovernanceRecycleEntity } from '../data-governance/contracts';
 import type { V2AuditLogRecord, V2AuditUser, V2SensitiveAccessLogRecord } from './contracts';
+
+const RESTORABLE_DELETE_ACTIONS: Record<
+  string,
+  { entity: V2GovernanceRecycleEntity; objectType: string }
+> = {
+  'id_business_v2.account.delete': {
+    entity: 'account',
+    objectType: 'id_business_v2_account'
+  },
+  'id_business_v2.customer.delete': {
+    entity: 'customer',
+    objectType: 'id_business_v2_customer'
+  },
+  'id_business_v2.option.delete': {
+    entity: 'option',
+    objectType: 'id_business_v2_option'
+  },
+  'id_business_v2.order.delete': {
+    entity: 'order',
+    objectType: 'id_business_v2_order'
+  }
+};
+
+export interface V2AuditRestoreCandidate {
+  entity: V2GovernanceRecycleEntity;
+  id: string;
+  label: string;
+}
 
 export function auditUserLabel(user?: V2AuditUser | null) {
   if (!user) return '系统或未知员工';
@@ -31,6 +60,38 @@ export function operationObjectLabel(item: V2AuditLogRecord) {
 
 export function sensitiveObjectLabel(item: V2SensitiveAccessLogRecord) {
   return [item.objectType, item.objectId].filter(Boolean).join(' / ') || '—';
+}
+
+function clampRouteText(value: string, maxLength: number) {
+  const normalized = value.trim();
+  return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+}
+
+export function getOperationAuditRestoreCandidate(
+  item: V2AuditLogRecord
+): V2AuditRestoreCandidate | null {
+  const config = RESTORABLE_DELETE_ACTIONS[item.action];
+  if (!config || !item.objectId || item.objectType !== config.objectType) return null;
+  return {
+    entity: config.entity,
+    id: item.objectId,
+    label: clampRouteText(item.remark || operationObjectLabel(item), 160)
+  };
+}
+
+export function buildOperationAuditRestoreRouteQuery(item: V2AuditLogRecord) {
+  const candidate = getOperationAuditRestoreCandidate(item);
+  if (!candidate) return null;
+  return {
+    tab: 'recycle',
+    restoreEntity: candidate.entity,
+    restoreId: candidate.id,
+    restoreLabel: candidate.label,
+    sourceAuditId: item.id,
+    sourceAuditAction: item.action,
+    sourceAuditAt: item.createdAt,
+    sourceAuditOperator: clampRouteText(auditUserLabel(item.user), 120)
+  };
 }
 
 export function exportOperationAuditRows(rows: V2AuditLogRecord[]) {

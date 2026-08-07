@@ -1,6 +1,7 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
@@ -9,6 +10,14 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2DataGovernanceApi } from './api';
 import { createDataGovernanceQueryKey } from './data-governance-query-key';
+import {
+  buildAuditRestoreReason,
+  createRecycleItemFromAuditRestoreRequest,
+  readAuditRestoreRouteRequest,
+  readGovernanceTab,
+  routeRestoreRequestKey,
+  type V2GovernanceTab
+} from './data-governance-route';
 import {
   canCancelGovernanceJob,
   formatGovernanceDate,
@@ -58,8 +67,9 @@ function mutationKey(prefix: string) {
 }
 
 export function useDataGovernancePage() {
+  const route = useRoute();
   const authStore = useAuthStore();
-  const activeTab = ref<'overview' | 'recycle' | 'jobs'>('overview');
+  const activeTab = ref<V2GovernanceTab>(readGovernanceTab(route.query.tab));
   const recycleQueryModel = reactive({
     page: 1,
     pageSize: 20,
@@ -89,6 +99,7 @@ export function useDataGovernancePage() {
   const detailId = ref('');
   const mutationBusy = ref('');
   const mutationError = ref('');
+  const handledRouteRestoreKey = ref('');
 
   function recycleListQuery(): V2GovernanceRecycleQuery {
     return {
@@ -265,6 +276,42 @@ export function useDataGovernancePage() {
     Object.assign(restoreForm, RESTORE_INITIAL);
     restoreBaseline.value = JSON.stringify(restoreForm);
     mutationError.value = '';
+    restoreDrawerVisible.value = true;
+  }
+
+  async function openRestoreDrawerFromAuditRoute() {
+    const request = readAuditRestoreRouteRequest(route.query);
+    if (!request) return;
+
+    const requestKey = routeRestoreRequestKey(request);
+    if (handledRouteRestoreKey.value === requestKey) return;
+    handledRouteRestoreKey.value = requestKey;
+
+    activeTab.value = 'recycle';
+    if (recycleQueryModel.entity !== request.entity) {
+      recycleQueryModel.entity = request.entity;
+      recycleQueryModel.page = 1;
+      await refreshRecycle();
+    } else {
+      await recycleQuery.ensureFresh();
+    }
+
+    const matchingItem =
+      recycleItems.value.find((item) => item.entity === request.entity && item.id === request.id) ??
+      createRecycleItemFromAuditRestoreRequest(request);
+    selectedRecycleItems.value = [matchingItem];
+    Object.assign(restoreForm, {
+      reason: buildAuditRestoreReason(request, matchingItem),
+      backupEvidence: ''
+    });
+    restoreBaseline.value = JSON.stringify(restoreForm);
+    mutationError.value = '';
+
+    await overviewQuery.ensureFresh();
+    if (previewBlockedReason.value) {
+      ElMessage.warning(previewBlockedReason.value);
+      return;
+    }
     restoreDrawerVisible.value = true;
   }
 
@@ -451,6 +498,27 @@ export function useDataGovernancePage() {
       .then(done)
       .catch(() => undefined);
   }
+
+  watch(
+    () => route.query.tab,
+    (tab) => {
+      activeTab.value = readGovernanceTab(tab);
+    },
+    { immediate: true }
+  );
+
+  watch(
+    () => [
+      route.query.restoreEntity,
+      route.query.restoreId,
+      route.query.sourceAuditId,
+      route.query.sourceAuditAt
+    ],
+    () => {
+      void openRestoreDrawerFromAuditRoute();
+    },
+    { immediate: true }
+  );
 
   return {
     activeTab,

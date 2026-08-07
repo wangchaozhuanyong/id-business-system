@@ -1,9 +1,12 @@
 import { computed, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
   auditUserLabel,
+  buildOperationAuditRestoreRouteQuery,
   exportOperationAuditRows,
   exportSensitiveAuditRows,
   formatAuditDate,
@@ -27,6 +30,7 @@ type AuditPageSnapshot =
   | { kind: 'sensitive_access'; result: V2AuditLogListResult<V2SensitiveAccessLogRecord> };
 
 export function useAuditLogsPage() {
+  const router = useRouter();
   const activeTab = ref<V2AuditLogTab>('operations');
   const createdRange = ref<[string, string] | []>([]);
   const query = reactive({
@@ -194,6 +198,19 @@ export function useAuditLogsPage() {
     detailDrawerVisible.value = true;
   }
 
+  function openRestoreFromOperationAudit(item: V2AuditLogRecord) {
+    const query = buildOperationAuditRestoreRouteQuery(item);
+    if (!query) {
+      ElMessage.warning('只有 ID、客户、业务选项和订单的软删除审计可以发起恢复。');
+      return;
+    }
+    detailDrawerVisible.value = false;
+    void navigateSafely(router, {
+      path: '/v2/data/governance',
+      query
+    });
+  }
+
   function exportInput(): V2AuditLogExportInput {
     const base = commonFilters();
     return activeTab.value === 'operations'
@@ -273,6 +290,7 @@ export function useAuditLogsPage() {
     handlePageSizeChange,
     openOperationDetails,
     openSensitiveDetails,
+    openRestoreFromOperationAudit,
     exportCurrent,
     auditUserLabel,
     formatAuditDate,
