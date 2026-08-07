@@ -81,25 +81,55 @@
         <dd>{{ selectedSensitiveAccess.userAgent || '—' }}</dd>
       </div>
     </dl>
+    <template v-if="selectedOperation" #footer>
+      <div class="v2-audit-detail__footer">
+        <span>
+          {{
+            restoreCandidate
+              ? '发起后只生成数据治理恢复预览，不会立即恢复数据。'
+              : '仅软删除审计可进入受控恢复流程。'
+          }}
+        </span>
+        <AppButton variant="primary" :disabled="!restoreCandidate" @click="handleRestore">
+          发起恢复
+        </AppButton>
+      </div>
+    </template>
   </el-drawer>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
+import AppButton from '@/components/ui/AppButton.vue';
 import {
   auditUserLabel,
   formatAuditDate,
   formatAuditJson,
+  getOperationAuditRestoreCandidate,
   operationObjectLabel,
   sensitiveObjectLabel
 } from '../audit-log-presentation';
 import type { V2AuditLogRecord, V2SensitiveAccessLogRecord } from '../contracts';
 
-defineProps<{
+const props = defineProps<{
   selectedOperation: V2AuditLogRecord | null;
   selectedSensitiveAccess: V2SensitiveAccessLogRecord | null;
 }>();
 
+const emit = defineEmits<{
+  restore: [item: V2AuditLogRecord];
+}>();
+
 const visible = defineModel<boolean>({ required: true });
+
+const restoreCandidate = computed(() =>
+  props.selectedOperation ? getOperationAuditRestoreCandidate(props.selectedOperation) : null
+);
+
+function handleRestore() {
+  if (!props.selectedOperation || !restoreCandidate.value) return;
+  emit('restore', props.selectedOperation);
+}
 </script>
 
 <style scoped>
@@ -143,6 +173,20 @@ const visible = defineModel<boolean>({ required: true });
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.v2-audit-detail__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-audit-detail__footer span {
+  min-width: 0;
+  color: var(--v3-text-soft);
+  font-size: 13px;
+  text-align: left;
+}
+
 .v2-audit-detail__changes section {
   min-width: 0;
 }
@@ -173,6 +217,11 @@ const visible = defineModel<boolean>({ required: true });
   .v2-audit-detail__meta,
   .v2-audit-detail__changes {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-audit-detail__footer {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

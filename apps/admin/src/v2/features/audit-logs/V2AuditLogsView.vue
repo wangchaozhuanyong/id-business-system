@@ -318,6 +318,7 @@
       v-model="page.detailDrawerVisible"
       :selected-operation="page.selectedOperation"
       :selected-sensitive-access="page.selectedSensitiveAccess"
+      @restore="page.openRestoreFromOperationAudit"
     />
   </section>
 </template>
