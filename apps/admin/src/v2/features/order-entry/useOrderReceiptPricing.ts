@@ -55,7 +55,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
       };
     }
 
-    const rate = form.receivedFxRateToCny || form.automaticFxRateToCny;
+    const rate = getActiveReceiptFxRate();
     const calculationCnyAmount = suggestedReceived.exactAmount ?? cnyAmount;
     const originalAmount = calculateSuggestedOriginalAmount(
       calculationCnyAmount,
@@ -148,7 +148,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
 
   async function loadReceiptFxQuote() {
     const currency = form.receivedCurrency;
-    if (currency === 'CNY') return false;
+    if (currency === 'CNY' || form.receivedFxMode !== 'automatic') return false;
 
     receiptFxRequestController?.abort();
     const controller = new AbortController();
@@ -163,12 +163,13 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
         !quote ||
         controller.signal.aborted ||
         requestVersion !== receiptFxRequestVersion ||
-        form.receivedCurrency !== currency
+        form.receivedCurrency !== currency ||
+        form.receivedFxMode !== 'automatic'
       ) {
         return false;
       }
       receiptFxQuote.value = quote;
-      if (!form.receivedFxRateToCny) {
+      if (form.receivedFxMode === 'automatic') {
         form.receivedFxSnapshotId = quote.snapshotId ?? '';
         form.automaticFxRateToCny = quote.rateToCny;
         scheduleReceiptFxExpiry(quote);
@@ -239,17 +240,37 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
 
   function handleManualFxRateInput() {
     clearReceiptFxExpiryTimer();
-    if (form.receivedFxRateToCny) {
+    if (form.receivedFxMode !== 'manual') return;
+    form.receivedFxSnapshotId = '';
+    form.automaticFxRateToCny = '';
+    void nextTick(() => {
+      formRef.value?.clearValidate(['receivedFxRateToCny', 'receivedManualRateReason']);
+    });
+  }
+
+  function handleFxModeChange(mode: V2OrderEntryForm['receivedFxMode']) {
+    if (form.receivedCurrency === 'CNY') {
+      form.receivedFxMode = 'automatic';
+      resetReceiptCurrencyEvidence(form);
+      return;
+    }
+    form.receivedFxMode = mode;
+    recommendationApplied.value = false;
+    appliedSuggestedOriginal.value = '';
+    if (mode === 'manual') {
+      stopReceiptFxTasks();
       form.receivedFxSnapshotId = '';
       form.automaticFxRateToCny = '';
+      receiptFxError.value = '';
     } else {
       form.receivedManualRateReason = '';
+      form.receivedFxRateToCny = '';
       const quote = receiptFxQuote.value;
       if (quote && !isReceiptFxQuoteExpired(quote)) {
         form.receivedFxSnapshotId = quote.snapshotId ?? '';
         form.automaticFxRateToCny = quote.rateToCny;
         scheduleReceiptFxExpiry(quote);
-      } else if (form.receivedCurrency !== 'CNY') {
+      } else {
         void loadReceiptFxQuote();
       }
     }
@@ -266,7 +287,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
       receiptFxExpiryTimer = undefined;
       if (
         form.receivedCurrency !== quote.currency ||
-        form.receivedFxRateToCny ||
+        form.receivedFxMode !== 'automatic' ||
         form.receivedFxSnapshotId !== quote.snapshotId
       ) {
         return;
@@ -290,7 +311,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
   }
 
   async function ensureReceiptFxReadyForSubmit() {
-    if (form.receivedCurrency === 'CNY' || form.receivedFxRateToCny) return true;
+    if (form.receivedCurrency === 'CNY' || form.receivedFxMode === 'manual') return true;
     const quote = receiptFxQuote.value;
     if (
       receiptFxLoading.value ||
@@ -352,14 +373,22 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
     receiptFxLoading.value = false;
   }
 
+  function getActiveReceiptFxRate() {
+    return form.receivedCurrency === 'CNY'
+      ? '1'
+      : form.receivedFxMode === 'manual'
+        ? form.receivedFxRateToCny
+        : form.automaticFxRateToCny;
+  }
+
   onActivated(() => {
     if (
       form.receivedCurrency !== 'CNY' &&
-      !form.receivedFxRateToCny &&
+      form.receivedFxMode === 'automatic' &&
       (!receiptFxQuote.value || isReceiptFxQuoteExpired(receiptFxQuote.value))
     ) {
       void loadReceiptFxQuote();
-    } else if (receiptFxQuote.value && !form.receivedFxRateToCny) {
+    } else if (receiptFxQuote.value && form.receivedFxMode === 'automatic') {
       scheduleReceiptFxExpiry(receiptFxQuote.value);
     }
   });
@@ -374,6 +403,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
     receiptFxLoading,
     receiptFxError,
     handleReceivedCurrencyChange,
+    handleFxModeChange,
     handleManualFxRateInput,
     loadReceiptFxQuote,
     ensureReceiptFxReadyForSubmit,

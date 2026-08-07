@@ -153,7 +153,7 @@ export class IdBusinessV2OrderLifecycleSupport {
 
     const account = await this.lockAccount(tx, order.accountId);
     if (account.lossReportedAt) {
-      throw new ConflictException('已报损 ID 永久冻结，不能恢复余额');
+      throw new ConflictException('已报损冻结 ID 不能恢复余额');
     }
     const movement = this.balanceCalculator.calculateReversalCredit(
       {

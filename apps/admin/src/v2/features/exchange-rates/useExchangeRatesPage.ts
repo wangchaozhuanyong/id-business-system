@@ -16,6 +16,7 @@ import type {
   V2ExchangeRateEntry,
   V2ExchangeRateListResult,
   V2ExchangeRateOverview,
+  V2ExchangeRateReceiptFxRate,
   V2ExchangeRateRun,
   V2ExchangeRateRunDetail,
   V2ExchangeRateRunListResult,
@@ -252,6 +253,7 @@ export function useExchangeRatesPage() {
   const manualLoading = computed(() => activeTab.value === 'manual' && headerLoading.value);
   const runError = computed(() => (activeTab.value === 'automatic' ? headerError.value : ''));
   const manualError = computed(() => (activeTab.value === 'manual' ? headerError.value : ''));
+  const receiptFxRates = computed(() => overview.value?.latestReceiptFxRates ?? []);
 
   function loadHeader() {
     return exchangeRateQuery.refresh();
@@ -469,7 +471,33 @@ export function useExchangeRatesPage() {
     return failureReasonByCode[error.code] || error.message || '采集失败，请查看批次详情';
   }
   function operatorName(entry: V2ExchangeRateEntry) {
-    return entry.createdBy?.displayName || entry.createdBy?.username || '-';
+    return entry.createdBy?.username || '-';
+  }
+  function receiptFxStatusLabel(status: V2ExchangeRateReceiptFxRate['status']) {
+    return {
+      fixed: '固定',
+      available: '有效',
+      expired: '已过期',
+      missing: '缺失'
+    }[status];
+  }
+  function receiptFxStatusType(status: V2ExchangeRateReceiptFxRate['status']) {
+    return {
+      fixed: 'success',
+      available: 'success',
+      expired: 'warning',
+      missing: 'danger'
+    }[status] as 'success' | 'warning' | 'danger';
+  }
+  function receiptFxSourceLabel(source: string | null | undefined) {
+    if (source === 'cny_fixed') return '人民币固定汇率';
+    if (source === 'combined_p2p') return 'Binance + OKX P2P';
+    if (source === 'ecb_cross') return 'ECB 交叉汇率';
+    if (source === 'manual') return '人工汇率';
+    return source || '暂无来源';
+  }
+  function receiptFxCapturedLabel(rate: V2ExchangeRateReceiptFxRate) {
+    return rate.capturedAt ? `采集于 ${formatDate(rate.capturedAt)}` : '暂无记录';
   }
 
   watch(activeTab, () => {
@@ -490,6 +518,7 @@ export function useExchangeRatesPage() {
     runError,
     runResolved,
     runDateRange,
+    receiptFxRates,
     manualEntries,
     manualTotal,
     manualLoading,
@@ -544,6 +573,10 @@ export function useExchangeRatesPage() {
     sideLabel,
     failureLabel,
     failureReason,
-    operatorName
+    operatorName,
+    receiptFxStatusLabel,
+    receiptFxStatusType,
+    receiptFxSourceLabel,
+    receiptFxCapturedLabel
   };
 }

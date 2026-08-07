@@ -275,7 +275,7 @@ export class IdBusinessV2OrderLockService {
     account: LockedAccountRow
   ) {
     if (account.lossReportedAt) {
-      throw new ConflictException('已报损 ID 永久冻结，不能锁定或扣减余额');
+      throw new ConflictException('已报损冻结 ID 不能锁定或扣减余额');
     }
     if (account.statusCode !== 'normal') {
       throw new ConflictException('只有状态正常的 ID 才能锁定或扣减余额');

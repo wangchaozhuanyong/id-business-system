@@ -20,7 +20,7 @@ const permissions = [
   ['管理加卡供应商资金', 'apple.topup_supplier_fund.manage'],
   ['查看完整礼品卡号', 'apple.gift_card.view_full'],
   ['查看订单', 'apple.order.view'],
-  ['新增订单', 'apple.order.create'],
+  ['订单录入', 'apple.order.create'],
   ['修改订单', 'apple.order.update'],
   ['删除订单', 'apple.order.delete'],
   ['查看开通记录', 'apple.activation.view'],

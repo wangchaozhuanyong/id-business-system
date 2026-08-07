@@ -174,14 +174,17 @@
               </el-tag>
             </template>
           </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.customers.main.columns[9]">
+            <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+          </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.customers.main.columns[9]"
+            :definition="v2TableSchemas.customers.main.columns[10]"
             prop="updatedAt"
             sortable="custom"
           >
             <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.customers.main.columns[10]">
+          <V2TableActionColumn :definition="v2TableSchemas.customers.main.columns[11]">
             <template #default="{ row }">
               <AppButton v-if="canUpdate" size="small" variant="ghost" @click="openEdit(row)">
                 <el-icon><Edit /></el-icon>
@@ -424,6 +427,7 @@ import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import V2CustomerHistoryServices from './components/V2CustomerHistoryServices.vue';
 import V2CustomerMobileDetails from './components/V2CustomerMobileDetails.vue';
 import V2CustomerSensitiveContactCell from './components/V2CustomerSensitiveContactCell.vue';

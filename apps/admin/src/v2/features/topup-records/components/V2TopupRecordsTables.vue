@@ -71,7 +71,7 @@
                 effect="plain"
                 size="small"
               >
-                已报损
+                已报损冻结
               </el-tag>
             </template>
           </V2TableColumn>
@@ -93,7 +93,7 @@
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[11]">
             <template #default="{ row }">
-              {{ row.createdBy?.displayName || row.createdBy?.username || '系统' }}
+              {{ operatorUsername(row.createdBy, 'system') }}
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -129,15 +129,6 @@
                 "
               >
                 <AppButton
-                  v-if="canAdjustBalance"
-                  size="small"
-                  variant="ghost"
-                  @click="openMetadataDrawer(row)"
-                >
-                  <el-icon><Edit /></el-icon>
-                  备注
-                </AppButton>
-                <AppButton
                   v-if="canReassignSupplier"
                   size="small"
                   variant="soft"
@@ -146,18 +137,22 @@
                   更正供应商
                 </AppButton>
                 <el-dropdown
-                  v-if="canAdjustBalance && row.status === 'credited'"
+                  v-if="canAdjustBalance"
                   trigger="click"
                   @command="handleFinancialCommand(row, $event)"
                 >
                   <AppButton size="small" variant="ghost">更多操作</AppButton>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item command="redeemed">
+                      <el-dropdown-item command="metadata">
+                        <el-icon><Edit /></el-icon>
+                        备注
+                      </el-dropdown-item>
+                      <el-dropdown-item v-if="row.status === 'credited'" command="redeemed" divided>
                         <el-icon><CircleClose /></el-icon>
                         标记被赎回
                       </el-dropdown-item>
-                      <el-dropdown-item command="withdrawn" divided>
+                      <el-dropdown-item v-if="row.status === 'credited'" command="withdrawn">
                         <el-icon><Back /></el-icon>
                         撤回并返还供应商
                       </el-dropdown-item>
@@ -194,7 +189,7 @@
                 <dd>¥{{ formatDecimal(item.exchangeRate) }}</dd>
               </div>
               <div>
-                <dt>卡片价值（人民币）</dt>
+                <dt>卡值（RMB）</dt>
                 <dd>¥{{ formatDecimal(item.costAmount) }}</dd>
               </div>
               <div>
@@ -212,6 +207,10 @@
                   {{ formatOptionalDecimal(item.creditedLedger?.balanceAfter) }}
                 </dd>
               </div>
+              <div>
+                <dt>操作人</dt>
+                <dd>{{ operatorUsername(item.createdBy, 'system') }}</dd>
+              </div>
             </dl>
             <footer>
               <span>{{ formatDate(item.creditedAt) }}</span>
@@ -222,14 +221,6 @@
                 class="v2-record-actions"
               >
                 <AppButton
-                  v-if="canAdjustBalance"
-                  size="small"
-                  variant="ghost"
-                  @click="openMetadataDrawer(item)"
-                >
-                  备注
-                </AppButton>
-                <AppButton
                   v-if="canReassignSupplier"
                   size="small"
                   variant="soft"
@@ -237,22 +228,28 @@
                 >
                   更正供应商
                 </AppButton>
-                <AppButton
-                  v-if="canAdjustBalance && item.status === 'credited'"
-                  size="small"
-                  variant="soft"
-                  @click="openReversalConfirmation(item, 'redeemed')"
+                <el-dropdown
+                  v-if="canAdjustBalance"
+                  trigger="click"
+                  @command="handleFinancialCommand(item, $event)"
                 >
-                  被赎回
-                </AppButton>
-                <AppButton
-                  v-if="canAdjustBalance && item.status === 'credited'"
-                  size="small"
-                  variant="danger"
-                  @click="openReversalConfirmation(item, 'withdrawn')"
-                >
-                  撤回
-                </AppButton>
+                  <AppButton size="small" variant="soft">更多操作</AppButton>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="metadata">备注</el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="item.status === 'credited'"
+                        command="redeemed"
+                        divided
+                      >
+                        被赎回
+                      </el-dropdown-item>
+                      <el-dropdown-item v-if="item.status === 'credited'" command="withdrawn">
+                        撤回
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </footer>
           </article>
@@ -361,7 +358,7 @@
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[13]">
             <template #default="{ row }">
-              {{ row.operator?.displayName || row.operator?.username || '系统' }}
+              {{ operatorUsername(row.operator, 'system') }}
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -452,6 +449,7 @@ import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import {
   deltaType,
   formatDate,
@@ -527,7 +525,9 @@ function openReversalConfirmation(giftCard: V2GiftCardRecord, action: V2GiftCard
   emit('reverse', giftCard, action);
 }
 function handleFinancialCommand(giftCard: V2GiftCardRecord, command: unknown) {
-  if (command === 'redeemed' || command === 'withdrawn') {
+  if (command === 'metadata') {
+    openMetadataDrawer(giftCard);
+  } else if (command === 'redeemed' || command === 'withdrawn') {
     openReversalConfirmation(giftCard, command);
   }
 }

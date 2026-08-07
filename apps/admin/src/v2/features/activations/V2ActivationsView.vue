@@ -110,14 +110,17 @@
           >
             <template #default="{ row }">{{ formatDate(row.dueAt) }}</template>
           </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[7]" prop="status">
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[7]">
+            <template #default="{ row }">{{ operatorUsername(row.createdBy) }}</template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.activations.main.columns[8]" prop="status">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status.code)" effect="plain">
                 {{ row.status.label }}
               </el-tag>
             </template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.activations.main.columns[8]">
+          <V2TableActionColumn :definition="v2TableSchemas.activations.main.columns[9]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="openDetail(row)">
                 <el-icon><View /></el-icon>
@@ -154,6 +157,10 @@
               <div>
                 <dt>到期日期</dt>
                 <dd>{{ formatDate(item.dueAt) }}</dd>
+              </div>
+              <div>
+                <dt>操作人</dt>
+                <dd>{{ operatorUsername(item.createdBy) }}</dd>
               </div>
             </dl>
             <footer>
@@ -246,6 +253,10 @@
               <dd>{{ detail.remark || '—' }}</dd>
             </div>
             <div>
+              <dt>操作人</dt>
+              <dd>{{ operatorUsername(detail.createdBy) }}</dd>
+            </div>
+            <div>
               <dt>记录生成时间</dt>
               <dd>{{ formatDate(detail.createdAt) }}</dd>
             </div>
@@ -271,6 +282,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2StatusStrip, { type V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import { operatorUsername } from '@/v2/utils/operator';
 import type {
   V2Activation,
   V2ActivationDueStatus,

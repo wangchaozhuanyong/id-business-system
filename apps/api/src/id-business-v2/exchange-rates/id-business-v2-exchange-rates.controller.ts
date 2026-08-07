@@ -68,6 +68,7 @@ export class IdBusinessV2ExchangeRatesController {
       runtime,
       runs,
       manualEntries,
+      latestReceiptFxRates: overview.latestReceiptFxRates,
       generatedAt: new Date().toISOString()
     };
   }

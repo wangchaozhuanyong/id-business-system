@@ -43,7 +43,12 @@ export class IdBusinessV2FinanceQueryRepository {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.idBusinessV2FinanceExpense.findMany({
         where: filter,
-        include: { categoryOption: true, financeAccount: true, journal: true },
+        include: {
+          categoryOption: true,
+          financeAccount: true,
+          journal: true,
+          createdBy: { select: { id: true, username: true, displayName: true } }
+        },
         skip,
         take,
         orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }]

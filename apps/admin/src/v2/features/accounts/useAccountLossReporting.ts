@@ -2,7 +2,7 @@ import { ref, type Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { idBusinessV2AccountsApi } from './api';
-import { isAccountLossConfirmationValid } from './account-loss-form';
+import { isAccountLossConfirmationValid, isAccountLossUnfreezeValid } from './account-loss-form';
 import type { V2Account } from './contracts';
 
 interface AccountLossReportingOptions {
@@ -17,6 +17,11 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
   const lossReason = ref('');
   const lossConfirmed = ref(false);
   const lossIdempotencyKey = ref('');
+  const unfreezeTarget = ref<V2Account | null>(null);
+  const unfreezeDialogVisible = ref(false);
+  const unfreezeSubmitting = ref(false);
+  const unfreezeReason = ref('');
+  const unfreezeIdempotencyKey = ref('');
 
   function openReportLoss(item: V2Account) {
     if (!options.canReportLoss.value || item.lossStatus === 'reported') return;
@@ -25,6 +30,16 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
     lossConfirmed.value = false;
     lossIdempotencyKey.value = `account-loss-${globalThis.crypto.randomUUID()}`;
     lossDialogVisible.value = true;
+  }
+
+  function openUnfreezeLoss(item: V2Account) {
+    if (!options.canReportLoss.value || item.lossStatus !== 'reported' || !item.activeLossId) {
+      return;
+    }
+    unfreezeTarget.value = item;
+    unfreezeReason.value = '';
+    unfreezeIdempotencyKey.value = `account-loss-unfreeze-${globalThis.crypto.randomUUID()}`;
+    unfreezeDialogVisible.value = true;
   }
 
   async function confirmReportLoss() {
@@ -46,7 +61,7 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
         expectedBalanceCostAmount: target.balanceCostAmount,
         idempotencyKey: lossIdempotencyKey.value
       });
-      ElMessage.success('ID 已永久报损，余额与人民币成本已清零');
+      ElMessage.success('ID 已报损冻结，余额与人民币成本已计入损耗');
       lossDialogVisible.value = false;
       lossTarget.value = null;
       await options.refreshAccounts();
@@ -57,13 +72,49 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
     }
   }
 
+  async function confirmUnfreezeLoss() {
+    const target = unfreezeTarget.value;
+    const reason = unfreezeReason.value.trim();
+    if (
+      !target ||
+      !target.activeLossId ||
+      !isAccountLossUnfreezeValid(unfreezeReason.value) ||
+      unfreezeSubmitting.value
+    ) {
+      return;
+    }
+
+    unfreezeSubmitting.value = true;
+    try {
+      await idBusinessV2AccountsApi.unfreezeLoss(target.id, {
+        reason,
+        expectedLossId: target.activeLossId,
+        idempotencyKey: unfreezeIdempotencyKey.value
+      });
+      ElMessage.success('ID 已解除报损冻结，损耗已自动冲回');
+      unfreezeDialogVisible.value = false;
+      unfreezeTarget.value = null;
+      await options.refreshAccounts();
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error));
+    } finally {
+      unfreezeSubmitting.value = false;
+    }
+  }
+
   return {
     lossTarget,
     lossDialogVisible,
     lossSubmitting,
     lossReason,
     lossConfirmed,
+    unfreezeTarget,
+    unfreezeDialogVisible,
+    unfreezeSubmitting,
+    unfreezeReason,
     openReportLoss,
-    confirmReportLoss
+    openUnfreezeLoss,
+    confirmReportLoss,
+    confirmUnfreezeLoss
   };
 }

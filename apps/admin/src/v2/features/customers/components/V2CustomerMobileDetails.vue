@@ -26,10 +26,15 @@
         <V2CustomerHistoryServices :services="customer.services" compact />
       </dd>
     </div>
+    <div>
+      <dt>操作人</dt>
+      <dd>{{ operatorUsername(customer.createdBy) }}</dd>
+    </div>
   </dl>
 </template>
 
 <script setup lang="ts">
+import { operatorUsername } from '@/v2/utils/operator';
 import type { V2Customer } from '../contracts';
 import V2CustomerHistoryServices from './V2CustomerHistoryServices.vue';
 

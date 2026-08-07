@@ -50,6 +50,7 @@ export interface AccountWithRelations {
   soldByOrderId: string | null;
   soldAt: Date | null;
   lossReportedAt: Date | null;
+  activeLossRecordId: string | null;
   recordStatus: AccountRecordStatus;
   remark: string | null;
   createdByUserId: string | null;
@@ -61,6 +62,7 @@ export interface AccountWithRelations {
   statusOption: { id: string; code: string; name: string; isSystem: boolean };
   supplierOption: { id: string; code: string; name: string } | null;
   soldByOrder: { id: string; orderNo: string } | null;
+  createdBy: { id: string; username: string; displayName: string } | null;
 }
 
 export interface AccountUpdateData {
@@ -274,8 +276,10 @@ export function toAccountResponse(account: AccountWithRelations) {
     soldByOrder: account.soldByOrder,
     lossStatus: account.lossReportedAt ? ('reported' as const) : ('active' as const),
     lossReportedAt: account.lossReportedAt,
+    activeLossId: account.activeLossRecordId,
     recordStatus: account.recordStatus,
     remark: account.remark,
+    createdBy: account.createdBy,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt
   };

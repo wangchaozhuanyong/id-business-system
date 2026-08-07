@@ -1,3 +1,5 @@
+import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
+
 export interface V2ExchangeRateOperator {
   id: string;
   username: string;
@@ -109,10 +111,21 @@ export interface V2ExchangeRateEffective {
   expiresAt?: string;
 }
 
+export interface V2ExchangeRateReceiptFxRate {
+  currency: 'CNY' | 'MYR' | 'USDT';
+  snapshotId: string | null;
+  rateToCny: string | null;
+  source: string | null;
+  capturedAt: string | null;
+  expiresAt: string | null;
+  status: 'fixed' | 'available' | 'expired' | 'missing';
+}
+
 export interface V2ExchangeRateOverview {
   latestRun: V2ExchangeRateRun | null;
   lastSuccess: (V2ExchangeRateRun & { stale: boolean; expiresAt: string | null }) | null;
   effective: V2ExchangeRateEffective;
+  latestReceiptFxRates: V2ExchangeRateReceiptFxRate[];
   calculationRule: string;
 }
 
@@ -189,4 +202,3 @@ export interface UpdateV2ExchangeRateSettingsInput {
   intervalMinutes: number;
   targetAmountRmb: string;
 }
-import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';

@@ -190,7 +190,7 @@ export class IdBusinessV2GiftCardCreditService {
 
       if (existingEntry?.giftCard) {
         if (account.lossReportedAt) {
-          throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
+          throw new ConflictException('已报损冻结 ID 不能继续加卡');
         }
         assertGiftCardCreditReplayMatches(this.balanceCalculator, existingEntry.giftCard, {
           accountId,
@@ -248,7 +248,7 @@ export class IdBusinessV2GiftCardCreditService {
         );
       }
       if (account.lossReportedAt) {
-        throw new ConflictException('已报损 ID 永久冻结，不能继续加卡');
+        throw new ConflictException('已报损冻结 ID 不能继续加卡');
       }
       if (account.soldByOrderId) {
         throw new ConflictException('该 ID 已卖出，不能继续加卡');

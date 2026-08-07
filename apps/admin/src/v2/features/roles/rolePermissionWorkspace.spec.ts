@@ -20,6 +20,19 @@ const groups: V2RolePermissionGroup[] = [
     ]
   },
   {
+    module: 'apple.order',
+    label: '订单',
+    permissions: [
+      {
+        id: 'order-create',
+        name: '订单录入',
+        code: 'apple.order.create',
+        module: 'apple.order',
+        action: 'create'
+      }
+    ]
+  },
+  {
     module: 'finance',
     label: '财务',
     permissions: [
@@ -54,6 +67,17 @@ describe('role permission workspace', () => {
 
     expect(result[0]?.permissions.map((permission) => permission.id)).toEqual(['finance-close']);
     expect(result[0]?.allPermissions).toHaveLength(2);
+  });
+
+  it('keeps the order entry permission searchable by its business label', () => {
+    const result = filterRolePermissionGroups(groups, '订单录入', false, []);
+
+    expect(result[0]?.permissions).toEqual([
+      expect.objectContaining({
+        name: '订单录入',
+        code: 'apple.order.create'
+      })
+    ]);
   });
 
   it('shows only selected permissions and reports full-group selection counts', () => {

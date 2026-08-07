@@ -8,14 +8,14 @@ function read(relativePath: string) {
   return readFileSync(resolve(sourceRoot, relativePath), 'utf8');
 }
 
-describe('permanently reported account loss guards', () => {
+describe('reported account loss freeze guards', () => {
   it('blocks account editing, balance adjustment and deletion', () => {
     const source = read('accounts/id-business-v2-accounts.service.ts');
     const balanceAdjustment = read('accounts/id-business-v2-account-balance-adjustment.service.ts');
     const repository = read('accounts/persistence/id-business-v2-accounts.repository.ts');
 
-    expect(source).toContain('已报损 ID 永久冻结，不能再修改');
-    expect(balanceAdjustment).toContain('已报损 ID 永久冻结，不能调整余额');
+    expect(source).toContain('已报损冻结 ID 不能再修改');
+    expect(balanceAdjustment).toContain('已报损冻结 ID 不能调整余额');
     expect(source).toContain('已报损 ID 必须保留历史记录，不能删除');
     expect(repository).toMatch(
       /updateMany\(\{\s*where: \{ id: accountId, lossReportedAt: null \}/s
@@ -35,14 +35,14 @@ describe('permanently reported account loss guards', () => {
 
     expect(topupRepository).toMatch(/lossReportedAt:\s*null/);
     expect(giftCardRepository).toContain('account."loss_reported_at" IS NULL');
-    expect(giftCardCredit).toContain('已报损 ID 永久冻结，不能继续加卡');
+    expect(giftCardCredit).toContain('已报损冻结 ID 不能继续加卡');
     expect(giftCardReversal).toContain('if (account.lossReportedAt)');
     expect(giftCardReversal.indexOf('if (existingEntry?.giftCard)')).toBeLessThan(
       giftCardReversal.indexOf('if (account.lossReportedAt)')
     );
     expect(orderRepository).toMatch(/lossReportedAt:\s*null/);
     expect(orderRepository).toContain('account."loss_reported_at" IS NULL');
-    expect(locking).toContain('已报损 ID 永久冻结，不能锁定或扣减余额');
+    expect(locking).toContain('已报损冻结 ID 不能锁定或扣减余额');
     expect(consumption).toContain('prepareOrderConsumptionInTransaction');
   });
 
@@ -54,9 +54,9 @@ describe('permanently reported account loss guards', () => {
     const orderRepository = read('orders/persistence/id-business-v2-orders.repository.ts');
 
     expect(renewalRepository).toContain('"loss_reported_at" IS NULL');
-    expect(manualRenewal).toContain('已报损 ID 永久冻结，不能续费');
-    expect(lifecycle).toContain('已报损 ID 永久冻结，不能恢复余额');
+    expect(manualRenewal).toContain('已报损冻结 ID 不能续费');
+    expect(lifecycle).toContain('已报损冻结 ID 不能恢复余额');
     expect(orderRepository).toMatch(/releaseSoldAccount[\s\S]*lossReportedAt:\s*null/);
-    expect(accountDisposition).toContain('已报损 ID 永久冻结，不能标记为收回或恢复可用');
+    expect(accountDisposition).toContain('已报损冻结 ID 不能标记为收回或恢复可用');
   });
 });

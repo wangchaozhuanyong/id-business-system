@@ -33,7 +33,7 @@ export async function applyNewOrderAccountDisposition(
     throw new ConflictException('使用 ID 不存在，请重新匹配');
   }
   if (account.lossReportedAt) {
-    throw new ConflictException('已报损 ID 永久冻结，不能用于订单');
+    throw new ConflictException('已报损冻结 ID 不能用于订单');
   }
 
   if (disposition === 'sold') {
@@ -68,7 +68,7 @@ export async function applyUpdatedOrderAccountDisposition(
     throw new ConflictException('使用 ID 不存在或已删除');
   }
   if (account.lossReportedAt) {
-    throw new ConflictException('已报损 ID 永久冻结，不能用于订单');
+    throw new ConflictException('已报损冻结 ID 不能用于订单');
   }
 
   if (
@@ -112,7 +112,7 @@ export async function releaseSoldOrderAccount(
   if (result.count === 0) {
     const lostAccount = await repository.findLostSoldAccount(tx, order.accountId, order.id);
     if (lostAccount) {
-      throw new ConflictException('已报损 ID 永久冻结，不能标记为收回或恢复可用');
+      throw new ConflictException('已报损冻结 ID 不能标记为收回或恢复可用');
     }
   }
 }

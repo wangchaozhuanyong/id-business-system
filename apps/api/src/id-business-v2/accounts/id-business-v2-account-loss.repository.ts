@@ -1,21 +1,28 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { Amount4, mapAmount4, type V2CommandTransaction } from '../runtime/public-api';
 
+const LOSS_USER_SELECT = {
+  id: true,
+  username: true,
+  displayName: true
+} satisfies Prisma.UserSelect;
+
 const REPORTED_BY_INCLUDE = {
   reportedBy: {
-    select: {
-      id: true,
-      username: true,
-      displayName: true
-    }
+    select: LOSS_USER_SELECT
+  },
+  reversedBy: {
+    select: LOSS_USER_SELECT
   }
 } satisfies Prisma.IdBusinessV2AccountLossInclude;
 
 interface LockedAccountPersistenceRow {
   id: string;
   appleIdMasked: string;
+  statusOptionId: string;
+  statusName: string;
   countryOptionId: string;
   countryName: string;
   currencyCode: string | null;
@@ -27,6 +34,8 @@ interface LockedAccountPersistenceRow {
   soldByOrderId: string | null;
   soldOrderNo: string | null;
   lossReportedAt: Date | null;
+  activeLossRecordId: string | null;
+  recordStatus: IdBusinessV2RecordStatus;
 }
 
 export interface LockedAccountLossRow extends Omit<
@@ -121,8 +130,36 @@ export class IdBusinessV2AccountLossRepository {
   }
 
   async findByAccountId(tx: V2CommandTransaction, accountId: string) {
+    const record = await tx.idBusinessV2AccountLoss.findFirst({
+      where: { accountId, status: 'active' },
+      include: REPORTED_BY_INCLUDE,
+      orderBy: [{ reportedAt: 'desc' }, { id: 'desc' }]
+    });
+    return record ? this.mapLossRecord(record) : null;
+  }
+
+  async findById(tx: V2CommandTransaction, id: string) {
     const record = await tx.idBusinessV2AccountLoss.findUnique({
-      where: { accountId },
+      where: { id },
+      include: REPORTED_BY_INCLUDE
+    });
+    return record ? this.mapLossRecord(record) : null;
+  }
+
+  async findUnfreezeReplay(tx: V2CommandTransaction, idempotencyKey: string) {
+    const journal = await tx.idBusinessV2FinanceJournal.findUnique({
+      where: { idempotencyKey },
+      select: {
+        id: true,
+        journalType: true,
+        sourceType: true
+      }
+    });
+    if (!journal || journal.journalType !== 'reversal' || journal.sourceType !== 'account_loss') {
+      return null;
+    }
+    const record = await tx.idBusinessV2AccountLoss.findFirst({
+      where: { reversalFinanceJournalId: journal.id },
       include: REPORTED_BY_INCLUDE
     });
     return record ? this.mapLossRecord(record) : null;
@@ -133,6 +170,8 @@ export class IdBusinessV2AccountLossRepository {
       SELECT
         account."id",
         account."apple_id_masked" AS "appleIdMasked",
+        account."status_option_id" AS "statusOptionId",
+        status_option."name" AS "statusName",
         account."country_option_id" AS "countryOptionId",
         country."name" AS "countryName",
         country."currency_code" AS "currencyCode",
@@ -143,8 +182,12 @@ export class IdBusinessV2AccountLossRepository {
         account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
         sold_order."order_no" AS "soldOrderNo",
-        account."loss_reported_at" AS "lossReportedAt"
+        account."loss_reported_at" AS "lossReportedAt",
+        account."active_loss_record_id" AS "activeLossRecordId",
+        account."record_status" AS "recordStatus"
       FROM "id_business_v2_accounts" account
+      INNER JOIN "id_business_v2_options" status_option
+        ON status_option."id" = account."status_option_id"
       INNER JOIN "id_business_v2_options" country
         ON country."id" = account."country_option_id"
       LEFT JOIN "id_business_v2_options" supplier
@@ -193,6 +236,19 @@ export class IdBusinessV2AccountLossRepository {
     });
   }
 
+  findNormalStatus(tx: V2CommandTransaction) {
+    return tx.idBusinessV2Option.findFirst({
+      where: {
+        type: 'id_status',
+        code: 'normal',
+        status: 'active',
+        isSystem: true,
+        deletedAt: null
+      },
+      select: { id: true }
+    });
+  }
+
   createBalanceLedger(
     tx: V2CommandTransaction,
     data: Prisma.IdBusinessV2BalanceLedgerUncheckedCreateInput
@@ -211,11 +267,24 @@ export class IdBusinessV2AccountLossRepository {
     return this.mapLossRecord(record);
   }
 
+  async attachFinanceJournalToLoss(
+    tx: V2CommandTransaction,
+    input: { lossRecordId: string; financeJournalId: string }
+  ) {
+    const record = await tx.idBusinessV2AccountLoss.update({
+      where: { id: input.lossRecordId },
+      data: { financeJournalId: input.financeJournalId },
+      include: REPORTED_BY_INCLUDE
+    });
+    return this.mapLossRecord(record);
+  }
+
   freezeAccount(
     tx: V2CommandTransaction,
     input: {
       accountId: string;
       frozenStatusId: string;
+      lossRecordId: string;
       now: Date;
       operatorId?: string;
     }
@@ -224,10 +293,57 @@ export class IdBusinessV2AccountLossRepository {
       where: { id: input.accountId },
       data: {
         statusOptionId: input.frozenStatusId,
-        currentBalance: '0',
-        balanceCostAmount: '0',
         lossReportedAt: input.now,
+        activeLossRecordId: input.lossRecordId,
         recordStatus: 'disabled',
+        updatedByUserId: input.operatorId
+      },
+      select: { id: true }
+    });
+  }
+
+  async markLossReversed(
+    tx: V2CommandTransaction,
+    input: {
+      lossRecordId: string;
+      reversalFinanceJournalId: string;
+      reason: string;
+      now: Date;
+      operatorId?: string;
+      operatorName?: string;
+    }
+  ) {
+    const record = await tx.idBusinessV2AccountLoss.update({
+      where: { id: input.lossRecordId },
+      data: {
+        status: 'reversed',
+        reversalFinanceJournalId: input.reversalFinanceJournalId,
+        reversalReason: input.reason,
+        reversedAt: input.now,
+        reversedByUserId: input.operatorId,
+        reversedByName: input.operatorName
+      },
+      include: REPORTED_BY_INCLUDE
+    });
+    return this.mapLossRecord(record);
+  }
+
+  unfreezeAccount(
+    tx: V2CommandTransaction,
+    input: {
+      accountId: string;
+      statusOptionId: string;
+      recordStatus: IdBusinessV2RecordStatus;
+      operatorId?: string;
+    }
+  ) {
+    return tx.idBusinessV2Account.update({
+      where: { id: input.accountId },
+      data: {
+        statusOptionId: input.statusOptionId,
+        lossReportedAt: null,
+        activeLossRecordId: null,
+        recordStatus: input.recordStatus,
         updatedByUserId: input.operatorId
       },
       select: { id: true }

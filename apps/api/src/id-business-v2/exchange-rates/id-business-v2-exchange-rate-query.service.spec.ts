@@ -38,7 +38,7 @@ function run(
 }
 
 describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
-  const repository = { findLatestRun: vi.fn() };
+  const repository = { findLatestRun: vi.fn(), findLatestReceiptFxSnapshots: vi.fn() };
   const settings = {
     getRecord: vi.fn(),
     isNetworkEnabled: vi.fn()
@@ -49,6 +49,7 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
     vi.clearAllMocks();
     settings.getRecord.mockResolvedValue({ intervalMinutes: 15 });
     settings.isNetworkEnabled.mockReturnValue(true);
+    repository.findLatestReceiptFxSnapshots.mockResolvedValue([]);
   });
 
   it('returns a fresh latest successful snapshot for topup prefill', async () => {
@@ -116,5 +117,33 @@ describe('IdBusinessV2ExchangeRateQueryService effective rate', () => {
       reason: 'collection_in_progress',
       latestRunId: runId
     });
+  });
+
+  it('returns receipt FX status for CNY, MYR and USDT', async () => {
+    const now = new Date('2026-08-06T10:00:00.000Z');
+    repository.findLatestReceiptFxSnapshots.mockResolvedValue([
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        currency: 'MYR',
+        rateToCny: '1.63000000',
+        source: 'ecb_cross',
+        capturedAt: new Date('2026-08-06T09:30:00.000Z'),
+        expiresAt: new Date('2026-08-07T09:30:00.000Z')
+      },
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        currency: 'USDT',
+        rateToCny: '7.18000000',
+        source: 'combined_p2p',
+        capturedAt: new Date('2026-08-06T08:00:00.000Z'),
+        expiresAt: new Date('2026-08-06T09:00:00.000Z')
+      }
+    ]);
+
+    await expect(service.getLatestReceiptFxRates(now)).resolves.toEqual([
+      expect.objectContaining({ currency: 'CNY', rateToCny: '1', status: 'fixed' }),
+      expect.objectContaining({ currency: 'MYR', rateToCny: '1.63000000', status: 'available' }),
+      expect.objectContaining({ currency: 'USDT', rateToCny: '7.18000000', status: 'expired' })
+    ]);
   });
 });

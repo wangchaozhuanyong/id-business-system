@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { ReportIdBusinessV2AccountLossDto } from './dto/report-id-business-v2-account-loss.dto';
+import type { UnfreezeIdBusinessV2AccountLossDto } from './dto/unfreeze-id-business-v2-account-loss.dto';
 import { IdBusinessV2AccountLossesService } from './id-business-v2-account-losses.service';
 
 @Controller('id-business-v2/accounts')
@@ -17,6 +18,19 @@ export class IdBusinessV2AccountLossCommandsController {
     @Req() request?: { requestId?: string }
   ) {
     return this.accountLossesService.reportLoss(id, dto, operator, {
+      requestId: request?.requestId
+    });
+  }
+
+  @Post(':id/unfreeze-loss')
+  @RequirePermissions('apple.account.update', 'apple.balance.adjust')
+  unfreezeLoss(
+    @Param('id') id: string,
+    @Body() dto: UnfreezeIdBusinessV2AccountLossDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.accountLossesService.unfreezeLoss(id, dto, operator, {
       requestId: request?.requestId
     });
   }

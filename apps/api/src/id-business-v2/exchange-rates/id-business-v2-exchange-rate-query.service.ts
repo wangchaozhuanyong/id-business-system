@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { Rate8 } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
@@ -18,6 +19,9 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 type RunRecord = NonNullable<
   Awaited<ReturnType<IdBusinessV2ExchangeRateRepository['findLatestRun']>>
 >;
+type ReceiptFxSnapshot = Awaited<
+  ReturnType<IdBusinessV2ExchangeRateRepository['findLatestReceiptFxSnapshots']>
+>[number];
 
 @Injectable()
 export class IdBusinessV2ExchangeRateQueryService {
@@ -106,10 +110,11 @@ export class IdBusinessV2ExchangeRateQueryService {
   }
 
   async getOverview() {
-    const [latestRun, lastSuccess, settings] = await Promise.all([
+    const [latestRun, lastSuccess, settings, latestReceiptFxRates] = await Promise.all([
       this.repository.findLatestRun(),
       this.repository.findLatestRun('success'),
-      this.settingsService.getRecord()
+      this.settingsService.getRecord(),
+      this.getLatestReceiptFxRates()
     ]);
     const effective = this.evaluateEffective(latestRun, lastSuccess, settings.intervalMinutes);
     return {
@@ -122,6 +127,7 @@ export class IdBusinessV2ExchangeRateQueryService {
           }
         : null,
       effective: this.publicEffective(effective),
+      latestReceiptFxRates,
       calculationRule: '平台内有效商家报价算术平均，Binance 与 OKX 等权合并，买卖综合价再取中间值'
     };
   }
@@ -154,6 +160,48 @@ export class IdBusinessV2ExchangeRateQueryService {
       exchangeRatePrefilledValue: prefilled,
       exchangeRateWasOverridden: !finalRate.equals(prefilled)
     };
+  }
+
+  async getLatestReceiptFxRates(now = new Date()) {
+    const snapshots = await this.repository.findLatestReceiptFxSnapshots(['MYR', 'USDT']);
+    const byCurrency = new Map<IdBusinessV2FinanceCurrency, ReceiptFxSnapshot>(
+      snapshots.map((snapshot) => [snapshot.currency, snapshot])
+    );
+    return (['CNY', 'MYR', 'USDT'] as const).map((currency) => {
+      if (currency === 'CNY') {
+        return {
+          currency,
+          snapshotId: null,
+          rateToCny: '1',
+          source: 'cny_fixed',
+          capturedAt: now,
+          expiresAt: null,
+          status: 'fixed' as const
+        };
+      }
+      const snapshot = byCurrency.get(currency);
+      if (!snapshot) {
+        return {
+          currency,
+          snapshotId: null,
+          rateToCny: null,
+          source: null,
+          capturedAt: null,
+          expiresAt: null,
+          status: 'missing' as const
+        };
+      }
+      const expired = Boolean(snapshot.expiresAt && snapshot.expiresAt.getTime() <= now.getTime());
+      return {
+        currency,
+        snapshotId: snapshot.id,
+        rateToCny: snapshot.rateToCny,
+        source: snapshot.source,
+        capturedAt: snapshot.capturedAt,
+        expiresAt: snapshot.expiresAt,
+        status: expired ? ('expired' as const) : ('available' as const)
+      };
+    });
   }
 
   private evaluateEffective(

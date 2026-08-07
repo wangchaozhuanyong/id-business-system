@@ -57,4 +57,5 @@ export interface ActivationRecord {
     name: string;
     parent: { id: string; name: string } | null;
   };
+  createdBy: { id: string; username: string; displayName: string } | null;
 }

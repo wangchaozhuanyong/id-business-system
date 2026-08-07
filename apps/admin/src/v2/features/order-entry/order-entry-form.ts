@@ -17,6 +17,8 @@ export function createConsumptionIdempotencyKey() {
   return `consume-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+export type V2OrderReceiptFxMode = 'automatic' | 'manual';
+
 export function createInitialOrderEntryForm() {
   const now = new Date();
   now.setSeconds(0, 0);
@@ -33,6 +35,7 @@ export function createInitialOrderEntryForm() {
     receivedAmount: '',
     receivedOriginalAmount: '',
     receivedCurrency: 'CNY' as V2FinanceCurrency,
+    receivedFxMode: 'automatic' as V2OrderReceiptFxMode,
     receivedFxRateToCny: '',
     receivedFxSnapshotId: '',
     automaticFxRateToCny: '',
@@ -62,7 +65,7 @@ export function applyLatestOrderEntryFxRate(
   latestFxRates: V2FinanceLatestRate[],
   evaluatedAt = Date.now()
 ) {
-  if (form.receivedCurrency === 'CNY' || form.receivedFxRateToCny) return;
+  if (form.receivedCurrency === 'CNY' || form.receivedFxMode === 'manual') return;
   const latest = latestFxRates.find((item) => item.currency === form.receivedCurrency);
   const expired = latest?.expiresAt ? new Date(latest.expiresAt).getTime() <= evaluatedAt : false;
   form.receivedFxSnapshotId = !expired && latest?.id ? latest.id : '';

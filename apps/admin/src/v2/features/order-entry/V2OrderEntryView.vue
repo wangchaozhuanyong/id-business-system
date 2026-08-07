@@ -145,33 +145,6 @@
               </div>
             </el-form-item>
 
-            <el-form-item
-              :label="
-                selectedService?.currencyCode
-                  ? `消耗余额（${selectedService.currencyCode}）`
-                  : '消耗余额'
-              "
-              prop="balanceAmount"
-            >
-              <el-input
-                v-model="form.balanceAmount"
-                inputmode="decimal"
-                maxlength="19"
-                placeholder="例如 20"
-              />
-            </el-form-item>
-
-            <el-form-item label="ID 选择方式">
-              <el-radio-group
-                v-model="idSelectionMode"
-                class="v2-order-entry-selection-mode"
-                @change="handleIdSelectionModeChange"
-              >
-                <el-radio value="auto">自动匹配</el-radio>
-                <el-radio value="manual">手动选择</el-radio>
-              </el-radio-group>
-            </el-form-item>
-
             <el-form-item label="使用 ID" prop="accountId">
               <el-select
                 v-model="form.accountId"
@@ -192,13 +165,6 @@
               </el-select>
             </el-form-item>
 
-            <el-form-item label="ID 购买成本">
-              <div class="v2-order-entry-readonly">
-                <strong>¥{{ formatDecimal(accountPurchaseCostPreview) }}</strong>
-                <span>{{ selectedCandidate ? '成本快照预览' : '选择 ID 后显示' }}</span>
-              </div>
-            </el-form-item>
-
             <V2SectionHeading
               as="div"
               level="h3"
@@ -215,19 +181,6 @@
                 autocomplete="off"
                 placeholder="选填"
               />
-            </el-form-item>
-
-            <el-form-item label="ID 处理方式">
-              <div class="v2-order-entry-disposition">
-                <el-radio-group v-model="form.accountDisposition">
-                  <el-radio value="retained">保留 ID</el-radio>
-                  <el-radio value="sold">卖出 ID</el-radio>
-                </el-radio-group>
-                <small v-if="form.accountDisposition === 'sold'">
-                  本单计入 ID 购买成本；创建后该 ID 将停止匹配、加卡和续费。
-                </small>
-                <small v-else>本单不计 ID 购买成本，ID 后续仍可继续使用。</small>
-              </div>
             </el-form-item>
 
             <el-form-item label="结算平台" prop="settlementPlatformOptionId">
@@ -262,6 +215,7 @@
               :receipt-fx-error="receiptFxError"
               :format-decimal="formatDecimal"
               @currency-change="handleReceivedCurrencyChange"
+              @fx-mode-change="handleFxModeChange"
               @price-input="handleManualPriceInput"
               @manual-rate-input="handleManualFxRateInput"
               @retry-fx-quote="loadReceiptFxQuote"
@@ -272,7 +226,6 @@
               :suggested-receipt="suggestedReceipt"
               :recommendation-applied="recommendationApplied"
               :applied-suggested-original="appliedSuggestedOriginal"
-              :platform-fee-preview="platformFeePreview"
               :pricing-input-mode="pricingInputMode"
               :profit-rate-input-hint="profitRateInputHint"
               :format-decimal="formatDecimal"
@@ -289,6 +242,41 @@
               title="周期与备注"
               help="核对开通周期后再提交，创建成功会返回账务回执。"
             />
+            <el-form-item
+              :label="
+                selectedService?.currencyCode
+                  ? `消耗余额（${selectedService.currencyCode}）`
+                  : '消耗余额'
+              "
+              prop="balanceAmount"
+            >
+              <el-input
+                v-model="form.balanceAmount"
+                inputmode="decimal"
+                maxlength="19"
+                placeholder="例如 20"
+              />
+            </el-form-item>
+
+            <el-form-item label="ID 购买成本">
+              <div class="v2-order-entry-readonly v2-order-entry-cost-check">
+                <strong>¥{{ formatDecimal(appliedAccountCostPreview) }}</strong>
+                <span v-if="form.accountDisposition === 'sold'">
+                  本单计入 ID 成本快照 ¥{{ formatDecimal(accountPurchaseCostPreview) }}
+                </span>
+                <span v-else>
+                  保留 ID 时本单不计入，当前快照 ¥{{ formatDecimal(accountPurchaseCostPreview) }}
+                </span>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="预计平台手续费">
+              <div class="v2-order-entry-readonly">
+                <strong>¥{{ formatDecimal(platformFeePreview) }}</strong>
+                <el-tag type="info" effect="plain">服务端复核</el-tag>
+              </div>
+            </el-form-item>
+
             <el-form-item label="开通时间" prop="openedAt">
               <el-date-picker
                 v-model="form.openedAt"
@@ -345,15 +333,12 @@
 
         <V2OrderEntryCandidates
           v-model:account-id="form.accountId"
-          :id-selection-mode="idSelectionMode"
+          v-model:id-selection-mode="idSelectionMode"
+          v-model:account-disposition="form.accountDisposition"
           :selected-candidate="selectedCandidate"
           :selected-country-name="selectedCountry?.name ?? ''"
-          :account-disposition="form.accountDisposition"
-          :account-purchase-cost-preview="accountPurchaseCostPreview"
-          :applied-account-cost-preview="appliedAccountCostPreview"
           :estimated-balance-cost-preview="estimatedBalanceCostPreview"
           :total-cost-preview="totalCostPreview"
-          :platform-fee-preview="platformFeePreview"
           :estimated-profit-preview="estimatedProfitPreview"
           :can-match="canMatch"
           :matching-loading="matchingLoading"
@@ -362,6 +347,7 @@
           :matching-error="matchingError"
           :matching-empty-message="matchingEmptyMessage"
           :format-decimal="formatDecimal"
+          @selection-mode-change="handleIdSelectionModeChange"
           @retry="loadCandidates"
         />
       </section>
@@ -466,6 +452,7 @@ const {
   handleCategoryChange,
   handleSettlementPlatformChange,
   handleReceivedCurrencyChange,
+  handleFxModeChange,
   handleIdSelectionModeChange,
   searchManualCandidates,
   loadCandidates,
