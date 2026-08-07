@@ -179,6 +179,16 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     loadView: () => import('./system-monitoring/V2SystemMonitoringView.vue')
   }),
   defineV2RuntimeFeature({
+    key: 'branding',
+    title: '品牌设置',
+    group: '系统管理',
+    route: '/v2/system/branding',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./branding/V2BrandingSettingsView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'employees',
     title: '员工账户',
     group: '系统管理',

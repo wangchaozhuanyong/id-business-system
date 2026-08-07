@@ -55,6 +55,9 @@ describe('API request policy registry', () => {
   it('declares auth lifecycle exceptions by exact endpoint policy', () => {
     expect(getApiEndpointPolicy('/auth/logout').key).toBe('auth-logout');
     expect(getApiEndpointPolicy('/auth/change-password').bypassSessionGate).toBe(true);
+    expect(getApiEndpointPolicy('/id-business-v2/branding/public').key).toBe('public-branding');
+    expect(getApiEndpointPolicy('/id-business-v2/branding/public').bypassSessionGate).toBe(true);
+    expect(getApiEndpointPolicy('/id-business-v2/branding').bypassSessionGate).toBe(false);
     expect(getApiEndpointPolicy('/id-business-v2/auth/logout').bypassSessionGate).toBe(false);
   });
 });

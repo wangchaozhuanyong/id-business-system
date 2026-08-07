@@ -19,6 +19,7 @@ export type V2ModuleKey =
   | 'data-governance'
   | 'business-monitoring'
   | 'system-monitoring'
+  | 'branding'
   | 'employees'
   | 'roles'
   | 'audit-logs'

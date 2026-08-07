@@ -17,6 +17,7 @@ import {
   v2Routes
 } from '@/v2/router/routes';
 import { beginV2RoutePerformance, markV2RouteCodeReady } from '@/runtime/performance';
+import { formatV2DocumentTitle, loadV2Branding, v2Branding } from '@/v2/composables/useV2Branding';
 
 const V2LoginView = () => import('@/v2/views/V2LoginView.vue');
 const V2ForbiddenView = () => import('@/v2/views/V2ForbiddenView.vue');
@@ -191,8 +192,7 @@ v2Router.afterEach((to, _from, failure) => {
     return;
   }
 
-  const title = typeof to.meta.title === 'string' ? to.meta.title : 'ID 业务管理';
-  document.title = `${title} - ID 业务管理`;
+  setRouteDocumentTitle(to);
   if (to.path.startsWith('/v2')) {
     setV2RouteNavigationState(to.fullPath, 'ready');
   } else {
@@ -207,6 +207,17 @@ v2Router.afterEach((to, _from, failure) => {
 v2Router.onError((error, to) => {
   setV2RouteNavigationState(to?.fullPath ?? v2Router.currentRoute.value.fullPath, 'error', error);
 });
+
+watch(
+  () => v2Branding.value.documentTitleSuffix,
+  () => setRouteDocumentTitle(v2Router.currentRoute.value)
+);
+
+void loadV2Branding().catch(() => undefined);
+
+function setRouteDocumentTitle(route: RouteLocationNormalizedLoaded) {
+  document.title = formatV2DocumentTitle(route.meta.title);
+}
 
 function redirectToLogin(targetFullPath: string) {
   return {

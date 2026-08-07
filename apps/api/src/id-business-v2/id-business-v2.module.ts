@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { IdBusinessV2AccountsModule } from './accounts/public-api';
 import { IdBusinessV2ActivationsModule } from './activations/public-api';
 import { IdBusinessV2BalancesModule } from './balances/public-api';
+import { IdBusinessV2BrandingModule } from './branding/public-api';
 import { IdBusinessV2BusinessMonitoringModule } from './business-monitoring/public-api';
 import { IdBusinessV2ChangeSyncModule } from './change-sync/public-api';
 import { IdBusinessV2CustomersModule } from './customers/public-api';
@@ -19,6 +20,7 @@ import { IdBusinessV2TopupSupplierFundsModule } from './topup-supplier-funds/pub
 @Module({
   imports: [
     IdBusinessV2OptionsModule,
+    IdBusinessV2BrandingModule,
     IdBusinessV2ChangeSyncModule,
     IdBusinessV2ExchangeRatesModule,
     IdBusinessV2FinanceModule,
