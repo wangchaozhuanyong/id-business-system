@@ -56,6 +56,7 @@ const dataScopes = [
   'balances-options',
   'balance-records',
   'balance-record-options',
+  'branding',
   'customers',
   'customers-options',
   'exchange-rates',
@@ -335,6 +336,10 @@ async function verifyPublicPageScroll(browserInstance) {
     }
     if (pathname.endsWith('/api/health/ready')) {
       await fulfillSuccess(route, { status: 'ready', database: 'ok' });
+      return;
+    }
+    if (pathname.endsWith('/api/id-business-v2/branding/public')) {
+      await fulfillSuccess(route, createDefaultBrandingSettings());
       return;
     }
     if (pathname.endsWith('/api/auth/me')) {
@@ -1154,6 +1159,13 @@ async function installApiMocks(page, user, unexpectedRequests) {
     }
     if (
       request.method() === 'GET' &&
+      url.pathname.endsWith('/api/id-business-v2/branding/public')
+    ) {
+      await fulfillSuccess(route, createDefaultBrandingSettings());
+      return;
+    }
+    if (
+      request.method() === 'GET' &&
       url.pathname.endsWith('/api/id-business-v2/customers/bootstrap')
     ) {
       await fulfillSuccess(route, createCustomersBootstrap());
@@ -1198,6 +1210,23 @@ async function fulfillSuccess(route, data) {
       timestamp: new Date().toISOString()
     })
   });
+}
+
+function createDefaultBrandingSettings() {
+  const now = new Date().toISOString();
+  return {
+    appName: 'ID 业务管理',
+    logoText: 'ID',
+    logoUrl: '/brand/default-logo.svg',
+    appSubtitle: 'Apple ID 订阅运营',
+    loginHeroTitle: '把订单、余额与续费\n收进一条安全动线',
+    loginNote: '内部后台仅限授权人员访问，登录后继续处理订单与财务任务。',
+    footerText: '© 2026 Apple 内部系统 · 仅限授权人员访问',
+    documentTitleSuffix: 'ID 业务管理',
+    updatedByUserId: null,
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 function createUser(scenario) {

@@ -143,6 +143,11 @@
           </div>
         </section>
 
+        <div class="v2-login-security" aria-label="登录安全提示">
+          <span>安全访问</span>
+          <strong>授权账号登录 · 敏感操作全程审计</strong>
+        </div>
+
         <div class="login-mobile-ground" aria-hidden="true">
           <i />
           <i />
@@ -335,6 +340,33 @@ onMounted(() => {
   background: var(--v3-danger-solid);
 }
 
+.v2-login-security {
+  display: flex;
+  grid-column: 1;
+  grid-row: 3;
+  align-items: center;
+  justify-self: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border: 1px solid rgba(166, 193, 226, 0.18);
+  border-radius: 999px;
+  background: rgba(5, 17, 32, 0.28);
+  color: rgba(226, 236, 250, 0.76);
+  font-size: 12px;
+  font-weight: 650;
+  backdrop-filter: blur(16px);
+}
+
+.v2-login-security span {
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
+.v2-login-security strong {
+  font: inherit;
+}
+
 .login-panel :deep(.el-form) {
   display: grid;
   gap: 18px;
@@ -418,6 +450,13 @@ onMounted(() => {
 }
 
 @media (max-width: 620px) {
+  .v2-login-security {
+    width: min(330px, calc(100% - 20px));
+    justify-content: center;
+    margin-top: 14px;
+    white-space: nowrap;
+  }
+
   .v2-login-appearance {
     gap: 12px;
     margin-bottom: 16px;
