@@ -10,6 +10,7 @@ import { dataAnalyticsFeature } from '@/v2/features/data-analytics/manifest';
 import { dataGovernanceFeature } from '@/v2/features/data-governance/manifest';
 import { employeesFeature } from '@/v2/features/employees/manifest';
 import { exchangeRatesFeature } from '@/v2/features/exchange-rates/manifest';
+import { financeExpensesFeature } from '@/v2/features/finance-expenses/manifest';
 import { financeLedgerFeature } from '@/v2/features/finance-ledger/manifest';
 import type { V2FeatureManifest, V2ModuleKey, V2NavigationSection } from '@/v2/features/feature';
 import { optionsFeature } from '@/v2/features/options/manifest';
@@ -36,8 +37,9 @@ export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   exchangeRatesFeature,
   optionsFeature,
   dashboardFeature,
-  dataAnalyticsFeature,
   financeLedgerFeature,
+  financeExpensesFeature,
+  dataAnalyticsFeature,
   dataGovernanceFeature,
   businessMonitoringFeature,
   systemMonitoringFeature,
@@ -73,13 +75,13 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
   {
     key: 'business',
-    title: '业务数据',
-    items: navigationItems('业务数据')
+    title: '业务中心',
+    items: navigationItems('业务中心')
   },
   {
-    key: 'records',
-    title: '记录中心',
-    items: navigationItems('记录')
+    key: 'finance',
+    title: '财务记账',
+    items: navigationItems('财务记账')
   },
   {
     key: 'data',

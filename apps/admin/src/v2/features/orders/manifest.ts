@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const ordersFeature = defineV2Feature({
   key: 'orders',
   title: '订单管理',
-  group: '业务数据',
+  group: '业务中心',
   route: '/v2/orders',
   sourceSheet: '订单管理',
   permission: 'apple.order.view',

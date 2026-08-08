@@ -401,7 +401,7 @@ const navigationSectionIcons: Record<string, Component> = {
   overview: Collection,
   workspace: Monitor,
   business: DataAnalysis,
-  records: Files,
+  finance: Files,
   data: DataAnalysis,
   monitoring: Monitor,
   system: Setting

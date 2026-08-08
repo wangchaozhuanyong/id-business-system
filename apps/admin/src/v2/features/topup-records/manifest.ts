@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const topupRecordsFeature = defineV2Feature({
   key: 'topup-records',
   title: '加卡记录',
-  group: '记录',
+  group: '业务中心',
   route: '/v2/records/topups',
   sourceSheet: '加卡记录',
   permission: 'apple.balance.view',

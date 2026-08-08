@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const dataAnalyticsFeature = defineV2Feature({
   key: 'analytics',
   title: '经营分析',
-  group: '数据中心',
+  group: '财务记账',
   route: '/v2/data/analytics',
   sourceSheet: '规划占位-经营分析',
   permission: 'data.analytics.view',

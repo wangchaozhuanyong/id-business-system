@@ -20,6 +20,7 @@ const expectedFeatures = [
   'data-governance',
   'employees',
   'exchange-rates',
+  'finance-expenses',
   'finance-ledger',
   'options',
   'order-entry',

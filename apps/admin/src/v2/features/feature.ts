@@ -16,6 +16,7 @@ export type V2ModuleKey =
   | 'dashboard'
   | 'analytics'
   | 'finance-ledger'
+  | 'finance-expenses'
   | 'data-governance'
   | 'business-monitoring'
   | 'system-monitoring'

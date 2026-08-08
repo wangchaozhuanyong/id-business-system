@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const customersFeature = defineV2Feature({
   key: 'customers',
   title: '客户记录',
-  group: '业务数据',
+  group: '业务中心',
   route: '/v2/customers',
   sourceSheet: '客户记录',
   permission: 'customer.view',

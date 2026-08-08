@@ -76,7 +76,7 @@
 
       <section class="v2-finance-panel v2-finance-ledger-tabs">
         <el-tabs v-model="page.activeTab">
-          <el-tab-pane label="资金账户" name="accounts">
+          <el-tab-pane v-if="!page.expenseOnly" label="资金账户" name="accounts">
             <V2Table
               :schema="v2TableSchemas.financeLedger.accounts"
               class="v2-records-table"
@@ -135,7 +135,7 @@
             </V2Table>
           </el-tab-pane>
 
-          <el-tab-pane label="供应商钱包" name="wallets">
+          <el-tab-pane v-if="!page.expenseOnly" label="供应商钱包" name="wallets">
             <V2Table
               :schema="v2TableSchemas.financeLedger.supplierWallets"
               class="v2-records-table"
@@ -198,7 +198,7 @@
             </V2Table>
           </el-tab-pane>
 
-          <el-tab-pane label="额外开支" name="expenses">
+          <el-tab-pane v-if="page.expenseOnly" label="开支记账" name="expenses">
             <V2Table
               :schema="v2TableSchemas.financeLedger.expenses"
               class="v2-records-table"
@@ -207,7 +207,7 @@
               show-overflow-tooltip
             >
               <template #empty>
-                <FinanceEmpty title="暂无额外开支" description="手机、办公、工资等开支在这里入账" />
+                <FinanceEmpty title="暂无开支记录" description="手机、办公、工资等开支在这里入账" />
               </template>
               <V2TableColumn :definition="v2TableSchemas.financeLedger.expenses.columns[0]">
                 <template #default="{ row }">{{ formatDate(row.occurredAt) }}</template>
@@ -254,7 +254,7 @@
             </footer>
           </el-tab-pane>
 
-          <el-tab-pane name="journals">
+          <el-tab-pane v-if="!page.expenseOnly" name="journals">
             <template #label>
               <span class="v2-records-help-title">
                 不可变流水
@@ -345,7 +345,7 @@
             </footer>
           </el-tab-pane>
 
-          <el-tab-pane label="关账与历史" name="periods">
+          <el-tab-pane v-if="!page.expenseOnly" label="关账与历史" name="periods">
             <section class="v2-finance-history">
               <article>
                 <div>
@@ -471,10 +471,18 @@ import {
   periodStatusType
 } from './financeLedgerPresentation';
 import { useFinanceLedgerPage } from './useFinanceLedgerPage';
+import type { V2ModuleKey } from '@/v2/features/feature';
 import '@/v2/styles/records.css';
 import '@/v2/styles/finance.css';
 
-const page = reactive(useFinanceLedgerPage());
+const props = withDefaults(
+  defineProps<{
+    moduleKey?: Extract<V2ModuleKey, 'finance-ledger' | 'finance-expenses'>;
+    expenseOnly?: boolean;
+  }>(),
+  { moduleKey: 'finance-ledger', expenseOnly: false }
+);
+const page = reactive(useFinanceLedgerPage(props.moduleKey, props.expenseOnly));
 const journalReversalHelp = [
   '已发布流水不能直接修改或删除，系统会保留原始记录，方便以后核对。',
   '冲销会新增一笔金额相反的流水，抵消原流水对余额和损益的影响；原流水随后显示“已冲销”。',
