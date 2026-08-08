@@ -1,11 +1,4 @@
 <template>
-  <V2OrderProfitRateField
-    :model-value="profitRateInputValue"
-    :mode="pricingInputMode"
-    :hint="profitRateInputHint"
-    @update:model-value="emit('update:profitRateInputValue', $event)"
-  />
-
   <el-form-item label="推荐价格">
     <div class="v2-order-entry-recommendation">
       <div>
@@ -39,7 +32,7 @@
         <small v-else-if="!suggestedReceipt.error">
           {{
             pricingInputMode === 'receipt'
-              ? '当前为实收反算；直接修改上方利润率可切换为目标定价'
+              ? '当前为实收反算；直接修改利润率可切换为目标定价'
               : '填写目标利润率并选择可用 ID 后自动计算推荐价'
           }}
         </small>
@@ -74,21 +67,17 @@ import AppButton from '@/components/ui/AppButton.vue';
 import type { V2OrderEntryForm } from '../order-entry-form';
 import type { SuggestedReceiptQuote } from '../order-pricing';
 import type { OrderPricingInputMode } from '../useOrderPricingInputMode';
-import V2OrderProfitRateField from './V2OrderProfitRateField.vue';
 
 const props = defineProps<{
   form: V2OrderEntryForm;
   suggestedReceipt: SuggestedReceiptQuote;
   recommendationApplied: boolean;
   appliedSuggestedOriginal: string;
-  profitRateInputValue: string;
   pricingInputMode: OrderPricingInputMode;
-  profitRateInputHint: string;
   formatDecimal: (value: string) => string;
 }>();
 
 const emit = defineEmits<{
-  'update:profitRateInputValue': [value: string];
   applySuggested: [];
   undoSuggested: [];
 }>();

@@ -253,7 +253,7 @@ export function useOptionsPage() {
     query.status = '';
     query.sortBy = 'sortOrder';
     query.sortOrder = 'asc';
-    void loadOptions();
+    void loadOptions(true);
   }
 
   function handleSearch() {
@@ -401,7 +401,7 @@ export function useOptionsPage() {
         ElMessage.success('选项已新增');
       }
       drawerVisible.value = false;
-      await loadOptions();
+      void loadOptions(true);
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -410,7 +410,7 @@ export function useOptionsPage() {
   }
 
   function openDelete(item: V2Option) {
-    if (item.isSystem || item.childCount > 0) return;
+    if (item.isSystem) return;
     deletingItem.value = item;
     deleteDialogVisible.value = true;
   }
@@ -427,7 +427,7 @@ export function useOptionsPage() {
       if (items.value.length === 1 && query.page > 1) {
         query.page -= 1;
       }
-      await loadOptions();
+      void loadOptions(true);
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -441,8 +441,16 @@ export function useOptionsPage() {
 
   function getDeleteTitle(item: V2Option) {
     if (item.isSystem) return '系统固定选项不能删除';
-    if (item.childCount > 0) return '请先处理下级选项';
     return '删除选项';
+  }
+
+  function getDeleteMessage(item: V2Option | null) {
+    if (!item) return '确认删除该选项？';
+    const cascadeNotice =
+      item.childCount > 0 && (item.type === 'country' || item.type === 'business_category')
+        ? `系统会同时删除关联的开通业务；已有 ID、订单和历史账目仍保留原始名称。`
+        : '已有业务记录会保留原始关联，但后续不能再选择该选项。';
+    return `确认删除“${item.name}”？${cascadeNotice}`;
   }
 
   function formatDecimal(value: string) {
@@ -520,6 +528,7 @@ export function useOptionsPage() {
     confirmDelete,
     getSelectorLabel,
     getDeleteTitle,
+    getDeleteMessage,
     formatDecimal,
     formatDate
   };

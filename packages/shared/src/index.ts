@@ -58,6 +58,13 @@ export {
   type V2ScopeVersion
 } from './v2/data-scopes.js';
 export {
+  V2_TABLE_PREFERENCE_LIMITS,
+  type ResetV2TablePreferenceResult,
+  type UpdateV2TablePreferenceInput,
+  type V2TablePreference,
+  type V2TablePreferenceList
+} from './v2/table-preferences.js';
+export {
   V2_FINANCE_ACCOUNT_TYPES,
   V2_FINANCE_CURRENCIES,
   type V2FinanceAccount,

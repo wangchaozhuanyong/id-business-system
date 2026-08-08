@@ -100,6 +100,38 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       : manualCandidateQuery.isInitialLoading.value || manualCandidateQuery.isRefreshing.value
   );
 
+  function applyAutomaticResult(result: V2OrderMatchingResult | undefined) {
+    if (!result || idSelectionMode.value !== 'auto' || !canMatch.value) return;
+    const currentAccountId = form.accountId;
+    matchingResult.value = result;
+    matchingError.value = '';
+    form.accountId =
+      currentAccountId && result.items.some((candidate) => candidate.id === currentAccountId)
+        ? currentAccountId
+        : (result.selectedCandidateId ?? '');
+  }
+
+  function applyManualResult(result: V2OrderMatchingResult | undefined) {
+    if (!result || idSelectionMode.value !== 'manual' || !canMatch.value) return;
+    const currentAccountId = form.accountId;
+    matchingResult.value = result;
+    matchingError.value = '';
+    if (currentAccountId && !result.items.some((candidate) => candidate.id === currentAccountId)) {
+      form.accountId = '';
+    }
+  }
+
+  watch(candidateQuery.data, applyAutomaticResult);
+  watch(manualCandidateQuery.data, applyManualResult);
+  watch(candidateQuery.error, (error) => {
+    if (error && idSelectionMode.value === 'auto') matchingError.value = getApiErrorMessage(error);
+  });
+  watch(manualCandidateQuery.error, (error) => {
+    if (error && idSelectionMode.value === 'manual') {
+      matchingError.value = getApiErrorMessage(error);
+    }
+  });
+
   watch(
     () => form.accountId,
     (accountId) => {
@@ -163,9 +195,7 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       return;
     }
     const result = candidateQuery.data.value;
-    if (!result) return;
-    matchingResult.value = result;
-    form.accountId = result.selectedCandidateId ?? '';
+    applyAutomaticResult(result);
   }
 
   async function loadManualCandidates() {
@@ -179,7 +209,23 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       return;
     }
     const result = manualCandidateQuery.data.value;
-    if (result) matchingResult.value = result;
+    applyManualResult(result);
+  }
+
+  async function refreshCurrentCandidates() {
+    if (!canMatch.value) return;
+    const mode = idSelectionMode.value;
+    const requestedKey = mode === 'auto' ? automaticQueryKey() : manualQueryKey();
+    const query = mode === 'auto' ? candidateQuery : manualCandidateQuery;
+    await query.ensureFresh();
+    const currentKey = mode === 'auto' ? automaticQueryKey() : manualQueryKey();
+    if (requestedKey !== currentKey || idSelectionMode.value !== mode) return;
+    if (query.error.value) {
+      matchingError.value = getApiErrorMessage(query.error.value);
+      return;
+    }
+    if (mode === 'auto') applyAutomaticResult(candidateQuery.data.value);
+    else applyManualResult(manualCandidateQuery.data.value);
   }
 
   function clearCandidates() {
@@ -215,12 +261,13 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
     if (manualSearchTimer) {
       clearTimeout(manualSearchTimer);
       manualSearchTimer = undefined;
+      resumeCandidateMatch = true;
     }
     if (matchingLoading.value) {
       resumeCandidateMatch = true;
-      candidateQuery.cancel();
-      manualCandidateQuery.cancel();
     }
+    candidateQuery.cancel();
+    manualCandidateQuery.cancel();
   }
 
   function automaticQueryKey() {
@@ -241,10 +288,13 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
   }
 
   onActivated(() => {
+    if (!canMatch.value) return;
     if (resumeCandidateMatch && canMatch.value) {
       resumeCandidateMatch = false;
       scheduleCandidateMatch();
+      return;
     }
+    void refreshCurrentCandidates();
   });
   onDeactivated(stopDeferredCandidateTasks);
 

@@ -11,6 +11,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { V2IdentityService } from '../v2-identity.service';
+import { ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES } from '../../id-business-v2/sensitive-access/public-api';
 import type { CreateV2RoleDto, ListV2RolesQuery, UpdateV2RoleDto } from './v2-roles.dto';
 
 const ROLE_SORT_FIELDS: Record<string, keyof Prisma.RoleOrderByWithRelationInput> = {
@@ -168,6 +169,10 @@ export class V2RolesService {
     const code = this.normalizeCode(dto.code);
     const description = this.normalizeDescription(dto.description);
     const permissions = await this.requirePermissions(dto.permissionIds);
+    const sensitiveApprovalPermissionIds = this.requireSensitiveApprovalPermissionIds(
+      dto.sensitiveApprovalPermissionIds,
+      permissions
+    );
     await this.assertCodeAvailable(code);
 
     try {
@@ -179,7 +184,8 @@ export class V2RolesService {
             description,
             rolePermissions: {
               create: permissions.map((permission) => ({
-                permissionId: permission.id
+                permissionId: permission.id,
+                sensitiveApprovalRequired: sensitiveApprovalPermissionIds.has(permission.id)
               }))
             }
           },
@@ -222,7 +228,18 @@ export class V2RolesService {
       dto.permissionIds === undefined
         ? undefined
         : await this.requirePermissions(dto.permissionIds);
-    if (name === undefined && description === undefined && permissions === undefined) {
+    if (dto.sensitiveApprovalPermissionIds !== undefined && permissions === undefined) {
+      throw new BadRequestException('修改敏感资料审批策略时必须同时提交完整权限清单。');
+    }
+    const sensitiveApprovalPermissionIds = permissions
+      ? this.requireSensitiveApprovalPermissionIds(dto.sensitiveApprovalPermissionIds, permissions)
+      : undefined;
+    if (
+      name === undefined &&
+      description === undefined &&
+      permissions === undefined &&
+      sensitiveApprovalPermissionIds === undefined
+    ) {
       throw new BadRequestException('请至少修改一项角色资料。');
     }
 
@@ -236,7 +253,8 @@ export class V2RolesService {
         await transaction.rolePermission.createMany({
           data: permissions.map((permission) => ({
             roleId: existing.id,
-            permissionId: permission.id
+            permissionId: permission.id,
+            sensitiveApprovalRequired: sensitiveApprovalPermissionIds?.has(permission.id) ?? false
           }))
         });
       }
@@ -342,6 +360,28 @@ export class V2RolesService {
     return permissions;
   }
 
+  private requireSensitiveApprovalPermissionIds(
+    permissionIdsInput: string[] | undefined,
+    permissions: Array<{ id: string; code: string }>
+  ) {
+    const selected = new Set(
+      (Array.isArray(permissionIdsInput) ? permissionIdsInput : []).map((permissionId) =>
+        this.normalizeUuid(permissionId, '敏感资料权限')
+      )
+    );
+    const permissionById = new Map(permissions.map((permission) => [permission.id, permission]));
+    for (const permissionId of selected) {
+      const permission = permissionById.get(permissionId);
+      if (!permission) {
+        throw new BadRequestException('敏感资料审批策略必须属于当前已选择的权限。');
+      }
+      if (!ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES.has(permission.code)) {
+        throw new BadRequestException('所选权限不是可配置审批的敏感资料权限。');
+      }
+    }
+    return selected;
+  }
+
   private normalizeCode(value: string | undefined) {
     const code = (value ?? '').trim().toLowerCase();
     if (!/^[a-z][a-z0-9._-]{2,99}$/.test(code)) {
@@ -410,10 +450,14 @@ export class V2RolesService {
     role: RoleListRecord | RoleDetailRecord,
     allPermissions: PermissionCatalogRecord[]
   ) {
-    const permissions =
+    const selectedPermissions =
       role.code === 'admin' && allPermissions.length
         ? allPermissions
         : role.rolePermissions.map(({ permission }) => permission);
+    const permissions = selectedPermissions.map((permission) => ({
+      ...permission,
+      sensitive: ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES.has(permission.code)
+    }));
     return {
       id: role.id,
       name: role.name,
@@ -422,6 +466,12 @@ export class V2RolesService {
       isSystemRole: role.code === 'admin',
       permissions,
       permissionIds: permissions.map((permission) => permission.id),
+      sensitiveApprovalPermissionIds:
+        role.code === 'admin'
+          ? []
+          : role.rolePermissions
+              .filter((assignment) => assignment.sensitiveApprovalRequired)
+              .map(({ permission }) => permission.id),
       permissionCount: permissions.length,
       memberCount: role._count.userRoles,
       createdAt: role.createdAt.toISOString(),
@@ -448,6 +498,10 @@ export class V2RolesService {
       code: role.code,
       description: role.description,
       permissionCodes: role.rolePermissions.map(({ permission }) => permission.code).sort(),
+      sensitiveApprovalPermissionCodes: role.rolePermissions
+        .filter((assignment) => assignment.sensitiveApprovalRequired)
+        .map(({ permission }) => permission.code)
+        .sort(),
       memberCount: role._count.userRoles
     };
   }

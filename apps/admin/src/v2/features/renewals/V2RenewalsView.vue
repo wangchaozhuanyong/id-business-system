@@ -231,27 +231,35 @@
           >
             <header>
               <div>
-                <strong>{{ item.customer.name }}</strong>
-                <span>{{ item.service.name }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'customer']">
+                  {{ item.customer.name }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'service']">
+                  {{ item.service.name }}
+                </span>
               </div>
-              <el-tag :type="statusType(item.status.code)" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.renewals.main.id, '状态']"
+                :type="statusType(item.status.code)"
+                effect="plain"
+              >
                 {{ item.status.label }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'account']">
                 <dt>ID账号</dt>
                 <dd>{{ item.account.appleIdMasked }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'currentBalance']">
                 <dt>ID余额</dt>
                 <dd>{{ formatDecimal(item.account.currentBalance) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, '客户网站账号']">
                 <dt>网站账号</dt>
                 <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'dueAt']">
                 <dt>到期时间</dt>
                 <dd>{{ formatDate(item.dueAt) }}</dd>
               </div>

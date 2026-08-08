@@ -3,10 +3,10 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
 export const accountsFeature = defineV2Feature({
   key: 'accounts',
-  title: 'ID录入',
+  title: 'ID管理',
   group: '工作台',
   route: '/v2/accounts',
-  sourceSheet: 'ID录入',
+  sourceSheet: 'ID管理',
   permission: 'apple.account.view',
   kind: 'list',
   freshnessPolicy: 'event-driven',

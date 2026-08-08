@@ -134,31 +134,42 @@
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.order.orderNo }}</strong>
-                <span>{{ item.customer.name }} / {{ item.service.name }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.activations.main.id, '订单']">
+                  {{ item.order.orderNo }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.activations.main.id, '客户']">
+                  {{ item.customer.name }}
+                </span>
+                <span v-v2-column-visibility="[v2TableSchemas.activations.main.id, '业务']">
+                  {{ item.service.name }}
+                </span>
               </div>
-              <el-tag :type="statusType(item.status.code)" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.activations.main.id, 'status']"
+                :type="statusType(item.status.code)"
+                effect="plain"
+              >
                 {{ item.status.label }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, '苹果 ID']">
                 <dt>苹果 ID</dt>
                 <dd>{{ item.account.appleIdMasked }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, '客户网站账号']">
                 <dt>客户网站账号</dt>
                 <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, 'openedAt']">
                 <dt>开通日期</dt>
                 <dd>{{ formatDate(item.openedAt) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, 'dueAt']">
                 <dt>到期日期</dt>
                 <dd>{{ formatDate(item.dueAt) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, '操作人']">
                 <dt>操作人</dt>
                 <dd>{{ operatorUsername(item.createdBy) }}</dd>
               </div>

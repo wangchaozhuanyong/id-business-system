@@ -26,6 +26,14 @@ const permissionUpdate = {
   action: 'update'
 };
 
+const permissionSensitive = {
+  id: '66666666-6666-4666-8666-666666666666',
+  name: '查看 ID 密码',
+  code: 'apple.secret.view_password',
+  module: 'apple.secret',
+  action: 'view_password'
+};
+
 function createRole(overrides: Record<string, unknown> = {}) {
   return {
     id: '22222222-2222-4222-8222-222222222222',
@@ -143,7 +151,7 @@ describe('V2RolesService', () => {
         data: expect.objectContaining({
           code: 'operation',
           rolePermissions: {
-            create: [{ permissionId: permissionView.id }]
+            create: [{ permissionId: permissionView.id, sensitiveApprovalRequired: false }]
           }
         })
       })
@@ -173,6 +181,51 @@ describe('V2RolesService', () => {
         operator
       )
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('stores approval-required switches only for selected sensitive permissions', async () => {
+    const fixture = createService();
+    const created = createRole({
+      rolePermissions: [
+        {
+          roleId: 'role-id',
+          permissionId: permissionSensitive.id,
+          permission: permissionSensitive,
+          sensitiveApprovalRequired: true
+        }
+      ]
+    });
+    fixture.prisma.role.findFirst.mockResolvedValue(null);
+    fixture.prisma.permission.findMany.mockResolvedValue([
+      { id: permissionSensitive.id, code: permissionSensitive.code }
+    ]);
+    fixture.transaction.role.create.mockResolvedValue(created);
+
+    const result = await fixture.service.create(
+      {
+        name: '敏感资料审核角色',
+        code: 'sensitive_reviewer',
+        permissionIds: [permissionSensitive.id],
+        sensitiveApprovalPermissionIds: [permissionSensitive.id]
+      },
+      operator
+    );
+
+    expect(result.sensitiveApprovalPermissionIds).toEqual([permissionSensitive.id]);
+    expect(fixture.transaction.role.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          rolePermissions: {
+            create: [
+              {
+                permissionId: permissionSensitive.id,
+                sensitiveApprovalRequired: true
+              }
+            ]
+          }
+        })
+      })
+    );
   });
 
   it('protects the system administrator role from changes', async () => {
@@ -271,7 +324,8 @@ describe('V2RolesService', () => {
       data: [
         {
           roleId: existing.id,
-          permissionId: permissionUpdate.id
+          permissionId: permissionUpdate.id,
+          sensitiveApprovalRequired: false
         }
       ]
     });

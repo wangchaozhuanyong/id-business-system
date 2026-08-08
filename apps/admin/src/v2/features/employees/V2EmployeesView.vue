@@ -149,35 +149,43 @@
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.displayName }}</strong>
-                <span>{{ item.username }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'displayName']">
+                  {{ item.displayName }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'username']">
+                  {{ item.username }}
+                </span>
               </div>
-              <el-tag :type="item.status === 'active' ? 'success' : 'info'" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'status']"
+                :type="item.status === 'active' ? 'success' : 'info'"
+                effect="plain"
+              >
                 {{ item.status === 'active' ? '启用' : '停用' }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, '角色']">
                 <dt>角色</dt>
                 <dd>{{ item.roles.map((role) => role.name).join('、') || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, '在线会话']">
                 <dt>在线会话</dt>
                 <dd>{{ item.activeSessionCount }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, '密码状态']">
                 <dt>密码状态</dt>
                 <dd>{{ item.mustResetPassword ? '待首次修改' : '正常' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'lastLoginAt']">
                 <dt>最近登录</dt>
                 <dd>{{ page.formatDate(item.lastLoginAt) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, '操作人']">
                 <dt>操作人</dt>
                 <dd>{{ operatorUsername(item.createdBy) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'createdAt']">
                 <dt>开通时间</dt>
                 <dd>{{ page.formatDate(item.createdAt) }}</dd>
               </div>

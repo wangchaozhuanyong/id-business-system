@@ -227,8 +227,9 @@ export function normalizeBalanceAdjustmentIdempotencyKey(value: unknown) {
   return key;
 }
 
-export function normalizeRevealReason(value: unknown) {
+export function normalizeRevealReason(value: unknown, fallback?: string) {
   const reason = normalizeNullableString(value);
+  if (!reason && fallback) return fallback;
   if (!reason) throw new BadRequestException('查看原因不能为空');
   if (reason.length > 200) throw new BadRequestException('查看原因过长');
   return reason;

@@ -37,6 +37,10 @@ export interface CreateIdBusinessV2FinanceExpenseDto {
   idempotencyKey: string;
 }
 
+export interface CorrectIdBusinessV2FinanceExpenseDto extends CreateIdBusinessV2FinanceExpenseDto {
+  reason: string;
+}
+
 export interface CreateIdBusinessV2SupplierDepositDto {
   financeAccountId: string;
   paidAmount: string | number;

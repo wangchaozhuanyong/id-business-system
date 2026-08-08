@@ -26,7 +26,7 @@ interface AccountsPageSnapshot {
 const ACCOUNTS_OPTIONS_SCOPE = 'accounts-options';
 const ACCOUNTS_OPTIONS_KEY = 'selectors';
 
-type AccountsListQueryDraft = Omit<
+export type AccountsListQueryDraft = Omit<
   V2AccountListQuery,
   | 'keyword'
   | 'countryOptionId'
@@ -42,6 +42,29 @@ type AccountsListQueryDraft = Omit<
   recordStatus: V2RecordStatus | '';
   saleState: 'available' | 'sold' | '';
 };
+
+export function countActiveAccountsFilters(query: AccountsListQueryDraft) {
+  return [
+    query.keyword.trim(),
+    query.countryOptionId,
+    query.statusOptionId,
+    query.supplierOptionId,
+    query.recordStatus,
+    query.saleState
+  ].filter(Boolean).length;
+}
+
+export function resetAccountsListFilters(query: AccountsListQueryDraft) {
+  Object.assign(query, {
+    keyword: '',
+    countryOptionId: '',
+    statusOptionId: '',
+    supplierOptionId: '',
+    recordStatus: '',
+    saleState: '',
+    page: 1
+  });
+}
 
 export function normalizeAccountsListQuery(query: AccountsListQueryDraft): V2AccountListQuery {
   return {

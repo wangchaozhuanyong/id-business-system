@@ -214,10 +214,18 @@
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.name }}</strong>
-                <span>{{ item.source?.name || '未设置来源' }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'name']">
+                  {{ item.name }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.customers.main.id, '来源']">
+                  {{ item.source?.name || '未设置来源' }}
+                </span>
               </div>
-              <el-tag :type="item.recordStatus === 'active' ? 'success' : 'info'" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'recordStatus']"
+                :type="item.recordStatus === 'active' ? 'success' : 'info'"
+                effect="plain"
+              >
                 {{ item.recordStatus === 'active' ? '启用' : '停用' }}
               </el-tag>
             </header>
@@ -225,6 +233,7 @@
             <footer>
               <AppButton
                 v-if="item.hasPhone && canRevealContact"
+                v-v2-column-visibility="[v2TableSchemas.customers.main.id, '手机号']"
                 size="small"
                 variant="ghost"
                 @click="openRevealPhone(item)"
@@ -233,6 +242,7 @@
               </AppButton>
               <AppButton
                 v-if="item.hasWhatsapp && canRevealContact"
+                v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'WhatsApp']"
                 size="small"
                 variant="ghost"
                 @click="openRevealWhatsapp(item)"
@@ -360,41 +370,7 @@
       </el-form>
     </V2FormDrawer>
 
-    <el-dialog
-      v-model="revealDialogVisible"
-      :title="revealField === 'phone' ? '查看完整手机号' : '查看完整 WhatsApp'"
-      width="min(440px, 92vw)"
-    >
-      <el-form
-        ref="revealFormRef"
-        class="v2-horizontal-form"
-        :model="revealForm"
-        :rules="revealRules"
-        label-position="left"
-        label-width="88px"
-        require-asterisk-position="right"
-        status-icon
-        scroll-to-error
-        :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
-      >
-        <el-form-item label="查看原因" prop="reason">
-          <el-input v-model="revealForm.reason" maxlength="200" />
-        </el-form-item>
-        <el-form-item label="审批编号">
-          <el-input v-model="revealForm.approvalId" placeholder="可选" />
-        </el-form-item>
-        <el-form-item
-          v-if="revealForm.value"
-          :label="revealField === 'phone' ? '完整手机号' : '完整 WhatsApp'"
-        >
-          <el-input v-model="revealForm.value" readonly />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <AppButton variant="ghost" @click="revealDialogVisible = false">关闭</AppButton>
-        <AppButton variant="primary" :loading="revealing" @click="revealContact"> 查看 </AppButton>
-      </template>
-    </el-dialog>
+    <V2CustomerSensitiveAccessDialog :page="page" />
 
     <V2ConfirmDialog
       v-model="deleteDialogVisible"
@@ -409,6 +385,7 @@
 </template>
 
 <script setup lang="ts">
+import { reactive } from 'vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
@@ -431,9 +408,12 @@ import { operatorUsername } from '@/v2/utils/operator';
 import V2CustomerHistoryServices from './components/V2CustomerHistoryServices.vue';
 import V2CustomerMobileDetails from './components/V2CustomerMobileDetails.vue';
 import V2CustomerSensitiveContactCell from './components/V2CustomerSensitiveContactCell.vue';
+import V2CustomerSensitiveAccessDialog from './components/V2CustomerSensitiveAccessDialog.vue';
 import { useCustomersPage } from './useCustomersPage';
 import '@/v2/styles/records.css';
 
+const customersPage = useCustomersPage();
+const page = reactive(customersPage);
 const {
   items,
   total,
@@ -448,20 +428,14 @@ const {
   deletingItem,
   deleteDialogVisible,
   deleting,
-  revealField,
-  revealDialogVisible,
-  revealing,
   formRef,
-  revealFormRef,
   query,
   form,
-  revealForm,
   canCreate,
   canUpdate,
   canDelete,
   canRevealContact,
   formRules,
-  revealRules,
   hasLoadedOnce,
   isInitialLoading,
   loadCustomers,
@@ -477,10 +451,9 @@ const {
   toggleStatus,
   openRevealPhone,
   openRevealWhatsapp,
-  revealContact,
   openDelete,
   confirmDelete,
   selectorLabel,
   formatDate
-} = useCustomersPage();
+} = customersPage;
 </script>

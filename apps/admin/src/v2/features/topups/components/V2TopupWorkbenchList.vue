@@ -149,15 +149,23 @@
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
-              <strong>{{ item.appleIdMasked }}</strong>
-              <span>{{ item.country.name }}</span>
+              <strong v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'appleId']">
+                {{ item.appleIdMasked }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.topups.main.id, '国家']">
+                {{ item.country.name }}
+              </span>
             </div>
-            <el-tag :type="item.status.code === 'normal' ? 'success' : 'warning'" effect="plain">
+            <el-tag
+              v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'ID 状态']"
+              :type="item.status.code === 'normal' ? 'success' : 'warning'"
+              effect="plain"
+            >
               {{ item.status.name }}
             </el-tag>
           </header>
           <dl>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'currentBalance']">
               <dt>ID 余额</dt>
               <dd>{{ page.formatDecimal(item.currentBalance) }}</dd>
             </div>
@@ -165,15 +173,15 @@
               <dt>人民币成本</dt>
               <dd>¥{{ page.formatDecimal(item.balanceCostAmount) }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, '平均成本']">
               <dt>平均成本</dt>
               <dd>¥{{ page.formatDecimal(item.averageCost) }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, '最近加卡']">
               <dt>最近加卡</dt>
               <dd>{{ page.formatElapsed(item.lastTopupAt) }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, '加卡记录']">
               <dt>加卡记录</dt>
               <dd>
                 <AppButton
@@ -187,7 +195,7 @@
                 </AppButton>
               </dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, '余额流水']">
               <dt>余额变动</dt>
               <dd>
                 <AppButton
@@ -218,7 +226,10 @@
                 <span v-else>—</span>
               </dd>
             </div>
-            <div class="v2-topup-mobile-service">
+            <div
+              v-v2-column-visibility="[v2TableSchemas.topups.main.id, '当前业务']"
+              class="v2-topup-mobile-service"
+            >
               <dt>当前开通业务</dt>
               <dd>
                 <div v-if="item.currentServices.length" class="v2-topup-service-tags">
@@ -237,7 +248,12 @@
             </div>
           </dl>
           <footer>
-            <span class="v2-topup-updated">{{ page.formatDate(item.updatedAt) }}</span>
+            <span
+              v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'updatedAt']"
+              class="v2-topup-updated"
+            >
+              {{ page.formatDate(item.updatedAt) }}
+            </span>
             <div class="v2-topup-mobile-actions">
               <AppButton
                 v-if="page.canAdjustBalance && item.topupRecordCount > 0"

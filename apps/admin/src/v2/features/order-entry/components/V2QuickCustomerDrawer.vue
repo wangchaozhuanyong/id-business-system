@@ -23,7 +23,7 @@
       show-icon
     >
       <template #default>
-        <AppButton size="small" variant="ghost" @click="loadOptions">重试加载</AppButton>
+        <AppButton size="small" variant="ghost" @click="retryOptions">重试加载</AppButton>
       </template>
     </el-alert>
 
@@ -140,12 +140,13 @@ import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from '../api';
-import type { V2OptionSelector, V2OrderEntryCustomer } from '../contracts';
+import type { V2OrderEntryCustomer } from '../contracts';
 import {
   createEmptyQuickCustomerForm,
   createQuickCustomerPayload,
   toOrderEntryCustomer
 } from '../quick-customer';
+import { useQuickCustomerOptions } from '../useQuickCustomerOptions';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -159,11 +160,14 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>();
 const form = reactive(createEmptyQuickCustomerForm());
 const saving = ref(false);
-const optionsLoading = ref(false);
-const optionsResolved = ref(false);
-const optionsError = ref('');
-const sourceOptions = ref<V2OptionSelector[]>([]);
-const tagOptions = ref<V2OptionSelector[]>([]);
+const {
+  sourceOptions,
+  tagOptions,
+  optionsLoading,
+  optionsError,
+  loadOptions,
+  retryOptions
+} = useQuickCustomerOptions();
 
 const rules: FormRules = {
   name: [
@@ -188,30 +192,10 @@ watch(
     if (!visible) return;
     Object.assign(form, createEmptyQuickCustomerForm());
     formRef.value?.clearValidate();
-    if (!optionsResolved.value) void loadOptions();
+    void loadOptions();
   },
   { immediate: true }
 );
-
-async function loadOptions() {
-  optionsLoading.value = true;
-  optionsError.value = '';
-  try {
-    const result = await idBusinessV2CustomersApi.bootstrap({
-      page: 1,
-      pageSize: 1,
-      sortBy: 'updatedAt',
-      sortOrder: 'desc'
-    });
-    sourceOptions.value = result.options.sources;
-    tagOptions.value = result.options.tags;
-    optionsResolved.value = true;
-  } catch (error) {
-    optionsError.value = getApiErrorMessage(error);
-  } finally {
-    optionsLoading.value = false;
-  }
-}
 
 async function submit() {
   if (!(await validateV2Form(formRef.value))) return;

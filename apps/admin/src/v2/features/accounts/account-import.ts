@@ -37,7 +37,7 @@ const ACCOUNT_IMPORT_HEADERS = [
 
 export function downloadAccountImportTemplate() {
   exportRowsToCsv<Record<string, string>>(
-    'ID录入导入模板',
+    'ID管理导入模板',
     ACCOUNT_IMPORT_HEADERS.map((header) => ({
       header,
       value: () => ''

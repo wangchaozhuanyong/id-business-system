@@ -1,8 +1,16 @@
 <script lang="ts">
-import { defineComponent, h, nextTick, onMounted, ref, watch, type PropType } from 'vue';
+import { defineComponent, h, nextTick, onMounted, provide, ref, watch, type PropType } from 'vue';
 import { ElTable } from 'element-plus/es/components/table/index.mjs';
 import 'element-plus/es/components/table/style/css';
+import { useAuthStore } from '@/stores/auth';
+import {
+  clearV2TablePreferences,
+  ensureV2TablePreferences,
+  isV2TableColumnVisible
+} from '@/v2/composables/useV2TablePreferences';
+import V2TableColumnSettings from './V2TableColumnSettings.vue';
 import type { V2TableSchema } from './tableSystem';
+import { V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
 
 type ElementTableExpose = {
   setScrollLeft?: (left: number) => void;
@@ -32,7 +40,12 @@ export default defineComponent({
     }
   },
   setup(props, { attrs, expose, slots }) {
+    const authStore = useAuthStore();
     const tableRef = ref<ElementTableExpose>();
+
+    provide(V2_TABLE_VISIBILITY_CONTEXT, {
+      isColumnVisible: (columnKey) => isV2TableColumnVisible(props.schema.id, columnKey)
+    });
 
     function setScrollLeft(left: number) {
       tableRef.value?.setScrollLeft?.(Math.max(0, left));
@@ -48,6 +61,14 @@ export default defineComponent({
     }
 
     onMounted(resetViewScroll);
+    watch(
+      () => authStore.user?.id ?? '',
+      (userId) => {
+        if (userId) void ensureV2TablePreferences(userId).catch(() => undefined);
+        else clearV2TablePreferences();
+      },
+      { immediate: true }
+    );
     watch(
       () => [props.schema.id, props.viewKey ?? props.schema.id] as const,
       (current, previous) => {
@@ -69,22 +90,25 @@ export default defineComponent({
         tableAttrs.rowKey = props.schema.rowKey.value;
       }
 
-      return h(
-        ElTable,
-        {
-          ...tableAttrs,
-          ref: tableRef,
-          fit: true,
-          flexible: true,
-          tableLayout: 'fixed',
-          scrollbarAlwaysOn: true,
-          showOverflowTooltip: true,
-          class: ['v2-unified-table', inheritedClass],
-          'data-table-schema': props.schema.id,
-          'data-mobile-mode': props.schema.mobileMode
-        },
-        slots
-      );
+      return h('div', { class: 'v2-unified-table-shell' }, [
+        h(V2TableColumnSettings, { schema: props.schema }),
+        h(
+          ElTable,
+          {
+            ...tableAttrs,
+            ref: tableRef,
+            fit: true,
+            flexible: true,
+            tableLayout: 'fixed',
+            scrollbarAlwaysOn: true,
+            showOverflowTooltip: true,
+            class: ['v2-unified-table', inheritedClass],
+            'data-table-schema': props.schema.id,
+            'data-mobile-mode': props.schema.mobileMode
+          },
+          slots
+        )
+      ]);
     };
   }
 });

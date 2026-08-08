@@ -206,31 +206,74 @@
           <article v-for="item in items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.supplierNameSnapshot }}</strong>
-                <span>{{ formatDate(item.paidAt) }}</span>
+                <strong
+                  v-v2-column-visibility="[
+                    v2TableSchemas.topupRecords.supplierPayments.id,
+                    '供应商'
+                  ]"
+                >
+                  {{ item.supplierNameSnapshot }}
+                </strong>
+                <span
+                  v-v2-column-visibility="[
+                    v2TableSchemas.topupRecords.supplierPayments.id,
+                    'paidAt'
+                  ]"
+                >
+                  {{ formatDate(item.paidAt) }}
+                </span>
               </div>
-              <el-tag :type="item.status === 'active' ? 'success' : 'info'" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.topupRecords.supplierPayments.id, '状态']"
+                :type="item.status === 'active' ? 'success' : 'info'"
+                effect="plain"
+              >
                 {{ item.status === 'active' ? '有效' : '已撤销' }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  'receivedUsdt'
+                ]"
+              >
                 <dt>到账 USDT</dt>
                 <dd>{{ formatDecimal(item.receivedUsdt) }}</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  'settlementRateCnyUsdt'
+                ]"
+              >
                 <dt>结算汇率</dt>
                 <dd>¥{{ formatRate(item.settlementRateCnyUsdt) }}</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  'creditedCny'
+                ]"
+              >
                 <dt>折算人民币</dt>
                 <dd>¥{{ formatDecimal(item.creditedCny) }}</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  '手续费 USDT'
+                ]"
+              >
                 <dt>网络手续费</dt>
                 <dd>{{ formatDecimal(item.networkFeeUsdt) }} USDT</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  '供应商余额快照'
+                ]"
+              >
                 <dt>余额快照</dt>
                 <dd>
                   {{
@@ -244,7 +287,14 @@
               </div>
             </dl>
             <footer>
-              <span>{{ item.network || '未记录网络' }}</span>
+              <span
+                v-v2-column-visibility="[
+                  v2TableSchemas.topupRecords.supplierPayments.id,
+                  '网络和交易哈希'
+                ]"
+              >
+                {{ item.network || '未记录网络' }}
+              </span>
               <AppButton
                 v-if="canManage && item.status === 'active'"
                 size="small"

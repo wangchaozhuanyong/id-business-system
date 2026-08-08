@@ -138,6 +138,7 @@ export const V2_SCOPE_DEPENDENCIES = {
     'renewals-options',
     'supplier-funds',
     'supplier-payments',
+    'finance-ledger',
     'finance-reports',
     'accounts',
     'customers',

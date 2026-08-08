@@ -237,11 +237,40 @@
           >
             <header>
               <div>
-                <strong>{{ page.auditUserLabel(item.user) }}</strong>
-                <span>{{ item.module }} / {{ page.formatAuditDate(item.createdAt) }}</span>
+                <strong
+                  v-v2-column-visibility="[
+                    page.activeTab === 'operations'
+                      ? v2TableSchemas.auditLogs.operations.id
+                      : v2TableSchemas.auditLogs.sensitiveAccess.id,
+                    page.activeTab === 'operations' ? '操作人' : '访问人'
+                  ]"
+                >
+                  {{ page.auditUserLabel(item.user) }}
+                </strong>
+                <span
+                  v-v2-column-visibility="[
+                    page.activeTab === 'operations'
+                      ? v2TableSchemas.auditLogs.operations.id
+                      : v2TableSchemas.auditLogs.sensitiveAccess.id,
+                    'module'
+                  ]"
+                >
+                  {{ item.module }}
+                </span>
+                <span
+                  v-v2-column-visibility="[
+                    page.activeTab === 'operations'
+                      ? v2TableSchemas.auditLogs.operations.id
+                      : v2TableSchemas.auditLogs.sensitiveAccess.id,
+                    'createdAt'
+                  ]"
+                >
+                  {{ page.formatAuditDate(item.createdAt) }}
+                </span>
               </div>
               <el-tag
                 v-if="'approved' in item"
+                v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, 'approved']"
                 :type="item.approved ? 'success' : 'warning'"
                 effect="plain"
               >
@@ -250,29 +279,40 @@
               <el-tag v-else effect="plain">操作审计</el-tag>
             </header>
             <dl v-if="'action' in item">
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, 'action']">
                 <dt>动作</dt>
                 <dd>{{ item.action }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, '对象']">
                 <dt>对象</dt>
                 <dd>{{ page.operationObjectLabel(item) }}</dd>
               </div>
-              <div class="v2-audit-logs__mobile-wide">
+              <div
+                v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, 'remark']"
+                class="v2-audit-logs__mobile-wide"
+              >
                 <dt>说明</dt>
                 <dd>{{ item.remark || '—' }}</dd>
               </div>
             </dl>
             <dl v-else>
-              <div>
+              <div
+                v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, 'fieldName']"
+              >
                 <dt>敏感字段</dt>
                 <dd>{{ item.fieldName }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, '对象']">
                 <dt>对象</dt>
                 <dd>{{ page.sensitiveObjectLabel(item) }}</dd>
               </div>
-              <div class="v2-audit-logs__mobile-wide">
+              <div
+                v-v2-column-visibility="[
+                  v2TableSchemas.auditLogs.sensitiveAccess.id,
+                  'accessReason'
+                ]"
+                class="v2-audit-logs__mobile-wide"
+              >
                 <dt>访问原因</dt>
                 <dd>{{ item.accessReason || '—' }}</dd>
               </div>

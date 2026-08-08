@@ -39,6 +39,21 @@
   gap: 6px;
 }
 
+.v2-order-progress {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.v2-order-progress .el-button {
+  margin-left: 0;
+  white-space: nowrap;
+}
+
 .v2-order-action-danger {
   color: var(--el-color-danger);
 }
@@ -153,6 +168,17 @@
   .v2-records-mobile-item footer .v2-order-row-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .v2-records-mobile-item header > .v2-order-mobile-progress {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: flex-end;
+  }
+
+  .v2-order-mobile-progress .el-button {
+    margin-left: 0;
+    white-space: nowrap;
   }
 
   .v2-order-detail-actions {

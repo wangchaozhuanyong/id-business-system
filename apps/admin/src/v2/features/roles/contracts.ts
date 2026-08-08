@@ -4,6 +4,7 @@ export interface V2RolePermission {
   code: string;
   module: string;
   action: string;
+  sensitive?: boolean;
 }
 
 export interface V2RoleMember {
@@ -21,6 +22,7 @@ export interface V2Role {
   isSystemRole: boolean;
   permissions: V2RolePermission[];
   permissionIds: string[];
+  sensitiveApprovalPermissionIds: string[];
   permissionCount: number;
   memberCount: number;
   createdAt: string;
@@ -63,10 +65,12 @@ export interface CreateV2RoleInput {
   code: string;
   description: string;
   permissionIds: string[];
+  sensitiveApprovalPermissionIds: string[];
 }
 
 export interface UpdateV2RoleInput {
   name: string;
   description: string;
   permissionIds: string[];
+  sensitiveApprovalPermissionIds: string[];
 }

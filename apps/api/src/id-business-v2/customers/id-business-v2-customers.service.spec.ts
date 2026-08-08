@@ -90,12 +90,20 @@ describe('IdBusinessV2CustomersService', () => {
     requireActiveOption: vi.fn(),
     requireActiveOptions: vi.fn()
   };
+  const sensitiveAccessService = {
+    authorize: vi.fn().mockResolvedValue({
+      mode: 'direct',
+      approvalId: null,
+      reason: '角色权限直接查看'
+    })
+  };
   const service = new IdBusinessV2CustomersService(
     new IdBusinessV2CustomerRepository(prisma as never),
     encryptionService as never,
     optionsService as never,
     new V2CommandTransactionManager(prisma as never),
-    new V2TransactionalAuditService()
+    new V2TransactionalAuditService(),
+    sensitiveAccessService as never
   );
 
   beforeEach(() => {
@@ -275,6 +283,19 @@ describe('IdBusinessV2CustomersService', () => {
       })
     );
     expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('13800138000');
+  });
+
+  it('does not decrypt a contact when administrator approval is still missing', async () => {
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
+    sensitiveAccessService.authorize.mockRejectedValueOnce(
+      new ForbiddenException('该字段需要管理员批准后才能查看')
+    );
+
+    await expect(service.revealPhone('customer-1', {}, operator)).rejects.toBeInstanceOf(
+      ForbiddenException
+    );
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(prisma.sensitiveAccessLog.create).not.toHaveBeenCalled();
   });
 
   it('does not return decrypted contact data when sensitive audit persistence fails', async () => {

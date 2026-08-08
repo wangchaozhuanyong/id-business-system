@@ -1,5 +1,5 @@
 <script lang="ts">
-import { defineComponent, h, type PropType } from 'vue';
+import { defineComponent, h, inject, type PropType } from 'vue';
 import { ElTableColumn } from 'element-plus/es/components/table/index.mjs';
 import type { V2TableDataColumnDefinition } from './tableSystem';
 import {
@@ -7,6 +7,7 @@ import {
   getV2TableColumnWidthProps,
   V2_TABLE_COLUMN_ALIGNMENT
 } from './tableColumn';
+import { V2_TABLE_VISIBILITY_CONTEXT } from './tableVisibility';
 
 export default defineComponent({
   name: 'V2TableColumn',
@@ -18,7 +19,16 @@ export default defineComponent({
     }
   },
   setup(props, { attrs, slots }) {
+    const visibility = inject(V2_TABLE_VISIBILITY_CONTEXT, null);
+
     return () => {
+      if (
+        visibility &&
+        props.definition.hideable !== false &&
+        !visibility.isColumnVisible(props.definition.key)
+      ) {
+        return null;
+      }
       const columnAttrs = { ...attrs } as Record<string, unknown>;
       const existingClassName = columnAttrs.className ?? columnAttrs['class-name'];
       const existingLabelClassName = columnAttrs.labelClassName ?? columnAttrs['label-class-name'];

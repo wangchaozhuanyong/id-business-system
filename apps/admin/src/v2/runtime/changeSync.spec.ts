@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { V2_DATA_SCOPES, type V2DataScope } from '@apple-business/shared';
 import { shouldEnableV2RealtimeChanges } from './changeSyncConfig';
 import { getChangedV2Scopes, parseV2ChangeEvent } from './changeSyncPayload';
+import {
+  shouldReconcileV2OnForeground,
+  V2_DEGRADED_RECONCILE_INTERVAL_MS
+} from './changeSyncPolicy';
 
 describe('V2 change sync runtime configuration', () => {
   it('enables Realtime only when explicitly requested and Supabase is configured', () => {
@@ -9,6 +13,13 @@ describe('V2 change sync runtime configuration', () => {
     expect(shouldEnableV2RealtimeChanges(undefined, true)).toBe(false);
     expect(shouldEnableV2RealtimeChanges('false', true)).toBe(false);
     expect(shouldEnableV2RealtimeChanges('true', false)).toBe(false);
+  });
+
+  it('uses a short fallback interval and reconciles when a stale page returns to foreground', () => {
+    expect(V2_DEGRADED_RECONCILE_INTERVAL_MS).toBe(15_000);
+    expect(shouldReconcileV2OnForeground(null, 10_000)).toBe(true);
+    expect(shouldReconcileV2OnForeground(6_000, 10_000)).toBe(false);
+    expect(shouldReconcileV2OnForeground(5_000, 10_000)).toBe(true);
   });
 });
 

@@ -14,12 +14,14 @@ import { invalidateV2Queries } from '@/v2/composables/useV2Query';
 import { showV2Warning } from '@/v2/services/feedback';
 import { shouldEnableV2RealtimeChanges } from '@/v2/runtime/changeSyncConfig';
 import { getChangedV2Scopes, parseV2ChangeEvent } from '@/v2/runtime/changeSyncPayload';
+import {
+  shouldReconcileV2OnForeground,
+  V2_DEGRADED_RECONCILE_INTERVAL_MS
+} from '@/v2/runtime/changeSyncPolicy';
 
 const REALTIME_TOPIC = 'id-business-v2:changes';
 const REALTIME_EVENT = 'change';
 const HEALTHY_RECONCILE_INTERVAL_MS = 5 * 60 * 1000;
-const DEGRADED_RECONCILE_INTERVAL_MS = 60 * 1000;
-const LONG_HIDDEN_INTERVAL_MS = 60 * 1000;
 const MAX_RECONNECT_DELAY_MS = 60 * 1000;
 const REALTIME_ENABLED = shouldEnableV2RealtimeChanges(
   import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED,
@@ -47,7 +49,6 @@ let reconnectAttempt = 0;
 let consecutiveFailures = 0;
 let degradationNotified = false;
 let realtimeSubscribed = false;
-let hiddenAt: number | null = null;
 let unsubscribeIdentityChange: (() => void) | null = null;
 const localVersions = new Map<V2DataScope, bigint>(V2_DATA_SCOPES.map((scope) => [scope, 0n]));
 
@@ -135,7 +136,7 @@ function scheduleReconcile() {
   const delay =
     mutableChangeSyncState.status === 'connected'
       ? HEALTHY_RECONCILE_INTERVAL_MS
-      : DEGRADED_RECONCILE_INTERVAL_MS;
+      : V2_DEGRADED_RECONCILE_INTERVAL_MS;
   reconcileTimer = setTimeout(() => {
     reconcileTimer = undefined;
     void reconcileVersions();
@@ -209,20 +210,28 @@ function handleOnline() {
   if (mutableChangeSyncState.status !== 'connected') void connectRealtime();
 }
 
-function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    hiddenAt = Date.now();
-    clearTimer(reconcileTimer);
-    reconcileTimer = undefined;
-    return;
-  }
-  const hiddenDuration = hiddenAt === null ? 0 : Date.now() - hiddenAt;
-  hiddenAt = null;
-  if (hiddenDuration >= LONG_HIDDEN_INTERVAL_MS) {
+function handleForeground() {
+  if (!started) return;
+  if (
+    shouldReconcileV2OnForeground(
+      mutableChangeSyncState.lastReconciledAt,
+      Date.now()
+    )
+  ) {
     void reconcileVersions();
   } else {
     scheduleReconcile();
   }
+  if (mutableChangeSyncState.status !== 'connected') void connectRealtime();
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    clearTimer(reconcileTimer);
+    reconcileTimer = undefined;
+    return;
+  }
+  handleForeground();
 }
 
 function handleAuthIdentityChanged() {
@@ -237,9 +246,9 @@ export function startV2ChangeSync() {
   consecutiveFailures = 0;
   degradationNotified = false;
   realtimeSubscribed = false;
-  hiddenAt = null;
   mutableChangeSyncState.status = REALTIME_ENABLED ? 'connecting' : 'degraded';
   window.addEventListener('online', handleOnline);
+  window.addEventListener('focus', handleForeground);
   unsubscribeIdentityChange = sessionCoordinator.subscribeIdentityChange(handleAuthIdentityChanged);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   void reconcileVersions();
@@ -258,8 +267,8 @@ export function stopV2ChangeSync() {
   connectPromise = null;
   degradationNotified = false;
   realtimeSubscribed = false;
-  hiddenAt = null;
   window.removeEventListener('online', handleOnline);
+  window.removeEventListener('focus', handleForeground);
   unsubscribeIdentityChange?.();
   unsubscribeIdentityChange = null;
   document.removeEventListener('visibilitychange', handleVisibilityChange);

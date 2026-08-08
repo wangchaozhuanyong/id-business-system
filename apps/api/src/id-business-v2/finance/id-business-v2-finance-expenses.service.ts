@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
@@ -7,7 +12,10 @@ import {
   V2CommandTransactionManager,
   V2TransactionalAuditService
 } from '../runtime/public-api';
-import type { CreateIdBusinessV2FinanceExpenseDto } from './dto/id-business-v2-finance.dto';
+import type {
+  CorrectIdBusinessV2FinanceExpenseDto,
+  CreateIdBusinessV2FinanceExpenseDto
+} from './dto/id-business-v2-finance.dto';
 import { IdBusinessV2FinanceFxService } from './id-business-v2-finance-fx.service';
 import {
   normalizeFinanceCurrency,
@@ -194,6 +202,151 @@ export class IdBusinessV2FinanceExpensesService {
         remark: `记录经营开支：${category.name}`
       });
       return this.toResponse(expense);
+    }, this.commandOptions(operator));
+  }
+
+  async correct(
+    expenseIdValue: string,
+    dto: CorrectIdBusinessV2FinanceExpenseDto,
+    operator?: AuthenticatedUser
+  ) {
+    const expenseId = normalizeFinanceUuid(expenseIdValue, '经营开支');
+    const categoryOptionId = normalizeFinanceUuid(dto.categoryOptionId, '开支分类');
+    const financeAccountId = normalizeFinanceUuid(dto.financeAccountId, '资金账户');
+    const currency = normalizeFinanceCurrency(dto.currency);
+    const amount = normalizeFinanceMoney(dto.amount, '开支金额');
+    const occurredAt = normalizeFinanceDate(dto.occurredAt, '发生时间');
+    const manualRate =
+      dto.fxRateToCny === undefined ? null : normalizeFinanceRate(dto.fxRateToCny, currency);
+    const payee = normalizeFinanceText(dto.payee, '收款方', 200);
+    const remark = normalizeFinanceText(dto.remark, '备注', 2000);
+    const receiptAttachmentId = normalizeOptionalFinanceUuid(dto.receiptAttachmentId, '凭证');
+    const reason = normalizeFinanceText(dto.reason, '更正原因', 500, true)!;
+    const idempotencyKey = normalizeFinanceIdempotencyKey(
+      dto.idempotencyKey,
+      'finance_expense_correction'
+    );
+
+    const [{ category, account }, rate] = await Promise.all([
+      this.queryRepository.findExpensePrerequisites(categoryOptionId, financeAccountId),
+      this.fxService.resolve({
+        currency,
+        occurredAt,
+        fxRateSnapshotId: dto.fxRateSnapshotId,
+        manualRate,
+        manualReason: dto.manualRateReason,
+        operator
+      })
+    ]);
+    if (!category) throw new BadRequestException('开支分类不存在或已停用');
+    if (!account || account.status !== 'active') {
+      throw new BadRequestException('资金账户不存在或已停用');
+    }
+    if (account.currency !== currency) {
+      throw new BadRequestException('开支币种与资金账户币种不一致');
+    }
+    const rateToCny = Rate8.from(rate.rateToCny);
+    const amountCny = rateToCny.apply(amount);
+    const replacementKey = `${idempotencyKey}:replacement`;
+
+    return this.commandTransactions.execute(async (tx) => {
+      const replay = await this.commandRepository.findExpenseReplay(tx, replacementKey);
+      if (replay) return this.toResponse(replay);
+
+      const original = await this.commandRepository.findExpenseForCorrection(tx, expenseId);
+      if (!original) throw new NotFoundException('经营开支不存在');
+      if (original.journal.status === 'reversed') {
+        throw new ConflictException('该经营开支已冲销，不能重复更正');
+      }
+
+      const reversal = await this.postingService.reverse(
+        tx,
+        original.journalId,
+        reason,
+        `${idempotencyKey}:reversal`,
+        operator
+      );
+      const replacementExpenseId = randomUUID();
+      const journal = await this.postingService.post(tx, {
+        journalType: 'expense',
+        sourceType: 'expense',
+        sourceId: replacementExpenseId,
+        sourceReference: category.name,
+        occurredAt,
+        summary: `经营开支：${category.name}`,
+        metadata: {
+          payee,
+          receiptAttachmentId,
+          correctedExpenseId: original.id,
+          reversalJournalId: reversal.id,
+          correctionReason: reason
+        },
+        idempotencyKey: `${replacementKey}:journal`,
+        operator,
+        lines: [
+          {
+            accountCode: 'operating_expense',
+            direction: 'debit',
+            currency,
+            amountOriginal: amount,
+            fxRateToCny: rateToCny,
+            amountCny,
+            fxRateSnapshotId: rate.id,
+            memo: category.name
+          },
+          {
+            accountCode: 'cash',
+            direction: 'credit',
+            currency,
+            amountOriginal: amount,
+            fxRateToCny: rateToCny,
+            amountCny,
+            financeAccountId,
+            fxRateSnapshotId: rate.id,
+            memo: account.name
+          }
+        ]
+      });
+      const replacement = await this.commandRepository.createExpense(tx, {
+        id: replacementExpenseId,
+        journalId: journal.id,
+        categoryOptionId,
+        financeAccountId,
+        fxRateSnapshotId: rate.id,
+        currency,
+        amountOriginal: amount.toString(),
+        fxRateToCny: rateToCny.toString(),
+        amountCny: amountCny.toString(),
+        occurredAt,
+        payee,
+        receiptAttachmentId,
+        remark,
+        idempotencyKey: replacementKey,
+        createdByUserId: operator?.id
+      });
+      await this.audit.append(tx, {
+        userId: operator?.id,
+        module: 'id_business_v2_finance',
+        action: 'id_business_v2.finance_expense.correct',
+        objectType: 'id_business_v2_finance_expense',
+        objectId: original.id,
+        beforeData: {
+          journalId: original.journalId,
+          categoryOptionId: original.categoryOptionId,
+          financeAccountId: original.financeAccountId,
+          currency: original.currency,
+          amount: original.amountOriginal,
+          occurredAt: original.occurredAt.toISOString()
+        },
+        afterData: {
+          reversalJournalId: reversal.id,
+          replacementExpenseId: replacement.id,
+          replacementJournalId: replacement.journalId,
+          reason
+        },
+        remark: `更正经营开支：${original.categoryOption.name}`
+      });
+      return this.toResponse(replacement);
     }, this.commandOptions(operator));
   }
 

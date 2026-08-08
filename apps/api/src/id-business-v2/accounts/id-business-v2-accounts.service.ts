@@ -20,6 +20,7 @@ import {
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
 import type { RevealIdBusinessV2AccountSecretDto } from './dto/reveal-id-business-v2-account-secret.dto';
@@ -73,7 +74,8 @@ export class IdBusinessV2AccountsService {
     private readonly financePostingService: IdBusinessV2FinancePostingService,
     private readonly transactionManager: V2CommandTransactionManager,
     private readonly transactionalAudit: V2TransactionalAuditService,
-    private readonly balanceAdjustmentService: IdBusinessV2AccountBalanceAdjustmentService
+    private readonly balanceAdjustmentService: IdBusinessV2AccountBalanceAdjustmentService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
   async list(query: ListIdBusinessV2AccountsQuery) {
@@ -275,28 +277,31 @@ export class IdBusinessV2AccountsService {
     const field = parseSecretField(dto.field);
     const config = SECRET_FIELDS[field];
     assertSecretPermission(config, operator);
-    const reason = normalizeRevealReason(dto.reason);
 
     return this.transactionManager.execute(
       async (tx, context) => {
         const account = await this.repository.findByIdOrThrow(id, tx);
-        const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
-        if (!value) throw new NotFoundException(`${config.label}未填写`);
-        const approved = await this.repository.verifySensitiveApproval(tx, {
+        const access = await this.sensitiveAccessService.authorize(tx, {
           approvalId: dto.approvalId,
-          requesterId: operator?.id,
           module: 'id_business_v2_account',
           fieldName: field,
           objectType: 'id_business_v2_account',
           objectId: account.id,
+          operator,
           now: context.businessTime
         });
+        const reason =
+          access.mode === 'approval'
+            ? access.reason
+            : normalizeRevealReason(dto.reason, access.reason);
+        const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
+        if (!value) throw new NotFoundException(`${config.label}未填写`);
         await this.repository.appendSensitiveAccess(tx, {
           userId: operator?.id,
           fieldName: field,
           objectId: account.id,
           accessReason: reason,
-          approved,
+          approved: true,
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined
         });
@@ -306,7 +311,13 @@ export class IdBusinessV2AccountsService {
           action: 'id_business_v2.account.secret.reveal',
           objectType: 'id_business_v2_account',
           objectId: account.id,
-          afterData: toV2JsonDocument({ field, reason, approved }),
+          afterData: toV2JsonDocument({
+            field,
+            reason,
+            approved: true,
+            accessMode: access.mode,
+            approvalId: access.approvalId
+          }),
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined,
           remark: `查看 V2 ID 敏感字段：${config.label} / ${account.appleIdMasked}`

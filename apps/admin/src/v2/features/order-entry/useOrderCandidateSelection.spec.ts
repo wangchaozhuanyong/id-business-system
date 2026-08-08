@@ -1,5 +1,6 @@
 import { effectScope, reactive } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearV2QueryCache, invalidateV2Queries } from '@/v2/composables/useV2Query';
 import { idBusinessV2OrdersApi } from './api';
 import type { V2OrderMatchingResult } from './contracts';
 import { useOrderCandidateSelection } from './useOrderCandidateSelection';
@@ -12,7 +13,10 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
-function createMatchingResult(): V2OrderMatchingResult {
+function createMatchingResult(
+  currentBalance = '20',
+  balanceAfterMatch = '10'
+): V2OrderMatchingResult {
   const evaluatedAt = new Date().toISOString();
   const option = { id: 'option-1', code: 'option', name: '选项' };
   return {
@@ -37,12 +41,12 @@ function createMatchingResult(): V2OrderMatchingResult {
         appleIdMasked: 'test***@example.com',
         country: option,
         status: option,
-        currentBalance: '20',
+        currentBalance,
         balanceCostAmount: '100',
         estimatedBalanceCostAmount: '50',
         averageCost: '5',
         purchaseCost: '0',
-        balanceAfterMatch: '10',
+        balanceAfterMatch,
         updatedAt: evaluatedAt
       }
     ],
@@ -51,6 +55,7 @@ function createMatchingResult(): V2OrderMatchingResult {
 }
 
 afterEach(() => {
+  clearV2QueryCache();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -85,6 +90,36 @@ describe('useOrderCandidateSelection', () => {
     expect(selection.matchingLoading.value).toBe(false);
     expect(selection.candidateItems.value).toEqual([]);
     expect(form.accountId).toBe('');
+    scope.stop();
+  });
+
+  it('applies a background balance refresh without clearing a still-eligible selected ID', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const findCandidates = vi
+      .spyOn(idBusinessV2OrdersApi, 'findMatchingCandidates')
+      .mockResolvedValueOnce(createMatchingResult('20'))
+      .mockResolvedValueOnce(createMatchingResult('50', '40'));
+    const form = reactive({
+      serviceOptionId: 'service-1',
+      balanceAmount: '10',
+      accountId: ''
+    });
+    const scope = effectScope();
+    const selection = scope.run(() => useOrderCandidateSelection(form));
+    if (!selection) return;
+
+    await selection.loadCandidates();
+    expect(form.accountId).toBe('candidate-1');
+    expect(selection.selectedCandidate.value?.currentBalance).toBe('20');
+
+    invalidateV2Queries('accounts');
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+
+    expect(findCandidates).toHaveBeenCalledTimes(2);
+    expect(form.accountId).toBe('candidate-1');
+    expect(selection.selectedCandidate.value?.currentBalance).toBe('50');
     scope.stop();
   });
 });

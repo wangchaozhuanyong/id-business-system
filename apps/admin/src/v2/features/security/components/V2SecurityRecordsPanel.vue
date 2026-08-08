@@ -157,23 +157,34 @@
         <template v-if="'status' in item">
           <header>
             <div>
-              <strong>{{ page.securityUserLabel(item.user, item.username) }}</strong>
-              <span>{{ page.formatSecurityDate(item.createdAt) }}</span>
+              <strong v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, '用户']">
+                {{ page.securityUserLabel(item.user, item.username) }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'createdAt']">
+                {{ page.formatSecurityDate(item.createdAt) }}
+              </span>
             </div>
-            <el-tag :type="page.loginStatusMeta(item.status).type" effect="plain">
+            <el-tag
+              v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'status']"
+              :type="page.loginStatusMeta(item.status).type"
+              effect="plain"
+            >
               {{ page.loginStatusMeta(item.status).label }}
             </el-tag>
           </header>
           <dl>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'abnormal']">
               <dt>风险</dt>
               <dd>{{ page.loginRiskLabel(item) }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'ip']">
               <dt>IP</dt>
               <dd>{{ item.ip || '—' }}</dd>
             </div>
-            <div class="v2-security-mobile-wide">
+            <div
+              v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'failureReason']"
+              class="v2-security-mobile-wide"
+            >
               <dt>失败原因</dt>
               <dd>{{ item.failureReason || '—' }}</dd>
             </div>
@@ -182,23 +193,34 @@
         <template v-else>
           <header>
             <div>
-              <strong>{{ page.securityUserLabel(item.user) }}</strong>
-              <span>最近活动 {{ page.formatSecurityDate(item.lastActiveAt) }}</span>
+              <strong v-v2-column-visibility="[v2TableSchemas.security.sessions.id, '用户']">
+                {{ page.securityUserLabel(item.user) }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.security.sessions.id, 'lastActiveAt']">
+                最近活动 {{ page.formatSecurityDate(item.lastActiveAt) }}
+              </span>
             </div>
-            <el-tag :type="page.sessionStateMeta(item).type" effect="plain">
+            <el-tag
+              v-v2-column-visibility="[v2TableSchemas.security.sessions.id, '状态']"
+              :type="page.sessionStateMeta(item).type"
+              effect="plain"
+            >
               {{ page.sessionStateMeta(item).label }}
             </el-tag>
           </header>
           <dl>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.sessions.id, 'ip']">
               <dt>IP</dt>
               <dd>{{ item.ip || '—' }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.sessions.id, 'expiresAt']">
               <dt>到期</dt>
               <dd>{{ page.formatSecurityDate(item.expiresAt) }}</dd>
             </div>
-            <div class="v2-security-mobile-wide">
+            <div
+              v-v2-column-visibility="[v2TableSchemas.security.sessions.id, 'userAgent']"
+              class="v2-security-mobile-wide"
+            >
               <dt>客户端</dt>
               <dd>{{ page.clientSummary(item.userAgent) }}</dd>
             </div>

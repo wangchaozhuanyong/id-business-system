@@ -39,7 +39,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   }),
   defineV2RuntimeFeature({
     key: 'accounts',
-    title: 'ID录入',
+    title: 'ID管理',
     group: '工作台',
     route: '/v2/accounts',
     permission: 'apple.account.view',

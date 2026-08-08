@@ -15,6 +15,7 @@ import {
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { CreateIdBusinessV2CustomerDto } from './dto/create-id-business-v2-customer.dto';
 import type { RevealIdBusinessV2CustomerPhoneDto } from './dto/reveal-id-business-v2-customer-phone.dto';
 import type { UpdateIdBusinessV2CustomerDto } from './dto/update-id-business-v2-customer.dto';
@@ -49,7 +50,8 @@ export class IdBusinessV2CustomersService {
     private readonly fieldEncryptionService: FieldEncryptionService,
     private readonly optionsService: IdBusinessV2OptionsService,
     private readonly transactionManager: V2CommandTransactionManager,
-    private readonly transactionalAudit: V2TransactionalAuditService
+    private readonly transactionalAudit: V2TransactionalAuditService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
   async list(query: ListIdBusinessV2CustomersQuery) {
@@ -318,8 +320,9 @@ export class IdBusinessV2CustomersService {
     return normalized;
   }
 
-  private normalizeRevealReason(value: unknown) {
+  private normalizeRevealReason(value: unknown, fallback?: string) {
     const reason = this.normalizeNullableString(value);
+    if (!reason && fallback) return fallback;
     if (!reason) throw new BadRequestException('查看原因不能为空');
     if (reason.length > 200) throw new BadRequestException('查看原因过长');
     return reason;
@@ -380,31 +383,33 @@ export class IdBusinessV2CustomersService {
     requestMeta: AuditRequestMeta = {}
   ) {
     this.assertContactPermission(operator);
-    const reason = this.normalizeRevealReason(dto.reason);
     return this.transactionManager.execute(
       async (tx, context) => {
         const customer = await this.findCustomerOrThrowInTransaction(tx, id);
         const encryptedValue =
           field === 'phone' ? customer.phoneEncrypted : customer.whatsappEncrypted;
-        const value = this.fieldEncryptionService.decrypt(encryptedValue);
         const label = field === 'phone' ? '手机号' : 'WhatsApp';
-        if (!value) throw new NotFoundException(`该客户没有${label}`);
-
-        const approved = await this.repository.verifySensitiveAccessApproval(tx, {
+        const access = await this.sensitiveAccessService.authorize(tx, {
           approvalId: dto.approvalId,
-          requesterId: operator?.id,
           module: 'id_business_v2_customer',
           fieldName: field,
           objectType: 'id_business_v2_customer',
           objectId: customer.id,
+          operator,
           now: context.businessTime
         });
+        const reason =
+          access.mode === 'approval'
+            ? access.reason
+            : this.normalizeRevealReason(dto.reason, access.reason);
+        const value = this.fieldEncryptionService.decrypt(encryptedValue);
+        if (!value) throw new NotFoundException(`该客户没有${label}`);
         await this.repository.appendSensitiveAccess(tx, {
           userId: operator?.id,
           fieldName: field,
           objectId: customer.id,
           accessReason: reason,
-          approved,
+          approved: true,
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined
         });
@@ -417,7 +422,9 @@ export class IdBusinessV2CustomersService {
           afterData: toV2JsonDocument({
             field,
             reason,
-            approved,
+            approved: true,
+            accessMode: access.mode,
+            approvalId: access.approvalId,
             contactTail: field === 'phone' ? customer.phoneTail : customer.whatsappTail
           }),
           ip: requestMeta.ip ?? undefined,

@@ -1,6 +1,6 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -27,6 +27,7 @@ interface RoleFormModel {
   code: string;
   description: string;
   permissionIds: string[];
+  sensitiveApprovalPermissionIds: string[];
 }
 
 const PERMISSION_MODULE_LABELS: Record<string, string> = {
@@ -52,7 +53,8 @@ function emptyForm(): RoleFormModel {
     name: '',
     code: '',
     description: '',
-    permissionIds: []
+    permissionIds: [],
+    sensitiveApprovalPermissionIds: []
   };
 }
 
@@ -122,6 +124,12 @@ export function useRolesPage() {
   const drawerDirty = computed(() => JSON.stringify(form) !== formBaseline.value);
   const isSystemRole = computed(() => editingItem.value?.isSystemRole ?? false);
   const selectedPermissionCount = computed(() => form.permissionIds.length);
+  const selectedSensitivePermissions = computed(() =>
+    permissions.value.filter(
+      (permission) => permission.sensitive && form.permissionIds.includes(permission.id)
+    )
+  );
+  const sensitiveApprovalCount = computed(() => form.sensitiveApprovalPermissionIds.length);
   const filteredPermissionGroups = computed(() =>
     filterRolePermissionGroups(
       permissionGroups.value,
@@ -171,6 +179,16 @@ export function useRolesPage() {
     ]
   }));
   const { hasLoadedOnce, isInitialLoading } = rolesQuery;
+
+  watch(
+    () => [...form.permissionIds],
+    (permissionIds) => {
+      const selected = new Set(permissionIds);
+      form.sensitiveApprovalPermissionIds = form.sensitiveApprovalPermissionIds.filter(
+        (permissionId) => selected.has(permissionId)
+      );
+    }
+  );
 
   function handleSearch() {
     query.page = 1;
@@ -249,7 +267,8 @@ export function useRolesPage() {
       name: item.name,
       code: item.code,
       description: item.description ?? '',
-      permissionIds: [...item.permissionIds]
+      permissionIds: [...item.permissionIds],
+      sensitiveApprovalPermissionIds: [...item.sensitiveApprovalPermissionIds]
     });
     resetPermissionWorkspace(item.permissionIds);
     drawerVisible.value = true;
@@ -304,6 +323,17 @@ export function useRolesPage() {
     form.permissionIds = [];
   }
 
+  function isSensitiveApprovalRequired(permissionId: string) {
+    return form.sensitiveApprovalPermissionIds.includes(permissionId);
+  }
+
+  function toggleSensitiveApproval(permissionId: string, required: boolean) {
+    const next = new Set(form.sensitiveApprovalPermissionIds);
+    if (required) next.add(permissionId);
+    else next.delete(permissionId);
+    form.sensitiveApprovalPermissionIds = [...next];
+  }
+
   function clearPermissionFilters() {
     permissionKeyword.value = '';
     selectedPermissionsOnly.value = false;
@@ -336,7 +366,8 @@ export function useRolesPage() {
         const input: UpdateV2RoleInput = {
           name: form.name.trim(),
           description: form.description.trim(),
-          permissionIds: [...form.permissionIds]
+          permissionIds: [...form.permissionIds],
+          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds]
         };
         await v2RolesApi.update(current.id, input);
         ElMessage.success('角色权限已更新');
@@ -345,7 +376,8 @@ export function useRolesPage() {
           name: form.name.trim(),
           code: form.code.trim().toLowerCase(),
           description: form.description.trim(),
-          permissionIds: [...form.permissionIds]
+          permissionIds: [...form.permissionIds],
+          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds]
         };
         await v2RolesApi.create(input);
         ElMessage.success('角色已创建');
@@ -393,6 +425,8 @@ export function useRolesPage() {
     drawerDirty,
     isSystemRole,
     selectedPermissionCount,
+    selectedSensitivePermissions,
+    sensitiveApprovalCount,
     permissionKeyword,
     selectedPermissionsOnly,
     filteredPermissionGroups,
@@ -412,6 +446,8 @@ export function useRolesPage() {
     isGroupIndeterminate,
     toggleGroup,
     clearPermissionSelection,
+    isSensitiveApprovalRequired,
+    toggleSensitiveApproval,
     clearPermissionFilters,
     submitRole,
     formatDate

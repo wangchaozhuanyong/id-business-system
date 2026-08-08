@@ -16,7 +16,12 @@ import {
 } from './account-form';
 import { exportAccountRowsToCsv } from './account-export';
 import { formatAccountDate, formatAccountDecimal } from './account-format';
-import { normalizeAccountsListQuery, useAccountsListQuery } from './accounts-query';
+import {
+  countActiveAccountsFilters,
+  normalizeAccountsListQuery,
+  resetAccountsListFilters,
+  useAccountsListQuery
+} from './accounts-query';
 import {
   downloadAccountImportTemplate,
   prepareAccountImport,
@@ -25,6 +30,8 @@ import {
 import { useAccountLossReporting } from './useAccountLossReporting';
 import { useAccountPermissions } from './useAccountPermissions';
 import { useAccountPurchaseSources } from './useAccountPurchaseSources';
+import { useAccountCreateOptions } from './useAccountCreateOptions';
+import { useAccountSensitiveAccess } from './useAccountSensitiveAccess';
 import type {
   CreateV2AccountInput,
   ImportV2AccountRowInput,
@@ -80,14 +87,27 @@ export function useAccountsPage() {
       | 'updatedAt',
     sortOrder: 'desc' as 'asc' | 'desc'
   });
+  const activeFilterCount = computed(() => countActiveAccountsFilters(query));
 
   const form = reactive<AccountFormState>(emptyAccountForm());
   const purchaseSourceState = useAccountPurchaseSources(form, editingItem);
+  const refreshCreateOptions = useAccountCreateOptions({
+    countryOptions,
+    statusOptions,
+    supplierOptions,
+    drawerVisible,
+    editingItem,
+    form
+  });
   const revealForm = reactive({
     field: '' as V2AccountSecretField | '',
     reason: '',
-    approvalId: '',
     value: ''
+  });
+  const accountSensitiveAccess = useAccountSensitiveAccess({
+    revealTarget,
+    revealing,
+    revealForm
   });
 
   const accountPermissions = useAccountPermissions(revealTarget);
@@ -169,6 +189,11 @@ export function useAccountsPage() {
 
   function handleSearch() {
     query.page = 1;
+    loadCurrentAccounts();
+  }
+
+  function resetFilters() {
+    resetAccountsListFilters(query);
     loadCurrentAccounts();
   }
 
@@ -311,6 +336,7 @@ export function useAccountsPage() {
     }
     drawerVisible.value = true;
     void purchaseSourceState.loadPurchaseSources();
+    void refreshCreateOptions();
   }
 
   function handleToolbarCommand(command: string) {
@@ -407,6 +433,10 @@ export function useAccountsPage() {
         ElMessage.success('ID 资料已更新');
       } else {
         const [purchaseSourceType, purchaseSourceId] = form.purchaseSourceId.split(':', 2);
+        if (purchaseSourceType !== 'account' || !purchaseSourceId) {
+          ElMessage.warning('请选择与采购币种一致的付款账户');
+          return;
+        }
         const payload: CreateV2AccountInput = {
           ...commonPayload,
           appleId: form.appleId.trim(),
@@ -418,8 +448,7 @@ export function useAccountsPage() {
           purchaseOriginalAmount: normalizeDecimalInput(form.purchaseOriginalAmount),
           purchaseCurrency: form.purchaseCurrency,
           purchaseFxRateToCny: form.purchaseFxRateToCny || undefined,
-          purchaseFinanceAccountId: purchaseSourceType === 'account' ? purchaseSourceId : undefined,
-          purchaseSupplierAccountId: purchaseSourceType === 'wallet' ? purchaseSourceId : undefined,
+          purchaseFinanceAccountId: purchaseSourceId,
           purchaseManualRateReason: form.purchaseManualRateReason.trim() || undefined,
           purchasedAt: new Date(form.purchasedAt).toISOString()
         };
@@ -427,7 +456,7 @@ export function useAccountsPage() {
         ElMessage.success('ID 资料已新增');
       }
       drawerVisible.value = false;
-      await loadAccounts();
+      void loadAccounts();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -440,10 +469,10 @@ export function useAccountsPage() {
     Object.assign(revealForm, {
       field,
       reason: '',
-      approvalId: '',
       value: ''
     });
     revealDialogVisible.value = true;
+    void accountSensitiveAccess.prepareSensitiveAccess(field);
   }
 
   function openSensitiveAccess(item: V2Account) {
@@ -456,27 +485,6 @@ export function useAccountsPage() {
             ? 'securityInfo'
             : 'appleId';
     openReveal(item, field);
-  }
-
-  async function revealSecret() {
-    if (!revealTarget.value || !revealForm.field || !revealForm.reason.trim()) return;
-    revealing.value = true;
-    try {
-      const result = await idBusinessV2AccountsApi.revealSecret(
-        revealTarget.value.id,
-        revealForm.field,
-        {
-          reason: revealForm.reason.trim(),
-          approvalId: revealForm.approvalId.trim() || null
-        }
-      );
-      revealForm.value = result.value;
-      ElMessage.success('完整资料已显示，并已写入敏感访问日志');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      revealing.value = false;
-    }
   }
 
   async function toggleStatus(item: V2Account) {
@@ -552,7 +560,9 @@ export function useAccountsPage() {
     query,
     form,
     revealForm,
+    ...accountSensitiveAccess,
     ...accountPermissions,
+    activeFilterCount,
     formStatusOptions,
     balanceInputError,
     exchangeRateInputError,
@@ -561,6 +571,7 @@ export function useAccountsPage() {
     formDisabledReason,
     loadAccounts,
     handleSearch,
+    resetFilters,
     handleFilterChange: handleSearch,
     handlePageSizeChange,
     handlePageChange,
@@ -575,7 +586,6 @@ export function useAccountsPage() {
     submitForm,
     openReveal,
     openSensitiveAccess,
-    revealSecret,
     toggleStatus,
     openDelete,
     confirmDelete,

@@ -79,6 +79,7 @@ for (const file of walk(v2Root).filter((target) => target.endsWith('.vue'))) {
     ).length;
   });
   validateMobileContracts(projectPath, tableSchemasInFile, mobileClaims);
+  validateMobileVisibility(projectPath, source, mobileClaims);
 }
 
 for (const schemaExpression of schemaByExpression.keys()) {
@@ -348,6 +349,8 @@ function validateSharedImplementation() {
     [/tableLayout:\s*'fixed'/, 'V2Table 必须使用 fixed 布局'],
     [/scrollbarAlwaysOn:\s*true/, 'V2Table 必须常显滚动条'],
     [/showOverflowTooltip:\s*true/, 'V2Table 必须统一溢出提示'],
+    [/V2TableColumnSettings/, 'V2Table 必须统一提供列显示设置入口'],
+    [/V2_TABLE_VISIBILITY_CONTEXT/, 'V2Table 必须提供共享列可见性上下文'],
     [
       /props\.schema\.rowKey\?\.kind === 'path'[\s\S]*?delete tableAttrs\['row-key'\][\s\S]*?tableAttrs\.rowKey = props\.schema\.rowKey\.value/,
       'path rowKey 必须由 schema 强制注入'
@@ -358,6 +361,9 @@ function validateSharedImplementation() {
   }
   if (!/columnKey:\s*props\.definition\.key/.test(columnSource)) {
     issues.push(`${tableColumnPath}: 数据列必须传递 schema columnKey`);
+  }
+  if (!/visibility\.isColumnVisible\(props\.definition\.key\)/.test(columnSource)) {
+    issues.push(`${tableColumnPath}: 数据列必须遵守共享列可见性设置`);
   }
   if (!/definition:[\s\S]{0,100}?required:\s*true/.test(columnSource)) {
     issues.push(`${tableColumnPath}: definition 必须为 required`);
@@ -518,6 +524,13 @@ function validateMobileContracts(projectPath, tableExpressions, claims) {
     if (count !== 1) {
       issues.push(`${projectPath}: ${schemaExpression} data-mobile-for 重复 ${count} 次`);
     }
+  }
+}
+
+function validateMobileVisibility(projectPath, source, claims) {
+  if (claims.size === 0) return;
+  if (!source.includes('v-v2-column-visibility') && !/<V2[A-Za-z0-9]*MobileList\b/.test(source)) {
+    issues.push(`${projectPath}: 移动卡片字段必须接入共享列可见性设置`);
   }
 }
 

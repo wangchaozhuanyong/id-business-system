@@ -183,61 +183,102 @@
             <button
               type="button"
               :aria-label="
-                renewalWarningCount
-                  ? `查看通知，当前 ${renewalWarningCount} 条续费提醒`
-                  : '查看通知'
+                notificationCount ? `查看通知，当前 ${notificationCount} 条待处理提醒` : '查看通知'
               "
               :aria-expanded="notificationOpen"
               @click="toggleNotification"
             >
               <el-icon><Bell /></el-icon>
-              <span v-if="renewalWarningCount" class="v2-notification__badge">
-                {{ renewalWarningCount > 99 ? '99+' : renewalWarningCount }}
+              <span v-if="notificationCount" class="v2-notification__badge">
+                {{ notificationCount > 99 ? '99+' : notificationCount }}
               </span>
             </button>
             <div v-if="notificationOpen" class="v2-notification__panel">
-              <header>
-                <strong>续费到期提醒</strong>
-                <small v-if="renewalWarningSummary">
-                  提前 {{ renewalWarningSummary.warningDays }} 天
-                </small>
-              </header>
-              <p v-if="!canViewRenewalWarnings">当前账号无权查看续费提醒。</p>
-              <p v-else-if="renewalWarningInitialLoading && !renewalWarningSummary">
-                正在读取提醒…
-              </p>
-              <template v-else-if="renewalWarningSummary">
-                <div class="v2-notification__counts">
-                  <span>
-                    <small>即将到期</small>
-                    <strong>{{ renewalWarningSummary.upcomingCount }}</strong>
-                  </span>
-                  <span>
-                    <small>已到期</small>
-                    <strong>{{ renewalWarningSummary.expiredCount }}</strong>
-                  </span>
-                </div>
-                <ul v-if="renewalWarningSummary.items.length">
-                  <li v-for="item in renewalWarningSummary.items" :key="item.id">
+              <section v-if="isAdmin" class="v2-notification__section">
+                <header>
+                  <strong>敏感资料审批</strong>
+                  <small>{{ sensitiveApprovalSummary?.pendingCount ?? 0 }} 条待审核</small>
+                </header>
+                <p v-if="sensitiveApprovalInitialLoading && !sensitiveApprovalSummary">
+                  正在读取审批…
+                </p>
+                <ul v-else-if="sensitiveApprovalSummary?.items.length">
+                  <li v-for="item in sensitiveApprovalSummary.items" :key="item.id">
                     <div>
-                      <strong>{{ item.customer.name }}</strong>
-                      <span>{{ item.account.appleIdMasked }} · {{ item.service.name }}</span>
+                      <strong>{{ item.requester.displayName }} · {{ item.fieldLabel }}</strong>
+                      <span>{{ item.targetLabel }} · {{ item.reason }}</span>
                     </div>
-                    <small :class="`is-${item.warningState}`">
-                      {{ item.warningState === 'expired' ? '已到期' : '即将到期' }}
-                      · {{ formatWarningDueAt(item.dueAt) }}
-                    </small>
+                    <small>申请于 {{ formatNotificationTime(item.createdAt) }}</small>
+                    <div class="v2-notification__approval-actions">
+                      <AppButton
+                        size="small"
+                        variant="ghost"
+                        :disabled="approvalDecisionId === item.id"
+                        @click="rejectSensitiveApproval(item.id)"
+                      >
+                        拒绝
+                      </AppButton>
+                      <AppButton
+                        size="small"
+                        variant="primary"
+                        :loading="approvalDecisionId === item.id"
+                        @click="approveSensitiveApproval(item.id)"
+                      >
+                        批准 15 分钟
+                      </AppButton>
+                    </div>
                   </li>
                 </ul>
-                <p v-else>当前没有续费到期提醒。</p>
-                <AppButton variant="primary" size="small" @click="openRenewalWarnings">
-                  打开续费操作台
-                </AppButton>
-              </template>
-              <p v-else>提醒暂时无法加载，请稍后重试。</p>
-              <small v-if="renewalWarningError" class="v2-notification__error">
-                刷新失败，已保留上次成功结果。
-              </small>
+                <p v-else>当前没有待审核的敏感资料申请。</p>
+                <small v-if="sensitiveApprovalError" class="v2-notification__error">
+                  审批通知刷新失败，已保留上次成功结果。
+                </small>
+              </section>
+
+              <section class="v2-notification__section">
+                <header>
+                  <strong>续费到期提醒</strong>
+                  <small v-if="renewalWarningSummary">
+                    提前 {{ renewalWarningSummary.warningDays }} 天
+                  </small>
+                </header>
+                <p v-if="!canViewRenewalWarnings">当前账号无权查看续费提醒。</p>
+                <p v-else-if="renewalWarningInitialLoading && !renewalWarningSummary">
+                  正在读取提醒…
+                </p>
+                <template v-else-if="renewalWarningSummary">
+                  <div class="v2-notification__counts">
+                    <span>
+                      <small>即将到期</small>
+                      <strong>{{ renewalWarningSummary.upcomingCount }}</strong>
+                    </span>
+                    <span>
+                      <small>已到期</small>
+                      <strong>{{ renewalWarningSummary.expiredCount }}</strong>
+                    </span>
+                  </div>
+                  <ul v-if="renewalWarningSummary.items.length">
+                    <li v-for="item in renewalWarningSummary.items" :key="item.id">
+                      <div>
+                        <strong>{{ item.customer.name }}</strong>
+                        <span>{{ item.account.appleIdMasked }} · {{ item.service.name }}</span>
+                      </div>
+                      <small :class="`is-${item.warningState}`">
+                        {{ item.warningState === 'expired' ? '已到期' : '即将到期' }}
+                        · {{ formatWarningDueAt(item.dueAt) }}
+                      </small>
+                    </li>
+                  </ul>
+                  <p v-else>当前没有续费到期提醒。</p>
+                  <AppButton variant="primary" size="small" @click="openRenewalWarnings">
+                    打开续费操作台
+                  </AppButton>
+                </template>
+                <p v-else>提醒暂时无法加载，请稍后重试。</p>
+                <small v-if="renewalWarningError" class="v2-notification__error">
+                  刷新失败，已保留上次成功结果。
+                </small>
+              </section>
             </div>
           </div>
           <div class="v2-topbar__account">
@@ -326,6 +367,8 @@
 </template>
 
 <script setup lang="ts">
+import 'element-plus/es/components/message-box/style/css.mjs';
+import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { V2_DATA_SCOPES } from '@apple-business/shared';
@@ -345,12 +388,16 @@ import {
   Sunny
 } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import { getApiErrorMessage } from '@/api/client';
 import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
+import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
+import type { V2SensitiveAccessApprovalSummary } from '@/v2/types/sensitiveAccess';
+import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { v2ModuleDefinitions, v2NavigationSections } from '@/v2/config/modules';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
 import {
@@ -392,6 +439,7 @@ const currentTheme = ref<V2Theme>(getPreferredV2Theme());
 const globalSearchQuery = ref('');
 const globalSearchOpen = ref(false);
 const notificationOpen = ref(false);
+const approvalDecisionId = ref('');
 const sessionRetrying = ref(false);
 const contentElement = ref<HTMLElement | null>(null);
 const pageTitleElement = ref<HTMLElement | null>(null);
@@ -455,6 +503,7 @@ const operatorInitial = computed(() => authStore.displayName.trim().slice(0, 1) 
 const operatorRole = computed(() =>
   authStore.user?.roles?.includes('admin') ? '管理员' : '运营成员'
 );
+const isAdmin = computed(() => authStore.user?.roles?.includes('admin') ?? false);
 const canViewRenewalWarnings = computed(() =>
   hasUserPermission(authStore.user, 'apple.renewal_task.view')
 );
@@ -469,6 +518,20 @@ const renewalWarningSummary = computed(() => renewalWarningQuery.data.value);
 const renewalWarningCount = computed(() => renewalWarningSummary.value?.totalCount ?? 0);
 const renewalWarningInitialLoading = computed(() => renewalWarningQuery.isInitialLoading.value);
 const renewalWarningError = computed(() => renewalWarningQuery.error.value);
+const sensitiveApprovalQuery = useV2Query<V2SensitiveAccessApprovalSummary>({
+  scope: 'security',
+  key: 'sensitive-approval-summary',
+  freshnessPolicy: 'event-driven',
+  query: ({ signal }) => idBusinessV2SensitiveAccessApi.getApprovalSummary({ signal })
+});
+const sensitiveApprovalSummary = computed(() => sensitiveApprovalQuery.data.value);
+const sensitiveApprovalInitialLoading = computed(
+  () => sensitiveApprovalQuery.isInitialLoading.value
+);
+const sensitiveApprovalError = computed(() => sensitiveApprovalQuery.error.value);
+const notificationCount = computed(
+  () => renewalWarningCount.value + (sensitiveApprovalSummary.value?.pendingCount ?? 0)
+);
 
 watch(
   () => route.fullPath,
@@ -564,8 +627,14 @@ function refreshRenewalWarnings(force = false) {
   void (force ? renewalWarningQuery.refresh() : renewalWarningQuery.ensureFresh());
 }
 
+function refreshSensitiveApprovals(force = false) {
+  if (!isAdmin.value) return;
+  void (force ? sensitiveApprovalQuery.refresh() : sensitiveApprovalQuery.ensureFresh());
+}
+
 function handleWindowFocus() {
   refreshRenewalWarnings();
+  refreshSensitiveApprovals();
 }
 
 function handleRenewalWarningRefresh() {
@@ -574,7 +643,66 @@ function handleRenewalWarningRefresh() {
 
 function toggleNotification() {
   notificationOpen.value = !notificationOpen.value;
-  if (notificationOpen.value) refreshRenewalWarnings(true);
+  if (notificationOpen.value) {
+    refreshRenewalWarnings(true);
+    refreshSensitiveApprovals(true);
+  }
+}
+
+async function approveSensitiveApproval(id: string) {
+  try {
+    await ElMessageBox.confirm('批准后，申请人可在 15 分钟内查看对应字段。', '批准敏感资料申请', {
+      confirmButtonText: '确认批准',
+      cancelButtonText: '取消',
+      type: 'warning'
+    });
+  } catch {
+    return;
+  }
+  approvalDecisionId.value = id;
+  try {
+    await idBusinessV2SensitiveAccessApi.decide(id, 'approved');
+    ElMessage.success('敏感资料申请已批准');
+    await sensitiveApprovalQuery.refresh();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error));
+  } finally {
+    approvalDecisionId.value = '';
+  }
+}
+
+async function rejectSensitiveApproval(id: string) {
+  let reason: string;
+  try {
+    const result = await ElMessageBox.prompt(
+      '请填写拒绝原因，申请人会看到该说明。',
+      '拒绝敏感资料申请',
+      {
+        confirmButtonText: '确认拒绝',
+        cancelButtonText: '取消',
+        inputPlaceholder: '2 至 200 个字符',
+        inputValidator: (value) => {
+          const normalized = value.trim();
+          return normalized.length >= 2 && normalized.length <= 200
+            ? true
+            : '请输入 2 至 200 个字符的拒绝原因';
+        }
+      }
+    );
+    reason = result.value.trim();
+  } catch {
+    return;
+  }
+  approvalDecisionId.value = id;
+  try {
+    await idBusinessV2SensitiveAccessApi.decide(id, 'rejected', reason);
+    ElMessage.success('敏感资料申请已拒绝');
+    await sensitiveApprovalQuery.refresh();
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error));
+  } finally {
+    approvalDecisionId.value = '';
+  }
 }
 
 async function openRenewalWarnings() {
@@ -597,6 +725,10 @@ function formatWarningDueAt(value: string | null) {
     minute: '2-digit',
     hour12: false
   }).format(date);
+}
+
+function formatNotificationTime(value: string) {
+  return formatWarningDueAt(value);
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -700,6 +832,7 @@ onMounted(() => {
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener(RENEWAL_WARNING_REFRESH_EVENT, handleRenewalWarningRefresh);
   refreshRenewalWarnings();
+  refreshSensitiveApprovals();
 });
 onBeforeUnmount(() => {
   stopV2ChangeSync();

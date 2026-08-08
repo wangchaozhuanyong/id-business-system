@@ -133,27 +133,35 @@
           <article v-for="job in page.jobs" :key="job.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ job.jobNo }}</strong>
-                <span>{{ page.governanceJobTypeLabels[job.type] }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, 'jobNo']">
+                  {{ job.jobNo }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '类型']">
+                  {{ page.governanceJobTypeLabels[job.type] }}
+                </span>
               </div>
-              <el-tag :type="page.governanceJobStatusMeta[job.status].type" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '状态']"
+                :type="page.governanceJobStatusMeta[job.status].type"
+                effect="plain"
+              >
                 {{ page.governanceJobStatusMeta[job.status].label }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '申请人']">
                 <dt>申请人</dt>
                 <dd>{{ job.requestedBy.displayName }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '审批人']">
                 <dt>审批人</dt>
                 <dd>{{ job.approval?.approver.displayName ?? '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '执行结果']">
                 <dt>执行结果</dt>
                 <dd>{{ job.succeededItems }}/{{ job.totalItems }} 成功</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '创建时间']">
                 <dt>创建时间</dt>
                 <dd>{{ page.formatGovernanceDate(job.createdAt) }}</dd>
               </div>

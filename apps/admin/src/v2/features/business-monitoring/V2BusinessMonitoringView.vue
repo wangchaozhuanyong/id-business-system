@@ -164,10 +164,22 @@
               >
                 <header>
                   <div>
-                    <strong>{{ item.subject }}</strong>
-                    <span>{{ page.businessMonitoringCategoryLabel(item.category) }}</span>
+                    <strong
+                      v-v2-column-visibility="[
+                        v2TableSchemas.businessMonitoring.main.id,
+                        'subject'
+                      ]"
+                    >
+                      {{ item.subject }}
+                    </strong>
+                    <span
+                      v-v2-column-visibility="[v2TableSchemas.businessMonitoring.main.id, '分类']"
+                    >
+                      {{ page.businessMonitoringCategoryLabel(item.category) }}
+                    </span>
                   </div>
                   <el-tag
+                    v-v2-column-visibility="[v2TableSchemas.businessMonitoring.main.id, '级别']"
                     :type="page.businessMonitoringSeverityMeta(item.severity).type"
                     effect="plain"
                   >
@@ -175,17 +187,29 @@
                   </el-tag>
                 </header>
                 <dl>
-                  <div class="v2-business-monitoring-mobile-description">
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.businessMonitoring.main.id,
+                      'description'
+                    ]"
+                    class="v2-business-monitoring-mobile-description"
+                  >
                     <dt>异常说明</dt>
                     <dd>{{ item.description }}</dd>
                   </div>
-                  <div>
+                  <div
+                    v-v2-column-visibility="[v2TableSchemas.businessMonitoring.main.id, '发现时间']"
+                  >
                     <dt>发现时间</dt>
                     <dd>{{ page.formatBusinessMonitoringDate(item.detectedAt) }}</dd>
                   </div>
                 </dl>
                 <footer>
-                  <span>修正源数据后自动消失</span>
+                  <span
+                    v-v2-column-visibility="[v2TableSchemas.businessMonitoring.main.id, '处理方式']"
+                  >
+                    修正源数据后自动消失
+                  </span>
                   <AppButton size="small" variant="ghost" @click="page.selectFinding(item)">
                     查看详情
                   </AppButton>

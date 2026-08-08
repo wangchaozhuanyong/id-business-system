@@ -1,12 +1,12 @@
 <template>
-  <el-form-item label="目标/反算利润率" prop="targetProfitRate">
+  <el-form-item :label="label" prop="targetProfitRate">
     <div class="v2-order-profit-rate-control">
       <el-input
         :model-value="modelValue"
         clearable
         inputmode="decimal"
         maxlength="12"
-        :placeholder="mode === 'receipt' ? '填写原币实收后自动反算' : '选填，例如 10'"
+        :placeholder="mode === 'receipt' ? receiptPlaceholder : '选填，例如 10'"
         @update:model-value="emit('update:modelValue', String($event ?? ''))"
       >
         <template #append>%</template>
@@ -19,11 +19,19 @@
 <script setup lang="ts">
 import type { OrderPricingInputMode } from '../useOrderPricingInputMode';
 
-defineProps<{
-  modelValue: string;
-  mode: OrderPricingInputMode;
-  hint: string;
-}>();
+withDefaults(
+  defineProps<{
+    modelValue: string;
+    mode: OrderPricingInputMode;
+    hint: string;
+    label?: string;
+    receiptPlaceholder?: string;
+  }>(),
+  {
+    label: '目标/反算利润率',
+    receiptPlaceholder: '填写原币实收后自动反算'
+  }
+);
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];

@@ -1,116 +1,150 @@
 <template>
   <section class="v2-records-page">
-    <section class="v2-records-toolbar v2-records-toolbar--accounts" aria-label="ID筛选">
-      <el-input
-        v-model="page.query.keyword"
-        clearable
-        placeholder="ID账号、手机号、供应商"
-        aria-label="搜索ID资料"
-        @keyup.enter="page.handleSearch"
-        @clear="page.handleSearch"
-      />
-      <el-select
-        v-model="page.query.countryOptionId"
-        clearable
-        placeholder="全部国家"
-        aria-label="筛选国家"
-        @change="page.handleFilterChange"
-      >
-        <el-option
-          v-for="option in page.countryOptions"
-          :key="option.id"
-          :label="option.name"
-          :value="option.id"
-        />
-      </el-select>
-      <el-select
-        v-model="page.query.statusOptionId"
-        clearable
-        placeholder="全部ID状态"
-        aria-label="筛选ID状态"
-        @change="page.handleFilterChange"
-      >
-        <el-option
-          v-for="option in page.statusOptions"
-          :key="option.id"
-          :label="option.name"
-          :value="option.id"
-        />
-      </el-select>
-      <el-select
-        v-model="page.query.saleState"
-        clearable
-        placeholder="全部销售状态"
-        aria-label="筛选销售状态"
-        @change="page.handleFilterChange"
-      >
-        <el-option label="可用" value="available" />
-        <el-option label="已卖出" value="sold" />
-      </el-select>
-      <V2FilterDisclosure>
-        <el-select
-          v-model="page.query.supplierOptionId"
+    <V2PageContext
+      description="集中管理 ID 资料、余额成本、销售关系和敏感信息；状态变更与敏感资料访问均保留审计记录。"
+      aria-label="ID 管理说明"
+    >
+      <template #meta>
+        <span>ID 资料库 · 账号默认脱敏展示</span>
+      </template>
+      <template #actions>
+        <div class="v2-account-command-panel__actions">
+          <AppButton variant="ghost" :disabled="page.loading" @click="page.loadAccounts">
+            <el-icon><Refresh /></el-icon>
+            刷新
+          </AppButton>
+          <el-dropdown trigger="click" @command="page.handleToolbarCommand">
+            <AppButton variant="ghost" :loading="page.exporting">
+              <el-icon><MoreFilled /></el-icon>
+              数据工具
+            </AppButton>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
+                <el-dropdown-item v-if="page.canImport" command="import">导入 ID</el-dropdown-item>
+                <el-dropdown-item command="export">导出当前结果</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate">
+            <el-icon><Plus /></el-icon>
+            新增 ID
+          </AppButton>
+        </div>
+      </template>
+    </V2PageContext>
+
+    <section class="v2-account-command-panel" aria-label="ID 管理工具">
+      <div class="v2-account-filter-grid" aria-label="ID 筛选">
+        <el-input
+          v-model="page.query.keyword"
+          class="v2-account-filter-grid__search"
           clearable
-          placeholder="全部供应商"
-          aria-label="筛选ID供应商"
+          placeholder="搜索 ID 账号、手机号或供应商"
+          aria-label="搜索 ID 资料"
+          @keyup.enter="page.handleSearch"
+          @clear="page.handleSearch"
+        />
+        <el-select
+          v-model="page.query.countryOptionId"
+          clearable
+          placeholder="全部国家"
+          aria-label="筛选国家"
           @change="page.handleFilterChange"
         >
           <el-option
-            v-for="option in page.supplierOptions"
+            v-for="option in page.countryOptions"
             :key="option.id"
             :label="option.name"
             :value="option.id"
           />
         </el-select>
         <el-select
-          v-model="page.query.recordStatus"
+          v-model="page.query.saleState"
           clearable
-          placeholder="全部资料状态"
-          aria-label="筛选资料状态"
+          placeholder="全部销售状态"
+          aria-label="筛选销售状态"
           @change="page.handleFilterChange"
         >
-          <el-option label="启用" value="active" />
-          <el-option label="停用" value="disabled" />
+          <el-option label="可用" value="available" />
+          <el-option label="已卖出" value="sold" />
         </el-select>
-      </V2FilterDisclosure>
-      <div class="v2-records-toolbar__actions">
-        <AppButton icon-only title="搜索" @click="page.handleSearch">
+        <V2FilterDisclosure
+          :label="page.activeFilterCount ? `更多筛选 · ${page.activeFilterCount}` : '更多筛选'"
+        >
+          <el-select
+            v-model="page.query.statusOptionId"
+            clearable
+            placeholder="全部 ID 状态"
+            aria-label="筛选 ID 状态"
+            @change="page.handleFilterChange"
+          >
+            <el-option
+              v-for="option in page.statusOptions"
+              :key="option.id"
+              :label="option.name"
+              :value="option.id"
+            />
+          </el-select>
+          <el-select
+            v-model="page.query.supplierOptionId"
+            clearable
+            placeholder="全部供应商"
+            aria-label="筛选 ID 供应商"
+            @change="page.handleFilterChange"
+          >
+            <el-option
+              v-for="option in page.supplierOptions"
+              :key="option.id"
+              :label="option.name"
+              :value="option.id"
+            />
+          </el-select>
+          <el-select
+            v-model="page.query.recordStatus"
+            clearable
+            placeholder="全部资料状态"
+            aria-label="筛选资料状态"
+            @change="page.handleFilterChange"
+          >
+            <el-option label="启用" value="active" />
+            <el-option label="停用" value="disabled" />
+          </el-select>
+        </V2FilterDisclosure>
+        <AppButton variant="soft" @click="page.handleSearch">
           <el-icon><Search /></el-icon>
+          查询
         </AppButton>
-        <AppButton icon-only title="刷新" :disabled="page.loading" @click="page.loadAccounts">
-          <el-icon><Refresh /></el-icon>
+        <AppButton v-if="page.activeFilterCount" variant="ghost" @click="page.resetFilters">
+          重置
         </AppButton>
-        <el-dropdown trigger="click" @command="page.handleToolbarCommand">
-          <AppButton variant="ghost" :loading="page.exporting">
-            <el-icon><MoreFilled /></el-icon>
-            更多
-          </AppButton>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
-              <el-dropdown-item v-if="page.canImport" command="import">导入 ID</el-dropdown-item>
-              <el-dropdown-item command="export">导出当前结果</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate">
-          <el-icon><Plus /></el-icon>
-          新增 ID
-        </AppButton>
-        <input
-          ref="importFileInput"
-          class="v2-sr-only"
-          type="file"
-          accept=".csv,text/csv"
-          @change="page.handleImportFile"
-        />
       </div>
+
+      <footer class="v2-account-command-panel__footer">
+        <p class="v2-records-security-note">
+          <el-icon><Lock /></el-icon>
+          敏感资料默认脱敏，查看、复制和导出都会写入审计日志。
+        </p>
+        <span v-if="page.activeFilterCount">已启用 {{ page.activeFilterCount }} 个筛选条件</span>
+        <span v-else>当前显示全部 ID 资料</span>
+      </footer>
+
+      <input
+        ref="importFileInput"
+        class="v2-sr-only"
+        type="file"
+        accept=".csv,text/csv"
+        @change="page.handleImportFile"
+      />
     </section>
 
-    <p class="v2-records-security-note">
-      <el-icon><Lock /></el-icon>
-      敏感资料默认脱敏，查看、复制和导出都会写入审计日志。
-    </p>
+    <div class="v2-account-list-heading">
+      <div>
+        <strong>ID 资料列表</strong>
+        <span>{{ page.hasLoadedOnce ? `共 ${page.total} 条结果` : '正在准备数据' }}</span>
+      </div>
+      <span>账号默认脱敏展示</span>
+    </div>
 
     <V2AsyncRegion
       skeleton="table"
@@ -135,7 +169,9 @@
           <template #empty>
             <div class="v2-records-empty">
               <strong>暂无 ID 资料</strong>
-              <span>当前筛选条件下没有数据</span>
+              <span>
+                {{ page.activeFilterCount ? '当前筛选条件下没有数据' : '系统中还没有 ID 资料' }}
+              </span>
               <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate"
                 >新增 ID</AppButton
               >
@@ -260,10 +296,18 @@
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.appleIdMasked }}</strong>
-                <span>{{ item.country.name }} / {{ item.supplier?.name || '未设置供应商' }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'appleId']">
+                  {{ item.appleIdMasked }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '国家']">
+                  {{ item.country.name }}
+                </span>
+                <span v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '供应商']">
+                  {{ item.supplier?.name || '未设置供应商' }}
+                </span>
               </div>
               <el-tag
+                v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'recordStatus']"
                 :type="
                   item.lossStatus === 'reported'
                     ? 'danger'
@@ -283,17 +327,17 @@
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'ID 状态']">
                 <dt>ID 状态</dt>
                 <dd>
                   {{ item.lossStatus === 'reported' ? '已报损冻结' : item.status.name }}
                 </dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '销售状态']">
                 <dt>销售状态</dt>
                 <dd>{{ item.saleState === 'sold' ? '已卖出' : '可用' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '来源订单']">
                 <dt class="v2-records-help-title">
                   来源订单
                   <FeatureHelp
@@ -319,15 +363,15 @@
                   {{ item.hasSecurityInfo ? '已保存' : '—' }}
                 </dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'currentBalance']">
                 <dt>余额</dt>
                 <dd>{{ page.formatDecimal(item.currentBalance) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '汇率']">
                 <dt>汇率</dt>
                 <dd>{{ page.getAccountExchangeRate(item) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'balanceCostAmount']">
                 <dt>人民币成本</dt>
                 <dd>¥{{ page.formatDecimal(item.balanceCostAmount) }}</dd>
               </div>
@@ -335,11 +379,11 @@
                 <dt>ID购买成本</dt>
                 <dd>¥{{ page.formatDecimal(item.purchaseCost) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '操作人']">
                 <dt>操作人</dt>
                 <dd>{{ operatorUsername(item.createdBy) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'updatedAt']">
                 <dt>更新时间</dt>
                 <dd>{{ page.formatDate(item.updatedAt) }}</dd>
               </div>
@@ -363,7 +407,9 @@
           </article>
           <div v-if="!page.items.length" class="v2-records-empty">
             <strong>暂无 ID 资料</strong>
-            <span>当前筛选条件下没有数据</span>
+            <span>
+              {{ page.activeFilterCount ? '当前筛选条件下没有数据' : '系统中还没有 ID 资料' }}
+            </span>
             <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate"
               >新增 ID</AppButton
             >
@@ -401,6 +447,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
+import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
@@ -408,6 +455,7 @@ import V2AccountRowActions from './components/V2AccountRowActions.vue';
 import { useAccountsPage } from './useAccountsPage';
 import type { V2Account } from './contracts';
 import '@/v2/styles/records.css';
+import '@/v2/styles/accounts.css';
 
 const accountPage = useAccountsPage();
 const importFileInput = accountPage.importFileInput;

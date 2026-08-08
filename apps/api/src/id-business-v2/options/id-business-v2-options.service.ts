@@ -271,7 +271,17 @@ export class IdBusinessV2OptionsService {
       async (tx, context) => {
         const existing = await this.findOptionOrThrowInTransaction(tx, id);
         this.assertMutable(existing);
-        await this.assertNoChildren(tx, existing.id, '删除', false);
+        const cascadedServices = await this.repository.softDeleteDependentServices(tx, {
+          optionId: existing.id,
+          optionType: existing.type,
+          deletedAt: context.businessTime,
+          operatorId: operator?.id
+        });
+        const disabledWallets = await this.repository.disableDependentSupplierWallets(tx, {
+          optionId: existing.id,
+          optionType: existing.type,
+          operatorId: operator?.id
+        });
         await this.repository.softDelete(tx, {
           id: existing.id,
           uniqueKey: existing.uniqueKey,
@@ -285,9 +295,19 @@ export class IdBusinessV2OptionsService {
           objectType: 'id_business_v2_option',
           objectId: existing.id,
           beforeData: toOptionAuditJson(toOptionResponse(existing)),
-          remark: `删除 V2 选项：${existing.name}`
+          afterData: toOptionAuditJson({
+            cascadedServiceCount: cascadedServices.count,
+            disabledSupplierWalletCount: disabledWallets.count
+          }),
+          remark: `删除 V2 选项：${existing.name}${
+            cascadedServices.count > 0 ? `，同步删除 ${cascadedServices.count} 个开通业务` : ''
+          }`
         });
-        return { deleted: true };
+        return {
+          deleted: true,
+          cascadedServiceCount: cascadedServices.count,
+          disabledSupplierWalletCount: disabledWallets.count
+        };
       },
       { requestId: metadata.requestId ?? randomUUID(), operator }
     );

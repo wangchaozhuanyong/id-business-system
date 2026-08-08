@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import view from './V2CustomersView.vue?raw';
 import historyServices from './components/V2CustomerHistoryServices.vue?raw';
 import mobileDetails from './components/V2CustomerMobileDetails.vue?raw';
+import sensitiveAccessDialog from './components/V2CustomerSensitiveAccessDialog.vue?raw';
 import tableSchemas from '@/v2/features/tableSchemas.ts?raw';
 
 describe('customer history and contact UI contract', () => {
@@ -29,6 +30,8 @@ describe('customer history and contact UI contract', () => {
   it('explains the keep and clear behavior for stored WhatsApp', () => {
     expect(view).toContain('留空保持原 WhatsApp');
     expect(view).toContain('清空已保存 WhatsApp');
-    expect(view).toContain("revealField === 'phone' ? '查看完整手机号' : '查看完整 WhatsApp'");
+    expect(sensitiveAccessDialog).toContain(
+      "revealField === 'phone' ? '查看完整手机号' : '查看完整 WhatsApp'"
+    );
   });
 });

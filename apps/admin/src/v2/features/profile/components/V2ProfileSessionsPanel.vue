@@ -71,19 +71,27 @@
         <article v-for="item in page.sessions" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
-              <strong>{{ page.profileClientSummary(item.userAgent) }}</strong>
-              <span>最近活动 {{ page.formatProfileDate(item.lastActiveAt) }}</span>
+              <strong v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, 'userAgent']">
+                {{ page.profileClientSummary(item.userAgent) }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, 'lastActiveAt']">
+                最近活动 {{ page.formatProfileDate(item.lastActiveAt) }}
+              </span>
             </div>
-            <el-tag :type="page.profileSessionStateMeta(item).type" effect="plain">
+            <el-tag
+              v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, '状态']"
+              :type="page.profileSessionStateMeta(item).type"
+              effect="plain"
+            >
               {{ page.profileSessionStateMeta(item).label }}
             </el-tag>
           </header>
           <dl>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, 'ip']">
               <dt>IP</dt>
               <dd>{{ item.ip || '—' }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, 'expiresAt']">
               <dt>到期</dt>
               <dd>{{ page.formatProfileDate(item.expiresAt) }}</dd>
             </div>

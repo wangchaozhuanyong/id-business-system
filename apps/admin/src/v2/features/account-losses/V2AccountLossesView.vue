@@ -154,39 +154,57 @@
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.appleIdMasked }}</strong>
-                <span>{{ item.countryName }} / {{ item.supplierName || '未设置供应商' }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'ID 账号']">
+                  {{ item.appleIdMasked }}
+                </strong>
+                <span
+                  v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'countryName']"
+                >
+                  {{ item.countryName }}
+                </span>
+                <span v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '供应商']">
+                  {{ item.supplierName || '未设置供应商' }}
+                </span>
               </div>
-              <el-tag :type="item.status === 'reversed' ? 'info' : 'danger'" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '销售状态']"
+                :type="item.status === 'reversed' ? 'info' : 'danger'"
+                effect="plain"
+              >
                 {{ item.status === 'reversed' ? '已冲回' : '已报损冻结' }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '销售状态']">
                 <dt>报损时销售状态</dt>
                 <dd>{{ item.saleState === 'sold' ? '已卖出' : '可用' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '来源订单']">
                 <dt>来源订单</dt>
                 <dd>{{ item.soldOrderNo || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'lossBalance']">
                 <dt>损失余额</dt>
                 <dd>{{ page.formatDecimal(item.lossBalance) }} {{ item.currencyCode || '' }}</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'lossCostAmount']"
+              >
                 <dt>人民币亏损</dt>
                 <dd>¥{{ page.formatDecimal(item.lossCostAmount) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '操作人']">
                 <dt>操作人</dt>
                 <dd>{{ operatorUsername(item.reportedBy) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'reportedAt']">
                 <dt>报损时间</dt>
                 <dd>{{ page.formatDate(item.reportedAt) }}</dd>
               </div>
-              <div class="v2-account-losses__mobile-reason">
+              <div
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'reason']"
+                class="v2-account-losses__mobile-reason"
+              >
                 <dt>报损原因</dt>
                 <dd>{{ item.reason }}</dd>
               </div>
