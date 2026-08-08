@@ -50,7 +50,14 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
   list(currency?: 'CNY' | 'MYR' | 'USD' | 'USDT', supplierOptionId?: string) {
     return this.prisma.idBusinessV2TopupSupplierAccount
       .findMany({
-        where: { currency, supplierOptionId },
+        where: {
+          currency,
+          supplierOptionId,
+          status: 'active',
+          supplierOption: {
+            is: { type: 'topup_supplier', status: 'active', deletedAt: null }
+          }
+        },
         include: { supplierOption: true },
         orderBy: [{ supplierOption: { name: 'asc' } }, { currency: 'asc' }]
       })
@@ -94,7 +101,7 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
     return tx.idBusinessV2Option.findFirst({
       where: {
         id: supplierOptionId,
-        type: { in: ['topup_supplier', 'id_supplier'] },
+        type: 'topup_supplier',
         status: 'active',
         deletedAt: null
       },

@@ -116,24 +116,11 @@ export class IdBusinessV2AccountsRepository {
   }
 
   async listPurchaseSources() {
-    const [financeAccounts, supplierWallets] = await Promise.all([
-      this.prisma.idBusinessV2FinanceAccount.findMany({
-        where: { status: 'active' },
-        select: { id: true, name: true, currency: true, currentBalance: true },
-        orderBy: [{ currency: 'asc' }, { name: 'asc' }]
-      }),
-      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-        where: { status: 'active' },
-        select: {
-          id: true,
-          supplierOptionId: true,
-          currency: true,
-          currentBalance: true,
-          supplierOption: { select: { name: true } }
-        },
-        orderBy: [{ currency: 'asc' }, { supplierOption: { name: 'asc' } }]
-      })
-    ]);
+    const financeAccounts = await this.prisma.idBusinessV2FinanceAccount.findMany({
+      where: { status: 'active' },
+      select: { id: true, name: true, currency: true, currentBalance: true },
+      orderBy: [{ currency: 'asc' }, { name: 'asc' }]
+    });
     return {
       financeAccounts: financeAccounts.map((row) => ({
         ...row,
@@ -142,16 +129,7 @@ export class IdBusinessV2AccountsRepository {
           'id_business_v2_finance_accounts.current_balance'
         ).toString()
       })),
-      supplierWallets: supplierWallets.map((row) => ({
-        id: row.id,
-        supplierOptionId: row.supplierOptionId,
-        supplierName: row.supplierOption.name,
-        currency: row.currency,
-        currentBalance: mapAmount4(
-          row.currentBalance,
-          'id_business_v2_topup_supplier_accounts.current_balance'
-        ).toString()
-      }))
+      supplierWallets: []
     };
   }
 

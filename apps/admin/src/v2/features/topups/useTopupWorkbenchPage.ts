@@ -366,7 +366,7 @@ export function useTopupWorkbenchPage() {
       }
       creditConfirmationVisible.value = false;
       creditDrawerVisible.value = false;
-      await loadWorkbench();
+      void loadWorkbench();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {

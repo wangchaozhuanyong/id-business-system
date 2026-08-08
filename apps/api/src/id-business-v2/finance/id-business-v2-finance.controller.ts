@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { IdBusinessV2OptionsService } from '../options/public-api';
 import type {
   AdjustIdBusinessV2SupplierWalletDto,
   BackfillIdBusinessV2FinanceHistoryDto,
   CloseIdBusinessV2GiftCardRefundDto,
   ConfirmIdBusinessV2FinanceHistoryDto,
+  CorrectIdBusinessV2FinanceExpenseDto,
   CreateIdBusinessV2FinanceAccountDto,
   CreateIdBusinessV2FinanceExpenseDto,
   CreateIdBusinessV2SupplierDepositDto,
@@ -49,8 +51,48 @@ export class IdBusinessV2FinanceController {
     private readonly giftCardRefundsService: IdBusinessV2FinanceGiftCardRefundsService,
     private readonly historyPreviewService: IdBusinessV2FinanceHistoryPreviewService,
     private readonly historyService: IdBusinessV2FinanceHistoryService,
-    private readonly historyConfirmationService: IdBusinessV2FinanceHistoryConfirmationService
+    private readonly historyConfirmationService: IdBusinessV2FinanceHistoryConfirmationService,
+    private readonly optionsService: IdBusinessV2OptionsService
   ) {}
+
+  @Get('ledger/bootstrap')
+  async ledgerBootstrap(
+    @Query('currency') currency?: string,
+    @Query('expensePage') expensePage?: string,
+    @Query('journalPage') journalPage?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('periodMonth') periodMonth?: string,
+    @Query('journalType') journalType?: string
+  ) {
+    const [accounts, wallets, expenses, journals, periods, settings, suppliers, categories] =
+      await Promise.all([
+        this.accountsService.list(currency),
+        this.supplierWalletsService.list(currency),
+        this.expensesService.list({ page: expensePage, pageSize, currency }),
+        this.journalsService.list({
+          page: journalPage,
+          pageSize,
+          currency,
+          periodMonth,
+          journalType
+        }),
+        this.periodsService.list(),
+        this.reportsService.getSettings(),
+        this.optionsService.listSelectors('topup_supplier'),
+        this.optionsService.listSelectors('expense_category')
+      ]);
+    return {
+      accounts: accounts.items,
+      wallets: wallets.items,
+      expenses: { items: expenses.items, total: expenses.total },
+      journals: { items: journals.items, total: journals.total },
+      periods,
+      settings,
+      supplierOptions: suppliers.items,
+      expenseCategories: categories.items,
+      generatedAt: new Date().toISOString()
+    };
+  }
 
   @Get('accounts')
   listAccounts(@Query('currency') currency?: string, @Query('status') status?: string) {
@@ -160,6 +202,16 @@ export class IdBusinessV2FinanceController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.expensesService.create(dto, operator);
+  }
+
+  @Post('expenses/:id/corrections')
+  @RequirePermissions('finance.view', 'finance.post', 'finance.adjust')
+  correctExpense(
+    @Param('id') id: string,
+    @Body() dto: CorrectIdBusinessV2FinanceExpenseDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.expensesService.correct(id, dto, operator);
   }
 
   @Get('journals')

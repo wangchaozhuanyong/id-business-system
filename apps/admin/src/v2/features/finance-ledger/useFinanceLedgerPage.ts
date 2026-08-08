@@ -19,7 +19,7 @@ import type { V2ModuleKey } from '@/v2/features/feature';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { V2OptionSelector } from '@/v2/types/options';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
-import { idBusinessV2FinanceApi, idBusinessV2OptionsApi } from './api';
+import { idBusinessV2FinanceApi } from './api';
 import { useFinanceHistory } from './useFinanceHistory';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
 
@@ -74,63 +74,17 @@ export function useFinanceLedgerPage(
       }),
     keepPreviousData: true,
     query: async ({ signal }) => {
-      const [
-        accountsResult,
-        walletsResult,
-        expensesResult,
-        journalsResult,
-        periods,
-        settings,
-        topupSuppliers,
-        idSuppliers,
-        expenseCategories
-      ] = await Promise.all([
-        idBusinessV2FinanceApi.listAccounts(
-          { currency: filters.currency || undefined },
-          { signal }
-        ),
-        idBusinessV2FinanceApi.listSupplierWallets(
-          { currency: filters.currency || undefined },
-          { signal }
-        ),
-        idBusinessV2FinanceApi.listExpenses(
-          {
-            page: expensePage.value,
-            pageSize,
-            currency: filters.currency || undefined
-          },
-          { signal }
-        ),
-        idBusinessV2FinanceApi.listJournals(
-          {
-            page: journalPage.value,
-            pageSize,
-            currency: filters.currency || undefined,
-            periodMonth: filters.periodMonth || undefined,
-            journalType: filters.journalType || undefined
-          },
-          { signal }
-        ),
-        idBusinessV2FinanceApi.listPeriods({ signal }),
-        idBusinessV2FinanceApi.getSettings({ signal }),
-        idBusinessV2OptionsApi.listSelectors('topup_supplier'),
-        idBusinessV2OptionsApi.listSelectors('id_supplier'),
-        idBusinessV2OptionsApi.listSelectors('expense_category')
-      ]);
-      const supplierMap = new Map<string, V2OptionSelector>();
-      for (const item of [...topupSuppliers.items, ...idSuppliers.items]) {
-        supplierMap.set(item.id, item);
-      }
-      return {
-        accounts: accountsResult.items,
-        wallets: walletsResult.items,
-        expenses: { items: expensesResult.items, total: expensesResult.total },
-        journals: { items: journalsResult.items, total: journalsResult.total },
-        periods,
-        settings,
-        supplierOptions: [...supplierMap.values()],
-        expenseCategories: expenseCategories.items
-      };
+      return idBusinessV2FinanceApi.bootstrapLedger(
+        {
+          currency: filters.currency || undefined,
+          expensePage: expensePage.value,
+          journalPage: journalPage.value,
+          pageSize,
+          periodMonth: filters.periodMonth || undefined,
+          journalType: filters.journalType || undefined
+        },
+        { signal }
+      );
     }
   });
 
@@ -179,6 +133,8 @@ export function useFinanceLedgerPage(
 
   const expenseDrawerVisible = ref(false);
   const expenseSubmitting = ref(false);
+  const editingExpense = ref<V2FinanceExpense | null>(null);
+  const expenseCorrectionReason = ref('');
   const expenseForm = reactive({
     categoryOptionId: '',
     financeAccountId: '',
@@ -283,7 +239,6 @@ export function useFinanceLedgerPage(
       }
       accountDrawerVisible.value = false;
       ElMessage.success(editingAccount.value ? '资金账户已更新' : '资金账户已创建');
-      await refresh();
     } catch (cause) {
       ElMessage.error(getApiErrorMessage(cause));
     } finally {
@@ -291,16 +246,18 @@ export function useFinanceLedgerPage(
     }
   }
 
-  function openExpense() {
+  function openExpense(expense?: V2FinanceExpense) {
+    editingExpense.value = expense ?? null;
+    expenseCorrectionReason.value = '';
     Object.assign(expenseForm, {
-      categoryOptionId: '',
-      financeAccountId: '',
-      amount: '',
-      occurredAt: toLocalDateTime(new Date()),
+      categoryOptionId: expense?.categoryOptionId ?? '',
+      financeAccountId: expense?.financeAccountId ?? '',
+      amount: expense?.amountOriginal ?? '',
+      occurredAt: toLocalDateTime(expense ? new Date(expense.occurredAt) : new Date()),
       fxRateToCny: '',
       manualRateReason: '',
-      payee: '',
-      remark: ''
+      payee: expense?.payee ?? '',
+      remark: expense?.remark ?? ''
     });
     expenseDrawerVisible.value = true;
   }
@@ -312,6 +269,9 @@ export function useFinanceLedgerPage(
     }
     if (!validUnsigned(expenseForm.amount, false)) return showWarning('开支金额必须大于 0');
     if (!expenseForm.occurredAt) return showWarning('请选择发生时间');
+    if (editingExpense.value && !expenseCorrectionReason.value.trim()) {
+      return showWarning('请填写更正原因');
+    }
     if (
       account.currency !== 'CNY' &&
       expenseForm.fxRateToCny &&
@@ -321,7 +281,7 @@ export function useFinanceLedgerPage(
     }
     expenseSubmitting.value = true;
     try {
-      await idBusinessV2FinanceApi.createExpense({
+      const payload = {
         categoryOptionId: expenseForm.categoryOptionId,
         financeAccountId: account.id,
         amount: expenseForm.amount,
@@ -332,10 +292,19 @@ export function useFinanceLedgerPage(
         payee: expenseForm.payee.trim() || undefined,
         remark: expenseForm.remark.trim() || undefined,
         idempotencyKey: requestKey()
-      });
+      };
+      if (editingExpense.value) {
+        await idBusinessV2FinanceApi.correctExpense(editingExpense.value.id, {
+          ...payload,
+          reason: expenseCorrectionReason.value.trim()
+        });
+      } else {
+        await idBusinessV2FinanceApi.createExpense(payload);
+      }
       expenseDrawerVisible.value = false;
-      ElMessage.success('经营开支已入账');
-      await refresh();
+      ElMessage.success(
+        editingExpense.value ? '原流水已冲销，正确开支已重新入账' : '经营开支已入账'
+      );
     } catch (cause) {
       ElMessage.error(getApiErrorMessage(cause));
     } finally {
@@ -361,7 +330,6 @@ export function useFinanceLedgerPage(
       });
       reversalDrawerVisible.value = false;
       ElMessage.success('原账务已冲销，请按正确证据重新记账');
-      await refresh();
     } catch (cause) {
       ElMessage.error(getApiErrorMessage(cause));
     } finally {
@@ -392,7 +360,6 @@ export function useFinanceLedgerPage(
       }
       periodDrawerVisible.value = false;
       ElMessage.success(periodMutationMode.value === 'close' ? '月份已关账' : '月份已重新打开');
-      await refresh();
     } catch (cause) {
       ElMessage.error(getApiErrorMessage(cause));
     } finally {
@@ -441,6 +408,8 @@ export function useFinanceLedgerPage(
     accountDirty,
     expenseDrawerVisible,
     expenseSubmitting,
+    editingExpense,
+    expenseCorrectionReason,
     expenseForm,
     selectedExpenseAccount,
     expenseDirty,

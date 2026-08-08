@@ -87,22 +87,25 @@ export const idBusinessV2OptionsApi = {
         request<V2OptionTypesResult>(http.get('/id-business-v2/options/types', { signal }))
     });
   },
-  listSelectors(type: V2OptionType, parentId?: string) {
-    return fetchV2Query({
-      scope: 'options-reference',
-      key: `selectors:${type}:${parentId ?? ''}`,
-      freshnessPolicy: 'event-driven',
-      query: ({ signal }: V2QueryContext) =>
-        request<{ items: V2OptionSelector[] }>(
-          http.get('/id-business-v2/options/selectors', {
-            params: {
-              type,
-              parentId
-            },
-            signal
-          })
-        )
-    });
+  listSelectors(type: V2OptionType, parentId?: string, options: V2OptionListRequestOptions = {}) {
+    return fetchV2Query(
+      {
+        scope: 'options-reference',
+        key: `selectors:${type}:${parentId ?? ''}`,
+        freshnessPolicy: 'event-driven',
+        query: ({ signal }: V2QueryContext) =>
+          request<{ items: V2OptionSelector[] }>(
+            http.get('/id-business-v2/options/selectors', {
+              params: {
+                type,
+                parentId
+              },
+              signal
+            })
+          )
+      },
+      { force: options.force }
+    );
   },
   async create(payload: CreateV2OptionInput) {
     const result = await request<V2Option>(http.post('/id-business-v2/options', payload));
@@ -138,7 +141,8 @@ const OPTION_MUTATION_SCOPES = [
   'balances-options',
   'balance-record-options',
   'options-page',
-  'order-entry-matching'
+  'order-entry-matching',
+  'finance-ledger'
 ] as const;
 
 const DEFAULT_OPTION_PAGE_SIZE = 20;

@@ -95,10 +95,14 @@ describe('IdBusinessV2OptionsService', () => {
       count: vi.fn(),
       groupBy: vi.fn(),
       create: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      updateMany: vi.fn()
     },
     idBusinessV2Account: {
       count: vi.fn()
+    },
+    idBusinessV2TopupSupplierAccount: {
+      updateMany: vi.fn()
     },
     auditLog: {
       create: vi.fn()
@@ -115,6 +119,8 @@ describe('IdBusinessV2OptionsService', () => {
     vi.clearAllMocks();
     prisma.auditLog.create.mockResolvedValue({ id: 'audit-1' });
     prisma.idBusinessV2Account.count.mockResolvedValue(0);
+    prisma.idBusinessV2TopupSupplierAccount.updateMany.mockResolvedValue({ count: 0 });
+    prisma.idBusinessV2Option.updateMany.mockResolvedValue({ count: 0 });
     prisma.$transaction.mockImplementation(
       async (work: Array<Promise<unknown>> | ((tx: typeof prisma) => Promise<unknown>)) =>
         typeof work === 'function' ? work(prisma) : Promise.all(work)
@@ -439,7 +445,7 @@ describe('IdBusinessV2OptionsService', () => {
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 
-  it('prevents deleting a parent while any undeleted child remains', async () => {
+  it('soft deletes a business category and its dependent services', async () => {
     prisma.idBusinessV2Option.findFirst.mockResolvedValue(
       makeOption({
         type: 'business_category',
@@ -447,12 +453,22 @@ describe('IdBusinessV2OptionsService', () => {
         uniqueKey: 'business_category:root:ai服务'
       })
     );
-    prisma.idBusinessV2Option.count.mockResolvedValue(1);
+    prisma.idBusinessV2Option.updateMany.mockResolvedValue({ count: 1 });
+    prisma.idBusinessV2Option.update.mockResolvedValue({});
 
-    await expect(service.remove('category-ai', operator)).rejects.toThrow(
-      '请先停用或删除下级选项，再删除当前选项'
+    await expect(service.remove('category-ai', operator)).resolves.toEqual({
+      deleted: true,
+      cascadedServiceCount: 1,
+      disabledSupplierWalletCount: 0
+    });
+    expect(prisma.idBusinessV2Option.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: 'service',
+          parentId: '10000000-0000-4000-8000-000000000010'
+        })
+      })
     );
-    expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 
   it('prevents disabling a country that is still used by an active ID', async () => {
@@ -474,7 +490,7 @@ describe('IdBusinessV2OptionsService', () => {
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 
-  it('prevents deleting a country that is still used by an undeleted ID', async () => {
+  it('soft deletes a country without removing historical ID references', async () => {
     prisma.idBusinessV2Option.findFirst.mockResolvedValue(
       makeOption({
         type: 'country',
@@ -484,12 +500,40 @@ describe('IdBusinessV2OptionsService', () => {
         _count: { children: 0, servicesByCountry: 0, accountsByCountry: 1 }
       })
     );
-    prisma.idBusinessV2Option.count.mockResolvedValue(0);
-    prisma.idBusinessV2Account.count.mockResolvedValue(1);
+    prisma.idBusinessV2Option.update.mockResolvedValue({});
 
-    await expect(service.remove('country-us', operator)).rejects.toThrow(
-      '该国家仍有 ID 资料使用，不能删除'
+    await expect(service.remove('country-us', operator)).resolves.toEqual({
+      deleted: true,
+      cascadedServiceCount: 0,
+      disabledSupplierWalletCount: 0
+    });
+    expect(prisma.idBusinessV2Option.update).toHaveBeenCalled();
+  });
+
+  it('disables supplier wallets when deleting a top-up supplier', async () => {
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(
+      makeOption({
+        id: '10000000-0000-4000-8000-000000000020',
+        type: 'topup_supplier',
+        code: 'supplier-a',
+        name: '加卡供应商 A',
+        uniqueKey: 'topup_supplier:root:加卡供应商 a'
+      })
     );
-    expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
+    prisma.idBusinessV2TopupSupplierAccount.updateMany.mockResolvedValue({ count: 2 });
+    prisma.idBusinessV2Option.update.mockResolvedValue({});
+
+    await expect(service.remove('supplier-a', operator)).resolves.toEqual({
+      deleted: true,
+      cascadedServiceCount: 0,
+      disabledSupplierWalletCount: 2
+    });
+    expect(prisma.idBusinessV2TopupSupplierAccount.updateMany).toHaveBeenCalledWith({
+      where: {
+        supplierOptionId: '10000000-0000-4000-8000-000000000020',
+        status: 'active'
+      },
+      data: { status: 'disabled', updatedByUserId: operator.id }
+    });
   });
 });

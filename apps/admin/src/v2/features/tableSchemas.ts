@@ -472,7 +472,9 @@ export const v2TableSchemas = {
         { key: '人民币金额', label: '人民币金额', kind: 'numeric', widthPreset: 'standard' },
         { key: '收款方', label: '收款方', kind: 'text', widthPreset: 'wide' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' }
+        { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     }),
     journals: table({

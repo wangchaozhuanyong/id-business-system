@@ -116,6 +116,15 @@ export class IdBusinessV2FinanceCommandRepository {
       .then((row) => (row ? mapExpense(row) : null));
   }
 
+  findExpenseForCorrection(tx: Transaction, id: string) {
+    return tx.idBusinessV2FinanceExpense
+      .findUnique({
+        where: { id },
+        include: { categoryOption: true, financeAccount: true, journal: true }
+      })
+      .then((row) => (row ? mapExpense(row) : null));
+  }
+
   createExpense(tx: Transaction, data: Prisma.IdBusinessV2FinanceExpenseUncheckedCreateInput) {
     return tx.idBusinessV2FinanceExpense
       .create({

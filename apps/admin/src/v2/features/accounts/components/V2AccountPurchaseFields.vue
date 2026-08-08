@@ -4,7 +4,7 @@
     <el-alert
       v-if="page.purchaseSourcesError"
       type="error"
-      :title="`付款来源加载失败：${page.purchaseSourcesError}`"
+      :title="`付款账户加载失败：${page.purchaseSourcesError}`"
       :closable="false"
       show-icon
     >
@@ -29,12 +29,12 @@
         />
       </el-form-item>
     </div>
-    <el-form-item label="付款来源" prop="purchaseSourceId">
+    <el-form-item label="付款账户" prop="purchaseSourceId">
       <el-select
         v-model="page.form.purchaseSourceId"
         filterable
         :loading="page.purchaseSourcesLoading"
-        placeholder="选择资金账户或供应商预存钱包"
+        :placeholder="`选择 ${page.form.purchaseCurrency} 币种的资金账户`"
       >
         <el-option
           v-for="option in page.purchaseSourceOptions"

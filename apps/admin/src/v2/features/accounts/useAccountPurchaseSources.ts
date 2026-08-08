@@ -20,20 +20,14 @@ export function useAccountPurchaseSources(
   });
   const purchaseSourcesLoading = ref(false);
   const purchaseSourcesError = ref('');
-  const purchaseSourceOptions = computed(() => [
-    ...purchaseSources.value.financeAccounts
+  const purchaseSourceOptions = computed(() =>
+    purchaseSources.value.financeAccounts
       .filter((account) => account.currency === form.purchaseCurrency)
       .map((account) => ({
         value: `account:${account.id}`,
         label: `${account.name} · ${account.currency} · 余额 ${account.currentBalance}`
-      })),
-    ...purchaseSources.value.supplierWallets
-      .filter((wallet) => wallet.currency === form.purchaseCurrency)
-      .map((wallet) => ({
-        value: `wallet:${wallet.id}`,
-        label: `${wallet.supplierName}预存 · ${wallet.currency} · 余额 ${wallet.currentBalance}`
       }))
-  ]);
+  );
   const purchaseCostPreview = computed(() => {
     const rate = form.purchaseCurrency === 'CNY' ? '1' : form.purchaseFxRateToCny;
     return calculateBalanceCost(form.purchaseOriginalAmount, rate) ?? '';
@@ -43,7 +37,7 @@ export function useAccountPurchaseSources(
     if (!isNonNegativeDecimal(form.purchaseOriginalAmount)) {
       return `请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负原币金额`;
     }
-    if (!form.purchaseSourceId) return '请选择实际付款账户或供应商预存钱包';
+    if (!form.purchaseSourceId) return `请选择 ${form.purchaseCurrency} 币种的付款账户`;
     if (form.purchaseFxRateToCny && !isNonNegativeExchangeRate(form.purchaseFxRateToCny)) {
       return `请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负汇率`;
     }

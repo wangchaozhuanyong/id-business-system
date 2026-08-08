@@ -206,72 +206,32 @@ describe('IdBusinessV2AccountsService', () => {
     expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('secret-password');
   });
 
-  it('purchases an ID from Cloudflare Decimal supplier-wallet rows using canonical strings', async () => {
+  it('rejects using a top-up supplier wallet to purchase an ID', async () => {
     const supplierWalletId = '44444444-4444-4444-8444-444444444444';
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
-    prisma.idBusinessV2Account.create.mockResolvedValue(
-      makeAccount({
-        purchaseCost: new CloudflarePrisma.Decimal('20'),
-        purchaseOriginalAmount: new CloudflarePrisma.Decimal('10'),
-        purchaseCurrency: 'MYR',
-        purchaseFxRateToCny: new CloudflarePrisma.Decimal('2'),
-        purchaseSupplierAccountId: supplierWalletId
-      })
-    );
     financeFxService.resolve.mockResolvedValueOnce({
       id: '55555555-5555-4555-8555-555555555555',
       rateToCny: new CloudflarePrisma.Decimal('2'),
       source: 'manual'
     });
-    prisma.$queryRaw.mockResolvedValue([
-      {
-        id: supplierWalletId,
-        currency: 'MYR',
-        currentBalance: new CloudflarePrisma.Decimal('50'),
-        currentBalanceCny: new CloudflarePrisma.Decimal('100'),
-        supplierName: '供应商 A'
-      }
-    ]);
-    prisma.idBusinessV2TopupSupplierLedger.create.mockResolvedValue({ id: 'ledger-1' });
-    prisma.idBusinessV2TopupSupplierAccount.update.mockResolvedValue({});
 
-    await service.create(
-      {
-        appleId: 'purchase@example.com',
-        countryOptionId: country.id,
-        statusOptionId: status.id,
-        supplierOptionId: supplier.id,
-        purchaseCurrency: 'MYR',
-        purchaseOriginalAmount: '10',
-        purchaseFxRateToCny: '2',
-        purchaseManualRateReason: '人工采购汇率',
-        purchaseCost: '20',
-        purchaseSupplierAccountId: supplierWalletId
-      },
-      operator
-    );
-
-    expect(prisma.idBusinessV2Account.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
+    await expect(
+      service.create(
+        {
+          appleId: 'purchase@example.com',
+          countryOptionId: country.id,
+          statusOptionId: status.id,
+          supplierOptionId: supplier.id,
+          purchaseCurrency: 'MYR',
           purchaseOriginalAmount: '10',
           purchaseFxRateToCny: '2',
-          purchaseCost: '20'
-        })
-      })
-    );
-    expect(prisma.idBusinessV2TopupSupplierLedger.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          amount: '10',
-          balanceBefore: '50',
-          balanceAfter: '40',
-          amountCny: '20',
-          balanceBeforeCny: '100',
-          balanceAfterCny: '80'
-        })
-      })
-    );
+          purchaseManualRateReason: '人工采购汇率',
+          purchaseCost: '20',
+          purchaseSupplierAccountId: supplierWalletId
+        },
+        operator
+      )
+    ).rejects.toThrow('ID 采购只能使用自有资金账户');
+    expect(prisma.idBusinessV2Account.create).not.toHaveBeenCalled();
   });
 
   it('creates an opening-balance ledger entry with the account in one transaction', async () => {

@@ -62,15 +62,21 @@
       </el-form-item>
     </el-form>
   </V2FormDrawer>
-
   <V2FormDrawer
     v-model="page.expenseDrawerVisible"
-    title="记录额外经营开支"
-    confirm-text="确认入账"
+    :title="page.editingExpense ? '更正经营开支' : '记录额外经营开支'"
+    :confirm-text="page.editingExpense ? '冲销并重记' : '确认入账'"
     :confirm-loading="page.expenseSubmitting"
     :dirty="page.expenseDirty"
     @confirm="page.submitExpense"
   >
+    <el-alert
+      v-if="page.editingExpense"
+      title="系统不会修改原始流水；确认后会冲销原流水，并按下方正确内容重新记账。"
+      type="warning"
+      :closable="false"
+      show-icon
+    />
     <el-form
       class="v2-horizontal-form"
       label-position="left"
@@ -130,9 +136,16 @@
       <el-form-item label="备注">
         <el-input v-model="page.expenseForm.remark" type="textarea" :rows="3" maxlength="2000" />
       </el-form-item>
+      <el-form-item v-if="page.editingExpense" label="更正原因" required>
+        <el-input
+          v-model="page.expenseCorrectionReason"
+          type="textarea"
+          :rows="3"
+          maxlength="500"
+        />
+      </el-form-item>
     </el-form>
   </V2FormDrawer>
-
   <V2FormDrawer
     v-model="page.walletDrawerVisible"
     title="新建供应商多币种钱包"
