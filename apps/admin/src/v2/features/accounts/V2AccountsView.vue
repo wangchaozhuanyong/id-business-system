@@ -35,6 +35,7 @@
     </V2PageContext>
 
     <section class="v2-account-command-panel" aria-label="ID 管理工具">
+      <V2AccountLifecycleTabs :model-value="page.query.lifecycle" @select="selectLifecycle" />
       <div class="v2-account-filter-grid" aria-label="ID 筛选">
         <el-input
           v-model="page.query.keyword"
@@ -58,16 +59,6 @@
             :label="option.name"
             :value="option.id"
           />
-        </el-select>
-        <el-select
-          v-model="page.query.saleState"
-          clearable
-          placeholder="全部销售状态"
-          aria-label="筛选销售状态"
-          @change="page.handleFilterChange"
-        >
-          <el-option label="可用" value="available" />
-          <el-option label="已卖出" value="sold" />
         </el-select>
         <V2FilterDisclosure
           :label="page.activeFilterCount ? `更多筛选 · ${page.activeFilterCount}` : '更多筛选'"
@@ -100,16 +91,6 @@
               :value="option.id"
             />
           </el-select>
-          <el-select
-            v-model="page.query.recordStatus"
-            clearable
-            placeholder="全部资料状态"
-            aria-label="筛选资料状态"
-            @change="page.handleFilterChange"
-          >
-            <el-option label="启用" value="active" />
-            <el-option label="停用" value="disabled" />
-          </el-select>
         </V2FilterDisclosure>
         <AppButton variant="soft" @click="page.handleSearch">
           <el-icon><Search /></el-icon>
@@ -126,7 +107,7 @@
           敏感资料默认脱敏，查看、复制和导出都会写入审计日志。
         </p>
         <span v-if="page.activeFilterCount">已启用 {{ page.activeFilterCount }} 个筛选条件</span>
-        <span v-else>当前显示全部 ID 资料</span>
+        <span v-else>当前分类：{{ page.lifecycleLabel }}</span>
       </footer>
 
       <input
@@ -140,7 +121,7 @@
 
     <div class="v2-account-list-heading">
       <div>
-        <strong>ID 资料列表</strong>
+        <strong>{{ page.lifecycleLabel }} 列表</strong>
         <span>{{ page.hasLoadedOnce ? `共 ${page.total} 条结果` : '正在准备数据' }}</span>
       </div>
       <span>账号默认脱敏展示</span>
@@ -168,9 +149,9 @@
         >
           <template #empty>
             <div class="v2-records-empty">
-              <strong>暂无 ID 资料</strong>
+              <strong>{{ emptyTitle }}</strong>
               <span>
-                {{ page.activeFilterCount ? '当前筛选条件下没有数据' : '系统中还没有 ID 资料' }}
+                {{ page.activeFilterCount ? '当前筛选条件下没有数据' : emptyDescription }}
               </span>
               <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate"
                 >新增 ID</AppButton
@@ -257,9 +238,10 @@
             sortable="custom"
           >
             <template #default="{ row }">
-              <el-tag :type="row.recordStatus === 'active' ? 'success' : 'info'" effect="plain">
-                {{ row.recordStatus === 'active' ? '启用' : '停用' }}
-              </el-tag>
+              <V2AccountRecordStatusBadge
+                :account="row"
+                @view-reason="page.openDisabledReason(row)"
+              />
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[10]">
@@ -276,17 +258,16 @@
             <template #default="{ row }">
               <V2AccountRowActions
                 :record-status="row.recordStatus"
+                :sale-state="row.saleState"
                 :loss-reported="row.lossStatus === 'reported'"
                 :can-view-sensitive="canOpenSensitiveAccess(row)"
                 :can-update="page.canUpdate && row.lossStatus !== 'reported'"
-                :can-delete="page.canDelete && row.lossStatus !== 'reported'"
                 :can-report-loss="page.canReportLoss"
                 @view-sensitive="page.openSensitiveAccess(row)"
                 @edit="page.openEdit(row)"
-                @toggle-status="page.toggleStatus(row)"
+                @toggle-status="page.openRecordStatusChange(row)"
                 @report-loss="page.openReportLoss(row)"
                 @unfreeze-loss="page.openUnfreezeLoss(row)"
-                @delete="page.openDelete(row)"
               />
             </template>
           </V2TableActionColumn>
@@ -306,25 +287,11 @@
                   {{ item.supplier?.name || '未设置供应商' }}
                 </span>
               </div>
-              <el-tag
+              <V2AccountRecordStatusBadge
                 v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'recordStatus']"
-                :type="
-                  item.lossStatus === 'reported'
-                    ? 'danger'
-                    : item.recordStatus === 'active'
-                      ? 'success'
-                      : 'info'
-                "
-                effect="plain"
-              >
-                {{
-                  item.lossStatus === 'reported'
-                    ? '已报损冻结'
-                    : item.recordStatus === 'active'
-                      ? '启用'
-                      : '停用'
-                }}
-              </el-tag>
+                :account="item"
+                @view-reason="page.openDisabledReason(item)"
+              />
             </header>
             <dl>
               <div v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'ID 状态']">
@@ -391,24 +358,23 @@
             <footer>
               <V2AccountRowActions
                 :record-status="item.recordStatus"
+                :sale-state="item.saleState"
                 :loss-reported="item.lossStatus === 'reported'"
                 :can-view-sensitive="canOpenSensitiveAccess(item)"
                 :can-update="page.canUpdate && item.lossStatus !== 'reported'"
-                :can-delete="page.canDelete && item.lossStatus !== 'reported'"
                 :can-report-loss="page.canReportLoss"
                 @view-sensitive="page.openSensitiveAccess(item)"
                 @edit="page.openEdit(item)"
-                @toggle-status="page.toggleStatus(item)"
+                @toggle-status="page.openRecordStatusChange(item)"
                 @report-loss="page.openReportLoss(item)"
                 @unfreeze-loss="page.openUnfreezeLoss(item)"
-                @delete="page.openDelete(item)"
               />
             </footer>
           </article>
           <div v-if="!page.items.length" class="v2-records-empty">
-            <strong>暂无 ID 资料</strong>
+            <strong>{{ emptyTitle }}</strong>
             <span>
-              {{ page.activeFilterCount ? '当前筛选条件下没有数据' : '系统中还没有 ID 资料' }}
+              {{ page.activeFilterCount ? '当前筛选条件下没有数据' : emptyDescription }}
             </span>
             <AppButton v-if="page.canCreate" variant="primary" @click="page.openCreate"
               >新增 ID</AppButton
@@ -441,7 +407,8 @@
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import { reactive } from 'vue';
+import { computed, reactive } from 'vue';
+import { useRouter } from 'vue-router';
 import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
@@ -451,17 +418,38 @@ import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
+import V2AccountLifecycleTabs from './components/V2AccountLifecycleTabs.vue';
+import V2AccountRecordStatusBadge from './components/V2AccountRecordStatusBadge.vue';
 import V2AccountRowActions from './components/V2AccountRowActions.vue';
 import { useAccountsPage } from './useAccountsPage';
-import type { V2Account } from './contracts';
+import type { V2Account, V2AccountLifecycle } from './contracts';
 import '@/v2/styles/records.css';
 import '@/v2/styles/accounts.css';
 
 const accountPage = useAccountsPage();
+const router = useRouter();
 const importFileInput = accountPage.importFileInput;
 const page = reactive(accountPage);
 const sourceOrderHelp =
   '这个 ID 被订单卖出后，系统会在这里显示对应订单号；未卖出或没有关联订单时显示空横线。';
+const emptyTitle = computed(() => `暂无${page.lifecycleLabel}`);
+const emptyDescription = computed(
+  () =>
+    ({
+      available: '当前没有可用于业务的 ID',
+      disabled: '当前没有已停用的 ID',
+      sold: '当前没有已售出的 ID',
+      reported: '当前没有已报损的 ID'
+    })[page.query.lifecycle]
+);
+
+function selectLifecycle(lifecycle: V2AccountLifecycle) {
+  if (lifecycle === 'reported') {
+    void router.push('/v2/records/account-losses');
+    return;
+  }
+  page.changeLifecycle(lifecycle);
+}
 
 function canOpenSensitiveAccess(item: V2Account) {
   return (

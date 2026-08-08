@@ -16,6 +16,7 @@ function createQuery(): AccountsListQueryDraft {
     supplierOptionId: '',
     recordStatus: '',
     saleState: '',
+    lifecycle: 'available',
     sortBy: 'updatedAt',
     sortOrder: 'desc'
   };
@@ -56,7 +57,8 @@ describe('accounts list filters', () => {
       keyword: 'account@example.com',
       countryOptionId: undefined,
       recordStatus: undefined,
-      saleState: undefined
+      saleState: undefined,
+      lifecycle: 'available'
     });
   });
 });

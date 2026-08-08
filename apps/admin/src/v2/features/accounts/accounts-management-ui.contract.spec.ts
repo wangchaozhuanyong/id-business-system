@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import view from './V2AccountsView.vue?raw';
 import manifest from './manifest.ts?raw';
 import accountImport from './account-import.ts?raw';
+import rowActions from './components/V2AccountRowActions.vue?raw';
 import runtimeRegistry from '@/v2/features/runtimeRegistry.ts?raw';
 
 describe('ID management page UI contract', () => {
@@ -23,5 +24,14 @@ describe('ID management page UI contract', () => {
     expect(view).toContain('敏感资料默认脱敏');
     expect(view).toContain('class="v2-account-list-heading"');
     expect(view).not.toContain('v2-records-toolbar--accounts');
+  });
+
+  it('uses lifecycle shortcuts and omits destructive ID deletion', () => {
+    expect(view).toContain('<V2AccountLifecycleTabs');
+    expect(view).toContain('page.openDisabledReason');
+    expect(view).toContain("router.push('/v2/records/account-losses')");
+    expect(rowActions).toContain("props.saleState !== 'sold'");
+    expect(rowActions).not.toContain('删除 ID');
+    expect(view).not.toContain('page.openDelete');
   });
 });

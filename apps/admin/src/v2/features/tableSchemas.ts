@@ -25,9 +25,11 @@ export const v2TableSchemas = {
         { key: '来源订单', label: '来源订单', kind: 'identifier', widthPreset: 'identifier' },
         { key: 'lossBalance', label: '损失余额', kind: 'numeric', widthPreset: 'standard' },
         { key: 'lossCostAmount', label: '人民币亏损', kind: 'numeric', widthPreset: 'standard' },
+        { key: '记录状态', label: '记录状态', kind: 'status', widthPreset: 'compact' },
         { key: 'reason', label: '报损原因', kind: 'text', widthPreset: 'longText' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: 'reportedAt', label: '报损时间', kind: 'date', widthPreset: 'dateTime' }
+        { key: 'reportedAt', label: '报损时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     })
   },

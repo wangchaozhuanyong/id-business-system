@@ -100,6 +100,8 @@ export interface V2Account {
   lossReportedAt: string | null;
   activeLossId: string | null;
   recordStatus: V2RecordStatus;
+  disabledReason: string | null;
+  disabledAt: string | null;
   remark: string | null;
   createdBy: V2OperatorSummary | null;
   createdAt: string;
@@ -115,6 +117,7 @@ export interface V2AccountListQuery extends V2PageQuery {
   supplierOptionId?: string;
   recordStatus?: V2RecordStatus | '';
   saleState?: 'available' | 'sold' | '';
+  lifecycle?: V2AccountLifecycle | '';
   sortBy?:
     | 'appleId'
     | 'currentBalance'
@@ -125,6 +128,8 @@ export interface V2AccountListQuery extends V2PageQuery {
     | 'updatedAt';
   sortOrder?: 'asc' | 'desc';
 }
+
+export type V2AccountLifecycle = 'available' | 'disabled' | 'sold' | 'reported';
 
 export interface CreateV2AccountInput {
   appleId: string;
@@ -146,6 +151,7 @@ export interface CreateV2AccountInput {
   purchaseManualRateReason?: string | null;
   purchasedAt?: string | null;
   recordStatus?: V2RecordStatus;
+  disabledReason?: string | null;
   remark?: string | null;
 }
 
@@ -170,6 +176,11 @@ export interface UpdateV2AccountInput extends Partial<CreateV2AccountInput> {
   expectedBalanceCostAmount?: string | number;
   balanceAdjustmentReason?: string;
   balanceAdjustmentIdempotencyKey?: string;
+}
+
+export interface ChangeV2AccountStatusInput {
+  recordStatus: V2RecordStatus;
+  reason: string;
 }
 
 export interface ImportV2AccountRowInput extends CreateV2AccountInput {
@@ -245,6 +256,7 @@ export interface V2AccountLossListQuery extends V2PageQuery {
   keyword?: string;
   countryOptionId?: string;
   saleState?: 'available' | 'sold' | '';
+  status?: 'active' | 'reversed' | '';
   reportedFrom?: string;
   reportedTo?: string;
   sortBy?: 'reportedAt' | 'lossBalance' | 'lossCostAmount';

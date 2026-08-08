@@ -15,15 +15,79 @@
   gap: 7px;
 }
 
+.v2-account-lifecycle-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  padding: 9px 12px 0;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-account-lifecycle-tabs button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.v2-account-lifecycle-tabs button:hover {
+  background: var(--v2-surface-muted);
+  color: var(--v2-text);
+}
+
+.v2-account-lifecycle-tabs button:focus-visible {
+  border-radius: 6px 6px 0 0;
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: -2px;
+}
+
+.v2-account-lifecycle-tabs button.is-active {
+  border-bottom-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
 .v2-account-filter-grid {
   display: grid;
   min-width: 0;
   grid-template-columns:
-    minmax(260px, 1fr) repeat(2, minmax(140px, 170px)) minmax(126px, max-content)
+    minmax(260px, 1fr) minmax(140px, 170px) minmax(126px, max-content)
     auto auto;
   align-items: start;
   gap: 9px;
   padding: 13px 18px;
+}
+
+.v2-account-status-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--el-color-info);
+  cursor: pointer;
+}
+
+.v2-account-status-trigger:hover,
+.v2-account-status-trigger:focus-visible {
+  color: var(--el-color-primary);
+}
+
+.v2-account-status-trigger:focus-visible {
+  border-radius: 5px;
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
 }
 
 .v2-account-filter-grid > .el-input,
@@ -89,15 +153,20 @@
   .v2-account-filter-grid__search {
     grid-column: span 2;
   }
-
-  .v2-account-filter-grid > .v2-filter-disclosure {
-    grid-column: 3 / 5;
-  }
 }
 
 @media (max-width: 900px) {
   .v2-account-command-panel__actions {
     flex-wrap: wrap;
+  }
+
+  .v2-account-lifecycle-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .v2-account-lifecycle-tabs button {
+    padding-inline: 6px;
   }
 
   .v2-account-filter-grid {
@@ -122,6 +191,11 @@
   .v2-account-command-panel__actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .v2-account-lifecycle-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 4px;
   }
 
   .v2-account-command-panel__actions > .app-button,

@@ -7,7 +7,6 @@ export function useAccountPermissions(revealTarget: Ref<V2Account | null>) {
   const authStore = useAuthStore();
   const canCreate = computed(() => hasUserPermission(authStore.user, 'apple.account.create'));
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'apple.account.update'));
-  const canDelete = computed(() => hasUserPermission(authStore.user, 'apple.account.delete'));
   const canImport = computed(() => hasUserPermission(authStore.user, 'apple.account.import'));
   const canAdjustBalance = computed(() =>
     hasUserPermission(authStore.user, 'apple.balance.adjust')
@@ -45,7 +44,6 @@ export function useAccountPermissions(revealTarget: Ref<V2Account | null>) {
   return {
     canCreate,
     canUpdate,
-    canDelete,
     canImport,
     canAdjustBalance,
     canReportLoss,

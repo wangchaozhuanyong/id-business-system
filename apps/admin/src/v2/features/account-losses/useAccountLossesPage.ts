@@ -4,6 +4,7 @@ import { idBusinessV2OptionsApi } from '@/v2/api/options';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2AccountLossesApi } from './api';
+import { useAccountLossRecovery } from './useAccountLossRecovery';
 import type {
   V2AccountLossListQuery,
   V2AccountLossListResult,
@@ -23,6 +24,7 @@ export function useAccountLossesPage() {
     keyword: '',
     countryOptionId: '',
     saleState: '' as 'available' | 'sold' | '',
+    status: 'active' as 'active' | 'reversed' | '',
     sortBy: 'reportedAt' as NonNullable<V2AccountLossListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
@@ -34,6 +36,7 @@ export function useAccountLossesPage() {
       keyword: query.keyword.trim() || undefined,
       countryOptionId: query.countryOptionId || undefined,
       saleState: query.saleState || undefined,
+      status: query.status || undefined,
       reportedFrom: reportedRange.value[0] || undefined,
       reportedTo: reportedRange.value[1] || undefined,
       sortBy: query.sortBy,
@@ -68,6 +71,9 @@ export function useAccountLossesPage() {
     accountLossesQuery.error.value ? getApiErrorMessage(accountLossesQuery.error.value) : ''
   );
   const { hasLoadedOnce, isInitialLoading } = accountLossesQuery;
+  const accountLossRecovery = useAccountLossRecovery({
+    refreshRecords: loadAccountLosses
+  });
 
   function loadAccountLosses() {
     return accountLossesQuery.refresh();
@@ -83,6 +89,7 @@ export function useAccountLossesPage() {
     query.keyword = '';
     query.countryOptionId = '';
     query.saleState = '';
+    query.status = 'active';
     query.sortBy = 'reportedAt';
     query.sortOrder = 'desc';
     reportedRange.value = [];
@@ -135,6 +142,7 @@ export function useAccountLossesPage() {
     listError,
     hasLoadedOnce,
     isInitialLoading,
+    ...accountLossRecovery,
     loadAccountLosses,
     handleSearch,
     handleFilterChange: handleSearch,

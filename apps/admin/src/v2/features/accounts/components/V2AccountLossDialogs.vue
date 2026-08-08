@@ -185,6 +185,7 @@ const lossDisabledReason = computed(() => {
   if (!props.page.canReportLoss) return '当前账号无报损冻结权限';
   if (!props.page.lossTarget) return '未选择需要报损的 ID';
   if (props.page.lossTarget.lossStatus === 'reported') return '该 ID 已报损冻结';
+  if (props.page.lossTarget.saleState === 'sold') return '已售出 ID 不能报损';
   return '';
 });
 const unfreezeDisabledReason = computed(() => {

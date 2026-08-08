@@ -27,24 +27,16 @@
       </AppButton>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item v-if="canUpdate && !lossReported" command="toggle-status">
+          <el-dropdown-item v-if="canChangeRecordStatus" command="toggle-status">
             {{ recordStatus === 'active' ? '停用 ID' : '启用 ID' }}
           </el-dropdown-item>
           <el-dropdown-item
-            v-if="canReportLoss && !lossReported"
+            v-if="canReportCurrentLoss"
             command="report-loss"
-            :divided="canUpdate"
+            :divided="canChangeRecordStatus"
             class="v2-record-action-danger"
           >
             报损
-          </el-dropdown-item>
-          <el-dropdown-item
-            v-if="canDelete && !lossReported"
-            command="delete"
-            :divided="canUpdate || canReportLoss"
-            class="v2-record-action-danger"
-          >
-            删除 ID
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -61,9 +53,9 @@ import type { V2RecordStatus } from '../contracts';
 
 const props = defineProps<{
   recordStatus: V2RecordStatus;
+  saleState: 'available' | 'sold';
   canViewSensitive: boolean;
   canUpdate: boolean;
-  canDelete: boolean;
   canReportLoss: boolean;
   lossReported: boolean;
 }>();
@@ -74,7 +66,6 @@ const emit = defineEmits<{
   'toggle-status': [];
   'report-loss': [];
   'unfreeze-loss': [];
-  delete: [];
 }>();
 
 const dropdownRef = ref<{ handleClose: () => void } | null>(null);
@@ -82,10 +73,19 @@ const hasActions = computed(
   () =>
     props.canViewSensitive ||
     (props.lossReported && props.canReportLoss) ||
-    (!props.lossReported && (props.canUpdate || props.canDelete || props.canReportLoss))
+    (!props.lossReported && (props.canUpdate || props.canReportLoss))
+);
+const canChangeRecordStatus = computed(
+  () =>
+    props.canUpdate &&
+    !props.lossReported &&
+    (props.saleState !== 'sold' || props.recordStatus === 'disabled')
+);
+const canReportCurrentLoss = computed(
+  () => props.canReportLoss && !props.lossReported && props.saleState !== 'sold'
 );
 const hasSecondaryActions = computed(
-  () => !props.lossReported && (props.canUpdate || props.canDelete || props.canReportLoss)
+  () => canChangeRecordStatus.value || canReportCurrentLoss.value
 );
 
 function closeMenu() {
@@ -97,8 +97,6 @@ function handleCommand(command: string | number | object) {
     emit('toggle-status');
   } else if (command === 'report-loss') {
     emit('report-loss');
-  } else if (command === 'delete') {
-    emit('delete');
   }
 }
 </script>

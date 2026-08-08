@@ -30,6 +30,12 @@ export function normalizeAccountLossSaleState(value: unknown): 'available' | 'so
   throw new BadRequestException('销售状态无效');
 }
 
+export function normalizeAccountLossStatus(value: unknown): 'active' | 'reversed' | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (value === 'active' || value === 'reversed') return value;
+  throw new BadRequestException('报损状态无效');
+}
+
 export function normalizeAccountLossReason(value: unknown) {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (normalized.length < 2 || normalized.length > 500) {

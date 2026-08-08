@@ -6,6 +6,7 @@ import {
 } from '@/v2/composables/useV2Query';
 import { idBusinessV2AccountsApi } from './api';
 import type {
+  V2AccountLifecycle,
   V2AccountListQuery,
   V2AccountListResult,
   V2OptionSelector,
@@ -34,6 +35,7 @@ export type AccountsListQueryDraft = Omit<
   | 'supplierOptionId'
   | 'recordStatus'
   | 'saleState'
+  | 'lifecycle'
 > & {
   keyword: string;
   countryOptionId: string;
@@ -41,6 +43,7 @@ export type AccountsListQueryDraft = Omit<
   supplierOptionId: string;
   recordStatus: V2RecordStatus | '';
   saleState: 'available' | 'sold' | '';
+  lifecycle: V2AccountLifecycle;
 };
 
 export function countActiveAccountsFilters(query: AccountsListQueryDraft) {
@@ -74,7 +77,8 @@ export function normalizeAccountsListQuery(query: AccountsListQueryDraft): V2Acc
     statusOptionId: query.statusOptionId || undefined,
     supplierOptionId: query.supplierOptionId || undefined,
     recordStatus: query.recordStatus || undefined,
-    saleState: query.saleState || undefined
+    saleState: query.saleState || undefined,
+    lifecycle: query.lifecycle
   };
 }
 

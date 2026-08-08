@@ -155,9 +155,6 @@
           placeholder="说明本次余额或人民币成本修正原因"
         />
       </el-form-item>
-      <el-form-item label="资料状态">
-        <el-switch v-model="page.form.active" active-text="启用" inactive-text="停用" />
-      </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="page.form.remark" type="textarea" :rows="3" maxlength="500" />
       </el-form-item>
@@ -314,16 +311,7 @@
   </el-dialog>
 
   <V2AccountLossDialogs :page="page" />
-
-  <V2ConfirmDialog
-    v-model="page.deleteDialogVisible"
-    title="删除 ID"
-    :message="`确认删除“${page.deletingItem?.appleIdMasked || ''}”？该操作会软删除资料。`"
-    confirm-text="确认删除"
-    danger
-    :confirm-loading="page.deleting"
-    @confirm="page.confirmDelete"
-  />
+  <V2AccountRecordStatusDialog :page="page" />
 </template>
 
 <script setup lang="ts">
@@ -333,13 +321,13 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
-import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
 import V2AccountLossDialogs from './V2AccountLossDialogs.vue';
 import V2AccountPurchaseFields from './V2AccountPurchaseFields.vue';
+import V2AccountRecordStatusDialog from './V2AccountRecordStatusDialog.vue';
 
 type AccountsPage = UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
 

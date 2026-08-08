@@ -42,6 +42,8 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     soldAt: null,
     lossReportedAt: null,
     recordStatus: 'active',
+    disabledReason: null,
+    disabledAt: null,
     remark: null,
     createdByUserId: operator.id,
     updatedByUserId: operator.id,
@@ -183,6 +185,24 @@ describe('IdBusinessV2AccountsService', () => {
     expect(prisma.idBusinessV2Account.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }]
+      })
+    );
+  });
+
+  it('uses mutually exclusive lifecycle filters for the disabled ID category', async () => {
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([]);
+    prisma.idBusinessV2Account.count.mockResolvedValue(0);
+
+    await service.list({ lifecycle: 'disabled' });
+
+    expect(prisma.idBusinessV2Account.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          deletedAt: null,
+          soldByOrderId: null,
+          lossReportedAt: null,
+          recordStatus: 'disabled'
+        })
       })
     );
   });
@@ -532,17 +552,58 @@ describe('IdBusinessV2AccountsService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('soft deletes and disables an ID record', async () => {
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
-    await expect(service.remove('account-1', operator)).resolves.toEqual({ deleted: true });
+  it('requires a reason and retains the ID when disabling it', async () => {
+    const disabled = makeAccount({
+      recordStatus: 'disabled',
+      disabledReason: '暂不投入使用',
+      disabledAt: new Date('2026-08-08T00:00:00.000Z')
+    });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'account-1' }]);
+    prisma.idBusinessV2Account.findFirst
+      .mockResolvedValueOnce(makeAccount())
+      .mockResolvedValueOnce(disabled);
+
+    await expect(
+      service.changeRecordStatus(
+        'account-1',
+        { recordStatus: 'disabled', reason: '暂不投入使用' },
+        operator
+      )
+    ).resolves.toMatchObject({
+      id: 'account-1',
+      recordStatus: 'disabled',
+      disabledReason: '暂不投入使用'
+    });
     expect(prisma.idBusinessV2Account.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          deletedAt: expect.any(Date),
-          recordStatus: 'disabled'
+          recordStatus: 'disabled',
+          disabledReason: '暂不投入使用',
+          disabledAt: expect.any(Date)
         })
       })
     );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'id_business_v2.account.disable' })
+      })
+    );
+  });
+
+  it('rejects disabling a sold ID', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 'account-1' }]);
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(
+      makeAccount({ soldByOrderId: '80000000-0000-4000-8000-000000000001' })
+    );
+
+    await expect(
+      service.changeRecordStatus(
+        'account-1',
+        { recordStatus: 'disabled', reason: '售后暂停' },
+        operator
+      )
+    ).rejects.toThrow('已售出 ID 不能停用');
+    expect(prisma.idBusinessV2Account.updateMany).not.toHaveBeenCalled();
   });
 
   it('exports every matching row without decrypting sensitive fields and writes an audit log', async () => {

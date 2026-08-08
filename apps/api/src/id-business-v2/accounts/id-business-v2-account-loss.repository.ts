@@ -63,6 +63,7 @@ export interface AccountLossListPersistenceInput {
   keyword: string | null;
   countryOptionId: string | null;
   saleState: 'available' | 'sold' | null;
+  status: 'active' | 'reversed' | null;
   reportedFrom: Date | null;
   reportedToExclusive: Date | null;
   sortBy: 'reportedAt' | 'lossBalance' | 'lossCostAmount' | null;
@@ -79,6 +80,7 @@ export class IdBusinessV2AccountLossRepository {
     const where: Prisma.IdBusinessV2AccountLossWhereInput = {
       countryOptionId: input.countryOptionId ?? undefined,
       saleState: input.saleState ?? undefined,
+      status: input.status ?? undefined,
       reportedAt:
         input.reportedFrom || input.reportedToExclusive
           ? {

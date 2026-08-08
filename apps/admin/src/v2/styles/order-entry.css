@@ -58,7 +58,8 @@
   top: 12px;
   align-self: start;
   max-height: calc(100dvh - 108px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .v2-order-entry-section-header {
@@ -462,7 +463,9 @@
 }
 
 .v2-order-entry-live-summary dd {
+  min-width: 0;
   max-width: 58%;
+  flex: 0 1 58%;
   overflow: hidden;
   color: var(--v2-text);
   font-weight: var(--v3-font-weight-semibold);

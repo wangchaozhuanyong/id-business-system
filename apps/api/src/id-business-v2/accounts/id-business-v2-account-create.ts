@@ -26,6 +26,7 @@ import {
   maskAppleId,
   maskPhone,
   normalizeAppleId,
+  normalizeAccountStatusReason,
   normalizeMoney,
   normalizeNullableString,
   normalizePhone,
@@ -122,9 +123,14 @@ export async function createIdBusinessV2Account(
   if (purchaseSupplierAccountId) {
     throw new BadRequestException('ID 采购只能使用自有资金账户，不能使用加卡供应商预存账户');
   }
+  const recordStatus = parseRecordStatus(dto.recordStatus, false) ?? 'active';
+  const disabledReason =
+    recordStatus === 'disabled'
+      ? normalizeAccountStatusReason(dto.disabledReason, '停用原因')
+      : null;
 
   return transactionManager.execute(
-    async (tx) => {
+    async (tx, context) => {
       if (await repository.findByAppleIdHash(appleIdHash, tx)) {
         throw new ConflictException('该 Apple ID 已存在');
       }
@@ -179,7 +185,9 @@ export async function createIdBusinessV2Account(
         purchaseFinanceAccountId,
         purchaseSupplierAccountId: null,
         purchasedAt,
-        recordStatus: parseRecordStatus(dto.recordStatus, false) ?? 'active',
+        recordStatus,
+        disabledReason,
+        disabledAt: recordStatus === 'disabled' ? context.businessTime : null,
         remark: normalizeNullableString(dto.remark),
         createdByUserId: operator?.id,
         updatedByUserId: operator?.id

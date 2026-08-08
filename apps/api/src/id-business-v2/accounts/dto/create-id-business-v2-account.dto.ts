@@ -18,5 +18,6 @@ export interface CreateIdBusinessV2AccountDto {
   purchaseManualRateReason?: string | null;
   purchasedAt?: string | null;
   recordStatus?: 'active' | 'disabled' | string;
+  disabledReason?: string | null;
   remark?: string | null;
 }

@@ -50,4 +50,27 @@ describe('account CSV import', () => {
       })
     );
   });
+
+  it('requires a reason when importing a disabled ID', () => {
+    const missingReason = prepareAccountImport(
+      [
+        ['ID账号', '国家', 'ID状态', '资料状态', '停用原因'],
+        ['disabled@example.com', '美国', '正常', '停用', '']
+      ],
+      { countries: [country], statuses: [status], suppliers: [] }
+    );
+    const withReason = prepareAccountImport(
+      [
+        ['ID账号', '国家', 'ID状态', '资料状态', '停用原因'],
+        ['disabled@example.com', '美国', '正常', '停用', '暂不投入使用']
+      ],
+      { countries: [country], statuses: [status], suppliers: [] }
+    );
+
+    expect(missingReason.failures[0]?.reason).toContain('停用原因');
+    expect(withReason.rows[0]).toMatchObject({
+      recordStatus: 'disabled',
+      disabledReason: '暂不投入使用'
+    });
+  });
 });

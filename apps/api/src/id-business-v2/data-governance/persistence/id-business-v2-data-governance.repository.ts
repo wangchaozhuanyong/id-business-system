@@ -302,7 +302,13 @@ export class IdBusinessV2DataGovernanceRepository {
         lossReportedAt: null,
         soldByOrderId: null
       },
-      data: { deletedAt: null, recordStatus: 'disabled', updatedByUserId: input.operatorId }
+      data: {
+        deletedAt: null,
+        recordStatus: 'disabled',
+        disabledReason: '数据治理恢复，待人工复核',
+        disabledAt: new Date(),
+        updatedByUserId: input.operatorId
+      }
     });
   }
 

@@ -17,6 +17,7 @@ import {
   normalizeAppleId,
   normalizeNullableString,
   normalizePhone,
+  parseAccountLifecycle,
   parseRecordStatus,
   parseSaleState,
   type AccountListQuery,
@@ -188,16 +189,34 @@ export class IdBusinessV2AccountsRepository {
     return this.findByIdOrThrow(accountId, tx);
   }
 
-  async softDelete(tx: V2CommandTransaction, accountId: string, operatorId?: string) {
+  async updateRecordStatus(
+    tx: V2CommandTransaction,
+    accountId: string,
+    input: {
+      recordStatus: 'active' | 'disabled';
+      disabledReason: string | null;
+      disabledAt: Date | null;
+      operatorId?: string;
+    }
+  ) {
     const result = await tx.idBusinessV2Account.updateMany({
-      where: { id: accountId, lossReportedAt: null },
+      where: {
+        id: accountId,
+        deletedAt: null,
+        lossReportedAt: null,
+        soldByOrderId: input.recordStatus === 'disabled' ? null : undefined
+      },
       data: {
-        deletedAt: new Date(),
-        recordStatus: 'disabled',
-        updatedByUserId: operatorId
+        recordStatus: input.recordStatus,
+        disabledReason: input.disabledReason,
+        disabledAt: input.disabledAt,
+        updatedByUserId: input.operatorId
       }
     });
-    if (result.count !== 1) throw new ConflictException('该 ID 已报损，不能删除');
+    if (result.count !== 1) {
+      throw new ConflictException('该 ID 状态已变化，请刷新后重试');
+    }
+    return this.findByIdOrThrow(accountId, tx);
   }
 
   verifySensitiveApproval(tx: V2CommandTransaction, input: SensitiveAccessApprovalCheckInput) {
@@ -510,14 +529,35 @@ export class IdBusinessV2AccountsRepository {
     const normalizedAppleId = keyword ? normalizeAppleId(keyword, false) : null;
     const normalizedPhone = keyword ? normalizePhone(keyword) : null;
     const saleState = parseSaleState(query.saleState);
+    const lifecycle = parseAccountLifecycle(query.lifecycle);
+    const lifecycleWhere: Prisma.IdBusinessV2AccountWhereInput =
+      lifecycle === 'available'
+        ? { soldByOrderId: null, lossReportedAt: null, recordStatus: 'active' }
+        : lifecycle === 'disabled'
+          ? { soldByOrderId: null, lossReportedAt: null, recordStatus: 'disabled' }
+          : lifecycle === 'sold'
+            ? { soldByOrderId: { not: null }, lossReportedAt: null }
+            : lifecycle === 'reported'
+              ? { lossReportedAt: { not: null } }
+              : {};
     return {
       deletedAt: null,
+      ...lifecycleWhere,
       countryOptionId: normalizeNullableString(query.countryOptionId) ?? undefined,
       statusOptionId: normalizeNullableString(query.statusOptionId) ?? undefined,
       supplierOptionId: normalizeNullableString(query.supplierOptionId) ?? undefined,
-      recordStatus: parseRecordStatus(query.recordStatus, false) ?? undefined,
+      recordStatus:
+        lifecycle === null
+          ? (parseRecordStatus(query.recordStatus, false) ?? undefined)
+          : lifecycleWhere.recordStatus,
       soldByOrderId:
-        saleState === 'sold' ? { not: null } : saleState === 'available' ? null : undefined,
+        lifecycle === null
+          ? saleState === 'sold'
+            ? { not: null }
+            : saleState === 'available'
+              ? null
+              : undefined
+          : lifecycleWhere.soldByOrderId,
       OR: keyword
         ? [
             { appleIdMasked: { contains: keyword, mode: 'insensitive' } },
