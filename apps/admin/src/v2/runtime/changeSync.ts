@@ -212,12 +212,7 @@ function handleOnline() {
 
 function handleForeground() {
   if (!started) return;
-  if (
-    shouldReconcileV2OnForeground(
-      mutableChangeSyncState.lastReconciledAt,
-      Date.now()
-    )
-  ) {
+  if (shouldReconcileV2OnForeground(mutableChangeSyncState.lastReconciledAt, Date.now())) {
     void reconcileVersions();
   } else {
     scheduleReconcile();

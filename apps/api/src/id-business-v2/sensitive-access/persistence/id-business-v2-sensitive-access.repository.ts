@@ -84,10 +84,7 @@ export class IdBusinessV2SensitiveAccessRepository {
     });
   }
 
-  createPending(
-    tx: V2CommandTransaction,
-    input: CreateSensitiveApprovalInput
-  ) {
+  createPending(tx: V2CommandTransaction, input: CreateSensitiveApprovalInput) {
     return tx.sensitiveAccessApproval.create({
       data: { ...input, status: 'pending' },
       include: APPROVAL_INCLUDE

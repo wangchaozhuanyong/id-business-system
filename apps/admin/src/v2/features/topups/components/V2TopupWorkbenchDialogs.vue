@@ -23,7 +23,9 @@
           </div>
           <div>
             <dt>国家</dt>
-            <dd><el-tag effect="plain">{{ page.selectedAccount.country.name }}</el-tag></dd>
+            <dd>
+              <el-tag effect="plain">{{ page.selectedAccount.country.name }}</el-tag>
+            </dd>
           </div>
         </dl>
       </section>

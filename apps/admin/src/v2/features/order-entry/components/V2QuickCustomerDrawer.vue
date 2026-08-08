@@ -160,14 +160,8 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>();
 const form = reactive(createEmptyQuickCustomerForm());
 const saving = ref(false);
-const {
-  sourceOptions,
-  tagOptions,
-  optionsLoading,
-  optionsError,
-  loadOptions,
-  retryOptions
-} = useQuickCustomerOptions();
+const { sourceOptions, tagOptions, optionsLoading, optionsError, loadOptions, retryOptions } =
+  useQuickCustomerOptions();
 
 const rules: FormRules = {
   name: [
