@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const accountsFeature = defineV2Feature({
   key: 'accounts',
   title: 'ID录入',
-  group: '业务数据',
+  group: '工作台',
   route: '/v2/accounts',
   sourceSheet: 'ID录入',
   permission: 'apple.account.view',

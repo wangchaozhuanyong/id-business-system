@@ -910,6 +910,7 @@ export const v2TablesByFeature = {
     v2TableSchemas.financeLedger.journals,
     v2TableSchemas.financeLedger.periods
   ],
+  'finance-expenses': [v2TableSchemas.financeLedger.expenses],
   'data-governance': [
     v2TableSchemas.dataGovernance.recycle,
     v2TableSchemas.dataGovernance.jobs,

@@ -15,6 +15,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import type { V2ModuleKey } from '@/v2/features/feature';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { V2OptionSelector } from '@/v2/types/options';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
@@ -43,13 +44,16 @@ interface FinanceLedgerSnapshot {
   expenseCategories: V2OptionSelector[];
 }
 
-export function useFinanceLedgerPage() {
+export function useFinanceLedgerPage(
+  moduleKey: Extract<V2ModuleKey, 'finance-ledger' | 'finance-expenses'>,
+  expenseOnly: boolean
+) {
   const authStore = useAuthStore();
   const canPost = computed(() => hasUserPermission(authStore.user, 'finance.post'));
   const canAdjust = computed(() => hasUserPermission(authStore.user, 'finance.adjust'));
   const canManage = computed(() => hasUserPermission(authStore.user, 'finance.manage'));
   const canClose = computed(() => hasUserPermission(authStore.user, 'finance.close'));
-  const activeTab = ref<FinanceLedgerTab>('accounts');
+  const activeTab = ref<FinanceLedgerTab>(expenseOnly ? 'expenses' : 'accounts');
   const filters = reactive({
     currency: '' as V2FinanceCurrency | '',
     periodMonth: '',
@@ -60,7 +64,7 @@ export function useFinanceLedgerPage() {
   const pageSize = 50;
 
   const ledgerQuery = useV2ModuleQuery<FinanceLedgerSnapshot>({
-    moduleKey: 'finance-ledger',
+    moduleKey,
     scope: 'finance-ledger',
     key: () =>
       createV2QueryKey({
@@ -407,6 +411,7 @@ export function useFinanceLedgerPage() {
   }
 
   return {
+    expenseOnly,
     activeTab,
     filters,
     expensePage,

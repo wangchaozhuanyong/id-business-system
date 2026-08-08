@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const accountLossesFeature = defineV2Feature({
   key: 'account-losses',
   title: 'ID报损记录',
-  group: '记录',
+  group: '业务中心',
   route: '/v2/records/account-losses',
   sourceSheet: 'ID报损记录',
   permission: 'apple.balance.view',

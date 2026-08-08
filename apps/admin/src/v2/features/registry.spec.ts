@@ -8,7 +8,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(23);
+    expect(v2FeatureRegistry).toHaveLength(24);
   });
 
   it('keeps routing, access and loading behavior in each feature manifest', () => {
@@ -171,6 +171,27 @@ describe('V2 feature registry', () => {
 
     expect(navigationItems).toHaveLength(navigableFeatures.length);
     expect(new Set(navigationItems)).toEqual(new Set(navigableFeatures));
+  });
+
+  it('keeps the requested workbench, business and finance navigation hierarchy', () => {
+    const navigation = Object.fromEntries(
+      v2NavigationSections.map((section) => [
+        section.title,
+        section.items.map((item) => item.title)
+      ])
+    );
+
+    expect(navigation['工作台']).toEqual(['续费操作', '订单录入', 'ID加额', 'ID录入']);
+    expect(navigation['业务中心']).toEqual([
+      '订单管理',
+      '客户记录',
+      '加卡记录',
+      'ID报损记录',
+      '开通记录'
+    ]);
+    expect(navigation['财务记账']).toEqual(['钱包账户', '开支记账', '经营分析']);
+    expect(navigation['数据中心']).toEqual(['数据治理']);
+    expect(navigation).not.toHaveProperty('记录中心');
   });
 
   it('keeps only the order-entry draft component alive', () => {

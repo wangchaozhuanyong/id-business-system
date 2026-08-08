@@ -40,7 +40,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'accounts',
     title: 'ID录入',
-    group: '业务数据',
+    group: '工作台',
     route: '/v2/accounts',
     permission: 'apple.account.view',
     kind: 'list',
@@ -50,7 +50,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'orders',
     title: '订单管理',
-    group: '业务数据',
+    group: '业务中心',
     route: '/v2/orders',
     permission: 'apple.order.view',
     kind: 'list',
@@ -60,7 +60,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'customers',
     title: '客户记录',
-    group: '业务数据',
+    group: '业务中心',
     route: '/v2/customers',
     permission: 'customer.view',
     kind: 'list',
@@ -70,7 +70,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'topup-records',
     title: '加卡记录',
-    group: '记录',
+    group: '业务中心',
     route: '/v2/records/topups',
     permission: 'apple.balance.view',
     kind: 'list',
@@ -80,7 +80,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'account-losses',
     title: 'ID报损记录',
-    group: '记录',
+    group: '业务中心',
     route: '/v2/records/account-losses',
     permission: 'apple.balance.view',
     kind: 'list',
@@ -90,7 +90,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
     key: 'activation-records',
     title: '开通记录',
-    group: '记录',
+    group: '业务中心',
     route: '/v2/records/activations',
     permission: 'apple.activation.view',
     kind: 'list',
@@ -127,26 +127,37 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     loadView: () => import('./dashboard/V2DashboardView.vue')
   }),
   defineV2RuntimeFeature({
-    key: 'analytics',
-    title: '经营分析',
-    group: '数据中心',
-    route: '/v2/data/analytics',
-    permission: 'data.analytics.view',
-    status: 'ready',
-    kind: 'list',
-    freshnessPolicy: 'event-driven',
-    loadView: () => import('./data-analytics/V2DataAnalyticsView.vue')
-  }),
-  defineV2RuntimeFeature({
     key: 'finance-ledger',
-    title: '财务记账',
-    group: '数据中心',
+    title: '钱包账户',
+    group: '财务记账',
     route: '/v2/data/finance',
     permission: 'finance.view',
     status: 'ready',
     kind: 'list',
     freshnessPolicy: 'event-driven',
     loadView: () => import('./finance-ledger/V2FinanceLedgerView.vue')
+  }),
+  defineV2RuntimeFeature({
+    key: 'finance-expenses',
+    title: '开支记账',
+    group: '财务记账',
+    route: '/v2/data/finance/expenses',
+    permission: 'finance.view',
+    status: 'ready',
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./finance-expenses/V2FinanceExpensesView.vue')
+  }),
+  defineV2RuntimeFeature({
+    key: 'analytics',
+    title: '经营分析',
+    group: '财务记账',
+    route: '/v2/data/analytics',
+    permission: 'data.analytics.view',
+    status: 'ready',
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./data-analytics/V2DataAnalyticsView.vue')
   }),
   defineV2RuntimeFeature({
     key: 'data-governance',
@@ -265,13 +276,13 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
   {
     key: 'business',
-    title: '业务数据',
-    items: navigationItems('业务数据')
+    title: '业务中心',
+    items: navigationItems('业务中心')
   },
   {
-    key: 'records',
-    title: '记录中心',
-    items: navigationItems('记录')
+    key: 'finance',
+    title: '财务记账',
+    items: navigationItems('财务记账')
   },
   {
     key: 'data',

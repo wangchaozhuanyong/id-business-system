@@ -4,7 +4,7 @@ import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 export const activationsFeature = defineV2Feature({
   key: 'activation-records',
   title: '开通记录',
-  group: '记录',
+  group: '业务中心',
   route: '/v2/records/activations',
   sourceSheet: '开通记录',
   permission: 'apple.activation.view',
