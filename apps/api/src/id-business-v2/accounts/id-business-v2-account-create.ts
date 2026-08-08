@@ -26,6 +26,7 @@ import {
   maskAppleId,
   maskPhone,
   normalizeAppleId,
+  normalizeAccountStatusReason,
   normalizeMoney,
   normalizeNullableString,
   normalizePhone,
@@ -119,12 +120,17 @@ export async function createIdBusinessV2Account(
     dto.purchaseSupplierAccountId,
     '采购供应商钱包'
   );
-  if (purchaseFinanceAccountId && purchaseSupplierAccountId) {
-    throw new BadRequestException('采购付款账户和供应商钱包只能选择一种资金来源');
+  if (purchaseSupplierAccountId) {
+    throw new BadRequestException('ID 采购只能使用自有资金账户，不能使用加卡供应商预存账户');
   }
+  const recordStatus = parseRecordStatus(dto.recordStatus, false) ?? 'active';
+  const disabledReason =
+    recordStatus === 'disabled'
+      ? normalizeAccountStatusReason(dto.disabledReason, '停用原因')
+      : null;
 
   return transactionManager.execute(
-    async (tx) => {
+    async (tx, context) => {
       if (await repository.findByAppleIdHash(appleIdHash, tx)) {
         throw new ConflictException('该 Apple ID 已存在');
       }
@@ -146,17 +152,6 @@ export async function createIdBusinessV2Account(
         occurredAt: purchasedAt
       });
 
-      const supplierWallet = purchaseSupplierAccountId
-        ? await repository.lockSupplierWallet(tx, purchaseSupplierAccountId)
-        : null;
-      if (purchaseSupplierAccountId) {
-        if (!supplierWallet || supplierWallet.currency !== purchaseCurrency) {
-          throw new BadRequestException('采购供应商钱包不存在或币种不一致');
-        }
-        if (supplierWallet.currentBalance.lt(purchaseOriginalAmount)) {
-          throw new ConflictException('供应商钱包余额不足，不能采购 ID');
-        }
-      }
       if (purchaseFinanceAccountId) {
         await repository.assertFinanceAccountCurrency(
           tx,
@@ -188,9 +183,11 @@ export async function createIdBusinessV2Account(
         purchaseFxRateToCny: purchaseRate.toString(),
         purchaseFxSnapshotId: resolvedRate.id,
         purchaseFinanceAccountId,
-        purchaseSupplierAccountId,
+        purchaseSupplierAccountId: null,
         purchasedAt,
-        recordStatus: parseRecordStatus(dto.recordStatus, false) ?? 'active',
+        recordStatus,
+        disabledReason,
+        disabledAt: recordStatus === 'disabled' ? context.businessTime : null,
         remark: normalizeNullableString(dto.remark),
         createdByUserId: operator?.id,
         updatedByUserId: operator?.id
@@ -205,17 +202,6 @@ export async function createIdBusinessV2Account(
           operatorId: operator?.id
         });
       }
-      if (supplierWallet) {
-        await repository.debitSupplierWallet(tx, {
-          wallet: supplierWallet,
-          amount: purchaseOriginalAmount,
-          amountCny: purchaseCost,
-          accountId: created.id,
-          accountMasked: created.appleIdMasked,
-          operatorId: operator?.id
-        });
-      }
-
       await financePostingService.post(tx, {
         journalType: 'account_purchase',
         sourceType: 'account',
@@ -237,48 +223,49 @@ export async function createIdBusinessV2Account(
             memo: 'ID 采购成本'
           },
           {
-            accountCode: purchaseSupplierAccountId ? 'supplier_prepayment' : 'cash',
+            accountCode: 'cash',
             direction: 'credit',
             currency: purchaseCurrency,
             amountOriginal: purchaseOriginalAmount.toString(),
             fxRateToCny: purchaseRate.toString(),
             amountCny: purchaseCost.toString(),
             financeAccountId: purchaseFinanceAccountId,
-            supplierAccountId: purchaseSupplierAccountId,
             fxRateSnapshotId: resolvedRate.id,
-            memo: purchaseSupplierAccountId ? '扣减供应商预付款' : 'ID 采购付款'
+            memo: 'ID 采购付款'
           }
         ]
       });
-      await financePostingService.post(tx, {
-        journalType: 'opening_balance',
-        sourceType: 'opening_balance',
-        sourceId: created.id,
-        sourceReference: created.appleIdMasked,
-        occurredAt: created.createdAt,
-        summary: `ID 期初余额资产：${created.appleIdMasked}`,
-        metadata: { excludedFromProfit: true },
-        idempotencyKey: `auto:account_balance_opening:${created.id}`,
-        operator,
-        lines: [
-          {
-            accountCode: 'gift_card_inventory',
-            direction: 'debit',
-            currency: 'CNY',
-            amountOriginal: openingBalance.balanceCostAmount.toString(),
-            fxRateToCny: '1',
-            amountCny: openingBalance.balanceCostAmount.toString()
-          },
-          {
-            accountCode: 'opening_equity',
-            direction: 'credit',
-            currency: 'CNY',
-            amountOriginal: openingBalance.balanceCostAmount.toString(),
-            fxRateToCny: '1',
-            amountCny: openingBalance.balanceCostAmount.toString()
-          }
-        ]
-      });
+      if (!openingBalance.balanceCostAmount.isZero()) {
+        await financePostingService.post(tx, {
+          journalType: 'opening_balance',
+          sourceType: 'opening_balance',
+          sourceId: created.id,
+          sourceReference: created.appleIdMasked,
+          occurredAt: created.createdAt,
+          summary: `ID 期初余额资产：${created.appleIdMasked}`,
+          metadata: { excludedFromProfit: true },
+          idempotencyKey: `auto:account_balance_opening:${created.id}`,
+          operator,
+          lines: [
+            {
+              accountCode: 'gift_card_inventory',
+              direction: 'debit',
+              currency: 'CNY',
+              amountOriginal: openingBalance.balanceCostAmount.toString(),
+              fxRateToCny: '1',
+              amountCny: openingBalance.balanceCostAmount.toString()
+            },
+            {
+              accountCode: 'opening_equity',
+              direction: 'credit',
+              currency: 'CNY',
+              amountOriginal: openingBalance.balanceCostAmount.toString(),
+              fxRateToCny: '1',
+              amountCny: openingBalance.balanceCostAmount.toString()
+            }
+          ]
+        });
+      }
 
       const response = toAccountResponse(created);
       await transactionalAudit.append(tx, {

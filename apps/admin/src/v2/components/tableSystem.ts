@@ -17,6 +17,7 @@ export interface V2TableDataColumnDefinition {
     | 'identifier'
     | 'longText';
   readonly pin?: V2TableColumnPin;
+  readonly hideable?: boolean;
 }
 
 export interface V2TableActionColumnDefinition {
@@ -40,6 +41,12 @@ export type V2TableColumnDefinition =
   | V2TableDataColumnDefinition
   | V2TableActionColumnDefinition
   | V2TableControlColumnDefinition;
+
+export function isV2TableDataColumn(
+  column: V2TableColumnDefinition
+): column is V2TableDataColumnDefinition {
+  return column.kind !== 'actions' && column.kind !== 'control';
+}
 
 export type V2TableRowKeyDefinition =
   | { readonly kind: 'path'; readonly value: string }

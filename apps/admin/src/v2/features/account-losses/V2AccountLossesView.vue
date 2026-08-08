@@ -33,6 +33,16 @@
         <el-option label="报损时可用" value="available" />
         <el-option label="报损时已卖出" value="sold" />
       </el-select>
+      <el-select
+        v-model="page.query.status"
+        placeholder="记录状态"
+        aria-label="筛选报损记录状态"
+        @change="page.handleFilterChange"
+      >
+        <el-option label="待恢复" value="active" />
+        <el-option label="已恢复" value="reversed" />
+        <el-option label="全部记录" value="" />
+      </el-select>
       <V2FilterDisclosure>
         <el-date-picker
           v-model="page.reportedRange"
@@ -131,66 +141,123 @@
               </strong>
             </template>
           </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[8]">
+            <template #default="{ row }">
+              <el-tooltip
+                :disabled="row.status === 'active' || !row.reversalReason"
+                :content="`恢复原因：${row.reversalReason}`"
+                placement="top"
+              >
+                <el-tag :type="row.status === 'active' ? 'danger' : 'success'" effect="plain">
+                  {{ row.status === 'active' ? '待恢复' : '已恢复' }}
+                </el-tag>
+              </el-tooltip>
+            </template>
+          </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.accountLosses.main.columns[8]"
+            :definition="v2TableSchemas.accountLosses.main.columns[9]"
             prop="reason"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[9]">
+          <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[10]">
             <template #default="{ row }">
               {{ operatorUsername(row.reportedBy) }}
             </template>
           </V2TableColumn>
           <V2TableColumn
-            :definition="v2TableSchemas.accountLosses.main.columns[10]"
+            :definition="v2TableSchemas.accountLosses.main.columns[11]"
             prop="reportedAt"
             sortable="custom"
           >
             <template #default="{ row }">{{ page.formatDate(row.reportedAt) }}</template>
           </V2TableColumn>
+          <V2TableActionColumn :definition="v2TableSchemas.accountLosses.main.columns[12]">
+            <template #default="{ row }">
+              <AppButton
+                v-if="page.canRecover && row.status === 'active'"
+                size="small"
+                variant="ghost"
+                @click="page.openRecovery(row)"
+              >
+                恢复 ID
+              </AppButton>
+              <span v-else>—</span>
+            </template>
+          </V2TableActionColumn>
         </V2Table>
 
         <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.accountLosses.main.id">
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.appleIdMasked }}</strong>
-                <span>{{ item.countryName }} / {{ item.supplierName || '未设置供应商' }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'ID 账号']">
+                  {{ item.appleIdMasked }}
+                </strong>
+                <span
+                  v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'countryName']"
+                >
+                  {{ item.countryName }}
+                </span>
+                <span v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '供应商']">
+                  {{ item.supplierName || '未设置供应商' }}
+                </span>
               </div>
-              <el-tag :type="item.status === 'reversed' ? 'info' : 'danger'" effect="plain">
+              <el-tag
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '记录状态']"
+                :type="item.status === 'reversed' ? 'info' : 'danger'"
+                effect="plain"
+              >
                 {{ item.status === 'reversed' ? '已冲回' : '已报损冻结' }}
               </el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '销售状态']">
                 <dt>报损时销售状态</dt>
                 <dd>{{ item.saleState === 'sold' ? '已卖出' : '可用' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '来源订单']">
                 <dt>来源订单</dt>
                 <dd>{{ item.soldOrderNo || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'lossBalance']">
                 <dt>损失余额</dt>
                 <dd>{{ page.formatDecimal(item.lossBalance) }} {{ item.currencyCode || '' }}</dd>
               </div>
-              <div>
+              <div
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'lossCostAmount']"
+              >
                 <dt>人民币亏损</dt>
                 <dd>¥{{ page.formatDecimal(item.lossCostAmount) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '操作人']">
                 <dt>操作人</dt>
                 <dd>{{ operatorUsername(item.reportedBy) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'reportedAt']">
                 <dt>报损时间</dt>
                 <dd>{{ page.formatDate(item.reportedAt) }}</dd>
               </div>
-              <div class="v2-account-losses__mobile-reason">
+              <div
+                v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'reason']"
+                class="v2-account-losses__mobile-reason"
+              >
                 <dt>报损原因</dt>
                 <dd>{{ item.reason }}</dd>
               </div>
+              <div v-if="item.status === 'reversed'" class="v2-account-losses__mobile-reason">
+                <dt>恢复原因</dt>
+                <dd>{{ item.reversalReason || '—' }}</dd>
+              </div>
+              <div v-if="item.reversedAt">
+                <dt>恢复时间</dt>
+                <dd>{{ page.formatDate(item.reversedAt) }}</dd>
+              </div>
             </dl>
+            <footer v-if="page.canRecover && item.status === 'active'">
+              <AppButton size="small" variant="ghost" @click="page.openRecovery(item)">
+                恢复 ID
+              </AppButton>
+            </footer>
           </article>
           <div v-if="!page.items.length" class="v2-records-empty">
             <strong>暂无 ID 报损记录</strong>
@@ -214,6 +281,8 @@
         </footer>
       </section>
     </V2AsyncRegion>
+
+    <V2AccountLossRecoveryDialog :page="page" />
   </section>
 </template>
 
@@ -221,6 +290,7 @@
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { reactive } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -228,6 +298,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import { useAccountLossesPage } from './useAccountLossesPage';
+import V2AccountLossRecoveryDialog from './V2AccountLossRecoveryDialog.vue';
 import '@/v2/styles/records.css';
 
 const page = reactive(useAccountLossesPage());

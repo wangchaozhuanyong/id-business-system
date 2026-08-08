@@ -7,6 +7,7 @@ import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessModule } from '../sensitive-access/public-api';
 import { IdBusinessV2TopupSupplierFundsModule } from '../topup-supplier-funds/public-api';
 import { IdBusinessV2GiftCardCreditService } from './id-business-v2-gift-card-credit.service';
 import { IdBusinessV2GiftCardRecordsService } from './id-business-v2-gift-card-records.service';
@@ -24,6 +25,7 @@ import { IdBusinessV2GiftCardsRepository } from './persistence/id-business-v2-gi
     IdBusinessV2FinanceModule,
     IdBusinessV2OptionsModule,
     IdBusinessV2RuntimeModule,
+    IdBusinessV2SensitiveAccessModule,
     IdBusinessV2TopupSupplierFundsModule
   ],
   controllers: [IdBusinessV2GiftCardsController],

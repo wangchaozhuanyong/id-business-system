@@ -280,8 +280,8 @@ export class IdBusinessV2GiftCardsRepository {
     }));
   }
 
-  async findSensitiveGiftCard(giftCardId: string) {
-    return this.prisma.idBusinessV2GiftCard.findUnique({
+  async findSensitiveGiftCard(giftCardId: string, tx?: V2CommandTransaction) {
+    return (tx ?? this.prisma).idBusinessV2GiftCard.findUnique({
       where: { id: giftCardId },
       select: { id: true, codeEncrypted: true, codeMasked: true }
     });

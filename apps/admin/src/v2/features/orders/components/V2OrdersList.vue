@@ -138,33 +138,35 @@
           sortable="custom"
         >
           <template #default="{ row }">
-            <el-tag :type="page.statusMeta(row.status).type" effect="plain">
-              {{ page.statusMeta(row.status).label }}
-            </el-tag>
+            <div class="v2-order-progress">
+              <el-tag :type="page.statusMeta(row.status).type" effect="plain">
+                {{ page.statusMeta(row.status).label }}
+              </el-tag>
+              <AppButton
+                v-if="page.canConsumeOrders && row.operations.canConsume"
+                size="small"
+                variant="primary"
+                :loading="page.consumingOrderId === row.id"
+                @click="page.consumeOrderBalance(row)"
+              >
+                <el-icon><Coin /></el-icon>
+                扣减
+              </AppButton>
+              <AppButton
+                v-if="page.canUpdateOrders && row.operations.canComplete"
+                size="small"
+                variant="primary"
+                :loading="page.completingOrderId === row.id"
+                @click="page.completeOrder(row)"
+              >
+                <el-icon><CircleCheck /></el-icon>
+                确认开通
+              </AppButton>
+            </div>
           </template>
         </V2TableColumn>
         <V2TableActionColumn :definition="v2TableSchemas.orders.main.columns[16]">
           <template #default="{ row }">
-            <AppButton
-              v-if="page.canConsumeOrders && row.operations.canConsume"
-              size="small"
-              variant="primary"
-              :loading="page.consumingOrderId === row.id"
-              @click="page.consumeOrderBalance(row)"
-            >
-              <el-icon><Coin /></el-icon>
-              扣减
-            </AppButton>
-            <AppButton
-              v-if="page.canUpdateOrders && row.operations.canComplete"
-              size="small"
-              variant="primary"
-              :loading="page.completingOrderId === row.id"
-              @click="page.completeOrder(row)"
-            >
-              <el-icon><CircleCheck /></el-icon>
-              确认开通
-            </AppButton>
             <AppButton size="small" variant="ghost" @click="page.openDetail(row)">
               <el-icon><View /></el-icon>
               详情
@@ -226,73 +228,23 @@
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
-              <strong>{{ item.orderNo }}</strong>
-              <span>
-                {{ item.customer.name }} / {{ item.service.parent?.name || '未分类' }} /
+              <strong v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'orderNo']">
+                {{ item.orderNo }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '客户']">
+                {{ item.customer.name }}
+              </span>
+              <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '分类']">
+                {{ item.service.parent?.name || '未分类' }}
+              </span>
+              <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '业务']">
                 {{ item.service.name }}
               </span>
             </div>
-            <el-tag :type="page.statusMeta(item.status).type" effect="plain">
-              {{ page.statusMeta(item.status).label }}
-            </el-tag>
-          </header>
-          <dl>
-            <div>
-              <dt>业务分类</dt>
-              <dd>{{ item.service.parent?.name || '—' }}</dd>
-            </div>
-            <div>
-              <dt>使用 ID</dt>
-              <dd>{{ item.account?.appleIdMasked || '—' }}</dd>
-            </div>
-            <div>
-              <dt>ID 处理状态</dt>
-              <dd>{{ page.accountDispositionMeta(item.accountDisposition).label }}</dd>
-            </div>
-            <div>
-              <dt>ID成本</dt>
-              <dd>{{ page.formatDecimal(item.appliedAccountCostAmount) }}</dd>
-            </div>
-            <div>
-              <dt>结算平台</dt>
-              <dd>{{ item.settlementPlatform?.name || '—' }}</dd>
-            </div>
-            <div>
-              <dt>实收金额</dt>
-              <dd>{{ page.formatDecimal(item.receivedAmount) }}</dd>
-            </div>
-            <div>
-              <dt>利润</dt>
-              <dd :class="page.profitClass(item.profitAmount)">
-                {{ page.formatNullableDecimal(item.profitAmount) }}
-              </dd>
-            </div>
-            <div>
-              <dt>利润率</dt>
-              <dd :class="page.profitClass(item.profitRate)">
-                {{ item.profitRate === null ? '—' : `${page.formatDecimal(item.profitRate)}%` }}
-              </dd>
-            </div>
-            <div>
-              <dt>订单时间</dt>
-              <dd>{{ page.formatDate(item.createdAt) }}</dd>
-            </div>
-            <div>
-              <dt>操作人</dt>
-              <dd>{{ operatorUsername(item.createdBy) }}</dd>
-            </div>
-            <div>
-              <dt>开通时间</dt>
-              <dd>{{ page.formatDate(item.openedAt) }}</dd>
-            </div>
-            <div>
-              <dt>到期时间</dt>
-              <dd>{{ page.formatDate(item.dueAt) }}</dd>
-            </div>
-          </dl>
-          <footer>
-            <span>{{ item.maskedWebsiteAccount || '未填写网站账号' }}</span>
-            <div class="v2-order-row-actions">
+            <div class="v2-order-mobile-progress">
+              <el-tag :type="page.statusMeta(item.status).type" effect="plain">
+                {{ page.statusMeta(item.status).label }}
+              </el-tag>
               <AppButton
                 v-if="page.canConsumeOrders && item.operations.canConsume"
                 size="small"
@@ -313,6 +265,67 @@
                 <el-icon><CircleCheck /></el-icon>
                 确认开通
               </AppButton>
+            </div>
+          </header>
+          <dl>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '分类']">
+              <dt>业务分类</dt>
+              <dd>{{ item.service.parent?.name || '—' }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '使用 ID']">
+              <dt>使用 ID</dt>
+              <dd>{{ item.account?.appleIdMasked || '—' }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'accountDisposition']">
+              <dt>ID 处理状态</dt>
+              <dd>{{ page.accountDispositionMeta(item.accountDisposition).label }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'accountCostAmount']">
+              <dt>ID成本</dt>
+              <dd>{{ page.formatDecimal(item.appliedAccountCostAmount) }}</dd>
+            </div>
+            <div>
+              <dt>结算平台</dt>
+              <dd>{{ item.settlementPlatform?.name || '—' }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'receivedAmount']">
+              <dt>实收金额</dt>
+              <dd>{{ page.formatDecimal(item.receivedAmount) }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'profitAmount']">
+              <dt>利润</dt>
+              <dd :class="page.profitClass(item.profitAmount)">
+                {{ page.formatNullableDecimal(item.profitAmount) }}
+              </dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '利润率']">
+              <dt>利润率</dt>
+              <dd :class="page.profitClass(item.profitRate)">
+                {{ item.profitRate === null ? '—' : `${page.formatDecimal(item.profitRate)}%` }}
+              </dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'createdAt']">
+              <dt>订单时间</dt>
+              <dd>{{ page.formatDate(item.createdAt) }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '操作人']">
+              <dt>操作人</dt>
+              <dd>{{ operatorUsername(item.createdBy) }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'openedAt']">
+              <dt>开通时间</dt>
+              <dd>{{ page.formatDate(item.openedAt) }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'dueAt']">
+              <dt>到期时间</dt>
+              <dd>{{ page.formatDate(item.dueAt) }}</dd>
+            </div>
+          </dl>
+          <footer>
+            <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '客户网站账号']">
+              {{ item.maskedWebsiteAccount || '未填写网站账号' }}
+            </span>
+            <div class="v2-order-row-actions">
               <AppButton size="small" variant="ghost" @click="page.openDetail(item)"
                 >查看详情</AppButton
               >

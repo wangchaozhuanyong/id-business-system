@@ -9,17 +9,17 @@ function read(relativePath: string) {
 }
 
 describe('reported account loss freeze guards', () => {
-  it('blocks account editing, balance adjustment and deletion', () => {
+  it('blocks account editing and balance adjustment, and removes the account delete API', () => {
     const source = read('accounts/id-business-v2-accounts.service.ts');
+    const controller = read('accounts/id-business-v2-accounts.controller.ts');
     const balanceAdjustment = read('accounts/id-business-v2-account-balance-adjustment.service.ts');
     const repository = read('accounts/persistence/id-business-v2-accounts.repository.ts');
 
     expect(source).toContain('已报损冻结 ID 不能再修改');
     expect(balanceAdjustment).toContain('已报损冻结 ID 不能调整余额');
-    expect(source).toContain('已报损 ID 必须保留历史记录，不能删除');
-    expect(repository).toMatch(
-      /updateMany\(\{\s*where: \{ id: accountId, lossReportedAt: null \}/s
-    );
+    expect(controller).not.toContain("@Delete(':id')");
+    expect(repository).not.toContain('softDelete(');
+    expect(repository).toContain('lossReportedAt: null');
   });
 
   it('excludes loss-reported IDs from top-up, matching, locking and deduction paths', () => {

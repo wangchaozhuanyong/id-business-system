@@ -152,13 +152,13 @@ export function useOrderEntryPage() {
   });
   const profitRatePreviewUnavailableReason = computed(() => {
     if (!form.receivedOriginalAmount.trim()) {
-      return '填写原币实收后，将按当前成本自动反算';
+      return '填写售卖价格后，将按当前成本自动反算';
     }
     if (!isPositiveOrderAmount(form.receivedAmount)) {
       if (form.receivedCurrency !== 'CNY' && !hasEffectiveReceiptFxRate.value) {
         return `等待有效的 ${form.receivedCurrency}/CNY 汇率后自动反算`;
       }
-      return '原币实收必须大于 0 才能反算利润率';
+      return '售卖价格必须大于 0 才能反算利润率';
     }
     if (!selectedSettlementPlatform.value) {
       return '请选择结算平台后自动反算';
@@ -189,6 +189,7 @@ export function useOrderEntryPage() {
     useReceiptDrivenProfitRate,
     resetPricingInputMode
   } = useOrderPricingInputMode({
+    receiptAmountLabel: '售卖价格',
     getTargetProfitRate: () => form.targetProfitRate,
     setTargetProfitRate: (value) => {
       form.targetProfitRate = value;
@@ -401,7 +402,7 @@ export function useOrderEntryPage() {
           (message.includes('汇率快照已过期') || message.includes('汇率快照不存在'))
         ) {
           await loadReceiptFxQuote();
-          ElMessage.warning('自动汇率已更新，请核对原币实收和预计利润后重新提交');
+          ElMessage.warning('自动汇率已更新，请核对售卖价格和预计利润后重新提交');
         } else {
           ElMessage.error(message);
         }

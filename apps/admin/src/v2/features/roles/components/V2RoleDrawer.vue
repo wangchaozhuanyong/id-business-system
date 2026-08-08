@@ -182,6 +182,8 @@
             </div>
           </div>
         </el-form-item>
+
+        <V2RoleSensitivePolicy :page="page" />
       </section>
     </el-form>
 
@@ -228,6 +230,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import type { useRolesPage } from '../useRolesPage';
+import V2RoleSensitivePolicy from './V2RoleSensitivePolicy.vue';
 
 const props = defineProps<{
   page: UnwrapNestedRefs<ReturnType<typeof useRolesPage>>;

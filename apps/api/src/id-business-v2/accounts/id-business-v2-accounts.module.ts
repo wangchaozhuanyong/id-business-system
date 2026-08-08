@@ -4,6 +4,7 @@ import { IdBusinessV2BalancesModule } from '../balances/public-api';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessModule } from '../sensitive-access/public-api';
 import { IdBusinessV2AccountsController } from './id-business-v2-accounts.controller';
 import { IdBusinessV2AccountsService } from './id-business-v2-accounts.service';
 import { IdBusinessV2AccountBalanceAdjustmentService } from './id-business-v2-account-balance-adjustment.service';
@@ -23,7 +24,8 @@ import { IdBusinessV2AccountsRepository } from './persistence/id-business-v2-acc
     IdBusinessV2BalancesModule,
     IdBusinessV2FinanceModule,
     IdBusinessV2OptionsModule,
-    IdBusinessV2RuntimeModule
+    IdBusinessV2RuntimeModule,
+    IdBusinessV2SensitiveAccessModule
   ],
   controllers: [
     IdBusinessV2AccountsController,

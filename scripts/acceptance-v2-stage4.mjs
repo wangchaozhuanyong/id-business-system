@@ -388,6 +388,11 @@ async function main() {
       assert(sensitiveFields.includes(expected), `缺少敏感访问日志 ${expected.split(':').at(-1)}`);
     }
 
+    await api(`/id-business-v2/accounts/${accountId}/record-status`, {
+      method: 'POST',
+      body: JSON.stringify({ recordStatus: 'disabled', reason: 'Stage 4 验收停用' })
+    });
+
     const auditLogs = await prisma.auditLog.findMany({
       where: {
         objectId: {
@@ -408,6 +413,7 @@ async function main() {
       'id_business_v2.customer.phone.reveal',
       'id_business_v2.account.create',
       'id_business_v2.account.update',
+      'id_business_v2.account.disable',
       'id_business_v2.account.secret.reveal'
     ]) {
       assert(auditActions.has(action), `缺少操作日志 ${action}`);
@@ -418,10 +424,9 @@ async function main() {
       assert(!auditJson.includes(secret), '操作日志中出现敏感明文');
     }
 
-    await api(`/id-business-v2/accounts/${accountId}`, { method: 'DELETE' });
     await api(`/id-business-v2/customers/${customerId}`, { method: 'DELETE' });
 
-    const deletedAccount = await prisma.idBusinessV2Account.findUnique({
+    const disabledAccount = await prisma.idBusinessV2Account.findUnique({
       where: { id: accountId }
     });
     const deletedCustomer = await prisma.idBusinessV2Customer.findUnique({
@@ -429,17 +434,21 @@ async function main() {
     });
 
     assert(
-      deletedAccount?.deletedAt && deletedAccount.recordStatus === 'disabled',
-      'ID 软删除未落库'
+      !disabledAccount?.deletedAt &&
+        disabledAccount?.recordStatus === 'disabled' &&
+        disabledAccount.disabledReason === 'Stage 4 验收停用',
+      'ID 停用状态或原因未落库'
     );
     assert(deletedCustomer?.deletedAt, '客户软删除未落库');
     assert(
       (
         await api(
-          `/id-business-v2/accounts?page=1&pageSize=20&keyword=${encodeURIComponent(appleId)}`
+          `/id-business-v2/accounts?page=1&pageSize=20&lifecycle=disabled&keyword=${encodeURIComponent(
+            appleId
+          )}`
         )
-      ).total === 0,
-      '软删除 ID 仍出现在列表'
+      ).items.some((item) => item.id === accountId),
+      '停用 ID 未出现在停用分类'
     );
     assert(
       (
@@ -462,7 +471,8 @@ async function main() {
         editableOpeningBalance: true,
         immutableManualAdjustment: true,
         plaintextAccountListDisabled: true,
-        softDelete: true
+        accountLifecycleManagement: true,
+        customerSoftDelete: true
       },
       sensitiveAccessLogCount: sensitiveLogs.length,
       auditLogCount: auditLogs.length

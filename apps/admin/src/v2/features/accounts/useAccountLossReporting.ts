@@ -25,6 +25,10 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
 
   function openReportLoss(item: V2Account) {
     if (!options.canReportLoss.value || item.lossStatus === 'reported') return;
+    if (item.saleState === 'sold') {
+      ElMessage.warning('已售出 ID 不能报损');
+      return;
+    }
     lossTarget.value = item;
     lossReason.value = '';
     lossConfirmed.value = false;

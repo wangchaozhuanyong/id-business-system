@@ -78,10 +78,18 @@
       <article v-for="item in page.mfaUserItems" :key="item.id" class="v2-records-mobile-item">
         <header>
           <div>
-            <strong>{{ item.displayName }}</strong>
-            <span>{{ item.username }} · {{ item.roles.join('、') || '无角色' }}</span>
+            <strong v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'displayName']">
+              {{ item.displayName }}
+            </strong>
+            <span v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'username']">
+              {{ item.username }}
+            </span>
+            <span v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, '角色']">
+              {{ item.roles.join('、') || '无角色' }}
+            </span>
           </div>
           <el-tag
+            v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'MFA']"
             :type="item.enabled ? 'success' : item.configured ? 'warning' : 'info'"
             effect="plain"
           >
@@ -89,15 +97,18 @@
           </el-tag>
         </header>
         <dl>
-          <div>
+          <div v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, '账号状态']">
             <dt>账号状态</dt>
             <dd>{{ item.status === 'active' ? '启用' : '停用' }}</dd>
           </div>
-          <div>
+          <div v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'recoveryCodeCount']">
             <dt>恢复码</dt>
             <dd>{{ item.recoveryCodeCount }} 个</dd>
           </div>
-          <div class="v2-security-mfa-users__mobile-wide">
+          <div
+            v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'lastUsedAt']"
+            class="v2-security-mfa-users__mobile-wide"
+          >
             <dt>最近使用</dt>
             <dd>{{ page.formatSecurityDate(item.lastUsedAt) }}</dd>
           </div>

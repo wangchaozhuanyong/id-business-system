@@ -225,7 +225,7 @@ async function warmCustomerPage(browserInstance) {
     localStorage.setItem('apple_business_access_token', 'layout-test-token');
     localStorage.setItem('apple_business_current_user', JSON.stringify(currentUser));
   }, user);
-  await installApiMocks(page, user, unexpectedRequests);
+  await installApiMocks(page, user, unexpectedRequests, new Map());
 
   try {
     await warmPage(page, '/v2/customers', '.v2-records-mobile-item');
@@ -429,13 +429,14 @@ async function verifyCustomerPage(browserInstance, scenario) {
   const page = await context.newPage();
   const runtimeErrors = collectRuntimeErrors(page);
   const unexpectedRequests = [];
+  const tablePreferences = new Map();
   const user = createUser(scenario);
 
   await page.addInitScript((currentUser) => {
     localStorage.setItem('apple_business_access_token', 'layout-test-token');
     localStorage.setItem('apple_business_current_user', JSON.stringify(currentUser));
   }, user);
-  await installApiMocks(page, user, unexpectedRequests);
+  await installApiMocks(page, user, unexpectedRequests, tablePreferences);
 
   try {
     await page.goto(new URL('/v2/customers', adminUrl).href, {
@@ -476,7 +477,10 @@ async function verifyCustomerPage(browserInstance, scenario) {
       await maybeCaptureScreenshot(page, scenario.key, width);
     }
 
-    if (scenario.key === 'all') await verifyRouteScrollRestoration(page);
+    if (scenario.key === 'all') {
+      await verifyRouteScrollRestoration(page);
+      await verifyCustomerColumnPreferencePersistence(page, user.displayName, tablePreferences);
+    }
 
     assert.deepEqual(
       unexpectedRequests,
@@ -709,6 +713,92 @@ async function verifyMobileCustomerLayout(page, scenario, width) {
     );
   }
   assert.equal(await getDocumentOverflow(page), 0, `${scenario.key} ${width}px 出现页面横向溢出`);
+}
+
+async function verifyCustomerColumnPreferencePersistence(page, displayName, tablePreferences) {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settleLayout(page);
+
+  const settingsButton = page.getByRole('button', { name: /^列设置/ }).first();
+  await settingsButton.click();
+  const settingsDrawer = page.locator('.v2-table-column-settings');
+  await settingsDrawer.waitFor({ state: 'visible' });
+
+  assert.equal(
+    await settingsDrawer.getByRole('checkbox', { name: /微信/ }).isChecked(),
+    true,
+    '客户表微信列默认未显示'
+  );
+  assert.equal(
+    await settingsDrawer.getByRole('checkbox', { name: '操作', exact: true }).count(),
+    0,
+    '系统操作列不应进入可隐藏列清单'
+  );
+  await settingsDrawer.locator('.el-checkbox', { hasText: '微信' }).click();
+  assert.equal(
+    await settingsDrawer.getByRole('checkbox', { name: /微信/ }).isChecked(),
+    false,
+    '客户表微信列未在列设置中取消选中'
+  );
+  await settingsDrawer.getByRole('button', { name: '保存设置' }).click();
+  await settingsDrawer.waitFor({ state: 'hidden' });
+
+  assert.deepEqual(
+    tablePreferences.get('customers.main')?.hiddenColumnKeys,
+    ['wechat'],
+    '列偏好未通过保存接口持久化'
+  );
+  await waitForCustomerTableHeader(page, '微信', false);
+  assert.ok((await readCustomerTableHeaders(page)).includes('操作'), '隐藏数据列时操作列被误隐藏');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+  assert.equal(
+    await visibleElementCount(page.locator('.v2-records-mobile-item dt', { hasText: '微信' })),
+    0,
+    '保存后移动卡片仍显示已隐藏列'
+  );
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForCustomerContentReady(page, displayName);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settleLayout(page);
+  await waitForCustomerTableHeader(page, '微信', false);
+
+  await page.getByRole('button', { name: /^列设置（隐藏 1）$/ }).click();
+  await settingsDrawer.waitFor({ state: 'visible' });
+  await settingsDrawer.getByRole('button', { name: '恢复默认' }).click();
+  await page.getByRole('button', { name: '确认恢复' }).click();
+  await settingsDrawer.waitFor({ state: 'hidden' });
+  assert.equal(tablePreferences.has('customers.main'), false, '恢复默认未删除服务端偏好');
+  await waitForCustomerTableHeader(page, '微信', true);
+}
+
+async function visibleElementCount(locator) {
+  const elements = await locator.all();
+  const visible = await Promise.all(elements.map((element) => element.isVisible()));
+  return visible.filter(Boolean).length;
+}
+
+async function readCustomerTableHeaders(page) {
+  return page
+    .locator('[data-table-schema="customers.main"] th .cell')
+    .evaluateAll((headers) => headers.map((header) => header.textContent?.trim() ?? ''));
+}
+
+async function waitForCustomerTableHeader(page, label, expectedVisible) {
+  await page.waitForFunction(
+    ({ expected, text }) => {
+      const headers = [
+        ...document.querySelectorAll('[data-table-schema="customers.main"] th .cell')
+      ]
+        .map((header) => header.textContent?.trim() ?? '')
+        .filter(Boolean);
+      return headers.includes(text) === expected;
+    },
+    { expected: expectedVisible, text: label },
+    { timeout: 5_000 }
+  );
 }
 
 async function measureActionGroups(page, containerSelector) {
@@ -1145,7 +1235,7 @@ async function getDocumentOverflow(page) {
   );
 }
 
-async function installApiMocks(page, user, unexpectedRequests) {
+async function installApiMocks(page, user, unexpectedRequests, tablePreferences) {
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -1169,6 +1259,34 @@ async function installApiMocks(page, user, unexpectedRequests) {
       url.pathname.endsWith('/api/id-business-v2/customers/bootstrap')
     ) {
       await fulfillSuccess(route, createCustomersBootstrap());
+      return;
+    }
+    if (
+      request.method() === 'GET' &&
+      url.pathname.endsWith('/api/id-business-v2/table-preferences')
+    ) {
+      await fulfillSuccess(route, { items: [...tablePreferences.values()] });
+      return;
+    }
+    const tablePreferenceMatch = url.pathname.match(
+      /\/api\/id-business-v2\/table-preferences\/([^/]+)$/
+    );
+    if (tablePreferenceMatch && request.method() === 'PUT') {
+      const tableId = decodeURIComponent(tablePreferenceMatch[1]);
+      const body = request.postDataJSON();
+      const preference = {
+        tableId,
+        hiddenColumnKeys: body.hiddenColumnKeys,
+        updatedAt: new Date().toISOString()
+      };
+      tablePreferences.set(tableId, preference);
+      await fulfillSuccess(route, preference);
+      return;
+    }
+    if (tablePreferenceMatch && request.method() === 'DELETE') {
+      const tableId = decodeURIComponent(tablePreferenceMatch[1]);
+      const deleted = tablePreferences.delete(tableId);
+      await fulfillSuccess(route, { tableId, hiddenColumnKeys: [], deleted });
       return;
     }
     if (

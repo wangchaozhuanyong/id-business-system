@@ -24,7 +24,6 @@ export interface AccountFormState {
   purchaseSourceId: string;
   purchaseManualRateReason: string;
   purchasedAt: string;
-  active: boolean;
   remark: string;
 }
 
@@ -48,7 +47,6 @@ export function emptyAccountForm(): AccountFormState {
     purchaseSourceId: '',
     purchaseManualRateReason: '',
     purchasedAt: toLocalDateTimeInput(new Date()),
-    active: true,
     remark: ''
   };
 }

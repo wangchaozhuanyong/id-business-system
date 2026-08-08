@@ -20,6 +20,7 @@ import type {
 } from '@apple-business/shared';
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
+import type { V2OptionSelector } from '@/v2/types/options';
 
 export interface V2FinanceReportQuery {
   dateFrom?: string;
@@ -57,6 +58,18 @@ export interface V2FinanceExpenseQuery {
   dateTo?: string;
 }
 
+export interface V2FinanceLedgerBootstrap {
+  accounts: V2FinanceAccount[];
+  wallets: V2FinanceSupplierWallet[];
+  expenses: { items: V2FinanceExpense[]; total: number };
+  journals: { items: V2FinanceJournal[]; total: number };
+  periods: V2FinancePeriod[];
+  settings: V2FinanceSettings;
+  supplierOptions: V2OptionSelector[];
+  expenseCategories: V2OptionSelector[];
+  generatedAt: string;
+}
+
 const FINANCE_SCOPES = [
   'finance-accounts',
   'finance-ledger',
@@ -65,6 +78,24 @@ const FINANCE_SCOPES = [
 ] as const;
 
 export const idBusinessV2FinanceApi = {
+  bootstrapLedger(
+    params: {
+      currency?: V2FinanceCurrency | '';
+      expensePage: number;
+      journalPage: number;
+      pageSize: number;
+      periodMonth?: string;
+      journalType?: V2FinanceJournalType | '';
+    },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2FinanceLedgerBootstrap>(
+      http.get('/id-business-v2/finance/ledger/bootstrap', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
   overview(params: V2FinanceReportQuery, options: ApiRequestOptions = {}) {
     return request<V2FinanceOverview>(
       http.get('/id-business-v2/finance/reports/overview', {
@@ -216,6 +247,29 @@ export const idBusinessV2FinanceApi = {
   }) {
     return withV2QueryInvalidation(
       request<V2FinanceExpense>(http.post('/id-business-v2/finance/expenses', payload)),
+      FINANCE_SCOPES
+    );
+  },
+  correctExpense(
+    id: string,
+    payload: {
+      categoryOptionId: string;
+      financeAccountId: string;
+      amount: string;
+      currency: V2FinanceCurrency;
+      occurredAt: string;
+      fxRateToCny?: string;
+      manualRateReason?: string;
+      payee?: string;
+      remark?: string;
+      reason: string;
+      idempotencyKey: string;
+    }
+  ) {
+    return withV2QueryInvalidation(
+      request<V2FinanceExpense>(
+        http.post(`/id-business-v2/finance/expenses/${id}/corrections`, payload)
+      ),
       FINANCE_SCOPES
     );
   },

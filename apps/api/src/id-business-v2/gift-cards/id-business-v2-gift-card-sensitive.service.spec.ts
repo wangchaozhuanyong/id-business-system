@@ -29,10 +29,18 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
   const encryption = {
     decrypt: vi.fn()
   };
+  const sensitiveAccessService = {
+    authorize: vi.fn().mockResolvedValue({
+      mode: 'direct',
+      approvalId: null,
+      reason: '角色权限直接查看'
+    })
+  };
   const service = new IdBusinessV2GiftCardSensitiveService(
     new IdBusinessV2GiftCardsRepository(prisma as never),
     encryption as never,
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    sensitiveAccessService as never
   );
 
   beforeEach(() => {
@@ -65,17 +73,18 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
         userId: operator.id,
         objectId: giftCardId,
         accessReason: '核对供应商原始卡号',
-        approved: false
+        approved: true
       })
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'id_business_v2.gift_card.code.reveal',
         objectId: giftCardId,
-        afterData: {
+        afterData: expect.objectContaining({
           reason: '核对供应商原始卡号',
-          approved: false
-        }
+          approved: true,
+          accessMode: 'direct'
+        })
       })
     });
   });
@@ -85,5 +94,17 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
       service.revealCode(giftCardId, { reason: '尝试查看' }, { ...operator, permissions: [] })
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.idBusinessV2GiftCard.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('does not decrypt the card number before a required approval is granted', async () => {
+    sensitiveAccessService.authorize.mockRejectedValueOnce(
+      new ForbiddenException('该字段需要管理员批准后才能查看')
+    );
+
+    await expect(
+      service.revealCode(giftCardId, { reason: '测试审批拦截' }, operator)
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(encryption.decrypt).not.toHaveBeenCalled();
+    expect(prisma.sensitiveAccessLog.create).not.toHaveBeenCalled();
   });
 });

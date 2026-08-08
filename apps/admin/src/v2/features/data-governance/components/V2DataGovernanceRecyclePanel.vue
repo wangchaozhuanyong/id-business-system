@@ -110,8 +110,14 @@
           >
             <header>
               <div>
-                <strong>{{ item.label }}</strong>
-                <span>{{ page.recycleEntityLabels[item.entity] }}</span>
+                <strong
+                  v-v2-column-visibility="[v2TableSchemas.dataGovernance.recycle.id, 'label']"
+                >
+                  {{ item.label }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.dataGovernance.recycle.id, '类型']">
+                  {{ page.recycleEntityLabels[item.entity] }}
+                </span>
               </div>
               <el-checkbox
                 :model-value="page.isRecycleSelected(item)"
@@ -120,11 +126,11 @@
               />
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.recycle.id, '删除时间']">
                 <dt>删除时间</dt>
                 <dd>{{ page.formatGovernanceDate(item.deletedAt) }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.dataGovernance.recycle.id, '恢复状态']">
                 <dt>恢复状态</dt>
                 <dd>需要影响预览</dd>
               </div>

@@ -169,94 +169,13 @@
           class="v2-records-mobile-list"
           :data-mobile-for="v2TableSchemas.topupRecords.giftCards.id"
         >
-          <article v-for="item in giftCards" :key="item.id" class="v2-records-mobile-item">
-            <header>
-              <div>
-                <strong>{{ item.cardName.name }} · {{ item.code }}</strong>
-                <span>{{ item.account.appleIdMasked }} / {{ item.country.name }}</span>
-              </div>
-              <el-tag :type="giftCardStatusType(item.status)" effect="plain">
-                {{ giftCardStatusLabel(item.status) }}
-              </el-tag>
-            </header>
-            <dl>
-              <div>
-                <dt>面值</dt>
-                <dd>{{ formatDecimal(item.faceValue) }} {{ item.country.currencyCode || '' }}</dd>
-              </div>
-              <div>
-                <dt>汇率</dt>
-                <dd>¥{{ formatDecimal(item.exchangeRate) }}</dd>
-              </div>
-              <div>
-                <dt>卡值（RMB）</dt>
-                <dd>¥{{ formatDecimal(item.costAmount) }}</dd>
-              </div>
-              <div>
-                <dt>备注</dt>
-                <dd>{{ item.remark || '—' }}</dd>
-              </div>
-              <div>
-                <dt>供应商</dt>
-                <dd>{{ item.supplier?.name || '—' }}</dd>
-              </div>
-              <div>
-                <dt>余额变化</dt>
-                <dd>
-                  {{ formatOptionalDecimal(item.creditedLedger?.balanceBefore) }} →
-                  {{ formatOptionalDecimal(item.creditedLedger?.balanceAfter) }}
-                </dd>
-              </div>
-              <div>
-                <dt>操作人</dt>
-                <dd>{{ operatorUsername(item.createdBy, 'system') }}</dd>
-              </div>
-            </dl>
-            <footer>
-              <span>{{ formatDate(item.creditedAt) }}</span>
-              <div
-                v-if="
-                  item.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)
-                "
-                class="v2-record-actions"
-              >
-                <AppButton
-                  v-if="canReassignSupplier"
-                  size="small"
-                  variant="soft"
-                  @click="openSupplierReassignment(item)"
-                >
-                  更正供应商
-                </AppButton>
-                <el-dropdown
-                  v-if="canAdjustBalance"
-                  trigger="click"
-                  @command="handleFinancialCommand(item, $event)"
-                >
-                  <AppButton size="small" variant="soft">更多操作</AppButton>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="metadata">备注</el-dropdown-item>
-                      <el-dropdown-item
-                        v-if="item.status === 'credited'"
-                        command="redeemed"
-                        divided
-                      >
-                        被赎回
-                      </el-dropdown-item>
-                      <el-dropdown-item v-if="item.status === 'credited'" command="withdrawn">
-                        撤回
-                      </el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-            </footer>
-          </article>
-          <div v-if="!giftCards.length" class="v2-records-empty">
-            <strong>暂无加卡记录</strong>
-            <span>当前筛选条件下没有入账记录</span>
-          </div>
+          <V2GiftCardMobileList
+            :items="giftCards"
+            :can-adjust-balance="canAdjustBalance"
+            :can-reassign-supplier="canReassignSupplier"
+            @reassign-supplier="openSupplierReassignment"
+            @financial-command="handleFinancialCommand"
+          />
         </div>
 
         <footer class="v2-records-pagination">
@@ -374,52 +293,7 @@
           class="v2-records-mobile-list"
           :data-mobile-for="v2TableSchemas.topupRecords.balanceLedger.id"
         >
-          <article v-for="item in ledgerEntries" :key="item.id" class="v2-records-mobile-item">
-            <header>
-              <div>
-                <strong>{{ ledgerTypeLabel(item.entryType) }}</strong>
-                <span>{{ item.account.appleIdMasked }} / {{ item.account.country.name }}</span>
-              </div>
-              <strong :class="`v2-ledger-amount--${deltaType(item.balanceDelta)}`">
-                {{ formatSignedDecimal(item.balanceDelta) }}
-              </strong>
-            </header>
-            <dl>
-              <div>
-                <dt>礼品卡</dt>
-                <dd>{{ item.giftCard?.code || '—' }}</dd>
-              </div>
-              <div>
-                <dt>余额快照</dt>
-                <dd>
-                  {{ formatDecimal(item.balanceBefore) }} → {{ formatDecimal(item.balanceAfter) }}
-                </dd>
-              </div>
-              <div>
-                <dt>成本变动</dt>
-                <dd>{{ formatSignedCurrency(item.costDelta) }}</dd>
-              </div>
-              <div>
-                <dt>平均成本</dt>
-                <dd>¥{{ formatDecimal(item.averageCostAfter) }}</dd>
-              </div>
-              <div>
-                <dt>冲正状态</dt>
-                <dd>
-                  <el-tag v-if="item.reversalOf" type="warning" effect="plain">反向流水</el-tag>
-                  <el-tag v-else-if="item.reversedBy" type="info" effect="plain">已反冲</el-tag>
-                  <span v-else>正常</span>
-                </dd>
-              </div>
-            </dl>
-            <footer>
-              <span>{{ formatDate(item.createdAt) }}</span>
-            </footer>
-          </article>
-          <div v-if="!ledgerEntries.length" class="v2-records-empty">
-            <strong>暂无余额变动</strong>
-            <span>当前筛选条件下没有账务流水</span>
-          </div>
+          <V2BalanceLedgerMobileList :items="ledgerEntries" />
         </div>
 
         <footer class="v2-records-pagination">
@@ -449,6 +323,8 @@ import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2BalanceLedgerMobileList from './V2BalanceLedgerMobileList.vue';
+import V2GiftCardMobileList from './V2GiftCardMobileList.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import {
   deltaType,

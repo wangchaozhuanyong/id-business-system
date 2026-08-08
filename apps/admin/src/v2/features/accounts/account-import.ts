@@ -32,12 +32,13 @@ const ACCOUNT_IMPORT_HEADERS = [
   '人民币成本',
   'ID购买成本',
   '资料状态',
+  '停用原因',
   '备注'
 ] as const;
 
 export function downloadAccountImportTemplate() {
   exportRowsToCsv<Record<string, string>>(
-    'ID录入导入模板',
+    'ID管理导入模板',
     ACCOUNT_IMPORT_HEADERS.map((header) => ({
       header,
       value: () => ''
@@ -96,6 +97,7 @@ export function prepareAccountImport(csvRows: string[][], options: AccountImport
         ? calculateBalanceCost(currentBalance, exchangeRate)
         : null;
 
+      const recordStatus = parseImportRecordStatus(value('资料状态'));
       rows.push({
         rowNumber,
         appleId,
@@ -117,7 +119,8 @@ export function prepareAccountImport(csvRows: string[][], options: AccountImport
         balanceCostAmount:
           calculatedBalanceCost ?? parseImportDecimal(value('人民币成本'), '人民币成本'),
         purchaseCost: parseImportDecimal(value('ID购买成本'), 'ID购买成本'),
-        recordStatus: parseImportRecordStatus(value('资料状态')),
+        recordStatus,
+        disabledReason: parseImportDisabledReason(value('停用原因'), recordStatus),
         remark: value('备注') || null
       });
     } catch (error) {
@@ -177,4 +180,13 @@ function parseImportRecordStatus(rawValue: string): V2RecordStatus {
   if (!value || value === '启用' || value === 'active') return 'active';
   if (value === '停用' || value === 'disabled') return 'disabled';
   throw new Error('资料状态只能填写“启用”或“停用”');
+}
+
+function parseImportDisabledReason(rawValue: string, recordStatus: V2RecordStatus) {
+  if (recordStatus === 'active') return null;
+  const reason = rawValue.trim();
+  if (reason.length < 2 || reason.length > 200) {
+    throw new Error('资料状态为“停用”时，停用原因必须为 2 至 200 个字符');
+  }
+  return reason;
 }

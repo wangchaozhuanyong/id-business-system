@@ -11,6 +11,7 @@ export interface AccountListQuery extends PaginationQuery {
   supplierOptionId?: string;
   recordStatus?: string;
   saleState?: string;
+  lifecycle?: string;
   sortBy?: string;
   sortOrder?: string;
 }
@@ -22,6 +23,7 @@ interface SecretFieldConfig {
 }
 
 export type AccountRecordStatus = 'active' | 'disabled';
+export type AccountLifecycle = 'available' | 'disabled' | 'sold' | 'reported';
 
 export interface AccountWithRelations {
   id: string;
@@ -52,6 +54,8 @@ export interface AccountWithRelations {
   lossReportedAt: Date | null;
   activeLossRecordId: string | null;
   recordStatus: AccountRecordStatus;
+  disabledReason: string | null;
+  disabledAt: Date | null;
   remark: string | null;
   createdByUserId: string | null;
   updatedByUserId: string | null;
@@ -80,6 +84,8 @@ export interface AccountUpdateData {
   supplierOptionId?: string | null;
   purchaseCost?: string;
   recordStatus?: AccountRecordStatus;
+  disabledReason?: string | null;
+  disabledAt?: Date | null;
   remark?: string | null;
   updatedByUserId?: string;
 }
@@ -122,6 +128,25 @@ export function parseSaleState(value: unknown): 'available' | 'sold' | null {
   if (value === undefined || value === null || value === '') return null;
   if (value === 'available' || value === 'sold') return value;
   throw new BadRequestException('销售状态无效');
+}
+
+export function parseAccountLifecycle(value: unknown): AccountLifecycle | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (value === 'available' || value === 'disabled' || value === 'sold' || value === 'reported') {
+    return value;
+  }
+  throw new BadRequestException('ID 分类无效');
+}
+
+export function normalizeAccountStatusReason(value: unknown, label = '状态变更原因') {
+  const reason = normalizeNullableString(value);
+  if (!reason || reason.length < 2) {
+    throw new BadRequestException(`${label}至少需要 2 个字`);
+  }
+  if (reason.length > 200) {
+    throw new BadRequestException(`${label}不能超过 200 个字`);
+  }
+  return reason;
 }
 
 export function parseSecretField(value: unknown): IdBusinessV2AccountSecretField {
@@ -227,8 +252,9 @@ export function normalizeBalanceAdjustmentIdempotencyKey(value: unknown) {
   return key;
 }
 
-export function normalizeRevealReason(value: unknown) {
+export function normalizeRevealReason(value: unknown, fallback?: string) {
   const reason = normalizeNullableString(value);
+  if (!reason && fallback) return fallback;
   if (!reason) throw new BadRequestException('查看原因不能为空');
   if (reason.length > 200) throw new BadRequestException('查看原因过长');
   return reason;
@@ -278,6 +304,8 @@ export function toAccountResponse(account: AccountWithRelations) {
     lossReportedAt: account.lossReportedAt,
     activeLossId: account.activeLossRecordId,
     recordStatus: account.recordStatus,
+    disabledReason: account.disabledReason,
+    disabledAt: account.disabledAt,
     remark: account.remark,
     createdBy: account.createdBy,
     createdAt: account.createdAt,

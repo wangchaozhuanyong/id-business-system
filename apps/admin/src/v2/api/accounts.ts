@@ -1,6 +1,7 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
+  ChangeV2AccountStatusInput,
   CreateV2AccountInput,
   ImportV2AccountRowInput,
   ReportV2AccountLossInput,
@@ -98,6 +99,19 @@ export const idBusinessV2AccountsApi = {
       ]
     );
   },
+  changeRecordStatus(id: string, payload: ChangeV2AccountStatusInput) {
+    return withV2QueryInvalidation(
+      request<V2Account>(http.post(`/id-business-v2/accounts/${id}/record-status`, payload)),
+      [
+        'accounts',
+        'balances',
+        'order-entry-options',
+        'order-entry-matching',
+        'renewals',
+        'renewals-options'
+      ]
+    );
+  },
   reportLoss(id: string, payload: ReportV2AccountLossInput) {
     return withV2QueryInvalidation(
       request<ReportV2AccountLossResult>(
@@ -149,18 +163,5 @@ export const idBusinessV2AccountsApi = {
       value: string;
       revealedAt: string;
     }>(http.post(`/id-business-v2/accounts/${id}/reveal-secret`, { ...payload, field }));
-  },
-  remove(id: string) {
-    return withV2QueryInvalidation(
-      request<{ deleted: true }>(http.delete(`/id-business-v2/accounts/${id}`)),
-      [
-        'accounts',
-        'balances',
-        'order-entry-options',
-        'order-entry-matching',
-        'renewals',
-        'renewals-options'
-      ]
-    );
   }
 };

@@ -42,6 +42,8 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     soldAt: null,
     lossReportedAt: null,
     recordStatus: 'active',
+    disabledReason: null,
+    disabledAt: null,
     remark: null,
     createdByUserId: operator.id,
     updatedByUserId: operator.id,
@@ -120,6 +122,13 @@ describe('IdBusinessV2AccountsService', () => {
     transactionalAudit,
     repository
   );
+  const sensitiveAccessService = {
+    authorize: vi.fn().mockResolvedValue({
+      mode: 'direct',
+      approvalId: null,
+      reason: '角色权限直接查看'
+    })
+  };
   const service = new IdBusinessV2AccountsService(
     repository,
     encryptionService as never,
@@ -129,7 +138,8 @@ describe('IdBusinessV2AccountsService', () => {
     financePostingService as never,
     transactionManager,
     transactionalAudit,
-    balanceAdjustmentService
+    balanceAdjustmentService,
+    sensitiveAccessService as never
   );
 
   beforeEach(() => {
@@ -179,6 +189,24 @@ describe('IdBusinessV2AccountsService', () => {
     );
   });
 
+  it('uses mutually exclusive lifecycle filters for the disabled ID category', async () => {
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([]);
+    prisma.idBusinessV2Account.count.mockResolvedValue(0);
+
+    await service.list({ lifecycle: 'disabled' });
+
+    expect(prisma.idBusinessV2Account.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          deletedAt: null,
+          soldByOrderId: null,
+          lossReportedAt: null,
+          recordStatus: 'disabled'
+        })
+      })
+    );
+  });
+
   it('encrypts every sensitive field and exposes only masked values', async () => {
     prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
     prisma.idBusinessV2Account.create.mockResolvedValue(makeAccount());
@@ -206,72 +234,31 @@ describe('IdBusinessV2AccountsService', () => {
     expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('secret-password');
   });
 
-  it('purchases an ID from Cloudflare Decimal supplier-wallet rows using canonical strings', async () => {
+  it('rejects using a top-up supplier wallet to purchase an ID', async () => {
     const supplierWalletId = '44444444-4444-4444-8444-444444444444';
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(null);
-    prisma.idBusinessV2Account.create.mockResolvedValue(
-      makeAccount({
-        purchaseCost: new CloudflarePrisma.Decimal('20'),
-        purchaseOriginalAmount: new CloudflarePrisma.Decimal('10'),
-        purchaseCurrency: 'MYR',
-        purchaseFxRateToCny: new CloudflarePrisma.Decimal('2'),
-        purchaseSupplierAccountId: supplierWalletId
-      })
-    );
     financeFxService.resolve.mockResolvedValueOnce({
       id: '55555555-5555-4555-8555-555555555555',
       rateToCny: new CloudflarePrisma.Decimal('2'),
       source: 'manual'
     });
-    prisma.$queryRaw.mockResolvedValue([
-      {
-        id: supplierWalletId,
-        currency: 'MYR',
-        currentBalance: new CloudflarePrisma.Decimal('50'),
-        currentBalanceCny: new CloudflarePrisma.Decimal('100'),
-        supplierName: '供应商 A'
-      }
-    ]);
-    prisma.idBusinessV2TopupSupplierLedger.create.mockResolvedValue({ id: 'ledger-1' });
-    prisma.idBusinessV2TopupSupplierAccount.update.mockResolvedValue({});
-
-    await service.create(
-      {
-        appleId: 'purchase@example.com',
-        countryOptionId: country.id,
-        statusOptionId: status.id,
-        supplierOptionId: supplier.id,
-        purchaseCurrency: 'MYR',
-        purchaseOriginalAmount: '10',
-        purchaseFxRateToCny: '2',
-        purchaseManualRateReason: '人工采购汇率',
-        purchaseCost: '20',
-        purchaseSupplierAccountId: supplierWalletId
-      },
-      operator
-    );
-
-    expect(prisma.idBusinessV2Account.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
+    await expect(
+      service.create(
+        {
+          appleId: 'purchase@example.com',
+          countryOptionId: country.id,
+          statusOptionId: status.id,
+          supplierOptionId: supplier.id,
+          purchaseCurrency: 'MYR',
           purchaseOriginalAmount: '10',
           purchaseFxRateToCny: '2',
-          purchaseCost: '20'
-        })
-      })
-    );
-    expect(prisma.idBusinessV2TopupSupplierLedger.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          amount: '10',
-          balanceBefore: '50',
-          balanceAfter: '40',
-          amountCny: '20',
-          balanceBeforeCny: '100',
-          balanceAfterCny: '80'
-        })
-      })
-    );
+          purchaseManualRateReason: '人工采购汇率',
+          purchaseCost: '20',
+          purchaseSupplierAccountId: supplierWalletId
+        },
+        operator
+      )
+    ).rejects.toThrow('ID 采购只能使用自有资金账户');
+    expect(prisma.idBusinessV2Account.create).not.toHaveBeenCalled();
   });
 
   it('creates an opening-balance ledger entry with the account in one transaction', async () => {
@@ -530,6 +517,19 @@ describe('IdBusinessV2AccountsService', () => {
     expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain('secret-password');
   });
 
+  it('does not decrypt or log a secret when the current policy requires approval', async () => {
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
+    sensitiveAccessService.authorize.mockRejectedValueOnce(
+      new ForbiddenException('该字段需要管理员批准后才能查看')
+    );
+
+    await expect(
+      service.revealSecret('account-1', { field: 'password' }, operator)
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(encryptionService.decrypt).not.toHaveBeenCalled();
+    expect(prisma.sensitiveAccessLog.create).not.toHaveBeenCalled();
+  });
+
   it('does not append the audit when sensitive access logging fails', async () => {
     prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
     prisma.sensitiveAccessLog.create.mockRejectedValueOnce(new Error('sensitive log unavailable'));
@@ -552,17 +552,58 @@ describe('IdBusinessV2AccountsService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('soft deletes and disables an ID record', async () => {
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(makeAccount());
-    await expect(service.remove('account-1', operator)).resolves.toEqual({ deleted: true });
+  it('requires a reason and retains the ID when disabling it', async () => {
+    const disabled = makeAccount({
+      recordStatus: 'disabled',
+      disabledReason: '暂不投入使用',
+      disabledAt: new Date('2026-08-08T00:00:00.000Z')
+    });
+    prisma.$queryRaw.mockResolvedValue([{ id: 'account-1' }]);
+    prisma.idBusinessV2Account.findFirst
+      .mockResolvedValueOnce(makeAccount())
+      .mockResolvedValueOnce(disabled);
+
+    await expect(
+      service.changeRecordStatus(
+        'account-1',
+        { recordStatus: 'disabled', reason: '暂不投入使用' },
+        operator
+      )
+    ).resolves.toMatchObject({
+      id: 'account-1',
+      recordStatus: 'disabled',
+      disabledReason: '暂不投入使用'
+    });
     expect(prisma.idBusinessV2Account.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          deletedAt: expect.any(Date),
-          recordStatus: 'disabled'
+          recordStatus: 'disabled',
+          disabledReason: '暂不投入使用',
+          disabledAt: expect.any(Date)
         })
       })
     );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'id_business_v2.account.disable' })
+      })
+    );
+  });
+
+  it('rejects disabling a sold ID', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 'account-1' }]);
+    prisma.idBusinessV2Account.findFirst.mockResolvedValue(
+      makeAccount({ soldByOrderId: '80000000-0000-4000-8000-000000000001' })
+    );
+
+    await expect(
+      service.changeRecordStatus(
+        'account-1',
+        { recordStatus: 'disabled', reason: '售后暂停' },
+        operator
+      )
+    ).rejects.toThrow('已售出 ID 不能停用');
+    expect(prisma.idBusinessV2Account.updateMany).not.toHaveBeenCalled();
   });
 
   it('exports every matching row without decrypting sensitive fields and writes an audit log', async () => {

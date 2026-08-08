@@ -1,17 +1,7 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Header,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req
-} from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import type { ChangeIdBusinessV2AccountStatusDto } from './dto/change-id-business-v2-account-status.dto';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
 import type { RevealIdBusinessV2AccountSecretDto } from './dto/reveal-id-business-v2-account-secret.dto';
@@ -43,6 +33,7 @@ export class IdBusinessV2AccountsController {
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
     @Query('saleState') saleState?: string,
+    @Query('lifecycle') lifecycle?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
@@ -55,6 +46,7 @@ export class IdBusinessV2AccountsController {
       supplierOptionId,
       recordStatus,
       saleState,
+      lifecycle,
       sortBy,
       sortOrder
     });
@@ -71,6 +63,7 @@ export class IdBusinessV2AccountsController {
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
     @Query('saleState') saleState?: string,
+    @Query('lifecycle') lifecycle?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
@@ -84,6 +77,7 @@ export class IdBusinessV2AccountsController {
         supplierOptionId,
         recordStatus,
         saleState,
+        lifecycle,
         sortBy,
         sortOrder
       }),
@@ -111,6 +105,7 @@ export class IdBusinessV2AccountsController {
     @Query('supplierOptionId') supplierOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
     @Query('saleState') saleState?: string,
+    @Query('lifecycle') lifecycle?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
     @CurrentUser() operator?: AuthenticatedUser,
@@ -124,6 +119,7 @@ export class IdBusinessV2AccountsController {
         supplierOptionId,
         recordStatus,
         saleState,
+        lifecycle,
         sortBy,
         sortOrder
       },
@@ -175,6 +171,19 @@ export class IdBusinessV2AccountsController {
     return this.accountsService.update(id, dto, operator, { requestId: request?.requestId });
   }
 
+  @Post(':id/record-status')
+  @RequirePermissions('apple.account.update')
+  changeRecordStatus(
+    @Param('id') id: string,
+    @Body() dto: ChangeIdBusinessV2AccountStatusDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: RequestWithAuditMeta
+  ) {
+    return this.accountsService.changeRecordStatus(id, dto, operator, {
+      requestId: request?.requestId
+    });
+  }
+
   @Post(':id/reveal-secret')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
@@ -190,16 +199,6 @@ export class IdBusinessV2AccountsController {
       ip: request.ip,
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
-  }
-
-  @Delete(':id')
-  @RequirePermissions('apple.account.delete')
-  remove(
-    @Param('id') id: string,
-    @CurrentUser() operator?: AuthenticatedUser,
-    @Req() request?: RequestWithAuditMeta
-  ) {
-    return this.accountsService.remove(id, operator, { requestId: request?.requestId });
   }
 
   private getHeaderValue(value: string | string[] | undefined) {

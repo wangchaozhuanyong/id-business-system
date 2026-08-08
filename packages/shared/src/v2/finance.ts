@@ -161,6 +161,7 @@ export interface V2FinanceExpense {
   payee: string | null;
   receiptAttachmentId: string | null;
   remark: string | null;
+  status: V2FinanceJournalStatus;
   createdBy: { id: string; username: string; displayName: string } | null;
   createdAt: IsoDateTimeString;
 }

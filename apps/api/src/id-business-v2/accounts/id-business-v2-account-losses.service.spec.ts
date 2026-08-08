@@ -428,38 +428,30 @@ describe('IdBusinessV2AccountLossesService', () => {
     );
   });
 
-  it('preserves the sold-order snapshot when reporting a sold ID', async () => {
+  it('rejects reporting a sold ID without writing loss records', async () => {
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
         soldByOrderId: '80000000-0000-4000-8000-000000000001',
         soldOrderNo: 'V220260729SOLD001'
       })
     ]);
-    tx.idBusinessV2AccountLoss.create.mockResolvedValue(
-      makeLossRecord({
-        saleState: 'sold',
-        soldOrderId: '80000000-0000-4000-8000-000000000001',
-        soldOrderNo: 'V220260729SOLD001'
-      })
-    );
-
-    const result = await service.reportLoss(
-      accountId,
-      {
-        reason: '售后确认 ID 死亡',
-        expectedCurrentBalance: '20',
-        expectedBalanceCostAmount: '70',
-        idempotencyKey: 'loss-request-sold'
-      },
-      operator
-    );
-
-    expect(result.lossRecord.saleState).toBe('sold');
-    expect(result.lossRecord.soldOrderId).toBe('80000000-0000-4000-8000-000000000001');
-    expect(result.lossRecord.soldOrderNo).toBe('V220260729SOLD001');
-    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        data: expect.objectContaining({ soldByOrderId: null })
+    await expect(
+      service.reportLoss(
+        accountId,
+        {
+          reason: '售后确认 ID 死亡',
+          expectedCurrentBalance: '20',
+          expectedBalanceCostAmount: '70',
+          idempotencyKey: 'loss-request-sold'
+        },
+        operator
+      )
+    ).rejects.toThrow('已售出 ID 不能报损');
+    expect(tx.idBusinessV2AccountLoss.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ lossReportedAt: expect.any(Date) })
       })
     );
   });
@@ -749,6 +741,7 @@ describe('IdBusinessV2AccountLossesService', () => {
       keyword: '管理员',
       countryOptionId: '30000000-0000-4000-8000-000000000001',
       saleState: 'sold',
+      status: 'active',
       reportedFrom: '2026-07-01',
       reportedTo: '2026-07-29',
       sortBy: 'lossCostAmount',
@@ -764,6 +757,7 @@ describe('IdBusinessV2AccountLossesService', () => {
         where: expect.objectContaining({
           countryOptionId: '30000000-0000-4000-8000-000000000001',
           saleState: 'sold',
+          status: 'active',
           reportedAt: {
             gte: new Date('2026-07-01T00:00:00.000Z'),
             lt: new Date('2026-07-30T00:00:00.000Z')

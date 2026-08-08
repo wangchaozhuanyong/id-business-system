@@ -4,6 +4,7 @@ import {
   normalizeAccountLossDate,
   normalizeAccountLossKeyword,
   normalizeAccountLossSaleState,
+  normalizeAccountLossStatus,
   normalizeOptionalAccountLossUuid
 } from './id-business-v2-account-loss-input';
 import { toAccountLossRecordResponse } from './id-business-v2-account-loss-response';
@@ -13,6 +14,7 @@ export interface ListIdBusinessV2AccountLossesQuery extends PaginationQuery {
   keyword?: string;
   countryOptionId?: string;
   saleState?: string;
+  status?: string;
   reportedFrom?: string;
   reportedTo?: string;
   sortBy?: string;
@@ -34,6 +36,7 @@ export class IdBusinessV2AccountLossQueryService {
     const keyword = normalizeAccountLossKeyword(query.keyword);
     const countryOptionId = normalizeOptionalAccountLossUuid(query.countryOptionId, '国家');
     const saleState = normalizeAccountLossSaleState(query.saleState);
+    const status = normalizeAccountLossStatus(query.status);
     const reportedAt = this.buildReportedAtFilter(query.reportedFrom, query.reportedTo);
     const sortBy =
       query.sortBy && Object.prototype.hasOwnProperty.call(SORT_FIELDS, query.sortBy)
@@ -45,6 +48,7 @@ export class IdBusinessV2AccountLossQueryService {
       keyword,
       countryOptionId,
       saleState,
+      status,
       reportedFrom: reportedAt?.gte ?? null,
       reportedToExclusive: reportedAt?.lt ?? null,
       sortBy,

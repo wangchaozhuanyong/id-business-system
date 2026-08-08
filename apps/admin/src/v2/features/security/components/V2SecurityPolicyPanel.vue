@@ -175,23 +175,34 @@
         <article v-for="item in page.whitelistItems" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
-              <strong>{{ item.ipOrCidr }}</strong
-              ><span>{{ item.scope === 'admin' ? '管理端' : 'API' }}</span>
+              <strong v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'ipOrCidr']">
+                {{ item.ipOrCidr }}
+              </strong>
+              <span v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'scope']">
+                {{ item.scope === 'admin' ? '管理端' : 'API' }}
+              </span>
             </div>
-            <el-tag :type="item.enabled ? 'success' : 'info'" effect="plain">
+            <el-tag
+              v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'enabled']"
+              :type="item.enabled ? 'success' : 'info'"
+              effect="plain"
+            >
               {{ item.enabled ? '启用' : '停用' }}
             </el-tag>
           </header>
           <dl>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, '创建人']">
               <dt>创建人</dt>
               <dd>{{ page.securityUserLabel(item.createdBy) }}</dd>
             </div>
-            <div>
+            <div v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'updatedAt']">
               <dt>更新时间</dt>
               <dd>{{ page.formatSecurityDate(item.updatedAt) }}</dd>
             </div>
-            <div class="v2-security-policy__mobile-wide">
+            <div
+              v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'remark']"
+              class="v2-security-policy__mobile-wide"
+            >
               <dt>说明</dt>
               <dd>{{ item.remark || '—' }}</dd>
             </div>

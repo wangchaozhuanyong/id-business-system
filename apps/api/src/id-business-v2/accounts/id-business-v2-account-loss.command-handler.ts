@@ -178,6 +178,9 @@ export class IdBusinessV2AccountLossCommandHandler {
       }
       throw new ConflictException('该 ID 已报损，不能重复操作');
     }
+    if (account.soldByOrderId) {
+      throw new ConflictException('已售出 ID 不能报损');
+    }
     if (
       !account.currentBalance.equals(command.expected.currentBalance) ||
       !account.balanceCostAmount.equals(command.expected.balanceCostAmount)

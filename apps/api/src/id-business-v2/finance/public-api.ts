@@ -2,6 +2,7 @@ export type {
   AdjustIdBusinessV2SupplierWalletDto,
   CloseIdBusinessV2GiftCardRefundDto,
   ConfirmIdBusinessV2FinanceHistoryDto,
+  CorrectIdBusinessV2FinanceExpenseDto,
   CreateIdBusinessV2FinanceAccountDto,
   CreateIdBusinessV2FinanceExpenseDto,
   CreateIdBusinessV2SupplierDepositDto,

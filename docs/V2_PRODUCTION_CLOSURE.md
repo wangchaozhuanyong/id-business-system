@@ -91,7 +91,7 @@ Supabase Auth 用户、角色、权限、客户、礼品卡、开通、治理任
 | -------------------------- | ---------------------------------------------------------- |
 | 已登录用户                 | 仪表盘、我的账户                                           |
 | 仅 `admin`                 | 业务监控、数据治理、员工账户、角色权限、安全中心、系统监控 |
-| `apple.account.view`       | ID 录入                                                    |
+| `apple.account.view`       | ID 管理                                                    |
 | `apple.activation.view`    | 开通记录                                                   |
 | `apple.balance.view`       | ID 加额、加卡记录、ID 报损记录                             |
 | `apple.exchange_rate.view` | 汇率记录                                                   |

@@ -16,7 +16,12 @@ import {
 } from './account-form';
 import { exportAccountRowsToCsv } from './account-export';
 import { formatAccountDate, formatAccountDecimal } from './account-format';
-import { normalizeAccountsListQuery, useAccountsListQuery } from './accounts-query';
+import {
+  countActiveAccountsFilters,
+  normalizeAccountsListQuery,
+  resetAccountsListFilters,
+  useAccountsListQuery
+} from './accounts-query';
 import {
   downloadAccountImportTemplate,
   prepareAccountImport,
@@ -25,11 +30,15 @@ import {
 import { useAccountLossReporting } from './useAccountLossReporting';
 import { useAccountPermissions } from './useAccountPermissions';
 import { useAccountPurchaseSources } from './useAccountPurchaseSources';
+import { useAccountCreateOptions } from './useAccountCreateOptions';
+import { useAccountRecordStatus } from './useAccountRecordStatus';
+import { useAccountSensitiveAccess } from './useAccountSensitiveAccess';
 import type {
   CreateV2AccountInput,
   ImportV2AccountRowInput,
   UpdateV2AccountInput,
   V2Account,
+  V2AccountLifecycle,
   V2AccountSecretField,
   V2OptionSelector,
   V2RecordStatus
@@ -44,9 +53,6 @@ export function useAccountsPage() {
   const drawerVisible = ref(false);
   const saving = ref(false);
   const editingItem = ref<V2Account | null>(null);
-  const deletingItem = ref<V2Account | null>(null);
-  const deleteDialogVisible = ref(false);
-  const deleting = ref(false);
   const exporting = ref(false);
   const importing = ref(false);
   const importDialogVisible = ref(false);
@@ -70,6 +76,7 @@ export function useAccountsPage() {
     supplierOptionId: '',
     recordStatus: '' as V2RecordStatus | '',
     saleState: '' as 'available' | 'sold' | '',
+    lifecycle: 'available' as V2AccountLifecycle,
     sortBy: 'updatedAt' as
       | 'appleId'
       | 'currentBalance'
@@ -80,17 +87,43 @@ export function useAccountsPage() {
       | 'updatedAt',
     sortOrder: 'desc' as 'asc' | 'desc'
   });
+  const activeFilterCount = computed(() => countActiveAccountsFilters(query));
+  const lifecycleLabel = computed(
+    () =>
+      ({
+        available: '可用 ID',
+        disabled: '已停用 ID',
+        sold: '已售出 ID',
+        reported: '已报损 ID'
+      })[query.lifecycle]
+  );
 
   const form = reactive<AccountFormState>(emptyAccountForm());
   const purchaseSourceState = useAccountPurchaseSources(form, editingItem);
+  const refreshCreateOptions = useAccountCreateOptions({
+    countryOptions,
+    statusOptions,
+    supplierOptions,
+    drawerVisible,
+    editingItem,
+    form
+  });
   const revealForm = reactive({
     field: '' as V2AccountSecretField | '',
     reason: '',
-    approvalId: '',
     value: ''
+  });
+  const accountSensitiveAccess = useAccountSensitiveAccess({
+    revealTarget,
+    revealing,
+    revealForm
   });
 
   const accountPermissions = useAccountPermissions(revealTarget);
+  const accountRecordStatus = useAccountRecordStatus({
+    canUpdate: accountPermissions.canUpdate,
+    refreshAccounts: loadAccounts
+  });
   const lossReporting = useAccountLossReporting({
     canReportLoss: accountPermissions.canReportLoss,
     refreshAccounts: loadAccounts
@@ -168,6 +201,19 @@ export function useAccountsPage() {
   }
 
   function handleSearch() {
+    query.page = 1;
+    loadCurrentAccounts();
+  }
+
+  function resetFilters() {
+    resetAccountsListFilters(query);
+    loadCurrentAccounts();
+  }
+
+  function changeLifecycle(lifecycle: Exclude<V2AccountLifecycle, 'reported'>) {
+    query.lifecycle = lifecycle;
+    query.recordStatus = '';
+    query.saleState = '';
     query.page = 1;
     loadCurrentAccounts();
   }
@@ -282,6 +328,7 @@ export function useAccountsPage() {
         supplierOptionId: query.supplierOptionId || undefined,
         recordStatus: query.recordStatus || undefined,
         saleState: query.saleState || undefined,
+        lifecycle: query.lifecycle,
         sortBy: query.sortBy,
         sortOrder: query.sortOrder
       });
@@ -311,6 +358,7 @@ export function useAccountsPage() {
     }
     drawerVisible.value = true;
     void purchaseSourceState.loadPurchaseSources();
+    void refreshCreateOptions();
   }
 
   function handleToolbarCommand(command: string) {
@@ -356,7 +404,6 @@ export function useAccountsPage() {
           : '',
       purchaseManualRateReason: '',
       purchasedAt: item.purchasedAt,
-      active: item.recordStatus === 'active',
       remark: item.remark ?? ''
     });
     drawerVisible.value = true;
@@ -380,7 +427,6 @@ export function useAccountsPage() {
       countryOptionId: form.countryOptionId,
       statusOptionId: form.statusOptionId,
       supplierOptionId: form.supplierOptionId || null,
-      recordStatus: (form.active ? 'active' : 'disabled') as V2RecordStatus,
       remark: form.remark.trim() || null
     };
 
@@ -407,6 +453,10 @@ export function useAccountsPage() {
         ElMessage.success('ID 资料已更新');
       } else {
         const [purchaseSourceType, purchaseSourceId] = form.purchaseSourceId.split(':', 2);
+        if (purchaseSourceType !== 'account' || !purchaseSourceId) {
+          ElMessage.warning('请选择与采购币种一致的付款账户');
+          return;
+        }
         const payload: CreateV2AccountInput = {
           ...commonPayload,
           appleId: form.appleId.trim(),
@@ -418,8 +468,7 @@ export function useAccountsPage() {
           purchaseOriginalAmount: normalizeDecimalInput(form.purchaseOriginalAmount),
           purchaseCurrency: form.purchaseCurrency,
           purchaseFxRateToCny: form.purchaseFxRateToCny || undefined,
-          purchaseFinanceAccountId: purchaseSourceType === 'account' ? purchaseSourceId : undefined,
-          purchaseSupplierAccountId: purchaseSourceType === 'wallet' ? purchaseSourceId : undefined,
+          purchaseFinanceAccountId: purchaseSourceId,
           purchaseManualRateReason: form.purchaseManualRateReason.trim() || undefined,
           purchasedAt: new Date(form.purchasedAt).toISOString()
         };
@@ -427,7 +476,7 @@ export function useAccountsPage() {
         ElMessage.success('ID 资料已新增');
       }
       drawerVisible.value = false;
-      await loadAccounts();
+      void loadAccounts();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
@@ -440,10 +489,10 @@ export function useAccountsPage() {
     Object.assign(revealForm, {
       field,
       reason: '',
-      approvalId: '',
       value: ''
     });
     revealDialogVisible.value = true;
+    void accountSensitiveAccess.prepareSensitiveAccess(field);
   }
 
   function openSensitiveAccess(item: V2Account) {
@@ -458,68 +507,6 @@ export function useAccountsPage() {
     openReveal(item, field);
   }
 
-  async function revealSecret() {
-    if (!revealTarget.value || !revealForm.field || !revealForm.reason.trim()) return;
-    revealing.value = true;
-    try {
-      const result = await idBusinessV2AccountsApi.revealSecret(
-        revealTarget.value.id,
-        revealForm.field,
-        {
-          reason: revealForm.reason.trim(),
-          approvalId: revealForm.approvalId.trim() || null
-        }
-      );
-      revealForm.value = result.value;
-      ElMessage.success('完整资料已显示，并已写入敏感访问日志');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      revealing.value = false;
-    }
-  }
-
-  async function toggleStatus(item: V2Account) {
-    if (item.lossStatus === 'reported') {
-      ElMessage.warning('已报损冻结 ID 不能启用或停用');
-      return;
-    }
-    try {
-      await idBusinessV2AccountsApi.update(item.id, {
-        recordStatus: item.recordStatus === 'active' ? 'disabled' : 'active'
-      });
-      ElMessage.success(item.recordStatus === 'active' ? 'ID 资料已停用' : 'ID 资料已启用');
-      await loadAccounts();
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    }
-  }
-
-  function openDelete(item: V2Account) {
-    if (item.lossStatus === 'reported') {
-      ElMessage.warning('已报损 ID 必须保留历史记录，不能删除');
-      return;
-    }
-    deletingItem.value = item;
-    deleteDialogVisible.value = true;
-  }
-
-  async function confirmDelete() {
-    if (!deletingItem.value) return;
-    deleting.value = true;
-    try {
-      await idBusinessV2AccountsApi.remove(deletingItem.value.id);
-      ElMessage.success('ID 资料已删除');
-      deleteDialogVisible.value = false;
-      deletingItem.value = null;
-      await loadAccounts();
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      deleting.value = false;
-    }
-  }
-
   return {
     items,
     total,
@@ -532,9 +519,6 @@ export function useAccountsPage() {
     drawerVisible,
     saving,
     editingItem,
-    deletingItem,
-    deleteDialogVisible,
-    deleting,
     exporting,
     importing,
     importDialogVisible,
@@ -552,7 +536,11 @@ export function useAccountsPage() {
     query,
     form,
     revealForm,
+    ...accountSensitiveAccess,
     ...accountPermissions,
+    ...accountRecordStatus,
+    activeFilterCount,
+    lifecycleLabel,
     formStatusOptions,
     balanceInputError,
     exchangeRateInputError,
@@ -561,6 +549,8 @@ export function useAccountsPage() {
     formDisabledReason,
     loadAccounts,
     handleSearch,
+    resetFilters,
+    changeLifecycle,
     handleFilterChange: handleSearch,
     handlePageSizeChange,
     handlePageChange,
@@ -575,10 +565,6 @@ export function useAccountsPage() {
     submitForm,
     openReveal,
     openSensitiveAccess,
-    revealSecret,
-    toggleStatus,
-    openDelete,
-    confirmDelete,
     formatDecimal: formatAccountDecimal,
     formatDate: formatAccountDate,
     hasLoadedOnce,

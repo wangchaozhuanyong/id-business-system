@@ -9,6 +9,7 @@ import {
   primeV2Query,
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
+import { useV2SensitiveAccessApproval } from '@/v2/composables/useV2SensitiveAccessApproval';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from './api';
@@ -86,9 +87,9 @@ export function useCustomersPage() {
   const form = reactive<CustomerFormState>(emptyForm());
   const revealForm = reactive({
     reason: '',
-    approvalId: '',
     value: ''
   });
+  const sensitiveAccess = useV2SensitiveAccessApproval();
 
   const canCreate = computed(() => hasUserPermission(authStore.user, 'customer.create'));
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'customer.update'));
@@ -111,22 +112,25 @@ export function useCustomersPage() {
       }
     ]
   };
-  const revealRules: FormRules = {
-    reason: [
-      {
-        required: true,
-        validator: (_rule, value, callback) => {
-          const normalized = String(value ?? '').trim();
-          callback(
-            normalized.length >= 1 && normalized.length <= 200
-              ? undefined
-              : new Error('请输入 1 至 200 个字符的查看原因')
-          );
-        },
-        trigger: 'blur'
-      }
-    ]
-  };
+  const revealRules = computed<FormRules>(() => ({
+    reason:
+      sensitiveAccess.requiresApproval.value && !sensitiveAccess.canReveal.value
+        ? [
+            {
+              required: true,
+              validator: (_rule, value, callback) => {
+                const normalized = String(value ?? '').trim();
+                callback(
+                  normalized.length >= 2 && normalized.length <= 200
+                    ? undefined
+                    : new Error('请输入 2 至 200 个字符的申请原因')
+                );
+              },
+              trigger: 'blur'
+            }
+          ]
+        : []
+  }));
 
   function getCustomersListQuery(): V2CustomerListQuery {
     return {
@@ -292,10 +296,15 @@ export function useCustomersPage() {
     revealField.value = field;
     Object.assign(revealForm, {
       reason: '',
-      approvalId: '',
       value: ''
     });
     revealDialogVisible.value = true;
+    void sensitiveAccess.prepare({
+      module: 'id_business_v2_customer',
+      fieldName: field,
+      objectType: 'id_business_v2_customer',
+      objectId: item.id
+    });
   }
 
   function openRevealPhone(item: V2Customer) {
@@ -310,9 +319,14 @@ export function useCustomersPage() {
     if (!revealTarget.value || !(await validateV2Form(revealFormRef.value))) return;
     revealing.value = true;
     try {
+      if (sensitiveAccess.requiresApproval.value && !sensitiveAccess.approvedRequestId.value) {
+        await sensitiveAccess.submitRequest(revealForm.reason);
+        ElMessage.success('查看申请已提交，管理员审核后即可查看');
+        return;
+      }
       const payload = {
         reason: revealForm.reason.trim(),
-        approvalId: revealForm.approvalId.trim() || null
+        approvalId: sensitiveAccess.approvedRequestId.value
       };
       if (revealField.value === 'phone') {
         const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, payload);
@@ -390,6 +404,15 @@ export function useCustomersPage() {
     query,
     form,
     revealForm,
+    sensitiveAccessPolicy: sensitiveAccess.policy,
+    sensitiveAccessRequest: sensitiveAccess.request,
+    sensitiveAccessRequiresApproval: sensitiveAccess.requiresApproval,
+    sensitiveAccessCanReveal: sensitiveAccess.canReveal,
+    sensitiveAccessLoading: sensitiveAccess.loading,
+    sensitiveAccessRequesting: sensitiveAccess.requesting,
+    sensitiveAccessError: sensitiveAccess.error,
+    sensitiveAccessStatusText: sensitiveAccess.statusText,
+    sensitiveAccessActionText: sensitiveAccess.actionText,
     canCreate,
     canUpdate,
     canDelete,
@@ -412,6 +435,7 @@ export function useCustomersPage() {
     openRevealPhone,
     openRevealWhatsapp,
     revealContact,
+    refreshSensitiveAccess: sensitiveAccess.refresh,
     openDelete,
     confirmDelete,
     selectorLabel,

@@ -11,10 +11,12 @@ export interface CreateV2RoleDto {
   code?: string;
   description?: string;
   permissionIds?: string[];
+  sensitiveApprovalPermissionIds?: string[];
 }
 
 export interface UpdateV2RoleDto {
   name?: string;
   description?: string;
   permissionIds?: string[];
+  sensitiveApprovalPermissionIds?: string[];
 }

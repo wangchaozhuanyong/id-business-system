@@ -215,7 +215,7 @@
                     <AppButton
                       size="small"
                       variant="danger"
-                      :disabled="row.isSystem || row.childCount > 0"
+                      :disabled="row.isSystem"
                       :title="getDeleteTitle(row)"
                       @click="openDelete(row)"
                     >
@@ -287,7 +287,7 @@
                       <AppButton
                         size="small"
                         variant="danger"
-                        :disabled="item.isSystem || item.childCount > 0"
+                        :disabled="item.isSystem"
                         @click="openDelete(item)"
                       >
                         删除
@@ -357,7 +357,7 @@
     <V2ConfirmDialog
       v-model="deleteDialogVisible"
       title="删除选项"
-      :message="`确认删除“${deletingItem?.name ?? ''}”？删除后不会出现在后续业务选择中。`"
+      :message="getDeleteMessage(deletingItem)"
       confirm-text="确认删除"
       danger
       :confirm-loading="deleting"
@@ -428,6 +428,7 @@ const {
   confirmDelete,
   getSelectorLabel,
   getDeleteTitle,
+  getDeleteMessage,
   formatDecimal,
   formatDate
 } = useOptionsPage();

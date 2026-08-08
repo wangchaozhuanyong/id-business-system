@@ -401,4 +401,43 @@ export class IdBusinessV2OptionRepository {
       }
     });
   }
+
+  softDeleteDependentServices(
+    tx: V2CommandTransaction,
+    input: {
+      optionId: string;
+      optionType: IdBusinessV2OptionType;
+      deletedAt: Date;
+      operatorId?: string;
+    }
+  ) {
+    if (input.optionType !== 'country' && input.optionType !== 'business_category') {
+      return Promise.resolve({ count: 0 });
+    }
+    return tx.idBusinessV2Option.updateMany({
+      where: {
+        type: 'service',
+        deletedAt: null,
+        ...(input.optionType === 'country'
+          ? { countryOptionId: input.optionId }
+          : { parentId: input.optionId })
+      },
+      data: {
+        status: 'disabled',
+        deletedAt: input.deletedAt,
+        updatedByUserId: input.operatorId
+      }
+    });
+  }
+
+  disableDependentSupplierWallets(
+    tx: V2CommandTransaction,
+    input: { optionId: string; optionType: IdBusinessV2OptionType; operatorId?: string }
+  ) {
+    if (input.optionType !== 'topup_supplier') return Promise.resolve({ count: 0 });
+    return tx.idBusinessV2TopupSupplierAccount.updateMany({
+      where: { supplierOptionId: input.optionId, status: 'active' },
+      data: { status: 'disabled', updatedByUserId: input.operatorId }
+    });
+  }
 }

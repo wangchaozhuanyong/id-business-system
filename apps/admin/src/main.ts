@@ -5,6 +5,7 @@ import App from './App.vue';
 import { captureAppRuntimeError, resolveWindowRuntimeErrorReason } from './runtime/appRuntimeError';
 import { markAppPerformance, measureAppPerformance } from './runtime/performance';
 import { v2PaginationLabel } from './v2/directives/paginationLabel';
+import { v2TableColumnVisibility } from './v2/directives/tableColumnVisibility';
 import {
   prefetchV2Route,
   setV2RouteNavigationState,
@@ -64,6 +65,7 @@ function bootstrapV2() {
 
   app.use(pinia);
   app.directive('pagination-label', v2PaginationLabel);
+  app.directive('v2-column-visibility', v2TableColumnVisibility);
   app.use(v2Router);
   app.mount('#app');
   installV2NavigationFocusPrefetch({

@@ -181,7 +181,7 @@ describe('V2 feature registry', () => {
       ])
     );
 
-    expect(navigation['工作台']).toEqual(['续费操作', '订单录入', 'ID加额', 'ID录入']);
+    expect(navigation['工作台']).toEqual(['续费操作', '订单录入', 'ID加额', 'ID管理']);
     expect(navigation['业务中心']).toEqual([
       '订单管理',
       '客户记录',

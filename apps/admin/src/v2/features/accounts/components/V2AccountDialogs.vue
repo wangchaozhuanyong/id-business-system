@@ -155,9 +155,6 @@
           placeholder="说明本次余额或人民币成本修正原因"
         />
       </el-form-item>
-      <el-form-item label="资料状态">
-        <el-switch v-model="page.form.active" active-text="启用" inactive-text="停用" />
-      </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="page.form.remark" type="textarea" :rows="3" maxlength="500" />
       </el-form-item>
@@ -231,8 +228,12 @@
     destroy-on-close
   >
     <el-alert
-      type="warning"
-      title="完整资料仅供必要业务核对，系统会记录查看人、字段和原因。"
+      :type="page.sensitiveAccessRequiresApproval ? 'warning' : 'info'"
+      :title="
+        page.sensitiveAccessRequiresApproval
+          ? '该字段需要管理员批准后才能查看，批准结果会自动同步。'
+          : '当前角色可以直接查看，系统仍会记录查看人和字段。'
+      "
       :closable="false"
       show-icon
     />
@@ -249,7 +250,7 @@
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
       <el-form-item label="查看字段" prop="field">
-        <el-select v-model="page.revealForm.field" @change="page.revealForm.value = ''">
+        <el-select v-model="page.revealForm.field" @change="page.changeRevealField">
           <el-option
             v-for="option in page.revealFieldOptions"
             :key="option.value"
@@ -258,7 +259,15 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="查看原因" prop="reason">
+      <el-form-item
+        v-if="
+          page.sensitiveAccessRequiresApproval &&
+          !page.sensitiveAccessCanReveal &&
+          page.sensitiveAccessRequest?.status !== 'pending'
+        "
+        label="申请原因"
+        prop="reason"
+      >
         <el-input
           v-model="page.revealForm.reason"
           type="textarea"
@@ -268,32 +277,41 @@
           placeholder="例如：客户续费登录核对"
         />
       </el-form-item>
-      <el-form-item label="审批编号">
-        <el-input v-model="page.revealForm.approvalId" placeholder="可选" />
-      </el-form-item>
+      <div class="v2-sensitive-access-status" role="status">
+        <span>{{ page.sensitiveAccessStatusText }}</span>
+        <AppButton
+          v-if="page.sensitiveAccessError"
+          size="small"
+          variant="ghost"
+          @click="page.refreshSensitiveAccess"
+        >
+          重试
+        </AppButton>
+      </div>
       <el-form-item v-if="page.revealForm.value" label="完整资料">
         <el-input v-model="page.revealForm.value" type="textarea" :rows="3" readonly />
       </el-form-item>
     </el-form>
     <template #footer>
       <AppButton variant="ghost" @click="page.revealDialogVisible = false">关闭</AppButton>
-      <AppButton variant="danger" :loading="page.revealing" @click="revealSecret">
-        查看完整资料
+      <AppButton
+        variant="danger"
+        :loading="page.revealing || page.sensitiveAccessLoading || page.sensitiveAccessRequesting"
+        :disabled="
+          Boolean(page.sensitiveAccessError) ||
+          page.sensitiveAccessPolicy?.mode === 'denied' ||
+          (page.sensitiveAccessRequiresApproval &&
+            page.sensitiveAccessRequest?.status === 'pending')
+        "
+        @click="revealSecret"
+      >
+        {{ page.sensitiveAccessActionText }}
       </AppButton>
     </template>
   </el-dialog>
 
   <V2AccountLossDialogs :page="page" />
-
-  <V2ConfirmDialog
-    v-model="page.deleteDialogVisible"
-    title="删除 ID"
-    :message="`确认删除“${page.deletingItem?.appleIdMasked || ''}”？该操作会软删除资料。`"
-    confirm-text="确认删除"
-    danger
-    :confirm-loading="page.deleting"
-    @confirm="page.confirmDelete"
-  />
+  <V2AccountRecordStatusDialog :page="page" />
 </template>
 
 <script setup lang="ts">
@@ -303,13 +321,13 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
-import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
 import V2AccountLossDialogs from './V2AccountLossDialogs.vue';
 import V2AccountPurchaseFields from './V2AccountPurchaseFields.vue';
+import V2AccountRecordStatusDialog from './V2AccountRecordStatusDialog.vue';
 
 type AccountsPage = UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
 
@@ -334,7 +352,7 @@ const formRules = computed<FormRules>(() => ({
   statusOptionId: [{ required: true, message: '请选择 ID 状态', trigger: 'change' }],
   purchaseCurrency: props.page.editingItem
     ? []
-    : [{ required: true, message: '请选择采购币种', trigger: 'change' }],
+    : [{ required: true, message: '请选择 ID采购币种', trigger: 'change' }],
   purchaseOriginalAmount: props.page.editingItem
     ? []
     : [
@@ -342,7 +360,7 @@ const formRules = computed<FormRules>(() => ({
           validator: (_rule, _value, callback) =>
             callback(
               props.page.purchaseEvidenceError &&
-                props.page.purchaseEvidenceError.includes('原币金额')
+                props.page.purchaseEvidenceError.includes('ID采购金额')
                 ? new Error(props.page.purchaseEvidenceError)
                 : undefined
             ),
@@ -351,7 +369,7 @@ const formRules = computed<FormRules>(() => ({
       ],
   purchaseSourceId: props.page.editingItem
     ? []
-    : [{ required: true, message: '请选择付款来源', trigger: 'change' }],
+    : [{ required: true, message: '请选择付款账户', trigger: 'change' }],
   purchasedAt: props.page.editingItem
     ? []
     : [{ required: true, message: '请选择采购时间', trigger: 'change' }],
@@ -422,23 +440,26 @@ const formRules = computed<FormRules>(() => ({
         ]
       : []
 }));
-const revealRules: FormRules = {
+const revealRules = computed<FormRules>(() => ({
   field: [{ required: true, message: '请选择查看字段', trigger: 'change' }],
-  reason: [
-    {
-      required: true,
-      validator: (_rule, value, callback) => {
-        const normalized = String(value ?? '').trim();
-        callback(
-          normalized.length >= 1 && normalized.length <= 200
-            ? undefined
-            : new Error('请输入 1 至 200 个字符的查看原因')
-        );
-      },
-      trigger: 'blur'
-    }
-  ]
-};
+  reason:
+    props.page.sensitiveAccessRequiresApproval && !props.page.sensitiveAccessCanReveal
+      ? [
+          {
+            required: true,
+            validator: (_rule, value, callback) => {
+              const normalized = String(value ?? '').trim();
+              callback(
+                normalized.length >= 2 && normalized.length <= 200
+                  ? undefined
+                  : new Error('请输入 2 至 200 个字符的申请原因')
+              );
+            },
+            trigger: 'blur'
+          }
+        ]
+      : []
+}));
 const importDisabledReason = computed(() =>
   !props.page.importCompleted && !props.page.importRows.length ? '当前没有可导入的有效记录' : ''
 );
@@ -457,3 +478,20 @@ function isZero(value: unknown) {
   return Number(String(value ?? '').trim() || '0') === 0;
 }
 </script>
+
+<style scoped>
+.v2-sensitive-access-status {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--el-border-radius-small);
+  background: var(--el-fill-color-extra-light);
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+</style>

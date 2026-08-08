@@ -323,7 +323,7 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
       const refreshed = await loadReceiptFxQuote();
       ElMessage.warning(
         refreshed
-          ? '自动汇率已更新，请核对原币实收和预计利润后重新提交'
+          ? '自动汇率已更新，请核对售卖价格和预计利润后重新提交'
           : receiptFxError.value || '自动汇率暂不可用，请重试或填写人工汇率'
       );
       return false;

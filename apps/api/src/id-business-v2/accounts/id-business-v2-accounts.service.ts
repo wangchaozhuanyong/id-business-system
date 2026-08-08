@@ -20,6 +20,8 @@ import {
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
+import type { ChangeIdBusinessV2AccountStatusDto } from './dto/change-id-business-v2-account-status.dto';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
 import type { RevealIdBusinessV2AccountSecretDto } from './dto/reveal-id-business-v2-account-secret.dto';
@@ -35,10 +37,12 @@ import {
   maskAppleId,
   maskPhone,
   normalizeAppleId,
+  normalizeAccountStatusReason,
   normalizeMoney,
   normalizeNullableString,
   normalizePhone,
   normalizeRevealReason,
+  parseAccountLifecycle,
   parseRecordStatus,
   parseSaleState,
   parseSecretField,
@@ -73,7 +77,8 @@ export class IdBusinessV2AccountsService {
     private readonly financePostingService: IdBusinessV2FinancePostingService,
     private readonly transactionManager: V2CommandTransactionManager,
     private readonly transactionalAudit: V2TransactionalAuditService,
-    private readonly balanceAdjustmentService: IdBusinessV2AccountBalanceAdjustmentService
+    private readonly balanceAdjustmentService: IdBusinessV2AccountBalanceAdjustmentService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
   async list(query: ListIdBusinessV2AccountsQuery) {
@@ -117,7 +122,8 @@ export class IdBusinessV2AccountsService {
               statusOptionId: normalizeNullableString(query.statusOptionId),
               supplierOptionId: normalizeNullableString(query.supplierOptionId),
               recordStatus: parseRecordStatus(query.recordStatus, false),
-              saleState: parseSaleState(query.saleState)
+              saleState: parseSaleState(query.saleState),
+              lifecycle: parseAccountLifecycle(query.lifecycle)
             }
           }),
           remark: `导出 V2 ID 脱敏资料：${items.length} 条`
@@ -201,6 +207,9 @@ export class IdBusinessV2AccountsService {
     operator?: AuthenticatedUser,
     metadata: AccountCommandMeta = {}
   ) {
+    if (dto.recordStatus !== undefined) {
+      throw new BadRequestException('资料状态请使用专用的停用或启用操作');
+    }
     const requestId = metadata.requestId ?? randomUUID();
     const adjustsBalance = dto.currentBalance !== undefined || dto.balanceCostAmount !== undefined;
     const buildUpdateData = (tx: V2CommandTransaction, existing: AccountWithRelations) =>
@@ -239,28 +248,51 @@ export class IdBusinessV2AccountsService {
     );
   }
 
-  remove(id: string, operator?: AuthenticatedUser, metadata: AccountCommandMeta = {}) {
+  changeRecordStatus(
+    id: string,
+    dto: ChangeIdBusinessV2AccountStatusDto,
+    operator?: AuthenticatedUser,
+    metadata: AccountCommandMeta = {}
+  ) {
+    const targetStatus = parseRecordStatus(dto.recordStatus, true)!;
+    const reason = normalizeAccountStatusReason(
+      dto.reason,
+      targetStatus === 'disabled' ? '停用原因' : '启用原因'
+    );
     return this.transactionManager.execute(
-      async (tx) => {
+      async (tx, context) => {
         const existing = await this.repository.lockAccount(tx, id);
-        assertAccountLossNotReported(
-          existing.lossReportedAt,
-          '已报损 ID 必须保留历史记录，不能删除'
-        );
-        if (existing.soldByOrderId) {
-          throw new ConflictException('已卖出的 ID 不能删除，请先通过退款流程确认收回');
+        assertAccountLossNotReported(existing.lossReportedAt, '已报损冻结 ID 不能启用或停用');
+        if (targetStatus === 'disabled' && existing.soldByOrderId) {
+          throw new ConflictException('已售出 ID 不能停用');
         }
-        await this.repository.softDelete(tx, existing.id, operator?.id);
+        if (existing.recordStatus === targetStatus) {
+          return toAccountResponse(existing);
+        }
+        const account = await this.repository.updateRecordStatus(tx, existing.id, {
+          recordStatus: targetStatus,
+          disabledReason: targetStatus === 'disabled' ? reason : null,
+          disabledAt: targetStatus === 'disabled' ? context.businessTime : null,
+          operatorId: operator?.id
+        });
+        const response = toAccountResponse(account);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_accounts',
-          action: 'id_business_v2.account.delete',
+          action:
+            targetStatus === 'disabled'
+              ? 'id_business_v2.account.disable'
+              : 'id_business_v2.account.enable',
           objectType: 'id_business_v2_account',
           objectId: existing.id,
           beforeData: toV2JsonDocument(toAccountResponse(existing)),
-          remark: `删除 V2 ID：${existing.appleIdMasked}`
+          afterData: toV2JsonDocument({
+            ...response,
+            statusChangeReason: reason
+          }),
+          remark: `${targetStatus === 'disabled' ? '停用' : '启用'} V2 ID：${existing.appleIdMasked} / ${reason}`
         });
-        return { deleted: true };
+        return response;
       },
       { requestId: metadata.requestId ?? randomUUID(), operator }
     );
@@ -275,28 +307,31 @@ export class IdBusinessV2AccountsService {
     const field = parseSecretField(dto.field);
     const config = SECRET_FIELDS[field];
     assertSecretPermission(config, operator);
-    const reason = normalizeRevealReason(dto.reason);
 
     return this.transactionManager.execute(
       async (tx, context) => {
         const account = await this.repository.findByIdOrThrow(id, tx);
-        const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
-        if (!value) throw new NotFoundException(`${config.label}未填写`);
-        const approved = await this.repository.verifySensitiveApproval(tx, {
+        const access = await this.sensitiveAccessService.authorize(tx, {
           approvalId: dto.approvalId,
-          requesterId: operator?.id,
           module: 'id_business_v2_account',
           fieldName: field,
           objectType: 'id_business_v2_account',
           objectId: account.id,
+          operator,
           now: context.businessTime
         });
+        const reason =
+          access.mode === 'approval'
+            ? access.reason
+            : normalizeRevealReason(dto.reason, access.reason);
+        const value = this.fieldEncryptionService.decrypt(getEncryptedSecretValue(account, field));
+        if (!value) throw new NotFoundException(`${config.label}未填写`);
         await this.repository.appendSensitiveAccess(tx, {
           userId: operator?.id,
           fieldName: field,
           objectId: account.id,
           accessReason: reason,
-          approved,
+          approved: true,
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined
         });
@@ -306,7 +341,13 @@ export class IdBusinessV2AccountsService {
           action: 'id_business_v2.account.secret.reveal',
           objectType: 'id_business_v2_account',
           objectId: account.id,
-          afterData: toV2JsonDocument({ field, reason, approved }),
+          afterData: toV2JsonDocument({
+            field,
+            reason,
+            approved: true,
+            accessMode: access.mode,
+            approvalId: access.approvalId
+          }),
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined,
           remark: `查看 V2 ID 敏感字段：${config.label} / ${account.appleIdMasked}`
@@ -400,10 +441,6 @@ export class IdBusinessV2AccountsService {
         dto.purchaseCost === undefined
           ? undefined
           : normalizeMoney(dto.purchaseCost, 'ID 购买成本'),
-      recordStatus:
-        dto.recordStatus === undefined
-          ? undefined
-          : (parseRecordStatus(dto.recordStatus, true) ?? undefined),
       remark: dto.remark === undefined ? undefined : normalizeNullableString(dto.remark),
       updatedByUserId: operator?.id
     };

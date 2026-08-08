@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
+import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2FinanceAccountsService } from './id-business-v2-finance-accounts.service';
 import { IdBusinessV2FinanceController } from './id-business-v2-finance.controller';
@@ -24,7 +25,7 @@ import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v
 import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
 
 @Module({
-  imports: [IdBusinessV2ExchangeRatesModule, IdBusinessV2RuntimeModule],
+  imports: [IdBusinessV2ExchangeRatesModule, IdBusinessV2OptionsModule, IdBusinessV2RuntimeModule],
   controllers: [IdBusinessV2FinanceController],
   providers: [
     IdBusinessV2FinanceAccountsService,

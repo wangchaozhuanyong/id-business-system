@@ -14,7 +14,9 @@ import { IdBusinessV2GiftCardsModule } from './gift-cards/public-api';
 import { IdBusinessV2OptionsModule } from './options/public-api';
 import { IdBusinessV2OrdersModule } from './orders/public-api';
 import { IdBusinessV2RenewalsModule } from './renewals/public-api';
+import { IdBusinessV2SensitiveAccessModule } from './sensitive-access/public-api';
 import { IdBusinessV2SystemMonitoringModule } from './system-monitoring/public-api';
+import { IdBusinessV2TablePreferencesModule } from './table-preferences/public-api';
 import { IdBusinessV2TopupSupplierFundsModule } from './topup-supplier-funds/public-api';
 
 @Module({
@@ -22,6 +24,8 @@ import { IdBusinessV2TopupSupplierFundsModule } from './topup-supplier-funds/pub
     IdBusinessV2OptionsModule,
     IdBusinessV2BrandingModule,
     IdBusinessV2ChangeSyncModule,
+    IdBusinessV2SensitiveAccessModule,
+    IdBusinessV2TablePreferencesModule,
     IdBusinessV2ExchangeRatesModule,
     IdBusinessV2FinanceModule,
     IdBusinessV2CustomersModule,

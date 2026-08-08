@@ -404,6 +404,7 @@ model User {
   idBusinessV2ExchangeRateEntries     IdBusinessV2ExchangeRateEntry[]     @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
   idBusinessV2ExchangeRateSettings    IdBusinessV2ExchangeRateSettings[]  @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
   idBusinessV2BrandingSettings        IdBusinessV2BrandingSettings[]      @relation("IdBusinessV2BrandingSettingsUpdatedBy")
+  idBusinessV2TablePreferences        IdBusinessV2UserTablePreference[]
   idBusinessV2FinanceSettings         IdBusinessV2FinanceSettings[]       @relation("IdBusinessV2FinanceSettingsUpdatedBy")
   idBusinessV2FinanceAccountsCreated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountCreatedBy")
   idBusinessV2FinanceAccountsUpdated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountUpdatedBy")
@@ -703,6 +704,8 @@ model IdBusinessV2Account {
   lossReportedAt            DateTime?                   @map("loss_reported_at") @db.Timestamptz(6)
   activeLossRecordId        String?                     @unique @map("active_loss_record_id") @db.Uuid
   recordStatus              IdBusinessV2RecordStatus    @default(active) @map("record_status")
+  disabledReason            String?                     @map("disabled_reason") @db.Text
+  disabledAt                DateTime?                   @map("disabled_at") @db.Timestamptz(6)
   remark                    String?                     @db.Text
   createdByUserId           String?                     @map("created_by_user_id") @db.Uuid
   updatedByUserId           String?                     @map("updated_by_user_id") @db.Uuid
@@ -737,6 +740,7 @@ model IdBusinessV2Account {
   @@index([purchaseFinanceAccountId])
   @@index([purchaseSupplierAccountId])
   @@index([lossReportedAt])
+  @@index([disabledAt])
   @@index([recordStatus, updatedAt])
   @@index([deletedAt])
   @@map("id_business_v2_accounts")
@@ -1475,6 +1479,21 @@ model IdBusinessV2BrandingSettings {
   @@map("id_business_v2_branding_settings")
 }
 
+model IdBusinessV2UserTablePreference {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  tableId          String   @map("table_id") @db.VarChar(120)
+  hiddenColumnKeys Json     @default("[]") @map("hidden_column_keys")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tableId])
+  @@index([userId])
+  @@map("id_business_v2_user_table_preferences")
+}
+
 model IdBusinessV2ExchangeRateProviderSnapshot {
   id                            String                  @id @default(uuid()) @db.Uuid
   snapshotId                    String                  @map("snapshot_id") @db.Uuid
@@ -1573,13 +1592,15 @@ model UserRole {
 }
 
 model RolePermission {
-  roleId       String @map("role_id") @db.Uuid
-  permissionId String @map("permission_id") @db.Uuid
+  roleId                    String  @map("role_id") @db.Uuid
+  permissionId              String  @map("permission_id") @db.Uuid
+  sensitiveApprovalRequired Boolean @default(false) @map("sensitive_approval_required")
 
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
+  @@index([sensitiveApprovalRequired])
   @@map("role_permissions")
 }
 

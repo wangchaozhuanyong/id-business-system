@@ -142,64 +142,12 @@
         class="v2-records-mobile-list"
         :data-mobile-for="v2TableSchemas.topupRecords.supplierFunds.id"
       >
-        <article v-for="item in items" :key="item.supplier.id" class="v2-records-mobile-item">
-          <header>
-            <div>
-              <strong>{{ item.supplier.name }}</strong>
-              <span>{{ item.initialized ? '资金账户已初始化' : '资金账户未初始化' }}</span>
-            </div>
-            <el-tag
-              :type="!item.initialized ? 'info' : item.isNegative ? 'danger' : 'success'"
-              effect="plain"
-            >
-              {{ !item.initialized ? '未初始化' : item.isNegative ? '余额为负' : '正常' }}
-            </el-tag>
-          </header>
-          <dl>
-            <div>
-              <dt>当前余额</dt>
-              <dd :class="{ 'is-negative': item.isNegative }">
-                {{
-                  item.currentBalanceCny === null
-                    ? '—'
-                    : `¥${formatDecimal(item.currentBalanceCny)}`
-                }}
-              </dd>
-            </div>
-            <div>
-              <dt>有效付款</dt>
-              <dd>¥{{ formatDecimal(item.paymentsCny) }}</dd>
-            </div>
-            <div>
-              <dt>加卡扣款</dt>
-              <dd>¥{{ formatDecimal(item.topupDeductionsCny) }}</dd>
-            </div>
-            <div>
-              <dt>期初及净调账</dt>
-              <dd>{{ formatSignedCurrency(item.netAdjustmentsCny) }}</dd>
-            </div>
-          </dl>
-          <footer>
-            <AppButton size="small" variant="ghost" @click="openDetails(item)">查看明细</AppButton>
-            <template v-if="canManage">
-              <AppButton
-                v-if="!item.initialized"
-                size="small"
-                @click="openMutation(item, 'initialize')"
-              >
-                初始化
-              </AppButton>
-              <template v-else>
-                <AppButton size="small" variant="soft" @click="openMutation(item, 'payment')">
-                  记录付款
-                </AppButton>
-                <AppButton size="small" variant="ghost" @click="openMutation(item, 'adjust')">
-                  调整
-                </AppButton>
-              </template>
-            </template>
-          </footer>
-        </article>
+        <V2TopupSupplierFundsMobileList
+          :items="items"
+          :can-manage="canManage"
+          @details="openDetails"
+          @mutation="openMutation"
+        />
       </div>
 
       <footer class="v2-records-pagination">
@@ -337,6 +285,7 @@ import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TopupSupplierFundDetailsDrawer from './V2TopupSupplierFundDetailsDrawer.vue';
+import V2TopupSupplierFundsMobileList from './V2TopupSupplierFundsMobileList.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
 import { ElMessage } from '@/v2/services/elementPlusMessage';

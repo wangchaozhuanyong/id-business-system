@@ -13,7 +13,7 @@ describe('IdBusinessV2AccountsController request metadata', () => {
   const accountsService = {
     create: vi.fn(),
     update: vi.fn(),
-    remove: vi.fn(),
+    changeRecordStatus: vi.fn(),
     revealSecret: vi.fn(),
     exportRows: vi.fn(),
     importRows: vi.fn()
@@ -29,14 +29,22 @@ describe('IdBusinessV2AccountsController request metadata', () => {
     };
 
     controller.create(dto, operator, request);
-    controller.remove('account-1', operator, request);
+    controller.changeRecordStatus(
+      'account-1',
+      { recordStatus: 'disabled', reason: '暂不使用' },
+      operator,
+      request
+    );
 
     expect(accountsService.create).toHaveBeenCalledWith(dto, operator, {
       requestId: request.requestId
     });
-    expect(accountsService.remove).toHaveBeenCalledWith('account-1', operator, {
-      requestId: request.requestId
-    });
+    expect(accountsService.changeRecordStatus).toHaveBeenCalledWith(
+      'account-1',
+      { recordStatus: 'disabled', reason: '暂不使用' },
+      operator,
+      { requestId: request.requestId }
+    );
   });
 
   it('passes request ID and non-secret request metadata into sensitive access', () => {

@@ -103,25 +103,29 @@
           <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
             <header>
               <div>
-                <strong>{{ item.name }}</strong>
-                <span>{{ item.code }}</span>
+                <strong v-v2-column-visibility="[v2TableSchemas.roles.main.id, 'name']">
+                  {{ item.name }}
+                </strong>
+                <span v-v2-column-visibility="[v2TableSchemas.roles.main.id, 'code']">
+                  {{ item.code }}
+                </span>
               </div>
               <el-tag v-if="item.isSystemRole" type="info" effect="plain">系统</el-tag>
             </header>
             <dl>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.roles.main.id, 'description']">
                 <dt>角色说明</dt>
                 <dd>{{ item.description || '—' }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.roles.main.id, '权限数量']">
                 <dt>权限数量</dt>
                 <dd>{{ item.permissionCount }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.roles.main.id, '成员数量']">
                 <dt>成员数量</dt>
                 <dd>{{ item.memberCount }}</dd>
               </div>
-              <div>
+              <div v-v2-column-visibility="[v2TableSchemas.roles.main.id, 'updatedAt']">
                 <dt>更新时间</dt>
                 <dd>{{ page.formatDate(item.updatedAt) }}</dd>
               </div>

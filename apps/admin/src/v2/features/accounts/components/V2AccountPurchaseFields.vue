@@ -4,7 +4,7 @@
     <el-alert
       v-if="page.purchaseSourcesError"
       type="error"
-      :title="`付款来源加载失败：${page.purchaseSourcesError}`"
+      :title="`付款账户加载失败：${page.purchaseSourcesError}`"
       :closable="false"
       show-icon
     >
@@ -13,7 +13,7 @@
       </template>
     </el-alert>
     <div class="v2-record-form-grid">
-      <el-form-item label="采购币种" prop="purchaseCurrency">
+      <el-form-item label="ID采购币种" prop="purchaseCurrency">
         <el-select v-model="page.form.purchaseCurrency" @change="page.handlePurchaseCurrencyChange">
           <el-option label="人民币 CNY" value="CNY" />
           <el-option label="马币 MYR" value="MYR" />
@@ -21,20 +21,30 @@
           <el-option label="USDT" value="USDT" />
         </el-select>
       </el-form-item>
-      <el-form-item label="原币金额" prop="purchaseOriginalAmount">
+      <el-form-item label="ID采购金额" prop="purchaseOriginalAmount">
         <el-input
           v-model="page.form.purchaseOriginalAmount"
           inputmode="decimal"
-          placeholder="实际支付金额"
+          placeholder="输入实际 ID 采购金额"
         />
       </el-form-item>
     </div>
-    <el-form-item label="付款来源" prop="purchaseSourceId">
+    <el-form-item label="人民币成本">
+      <div class="v2-account-purchase-calculated-field">
+        <el-input
+          :model-value="page.purchaseCostPreview"
+          placeholder="系统按交易汇率自动计算"
+          readonly
+        />
+        <small>根据 ID采购金额与交易汇率自动计算，无需手动填写。</small>
+      </div>
+    </el-form-item>
+    <el-form-item label="付款账户" prop="purchaseSourceId">
       <el-select
         v-model="page.form.purchaseSourceId"
         filterable
         :loading="page.purchaseSourcesLoading"
-        placeholder="选择资金账户或供应商预存钱包"
+        :placeholder="`选择 ${page.form.purchaseCurrency} 币种的资金账户`"
       >
         <el-option
           v-for="option in page.purchaseSourceOptions"
@@ -44,14 +54,9 @@
         />
       </el-select>
     </el-form-item>
-    <div class="v2-record-form-grid">
-      <el-form-item label="采购时间" prop="purchasedAt">
-        <el-input v-model="page.form.purchasedAt" type="datetime-local" />
-      </el-form-item>
-      <el-form-item :label="page.form.purchaseCurrency === 'CNY' ? '人民币成本' : '预计人民币成本'">
-        <el-input :model-value="page.purchaseCostPreview || '系统按交易汇率计算'" readonly />
-      </el-form-item>
-    </div>
+    <el-form-item label="采购时间" prop="purchasedAt">
+      <el-input v-model="page.form.purchasedAt" type="datetime-local" />
+    </el-form-item>
     <div v-if="page.form.purchaseCurrency !== 'CNY'" class="v2-record-form-grid">
       <el-form-item label="手工汇率">
         <el-input
@@ -91,3 +96,17 @@ defineProps<{
   page: UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
 }>();
 </script>
+
+<style scoped>
+.v2-account-purchase-calculated-field {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+}
+
+.v2-account-purchase-calculated-field small {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+</style>

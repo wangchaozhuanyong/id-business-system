@@ -25,9 +25,11 @@ export const v2TableSchemas = {
         { key: '来源订单', label: '来源订单', kind: 'identifier', widthPreset: 'identifier' },
         { key: 'lossBalance', label: '损失余额', kind: 'numeric', widthPreset: 'standard' },
         { key: 'lossCostAmount', label: '人民币亏损', kind: 'numeric', widthPreset: 'standard' },
+        { key: '记录状态', label: '记录状态', kind: 'status', widthPreset: 'compact' },
         { key: 'reason', label: '报损原因', kind: 'text', widthPreset: 'longText' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: 'reportedAt', label: '报损时间', kind: 'date', widthPreset: 'dateTime' }
+        { key: 'reportedAt', label: '报损时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     })
   },
@@ -472,7 +474,9 @@ export const v2TableSchemas = {
         { key: '人民币金额', label: '人民币金额', kind: 'numeric', widthPreset: 'standard' },
         { key: '收款方', label: '收款方', kind: 'text', widthPreset: 'wide' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' }
+        { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     }),
     journals: table({
@@ -578,8 +582,15 @@ export const v2TableSchemas = {
         { key: '利润率', label: '利润率', kind: 'numeric', widthPreset: 'standard' },
         { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'wide', pin: 'end' }
+        {
+          key: 'status',
+          label: '状态/下一步',
+          kind: 'status',
+          widthPreset: 'wide',
+          pin: 'end',
+          hideable: false
+        },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
   },
@@ -745,7 +756,7 @@ export const v2TableSchemas = {
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'wide' },
         { key: 'creditedAt', label: '加卡时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
       ]
     }),
     balanceLedger: table({
