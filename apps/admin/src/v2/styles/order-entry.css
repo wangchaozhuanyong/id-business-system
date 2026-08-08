@@ -37,7 +37,7 @@
 .v2-order-entry-workspace {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(620px, 1.3fr) minmax(440px, 0.9fr) minmax(280px, 0.58fr);
+  grid-template-columns: minmax(760px, 1.5fr) minmax(440px, 0.82fr) minmax(270px, 0.5fr);
   align-items: start;
   gap: 12px;
 }
@@ -668,7 +668,7 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
 .v2-order-entry-result-shell {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(620px, 1.3fr) minmax(440px, 0.9fr) minmax(280px, 0.58fr);
+  grid-template-columns: minmax(760px, 1.5fr) minmax(440px, 0.82fr) minmax(270px, 0.5fr);
   gap: 12px;
 }
 
@@ -698,7 +698,7 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
   font-size: 13px;
 }
 
-@media (max-width: 1680px) {
+@media (max-width: 1800px) {
   .v2-order-entry-workspace {
     grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.55fr);
   }
