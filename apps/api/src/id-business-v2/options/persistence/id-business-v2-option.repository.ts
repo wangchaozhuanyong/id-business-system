@@ -275,6 +275,58 @@ export class IdBusinessV2OptionRepository {
     }));
   }
 
+  async listSelectorGroups(types: readonly IdBusinessV2OptionType[]) {
+    const uniqueTypes = [...new Set(types)];
+    if (!uniqueTypes.length) return [];
+
+    const rows = await this.prisma.idBusinessV2Option.findMany({
+      where: {
+        status: 'active',
+        deletedAt: null,
+        OR: uniqueTypes.map((type) => ({
+          type,
+          businessAmount: type === 'service' ? { gt: 0 } : undefined,
+          parent:
+            type === 'service'
+              ? { is: { type: 'business_category', status: 'active', deletedAt: null } }
+              : undefined,
+          countryOption:
+            type === 'service'
+              ? {
+                  is: {
+                    type: 'country',
+                    status: 'active',
+                    deletedAt: null,
+                    currencyCode: { not: null }
+                  }
+                }
+              : undefined
+        }))
+      },
+      select: {
+        id: true,
+        type: true,
+        code: true,
+        name: true,
+        parentId: true,
+        countryOptionId: true,
+        businessAmount: true,
+        currencyCode: true,
+        parent: { select: { id: true, name: true } },
+        countryOption: { select: { id: true, name: true, currencyCode: true } }
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+    });
+
+    return rows.map<OptionSelectorRow>((row) => ({
+      ...row,
+      businessAmount: mapOptionalAmount4(
+        row.businessAmount,
+        'id_business_v2_options.business_amount'
+      )
+    }));
+  }
+
   async findByIdInTransaction(tx: V2CommandTransaction, id: string) {
     const row = await tx.idBusinessV2Option.findFirst({
       where: { id, deletedAt: null },

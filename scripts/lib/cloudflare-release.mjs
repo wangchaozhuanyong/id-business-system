@@ -5,6 +5,7 @@ export const RELEASE_ACCOUNT_ID = 'a7e061557092f924beb4a7c8adc39c3d';
 export const RELEASE_PUBLIC_URL = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
 export const RELEASE_SUPABASE_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
 export const RELEASE_SUPABASE_API_BASE_URL = `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v2-api`;
+export const RELEASE_SUPABASE_FUNCTION_REGION = 'ap-northeast-1';
 export const RELEASE_V2_REALTIME_CHANGES_ENABLED = 'false';
 export const REQUIRED_CHECKS = ['quality', 'production-images'];
 export const SMOKE_ROLE_CODE = 'production_smoke_readonly';
@@ -100,6 +101,9 @@ export function validateWranglerConfig(config) {
   }
   if (vars.SUPABASE_API_BASE_URL !== RELEASE_SUPABASE_API_BASE_URL) {
     errors.push(`SUPABASE_API_BASE_URL 必须固定为 ${RELEASE_SUPABASE_API_BASE_URL}`);
+  }
+  if (vars.SUPABASE_FUNCTION_REGION !== RELEASE_SUPABASE_FUNCTION_REGION) {
+    errors.push(`SUPABASE_FUNCTION_REGION 必须固定为 ${RELEASE_SUPABASE_FUNCTION_REGION}`);
   }
 
   return errors;

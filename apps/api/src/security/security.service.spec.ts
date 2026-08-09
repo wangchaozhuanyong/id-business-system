@@ -254,7 +254,8 @@ describe('SecurityService', () => {
     return {
       service: new SecurityService(prisma, auditLogsService, fieldEncryptionService),
       prisma,
-      auditLogsService
+      auditLogsService,
+      activeSession
     };
   }
 
@@ -370,9 +371,18 @@ describe('SecurityService', () => {
   });
 
   it('reuses a registered provider session without replacing its original device metadata', async () => {
-    const { service, prisma } = createService();
+    const { service, prisma, activeSession } = createService();
     const sessionIdentifier = 'supabase:55555555-5555-4555-8555-555555555555';
     const tokenHash = createHash('sha256').update(sessionIdentifier).digest('hex');
+    (prisma.activeSession.findUnique as jest.Mock)
+      .mockResolvedValueOnce({
+        ...activeSession,
+        lastActiveAt: new Date(Date.now() - 120_000)
+      })
+      .mockResolvedValueOnce({
+        ...activeSession,
+        lastActiveAt: new Date()
+      });
 
     await expect(
       service.ensureActiveSession({
@@ -393,32 +403,72 @@ describe('SecurityService', () => {
       })
     ).resolves.toBe(true);
 
-    expect(prisma.activeSession.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(2);
+    expect(prisma.activeSession.updateMany).toHaveBeenCalledTimes(1);
     for (const [input] of (prisma.activeSession.updateMany as jest.Mock).mock.calls) {
       expect(input.where).toEqual(
         expect.objectContaining({
+          id: 'session-id',
           userId,
           tokenHash,
-          revokedAt: null
+          revokedAt: null,
+          expiresAt: { gt: expect.any(Date) },
+          lastActiveAt: { lte: expect.any(Date) }
         })
       );
       expect(input.data).toEqual(
         expect.objectContaining({
-          lastActiveAt: expect.any(Date),
-          expiresAt: future
+          lastActiveAt: expect.any(Date)
         })
       );
+      expect(input.data).not.toHaveProperty('expiresAt');
       expect(input.data).not.toHaveProperty('ip');
       expect(input.data).not.toHaveProperty('userAgent');
     }
     expect(prisma.activeSession.create).not.toHaveBeenCalled();
   });
 
+  it('keeps a session active when another request wins the periodic touch race', async () => {
+    const { service, prisma, activeSession } = createService();
+    (prisma.activeSession.findUnique as jest.Mock)
+      .mockResolvedValueOnce({
+        ...activeSession,
+        lastActiveAt: new Date(Date.now() - 120_000)
+      })
+      .mockResolvedValueOnce({
+        userId,
+        revokedAt: null,
+        expiresAt: future
+      });
+    (prisma.activeSession.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      service.ensureActiveSession({
+        userId,
+        sessionIdentifier: 'supabase:touch-race',
+        expiresAt: future
+      })
+    ).resolves.toBe(true);
+
+    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(2);
+    expect(prisma.activeSession.updateMany).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['unregistered', 'revoked'])(
     'rejects an %s provider session instead of recreating it',
-    async () => {
+    async (status) => {
       const { service, prisma } = createService();
-      (prisma.activeSession.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+      (prisma.activeSession.findUnique as jest.Mock).mockResolvedValueOnce(
+        status === 'revoked'
+          ? {
+              id: 'session-id',
+              userId,
+              revokedAt: now,
+              expiresAt: future,
+              lastActiveAt: now
+            }
+          : null
+      );
 
       await expect(
         service.ensureActiveSession({
@@ -450,7 +500,7 @@ describe('SecurityService', () => {
     expect(prisma.activeSession.updateMany).not.toHaveBeenCalled();
   });
 
-  it('invalidates the positive session cache when revoking a provider session identifier', async () => {
+  it('observes provider session revocation on the next request', async () => {
     const { service, prisma } = createService();
     const sessionIdentifier = 'supabase:77777777-7777-4777-8777-777777777777';
     const tokenHash = createHash('sha256').update(sessionIdentifier).digest('hex');
@@ -481,7 +531,7 @@ describe('SecurityService', () => {
       })
     ).resolves.toBe(true);
     await expect(service.isAccessTokenActive(sessionIdentifier)).resolves.toBe(true);
-    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(2);
 
     (prisma.activeSession.findUnique as jest.Mock)
       .mockResolvedValueOnce(registeredSession)
@@ -497,7 +547,7 @@ describe('SecurityService', () => {
     ).resolves.toBe(true);
     await expect(service.isAccessTokenActive(sessionIdentifier)).resolves.toBe(false);
 
-    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(3);
+    expect(prisma.activeSession.findUnique).toHaveBeenCalledTimes(4);
     expect(prisma.activeSession.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {

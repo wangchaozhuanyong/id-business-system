@@ -6,6 +6,7 @@ import {
   RELEASE_PUBLIC_URL,
   RELEASE_REPOSITORY,
   RELEASE_SUPABASE_API_BASE_URL,
+  RELEASE_SUPABASE_FUNCTION_REGION,
   RELEASE_V2_REALTIME_CHANGES_ENABLED,
   RELEASE_WORKER_NAME,
   createCloudflareProductionBuildEnvironment,
@@ -36,7 +37,8 @@ const validConfig = {
   },
   vars: {
     APP_PUBLIC_URL: RELEASE_PUBLIC_URL,
-    SUPABASE_API_BASE_URL: RELEASE_SUPABASE_API_BASE_URL
+    SUPABASE_API_BASE_URL: RELEASE_SUPABASE_API_BASE_URL,
+    SUPABASE_FUNCTION_REGION: RELEASE_SUPABASE_FUNCTION_REGION
   }
 };
 
@@ -55,6 +57,19 @@ test('forces the Cloudflare production frontend to use version polling', () => {
   assert.equal(buildEnvironment.VITE_API_BASE_URL, '/api');
   assert.equal(buildEnvironment.VITE_V2_REALTIME_CHANGES_ENABLED, 'false');
   assert.equal(buildEnvironment.KEEP_ME, 'yes');
+});
+
+test('pins the Supabase function to the production database region', () => {
+  assert.equal(RELEASE_SUPABASE_FUNCTION_REGION, 'ap-northeast-1');
+  assert.equal(validConfig.vars.SUPABASE_FUNCTION_REGION, RELEASE_SUPABASE_FUNCTION_REGION);
+});
+
+test('keeps the production performance probe within smoke permissions and always logs out', async () => {
+  const source = await readFile(new URL('./probe-v2-api-performance.mjs', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /id-business-v2\/options\/bootstrap/);
+  assert.match(source, /try\s*\{[\s\S]*finally\s*\{/);
+  assert.match(source, /finally\s*\{[\s\S]*request\('\/auth\/logout'/);
 });
 
 test('builds the shared package before the Cloudflare admin bundle', async () => {

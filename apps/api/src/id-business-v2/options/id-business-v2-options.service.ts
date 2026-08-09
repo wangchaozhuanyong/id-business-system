@@ -73,6 +73,10 @@ export class IdBusinessV2OptionsService {
     return this.query.listSelectors(typeValue, parentIdValue);
   }
 
+  listSelectorGroups<T extends IdBusinessV2OptionType>(typeValues: readonly T[]) {
+    return this.query.listSelectorGroups(typeValues);
+  }
+
   getBusinessTree() {
     return this.query.getBusinessTree();
   }

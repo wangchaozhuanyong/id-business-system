@@ -1,6 +1,7 @@
 const API_PREFIX = '/api';
 const SUPABASE_FUNCTION_PATH = '/functions/v1/v2-api';
 const SUPABASE_API_BASE_URL = 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api';
+const SUPABASE_FUNCTION_REGION_PATTERN = /^[a-z]{2}-[a-z]+-\d$/u;
 
 export default {
   async fetch(request, env) {
@@ -28,6 +29,13 @@ export default {
       upstreamHeaders.set('x-forwarded-host', incomingUrl.host);
       upstreamHeaders.set('x-forwarded-proto', incomingUrl.protocol.replace(':', ''));
       upstreamHeaders.set('x-request-id', requestId);
+      const functionRegion = resolveFunctionRegion(env.SUPABASE_FUNCTION_REGION);
+      if (functionRegion) {
+        upstreamHeaders.set('x-region', functionRegion);
+      } else {
+        // Region routing is deployment-owned. Never trust a caller-provided override.
+        upstreamHeaders.delete('x-region');
+      }
 
       const upstreamRequest = new Request(new Request(targetUrl, request), {
         headers: upstreamHeaders,
@@ -95,6 +103,15 @@ export function resolveTargetUrl(incomingUrl, apiBaseUrl) {
   targetUrl.pathname = `${SUPABASE_FUNCTION_PATH}${incomingUrl.pathname}`;
   targetUrl.search = incomingUrl.search;
   return targetUrl;
+}
+
+export function resolveFunctionRegion(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return null;
+  if (!SUPABASE_FUNCTION_REGION_PATTERN.test(normalized)) {
+    throw new Error('SUPABASE_FUNCTION_REGION is invalid');
+  }
+  return normalized;
 }
 
 function resolveRequestId(value) {

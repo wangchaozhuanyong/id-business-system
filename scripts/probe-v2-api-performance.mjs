@@ -14,46 +14,51 @@ assert.ok(apiBaseUrl, '缺少 V2_PERF_API_BASE_URL');
 assert.ok(username && password, '缺少 V2 性能探测账号');
 assert.ok(Number.isInteger(probeRounds) && probeRounds > 0, 'V2_PERF_ROUNDS 必须是正整数');
 
-const login = await request('/auth/login', {
-  method: 'POST',
-  body: {
-    username,
-    password
-  }
-});
-const accessToken = login.data?.accessToken;
-assert.ok(accessToken, '性能探测登录没有返回 accessToken');
-
 const probes = [
+  '/auth/me',
   '/id-business-v2/orders/bootstrap?page=1&pageSize=20&sortBy=openedAt&sortOrder=desc',
   '/id-business-v2/customers/bootstrap?page=1&pageSize=20&sortBy=sortOrder&sortOrder=asc',
   '/id-business-v2/accounts/bootstrap?page=1&pageSize=20&sortBy=sortOrder&sortOrder=asc',
-  '/id-business-v2/renewals/workbench/bootstrap?page=1&pageSize=20&sortBy=dueAt&sortOrder=asc',
-  '/id-business-v2/options/bootstrap?page=1&pageSize=20&type=id_status&sortBy=sortOrder&sortOrder=asc'
+  '/id-business-v2/renewals/workbench/bootstrap?page=1&pageSize=20&sortBy=dueAt&sortOrder=asc'
 ];
 
-for (let round = 1; round <= probeRounds; round += 1) {
-  for (const path of probes) {
-    const result = await request(path, {
+let accessToken;
+try {
+  const login = await request('/auth/login', {
+    method: 'POST',
+    body: {
+      username,
+      password
+    }
+  });
+  accessToken = login.data?.accessToken;
+  assert.ok(accessToken, '性能探测登录没有返回 accessToken');
+
+  for (let round = 1; round <= probeRounds; round += 1) {
+    for (const path of probes) {
+      const result = await request(path, {
+        accessToken
+      });
+      console.log(
+        JSON.stringify({
+          round,
+          path: path.split('?')[0],
+          status: result.status,
+          totalMs: result.totalMs,
+          serverTiming: result.serverTiming,
+          edgeRegion: result.edgeRegion
+        })
+      );
+    }
+  }
+} finally {
+  if (accessToken) {
+    await request('/auth/logout', {
+      method: 'POST',
       accessToken
-    });
-    console.log(
-      JSON.stringify({
-        round,
-        path: path.split('?')[0],
-        status: result.status,
-        totalMs: result.totalMs,
-        serverTiming: result.serverTiming,
-        edgeRegion: result.edgeRegion
-      })
-    );
+    }).catch(() => undefined);
   }
 }
-
-await request('/auth/logout', {
-  method: 'POST',
-  accessToken
-}).catch(() => undefined);
 
 function loadEnvFile(fileUrl) {
   try {

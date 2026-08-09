@@ -10,6 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { ApiHttpException, authHttpError } from '../common/errors/api-http.exception';
+import { recordServerAuthTiming } from '../common/interceptors/server-timing.interceptor';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorators';
@@ -51,8 +52,10 @@ export class JwtAuthGuard implements CanActivate {
       [context.getHandler(), context.getClass()]
     );
     const request = context.switchToHttp().getRequest<RequestWithAuthHeader>();
+    const authStartedAt = performance.now();
     const token = this.extractToken(request);
     if (!token) {
+      recordServerAuthTiming(request, performance.now() - authStartedAt);
       throw authHttpError(HttpStatus.UNAUTHORIZED, 'AUTH_MISSING', '请先登录后再操作。');
     }
 
@@ -74,6 +77,8 @@ export class JwtAuthGuard implements CanActivate {
         this.availabilityMonitor.recordAvailable();
       }
       throw error;
+    } finally {
+      recordServerAuthTiming(request, performance.now() - authStartedAt);
     }
   }
 
