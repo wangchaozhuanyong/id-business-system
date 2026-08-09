@@ -79,7 +79,7 @@ export class IdBusinessV2SystemMonitoringService {
           key: 'slow_requests',
           title: '慢请求历史',
           status: 'unknown' as const,
-          detail: '当前只有逐请求 Server-Timing，不保存慢请求时间序列。'
+          detail: '当前逐请求返回总耗时、认证耗时与业务处理耗时，不保存慢请求时间序列。'
         },
         {
           key: 'backup_restore',

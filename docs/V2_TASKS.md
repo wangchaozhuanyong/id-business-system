@@ -85,6 +85,7 @@
 - [x] ID 报损拆分为 command handler、repository、posting coordinator 和 query service，并复用外层事务
 - [x] 会话统一由 `SessionCoordinator` 管理原子凭据、身份代际、跨标签验证、熔断和只读降级
 - [x] API 错误统一输出稳定错误码、request ID、重试语义和向后兼容的 `message`
+- [x] 生产刷新性能：API 固定到数据库同区、会话活跃时间限频写入、选择项批量读取和分阶段 Server-Timing
 - [x] AST 动态盘点的全部真实桌面表迁移到显式 `V2Table + typed schema`，删除隐式表格代理和双轨列算法
 - [x] Prisma runtime、Decimal、直接模型访问、直接事务、raw SQL 和 persistence 外 row mapper 纳入静态门禁
 

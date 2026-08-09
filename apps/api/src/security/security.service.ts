@@ -387,21 +387,56 @@ export class SecurityService {
       this.activeTokenCache.delete(tokenHash);
       return false;
     }
-    const result = await this.prisma.activeSession.updateMany({
-      where: {
-        userId,
-        tokenHash,
-        revokedAt: null
-      },
-      data: {
-        lastActiveAt: now,
-        expiresAt: input.expiresAt
+    const session = await this.prisma.activeSession.findUnique({
+      where: { tokenHash },
+      select: {
+        id: true,
+        userId: true,
+        revokedAt: true,
+        expiresAt: true,
+        lastActiveAt: true
       }
     });
 
-    if (result.count !== 1) {
+    if (!session || session.userId !== userId || session.revokedAt || session.expiresAt <= now) {
       this.activeTokenCache.delete(tokenHash);
       return false;
+    }
+
+    const shouldTouch =
+      now.getTime() - session.lastActiveAt.getTime() >= ACTIVE_SESSION_TOUCH_INTERVAL_MS;
+    const shouldExtend = input.expiresAt.getTime() > session.expiresAt.getTime();
+    if (shouldTouch || shouldExtend) {
+      const touchCutoff = new Date(now.getTime() - ACTIVE_SESSION_TOUCH_INTERVAL_MS);
+      const result = await this.prisma.activeSession.updateMany({
+        where: {
+          id: session.id,
+          userId,
+          tokenHash,
+          revokedAt: null,
+          expiresAt: { gt: now },
+          ...(shouldTouch && !shouldExtend ? { lastActiveAt: { lte: touchCutoff } } : {})
+        },
+        data: {
+          ...(shouldTouch ? { lastActiveAt: now } : {}),
+          ...(shouldExtend ? { expiresAt: input.expiresAt } : {})
+        }
+      });
+      if (result.count !== 1) {
+        const current = await this.prisma.activeSession.findUnique({
+          where: { tokenHash },
+          select: { userId: true, revokedAt: true, expiresAt: true }
+        });
+        if (
+          !current ||
+          current.userId !== userId ||
+          current.revokedAt ||
+          current.expiresAt <= now
+        ) {
+          this.activeTokenCache.delete(tokenHash);
+          return false;
+        }
+      }
     }
 
     this.cacheActiveToken(tokenHash, input.expiresAt, now);

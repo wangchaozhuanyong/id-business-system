@@ -70,7 +70,7 @@ export class IdBusinessV2CustomersController {
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
-    const [list, sources, tags, services] = await Promise.all([
+    const [list, optionGroups] = await Promise.all([
       this.customersService.list({
         page,
         pageSize,
@@ -82,16 +82,14 @@ export class IdBusinessV2CustomersController {
         sortBy,
         sortOrder
       }),
-      this.optionsService.listSelectors('customer_source'),
-      this.optionsService.listSelectors('customer_tag'),
-      this.optionsService.listSelectors('service')
+      this.optionsService.listSelectorGroups(['customer_source', 'customer_tag', 'service'])
     ]);
     return {
       list,
       options: {
-        sources: sources.items,
-        tags: tags.items,
-        services: services.items
+        sources: optionGroups.customer_source.items,
+        tags: optionGroups.customer_tag.items,
+        services: optionGroups.service.items
       },
       generatedAt: new Date().toISOString()
     };

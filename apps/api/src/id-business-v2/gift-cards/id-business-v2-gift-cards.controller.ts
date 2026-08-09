@@ -79,19 +79,17 @@ export class IdBusinessV2GiftCardsController {
             sortBy,
             sortOrder
           });
-    const [list, cardNames, countries, suppliers] = await Promise.all([
+    const [list, optionGroups] = await Promise.all([
       listPromise,
-      this.optionsService.listSelectors('gift_card_name'),
-      this.optionsService.listSelectors('country'),
-      this.optionsService.listSelectors('topup_supplier')
+      this.optionsService.listSelectorGroups(['gift_card_name', 'country', 'topup_supplier'])
     ]);
     return {
       tab: selectedTab,
       list,
       options: {
-        cardNames: cardNames.items,
-        countries: countries.items,
-        suppliers: suppliers.items
+        cardNames: optionGroups.gift_card_name.items,
+        countries: optionGroups.country.items,
+        suppliers: optionGroups.topup_supplier.items
       },
       generatedAt: new Date().toISOString()
     };

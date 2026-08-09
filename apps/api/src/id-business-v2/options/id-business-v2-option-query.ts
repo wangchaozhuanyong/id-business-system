@@ -12,6 +12,7 @@ import {
 } from './id-business-v2-option-input';
 import { toOptionResponse } from './id-business-v2-option-support';
 import { IdBusinessV2OptionRepository } from './persistence/id-business-v2-option.repository';
+import type { OptionSelectorRow } from './persistence/id-business-v2-option.repository';
 
 export interface ListIdBusinessV2OptionsQuery extends PaginationQuery {
   keyword?: string;
@@ -86,7 +87,24 @@ export class IdBusinessV2OptionQuery {
   async listSelectors(typeValue?: string, parentIdValue?: string) {
     const type = parseOptionType(typeValue, true);
     const parentId = normalizeNullableString(parentIdValue);
+    if (!parentId) {
+      const groups = await this.listSelectorGroups([type]);
+      return groups[type];
+    }
     return this.listSelectorsUncached(type, parentId);
+  }
+
+  async listSelectorGroups<T extends IdBusinessV2OptionType>(
+    typeValues: readonly T[]
+  ): Promise<Record<T, { items: ReturnType<IdBusinessV2OptionQuery['mapSelector']>[] }>> {
+    const types = [...new Set(typeValues.map((value) => parseOptionType(value, true)))] as T[];
+    const rows = await this.repository.listSelectorGroups(types);
+    const groups = {} as Record<T, { items: ReturnType<IdBusinessV2OptionQuery['mapSelector']>[] }>;
+    for (const type of types) groups[type] = { items: [] };
+    for (const row of rows) {
+      if (row.type in groups) groups[row.type as T].items.push(this.mapSelector(row));
+    }
+    return groups;
   }
 
   async getBusinessTree() {
@@ -118,13 +136,17 @@ export class IdBusinessV2OptionQuery {
   private async listSelectorsUncached(type: IdBusinessV2OptionType, parentId: string | null) {
     const items = await this.repository.listSelectors(type, parentId);
     return {
-      items: items.map((item) => ({
-        ...item,
-        businessAmount: item.businessAmount?.toString() ?? null,
-        currencyCode:
-          item.type === 'service' ? (item.countryOption?.currencyCode ?? null) : item.currencyCode,
-        country: item.countryOption
-      }))
+      items: items.map((item) => this.mapSelector(item))
+    };
+  }
+
+  private mapSelector(item: OptionSelectorRow) {
+    return {
+      ...item,
+      businessAmount: item.businessAmount?.toString() ?? null,
+      currencyCode:
+        item.type === 'service' ? (item.countryOption?.currencyCode ?? null) : item.currencyCode,
+      country: item.countryOption
     };
   }
 }

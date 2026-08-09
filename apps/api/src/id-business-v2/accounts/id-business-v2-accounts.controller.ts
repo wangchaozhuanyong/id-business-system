@@ -67,7 +67,7 @@ export class IdBusinessV2AccountsController {
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string
   ) {
-    const [list, countries, statuses, suppliers] = await Promise.all([
+    const [list, optionGroups] = await Promise.all([
       this.accountsService.list({
         page,
         pageSize,
@@ -81,16 +81,14 @@ export class IdBusinessV2AccountsController {
         sortBy,
         sortOrder
       }),
-      this.optionsService.listSelectors('country'),
-      this.optionsService.listSelectors('id_status'),
-      this.optionsService.listSelectors('id_supplier')
+      this.optionsService.listSelectorGroups(['country', 'id_status', 'id_supplier'])
     ]);
     return {
       list,
       options: {
-        countries: countries.items,
-        statuses: statuses.items,
-        suppliers: suppliers.items
+        countries: optionGroups.country.items,
+        statuses: optionGroups.id_status.items,
+        suppliers: optionGroups.id_supplier.items
       },
       generatedAt: new Date().toISOString()
     };

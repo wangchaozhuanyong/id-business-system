@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import worker, { resolveTargetUrl } from '../deploy/cloudflare-free/worker.mjs';
+import worker, {
+  resolveFunctionRegion,
+  resolveTargetUrl
+} from '../deploy/cloudflare-free/worker.mjs';
 
 const apiBaseUrl = 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api';
+const functionRegion = 'ap-northeast-1';
 
 test('maps same-origin API paths and query strings to the fixed Supabase function', () => {
   const target = resolveTargetUrl(
@@ -46,7 +50,7 @@ test('forwards method, body, authorization and request correlation without expos
         },
         body: JSON.stringify({ name: '测试账户' })
       }),
-      { SUPABASE_API_BASE_URL: apiBaseUrl }
+      { SUPABASE_API_BASE_URL: apiBaseUrl, SUPABASE_FUNCTION_REGION: functionRegion }
     );
 
     assert.equal(response.status, 201);
@@ -61,7 +65,33 @@ test('forwards method, body, authorization and request correlation without expos
     assert.equal(capturedRequest.headers.get('x-forwarded-host'), 'admin.example.test');
     assert.equal(capturedRequest.headers.get('x-forwarded-proto'), 'https');
     assert.equal(capturedRequest.headers.get('x-request-id'), 'client-request-1234');
+    assert.equal(capturedRequest.headers.get('x-region'), functionRegion);
     assert.deepEqual(await capturedRequest.json(), { name: '测试账户' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('owns Supabase region routing and rejects invalid deployment values', async () => {
+  assert.equal(resolveFunctionRegion(functionRegion), functionRegion);
+  assert.equal(resolveFunctionRegion(''), null);
+  assert.throws(() => resolveFunctionRegion('https://attacker.example.test'), /is invalid/);
+
+  const originalFetch = globalThis.fetch;
+  let capturedRequest;
+  globalThis.fetch = async (request) => {
+    capturedRequest = request;
+    return Response.json({ success: true });
+  };
+
+  try {
+    await worker.fetch(
+      new Request('https://admin.example.test/api/health/live', {
+        headers: { 'x-region': 'us-east-1' }
+      }),
+      { SUPABASE_API_BASE_URL: apiBaseUrl }
+    );
+    assert.equal(capturedRequest.headers.get('x-region'), null);
   } finally {
     globalThis.fetch = originalFetch;
   }

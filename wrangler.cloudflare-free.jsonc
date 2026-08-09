@@ -11,6 +11,7 @@
   },
   "vars": {
     "APP_PUBLIC_URL": "https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev",
-    "SUPABASE_API_BASE_URL": "https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api"
+    "SUPABASE_API_BASE_URL": "https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api",
+    "SUPABASE_FUNCTION_REGION": "ap-northeast-1"
   }
 }

@@ -195,6 +195,55 @@ describe('IdBusinessV2OptionsService', () => {
     expect(result.gift_card_name.total).toBe(0);
   });
 
+  it('loads several selector types with one current database query', async () => {
+    prisma.idBusinessV2Option.findMany.mockResolvedValue([
+      {
+        id: 'country-us',
+        type: 'country',
+        code: 'country_us',
+        name: '美国',
+        parentId: null,
+        countryOptionId: null,
+        businessAmount: null,
+        currencyCode: 'USD',
+        parent: null,
+        countryOption: null
+      },
+      {
+        id: 'status-normal',
+        type: 'id_status',
+        code: 'normal',
+        name: '正常',
+        parentId: null,
+        countryOptionId: null,
+        businessAmount: null,
+        currencyCode: null,
+        parent: null,
+        countryOption: null
+      }
+    ]);
+
+    const result = await service.listSelectorGroups(['country', 'id_status', 'id_supplier']);
+
+    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'active',
+          deletedAt: null,
+          OR: expect.arrayContaining([
+            expect.objectContaining({ type: 'country' }),
+            expect.objectContaining({ type: 'id_status' }),
+            expect.objectContaining({ type: 'id_supplier' })
+          ])
+        })
+      })
+    );
+    expect(result.country.items).toHaveLength(1);
+    expect(result.id_status.items).toHaveLength(1);
+    expect(result.id_supplier.items).toEqual([]);
+  });
+
   it('requires an active option of the exact requested type', async () => {
     const country = {
       id: '10000000-0000-4000-8000-000000000030',
