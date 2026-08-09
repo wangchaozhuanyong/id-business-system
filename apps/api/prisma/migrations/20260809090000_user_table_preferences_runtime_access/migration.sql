@@ -5,7 +5,16 @@ BEGIN
       ON TABLE public.id_business_v2_user_table_preferences
       TO id_business_v2_runtime;
 
-    IF NOT EXISTS (
+    -- Prisma-created tables do not enable RLS by default. Avoid an unnecessary
+    -- ACCESS EXCLUSIVE lock unless RLS has explicitly been enabled first.
+    IF EXISTS (
+      SELECT 1
+      FROM pg_class target
+      JOIN pg_namespace namespace ON namespace.oid = target.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND target.relname = 'id_business_v2_user_table_preferences'
+        AND target.relrowsecurity
+    ) AND NOT EXISTS (
       SELECT 1 FROM pg_policies
       WHERE schemaname = 'public'
         AND tablename = 'id_business_v2_user_table_preferences'
@@ -25,7 +34,14 @@ BEGIN
       ON TABLE public.id_business_v2_user_table_preferences
       TO id_business_v2_audit;
 
-    IF NOT EXISTS (
+    IF EXISTS (
+      SELECT 1
+      FROM pg_class target
+      JOIN pg_namespace namespace ON namespace.oid = target.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND target.relname = 'id_business_v2_user_table_preferences'
+        AND target.relrowsecurity
+    ) AND NOT EXISTS (
       SELECT 1 FROM pg_policies
       WHERE schemaname = 'public'
         AND tablename = 'id_business_v2_user_table_preferences'

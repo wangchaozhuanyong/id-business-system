@@ -177,6 +177,20 @@ npm run prisma:migrate:production -- \
 该固定脚本只会执行 `prisma migrate deploy`，不会把 `MIGRATION_DATABASE_URL` 注入通用命令、应用
 运行时或发布流程。
 
+若 `20260809090000_user_table_preferences_runtime_access` 曾因创建策略等待表锁而超时，必须先确认
+PostgreSQL 已回滚整段 migration，再在同一备份与确认门后追加固定参数：
+
+```bash
+npm run prisma:migrate:production -- \
+  --backup=/absolute/path/to/backups/postgres/pre-migration.dump \
+  --backup-sha256=<最新备份 SHA-256> \
+  --confirmation=MIGRATE_fjquufgbnxyocmuzltxi_<SHA-256 前 12 位> \
+  --resolve-rolled-back=20260809090000_user_table_preferences_runtime_access
+```
+
+脚本只接受这一条已审查 migration，并在标记回滚前核验失败记录唯一存在、运行角色权限和策略均未
+部分生效；任何状态不一致都会拒绝继续。
+
 仓库不提供通用生产清理入口。所有验收脚本继续同时校验 API 与数据库均为 loopback；若未来确需
 生产清理，必须新增专用固定脚本、只读预览清单、二次确认和最新备份指纹，禁止临时命令直接执行。
 
