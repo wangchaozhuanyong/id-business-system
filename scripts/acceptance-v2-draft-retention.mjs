@@ -13,7 +13,7 @@ const routeDraftChecks = [
   },
   {
     path: '/v2/accounts',
-    placeholder: 'ID账号、手机号、供应商'
+    placeholder: '搜索 ID 账号、手机号或供应商'
   },
   {
     path: '/v2/orders',
@@ -21,19 +21,15 @@ const routeDraftChecks = [
   },
   {
     path: '/v2/customers',
-    placeholder: '客户名称、手机号、微信'
+    placeholder: '客户名称、手机、微信、QQ、WhatsApp'
   },
   {
     path: '/v2/records/topups',
-    placeholder: '礼品卡尾号、ID、供应商'
+    placeholder: '卡片名称、礼品卡尾号、ID、供应商'
   },
   {
     path: '/v2/records/activations',
     placeholder: '订单、客户、业务、ID账号'
-  },
-  {
-    path: '/v2/exchange-rates',
-    placeholder: '批次编号、错误代码'
   },
   {
     path: '/v2/options',
@@ -206,7 +202,7 @@ async function main() {
     );
     await page.locator('[name="username"]').fill(username);
     await page.locator('[name="password"]').fill(password);
-    await page.getByRole('button', { name: '登录新版后台', exact: true }).click();
+    await page.locator('#v2-admin-login-form button[type="submit"]').click();
     await page.waitForURL('**/v2/workbench/order-entry', { timeout: HTTP_TIMEOUT_MS });
     await waitForPageReady(page);
 
@@ -287,7 +283,11 @@ async function waitForPageReady(page) {
 }
 
 function formItem(page, label) {
-  return page.locator('.el-form-item').filter({ hasText: label }).first();
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const exactLabel = page.locator('.el-form-item__label').filter({
+    hasText: new RegExp(`^\\s*${escapedLabel}(?:（[^）]+）)?\\s*$`)
+  });
+  return page.locator('.el-form-item').filter({ has: exactLabel }).first();
 }
 
 async function selectOption(page, label, optionText) {
@@ -312,8 +312,8 @@ async function verifyOrderEntryDraft(page, fixture) {
   await selectOption(page, '业务名称', fixture.serviceName);
   await selectOption(page, '客户', fixture.customerName);
 
-  await formItem(page, '客户网站账号').locator('input').fill('draft-switch@example.com');
-  await formItem(page, '实收金额').locator('input').fill('123.45');
+  await formItem(page, '客户业务账号').locator('input').fill('draft-switch@example.com');
+  await formItem(page, '售卖价格').locator('input').fill('123.45');
   await formItem(page, '备注').locator('textarea').fill('V2901 页面切换保留测试');
 
   const matchingResponse = await matchingResponsePromise;
@@ -370,10 +370,10 @@ async function assertOrderDraft(page, fixture) {
     '选择业务后没有按国家货币对应的业务金额自动带入'
   );
   assert.equal(
-    await formItem(page, '客户网站账号').locator('input').inputValue(),
+    await formItem(page, '客户业务账号').locator('input').inputValue(),
     'draft-switch@example.com'
   );
-  assert.equal(await formItem(page, '实收金额').locator('input').inputValue(), '123.45');
+  assert.equal(await formItem(page, '售卖价格').locator('input').inputValue(), '123.45');
   assert.equal(
     await formItem(page, '备注').locator('textarea').inputValue(),
     'V2901 页面切换保留测试'
@@ -386,8 +386,8 @@ async function assertOrderDraftCleared(page) {
   assert.equal(await formItem(page, '业务分类').locator('input').inputValue(), '');
   assert.equal(await formItem(page, '业务名称').locator('input').inputValue(), '');
   assert.equal(await formItem(page, '客户').locator('input').inputValue(), '');
-  assert.equal(await formItem(page, '客户网站账号').locator('input').inputValue(), '');
-  assert.equal(await formItem(page, '实收金额').locator('input').inputValue(), '');
+  assert.equal(await formItem(page, '客户业务账号').locator('input').inputValue(), '');
+  assert.equal(await formItem(page, '售卖价格').locator('input').inputValue(), '');
   assert.equal(await formItem(page, '消耗余额').locator('input').inputValue(), '');
   assert.equal(await formItem(page, '备注').locator('textarea').inputValue(), '');
 }

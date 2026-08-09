@@ -147,7 +147,7 @@ async function login(page) {
   await page.locator('#v2-admin-login-form').waitFor({ state: 'visible', timeout: timeoutMs });
   await page.locator('[name="username"]').fill(username);
   await page.locator('[name="password"]').fill(password);
-  await page.getByRole('button', { name: '登录新版后台', exact: true }).click();
+  await page.locator('#v2-admin-login-form button[type="submit"]').click();
   await page.waitForURL('**/v2/**', { timeout: timeoutMs });
   await page.locator('.v2-shell').waitFor({ state: 'visible', timeout: timeoutMs });
 }

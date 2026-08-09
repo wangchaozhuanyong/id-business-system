@@ -72,6 +72,10 @@ async function verifyColdAuth503(browserInstance, viewport) {
       await route.continue();
       return;
     }
+    if (request.method() === 'GET' && pathname.endsWith('/api/id-business-v2/branding/public')) {
+      await fulfillSuccess(route, {});
+      return;
+    }
     if (request.method() === 'GET' && pathname.endsWith('/api/auth/me')) {
       authCalls += 1;
       await fulfillAuthUnavailable(route);
