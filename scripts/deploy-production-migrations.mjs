@@ -10,6 +10,7 @@ import { Client } from 'pg';
 import { normalizeDatabaseConnection } from './lib/production-closure-audit.mjs';
 
 const EXPECTED_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
+const RECOVERABLE_ROLLED_BACK_MIGRATION = '20260809090000_user_table_preferences_runtime_access';
 const DATABASE_KEYS = [
   'DATABASE_URL',
   'DIRECT_URL',
@@ -47,6 +48,27 @@ for (const key of DATABASE_KEYS) delete environment[key];
 environment.DATABASE_URL = databaseUrl;
 environment.DIRECT_URL = databaseUrl;
 
+if (args.resolveRolledBack) {
+  await assertExpectedRolledBackMigration(databaseUrl, args.resolveRolledBack);
+  await run(
+    'npm',
+    [
+      'exec',
+      '--workspace',
+      '@apple-business/api',
+      '--',
+      'prisma',
+      'migrate',
+      'resolve',
+      '--rolled-back',
+      args.resolveRolledBack,
+      '--schema',
+      'prisma/schema.prisma'
+    ],
+    { environment }
+  );
+}
+
 await run('npm', ['run', 'prisma:migrate:deploy', '--workspace', '@apple-business/api'], {
   environment
 });
@@ -59,6 +81,7 @@ console.log(
       projectRef: EXPECTED_PROJECT_REF,
       backup: backupPath,
       backupSha256: args.backupSha256,
+      resolvedRolledBackMigration: args.resolveRolledBack ?? null,
       migrationsBefore: before,
       migrationsAfter: after
     },
@@ -75,6 +98,8 @@ function parseArgs(values) {
       result.backupSha256 = value.slice('--backup-sha256='.length).toLowerCase();
     } else if (value.startsWith('--confirmation=')) {
       result.confirmation = value.slice('--confirmation='.length);
+    } else if (value.startsWith('--resolve-rolled-back=')) {
+      result.resolveRolledBack = value.slice('--resolve-rolled-back='.length);
     } else throw new Error(`未知参数：${value}`);
   }
 
@@ -82,7 +107,61 @@ function parseArgs(values) {
   if (!result.backupSha256?.match(/^[a-f0-9]{64}$/)) {
     throw new Error('--backup-sha256 必须是 64 位 SHA-256');
   }
+  if (
+    result.resolveRolledBack !== undefined &&
+    result.resolveRolledBack !== RECOVERABLE_ROLLED_BACK_MIGRATION
+  ) {
+    throw new Error(`只允许恢复已审查的失败 migration：${RECOVERABLE_ROLLED_BACK_MIGRATION}`);
+  }
   return result;
+}
+
+async function assertExpectedRolledBackMigration(databaseUrl, migrationName) {
+  const client = new Client({
+    ...normalizeDatabaseConnection(databaseUrl),
+    application_name: 'id-v2-production-migration-recovery-gate'
+  });
+  await client.connect();
+  try {
+    const failed = await client.query(
+      `SELECT id
+       FROM public._prisma_migrations
+       WHERE migration_name = $1
+         AND finished_at IS NULL
+         AND rolled_back_at IS NULL`,
+      [migrationName]
+    );
+    if (failed.rowCount !== 1) {
+      throw new Error('目标 migration 不存在唯一、尚未处理的失败记录');
+    }
+
+    const state = (
+      await client.query(`
+        SELECT
+          CASE
+            WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'id_business_v2_runtime')
+            THEN has_table_privilege(
+              'id_business_v2_runtime',
+              'public.id_business_v2_user_table_preferences',
+              'SELECT'
+            )
+            ELSE NULL
+          END AS runtime_select,
+          (
+            SELECT count(*)::integer
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = 'id_business_v2_user_table_preferences'
+              AND policyname IN ('id_business_v2_runtime_access', 'id_business_v2_audit_read')
+          ) AS policy_count
+      `)
+    ).rows[0];
+    if (state.runtime_select !== false || state.policy_count !== 0) {
+      throw new Error('失败 migration 存在未预期的部分生效状态，拒绝自动标记回滚');
+    }
+  } finally {
+    await client.end().catch(() => undefined);
+  }
 }
 
 async function validateBackup(inputPath, expectedSha256) {

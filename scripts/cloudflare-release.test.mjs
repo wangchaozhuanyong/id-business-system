@@ -164,6 +164,11 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.match(source, /branch !== 'main'/);
   assert.match(source, /head !== originHead/);
   assert.match(source, /prisma:migrate:deploy/);
+  assert.match(source, /RECOVERABLE_ROLLED_BACK_MIGRATION/);
+  assert.match(source, /--resolve-rolled-back=/);
+  assert.match(source, /finished_at IS NULL/);
+  assert.match(source, /失败 migration 存在未预期的部分生效状态/);
+  assert.match(source, /'--rolled-back'/);
   assert.doesNotMatch(source, /shell:\s*true/);
 });
 
@@ -218,6 +223,7 @@ test('grants and continuously verifies production access to user table preferenc
   assert.match(migration, /GRANT SELECT[\s\S]*id_business_v2_audit/);
   assert.match(migration, /id_business_v2_runtime_access/);
   assert.match(migration, /id_business_v2_audit_read/);
+  assert.match(migration, /target\.relrowsecurity/);
   assert.match(provisioner, /'id_business_v2_user_table_preferences'/);
   assert.match(verifier, /'id_business_v2_user_table_preferences'/);
 });
