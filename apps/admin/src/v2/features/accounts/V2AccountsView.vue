@@ -1,14 +1,20 @@
 <template>
   <section class="v2-records-page">
     <V2PageContext
-      description="集中管理 ID 资料、余额成本、销售关系和敏感信息；状态变更与敏感资料访问均保留审计记录。"
+      :description="
+        showingLossRecords
+          ? '查看报损冻结、余额损失和财务冲回记录；恢复操作会保留原报损快照和审计记录。'
+          : '集中管理 ID 资料、余额成本、销售关系和敏感信息；状态变更与敏感资料访问均保留审计记录。'
+      "
       aria-label="ID 管理说明"
     >
       <template #meta>
-        <span>ID 资料库 · 账号默认脱敏展示</span>
+        <span>{{
+          showingLossRecords ? 'ID 报损记录 · 不可修改快照' : 'ID 资料库 · 账号默认脱敏展示'
+        }}</span>
       </template>
       <template #actions>
-        <div class="v2-account-command-panel__actions">
+        <div v-if="!showingLossRecords" class="v2-account-command-panel__actions">
           <AppButton variant="ghost" :disabled="page.loading" @click="page.loadAccounts">
             <el-icon><Refresh /></el-icon>
             刷新
@@ -35,8 +41,12 @@
     </V2PageContext>
 
     <section class="v2-account-command-panel" aria-label="ID 管理工具">
-      <V2AccountLifecycleTabs :model-value="page.query.lifecycle" @select="selectLifecycle" />
-      <div class="v2-account-filter-grid" aria-label="ID 筛选">
+      <V2AccountLifecycleTabs
+        :model-value="activeLifecycle"
+        :show-reported="page.canViewLosses"
+        @select="selectLifecycle"
+      />
+      <div v-if="!showingLossRecords" class="v2-account-filter-grid" aria-label="ID 筛选">
         <el-input
           v-model="page.query.keyword"
           class="v2-account-filter-grid__search"
@@ -101,7 +111,7 @@
         </AppButton>
       </div>
 
-      <footer class="v2-account-command-panel__footer">
+      <footer v-if="!showingLossRecords" class="v2-account-command-panel__footer">
         <p class="v2-records-security-note">
           <el-icon><Lock /></el-icon>
           敏感资料默认脱敏，查看、复制和导出都会写入审计日志。
@@ -111,6 +121,7 @@
       </footer>
 
       <input
+        v-if="!showingLossRecords"
         ref="importFileInput"
         class="v2-sr-only"
         type="file"
@@ -119,7 +130,7 @@
       />
     </section>
 
-    <div class="v2-account-list-heading">
+    <div v-if="!showingLossRecords" class="v2-account-list-heading">
       <div>
         <strong>{{ page.lifecycleLabel }} 列表</strong>
         <span>{{ page.hasLoadedOnce ? `共 ${page.total} 条结果` : '正在准备数据' }}</span>
@@ -128,6 +139,7 @@
     </div>
 
     <V2AsyncRegion
+      v-if="!showingLossRecords"
       skeleton="table"
       :loading="page.loading || page.isInitialLoading"
       :resolved="page.hasLoadedOnce"
@@ -399,7 +411,8 @@
       </section>
     </V2AsyncRegion>
 
-    <V2AccountDialogs :page="page" />
+    <V2AccountDialogs v-if="!showingLossRecords" :page="page" />
+    <V2AccountLossesView v-if="showingLossRecords" />
   </section>
 </template>
 
@@ -407,8 +420,7 @@
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import { computed, reactive } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, reactive, ref } from 'vue';
 import { Lock, MoreFilled, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
@@ -416,6 +428,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2AccountLossesView from '@/v2/features/account-losses/V2AccountLossesView.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
 import V2AccountLifecycleTabs from './components/V2AccountLifecycleTabs.vue';
@@ -427,9 +440,10 @@ import '@/v2/styles/records.css';
 import '@/v2/styles/accounts.css';
 
 const accountPage = useAccountsPage();
-const router = useRouter();
 const importFileInput = accountPage.importFileInput;
 const page = reactive(accountPage);
+const activeLifecycle = ref<V2AccountLifecycle>(page.query.lifecycle);
+const showingLossRecords = computed(() => activeLifecycle.value === 'reported');
 const sourceOrderHelp =
   '这个 ID 被订单卖出后，系统会在这里显示对应订单号；未卖出或没有关联订单时显示空横线。';
 const emptyTitle = computed(() => `暂无${page.lifecycleLabel}`);
@@ -445,9 +459,11 @@ const emptyDescription = computed(
 
 function selectLifecycle(lifecycle: V2AccountLifecycle) {
   if (lifecycle === 'reported') {
-    void router.push('/v2/records/account-losses');
+    if (!page.canViewLosses) return;
+    activeLifecycle.value = lifecycle;
     return;
   }
+  activeLifecycle.value = lifecycle;
   page.changeLifecycle(lifecycle);
 }
 

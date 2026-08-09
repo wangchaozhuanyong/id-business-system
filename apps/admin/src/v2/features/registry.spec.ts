@@ -124,6 +124,16 @@ describe('V2 feature registry', () => {
     expect(dashboard?.tables.length).toBeGreaterThan(0);
   });
 
+  it('keeps account loss records routable but out of standalone navigation', () => {
+    const accountLosses = v2FeatureRegistry.find((feature) => feature.key === 'account-losses');
+
+    expect(accountLosses).toMatchObject({
+      navigation: false,
+      permission: 'apple.balance.view',
+      freshnessPolicy: 'event-driven'
+    });
+  });
+
   it('registers business monitoring as an administrator-only real module', () => {
     const businessMonitoring = v2FeatureRegistry.find(
       (feature) => feature.key === 'business-monitoring'
@@ -182,13 +192,7 @@ describe('V2 feature registry', () => {
     );
 
     expect(navigation['工作台']).toEqual(['续费操作', '订单录入', 'ID加额', 'ID管理']);
-    expect(navigation['业务中心']).toEqual([
-      '订单管理',
-      '客户记录',
-      '加卡记录',
-      'ID报损记录',
-      '开通记录'
-    ]);
+    expect(navigation['业务中心']).toEqual(['订单管理', '客户记录', '加卡记录', '开通记录']);
     expect(navigation['财务记账']).toEqual(['钱包账户', '开支记账', '经营分析']);
     expect(navigation['数据中心']).toEqual(['数据治理']);
     expect(navigation).not.toHaveProperty('记录中心');

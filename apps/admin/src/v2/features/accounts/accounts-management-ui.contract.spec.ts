@@ -3,6 +3,8 @@ import view from './V2AccountsView.vue?raw';
 import manifest from './manifest.ts?raw';
 import accountImport from './account-import.ts?raw';
 import rowActions from './components/V2AccountRowActions.vue?raw';
+import lifecycleTabs from './components/V2AccountLifecycleTabs.vue?raw';
+import accountLossesManifest from '@/v2/features/account-losses/manifest.ts?raw';
 import runtimeRegistry from '@/v2/features/runtimeRegistry.ts?raw';
 
 describe('ID management page UI contract', () => {
@@ -29,7 +31,15 @@ describe('ID management page UI contract', () => {
   it('uses lifecycle shortcuts and omits destructive ID deletion', () => {
     expect(view).toContain('<V2AccountLifecycleTabs');
     expect(view).toContain('page.openDisabledReason');
-    expect(view).toContain("router.push('/v2/records/account-losses')");
+    expect(view).toContain('<V2AccountLossesView v-if="showingLossRecords"');
+    expect(view).toContain("activeLifecycle.value === 'reported'");
+    expect(view).not.toContain("router.push('/v2/records/account-losses')");
+    expect(lifecycleTabs).toContain('props.showReported');
+    expect(accountLossesManifest).toContain('navigation: false');
+    expect(runtimeRegistry).toContain("key: 'account-losses'");
+    expect(runtimeRegistry).toContain(
+      "route: '/v2/records/account-losses',\n    navigation: false"
+    );
     expect(rowActions).toContain("props.saleState !== 'sold'");
     expect(rowActions).not.toContain('删除 ID');
     expect(view).not.toContain('page.openDelete');

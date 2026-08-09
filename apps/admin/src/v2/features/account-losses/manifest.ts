@@ -6,6 +6,7 @@ export const accountLossesFeature = defineV2Feature({
   title: 'ID报损记录',
   group: '业务中心',
   route: '/v2/records/account-losses',
+  navigation: false,
   sourceSheet: 'ID报损记录',
   permission: 'apple.balance.view',
   kind: 'list',

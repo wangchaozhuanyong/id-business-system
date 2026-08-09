@@ -82,6 +82,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     title: 'ID报损记录',
     group: '业务中心',
     route: '/v2/records/account-losses',
+    navigation: false,
     permission: 'apple.balance.view',
     kind: 'list',
     freshnessPolicy: 'event-driven',
