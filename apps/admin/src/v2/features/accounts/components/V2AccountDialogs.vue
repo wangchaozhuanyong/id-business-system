@@ -89,8 +89,9 @@
           <el-option
             v-for="option in page.supplierOptions"
             :key="option.id"
-            :label="option.name"
+            :label="option.status === 'disabled' ? `${option.name}（已停用）` : option.name"
             :value="option.id"
+            :disabled="option.status === 'disabled'"
           />
         </el-select>
       </el-form-item>
