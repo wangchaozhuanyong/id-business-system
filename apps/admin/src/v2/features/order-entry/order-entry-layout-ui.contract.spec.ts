@@ -12,6 +12,9 @@ function sliceBetween(source: string, start: string, end: string) {
 describe('order entry three-module UI contract', () => {
   it('groups the requested fields into paired columns without changing their bindings', () => {
     const businessGroup = sliceBetween(view, 'title="业务与对象"', 'title="客户与结算"');
+    const businessColumns = businessGroup
+      .split('<div class="v2-order-entry-form-column">')
+      .slice(1);
     const settlementGroup = sliceBetween(view, 'title="客户与结算"', 'title="周期与备注"');
     const periodGroup = sliceBetween(view, 'title="周期与备注"', '<V2OrderEntrySubmitBar');
 
@@ -21,6 +24,10 @@ describe('order entry three-module UI contract', () => {
     for (const binding of ['form.countryId', 'form.accountId', 'idSelectionMode']) {
       expect(businessGroup).toContain(binding);
     }
+    expect(businessColumns[0]).toContain('label="国家" prop="countryId"');
+    expect(businessColumns[0]).not.toContain('label="业务分类" prop="categoryId"');
+    expect(businessColumns[1]).toContain('label="业务分类" prop="categoryId"');
+    expect(businessColumns[1]).not.toContain('label="国家" prop="countryId"');
     expect(settlementGroup).toContain('label="结算平台"');
     expect(settlementGroup).toContain('label="平台订单号"');
     expect(settlementGroup).toContain('label="客户业务账号"');
