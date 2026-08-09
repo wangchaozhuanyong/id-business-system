@@ -2,12 +2,10 @@
   <el-tabs v-model="page.activeTab" class="v2-exchange-tabs">
     <el-tab-pane label="自动采集记录" name="automatic">
       <section class="v2-exchange-toolbar" aria-label="自动采集记录筛选">
-        <el-input
-          :model-value="page.records.length ? `${page.recordTotal} 条自动快照` : ''"
-          readonly
-          placeholder="自动快照记录"
-          aria-label="自动快照记录数量"
-        />
+        <div class="v2-exchange-toolbar__summary" aria-live="polite">
+          <span>自动快照</span>
+          <strong>{{ page.recordResolved ? `${page.recordTotal} 条` : '—' }}</strong>
+        </div>
         <el-select
           v-model="page.recordQuery.currency"
           clearable
@@ -52,7 +50,12 @@
           aria-label="筛选采集日期"
           @change="page.searchRecords"
         />
-        <AppButton icon-only title="搜索" @click="page.searchRecords">
+        <AppButton
+          class="v2-exchange-toolbar__search"
+          icon-only
+          title="搜索"
+          @click="page.searchRecords"
+        >
           <el-icon><Search /></el-icon>
         </AppButton>
       </section>
@@ -233,7 +236,12 @@
           end-placeholder="记录结束"
           @change="page.searchManual"
         />
-        <AppButton icon-only title="搜索" @click="page.searchManual">
+        <AppButton
+          class="v2-exchange-toolbar__search"
+          icon-only
+          title="搜索"
+          @click="page.searchManual"
+        >
           <el-icon><Search /></el-icon>
         </AppButton>
       </section>
