@@ -202,6 +202,7 @@ describe('IdBusinessV2OptionsService', () => {
         type: 'country',
         code: 'country_us',
         name: '美国',
+        status: 'active',
         parentId: null,
         countryOptionId: null,
         businessAmount: null,
@@ -214,6 +215,7 @@ describe('IdBusinessV2OptionsService', () => {
         type: 'id_status',
         code: 'normal',
         name: '正常',
+        status: 'active',
         parentId: null,
         countryOptionId: null,
         businessAmount: null,
@@ -240,8 +242,63 @@ describe('IdBusinessV2OptionsService', () => {
       })
     );
     expect(result.country.items).toHaveLength(1);
+    expect(result.country.items[0]).toMatchObject({ status: 'active' });
     expect(result.id_status.items).toHaveLength(1);
     expect(result.id_supplier.items).toEqual([]);
+  });
+
+  it('includes disabled selectors only when explicitly requested', async () => {
+    prisma.idBusinessV2Option.findMany.mockResolvedValue([
+      {
+        id: 'supplier-active',
+        type: 'id_supplier',
+        code: 'supplier_active',
+        name: '启用供应商',
+        status: 'active',
+        parentId: null,
+        countryOptionId: null,
+        businessAmount: null,
+        currencyCode: null,
+        parent: null,
+        countryOption: null
+      },
+      {
+        id: 'supplier-disabled',
+        type: 'id_supplier',
+        code: 'supplier_disabled',
+        name: '停用供应商',
+        status: 'disabled',
+        parentId: null,
+        countryOptionId: null,
+        businessAmount: null,
+        currencyCode: null,
+        parent: null,
+        countryOption: null
+      }
+    ]);
+
+    const result = await service.listSelectors('id_supplier', undefined, 'true');
+
+    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: 'id_supplier',
+          status: undefined,
+          deletedAt: null
+        })
+      })
+    );
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: 'supplier-active', status: 'active' }),
+      expect.objectContaining({ id: 'supplier-disabled', status: 'disabled' })
+    ]);
+  });
+
+  it('rejects invalid include-disabled selector flags', async () => {
+    await expect(service.listSelectors('id_supplier', undefined, 'yes')).rejects.toThrow(
+      '包含停用选项参数格式无效'
+    );
+    expect(prisma.idBusinessV2Option.findMany).not.toHaveBeenCalled();
   });
 
   it('requires an active option of the exact requested type', async () => {

@@ -3,7 +3,9 @@ import view from './V2AccountsView.vue?raw';
 import manifest from './manifest.ts?raw';
 import accountImport from './account-import.ts?raw';
 import rowActions from './components/V2AccountRowActions.vue?raw';
+import dialogs from './components/V2AccountDialogs.vue?raw';
 import lifecycleTabs from './components/V2AccountLifecycleTabs.vue?raw';
+import createOptions from './useAccountCreateOptions.ts?raw';
 import accountLossesManifest from '@/v2/features/account-losses/manifest.ts?raw';
 import runtimeRegistry from '@/v2/features/runtimeRegistry.ts?raw';
 
@@ -43,5 +45,12 @@ describe('ID management page UI contract', () => {
     expect(rowActions).toContain("props.saleState !== 'sold'");
     expect(rowActions).not.toContain('删除 ID');
     expect(view).not.toContain('page.openDelete');
+  });
+
+  it('shows configured ID suppliers while preventing selection of disabled items', () => {
+    expect(createOptions).toContain('includeDisabled: true');
+    expect(dialogs).toContain("option.status === 'disabled'");
+    expect(dialogs).toContain('（已停用）');
+    expect(dialogs).toContain(':disabled="option.status === \'disabled\'"');
   });
 });

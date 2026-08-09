@@ -16,6 +16,7 @@ import { createV2QueryKey, getV2QueryData, useV2ModuleQuery } from '@/v2/composa
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2OptionsApi } from './api';
+import { resolveCountryCurrencyAutoMatch } from './countryCurrency';
 import type {
   CreateV2OptionInput,
   V2Option,
@@ -104,6 +105,7 @@ export function useOptionsPage() {
     'HKD',
     'SGD',
     'MYR',
+    'PHP',
     'EUR',
     'GBP',
     'CAD',
@@ -112,6 +114,24 @@ export function useOptionsPage() {
     'TWD',
     'THB'
   ] as const;
+  let autoMatchedCountryCurrencyCode = '';
+
+  watch(
+    () => [form.type, form.name] as const,
+    ([type, name]) => {
+      if (type !== 'country' || editingItem.value) {
+        autoMatchedCountryCurrencyCode = '';
+        return;
+      }
+      const match = resolveCountryCurrencyAutoMatch(
+        name,
+        form.currencyCode,
+        autoMatchedCountryCurrencyCode
+      );
+      form.currencyCode = match.currencyCode;
+      autoMatchedCountryCurrencyCode = match.autoMatchedCurrencyCode;
+    }
+  );
 
   const activeTypeDefinition = computed(() =>
     typeDefinitions.value.find((item) => item.type === renderedType.value)
@@ -298,6 +318,7 @@ export function useOptionsPage() {
 
   async function openCreate() {
     editingItem.value = null;
+    autoMatchedCountryCurrencyCode = '';
     Object.assign(form, createEmptyForm(), { type: selectedType.value });
     drawerVisible.value = true;
     await loadRelatedOptions();
@@ -306,6 +327,7 @@ export function useOptionsPage() {
   async function openEdit(item: V2Option) {
     if (item.isSystem) return;
     editingItem.value = item;
+    autoMatchedCountryCurrencyCode = '';
     Object.assign(form, {
       type: item.type,
       name: item.name,

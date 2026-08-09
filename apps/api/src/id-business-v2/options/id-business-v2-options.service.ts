@@ -69,8 +69,8 @@ export class IdBusinessV2OptionsService {
     return this.query.listTypes();
   }
 
-  listSelectors(typeValue?: string, parentIdValue?: string) {
-    return this.query.listSelectors(typeValue, parentIdValue);
+  listSelectors(typeValue?: string, parentIdValue?: string, includeDisabledValue?: string) {
+    return this.query.listSelectors(typeValue, parentIdValue, includeDisabledValue);
   }
 
   listSelectorGroups<T extends IdBusinessV2OptionType>(typeValues: readonly T[]) {

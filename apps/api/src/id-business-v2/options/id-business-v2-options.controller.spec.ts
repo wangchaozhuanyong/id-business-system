@@ -66,3 +66,16 @@ describe('IdBusinessV2OptionsController bootstrap', () => {
     expect(result.generatedAt).toEqual(expect.any(String));
   });
 });
+
+describe('IdBusinessV2OptionsController selectors', () => {
+  it('passes the explicit include-disabled flag to the selector query', async () => {
+    const optionsService = {
+      listSelectors: vi.fn(async () => ({ items: [] }))
+    };
+    const controller = new IdBusinessV2OptionsController(optionsService as never);
+
+    await controller.listSelectors('id_supplier', undefined, 'true');
+
+    expect(optionsService.listSelectors).toHaveBeenCalledWith('id_supplier', undefined, 'true');
+  });
+});

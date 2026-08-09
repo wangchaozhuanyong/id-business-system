@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import {
   ID_BUSINESS_V2_OPTION_TYPES,
@@ -84,14 +84,16 @@ export class IdBusinessV2OptionQuery {
     };
   }
 
-  async listSelectors(typeValue?: string, parentIdValue?: string) {
+  async listSelectors(typeValue?: string, parentIdValue?: string, includeDisabledValue?: string) {
     const type = parseOptionType(typeValue, true);
     const parentId = normalizeNullableString(parentIdValue);
+    const includeDisabled = this.parseIncludeDisabled(includeDisabledValue);
     if (!parentId) {
+      if (includeDisabled) return this.listSelectorsUncached(type, null, true);
       const groups = await this.listSelectorGroups([type]);
       return groups[type];
     }
-    return this.listSelectorsUncached(type, parentId);
+    return this.listSelectorsUncached(type, parentId, includeDisabled);
   }
 
   async listSelectorGroups<T extends IdBusinessV2OptionType>(
@@ -133,11 +135,21 @@ export class IdBusinessV2OptionQuery {
     };
   }
 
-  private async listSelectorsUncached(type: IdBusinessV2OptionType, parentId: string | null) {
-    const items = await this.repository.listSelectors(type, parentId);
+  private async listSelectorsUncached(
+    type: IdBusinessV2OptionType,
+    parentId: string | null,
+    includeDisabled = false
+  ) {
+    const items = await this.repository.listSelectors(type, parentId, includeDisabled);
     return {
       items: items.map((item) => this.mapSelector(item))
     };
+  }
+
+  private parseIncludeDisabled(value: string | undefined) {
+    if (value === undefined || value === '' || value === 'false') return false;
+    if (value === 'true') return true;
+    throw new BadRequestException('包含停用选项参数格式无效');
   }
 
   private mapSelector(item: OptionSelectorRow) {
