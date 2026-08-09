@@ -1,7 +1,7 @@
 <template>
   <nav class="v2-account-lifecycle-tabs" aria-label="ID 快捷分类">
     <button
-      v-for="option in options"
+      v-for="option in visibleOptions"
       :key="option.value"
       type="button"
       :class="{ 'is-active': modelValue === option.value }"
@@ -14,9 +14,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { V2AccountLifecycle } from '../contracts';
 
-defineProps<{ modelValue: V2AccountLifecycle }>();
+const props = defineProps<{
+  modelValue: V2AccountLifecycle;
+  showReported: boolean;
+}>();
 
 const emit = defineEmits<{
   select: [value: V2AccountLifecycle];
@@ -28,4 +32,8 @@ const options: Array<{ value: V2AccountLifecycle; label: string }> = [
   { value: 'sold', label: '已售出' },
   { value: 'reported', label: '已报损' }
 ];
+
+const visibleOptions = computed(() =>
+  options.filter((option) => option.value !== 'reported' || props.showReported)
+);
 </script>
