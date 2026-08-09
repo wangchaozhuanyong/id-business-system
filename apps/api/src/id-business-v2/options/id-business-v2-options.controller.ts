@@ -73,8 +73,12 @@ export class IdBusinessV2OptionsController {
 
   @Get('selectors')
   @RequirePermissions()
-  listSelectors(@Query('type') type?: string, @Query('parentId') parentId?: string) {
-    return this.optionsService.listSelectors(type, parentId);
+  listSelectors(
+    @Query('type') type?: string,
+    @Query('parentId') parentId?: string,
+    @Query('includeDisabled') includeDisabled?: string
+  ) {
+    return this.optionsService.listSelectors(type, parentId, includeDisabled);
   }
 
   @Get('business-tree')

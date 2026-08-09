@@ -22,6 +22,11 @@ interface V2OptionListRequestOptions extends ApiRequestOptions {
   useSharedCache?: boolean;
 }
 
+interface V2OptionSelectorRequestOptions extends ApiRequestOptions {
+  force?: boolean;
+  includeDisabled?: boolean;
+}
+
 export const idBusinessV2OptionsApi = {
   list(params: V2OptionListQuery, options: V2OptionListRequestOptions = {}) {
     if (options.useSharedCache === false) {
@@ -87,18 +92,23 @@ export const idBusinessV2OptionsApi = {
         request<V2OptionTypesResult>(http.get('/id-business-v2/options/types', { signal }))
     });
   },
-  listSelectors(type: V2OptionType, parentId?: string, options: V2OptionListRequestOptions = {}) {
+  listSelectors(
+    type: V2OptionType,
+    parentId?: string,
+    options: V2OptionSelectorRequestOptions = {}
+  ) {
     return fetchV2Query(
       {
         scope: 'options-reference',
-        key: `selectors:${type}:${parentId ?? ''}`,
+        key: `selectors:${type}:${parentId ?? ''}:${options.includeDisabled ? 'all' : 'active'}`,
         freshnessPolicy: 'event-driven',
         query: ({ signal }: V2QueryContext) =>
           request<{ items: V2OptionSelector[] }>(
             http.get('/id-business-v2/options/selectors', {
               params: {
                 type,
-                parentId
+                parentId,
+                includeDisabled: options.includeDisabled || undefined
               },
               signal
             })

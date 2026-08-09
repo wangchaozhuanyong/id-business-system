@@ -91,6 +91,7 @@ export interface OptionSelectorRow {
   type: IdBusinessV2OptionType;
   code: string;
   name: string;
+  status: IdBusinessV2OptionStatus;
   parentId: string | null;
   countryOptionId: string | null;
   businessAmount: import('../../runtime/public-api').Amount4 | null;
@@ -228,12 +229,16 @@ export class IdBusinessV2OptionRepository {
     };
   }
 
-  async listSelectors(type: IdBusinessV2OptionType, parentId: string | null) {
+  async listSelectors(
+    type: IdBusinessV2OptionType,
+    parentId: string | null,
+    includeDisabled = false
+  ) {
     const rows = await this.prisma.idBusinessV2Option.findMany({
       where: {
         type,
         parentId: parentId ?? undefined,
-        status: 'active',
+        status: includeDisabled ? undefined : 'active',
         deletedAt: null,
         businessAmount: type === 'service' ? { gt: 0 } : undefined,
         parent:
@@ -257,6 +262,7 @@ export class IdBusinessV2OptionRepository {
         type: true,
         code: true,
         name: true,
+        status: true,
         parentId: true,
         countryOptionId: true,
         businessAmount: true,
@@ -308,6 +314,7 @@ export class IdBusinessV2OptionRepository {
         type: true,
         code: true,
         name: true,
+        status: true,
         parentId: true,
         countryOptionId: true,
         businessAmount: true,
