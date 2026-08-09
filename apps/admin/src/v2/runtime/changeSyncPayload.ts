@@ -8,11 +8,14 @@ import {
 
 export function parseV2ChangeEvent(payload: unknown): V2ChangeEvent | null {
   if (!payload || typeof payload !== 'object') return null;
-  const candidate = payload as Partial<V2ChangeEvent>;
+  const candidate = payload as Partial<V2ChangeEvent> & { id?: unknown };
   const rootKeys = Object.keys(candidate);
   if (
-    rootKeys.length !== 4 ||
-    !rootKeys.every((key) => ['schemaVersion', 'eventId', 'occurredAt', 'scopes'].includes(key)) ||
+    (rootKeys.length !== 4 && rootKeys.length !== 5) ||
+    !rootKeys.every((key) =>
+      ['id', 'schemaVersion', 'eventId', 'occurredAt', 'scopes'].includes(key)
+    ) ||
+    ('id' in candidate && (typeof candidate.id !== 'string' || !candidate.id)) ||
     candidate.schemaVersion !== 1 ||
     typeof candidate.eventId !== 'string' ||
     !candidate.eventId ||

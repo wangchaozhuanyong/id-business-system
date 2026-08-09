@@ -366,12 +366,14 @@ export class SupabaseAuthService {
 
   private getConfig() {
     const url = this.configService.get<string>('SUPABASE_URL');
-    const anonKey =
-      this.configService.get<string>('SUPABASE_ANON_KEY') ??
-      this.configService.get<string>('SUPABASE_PUBLISHABLE_KEY');
-    const serviceRoleKey =
-      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') ??
-      this.configService.get<string>('SUPABASE_SECRET_KEY');
+    const anonKey = this.firstConfiguredValue(
+      this.configService.get<string>('SUPABASE_ANON_KEY'),
+      this.configService.get<string>('SUPABASE_PUBLISHABLE_KEY')
+    );
+    const serviceRoleKey = this.firstConfiguredValue(
+      this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY'),
+      this.configService.get<string>('SUPABASE_SECRET_KEY')
+    );
 
     if (!url || !anonKey || !serviceRoleKey) {
       throw new ServiceUnavailableException('Supabase Auth 环境变量尚未完整配置。');
@@ -382,6 +384,10 @@ export class SupabaseAuthService {
       anonKey,
       serviceRoleKey
     };
+  }
+
+  private firstConfiguredValue(...values: Array<string | undefined>) {
+    return values.map((value) => value?.trim()).find(Boolean);
   }
 
   private toLoginResult(session: Session, identity: SupabaseSessionIdentity): SupabaseLoginResult {

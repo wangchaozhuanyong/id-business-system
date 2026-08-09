@@ -68,7 +68,9 @@ try {
     }
   });
 
+  const realtimeReady = waitForRealtimeSubscription(page);
   await login(page);
+  await realtimeReady;
   await navigate(page, '/v2/orders');
   const ordersBeforeActiveChange = requests.orders;
   await publishChange(['orders']);
@@ -108,7 +110,7 @@ try {
   assert.equal(requests.orders, ordersBeforeOffline + 1, '漏事件补偿没有把订单 scope 标记为 dirty');
 
   await navigate(page, '/v2/workbench/order-entry');
-  const draftInput = page.locator('input[placeholder="选填"]').first();
+  const draftInput = page.locator('.v2-order-entry-remark-item textarea');
   await draftInput.fill('realtime-draft-must-survive');
   await publishChange(['orders']);
   await page.waitForTimeout(500);
@@ -150,6 +152,41 @@ async function login(page) {
   await page.locator('#v2-admin-login-form button[type="submit"]').click();
   await page.waitForURL('**/v2/**', { timeout: timeoutMs });
   await page.locator('.v2-shell').waitFor({ state: 'visible', timeout: timeoutMs });
+  await page.waitForLoadState('networkidle');
+}
+
+function waitForRealtimeSubscription(page) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      page.off('websocket', handleWebSocket);
+      reject(new Error('等待私有 Realtime 频道订阅超时'));
+    }, timeoutMs);
+
+    function handleWebSocket(webSocket) {
+      webSocket.on('framereceived', ({ payload }) => {
+        let message;
+        try {
+          message = JSON.parse(String(payload));
+        } catch {
+          return;
+        }
+        const topic = Array.isArray(message) ? message[2] : message?.topic;
+        const event = Array.isArray(message) ? message[3] : message?.event;
+        const status = Array.isArray(message) ? message[4]?.status : message?.payload?.status;
+        if (
+          topic === 'realtime:id-business-v2:changes' &&
+          event === 'phx_reply' &&
+          status === 'ok'
+        ) {
+          clearTimeout(timer);
+          page.off('websocket', handleWebSocket);
+          resolve();
+        }
+      });
+    }
+
+    page.on('websocket', handleWebSocket);
+  });
 }
 
 async function navigate(page, path) {

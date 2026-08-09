@@ -54,6 +54,7 @@ describe('SupabaseAuthService', () => {
     loginSessionIdMissing?: boolean;
     mfaVerificationFails?: boolean;
     verifiedFactor?: boolean;
+    emptyLegacySupabaseKeys?: boolean;
   }) {
     const passwordHash = await hashPassword(options?.storedPassword ?? password);
     const identity = {
@@ -77,8 +78,10 @@ describe('SupabaseAuthService', () => {
         const values: Record<string, string> = {
           AUTH_PROVIDER: 'supabase',
           SUPABASE_URL: 'https://project.supabase.co',
-          SUPABASE_ANON_KEY: 'anon-key',
-          SUPABASE_SERVICE_ROLE_KEY: 'service-role-key'
+          SUPABASE_ANON_KEY: options?.emptyLegacySupabaseKeys ? '' : 'anon-key',
+          SUPABASE_PUBLISHABLE_KEY: 'publishable-key',
+          SUPABASE_SERVICE_ROLE_KEY: options?.emptyLegacySupabaseKeys ? '' : 'service-role-key',
+          SUPABASE_SECRET_KEY: 'secret-key'
         };
         return values[key];
       })
@@ -179,7 +182,9 @@ describe('SupabaseAuthService', () => {
     };
 
     vi.mocked(createClient).mockImplementation((_url, key) => {
-      return (key === 'service-role-key' ? serviceClient : publicClient) as never;
+      return (
+        key === 'service-role-key' || key === 'secret-key' ? serviceClient : publicClient
+      ) as never;
     });
 
     return {
@@ -193,6 +198,23 @@ describe('SupabaseAuthService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('uses non-empty publishable and secret keys when legacy key variables are blank', async () => {
+    const { service } = await createService({ emptyLegacySupabaseKeys: true });
+
+    await expect(service.login('admin', password)).resolves.toMatchObject({ userId });
+
+    expect(createClient).toHaveBeenCalledWith(
+      'https://project.supabase.co',
+      'publishable-key',
+      expect.any(Object)
+    );
+    expect(createClient).toHaveBeenCalledWith(
+      'https://project.supabase.co',
+      'secret-key',
+      expect.any(Object)
+    );
   });
 
   it('migrates the stored password once and then signs in through Supabase Auth', async () => {

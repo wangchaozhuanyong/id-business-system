@@ -40,6 +40,23 @@ describe('V2 change sync payload validation', () => {
     });
   });
 
+  it('accepts and strips the transport id added by Supabase database Broadcast', () => {
+    expect(
+      parseV2ChangeEvent({
+        id: '11111111-1111-4111-8111-111111111111',
+        schemaVersion: 1,
+        eventId: 'event-1',
+        occurredAt: '2026-07-29T00:00:00.000Z',
+        scopes: [{ scope: 'orders', version: '2' }]
+      })
+    ).toEqual({
+      schemaVersion: 1,
+      eventId: 'event-1',
+      occurredAt: '2026-07-29T00:00:00.000Z',
+      scopes: [{ scope: 'orders', version: '2' }]
+    });
+  });
+
   it('rejects unknown scopes, invalid versions and business row fields', () => {
     expect(
       parseV2ChangeEvent({
@@ -63,6 +80,15 @@ describe('V2 change sync payload validation', () => {
         eventId: 'event-1',
         occurredAt: '2026-07-29T00:00:00.000Z',
         scopes: [{ scope: 'orders', version: '2', phone: 'sensitive' }]
+      })
+    ).toBeNull();
+    expect(
+      parseV2ChangeEvent({
+        id: { unexpected: true },
+        schemaVersion: 1,
+        eventId: 'event-1',
+        occurredAt: '2026-07-29T00:00:00.000Z',
+        scopes: [{ scope: 'orders', version: '2' }]
       })
     ).toBeNull();
   });
