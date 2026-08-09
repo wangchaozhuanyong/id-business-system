@@ -168,8 +168,9 @@
 .v2-exchange-toolbar {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(190px, 1fr) 130px 140px minmax(250px, 320px) 36px;
+  grid-template-columns: minmax(180px, 220px) 130px 140px 140px minmax(260px, 300px) 36px;
   align-items: center;
+  justify-content: start;
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--v2-border);
@@ -178,7 +179,35 @@
 }
 
 .v2-exchange-toolbar--manual {
-  grid-template-columns: minmax(220px, 1fr) minmax(250px, 320px) 36px;
+  grid-template-columns: minmax(220px, 1fr) 130px minmax(260px, 300px) 36px;
+}
+
+.v2-exchange-toolbar__summary {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 11px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface-muted);
+}
+
+.v2-exchange-toolbar__summary > span {
+  overflow: hidden;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-exchange-toolbar__summary > strong {
+  color: var(--v2-text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .v2-exchange-list {
@@ -327,12 +356,25 @@
   }
 
   .v2-exchange-toolbar {
-    grid-template-columns: minmax(180px, 1fr) 130px 140px 36px;
+    grid-template-columns: minmax(180px, 1fr) 130px 140px 140px 36px;
   }
 
   .v2-exchange-toolbar .el-date-editor {
     grid-column: 1 / -1;
     width: 100%;
+  }
+
+  .v2-exchange-toolbar__search {
+    grid-column: 5;
+    grid-row: 1;
+  }
+
+  .v2-exchange-toolbar--manual {
+    grid-template-columns: minmax(220px, 1fr) 130px 36px;
+  }
+
+  .v2-exchange-toolbar--manual .v2-exchange-toolbar__search {
+    grid-column: 3;
   }
 }
 
@@ -374,6 +416,13 @@
 
   .v2-exchange-toolbar .el-date-editor {
     grid-column: auto;
+  }
+
+  .v2-exchange-toolbar__search,
+  .v2-exchange-toolbar--manual .v2-exchange-toolbar__search {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: end;
   }
 
   .v2-exchange-table {
