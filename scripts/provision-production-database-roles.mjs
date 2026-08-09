@@ -18,6 +18,7 @@ const ACCESS_CHECK_TABLES = [
   'permissions',
   'id_business_v2_options',
   'id_business_v2_branding_settings',
+  'id_business_v2_user_table_preferences',
   'id_business_v2_accounts',
   'id_business_v2_orders',
   'id_business_v2_finance_journals'
@@ -40,6 +41,7 @@ const RUNTIME_TABLES = [
   'v2_auth_identities',
   'id_business_v2_options',
   'id_business_v2_branding_settings',
+  'id_business_v2_user_table_preferences',
   'id_business_v2_customers',
   'id_business_v2_customer_tags',
   'id_business_v2_customer_services',

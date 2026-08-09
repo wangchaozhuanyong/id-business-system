@@ -10,6 +10,7 @@ const tables = [
   'roles',
   'permissions',
   'id_business_v2_options',
+  'id_business_v2_user_table_preferences',
   'id_business_v2_customers',
   'id_business_v2_accounts',
   'id_business_v2_gift_cards',

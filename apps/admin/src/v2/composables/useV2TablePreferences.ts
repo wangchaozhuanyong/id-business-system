@@ -1,6 +1,9 @@
 import { computed, readonly, ref } from 'vue';
 import type { V2TablePreference } from '@apple-business/shared';
+import { isApiError } from '@/api/apiError';
 import { idBusinessV2TablePreferencesApi } from '@/v2/api/tablePreferences';
+
+const SERVER_FAILURE_COOLDOWN_MS = 30_000;
 
 const preferencesByTable = ref<Record<string, readonly string[]>>({});
 const activeUserId = ref('');
@@ -9,6 +12,7 @@ const loading = ref(false);
 const loadError = ref<unknown>(null);
 let loadingPromise: Promise<void> | null = null;
 let identityRevision = 0;
+let loadRetryAt = 0;
 
 export const v2TablePreferences = readonly(preferencesByTable);
 export const v2TablePreferencesReady = computed(
@@ -25,10 +29,12 @@ export async function ensureV2TablePreferences(userId: string) {
   switchActiveUser(normalizedUserId);
   if (loadedUserId.value === normalizedUserId) return;
   if (loadingPromise) return loadingPromise;
+  if (loadError.value && Date.now() < loadRetryAt) throw loadError.value;
 
   const revision = identityRevision;
   loading.value = true;
   loadError.value = null;
+  loadRetryAt = 0;
   const currentLoadingPromise: Promise<void> = idBusinessV2TablePreferencesApi
     .list()
     .then((result) => {
@@ -37,10 +43,15 @@ export async function ensureV2TablePreferences(userId: string) {
         result.items.map((item) => [item.tableId, normalizeKeys(item.hiddenColumnKeys)])
       );
       loadedUserId.value = normalizedUserId;
+      loadRetryAt = 0;
     })
     .catch((error) => {
       if (revision === identityRevision && activeUserId.value === normalizedUserId) {
         loadError.value = error;
+        loadRetryAt =
+          isApiError(error) && error.kind === 'server'
+            ? Date.now() + SERVER_FAILURE_COOLDOWN_MS
+            : 0;
       }
       throw error;
     })
@@ -102,6 +113,7 @@ export function clearV2TablePreferences() {
   loadedUserId.value = '';
   loading.value = false;
   loadError.value = null;
+  loadRetryAt = 0;
   loadingPromise = null;
 }
 
@@ -129,6 +141,7 @@ function switchActiveUser(userId: string) {
   loadedUserId.value = '';
   preferencesByTable.value = {};
   loadError.value = null;
+  loadRetryAt = 0;
   loadingPromise = null;
 }
 

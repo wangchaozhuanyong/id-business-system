@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/apiError';
 
 const tablePreferencesApi = vi.hoisted(() => ({
   list: vi.fn(),
@@ -26,6 +27,10 @@ describe('useV2TablePreferences', () => {
     tablePreferencesApi.list.mockResolvedValue({ items: [] });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('hydrates database preferences once and applies hidden keys by stable table id', async () => {
     tablePreferencesApi.list.mockResolvedValue({
       items: [
@@ -42,6 +47,28 @@ describe('useV2TablePreferences', () => {
     expect(tablePreferencesApi.list).toHaveBeenCalledTimes(1);
     expect(isV2TableColumnVisible('orders.main', '客户')).toBe(false);
     expect(isV2TableColumnVisible('orders.main', '业务')).toBe(true);
+  });
+
+  it('suppresses repeated requests after a server failure and retries after the cooldown', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const serverError = new ApiError('服务器内部错误（500）', {
+      code: 'INTERNAL_SERVER_ERROR',
+      kind: 'server',
+      retryable: false,
+      status: 500
+    });
+    tablePreferencesApi.list.mockRejectedValue(serverError);
+
+    await expect(ensureV2TablePreferences('user-1')).rejects.toBe(serverError);
+    await expect(ensureV2TablePreferences('user-1')).rejects.toBe(serverError);
+
+    expect(tablePreferencesApi.list).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(31_001);
+    tablePreferencesApi.list.mockResolvedValueOnce({ items: [] });
+    await expect(ensureV2TablePreferences('user-1')).resolves.toBeUndefined();
+
+    expect(tablePreferencesApi.list).toHaveBeenCalledTimes(2);
   });
 
   it('replaces the in-memory preference only after a successful database save', async () => {
