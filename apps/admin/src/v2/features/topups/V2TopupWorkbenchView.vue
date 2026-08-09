@@ -2,7 +2,6 @@
   <section class="v2-records-page v2-topup-workbench">
     <section class="v2-topup-toolbar" aria-label="加卡工作台筛选">
       <label class="v2-topup-filter">
-        <span>国家</span>
         <el-select
           v-model="page.query.countryOptionId"
           clearable
@@ -20,7 +19,6 @@
       </label>
 
       <label class="v2-topup-filter">
-        <span>余额范围</span>
         <el-select
           v-model="page.query.balancePreset"
           clearable
