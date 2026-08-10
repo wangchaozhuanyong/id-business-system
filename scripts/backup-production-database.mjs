@@ -26,6 +26,7 @@ import {
   parsePgRestoreList,
   sha256File
 } from './lib/production-backup.mjs';
+import { resolveNativePostgresClient } from './lib/native-postgres-client.mjs';
 
 const BACKUP_TIMEOUT_MS = 15 * 60 * 1000;
 const args = parseArgs(process.argv.slice(2));
@@ -35,6 +36,10 @@ if (args.confirmation !== expectedConfirmation) {
 }
 
 process.umask(0o077);
+const postgresClient =
+  args.executor === 'native'
+    ? { executor: 'native', ...(await resolveNativePostgresClient(args.postgresBinDirectory)) }
+    : { executor: 'docker', version: POSTGRES_BACKUP_VERSION };
 const databaseUrl = await resolveBackupDatabaseUrl();
 const url = assertExpectedBackupDatabase(databaseUrl);
 const backupDirectory = await resolveBackupDirectory(args.outputDirectory);
@@ -62,7 +67,8 @@ try {
 
   const postgresEnvironment = buildPostgresEnvironment(url);
   createdPaths.add(partialDumpPath);
-  await runPostgresContainer({
+  await runPostgresCommand({
+    client: postgresClient,
     environment: postgresEnvironment,
     directory: backupDirectory,
     args: [
@@ -72,26 +78,29 @@ try {
       '--no-acl',
       '--lock-wait-timeout=30000',
       '--file',
-      `/backup/${path.basename(partialDumpPath)}`
+      postgresBackupPath(postgresClient, partialDumpPath)
     ],
     timeoutMs: BACKUP_TIMEOUT_MS,
-    capture: false
+    capture: false,
+    outputFilePath: partialDumpPath
   });
   await chmod(partialDumpPath, 0o400);
   const dumpStat = await stat(partialDumpPath);
   if (!dumpStat.isFile() || dumpStat.size === 0) throw new Error('pg_dump 生成了空备份');
 
-  const tocOutput = await runPostgresContainer({
+  const tocOutput = await runPostgresCommand({
+    client: postgresClient,
     environment: {},
     directory: backupDirectory,
     readOnlyMount: true,
-    args: ['pg_restore', '--list', `/backup/${path.basename(partialDumpPath)}`],
+    args: ['pg_restore', '--list', postgresBackupPath(postgresClient, partialDumpPath)],
     timeoutMs: 60_000,
     capture: true
   });
   const toc = parsePgRestoreList(tocOutput);
   const coreCounts = parseCoreCounts(
-    await runPostgresContainer({
+    await runPostgresCommand({
+      client: postgresClient,
       environment: postgresEnvironment,
       directory: backupDirectory,
       readOnlyMount: true,
@@ -113,7 +122,7 @@ try {
     createdAt: new Date().toISOString(),
     databaseProjectRef: EXPECTED_BACKUP_PROJECT_REF,
     databaseVersion: POSTGRES_BACKUP_VERSION,
-    pgDumpVersion: POSTGRES_BACKUP_VERSION,
+    pgDumpVersion: postgresClient.version,
     format: 'custom',
     file: path.basename(dumpPath),
     sizeBytes: dumpStat.size,
@@ -169,6 +178,8 @@ try {
 
   const result = {
     ok: true,
+    executor: postgresClient.executor,
+    pgDumpVersion: postgresClient.version,
     dump: args.ephemeralPlaintext ? null : dumpPath,
     manifest: args.ephemeralPlaintext ? null : manifestPath,
     archive: archivePath && archive ? archivePath : null,
@@ -209,9 +220,11 @@ function parseArgs(values) {
   const result = {
     outputDirectory: 'backups/postgres',
     ephemeralPlaintext: false,
+    executor: 'docker',
     label: undefined,
     confirmation: undefined,
-    publicKeyPath: undefined
+    publicKeyPath: undefined,
+    postgresBinDirectory: undefined
   };
   for (const value of values) {
     if (value.startsWith('--label=')) result.label = value.slice('--label='.length);
@@ -221,6 +234,10 @@ function parseArgs(values) {
       result.outputDirectory = value.slice('--output-dir='.length);
     } else if (value.startsWith('--public-key=')) {
       result.publicKeyPath = value.slice('--public-key='.length);
+    } else if (value.startsWith('--executor=')) {
+      result.executor = value.slice('--executor='.length);
+    } else if (value.startsWith('--postgres-bin-dir=')) {
+      result.postgresBinDirectory = value.slice('--postgres-bin-dir='.length);
     } else if (value === '--ephemeral-plaintext') result.ephemeralPlaintext = true;
     else throw new Error(`未知参数：${value}`);
   }
@@ -229,6 +246,12 @@ function parseArgs(values) {
   }
   if (result.ephemeralPlaintext && !result.publicKeyPath) {
     throw new Error('--ephemeral-plaintext 必须同时提供 --public-key');
+  }
+  if (!['docker', 'native'].includes(result.executor)) {
+    throw new Error('--executor 只允许 docker 或 native');
+  }
+  if (result.executor === 'docker' && result.postgresBinDirectory) {
+    throw new Error('--postgres-bin-dir 只允许用于 native 执行器');
   }
   return result;
 }
@@ -268,7 +291,10 @@ function buildPostgresEnvironment(url) {
     PGUSER: decodeURIComponent(url.username),
     PGPASSWORD: decodeURIComponent(url.password),
     PGDATABASE: url.pathname.slice(1),
-    PGSSLMODE: url.searchParams.get('sslmode') || 'require'
+    PGSSLMODE: url.searchParams.get('sslmode') || 'require',
+    PGAPPNAME: 'id-business-v2-backup',
+    PGOPTIONS:
+      '-c statement_timeout=900000 -c lock_timeout=30000 -c idle_in_transaction_session_timeout=900000'
   };
 }
 
@@ -276,6 +302,16 @@ function coreCountSql() {
   return CORE_BACKUP_TABLES.map(
     (table) => `SELECT '${table}=' || count(*)::bigint::text FROM public."${table}";`
   ).join('\n');
+}
+
+function postgresBackupPath(client, hostPath) {
+  return client.executor === 'native' ? hostPath : `/backup/${path.basename(hostPath)}`;
+}
+
+function runPostgresCommand(options) {
+  return options.client.executor === 'native'
+    ? runNativePostgresCommand(options)
+    : runPostgresContainer(options);
 }
 
 function runPostgresContainer({
@@ -290,6 +326,14 @@ function runPostgresContainer({
     const dockerArgs = [
       'run',
       '--rm',
+      '--memory',
+      '256m',
+      '--cpus',
+      '1',
+      '--pids-limit',
+      '64',
+      '--ulimit',
+      'fsize=16777216:16777216',
       '--user',
       `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`
     ];
@@ -326,4 +370,81 @@ function runPostgresContainer({
         );
     });
   });
+}
+
+function runNativePostgresCommand({
+  client,
+  environment,
+  args,
+  timeoutMs,
+  capture,
+  outputFilePath
+}) {
+  return new Promise((resolve, reject) => {
+    const [command, ...commandArguments] = args;
+    const commandPath = client.commands[command];
+    if (!commandPath) {
+      reject(new Error(`原生 PostgreSQL 命令不在允许范围：${command}`));
+      return;
+    }
+    const child = spawn('/usr/bin/nice', ['-n', '10', commandPath, ...commandArguments], {
+      env: { ...process.env, ...environment },
+      stdio: ['ignore', capture ? 'pipe' : 'ignore', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    let outputLimitExceeded = false;
+    let captureLimitExceeded = false;
+    let sizeCheckRunning = false;
+    const captureLimitBytes = command === 'pg_restore' ? 4 * 1024 * 1024 : 64 * 1024;
+    if (capture) {
+      child.stdout.on('data', (chunk) => {
+        if (stdout.length + chunk.length > captureLimitBytes) {
+          captureLimitExceeded = true;
+          child.kill('SIGTERM');
+        } else stdout += chunk;
+      });
+    }
+    child.stderr.on('data', (chunk) => (stderr = boundedAppend(stderr, chunk)));
+    const sizeTimer = outputFilePath
+      ? setInterval(async () => {
+          if (sizeCheckRunning) return;
+          sizeCheckRunning = true;
+          try {
+            const metadata = await stat(outputFilePath);
+            if (metadata.size > 16 * 1024 * 1024) {
+              outputLimitExceeded = true;
+              child.kill('SIGTERM');
+            }
+          } catch (error) {
+            if (error?.code !== 'ENOENT') child.kill('SIGTERM');
+          } finally {
+            sizeCheckRunning = false;
+          }
+        }, 250)
+      : undefined;
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      if (sizeTimer) clearInterval(sizeTimer);
+      reject(error);
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (sizeTimer) clearInterval(sizeTimer);
+      if (outputLimitExceeded) reject(new Error('原生 pg_dump 超过16MiB临时文件硬上限'));
+      else if (captureLimitExceeded) reject(new Error('原生 PostgreSQL 校验输出超过内存硬上限'));
+      else if (code === 0 && !signal) resolve(stdout);
+      else if (signal === 'SIGTERM') reject(new Error(`生产备份命令超过 ${timeoutMs}ms 超时`));
+      else
+        reject(
+          new Error(`原生生产备份命令失败，退出码 ${code ?? 'unknown'}：${stderr.slice(-1000)}`)
+        );
+    });
+  });
+}
+
+function boundedAppend(current, chunk, maximumLength = 32_000) {
+  const combined = current + String(chunk);
+  return combined.length <= maximumLength ? combined : combined.slice(-maximumLength);
 }

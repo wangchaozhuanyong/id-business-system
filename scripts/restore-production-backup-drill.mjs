@@ -38,6 +38,12 @@ try {
       '--rm',
       '--name',
       containerName,
+      '--memory',
+      '512m',
+      '--cpus',
+      '2',
+      '--pids-limit',
+      '128',
       '-e',
       'POSTGRES_PASSWORD',
       '-e',
@@ -186,6 +192,35 @@ async function waitForPostgres() {
   for (let attempt = 1; attempt <= 30; attempt += 1) {
     try {
       await dockerExec(['pg_isready', '-U', 'postgres', '-d', 'restore_drill'], 5_000);
+      await dockerExec(
+        [
+          'psql',
+          '-U',
+          'postgres',
+          '-d',
+          'restore_drill',
+          '-v',
+          'ON_ERROR_STOP=1',
+          '-c',
+          'SELECT 1'
+        ],
+        5_000
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await dockerExec(
+        [
+          'psql',
+          '-U',
+          'postgres',
+          '-d',
+          'restore_drill',
+          '-v',
+          'ON_ERROR_STOP=1',
+          '-c',
+          'SELECT 1'
+        ],
+        5_000
+      );
       return;
     } catch (error) {
       lastError = error;

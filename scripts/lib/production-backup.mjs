@@ -15,6 +15,8 @@ export const EXPECTED_BACKUP_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
 export const EXPECTED_BACKUP_ROLE = 'id_v2_backup';
 export const POSTGRES_BACKUP_VERSION = '17.6';
 export const MAX_ENCRYPTED_ARCHIVE_BYTES = 12 * 1024 * 1024;
+export const MAX_PLAINTEXT_DUMP_BYTES = 12 * 1024 * 1024;
+export const MAX_BACKUP_MANIFEST_BYTES = 256 * 1024;
 export const MAX_GITHUB_BACKUP_STORAGE_BYTES = 400 * 1024 * 1024;
 
 export const CORE_BACKUP_TABLES = Object.freeze([
@@ -98,6 +100,14 @@ export function publicKeyFingerprint(publicKeyPem) {
 }
 
 export async function encryptBackupBundle({ dumpPath, manifestPath, outputPath, publicKeyPem }) {
+  const [dumpStat, manifestStat] = await Promise.all([stat(dumpPath), stat(manifestPath)]);
+  if (!dumpStat.isFile() || dumpStat.size === 0) throw new Error('生产备份为空或不是文件');
+  if (dumpStat.size > MAX_PLAINTEXT_DUMP_BYTES) {
+    throw new Error('明文备份超过加密进程内存硬上限');
+  }
+  if (!manifestStat.isFile() || manifestStat.size > MAX_BACKUP_MANIFEST_BYTES) {
+    throw new Error('备份 manifest 不是文件或超过内存硬上限');
+  }
   const [dump, manifestBytes] = await Promise.all([readFile(dumpPath), readFile(manifestPath)]);
   const manifestLength = Buffer.alloc(4);
   manifestLength.writeUInt32BE(manifestBytes.length);
@@ -202,8 +212,8 @@ export async function decryptBackupBundle({ archivePath, privateKeyPem, passphra
 export function validateManifestAgainstDump(manifest, dump) {
   if (
     manifest?.databaseProjectRef !== EXPECTED_BACKUP_PROJECT_REF ||
-    manifest?.databaseVersion !== POSTGRES_BACKUP_VERSION ||
-    manifest?.pgDumpVersion !== POSTGRES_BACKUP_VERSION ||
+    !isSupportedPostgresVersion(manifest?.databaseVersion) ||
+    !isSupportedPostgresVersion(manifest?.pgDumpVersion) ||
     manifest?.format !== 'custom'
   ) {
     throw new Error('备份 manifest 的生产项目、版本或格式不匹配');
@@ -226,6 +236,10 @@ export function validateManifestAgainstDump(manifest, dump) {
   }
 }
 
+function isSupportedPostgresVersion(value) {
+  return typeof value === 'string' && /^17\.[0-9]+(?:\.[0-9]+)?$/u.test(value);
+}
+
 export async function atomicWriteJson(finalPath, value, mode = 0o400) {
   const partialPath = `${finalPath}.partial-${process.pid}`;
   try {
@@ -243,12 +257,16 @@ export async function atomicWriteJson(finalPath, value, mode = 0o400) {
 }
 
 export async function validatePlaintextBackup({ dumpPath, manifestPath }) {
-  const [dump, manifest, fileStat] = await Promise.all([
-    readFile(dumpPath),
-    readFile(manifestPath, 'utf8').then(JSON.parse),
-    stat(dumpPath)
-  ]);
+  const [fileStat, manifestStat] = await Promise.all([stat(dumpPath), stat(manifestPath)]);
   if (!fileStat.isFile() || fileStat.size === 0) throw new Error('生产备份为空或不是文件');
+  if (fileStat.size > MAX_PLAINTEXT_DUMP_BYTES) throw new Error('明文备份超过验证内存硬上限');
+  if (!manifestStat.isFile() || manifestStat.size > MAX_BACKUP_MANIFEST_BYTES) {
+    throw new Error('备份 manifest 不是文件或超过验证内存硬上限');
+  }
+  const [dump, manifest] = await Promise.all([
+    readFile(dumpPath),
+    readFile(manifestPath, 'utf8').then(JSON.parse)
+  ]);
   validateManifestAgainstDump(manifest, dump);
   return manifest;
 }
