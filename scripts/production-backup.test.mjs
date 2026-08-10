@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -207,7 +216,7 @@ if (command === 'pg_dump') {
   process.exit(0);
 }
 if (command === 'pg_restore') {
-  console.log('1; 1259 100 TABLE public users postgres\\n2; 0 100 TABLE DATA public users postgres');
+  writeFileSync(1, '1; 1259 100 TABLE public users postgres\\n2; 0 100 TABLE DATA public users postgres\\n;' + 'x'.repeat(100000));
   process.exit(0);
 }
 if (command === 'psql') {
@@ -240,6 +249,64 @@ process.exit(2);
   }
 });
 
+test('native backup executor uses the pinned PostgreSQL 17 client without Docker', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'id-v2-native-backup-test-'));
+  const fakeBin = path.join(directory, 'native-bin');
+  const scriptPath = path.resolve('scripts/backup-production-database.mjs');
+  const environment = {
+    ...process.env,
+    BACKUP_DATABASE_URL: `postgresql://${EXPECTED_BACKUP_ROLE}:secret@db.${EXPECTED_BACKUP_PROJECT_REF}.supabase.co/postgres`
+  };
+  try {
+    await mkdir(fakeBin, { recursive: true });
+    const fakeCommandSource = `#!/usr/bin/env node
+const { basename } = require('node:path');
+const { writeFileSync } = require('node:fs');
+const command = basename(process.argv[1]);
+const args = process.argv.slice(2);
+if (args.includes('--version')) {
+  console.log(command + ' (PostgreSQL) 17.10');
+  process.exit(0);
+}
+if (command === 'pg_dump') {
+  writeFileSync(args[args.indexOf('--file') + 1], 'valid-native-dump');
+  process.exit(0);
+}
+if (command === 'pg_restore') {
+  console.log('1; 1259 100 TABLE public users postgres\\n2; 0 100 TABLE DATA public users postgres');
+  process.exit(0);
+}
+if (command === 'psql') {
+  console.log(${JSON.stringify(CORE_BACKUP_TABLES)}.map((table, index) => table + '=' + index).join('\\n'));
+  process.exit(0);
+}
+process.exit(2);
+`;
+    for (const command of ['pg_dump', 'pg_restore', 'psql']) {
+      const commandPath = path.join(fakeBin, command);
+      await writeFile(commandPath, fakeCommandSource);
+      await chmod(commandPath, 0o755);
+    }
+    const stdout = await runNode(
+      [
+        scriptPath,
+        '--label=native-test',
+        `--confirmation=BACKUP_${EXPECTED_BACKUP_PROJECT_REF}_native-test`,
+        '--executor=native',
+        `--postgres-bin-dir=${await realpath(fakeBin)}`
+      ],
+      { cwd: directory, environment }
+    );
+    const result = JSON.parse(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.executor, 'native');
+    assert.equal(result.pgDumpVersion, '17.10');
+    assert.ok(result.dump.endsWith('.dump'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('manifest rejects project, checksum and count drift', async () => {
   const { createHash } = await import('node:crypto');
   const dump = Buffer.from('dump');
@@ -259,6 +326,9 @@ test('manifest rejects project, checksum and count drift', async () => {
     countFingerprint: countFingerprint(counts)
   };
   assert.doesNotThrow(() => validateManifestAgainstDump(manifest, dump));
+  assert.doesNotThrow(() =>
+    validateManifestAgainstDump({ ...manifest, pgDumpVersion: '17.10' }, dump)
+  );
   assert.throws(
     () => validateManifestAgainstDump({ ...manifest, databaseProjectRef: 'wrong' }, dump),
     /项目、版本或格式/
@@ -270,6 +340,10 @@ test('manifest rejects project, checksum and count drift', async () => {
   assert.throws(
     () => validateManifestAgainstDump({ ...manifest, coreCounts: { ...counts, users: 999 } }, dump),
     /计数指纹/
+  );
+  assert.throws(
+    () => validateManifestAgainstDump({ ...manifest, pgDumpVersion: '18.1' }, dump),
+    /项目、版本或格式/
   );
 });
 
