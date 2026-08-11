@@ -5,6 +5,26 @@
       <h1>Element Plus 组件状态</h1>
     </header>
 
+    <section class="v2-theme-components__overview" data-theme-overview>
+      <div>
+        <span data-theme-overview-accent>REFERENCE DATA</span>
+        <h2 data-theme-overview-title>业务选项总览</h2>
+        <p data-theme-overview-copy>集中维护业务模块共用的分类、国家和结算基础资料。</p>
+      </div>
+      <div class="v2-theme-components__overview-metrics">
+        <article>
+          <span data-theme-overview-metric-label>配置分类</span>
+          <strong data-theme-overview-metric-value>11</strong>
+          <small>当前可维护类型</small>
+        </article>
+        <article>
+          <span>筛选结果</span>
+          <strong>2</strong>
+          <small>全部匹配记录</small>
+        </article>
+      </div>
+    </section>
+
     <section class="v2-theme-components__band" data-theme-band="form">
       <h2>表单控件</h2>
       <el-form
@@ -198,6 +218,77 @@ const rows = [
   font-size: 22px;
 }
 
+.v2-theme-components__overview {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(360px, 1.15fr);
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--v2-overview-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-overview-bg);
+  color: var(--v2-overview-text);
+  box-shadow: var(--v2-overview-shadow);
+}
+
+.v2-theme-components__overview > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.v2-theme-components__overview h2,
+.v2-theme-components__overview p {
+  margin: 0;
+}
+
+.v2-theme-components__overview > div:first-child > span {
+  color: var(--v2-overview-accent);
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+}
+
+.v2-theme-components__overview h2 {
+  color: var(--v2-overview-text);
+  font-size: 17px;
+}
+
+.v2-theme-components__overview p,
+.v2-theme-components__overview-metrics span,
+.v2-theme-components__overview-metrics small {
+  color: var(--v2-overview-text-soft);
+  font-size: 11px;
+}
+
+.v2-theme-components__overview-metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--v2-overview-divider);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-theme-components__overview-metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid var(--v2-overview-divider);
+  background: var(--v2-overview-surface);
+}
+
+.v2-theme-components__overview-metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-theme-components__overview-metrics strong {
+  color: var(--v2-overview-text);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
 .v2-theme-components__band {
   padding: 18px 0 20px;
   border-top: 1px solid var(--v2-border);
@@ -246,6 +337,11 @@ const rows = [
   .v2-theme-components__form-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+  }
+
+  .v2-theme-components__overview {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
   }
 
   .v2-theme-components__wide {

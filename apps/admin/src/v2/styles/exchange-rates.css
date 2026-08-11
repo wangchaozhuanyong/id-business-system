@@ -26,11 +26,11 @@
   gap: 18px;
   padding: 18px 20px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--v2-overview-border);
   border-radius: var(--v3-radius);
-  background: var(--v2-sidebar);
-  color: #f4f7fb;
-  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+  background: var(--v2-overview-bg);
+  color: var(--v2-overview-text);
+  box-shadow: var(--v2-overview-shadow);
 }
 
 .v2-exchange-overview__intro,
@@ -41,7 +41,7 @@
 }
 
 .v2-exchange-overview__eyebrow {
-  color: #80aafc;
+  color: var(--v2-overview-accent);
   font-size: 10px;
   font-weight: var(--v3-font-weight-bold);
   letter-spacing: 0.14em;
@@ -61,7 +61,7 @@
 }
 
 .v2-exchange-overview__title-row h2 {
-  color: #f4f7fb;
+  color: var(--v2-overview-text);
   font-size: 17px;
   font-weight: var(--v3-font-weight-bold);
   letter-spacing: 0.01em;
@@ -69,7 +69,7 @@
 
 .v2-exchange-overview__intro p {
   max-width: 48ch;
-  color: #9fb0c4;
+  color: var(--v2-overview-text-soft);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -77,20 +77,20 @@
 .v2-exchange-overview__primary {
   align-content: center;
   padding-left: 18px;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 1px solid var(--v2-overview-divider);
 }
 
 .v2-exchange-overview__primary > span,
 .v2-exchange-overview__primary > small,
 .v2-exchange-overview__metrics dt,
 .v2-exchange-overview__metrics small {
-  color: #9fb0c4;
+  color: var(--v2-overview-text-soft);
   font-size: 10px;
 }
 
 .v2-exchange-overview__primary strong {
   overflow-wrap: anywhere;
-  color: #f4f7fb;
+  color: var(--v2-overview-text);
   font-size: 30px;
   font-weight: var(--v3-font-weight-bold);
   font-variant-numeric: tabular-nums;
@@ -99,7 +99,7 @@
 }
 
 .v2-exchange-overview__primary.is-stale strong {
-  color: #9fb0c4;
+  color: var(--v2-overview-text-soft);
 }
 
 .v2-exchange-overview__primary small {
@@ -122,14 +122,14 @@
 }
 
 .v2-exchange-overview__actions .app-button--ghost.el-button {
-  --el-button-text-color: #f4f7fb;
-  --el-button-border-color: rgba(255, 255, 255, 0.16);
-  --el-button-hover-text-color: #ffffff;
-  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
-  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
-  --el-button-active-text-color: #ffffff;
-  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
-  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+  --el-button-text-color: var(--v2-overview-text);
+  --el-button-border-color: var(--v2-overview-control-border);
+  --el-button-hover-text-color: var(--v2-overview-text);
+  --el-button-hover-bg-color: var(--v2-overview-control-hover);
+  --el-button-hover-border-color: var(--v2-overview-control-hover-border);
+  --el-button-active-text-color: var(--v2-overview-text);
+  --el-button-active-bg-color: var(--v2-overview-control-active);
+  --el-button-active-border-color: var(--v2-overview-control-active-border);
 }
 
 .v2-exchange-overview__metrics {
@@ -139,7 +139,7 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--v2-overview-divider);
   border-radius: var(--v3-radius-sm);
 }
 
@@ -148,8 +148,8 @@
   min-width: 0;
   gap: 3px;
   padding: 10px 13px;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.035);
+  border-left: 1px solid var(--v2-overview-divider);
+  background: var(--v2-overview-surface);
 }
 
 .v2-exchange-overview__metrics > div:first-child {
@@ -160,7 +160,7 @@
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  color: #f4f7fb;
+  color: var(--v2-overview-text);
   font-size: 18px;
   font-weight: var(--v3-font-weight-bold);
   font-variant-numeric: tabular-nums;
@@ -525,7 +525,7 @@
   .v2-exchange-overview__primary {
     padding-top: 14px;
     padding-left: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid var(--v2-overview-divider);
     border-left: 0;
   }
 
@@ -540,12 +540,12 @@
   }
 
   .v2-exchange-overview__metrics > div:nth-child(3) {
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid var(--v2-overview-divider);
     border-left: 0;
   }
 
   .v2-exchange-overview__metrics > div:nth-child(4) {
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid var(--v2-overview-divider);
   }
 
   .v2-exchange-receipt-rates > dl {
@@ -606,7 +606,7 @@
   }
 
   .v2-exchange-overview__metrics > div {
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid var(--v2-overview-divider);
     border-left: 0;
   }
 

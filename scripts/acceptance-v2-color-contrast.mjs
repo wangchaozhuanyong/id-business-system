@@ -48,7 +48,7 @@ try {
       themes,
       viewportWidths,
       variants,
-      componentSurfaces: 12,
+      componentSurfaces: 13,
       minimumTextContrast: 4.5,
       minimumFocusContrast: 3
     })
@@ -307,6 +307,7 @@ async function verifyThemeComponentsScenario(browserInstance, theme, width) {
     assert.equal(themeState.colorScheme, theme, `${theme} ${width}px 原生 color-scheme 未同步`);
 
     const surfaceSelectors = [
+      ['页面概览', '[data-theme-overview]'],
       ['输入框', '.el-input__wrapper'],
       ['选择器', '.el-select__wrapper'],
       ['文本域', '.el-textarea__inner'],
@@ -325,6 +326,11 @@ async function verifyThemeComponentsScenario(browserInstance, theme, width) {
     }
 
     const textSelectors = [
+      ['概览标题', '[data-theme-overview-title]'],
+      ['概览说明', '[data-theme-overview-copy]'],
+      ['概览强调文字', '[data-theme-overview-accent]'],
+      ['概览指标标题', '[data-theme-overview-metric-label]'],
+      ['概览指标数值', '[data-theme-overview-metric-value]'],
       ['输入框文字', '.el-input__inner'],
       ['选择器文字', '.el-select__selected-item'],
       ['文本域文字', '.el-textarea__inner'],

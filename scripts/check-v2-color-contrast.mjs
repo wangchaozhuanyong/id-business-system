@@ -37,6 +37,10 @@ const contrastPairs = [
   ['侧栏正文', '--v3-sidebar', '--v3-sidebar-text', 4.5],
   ['侧栏次要文字', '--v3-sidebar', '--v3-sidebar-muted', 4.5],
   ['侧栏强调文字', '--v3-sidebar', '--v3-sidebar-text-strong', 4.5],
+  ['顶栏正文', '--v3-topbar-bg', '--v3-topbar-text', 4.5],
+  ['概览正文', '--v3-overview-bg', '--v3-overview-text', 4.5],
+  ['概览次要文字', '--v3-overview-bg', '--v3-overview-text-soft', 4.5],
+  ['概览强调文字', '--v3-overview-bg', '--v3-overview-accent', 4.5],
   ['焦点边界', '--v3-surface', '--v3-focus-color', 3]
 ];
 
