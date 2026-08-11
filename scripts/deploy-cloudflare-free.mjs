@@ -26,6 +26,7 @@ await run('npx', [
   'v2-api',
   '--project-ref',
   RELEASE_SUPABASE_PROJECT_REF,
+  '--use-docker',
   '--no-verify-jwt'
 ]);
 await run('node', [
