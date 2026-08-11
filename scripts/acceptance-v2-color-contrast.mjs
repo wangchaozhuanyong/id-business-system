@@ -33,6 +33,8 @@ try {
   await waitForServer(adminUrl, adminServer);
 
   browser = await chromium.launch({ headless: true });
+  await warmFixture(browser, '/button-contrast-fixture.html', '[data-button-contrast-fixture]');
+  await warmFixture(browser, '/theme-components-fixture.html', '[data-theme-components-fixture]');
   for (const theme of themes) {
     for (const width of viewportWidths) {
       await verifyScenario(browser, theme, width);
@@ -56,11 +58,32 @@ try {
   await stopAdminServer(adminServer);
 }
 
+async function warmFixture(browserInstance, pathname, readySelector) {
+  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  const fixtureUrl = new URL(pathname, adminUrl).href;
+
+  try {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await page.goto(fixtureUrl, { waitUntil: 'networkidle' });
+      const ready = await page
+        .locator(readySelector)
+        .waitFor({ state: 'visible', timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (ready) return;
+    }
+    throw new Error(`主题验收预热失败：${fixtureUrl}`);
+  } finally {
+    await context.close();
+  }
+}
+
 function startAdminServer(url) {
   const output = [];
   const child = spawn(
     process.execPath,
-    [viteCliPath, '--host', url.hostname, '--port', url.port, '--strictPort'],
+    [viteCliPath, '--host', url.hostname, '--port', url.port, '--strictPort', '--force'],
     {
       cwd: adminDir,
       env: {
