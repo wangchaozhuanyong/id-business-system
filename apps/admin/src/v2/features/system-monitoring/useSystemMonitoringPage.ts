@@ -1,4 +1,4 @@
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { v2SystemMonitoringApi } from './api';
@@ -14,6 +14,7 @@ import {
 import type { V2SystemMonitoringResponse } from './contracts';
 
 export function useSystemMonitoringPage() {
+  const activeSection = ref<'health' | 'operations' | 'gaps'>('health');
   const systemQuery = useV2ModuleQuery<V2SystemMonitoringResponse>({
     moduleKey: 'system-monitoring',
     scope: 'dashboard',
@@ -35,14 +36,22 @@ export function useSystemMonitoringPage() {
     systemQuery.error.value ? getApiErrorMessage(systemQuery.error.value) : ''
   );
 
+  function setActiveSection(section: 'health' | 'operations' | 'gaps') {
+    activeSection.value = section;
+  }
+
   return {
+    activeSection,
     overview,
     sortedChecks,
     evidenceSummary,
+    queryPhase: systemQuery.phase,
+    isParameterTransition: systemQuery.isParameterTransition,
     loading,
     error,
     hasData: systemQuery.hasData,
     refresh: systemQuery.refresh,
+    setActiveSection,
     systemMonitorStatusMeta,
     systemOverallStatusMeta,
     formatSystemMonitoringDate,

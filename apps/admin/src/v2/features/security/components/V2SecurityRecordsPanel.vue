@@ -1,8 +1,24 @@
 <template>
-  <section class="v2-records-list">
+  <section ref="listRef" class="v2-records-list v2-security-records" :style="listFrameStyle">
+    <header class="v2-security-records__heading">
+      <V2SectionHeading :title="page.activeTab === 'login_logs' ? '登录记录' : '在线会话'">
+        <template #actions>
+          <V2TableColumnSettings
+            v-if="page.activeTab === 'login_logs'"
+            inline
+            :schema="v2TableSchemas.security.loginLogs"
+          />
+          <V2TableColumnSettings v-else inline :schema="v2TableSchemas.security.sessions" />
+          <span>本页 {{ page.currentItems.length }} 条</span>
+          <span aria-hidden="true">·</span>
+          <strong>共 {{ page.total }} 条</strong>
+        </template>
+      </V2SectionHeading>
+    </header>
     <V2Table
       v-if="page.activeTab === 'login_logs'"
       :schema="v2TableSchemas.security.loginLogs"
+      :show-column-settings="false"
       class="v2-records-table"
       :data="page.loginItems"
       scrollbar-always-on
@@ -74,6 +90,7 @@
     <V2Table
       v-else
       :schema="v2TableSchemas.security.sessions"
+      :show-column-settings="false"
       class="v2-records-table"
       :data="page.sessionItems"
       scrollbar-always-on
@@ -267,13 +284,20 @@ import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import type { useSecurityPage } from '../useSecurityPage';
 
 type SecurityPage = UnwrapNestedRefs<ReturnType<typeof useSecurityPage>>;
 
-defineProps<{ page: SecurityPage }>();
+const props = defineProps<{ page: SecurityPage }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.currentItems,
+  pageSize: () => props.page.query.pageSize
+});
 </script>
 
 <style scoped>

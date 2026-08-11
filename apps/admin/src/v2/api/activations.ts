@@ -11,7 +11,9 @@ export const idBusinessV2ActivationsApi = {
       http.get('/id-business-v2/activations', { params, signal: options.signal })
     );
   },
-  get(id: string) {
-    return request<V2Activation>(http.get(`/id-business-v2/activations/${id}`));
+  get(id: string, options: ApiRequestOptions = {}) {
+    return request<V2Activation>(
+      http.get(`/id-business-v2/activations/${id}`, { signal: options.signal })
+    );
   }
 };

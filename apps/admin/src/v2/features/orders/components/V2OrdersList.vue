@@ -1,17 +1,28 @@
 <template>
   <V2AsyncRegion
     skeleton="table"
-    :loading="page.loading || page.isInitialLoading"
-    :resolved="page.hasLoadedOnce"
+    :phase="page.queryPhase"
+    :previous-data="page.isParameterTransition"
     :error="page.listError"
     loading-title="正在加载订单"
     refreshing-title="正在更新订单"
     error-title="订单加载失败"
     @retry="page.loadOrders"
   >
-    <section class="v2-records-list">
+    <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
+      <header class="v2-orders-list__header">
+        <V2SectionHeading title="订单列表" help="可横向查看完整字段，固定操作列始终保留在右侧。">
+          <template #actions>
+            <V2TableColumnSettings inline :schema="v2TableSchemas.orders.main" />
+            <span>本页 {{ page.items.length }} 条</span>
+            <span aria-hidden="true">·</span>
+            <strong>共 {{ page.total }} 条</strong>
+          </template>
+        </V2SectionHeading>
+      </header>
       <V2Table
         :schema="v2TableSchemas.orders.main"
+        :show-column-settings="false"
         :aria-busy="page.loading"
         scrollbar-always-on
         show-overflow-tooltip
@@ -147,6 +158,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === row.id"
+                :disabled="page.isParameterTransition"
                 @click="page.consumeOrderBalance(row)"
               >
                 <el-icon><Coin /></el-icon>
@@ -157,6 +169,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === row.id"
+                :disabled="page.isParameterTransition"
                 @click="page.completeOrder(row)"
               >
                 <el-icon><CircleCheck /></el-icon>
@@ -177,6 +190,7 @@
               variant="ghost"
               icon-only
               title="修改订单"
+              :disabled="page.isParameterTransition"
               @click="page.openEdit(row)"
             >
               <el-icon><Edit /></el-icon>
@@ -184,6 +198,7 @@
             <el-dropdown
               v-if="page.hasLifecycleActions(row)"
               trigger="click"
+              :disabled="page.isParameterTransition"
               @command="page.handleLifecycleCommand($event, row)"
             >
               <AppButton
@@ -250,6 +265,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === item.id"
+                :disabled="page.isParameterTransition"
                 @click="page.consumeOrderBalance(item)"
               >
                 <el-icon><Coin /></el-icon>
@@ -260,6 +276,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === item.id"
+                :disabled="page.isParameterTransition"
                 @click="page.completeOrder(item)"
               >
                 <el-icon><CircleCheck /></el-icon>
@@ -333,6 +350,7 @@
                 v-if="page.canUpdateOrders && item.operations.canEdit"
                 size="small"
                 variant="ghost"
+                :disabled="page.isParameterTransition"
                 @click="page.openEdit(item)"
               >
                 修改
@@ -340,6 +358,7 @@
               <el-dropdown
                 v-if="page.hasLifecycleActions(item)"
                 trigger="click"
+                :disabled="page.isParameterTransition"
                 @command="page.handleLifecycleCommand($event, item)"
               >
                 <AppButton
@@ -394,10 +413,11 @@
       <footer class="v2-records-pagination">
         <span>共 {{ page.total }} 条</span>
         <el-pagination
-          v-model:current-page="page.query.page"
-          v-model:page-size="page.query.pageSize"
           v-pagination-label
+          :current-page="page.displayedPage"
+          :page-size="page.displayedPageSize"
           background
+          :disabled="page.isParameterTransition"
           :page-sizes="[10, 20, 50, 100]"
           layout="sizes, prev, pager, next"
           :total="page.total"
@@ -417,13 +437,21 @@ import { CircleCheck, Coin, Edit, MoreFilled, View } from '@element-plus/icons-v
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { operatorUsername } from '@/v2/utils/operator';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useOrdersPage } from '../useOrdersPage';
 
 type OrdersPage = UnwrapNestedRefs<ReturnType<typeof useOrdersPage>>;
 
-defineProps<{
+const props = defineProps<{
   page: OrdersPage;
 }>();
+
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.items,
+  pageSize: () => props.page.displayedPageSize
+});
 </script>

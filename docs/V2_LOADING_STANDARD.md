@@ -17,7 +17,8 @@
 | 路由意图预取               | 只预取目标路由代码；短暂掠过可取消，不提前请求业务数据或改变当前页面。     |
 | 首次数据加载               | 没有成功快照时，使用与真实内容结构一致的共享骨架。                         |
 | 缓存命中                   | 立即显示缓存数据，不显示骨架、遮罩或按钮闪烁。                             |
-| 刷新、筛选、分页、页签切换 | 保留最后成功内容；超过 120ms 后只显示区域顶部细进度线。                    |
+| 同参数刷新                 | 保留最后成功内容；超过 120ms 后只显示区域顶部细进度线。                    |
+| 筛选、分页、排序、页签切换 | 保留最后成功快照并标记为只读；新参数成功后原子替换，区域尺寸不得跳动。     |
 | 首次加载失败               | 显示统一错误状态、错误原因和重新加载按钮。                                 |
 | 已有数据刷新失败           | 保留原内容，在区域顶部显示错误和重试；禁止清空列表。                       |
 | 空数据                     | 只有请求成功后才能显示空状态，不能把加载中或失败误报为空。                 |
@@ -78,6 +79,11 @@
   `useV2ModuleRefresh({ moduleKey, scope, load })`。
 - `resolved` 表示该区域至少成功返回过一次，不能用 `items.length` 判断；成功空列表也属于
   resolved。
+- `useV2ModuleQuery` 必须向区域透传受控 `phase`。统一阶段为
+  `disabled | idle | initial-loading | ready | refreshing | transitioning | initial-error |
+refresh-error`；业务组件不得重新组合多个布尔值猜测主查询状态。
+- 查询状态必须同时记录 `requestedKey` 与 `displayedKey`。二者不同时属于参数过渡：旧快照继续展示但
+  必须只读，分页器展示旧快照的页码和每页条数；只有新 key 成功后才能一起提交内容、总数和分页状态。
 - 查询 key 必须由已规范化的分页、搜索、筛选和排序参数生成；同身份、同 scope、同 key 的并发读取
   必须复用一个请求，不同 key 不允许通过固定请求通道互相取消。
 - 远程请求开始前不得清空已提交的列表、表格列或详情。筛选、排序和分页的新 key 尚无数据时，
@@ -100,6 +106,10 @@
   分页、页签和自动轮询也不得额外显示全局“后台更新中”、旋转图标、浮动卡片或第二个区域指示器。
 - 加载区域必须具有 `aria-busy`；状态文案通过 live region 或 `role="status"` 提供；动态动画必须
   支持 `prefers-reduced-motion`。
+- 权限不仅控制组件可见性，也必须通过查询 `enabled` 阻止请求。权限未确认或无权访问时不得创建读取
+  请求、命中旧身份敏感快照或短暂展示受保护内容。
+- 抽屉详情等非模块主查询必须使用可中止、只允许最后一次请求提交的请求代次。切换实体时先清除上一
+  实体详情；同一实体重试可保留旧详情。关闭抽屉、卸载页面或切换实体后，迟到响应不得回写。
 
 ## 3. 禁止写法
 
@@ -132,18 +142,20 @@
 ```vue
 <V2AsyncRegion
   skeleton="table"
-  :loading="loading || isInitialLoading"
-  :resolved="hasLoadedOnce"
+  :phase="ordersQuery.phase"
+  :previous-data="ordersQuery.isParameterTransition"
   :error="loadError"
   loading-title="正在加载订单"
   refreshing-title="正在更新订单"
   error-title="订单加载失败"
   @retry="loadOrders"
 >
-  <OrderList />
+  <OrderList :items="items" />
 </V2AsyncRegion>
 
-<AppButton title="刷新订单" :disabled="loading" @click="loadOrders">刷新</AppButton>
+<AppButton title="刷新订单" :disabled="ordersQuery.isRefreshing" @click="loadOrders">
+  刷新
+</AppButton>
 ```
 
 ```ts
@@ -155,6 +167,8 @@ const ordersQuery = useV2ModuleQuery({
 });
 
 const items = computed(() => ordersQuery.data.value?.items ?? []);
+const displayedPage = computed(() => ordersQuery.data.value?.page ?? query.page);
+const displayedPageSize = computed(() => ordersQuery.data.value?.pageSize ?? query.pageSize);
 ```
 
 新增或修改 V2 页面后必须运行：

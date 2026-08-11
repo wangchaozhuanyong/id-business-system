@@ -276,6 +276,8 @@ export function useOrderEntryPage() {
 
   const {
     data: entryOptionsData,
+    phase: optionsQueryPhase,
+    isParameterTransition: optionsParameterTransition,
     loading: optionsLoading,
     error: optionsError,
     resolved: optionsResolved,
@@ -481,6 +483,8 @@ export function useOrderEntryPage() {
     router,
     formRef,
     optionsLoading,
+    optionsQueryPhase,
+    optionsParameterTransition,
     optionsError,
     optionsResolved,
     idSelectionMode,

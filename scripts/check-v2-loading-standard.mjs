@@ -138,7 +138,11 @@ requirePatterns(queryCachePath, queryCacheSource, [
   [/MAX_INACTIVE_QUERY_ENTRIES = 200/, '查询缓存缺少 200 条非活跃 LRU 保护'],
   [/INVALIDATION_COALESCE_MS = 100/, 'scope 失效没有在 100ms 内合并'],
   [/entry\.revalidateAt/, 'event-with-deadline 查询缺少 revalidateAt'],
-  [/entry\.inFlight/, '同 scope 同 key 的并发请求没有复用']
+  [/entry\.inFlight/, '同 scope 同 key 的并发请求没有复用'],
+  [/requestedKey/, '查询状态没有记录当前请求参数 key'],
+  [/displayedKey/, '查询状态没有记录当前展示快照 key'],
+  [/isParameterTransition/, '查询状态无法区分参数切换和同参数刷新'],
+  [/options\.enabled/, '查询缺少权限驱动的 enabled 门禁']
 ]);
 forbidPatterns(queryCachePath, queryCacheSource, [
   [/TIER_FRESHNESS_MS/, '时间过去不得让 event-driven 缓存失效'],
@@ -150,20 +154,26 @@ for (const [pattern, message] of [
   [/:aria-busy="isBusy"/, '异步区域缺少 aria-busy'],
   [/regionState === 'initial-loading'/, '异步区域缺少首次加载状态'],
   [/regionState === 'initial-error'/, '异步区域缺少首次失败状态'],
-  [/v-if="error".+refresh-error/s, '异步区域缺少保留内容后的刷新错误提示'],
+  [
+    /v-if="[^"]*refresh-error[^"]*".+v2-async-region__refresh-error/s,
+    '异步区域缺少保留内容后的刷新错误提示'
+  ],
   [/v-if="showRefreshFeedback"/, '异步区域缺少延迟刷新反馈'],
   [/class="v2-async-region__progress"/, '异步区域缺少非遮挡式顶部进度线'],
+  [/:inert="isPreviousData \|\| undefined"/, '旧参数快照没有进入只读状态'],
+  [/:data-v2-query-phase="effectivePhase"/, '异步区域没有暴露可验收的查询阶段'],
   [/prefers-reduced-motion/, '异步区域缺少减少动态效果支持']
 ]) {
   if (!pattern.test(asyncRegionSource)) issues.push(`${asyncRegionPath}: ${message}`);
 }
 requirePatterns(asyncRegionStatePath, asyncRegionStateSource, [
+  [/if \(phase === 'initial-error'\) return 'initial-error'/, '首次加载和失败状态不互斥'],
   [
-    /if \(!resolved\) return error \? 'initial-error' : 'initial-loading'/,
+    /if \(phase === 'idle' \|\| phase === 'initial-loading'\) return 'initial-loading'/,
     '首次加载和失败状态不互斥'
   ],
-  [/if \(empty\) return 'empty'/, '成功空状态没有独立分支'],
-  [/return loading && resolved/, '刷新反馈没有限制为已有成功内容']
+  [/if \(empty && phase !== 'transitioning'\) return 'empty'/, '成功空状态没有独立分支'],
+  [/return phase === 'refreshing' \|\| phase === 'transitioning'/, '刷新反馈没有限制为已有成功内容']
 ]);
 for (const [pattern, message] of [
   [/v2-async-region__overlay/, '禁止恢复浮动刷新卡片'],
@@ -206,13 +216,17 @@ function validateLoadingVisualArchitecture() {
   for (const { projectPath, source } of sourceEntries) {
     for (const match of source.matchAll(/<V2AsyncRegion\b[\s\S]*?>/g)) {
       regionCount += 1;
-      const kind = match[0].match(/\bskeleton=["']([a-z-]+)["']/)?.[1];
+      const regionTag = match[0];
+      const kind = regionTag.match(/\bskeleton=["']([a-z-]+)["']/)?.[1];
       if (!kind) {
         issues.push(`${projectPath}: 每个 V2AsyncRegion 必须显式声明内容形状 skeleton`);
       } else if (!allowedSkeletonKinds.has(kind)) {
         issues.push(`${projectPath}: V2AsyncRegion 使用了未知骨架类型 ${kind}`);
       } else {
         usedSkeletonKinds.add(kind);
+      }
+      if (/\b:previous-data=/.test(regionTag) && !/\b:phase=/.test(regionTag)) {
+        issues.push(`${projectPath}: previous-data 必须与受控 phase 同时使用`);
       }
     }
 
@@ -259,7 +273,10 @@ function validateLoadingVisualArchitecture() {
 function validateViewSource(source, pageSource = source, requiresRemoteData = true) {
   const viewIssues = [];
   if (requiresRemoteData) {
-    const required = [['V2AsyncRegion', '没有使用 V2AsyncRegion']];
+    const required = [
+      ['V2AsyncRegion', '没有使用 V2AsyncRegion'],
+      [':phase=', '模块主查询没有把受控 phase 交给 V2AsyncRegion']
+    ];
     for (const [snippet, message] of required) {
       if (!source.includes(snippet)) viewIssues.push(message);
     }
@@ -544,7 +561,7 @@ function forbidPatterns(projectPath, source, patterns) {
 
 function runSelfTests() {
   const valid =
-    '<V2AsyncRegion skeleton="table" /><script>useV2ModuleQuery({ moduleKey: \'orders\' })</script>';
+    '<V2AsyncRegion skeleton="table" :phase="query.phase" /><script>useV2ModuleQuery({ moduleKey: \'orders\' })</script>';
   assert.deepEqual(validateViewSource(valid), []);
   for (const snippet of [
     'v-loading="loading"',

@@ -1,24 +1,32 @@
 <template>
-  <section class="v2-records-list">
+  <section ref="listRef" class="v2-records-list v2-security-mfa-users" :style="listFrameStyle">
     <header class="v2-security-mfa-users__title">
-      <div>
-        <strong>用户 MFA 状态</strong>
+      <V2SectionHeading title="用户 MFA 状态">
+        <template #actions>
+          <V2TableColumnSettings inline :schema="v2TableSchemas.security.mfaUsers" />
+          <span>本页 {{ page.mfaUserItems.length }} 人</span>
+          <span aria-hidden="true">·</span>
+          <strong>共 {{ page.mfaUserTotal }} 人</strong>
+        </template>
+      </V2SectionHeading>
+      <div class="v2-security-mfa-users__tools">
         <span>仅显示绑定状态和恢复码数量，不返回密钥或恢复码哈希。</span>
-      </div>
-      <div class="v2-security-mfa-users__search">
-        <el-input
-          v-model="page.query.mfaUserKeyword"
-          clearable
-          placeholder="账号或姓名"
-          aria-label="搜索用户 MFA 状态"
-          @keyup.enter="page.handleMfaUserSearch"
-          @clear="page.handleMfaUserSearch"
-        />
-        <AppButton size="small" variant="ghost" @click="page.handleMfaUserSearch">搜索</AppButton>
+        <div class="v2-security-mfa-users__search">
+          <el-input
+            v-model="page.query.mfaUserKeyword"
+            clearable
+            placeholder="账号或姓名"
+            aria-label="搜索用户 MFA 状态"
+            @keyup.enter="page.handleMfaUserSearch"
+            @clear="page.handleMfaUserSearch"
+          />
+          <AppButton size="small" variant="ghost" @click="page.handleMfaUserSearch">搜索</AppButton>
+        </div>
       </div>
     </header>
     <V2Table
       :schema="v2TableSchemas.security.mfaUsers"
+      :show-column-settings="false"
       class="v2-records-table"
       :data="page.mfaUserItems"
       scrollbar-always-on
@@ -146,19 +154,26 @@
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import type { useSecurityPage } from '../useSecurityPage';
 
 type SecurityPage = UnwrapNestedRefs<ReturnType<typeof useSecurityPage>>;
 
-defineProps<{ page: SecurityPage }>();
+const props = defineProps<{ page: SecurityPage }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.mfaUserItems,
+  pageSize: () => props.page.query.mfaUserPageSize
+});
 </script>
 
 <style scoped>
-.v2-security-mfa-users__title,
+.v2-security-mfa-users__tools,
 .v2-security-mfa-users__search {
   display: flex;
   align-items: center;
@@ -166,20 +181,27 @@ defineProps<{ page: SecurityPage }>();
 }
 
 .v2-security-mfa-users__title {
-  justify-content: space-between;
-  min-height: 58px;
-  padding: 10px 14px;
+  display: grid;
+  min-height: 96px;
+  gap: 10px;
+  padding: 13px 14px;
   border-bottom: 1px solid var(--v2-border-soft);
 }
 
-.v2-security-mfa-users__title > div:first-child {
-  display: grid;
-  gap: 4px;
+.v2-security-mfa-users__title .v2-section-heading,
+.v2-security-mfa-users__title .v2-section-heading__actions {
+  align-items: center;
 }
 
-.v2-security-mfa-users__title span {
+.v2-security-mfa-users__title .v2-section-heading__actions,
+.v2-security-mfa-users__tools > span {
   color: var(--v2-text-soft);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 19.5px;
+}
+
+.v2-security-mfa-users__tools {
+  justify-content: space-between;
 }
 
 .v2-security-mfa-users__search {
@@ -191,7 +213,7 @@ defineProps<{ page: SecurityPage }>();
 }
 
 @media (max-width: 760px) {
-  .v2-security-mfa-users__title {
+  .v2-security-mfa-users__tools {
     align-items: stretch;
     flex-direction: column;
   }

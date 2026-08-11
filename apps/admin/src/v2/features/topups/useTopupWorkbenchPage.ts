@@ -196,6 +196,8 @@ export function useTopupWorkbenchPage() {
   const loading = computed(
     () => topupQuery.isInitialLoading.value || topupQuery.isRefreshing.value
   );
+  const displayedPage = computed(() => topupQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(() => topupQuery.data.value?.list.pageSize ?? query.pageSize);
   const listError = computed(() =>
     topupQuery.error.value ? getApiErrorMessage(topupQuery.error.value) : ''
   );
@@ -263,12 +265,14 @@ export function useTopupWorkbenchPage() {
     loadCurrentWorkbench();
   }
 
-  function handlePageSizeChange() {
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentWorkbench();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentWorkbench();
   }
 
@@ -480,6 +484,10 @@ export function useTopupWorkbenchPage() {
   return {
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: topupQuery.phase,
+    isParameterTransition: topupQuery.isParameterTransition,
     evaluatedAt,
     loading,
     listError,

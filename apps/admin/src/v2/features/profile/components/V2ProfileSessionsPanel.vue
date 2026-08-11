@@ -1,25 +1,29 @@
 <template>
   <section class="v2-profile-sessions">
-    <V2SectionHeading
-      title="登录设备"
-      help="只显示当前账号的在线会话。为防止误操作，当前设备需通过右上角账号菜单退出登录。"
-    >
-      <template #actions>
-        <AppButton
-          size="small"
-          variant="danger"
-          :disabled="!page.hasOtherActiveSessions"
-          :loading="page.revokingOthers"
-          @click="page.revokeOtherSessions"
-        >
-          退出其他设备
-        </AppButton>
-      </template>
-    </V2SectionHeading>
-
-    <div class="v2-records-list">
+    <div ref="listRef" class="v2-records-list v2-profile-sessions__list" :style="listFrameStyle">
+      <header class="v2-profile-sessions__heading">
+        <V2SectionHeading title="登录设备">
+          <template #actions>
+            <V2TableColumnSettings inline :schema="v2TableSchemas.profile.sessions" />
+            <span>本页 {{ page.sessions.length }} 条</span>
+            <span aria-hidden="true">·</span>
+            <strong>共 {{ page.sessionTotal }} 条</strong>
+            <AppButton
+              size="small"
+              variant="danger"
+              :disabled="!page.hasOtherActiveSessions"
+              :loading="page.revokingOthers"
+              @click="page.revokeOtherSessions"
+            >
+              退出其他设备
+            </AppButton>
+          </template>
+        </V2SectionHeading>
+        <span>只显示当前账号会话；当前设备需通过右上角账号菜单退出登录。</span>
+      </header>
       <V2Table
         :schema="v2TableSchemas.profile.sessions"
+        :show-column-settings="false"
         class="v2-records-table"
         :data="page.sessions"
         scrollbar-always-on
@@ -136,31 +140,17 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import type { useProfilePage } from '../useProfilePage';
 
 type ProfilePage = UnwrapNestedRefs<ReturnType<typeof useProfilePage>>;
 
-defineProps<{ page: ProfilePage }>();
+const props = defineProps<{ page: ProfilePage }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.sessions,
+  pageSize: () => props.page.query.pageSize
+});
 </script>
-
-<style scoped>
-.v2-profile-sessions {
-  display: grid;
-  min-width: 0;
-  gap: 12px;
-}
-
-@media (max-width: 620px) {
-  .v2-profile-sessions :deep(.v2-section-heading) {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .v2-profile-sessions :deep(.v2-section-heading__actions),
-  .v2-profile-sessions :deep(.v2-section-heading__actions .app-button) {
-    width: 100%;
-  }
-}
-</style>

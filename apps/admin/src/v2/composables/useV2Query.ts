@@ -28,11 +28,22 @@ export interface V2QueryContext {
 export interface UseV2QueryOptions<T> {
   scope: V2DataScope;
   key: string | (() => string);
+  enabled?: boolean | (() => boolean);
   freshnessPolicy?: V2FreshnessPolicy;
   query: (context: V2QueryContext) => Promise<T>;
   keepPreviousData?: boolean;
   getRevalidateAt?: (data: T) => Date | number | string | null | undefined;
 }
+
+export type V2QueryPhase =
+  | 'disabled'
+  | 'idle'
+  | 'initial-loading'
+  | 'ready'
+  | 'refreshing'
+  | 'transitioning'
+  | 'initial-error'
+  | 'refresh-error';
 
 export interface PrimeV2QueryOptions<T> {
   scope: V2DataScope;
@@ -43,9 +54,14 @@ export interface PrimeV2QueryOptions<T> {
 
 export interface UseV2QueryResult<T> {
   data: Ref<T | undefined>;
+  enabled: ComputedRef<boolean>;
+  phase: ComputedRef<V2QueryPhase>;
   hasData: ComputedRef<boolean>;
   hasCurrentData: ComputedRef<boolean>;
   isPlaceholderData: ComputedRef<boolean>;
+  isParameterTransition: ComputedRef<boolean>;
+  requestedKey: Ref<string>;
+  displayedKey: Ref<string | null>;
   isInitialLoading: Ref<boolean>;
   isRefreshing: Ref<boolean>;
   error: Ref<unknown>;
@@ -115,9 +131,13 @@ function ensureCacheIdentity() {
   resetQueryCache(currentIdentityEpoch);
 }
 
+function resolveKeyValue(key: string | (() => string)) {
+  return typeof key === 'function' ? key() : key;
+}
+
 function resolveKey(scope: V2DataScope, key: string | (() => string)) {
   ensureCacheIdentity();
-  const value = typeof key === 'function' ? key() : key;
+  const value = resolveKeyValue(key);
   return `${cacheIdentityEpoch}:${scope}:${value}`;
 }
 
@@ -318,27 +338,39 @@ function startRequest<T>(
 
 export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T> {
   const freshnessPolicy = options.freshnessPolicy ?? 'event-driven';
+  const enabled = computed(() =>
+    typeof options.enabled === 'function' ? options.enabled() : options.enabled !== false
+  );
   const data = shallowRef<T>();
   const displayedData = ref(false);
   const currentData = ref(false);
   const placeholderData = ref(false);
+  const requestedKey = ref(resolveKeyValue(options.key));
+  const displayedKey = ref<string | null>(null);
   const isInitialLoading = ref(false);
   const isRefreshing = ref(false);
   const error = shallowRef<unknown>(null);
   const refreshedAt = ref<number | null>(null);
   let subscribedEntry: V2QueryEntry<T> | null = null;
+  let subscribedKey = requestedKey.value;
 
-  function syncFromEntry(entry: V2QueryEntry<T>, preservePrevious = true) {
+  function syncFromEntry(
+    entry: V2QueryEntry<T>,
+    preservePrevious = true,
+    entryKey = subscribedKey
+  ) {
     currentData.value = entry.hasData;
     if (entry.hasData) {
       data.value = entry.data;
       displayedData.value = true;
       placeholderData.value = false;
+      displayedKey.value = entryKey;
       refreshedAt.value = entry.updatedAt || null;
     } else if (!preservePrevious || options.keepPreviousData !== true || !displayedData.value) {
       data.value = undefined;
       displayedData.value = false;
       placeholderData.value = false;
+      displayedKey.value = null;
       refreshedAt.value = null;
     } else {
       placeholderData.value = true;
@@ -364,34 +396,42 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     }
   }
 
-  function subscribe(entry: V2QueryEntry<T>) {
-    if (subscribedEntry === entry) return;
+  function subscribe(entry: V2QueryEntry<T>, entryKey: string) {
+    if (subscribedEntry === entry) {
+      subscribedKey = entryKey;
+      return;
+    }
     if (subscribedEntry) unsubscribe(subscribedEntry);
     subscribedEntry = entry;
+    subscribedKey = entryKey;
     entry.listeners.add(syncCurrentEntry);
     entry.lastAccessedAt = Date.now();
     scheduleEntryDeadline(entry);
   }
 
   async function execute(force: boolean, retryAfterCacheReset = true) {
-    const cacheKey = resolveKey(options.scope, options.key);
+    const nextKey = resolveKeyValue(options.key);
+    requestedKey.value = nextKey;
+    if (!enabled.value) return data.value;
+
+    const cacheKey = resolveKey(options.scope, nextKey);
     const entry = getEntry<T>(cacheKey, options.scope);
-    subscribe(entry);
-    syncFromEntry(entry);
+    subscribe(entry, nextKey);
+    syncFromEntry(entry, true, nextKey);
 
     if (!force && isFresh(entry)) return entry.data;
     const request =
       entry.inFlight && !entry.controller?.signal.aborted
         ? entry.inFlight
         : startRequest(cacheKey, entry, options.query, freshnessPolicy, options.getRevalidateAt);
-    syncFromEntry(entry);
+    syncFromEntry(entry, true, nextKey);
 
     try {
       await request;
     } catch {
       // 错误已写入当前查询条目；有旧数据时继续保留旧内容。
     } finally {
-      if (subscribedEntry === entry) syncFromEntry(entry);
+      if (subscribedEntry === entry) syncFromEntry(entry, true, nextKey);
     }
     if (retryAfterCacheReset && queryCache.get(cacheKey) !== entry) {
       return execute(force, false);
@@ -408,18 +448,52 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     isRefreshing.value = false;
   }
 
-  const initialCacheKey = resolveKey(options.scope, options.key);
-  const initialEntry = getEntry<T>(initialCacheKey, options.scope);
-  subscribe(initialEntry);
-  syncFromEntry(initialEntry);
+  function clearDisplayedState() {
+    data.value = undefined;
+    displayedData.value = false;
+    currentData.value = false;
+    placeholderData.value = false;
+    displayedKey.value = null;
+    refreshedAt.value = null;
+    error.value = null;
+  }
+
+  if (enabled.value) {
+    const initialCacheKey = resolveKey(options.scope, requestedKey.value);
+    const initialEntry = getEntry<T>(initialCacheKey, options.scope);
+    subscribe(initialEntry, requestedKey.value);
+    syncFromEntry(initialEntry);
+  }
+
+  watch(enabled, (isEnabled) => {
+    if (isEnabled) return;
+    cancel();
+    clearDisplayedState();
+  });
 
   onScopeDispose(cancel);
 
+  const phase = computed<V2QueryPhase>(() => {
+    if (!enabled.value) return 'disabled';
+    if (error.value && !displayedData.value) return 'initial-error';
+    if (error.value && displayedData.value) return 'refresh-error';
+    if (isInitialLoading.value) return 'initial-loading';
+    if (isRefreshing.value && placeholderData.value) return 'transitioning';
+    if (isRefreshing.value) return 'refreshing';
+    if (currentData.value || displayedData.value) return 'ready';
+    return 'idle';
+  });
+
   return {
     data,
+    enabled,
+    phase,
     hasData: computed(() => displayedData.value),
     hasCurrentData: computed(() => currentData.value),
     isPlaceholderData: computed(() => placeholderData.value),
+    isParameterTransition: computed(() => placeholderData.value),
+    requestedKey,
+    displayedKey,
     isInitialLoading,
     isRefreshing,
     error,
@@ -488,6 +562,7 @@ export function useV2ModuleQuery<T>(
   const query = useV2Query({
     scope: options.scope,
     key: options.key,
+    enabled: options.enabled,
     freshnessPolicy: moduleDefinition.freshnessPolicy,
     query: options.query,
     keepPreviousData: options.keepPreviousData ?? true,
@@ -515,12 +590,15 @@ export function useV2ModuleQuery<T>(
 
   onMounted(() => {
     mounted = true;
-    void ensureModuleFresh();
+    if (query.enabled.value) void ensureModuleFresh();
   });
   onActivated(() => {
-    if (mounted) void ensureModuleFresh();
+    if (mounted && query.enabled.value) void ensureModuleFresh();
   });
   onDeactivated(query.cancel);
+  watch(query.enabled, (isEnabled) => {
+    if (mounted && isEnabled) void ensureModuleFresh();
+  });
 
   return {
     ...query,

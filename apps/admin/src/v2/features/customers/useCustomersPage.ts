@@ -95,6 +95,16 @@ export function useCustomersPage() {
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'customer.update'));
   const canDelete = computed(() => hasUserPermission(authStore.user, 'customer.delete'));
   const canRevealContact = computed(() => hasUserPermission(authStore.user, 'customer.view_phone'));
+  const activeFilterCount = computed(
+    () =>
+      [
+        query.keyword.trim(),
+        query.sourceOptionId,
+        query.tagOptionId,
+        query.serviceOptionId,
+        query.recordStatus
+      ].filter(Boolean).length
+  );
 
   const formRules: FormRules<CustomerFormState> = {
     name: [
@@ -185,6 +195,10 @@ export function useCustomersPage() {
   const loading = computed(
     () => customersQuery.isInitialLoading.value || customersQuery.isRefreshing.value
   );
+  const displayedPage = computed(() => customersQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => customersQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const listError = computed(() =>
     customersQuery.error.value ? getApiErrorMessage(customersQuery.error.value) : ''
   );
@@ -208,12 +222,26 @@ export function useCustomersPage() {
     loadCurrentCustomers();
   }
 
-  function handlePageSizeChange() {
+  function resetFilters() {
+    Object.assign(query, {
+      page: 1,
+      keyword: '',
+      sourceOptionId: '',
+      tagOptionId: '',
+      serviceOptionId: '',
+      recordStatus: ''
+    });
+    loadCurrentCustomers();
+  }
+
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentCustomers();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentCustomers();
   }
 
@@ -239,6 +267,7 @@ export function useCustomersPage() {
   }
 
   function openEdit(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     editingItem.value = item;
     Object.assign(form, {
       name: item.name,
@@ -280,6 +309,7 @@ export function useCustomersPage() {
   }
 
   async function toggleStatus(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     try {
       await idBusinessV2CustomersApi.update(item.id, {
         recordStatus: item.recordStatus === 'active' ? 'disabled' : 'active'
@@ -292,6 +322,7 @@ export function useCustomersPage() {
   }
 
   function openRevealContact(item: V2Customer, field: 'phone' | 'whatsapp') {
+    if (customersQuery.isParameterTransition.value) return;
     revealTarget.value = item;
     revealField.value = field;
     Object.assign(revealForm, {
@@ -346,6 +377,7 @@ export function useCustomersPage() {
   }
 
   function openDelete(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     deletingItem.value = item;
     deleteDialogVisible.value = true;
   }
@@ -384,6 +416,10 @@ export function useCustomersPage() {
   return {
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: customersQuery.phase,
+    isParameterTransition: customersQuery.isParameterTransition,
     loading,
     listError,
     sourceOptions,
@@ -417,6 +453,7 @@ export function useCustomersPage() {
     canUpdate,
     canDelete,
     canRevealContact,
+    activeFilterCount,
     formRules,
     revealRules,
     hasLoadedOnce,
@@ -424,6 +461,7 @@ export function useCustomersPage() {
     loadCustomers,
     handleSearch,
     handleFilterChange,
+    resetFilters,
     handlePageSizeChange,
     handlePageChange,
     optionNames,

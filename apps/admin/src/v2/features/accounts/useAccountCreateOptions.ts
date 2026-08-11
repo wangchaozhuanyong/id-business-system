@@ -20,7 +20,10 @@ export function useAccountCreateOptions(context: AccountCreateOptionsContext) {
       const [countries, statuses, suppliers] = await Promise.all([
         idBusinessV2OptionsApi.listSelectors('country', undefined, { force: true }),
         idBusinessV2OptionsApi.listSelectors('id_status', undefined, { force: true }),
-        idBusinessV2OptionsApi.listSelectors('id_supplier', undefined, { force: true })
+        idBusinessV2OptionsApi.listSelectors('id_supplier', undefined, {
+          force: true,
+          includeDisabled: true
+        })
       ]);
       context.countryOptions.value = countries.items;
       context.statusOptions.value = statuses.items;

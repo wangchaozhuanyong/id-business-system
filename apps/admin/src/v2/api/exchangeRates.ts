@@ -31,8 +31,10 @@ export const idBusinessV2ExchangeRatesApi = {
       })
     );
   },
-  getRun(id: string) {
-    return request<V2ExchangeRateRunDetail>(http.get(`/id-business-v2/exchange-rates/runs/${id}`));
+  getRun(id: string, options: ApiRequestOptions = {}) {
+    return request<V2ExchangeRateRunDetail>(
+      http.get(`/id-business-v2/exchange-rates/runs/${id}`, { signal: options.signal })
+    );
   },
   overview(options: ApiRequestOptions = {}) {
     return request<V2ExchangeRateOverview>(

@@ -89,6 +89,8 @@ export function useOrderEntryOptionsQuery(config: OrderEntryOptionsQueryConfig) 
 
   return {
     data: query.data,
+    phase: query.phase,
+    isParameterTransition: query.isParameterTransition,
     loading,
     error,
     resolved,

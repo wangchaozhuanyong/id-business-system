@@ -47,25 +47,20 @@ interface RestoreFormModel {
   reason: string;
   backupEvidence: string;
 }
-
 interface CleanupFormModel extends RestoreFormModel {
   olderThanDays: number;
 }
-
 interface DecisionFormModel {
   decision: 'approved' | 'rejected';
   reason: string;
 }
-
 const RESTORE_INITIAL: RestoreFormModel = { reason: '', backupEvidence: '' };
 const CLEANUP_INITIAL: CleanupFormModel = { olderThanDays: 30, reason: '', backupEvidence: '' };
 const DECISION_INITIAL: DecisionFormModel = { decision: 'approved', reason: '' };
-
 function mutationKey(prefix: string) {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}:${suffix}`;
 }
-
 export function useDataGovernancePage() {
   const route = useRoute();
   const authStore = useAuthStore();
@@ -545,6 +540,12 @@ export function useDataGovernancePage() {
     jobs,
     jobsTotal,
     detail,
+    overviewQueryPhase: overviewQuery.phase,
+    recycleQueryPhase: recycleQuery.phase,
+    jobsQueryPhase: jobsQuery.phase,
+    detailQueryPhase: detailQuery.phase,
+    recycleParameterTransition: recycleQuery.isParameterTransition,
+    jobsParameterTransition: jobsQuery.isParameterTransition,
     overviewLoading,
     recycleLoading,
     jobsLoading,

@@ -398,6 +398,8 @@ export function useFinanceLedgerPage(
     settings,
     supplierOptions,
     expenseCategories,
+    queryPhase: ledgerQuery.phase,
+    isParameterTransition: ledgerQuery.isParameterTransition,
     loading,
     resolved,
     error,

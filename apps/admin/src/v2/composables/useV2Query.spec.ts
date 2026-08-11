@@ -83,6 +83,10 @@ describe('V2 query cache', () => {
     const pending = result.ensureFresh();
     expect(result.data.value).toEqual({ items: ['order-1'] });
     expect(result.isPlaceholderData.value).toBe(true);
+    expect(result.isParameterTransition.value).toBe(true);
+    expect(result.phase.value).toBe('transitioning');
+    expect(result.requestedKey.value).toBe('page-2');
+    expect(result.displayedKey.value).toBe('page-1');
     expect(result.isRefreshing.value).toBe(true);
 
     nextPage.reject(new Error('network failed'));
@@ -90,6 +94,40 @@ describe('V2 query cache', () => {
     expect(result.data.value).toEqual({ items: ['order-1'] });
     expect(result.hasCurrentData.value).toBe(false);
     expect(result.error.value).toBeInstanceOf(Error);
+    expect(result.phase.value).toBe('refresh-error');
+    expect(result.displayedKey.value).toBe('page-1');
+    scope.stop();
+  });
+
+  it('does not subscribe or request until an enabled query is allowed', async () => {
+    const allowed = ref(false);
+    const query = vi.fn(async () => ({ items: ['protected'] }));
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({
+        scope: 'orders',
+        key: 'protected-list',
+        enabled: () => allowed.value,
+        freshnessPolicy: 'event-driven',
+        query
+      })
+    );
+    if (!result) return;
+
+    expect(result.phase.value).toBe('disabled');
+    await result.ensureFresh();
+    expect(query).not.toHaveBeenCalled();
+
+    allowed.value = true;
+    await result.ensureFresh();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(result.phase.value).toBe('ready');
+    expect(result.data.value).toEqual({ items: ['protected'] });
+
+    allowed.value = false;
+    await Promise.resolve();
+    expect(result.phase.value).toBe('disabled');
+    expect(result.data.value).toBeUndefined();
     scope.stop();
   });
 

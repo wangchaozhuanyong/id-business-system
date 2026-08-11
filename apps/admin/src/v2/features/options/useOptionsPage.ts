@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch, type Component } from 'vue';
+import { computed, markRaw, reactive, ref, watch, type Component } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   Box,
@@ -16,6 +16,7 @@ import { createV2QueryKey, getV2QueryData, useV2ModuleQuery } from '@/v2/composa
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2OptionsApi } from './api';
+import { resolveCountryCurrencyAutoMatch } from './countryCurrency';
 import type {
   CreateV2OptionInput,
   V2Option,
@@ -55,17 +56,17 @@ export function useOptionsPage() {
 
   const typeDefinitions = ref<V2OptionTypeDefinition[]>([]);
   const optionTypeIcons: Record<V2OptionType, Component> = {
-    id_status: CircleCheck,
-    customer_source: User,
-    customer_tag: PriceTag,
-    country: Location,
-    business_category: Files,
-    service: Tickets,
-    id_supplier: Box,
-    topup_supplier: Wallet,
-    gift_card_name: CreditCard,
-    settlement_platform: CreditCard,
-    expense_category: Wallet
+    id_status: markRaw(CircleCheck),
+    customer_source: markRaw(User),
+    customer_tag: markRaw(PriceTag),
+    country: markRaw(Location),
+    business_category: markRaw(Files),
+    service: markRaw(Tickets),
+    id_supplier: markRaw(Box),
+    topup_supplier: markRaw(Wallet),
+    gift_card_name: markRaw(CreditCard),
+    settlement_platform: markRaw(CreditCard),
+    expense_category: markRaw(Wallet)
   };
   const requestedType =
     typeof route.query.type === 'string' ? (route.query.type as V2OptionType) : 'id_status';
@@ -104,6 +105,7 @@ export function useOptionsPage() {
     'HKD',
     'SGD',
     'MYR',
+    'PHP',
     'EUR',
     'GBP',
     'CAD',
@@ -112,6 +114,24 @@ export function useOptionsPage() {
     'TWD',
     'THB'
   ] as const;
+  let autoMatchedCountryCurrencyCode = '';
+
+  watch(
+    () => [form.type, form.name] as const,
+    ([type, name]) => {
+      if (type !== 'country' || editingItem.value) {
+        autoMatchedCountryCurrencyCode = '';
+        return;
+      }
+      const match = resolveCountryCurrencyAutoMatch(
+        name,
+        form.currencyCode,
+        autoMatchedCountryCurrencyCode
+      );
+      form.currencyCode = match.currencyCode;
+      autoMatchedCountryCurrencyCode = match.autoMatchedCurrencyCode;
+    }
+  );
 
   const activeTypeDefinition = computed(() =>
     typeDefinitions.value.find((item) => item.type === renderedType.value)
@@ -131,6 +151,9 @@ export function useOptionsPage() {
     () =>
       countryOptions.value.find((option) => option.id === form.countryOptionId)?.currencyCode ??
       '选择国家后自动带入'
+  );
+  const activeFilterCount = computed(
+    () => Number(Boolean(query.keyword.trim())) + Number(Boolean(query.status))
   );
   const submitDisabledReason = computed(() => {
     if (parentOptionsLoading.value || countryOptionsLoading.value) {
@@ -224,6 +247,8 @@ export function useOptionsPage() {
   const loading = computed(
     () => optionsQuery.isInitialLoading.value || optionsQuery.isRefreshing.value
   );
+  const displayedPage = computed(() => renderedQuery.value.page);
+  const displayedPageSize = computed(() => renderedQuery.value.pageSize);
   const listError = computed(() =>
     optionsQuery.error.value ? getApiErrorMessage(optionsQuery.error.value) : ''
   );
@@ -266,12 +291,21 @@ export function useOptionsPage() {
     void loadOptions();
   }
 
-  function handlePageSizeChange() {
+  function resetFilters() {
+    query.page = 1;
+    query.keyword = '';
+    query.status = '';
+    void loadOptions();
+  }
+
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     void loadOptions();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     void loadOptions();
   }
 
@@ -298,6 +332,7 @@ export function useOptionsPage() {
 
   async function openCreate() {
     editingItem.value = null;
+    autoMatchedCountryCurrencyCode = '';
     Object.assign(form, createEmptyForm(), { type: selectedType.value });
     drawerVisible.value = true;
     await loadRelatedOptions();
@@ -306,6 +341,7 @@ export function useOptionsPage() {
   async function openEdit(item: V2Option) {
     if (item.isSystem) return;
     editingItem.value = item;
+    autoMatchedCountryCurrencyCode = '';
     Object.assign(form, {
       type: item.type,
       name: item.name,
@@ -501,6 +537,10 @@ export function useOptionsPage() {
     deleting,
     deletingItem,
     query,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: optionsQuery.phase,
+    isParameterTransition: optionsQuery.isParameterTransition,
     listResolved,
     form,
     currencyOptions,
@@ -509,12 +549,14 @@ export function useOptionsPage() {
     formTypeDefinition,
     parentTypeLabel,
     selectedServiceCurrency,
+    activeFilterCount,
     submitDisabledReason,
     isInitialLoading,
     loadInitialData,
     handleTypeChange,
     handleSearch,
     handleFilterChange,
+    resetFilters,
     handlePageSizeChange,
     handlePageChange,
     handleRefresh,

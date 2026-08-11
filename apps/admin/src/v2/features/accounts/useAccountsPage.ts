@@ -187,6 +187,10 @@ export function useAccountsPage() {
   const loading = computed(
     () => accountsQuery.isInitialLoading.value || accountsQuery.isRefreshing.value
   );
+  const displayedPage = computed(() => accountsQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => accountsQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const listError = computed(() =>
     accountsQuery.error.value ? getApiErrorMessage(accountsQuery.error.value) : ''
   );
@@ -218,12 +222,14 @@ export function useAccountsPage() {
     loadCurrentAccounts();
   }
 
-  function handlePageSizeChange() {
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentAccounts();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentAccounts();
   }
 
@@ -376,6 +382,7 @@ export function useAccountsPage() {
   }
 
   function openEdit(item: V2Account) {
+    if (accountsQuery.isParameterTransition.value) return;
     if (item.lossStatus === 'reported') {
       ElMessage.warning('已报损冻结 ID 不能编辑');
       return;
@@ -485,6 +492,7 @@ export function useAccountsPage() {
   }
 
   function openReveal(item: V2Account, field: V2AccountSecretField) {
+    if (accountsQuery.isParameterTransition.value) return;
     revealTarget.value = item;
     Object.assign(revealForm, {
       field,
@@ -496,6 +504,7 @@ export function useAccountsPage() {
   }
 
   function openSensitiveAccess(item: V2Account) {
+    if (accountsQuery.isParameterTransition.value) return;
     const field: V2AccountSecretField =
       item.hasPassword && accountPermissions.canRevealPassword.value
         ? 'password'
@@ -534,6 +543,10 @@ export function useAccountsPage() {
     revealing,
     ...lossReporting,
     query,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: accountsQuery.phase,
+    isParameterTransition: accountsQuery.isParameterTransition,
     form,
     revealForm,
     ...accountSensitiveAccess,
@@ -565,6 +578,17 @@ export function useAccountsPage() {
     submitForm,
     openReveal,
     openSensitiveAccess,
+    openRecordStatusChange: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) {
+        accountRecordStatus.openRecordStatusChange(item);
+      }
+    },
+    openReportLoss: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) lossReporting.openReportLoss(item);
+    },
+    openUnfreezeLoss: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) lossReporting.openUnfreezeLoss(item);
+    },
     formatDecimal: formatAccountDecimal,
     formatDate: formatAccountDate,
     hasLoadedOnce,

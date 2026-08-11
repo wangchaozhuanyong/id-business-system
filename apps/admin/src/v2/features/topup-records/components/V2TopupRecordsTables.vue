@@ -1,18 +1,42 @@
 <template>
   <V2AsyncRegion
     skeleton="table"
-    :loading="activeLoading || isInitialLoading"
-    :resolved="activeResolved"
+    :phase="queryPhase"
+    :previous-data="isParameterTransition"
     :error="activeError"
     :loading-title="activeTab === 'giftCards' ? '正在加载加卡记录' : '正在加载余额变动'"
     :refreshing-title="activeTab === 'giftCards' ? '正在更新加卡记录' : '正在更新余额变动'"
     :error-title="activeTab === 'giftCards' ? '加卡记录加载失败' : '余额变动加载失败'"
     @retry="loadActiveTab"
   >
-    <section class="v2-records-list">
+    <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
+      <header class="v2-topup-records-list__header">
+        <V2SectionHeading
+          :title="activeTab === 'giftCards' ? '加卡记录列表' : '余额流水列表'"
+          help="列表保留余额与成本快照；分页、排序和筛选只改变查看范围。"
+        >
+          <template #actions>
+            <V2TableColumnSettings
+              inline
+              :schema="
+                activeTab === 'giftCards'
+                  ? v2TableSchemas.topupRecords.giftCards
+                  : v2TableSchemas.topupRecords.balanceLedger
+              "
+            />
+            <span>
+              本页 {{ activeTab === 'giftCards' ? giftCards.length : ledgerEntries.length }} 条
+            </span>
+            <span aria-hidden="true">·</span>
+            <strong>共 {{ activeTab === 'giftCards' ? giftCardTotal : ledgerTotal }} 条</strong>
+          </template>
+        </V2SectionHeading>
+      </header>
+
       <template v-if="activeTab === 'giftCards'">
         <V2Table
           :schema="v2TableSchemas.topupRecords.giftCards"
+          :show-column-settings="false"
           :aria-busy="giftCardLoading"
           scrollbar-always-on
           show-overflow-tooltip
@@ -197,6 +221,7 @@
       <template v-else>
         <V2Table
           :schema="v2TableSchemas.topupRecords.balanceLedger"
+          :show-column-settings="false"
           :aria-busy="ledgerLoading"
           scrollbar-always-on
           show-overflow-tooltip
@@ -322,7 +347,10 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { Back, CircleClose, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import V2BalanceLedgerMobileList from './V2BalanceLedgerMobileList.vue';
 import V2GiftCardMobileList from './V2GiftCardMobileList.vue';
 import { operatorUsername } from '@/v2/utils/operator';
@@ -343,18 +371,21 @@ import type {
   V2GiftCardRecord,
   V2GiftCardReversalAction
 } from '../contracts';
+import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 
 interface SortChange {
   prop?: string;
   order?: 'ascending' | 'descending' | null;
 }
 
-defineProps<{
+const props = defineProps<{
   activeTab: 'giftCards' | 'ledger';
   activeLoading: boolean;
   isInitialLoading: boolean;
   activeResolved: boolean;
   activeError: string;
+  queryPhase: V2QueryPhase;
+  isParameterTransition: boolean;
   giftCardLoading: boolean;
   giftCards: V2GiftCardRecord[];
   giftCardTotal: number;
@@ -383,6 +414,10 @@ const giftCardPage = defineModel<number>('giftCardPage', { required: true });
 const giftCardPageSize = defineModel<number>('giftCardPageSize', { required: true });
 const ledgerPage = defineModel<number>('ledgerPage', { required: true });
 const ledgerPageSize = defineModel<number>('ledgerPageSize', { required: true });
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => (props.activeTab === 'giftCards' ? props.giftCards : props.ledgerEntries),
+  pageSize: () => (props.activeTab === 'giftCards' ? giftCardPageSize.value : ledgerPageSize.value)
+});
 const loadActiveTab = () => emit('retry');
 const resetFilters = () => emit('reset');
 const handleGiftCardSortChange = (value: SortChange) => emit('giftCardSortChange', value);

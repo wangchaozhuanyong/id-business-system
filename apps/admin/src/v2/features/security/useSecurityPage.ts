@@ -199,6 +199,18 @@ export function useSecurityPage() {
   const total = computed(() =>
     securityQuery.data.value?.kind === activeTab.value ? securityQuery.data.value.result.total : 0
   );
+  const currentItems = computed(() => {
+    if (activeTab.value === 'sessions') return sessionItems.value;
+    if (activeTab.value === 'policy') return whitelistItems.value;
+    return loginItems.value;
+  });
+  const activeFilterCount = computed(() => {
+    const values: string[] = [query.keyword.trim()];
+    if (activeTab.value === 'login_logs') values.push(query.status, query.abnormal);
+    if (activeTab.value === 'sessions') values.push(query.revoked === 'false' ? '' : query.revoked);
+    if (activeTab.value === 'policy') values.push(query.scope, query.enabled);
+    return values.filter(Boolean).length;
+  });
   const resolved = computed(() => securityQuery.data.value?.kind === activeTab.value);
   const loading = computed(
     () => securityQuery.isInitialLoading.value || securityQuery.isRefreshing.value
@@ -362,6 +374,10 @@ export function useSecurityPage() {
     mfaUserItems,
     mfaUserTotal,
     total,
+    currentItems,
+    activeFilterCount,
+    queryPhase: securityQuery.phase,
+    isParameterTransition: securityQuery.isParameterTransition,
     resolved,
     loading,
     listError,

@@ -1,75 +1,111 @@
 <template>
   <el-tabs v-model="page.activeTab" class="v2-exchange-tabs">
     <el-tab-pane label="自动采集记录" name="automatic">
-      <section class="v2-exchange-toolbar" aria-label="自动采集记录筛选">
-        <el-input
-          :model-value="page.records.length ? `${page.recordTotal} 条自动快照` : ''"
-          readonly
-          placeholder="自动快照记录"
-          aria-label="自动快照记录数量"
-        />
-        <el-select
-          v-model="page.recordQuery.currency"
-          clearable
-          placeholder="全部币种"
-          aria-label="筛选币种"
-          @change="page.searchRecords"
+      <section class="v2-exchange-command-panel" aria-label="自动采集记录筛选工具">
+        <V2SectionHeading
+          class="v2-exchange-command-panel__heading"
+          title="自动采集筛选"
+          help="按币种、汇率来源、有效状态和采集日期缩小联网快照范围。"
         >
-          <el-option
-            v-for="currency in page.trackedCurrencies"
-            :key="currency"
-            :label="page.currencyLabel(currency)"
-            :value="currency"
+          <template #actions>
+            <span class="v2-exchange-command-panel__result">当前共 {{ page.recordTotal }} 条</span>
+          </template>
+        </V2SectionHeading>
+
+        <div class="v2-exchange-toolbar" aria-label="自动采集记录筛选">
+          <div class="v2-exchange-toolbar__summary" aria-live="polite">
+            <span>自动快照</span>
+            <strong>{{ page.recordResolved ? `${page.recordTotal} 条` : '—' }}</strong>
+          </div>
+          <el-select
+            v-model="page.recordQuery.currency"
+            clearable
+            placeholder="全部币种"
+            aria-label="筛选币种"
+            @change="page.searchRecords"
+          >
+            <el-option
+              v-for="currency in page.trackedCurrencies"
+              :key="currency"
+              :label="page.currencyLabel(currency)"
+              :value="currency"
+            />
+          </el-select>
+          <el-select
+            v-model="page.recordQuery.source"
+            clearable
+            placeholder="全部来源"
+            aria-label="筛选来源"
+            @change="page.searchRecords"
+          >
+            <el-option label="Binance + OKX P2P" value="combined_p2p" />
+            <el-option label="ECB 交叉汇率" value="ecb_cross" />
+          </el-select>
+          <el-select
+            v-model="page.recordQuery.status"
+            clearable
+            placeholder="全部状态"
+            aria-label="筛选汇率状态"
+            @change="page.searchRecords"
+          >
+            <el-option label="有效" value="available" />
+            <el-option label="已过期" value="expired" />
+          </el-select>
+          <el-date-picker
+            v-model="page.recordDateRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            aria-label="筛选采集日期"
+            @change="page.searchRecords"
           />
-        </el-select>
-        <el-select
-          v-model="page.recordQuery.source"
-          clearable
-          placeholder="全部来源"
-          aria-label="筛选来源"
-          @change="page.searchRecords"
-        >
-          <el-option label="Binance + OKX P2P" value="combined_p2p" />
-          <el-option label="ECB 交叉汇率" value="ecb_cross" />
-        </el-select>
-        <el-select
-          v-model="page.recordQuery.status"
-          clearable
-          placeholder="全部状态"
-          aria-label="筛选汇率状态"
-          @change="page.searchRecords"
-        >
-          <el-option label="有效" value="available" />
-          <el-option label="已过期" value="expired" />
-        </el-select>
-        <el-date-picker
-          v-model="page.recordDateRange"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          aria-label="筛选采集日期"
-          @change="page.searchRecords"
-        />
-        <AppButton icon-only title="搜索" @click="page.searchRecords">
-          <el-icon><Search /></el-icon>
-        </AppButton>
+          <AppButton
+            class="v2-exchange-toolbar__search"
+            icon-only
+            title="搜索"
+            @click="page.searchRecords"
+          >
+            <el-icon><Search /></el-icon>
+          </AppButton>
+        </div>
+
+        <footer class="v2-exchange-command-panel__footer">
+          <p>联网快照只展示真实采集结果，过期值不会自动进入订单计算。</p>
+          <span>按采集时间倒序</span>
+        </footer>
       </section>
 
       <V2AsyncRegion
         skeleton="table"
-        :loading="page.recordLoading"
-        :resolved="page.recordResolved"
+        :phase="page.queryPhase"
+        :previous-data="page.isParameterTransition"
         :error="page.recordError"
         loading-title="正在加载采集记录"
         refreshing-title="正在更新采集记录"
         error-title="采集记录加载失败"
         @retry="page.loadRecords"
       >
-        <section class="v2-exchange-list">
+        <section
+          ref="recordListRef"
+          class="v2-records-list v2-exchange-list"
+          :style="recordListFrameStyle"
+        >
+          <header class="v2-exchange-list__header">
+            <V2SectionHeading title="自动采集记录" help="每条记录保留来源、有效期和采集批次证据。">
+              <template #actions>
+                <V2TableColumnSettings inline :schema="v2TableSchemas.exchangeRates.snapshots" />
+                <span>本页 {{ page.records.length }} 条</span>
+                <span aria-hidden="true">·</span>
+                <strong>共 {{ page.recordTotal }} 条</strong>
+              </template>
+            </V2SectionHeading>
+          </header>
+
           <V2Table
             :schema="v2TableSchemas.exchangeRates.snapshots"
+            :show-column-settings="false"
             :aria-busy="page.recordLoading"
             scrollbar-always-on
             show-overflow-tooltip
@@ -138,51 +174,6 @@
             </V2TableActionColumn>
           </V2Table>
 
-          <div class="v2-exchange-mobile-list">
-            <article
-              v-for="record in page.records"
-              :key="record.id"
-              class="v2-exchange-mobile-item"
-            >
-              <header>
-                <div>
-                  <el-tag :type="page.recordStatusType(record.status)" size="small" effect="plain">
-                    {{ page.recordStatusLabel(record.status) }}
-                  </el-tag>
-                  <strong>{{ record.currency }} {{ page.formatRate(record.rateToCny) }}</strong>
-                </div>
-                <time>{{ page.formatDate(record.capturedAt) }}</time>
-              </header>
-              <dl>
-                <div>
-                  <dt>来源</dt>
-                  <dd>{{ page.receiptFxSourceLabel(record.source) }}</dd>
-                </div>
-                <div>
-                  <dt>业务日期 / 过期时间</dt>
-                  <dd>{{ record.businessDate }} / {{ page.formatDate(record.expiresAt) }}</dd>
-                </div>
-              </dl>
-              <footer>
-                <span>{{
-                  record.exchangeRateRunId
-                    ? '可查看 P2P 批次'
-                    : record.sourceReference || 'ECB 证据'
-                }}</span>
-                <AppButton
-                  icon-only
-                  size="small"
-                  variant="ghost"
-                  title="查看证据"
-                  :disabled="!record.exchangeRateRunId"
-                  @click="page.openRecordEvidence(record)"
-                >
-                  <el-icon><View /></el-icon>
-                </AppButton>
-              </footer>
-            </article>
-          </div>
-
           <footer class="v2-records-pagination">
             <span>共 {{ page.recordTotal }} 条</span>
             <el-pagination
@@ -202,55 +193,99 @@
     </el-tab-pane>
 
     <el-tab-pane label="人工记录" name="manual">
-      <section class="v2-exchange-toolbar v2-exchange-toolbar--manual" aria-label="人工汇率筛选">
-        <el-input
-          v-model="page.manualQuery.keyword"
-          clearable
-          placeholder="原因、来源、操作人"
-          @keyup.enter="page.searchManual"
-          @clear="page.searchManual"
-        />
-        <el-select
-          v-model="page.manualQuery.currency"
-          clearable
-          placeholder="全部币种"
-          aria-label="筛选人工汇率币种"
-          @change="page.searchManual"
+      <section class="v2-exchange-command-panel" aria-label="人工汇率筛选工具">
+        <V2SectionHeading
+          class="v2-exchange-command-panel__heading"
+          title="人工记录筛选"
+          help="按原因、来源、操作人、币种和记录日期核对人工汇率。"
         >
-          <el-option
-            v-for="currency in page.trackedCurrencies"
-            :key="currency"
-            :label="page.currencyLabel(currency)"
-            :value="currency"
+          <template #actions>
+            <span class="v2-exchange-command-panel__result">当前共 {{ page.manualTotal }} 条</span>
+          </template>
+        </V2SectionHeading>
+
+        <div class="v2-exchange-toolbar v2-exchange-toolbar--manual" aria-label="人工汇率筛选">
+          <el-input
+            v-model="page.manualQuery.keyword"
+            clearable
+            placeholder="原因、来源、操作人"
+            @keyup.enter="page.searchManual"
+            @clear="page.searchManual"
           />
-        </el-select>
-        <el-date-picker
-          v-model="page.manualDateRange"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="至"
-          start-placeholder="记录开始"
-          end-placeholder="记录结束"
-          @change="page.searchManual"
-        />
-        <AppButton icon-only title="搜索" @click="page.searchManual">
-          <el-icon><Search /></el-icon>
-        </AppButton>
+          <el-select
+            v-model="page.manualQuery.currency"
+            clearable
+            placeholder="全部币种"
+            aria-label="筛选人工汇率币种"
+            @change="page.searchManual"
+          >
+            <el-option
+              v-for="currency in page.trackedCurrencies"
+              :key="currency"
+              :label="page.currencyLabel(currency)"
+              :value="currency"
+            />
+          </el-select>
+          <el-date-picker
+            v-model="page.manualDateRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="记录开始"
+            end-placeholder="记录结束"
+            @change="page.searchManual"
+          />
+          <AppButton
+            class="v2-exchange-toolbar__search"
+            icon-only
+            title="搜索"
+            @click="page.searchManual"
+          >
+            <el-icon><Search /></el-icon>
+          </AppButton>
+        </div>
+
+        <footer class="v2-exchange-command-panel__footer">
+          <p>人工记录独立留痕，不会覆盖自动采集汇率。</p>
+          <span>按记录时间倒序</span>
+        </footer>
       </section>
 
       <V2AsyncRegion
         skeleton="table"
-        :loading="page.manualLoading"
-        :resolved="page.manualResolved"
+        :phase="page.queryPhase"
+        :previous-data="page.isParameterTransition"
         :error="page.manualError"
         loading-title="正在加载人工记录"
         refreshing-title="正在更新人工记录"
         error-title="人工记录加载失败"
         @retry="page.loadManualEntries"
       >
-        <section class="v2-exchange-list">
+        <section
+          ref="manualListRef"
+          class="v2-records-list v2-exchange-list"
+          :style="manualListFrameStyle"
+        >
+          <header class="v2-exchange-list__header">
+            <V2SectionHeading
+              title="人工汇率记录"
+              help="人工录入值保留来源、原因和操作人，便于审计追溯。"
+            >
+              <template #actions>
+                <V2TableColumnSettings
+                  inline
+                  :schema="v2TableSchemas.exchangeRates.manualChanges"
+                />
+                <span>本页 {{ page.manualEntries.length }} 条</span>
+                <span aria-hidden="true">·</span>
+                <strong>共 {{ page.manualTotal }} 条</strong>
+              </template>
+            </V2SectionHeading>
+          </header>
+
           <V2Table
             :schema="v2TableSchemas.exchangeRates.manualChanges"
+            :show-column-settings="false"
             :aria-busy="page.manualLoading"
             scrollbar-always-on
             show-overflow-tooltip
@@ -305,48 +340,6 @@
             </V2TableActionColumn>
           </V2Table>
 
-          <div class="v2-exchange-mobile-list">
-            <article
-              v-for="entry in page.manualEntries"
-              :key="entry.id"
-              class="v2-exchange-mobile-item"
-            >
-              <header>
-                <div>
-                  <el-tag type="info" size="small" effect="plain">人工记录</el-tag>
-                  <strong>{{ entry.currency }} {{ page.formatRate(entry.rateToCny) }}</strong>
-                </div>
-                <time>{{ page.formatDate(entry.recordedAt) }}</time>
-              </header>
-              <dl>
-                <div>
-                  <dt>来源说明</dt>
-                  <dd>{{ entry.sourceReference || '—' }}</dd>
-                </div>
-                <div v-if="entry.reason">
-                  <dt>原因</dt>
-                  <dd>{{ entry.reason }}</dd>
-                </div>
-              </dl>
-              <footer>
-                <span>{{ page.operatorName(entry) }}</span>
-                <AppButton
-                  icon-only
-                  size="small"
-                  variant="ghost"
-                  title="查看人工记录"
-                  @click="page.openManualDetail(entry)"
-                >
-                  <el-icon><View /></el-icon>
-                </AppButton>
-              </footer>
-            </article>
-            <div v-if="!page.manualEntries.length" class="v2-records-empty">
-              <strong>暂无人工汇率记录</strong>
-              <span>人工记录不会覆盖联网汇率</span>
-            </div>
-          </div>
-
           <footer class="v2-records-pagination">
             <span>共 {{ page.manualTotal }} 条</span>
             <el-pagination
@@ -375,12 +368,24 @@ import { Search, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
 
 type ExchangeRatesPage = UnwrapNestedRefs<ReturnType<typeof useExchangeRatesPage>>;
 
-defineProps<{
+const props = defineProps<{
   page: ExchangeRatesPage;
 }>();
+
+const { listRef: recordListRef, listFrameStyle: recordListFrameStyle } = useV2StableListFrame({
+  items: () => props.page.records,
+  pageSize: () => props.page.recordQuery.pageSize
+});
+const { listRef: manualListRef, listFrameStyle: manualListFrameStyle } = useV2StableListFrame({
+  items: () => props.page.manualEntries,
+  pageSize: () => props.page.manualQuery.pageSize
+});
 </script>

@@ -1,0 +1,303 @@
+.v2-audit-logs-page {
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-audit-overview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(210px, 0.78fr) minmax(470px, 1.5fr) minmax(230px, max-content);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--v3-radius);
+  background: var(--v2-sidebar);
+  color: #f4f7fb;
+  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+}
+
+.v2-audit-overview__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-audit-overview__intro > span {
+  color: #80aafc;
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0;
+}
+
+.v2-audit-overview__intro h2,
+.v2-audit-overview__intro p {
+  margin: 0;
+}
+
+.v2-audit-overview__intro h2 {
+  color: #f4f7fb;
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.v2-audit-overview__intro p {
+  max-width: 42ch;
+  color: #9fb0c4;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-audit-overview__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-audit-overview__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v2-audit-overview__metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-audit-overview__metrics span,
+.v2-audit-overview__metrics small {
+  overflow: hidden;
+  color: #9fb0c4;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-audit-overview__metrics strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-audit-overview__metrics strong.is-text {
+  font-size: 15px;
+}
+
+.v2-audit-overview__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.v2-audit-overview__actions .app-button--ghost.el-button {
+  --el-button-text-color: #f4f7fb;
+  --el-button-border-color: rgba(255, 255, 255, 0.16);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
+}
+
+.v2-audit-navigation,
+.v2-audit-command-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-audit-navigation {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 11px 16px;
+}
+
+.v2-audit-navigation .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-audit-navigation .el-tabs {
+  min-width: 220px;
+}
+
+.v2-audit-navigation .el-tabs__header {
+  margin: 0;
+}
+
+.v2-audit-navigation .el-tabs__nav-wrap::after {
+  display: none;
+}
+
+.v2-audit-command-panel {
+  display: grid;
+}
+
+.v2-audit-command-panel__heading {
+  margin: 0 16px;
+  padding: 15px 0 12px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-audit-command-panel__heading .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 19.5px;
+}
+
+.v2-audit-filter-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto auto;
+  align-items: start;
+  gap: 9px;
+  padding: 13px 16px;
+}
+
+.v2-audit-filter-grid > .el-input {
+  width: 100%;
+}
+
+.v2-audit-filter-grid__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.v2-audit-list {
+  min-height: 743px;
+}
+
+.v2-audit-list__heading {
+  min-width: 0;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-audit-list__heading .v2-section-heading,
+.v2-audit-list__heading .v2-section-heading__actions {
+  align-items: baseline;
+}
+
+.v2-audit-list__heading .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 19.5px;
+}
+
+.v2-audit-list__heading .v2-section-heading__actions strong {
+  color: var(--v2-text);
+}
+
+.v2-audit-mobile-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1220px) {
+  .v2-audit-overview {
+    grid-template-columns: minmax(210px, 0.8fr) minmax(430px, 1.3fr);
+  }
+
+  .v2-audit-overview__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .v2-audit-filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .v2-audit-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-audit-overview__actions {
+    grid-column: auto;
+    justify-content: flex-start;
+  }
+
+  .v2-audit-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-audit-list > .v2-unified-table-shell {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .v2-audit-overview {
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .v2-audit-overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-audit-overview__metrics article:nth-child(3) {
+    border-left: 0;
+  }
+
+  .v2-audit-overview__metrics article:nth-child(n + 3) {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-audit-overview__actions {
+    flex-wrap: wrap;
+  }
+
+  .v2-audit-overview__actions .el-tag {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .v2-audit-navigation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-audit-navigation .v2-section-heading__actions {
+    display: none;
+  }
+
+  .v2-audit-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 12px;
+  }
+
+  .v2-audit-filter-grid__actions {
+    justify-content: stretch;
+  }
+
+  .v2-audit-filter-grid__actions .el-button {
+    flex: 1 1 0;
+  }
+
+  .v2-audit-list .v2-records-pagination .el-pagination {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    row-gap: 8px;
+  }
+}

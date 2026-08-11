@@ -6,6 +6,7 @@ import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
 import {
   currencyLabel,
@@ -67,6 +68,7 @@ export function useExchangeRatesPage() {
   const detailError = ref('');
   const runDetail = ref<V2ExchangeRateRunDetail | null>(null);
   const runDetailTarget = ref<string | null>(null);
+  const runDetailRequest = useV2LatestRequest();
   const manualCreateVisible = ref(false);
   const manualCreating = ref(false);
   const manualDetailVisible = ref(false);
@@ -353,17 +355,25 @@ export function useExchangeRatesPage() {
   }
 
   async function openRun(runId: string) {
+    const switchingTarget = runDetailTarget.value !== runId;
     runDetailTarget.value = runId;
     runDetailVisible.value = true;
     detailLoading.value = true;
     detailError.value = '';
-    runDetail.value = null;
+    if (switchingTarget) runDetail.value = null;
+    const request = runDetailRequest.begin();
     try {
-      runDetail.value = await idBusinessV2ExchangeRatesApi.getRun(runId);
+      const result = await idBusinessV2ExchangeRatesApi.getRun(runId, { signal: request.signal });
+      if (!request.isCurrent() || runDetailTarget.value !== runId) return;
+      runDetail.value = result;
     } catch (error) {
+      if (!request.isCurrent() || runDetailTarget.value !== runId) return;
       detailError.value = getApiErrorMessage(error);
     } finally {
-      detailLoading.value = false;
+      if (request.isCurrent() && runDetailTarget.value === runId) {
+        detailLoading.value = false;
+      }
+      request.finish();
     }
   }
 
@@ -469,6 +479,8 @@ export function useExchangeRatesPage() {
     activeTab,
     overview,
     runtime,
+    queryPhase: exchangeRateQuery.phase,
+    isParameterTransition: exchangeRateQuery.isParameterTransition,
     headerLoading,
     headerError,
     collecting,

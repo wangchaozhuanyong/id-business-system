@@ -6,6 +6,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 import { v2RolesApi } from './api';
 import type {
   CreateV2RoleInput,
@@ -72,6 +73,7 @@ export function useRolesPage() {
   const detailLoading = ref(false);
   const detailResolved = ref(false);
   const detailError = ref('');
+  const detailRequest = useV2LatestRequest();
   const saving = ref(false);
   const mutationError = ref('');
   const permissionKeyword = ref('');
@@ -101,6 +103,9 @@ export function useRolesPage() {
 
   const items = computed(() => rolesQuery.data.value?.list.items ?? []);
   const total = computed(() => rolesQuery.data.value?.list.total ?? 0);
+  const displayedPage = computed(() => rolesQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(() => rolesQuery.data.value?.list.pageSize ?? query.pageSize);
+  const activeFilterCount = computed(() => (query.keyword.trim() ? 1 : 0));
   const permissions = computed(() => rolesQuery.data.value?.permissions ?? []);
   const permissionGroups = computed<V2RolePermissionGroup[]>(() => {
     const groups = new Map<string, V2RolePermission[]>();
@@ -245,6 +250,7 @@ export function useRolesPage() {
   }
 
   function openCreate() {
+    detailRequest.cancel();
     editingItem.value = null;
     members.value = [];
     detailLoading.value = false;
@@ -258,9 +264,12 @@ export function useRolesPage() {
   }
 
   function openEdit(item: V2Role) {
+    const switchingTarget = editingItem.value?.id !== item.id;
     editingItem.value = item;
-    members.value = [];
-    detailResolved.value = false;
+    if (switchingTarget) {
+      members.value = [];
+      detailResolved.value = false;
+    }
     detailError.value = '';
     mutationError.value = '';
     setForm({
@@ -278,19 +287,22 @@ export function useRolesPage() {
   async function loadRoleDetail() {
     const current = editingItem.value;
     if (!current) return;
+    const request = detailRequest.begin();
     detailLoading.value = true;
     detailError.value = '';
     try {
-      const detail = await v2RolesApi.get(current.id);
-      if (editingItem.value?.id !== current.id) return;
+      const detail = await v2RolesApi.get(current.id, { signal: request.signal });
+      if (!request.isCurrent() || editingItem.value?.id !== current.id) return;
       members.value = detail.members;
       detailResolved.value = true;
     } catch (error) {
+      if (!request.isCurrent() || editingItem.value?.id !== current.id) return;
       detailError.value = getApiErrorMessage(error);
     } finally {
-      if (editingItem.value?.id === current.id) {
+      if (request.isCurrent() && editingItem.value?.id === current.id) {
         detailLoading.value = false;
       }
+      request.finish();
     }
   }
 
@@ -407,6 +419,11 @@ export function useRolesPage() {
     query,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: rolesQuery.phase,
+    isParameterTransition: rolesQuery.isParameterTransition,
+    activeFilterCount,
     permissionGroups,
     loading,
     listError,

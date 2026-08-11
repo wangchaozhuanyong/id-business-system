@@ -1,34 +1,23 @@
 <template>
   <section class="v2-records-page v2-governance-page">
-    <V2PageContext
-      description="所有恢复和清理先冻结影响预览、确认备份证据，再由另一名管理员审批并分批执行。"
-      aria-label="数据治理安全边界"
-    >
-      <template #status>
-        <el-tag type="success" effect="plain">异人审批</el-tag>
-        <el-tag type="info" effect="plain">通用硬删除关闭</el-tag>
-      </template>
-    </V2PageContext>
+    <V2DataGovernanceOverview :page="page" />
 
-    <el-tabs v-model="page.activeTab" class="v2-governance-tabs">
-      <el-tab-pane label="治理概况" name="overview">
-        <V2DataGovernanceOverviewPanel :page="page" />
-      </el-tab-pane>
-      <el-tab-pane name="recycle">
-        <template #label>
-          <span>回收站</span>
-          <el-badge v-if="page.recycleTotal" :value="page.recycleTotal" :max="999" />
-        </template>
-        <V2DataGovernanceRecyclePanel :page="page" />
-      </el-tab-pane>
-      <el-tab-pane name="jobs">
-        <template #label>
-          <span>治理任务</span>
-          <el-badge v-if="page.jobsTotal" :value="page.jobsTotal" :max="999" />
-        </template>
-        <V2DataGovernanceJobsPanel :page="page" />
-      </el-tab-pane>
-    </el-tabs>
+    <el-alert
+      v-if="page.previewBlockedReason && page.overviewHasData"
+      type="warning"
+      :title="page.previewBlockedReason"
+      description="在异人审批条件恢复前，可以查看治理概况与历史任务，但不能生成新的恢复或清理预览。"
+      :closable="false"
+      show-icon
+    />
+
+    <V2DataGovernanceNavigation v-model:active-tab="page.activeTab" :page="page" />
+
+    <div class="v2-governance-content">
+      <V2DataGovernanceOverviewPanel v-show="page.activeTab === 'overview'" :page="page" />
+      <V2DataGovernanceRecyclePanel v-show="page.activeTab === 'recycle'" :page="page" />
+      <V2DataGovernanceJobsPanel v-show="page.activeTab === 'jobs'" :page="page" />
+    </div>
 
     <V2DataGovernanceDrawers :page="page" />
   </section>
@@ -36,27 +25,15 @@
 
 <script setup lang="ts">
 import { reactive } from 'vue';
-import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2DataGovernanceDrawers from './components/V2DataGovernanceDrawers.vue';
 import V2DataGovernanceJobsPanel from './components/V2DataGovernanceJobsPanel.vue';
+import V2DataGovernanceNavigation from './components/V2DataGovernanceNavigation.vue';
+import V2DataGovernanceOverview from './components/V2DataGovernanceOverview.vue';
 import V2DataGovernanceOverviewPanel from './components/V2DataGovernanceOverviewPanel.vue';
 import V2DataGovernanceRecyclePanel from './components/V2DataGovernanceRecyclePanel.vue';
 import { useDataGovernancePage } from './useDataGovernancePage';
 import '@/v2/styles/records.css';
+import '@/v2/styles/data-governance.css';
 
 const page = reactive(useDataGovernancePage());
 </script>
-
-<style scoped>
-.v2-governance-tabs {
-  min-width: 0;
-}
-
-.v2-governance-tabs :deep(.el-tabs__item) {
-  gap: 6px;
-}
-
-.v2-governance-tabs :deep(.el-tabs__content) {
-  overflow: visible;
-}
-</style>

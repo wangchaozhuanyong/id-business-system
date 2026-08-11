@@ -1,11 +1,23 @@
 <template>
-  <section class="v2-finance-panel v2-settlement-report">
-    <header>
-      <div>
-        <span>结算平台收款</span>
-        <strong>按订单创建时间归属，已结算与处理中金额分开</strong>
-      </div>
-      <el-tag effect="plain">{{ report.totals.completedOrderCount }} 笔已结算</el-tag>
+  <section
+    ref="listRef"
+    class="v2-finance-panel v2-settlement-report v2-analytics-report-list v2-records-list"
+    :style="listFrameStyle"
+  >
+    <header class="v2-analytics-report-list__header">
+      <V2SectionHeading
+        title="结算平台收款"
+        help="按订单创建时间归属，已结算与处理中金额分开核算。"
+      >
+        <template #actions>
+          <V2TableColumnSettings
+            inline
+            :schema="v2TableSchemas.dataAnalytics.settlementPlatforms"
+          />
+          <span>本页 {{ report.rows.length }} 条</span>
+          <strong>{{ report.totals.completedOrderCount }} 笔已结算</strong>
+        </template>
+      </V2SectionHeading>
     </header>
 
     <el-alert
@@ -45,6 +57,7 @@
       class="v2-records-table"
       :data="report.rows"
       :row-key="settlementPlatformRowKey"
+      :show-column-settings="false"
       scrollbar-always-on
       show-overflow-tooltip
     >
@@ -115,14 +128,21 @@ import type {
   V2SettlementPlatformReport,
   V2SettlementPlatformReportRow
 } from '@apple-business/shared';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2Table from '@/v2/components/V2Table.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 
-defineProps<{
+const props = defineProps<{
   report: V2SettlementPlatformReport;
 }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.report.rows,
+  pageSize: () => 10
+});
 
 function settlementPlatformRowKey(row: V2SettlementPlatformReportRow) {
   return row.settlementPlatform?.id ?? 'historical-unspecified';

@@ -123,6 +123,28 @@ export function useAuditLogsPage() {
   const total = computed(() =>
     auditQuery.data.value?.kind === activeTab.value ? auditQuery.data.value.result.total : 0
   );
+  const displayedPage = computed(() =>
+    auditQuery.data.value?.kind === activeTab.value ? auditQuery.data.value.result.page : query.page
+  );
+  const displayedPageSize = computed(() =>
+    auditQuery.data.value?.kind === activeTab.value
+      ? auditQuery.data.value.result.pageSize
+      : query.pageSize
+  );
+  const currentItems = computed(() =>
+    activeTab.value === 'operations' ? operationItems.value : sensitiveItems.value
+  );
+  const activeFilterCount = computed(
+    () =>
+      [
+        query.keyword.trim(),
+        query.module.trim(),
+        query.operator.trim(),
+        activeTab.value === 'operations' ? query.action.trim() : query.fieldName.trim(),
+        activeTab.value === 'sensitive_access' ? query.approved : '',
+        createdRange.value.length ? 'date' : ''
+      ].filter(Boolean).length
+  );
   const resolved = computed(() => auditQuery.data.value?.kind === activeTab.value);
   const loading = computed(
     () => auditQuery.isInitialLoading.value || auditQuery.isRefreshing.value
@@ -273,7 +295,13 @@ export function useAuditLogsPage() {
     query,
     operationItems,
     sensitiveItems,
+    currentItems,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: auditQuery.phase,
+    isParameterTransition: auditQuery.isParameterTransition,
+    activeFilterCount,
     resolved,
     loading,
     listError,

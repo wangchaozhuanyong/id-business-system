@@ -6,30 +6,23 @@
       help="随订单资料和所选 ID 实时更新余额、成本与预计利润。"
     />
 
-    <section class="v2-order-entry-disposition-control">
+    <section class="v2-order-entry-selected-id" aria-live="polite">
       <header>
-        <span>ID 处理方式</span>
-        <small>{{
-          accountDisposition === 'sold' ? '本单售出并全局锁定' : '本单保留继续复用'
-        }}</small>
+        <span>当前选中 ID</span>
+        <strong :class="{ 'is-ready': Boolean(selectedCandidate) }">
+          {{ selectedCandidate?.status.name || '待匹配' }}
+        </strong>
       </header>
-      <el-radio-group v-model="accountDisposition" class="v2-order-entry-disposition-mode">
-        <el-radio value="retained">保留 ID</el-radio>
-        <el-radio value="sold">卖出 ID</el-radio>
-      </el-radio-group>
+      <p>{{ selectedCandidate?.appleIdMasked || '尚未选择可用 ID' }}</p>
+      <footer>
+        <span>{{ selectedCountryName || '等待国家' }}</span>
+        <span> 匹配余额 {{ formatDecimal(selectedCandidate?.currentBalance ?? '0') }} </span>
+      </footer>
     </section>
 
     <dl class="v2-order-entry-live-summary" aria-live="polite">
       <div>
-        <dt>匹配 Apple ID</dt>
-        <dd>{{ selectedCandidate?.appleIdMasked || '等待匹配' }}</dd>
-      </div>
-      <div>
-        <dt>国家 / 地区</dt>
-        <dd>{{ selectedCountryName || '-' }}</dd>
-      </div>
-      <div>
-        <dt>账号余额（可用）</dt>
+        <dt>可用余额</dt>
         <dd>{{ formatDecimal(selectedCandidate?.currentBalance ?? '0') }}</dd>
       </div>
       <div>
@@ -37,14 +30,33 @@
         <dd>¥{{ formatDecimal(estimatedBalanceCostPreview) }}</dd>
       </div>
       <div>
+        <dt>ID 购买成本</dt>
+        <dd>¥{{ formatDecimal(accountPurchaseCostPreview) }}</dd>
+      </div>
+      <div>
+        <dt>平台手续费</dt>
+        <dd>¥{{ formatDecimal(platformFeePreview) }}</dd>
+      </div>
+      <div>
         <dt>总成本</dt>
         <dd>¥{{ formatDecimal(totalCostPreview) }}</dd>
       </div>
       <div class="is-profit">
         <dt>预计利润</dt>
-        <dd>¥{{ formatDecimal(estimatedProfitPreview) }}</dd>
+        <dd>
+          ¥{{ formatDecimal(estimatedProfitPreview) }}
+          <small v-if="estimatedProfitRatePreview">
+            {{ formatDecimal(estimatedProfitRatePreview) }}%
+          </small>
+        </dd>
       </div>
     </dl>
+
+    <section class="v2-order-entry-summary-note">
+      <strong>核算说明</strong>
+      <span>金额随售卖价格、ID 处理方式与服务端成本规则实时更新。</span>
+      <span>提交时服务端会再次校验余额与成本，避免多人操作造成旧数据扣减。</span>
+    </section>
   </aside>
 </template>
 
@@ -55,13 +67,12 @@ import type { V2OrderCandidate } from '../contracts';
 defineProps<{
   selectedCandidate: V2OrderCandidate | null;
   selectedCountryName: string;
+  accountPurchaseCostPreview: string;
+  platformFeePreview: string;
   estimatedBalanceCostPreview: string;
   totalCostPreview: string;
   estimatedProfitPreview: string;
+  estimatedProfitRatePreview: string | null;
   formatDecimal: (value: string) => string;
 }>();
-
-const accountDisposition = defineModel<'retained' | 'sold'>('accountDisposition', {
-  required: true
-});
 </script>

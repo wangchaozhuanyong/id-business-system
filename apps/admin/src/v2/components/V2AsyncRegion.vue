@@ -1,7 +1,15 @@
 <template>
   <section
     class="v2-async-region"
-    :class="[`v2-async-region--${variant}`, { 'is-refreshing': showRefreshFeedback }]"
+    :class="[
+      `v2-async-region--${variant}`,
+      {
+        'is-refreshing': showRefreshFeedback,
+        'is-previous-data': isPreviousData
+      }
+    ]"
+    :data-v2-query-phase="effectivePhase"
+    :data-v2-previous-data="isPreviousData || undefined"
     :aria-busy="isBusy"
   >
     <V2PageState
@@ -28,9 +36,13 @@
     </V2PageState>
 
     <template v-else>
-      <div v-if="error" class="v2-async-region__refresh-error" role="alert">
-        <strong>更新失败</strong>
-        <span>{{ error }}</span>
+      <div
+        v-if="effectivePhase === 'refresh-error' && error"
+        class="v2-async-region__refresh-error"
+        role="alert"
+      >
+        <strong>{{ isPreviousData ? '新条件加载失败' : '更新失败' }}</strong>
+        <span> {{ error }}{{ isPreviousData ? '，以下仍为上次成功结果。' : '' }} </span>
         <AppButton size="small" variant="soft" @click="$emit('retry')">重试</AppButton>
       </div>
 
@@ -43,7 +55,12 @@
         <slot name="empty-action" />
       </V2PageState>
 
-      <div v-else class="v2-async-region__content">
+      <div
+        v-else
+        class="v2-async-region__content"
+        :inert="isPreviousData || undefined"
+        :aria-disabled="isPreviousData || undefined"
+      >
         <slot />
       </div>
 
@@ -64,15 +81,22 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2PageState from '@/v2/components/V2PageState.vue';
-import { resolveV2AsyncRegionState, shouldDeferV2RefreshFeedback } from './asyncRegionState';
+import {
+  resolveLegacyV2QueryPhase,
+  resolveV2AsyncRegionState,
+  shouldDeferV2RefreshFeedback
+} from './asyncRegionState';
 import type { V2SkeletonKind } from './loadingVisuals';
+import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 
 const REFRESH_FEEDBACK_DELAY_MS = 120;
 
 const props = withDefaults(
   defineProps<{
-    loading: boolean;
-    resolved: boolean;
+    phase?: V2QueryPhase;
+    previousData?: boolean;
+    loading?: boolean;
+    resolved?: boolean;
     empty?: boolean;
     error?: string;
     forbidden?: boolean;
@@ -87,6 +111,10 @@ const props = withDefaults(
     forbiddenMessage?: string;
   }>(),
   {
+    phase: undefined,
+    previousData: false,
+    loading: false,
+    resolved: false,
     empty: false,
     error: '',
     forbidden: false,
@@ -106,12 +134,25 @@ defineEmits<{
 }>();
 
 const showRefreshFeedback = ref(false);
-const isBusy = computed(() => props.loading || (!props.resolved && !props.error));
+const effectivePhase = computed<V2QueryPhase>(() =>
+  props.phase
+    ? props.phase
+    : resolveLegacyV2QueryPhase({
+        loading: props.loading,
+        resolved: props.resolved,
+        error: props.error
+      })
+);
+const isPreviousData = computed(
+  () => props.previousData || effectivePhase.value === 'transitioning'
+);
+const isBusy = computed(() =>
+  ['idle', 'initial-loading', 'refreshing', 'transitioning'].includes(effectivePhase.value)
+);
 const regionState = computed(() =>
   resolveV2AsyncRegionState({
     forbidden: props.forbidden,
-    resolved: props.resolved,
-    error: props.error,
+    phase: effectivePhase.value,
     empty: props.empty
   })
 );
@@ -126,12 +167,12 @@ function clearRefreshTimer() {
 }
 
 watch(
-  () => [props.loading, props.resolved] as const,
-  ([loading, resolved]) => {
+  effectivePhase,
+  (phase) => {
     clearRefreshTimer();
-    if (!shouldDeferV2RefreshFeedback(loading, resolved)) return;
+    if (!shouldDeferV2RefreshFeedback(phase)) return;
     refreshTimer = setTimeout(() => {
-      if (props.loading && props.resolved) showRefreshFeedback.value = true;
+      if (shouldDeferV2RefreshFeedback(effectivePhase.value)) showRefreshFeedback.value = true;
     }, REFRESH_FEEDBACK_DELAY_MS);
   },
   { immediate: true }
@@ -156,6 +197,11 @@ onBeforeUnmount(clearRefreshTimer);
 
 .v2-async-region__content {
   min-width: 0;
+}
+
+.v2-async-region.is-previous-data .v2-async-region__content {
+  opacity: 0.82;
+  transition: opacity 120ms ease;
 }
 
 .v2-async-region__refresh-error {
@@ -221,6 +267,10 @@ onBeforeUnmount(clearRefreshTimer);
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .v2-async-region.is-previous-data .v2-async-region__content {
+    transition: none;
+  }
+
   .v2-async-region__progress > span:first-child {
     width: 100%;
     animation: none;

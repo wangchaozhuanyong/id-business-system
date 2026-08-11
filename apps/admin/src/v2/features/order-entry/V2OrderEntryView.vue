@@ -2,8 +2,8 @@
   <section class="v2-order-entry-page">
     <V2AsyncRegion
       skeleton="form"
-      :loading="optionsLoading"
-      :resolved="optionsResolved"
+      :phase="optionsQueryPhase"
+      :previous-data="optionsParameterTransition"
       :error="optionsError"
       loading-title="正在加载订单录入资料"
       refreshing-title="正在更新订单录入资料"
@@ -255,7 +255,7 @@
                 title="周期与备注"
                 help="核对使用周期、成本和备注后再提交。"
               />
-              <div class="v2-order-entry-group-columns">
+              <div class="v2-order-entry-group-columns v2-order-entry-period-columns">
                 <div class="v2-order-entry-form-column">
                   <el-form-item
                     :label="
@@ -319,7 +319,7 @@
                     <el-input
                       v-model="form.remark"
                       type="textarea"
-                      :rows="3"
+                      :autosize="{ minRows: 1, maxRows: 3 }"
                       maxlength="2000"
                       show-word-limit
                       placeholder="选填"
@@ -329,16 +329,11 @@
               </div>
             </section>
           </div>
-
-          <V2OrderEntrySubmitBar
-            :submitting="submitting"
-            :disabled-reason="submitDisabledReason"
-            @submit="submitOrder"
-          />
         </el-form>
 
         <V2OrderEntryCandidates
           v-model:account-id="form.accountId"
+          v-model:account-disposition="form.accountDisposition"
           :id-selection-mode="idSelectionMode"
           :can-match="canMatch"
           :matching-loading="matchingLoading"
@@ -351,13 +346,27 @@
         />
 
         <V2OrderEntryLiveSummary
-          v-model:account-disposition="form.accountDisposition"
           :selected-candidate="selectedCandidate"
           :selected-country-name="selectedCountry?.name ?? ''"
+          :account-purchase-cost-preview="appliedAccountCostPreview"
+          :platform-fee-preview="platformFeePreview"
           :estimated-balance-cost-preview="estimatedBalanceCostPreview"
           :total-cost-preview="totalCostPreview"
           :estimated-profit-preview="estimatedProfitPreview"
+          :estimated-profit-rate-preview="estimatedProfitRatePreview"
           :format-decimal="formatDecimal"
+        />
+
+        <V2OrderEntrySubmitBar
+          :submitting="submitting"
+          :disabled-reason="submitDisabledReason"
+          :selected-id="selectedCandidate?.appleIdMasked ?? ''"
+          :selected-balance="selectedCandidate?.currentBalance ?? '0'"
+          :selected-currency="selectedCountry?.currencyCode ?? ''"
+          :estimated-profit="estimatedProfitPreview"
+          :estimated-profit-rate="estimatedProfitRatePreview"
+          :format-decimal="formatDecimal"
+          @submit="submitOrder"
         />
       </section>
 
@@ -410,9 +419,9 @@ import '@/v2/styles/order-entry.css';
 const {
   router,
   formRef,
-  optionsLoading,
+  optionsQueryPhase,
+  optionsParameterTransition,
   optionsError,
-  optionsResolved,
   idSelectionMode,
   matchingLoading,
   matchingError,
@@ -448,6 +457,7 @@ const {
   estimatedBalanceCostPreview,
   totalCostPreview,
   estimatedProfitPreview,
+  estimatedProfitRatePreview,
   pricingInputMode,
   profitRateInputValue,
   profitRateInputHint,

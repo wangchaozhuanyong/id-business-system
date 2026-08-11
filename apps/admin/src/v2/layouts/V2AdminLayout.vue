@@ -510,6 +510,7 @@ const canViewRenewalWarnings = computed(() =>
 const renewalWarningQuery = useV2Query<V2RenewalWarningSummary>({
   scope: 'renewal-warning-summary',
   key: 'global',
+  enabled: () => canViewRenewalWarnings.value,
   freshnessPolicy: 'event-with-deadline',
   getRevalidateAt: (result) => result.revalidateAt,
   query: ({ signal }) => idBusinessV2RenewalsApi.getWarningSummary({ signal })
@@ -521,6 +522,7 @@ const renewalWarningError = computed(() => renewalWarningQuery.error.value);
 const sensitiveApprovalQuery = useV2Query<V2SensitiveAccessApprovalSummary>({
   scope: 'security',
   key: 'sensitive-approval-summary',
+  enabled: () => isAdmin.value,
   freshnessPolicy: 'event-driven',
   query: ({ signal }) => idBusinessV2SensitiveAccessApi.getApprovalSummary({ signal })
 });

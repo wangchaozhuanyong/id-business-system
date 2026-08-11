@@ -748,3 +748,1141 @@
     margin-inline: -2px;
   }
 }
+
+/* 方案 3：钱包账户工作台，仅作用于 finance-ledger，避免影响开支记账与经营分析。 */
+.v2-finance-ledger-page {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-finance-ledger-overview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(210px, 0.78fr) minmax(470px, 1.5fr) minmax(210px, max-content);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--v3-radius);
+  background: var(--v2-sidebar);
+  color: #f4f7fb;
+  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+}
+
+.v2-finance-ledger-overview__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-finance-ledger-overview__eyebrow {
+  color: #80aafc;
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.14em;
+}
+
+.v2-finance-ledger-overview__intro h2,
+.v2-finance-ledger-overview__intro p {
+  margin: 0;
+}
+
+.v2-finance-ledger-overview__intro h2 {
+  font-size: 17px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.01em;
+}
+
+.v2-finance-ledger-overview__intro p {
+  max-width: 42ch;
+  color: #9fb0c4;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-finance-ledger-overview__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-finance-ledger-overview__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v2-finance-ledger-overview__metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-finance-ledger-overview__metrics span,
+.v2-finance-ledger-overview__metrics small,
+.v2-finance-ledger-overview__actions > span {
+  color: #9fb0c4;
+  font-size: 10px;
+}
+
+.v2-finance-ledger-overview__metrics strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-finance-ledger-overview__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.v2-finance-ledger-overview__actions .app-button--ghost.el-button {
+  --el-button-text-color: #f4f7fb;
+  --el-button-border-color: rgba(255, 255, 255, 0.16);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+}
+
+.v2-finance-ledger-navigation {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface-soft);
+}
+
+.v2-finance-ledger-navigation button {
+  display: grid;
+  min-width: 0;
+  min-height: 66px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--v3-radius) - 4px);
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.v2-finance-ledger-navigation button:hover {
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+  color: var(--v2-text);
+}
+
+.v2-finance-ledger-navigation button:active {
+  transform: translateY(1px);
+}
+
+.v2-finance-ledger-navigation button:focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
+.v2-finance-ledger-navigation button.is-active {
+  border-color: color-mix(in srgb, var(--v2-accent) 18%, var(--v2-border));
+  background: var(--v2-surface);
+  color: var(--v2-accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--v2-text) 10%, transparent);
+}
+
+.v2-finance-ledger-navigation__icon {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--v2-accent) 8%, var(--v2-surface));
+  color: var(--v2-accent);
+  font-size: 16px;
+}
+
+.v2-finance-ledger-navigation__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.v2-finance-ledger-navigation__copy strong {
+  overflow: hidden;
+  color: var(--v2-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-finance-ledger-navigation__copy small {
+  overflow: hidden;
+  color: var(--v2-text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-finance-ledger-navigation__count {
+  min-width: 28px;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--v3-font-weight-semibold);
+  text-align: right;
+}
+
+.v2-finance-ledger-command-panel {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-finance-ledger-command-panel > .v2-section-heading {
+  margin: 0 16px;
+  padding: 15px 0 12px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-finance-ledger-command-panel .v2-section-heading__actions,
+.v2-finance-ledger-list__header .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 19.5px;
+}
+
+.v2-finance-ledger-filter-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(180px, 240px) minmax(180px, 240px) auto auto 1fr;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 18px;
+}
+
+.v2-finance-ledger-filter-grid > .el-select,
+.v2-finance-ledger-filter-grid > .el-input {
+  width: 100%;
+}
+
+.v2-finance-ledger-command-panel > footer {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--v2-border-soft);
+  background: var(--v2-surface-muted);
+}
+
+.v2-finance-ledger-command-panel > footer p {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-finance-ledger-command-panel > footer > span {
+  flex: 0 0 auto;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-finance-ledger-list {
+  --v2-records-list-body-min-height: 354px;
+}
+
+.v2-finance-ledger-list__header {
+  min-width: 0;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-finance-ledger-list__header .v2-section-heading__actions strong {
+  color: var(--v2-text);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+.v2-finance-ledger-list > .v2-finance-history {
+  margin: 14px;
+}
+
+@media (max-width: 1180px) {
+  .v2-finance-ledger-overview {
+    grid-template-columns: minmax(210px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .v2-finance-ledger-overview__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .v2-finance-ledger-filter-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-finance-ledger-overview {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .v2-finance-ledger-overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-finance-ledger-overview__metrics article:nth-child(3) {
+    border-left: 0;
+  }
+
+  .v2-finance-ledger-overview__metrics article:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-finance-ledger-overview__actions {
+    grid-column: auto;
+    flex-wrap: wrap;
+  }
+
+  .v2-finance-ledger-navigation {
+    grid-template-columns: repeat(4, minmax(190px, 1fr));
+  }
+
+  .v2-finance-ledger-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px 14px;
+  }
+
+  .v2-finance-ledger-command-panel > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-finance-ledger-list {
+    --v2-records-list-body-min-height: 300px;
+  }
+
+  .v2-finance-ledger-list > .v2-finance-history {
+    margin: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .v2-finance-ledger-overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-finance-ledger-overview__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .v2-finance-ledger-overview__actions > span {
+    grid-column: 1 / -1;
+  }
+
+  .v2-finance-ledger-overview__actions .app-button {
+    width: 100%;
+  }
+
+  .v2-finance-ledger-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-finance-ledger-filter-grid > .app-button {
+    width: 100%;
+  }
+
+  .v2-finance-ledger-list__header .v2-section-heading {
+    gap: 6px;
+  }
+
+  .v2-finance-ledger-list__header .v2-section-heading__actions {
+    flex-wrap: nowrap;
+    gap: 5px;
+    font-size: 10px;
+  }
+
+  .v2-finance-ledger-list__header .v2-section-heading__actions > span[aria-hidden='true'] {
+    display: none;
+  }
+}
+
+/* 方案 3：开支记账独立工作台，不改变钱包账户、经营分析或共享抽屉。 */
+.v2-finance-expenses-page {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-finance-expenses-overview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(220px, 0.82fr) minmax(470px, 1.5fr) minmax(230px, max-content);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--v3-radius);
+  background: var(--v2-sidebar);
+  color: #f4f7fb;
+  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+}
+
+.v2-finance-expenses-overview__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-finance-expenses-overview__eyebrow {
+  color: #80aafc;
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.14em;
+}
+
+.v2-finance-expenses-overview__intro h2,
+.v2-finance-expenses-overview__intro p {
+  margin: 0;
+}
+
+.v2-finance-expenses-overview__intro h2 {
+  font-size: 17px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.01em;
+}
+
+.v2-finance-expenses-overview__intro p {
+  max-width: 44ch;
+  color: #9fb0c4;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-finance-expenses-overview__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-finance-expenses-overview__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v2-finance-expenses-overview__metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-finance-expenses-overview__metrics span,
+.v2-finance-expenses-overview__metrics small,
+.v2-finance-expenses-overview__actions > span {
+  color: #9fb0c4;
+  font-size: 10px;
+}
+
+.v2-finance-expenses-overview__metrics strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-finance-expenses-overview__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.v2-finance-expenses-overview__actions .app-button--ghost.el-button {
+  --el-button-text-color: #f4f7fb;
+  --el-button-border-color: rgba(255, 255, 255, 0.16);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+}
+
+.v2-finance-expenses-command-panel {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-finance-expenses-command-panel > .v2-section-heading {
+  align-items: baseline;
+  margin: 0 16px;
+  padding: 15px 0 12px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-finance-expenses-command-panel .v2-section-heading__actions,
+.v2-finance-expenses-list__header .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 21px;
+}
+
+.v2-finance-expenses-filter-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(180px, 240px) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 13px 18px;
+}
+
+.v2-finance-expenses-filter-grid > .el-select {
+  width: 100%;
+}
+
+.v2-finance-expenses-command-panel > footer {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--v2-border-soft);
+  background: var(--v2-surface-muted);
+}
+
+.v2-finance-expenses-command-panel > footer p {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-finance-expenses-command-panel > footer > span {
+  flex: 0 0 auto;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-finance-expenses-list {
+  --v2-records-list-body-min-height: 562px;
+}
+
+.v2-finance-expenses-list__header {
+  min-width: 0;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-finance-expenses-list__header .v2-section-heading,
+.v2-finance-expenses-list__header .v2-section-heading__actions {
+  align-items: baseline;
+}
+
+.v2-finance-expenses-list__header .v2-section-heading__actions strong {
+  color: var(--v2-text);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+@media (max-width: 1180px) {
+  .v2-finance-expenses-overview {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .v2-finance-expenses-overview__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .v2-finance-expenses-overview__metrics article {
+    padding-inline: 10px;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-finance-expenses-overview {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .v2-finance-expenses-overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-finance-expenses-overview__metrics article:nth-child(3) {
+    border-left: 0;
+  }
+
+  .v2-finance-expenses-overview__metrics article:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-finance-expenses-overview__actions {
+    grid-column: auto;
+    flex-wrap: wrap;
+  }
+
+  .v2-finance-expenses-filter-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 12px 14px;
+  }
+
+  .v2-finance-expenses-command-panel > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-finance-expenses-list {
+    --v2-records-list-body-min-height: 300px;
+  }
+}
+
+@media (max-width: 560px) {
+  .v2-finance-expenses-overview__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .v2-finance-expenses-overview__actions > span {
+    grid-column: 1 / -1;
+  }
+
+  .v2-finance-expenses-overview__actions .app-button {
+    width: 100%;
+  }
+
+  .v2-finance-expenses-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-finance-expenses-filter-grid > .app-button {
+    width: 100%;
+  }
+
+  .v2-finance-expenses-list__header .v2-section-heading {
+    gap: 6px;
+  }
+
+  .v2-finance-expenses-list__header .v2-section-heading__actions {
+    flex-wrap: nowrap;
+    gap: 5px;
+    font-size: 10px;
+  }
+
+  .v2-finance-expenses-list__header .v2-section-heading__actions > span[aria-hidden='true'] {
+    display: none;
+  }
+}
+
+/* 方案 3：经营分析决策台，仅统一报表布局，不改变统计口径与接口。 */
+.v2-analytics-page {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-analytics-overview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(220px, 0.82fr) minmax(470px, 1.5fr) minmax(220px, max-content);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--v3-radius);
+  background: var(--v2-sidebar);
+  color: #f4f7fb;
+  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+}
+
+.v2-analytics-overview__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-analytics-overview__eyebrow {
+  color: #80aafc;
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.14em;
+}
+
+.v2-analytics-overview__intro h2,
+.v2-analytics-overview__intro p {
+  margin: 0;
+}
+
+.v2-analytics-overview__intro h2 {
+  font-size: 17px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.01em;
+}
+
+.v2-analytics-overview__intro p {
+  max-width: 46ch;
+  color: #9fb0c4;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-analytics-overview__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-analytics-overview__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v2-analytics-overview__metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-analytics-overview__metrics span,
+.v2-analytics-overview__metrics small,
+.v2-analytics-overview__actions > span {
+  color: #9fb0c4;
+  font-size: 10px;
+}
+
+.v2-analytics-overview__metrics strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-analytics-overview__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.v2-analytics-overview__actions .app-button--ghost.el-button {
+  --el-button-text-color: #f4f7fb;
+  --el-button-border-color: rgba(255, 255, 255, 0.16);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+}
+
+.v2-analytics-command-panel {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-analytics-command-panel > .v2-section-heading {
+  align-items: baseline;
+  margin: 0 16px;
+  padding: 15px 0 12px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-analytics-command-panel .v2-section-heading__actions,
+.v2-analytics-report-list__header .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 21px;
+}
+
+.v2-analytics-filter-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(250px, 1.35fr) repeat(5, minmax(138px, 0.78fr));
+  align-items: center;
+  gap: 9px;
+  padding: 13px 18px;
+}
+
+.v2-analytics-filter-grid > .el-date-editor,
+.v2-analytics-filter-grid > .el-select {
+  width: 100%;
+}
+
+.v2-analytics-filter-grid__actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.v2-analytics-command-panel > footer {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--v2-border-soft);
+  background: var(--v2-surface-muted);
+}
+
+.v2-analytics-command-panel > footer p {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-analytics-command-panel > footer > span {
+  flex: 0 0 auto;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-analytics-navigation {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface-soft);
+}
+
+.v2-analytics-navigation button {
+  display: grid;
+  min-width: 0;
+  min-height: 66px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--v3-radius) - 4px);
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.v2-analytics-navigation button:hover {
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+  color: var(--v2-text);
+}
+
+.v2-analytics-navigation button:active {
+  transform: translateY(1px);
+}
+
+.v2-analytics-navigation button:focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
+.v2-analytics-navigation button.is-active {
+  border-color: color-mix(in srgb, var(--v2-accent) 18%, var(--v2-border));
+  background: var(--v2-surface);
+  color: var(--v2-accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--v2-text) 10%, transparent);
+}
+
+.v2-analytics-navigation__icon {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--v2-accent) 8%, var(--v2-surface));
+  color: var(--v2-accent);
+  font-size: 16px;
+}
+
+.v2-analytics-navigation__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.v2-analytics-navigation__copy strong,
+.v2-analytics-navigation__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-analytics-navigation__copy strong {
+  color: var(--v2-text);
+  font-size: 13px;
+}
+
+.v2-analytics-navigation__copy small {
+  color: var(--v2-text-soft);
+  font-size: 10px;
+}
+
+.v2-analytics-content {
+  min-width: 0;
+  min-height: 860px;
+}
+
+.v2-analytics-section-stack {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-analytics-report-list {
+  --v2-records-list-body-min-height: 354px;
+}
+
+.v2-analytics-report-list__header {
+  min-width: 0;
+  padding: 15px 16px 13px !important;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-analytics-report-list__header .v2-section-heading,
+.v2-analytics-report-list__header .v2-section-heading__actions {
+  align-items: baseline;
+}
+
+.v2-analytics-report-list__header .v2-section-heading__actions strong {
+  color: var(--v2-text);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+.v2-settlement-report.v2-analytics-report-list {
+  display: grid;
+  align-content: start;
+}
+
+.v2-analytics-asset-composition > header {
+  padding: 15px 16px 13px;
+}
+
+.v2-analytics-reconciliation {
+  align-items: stretch;
+}
+
+.v2-analytics-reconciliation > .v2-analytics-report-list,
+.v2-analytics-reconciliation__issues {
+  min-height: 624px;
+}
+
+.v2-analytics-reconciliation > .v2-analytics-report-list {
+  --v2-records-list-body-min-height: 562px;
+}
+
+.v2-analytics-reconciliation__issues {
+  display: grid;
+  align-content: start;
+}
+
+.v2-analytics-reconciliation__issues > header {
+  padding: 15px 16px 13px;
+}
+
+@media (max-width: 1180px) {
+  .v2-analytics-overview {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  }
+
+  .v2-analytics-overview__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .v2-analytics-filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-analytics-overview {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .v2-analytics-overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-analytics-overview__metrics article:nth-child(3) {
+    border-left: 0;
+  }
+
+  .v2-analytics-overview__metrics article:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-analytics-overview__actions {
+    grid-column: auto;
+    flex-wrap: wrap;
+  }
+
+  .v2-analytics-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px 14px;
+  }
+
+  .v2-analytics-filter-grid > .el-date-editor {
+    grid-column: 1 / -1;
+  }
+
+  .v2-analytics-command-panel > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-analytics-navigation {
+    grid-template-columns: repeat(4, minmax(170px, 1fr));
+  }
+
+  .v2-analytics-content {
+    min-height: 0;
+  }
+
+  .v2-analytics-report-list {
+    --v2-records-list-body-min-height: 300px;
+  }
+
+  .v2-analytics-reconciliation > .v2-analytics-report-list {
+    --v2-records-list-body-min-height: 300px;
+  }
+
+  .v2-analytics-reconciliation > .v2-analytics-report-list,
+  .v2-analytics-reconciliation__issues {
+    min-height: 362px;
+  }
+}
+
+@media (max-width: 560px) {
+  .v2-analytics-overview__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .v2-analytics-overview__actions .app-button {
+    width: 100%;
+  }
+
+  .v2-analytics-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-analytics-filter-grid > .el-date-editor {
+    grid-column: auto;
+  }
+
+  .v2-analytics-filter-grid__actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .v2-analytics-filter-grid__actions .app-button {
+    width: 100%;
+  }
+
+  .v2-analytics-report-list__header .v2-section-heading {
+    gap: 6px;
+  }
+
+  .v2-analytics-report-list__header .v2-section-heading__actions {
+    flex-wrap: nowrap;
+    gap: 5px;
+    font-size: 10px;
+  }
+
+  .v2-settlement-summary {
+    padding-inline: 0;
+  }
+}

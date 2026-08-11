@@ -1,9 +1,15 @@
 <template>
   <section v-if="page.overview" class="v2-dashboard-activity">
-    <article class="v2-dashboard-panel">
-      <V2SectionHeading title="最近订单" help="按订单创建时间显示最近 5 条记录。" />
+    <article class="v2-dashboard-panel v2-dashboard-panel--orders">
+      <V2SectionHeading title="最近订单" help="按订单创建时间显示最近 5 条记录。">
+        <template #actions>
+          <V2TableColumnSettings inline :schema="v2TableSchemas.dashboard.activity" />
+          <span>当前 {{ page.overview.recentOrders.length }} 条</span>
+        </template>
+      </V2SectionHeading>
       <V2Table
         :schema="v2TableSchemas.dashboard.activity"
+        :show-column-settings="false"
         class="v2-records-table"
         :data="page.overview.recentOrders"
         scrollbar-always-on
@@ -51,54 +57,70 @@
       </V2Table>
     </article>
 
-    <article class="v2-dashboard-panel">
+    <article class="v2-dashboard-panel v2-dashboard-panel--renewals">
       <V2SectionHeading
         title="到期待办"
         :help="`显示已逾期和未来 ${page.overview.warningDays} 天内到期的最前 5 条记录。`"
-      />
-      <div v-if="page.overview.upcomingRenewals.length" class="v2-dashboard-renewals">
-        <article v-for="item in page.overview.upcomingRenewals" :key="item.id">
-          <div>
-            <strong>{{ item.customer.name }} · {{ item.serviceOption.name }}</strong>
-            <span>{{ item.account.appleIdMasked }}</span>
-          </div>
-          <div>
-            <span>到期时间</span>
-            <strong>{{ page.formatDashboardDate(item.dueAt) }}</strong>
-          </div>
-          <AppButton size="small" variant="soft" @click="page.openRoute('/v2/workbench/renewals')">
-            处理
-          </AppButton>
-        </article>
-      </div>
-      <div v-else class="v2-dashboard-empty">
-        <strong>{{ page.overview.access.renewals ? '当前无到期待办' : '无续费查看权限' }}</strong>
+      >
+        <template #actions>
+          <span>当前 {{ page.overview.upcomingRenewals.length }} 条</span>
+        </template>
+      </V2SectionHeading>
+      <div class="v2-dashboard-panel__fixed-body">
+        <div v-if="page.overview.upcomingRenewals.length" class="v2-dashboard-renewals">
+          <article v-for="item in page.overview.upcomingRenewals" :key="item.id">
+            <div>
+              <strong>{{ item.customer.name }} · {{ item.serviceOption.name }}</strong>
+              <span>{{ item.account.appleIdMasked }}</span>
+            </div>
+            <div>
+              <span>到期时间</span>
+              <strong>{{ page.formatDashboardDate(item.dueAt) }}</strong>
+            </div>
+            <AppButton
+              size="small"
+              variant="soft"
+              @click="page.openRoute('/v2/workbench/renewals')"
+            >
+              处理
+            </AppButton>
+          </article>
+        </div>
+        <div v-else class="v2-dashboard-empty">
+          <strong>{{ page.overview.access.renewals ? '当前无到期待办' : '无续费查看权限' }}</strong>
+        </div>
       </div>
     </article>
 
     <V2DashboardAssets :page="page" />
 
-    <article class="v2-dashboard-panel">
+    <article class="v2-dashboard-panel v2-dashboard-panel--audits">
       <V2SectionHeading
         title="团队动态"
         help="只显示最近 5 条审计摘要，不包含变更前后详情或敏感字段。"
-      />
-      <ol v-if="page.overview.recentAudits.length" class="v2-dashboard-audit-list">
-        <li v-for="item in page.overview.recentAudits" :key="item.id">
-          <div>
-            <div class="v2-dashboard-audit-list__event">
-              <time>{{ page.formatDashboardTime(item.createdAt) }}</time>
-              <strong>
-                {{ item.user?.displayName || item.user?.username || '系统' }}
-                · {{ page.auditActionLabel(item.action) }}
-              </strong>
+      >
+        <template #actions>
+          <span>最近 {{ page.overview.recentAudits.length }} 条</span>
+        </template>
+      </V2SectionHeading>
+      <div class="v2-dashboard-panel__fixed-body">
+        <ol v-if="page.overview.recentAudits.length" class="v2-dashboard-audit-list">
+          <li v-for="item in page.overview.recentAudits" :key="item.id">
+            <div>
+              <div class="v2-dashboard-audit-list__event">
+                <time>{{ page.formatDashboardTime(item.createdAt) }}</time>
+                <strong>
+                  {{ item.user?.displayName || item.user?.username || '系统' }}
+                  · {{ page.auditActionLabel(item.action) }}
+                </strong>
+              </div>
+              <span>{{ item.module }}{{ item.objectType ? ` · ${item.objectType}` : '' }}</span>
             </div>
-            <span>{{ item.module }}{{ item.objectType ? ` · ${item.objectType}` : '' }}</span>
-          </div>
-        </li>
-      </ol>
-      <div v-else class="v2-dashboard-empty">
-        <strong>{{ page.overview.access.audit ? '暂无审计动态' : '无审计日志权限' }}</strong>
+          </li>
+        </ol>
+        <div v-else class="v2-dashboard-empty">
+          <strong>{{ page.overview.access.audit ? '暂无审计动态' : '无审计日志权限' }}</strong>
+        </div>
       </div>
     </article>
   </section>
@@ -112,6 +134,7 @@ import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import type { useDashboardPage } from '../useDashboardPage';
 import V2DashboardAssets from './V2DashboardAssets.vue';
 
@@ -124,13 +147,15 @@ defineProps<{ page: DashboardPage }>();
 .v2-dashboard-activity {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.75fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.75fr);
+  align-items: stretch;
   gap: 14px;
 }
 
 .v2-dashboard-panel {
   display: grid;
   min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
   gap: 0;
   overflow: hidden;
@@ -139,21 +164,38 @@ defineProps<{ page: DashboardPage }>();
   background: var(--v2-surface);
 }
 
-.v2-dashboard-panel:last-child,
-.v2-dashboard-activity > :deep(.v2-dashboard-section) {
-  grid-column: 1 / -1;
+.v2-dashboard-panel--orders,
+.v2-dashboard-panel--renewals {
+  height: 361px;
 }
 
-.v2-dashboard-panel:last-child > :deep(.v2-section-heading) {
-  box-sizing: border-box;
-  min-height: 42px;
-  padding-block: 7px;
+.v2-dashboard-panel--audits,
+.v2-dashboard-activity > :deep(.v2-dashboard-assets) {
+  height: 341px;
 }
 
 .v2-dashboard-panel > :deep(.v2-section-heading) {
-  min-height: 48px;
-  padding: 9px 14px;
+  min-height: 52px;
+  padding: 10px 15px;
   border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-dashboard-panel > :deep(.v2-section-heading__actions) {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--v3-line-height-tight);
+}
+
+.v2-dashboard-panel__fixed-body {
+  display: grid;
+  min-width: 0;
+  min-height: 260px;
+  align-content: start;
+}
+
+.v2-dashboard-panel--audits .v2-dashboard-panel__fixed-body {
+  min-height: 198px;
 }
 
 .v2-dashboard-panel > :deep(.v2-records-table .el-table__header-wrapper th.el-table__cell) {
@@ -167,7 +209,8 @@ defineProps<{ page: DashboardPage }>();
 
 .v2-dashboard-empty {
   display: grid;
-  min-height: 132px;
+  width: 100%;
+  min-height: inherit;
   place-content: center;
   color: var(--v2-text-soft);
   font-size: 13px;
@@ -218,7 +261,6 @@ defineProps<{ page: DashboardPage }>();
 }
 
 .v2-dashboard-audit-list {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
   list-style: none;
 }
@@ -228,9 +270,9 @@ defineProps<{ page: DashboardPage }>();
   min-width: 0;
   align-content: start;
   gap: 4px;
-  padding: 7px 12px;
-  border-top: 2px solid color-mix(in srgb, var(--v2-accent) 55%, var(--v2-border));
-  border-right: 1px solid var(--v2-border-soft);
+  min-height: 38px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--v2-border-soft);
 }
 
 .v2-dashboard-audit-list > li > div {
@@ -250,10 +292,6 @@ defineProps<{ page: DashboardPage }>();
   min-width: 0;
 }
 
-.v2-dashboard-audit-list > li:last-child {
-  border-right: 0;
-}
-
 .v2-dashboard-audit-list time {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
@@ -268,19 +306,22 @@ defineProps<{ page: DashboardPage }>();
     grid-column: auto;
   }
 
-  .v2-dashboard-audit-list {
-    grid-template-columns: minmax(0, 1fr);
+  .v2-dashboard-panel--orders,
+  .v2-dashboard-panel--renewals {
+    height: auto;
+    min-height: 314px;
   }
 
-  .v2-dashboard-audit-list > li {
-    border-top-width: 1px;
-    border-right: 0;
+  .v2-dashboard-panel--audits,
+  .v2-dashboard-activity > :deep(.v2-dashboard-assets) {
+    height: auto;
+    min-height: 252px;
   }
 }
 
 @media (max-width: 600px) {
   .v2-dashboard-renewals > article,
-  .v2-dashboard-audit-list > li {
+  .v2-dashboard-audit-list__event {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 

@@ -505,6 +505,8 @@ export function useTopupRecordsPage() {
     activeLoading,
     activeError,
     activeResolved,
+    queryPhase: recordsQuery.phase,
+    isParameterTransition: recordsQuery.isParameterTransition,
     isInitialLoading,
     loadGiftCards,
     loadBalanceLedger,

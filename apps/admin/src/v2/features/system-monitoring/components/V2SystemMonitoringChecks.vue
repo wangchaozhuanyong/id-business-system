@@ -1,172 +1,85 @@
 <template>
-  <section v-if="page.overview" class="v2-system-checks" aria-label="系统健康证据清单">
-    <header class="v2-system-checks__heading">
-      <div>
-        <span>只读探针</span>
-        <h2>系统健康证据</h2>
-      </div>
-      <p>异常与未知项优先排列；未知项不会计入正常。</p>
-    </header>
+  <div v-if="page.overview" class="v2-system-health-workspace">
+    <section class="v2-system-checks" aria-label="系统健康证据清单">
+      <header class="v2-system-checks__heading">
+        <V2SectionHeading title="只读探针清单" help="异常与未知项优先排列；未知项不会计入正常。">
+          <template #actions>
+            <span>本次 {{ page.sortedChecks.length }} 项</span>
+            <span aria-hidden="true">·</span>
+            <strong>{{ statusSummary }}</strong>
+          </template>
+        </V2SectionHeading>
+      </header>
 
-    <div class="v2-system-checks__list">
-      <article v-for="check in page.sortedChecks" :key="check.key" :class="`is-${check.status}`">
-        <span class="v2-system-checks__marker" aria-hidden="true" />
-        <div class="v2-system-checks__identity">
-          <strong>{{ check.title }}</strong>
-          <span>{{ page.systemMonitorStatusMeta(check.status).label }}</span>
+      <div v-if="page.sortedChecks.length" class="v2-system-checks__list">
+        <article v-for="check in page.sortedChecks" :key="check.key" :class="`is-${check.status}`">
+          <span class="v2-system-checks__marker" aria-hidden="true" />
+          <div class="v2-system-checks__identity">
+            <strong>{{ check.title }}</strong>
+            <el-tag :type="page.systemMonitorStatusMeta(check.status).type" effect="plain">
+              {{ page.systemMonitorStatusMeta(check.status).label }}
+            </el-tag>
+          </div>
+          <div class="v2-system-checks__evidence">
+            <strong>{{ check.value }}</strong>
+            <p>{{ page.formatSystemMonitoringDetail(check.detail) }}</p>
+          </div>
+        </article>
+      </div>
+      <div v-else class="v2-system-monitoring-empty">
+        <strong>本次没有可展示的探针证据</strong>
+        <span>请重新执行只读探针；未获得证据前不判定为正常。</span>
+      </div>
+    </section>
+
+    <aside class="v2-system-coverage" aria-label="证据覆盖说明">
+      <V2SectionHeading title="证据覆盖" help="覆盖率只表示有可信证据，不等同于健康率。" />
+      <div class="v2-system-coverage__score">
+        <strong>{{ page.evidenceSummary.coverageRate }}%</strong>
+        <span>{{ page.evidenceSummary.observable }}/{{ page.evidenceSummary.total }} 项可判定</span>
+      </div>
+      <div class="v2-system-coverage__bar" aria-hidden="true">
+        <i :style="{ width: `${page.evidenceSummary.coverageRate}%` }" />
+      </div>
+      <dl>
+        <div>
+          <dt>正常</dt>
+          <dd class="is-healthy">{{ page.evidenceSummary.healthy }}</dd>
         </div>
-        <div class="v2-system-checks__evidence">
-          <strong>{{ check.value }}</strong>
-          <p>{{ page.formatSystemMonitoringDetail(check.detail) }}</p>
+        <div>
+          <dt>异常</dt>
+          <dd class="is-degraded">{{ page.evidenceSummary.degraded }}</dd>
         </div>
-      </article>
-    </div>
-  </section>
+        <div>
+          <dt>未知</dt>
+          <dd>{{ page.evidenceSummary.unknown }}</dd>
+        </div>
+      </dl>
+      <div class="v2-system-coverage__boundary">
+        <strong>判定边界</strong>
+        <p>正常表示本次探针通过；异常表示证据已可判定问题；未知表示证据不足。</p>
+      </div>
+    </aside>
+  </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { useSystemMonitoringPage } from '../useSystemMonitoringPage';
 
 type SystemMonitoringPage = UnwrapNestedRefs<ReturnType<typeof useSystemMonitoringPage>>;
-defineProps<{ page: SystemMonitoringPage }>();
+
+const props = defineProps<{ page: SystemMonitoringPage }>();
+
+const statusSummary = computed(() => {
+  if (props.page.evidenceSummary.degraded) {
+    return `${props.page.evidenceSummary.degraded} 项异常`;
+  }
+  if (props.page.evidenceSummary.unknown) {
+    return `${props.page.evidenceSummary.unknown} 项未知`;
+  }
+  return '已检查项正常';
+});
 </script>
-
-<style scoped>
-.v2-system-checks {
-  display: grid;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
-}
-
-.v2-system-checks__heading {
-  display: flex;
-  min-width: 0;
-  min-height: 72px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-system-checks__heading > div {
-  display: grid;
-  gap: 3px;
-}
-
-.v2-system-checks__heading span {
-  color: var(--v2-text-soft);
-  font-size: 11px;
-}
-
-.v2-system-checks__heading h2 {
-  margin: 0;
-  color: var(--v2-text);
-  font-size: 16px;
-}
-
-.v2-system-checks__heading p {
-  max-width: 36em;
-  margin: 0;
-  color: var(--v2-text-soft);
-  font-size: 11px;
-  line-height: 1.6;
-  text-align: right;
-}
-
-.v2-system-checks__list {
-  display: grid;
-  min-width: 0;
-}
-
-.v2-system-checks article {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: 5px minmax(130px, 0.58fr) minmax(220px, 1.42fr);
-  align-items: center;
-  gap: 16px;
-  min-height: 84px;
-  padding: 13px 18px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-system-checks article:last-child {
-  border-bottom: 0;
-}
-
-.v2-system-checks__marker {
-  width: 5px;
-  height: 34px;
-  border-radius: 999px;
-  background: var(--v2-success);
-}
-
-.v2-system-checks article.is-degraded .v2-system-checks__marker {
-  background: var(--v2-danger);
-}
-
-.v2-system-checks article.is-unknown .v2-system-checks__marker {
-  background: var(--v2-text-soft);
-}
-
-.v2-system-checks__identity,
-.v2-system-checks__evidence {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.v2-system-checks__identity strong,
-.v2-system-checks__evidence strong {
-  color: var(--v2-text);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.v2-system-checks__identity > span {
-  width: fit-content;
-  padding: 2px 7px;
-  border-radius: 999px;
-  color: var(--v2-text-soft);
-  background: var(--v2-bg);
-  font-size: 10px;
-}
-
-.v2-system-checks article.is-degraded .v2-system-checks__identity > span {
-  color: var(--v2-danger);
-  background: color-mix(in srgb, var(--v2-danger) 8%, transparent);
-}
-
-.v2-system-checks__evidence p {
-  margin: 0;
-  color: var(--v2-text-soft);
-  font-size: 11px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 600px) {
-  .v2-system-checks__heading {
-    display: grid;
-    gap: 8px;
-  }
-
-  .v2-system-checks__heading p {
-    text-align: left;
-  }
-
-  .v2-system-checks article {
-    grid-template-columns: 5px minmax(0, 1fr);
-    gap: 12px;
-    padding: 14px;
-  }
-
-  .v2-system-checks__evidence {
-    grid-column: 2;
-  }
-}
-</style>

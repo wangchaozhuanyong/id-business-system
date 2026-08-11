@@ -207,6 +207,8 @@ export function useDashboardPage() {
 
   return {
     overview,
+    queryPhase: dashboardQuery.phase,
+    isParameterTransition: dashboardQuery.isParameterTransition,
     resolved,
     loading,
     error,

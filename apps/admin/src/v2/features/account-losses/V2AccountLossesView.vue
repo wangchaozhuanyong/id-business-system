@@ -70,8 +70,8 @@
 
     <V2AsyncRegion
       skeleton="table"
-      :loading="page.loading || page.isInitialLoading"
-      :resolved="page.hasLoadedOnce"
+      :phase="page.queryPhase"
+      :previous-data="page.isParameterTransition"
       :error="page.listError"
       loading-title="正在加载 ID 报损记录"
       refreshing-title="正在更新 ID 报损记录"
@@ -268,10 +268,11 @@
         <footer class="v2-records-pagination">
           <span>共 {{ page.total }} 条</span>
           <el-pagination
-            v-model:current-page="page.query.page"
-            v-model:page-size="page.query.pageSize"
             v-pagination-label
+            :current-page="page.displayedPage"
+            :page-size="page.displayedPageSize"
             background
+            :disabled="page.isParameterTransition"
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="page.total"

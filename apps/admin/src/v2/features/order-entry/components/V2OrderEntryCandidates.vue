@@ -5,13 +5,54 @@
   >
     <V2SectionHeading
       class="v2-order-entry-section-header"
-      title="ID 选择"
+      title="ID 资源库"
       :help="
         idSelectionMode === 'manual'
           ? '从搜索结果中选择符合国家、状态、余额和锁定规则的 ID。'
           : '系统按订单条件匹配可用 ID；选择结果会同步到订单资料和实时核算。'
       "
-    />
+    >
+      <template #actions>
+        <AppButton
+          variant="ghost"
+          size="small"
+          :loading="matchingLoading"
+          :disabled="!canMatch"
+          aria-label="刷新可用 ID"
+          @click="$emit('retry')"
+        >
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </AppButton>
+      </template>
+    </V2SectionHeading>
+
+    <section class="v2-order-entry-resource-disposition" aria-labelledby="id-disposition-title">
+      <header>
+        <div>
+          <strong id="id-disposition-title">ID 处理方式</strong>
+          <small>决定本单完成后，这个 ID 是否继续参与后续匹配。</small>
+        </div>
+        <span :class="{ 'is-sold': accountDisposition === 'sold' }">
+          {{ accountDisposition === 'sold' ? '卖出后全局锁定' : '保留后继续复用' }}
+        </span>
+      </header>
+      <el-radio-group
+        v-model="accountDisposition"
+        class="v2-order-entry-resource-disposition__options"
+        aria-label="ID 处理方式"
+      >
+        <el-radio-button value="retained">保留 ID · 继续复用</el-radio-button>
+        <el-radio-button value="sold">卖出 ID · 全局锁定</el-radio-button>
+      </el-radio-group>
+    </section>
+
+    <div class="v2-order-entry-candidate-mode" role="status">
+      <span>{{ idSelectionMode === 'manual' ? '手动选择' : '自动匹配' }}</span>
+      <small>
+        {{ canMatch ? '已按当前业务条件筛选' : '请选择业务并填写消耗余额' }}
+      </small>
+    </div>
 
     <V2AsyncRegion
       variant="section"
@@ -55,7 +96,7 @@
             class="v2-order-entry-candidate"
           >
             <span class="v2-order-entry-candidate-main">
-              <strong>{{ candidate.appleIdMasked }}</strong>
+              <strong :title="candidate.appleIdMasked">{{ candidate.appleIdMasked }}</strong>
               <small>{{ candidate.country.name }} / {{ candidate.status.name }}</small>
               <small>平均成本 ¥{{ formatDecimal(candidate.averageCost) }}</small>
               <small>ID 购买成本 ¥{{ formatDecimal(candidate.purchaseCost) }}</small>
@@ -85,6 +126,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { Refresh } from '@element-plus/icons-vue';
+import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { V2OrderCandidate, V2OrderMatchingResult } from '../contracts';
@@ -106,8 +149,11 @@ defineEmits<{
 }>();
 
 const accountId = defineModel<string>('accountId', { required: true });
+const accountDisposition = defineModel<'retained' | 'sold'>('accountDisposition', {
+  required: true
+});
 const currentPage = ref(1);
-const pageSize = 12;
+const pageSize = 8;
 const paginatedCandidates = computed(() => {
   const start = (currentPage.value - 1) * pageSize;
   return props.candidateItems.slice(start, start + pageSize);

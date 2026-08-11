@@ -1,0 +1,338 @@
+<template>
+  <div class="v2-shell v2-renewals-design-fixture">
+    <aside class="v2-sidebar">
+      <div class="v2-brand">
+        <V2BrandLogo class="v2-brand__mark" logo-text="ID" />
+        <div class="v2-brand__copy">
+          <strong>ID 业务管理系统</strong>
+          <span>业务管理工作台</span>
+        </div>
+      </div>
+
+      <nav class="v2-navigation" aria-label="设计验收导航">
+        <section
+          v-for="section in navigation"
+          :key="section.title"
+          class="v2-navigation__section"
+          :class="{ 'is-open': section.active, 'is-active': section.active }"
+        >
+          <button class="v2-navigation__parent" type="button">
+            <el-icon class="v2-navigation__parent-icon"><component :is="section.icon" /></el-icon>
+            <span class="v2-navigation__parent-label">{{ section.title }}</span>
+            <el-icon class="v2-navigation__chevron"><ArrowDown /></el-icon>
+          </button>
+          <div v-if="section.active" class="v2-navigation__children">
+            <a class="v2-navigation__item router-link-active" href="#renewals">
+              <span class="v2-navigation__item-dot" aria-hidden="true" />
+              <span class="v2-navigation__item-label">续费操作</span>
+            </a>
+            <a class="v2-navigation__item" href="#order-entry">
+              <span class="v2-navigation__item-dot" aria-hidden="true" />
+              <span class="v2-navigation__item-label">订单录入</span>
+            </a>
+          </div>
+        </section>
+      </nav>
+    </aside>
+
+    <div class="v2-workspace">
+      <header class="v2-topbar">
+        <div class="v2-topbar__identity"><h1>续费操作</h1></div>
+        <div class="v2-topbar__utilities">
+          <span>方案 3 · 设计验收</span>
+          <el-icon><Bell /></el-icon>
+          <span class="v2-renewals-fixture-avatar">管</span>
+        </div>
+      </header>
+
+      <main class="v2-content">
+        <div class="v2-content__inner">
+          <p v-if="notice" class="v2-renewals-fixture-notice" role="status">{{ notice }}</p>
+          <section class="v2-records-page">
+            <V2RenewalsOverview :page="page" />
+            <V2RenewalsToolbar :page="page" />
+            <V2RenewalsList :page="page" />
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { reactive, ref } from 'vue';
+import type { UnwrapNestedRefs } from 'vue';
+import {
+  ArrowDown,
+  Bell,
+  Collection,
+  DataAnalysis,
+  Document,
+  Setting,
+  User
+} from '@element-plus/icons-vue';
+import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2RenewalsList from '@/v2/features/renewals/components/V2RenewalsList.vue';
+import V2RenewalsOverview from '@/v2/features/renewals/components/V2RenewalsOverview.vue';
+import V2RenewalsToolbar from '@/v2/features/renewals/components/V2RenewalsToolbar.vue';
+import type { useRenewalsPage } from '@/v2/features/renewals/useRenewalsPage';
+import type {
+  V2RenewalDueStatus,
+  V2RenewalStatusCode,
+  V2RenewalWorkbenchItem
+} from '@/v2/types/renewals';
+
+type RenewalsPage = UnwrapNestedRefs<ReturnType<typeof useRenewalsPage>>;
+type RenewalWarningScope = '' | 'warning' | 'expired';
+
+const navigation = [
+  { title: '工作台', icon: Document, active: true },
+  { title: '业务中心', icon: Document, active: false },
+  { title: 'ID 资源', icon: Collection, active: false },
+  { title: '客户管理', icon: User, active: false },
+  { title: '财务管理', icon: DataAnalysis, active: false },
+  { title: '系统设置', icon: Setting, active: false }
+];
+const dueStatusOptions: Array<{ value: V2RenewalDueStatus; label: string }> = [
+  { value: 'due_within_1_hour', label: '1小时内到期' },
+  { value: 'due_within_23_hours', label: '23小时内到期' },
+  { value: 'due_within_7_days', label: '7天内到期' },
+  { value: 'expired', label: '已到期' }
+];
+const statusSequence: V2RenewalStatusCode[] = [
+  'active',
+  'due_within_7_days',
+  'due_within_23_hours',
+  'due_within_1_hour',
+  'expired'
+];
+const customerNames = ['王明', '林晓雯', '陈先生', '周欣怡', '郑文杰', '黄女士'];
+const serviceNames = ['ChatGPT Plus', 'Claude Pro', 'Midjourney', 'Canva Pro'];
+
+function statusLabel(status: V2RenewalStatusCode) {
+  if (status === 'active') return '正常';
+  return dueStatusOptions.find((option) => option.value === status)?.label ?? status;
+}
+
+function makeRenewal(index: number): V2RenewalWorkbenchItem {
+  const status = statusSequence[index % statusSequence.length];
+  const warningState = status === 'expired' ? 'expired' : status === 'active' ? null : 'upcoming';
+  const withinActionWindow = status !== 'active';
+  const day = String(10 - Math.floor(index / 5)).padStart(2, '0');
+  return {
+    id: `renewal-${index + 1}`,
+    orderId: `order-${index + 1}`,
+    orderNo: `V2202608${day}${String(index + 1).padStart(6, '0')}`,
+    customer: { id: `customer-${index + 1}`, name: customerNames[index % customerNames.length] },
+    account: {
+      id: `account-${index + 1}`,
+      appleIdMasked: `${String(85 + index).padStart(2, '0')}********@qq.com`,
+      currentBalance: `${324 - index * 4}.20`,
+      balanceCostAmount: `${116 - index}.40`,
+      recordStatus: 'active',
+      country: { id: 'country-us', code: 'US', name: '美国' }
+    },
+    service: {
+      id: `service-${(index % serviceNames.length) + 1}`,
+      code: `service-${(index % serviceNames.length) + 1}`,
+      name: serviceNames[index % serviceNames.length],
+      parent: { id: 'category-ai', name: 'AI 工具' }
+    },
+    maskedWebsiteAccount:
+      index % 4 === 3 ? null : `user_${String(index + 1).padStart(2, '0')}***@mail.com`,
+    openedAt: `2026-08-${day}T08:20:00.000Z`,
+    dueAt: `2026-09-${day}T08:20:00.000Z`,
+    status: {
+      code: status,
+      label: statusLabel(status),
+      hoursRemaining: status === 'expired' ? -12 : 36 + index,
+      daysRemaining: status === 'expired' ? -1 : Math.ceil((36 + index) / 24)
+    },
+    warningState,
+    withinActionWindow,
+    updatedAt: `2026-08-${day}T16:05:00.000Z`
+  };
+}
+
+const emptyState = new URLSearchParams(window.location.search).get('state') === 'empty';
+const allRenewals: V2RenewalWorkbenchItem[] = emptyState
+  ? []
+  : Array.from({ length: 23 }, (_, index) => makeRenewal(index));
+const filterOptions = {
+  customers: allRenewals.slice(0, 6).map((item) => item.customer),
+  accounts: allRenewals.slice(0, 8).map((item) => ({
+    id: item.account.id,
+    appleIdMasked: item.account.appleIdMasked
+  })),
+  services: serviceNames.map((name, index) => ({
+    id: `service-${index + 1}`,
+    code: `service-${index + 1}`,
+    name,
+    parent: { id: 'category-ai', name: 'AI 工具' }
+  }))
+};
+const notice = ref('');
+
+const page = reactive({
+  items: [] as V2RenewalWorkbenchItem[],
+  total: 0,
+  evaluatedAt: '2026-08-10T09:20:00.000Z',
+  loading: false,
+  listError: '',
+  hasLoadedOnce: true,
+  isInitialLoading: false,
+  canRenew: true,
+  canManageWarning: true,
+  renewalStatusStripItems: [] as Array<{
+    key: string;
+    label: string;
+    count: number;
+    tone?: 'danger' | 'warning' | 'primary' | 'success' | 'neutral';
+  }>,
+  activeWarningScope: '' as RenewalWarningScope,
+  emptyDescription: '当前筛选条件下没有数据',
+  dueStatusOptions,
+  dueRange: [] as [string, string] | [],
+  filterOptions,
+  query: {
+    page: 1,
+    pageSize: 10,
+    keyword: '',
+    customerId: '',
+    serviceOptionId: '',
+    accountId: '',
+    dueStatus: '' as V2RenewalDueStatus | '',
+    sortBy: 'dueAt',
+    sortOrder: 'asc'
+  },
+  openWarningSettings: () => {
+    notice.value = '预览操作：已打开续费预警设置。';
+  },
+  loadWorkbench: () => {
+    notice.value = '续费待办已刷新，到期状态已重新计算。';
+    applyFilters();
+  },
+  selectWarningScope: (key: string) => {
+    if (key !== 'warning' && key !== 'expired') return;
+    page.activeWarningScope = page.activeWarningScope === key ? '' : key;
+    page.query.dueStatus = page.activeWarningScope === 'expired' ? 'expired' : '';
+    applyFilters(true);
+  },
+  handleSearch: () => applyFilters(true),
+  handleFilterChange: () => applyFilters(true),
+  handleTimeFilterChange: () => {
+    page.activeWarningScope = '';
+    applyFilters(true);
+  },
+  handlePageChange: () => applyFilters(),
+  handlePageSizeChange: () => applyFilters(true),
+  handleSortChange: () => undefined,
+  openRenewalDrawer: (item: V2RenewalWorkbenchItem) => {
+    notice.value = `预览操作：正在为 ${item.customer.name} 录入续费订单。`;
+  },
+  renewalActionDisabledReason: (item: V2RenewalWorkbenchItem) =>
+    item.withinActionWindow ? '' : '仅支持为 7 天内到期或已到期记录续费',
+  renewalRowClassName: ({ row }: { row: V2RenewalWorkbenchItem }) =>
+    row.warningState === 'expired'
+      ? 'is-renewal-expired'
+      : row.warningState === 'upcoming'
+        ? 'is-renewal-warning'
+        : '',
+  serviceLabel: (service: (typeof filterOptions.services)[number]) =>
+    service.parent ? `${service.parent.name} / ${service.name}` : service.name,
+  formatDecimal: (value: string | number | null | undefined) => value?.toString() ?? '0.00',
+  formatDate: (value: string | null) =>
+    value
+      ? new Intl.DateTimeFormat('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(new Date(value))
+      : '—',
+  formatTime: (value: string) =>
+    new Intl.DateTimeFormat('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).format(new Date(value)),
+  statusType: (status: V2RenewalStatusCode) => {
+    if (status === 'expired' || status === 'due_within_1_hour') return 'danger';
+    if (status === 'due_within_23_hours') return 'warning';
+    return 'info';
+  }
+}) as unknown as RenewalsPage;
+
+function applyFilters(resetPage = false) {
+  if (resetPage) page.query.page = 1;
+  const keyword = page.query.keyword.trim().toLowerCase();
+  const filtered = allRenewals.filter((renewal) => {
+    const matchesKeyword =
+      !keyword ||
+      [
+        renewal.orderNo,
+        renewal.customer.name,
+        renewal.account.appleIdMasked,
+        renewal.maskedWebsiteAccount
+      ]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(keyword));
+    const matchesWarning =
+      page.activeWarningScope !== 'warning' || renewal.warningState === 'upcoming';
+    return (
+      matchesKeyword &&
+      matchesWarning &&
+      (!page.query.dueStatus || renewal.status.code === page.query.dueStatus) &&
+      (!page.query.customerId || renewal.customer.id === page.query.customerId) &&
+      (!page.query.serviceOptionId || renewal.service.id === page.query.serviceOptionId) &&
+      (!page.query.accountId || renewal.account.id === page.query.accountId)
+    );
+  });
+  page.total = filtered.length;
+  const start = (page.query.page - 1) * page.query.pageSize;
+  page.items = filtered.slice(start, start + page.query.pageSize);
+  page.renewalStatusStripItems = [
+    {
+      key: 'warning',
+      label: '未来 7 天预警',
+      count: allRenewals.filter((item) => item.warningState === 'upcoming').length,
+      tone: 'warning'
+    },
+    {
+      key: 'expired',
+      label: '已到期',
+      count: allRenewals.filter((item) => item.warningState === 'expired').length,
+      tone: 'danger'
+    }
+  ];
+}
+
+applyFilters();
+</script>
+
+<style scoped>
+.v2-renewals-fixture-avatar {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--v2-accent-soft);
+  color: var(--v2-accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.v2-renewals-fixture-notice {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--v3-success-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v3-success-soft);
+  color: var(--v2-text);
+  font-size: 12px;
+}
+</style>

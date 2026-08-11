@@ -65,6 +65,7 @@ export interface V2OptionSelector {
   type: V2OptionType;
   code: string;
   name: string;
+  status?: V2OptionStatus;
   parentId: string | null;
   parent: Pick<V2OptionParent, 'id' | 'name'> | null;
   countryOptionId: string | null;

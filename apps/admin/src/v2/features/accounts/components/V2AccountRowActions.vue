@@ -1,17 +1,30 @@
 <template>
   <div v-if="hasActions" class="v2-record-actions v2-account-row-actions">
-    <AppButton v-if="canViewSensitive" size="small" variant="ghost" @click="emit('view-sensitive')">
+    <AppButton
+      v-if="canViewSensitive"
+      size="small"
+      variant="ghost"
+      :disabled="disabled"
+      @click="emit('view-sensitive')"
+    >
       敏感资料
     </AppButton>
     <AppButton
       v-if="canReportLoss && lossReported"
       size="small"
       variant="ghost"
+      :disabled="disabled"
       @click="emit('unfreeze-loss')"
     >
       解除冻结
     </AppButton>
-    <AppButton v-if="canUpdate && !lossReported" size="small" variant="ghost" @click="emit('edit')">
+    <AppButton
+      v-if="canUpdate && !lossReported"
+      size="small"
+      variant="ghost"
+      :disabled="disabled"
+      @click="emit('edit')"
+    >
       <el-icon><Edit /></el-icon>
       编辑
     </AppButton>
@@ -19,6 +32,7 @@
       v-if="hasSecondaryActions"
       ref="dropdownRef"
       trigger="click"
+      :disabled="disabled"
       @command="handleCommand"
       @keydown.esc.stop.prevent="closeMenu"
     >
@@ -58,6 +72,7 @@ const props = defineProps<{
   canUpdate: boolean;
   canReportLoss: boolean;
   lossReported: boolean;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -93,6 +108,7 @@ function closeMenu() {
 }
 
 function handleCommand(command: string | number | object) {
+  if (props.disabled) return;
   if (command === 'toggle-status') {
     emit('toggle-status');
   } else if (command === 'report-loss') {
