@@ -58,7 +58,7 @@
             <V2CustomerSensitiveContactCell
               :masked-value="row.maskedPhone"
               :has-value="row.hasPhone"
-              :can-reveal="page.canRevealContact"
+              :can-reveal="page.canRevealContact && !page.isParameterTransition"
               reveal-title="查看完整手机号"
               @reveal="page.openRevealPhone(row)"
             />
@@ -79,7 +79,7 @@
             <V2CustomerSensitiveContactCell
               :masked-value="row.maskedWhatsapp"
               :has-value="row.hasWhatsapp"
-              :can-reveal="page.canRevealContact"
+              :can-reveal="page.canRevealContact && !page.isParameterTransition"
               reveal-title="查看完整 WhatsApp"
               @reveal="page.openRevealWhatsapp(row)"
             />
@@ -128,6 +128,7 @@
               v-if="page.canUpdate"
               size="small"
               variant="ghost"
+              :disabled="page.isParameterTransition"
               @click="page.openEdit(row)"
             >
               <el-icon><Edit /></el-icon>
@@ -137,6 +138,7 @@
               v-if="page.canUpdate"
               size="small"
               :variant="row.recordStatus === 'active' ? 'soft' : 'success'"
+              :disabled="page.isParameterTransition"
               @click="page.toggleStatus(row)"
             >
               <el-icon>
@@ -149,6 +151,7 @@
               v-if="page.canDelete"
               size="small"
               variant="danger"
+              :disabled="page.isParameterTransition"
               @click="page.openDelete(row)"
             >
               <el-icon><Delete /></el-icon>
@@ -184,6 +187,7 @@
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, '手机号']"
               size="small"
               variant="ghost"
+              :disabled="page.isParameterTransition"
               @click="page.openRevealPhone(item)"
             >
               查看手机号
@@ -193,6 +197,7 @@
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'WhatsApp']"
               size="small"
               variant="ghost"
+              :disabled="page.isParameterTransition"
               @click="page.openRevealWhatsapp(item)"
             >
               查看 WhatsApp
@@ -202,6 +207,7 @@
                 v-if="page.canUpdate"
                 size="small"
                 variant="ghost"
+                :disabled="page.isParameterTransition"
                 @click="page.openEdit(item)"
               >
                 编辑
@@ -210,6 +216,7 @@
                 v-if="page.canUpdate"
                 size="small"
                 variant="soft"
+                :disabled="page.isParameterTransition"
                 @click="page.toggleStatus(item)"
               >
                 {{ item.recordStatus === 'active' ? '停用' : '启用' }}
@@ -218,6 +225,7 @@
                 v-if="page.canDelete"
                 size="small"
                 variant="danger"
+                :disabled="page.isParameterTransition"
                 @click="page.openDelete(item)"
               >
                 删除

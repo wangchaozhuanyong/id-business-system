@@ -158,6 +158,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === row.id"
+                :disabled="page.isParameterTransition"
                 @click="page.consumeOrderBalance(row)"
               >
                 <el-icon><Coin /></el-icon>
@@ -168,6 +169,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === row.id"
+                :disabled="page.isParameterTransition"
                 @click="page.completeOrder(row)"
               >
                 <el-icon><CircleCheck /></el-icon>
@@ -188,6 +190,7 @@
               variant="ghost"
               icon-only
               title="修改订单"
+              :disabled="page.isParameterTransition"
               @click="page.openEdit(row)"
             >
               <el-icon><Edit /></el-icon>
@@ -195,6 +198,7 @@
             <el-dropdown
               v-if="page.hasLifecycleActions(row)"
               trigger="click"
+              :disabled="page.isParameterTransition"
               @command="page.handleLifecycleCommand($event, row)"
             >
               <AppButton
@@ -261,6 +265,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.consumingOrderId === item.id"
+                :disabled="page.isParameterTransition"
                 @click="page.consumeOrderBalance(item)"
               >
                 <el-icon><Coin /></el-icon>
@@ -271,6 +276,7 @@
                 size="small"
                 variant="primary"
                 :loading="page.completingOrderId === item.id"
+                :disabled="page.isParameterTransition"
                 @click="page.completeOrder(item)"
               >
                 <el-icon><CircleCheck /></el-icon>
@@ -344,6 +350,7 @@
                 v-if="page.canUpdateOrders && item.operations.canEdit"
                 size="small"
                 variant="ghost"
+                :disabled="page.isParameterTransition"
                 @click="page.openEdit(item)"
               >
                 修改
@@ -351,6 +358,7 @@
               <el-dropdown
                 v-if="page.hasLifecycleActions(item)"
                 trigger="click"
+                :disabled="page.isParameterTransition"
                 @command="page.handleLifecycleCommand($event, item)"
               >
                 <AppButton

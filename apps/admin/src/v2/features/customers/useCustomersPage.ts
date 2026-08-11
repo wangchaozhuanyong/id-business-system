@@ -267,6 +267,7 @@ export function useCustomersPage() {
   }
 
   function openEdit(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     editingItem.value = item;
     Object.assign(form, {
       name: item.name,
@@ -308,6 +309,7 @@ export function useCustomersPage() {
   }
 
   async function toggleStatus(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     try {
       await idBusinessV2CustomersApi.update(item.id, {
         recordStatus: item.recordStatus === 'active' ? 'disabled' : 'active'
@@ -320,6 +322,7 @@ export function useCustomersPage() {
   }
 
   function openRevealContact(item: V2Customer, field: 'phone' | 'whatsapp') {
+    if (customersQuery.isParameterTransition.value) return;
     revealTarget.value = item;
     revealField.value = field;
     Object.assign(revealForm, {
@@ -374,6 +377,7 @@ export function useCustomersPage() {
   }
 
   function openDelete(item: V2Customer) {
+    if (customersQuery.isParameterTransition.value) return;
     deletingItem.value = item;
     deleteDialogVisible.value = true;
   }

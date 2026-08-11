@@ -55,7 +55,12 @@
         <slot name="empty-action" />
       </V2PageState>
 
-      <div v-else class="v2-async-region__content">
+      <div
+        v-else
+        class="v2-async-region__content"
+        :inert="isPreviousData || undefined"
+        :aria-disabled="isPreviousData || undefined"
+      >
         <slot />
       </div>
 

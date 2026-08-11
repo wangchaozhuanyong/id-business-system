@@ -382,6 +382,7 @@ export function useAccountsPage() {
   }
 
   function openEdit(item: V2Account) {
+    if (accountsQuery.isParameterTransition.value) return;
     if (item.lossStatus === 'reported') {
       ElMessage.warning('已报损冻结 ID 不能编辑');
       return;
@@ -491,6 +492,7 @@ export function useAccountsPage() {
   }
 
   function openReveal(item: V2Account, field: V2AccountSecretField) {
+    if (accountsQuery.isParameterTransition.value) return;
     revealTarget.value = item;
     Object.assign(revealForm, {
       field,
@@ -502,6 +504,7 @@ export function useAccountsPage() {
   }
 
   function openSensitiveAccess(item: V2Account) {
+    if (accountsQuery.isParameterTransition.value) return;
     const field: V2AccountSecretField =
       item.hasPassword && accountPermissions.canRevealPassword.value
         ? 'password'
@@ -575,6 +578,17 @@ export function useAccountsPage() {
     submitForm,
     openReveal,
     openSensitiveAccess,
+    openRecordStatusChange: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) {
+        accountRecordStatus.openRecordStatusChange(item);
+      }
+    },
+    openReportLoss: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) lossReporting.openReportLoss(item);
+    },
+    openUnfreezeLoss: (item: V2Account) => {
+      if (!accountsQuery.isParameterTransition.value) lossReporting.openUnfreezeLoss(item);
+    },
     formatDecimal: formatAccountDecimal,
     formatDate: formatAccountDate,
     hasLoadedOnce,
