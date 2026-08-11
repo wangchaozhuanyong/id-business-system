@@ -205,13 +205,14 @@
         <footer class="v2-records-pagination">
           <span>共 {{ giftCardTotal }} 条</span>
           <el-pagination
-            v-model:current-page="giftCardPage"
-            v-model:page-size="giftCardPageSize"
             v-pagination-label
+            :current-page="giftCardPage"
+            :page-size="giftCardPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="giftCardTotal"
+            :disabled="queryPhase === 'transitioning'"
             @current-change="loadGiftCards"
             @size-change="handleGiftCardPageSizeChange"
           />
@@ -324,13 +325,14 @@
         <footer class="v2-records-pagination">
           <span>共 {{ ledgerTotal }} 条</span>
           <el-pagination
-            v-model:current-page="ledgerPage"
-            v-model:page-size="ledgerPageSize"
             v-pagination-label
+            :current-page="ledgerPage"
+            :page-size="ledgerPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="ledgerTotal"
+            :disabled="queryPhase === 'transitioning'"
             @current-change="loadBalanceLedger"
             @size-change="handleLedgerPageSizeChange"
           />
@@ -389,9 +391,13 @@ const props = defineProps<{
   giftCardLoading: boolean;
   giftCards: V2GiftCardRecord[];
   giftCardTotal: number;
+  giftCardPage: number;
+  giftCardPageSize: number;
   ledgerLoading: boolean;
   ledgerEntries: V2BalanceLedgerRecord[];
   ledgerTotal: number;
+  ledgerPage: number;
+  ledgerPageSize: number;
   canAdjustBalance: boolean;
   canReassignSupplier: boolean;
 }>();
@@ -401,31 +407,27 @@ const emit = defineEmits<{
   reset: [];
   giftCardSortChange: [value: SortChange];
   ledgerSortChange: [value: SortChange];
-  giftCardPageChange: [];
-  giftCardPageSizeChange: [];
-  ledgerPageChange: [];
-  ledgerPageSizeChange: [];
+  giftCardPageChange: [page: number];
+  giftCardPageSizeChange: [pageSize: number];
+  ledgerPageChange: [page: number];
+  ledgerPageSizeChange: [pageSize: number];
   editMetadata: [giftCard: V2GiftCardRecord];
   reassignSupplier: [giftCard: V2GiftCardRecord];
   reverse: [giftCard: V2GiftCardRecord, action: V2GiftCardReversalAction];
 }>();
 
-const giftCardPage = defineModel<number>('giftCardPage', { required: true });
-const giftCardPageSize = defineModel<number>('giftCardPageSize', { required: true });
-const ledgerPage = defineModel<number>('ledgerPage', { required: true });
-const ledgerPageSize = defineModel<number>('ledgerPageSize', { required: true });
 const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => (props.activeTab === 'giftCards' ? props.giftCards : props.ledgerEntries),
-  pageSize: () => (props.activeTab === 'giftCards' ? giftCardPageSize.value : ledgerPageSize.value)
+  pageSize: () => (props.activeTab === 'giftCards' ? props.giftCardPageSize : props.ledgerPageSize)
 });
 const loadActiveTab = () => emit('retry');
 const resetFilters = () => emit('reset');
 const handleGiftCardSortChange = (value: SortChange) => emit('giftCardSortChange', value);
 const handleLedgerSortChange = (value: SortChange) => emit('ledgerSortChange', value);
-const loadGiftCards = () => emit('giftCardPageChange');
-const handleGiftCardPageSizeChange = () => emit('giftCardPageSizeChange');
-const loadBalanceLedger = () => emit('ledgerPageChange');
-const handleLedgerPageSizeChange = () => emit('ledgerPageSizeChange');
+const loadGiftCards = (page: number) => emit('giftCardPageChange', page);
+const handleGiftCardPageSizeChange = (pageSize: number) => emit('giftCardPageSizeChange', pageSize);
+const loadBalanceLedger = (page: number) => emit('ledgerPageChange', page);
+const handleLedgerPageSizeChange = (pageSize: number) => emit('ledgerPageSizeChange', pageSize);
 function openMetadataDrawer(giftCard: V2GiftCardRecord) {
   emit('editMetadata', giftCard);
 }
@@ -443,9 +445,9 @@ function handleFinancialCommand(giftCard: V2GiftCardRecord, command: unknown) {
   }
 }
 function giftCardRowNumber(index: number) {
-  return (giftCardPage.value - 1) * giftCardPageSize.value + index + 1;
+  return (props.giftCardPage - 1) * props.giftCardPageSize + index + 1;
 }
 function ledgerRowNumber(index: number) {
-  return (ledgerPage.value - 1) * ledgerPageSize.value + index + 1;
+  return (props.ledgerPage - 1) * props.ledgerPageSize + index + 1;
 }
 </script>

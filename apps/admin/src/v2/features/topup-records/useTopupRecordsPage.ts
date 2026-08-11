@@ -102,9 +102,13 @@ export function useTopupRecordsPage() {
   const giftCards = ref<V2GiftCardRecord[]>([]);
   const giftCardTotal = ref(0);
   const giftCardResolved = ref(false);
+  const giftCardDisplayedPage = ref(1);
+  const giftCardDisplayedPageSize = ref(20);
   const ledgerEntries = ref<V2BalanceLedgerRecord[]>([]);
   const ledgerTotal = ref(0);
   const ledgerResolved = ref(false);
+  const ledgerDisplayedPage = ref(1);
+  const ledgerDisplayedPageSize = ref(20);
   const metadataDrawerVisible = ref(false);
   const metadataSubmitting = ref(false);
   const selectedGiftCard = ref<V2GiftCardRecord | null>(null);
@@ -179,6 +183,8 @@ export function useTopupRecordsPage() {
 
   const recordsQuery = useV2ModuleQuery<RecordsPageSnapshot>({
     moduleKey: 'topup-records',
+    enabled: () => activeTab.value === 'giftCards' || activeTab.value === 'ledger',
+    trackRouteData: () => activeTab.value === 'giftCards' || activeTab.value === 'ledger',
     scope: 'balance-records',
     key: () => createV2QueryKey(getRecordsRequest()),
     keepPreviousData: true,
@@ -226,10 +232,14 @@ export function useTopupRecordsPage() {
       if (snapshot.tab === 'giftCards') {
         giftCards.value = snapshot.list.items;
         giftCardTotal.value = snapshot.list.total;
+        giftCardDisplayedPage.value = snapshot.list.page;
+        giftCardDisplayedPageSize.value = snapshot.list.pageSize;
         giftCardResolved.value = true;
       } else {
         ledgerEntries.value = snapshot.list.items;
         ledgerTotal.value = snapshot.list.total;
+        ledgerDisplayedPage.value = snapshot.list.page;
+        ledgerDisplayedPageSize.value = snapshot.list.pageSize;
         ledgerResolved.value = true;
       }
     },
@@ -330,21 +340,25 @@ export function useTopupRecordsPage() {
     void navigateSafely(router, { path: '/v2/records/topups', query }, 'replace');
   }
 
-  function handleGiftCardPageSizeChange() {
+  function handleGiftCardPageSizeChange(pageSize: number) {
+    giftCardQuery.pageSize = pageSize;
     giftCardQuery.page = 1;
     void recordsQuery.ensureFresh();
   }
 
-  function handleLedgerPageSizeChange() {
+  function handleLedgerPageSizeChange(pageSize: number) {
+    ledgerQuery.pageSize = pageSize;
     ledgerQuery.page = 1;
     void recordsQuery.ensureFresh();
   }
 
-  function handleGiftCardPageChange() {
+  function handleGiftCardPageChange(page: number) {
+    giftCardQuery.page = page;
     void recordsQuery.ensureFresh();
   }
 
-  function handleLedgerPageChange() {
+  function handleLedgerPageChange(page: number) {
+    ledgerQuery.page = page;
     void recordsQuery.ensureFresh();
   }
 
@@ -467,14 +481,6 @@ export function useTopupRecordsPage() {
     }
   }
 
-  function giftCardRowNumber(index: number) {
-    return (giftCardQuery.page - 1) * giftCardQuery.pageSize + index + 1;
-  }
-
-  function ledgerRowNumber(index: number) {
-    return (ledgerQuery.page - 1) * ledgerQuery.pageSize + index + 1;
-  }
-
   return {
     canAdjustBalance,
     canViewSupplierFunds,
@@ -486,9 +492,13 @@ export function useTopupRecordsPage() {
     topupSupplierOptions,
     giftCards,
     giftCardTotal,
+    giftCardDisplayedPage,
+    giftCardDisplayedPageSize,
     giftCardLoading,
     ledgerEntries,
     ledgerTotal,
+    ledgerDisplayedPage,
+    ledgerDisplayedPageSize,
     ledgerLoading,
     metadataDrawerVisible,
     metadataSubmitting,
@@ -527,8 +537,6 @@ export function useTopupRecordsPage() {
     openSupplierDrawer,
     submitSupplierReassignment,
     ...giftCardReversal,
-    giftCardRowNumber,
-    ledgerRowNumber,
     giftCardStatusLabel,
     giftCardStatusType,
     ledgerTypeLabel,

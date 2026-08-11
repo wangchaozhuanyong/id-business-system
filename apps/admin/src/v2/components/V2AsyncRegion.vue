@@ -43,7 +43,9 @@
       >
         <strong>{{ isPreviousData ? '新条件加载失败' : '更新失败' }}</strong>
         <span> {{ error }}{{ isPreviousData ? '，以下仍为上次成功结果。' : '' }} </span>
-        <AppButton size="small" variant="soft" @click="$emit('retry')">重试</AppButton>
+        <AppButton size="small" variant="soft" allow-when-stale @click="$emit('retry')">
+          重试
+        </AppButton>
       </div>
 
       <V2PageState
@@ -55,12 +57,7 @@
         <slot name="empty-action" />
       </V2PageState>
 
-      <div
-        v-else
-        class="v2-async-region__content"
-        :inert="isPreviousData || undefined"
-        :aria-disabled="isPreviousData || undefined"
-      >
+      <div v-else class="v2-async-region__content">
         <slot />
       </div>
 
@@ -78,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2PageState from '@/v2/components/V2PageState.vue';
 import {
@@ -86,6 +83,7 @@ import {
   resolveV2AsyncRegionState,
   shouldDeferV2RefreshFeedback
 } from './asyncRegionState';
+import { V2_ASYNC_REGION_PREVIOUS_DATA } from './asyncRegionContext';
 import type { V2SkeletonKind } from './loadingVisuals';
 import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 
@@ -146,6 +144,7 @@ const effectivePhase = computed<V2QueryPhase>(() =>
 const isPreviousData = computed(
   () => props.previousData || effectivePhase.value === 'transitioning'
 );
+provide(V2_ASYNC_REGION_PREVIOUS_DATA, isPreviousData);
 const isBusy = computed(() =>
   ['idle', 'initial-loading', 'refreshing', 'transitioning'].includes(effectivePhase.value)
 );

@@ -119,13 +119,14 @@
       <footer class="v2-records-pagination">
         <span>共 {{ page.sessionTotal }} 条</span>
         <el-pagination
-          v-model:current-page="page.query.page"
-          v-model:page-size="page.query.pageSize"
           v-pagination-label
+          :current-page="page.displayedPage"
+          :page-size="page.displayedPageSize"
           background
           :page-sizes="[10, 20, 50]"
           layout="sizes, prev, pager, next"
           :total="page.sessionTotal"
+          :disabled="page.queryPhase === 'transitioning'"
           @current-change="page.handlePageChange"
           @size-change="page.handlePageSizeChange"
         />
@@ -151,6 +152,6 @@ type ProfilePage = UnwrapNestedRefs<ReturnType<typeof useProfilePage>>;
 const props = defineProps<{ page: ProfilePage }>();
 const { listRef, listFrameStyle } = useV2StableListFrame({
   items: () => props.page.sessions,
-  pageSize: () => props.page.query.pageSize
+  pageSize: () => props.page.displayedPageSize
 });
 </script>

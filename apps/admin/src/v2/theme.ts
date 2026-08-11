@@ -17,8 +17,10 @@ export function getPreferredV2Theme(): V2Theme {
 }
 
 export function applyV2Theme(theme: V2Theme) {
-  document.documentElement.dataset.v2Theme = theme;
-  document.documentElement.style.colorScheme = theme;
+  const root = document.documentElement;
+  root.dataset.v2Theme = theme;
+  root.classList.toggle('dark', theme === 'dark');
+  root.style.colorScheme = theme;
 }
 
 export function initializeV2Theme() {

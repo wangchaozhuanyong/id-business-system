@@ -337,6 +337,8 @@
           :id-selection-mode="idSelectionMode"
           :can-match="canMatch"
           :matching-loading="matchingLoading"
+          :matching-phase="matchingPhase"
+          :matching-parameter-transition="matchingParameterTransition"
           :matching-result="matchingResult"
           :candidate-items="candidateItems"
           :matching-error="matchingError"
@@ -378,7 +380,6 @@
         show-icon
         :closable="false"
       />
-
       <div class="v2-order-entry-result-shell">
         <V2OrderEntryResult
           :created-result="createdResult"
@@ -415,7 +416,6 @@ import V2CustomerRemoteSelect from './components/V2CustomerRemoteSelect.vue';
 import V2QuickCustomerDrawer from './components/V2QuickCustomerDrawer.vue';
 import { useOrderEntryPage } from './useOrderEntryPage';
 import '@/v2/styles/order-entry.css';
-
 const {
   router,
   formRef,
@@ -424,6 +424,8 @@ const {
   optionsError,
   idSelectionMode,
   matchingLoading,
+  matchingPhase,
+  matchingParameterTransition,
   matchingError,
   matchingResult,
   submitting,
@@ -492,7 +494,6 @@ const {
   formatDecimal
 } = useOrderEntryPage();
 const quickCustomerVisible = ref(false);
-
 function openRoute(path: string) {
   void navigateSafely(router, path);
 }

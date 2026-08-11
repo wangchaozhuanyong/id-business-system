@@ -244,15 +244,16 @@
         <footer class="v2-records-pagination">
           <span>当前筛选共 {{ page.jobsTotal }} 条</span>
           <el-pagination
-            v-model:current-page="page.jobQueryModel.page"
-            v-model:page-size="page.jobQueryModel.pageSize"
             v-pagination-label
+            :current-page="page.jobsDisplayedPage"
+            :page-size="page.jobsDisplayedPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="page.jobsTotal"
-            @current-change="page.refreshJobs"
-            @size-change="page.handleJobFilterChange"
+            :disabled="page.jobsQueryPhase === 'transitioning'"
+            @current-change="page.handleJobPageChange"
+            @size-change="page.handleJobPageSizeChange"
           />
         </footer>
       </section>

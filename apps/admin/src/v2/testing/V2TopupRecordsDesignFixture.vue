@@ -148,10 +148,10 @@
             </section>
 
             <V2TopupRecordsTables
-              v-model:gift-card-page="giftCardPage"
-              v-model:gift-card-page-size="giftCardPageSize"
-              v-model:ledger-page="ledgerPage"
-              v-model:ledger-page-size="ledgerPageSize"
+              :gift-card-page="giftCardPage"
+              :gift-card-page-size="giftCardPageSize"
+              :ledger-page="ledgerPage"
+              :ledger-page-size="ledgerPageSize"
               :active-tab="activeTab"
               :active-loading="false"
               :is-initial-loading="false"
@@ -171,10 +171,10 @@
               @reset="resetFilters"
               @gift-card-sort-change="showNotice('已切换加卡记录排序。')"
               @ledger-sort-change="showNotice('已切换余额流水排序。')"
-              @gift-card-page-change="showNotice('已切换加卡记录分页。')"
-              @ledger-page-change="showNotice('已切换余额流水分页。')"
-              @gift-card-page-size-change="resetPage"
-              @ledger-page-size-change="resetPage"
+              @gift-card-page-change="handleGiftCardPageChange"
+              @ledger-page-change="handleLedgerPageChange"
+              @gift-card-page-size-change="handleGiftCardPageSizeChange"
+              @ledger-page-size-change="handleLedgerPageSizeChange"
               @edit-metadata="showNotice('预览操作：正在修改备注。')"
               @reassign-supplier="showNotice('预览操作：正在更正供应商。')"
               @reverse="showNotice('预览操作：正在核对反向流水。')"
@@ -430,6 +430,26 @@ const activeSummary = computed(() =>
 function resetPage() {
   giftCardPage.value = 1;
   ledgerPage.value = 1;
+}
+
+function handleGiftCardPageChange(page: number) {
+  giftCardPage.value = page;
+  showNotice('已切换加卡记录分页。');
+}
+
+function handleLedgerPageChange(page: number) {
+  ledgerPage.value = page;
+  showNotice('已切换余额流水分页。');
+}
+
+function handleGiftCardPageSizeChange(pageSize: number) {
+  giftCardPageSize.value = pageSize;
+  resetPage();
+}
+
+function handleLedgerPageSizeChange(pageSize: number) {
+  ledgerPageSize.value = pageSize;
+  resetPage();
 }
 function resetFilters() {
   keyword.value = '';

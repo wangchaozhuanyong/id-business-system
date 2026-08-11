@@ -1,6 +1,6 @@
 import { computed, onActivated, onDeactivated, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
-import { createV2QueryKey, useV2Query } from '@/v2/composables/useV2Query';
+import { createV2QueryKey, useV2Query, type V2QueryPhase } from '@/v2/composables/useV2Query';
 import { idBusinessV2OrdersApi } from './api';
 import { isPositiveOrderAmount } from './order-pricing';
 import type { V2OrderCandidate, V2OrderMatchingResult } from './contracts';
@@ -98,6 +98,14 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
     idSelectionMode.value === 'auto'
       ? candidateQuery.isInitialLoading.value || candidateQuery.isRefreshing.value
       : manualCandidateQuery.isInitialLoading.value || manualCandidateQuery.isRefreshing.value
+  );
+  const matchingPhase = computed<V2QueryPhase>(() =>
+    idSelectionMode.value === 'auto' ? candidateQuery.phase.value : manualCandidateQuery.phase.value
+  );
+  const matchingParameterTransition = computed(() =>
+    idSelectionMode.value === 'auto'
+      ? candidateQuery.isParameterTransition.value
+      : manualCandidateQuery.isParameterTransition.value
   );
 
   function applyAutomaticResult(result: V2OrderMatchingResult | undefined) {
@@ -301,6 +309,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
   return {
     idSelectionMode,
     matchingLoading,
+    matchingPhase,
+    matchingParameterTransition,
     matchingError,
     matchingResult,
     candidateItems,

@@ -177,14 +177,15 @@
           <footer class="v2-records-pagination">
             <span>共 {{ page.recordTotal }} 条</span>
             <el-pagination
-              v-model:current-page="page.recordQuery.page"
-              v-model:page-size="page.recordQuery.pageSize"
               v-pagination-label
+              :current-page="page.recordDisplayedPage"
+              :page-size="page.recordDisplayedPageSize"
               background
               :page-sizes="[10, 20, 50, 100]"
               layout="sizes, prev, pager, next"
               :total="page.recordTotal"
-              @current-change="page.loadRecords"
+              :disabled="page.queryPhase === 'transitioning'"
+              @current-change="page.handleRecordPageChange"
               @size-change="page.resetRecordPage"
             />
           </footer>
@@ -343,14 +344,15 @@
           <footer class="v2-records-pagination">
             <span>共 {{ page.manualTotal }} 条</span>
             <el-pagination
-              v-model:current-page="page.manualQuery.page"
-              v-model:page-size="page.manualQuery.pageSize"
               v-pagination-label
+              :current-page="page.manualDisplayedPage"
+              :page-size="page.manualDisplayedPageSize"
               background
               :page-sizes="[10, 20, 50, 100]"
               layout="sizes, prev, pager, next"
               :total="page.manualTotal"
-              @current-change="page.loadManualEntries"
+              :disabled="page.queryPhase === 'transitioning'"
+              @current-change="page.handleManualPageChange"
               @size-change="page.resetManualPage"
             />
           </footer>

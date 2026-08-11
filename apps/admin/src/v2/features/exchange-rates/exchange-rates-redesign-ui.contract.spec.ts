@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import view from './V2ExchangeRatesView.vue?raw';
 import overview from './components/V2ExchangeRatesOverview.vue?raw';
 import tabs from './components/V2ExchangeRateTabs.vue?raw';
+import pageState from './useExchangeRatesPage.ts?raw';
 
 describe('exchange-rate option 3 redesign UI contract', () => {
   it('keeps the real page flow while delegating the overview and record tabs', () => {
@@ -27,6 +28,9 @@ describe('exchange-rate option 3 redesign UI contract', () => {
     expect(tabs).toContain('本页 {{ page.records.length }} 条');
     expect(tabs).toContain('本页 {{ page.manualEntries.length }} 条');
     expect(tabs).not.toContain('v2-records-mobile-list');
+    expect(tabs).toContain(':current-page="page.recordDisplayedPage"');
+    expect(tabs).toContain(':current-page="page.manualDisplayedPage"');
+    expect(pageState).toContain('runDetailRequest.cancel()');
   });
 
   it('preserves both repaired filter grids and their dedicated search actions', () => {

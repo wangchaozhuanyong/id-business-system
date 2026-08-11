@@ -229,6 +229,8 @@
                 :id-selection-mode="selectionMode"
                 :can-match="true"
                 :matching-loading="false"
+                matching-phase="ready"
+                :matching-parameter-transition="false"
                 :matching-result="matchingResult"
                 :candidate-items="candidates"
                 matching-error=""

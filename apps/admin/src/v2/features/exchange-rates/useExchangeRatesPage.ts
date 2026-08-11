@@ -56,10 +56,14 @@ export function useExchangeRatesPage() {
   const records = ref<V2ExchangeRateRecord[]>([]);
   const recordTotal = ref(0);
   const recordResolved = ref(false);
+  const recordDisplayedPage = ref(1);
+  const recordDisplayedPageSize = ref(20);
   const recordDateRange = ref<[string, string] | []>([]);
   const manualEntries = ref<V2ManualFxRate[]>([]);
   const manualTotal = ref(0);
   const manualResolved = ref(false);
+  const manualDisplayedPage = ref(1);
+  const manualDisplayedPageSize = ref(20);
   const manualDateRange = ref<[string, string] | []>([]);
   const settingsVisible = ref(false);
   const settingsSaving = ref(false);
@@ -233,11 +237,15 @@ export function useExchangeRatesPage() {
       if (snapshot.records) {
         records.value = snapshot.records.items;
         recordTotal.value = snapshot.records.total;
+        recordDisplayedPage.value = snapshot.records.page;
+        recordDisplayedPageSize.value = snapshot.records.pageSize;
         recordResolved.value = true;
       }
       if (snapshot.manualEntries) {
         manualEntries.value = snapshot.manualEntries.items;
         manualTotal.value = snapshot.manualEntries.total;
+        manualDisplayedPage.value = snapshot.manualEntries.page;
+        manualDisplayedPageSize.value = snapshot.manualEntries.pageSize;
         manualResolved.value = true;
       }
     },
@@ -277,7 +285,12 @@ export function useExchangeRatesPage() {
     recordQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
-  function resetRecordPage() {
+  function handleRecordPageChange(page: number) {
+    recordQuery.page = page;
+    void exchangeRateQuery.ensureFresh();
+  }
+  function resetRecordPage(pageSize: number) {
+    recordQuery.pageSize = pageSize;
     recordQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
@@ -285,7 +298,12 @@ export function useExchangeRatesPage() {
     manualQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
-  function resetManualPage() {
+  function handleManualPageChange(page: number) {
+    manualQuery.page = page;
+    void exchangeRateQuery.ensureFresh();
+  }
+  function resetManualPage(pageSize: number) {
+    manualQuery.pageSize = pageSize;
     manualQuery.page = 1;
     void exchangeRateQuery.ensureFresh();
   }
@@ -473,6 +491,15 @@ export function useExchangeRatesPage() {
     void exchangeRateQuery.ensureFresh();
   });
 
+  watch(runDetailVisible, (visible) => {
+    if (visible) return;
+    runDetailRequest.cancel();
+    detailLoading.value = false;
+    detailError.value = '';
+    runDetail.value = null;
+    runDetailTarget.value = null;
+  });
+
   return {
     defaultIntervals,
     trackedCurrencies,
@@ -486,6 +513,8 @@ export function useExchangeRatesPage() {
     collecting,
     records,
     recordTotal,
+    recordDisplayedPage,
+    recordDisplayedPageSize,
     recordLoading,
     recordError,
     recordResolved,
@@ -493,6 +522,8 @@ export function useExchangeRatesPage() {
     receiptFxRates,
     manualEntries,
     manualTotal,
+    manualDisplayedPage,
+    manualDisplayedPageSize,
     manualLoading,
     manualError,
     manualResolved,
@@ -522,8 +553,10 @@ export function useExchangeRatesPage() {
     loadManualEntries,
     loadAll,
     searchRecords,
+    handleRecordPageChange,
     resetRecordPage,
     searchManual,
+    handleManualPageChange,
     resetManualPage,
     collectNow,
     openSettings,

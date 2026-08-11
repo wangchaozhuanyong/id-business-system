@@ -73,14 +73,15 @@
         <footer class="v2-records-pagination">
           <span>共 {{ detail.total }} 条</span>
           <el-pagination
-            v-model:current-page="query.page"
-            v-model:page-size="query.pageSize"
             v-pagination-label
+            :current-page="displayedPage"
+            :page-size="displayedPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="detail.total"
-            @current-change="load"
+            :disabled="loading"
+            @current-change="handlePageChange"
             @size-change="handlePageSizeChange"
           />
         </footer>
@@ -90,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2Table from '@/v2/components/V2Table.vue';
@@ -117,6 +118,8 @@ const resolved = ref(false);
 const error = ref('');
 const query = reactive({ page: 1, pageSize: 20 });
 const latestRequest = useV2LatestRequest();
+const displayedPage = computed(() => detail.value?.page ?? query.page);
+const displayedPageSize = computed(() => detail.value?.pageSize ?? query.pageSize);
 
 function open(item: V2TopupSupplierFundItem) {
   const switchingTarget = supplier.value?.supplier.id !== item.supplier.id;
@@ -154,10 +157,26 @@ async function load() {
   }
 }
 
-function handlePageSizeChange() {
+function handlePageChange(page: number) {
+  query.page = page;
+  void load();
+}
+
+function handlePageSizeChange(pageSize: number) {
+  query.pageSize = pageSize;
   query.page = 1;
   void load();
 }
+
+watch(visible, (isVisible) => {
+  if (isVisible) return;
+  latestRequest.cancel();
+  loading.value = false;
+  resolved.value = false;
+  error.value = '';
+  detail.value = null;
+  supplier.value = null;
+});
 
 function ledgerTypeLabel(type: V2TopupSupplierLedgerEntryType) {
   return {

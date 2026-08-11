@@ -36,6 +36,7 @@ try {
   for (const theme of themes) {
     for (const width of viewportWidths) {
       await verifyScenario(browser, theme, width);
+      await verifyThemeComponentsScenario(browser, theme, width);
     }
   }
 
@@ -45,6 +46,7 @@ try {
       themes,
       viewportWidths,
       variants,
+      componentSurfaces: 12,
       minimumTextContrast: 4.5,
       minimumFocusContrast: 3
     })
@@ -248,6 +250,185 @@ async function verifyScenario(browserInstance, theme, width) {
   } finally {
     await context.close();
   }
+}
+
+async function verifyThemeComponentsScenario(browserInstance, theme, width) {
+  const context = await browserInstance.newContext({
+    viewport: { width, height: width <= 390 ? 844 : 1000 }
+  });
+  const page = await context.newPage();
+  const runtimeErrors = [];
+
+  page.on('pageerror', (error) => runtimeErrors.push(String(error)));
+  page.on('console', (message) => {
+    if (message.type() === 'error') runtimeErrors.push(message.text());
+  });
+
+  try {
+    const fixtureUrl = new URL('/theme-components-fixture.html', adminUrl);
+    fixtureUrl.searchParams.set('theme', theme);
+    await page.goto(fixtureUrl.href, { waitUntil: 'networkidle' });
+    await page.locator('[data-theme-components-fixture]').waitFor({ state: 'visible' });
+
+    const themeState = await page.evaluate(() => ({
+      classList: [...document.documentElement.classList],
+      colorScheme: getComputedStyle(document.documentElement).colorScheme,
+      theme: document.documentElement.dataset.v2Theme
+    }));
+    assert.equal(themeState.theme, theme, `${theme} ${width}px 产品主题标记未同步`);
+    assert.equal(
+      themeState.classList.includes('dark'),
+      theme === 'dark',
+      `${theme} ${width}px Element Plus 深色主题类未同步`
+    );
+    assert.equal(themeState.colorScheme, theme, `${theme} ${width}px 原生 color-scheme 未同步`);
+
+    const surfaceSelectors = [
+      ['输入框', '.el-input__wrapper'],
+      ['选择器', '.el-select__wrapper'],
+      ['文本域', '.el-textarea__inner'],
+      ['数字输入', '.el-input-number .el-input__wrapper'],
+      ['日期输入', '.el-date-editor .el-input__wrapper'],
+      ['表格', '.el-table'],
+      ['表头', '.el-table th.el-table__cell'],
+      ['表格单元格', '.el-table td.el-table__cell'],
+      ['分页按钮', '.el-pagination .btn-prev']
+    ];
+    for (const [label, selector] of surfaceSelectors) {
+      assertThemeSurface(await measureThemeNode(page.locator(selector).first()), theme, {
+        label,
+        width
+      });
+    }
+
+    const textSelectors = [
+      ['输入框文字', '.el-input__inner'],
+      ['选择器文字', '.el-select__selected-item'],
+      ['文本域文字', '.el-textarea__inner'],
+      ['数字输入文字', '.el-input-number .el-input__inner'],
+      ['日期输入文字', '.el-date-editor .el-input__inner'],
+      ['表头文字', '.el-table th.el-table__cell .cell'],
+      ['表格文字', '.el-table td.el-table__cell .cell'],
+      ['分页文字', '.el-pagination .btn-prev'],
+      ['标签页文字', '.el-tabs__item.is-active'],
+      ['状态标签文字', '.el-tag--success']
+    ];
+    for (const [label, selector] of textSelectors) {
+      assertThemeTextContrast(await measureThemeNode(page.locator(selector).first()), {
+        label,
+        theme,
+        width
+      });
+    }
+
+    await page.locator('[data-theme-dropdown-trigger]').click();
+    const dropdown = page.locator('.el-dropdown__popper').filter({ visible: true });
+    await dropdown.waitFor({ state: 'visible' });
+    assertThemeSurface(await measureThemeNode(dropdown), theme, {
+      label: '下拉浮层',
+      width
+    });
+    assertThemeTextContrast(
+      await measureThemeNode(dropdown.locator('.el-dropdown-menu__item').first()),
+      { label: '下拉浮层文字', theme, width }
+    );
+    await page.keyboard.press('Escape');
+
+    await page.locator('[data-theme-dialog-trigger]').click();
+    const dialog = page.locator('.el-dialog');
+    await dialog.waitFor({ state: 'visible' });
+    assertThemeSurface(await measureThemeNode(dialog), theme, { label: '弹窗', width });
+    assertThemeTextContrast(await measureThemeNode(dialog.locator('[data-theme-dialog-copy]')), {
+      label: '弹窗文字',
+      theme,
+      width
+    });
+    await dialog.locator('[data-theme-dialog-close]').click();
+    await dialog.waitFor({ state: 'hidden' });
+
+    await page.locator('[data-theme-drawer-trigger]').click();
+    const drawer = page.locator('.el-drawer');
+    await drawer.waitFor({ state: 'visible' });
+    assertThemeSurface(await measureThemeNode(drawer), theme, { label: '抽屉', width });
+    assertThemeTextContrast(await measureThemeNode(drawer.locator('[data-theme-drawer-copy]')), {
+      label: '抽屉文字',
+      theme,
+      width
+    });
+    await drawer.locator('[data-theme-drawer-close]').click();
+    await drawer.waitFor({ state: 'hidden' });
+
+    const overflow = await page.evaluate(() =>
+      Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    );
+    assert.equal(overflow, 0, `${theme} ${width}px 主题组件页出现横向溢出`);
+    assert.deepEqual(
+      runtimeErrors,
+      [],
+      `${theme} ${width}px 主题组件页浏览器错误：${runtimeErrors.join('\n')}`
+    );
+
+    if (screenshotDirectory) {
+      await page.screenshot({
+        fullPage: true,
+        path: path.join(screenshotDirectory, `components-${theme}-${width}.png`)
+      });
+    }
+  } finally {
+    await context.close();
+  }
+}
+
+async function measureThemeNode(locator) {
+  return locator.evaluate((element) => {
+    const parseAlpha = (value) => {
+      const match = value.match(
+        /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/
+      );
+      if (!match) throw new Error(`无法解析 CSS 颜色：${value}`);
+      return match[4] == null ? 1 : Number(match[4]);
+    };
+    const resolveBackground = (target) => {
+      let current = target;
+      while (current) {
+        const color = getComputedStyle(current).backgroundColor;
+        if (parseAlpha(color) >= 1) return color;
+        current = current.parentElement;
+      }
+      return 'rgb(255, 255, 255)';
+    };
+    const style = getComputedStyle(element);
+    return {
+      background: resolveBackground(element),
+      foreground: style.color
+    };
+  });
+}
+
+function assertThemeSurface(measurement, theme, { label, width }) {
+  const luminance = relativeLuminance(parseCssColor(measurement.background));
+  if (theme === 'dark') {
+    assert.ok(
+      luminance <= 0.08,
+      `${theme} ${width}px ${label} 仍是浅色表面：${measurement.background}`
+    );
+    return;
+  }
+  assert.ok(
+    luminance >= 0.72,
+    `${theme} ${width}px ${label} 错误使用了深色表面：${measurement.background}`
+  );
+}
+
+function assertThemeTextContrast(measurement, { label, theme, width }) {
+  const ratio = contrastRatio(
+    parseCssColor(measurement.foreground),
+    parseCssColor(measurement.background)
+  );
+  assert.ok(
+    ratio >= 4.5,
+    `${theme} ${width}px ${label}: ${measurement.foreground} / ${measurement.background} = ${ratio.toFixed(2)}:1，低于 4.5:1`
+  );
 }
 
 function assertTextContrast(measurement, context) {

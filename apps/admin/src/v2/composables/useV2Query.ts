@@ -552,6 +552,7 @@ export function useV2ModuleRefresh(options: {
 export function useV2ModuleQuery<T>(
   options: Omit<UseV2QueryOptions<T>, 'freshnessPolicy'> & {
     moduleKey: V2ModuleKey;
+    trackRouteData?: boolean | (() => boolean);
   }
 ) {
   const moduleDefinition = getV2ModuleDefinition(options.moduleKey);
@@ -568,19 +569,25 @@ export function useV2ModuleQuery<T>(
     keepPreviousData: options.keepPreviousData ?? true,
     getRevalidateAt: options.getRevalidateAt
   });
+  const trackRouteData = computed(() =>
+    typeof options.trackRouteData === 'function'
+      ? options.trackRouteData()
+      : options.trackRouteData !== false
+  );
   let mounted = false;
 
-  watch(query.hasCurrentData, (hasCurrentData) => {
-    if (hasCurrentData) markV2RouteDataReady(options.moduleKey, 'network');
+  watch([trackRouteData, query.hasCurrentData], ([shouldTrack, hasCurrentData]) => {
+    if (shouldTrack && hasCurrentData) markV2RouteDataReady(options.moduleKey, 'network');
   });
 
   async function ensureModuleFresh() {
     const hadCurrentData = query.hasCurrentData.value;
-    if (hadCurrentData) {
+    if (trackRouteData.value && hadCurrentData) {
       markV2RouteDataReady(options.moduleKey, 'memory-cache');
     }
 
     await query.ensureFresh();
+    if (!trackRouteData.value) return;
     if (query.hasCurrentData.value) {
       markV2RouteDataReady(options.moduleKey, hadCurrentData ? 'memory-cache' : 'network');
     } else if (query.error.value) {

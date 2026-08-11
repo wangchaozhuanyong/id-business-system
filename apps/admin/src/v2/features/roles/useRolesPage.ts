@@ -415,6 +415,16 @@ export function useRolesPage() {
     }).format(new Date(value));
   }
 
+  watch(drawerVisible, (visible) => {
+    if (visible) return;
+    detailRequest.cancel();
+    detailLoading.value = false;
+    detailResolved.value = false;
+    detailError.value = '';
+    members.value = [];
+    editingItem.value = null;
+  });
+
   return {
     query,
     items,

@@ -5,6 +5,7 @@ import categoryRail from './components/V2OptionsCategoryRail.vue?raw';
 import list from './components/V2OptionsList.vue?raw';
 import overview from './components/V2OptionsOverview.vue?raw';
 import toolbar from './components/V2OptionsToolbar.vue?raw';
+import fixture from '../../testing/V2OptionsDesignFixture.vue?raw';
 
 describe('options scheme 3 redesign contract', () => {
   it('composes the overview, category rail, filters and list around the existing dialogs', () => {
@@ -45,5 +46,10 @@ describe('options scheme 3 redesign contract', () => {
     expect(pageState).toContain('idBusinessV2OptionsApi.update');
     expect(pageState).toContain('idBusinessV2OptionsApi.remove');
     expect(pageState).toContain('void loadOptions(true)');
+  });
+
+  it('keeps space between the overview and workspace inside the async region', () => {
+    expect(view).toContain('<div class="v2-options-page__content">');
+    expect(fixture).toContain('<div class="v2-options-page__content">');
   });
 });

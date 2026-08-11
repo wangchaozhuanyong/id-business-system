@@ -55,6 +55,10 @@ export function useProfilePage() {
   const mfaStatus = computed(() => profileQuery.data.value?.mfaStatus ?? null);
   const sessions = computed(() => profileQuery.data.value?.sessions.items ?? []);
   const sessionTotal = computed(() => profileQuery.data.value?.sessions.total ?? 0);
+  const displayedPage = computed(() => profileQuery.data.value?.sessions.page ?? query.page);
+  const displayedPageSize = computed(
+    () => profileQuery.data.value?.sessions.pageSize ?? query.pageSize
+  );
   const hasOtherActiveSessions = computed(() =>
     sessions.value.some((item) => !item.isCurrent && !item.revokedAt)
   );
@@ -255,6 +259,8 @@ export function useProfilePage() {
     mfaStatus,
     sessions,
     sessionTotal,
+    displayedPage,
+    displayedPageSize,
     hasOtherActiveSessions,
     queryPhase: profileQuery.phase,
     isParameterTransition: profileQuery.isParameterTransition,

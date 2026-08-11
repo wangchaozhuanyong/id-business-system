@@ -293,11 +293,8 @@ watch(
 );
 
 async function refreshQueriesAfterSessionRecovery() {
-  const [{ V2_DATA_SCOPES }, { invalidateV2Queries }] = await Promise.all([
-    import('@apple-business/shared'),
-    import('@/v2/composables/useV2Query')
-  ]);
-  invalidateV2Queries(V2_DATA_SCOPES);
+  const { invalidateV2SessionRecoveryQueries } = await import('@/v2/router/sessionRecoveryQueries');
+  invalidateV2SessionRecoveryQueries();
   await reconcileRouteAfterSessionRecovery();
 }
 

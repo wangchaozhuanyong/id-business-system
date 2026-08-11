@@ -4,8 +4,10 @@ import path from 'node:path';
 
 const rootDir = process.cwd();
 const baseCssPath = path.join(rootDir, 'apps/admin/src/v2/styles/base.css');
+const themePath = path.join(rootDir, 'apps/admin/src/v2/theme.ts');
 const uiRulesPath = path.join(rootDir, 'docs/UI_DESIGN.md');
 const baseCss = readFileSync(baseCssPath, 'utf8');
+const themeSource = readFileSync(themePath, 'utf8');
 const uiRules = readFileSync(uiRulesPath, 'utf8');
 const failures = [];
 
@@ -95,11 +97,54 @@ for (const variant of ['primary', 'soft', 'danger', 'success', 'ghost']) {
   }
 }
 
+if (!baseCss.includes("@import 'element-plus/theme-chalk/dark/css-vars.css';")) {
+  failures.push('base.css: 必须引入 Element Plus 官方深色变量');
+}
+
+const elementThemeRule = extractBlock(baseCss, 'html[data-v2-theme]');
+requireProperties('html[data-v2-theme]', elementThemeRule, [
+  '--el-bg-color',
+  '--el-bg-color-page',
+  '--el-bg-color-overlay',
+  '--el-text-color-primary',
+  '--el-text-color-regular',
+  '--el-text-color-secondary',
+  '--el-text-color-placeholder',
+  '--el-text-color-disabled',
+  '--el-border-color',
+  '--el-border-color-light',
+  '--el-border-color-lighter',
+  '--el-border-color-extra-light',
+  '--el-fill-color',
+  '--el-fill-color-light',
+  '--el-fill-color-lighter',
+  '--el-fill-color-extra-light',
+  '--el-fill-color-blank',
+  '--el-disabled-bg-color',
+  '--el-disabled-text-color',
+  '--el-disabled-border-color',
+  '--el-box-shadow',
+  '--el-box-shadow-light',
+  '--el-mask-color'
+]);
+
+for (const snippet of [
+  "root.classList.toggle('dark', theme === 'dark')",
+  'root.dataset.v2Theme = theme',
+  'root.style.colorScheme = theme'
+]) {
+  if (!themeSource.includes(snippet)) {
+    failures.push(`theme.ts: 缺少统一主题同步逻辑“${snippet}”`);
+  }
+}
+
 for (const snippet of [
   '彩色背景必须使用配套的 `on-*` 前景令牌',
   '按钮文字对比度不得低于 4.5:1',
   '图标、边框和焦点指示不得低于 3:1',
-  'normal、hover、active、focus、disabled 和 loading'
+  'normal、hover、active、focus、disabled 和 loading',
+  '`html.dark` 协议',
+  '业务页面禁止为深色模式单独覆盖 Element Plus 组件背景'
 ]) {
   if (!uiRules.includes(snippet)) failures.push(`docs/UI_DESIGN.md: 缺少规则“${snippet}”`);
 }
@@ -111,7 +156,7 @@ if (failures.length) {
 }
 
 console.log(
-  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 6 button variants).`
+  `V2 color contrast check passed (${contrastPairs.length} pairs x 2 themes, 6 button variants, Element Plus theme bridge).`
 );
 
 function extractBlock(source, selector) {

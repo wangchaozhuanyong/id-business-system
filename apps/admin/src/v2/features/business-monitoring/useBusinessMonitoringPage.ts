@@ -48,6 +48,10 @@ export function useBusinessMonitoringPage() {
 
   const items = computed(() => monitoringQuery.data.value?.result.items ?? []);
   const total = computed(() => monitoringQuery.data.value?.result.total ?? 0);
+  const displayedPage = computed(() => monitoringQuery.data.value?.result.page ?? query.page);
+  const displayedPageSize = computed(
+    () => monitoringQuery.data.value?.result.pageSize ?? query.pageSize
+  );
   const summary = computed(() => monitoringQuery.data.value?.summary ?? null);
   const categoryBreakdown = computed(() =>
     summary.value ? businessMonitoringCategoryBreakdown(summary.value) : []
@@ -118,6 +122,8 @@ export function useBusinessMonitoringPage() {
     query,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
     summary,
     categoryBreakdown,
     rules,

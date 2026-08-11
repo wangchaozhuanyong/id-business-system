@@ -153,14 +153,15 @@
       <footer class="v2-records-pagination">
         <span>共 {{ total }} 个供应商</span>
         <el-pagination
-          v-model:current-page="query.page"
-          v-model:page-size="query.pageSize"
           v-pagination-label
+          :current-page="displayedPage"
+          :page-size="displayedPageSize"
           background
           :page-sizes="[10, 20, 50, 100]"
           layout="sizes, prev, pager, next"
           :total="total"
-          @current-change="refresh"
+          :disabled="queryPhase === 'transitioning'"
+          @current-change="handlePageChange"
           @size-change="handlePageSizeChange"
         />
       </footer>
@@ -308,6 +309,8 @@ type MutationMode = 'initialize' | 'payment' | 'adjust';
 
 const items = ref<V2TopupSupplierFundItem[]>([]);
 const total = ref(0);
+const displayedPage = ref(1);
+const displayedPageSize = ref(20);
 const summary = reactive<V2TopupSupplierFundSummary>({
   totalBalanceCny: '0',
   initializedCount: 0,
@@ -343,6 +346,8 @@ watch(
     if (!result) return;
     items.value = result.items;
     total.value = result.total;
+    displayedPage.value = result.page;
+    displayedPageSize.value = result.pageSize;
     Object.assign(summary, result.summary);
   },
   { immediate: true }
@@ -429,7 +434,13 @@ function refresh() {
   return fundsQuery.refresh();
 }
 
-function handlePageSizeChange() {
+function handlePageChange(page: number) {
+  query.page = page;
+  void fundsQuery.ensureFresh();
+}
+
+function handlePageSizeChange(pageSize: number) {
+  query.pageSize = pageSize;
   query.page = 1;
   void fundsQuery.ensureFresh();
 }

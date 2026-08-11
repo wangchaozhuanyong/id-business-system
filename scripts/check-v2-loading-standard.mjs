@@ -7,6 +7,10 @@ const rootDir = process.cwd();
 const featuresPath = 'apps/admin/src/v2/features';
 const asyncRegionPath = 'apps/admin/src/v2/components/V2AsyncRegion.vue';
 const asyncRegionSource = read(asyncRegionPath);
+const asyncRegionContextPath = 'apps/admin/src/v2/components/asyncRegionContext.ts';
+const asyncRegionContextSource = read(asyncRegionContextPath);
+const appButtonPath = 'apps/admin/src/components/ui/AppButton.vue';
+const appButtonSource = read(appButtonPath);
 const asyncRegionStatePath = 'apps/admin/src/v2/components/asyncRegionState.ts';
 const asyncRegionStateSource = read(asyncRegionStatePath);
 const contentSkeletonPath = 'apps/admin/src/v2/components/V2ContentSkeleton.vue';
@@ -142,7 +146,8 @@ requirePatterns(queryCachePath, queryCacheSource, [
   [/requestedKey/, '查询状态没有记录当前请求参数 key'],
   [/displayedKey/, '查询状态没有记录当前展示快照 key'],
   [/isParameterTransition/, '查询状态无法区分参数切换和同参数刷新'],
-  [/options\.enabled/, '查询缺少权限驱动的 enabled 门禁']
+  [/options\.enabled/, '查询缺少权限驱动的 enabled 门禁'],
+  [/options\.trackRouteData/, '同路由多查询缺少数据就绪埋点归属门禁']
 ]);
 forbidPatterns(queryCachePath, queryCacheSource, [
   [/TIER_FRESHNESS_MS/, '时间过去不得让 event-driven 缓存失效'],
@@ -160,12 +165,19 @@ for (const [pattern, message] of [
   ],
   [/v-if="showRefreshFeedback"/, '异步区域缺少延迟刷新反馈'],
   [/class="v2-async-region__progress"/, '异步区域缺少非遮挡式顶部进度线'],
-  [/:inert="isPreviousData \|\| undefined"/, '旧参数快照没有进入只读状态'],
+  [/provide\(V2_ASYNC_REGION_PREVIOUS_DATA, isPreviousData\)/, '旧参数快照没有下发只读状态'],
   [/:data-v2-query-phase="effectivePhase"/, '异步区域没有暴露可验收的查询阶段'],
   [/prefers-reduced-motion/, '异步区域缺少减少动态效果支持']
 ]) {
   if (!pattern.test(asyncRegionSource)) issues.push(`${asyncRegionPath}: ${message}`);
 }
+requirePatterns(asyncRegionContextPath, asyncRegionContextSource, [
+  [/InjectionKey<ComputedRef<boolean>>/, '旧参数快照的只读上下文缺少强类型约束']
+]);
+requirePatterns(appButtonPath, appButtonSource, [
+  [/inject\(V2_ASYNC_REGION_PREVIOUS_DATA/, '操作按钮没有接入旧参数快照状态'],
+  [/regionPreviousData\?\.value === true/, '旧参数快照下的操作按钮没有禁用']
+]);
 requirePatterns(asyncRegionStatePath, asyncRegionStateSource, [
   [/if \(phase === 'initial-error'\) return 'initial-error'/, '首次加载和失败状态不互斥'],
   [
@@ -177,7 +189,8 @@ requirePatterns(asyncRegionStatePath, asyncRegionStateSource, [
 ]);
 for (const [pattern, message] of [
   [/v2-async-region__overlay/, '禁止恢复浮动刷新卡片'],
-  [/v2-async-region__spinner/, '读取反馈不得同时显示独立旋转指示器']
+  [/v2-async-region__spinner/, '读取反馈不得同时显示独立旋转指示器'],
+  [/:inert="isPreviousData/, '旧参数快照不得锁死分页和恢复操作']
 ]) {
   if (pattern.test(asyncRegionSource)) issues.push(`${asyncRegionPath}: ${message}`);
 }
@@ -231,9 +244,20 @@ function validateLoadingVisualArchitecture() {
     }
 
     for (const tag of source.matchAll(/<AppButton\b[\s\S]*?>/g)) {
-      if (/\btitle=["'][^"']*刷新[^"']*["']/.test(tag[0]) && /\b:loading=/.test(tag[0])) {
+      if (
+        /\b(?:title|aria-label)=["'][^"']*刷新[^"']*["']/.test(tag[0]) &&
+        /\b:loading=/.test(tag[0])
+      ) {
         issues.push(`${projectPath}: 读取刷新按钮不得与区域进度线同时显示 loading`);
       }
+    }
+
+    if (
+      projectPath.startsWith(`${featuresPath}/`) &&
+      !projectPath.endsWith('/order-entry/components/V2OrderEntryCandidates.vue') &&
+      /\bv-model:current-page=/.test(source)
+    ) {
+      issues.push(`${projectPath}: 远程分页不得直接双向绑定请求页码`);
     }
 
     if (
@@ -318,6 +342,7 @@ function validateStartupArchitecture() {
     requestPolicy: 'apps/admin/src/api/requestPolicy.ts',
     router: 'apps/admin/src/v2-router.ts',
     routes: 'apps/admin/src/v2/router/routes.ts',
+    sessionRecoveryQueries: 'apps/admin/src/v2/router/sessionRecoveryQueries.ts',
     credential: 'apps/admin/src/auth/credential.ts',
     sessionCoordinator: 'apps/admin/src/auth/sessionCoordinator.ts',
     orderEntryManifest: 'apps/admin/src/v2/features/order-entry/manifest.ts',
@@ -508,11 +533,14 @@ function validateStartupArchitecture() {
     [/markV2RouteCodeReady/, 'afterEach 没有只记录代码就绪'],
     [/resetV2RouteNavigationState/, '非 V2 跳转没有清理旧工作区加载状态'],
     [/watch\([\s\S]*sessionState/, '路由层没有统一观察会话恢复'],
-    [/invalidateV2Queries\(V2_DATA_SCOPES\)/, '会话恢复后没有失效并刷新已保留查询'],
+    [/invalidateV2SessionRecoveryQueries/, '会话恢复后没有触发已保留查询刷新'],
     [/restoreVerifiedRoute/, '已验证降级时没有保留原工作区路由']
   ]);
   forbidPatterns(files.router, sources.router, [
     [/return false;/, '会话守卫不得通过 return false 中止导航']
+  ]);
+  requirePatterns(files.sessionRecoveryQueries, sources.sessionRecoveryQueries, [
+    [/invalidateV2Queries\(V2_DATA_SCOPES\)/, '会话恢复后没有失效并刷新已保留查询']
   ]);
   requirePatterns(files.routes, sources.routes, [
     [/export function resetV2RouteNavigationState/, '路由状态缺少显式重置入口']

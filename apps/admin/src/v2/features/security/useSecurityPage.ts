@@ -199,6 +199,26 @@ export function useSecurityPage() {
   const total = computed(() =>
     securityQuery.data.value?.kind === activeTab.value ? securityQuery.data.value.result.total : 0
   );
+  const displayedPage = computed(() =>
+    securityQuery.data.value?.kind === activeTab.value
+      ? securityQuery.data.value.result.page
+      : query.page
+  );
+  const displayedPageSize = computed(() =>
+    securityQuery.data.value?.kind === activeTab.value
+      ? securityQuery.data.value.result.pageSize
+      : query.pageSize
+  );
+  const displayedMfaUserPage = computed(() =>
+    securityQuery.data.value?.kind === 'policy'
+      ? securityQuery.data.value.mfaUsers.page
+      : query.mfaUserPage
+  );
+  const displayedMfaUserPageSize = computed(() =>
+    securityQuery.data.value?.kind === 'policy'
+      ? securityQuery.data.value.mfaUsers.pageSize
+      : query.mfaUserPageSize
+  );
   const currentItems = computed(() => {
     if (activeTab.value === 'sessions') return sessionItems.value;
     if (activeTab.value === 'policy') return whitelistItems.value;
@@ -374,6 +394,10 @@ export function useSecurityPage() {
     mfaUserItems,
     mfaUserTotal,
     total,
+    displayedPage,
+    displayedPageSize,
+    displayedMfaUserPage,
+    displayedMfaUserPageSize,
     currentItems,
     activeFilterCount,
     queryPhase: securityQuery.phase,

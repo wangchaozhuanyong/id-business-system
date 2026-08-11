@@ -1,5 +1,5 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';
@@ -243,11 +243,17 @@ export function useOrdersPage() {
       request.finish();
     }
   }
-
   function retryDetail() {
     if (detailTarget.value) void openDetail(detailTarget.value);
   }
-
+  watch(detailVisible, (visible) => {
+    if (visible) return;
+    detailRequest.cancel();
+    detailLoading.value = false;
+    detailError.value = '';
+    detail.value = null;
+    detailTarget.value = null;
+  });
   function openEdit(order: V2Order) {
     if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canEdit)) return;
     editingOrder.value = order;

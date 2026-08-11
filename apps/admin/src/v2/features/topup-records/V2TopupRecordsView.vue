@@ -172,10 +172,10 @@
 
     <V2TopupRecordsTables
       v-if="activeTab === 'giftCards' || activeTab === 'ledger'"
-      v-model:gift-card-page="giftCardQuery.page"
-      v-model:gift-card-page-size="giftCardQuery.pageSize"
-      v-model:ledger-page="ledgerQuery.page"
-      v-model:ledger-page-size="ledgerQuery.pageSize"
+      :gift-card-page="giftCardDisplayedPage"
+      :gift-card-page-size="giftCardDisplayedPageSize"
+      :ledger-page="ledgerDisplayedPage"
+      :ledger-page-size="ledgerDisplayedPageSize"
       :active-tab="activeTab"
       :active-loading="activeLoading"
       :is-initial-loading="isInitialLoading"
@@ -406,9 +406,13 @@ const {
   topupSupplierOptions,
   giftCards,
   giftCardTotal,
+  giftCardDisplayedPage,
+  giftCardDisplayedPageSize,
   giftCardLoading,
   ledgerEntries,
   ledgerTotal,
+  ledgerDisplayedPage,
+  ledgerDisplayedPageSize,
   ledgerLoading,
   metadataDrawerVisible,
   metadataSubmitting,

@@ -157,7 +157,7 @@
           :current-page="page.displayedPage"
           :page-size="page.displayedPageSize"
           background
-          :disabled="page.isParameterTransition"
+          :disabled="page.queryPhase === 'transitioning'"
           :page-sizes="[10, 20, 50, 100]"
           layout="sizes, prev, pager, next"
           :total="page.total"

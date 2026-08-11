@@ -1,4 +1,4 @@
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import type { TagProps } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -190,6 +190,15 @@ export function useActivationsPage() {
   function retryDetail() {
     if (detailTarget.value) void openDetail(detailTarget.value);
   }
+
+  watch(detailVisible, (visible) => {
+    if (visible) return;
+    detailRequest.cancel();
+    detailLoading.value = false;
+    detailError.value = '';
+    detail.value = null;
+    detailTarget.value = null;
+  });
 
   function statusType(status: V2ActivationDueStatus): TagProps['type'] {
     if (status === 'active') return 'success';

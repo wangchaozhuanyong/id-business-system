@@ -103,7 +103,10 @@
               <span>当前筛选下没有软删除记录</span>
             </div>
           </template>
-          <V2TableControlColumn :definition="v2TableSchemas.dataGovernance.recycle.columns[0]" />
+          <V2TableControlColumn
+            :definition="v2TableSchemas.dataGovernance.recycle.columns[0]"
+            :selection-disabled="page.recycleParameterTransition"
+          />
           <V2TableColumn :definition="v2TableSchemas.dataGovernance.recycle.columns[1]">
             <template #default="{ row }">{{ page.recycleEntityLabel(row.entity) }}</template>
           </V2TableColumn>
@@ -143,6 +146,7 @@
               </div>
               <el-checkbox
                 :model-value="page.isRecycleSelected(item)"
+                :disabled="page.recycleParameterTransition"
                 aria-label="选择回收站记录"
                 @change="page.toggleRecycleSelection(item, Boolean($event))"
               />
@@ -167,15 +171,16 @@
         <footer class="v2-records-pagination">
           <span>当前筛选共 {{ page.recycleTotal }} 条</span>
           <el-pagination
-            v-model:current-page="page.recycleQueryModel.page"
-            v-model:page-size="page.recycleQueryModel.pageSize"
             v-pagination-label
+            :current-page="page.recycleDisplayedPage"
+            :page-size="page.recycleDisplayedPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="page.recycleTotal"
-            @current-change="page.refreshRecycle"
-            @size-change="page.handleRecycleFilterChange"
+            :disabled="page.recycleQueryPhase === 'transitioning'"
+            @current-change="page.handleRecyclePageChange"
+            @size-change="page.handleRecyclePageSizeChange"
           />
         </footer>
       </section>

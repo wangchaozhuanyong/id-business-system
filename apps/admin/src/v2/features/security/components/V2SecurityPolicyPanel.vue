@@ -232,13 +232,14 @@
       <footer class="v2-records-pagination">
         <span>共 {{ page.total }} 条</span>
         <el-pagination
-          v-model:current-page="page.query.page"
-          v-model:page-size="page.query.pageSize"
           v-pagination-label
+          :current-page="page.displayedPage"
+          :page-size="page.displayedPageSize"
           background
           :page-sizes="[10, 20, 50, 100]"
           layout="sizes, prev, pager, next"
           :total="page.total"
+          :disabled="page.queryPhase === 'transitioning'"
           @current-change="page.handlePageChange"
           @size-change="page.handlePageSizeChange"
         />

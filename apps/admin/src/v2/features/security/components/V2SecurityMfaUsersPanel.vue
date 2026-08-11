@@ -137,13 +137,14 @@
     <footer class="v2-records-pagination">
       <span>共 {{ page.mfaUserTotal }} 人</span>
       <el-pagination
-        v-model:current-page="page.query.mfaUserPage"
-        v-model:page-size="page.query.mfaUserPageSize"
         v-pagination-label
+        :current-page="page.displayedMfaUserPage"
+        :page-size="page.displayedMfaUserPageSize"
         background
         :page-sizes="[10, 20, 50]"
         layout="sizes, prev, pager, next"
         :total="page.mfaUserTotal"
+        :disabled="page.queryPhase === 'transitioning'"
         @current-change="page.handleMfaUserPageChange"
         @size-change="page.handleMfaUserPageSizeChange"
       />

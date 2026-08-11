@@ -30,6 +30,7 @@ describe('roles scheme 3 redesign contract', () => {
     expect(overview).toContain('page.openCreate');
     expect(pageState).toContain('activeFilterCount');
     expect(pageState).toContain('keepPreviousData: true');
+    expect(pageState).toContain('detailRequest.cancel()');
   });
 
   it('keeps the existing admin, sensitive-policy and member-safety boundaries', () => {
