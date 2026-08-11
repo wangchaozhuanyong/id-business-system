@@ -135,6 +135,7 @@ test('deploys and verifies Supabase API before switching the Cloudflare proxy', 
   assert.notEqual(supabaseDeploy, -1);
   assert.notEqual(apiVerification, -1);
   assert.notEqual(cloudflareDeploy, -1);
+  assert.match(source, /'--use-docker'/);
   assert.ok(supabaseDeploy < apiVerification);
   assert.ok(apiVerification < cloudflareDeploy);
 });
