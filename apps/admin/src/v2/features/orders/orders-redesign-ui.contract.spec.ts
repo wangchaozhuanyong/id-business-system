@@ -3,6 +3,7 @@ import view from './V2OrdersView.vue?raw';
 import list from './components/V2OrdersList.vue?raw';
 import overview from './components/V2OrdersOverview.vue?raw';
 import toolbar from './components/V2OrdersToolbar.vue?raw';
+import pageState from './useOrdersPage.ts?raw';
 
 describe('orders scheme 3 redesign contract', () => {
   it('uses the order entry visual hierarchy without replacing business modules', () => {
@@ -43,9 +44,10 @@ describe('orders scheme 3 redesign contract', () => {
     expect(list).toContain(':schema="v2TableSchemas.orders.main"');
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');
-    expect(list).toContain(':disabled="page.isParameterTransition"');
+    expect(list).toContain(':disabled="page.queryPhase === \'transitioning\'"');
     expect(list).toContain('@current-change="page.handlePageChange"');
     expect(list).toContain('@size-change="page.handlePageSizeChange"');
     expect(list).toContain('useV2StableListFrame');
+    expect(pageState).toContain('detailRequest.cancel()');
   });
 });

@@ -44,7 +44,7 @@ describe('topup workbench scheme 3 redesign contract', () => {
     expect(list).toContain('useV2StableListFrame');
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');
-    expect(list).toContain(':disabled="page.isParameterTransition"');
+    expect(list).toContain(':disabled="page.queryPhase === \'transitioning\'"');
     expect(overview).toContain('@click="page.loadWorkbench"');
   });
 });

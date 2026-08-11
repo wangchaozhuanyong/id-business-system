@@ -4,6 +4,12 @@
   gap: 14px;
 }
 
+.v2-options-page__content {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
 .v2-options-overview {
   display: grid;
   min-width: 0;

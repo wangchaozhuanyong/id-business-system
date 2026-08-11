@@ -32,6 +32,10 @@ describe('data governance scheme 3 redesign contract', () => {
     expect(pageState).toContain('job.requestedByUserId !== authStore.user?.id');
     expect(pageState).toContain('canCancelGovernanceJob(job, authStore.user?.id)');
     expect(pageState).toContain('backupEvidence: restoreForm.backupEvidence.trim()');
+    expect(pageState).toContain("trackRouteData: () => activeTab.value === 'overview'");
+    expect(pageState).toContain("trackRouteData: () => activeTab.value === 'recycle'");
+    expect(pageState).toContain("trackRouteData: () => activeTab.value === 'jobs'");
+    expect(pageState).toContain('enabled: () => Boolean(detailId.value)');
     expect(drawers).toContain('必须由另一名管理员审批');
   });
 

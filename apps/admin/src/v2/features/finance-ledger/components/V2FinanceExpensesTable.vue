@@ -80,13 +80,14 @@
       </V2TableActionColumn>
     </V2Table>
     <footer class="v2-records-pagination">
-      <span>第 {{ page.expensePage }} 页</span>
+      <span>第 {{ page.displayedExpensePage }} 页</span>
       <el-pagination
-        :current-page="page.expensePage"
+        :current-page="page.displayedExpensePage"
         :page-size="page.pageSize"
         background
         layout="prev, pager, next"
         :total="page.expenseTotal"
+        :disabled="page.queryPhase === 'transitioning'"
         @current-change="page.setExpensePage"
       />
     </footer>

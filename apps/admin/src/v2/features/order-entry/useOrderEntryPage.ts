@@ -60,6 +60,8 @@ export function useOrderEntryPage() {
   const {
     idSelectionMode,
     matchingLoading,
+    matchingPhase,
+    matchingParameterTransition,
     matchingError,
     matchingResult,
     candidateItems,
@@ -489,6 +491,8 @@ export function useOrderEntryPage() {
     optionsResolved,
     idSelectionMode,
     matchingLoading,
+    matchingPhase,
+    matchingParameterTransition,
     matchingError,
     matchingResult,
     submitting,

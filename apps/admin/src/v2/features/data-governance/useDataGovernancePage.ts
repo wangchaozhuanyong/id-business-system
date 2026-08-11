@@ -2,13 +2,26 @@ import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { v2DataGovernanceApi } from './api';
+import {
+  CLEANUP_INITIAL,
+  DECISION_INITIAL,
+  RESTORE_INITIAL,
+  cleanupRules,
+  createGovernanceMutationKey,
+  decisionRules,
+  restoreRules,
+  type CleanupFormModel,
+  type DecisionFormModel,
+  type RestoreFormModel
+} from './data-governance-forms';
+import { useDataGovernancePagination } from './data-governance-pagination';
 import { createDataGovernanceQueryKey } from './data-governance-query-key';
 import {
   buildAuditRestoreReason,
@@ -43,24 +56,6 @@ import type {
   V2GovernanceRecycleQuery
 } from './contracts';
 
-interface RestoreFormModel {
-  reason: string;
-  backupEvidence: string;
-}
-interface CleanupFormModel extends RestoreFormModel {
-  olderThanDays: number;
-}
-interface DecisionFormModel {
-  decision: 'approved' | 'rejected';
-  reason: string;
-}
-const RESTORE_INITIAL: RestoreFormModel = { reason: '', backupEvidence: '' };
-const CLEANUP_INITIAL: CleanupFormModel = { olderThanDays: 30, reason: '', backupEvidence: '' };
-const DECISION_INITIAL: DecisionFormModel = { decision: 'approved', reason: '' };
-function mutationKey(prefix: string) {
-  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  return `${prefix}:${suffix}`;
-}
 export function useDataGovernancePage() {
   const route = useRoute();
   const authStore = useAuthStore();
@@ -115,6 +110,7 @@ export function useDataGovernancePage() {
 
   const overviewQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
+    trackRouteData: () => activeTab.value === 'overview',
     scope: 'data-governance',
     key: 'overview',
     keepPreviousData: true,
@@ -122,6 +118,7 @@ export function useDataGovernancePage() {
   });
   const recycleQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
+    trackRouteData: () => activeTab.value === 'recycle',
     scope: 'data-governance',
     key: () => createDataGovernanceQueryKey('recycle', recycleListQuery()),
     keepPreviousData: true,
@@ -129,6 +126,7 @@ export function useDataGovernancePage() {
   });
   const jobsQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
+    trackRouteData: () => activeTab.value === 'jobs',
     scope: 'data-governance',
     key: () => createDataGovernanceQueryKey('jobs', jobListQuery()),
     keepPreviousData: true,
@@ -136,11 +134,12 @@ export function useDataGovernancePage() {
   });
   const detailQuery = useV2ModuleQuery<V2GovernanceJobDetail | null>({
     moduleKey: 'data-governance',
+    trackRouteData: false,
     scope: 'data-governance',
     key: () => `detail:${detailId.value || 'none'}`,
+    enabled: () => Boolean(detailId.value),
     keepPreviousData: false,
-    query: ({ signal }) =>
-      detailId.value ? v2DataGovernanceApi.job(detailId.value, { signal }) : Promise.resolve(null)
+    query: ({ signal }) => v2DataGovernanceApi.job(detailId.value, { signal })
   });
 
   const overview = computed(() => overviewQuery.data.value);
@@ -191,55 +190,44 @@ export function useDataGovernancePage() {
   const restoreDirty = computed(() => JSON.stringify(restoreForm) !== restoreBaseline.value);
   const cleanupDirty = computed(() => JSON.stringify(cleanupForm) !== cleanupBaseline.value);
   const decisionDirty = computed(() => JSON.stringify(decisionForm) !== decisionBaseline.value);
-
-  const restoreRules: FormRules<RestoreFormModel> = {
-    reason: [
-      { required: true, message: '请输入申请原因', trigger: 'blur' },
-      { min: 8, max: 1_000, message: '申请原因需为 8-1000 个字符', trigger: 'blur' }
-    ],
-    backupEvidence: [
-      { required: true, message: '请输入备份证据', trigger: 'blur' },
-      { min: 8, max: 2_000, message: '备份证据需为 8-2000 个字符', trigger: 'blur' }
-    ]
-  };
-  const cleanupRules: FormRules<CleanupFormModel> = {
-    olderThanDays: [{ required: true, message: '请输入保留天数', trigger: 'change' }],
-    ...restoreRules
-  };
-  const decisionRules: FormRules<DecisionFormModel> = {
-    decision: [{ required: true, message: '请选择审批决定', trigger: 'change' }],
-    reason: [
-      { required: true, message: '请输入审批意见', trigger: 'blur' },
-      { min: 4, max: 1_000, message: '审批意见需为 4-1000 个字符', trigger: 'blur' }
-    ]
-  };
-
   function refreshOverview() {
     return overviewQuery.refresh();
   }
-
   function refreshRecycle() {
     selectedRecycleItems.value = [];
     return recycleQuery.refresh();
   }
-
   function refreshJobs() {
     return jobsQuery.refresh();
   }
-
   function refreshDetail() {
     return detailQuery.refresh();
   }
-
   function handleRecycleFilterChange() {
     recycleQueryModel.page = 1;
     void refreshRecycle();
   }
-
   function handleJobFilterChange() {
     jobQueryModel.page = 1;
     void refreshJobs();
   }
+  const {
+    recycleDisplayedPage,
+    recycleDisplayedPageSize,
+    jobsDisplayedPage,
+    jobsDisplayedPageSize,
+    handleRecyclePageChange,
+    handleRecyclePageSizeChange,
+    handleJobPageChange,
+    handleJobPageSizeChange
+  } = useDataGovernancePagination({
+    recycleData: recycleQuery.data,
+    jobsData: jobsQuery.data,
+    recycleQuery: recycleQueryModel,
+    jobsQuery: jobQueryModel,
+    refreshRecycle,
+    refreshJobs
+  });
 
   function handleRecycleSelection(items: V2GovernanceRecycleItem[]) {
     selectedRecycleItems.value = items;
@@ -330,7 +318,7 @@ export function useDataGovernancePage() {
         items: selectedRecycleItems.value.map((item) => ({ entity: item.entity, id: item.id })),
         reason: restoreForm.reason.trim(),
         backupEvidence: restoreForm.backupEvidence.trim(),
-        idempotencyKey: mutationKey('governance:restore')
+        idempotencyKey: createGovernanceMutationKey('governance:restore')
       });
       restoreDrawerVisible.value = false;
       activeTab.value = 'jobs';
@@ -352,7 +340,7 @@ export function useDataGovernancePage() {
         olderThanDays: cleanupForm.olderThanDays,
         reason: cleanupForm.reason.trim(),
         backupEvidence: cleanupForm.backupEvidence.trim(),
-        idempotencyKey: mutationKey('governance:cleanup')
+        idempotencyKey: createGovernanceMutationKey('governance:cleanup')
       });
       cleanupDrawerVisible.value = false;
       activeTab.value = 'jobs';
@@ -455,7 +443,7 @@ export function useDataGovernancePage() {
     try {
       const result = await v2DataGovernanceApi.execute(job.id, {
         batchSize: 50,
-        idempotencyKey: mutationKey(`governance:execute:${job.id}`)
+        idempotencyKey: createGovernanceMutationKey(`governance:execute:${job.id}`)
       });
       await Promise.all([refreshJobs(), refreshOverview(), refreshRecycle()]);
       if (detailId.value === job.id) await detailQuery.refresh();
@@ -502,6 +490,10 @@ export function useDataGovernancePage() {
     { immediate: true }
   );
 
+  watch(detailDrawerVisible, (visible) => {
+    if (!visible) detailId.value = '';
+  });
+
   watch(
     () => [
       route.query.restoreEntity,
@@ -536,9 +528,13 @@ export function useDataGovernancePage() {
     overview,
     recycleItems,
     recycleTotal,
+    recycleDisplayedPage,
+    recycleDisplayedPageSize,
     recycleCounts,
     jobs,
     jobsTotal,
+    jobsDisplayedPage,
+    jobsDisplayedPageSize,
     detail,
     overviewQueryPhase: overviewQuery.phase,
     recycleQueryPhase: recycleQuery.phase,
@@ -570,7 +566,11 @@ export function useDataGovernancePage() {
     refreshJobs,
     refreshDetail,
     handleRecycleFilterChange,
+    handleRecyclePageChange,
+    handleRecyclePageSizeChange,
     handleJobFilterChange,
+    handleJobPageChange,
+    handleJobPageSizeChange,
     handleRecycleSelection,
     isRecycleSelected,
     toggleRecycleSelection,

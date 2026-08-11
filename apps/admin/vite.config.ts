@@ -10,6 +10,16 @@ import { validateAuthBuildConfiguration } from './src/auth/auth-build-config';
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url));
 const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
 const pagesHeaders = fileURLToPath(new URL('./dist/_headers', import.meta.url));
+const vueUseBundlePath = '/node_modules/@vueuse/core/dist/index.js';
+
+function isKnownVueUseAnnotationWarning(log: {
+  code?: string;
+  id?: string;
+  loc?: { file?: string };
+}) {
+  const source = log.id || log.loc?.file || '';
+  return log.code === 'INVALID_ANNOTATION' && source.includes(vueUseBundlePath);
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, workspaceRoot, '');
@@ -94,8 +104,12 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
-      rollupOptions: {
-        input: htmlEntry
+      rolldownOptions: {
+        input: htmlEntry,
+        onLog(level, log, defaultHandler) {
+          if (level === 'warn' && isKnownVueUseAnnotationWarning(log)) return;
+          defaultHandler(level, log);
+        }
       }
     }
   };

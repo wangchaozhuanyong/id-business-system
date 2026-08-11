@@ -42,6 +42,11 @@ interface FinanceLedgerSnapshot {
   settings: V2FinanceSettings;
   supplierOptions: V2OptionSelector[];
   expenseCategories: V2OptionSelector[];
+  pagination: {
+    expensePage: number;
+    journalPage: number;
+    pageSize: number;
+  };
 }
 
 export function useFinanceLedgerPage(
@@ -74,17 +79,21 @@ export function useFinanceLedgerPage(
       }),
     keepPreviousData: true,
     query: async ({ signal }) => {
-      return idBusinessV2FinanceApi.bootstrapLedger(
+      const pagination = {
+        expensePage: expensePage.value,
+        journalPage: journalPage.value,
+        pageSize
+      };
+      const snapshot = await idBusinessV2FinanceApi.bootstrapLedger(
         {
           currency: filters.currency || undefined,
-          expensePage: expensePage.value,
-          journalPage: journalPage.value,
-          pageSize,
+          ...pagination,
           periodMonth: filters.periodMonth || undefined,
           journalType: filters.journalType || undefined
         },
         { signal }
       );
+      return { ...snapshot, pagination };
     }
   });
 
@@ -95,6 +104,12 @@ export function useFinanceLedgerPage(
   const expenseTotal = computed(() => data.value?.expenses.total ?? 0);
   const journals = computed(() => data.value?.journals.items ?? []);
   const journalTotal = computed(() => data.value?.journals.total ?? 0);
+  const displayedExpensePage = computed(
+    () => data.value?.pagination.expensePage ?? expensePage.value
+  );
+  const displayedJournalPage = computed(
+    () => data.value?.pagination.journalPage ?? journalPage.value
+  );
   const periods = computed(() => data.value?.periods ?? []);
   const settings = computed(() => data.value?.settings);
   const supplierOptions = computed(() => data.value?.supplierOptions ?? []);
@@ -383,6 +398,8 @@ export function useFinanceLedgerPage(
     filters,
     expensePage,
     journalPage,
+    displayedExpensePage,
+    displayedJournalPage,
     pageSize,
     canPost,
     canAdjust,

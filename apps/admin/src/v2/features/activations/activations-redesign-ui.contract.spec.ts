@@ -30,9 +30,10 @@ describe('activations scheme 3 redesign contract', () => {
     expect(list).toContain('@click="page.openDetail(row)"');
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');
-    expect(list).toContain(':disabled="page.isParameterTransition"');
+    expect(list).toContain(':disabled="page.queryPhase === \'transitioning\'"');
     expect(list).toContain('useV2StableListFrame');
     expect(list.match(/@current-change=/g)).toHaveLength(1);
+    expect(pageState).toContain('detailRequest.cancel()');
   });
 
   it('renders order profit once in the detail drawer', () => {

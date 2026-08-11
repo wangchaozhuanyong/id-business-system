@@ -10,13 +10,15 @@
       error-title="选项类型加载失败"
       @retry="page.loadInitialData"
     >
-      <V2OptionsOverview :page="page" />
+      <div class="v2-options-page__content">
+        <V2OptionsOverview :page="page" />
 
-      <div class="v2-options-workspace">
-        <V2OptionsCategoryRail :page="page" />
-        <div class="v2-options-content">
-          <V2OptionsToolbar :page="page" />
-          <V2OptionsList :page="page" />
+        <div class="v2-options-workspace">
+          <V2OptionsCategoryRail :page="page" />
+          <div class="v2-options-content">
+            <V2OptionsToolbar :page="page" />
+            <V2OptionsList :page="page" />
+          </div>
         </div>
       </div>
     </V2AsyncRegion>

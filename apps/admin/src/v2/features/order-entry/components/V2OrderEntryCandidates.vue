@@ -16,8 +16,7 @@
         <AppButton
           variant="ghost"
           size="small"
-          :loading="matchingLoading"
-          :disabled="!canMatch"
+          :disabled="!canMatch || matchingLoading"
           aria-label="刷新可用 ID"
           @click="$emit('retry')"
         >
@@ -57,8 +56,8 @@
     <V2AsyncRegion
       variant="section"
       skeleton="cards"
-      :loading="matchingLoading"
-      :resolved="!canMatch || Boolean(matchingResult)"
+      :phase="canMatch ? matchingPhase : 'ready'"
+      :previous-data="matchingParameterTransition"
       :empty="!canMatch || (Boolean(matchingResult) && !candidateItems.length)"
       :error="matchingError"
       :loading-title="idSelectionMode === 'manual' ? '正在搜索可用 ID' : '正在匹配可用 ID'"
@@ -88,7 +87,11 @@
           </div>
         </dl>
 
-        <el-radio-group v-model="accountId" class="v2-order-entry-candidate-list">
+        <el-radio-group
+          v-model="accountId"
+          class="v2-order-entry-candidate-list"
+          :disabled="matchingParameterTransition"
+        >
           <el-radio
             v-for="candidate in paginatedCandidates"
             :key="candidate.id"
@@ -132,11 +135,14 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { V2OrderCandidate, V2OrderMatchingResult } from '../contracts';
 import type { IdSelectionMode } from '../useOrderCandidateSelection';
+import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 
 const props = defineProps<{
   idSelectionMode: IdSelectionMode;
   canMatch: boolean;
   matchingLoading: boolean;
+  matchingPhase: V2QueryPhase;
+  matchingParameterTransition: boolean;
   matchingResult: V2OrderMatchingResult | null;
   candidateItems: V2OrderCandidate[];
   matchingError: string;

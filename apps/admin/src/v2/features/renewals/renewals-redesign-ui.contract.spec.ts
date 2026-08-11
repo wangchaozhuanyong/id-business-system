@@ -40,7 +40,7 @@ describe('renewals scheme 3 redesign contract', () => {
     expect(list).toContain(':schema="v2TableSchemas.renewals.main"');
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');
-    expect(list).toContain(':disabled="page.isParameterTransition"');
+    expect(list).toContain(':disabled="page.queryPhase === \'transitioning\'"');
     expect(list).toContain('useV2StableListFrame');
   });
 

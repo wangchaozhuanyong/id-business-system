@@ -22,6 +22,7 @@
     :column-key="definition.key"
     :width="definition.width"
     :fixed="definition.pin === 'start' ? 'left' : undefined"
+    :selectable="selectionDisabled ? () => false : undefined"
     align="center"
     header-align="center"
     class-name="v2-table-column v2-table-column--control"
@@ -34,5 +35,6 @@ import type { V2TableControlColumnDefinition } from './tableSystem';
 
 defineProps<{
   definition: V2TableControlColumnDefinition;
+  selectionDisabled?: boolean;
 }>();
 </script>

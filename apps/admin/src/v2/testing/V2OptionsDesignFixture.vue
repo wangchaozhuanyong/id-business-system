@@ -49,12 +49,14 @@
         <div class="v2-content__inner">
           <p v-if="notice" class="v2-options-fixture-notice" role="status">{{ notice }}</p>
           <section class="v2-options-page">
-            <V2OptionsOverview :page="page" />
-            <div class="v2-options-workspace">
-              <V2OptionsCategoryRail :page="page" />
-              <div class="v2-options-content">
-                <V2OptionsToolbar :page="page" />
-                <V2OptionsList :page="page" />
+            <div class="v2-options-page__content">
+              <V2OptionsOverview :page="page" />
+              <div class="v2-options-workspace">
+                <V2OptionsCategoryRail :page="page" />
+                <div class="v2-options-content">
+                  <V2OptionsToolbar :page="page" />
+                  <V2OptionsList :page="page" />
+                </div>
               </div>
             </div>
           </section>

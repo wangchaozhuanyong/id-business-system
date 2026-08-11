@@ -87,11 +87,12 @@
     <footer class="v2-records-pagination">
       <span>共 {{ page.journalTotal }} 条</span>
       <el-pagination
-        :current-page="page.journalPage"
+        :current-page="page.displayedJournalPage"
         :page-size="page.pageSize"
         background
         layout="prev, pager, next"
         :total="page.journalTotal"
+        :disabled="page.queryPhase === 'transitioning'"
         @current-change="page.setJournalPage"
       />
     </footer>

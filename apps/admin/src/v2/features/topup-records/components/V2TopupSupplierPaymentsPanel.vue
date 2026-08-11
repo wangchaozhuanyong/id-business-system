@@ -310,14 +310,15 @@
         <footer class="v2-records-pagination">
           <span>共 {{ total }} 条付款记录</span>
           <el-pagination
-            v-model:current-page="query.page"
-            v-model:page-size="query.pageSize"
             v-pagination-label
+            :current-page="displayedPage"
+            :page-size="displayedPageSize"
             background
             :page-sizes="[10, 20, 50, 100]"
             layout="sizes, prev, pager, next"
             :total="total"
-            @current-change="refresh"
+            :disabled="queryPhase === 'transitioning'"
+            @current-change="handlePageChange"
             @size-change="handlePageSizeChange"
           />
         </footer>
@@ -397,6 +398,8 @@ defineProps<{
 
 const items = ref<V2TopupSupplierPaymentItem[]>([]);
 const total = ref(0);
+const displayedPage = ref(1);
+const displayedPageSize = ref(20);
 const summary = reactive<V2TopupSupplierPaymentListResult['summary']>({
   activeReceivedUsdt: '0',
   activeNetworkFeeUsdt: '0',
@@ -441,6 +444,8 @@ watch(
     if (!result) return;
     items.value = result.items;
     total.value = result.total;
+    displayedPage.value = result.page;
+    displayedPageSize.value = result.pageSize;
     Object.assign(summary, result.summary);
   },
   { immediate: true }
@@ -486,7 +491,13 @@ function refresh() {
   return paymentsQuery.refresh();
 }
 
-function handlePageSizeChange() {
+function handlePageChange(page: number) {
+  query.page = page;
+  void paymentsQuery.ensureFresh();
+}
+
+function handlePageSizeChange(pageSize: number) {
+  query.pageSize = pageSize;
   query.page = 1;
   void paymentsQuery.ensureFresh();
 }

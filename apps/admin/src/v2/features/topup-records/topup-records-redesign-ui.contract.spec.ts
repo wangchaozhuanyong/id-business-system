@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import view from './V2TopupRecordsView.vue?raw';
 import overview from './components/V2TopupRecordsOverview.vue?raw';
 import tables from './components/V2TopupRecordsTables.vue?raw';
+import pageState from './useTopupRecordsPage.ts?raw';
 
 describe('top-up records scheme 3 redesign contract', () => {
   it('uses the shared overview, command panel and list hierarchy', () => {
@@ -45,8 +46,12 @@ describe('top-up records scheme 3 redesign contract', () => {
   it('keeps tables, pagination and stable page geometry', () => {
     expect(tables).toContain(':schema="v2TableSchemas.topupRecords.giftCards"');
     expect(tables).toContain(':schema="v2TableSchemas.topupRecords.balanceLedger"');
-    expect(tables).toContain('v-model:current-page="giftCardPage"');
-    expect(tables).toContain('v-model:current-page="ledgerPage"');
+    expect(tables).toContain(':current-page="giftCardPage"');
+    expect(tables).toContain(':current-page="ledgerPage"');
+    expect(tables).not.toContain('v-model:current-page');
+    expect(tables).toContain(':disabled="queryPhase === \'transitioning\'"');
+    expect(pageState).toContain('giftCardDisplayedPage.value = snapshot.list.page');
+    expect(pageState).toContain('trackRouteData: () =>');
     expect(tables).toContain('useV2StableListFrame');
   });
 });

@@ -3,7 +3,7 @@
     v-bind="buttonAttrs"
     class="app-button"
     :class="[`app-button--${variant}`, { 'app-button--icon': iconOnly }]"
-    :disabled="disabled"
+    :disabled="effectiveDisabled"
     :loading="loading"
     @click="$emit('click', $event)"
   >
@@ -12,7 +12,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, useAttrs } from 'vue';
+import { computed, inject, useAttrs } from 'vue';
+import { V2_ASYNC_REGION_PREVIOUS_DATA } from '@/v2/components/asyncRegionContext';
 
 defineOptions({
   inheritAttrs: false
@@ -24,12 +25,14 @@ const props = withDefaults(
     loading?: boolean;
     disabled?: boolean;
     iconOnly?: boolean;
+    allowWhenStale?: boolean;
   }>(),
   {
     variant: 'default',
     loading: false,
     disabled: false,
-    iconOnly: false
+    iconOnly: false,
+    allowWhenStale: false
   }
 );
 
@@ -38,6 +41,10 @@ defineEmits<{
 }>();
 
 const attrs = useAttrs();
+const regionPreviousData = inject(V2_ASYNC_REGION_PREVIOUS_DATA, undefined);
+const effectiveDisabled = computed(
+  () => props.disabled || (!props.allowWhenStale && regionPreviousData?.value === true)
+);
 const buttonAttrs = computed(() => {
   const normalizedAttrs = { ...attrs };
   const ariaLabel = normalizedAttrs['aria-label'];
