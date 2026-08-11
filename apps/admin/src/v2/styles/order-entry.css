@@ -54,21 +54,21 @@
 }
 
 .v2-order-entry-summary {
-  --v2-order-summary-border: rgba(255, 255, 255, 0.14);
-  --v2-order-summary-muted: #9fb0c4;
-  --v2-order-summary-text: #f4f7fb;
+  --v2-order-summary-border: var(--v2-overview-strong-border);
+  --v2-order-summary-muted: var(--v2-overview-text-soft);
+  --v2-order-summary-text: var(--v2-overview-text);
   position: sticky;
   top: 0;
   display: flex;
   align-self: stretch;
   flex-direction: column;
   max-height: calc(100dvh - 108px);
-  border-color: rgba(255, 255, 255, 0.08);
-  background: var(--v2-sidebar);
+  border-color: var(--v2-overview-border);
+  background: var(--v2-overview-bg);
   overflow-x: hidden;
   overflow-y: auto;
   color: var(--v2-order-summary-text);
-  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.18);
+  box-shadow: var(--v2-overview-emphasis-shadow);
 }
 
 .v2-order-entry-candidates {
