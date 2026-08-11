@@ -150,7 +150,10 @@ for (const [pattern, message] of [
   [/:aria-busy="isBusy"/, '异步区域缺少 aria-busy'],
   [/regionState === 'initial-loading'/, '异步区域缺少首次加载状态'],
   [/regionState === 'initial-error'/, '异步区域缺少首次失败状态'],
-  [/v-if="error".+refresh-error/s, '异步区域缺少保留内容后的刷新错误提示'],
+  [
+    /v-if="[^"]*refresh-error[^"]*".+v2-async-region__refresh-error/s,
+    '异步区域缺少保留内容后的刷新错误提示'
+  ],
   [/v-if="showRefreshFeedback"/, '异步区域缺少延迟刷新反馈'],
   [/class="v2-async-region__progress"/, '异步区域缺少非遮挡式顶部进度线'],
   [/prefers-reduced-motion/, '异步区域缺少减少动态效果支持']
@@ -158,12 +161,13 @@ for (const [pattern, message] of [
   if (!pattern.test(asyncRegionSource)) issues.push(`${asyncRegionPath}: ${message}`);
 }
 requirePatterns(asyncRegionStatePath, asyncRegionStateSource, [
+  [/if \(phase === 'initial-error'\) return 'initial-error'/, '首次加载和失败状态不互斥'],
   [
-    /if \(!resolved\) return error \? 'initial-error' : 'initial-loading'/,
+    /if \(phase === 'idle' \|\| phase === 'initial-loading'\) return 'initial-loading'/,
     '首次加载和失败状态不互斥'
   ],
-  [/if \(empty\) return 'empty'/, '成功空状态没有独立分支'],
-  [/return loading && resolved/, '刷新反馈没有限制为已有成功内容']
+  [/if \(empty && phase !== 'transitioning'\) return 'empty'/, '成功空状态没有独立分支'],
+  [/return phase === 'refreshing' \|\| phase === 'transitioning'/, '刷新反馈没有限制为已有成功内容']
 ]);
 for (const [pattern, message] of [
   [/v2-async-region__overlay/, '禁止恢复浮动刷新卡片'],

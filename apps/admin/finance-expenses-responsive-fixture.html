@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>开支记账 · 响应式验收</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: start center;
+        padding: 18px;
+        background: #334155;
+      }
+
+      iframe {
+        height: 844px;
+        border: 0;
+        border-radius: 12px;
+        background: #f4f7fb;
+        box-shadow: 0 22px 56px rgba(3, 14, 27, 0.28);
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="preview" title="开支记账响应式验收"></iframe>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const requestedWidth = Number(params.get('width'));
+      const width = requestedWidth === 901 ? 901 : 390;
+      const state = params.get('state') === 'empty' ? '?state=empty' : '';
+      const preview = document.querySelector('#preview');
+      preview.style.width = `${width}px`;
+      preview.src = `/finance-expenses-design-fixture.html${state}#finance-expenses`;
+    </script>
+  </body>
+</html>

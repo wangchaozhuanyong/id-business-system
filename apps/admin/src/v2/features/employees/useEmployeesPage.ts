@@ -74,7 +74,14 @@ export function useEmployeesPage() {
 
   const items = computed(() => employeesQuery.data.value?.list.items ?? []);
   const total = computed(() => employeesQuery.data.value?.list.total ?? 0);
+  const displayedPage = computed(() => employeesQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => employeesQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const roleOptions = computed(() => employeesQuery.data.value?.roles ?? []);
+  const activeFilterCount = computed(
+    () => [query.keyword.trim(), query.status, query.roleId].filter(Boolean).length
+  );
   const loading = computed(
     () => employeesQuery.isInitialLoading.value || employeesQuery.isRefreshing.value
   );
@@ -253,7 +260,12 @@ export function useEmployeesPage() {
     query,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: employeesQuery.phase,
+    isParameterTransition: employeesQuery.isParameterTransition,
     roleOptions,
+    activeFilterCount,
     loading,
     listError,
     hasLoadedOnce,

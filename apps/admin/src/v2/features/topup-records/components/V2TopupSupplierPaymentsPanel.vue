@@ -83,8 +83,8 @@
 
     <V2AsyncRegion
       skeleton="table"
-      :loading="loading"
-      :resolved="resolved"
+      :phase="queryPhase"
+      :previous-data="isParameterTransition"
       :error="error"
       loading-title="正在加载付款记录"
       refreshing-title="正在更新付款记录"
@@ -448,7 +448,8 @@ watch(
 const loading = computed(
   () => paymentsQuery.isInitialLoading.value || paymentsQuery.isRefreshing.value
 );
-const resolved = computed(() => paymentsQuery.hasLoadedOnce.value);
+const queryPhase = paymentsQuery.phase;
+const isParameterTransition = paymentsQuery.isParameterTransition;
 const error = computed(() =>
   paymentsQuery.error.value ? getApiErrorMessage(paymentsQuery.error.value) : ''
 );

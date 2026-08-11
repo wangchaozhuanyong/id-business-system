@@ -54,8 +54,8 @@
 
     <V2AsyncRegion
       skeleton="table"
-      :loading="loading"
-      :resolved="resolved"
+      :phase="queryPhase"
+      :previous-data="isParameterTransition"
       :error="error"
       loading-title="正在加载供应商资金"
       refreshing-title="正在更新供应商资金"
@@ -348,7 +348,8 @@ watch(
   { immediate: true }
 );
 const loading = computed(() => fundsQuery.isInitialLoading.value || fundsQuery.isRefreshing.value);
-const resolved = computed(() => fundsQuery.hasLoadedOnce.value);
+const queryPhase = fundsQuery.phase;
+const isParameterTransition = fundsQuery.isParameterTransition;
 const error = computed(() =>
   fundsQuery.error.value ? getApiErrorMessage(fundsQuery.error.value) : ''
 );

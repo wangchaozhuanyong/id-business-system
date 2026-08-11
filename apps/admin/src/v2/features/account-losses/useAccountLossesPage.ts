@@ -63,6 +63,10 @@ export function useAccountLossesPage() {
 
   const items = computed(() => accountLossesQuery.data.value?.list.items ?? []);
   const total = computed(() => accountLossesQuery.data.value?.list.total ?? 0);
+  const displayedPage = computed(() => accountLossesQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => accountLossesQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const countryOptions = computed(() => accountLossesQuery.data.value?.countries ?? []);
   const loading = computed(
     () => accountLossesQuery.isInitialLoading.value || accountLossesQuery.isRefreshing.value
@@ -137,6 +141,10 @@ export function useAccountLossesPage() {
     reportedRange,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: accountLossesQuery.phase,
+    isParameterTransition: accountLossesQuery.isParameterTransition,
     countryOptions,
     loading,
     listError,

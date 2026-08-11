@@ -88,21 +88,28 @@
 
     <V2SecurityMfaUsersPanel :page="page" />
 
-    <section class="v2-records-list">
+    <section
+      ref="whitelistListRef"
+      class="v2-records-list v2-security-whitelist-list"
+      :style="whitelistListFrameStyle"
+    >
       <header class="v2-security-policy__table-title">
-        <div>
-          <strong>IP 白名单</strong>
-          <span>启用记录会在登录前执行，错误修改可能导致管理员无法进入系统。</span>
-        </div>
-        <div class="v2-security-policy__table-actions">
-          <el-tag effect="plain">共 {{ page.total }} 条</el-tag>
-          <AppButton size="small" variant="primary" @click="page.openCreateWhitelist">
-            新增白名单
-          </AppButton>
-        </div>
+        <V2SectionHeading title="IP 白名单">
+          <template #actions>
+            <V2TableColumnSettings inline :schema="v2TableSchemas.security.whitelist" />
+            <span>本页 {{ page.whitelistItems.length }} 条</span>
+            <span aria-hidden="true">·</span>
+            <strong>共 {{ page.total }} 条</strong>
+            <AppButton size="small" variant="primary" @click="page.openCreateWhitelist">
+              新增白名单
+            </AppButton>
+          </template>
+        </V2SectionHeading>
+        <span>启用记录会在登录前执行，错误修改可能导致管理员无法进入系统。</span>
       </header>
       <V2Table
         :schema="v2TableSchemas.security.whitelist"
+        :show-column-settings="false"
         class="v2-records-table"
         :data="page.whitelistItems"
         scrollbar-always-on
@@ -243,8 +250,11 @@
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2Table from '@/v2/components/V2Table.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2SecurityMfaUsersPanel from './V2SecurityMfaUsersPanel.vue';
@@ -252,7 +262,13 @@ import type { useSecurityPage } from '../useSecurityPage';
 
 type SecurityPage = UnwrapNestedRefs<ReturnType<typeof useSecurityPage>>;
 
-defineProps<{ page: SecurityPage }>();
+const props = defineProps<{ page: SecurityPage }>();
+const { listRef: whitelistListRef, listFrameStyle: whitelistListFrameStyle } = useV2StableListFrame(
+  {
+    items: () => props.page.whitelistItems,
+    pageSize: () => props.page.query.pageSize
+  }
+);
 </script>
 
 <style scoped>
@@ -274,18 +290,12 @@ defineProps<{ page: SecurityPage }>();
 }
 
 .v2-security-policy__cards header,
-.v2-security-policy__table-title,
 .v2-security-policy__cards header > div {
   display: flex;
   align-items: center;
 }
 
 .v2-security-policy__cards header,
-.v2-security-policy__table-title {
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .v2-security-policy__cards header > div {
   align-items: baseline;
   gap: 10px;
@@ -346,14 +356,25 @@ defineProps<{ page: SecurityPage }>();
 }
 
 .v2-security-policy__table-title {
-  min-height: 58px;
-  padding: 10px 14px;
+  display: grid;
+  min-height: 76px;
+  gap: 6px;
+  padding: 13px 14px;
   border-bottom: 1px solid var(--v2-border-soft);
 }
 
-.v2-security-policy__table-title > div {
-  display: grid;
-  gap: 4px;
+.v2-security-policy__table-title .v2-section-heading,
+.v2-security-policy__table-title .v2-section-heading__actions {
+  align-items: center;
+}
+
+.v2-security-policy__table-title .v2-section-heading__actions {
+  font-size: 11px;
+  line-height: 19.5px;
+}
+
+.v2-security-whitelist-list {
+  min-height: 743px;
 }
 
 .v2-security-policy__mobile-wide {

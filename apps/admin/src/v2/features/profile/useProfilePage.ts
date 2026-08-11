@@ -256,6 +256,8 @@ export function useProfilePage() {
     sessions,
     sessionTotal,
     hasOtherActiveSessions,
+    queryPhase: profileQuery.phase,
+    isParameterTransition: profileQuery.isParameterTransition,
     resolved,
     loading,
     error,

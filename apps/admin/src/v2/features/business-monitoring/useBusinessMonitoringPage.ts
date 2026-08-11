@@ -122,6 +122,8 @@ export function useBusinessMonitoringPage() {
     categoryBreakdown,
     rules,
     generatedAt,
+    queryPhase: monitoringQuery.phase,
+    isParameterTransition: monitoringQuery.isParameterTransition,
     loading,
     error,
     selectedFinding,

@@ -1,235 +1,151 @@
 <template>
   <V2AsyncRegion
     skeleton="cards"
-    :loading="page.overviewLoading"
-    :resolved="page.overviewHasData"
+    :phase="page.overviewQueryPhase"
     :error="page.overviewError"
     loading-title="正在读取治理概况"
     refreshing-title="正在更新治理概况"
     error-title="治理概况加载失败"
     @retry="page.refreshOverview"
   >
-    <div v-if="page.overview" class="v2-governance-overview">
-      <section class="v2-governance-metrics" aria-label="回收站概况">
-        <article>
-          <span>回收站总数</span>
-          <strong>{{ page.overview.recycleBin.total }}</strong>
-          <small>仅统计软删除记录</small>
-        </article>
-        <article v-for="(label, entity) in page.recycleEntityLabels" :key="entity">
-          <span>{{ label }}</span>
-          <strong>{{ page.overview.recycleBin.byEntity[entity] }}</strong>
-          <small>待复核恢复</small>
-        </article>
-      </section>
-
-      <section class="v2-governance-safety">
+    <section v-if="page.overview" class="v2-governance-overview-workspace">
+      <article class="v2-governance-surface v2-governance-capabilities">
         <header>
-          <div>
-            <strong>安全边界</strong>
-            <span>当前能力与仍需外部验证的边界</span>
-          </div>
-          <el-tag
-            :type="page.overview.approvalReadiness.ready ? 'success' : 'danger'"
-            effect="plain"
+          <V2SectionHeading
+            title="治理能力"
+            help="只展示当前系统已实现或仍需验证的能力，不把未知状态描述为正常。"
           >
-            {{ page.overview.approvalReadiness.ready ? '审批工作流可执行' : '审批工作流阻塞' }}
-          </el-tag>
+            <template #actions>
+              <span>{{ availableCount }} 项可用</span>
+              <span aria-hidden="true">·</span>
+              <strong>{{ page.overview.capabilities.length }} 项能力</strong>
+            </template>
+          </V2SectionHeading>
+        </header>
+        <div class="v2-governance-capability-list">
+          <article v-for="capability in page.overview.capabilities" :key="capability.key">
+            <el-icon aria-hidden="true"
+              ><CircleCheck v-if="capability.status === 'available'" /><WarningFilled v-else
+            /></el-icon>
+            <div>
+              <strong>{{ capability.title }}</strong>
+              <p>{{ capability.detail }}</p>
+            </div>
+            <el-tag
+              :type="
+                capability.status === 'available'
+                  ? 'success'
+                  : capability.status === 'blocked'
+                    ? 'danger'
+                    : 'info'
+              "
+              effect="plain"
+              size="small"
+            >
+              {{
+                capability.status === 'available'
+                  ? '可用'
+                  : capability.status === 'blocked'
+                    ? '阻塞'
+                    : '待验证'
+              }}
+            </el-tag>
+          </article>
+        </div>
+      </article>
+
+      <article class="v2-governance-surface v2-governance-boundary">
+        <header>
+          <V2SectionHeading
+            title="审批与保护边界"
+            help="新预览必须有另一名启用管理员可以审批，通用业务数据硬删除始终关闭。"
+          >
+            <template #actions>
+              <el-tag
+                :type="page.overview.approvalReadiness.ready ? 'success' : 'danger'"
+                effect="plain"
+              >
+                {{ page.overview.approvalReadiness.ready ? '审批可执行' : '审批阻塞' }}
+              </el-tag>
+            </template>
+          </V2SectionHeading>
         </header>
         <el-alert
           v-if="!page.overview.approvalReadiness.ready"
           type="error"
           :title="page.overview.approvalReadiness.blockedReason ?? '异人审批条件未就绪'"
-          :description="`当前启用管理员 ${page.overview.approvalReadiness.activeAdminCount} 人，可作为其他审批人的管理员 ${page.overview.approvalReadiness.eligibleApproverCount} 人。`"
           :closable="false"
           show-icon
         />
-        <div class="v2-governance-capability-grid">
-          <article v-for="capability in page.overview.capabilities" :key="capability.key">
-            <div>
-              <strong>{{ capability.title }}</strong>
-              <el-tag
-                :type="
-                  capability.status === 'available'
-                    ? 'success'
-                    : capability.status === 'blocked'
-                      ? 'danger'
-                      : 'info'
-                "
-                effect="plain"
-                size="small"
-              >
-                {{
-                  capability.status === 'available'
-                    ? '可用'
-                    : capability.status === 'blocked'
-                      ? '阻塞'
-                      : '待验证'
-                }}
-              </el-tag>
-            </div>
-            <p>{{ capability.detail }}</p>
-          </article>
-        </div>
-      </section>
+        <dl class="v2-governance-boundary-list">
+          <div>
+            <dt>启用管理员</dt>
+            <dd>{{ page.overview.approvalReadiness.activeAdminCount }} 人</dd>
+          </div>
+          <div>
+            <dt>其他可审批管理员</dt>
+            <dd>{{ page.overview.approvalReadiness.eligibleApproverCount }} 人</dd>
+          </div>
+          <div>
+            <dt>恢复预览</dt>
+            <dd>{{ page.overview.safety.restoreEnabled ? '已启用' : '已关闭' }}</dd>
+          </div>
+          <div>
+            <dt>汇率历史清理</dt>
+            <dd>{{ page.overview.safety.cleanupEnabled ? '已启用' : '已关闭' }}</dd>
+          </div>
+          <div>
+            <dt>通用硬删除</dt>
+            <dd class="is-safe">关闭</dd>
+          </div>
+          <div>
+            <dt>最近清理审计</dt>
+            <dd>
+              {{ page.formatGovernanceDate(page.overview.existingRetention.lastAuditedRunAt) }}
+            </dd>
+          </div>
+        </dl>
+      </article>
 
-      <section class="v2-governance-workflow">
+      <article class="v2-governance-surface v2-governance-workflow">
         <header>
-          <strong>执行闭环</strong>
-          <span>通用业务数据硬删除：关闭</span>
+          <V2SectionHeading
+            title="执行闭环"
+            help="预览、审批与执行使用同一预览哈希；每个条目独立事务并保留检查点和审计编号。"
+          >
+            <template #actions>
+              <span>{{ page.overview.timezone }}</span>
+              <span aria-hidden="true">·</span>
+              <strong>通用硬删除关闭</strong>
+            </template>
+          </V2SectionHeading>
         </header>
         <ol>
           <li v-for="(step, index) in page.overview.proposedWorkflow" :key="step">
-            <span>{{ index + 1 }}</span>
-            <strong>{{ step }}</strong>
+            <el-icon aria-hidden="true"><CircleCheck /></el-icon>
+            <div>
+              <span>步骤 {{ index + 1 }}</span>
+              <strong>{{ step }}</strong>
+            </div>
           </li>
         </ol>
-        <footer>
-          <span>最近汇率清理审计</span>
-          <strong>{{
-            page.formatGovernanceDate(page.overview.existingRetention.lastAuditedRunAt)
-          }}</strong>
-        </footer>
-      </section>
-    </div>
+      </article>
+    </section>
   </V2AsyncRegion>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
+import { CircleCheck, WarningFilled } from '@element-plus/icons-vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { useDataGovernancePage } from '../useDataGovernancePage';
 
 type DataGovernancePage = UnwrapNestedRefs<ReturnType<typeof useDataGovernancePage>>;
 
-defineProps<{ page: DataGovernancePage }>();
+const props = defineProps<{ page: DataGovernancePage }>();
+const availableCount = computed(
+  () => props.page.overview?.capabilities.filter((item) => item.status === 'available').length ?? 0
+);
 </script>
-
-<style scoped>
-.v2-governance-overview {
-  display: grid;
-  gap: 14px;
-}
-
-.v2-governance-metrics {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.v2-governance-metrics article,
-.v2-governance-safety,
-.v2-governance-workflow {
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
-}
-
-.v2-governance-metrics article {
-  display: grid;
-  gap: 6px;
-  padding: 16px;
-}
-
-.v2-governance-metrics span,
-.v2-governance-metrics small,
-.v2-governance-safety header span,
-.v2-governance-workflow header span,
-.v2-governance-workflow footer span {
-  color: var(--v2-text-soft);
-  font-size: 11px;
-}
-
-.v2-governance-metrics strong {
-  color: var(--v2-text);
-  font-size: 26px;
-}
-
-.v2-governance-safety,
-.v2-governance-workflow {
-  display: grid;
-  gap: 14px;
-  padding: 16px;
-}
-
-.v2-governance-safety > header,
-.v2-governance-workflow > header,
-.v2-governance-workflow > footer,
-.v2-governance-capability-grid article > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.v2-governance-safety > header > div {
-  display: grid;
-  gap: 4px;
-}
-
-.v2-governance-capability-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.v2-governance-capability-grid article {
-  padding: 14px;
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface-soft);
-}
-
-.v2-governance-capability-grid p {
-  margin: 8px 0 0;
-  color: var(--v2-text-soft);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.v2-governance-workflow ol {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.v2-governance-workflow li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px;
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface-soft);
-  font-size: 12px;
-}
-
-.v2-governance-workflow li span {
-  display: grid;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-}
-
-@media (max-width: 900px) {
-  .v2-governance-metrics,
-  .v2-governance-capability-grid,
-  .v2-governance-workflow ol {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-@media (max-width: 560px) {
-  .v2-governance-metrics,
-  .v2-governance-capability-grid,
-  .v2-governance-workflow ol {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

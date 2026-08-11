@@ -27,7 +27,7 @@
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
-  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   background: var(--v2-bg);
   color: var(--v2-text);
   font-family: var(--v3-font-sans);
@@ -1388,6 +1388,13 @@
   gap: 6px;
 }
 
+.v2-table-preference-toolbar--inline {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .v2-table-column-settings.el-drawer {
   width: min(440px, calc(100vw - 18px)) !important;
 }
@@ -1545,6 +1552,12 @@
   border-radius: 4px;
   font-size: var(--v3-font-size-small);
   font-weight: var(--v3-font-weight-medium);
+}
+
+.v2-shell .el-pagination button,
+.v2-shell .el-pagination .el-pager li {
+  min-width: 36px;
+  min-height: 36px;
 }
 
 .v2-shell .el-pagination.is-background .el-pager li.is-active {

@@ -3,6 +3,8 @@ import view from './V2CustomersView.vue?raw';
 import historyServices from './components/V2CustomerHistoryServices.vue?raw';
 import mobileDetails from './components/V2CustomerMobileDetails.vue?raw';
 import sensitiveAccessDialog from './components/V2CustomerSensitiveAccessDialog.vue?raw';
+import list from './components/V2CustomersList.vue?raw';
+import toolbar from './components/V2CustomersToolbar.vue?raw';
 import tableSchemas from '@/v2/features/tableSchemas.ts?raw';
 
 describe('customer history and contact UI contract', () => {
@@ -11,15 +13,15 @@ describe('customer history and contact UI contract', () => {
     expect(view).toContain('label="WhatsApp"');
     expect(mobileDetails).toContain('<dt>QQ</dt>');
     expect(mobileDetails).toContain('<dt>WhatsApp</dt>');
-    expect(view).toContain('row.maskedWhatsapp');
-    expect(view).toContain('openRevealWhatsapp');
+    expect(list).toContain('row.maskedWhatsapp');
+    expect(list).toContain('openRevealWhatsapp');
     expect(tableSchemas).toContain("key: 'qq'");
     expect(tableSchemas).toContain("label: 'WhatsApp'");
   });
 
   it('labels activation-backed data as history and does not expose manual editing', () => {
-    expect(view).toContain('历史开通业务');
-    expect(view).toContain('v-model="query.serviceOptionId"');
+    expect(toolbar).toContain('筛选历史开通业务');
+    expect(toolbar).toContain('v-model="page.query.serviceOptionId"');
     expect(historyServices).toContain('serviceHistoryTitle(service)');
     expect(view).not.toContain('form.serviceOptionIds');
     expect(view).not.toContain('常开业务');

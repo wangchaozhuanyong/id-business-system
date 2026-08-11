@@ -107,6 +107,7 @@ import type {
   V2TopupSupplierLedgerEntryType,
   V2TopupSupplierLedgerResult
 } from '@/v2/types/topupSupplierFunds';
+import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 
 const visible = ref(false);
 const supplier = ref<V2TopupSupplierFundItem | null>(null);
@@ -115,30 +116,41 @@ const loading = ref(false);
 const resolved = ref(false);
 const error = ref('');
 const query = reactive({ page: 1, pageSize: 20 });
+const latestRequest = useV2LatestRequest();
 
 function open(item: V2TopupSupplierFundItem) {
+  const switchingTarget = supplier.value?.supplier.id !== item.supplier.id;
   supplier.value = item;
   visible.value = true;
   query.page = 1;
-  detail.value = null;
-  resolved.value = false;
+  if (switchingTarget) {
+    detail.value = null;
+    resolved.value = false;
+  }
   void load();
 }
 
 async function load() {
   if (!supplier.value) return;
+  const supplierId = supplier.value.supplier.id;
+  const request = latestRequest.begin();
   loading.value = true;
   error.value = '';
   try {
-    detail.value = await idBusinessV2TopupSupplierFundsApi.listLedger(
-      supplier.value.supplier.id,
-      query
-    );
+    const result = await idBusinessV2TopupSupplierFundsApi.listLedger(supplierId, query, {
+      signal: request.signal
+    });
+    if (!request.isCurrent() || supplier.value?.supplier.id !== supplierId) return;
+    detail.value = result;
     resolved.value = true;
   } catch (loadError) {
+    if (!request.isCurrent() || supplier.value?.supplier.id !== supplierId) return;
     error.value = getApiErrorMessage(loadError);
   } finally {
-    loading.value = false;
+    if (request.isCurrent() && supplier.value?.supplier.id === supplierId) {
+      loading.value = false;
+    }
+    request.finish();
   }
 }
 

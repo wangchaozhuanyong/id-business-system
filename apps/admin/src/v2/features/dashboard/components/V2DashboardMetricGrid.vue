@@ -12,33 +12,36 @@
         class="v2-dashboard-metric"
         :class="[`is-${item.tone || 'neutral'}`, { 'is-unavailable': item.value === null }]"
       >
-        <el-icon
-          v-if="variant === 'risk'"
-          class="v2-dashboard-metric__indicator"
-          aria-hidden="true"
-        >
-          <component :is="indicatorIcon(item)" />
-        </el-icon>
-        <div class="v2-dashboard-metric__identity">
-          <span>{{ item.label }}</span>
+        <header class="v2-dashboard-metric__header">
+          <div class="v2-dashboard-metric__identity">
+            <el-icon
+              v-if="variant === 'risk'"
+              class="v2-dashboard-metric__indicator"
+              aria-hidden="true"
+            >
+              <component :is="indicatorIcon(item)" />
+            </el-icon>
+            <span>{{ item.label }}</span>
+          </div>
           <el-tag v-if="variant === 'risk'" :type="statusType(item)" effect="light" size="small">
             {{ statusLabel(item) }}
           </el-tag>
-        </div>
+        </header>
         <strong>{{ page.metricValue(item) }}</strong>
-        <p>{{ item.description }}</p>
-        <AppButton
-          v-if="item.route"
-          class="v2-dashboard-metric__action"
-          size="small"
-          variant="ghost"
-          :icon-only="variant === 'business'"
-          :title="item.actionLabel"
-          @click="page.openRoute(item.route)"
-        >
-          <span v-if="variant === 'risk'">{{ item.actionLabel }}</span>
-          <el-icon><ArrowRight /></el-icon>
-        </AppButton>
+        <footer>
+          <p>{{ item.description }}</p>
+          <AppButton
+            v-if="item.route"
+            class="v2-dashboard-metric__action"
+            size="small"
+            variant="ghost"
+            icon-only
+            :title="item.actionLabel"
+            @click="page.openRoute(item.route)"
+          >
+            <el-icon><ArrowRight /></el-icon>
+          </AppButton>
+        </footer>
       </article>
     </div>
   </section>
@@ -84,6 +87,7 @@ function indicatorIcon(item: DashboardMetricItem) {
 .v2-dashboard-section {
   display: grid;
   min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
   overflow: hidden;
   border: 1px solid var(--v2-border);
@@ -92,43 +96,52 @@ function indicatorIcon(item: DashboardMetricItem) {
 }
 
 .v2-dashboard-section > :deep(.v2-section-heading) {
-  min-height: 50px;
-  padding: 9px 14px;
+  min-height: 52px;
+  padding: 10px 15px;
   border-bottom: 1px solid var(--v2-border-soft);
 }
 
 .v2-dashboard-metric-list {
   display: grid;
   min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: var(--v2-surface-muted);
 }
 
 .v2-dashboard-metric {
   display: grid;
   min-width: 0;
-  min-height: 49px;
-  grid-template-columns: minmax(126px, 0.75fr) minmax(92px, auto) minmax(160px, 1.25fr) auto;
+  min-height: 118px;
+  grid-template-rows: auto auto minmax(28px, 1fr);
+  align-content: start;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface);
+  transition:
+    border-color 150ms var(--v3-ease),
+    box-shadow 150ms var(--v3-ease);
+}
+
+.v2-dashboard-metric:hover {
+  border-color: color-mix(in srgb, var(--v2-accent) 32%, var(--v2-border));
+  box-shadow: 0 8px 18px rgba(7, 24, 41, 0.06);
+}
+
+.v2-dashboard-metric__header,
+.v2-dashboard-metric footer {
+  display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 12px;
-  padding: 6px 14px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-dashboard-metric:last-child {
-  border-bottom: 0;
-}
-
-.v2-dashboard-section.is-risk .v2-dashboard-metric {
-  grid-template-columns:
-    6px minmax(150px, 0.8fr) minmax(80px, auto) minmax(180px, 1.15fr)
-    minmax(116px, auto);
-}
-
-.v2-dashboard-section.is-business .v2-dashboard-metric {
-  grid-template-columns: minmax(74px, 0.65fr) minmax(90px, auto) minmax(0, 1fr) 32px;
+  justify-content: space-between;
   gap: 8px;
 }
 
 .v2-dashboard-metric__indicator {
+  flex: 0 0 auto;
   color: var(--v2-text-soft);
   font-size: 14px;
 }
@@ -145,8 +158,7 @@ function indicatorIcon(item: DashboardMetricItem) {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
 .v2-dashboard-metric__identity > span {
@@ -156,13 +168,14 @@ function indicatorIcon(item: DashboardMetricItem) {
 }
 
 .v2-dashboard-metric p {
+  min-width: 0;
   color: var(--v2-text-soft);
   font-size: 11px;
 }
 
 .v2-dashboard-metric strong {
   color: var(--v2-text);
-  font-size: 14px;
+  font-size: 20px;
   font-variant-numeric: tabular-nums;
   line-height: var(--v3-line-height-tight);
   overflow-wrap: anywhere;
@@ -174,10 +187,6 @@ function indicatorIcon(item: DashboardMetricItem) {
 
 .v2-dashboard-metric.is-warning strong {
   color: var(--el-color-warning-dark-2);
-}
-
-.v2-dashboard-section.is-business .v2-dashboard-metric strong {
-  font-size: 16px;
 }
 
 .v2-dashboard-section.is-business .v2-dashboard-metric.is-success strong {
@@ -195,49 +204,18 @@ function indicatorIcon(item: DashboardMetricItem) {
 }
 
 .v2-dashboard-metric__action {
-  justify-self: end;
-  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
-@media (max-width: 1180px) {
-  .v2-dashboard-section.is-risk .v2-dashboard-metric {
-    grid-template-columns: 6px minmax(138px, 0.8fr) minmax(76px, auto) minmax(150px, 1fr) auto;
+@media (max-width: 1100px) and (min-width: 701px) {
+  .v2-dashboard-metric-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 700px) {
-  .v2-dashboard-metric,
-  .v2-dashboard-section.is-risk .v2-dashboard-metric {
-    min-height: 92px;
-    grid-template-columns: 6px minmax(0, 1fr) auto;
-    gap: 8px 10px;
-    padding-block: 12px;
-  }
-
-  .v2-dashboard-section.is-business .v2-dashboard-metric {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
-  .v2-dashboard-section.is-risk .v2-dashboard-metric__identity {
-    grid-column: 2;
-  }
-
-  .v2-dashboard-section.is-risk .v2-dashboard-metric strong {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .v2-dashboard-section.is-risk .v2-dashboard-metric p {
-    grid-column: 2 / -1;
-  }
-
-  .v2-dashboard-section.is-risk .v2-dashboard-metric__action {
-    grid-column: 2 / -1;
-    justify-self: start;
-  }
-
-  .v2-dashboard-section.is-business .v2-dashboard-metric p {
-    grid-column: 1 / -1;
+  .v2-dashboard-metric-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

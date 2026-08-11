@@ -12,6 +12,7 @@ import {
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { navigateSafely } from '@/v2/router/navigateSafely';
+import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 import { useAuthStore } from '@/stores/auth';
 import type {
   RefundV2OrderInput,
@@ -68,6 +69,7 @@ export function useOrdersPage() {
   const refundVisible = ref(false);
   const refundSaving = ref(false);
   const lifecycleBusyOrderId = ref('');
+  const detailRequest = useV2LatestRequest();
   const consumptionKeys = new Map<string, string>();
   const lifecycleKeys = new Map<string, string>();
   const canConsumeOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.create'));
@@ -142,6 +144,8 @@ export function useOrdersPage() {
 
   const items = computed(() => ordersQuery.data.value?.list.items ?? []);
   const total = computed(() => ordersQuery.data.value?.list.total ?? 0);
+  const displayedPage = computed(() => ordersQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(() => ordersQuery.data.value?.list.pageSize ?? query.pageSize);
   const serviceOptions = computed(() => ordersQuery.data.value?.options.services ?? []);
   const settlementOptions = computed(
     () => ordersQuery.data.value?.options.settlementPlatforms ?? []
@@ -172,13 +176,19 @@ export function useOrdersPage() {
     loadCurrentOrders();
   }
 
-  function handlePageSizeChange() {
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentOrders();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentOrders();
+  }
+
+  function isOrderActionUnavailable(allowed: boolean) {
+    return ordersQuery.isParameterTransition.value || !allowed;
   }
 
   function openOrderEntry() {
@@ -212,17 +222,25 @@ export function useOrdersPage() {
   }
 
   async function openDetail(item: V2Order) {
+    const switchingTarget = detailTarget.value?.id !== item.id;
     detailTarget.value = item;
     detailVisible.value = true;
     detailLoading.value = true;
     detailError.value = '';
-    detail.value = null;
+    if (switchingTarget) detail.value = null;
+    const request = detailRequest.begin();
     try {
-      detail.value = await idBusinessV2OrdersApi.get(item.id);
+      const result = await idBusinessV2OrdersApi.get(item.id, { signal: request.signal });
+      if (!request.isCurrent() || detailTarget.value?.id !== item.id) return;
+      detail.value = result;
     } catch (error) {
+      if (!request.isCurrent() || detailTarget.value?.id !== item.id) return;
       detailError.value = getApiErrorMessage(error);
     } finally {
-      detailLoading.value = false;
+      if (request.isCurrent() && detailTarget.value?.id === item.id) {
+        detailLoading.value = false;
+      }
+      request.finish();
     }
   }
 
@@ -231,7 +249,7 @@ export function useOrdersPage() {
   }
 
   function openEdit(order: V2Order) {
-    if (!canUpdateOrders.value || !order.operations.canEdit) return;
+    if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canEdit)) return;
     editingOrder.value = order;
     editVisible.value = true;
   }
@@ -257,7 +275,7 @@ export function useOrdersPage() {
   }
 
   function openRefund(order: V2Order) {
-    if (!canUpdateOrders.value || !order.operations.canRefund) return;
+    if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canRefund)) return;
     refundingOrder.value = order;
     refundVisible.value = true;
   }
@@ -335,7 +353,7 @@ export function useOrdersPage() {
   }
 
   async function cancelOrder(order: V2Order) {
-    if (!canUpdateOrders.value || !order.operations.canCancel) return;
+    if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canCancel)) return;
     const reason = await promptReason(
       '待处理订单会释放 ID 锁；已扣款但未开通的订单会按原流水精确恢复余额。',
       `取消订单 ${order.orderNo}`,
@@ -369,7 +387,7 @@ export function useOrdersPage() {
   }
 
   async function deleteOrder(order: V2Order) {
-    if (!canDeleteOrders.value || !order.operations.canDelete) return;
+    if (isOrderActionUnavailable(canDeleteOrders.value && order.operations.canDelete)) return;
     const reason = await promptReason(
       '订单会从业务列表隐藏，但余额流水、退款证据和审计记录会完整保留。',
       `删除订单 ${order.orderNo}`,
@@ -418,7 +436,7 @@ export function useOrdersPage() {
   }
 
   async function consumeOrderBalance(order: V2Order) {
-    if (!canConsumeOrders.value || !order.operations.canConsume) return;
+    if (isOrderActionUnavailable(canConsumeOrders.value && order.operations.canConsume)) return;
     try {
       await ElMessageBox.confirm(
         `将真实扣减 ${formatDecimal(order.balanceAmount)} 余额，并写入成本流水。确认继续？`,
@@ -456,7 +474,7 @@ export function useOrdersPage() {
   }
 
   async function completeOrder(order: V2Order) {
-    if (!canUpdateOrders.value || !order.operations.canComplete) return;
+    if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canComplete)) return;
     try {
       await ElMessageBox.confirm(
         '确认 Apple 官网业务已经真实开通。系统会核对原扣款流水，并在同一事务中生成开通记录和完成订单。',
@@ -515,6 +533,10 @@ export function useOrdersPage() {
     accountDispositionOptions,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: ordersQuery.phase,
+    isParameterTransition: ordersQuery.isParameterTransition,
     loading,
     listError,
     serviceOptions,

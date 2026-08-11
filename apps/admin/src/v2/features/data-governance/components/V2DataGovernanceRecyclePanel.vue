@@ -1,76 +1,98 @@
 <template>
   <section class="v2-governance-panel">
-    <el-alert
-      v-if="page.previewBlockedReason"
-      type="warning"
-      :title="page.previewBlockedReason"
-      :closable="false"
-      show-icon
-    />
-    <div class="v2-records-toolbar v2-governance-toolbar">
-      <el-select
-        v-model="page.recycleQueryModel.entity"
-        clearable
-        placeholder="全部回收站类型"
-        aria-label="筛选回收站类型"
-        @change="page.handleRecycleFilterChange"
+    <section class="v2-governance-command-panel" aria-label="回收站筛选与治理操作">
+      <V2SectionHeading
+        title="回收站筛选"
+        help="筛选只影响当前回收站列表；生成恢复预览前必须勾选记录并确认审批条件。"
       >
-        <el-option
-          v-for="(label, value) in page.recycleEntityLabels"
-          :key="value"
-          :label="label"
-          :value="value"
-        />
-      </el-select>
-      <span>已选择 {{ page.selectedRecycleItems.length }} 条</span>
-      <div class="v2-records-toolbar__actions">
-        <AppButton
-          variant="ghost"
-          :disabled="Boolean(page.previewBlockedReason)"
-          :title="page.previewBlockedReason || '生成汇率历史清理预览'"
-          :aria-label="
-            page.previewBlockedReason ? `生成清理预览：${page.previewBlockedReason}` : undefined
-          "
-          @click="page.openCleanupDrawer"
+        <template #actions>
+          <span>已选择 {{ page.selectedRecycleItems.length }} 条</span>
+        </template>
+      </V2SectionHeading>
+
+      <div class="v2-governance-filter-grid is-recycle">
+        <el-select
+          v-model="page.recycleQueryModel.entity"
+          clearable
+          placeholder="全部回收站类型"
+          aria-label="筛选回收站类型"
+          @change="page.handleRecycleFilterChange"
         >
-          生成清理预览
-        </AppButton>
-        <AppButton
-          variant="primary"
-          :disabled="Boolean(page.previewBlockedReason)"
-          :title="page.previewBlockedReason || '生成回收站恢复预览'"
-          :aria-label="
-            page.previewBlockedReason ? `生成恢复预览：${page.previewBlockedReason}` : undefined
-          "
-          @click="page.openRestoreDrawer"
-        >
-          生成恢复预览
-        </AppButton>
-        <AppButton
-          icon-only
-          title="刷新"
-          :disabled="page.recycleLoading"
-          @click="page.refreshRecycle"
-        >
-          <el-icon><Refresh /></el-icon>
-        </AppButton>
+          <el-option
+            v-for="(label, value) in page.recycleEntityLabels"
+            :key="value"
+            :label="label"
+            :value="value"
+          />
+        </el-select>
+        <div class="v2-governance-filter-grid__actions">
+          <AppButton
+            variant="ghost"
+            :disabled="Boolean(page.previewBlockedReason)"
+            :title="page.previewBlockedReason || '生成汇率历史清理预览'"
+            :aria-label="
+              page.previewBlockedReason ? `生成清理预览：${page.previewBlockedReason}` : undefined
+            "
+            @click="page.openCleanupDrawer"
+          >
+            生成清理预览
+          </AppButton>
+          <AppButton
+            variant="primary"
+            :disabled="Boolean(page.previewBlockedReason)"
+            :title="page.previewBlockedReason || '生成回收站恢复预览'"
+            :aria-label="
+              page.previewBlockedReason ? `生成恢复预览：${page.previewBlockedReason}` : undefined
+            "
+            @click="page.openRestoreDrawer"
+          >
+            生成恢复预览
+          </AppButton>
+          <AppButton variant="ghost" :disabled="page.recycleLoading" @click="page.refreshRecycle">
+            <el-icon><Refresh /></el-icon>
+            刷新
+          </AppButton>
+        </div>
       </div>
-    </div>
+
+      <footer>
+        <p>
+          <el-icon aria-hidden="true"><InfoFilled /></el-icon>
+          恢复只恢复可见性或启用状态，不修改锁定订单、财务状态和既有审计证据。
+        </p>
+        <span>{{ page.recycleQueryModel.entity ? '已按类型筛选' : '当前显示全部类型' }}</span>
+      </footer>
+    </section>
 
     <V2AsyncRegion
       skeleton="table"
-      :loading="page.recycleLoading"
-      :resolved="page.recycleHasData"
+      :phase="page.recycleQueryPhase"
+      :previous-data="page.recycleParameterTransition"
       :error="page.recycleError"
       loading-title="正在读取回收站"
       refreshing-title="正在更新回收站"
       error-title="回收站加载失败"
       @retry="page.refreshRecycle"
     >
-      <section class="v2-records-list">
+      <section ref="listRef" class="v2-records-list v2-governance-list" :style="listFrameStyle">
+        <header class="v2-governance-list__header">
+          <V2SectionHeading
+            title="回收站记录"
+            help="只显示当前系统支持恢复的软删除对象；恢复前仍需生成确定性影响预览。"
+          >
+            <template #actions>
+              <V2TableColumnSettings inline :schema="v2TableSchemas.dataGovernance.recycle" />
+              <span>本页 {{ page.recycleItems.length }} 条</span>
+              <span aria-hidden="true">·</span>
+              <strong>共 {{ page.recycleTotal }} 条</strong>
+            </template>
+          </V2SectionHeading>
+        </header>
+
         <V2Table
           :schema="v2TableSchemas.dataGovernance.recycle"
           :data="page.recycleItems"
+          :show-column-settings="false"
           class="v2-records-table"
           scrollbar-always-on
           @selection-change="page.handleRecycleSelection"
@@ -163,39 +185,23 @@
 
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import { InfoFilled, Refresh } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import V2TableControlColumn from '@/v2/components/V2TableControlColumn.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import type { useDataGovernancePage } from '../useDataGovernancePage';
 
 type DataGovernancePage = UnwrapNestedRefs<ReturnType<typeof useDataGovernancePage>>;
 
-defineProps<{ page: DataGovernancePage }>();
+const props = defineProps<{ page: DataGovernancePage }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.recycleItems,
+  pageSize: () => props.page.recycleQueryModel.pageSize
+});
 </script>
-
-<style scoped>
-.v2-governance-panel {
-  display: grid;
-  gap: 14px;
-}
-
-.v2-governance-toolbar {
-  grid-template-columns: minmax(180px, 240px) auto 1fr;
-}
-
-.v2-governance-toolbar > span {
-  align-self: center;
-  color: var(--v2-text-soft);
-  font-size: 12px;
-}
-
-@media (max-width: 760px) {
-  .v2-governance-toolbar {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

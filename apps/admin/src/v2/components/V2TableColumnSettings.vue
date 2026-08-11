@@ -1,5 +1,8 @@
 <template>
-  <div class="v2-table-preference-toolbar">
+  <div
+    class="v2-table-preference-toolbar"
+    :class="{ 'v2-table-preference-toolbar--inline': inline }"
+  >
     <AppButton
       size="small"
       variant="ghost"
@@ -76,7 +79,9 @@ import {
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { isV2TableDataColumn, type V2TableSchema } from './tableSystem';
 
-const props = defineProps<{ schema: V2TableSchema }>();
+const props = withDefaults(defineProps<{ schema: V2TableSchema; inline?: boolean }>(), {
+  inline: false
+});
 const authStore = useAuthStore();
 const { loading: preferencesLoading } = useV2TablePreferences();
 const drawerVisible = ref(false);

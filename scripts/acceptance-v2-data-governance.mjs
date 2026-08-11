@@ -1,8 +1,12 @@
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 
 const containerName = `id-business-v2-governance-${process.pid}`;
 const databaseName = `id_business_v2_governance_drill_${process.pid}`;
 const databasePassword = 'v2_governance_drill_only';
+const expectedMigrationCount = readdirSync('apps/api/prisma/migrations', {
+  withFileTypes: true
+}).filter((entry) => entry.isDirectory()).length;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -104,7 +108,7 @@ try {
     ])
   );
   const expectedState = {
-    migrations: 19,
+    migrations: expectedMigrationCount,
     failedMigrations: 0,
     users: 2,
     customers: 1,

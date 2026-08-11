@@ -117,6 +117,17 @@
   justify-content: space-between;
 }
 
+.v2-sensitive-cell > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-sensitive-cell > .app-button--icon {
+  flex: 0 0 36px;
+}
+
 .v2-account-security-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -129,6 +140,11 @@
   border-radius: var(--v3-radius);
   background: var(--v2-surface);
   box-shadow: none;
+}
+
+.v2-records-list > .v2-unified-table-shell,
+.v2-records-list > .v2-records-mobile-list {
+  min-height: var(--v2-records-list-body-min-height, 0);
 }
 
 .v2-records-table {

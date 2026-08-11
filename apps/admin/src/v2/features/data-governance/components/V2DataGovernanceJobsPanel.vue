@@ -1,40 +1,62 @@
 <template>
   <section class="v2-governance-panel">
-    <div class="v2-records-toolbar v2-governance-jobs-toolbar">
-      <el-select
-        v-model="page.jobQueryModel.type"
-        clearable
-        placeholder="全部任务类型"
-        aria-label="筛选任务类型"
-        @change="page.handleJobFilterChange"
+    <section class="v2-governance-command-panel" aria-label="治理任务筛选">
+      <V2SectionHeading
+        title="任务筛选"
+        help="任务状态来自不可变预览、审批和分批执行记录；筛选不会修改任务状态。"
       >
-        <el-option
-          v-for="(label, value) in page.governanceJobTypeLabels"
-          :key="value"
-          :label="label"
-          :value="value"
-        />
-      </el-select>
-      <el-select
-        v-model="page.jobQueryModel.status"
-        clearable
-        placeholder="全部任务状态"
-        aria-label="筛选任务状态"
-        @change="page.handleJobFilterChange"
-      >
-        <el-option
-          v-for="(meta, value) in page.governanceJobStatusMeta"
-          :key="value"
-          :label="meta.label"
-          :value="value"
-        />
-      </el-select>
-      <div class="v2-records-toolbar__actions">
-        <AppButton icon-only title="刷新" :disabled="page.jobsLoading" @click="page.refreshJobs">
-          <el-icon><Refresh /></el-icon>
-        </AppButton>
+        <template #actions>
+          <span>{{
+            page.jobQueryModel.type || page.jobQueryModel.status ? '已应用筛选' : '未附加筛选'
+          }}</span>
+        </template>
+      </V2SectionHeading>
+
+      <div class="v2-governance-filter-grid is-jobs">
+        <el-select
+          v-model="page.jobQueryModel.type"
+          clearable
+          placeholder="全部任务类型"
+          aria-label="筛选任务类型"
+          @change="page.handleJobFilterChange"
+        >
+          <el-option
+            v-for="(label, value) in page.governanceJobTypeLabels"
+            :key="value"
+            :label="label"
+            :value="value"
+          />
+        </el-select>
+        <el-select
+          v-model="page.jobQueryModel.status"
+          clearable
+          placeholder="全部任务状态"
+          aria-label="筛选任务状态"
+          @change="page.handleJobFilterChange"
+        >
+          <el-option
+            v-for="(meta, value) in page.governanceJobStatusMeta"
+            :key="value"
+            :label="meta.label"
+            :value="value"
+          />
+        </el-select>
+        <div class="v2-governance-filter-grid__actions">
+          <AppButton variant="ghost" :disabled="page.jobsLoading" @click="page.refreshJobs">
+            <el-icon><Refresh /></el-icon>
+            刷新任务
+          </AppButton>
+        </div>
       </div>
-    </div>
+
+      <footer>
+        <p>
+          <el-icon aria-hidden="true"><InfoFilled /></el-icon>
+          申请人只能取消自己的待审批任务；审批人必须是另一名管理员。
+        </p>
+        <span>每批最多执行 50 条</span>
+      </footer>
+    </section>
 
     <el-alert
       v-if="page.mutationError"
@@ -46,18 +68,33 @@
 
     <V2AsyncRegion
       skeleton="table"
-      :loading="page.jobsLoading"
-      :resolved="page.jobsHasData"
+      :phase="page.jobsQueryPhase"
+      :previous-data="page.jobsParameterTransition"
       :error="page.jobsError"
       loading-title="正在读取治理任务"
       refreshing-title="正在更新治理任务"
       error-title="治理任务加载失败"
       @retry="page.refreshJobs"
     >
-      <section class="v2-records-list">
+      <section ref="listRef" class="v2-records-list v2-governance-list" :style="listFrameStyle">
+        <header class="v2-governance-list__header">
+          <V2SectionHeading
+            title="治理任务"
+            help="查看预览、审批人、分批结果和操作审计；可用操作继续由原任务状态和管理员身份决定。"
+          >
+            <template #actions>
+              <V2TableColumnSettings inline :schema="v2TableSchemas.dataGovernance.jobs" />
+              <span>本页 {{ page.jobs.length }} 条</span>
+              <span aria-hidden="true">·</span>
+              <strong>共 {{ page.jobsTotal }} 条</strong>
+            </template>
+          </V2SectionHeading>
+        </header>
+
         <V2Table
           :schema="v2TableSchemas.dataGovernance.jobs"
           :data="page.jobs"
+          :show-column-settings="false"
           class="v2-records-table"
           scrollbar-always-on
           show-overflow-tooltip
@@ -167,9 +204,9 @@
               </div>
             </dl>
             <footer>
-              <AppButton size="small" variant="ghost" @click="page.openDetail(job)"
-                >查看详情</AppButton
-              >
+              <AppButton size="small" variant="ghost" @click="page.openDetail(job)">
+                查看详情
+              </AppButton>
               <AppButton
                 v-if="page.canApprove(job)"
                 size="small"
@@ -225,33 +262,23 @@
 
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import { InfoFilled, Refresh } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import type { useDataGovernancePage } from '../useDataGovernancePage';
 
 type DataGovernancePage = UnwrapNestedRefs<ReturnType<typeof useDataGovernancePage>>;
 
-defineProps<{ page: DataGovernancePage }>();
+const props = defineProps<{ page: DataGovernancePage }>();
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.jobs,
+  pageSize: () => props.page.jobQueryModel.pageSize
+});
 </script>
-
-<style scoped>
-.v2-governance-panel {
-  display: grid;
-  gap: 14px;
-}
-
-.v2-governance-jobs-toolbar {
-  grid-template-columns: minmax(180px, 240px) minmax(180px, 240px) 1fr;
-}
-
-@media (max-width: 760px) {
-  .v2-governance-jobs-toolbar {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

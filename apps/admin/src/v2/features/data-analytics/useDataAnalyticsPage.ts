@@ -134,6 +134,8 @@ export function useDataAnalyticsPage() {
     journalTypeOptions,
     filters,
     overview,
+    queryPhase: query.phase,
+    isParameterTransition: query.isParameterTransition,
     accounts,
     wallets,
     journals,

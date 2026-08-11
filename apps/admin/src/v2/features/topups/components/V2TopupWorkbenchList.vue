@@ -1,17 +1,32 @@
 <template>
   <V2AsyncRegion
     skeleton="table"
-    :loading="page.loading || page.isInitialLoading"
-    :resolved="page.hasLoadedOnce"
+    :phase="page.queryPhase"
+    :previous-data="page.isParameterTransition"
     :error="page.listError"
     loading-title="正在加载加卡工作台"
     refreshing-title="正在更新加卡工作台"
     error-title="加卡工作台加载失败"
     @retry="page.loadWorkbench"
   >
-    <section class="v2-records-list">
+    <section ref="listRef" class="v2-records-list" :style="listFrameStyle">
+      <header class="v2-topup-list__header">
+        <V2SectionHeading
+          title="可加额 ID 列表"
+          help="列表保留余额、成本和当前业务快照；加卡操作继续受权限控制。"
+        >
+          <template #actions>
+            <V2TableColumnSettings inline :schema="v2TableSchemas.topups.main" />
+            <span>本页 {{ page.items.length }} 条</span>
+            <span aria-hidden="true">·</span>
+            <strong>共 {{ page.total }} 条</strong>
+          </template>
+        </V2SectionHeading>
+      </header>
+
       <V2Table
         :schema="v2TableSchemas.topups.main"
+        :show-column-settings="false"
         :aria-busy="page.loading"
         scrollbar-always-on
         show-overflow-tooltip
@@ -293,10 +308,11 @@
           >
         </span>
         <el-pagination
-          v-model:current-page="page.query.page"
-          v-model:page-size="page.query.pageSize"
           v-pagination-label
+          :current-page="page.displayedPage"
+          :page-size="page.displayedPageSize"
           background
+          :disabled="page.isParameterTransition"
           :page-sizes="[10, 20, 50, 100]"
           layout="sizes, prev, pager, next"
           :total="page.total"
@@ -309,19 +325,27 @@
 </template>
 
 <script setup lang="ts">
-import V2Table from '@/v2/components/V2Table.vue';
-import { v2TableSchemas } from '@/v2/features/tableSchemas';
-import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import type { UnwrapNestedRefs } from 'vue';
 import { DataAnalysis, Plus, RefreshLeft, Tickets } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import V2Table from '@/v2/components/V2Table.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
-import type { UnwrapNestedRefs } from 'vue';
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import type { useTopupWorkbenchPage } from '../useTopupWorkbenchPage';
 
 type TopupWorkbenchPage = UnwrapNestedRefs<ReturnType<typeof useTopupWorkbenchPage>>;
 
-defineProps<{
+const props = defineProps<{
   page: TopupWorkbenchPage;
 }>();
+
+const { listRef, listFrameStyle } = useV2StableListFrame({
+  items: () => props.page.items,
+  pageSize: () => props.page.displayedPageSize
+});
 </script>

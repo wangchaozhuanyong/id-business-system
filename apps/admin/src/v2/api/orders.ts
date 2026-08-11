@@ -43,8 +43,8 @@ export const idBusinessV2OrdersApi = {
       })
     );
   },
-  get(id: string) {
-    return request<V2Order>(http.get(`/id-business-v2/orders/${id}`));
+  get(id: string, options: ApiRequestOptions = {}) {
+    return request<V2Order>(http.get(`/id-business-v2/orders/${id}`, { signal: options.signal }));
   },
   getEntryOptions(customerKeyword?: string, options: ApiRequestOptions = {}) {
     return request<V2OrderEntryOptions>(

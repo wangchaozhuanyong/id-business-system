@@ -37,6 +37,10 @@ export default defineComponent({
     viewKey: {
       type: [String, Number] as PropType<string | number>,
       default: undefined
+    },
+    showColumnSettings: {
+      type: Boolean,
+      default: true
     }
   },
   setup(props, { attrs, expose, slots }) {
@@ -91,7 +95,7 @@ export default defineComponent({
       }
 
       return h('div', { class: 'v2-unified-table-shell' }, [
-        h(V2TableColumnSettings, { schema: props.schema }),
+        props.showColumnSettings ? h(V2TableColumnSettings, { schema: props.schema }) : null,
         h(
           ElTable,
           {

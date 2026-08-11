@@ -1,0 +1,631 @@
+.v2-business-monitoring-page {
+  min-width: 0;
+  gap: 14px;
+}
+
+.v2-business-monitoring-overview {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(230px, 0.84fr) minmax(470px, 1.5fr) minmax(240px, max-content);
+  align-items: center;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--v3-radius);
+  background: var(--v2-sidebar);
+  color: #f4f7fb;
+  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+}
+
+.v2-business-monitoring-overview__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-business-monitoring-overview__eyebrow {
+  color: #80aafc;
+  font-size: 10px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.14em;
+}
+
+.v2-business-monitoring-overview__intro h2,
+.v2-business-monitoring-overview__intro p {
+  margin: 0;
+}
+
+.v2-business-monitoring-overview__intro h2 {
+  font-size: 17px;
+  font-weight: var(--v3-font-weight-bold);
+  letter-spacing: 0.01em;
+}
+
+.v2-business-monitoring-overview__intro p {
+  max-width: 46ch;
+  color: #9fb0c4;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-business-monitoring-overview__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-business-monitoring-overview__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 11px 13px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.v2-business-monitoring-overview__metrics article:first-child {
+  border-left: 0;
+}
+
+.v2-business-monitoring-overview__metrics span,
+.v2-business-monitoring-overview__metrics small,
+.v2-business-monitoring-overview__actions > span {
+  color: #9fb0c4;
+  font-size: 10px;
+}
+
+.v2-business-monitoring-overview__metrics strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-business-monitoring-overview__actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.v2-business-monitoring-overview__actions .app-button--ghost.el-button {
+  --el-button-text-color: #f4f7fb;
+  --el-button-border-color: rgba(255, 255, 255, 0.16);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
+  --el-button-active-text-color: #ffffff;
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+}
+
+.v2-business-monitoring-categories {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(5, minmax(170px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface-soft);
+}
+
+.v2-business-monitoring-categories button {
+  display: grid;
+  min-width: 0;
+  min-height: 66px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--v3-radius) - 4px);
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.v2-business-monitoring-categories button:hover {
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+  color: var(--v2-text);
+}
+
+.v2-business-monitoring-categories button:active {
+  transform: translateY(1px);
+}
+
+.v2-business-monitoring-categories button:focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
+.v2-business-monitoring-categories button.is-active {
+  border-color: color-mix(in srgb, var(--v2-accent) 18%, var(--v2-border));
+  background: var(--v2-surface);
+  color: var(--v2-accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--v2-text) 10%, transparent);
+}
+
+.v2-business-monitoring-categories__icon {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--v2-accent) 8%, var(--v2-surface));
+  color: var(--v2-accent);
+  font-size: 16px;
+}
+
+.v2-business-monitoring-categories__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.v2-business-monitoring-categories__copy strong,
+.v2-business-monitoring-categories__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-business-monitoring-categories__copy strong {
+  color: var(--v2-text);
+  font-size: 13px;
+}
+
+.v2-business-monitoring-categories__copy small,
+.v2-business-monitoring-categories__count {
+  color: var(--v2-text-soft);
+  font-size: 10px;
+}
+
+.v2-business-monitoring-categories__count {
+  min-width: 24px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--v3-font-weight-semibold);
+  text-align: right;
+}
+
+.v2-business-monitoring-command {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-business-monitoring-command > .v2-section-heading {
+  align-items: baseline;
+  margin: 0 16px;
+  padding: 14px 0 11px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-business-monitoring-command .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 21px;
+}
+
+.v2-business-monitoring-command__grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(360px, 1fr) minmax(190px, 230px) max-content;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+}
+
+.v2-business-monitoring-severity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface-soft);
+}
+
+.v2-business-monitoring-severity button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--v3-radius-sm) - 3px);
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.v2-business-monitoring-severity button:hover,
+.v2-business-monitoring-severity button:focus-visible,
+.v2-business-monitoring-severity button.is-active {
+  border-color: var(--v2-border);
+  background: var(--v2-surface);
+  color: var(--v2-text);
+  outline: none;
+}
+
+.v2-business-monitoring-severity button:focus-visible {
+  box-shadow: var(--v2-focus);
+}
+
+.v2-business-monitoring-severity button.is-active {
+  color: var(--v2-accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--v2-text) 8%, transparent);
+}
+
+.v2-business-monitoring-severity button span {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+.v2-business-monitoring-command__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.v2-business-monitoring-command > footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--v2-border-soft);
+  background: var(--v2-surface-soft);
+  color: var(--v2-text-soft);
+  font-size: 10px;
+}
+
+.v2-business-monitoring-command > footer p {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.v2-business-monitoring-workspace {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
+  align-items: stretch;
+  gap: 14px;
+}
+
+.v2-business-monitoring-list {
+  --v2-records-list-body-min-height: 618px;
+}
+
+.v2-business-monitoring-list__header {
+  min-width: 0;
+  min-height: 65px;
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-business-monitoring-list__header .v2-section-heading,
+.v2-business-monitoring-list__header .v2-section-heading__actions {
+  align-items: baseline;
+}
+
+.v2-business-monitoring-list__header .v2-section-heading__actions {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 21px;
+}
+
+.v2-business-monitoring-list__header .v2-section-heading__actions strong {
+  color: var(--v2-text);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+.v2-business-monitoring-list .el-table__row.is-monitoring-selected > td.el-table__cell {
+  background: color-mix(in srgb, var(--v2-accent) 7%, var(--v2-surface));
+}
+
+.v2-business-monitoring-mobile-description dd {
+  line-height: 1.55;
+}
+
+.v2-monitoring-detail {
+  display: grid;
+  min-width: 0;
+  height: 100%;
+  align-content: start;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-monitoring-detail header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-monitoring-detail header > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.v2-monitoring-detail header span,
+.v2-monitoring-detail__empty > span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-monitoring-detail h2 {
+  margin: 0;
+  color: var(--v2-text);
+  font-size: 17px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.v2-monitoring-detail > p,
+.v2-monitoring-detail__empty p {
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.v2-monitoring-detail dl {
+  display: grid;
+  margin: 0;
+  gap: 0;
+  border-top: 1px solid var(--v2-border-soft);
+}
+
+.v2-monitoring-detail dl div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-monitoring-detail dt {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-monitoring-detail dd {
+  margin: 0;
+  color: var(--v2-text);
+  font-size: 12px;
+  font-weight: var(--v3-font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.v2-monitoring-detail__note {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border-left: 3px solid var(--v2-accent);
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+}
+
+.v2-monitoring-detail__note strong {
+  color: var(--v2-text);
+  font-size: 12px;
+}
+
+.v2-monitoring-detail__note span {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.v2-monitoring-detail .app-button {
+  width: 100%;
+}
+
+.v2-monitoring-detail__empty {
+  display: grid;
+  min-height: 220px;
+  align-content: center;
+  gap: 8px;
+}
+
+.v2-monitoring-detail__empty strong {
+  color: var(--v2-text);
+  font-size: 15px;
+}
+
+@media (max-width: 1180px) {
+  .v2-business-monitoring-overview {
+    grid-template-columns: minmax(230px, 0.8fr) minmax(460px, 1.4fr);
+  }
+
+  .v2-business-monitoring-overview__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .v2-business-monitoring-command__grid {
+    grid-template-columns: minmax(330px, 1fr) minmax(190px, 220px);
+  }
+
+  .v2-business-monitoring-command__actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-business-monitoring-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-business-monitoring-overview__metrics {
+    grid-template-columns: repeat(4, minmax(112px, 1fr));
+    overflow-x: auto;
+  }
+
+  .v2-business-monitoring-overview__actions {
+    grid-column: auto;
+    justify-content: flex-start;
+  }
+
+  .v2-business-monitoring-categories {
+    grid-template-columns: repeat(5, minmax(180px, 1fr));
+  }
+
+  .v2-business-monitoring-command__grid {
+    grid-template-columns: minmax(0, 1fr) minmax(190px, 0.48fr);
+  }
+
+  .v2-business-monitoring-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-business-monitoring-list > .v2-unified-table-shell {
+    min-height: 0;
+  }
+
+  .v2-monitoring-detail {
+    height: auto;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .v2-business-monitoring-page {
+    gap: 10px;
+  }
+
+  .v2-business-monitoring-overview {
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .v2-business-monitoring-overview__metrics {
+    grid-template-columns: repeat(2, minmax(112px, 1fr));
+    overflow: hidden;
+  }
+
+  .v2-business-monitoring-overview__metrics article:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-business-monitoring-overview__metrics article:nth-child(4) {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .v2-business-monitoring-overview__actions {
+    flex-wrap: wrap;
+  }
+
+  .v2-business-monitoring-command > .v2-section-heading {
+    margin: 0 13px;
+  }
+
+  .v2-business-monitoring-command__grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px 13px;
+  }
+
+  .v2-business-monitoring-severity {
+    grid-template-columns: repeat(4, minmax(62px, 1fr));
+  }
+
+  .v2-business-monitoring-command__actions {
+    grid-column: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-business-monitoring-command__actions .app-button {
+    width: 100%;
+  }
+
+  .v2-business-monitoring-command > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-business-monitoring-list__header {
+    min-height: 65px;
+    padding: 14px 13px 12px;
+  }
+
+  .v2-business-monitoring-list__header .v2-section-heading {
+    flex-wrap: nowrap;
+  }
+
+  .v2-business-monitoring-list__header .v2-section-heading__copy {
+    min-width: 0;
+  }
+
+  .v2-business-monitoring-list__header .v2-section-heading__actions {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .v2-business-monitoring-list__header .v2-section-heading__actions > span[aria-hidden='true'] {
+    display: none;
+  }
+
+  .v2-business-monitoring-list .v2-records-pagination .el-pagination {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    row-gap: 8px;
+  }
+
+  .v2-monitoring-detail {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 390px) {
+  .v2-business-monitoring-severity button {
+    padding-inline: 5px;
+  }
+
+  .v2-business-monitoring-list__header .v2-section-heading__actions > span:not([aria-hidden]),
+  .v2-business-monitoring-list__header .v2-section-heading__actions > strong {
+    display: none;
+  }
+}

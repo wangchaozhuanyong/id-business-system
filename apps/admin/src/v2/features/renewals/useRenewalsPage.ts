@@ -31,25 +31,20 @@ const dueStatusOptions: Array<{ value: V2RenewalDueStatus; label: string }> = [
   { value: 'due_within_7_days', label: '7天内到期' },
   { value: 'expired', label: '已到期' }
 ];
-
 function isValidNonNegativeDecimal(value: string) {
   return isV2UnsignedDecimal(value);
 }
-
 function isValidPositiveDecimal(value: string) {
   return isV2UnsignedDecimal(value, { allowZero: false });
 }
-
 interface RenewalsReferenceOptions {
   filters: V2RenewalFilterOptions;
   manualRenewal: V2ManualRenewalOptions | null;
 }
-
 interface RenewalsPageSnapshot {
   list: V2RenewalWorkbenchResult;
   options: RenewalsReferenceOptions;
 }
-
 const RENEWALS_OPTIONS_SCOPE = 'renewals-options';
 const RENEWALS_OPTIONS_KEY = 'selectors';
 const RENEWAL_WARNING_REFRESH_EVENT = 'v2:renewal-warning-refresh';
@@ -171,6 +166,10 @@ export function useRenewalsPage() {
 
   const items = computed(() => renewalsQuery.data.value?.list.items ?? []);
   const total = computed(() => renewalsQuery.data.value?.list.total ?? 0);
+  const displayedPage = computed(() => renewalsQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => renewalsQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const evaluatedAt = computed(() => renewalsQuery.data.value?.list.evaluatedAt ?? '');
   const warningSummary = computed(
     () =>
@@ -355,12 +354,14 @@ export function useRenewalsPage() {
     handleFilterChange();
   }
 
-  function handlePageSizeChange() {
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentWorkbench();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentWorkbench();
   }
 
@@ -529,6 +530,10 @@ export function useRenewalsPage() {
     canManageWarning,
     items,
     total,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: renewalsQuery.phase,
+    isParameterTransition: renewalsQuery.isParameterTransition,
     evaluatedAt,
     loading,
     listError,

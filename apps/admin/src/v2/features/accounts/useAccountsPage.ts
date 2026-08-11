@@ -187,6 +187,10 @@ export function useAccountsPage() {
   const loading = computed(
     () => accountsQuery.isInitialLoading.value || accountsQuery.isRefreshing.value
   );
+  const displayedPage = computed(() => accountsQuery.data.value?.list.page ?? query.page);
+  const displayedPageSize = computed(
+    () => accountsQuery.data.value?.list.pageSize ?? query.pageSize
+  );
   const listError = computed(() =>
     accountsQuery.error.value ? getApiErrorMessage(accountsQuery.error.value) : ''
   );
@@ -218,12 +222,14 @@ export function useAccountsPage() {
     loadCurrentAccounts();
   }
 
-  function handlePageSizeChange() {
+  function handlePageSizeChange(pageSize: number) {
+    query.pageSize = pageSize;
     query.page = 1;
     loadCurrentAccounts();
   }
 
-  function handlePageChange() {
+  function handlePageChange(page: number) {
+    query.page = page;
     loadCurrentAccounts();
   }
 
@@ -534,6 +540,10 @@ export function useAccountsPage() {
     revealing,
     ...lossReporting,
     query,
+    displayedPage,
+    displayedPageSize,
+    queryPhase: accountsQuery.phase,
+    isParameterTransition: accountsQuery.isParameterTransition,
     form,
     revealForm,
     ...accountSensitiveAccess,

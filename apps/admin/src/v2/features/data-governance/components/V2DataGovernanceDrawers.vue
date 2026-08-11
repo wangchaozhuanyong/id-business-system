@@ -256,8 +256,7 @@
   >
     <V2AsyncRegion
       skeleton="table"
-      :loading="page.detailLoading"
-      :resolved="page.detailHasData"
+      :phase="page.detailQueryPhase"
       :error="page.detailError"
       loading-title="正在读取任务明细"
       refreshing-title="正在更新任务明细"
