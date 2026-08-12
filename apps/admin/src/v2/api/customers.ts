@@ -4,6 +4,7 @@ import type {
   CreateV2CustomerInput,
   UpdateV2CustomerInput,
   V2Customer,
+  V2CustomerDeletePreview,
   V2CustomerListQuery,
   V2CustomerListResult,
   V2RevealInput
@@ -57,9 +58,16 @@ export const idBusinessV2CustomersApi = {
       http.post(`/id-business-v2/customers/${id}/reveal-whatsapp`, payload)
     );
   },
-  remove(id: string) {
+  getDeletePreview(id: string) {
+    return request<V2CustomerDeletePreview>(
+      http.get(`/id-business-v2/customers/${id}/delete-preview`)
+    );
+  },
+  remove(id: string, previewFingerprint: string) {
     return withV2QueryInvalidation(
-      request<{ deleted: true }>(http.delete(`/id-business-v2/customers/${id}`)),
+      request<{ deleted: true }>(
+        http.delete(`/id-business-v2/customers/${id}`, { params: { previewFingerprint } })
+      ),
       ['customers', 'order-entry-options', 'orders', 'renewals', 'renewals-options']
     );
   }

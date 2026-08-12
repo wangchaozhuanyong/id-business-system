@@ -95,6 +95,12 @@ export class IdBusinessV2CustomersController {
     };
   }
 
+  @Get(':id/delete-preview')
+  @RequirePermissions('customer.view')
+  getDeletePreview(@Param('id') id: string) {
+    return this.customersService.getDeletePreview(id);
+  }
+
   @Get(':id')
   @RequirePermissions('customer.view')
   get(@Param('id') id: string) {
@@ -152,10 +158,16 @@ export class IdBusinessV2CustomersController {
   @RequirePermissions('customer.delete')
   remove(
     @Param('id') id: string,
+    @Query('previewFingerprint') previewFingerprint: string | undefined,
     @CurrentUser() operator: AuthenticatedUser | undefined,
     @Req() request: RequestWithAuditMeta
   ) {
-    return this.customersService.remove(id, operator, this.requestMeta(request));
+    return this.customersService.remove(
+      id,
+      previewFingerprint,
+      operator,
+      this.requestMeta(request)
+    );
   }
 
   private requestMeta(request: RequestWithAuditMeta) {

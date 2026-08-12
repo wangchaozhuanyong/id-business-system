@@ -1,6 +1,10 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import {
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  createV2DeletePreviewFingerprint
+} from '../runtime/public-api';
 import { IdBusinessV2CustomersService } from './id-business-v2-customers.service';
 import { IdBusinessV2CustomerRepository } from './persistence/id-business-v2-customer.repository';
 
@@ -71,6 +75,8 @@ describe('IdBusinessV2CustomersService', () => {
       create: vi.fn(),
       update: vi.fn()
     },
+    idBusinessV2Order: { count: vi.fn() },
+    idBusinessV2Activation: { count: vi.fn() },
     sensitiveAccessLog: {
       create: vi.fn()
     },
@@ -112,6 +118,8 @@ describe('IdBusinessV2CustomersService', () => {
       async (work: Array<Promise<unknown>> | ((tx: typeof prisma) => Promise<unknown>)) =>
         typeof work === 'function' ? work(prisma) : Promise.all(work)
     );
+    prisma.idBusinessV2Order.count.mockResolvedValue(0);
+    prisma.idBusinessV2Activation.count.mockResolvedValue(0);
     encryptionService.encrypt.mockImplementation((value: string | null) =>
       value ? `encrypted:${value}` : null
     );
@@ -345,10 +353,19 @@ describe('IdBusinessV2CustomersService', () => {
   });
 
   it('soft deletes a customer and writes an audit log', async () => {
-    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
+    const customer = makeCustomer();
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(customer);
     prisma.idBusinessV2Customer.update.mockResolvedValue(makeCustomer({ deletedAt: new Date() }));
+    const fingerprint = createV2DeletePreviewFingerprint(
+      'customer',
+      customer.id,
+      customer.updatedAt,
+      { orderCount: 0, activeOrderCount: 0, activationCount: 0, activeActivationCount: 0 }
+    );
 
-    await expect(service.remove('customer-1', operator)).resolves.toEqual({ deleted: true });
+    await expect(service.remove('customer-1', fingerprint, operator)).resolves.toEqual({
+      deleted: true
+    });
     expect(prisma.idBusinessV2Customer.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -361,5 +378,36 @@ describe('IdBusinessV2CustomersService', () => {
         data: expect.objectContaining({ action: 'id_business_v2.customer.delete' })
       })
     );
+  });
+
+  it('blocks customer deletion when active orders or activations still exist', async () => {
+    const customer = makeCustomer();
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(customer);
+    prisma.idBusinessV2Order.count.mockResolvedValueOnce(5).mockResolvedValueOnce(2);
+    prisma.idBusinessV2Activation.count.mockResolvedValueOnce(3).mockResolvedValueOnce(1);
+
+    const preview = await service.getDeletePreview(customer.id);
+
+    expect(preview).toMatchObject({
+      canDelete: false,
+      impact: {
+        orderCount: 5,
+        activeOrderCount: 2,
+        activationCount: 3,
+        activeActivationCount: 1
+      },
+      blockingReasons: ['仍有 2 个进行中订单，不能删除客户', '仍有 1 个活动开通记录，不能删除客户']
+    });
+  });
+
+  it('rejects a customer delete when the preview fingerprint is stale', async () => {
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
+
+    await expect(service.remove('customer-1', '0'.repeat(64), operator)).rejects.toBeInstanceOf(
+      ConflictException
+    );
+
+    expect(prisma.idBusinessV2Customer.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });

@@ -60,6 +60,28 @@ export interface V2Option {
   updatedAt: string;
 }
 
+export interface V2OptionDeletePreview {
+  entityId: string;
+  entityName: string;
+  entityType: V2OptionType;
+  canDelete: boolean;
+  blockingReasons: string[];
+  impact: {
+    dependentServiceCount: number;
+    accountReferenceCount: number;
+    activeAccountCount: number;
+    customerReferenceCount: number;
+    giftCardReferenceCount: number;
+    orderReferenceCount: number;
+    activeOrderCount: number;
+    activationReferenceCount: number;
+    activeActivationCount: number;
+    supplierWalletCount: number;
+    financeExpenseCount: number;
+  };
+  fingerprint: string;
+}
+
 export interface V2OptionSelector {
   id: string;
   type: V2OptionType;

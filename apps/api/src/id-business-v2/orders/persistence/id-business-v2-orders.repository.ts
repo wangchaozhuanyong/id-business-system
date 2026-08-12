@@ -19,6 +19,7 @@ import type {
 } from '../id-business-v2-order.types';
 
 const ORDER_INCLUDE = {
+  displaySnapshot: true,
   customer: { select: { id: true, name: true } },
   serviceOption: {
     select: {
@@ -945,6 +946,24 @@ export class IdBusinessV2OrdersRepository {
               settlementPlatform: {
                 is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
               }
+            },
+            {
+              displaySnapshot: {
+                is: {
+                  OR: [
+                    { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
+                    { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
+                    { serviceCategoryName: { contains: criteria.keyword, mode: 'insensitive' } },
+                    { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } },
+                    {
+                      settlementPlatformName: {
+                        contains: criteria.keyword,
+                        mode: 'insensitive'
+                      }
+                    }
+                  ]
+                }
+              }
             }
           ]
         : undefined
@@ -1190,14 +1209,50 @@ function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
 }
 
 function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRecord {
+  const {
+    displaySnapshot: snapshot,
+    customer,
+    serviceOption,
+    account,
+    settlementPlatform,
+    createdBy,
+    locks,
+    ...order
+  } = row;
   return {
-    ...mapOrderRow(row),
-    customer: row.customer,
-    serviceOption: row.serviceOption,
-    account: row.account,
-    settlementPlatform: row.settlementPlatform,
-    createdBy: row.createdBy,
-    locks: row.locks
+    ...mapOrderRow(order),
+    customer: {
+      ...customer,
+      name: snapshot?.customerName ?? customer.name
+    },
+    serviceOption: {
+      ...serviceOption,
+      name: snapshot?.serviceName ?? serviceOption.name,
+      parent: serviceOption.parent
+        ? {
+            ...serviceOption.parent,
+            name: snapshot?.serviceCategoryName ?? serviceOption.parent.name
+          }
+        : null
+    },
+    account: account
+      ? {
+          ...account,
+          appleIdMasked: snapshot?.accountLabel ?? account.appleIdMasked,
+          countryOption: {
+            ...account.countryOption,
+            name: snapshot?.accountCountryName ?? account.countryOption.name
+          }
+        }
+      : null,
+    settlementPlatform: settlementPlatform
+      ? {
+          ...settlementPlatform,
+          name: snapshot?.settlementPlatformName ?? settlementPlatform.name
+        }
+      : null,
+    createdBy,
+    locks
   };
 }
 

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException
@@ -12,6 +13,8 @@ import { IdBusinessV2OptionsService } from '../options/public-api';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  createV2DeletePreviewFingerprint,
+  normalizeV2DeletePreviewFingerprint,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
@@ -79,6 +82,12 @@ export class IdBusinessV2CustomersService {
 
   async get(id: string) {
     return this.toResponse(await this.findCustomerOrThrow(id));
+  }
+
+  async getDeletePreview(id: string) {
+    const customer = await this.findCustomerOrThrow(id);
+    const impact = await this.repository.getDeleteImpact(customer.id);
+    return this.buildDeletePreview(customer, impact);
   }
 
   create(
@@ -220,10 +229,24 @@ export class IdBusinessV2CustomersService {
     );
   }
 
-  remove(id: string, operator?: AuthenticatedUser, requestMeta: AuditRequestMeta = {}) {
+  remove(
+    id: string,
+    previewFingerprintValue: string | undefined,
+    operator?: AuthenticatedUser,
+    requestMeta: AuditRequestMeta = {}
+  ) {
+    const previewFingerprint = normalizeV2DeletePreviewFingerprint(previewFingerprintValue);
     return this.transactionManager.execute(
       async (tx, context) => {
         const existing = await this.findCustomerOrThrowInTransaction(tx, id);
+        const impact = await this.repository.getDeleteImpact(existing.id, tx);
+        const preview = this.buildDeletePreview(existing, impact);
+        if (preview.fingerprint !== previewFingerprint) {
+          throw new ConflictException('删除依赖已经变化，请重新预览后再确认');
+        }
+        if (!preview.canDelete) {
+          throw new BadRequestException(preview.blockingReasons.join('；'));
+        }
         await this.repository.softDelete(tx, {
           id: existing.id,
           deletedAt: context.businessTime,
@@ -244,6 +267,32 @@ export class IdBusinessV2CustomersService {
       },
       { requestId: requestMeta.requestId ?? randomUUID(), operator }
     );
+  }
+
+  private buildDeletePreview(
+    customer: CustomerWithRelations,
+    impact: Awaited<ReturnType<IdBusinessV2CustomerRepository['getDeleteImpact']>>
+  ) {
+    const blockingReasons: string[] = [];
+    if (impact.activeOrderCount > 0) {
+      blockingReasons.push(`仍有 ${impact.activeOrderCount} 个进行中订单，不能删除客户`);
+    }
+    if (impact.activeActivationCount > 0) {
+      blockingReasons.push(`仍有 ${impact.activeActivationCount} 个活动开通记录，不能删除客户`);
+    }
+    return {
+      entityId: customer.id,
+      entityName: customer.name,
+      canDelete: blockingReasons.length === 0,
+      blockingReasons,
+      impact,
+      fingerprint: createV2DeletePreviewFingerprint(
+        'customer',
+        customer.id,
+        customer.updatedAt,
+        impact
+      )
+    };
   }
 
   async revealPhone(

@@ -116,6 +116,13 @@ export interface UpdateCustomerPersistenceInput {
   operatorId?: string;
 }
 
+export interface CustomerDeleteImpact {
+  orderCount: number;
+  activeOrderCount: number;
+  activationCount: number;
+  activeActivationCount: number;
+}
+
 const CUSTOMER_SORT_FIELDS: Record<
   string,
   keyof Prisma.IdBusinessV2CustomerOrderByWithRelationInput
@@ -188,6 +195,24 @@ export class IdBusinessV2CustomerRepository {
       where: { id, deletedAt: null },
       include: CUSTOMER_INCLUDE
     });
+  }
+
+  async getDeleteImpact(id: string, tx?: V2CommandTransaction): Promise<CustomerDeleteImpact> {
+    const client = tx ?? this.prisma;
+    const [orderCount, activeOrderCount, activationCount, activeActivationCount] =
+      await Promise.all([
+        client.idBusinessV2Order.count({ where: { customerId: id, deletedAt: null } }),
+        client.idBusinessV2Order.count({
+          where: {
+            customerId: id,
+            deletedAt: null,
+            status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+          }
+        }),
+        client.idBusinessV2Activation.count({ where: { customerId: id } }),
+        client.idBusinessV2Activation.count({ where: { customerId: id, status: 'active' } })
+      ]);
+    return { orderCount, activeOrderCount, activationCount, activeActivationCount };
   }
 
   create(tx: V2CommandTransaction, input: CreateCustomerPersistenceInput) {

@@ -64,9 +64,16 @@ export interface GovernanceEligibility {
   code: string;
   detail: string;
   originalUniqueKey?: string;
+  originalStatus?: 'active' | 'disabled';
   expectedStatus?: string;
   cutoff?: string;
   snapshotId?: string | null;
+  dependentServices?: Array<{
+    id: string;
+    currentUniqueKey: string;
+    originalUniqueKey: string;
+    originalStatus: 'active' | 'disabled';
+  }>;
 }
 
 export interface GovernancePreviewItem {

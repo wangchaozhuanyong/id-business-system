@@ -100,6 +100,20 @@ export interface OptionSelectorRow {
   countryOption: { id: string; name: string; currencyCode: string | null } | null;
 }
 
+export interface OptionDeleteImpact {
+  dependentServiceCount: number;
+  accountReferenceCount: number;
+  activeAccountCount: number;
+  customerReferenceCount: number;
+  giftCardReferenceCount: number;
+  orderReferenceCount: number;
+  activeOrderCount: number;
+  activationReferenceCount: number;
+  activeActivationCount: number;
+  supplierWalletCount: number;
+  financeExpenseCount: number;
+}
+
 export function mapOptionPersistenceRow(row: OptionPersistenceRow): OptionWithRelations {
   return {
     ...row,
@@ -401,6 +415,106 @@ export class IdBusinessV2OptionRepository {
     return { childCount, accountCount };
   }
 
+  async getDeleteImpact(
+    option: Pick<OptionWithRelations, 'id' | 'type'>,
+    tx?: V2CommandTransaction
+  ): Promise<OptionDeleteImpact> {
+    const client = tx ?? this.prisma;
+    const dependentServices =
+      option.type === 'country' || option.type === 'business_category'
+        ? await client.idBusinessV2Option.findMany({
+            where: {
+              type: 'service',
+              deletedAt: null,
+              ...(option.type === 'country'
+                ? { countryOptionId: option.id }
+                : { parentId: option.id })
+            },
+            select: { id: true }
+          })
+        : [];
+    const affectedServiceIds = [
+      ...(option.type === 'service' ? [option.id] : []),
+      ...dependentServices.map((service) => service.id)
+    ];
+    const accountWhere: Prisma.IdBusinessV2AccountWhereInput = {
+      deletedAt: null,
+      OR: [
+        { countryOptionId: option.id },
+        { statusOptionId: option.id },
+        { supplierOptionId: option.id }
+      ]
+    };
+    const orderWhere: Prisma.IdBusinessV2OrderWhereInput = {
+      deletedAt: null,
+      OR: [
+        ...(affectedServiceIds.length ? [{ serviceOptionId: { in: affectedServiceIds } }] : []),
+        { settlementPlatformOptionId: option.id }
+      ]
+    };
+    const activationWhere: Prisma.IdBusinessV2ActivationWhereInput = affectedServiceIds.length
+      ? { serviceOptionId: { in: affectedServiceIds } }
+      : { id: { in: [] } };
+    const customerWhere: Prisma.IdBusinessV2CustomerWhereInput = {
+      deletedAt: null,
+      OR: [
+        { sourceOptionId: option.id },
+        { tags: { some: { optionId: option.id } } },
+        { services: { some: { optionId: option.id } } }
+      ]
+    };
+    const giftCardWhere: Prisma.IdBusinessV2GiftCardWhereInput = {
+      OR: [
+        { supplierOptionId: option.id },
+        { countryOptionId: option.id },
+        { cardNameOptionId: option.id }
+      ]
+    };
+    const [
+      accountReferenceCount,
+      activeAccountCount,
+      customerReferenceCount,
+      giftCardReferenceCount,
+      orderReferenceCount,
+      activeOrderCount,
+      activationReferenceCount,
+      activeActivationCount,
+      supplierWalletCount,
+      financeExpenseCount
+    ] = await Promise.all([
+      client.idBusinessV2Account.count({ where: accountWhere }),
+      client.idBusinessV2Account.count({ where: { ...accountWhere, recordStatus: 'active' } }),
+      client.idBusinessV2Customer.count({ where: customerWhere }),
+      client.idBusinessV2GiftCard.count({ where: giftCardWhere }),
+      client.idBusinessV2Order.count({ where: orderWhere }),
+      client.idBusinessV2Order.count({
+        where: {
+          ...orderWhere,
+          status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+        }
+      }),
+      client.idBusinessV2Activation.count({ where: activationWhere }),
+      client.idBusinessV2Activation.count({ where: { ...activationWhere, status: 'active' } }),
+      client.idBusinessV2TopupSupplierAccount.count({
+        where: { supplierOptionId: option.id }
+      }),
+      client.idBusinessV2FinanceExpense.count({ where: { categoryOptionId: option.id } })
+    ]);
+    return {
+      dependentServiceCount: dependentServices.length,
+      accountReferenceCount,
+      activeAccountCount,
+      customerReferenceCount,
+      giftCardReferenceCount,
+      orderReferenceCount,
+      activeOrderCount,
+      activationReferenceCount,
+      activeActivationCount,
+      supplierWalletCount,
+      financeExpenseCount
+    };
+  }
+
   async create(tx: V2CommandTransaction, input: CreateOptionInput) {
     const row = await tx.idBusinessV2Option.create({
       data: {
@@ -449,19 +563,26 @@ export class IdBusinessV2OptionRepository {
 
   softDelete(
     tx: V2CommandTransaction,
-    input: { id: string; uniqueKey: string; deletedAt: Date; operatorId?: string }
+    input: {
+      id: string;
+      uniqueKey: string;
+      status: 'active' | 'disabled';
+      deletedAt: Date;
+      operatorId?: string;
+    }
   ) {
     return tx.idBusinessV2Option.update({
       where: { id: input.id },
       data: {
         uniqueKey: `deleted:${input.id}:${input.uniqueKey}`,
+        statusBeforeDeletion: input.status,
         deletedAt: input.deletedAt,
         updatedByUserId: input.operatorId
       }
     });
   }
 
-  softDeleteDependentServices(
+  async softDeleteDependentServices(
     tx: V2CommandTransaction,
     input: {
       optionId: string;
@@ -471,9 +592,9 @@ export class IdBusinessV2OptionRepository {
     }
   ) {
     if (input.optionType !== 'country' && input.optionType !== 'business_category') {
-      return Promise.resolve({ count: 0 });
+      return [];
     }
-    return tx.idBusinessV2Option.updateMany({
+    const rows = await tx.idBusinessV2Option.findMany({
       where: {
         type: 'service',
         deletedAt: null,
@@ -481,22 +602,42 @@ export class IdBusinessV2OptionRepository {
           ? { countryOptionId: input.optionId }
           : { parentId: input.optionId })
       },
-      data: {
-        status: 'disabled',
-        deletedAt: input.deletedAt,
-        updatedByUserId: input.operatorId
-      }
+      include: OPTION_INCLUDE,
+      orderBy: [{ id: 'asc' }]
     });
+    for (const row of rows) {
+      await tx.idBusinessV2Option.update({
+        where: { id: row.id },
+        data: {
+          uniqueKey: `deleted:${row.id}:${row.uniqueKey}`,
+          statusBeforeDeletion: row.status,
+          deletedByParentOptionId: input.optionId,
+          status: 'disabled',
+          deletedAt: input.deletedAt,
+          updatedByUserId: input.operatorId
+        }
+      });
+    }
+    return rows.map(mapOptionPersistenceRow);
   }
 
   disableDependentSupplierWallets(
     tx: V2CommandTransaction,
-    input: { optionId: string; optionType: IdBusinessV2OptionType; operatorId?: string }
+    input: {
+      optionId: string;
+      optionType: IdBusinessV2OptionType;
+      deletedAt: Date;
+      operatorId?: string;
+    }
   ) {
     if (input.optionType !== 'topup_supplier') return Promise.resolve({ count: 0 });
     return tx.idBusinessV2TopupSupplierAccount.updateMany({
       where: { supplierOptionId: input.optionId, status: 'active' },
-      data: { status: 'disabled', updatedByUserId: input.operatorId }
+      data: {
+        status: 'disabled',
+        disabledByOptionDeletionAt: input.deletedAt,
+        updatedByUserId: input.operatorId
+      }
     });
   }
 }

@@ -38,6 +38,7 @@ export class IdBusinessV2TopupSupplierAccountRepository {
       WHERE
         account."supplier_option_id" = CAST(${supplierOptionId} AS UUID)
         AND account."currency" = 'CNY'
+        AND account."status" = 'active'
         AND supplier."type" = 'topup_supplier'
         AND supplier."status" = 'active'
         AND supplier."deleted_at" IS NULL

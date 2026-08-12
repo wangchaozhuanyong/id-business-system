@@ -15,6 +15,7 @@ const tables = [
   'id_business_v2_accounts',
   'id_business_v2_gift_cards',
   'id_business_v2_orders',
+  'id_business_v2_order_display_snapshots',
   'id_business_v2_activations',
   'id_business_v2_topup_supplier_accounts',
   'id_business_v2_topup_supplier_payments',
@@ -33,7 +34,18 @@ for (const [name, value] of Object.entries(profiles)) {
   if (!value) throw new Error(`部署凭据缺少 ${name} 数据库地址`);
 }
 
-const report = { ok: true, profiles: {}, rowSecurity: [] };
+const expectedRuntimeDeleteTables = new Set([
+  'ip_whitelists',
+  'user_roles',
+  'role_permissions',
+  'id_business_v2_user_table_preferences',
+  'id_business_v2_exchange_rate_runs',
+  'id_business_v2_exchange_rate_snapshots',
+  'id_business_v2_exchange_rate_provider_snapshots',
+  'id_business_v2_exchange_rate_quote_samples'
+]);
+
+const report = { ok: true, profiles: {}, rowSecurity: [], runtimeDeletePrivileges: [] };
 for (const [name, databaseUrl] of Object.entries(profiles)) {
   const client = new Client({
     ...normalizeDatabaseConnection(databaseUrl),
@@ -71,6 +83,28 @@ const admin = new Client({
 });
 try {
   await admin.connect();
+  report.runtimeDeletePrivileges = (
+    await admin.query(
+      `SELECT c.relname AS table_name
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND c.relkind IN ('r', 'p')
+         AND has_table_privilege('id_business_v2_runtime', c.oid, 'DELETE')
+       ORDER BY c.relname`
+    )
+  ).rows.map((row) => row.table_name);
+  const unexpectedDeletePrivileges = report.runtimeDeletePrivileges.filter(
+    (table) => !expectedRuntimeDeleteTables.has(table)
+  );
+  const missingDeletePrivileges = [...expectedRuntimeDeleteTables].filter(
+    (table) => !report.runtimeDeletePrivileges.includes(table)
+  );
+  if (unexpectedDeletePrivileges.length || missingDeletePrivileges.length) {
+    throw new Error(
+      `运行时 DELETE 权限不符合最小范围：unexpected=${unexpectedDeletePrivileges.join(',') || '-'} missing=${missingDeletePrivileges.join(',') || '-'}`
+    );
+  }
   report.rowSecurity = (
     await admin.query(
       `SELECT c.relname AS table_name, c.relrowsecurity AS row_security,

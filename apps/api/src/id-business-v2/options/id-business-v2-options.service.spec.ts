@@ -1,7 +1,11 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
+import {
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  createV2DeletePreviewFingerprint
+} from '../runtime/public-api';
 import { IdBusinessV2OptionQuery } from './id-business-v2-option-query';
 import { IdBusinessV2OptionsService } from './id-business-v2-options.service';
 import { IdBusinessV2OptionRepository } from './persistence/id-business-v2-option.repository';
@@ -13,6 +17,24 @@ const operator = {
   roles: ['admin'],
   permissions: ['data.dictionary.manage']
 };
+
+const zeroOptionImpact = {
+  dependentServiceCount: 0,
+  accountReferenceCount: 0,
+  activeAccountCount: 0,
+  customerReferenceCount: 0,
+  giftCardReferenceCount: 0,
+  orderReferenceCount: 0,
+  activeOrderCount: 0,
+  activationReferenceCount: 0,
+  activeActivationCount: 0,
+  supplierWalletCount: 0,
+  financeExpenseCount: 0
+};
+
+function deleteFingerprint(option: ReturnType<typeof makeOption>, impact = zeroOptionImpact) {
+  return createV2DeletePreviewFingerprint('option', option.id, option.updatedAt, impact);
+}
 
 function makeOption(
   overrides: Partial<{
@@ -101,9 +123,15 @@ describe('IdBusinessV2OptionsService', () => {
     idBusinessV2Account: {
       count: vi.fn()
     },
+    idBusinessV2Customer: { count: vi.fn() },
+    idBusinessV2GiftCard: { count: vi.fn() },
+    idBusinessV2Order: { count: vi.fn() },
+    idBusinessV2Activation: { count: vi.fn() },
     idBusinessV2TopupSupplierAccount: {
+      count: vi.fn(),
       updateMany: vi.fn()
     },
+    idBusinessV2FinanceExpense: { count: vi.fn() },
     auditLog: {
       create: vi.fn()
     }
@@ -119,6 +147,13 @@ describe('IdBusinessV2OptionsService', () => {
     vi.clearAllMocks();
     prisma.auditLog.create.mockResolvedValue({ id: 'audit-1' });
     prisma.idBusinessV2Account.count.mockResolvedValue(0);
+    prisma.idBusinessV2Customer.count.mockResolvedValue(0);
+    prisma.idBusinessV2GiftCard.count.mockResolvedValue(0);
+    prisma.idBusinessV2Order.count.mockResolvedValue(0);
+    prisma.idBusinessV2Activation.count.mockResolvedValue(0);
+    prisma.idBusinessV2TopupSupplierAccount.count.mockResolvedValue(0);
+    prisma.idBusinessV2FinanceExpense.count.mockResolvedValue(0);
+    prisma.idBusinessV2Option.findMany.mockResolvedValue([]);
     prisma.idBusinessV2TopupSupplierAccount.updateMany.mockResolvedValue({ count: 0 });
     prisma.idBusinessV2Option.updateMany.mockResolvedValue({ count: 0 });
     prisma.$transaction.mockImplementation(
@@ -552,27 +587,44 @@ describe('IdBusinessV2OptionsService', () => {
   });
 
   it('soft deletes a business category and its dependent services', async () => {
-    prisma.idBusinessV2Option.findFirst.mockResolvedValue(
-      makeOption({
-        type: 'business_category',
-        name: 'AI服务',
-        uniqueKey: 'business_category:root:ai服务'
-      })
-    );
-    prisma.idBusinessV2Option.updateMany.mockResolvedValue({ count: 1 });
+    const category = makeOption({
+      type: 'business_category',
+      name: 'AI服务',
+      uniqueKey: 'business_category:root:ai服务'
+    });
+    const dependentService = makeOption({
+      id: '10000000-0000-4000-8000-000000000011',
+      type: 'service',
+      name: 'ChatGPT Plus',
+      uniqueKey: 'service:country:category:chatgpt plus',
+      parentId: category.id
+    });
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(category);
+    prisma.idBusinessV2Option.findMany.mockResolvedValue([dependentService]);
     prisma.idBusinessV2Option.update.mockResolvedValue({});
 
-    await expect(service.remove('category-ai', operator)).resolves.toEqual({
+    await expect(
+      service.remove(
+        'category-ai',
+        deleteFingerprint(category, { ...zeroOptionImpact, dependentServiceCount: 1 }),
+        operator
+      )
+    ).resolves.toEqual({
       deleted: true,
       cascadedServiceCount: 1,
       disabledSupplierWalletCount: 0
     });
-    expect(prisma.idBusinessV2Option.updateMany).toHaveBeenCalledWith(
+    expect(prisma.idBusinessV2Option.update).toHaveBeenCalledWith({
+      where: { id: dependentService.id },
+      data: expect.objectContaining({
+        uniqueKey: `deleted:${dependentService.id}:${dependentService.uniqueKey}`,
+        status: 'disabled',
+        deletedAt: expect.any(Date)
+      })
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
-          type: 'service',
-          parentId: '10000000-0000-4000-8000-000000000010'
-        })
+        data: expect.objectContaining({ objectId: dependentService.id })
       })
     );
   });
@@ -596,40 +648,84 @@ describe('IdBusinessV2OptionsService', () => {
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 
-  it('soft deletes a country without removing historical ID references', async () => {
-    prisma.idBusinessV2Option.findFirst.mockResolvedValue(
-      makeOption({
-        type: 'country',
-        name: '美国',
-        uniqueKey: 'country:root:美国',
-        currencyCode: 'USD',
-        _count: { children: 0, servicesByCountry: 0, accountsByCountry: 1 }
-      })
-    );
+  it('rejects deleting a country that still has an active ID reference', async () => {
+    const country = makeOption({
+      type: 'country',
+      name: '美国',
+      uniqueKey: 'country:root:美国',
+      currencyCode: 'USD',
+      _count: { children: 0, servicesByCountry: 0, accountsByCountry: 1 }
+    });
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(country);
+    prisma.idBusinessV2Account.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
     prisma.idBusinessV2Option.update.mockResolvedValue({});
 
-    await expect(service.remove('country-us', operator)).resolves.toEqual({
-      deleted: true,
-      cascadedServiceCount: 0,
-      disabledSupplierWalletCount: 0
+    await expect(
+      service.remove(
+        'country-us',
+        deleteFingerprint(country, {
+          ...zeroOptionImpact,
+          accountReferenceCount: 1,
+          activeAccountCount: 1
+        }),
+        operator
+      )
+    ).rejects.toThrow('仍有 1 个启用 ID 引用该选项');
+    expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
+  });
+
+  it('returns a deterministic delete preview and reports every blocking dependency', async () => {
+    const serviceOption = makeOption({ type: 'service', name: 'ChatGPT Plus' });
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(serviceOption);
+    prisma.idBusinessV2Order.count.mockResolvedValueOnce(4).mockResolvedValueOnce(2);
+    prisma.idBusinessV2Activation.count.mockResolvedValueOnce(3).mockResolvedValueOnce(1);
+
+    const result = await service.getDeletePreview(serviceOption.id);
+
+    expect(result).toMatchObject({
+      entityId: serviceOption.id,
+      canDelete: false,
+      impact: {
+        orderReferenceCount: 4,
+        activeOrderCount: 2,
+        activationReferenceCount: 3,
+        activeActivationCount: 1
+      },
+      blockingReasons: [
+        '仍有 2 个进行中订单引用该选项或其业务',
+        '仍有 1 个活动开通记录引用该选项或其业务'
+      ]
     });
-    expect(prisma.idBusinessV2Option.update).toHaveBeenCalled();
+    expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('rejects a delete when dependencies changed after the preview', async () => {
+    const option = makeOption();
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(option);
+
+    await expect(service.remove(option.id, '0'.repeat(64), operator)).rejects.toBeInstanceOf(
+      ConflictException
+    );
+
+    expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('disables supplier wallets when deleting a top-up supplier', async () => {
-    prisma.idBusinessV2Option.findFirst.mockResolvedValue(
-      makeOption({
-        id: '10000000-0000-4000-8000-000000000020',
-        type: 'topup_supplier',
-        code: 'supplier-a',
-        name: '加卡供应商 A',
-        uniqueKey: 'topup_supplier:root:加卡供应商 a'
-      })
-    );
+    const supplier = makeOption({
+      id: '10000000-0000-4000-8000-000000000020',
+      type: 'topup_supplier',
+      code: 'supplier-a',
+      name: '加卡供应商 A',
+      uniqueKey: 'topup_supplier:root:加卡供应商 a'
+    });
+    prisma.idBusinessV2Option.findFirst.mockResolvedValue(supplier);
     prisma.idBusinessV2TopupSupplierAccount.updateMany.mockResolvedValue({ count: 2 });
     prisma.idBusinessV2Option.update.mockResolvedValue({});
 
-    await expect(service.remove('supplier-a', operator)).resolves.toEqual({
+    await expect(
+      service.remove('supplier-a', deleteFingerprint(supplier), operator)
+    ).resolves.toEqual({
       deleted: true,
       cascadedServiceCount: 0,
       disabledSupplierWalletCount: 2
@@ -639,7 +735,11 @@ describe('IdBusinessV2OptionsService', () => {
         supplierOptionId: '10000000-0000-4000-8000-000000000020',
         status: 'active'
       },
-      data: { status: 'disabled', updatedByUserId: operator.id }
+      data: {
+        status: 'disabled',
+        disabledByOptionDeletionAt: expect.any(Date),
+        updatedByUserId: operator.id
+      }
     });
   });
 });

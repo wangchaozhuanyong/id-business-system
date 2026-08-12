@@ -8,6 +8,10 @@ export {
 } from './id-business-v2-decimal';
 export { toKualaLumpurBusinessDate } from './id-business-v2-business-date';
 export {
+  createV2DeletePreviewFingerprint,
+  normalizeV2DeletePreviewFingerprint
+} from './id-business-v2-delete-preview';
+export {
   V2CommandTransactionManager,
   type V2CommandContext,
   type V2CommandRetryMode,

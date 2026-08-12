@@ -25,6 +25,7 @@ function summaryItem(overrides: Record<string, unknown> = {}) {
     id: '22222222-2222-4222-8222-222222222222',
     dueAt: new Date('2026-07-31T12:00:00.000Z'),
     status: 'active',
+    order: { displaySnapshot: null },
     customer: {
       id: '33333333-3333-4333-8333-333333333333',
       name: '测试客户'

@@ -14,6 +14,13 @@ export const PRODUCTION_COMMANDS = Object.freeze({
     databaseSecret: 'AUDIT_DATABASE_URL',
     forwardedSecrets: []
   },
+  'integrity-audit': {
+    command: 'node',
+    args: ['scripts/v2-data-integrity-audit.mjs'],
+    requiredSecrets: ['AUDIT_DATABASE_URL'],
+    databaseSecret: 'AUDIT_DATABASE_URL',
+    forwardedSecrets: []
+  },
   'release-check': {
     command: 'node',
     args: ['scripts/validate-cloudflare-free-release.mjs'],

@@ -33,4 +33,12 @@ describe('customers scheme 3 redesign contract', () => {
     expect(list).toContain('useV2StableListFrame');
     expect(list.match(/@current-change=/g)).toHaveLength(1);
   });
+
+  it('requires a fresh dependency preview before customer deletion', () => {
+    expect(view).toContain('deleteImpactRows');
+    expect(view).toContain(':confirm-disabled-reason="deleteConfirmDisabledReason"');
+    expect(pageState).toContain('getDeletePreview');
+    expect(pageState).toContain('deletePreviewRequestId');
+    expect(pageState).toContain("error.kind === 'conflict'");
+  });
 });

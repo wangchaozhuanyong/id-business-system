@@ -229,7 +229,21 @@ describe('IdBusinessV2RenewalsService', () => {
         }
       ]
     });
-    expect(call.where.AND[0].OR).toHaveLength(5);
+    expect(call.where.AND[0].OR).toContainEqual({
+      order: {
+        is: {
+          displaySnapshot: {
+            is: {
+              OR: [
+                { customerName: { contains: '测试', mode: 'insensitive' } },
+                { serviceName: { contains: '测试', mode: 'insensitive' } },
+                { accountLabel: { contains: '测试', mode: 'insensitive' } }
+              ]
+            }
+          }
+        }
+      }
+    });
   });
 
   it('allows an arbitrary date range for viewing without widening the seven-day action window', async () => {

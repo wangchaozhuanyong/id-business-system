@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import view from './V2OptionsView.vue?raw';
 import pageState from './useOptionsPage.ts?raw';
+import deleteFlow from './useOptionDeleteFlow.ts?raw';
 import categoryRail from './components/V2OptionsCategoryRail.vue?raw';
 import list from './components/V2OptionsList.vue?raw';
 import overview from './components/V2OptionsOverview.vue?raw';
@@ -44,8 +45,17 @@ describe('options scheme 3 redesign contract', () => {
   it('keeps the existing cross-module refresh boundary after option mutations', () => {
     expect(pageState).toContain('idBusinessV2OptionsApi.create');
     expect(pageState).toContain('idBusinessV2OptionsApi.update');
-    expect(pageState).toContain('idBusinessV2OptionsApi.remove');
+    expect(deleteFlow).toContain('idBusinessV2OptionsApi.remove');
     expect(pageState).toContain('void loadOptions(true)');
+  });
+
+  it('requires a fresh dependency preview before deletion', () => {
+    expect(view).toContain('page.deleteImpactRows');
+    expect(view).toContain(':confirm-disabled-reason="page.deleteConfirmDisabledReason"');
+    expect(pageState).toContain('useOptionDeleteFlow');
+    expect(deleteFlow).toContain('getDeletePreview');
+    expect(deleteFlow).toContain('deletePreviewRequestId');
+    expect(deleteFlow).toContain("error.kind === 'conflict'");
   });
 
   it('keeps space between the overview and workspace inside the async region', () => {
