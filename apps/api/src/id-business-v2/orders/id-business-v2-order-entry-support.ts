@@ -14,6 +14,7 @@ import type {
   IdBusinessV2AccountLockRecord,
   IdBusinessV2AccountLockScope,
   IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderAccountSource,
   IdBusinessV2OrderRecord
 } from './id-business-v2-order.types';
 import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
@@ -22,6 +23,7 @@ export interface NormalizedCreateOrderInput {
   customerId: string;
   serviceOptionId: string;
   accountId: string;
+  accountSource: IdBusinessV2OrderAccountSource;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   settlementPlatformOptionId: string;
   platformOrderNo: string | null;
@@ -59,7 +61,11 @@ export function normalizeCreateOrderInput(
   const customerId = normalizeUuid(dto.customerId, '客户');
   const serviceOptionId = normalizeUuid(dto.serviceOptionId, '业务');
   const accountId = normalizeUuid(dto.accountId, '使用 ID');
-  const accountDisposition = normalizeAccountDisposition(dto.accountDisposition);
+  const accountSource = normalizeAccountSource(dto.accountSource);
+  const accountDisposition =
+    accountSource === 'customer_owned'
+      ? 'retained'
+      : normalizeAccountDisposition(dto.accountDisposition);
   const settlementPlatformOptionId = normalizeUuid(dto.settlementPlatformOptionId, '结算平台');
   const platformOrderNo = normalizeOptionalString(dto.platformOrderNo, '平台订单号', 160);
   if (platformOrderNo && !settlementPlatformOptionId) {
@@ -82,6 +88,7 @@ export function normalizeCreateOrderInput(
     customerId,
     serviceOptionId,
     accountId,
+    accountSource,
     accountDisposition,
     settlementPlatformOptionId,
     platformOrderNo,
@@ -91,7 +98,12 @@ export function normalizeCreateOrderInput(
     balanceAmount,
     openedAt,
     dueAt,
-    lockScope: accountDisposition === 'sold' ? 'global' : normalizeLockScope(dto.lockScope),
+    lockScope:
+      accountSource === 'customer_owned'
+        ? 'by_service'
+        : accountDisposition === 'sold'
+          ? 'global'
+          : normalizeLockScope(dto.lockScope),
     idempotencyKey: buildIdempotencyKey(normalizeIdempotencyKey(dto.idempotencyKey)),
     remark: normalizeOptionalString(dto.remark, '备注', 2000)
   };
@@ -128,6 +140,7 @@ export function assertOrderEntryReplayMatches(
     order.customerId !== input.customerId ||
     order.serviceOptionId !== input.serviceOptionId ||
     order.accountId !== input.accountId ||
+    order.accountSource !== input.accountSource ||
     order.accountDisposition !== input.accountDisposition ||
     order.settlementPlatformOptionId !== input.settlementPlatformOptionId ||
     order.platformOrderNo !== input.platformOrderNo ||
@@ -168,8 +181,11 @@ export async function writeOrderEntryAuditLog(
       customerId: input.customerId,
       serviceOptionId: input.serviceOptionId,
       accountId: input.accountId,
+      accountSource: input.accountSource,
+      sourceSoldOrderId: order.sourceSoldOrderId,
       accountDisposition: input.accountDisposition,
       accountCostAmount: order.accountCostAmount.toString(),
+      appliedAccountCostAmount: order.appliedAccountCostAmount.toString(),
       settlementPlatformOptionId: input.settlementPlatformOptionId,
       platformOrderNo: input.platformOrderNo,
       websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
@@ -280,6 +296,14 @@ function normalizeAccountDisposition(value: unknown): IdBusinessV2OrderAccountDi
     return 'sold';
   }
   throw new BadRequestException('ID 处理方式必须选择保留或卖出');
+}
+
+function normalizeAccountSource(value: unknown): IdBusinessV2OrderAccountSource {
+  if (value === undefined || value === null || value === '' || value === 'inventory') {
+    return 'inventory';
+  }
+  if (value === 'customer_owned') return value;
+  throw new BadRequestException('ID 来源无效');
 }
 
 function normalizeIdempotencyKey(value: unknown) {

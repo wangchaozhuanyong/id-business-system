@@ -154,6 +154,8 @@ export function useTopupWorkbenchPage() {
   const query = reactive({
     page: 1,
     pageSize: 20,
+    keyword: '',
+    accountSource: '' as '' | 'inventory' | 'customer_owned',
     countryOptionId: '',
     balancePreset: '' as V2TopupBalancePreset,
     balanceMin: '',
@@ -167,6 +169,8 @@ export function useTopupWorkbenchPage() {
     return {
       page: query.page,
       pageSize: query.pageSize,
+      keyword: query.keyword.trim() || undefined,
+      accountSource: query.accountSource || undefined,
       countryOptionId: query.countryOptionId || undefined,
       balancePreset: query.balancePreset || undefined,
       balanceMin:
@@ -254,6 +258,8 @@ export function useTopupWorkbenchPage() {
   function resetFilters() {
     Object.assign(query, {
       page: 1,
+      keyword: '',
+      accountSource: '',
       countryOptionId: '',
       balancePreset: '',
       balanceMin: '',

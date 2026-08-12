@@ -6,6 +6,7 @@ import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import type { CancelIdBusinessV2OrderDto } from './dto/cancel-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
+import type { RecoverIdBusinessV2SoldAccountDto } from './dto/recover-id-business-v2-sold-account.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
 import {
@@ -26,6 +27,11 @@ import type {
   IdBusinessV2OrderStatus
 } from './id-business-v2-order.types';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import {
+  assertSoldAccountCanRecover,
+  buildSoldAccountRecoveryPreview,
+  recoverIdBusinessV2SoldAccount
+} from './id-business-v2-order-sold-account-recovery';
 
 const FULLY_EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['draft', 'pending']);
 const EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
@@ -138,10 +144,32 @@ export class IdBusinessV2OrderLifecycleService {
         if (!accountId) {
           throw new ConflictException('订单没有绑定 ID，不能修改');
         }
+        const accountSource = this.support.normalizeAccountSource(
+          dto.accountSource,
+          order.accountSource
+        );
         const accountDisposition =
-          dto.accountDisposition === undefined
-            ? order.accountDisposition
-            : normalizeOrderAccountDisposition(dto.accountDisposition);
+          accountSource === 'customer_owned'
+            ? 'retained'
+            : dto.accountDisposition === undefined
+              ? order.accountDisposition
+              : normalizeOrderAccountDisposition(dto.accountDisposition);
+        if (
+          order.accountDisposition === 'sold' &&
+          (customerId !== order.customerId ||
+            accountId !== order.accountId ||
+            accountSource !== order.accountSource ||
+            accountDisposition !== 'sold')
+        ) {
+          throw new ConflictException('已售出 ID 请从 ID 管理执行“恢复可用”');
+        }
+        const sourceSoldOrderId = await this.support.resolveUpdatedAccountSource(
+          tx,
+          order.id,
+          accountId,
+          customerId,
+          accountSource
+        );
         const settlementPlatformOptionId =
           dto.settlementPlatformOptionId === undefined
             ? order.settlementPlatformOptionId
@@ -198,10 +226,17 @@ export class IdBusinessV2OrderLifecycleService {
           dto.lockScope === undefined
             ? (activeLock?.lockScope ?? 'by_service')
             : this.support.normalizeLockScope(dto.lockScope);
-        const lockScope = accountDisposition === 'sold' ? 'global' : requestedLockScope;
+        const lockScope =
+          accountSource === 'customer_owned'
+            ? 'by_service'
+            : accountDisposition === 'sold'
+              ? 'global'
+              : requestedLockScope;
         const reservationChanged =
           order.serviceOptionId !== serviceOptionId ||
           order.accountId !== accountId ||
+          order.accountSource !== accountSource ||
+          order.sourceSoldOrderId !== sourceSoldOrderId ||
           order.accountDisposition !== accountDisposition ||
           !order.balanceAmount.equals(balanceAmount) ||
           order.dueAt?.getTime() !== dueAt.getTime() ||
@@ -234,16 +269,20 @@ export class IdBusinessV2OrderLifecycleService {
         const accountCostAmount = await applyUpdatedOrderAccountDisposition(
           tx,
           this.repository,
-          order,
+          { ...order, accountSource },
           accountId,
           accountDisposition,
           operator
         );
+        const appliedAccountCostAmount =
+          accountSource === 'inventory' && accountDisposition === 'sold'
+            ? accountCostAmount
+            : Amount4.zero();
         const profitAmount = consumption
           ? this.support.calculateProfit(
               receivedAmount,
               platformFeeAmount,
-              accountDisposition === 'sold' ? accountCostAmount : Amount4.zero(),
+              appliedAccountCostAmount,
               order.balanceCostAmount,
               order.refundCostAmount
             )
@@ -269,6 +308,8 @@ export class IdBusinessV2OrderLifecycleService {
           customerId,
           serviceOptionId,
           accountId,
+          accountSource,
+          sourceSoldOrderId,
           settlementPlatformOptionId,
           platformOrderNo,
           websiteAccountEncrypted: website.encrypted,
@@ -280,6 +321,7 @@ export class IdBusinessV2OrderLifecycleService {
           balanceAmount: balanceAmount.toString(),
           accountDisposition,
           accountCostAmount: accountCostAmount.toString(),
+          appliedAccountCostAmount: appliedAccountCostAmount.toString(),
           profitAmount: profitAmount?.toString() ?? null,
           openedAt,
           dueAt,
@@ -342,6 +384,8 @@ export class IdBusinessV2OrderLifecycleService {
             customerId,
             serviceOptionId,
             accountId,
+            accountSource,
+            sourceSoldOrderId,
             settlementPlatformOptionId,
             platformOrderNo,
             websiteAccountMasked: website.masked,
@@ -354,6 +398,7 @@ export class IdBusinessV2OrderLifecycleService {
             balanceAmount: balanceAmount.toString(),
             accountDisposition,
             accountCostAmount: accountCostAmount.toString(),
+            appliedAccountCostAmount: appliedAccountCostAmount.toString(),
             profitAmount: profitAmount?.toString() ?? null,
             openedAt,
             dueAt,
@@ -438,23 +483,31 @@ export class IdBusinessV2OrderLifecycleService {
           );
         }
 
-        const accountRecovered = order.accountDisposition === 'sold';
-        if (accountRecovered) {
-          await releaseSoldOrderAccount(tx, this.repository, order, operator);
-        }
-
         const release = await this.orderLockService.releaseOrderLockInTransaction(
           tx,
           order.id,
           `订单取消：${reason}`,
           operator
         );
+        const accountRecovered = order.accountDisposition === 'sold';
+        if (accountRecovered) {
+          if (!order.accountId) throw new ConflictException('已售订单缺少 ID 关联');
+          const account = await this.repository.lockAccountForSale(tx, order.accountId);
+          if (!account || account.soldByOrderId !== order.id) {
+            throw new ConflictException('ID 售出归属已变更，请刷新后核对');
+          }
+          await assertSoldAccountCanRecover(this.repository, tx, account, order.id);
+          await releaseSoldOrderAccount(tx, this.repository, order, operator);
+        }
         const statusChangedAt = new Date();
         await this.repository.updateOrder(tx, order.id, {
           status: 'cancelled',
           statusChangedAt,
           balanceCostAmount: balanceRestored ? '0' : order.balanceCostAmount.toString(),
           accountDisposition: accountRecovered ? 'recovered' : order.accountDisposition,
+          appliedAccountCostAmount: accountRecovered
+            ? '0'
+            : order.appliedAccountCostAmount.toString(),
           profitAmount: profitAmount?.toString() ?? null,
           updatedByUserId: operator?.id
         });
@@ -493,6 +546,43 @@ export class IdBusinessV2OrderLifecycleService {
 
   refund(orderIdValue: string, dto: RefundIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
     return refundIdBusinessV2Order(
+      this.support,
+      this.orderLockService,
+      this.financePostingService,
+      this.repository,
+      orderIdValue,
+      dto,
+      operator
+    );
+  }
+
+  async previewSoldAccountRecovery(orderIdValue: string, accountIdValue: string) {
+    const orderId = this.support.normalizeUuid(orderIdValue, '订单');
+    const accountId = this.support.normalizeUuid(accountIdValue, 'ID');
+    return this.support.runLifecycleTransaction(async (tx) => {
+      const order = await this.support.lockOrder(tx, orderId);
+      if (order.accountId !== accountId || order.accountDisposition !== 'sold') {
+        throw new ConflictException('该 ID 与已售订单归属不一致，请刷新后核对');
+      }
+      const account = await this.repository.lockAccountForSale(tx, accountId);
+      if (!account || account.soldByOrderId !== order.id) {
+        throw new ConflictException('ID 售出关联已变化，请刷新后核对');
+      }
+      const blockers = await this.repository.findSoldAccountRecoveryBlockers(tx, {
+        accountId,
+        sourceOrderId: order.id,
+        evaluatedAt: new Date()
+      });
+      return buildSoldAccountRecoveryPreview({ ...account, ...blockers });
+    }, 'ID 售出状态已被其他操作修改，请刷新后核对');
+  }
+
+  recoverSoldAccount(
+    orderIdValue: string,
+    dto: RecoverIdBusinessV2SoldAccountDto,
+    operator?: AuthenticatedUser
+  ) {
+    return recoverIdBusinessV2SoldAccount(
       this.support,
       this.orderLockService,
       this.financePostingService,

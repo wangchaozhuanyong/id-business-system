@@ -9,6 +9,7 @@ export type V2OrderStatus =
   | 'failed';
 
 export type V2OrderAccountDisposition = 'retained' | 'sold' | 'recovered';
+export type V2OrderAccountSource = 'inventory' | 'customer_owned';
 
 export interface V2OrderOption {
   id: string;
@@ -56,6 +57,13 @@ export interface V2Order {
   receivedFinanceAccountId: string | null;
   receivedAt: string | null;
   platformFeeAmount: string;
+  accountSource: V2OrderAccountSource;
+  sourceSoldOrderId: string | null;
+  sourceSoldOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
   accountDisposition: V2OrderAccountDisposition;
   accountCostAmount: string;
   appliedAccountCostAmount: string;
@@ -95,6 +103,7 @@ export interface V2OrderListQuery extends V2PageQuery {
   settlementPlatformOptionId?: string;
   status?: V2OrderStatus | '';
   accountDisposition?: V2OrderAccountDisposition | '';
+  accountSource?: V2OrderAccountSource | '';
   openedFrom?: string;
   openedTo?: string;
   sortBy?:
@@ -160,6 +169,12 @@ export interface V2OrderCandidate {
   estimatedBalanceCostAmount: string;
   averageCost: string;
   purchaseCost: string;
+  saleState: 'sold' | 'unsold';
+  sourceSoldOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
   balanceAfterMatch: string;
   updatedAt: string;
 }
@@ -171,6 +186,8 @@ export interface V2OrderMatchingResult {
     country: V2OrderOption;
     requiredBalance: string;
     requiredStatusCode: 'normal';
+    accountSource: V2OrderAccountSource;
+    customerId: string | null;
     evaluatedAt: string;
   };
   counts: {
@@ -187,6 +204,8 @@ export interface V2OrderMatchingResult {
 export interface SearchV2OrderCandidatesInput {
   serviceOptionId: string;
   balanceAmount: string;
+  accountSource?: V2OrderAccountSource;
+  customerId?: string;
   keyword?: string;
   limit?: number;
 }
@@ -195,6 +214,7 @@ export interface CreateV2OrderInput {
   customerId: string;
   serviceOptionId: string;
   accountId: string;
+  accountSource: V2OrderAccountSource;
   settlementPlatformOptionId: string;
   platformOrderNo?: string | null;
   websiteAccount?: string | null;
@@ -278,6 +298,7 @@ export interface UpdateV2OrderInput {
   customerId?: string;
   serviceOptionId?: string;
   accountId?: string;
+  accountSource?: V2OrderAccountSource;
   accountDisposition?: Exclude<V2OrderAccountDisposition, 'recovered'>;
   settlementPlatformOptionId?: string | null;
   platformOrderNo?: string | null;

@@ -7,7 +7,11 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { IdBusinessV2OrderEntryService, IdBusinessV2OrdersService } from '../orders/public-api';
+import {
+  IdBusinessV2OrderCompletionService,
+  IdBusinessV2OrderEntryService,
+  IdBusinessV2OrdersService
+} from '../orders/public-api';
 import {
   Amount4,
   V2CommandTransactionManager,
@@ -41,6 +45,7 @@ export class IdBusinessV2ManualRenewalService {
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
     private readonly orderEntryService: IdBusinessV2OrderEntryService,
     private readonly ordersService: IdBusinessV2OrdersService,
+    private readonly orderCompletionService: IdBusinessV2OrderCompletionService,
     private readonly renewalsRepository: IdBusinessV2RenewalsRepository,
     private readonly transactionManager: V2CommandTransactionManager
   ) {}
@@ -106,7 +111,6 @@ export class IdBusinessV2ManualRenewalService {
           sourceActivation.account.recordStatus !== 'active' ||
           sourceActivation.account.deletedAt ||
           sourceActivation.account.lossReportedAt ||
-          sourceActivation.account.soldByOrderId ||
           sourceActivation.account.statusOption.code !== 'normal' ||
           sourceActivation.account.statusOption.status !== 'active' ||
           sourceActivation.account.statusOption.deletedAt
@@ -132,8 +136,14 @@ export class IdBusinessV2ManualRenewalService {
         if (!account) {
           throw new ConflictException('ID 不存在、已停用或已删除');
         }
-        if (account.soldByOrderId) {
-          throw new ConflictException('该 ID 已卖出，不能续费');
+        if (account.soldByOrderId && account.soldByCustomerId !== sourceActivation.customerId) {
+          throw new ConflictException('该已售 ID 不属于续费客户');
+        }
+        if (
+          sourceActivation.account.soldByOrderId &&
+          sourceActivation.account.soldByOrder?.customerId !== sourceActivation.customerId
+        ) {
+          throw new ConflictException('原开通记录客户与 ID 销售归属不一致');
         }
         if (account.lossReportedAt) {
           throw new ConflictException('已报损冻结 ID 不能续费');
@@ -179,7 +189,8 @@ export class IdBusinessV2ManualRenewalService {
             openedAt: input.openedAt,
             dueAt: input.dueAt,
             idempotencyKey: input.idempotencyKey,
-            remark: input.remark
+            remark: input.remark,
+            accountSource: account.soldByOrderId ? 'customer_owned' : 'inventory'
           },
           operator
         );
@@ -218,7 +229,8 @@ export class IdBusinessV2ManualRenewalService {
         });
         const completedAt = context.businessTime;
         await this.renewalsRepository.updateManualRenewalOrder(tx, createdOrder.order.id, {
-          accountCostAmount: account.purchaseCost.toString(),
+          accountCostAmount: '0',
+          appliedAccountCostAmount: '0',
           balanceCostAmount: movement.costAmount.toString(),
           refundCostAmount: refundCostAmount.toString(),
           profitAmount: profitAmount.toString(),
@@ -242,6 +254,20 @@ export class IdBusinessV2ManualRenewalService {
           createdByUserId: operator?.id,
           updatedByUserId: operator?.id
         });
+        await this.orderCompletionService.postCompletionJournalInTransaction(
+          tx,
+          {
+            ...createdOrder.order,
+            accountCostAmount: Amount4.zero(),
+            appliedAccountCostAmount: Amount4.zero(),
+            balanceCostAmount: movement.costAmount,
+            refundCostAmount,
+            profitAmount,
+            status: 'completed'
+          },
+          completedAt,
+          operator
+        );
 
         await this.renewalsRepository.appendAudit(tx, {
           userId: operator?.id,

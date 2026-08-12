@@ -2,7 +2,7 @@
   <div class="v2-renewals-overview-stack">
     <section class="v2-renewals-overview" aria-label="续费工作台概览">
       <div class="v2-renewals-overview__intro">
-        <span class="v2-renewals-overview__eyebrow">RENEWAL WORKBENCH</span>
+        <span class="v2-renewals-overview__eyebrow">续费工作台</span>
         <h2>续费管理总览</h2>
         <p>集中处理临期与到期业务，续费动作继续受权限、时间窗口和余额校验控制。</p>
       </div>

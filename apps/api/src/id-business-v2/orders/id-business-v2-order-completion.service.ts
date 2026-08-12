@@ -81,7 +81,12 @@ export class IdBusinessV2OrderCompletionService {
         endedAt: completedAt,
         endReason: '订单完成后释放'
       });
-      const financeJournal = await this.postCompletionJournal(tx, order, completedAt, operator);
+      const financeJournal = await this.postCompletionJournalInTransaction(
+        tx,
+        order,
+        completedAt,
+        operator
+      );
 
       await this.repository.appendAudit(tx, {
         userId: operator?.id,
@@ -129,7 +134,7 @@ export class IdBusinessV2OrderCompletionService {
     };
   }
 
-  private postCompletionJournal(
+  postCompletionJournalInTransaction(
     tx: V2CommandTransaction,
     order: IdBusinessV2OrderRecord,
     completedAt: Date,
@@ -140,7 +145,7 @@ export class IdBusinessV2OrderCompletionService {
     const rate = order.receivedFxRateToCny;
     const platformFeeAmount = order.platformFeeAmount;
     const balanceCostAmount = order.balanceCostAmount;
-    const accountCostAmount = order.accountCostAmount;
+    const appliedAccountCostAmount = order.appliedAccountCostAmount;
     const hasOriginalEvidence = receivedOriginalAmount.gt(0);
     const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
     const receivedOriginal = hasOriginalEvidence ? receivedOriginalAmount : receivedAmount;
@@ -217,24 +222,28 @@ export class IdBusinessV2OrderCompletionService {
           amountCny: balanceCostAmount,
           memo: '结转礼品卡库存成本'
         },
-        {
-          accountCode: 'id_cost',
-          direction: 'debit',
-          currency: 'CNY',
-          amountOriginal: accountCostAmount,
-          fxRateToCny: 1,
-          amountCny: accountCostAmount,
-          memo: '已卖出 ID 成本'
-        },
-        {
-          accountCode: 'id_inventory',
-          direction: 'credit',
-          currency: 'CNY',
-          amountOriginal: accountCostAmount,
-          fxRateToCny: 1,
-          amountCny: accountCostAmount,
-          memo: '结转 ID 库存成本'
-        }
+        ...(appliedAccountCostAmount.isZero()
+          ? []
+          : [
+              {
+                accountCode: 'id_cost' as const,
+                direction: 'debit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: appliedAccountCostAmount,
+                fxRateToCny: 1,
+                amountCny: appliedAccountCostAmount,
+                memo: '首次售出 ID 成本'
+              },
+              {
+                accountCode: 'id_inventory' as const,
+                direction: 'credit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: appliedAccountCostAmount,
+                fxRateToCny: 1,
+                amountCny: appliedAccountCostAmount,
+                memo: '结转 ID 库存成本'
+              }
+            ])
       ]
     });
   }

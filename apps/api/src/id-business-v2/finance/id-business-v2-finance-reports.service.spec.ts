@@ -283,6 +283,74 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
       unrealizedFxChangeCny: '0'
     });
   });
+
+  it('uses posted ledger lines for the customer-owned after-sales report and keeps ID cost zero', async () => {
+    const reportPrisma = {
+      idBusinessV2Order: {
+        findMany: vi
+          .fn()
+          .mockResolvedValueOnce([{ id: orderId }])
+          .mockResolvedValueOnce([
+            {
+              receivedAmount: decimal('100'),
+              platformFeeAmount: decimal('5'),
+              balanceAmount: decimal('20'),
+              profitAmount: null,
+              account: {
+                currentBalance: decimal('100'),
+                balanceCostAmount: decimal('50')
+              }
+            },
+            {
+              receivedAmount: decimal('50'),
+              platformFeeAmount: decimal('0'),
+              balanceAmount: decimal('10'),
+              profitAmount: decimal('-5'),
+              account: {
+                currentBalance: decimal('80'),
+                balanceCostAmount: decimal('40')
+              }
+            }
+          ])
+      },
+      idBusinessV2FinanceJournal: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'journal-completed',
+            sourceId: orderId,
+            journalType: 'order_completed',
+            reversalOf: null,
+            lines: [
+              line('sales_revenue', 'credit', '100'),
+              line('platform_fee', 'debit', '3'),
+              line('gift_card_cost', 'debit', '40')
+            ]
+          },
+          {
+            id: 'journal-refund',
+            sourceId: orderId,
+            journalType: 'order_refund',
+            reversalOf: null,
+            lines: [line('sales_revenue', 'debit', '20'), line('refund_loss', 'debit', '5')]
+          }
+        ])
+      }
+    };
+
+    await expect(createReportsService(reportPrisma).afterSales({})).resolves.toEqual({
+      completedOrderCount: 1,
+      grossRevenueCny: '100',
+      refundedRevenueCny: '20',
+      platformFeeCny: '3',
+      balanceCostCny: '40',
+      idCostCny: '0',
+      refundLossCny: '5',
+      netProfitCny: '32',
+      pendingOrderCount: 2,
+      pendingRevenueCny: '150',
+      pendingProfitCny: '80'
+    });
+  });
 });
 
 function createReportsService(prisma: object) {

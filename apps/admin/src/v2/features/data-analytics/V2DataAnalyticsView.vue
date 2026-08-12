@@ -42,6 +42,13 @@
               <V2SettlementPlatformReport :report="page.overview.settlementPlatformReport" />
             </div>
 
+            <V2AfterSalesReport
+              v-show="activeAnalysisSection === 'after-sales'"
+              :report="page.overview.afterSales"
+              :format-cny="page.formatCny"
+              :amount-tone="page.amountTone"
+            />
+
             <V2AnalyticsCurrencyReport
               v-show="activeAnalysisSection === 'cash-flow'"
               :overview="page.overview"
@@ -82,6 +89,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2AfterSalesReport from './components/V2AfterSalesReport.vue';
 import V2AnalyticsAssetsReport from './components/V2AnalyticsAssetsReport.vue';
 import V2AnalyticsCurrencyReport from './components/V2AnalyticsCurrencyReport.vue';
 import V2AnalyticsNavigation, {

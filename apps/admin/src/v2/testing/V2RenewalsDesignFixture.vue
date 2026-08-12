@@ -130,6 +130,18 @@ function makeRenewal(index: number): V2RenewalWorkbenchItem {
       currentBalance: `${324 - index * 4}.20`,
       balanceCostAmount: `${116 - index}.40`,
       recordStatus: 'active',
+      saleState: index % 3 === 0 ? 'sold' : 'available',
+      soldByOrder:
+        index % 3 === 0
+          ? {
+              id: `sold-order-${index + 1}`,
+              orderNo: `V2202607${day}${String(index + 1).padStart(6, '0')}`,
+              customer: {
+                id: `customer-${index + 1}`,
+                name: customerNames[index % customerNames.length]
+              }
+            }
+          : null,
       country: { id: 'country-us', code: 'US', name: '美国' }
     },
     service: {

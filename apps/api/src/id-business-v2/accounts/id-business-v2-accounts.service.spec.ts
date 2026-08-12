@@ -118,6 +118,7 @@ describe('IdBusinessV2AccountsService', () => {
   const repository = new IdBusinessV2AccountsRepository(prisma as never);
   const balanceAdjustmentService = new IdBusinessV2AccountBalanceAdjustmentService(
     balanceCalculator,
+    financePostingService as never,
     transactionManager,
     transactionalAudit,
     repository
@@ -167,6 +168,11 @@ describe('IdBusinessV2AccountsService', () => {
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(supplier);
     prisma.auditLog.create.mockResolvedValue({ id: 'audit-transactional-1' });
+    prisma.idBusinessV2BalanceLedger.create.mockImplementation(async ({ data }) => ({
+      id: 'balance-ledger-adjustment-1',
+      ...data,
+      createdAt: new Date('2026-07-26T12:30:00.000Z')
+    }));
     prisma.idBusinessV2Account.updateMany.mockResolvedValue({ count: 1 });
     prisma.idBusinessV2FinanceFxRateSnapshot.findUnique.mockResolvedValue({
       currency: 'MYR',
@@ -441,7 +447,7 @@ describe('IdBusinessV2AccountsService', () => {
     );
   });
 
-  it('rejects balance adjustments for a sold ID', async () => {
+  it('allows balance and cost adjustments for a sold ID and posts the cost movement', async () => {
     const existing = makeAccount({
       currentBalance: new Prisma.Decimal(20),
       balanceCostAmount: new Prisma.Decimal(70),
@@ -452,7 +458,13 @@ describe('IdBusinessV2AccountsService', () => {
         orderNo: 'V220260726SOLD001'
       }
     });
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(existing);
+    prisma.idBusinessV2Account.findFirst.mockResolvedValueOnce(existing).mockResolvedValueOnce(
+      makeAccount({
+        ...existing,
+        currentBalance: new Prisma.Decimal(15),
+        balanceCostAmount: new Prisma.Decimal(45)
+      })
+    );
     prisma.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
     prisma.$queryRaw.mockResolvedValue([
       {
@@ -477,8 +489,31 @@ describe('IdBusinessV2AccountsService', () => {
         },
         operator
       )
-    ).rejects.toThrow('该 ID 已卖出，不能调整余额或人民币成本');
-    expect(prisma.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ currentBalance: '15', balanceCostAmount: '45', saleState: 'sold' });
+    expect(prisma.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountId: existing.id,
+          direction: 'adjustment',
+          balanceAmount: '5',
+          costAmount: '25',
+          balanceBefore: '20',
+          balanceAfter: '15',
+          costBefore: '70',
+          costAfter: '45'
+        })
+      })
+    );
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({
+        journalType: 'manual_adjustment',
+        lines: expect.arrayContaining([
+          expect.objectContaining({ accountCode: 'gift_card_inventory', direction: 'credit' }),
+          expect.objectContaining({ accountCode: 'manual_adjustment', direction: 'debit' })
+        ])
+      })
+    );
   });
 
   it('rejects a duplicate encrypted Apple ID hash', async () => {
@@ -590,10 +625,22 @@ describe('IdBusinessV2AccountsService', () => {
     );
   });
 
-  it('rejects disabling a sold ID', async () => {
+  it('allows disabling a sold ID without clearing its ownership', async () => {
+    const soldAccount = makeAccount({
+      soldByOrderId: '80000000-0000-4000-8000-000000000001',
+      soldByOrder: {
+        id: '80000000-0000-4000-8000-000000000001',
+        orderNo: 'V220260801SOLD001'
+      }
+    });
     prisma.$queryRaw.mockResolvedValue([{ id: 'account-1' }]);
-    prisma.idBusinessV2Account.findFirst.mockResolvedValue(
-      makeAccount({ soldByOrderId: '80000000-0000-4000-8000-000000000001' })
+    prisma.idBusinessV2Account.findFirst.mockResolvedValueOnce(soldAccount).mockResolvedValueOnce(
+      makeAccount({
+        ...soldAccount,
+        recordStatus: 'disabled',
+        disabledReason: '售后暂停',
+        disabledAt: new Date('2026-07-26T12:00:00.000Z')
+      })
     );
 
     await expect(
@@ -602,8 +649,16 @@ describe('IdBusinessV2AccountsService', () => {
         { recordStatus: 'disabled', reason: '售后暂停' },
         operator
       )
-    ).rejects.toThrow('已售出 ID 不能停用');
-    expect(prisma.idBusinessV2Account.updateMany).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      saleState: 'sold',
+      soldByOrder: expect.objectContaining({ id: soldAccount.soldByOrderId }),
+      recordStatus: 'disabled'
+    });
+    expect(prisma.idBusinessV2Account.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ recordStatus: 'disabled', disabledReason: '售后暂停' })
+      })
+    );
   });
 
   it('exports every matching row without decrypting sensitive fields and writes an audit log', async () => {

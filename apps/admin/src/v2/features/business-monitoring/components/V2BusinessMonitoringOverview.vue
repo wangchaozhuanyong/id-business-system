@@ -1,7 +1,7 @@
 <template>
   <section class="v2-business-monitoring-overview" aria-label="业务监控总览">
     <div class="v2-business-monitoring-overview__intro">
-      <span class="v2-business-monitoring-overview__eyebrow">RISK CONTROL</span>
+      <span class="v2-business-monitoring-overview__eyebrow">业务风险监控</span>
       <h2>业务风险总览</h2>
       <p>异常直接来自订单、余额、续费、汇率采集和财务基线；修正源数据后自动退出队列。</p>
     </div>

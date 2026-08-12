@@ -8,17 +8,21 @@ import currencyReport from './components/V2AnalyticsCurrencyReport.vue?raw';
 import assetsReport from './components/V2AnalyticsAssetsReport.vue?raw';
 import reconciliationReport from './components/V2AnalyticsReconciliationReport.vue?raw';
 import settlementReport from './components/V2SettlementPlatformReport.vue?raw';
+import afterSalesReport from './components/V2AfterSalesReport.vue?raw';
 
 describe('data analytics scheme 3 redesign contract', () => {
-  it('composes the overview, filters and four existing analysis sections', () => {
+  it('composes the overview, filters and five analysis sections', () => {
     expect(view).toContain('<V2AnalyticsOverview :page="page" />');
     expect(view).toContain('<V2AnalyticsToolbar :page="page" />');
     expect(view).toContain('v-model:active-section="activeAnalysisSection"');
     expect(view).toContain('<V2ProfitOverview');
+    expect(view).toContain('<V2AfterSalesReport');
     expect(view).toContain('<V2AnalyticsCurrencyReport');
     expect(view).toContain('<V2AnalyticsAssetsReport');
     expect(view).toContain('<V2AnalyticsReconciliationReport');
-    expect(navigation).toContain("'profit' | 'cash-flow' | 'assets' | 'reconciliation'");
+    expect(navigation).toContain("| 'after-sales'");
+    expect(afterSalesReport).toContain('report.idCostCny');
+    expect(afterSalesReport).toContain('售后订单出现非零 ID 成本');
   });
 
   it('preserves the current report APIs, async loading standard and all filter dimensions', () => {

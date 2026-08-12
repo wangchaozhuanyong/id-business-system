@@ -7,7 +7,7 @@
         :logo-text="form.logoText || V2_BRANDING_DEFAULTS.logoText"
       />
       <div class="v2-branding-overview__intro">
-        <span>BRAND CONTROL</span>
+        <span>品牌管理</span>
         <h2>{{ form.appName || V2_BRANDING_DEFAULTS.appName }}</h2>
         <p>统一管理后台标识、登录内容与浏览器标题。</p>
       </div>

@@ -37,7 +37,6 @@
       <el-checkbox-group v-model="draftVisibleKeys" class="v2-table-column-settings__list">
         <el-checkbox v-for="column in filteredColumns" :key="column.key" :value="column.key">
           <span>{{ column.label }}</span>
-          <small>{{ column.key }}</small>
         </el-checkbox>
       </el-checkbox-group>
 
@@ -105,10 +104,8 @@ const currentVisibleKeys = computed(() =>
 const filteredColumns = computed(() => {
   const normalizedKeyword = keyword.value.toLocaleLowerCase('zh-CN');
   if (!normalizedKeyword) return dataColumns.value;
-  return dataColumns.value.filter(
-    (column) =>
-      column.label.toLocaleLowerCase('zh-CN').includes(normalizedKeyword) ||
-      column.key.toLocaleLowerCase('zh-CN').includes(normalizedKeyword)
+  return dataColumns.value.filter((column) =>
+    column.label.toLocaleLowerCase('zh-CN').includes(normalizedKeyword)
   );
 });
 const isDirty = computed(

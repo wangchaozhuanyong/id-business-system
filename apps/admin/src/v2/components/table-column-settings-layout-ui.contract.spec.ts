@@ -16,6 +16,12 @@ describe('table column settings header layout contract', () => {
     expect(settings).toContain("'v2-table-preference-toolbar--inline': inline");
   });
 
+  it('only exposes localized column labels to users', () => {
+    expect(settings).toContain('{{ column.label }}');
+    expect(settings).not.toMatch(/\{\{\s*column\.key\s*\}\}/);
+    expect(settings).not.toContain("column.key.toLocaleLowerCase('zh-CN')");
+  });
+
   it('keeps redesigned data-table settings beside the page-count summary', () => {
     for (const source of [
       accounts,

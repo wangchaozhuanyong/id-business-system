@@ -49,75 +49,19 @@
         />
 
         <div class="v2-order-edit-grid">
-          <el-form-item label="客户" prop="customerId">
-            <V2CustomerRemoteSelect
-              v-model="form.customerId"
-              :customers="visibleCustomerChoices"
-              :keyword="customerKeyword"
-              :searching="customerOptionsPending && optionsLoading"
-              :remote-method="searchCustomers"
-              :disabled="!order?.operations.canEditCore"
-            />
-          </el-form-item>
-
-          <el-form-item label="业务" prop="serviceOptionId">
-            <el-select
-              v-model="form.serviceOptionId"
-              filterable
-              :disabled="!order?.operations.canEditCore"
-              placeholder="选择业务"
-            >
-              <el-option
-                v-for="service in serviceChoices"
-                :key="service.id"
-                :label="service.label"
-                :value="service.id"
-              />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item label="消耗余额" prop="balanceAmount">
-            <el-input
-              v-model="form.balanceAmount"
-              inputmode="decimal"
-              maxlength="19"
-              :disabled="!order?.operations.canEditCore"
-            />
-          </el-form-item>
-
-          <el-form-item label="使用 ID" prop="accountId">
-            <el-select
-              v-model="form.accountId"
-              filterable
-              :loading="matchingLoading"
-              :disabled="!order?.operations.canEditCore"
-              placeholder="选择匹配 ID"
-            >
-              <el-option
-                v-for="candidate in accountChoices"
-                :key="candidate.id"
-                :label="candidate.label"
-                :value="candidate.id"
-              />
-            </el-select>
-            <span v-if="matchingError" class="v2-order-edit-error">{{ matchingError }}</span>
-          </el-form-item>
-
-          <el-form-item label="ID 处理方式">
-            <div class="v2-order-edit-disposition">
-              <el-radio-group
-                v-model="form.accountDisposition"
-                :disabled="!order?.operations.canEditCore"
-              >
-                <el-radio value="retained">保留 ID</el-radio>
-                <el-radio value="sold">卖出 ID</el-radio>
-              </el-radio-group>
-              <small v-if="form.accountDisposition === 'sold'">
-                将计入当前 ID 购买成本，并锁定该 ID 停止匹配、加卡和续费。
-              </small>
-              <small v-else>不计 ID 购买成本，ID 仍可继续使用。</small>
-            </div>
-          </el-form-item>
+          <V2OrderEditCoreFields
+            :form="form"
+            :order="order"
+            :customers="visibleCustomerChoices"
+            :customer-keyword="customerKeyword"
+            :customer-searching="customerOptionsPending && optionsLoading"
+            :services="serviceChoices"
+            :accounts="accountChoices"
+            :matching-loading="matchingLoading"
+            :matching-error="matchingError"
+            @search-customers="searchCustomers"
+            @search-candidates="searchCandidates"
+          />
 
           <V2OrderEditPricingFields
             v-if="order"
@@ -159,7 +103,10 @@
             />
           </el-form-item>
 
-          <el-form-item v-if="order?.operations.canEditCore" label="ID 锁范围">
+          <el-form-item
+            v-if="order?.operations.canEditCore && form.accountSource === 'inventory'"
+            label="ID 锁范围"
+          >
             <el-radio-group v-model="form.lockScope" aria-label="ID 锁范围">
               <el-radio-button
                 v-for="option in lockScopeOptions"
@@ -213,7 +160,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
-import V2CustomerRemoteSelect from '@/v2/features/order-entry/components/V2CustomerRemoteSelect.vue';
+import V2OrderEditCoreFields from './V2OrderEditCoreFields.vue';
 import V2OrderEditPricingFields from './V2OrderEditPricingFields.vue';
 import {
   calculateEstimatedProfitAmount,
@@ -344,7 +291,7 @@ const platformFeePreview = computed(() => {
   );
 });
 const appliedAccountCostPreview = computed(() =>
-  form.accountDisposition === 'sold'
+  form.accountSource === 'inventory' && form.accountDisposition === 'sold'
     ? (selectedCandidate.value?.purchaseCost ?? props.order?.accountCostAmount ?? '0')
     : '0'
 );
@@ -428,11 +375,32 @@ watch(
 );
 
 watch(
-  () => [form.serviceOptionId, form.balanceAmount],
+  () => [form.serviceOptionId, form.balanceAmount, form.accountSource, form.customerId],
   () => {
     if (!initializing && props.order?.operations.canEditCore) {
       scheduleCandidates();
     }
+  }
+);
+
+watch(
+  () => form.accountSource,
+  () => {
+    if (initializing) return;
+    form.accountDisposition = 'retained';
+    form.lockScope = 'by_service';
+    form.accountId = '';
+    candidates.value = [];
+    scheduleCandidates();
+  }
+);
+
+watch(
+  () => form.customerId,
+  () => {
+    if (initializing || form.accountSource !== 'customer_owned') return;
+    form.accountId = '';
+    candidates.value = [];
   }
 );
 
@@ -449,6 +417,7 @@ async function initialize(order: V2Order) {
     customerId: order.customer.id,
     serviceOptionId: order.service.id,
     accountId: order.account?.id ?? '',
+    accountSource: order.accountSource,
     accountDisposition: order.accountDisposition === 'sold' ? 'sold' : 'retained',
     settlementPlatformOptionId: order.settlementPlatform?.id ?? '',
     platformOrderNo: order.platformOrderNo ?? '',
@@ -486,23 +455,36 @@ function scheduleCandidates() {
   matchingTimer = setTimeout(() => void loadCandidates(), 350);
 }
 
-async function loadCandidates() {
+async function loadCandidates(keyword = '') {
   const sequence = ++matchingSequence;
   matchingLoading.value = true;
   matchingError.value = '';
   try {
-    const result = await idBusinessV2OrdersApi.findMatchingCandidates({
-      serviceOptionId: form.serviceOptionId,
-      balanceAmount: form.balanceAmount.trim(),
-      orderId: props.order?.id,
-      limit: 50
-    });
+    const result =
+      form.accountSource === 'customer_owned'
+        ? await idBusinessV2OrdersApi.searchManualCandidates({
+            serviceOptionId: form.serviceOptionId,
+            balanceAmount: form.balanceAmount.trim(),
+            accountSource: form.accountSource,
+            customerId: form.customerId,
+            keyword: keyword.trim() || undefined,
+            limit: 50
+          })
+        : await idBusinessV2OrdersApi.findMatchingCandidates({
+            serviceOptionId: form.serviceOptionId,
+            balanceAmount: form.balanceAmount.trim(),
+            accountSource: form.accountSource,
+            customerId: form.customerId || undefined,
+            orderId: props.order?.id,
+            limit: 50
+          });
     if (sequence !== matchingSequence) return;
     candidates.value = result.items;
     const coreChanged =
       form.serviceOptionId !== props.order?.service.id ||
       form.balanceAmount !== props.order?.balanceAmount;
-    if (coreChanged) {
+    const selectedAccountStillAvailable = result.items.some((item) => item.id === form.accountId);
+    if (coreChanged || !selectedAccountStillAvailable) {
       form.accountId = result.selectedCandidateId ?? '';
     }
   } catch (error) {
@@ -512,6 +494,12 @@ async function loadCandidates() {
   } finally {
     if (sequence === matchingSequence) matchingLoading.value = false;
   }
+}
+
+function searchCandidates(keyword: string) {
+  if (form.accountSource !== 'customer_owned') return;
+  if (matchingTimer) clearTimeout(matchingTimer);
+  matchingTimer = setTimeout(() => void loadCandidates(keyword), 300);
 }
 
 function handleSettlementChange() {
@@ -577,9 +565,14 @@ async function submit() {
       customerId: form.customerId,
       serviceOptionId: form.serviceOptionId,
       accountId: form.accountId,
-      accountDisposition: form.accountDisposition,
+      accountSource: form.accountSource,
+      accountDisposition:
+        form.accountSource === 'customer_owned' ? 'retained' : form.accountDisposition,
       balanceAmount: form.balanceAmount.trim(),
-      lockScope: form.accountDisposition === 'sold' ? 'global' : form.lockScope
+      lockScope:
+        form.accountSource === 'inventory' && form.accountDisposition === 'sold'
+          ? 'global'
+          : 'by_service'
     });
   }
   if (form.clearWebsiteAccount) {

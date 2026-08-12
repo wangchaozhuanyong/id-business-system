@@ -65,6 +65,8 @@ export const idBusinessV2OrdersApi = {
     params: {
       serviceOptionId: string;
       balanceAmount: string;
+      accountSource?: 'inventory' | 'customer_owned';
+      customerId?: string;
       orderId?: string;
       limit?: number;
     },

@@ -19,15 +19,26 @@
 
 <script setup lang="ts">
 import { markRaw } from 'vue';
-import { Coin, DataLine, DocumentChecked, Wallet } from '@element-plus/icons-vue';
+import { Coin, DataLine, DocumentChecked, RefreshRight, Wallet } from '@element-plus/icons-vue';
 
-export type AnalyticsSectionKey = 'profit' | 'cash-flow' | 'assets' | 'reconciliation';
+export type AnalyticsSectionKey =
+  | 'profit'
+  | 'after-sales'
+  | 'cash-flow'
+  | 'assets'
+  | 'reconciliation';
 
 defineProps<{ activeSection: AnalyticsSectionKey }>();
 defineEmits<{ 'update:activeSection': [value: AnalyticsSectionKey] }>();
 
 const sections = [
   { key: 'profit', label: '经营利润', description: '收入、成本与损益', icon: markRaw(DataLine) },
+  {
+    key: 'after-sales',
+    label: '售后业务',
+    description: '客户已购 ID 损益',
+    icon: markRaw(RefreshRight)
+  },
   { key: 'cash-flow', label: '资金收支', description: '四币种现金流', icon: markRaw(Coin) },
   { key: 'assets', label: '资产余额', description: '账面值与最新估值', icon: markRaw(Wallet) },
   {

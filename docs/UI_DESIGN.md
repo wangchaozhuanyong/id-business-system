@@ -67,7 +67,17 @@
 - 新增 schema 列默认可见，已删除或更名的旧 key 在客户端忽略；不得因历史偏好导致新列静默隐藏。
 - 列设置抽屉必须覆盖搜索、全部显示、保存中、写入失败重试、恢复默认和未保存关闭保护；只有服务端写入成功后才能提示“已保存”。
 
-### 2.4 跨模块对齐与稳定尺寸
+### 2.4 中文界面语言
+
+- 用户可见的标题、说明、标签、占位符、按钮、提示和装饰文字默认使用简体中文，禁止使用纯英文装饰标题。
+- schema key、数据库字段名、接口字段名、枚举值和代码标识属于内部契约，不得直接渲染或作为用户可见搜索项；
+  必须在 table schema 或展示层先映射为中文 `label`。
+- 业务术语白名单只保留确有辨识意义的专有名词和缩写，例如 ID、Apple ID、API、MFA、IP、CIDR、
+  QQ、WhatsApp、币种代码和支付平台品牌；新增白名单必须经过明确审查，不能用来绕过中文化。
+- 新功能必须运行 `npm run check:v2-ui-language`；检查覆盖 Vue 模板、可见属性、脚本标题/标签/提示文案，
+  以及直接展示内部字段名的行为，并在 CI 中阻止不合规变更。
+
+### 2.5 跨模块对齐与稳定尺寸
 
 - 同一视觉行中的“标题 + 值”必须复用相同的语义结构、字号、行高和垂直对齐模型；禁止一侧使用
   `flex + align-items: center`，另一侧使用 `grid + baseline` 等混合方案制造肉眼可见的基线偏差。
@@ -177,5 +187,5 @@
 - 检查长文本、错误提示、空数据、慢请求和权限不足状态。
 - 检查空表单可点击提交，全部字段错误同时出现，并能滚动、聚焦到第一处错误。
 - 运行 `npm run check:admin-ui`、`npm run check:v2-color-contrast`、
-  `npm run acceptance:v2-color-contrast`、`npm run check:v2-loading-standard`、
+  `npm run check:v2-ui-language`、`npm run acceptance:v2-color-contrast`、`npm run check:v2-loading-standard`、
   `npm run check:v2-table-standard`、`npm run acceptance:v2-table-layout` 和管理端构建。

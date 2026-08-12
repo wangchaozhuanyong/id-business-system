@@ -11,6 +11,8 @@ interface OrderCandidateForm {
   serviceOptionId: string;
   balanceAmount: string;
   accountId: string;
+  accountSource: 'inventory' | 'customer_owned';
+  customerId: string;
 }
 
 export function useOrderCandidateSelection(form: OrderCandidateForm) {
@@ -32,7 +34,10 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       : null;
   });
   const canMatch = computed(
-    () => Boolean(form.serviceOptionId) && isPositiveOrderAmount(form.balanceAmount)
+    () =>
+      Boolean(form.serviceOptionId) &&
+      isPositiveOrderAmount(form.balanceAmount) &&
+      (form.accountSource === 'inventory' || Boolean(form.customerId))
   );
   const matchingEmptyMessage = computed(() => {
     const counts = matchingResult.value?.counts;
@@ -56,6 +61,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       createV2QueryKey({
         serviceOptionId: form.serviceOptionId,
         balanceAmount: form.balanceAmount.trim(),
+        accountSource: form.accountSource,
+        customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
         limit: 50
       }),
     freshnessPolicy: 'event-with-deadline',
@@ -66,6 +73,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
         {
           serviceOptionId: form.serviceOptionId,
           balanceAmount: form.balanceAmount.trim(),
+          accountSource: form.accountSource,
+          customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
           limit: 50
         },
         { signal }
@@ -77,6 +86,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       createV2QueryKey({
         serviceOptionId: form.serviceOptionId,
         balanceAmount: form.balanceAmount.trim(),
+        accountSource: form.accountSource,
+        customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
         keyword: manualSearchKeyword.value.trim(),
         limit: 50
       }),
@@ -88,6 +99,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
         {
           serviceOptionId: form.serviceOptionId,
           balanceAmount: form.balanceAmount.trim(),
+          accountSource: form.accountSource,
+          customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
           keyword: manualSearchKeyword.value.trim() || undefined,
           limit: 50
         },
@@ -255,7 +268,7 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
       manualSearchTimer = undefined;
     }
     resumeCandidateMatch = false;
-    idSelectionMode.value = 'auto';
+    idSelectionMode.value = form.accountSource === 'customer_owned' ? 'manual' : 'auto';
     manualSearchKeyword.value = '';
     clearCandidates();
   }
@@ -282,6 +295,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
     return createV2QueryKey({
       serviceOptionId: form.serviceOptionId,
       balanceAmount: form.balanceAmount.trim(),
+      accountSource: form.accountSource,
+      customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
       limit: 50
     });
   }
@@ -290,6 +305,8 @@ export function useOrderCandidateSelection(form: OrderCandidateForm) {
     return createV2QueryKey({
       serviceOptionId: form.serviceOptionId,
       balanceAmount: form.balanceAmount.trim(),
+      accountSource: form.accountSource,
+      customerId: form.accountSource === 'customer_owned' ? form.customerId : undefined,
       keyword: manualSearchKeyword.value.trim(),
       limit: 50
     });

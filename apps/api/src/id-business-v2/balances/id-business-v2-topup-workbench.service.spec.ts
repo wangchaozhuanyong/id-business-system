@@ -168,7 +168,7 @@ describe('IdBusinessV2TopupWorkbenchService', () => {
         where: expect.objectContaining({
           deletedAt: null,
           recordStatus: 'active',
-          soldByOrderId: null,
+          soldByOrderId: undefined,
           countryOptionId: 'country-1',
           statusOption: {
             is: {

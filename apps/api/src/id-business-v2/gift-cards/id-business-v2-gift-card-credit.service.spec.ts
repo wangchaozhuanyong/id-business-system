@@ -422,7 +422,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     expect(result.supplierFunding).toBeNull();
   });
 
-  it('rejects a new gift-card credit when the target ID has been sold', async () => {
+  it('credits an active sold ID and keeps the gift-card cost in balance inventory', async () => {
     tx.$queryRaw.mockResolvedValueOnce([
       {
         id: accountId,
@@ -437,11 +437,40 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       }
     ]);
 
-    await expect(service.confirmCredit(accountId, makeDto(), operator)).rejects.toThrow(
-      '该 ID 已卖出，不能继续加卡'
+    const result = await service.confirmCredit(accountId, makeDto(), operator);
+
+    expect(tx.idBusinessV2GiftCard.create).toHaveBeenCalledOnce();
+    expect(tx.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accountId,
+          entryType: 'gift_card_credit',
+          balanceBefore: '20',
+          costBefore: '50'
+        })
+      })
     );
-    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
-    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          currentBalance: '30',
+          balanceCostAmount: '75'
+        })
+      })
+    );
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        journalType: 'gift_card_purchase',
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            direction: 'debit'
+          })
+        ])
+      })
+    );
+    expect(result.account.currentBalance).toBe('30');
   });
 
   it('records a renewal-workbench source context without logging the gift-card plaintext', async () => {

@@ -221,6 +221,16 @@ describe('IdBusinessV2OrderMatchingService', () => {
           },
           {
             appleIdHash: 'apple-id-search-hash'
+          },
+          {
+            soldByOrder: {
+              is: {
+                orderNo: {
+                  contains: 'Target@Example.com',
+                  mode: 'insensitive'
+                }
+              }
+            }
           }
         ]
       },

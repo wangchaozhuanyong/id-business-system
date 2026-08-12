@@ -1,9 +1,9 @@
 <template>
   <section class="v2-topup-overview" aria-label="ID 加额工作台概览">
     <div class="v2-topup-overview__intro">
-      <span class="v2-topup-overview__eyebrow">BALANCE WORKBENCH</span>
+      <span class="v2-topup-overview__eyebrow">余额加额工作台</span>
       <h2>ID 加额总览</h2>
-      <p>查找可用 ID 并完成礼品卡入账，余额、成本、卡商资金和财务流水继续由系统联动校验。</p>
+      <p>查找可运营的库存或客户已购 ID 并完成礼品卡入账，余额成本继续由系统联动记录。</p>
     </div>
 
     <div class="v2-topup-overview__metrics" aria-label="当前页 ID 加额指标">

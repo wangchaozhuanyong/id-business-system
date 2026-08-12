@@ -130,6 +130,15 @@ function makeTopupItem(index: number): V2TopupWorkbenchItem {
       name: statusNormal ? '正常' : '维护中',
       isSystem: true
     },
+    saleState: index % 4 === 0 ? 'sold' : 'available',
+    soldByOrder:
+      index % 4 === 0
+        ? {
+            id: `sold-order-${index + 1}`,
+            orderNo: `V2202607${day}${String(index + 1).padStart(6, '0')}`,
+            customer: { id: `customer-${index + 1}`, name: `客户 ${index + 1}` }
+          }
+        : null,
     historicalServices: services.slice(0, (index % services.length) + 1).map((service) => ({
       ...service,
       parent: { id: 'category-ai', name: 'AI 工具' }
@@ -149,6 +158,8 @@ const page = reactive({
   total: 0,
   evaluatedAt: '2026-08-10T09:20:00.000Z',
   loading: false,
+  queryPhase: 'ready',
+  isParameterTransition: false,
   listError: '',
   hasLoadedOnce: true,
   isInitialLoading: false,
@@ -158,6 +169,8 @@ const page = reactive({
   query: {
     page: 1,
     pageSize: 10,
+    keyword: '',
+    accountSource: '' as '' | 'inventory' | 'customer_owned',
     countryOptionId: '',
     balancePreset: '' as V2TopupBalancePreset,
     balanceMin: '',
@@ -182,6 +195,8 @@ const page = reactive({
   resetFilters: () => {
     Object.assign(page.query, {
       page: 1,
+      keyword: '',
+      accountSource: '',
       countryOptionId: '',
       balancePreset: '',
       balanceMin: '',
@@ -237,6 +252,16 @@ function applyFilters(resetPage = false) {
   const maximum = page.query.balanceMax ? decimalWhole(page.query.balanceMax) : null;
   const filtered = allItems.filter((item) => {
     const balance = decimalWhole(item.currentBalance);
+    const keyword = page.query.keyword.trim().toLowerCase();
+    const matchesKeyword =
+      !keyword ||
+      item.appleIdMasked.toLowerCase().includes(keyword) ||
+      item.soldByOrder?.orderNo.toLowerCase().includes(keyword);
+    const matchesSource =
+      !page.query.accountSource ||
+      (page.query.accountSource === 'customer_owned'
+        ? item.saleState === 'sold'
+        : item.saleState === 'available');
     const matchesPreset =
       !page.query.balancePreset ||
       (page.query.balancePreset === 'zero' && balance === 0n) ||
@@ -245,6 +270,8 @@ function applyFilters(resetPage = false) {
         (minimum === null || balance >= minimum) &&
         (maximum === null || balance <= maximum));
     return (
+      matchesKeyword &&
+      matchesSource &&
       matchesPreset &&
       (!page.query.countryOptionId || item.country.id === page.query.countryOptionId) &&
       (!page.query.onlyNormal || item.status.code === 'normal')

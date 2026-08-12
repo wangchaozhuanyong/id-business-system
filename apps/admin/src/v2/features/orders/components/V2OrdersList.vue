@@ -78,7 +78,15 @@
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.orders.main.columns[6]" show-overflow-tooltip>
           <template #default="{ row }">
-            <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
+            <div>
+              <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
+              <el-tag v-if="row.accountSource === 'customer_owned'" type="warning" effect="plain">
+                客户已购
+              </el-tag>
+              <small v-if="row.sourceSoldOrder">
+                {{ row.sourceSoldOrder.orderNo }} · {{ row.sourceSoldOrder.customer.name }}
+              </small>
+            </div>
           </template>
         </V2TableColumn>
         <V2TableColumn
@@ -291,7 +299,20 @@
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '使用 ID']">
               <dt>使用 ID</dt>
-              <dd>{{ item.account?.appleIdMasked || '—' }}</dd>
+              <dd>
+                {{ item.account?.appleIdMasked || '—' }}
+                <el-tag
+                  v-if="item.accountSource === 'customer_owned'"
+                  type="warning"
+                  effect="plain"
+                >
+                  客户已购
+                </el-tag>
+              </dd>
+            </div>
+            <div v-if="item.sourceSoldOrder">
+              <dt>原销售订单</dt>
+              <dd>{{ item.sourceSoldOrder.orderNo }} · {{ item.sourceSoldOrder.customer.name }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'accountDisposition']">
               <dt>ID 处理状态</dt>

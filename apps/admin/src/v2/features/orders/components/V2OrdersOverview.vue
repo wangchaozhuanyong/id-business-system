@@ -1,7 +1,7 @@
 <template>
   <section class="v2-orders-overview" aria-label="订单概览">
     <div class="v2-orders-overview__intro">
-      <span class="v2-orders-overview__eyebrow">ORDER WORKSPACE</span>
+      <span class="v2-orders-overview__eyebrow">订单工作台</span>
       <h2>订单业务总览</h2>
       <p>当前筛选范围内共 {{ page.total }} 笔订单，当前页关键状态集中展示。</p>
     </div>

@@ -129,6 +129,7 @@ describe('IdBusinessV2OrderEntryService', () => {
       update: vi.fn()
     },
     idBusinessV2Account: {
+      findFirst: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn()
     },
@@ -221,6 +222,7 @@ describe('IdBusinessV2OrderEntryService', () => {
       purchaseCost: decimal('25'),
       soldByOrderId: null
     });
+    tx.idBusinessV2Account.findFirst.mockResolvedValue(null);
     tx.idBusinessV2Account.update.mockResolvedValue({});
     tx.idBusinessV2Order.update.mockImplementation(async ({ data }) =>
       makeStoredOrder({
@@ -433,6 +435,87 @@ describe('IdBusinessV2OrderEntryService', () => {
         accountCostAmount: '25'
       })
     });
+  });
+
+  it('creates a customer-owned after-sales order for the original customer without ID cost', async () => {
+    const sourceSoldOrderId = '88888888-8888-4888-8888-888888888888';
+    tx.idBusinessV2Account.findFirst.mockResolvedValueOnce({
+      id: accountId,
+      soldByOrder: {
+        id: sourceSoldOrderId,
+        orderNo: 'V220300701SOLD001',
+        customerId,
+        deletedAt: null
+      }
+    });
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: accountId,
+        purchaseCost: decimal('25'),
+        soldByOrderId: sourceSoldOrderId,
+        lossReportedAt: null
+      }
+    ]);
+    tx.idBusinessV2Order.findUniqueOrThrow.mockResolvedValueOnce(
+      makeStoredOrder({
+        accountSource: 'customer_owned',
+        sourceSoldOrderId,
+        accountDisposition: 'retained',
+        accountCostAmount: decimal('0'),
+        appliedAccountCostAmount: decimal('0')
+      })
+    );
+
+    await service.create(
+      makeDto({
+        accountSource: 'customer_owned',
+        accountDisposition: 'sold',
+        lockScope: 'global'
+      }),
+      operator
+    );
+
+    expect(tx.idBusinessV2Order.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accountSource: 'customer_owned',
+        sourceSoldOrderId,
+        accountDisposition: 'retained',
+        accountCostAmount: 0,
+        appliedAccountCostAmount: 0
+      })
+    });
+    expect(orderLockService.reserveAccountForOrderInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ accountId, lockScope: 'by_service' }),
+      operator
+    );
+    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith({
+      where: { id: orderId },
+      data: expect.objectContaining({
+        accountDisposition: 'retained',
+        accountCostAmount: '0',
+        appliedAccountCostAmount: '0'
+      })
+    });
+  });
+
+  it('rejects using another customer customer-owned ID before creating an order', async () => {
+    tx.idBusinessV2Account.findFirst.mockResolvedValueOnce({
+      id: accountId,
+      soldByOrder: {
+        id: '88888888-8888-4888-8888-888888888888',
+        orderNo: 'V220300701SOLD002',
+        customerId: '99999999-9999-4999-8999-999999999999',
+        deletedAt: null
+      }
+    });
+
+    await expect(
+      service.create(makeDto({ accountSource: 'customer_owned' }), operator)
+    ).rejects.toThrow('该 ID 不属于当前客户');
+    expect(tx.idBusinessV2Order.create).not.toHaveBeenCalled();
+    expect(orderLockService.reserveAccountForOrderInTransaction).not.toHaveBeenCalled();
   });
 
   it('returns the original order for an exact idempotent replay without writing again', async () => {

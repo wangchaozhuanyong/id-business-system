@@ -1485,18 +1485,9 @@
 }
 
 .v2-table-column-settings__list .el-checkbox__label {
-  display: flex;
   min-width: 0;
   flex: 1;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.v2-table-column-settings__list small {
   overflow: hidden;
-  color: var(--v2-text-soft);
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

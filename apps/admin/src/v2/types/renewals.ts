@@ -24,6 +24,12 @@ export interface V2RenewalWorkbenchItem {
     currentBalance: string;
     balanceCostAmount: string;
     recordStatus: 'active' | 'disabled';
+    saleState: 'available' | 'sold';
+    soldByOrder: {
+      id: string;
+      orderNo: string;
+      customer: { id: string; name: string };
+    } | null;
     country: {
       id: string;
       code: string;

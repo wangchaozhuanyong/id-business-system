@@ -1,7 +1,7 @@
 <template>
   <section class="v2-finance-ledger-overview" aria-label="钱包账户概览">
     <div class="v2-finance-ledger-overview__intro">
-      <span class="v2-finance-ledger-overview__eyebrow">FINANCE CONTROL</span>
+      <span class="v2-finance-ledger-overview__eyebrow">财务账务管理</span>
       <h2>钱包与账户总览</h2>
       <p>集中管理自有资金账户、供应商预付钱包、不可变流水与月度关账。</p>
     </div>

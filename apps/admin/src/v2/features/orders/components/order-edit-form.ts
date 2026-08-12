@@ -8,6 +8,7 @@ export function createEmptyOrderEditForm() {
     customerId: '',
     serviceOptionId: '',
     accountId: '',
+    accountSource: 'inventory' as 'inventory' | 'customer_owned',
     accountDisposition: 'retained' as 'retained' | 'sold',
     settlementPlatformOptionId: '',
     platformOrderNo: '',

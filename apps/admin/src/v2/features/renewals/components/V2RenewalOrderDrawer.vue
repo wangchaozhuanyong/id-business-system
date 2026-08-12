@@ -34,7 +34,23 @@
           <span>当前系统余额</span>
           <strong>{{ formatDecimal(renewal.account.currentBalance) }}</strong>
         </div>
+        <div v-if="renewal.account.soldByOrder">
+          <span>原销售订单</span>
+          <strong>{{ renewal.account.soldByOrder.orderNo }}</strong>
+        </div>
+        <div v-if="renewal.account.soldByOrder">
+          <span>归属客户</span>
+          <strong>{{ renewal.account.soldByOrder.customer.name }}</strong>
+        </div>
       </section>
+
+      <el-alert
+        v-if="renewal.account.saleState === 'sold'"
+        type="info"
+        title="本次续费按客户已购 ID 入账，ID 成本固定为 0"
+        :closable="false"
+        show-icon
+      />
 
       <el-form
         ref="formRef"
@@ -230,6 +246,10 @@
           <div>
             <span>预计余额成本</span>
             <strong>¥{{ formatDecimal(estimatedBalanceCostPreview) }}</strong>
+          </div>
+          <div>
+            <span>本次 ID 成本</span>
+            <strong>¥0.00</strong>
           </div>
           <div>
             <span>预计利润</span>

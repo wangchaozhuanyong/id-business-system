@@ -1,7 +1,7 @@
 <template>
   <section class="v2-roles-overview" aria-label="角色权限总览">
     <div class="v2-roles-overview__intro">
-      <span>ACCESS POLICY</span>
+      <span>访问权限策略</span>
       <h2>角色权限总览</h2>
       <p>集中维护岗位权限、敏感资料审核策略和成员影响范围。</p>
     </div>

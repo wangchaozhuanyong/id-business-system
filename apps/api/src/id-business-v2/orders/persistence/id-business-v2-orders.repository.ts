@@ -13,6 +13,7 @@ import type {
   IdBusinessV2MatchingContext,
   IdBusinessV2AccountLockScope,
   IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderAccountSource,
   IdBusinessV2OrderListRecord,
   IdBusinessV2OrderRecord,
   IdBusinessV2OrderStatus
@@ -36,6 +37,13 @@ const ORDER_INCLUDE = {
       countryOption: { select: { id: true, code: true, name: true } }
     }
   },
+  sourceSoldOrder: {
+    select: {
+      id: true,
+      orderNo: true,
+      customer: { select: { id: true, name: true } }
+    }
+  },
   settlementPlatform: { select: { id: true, code: true, name: true } },
   createdBy: { select: { id: true, username: true, displayName: true } },
   locks: {
@@ -53,7 +61,14 @@ const MATCHING_ACCOUNT_SELECT = {
   purchaseCost: true,
   updatedAt: true,
   countryOption: { select: { id: true, code: true, name: true } },
-  statusOption: { select: { id: true, code: true, name: true } }
+  statusOption: { select: { id: true, code: true, name: true } },
+  soldByOrder: {
+    select: {
+      id: true,
+      orderNo: true,
+      customer: { select: { id: true, name: true } }
+    }
+  }
 } satisfies Prisma.IdBusinessV2AccountSelect;
 
 type OrderListPersistenceRow = Prisma.IdBusinessV2OrderGetPayload<{
@@ -88,6 +103,7 @@ export interface IdBusinessV2OrderListCriteria {
   settlementPlatformOptionId: string | null;
   status: IdBusinessV2OrderStatus | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition | null;
+  accountSource: IdBusinessV2OrderAccountSource | null;
   openedAt?: { gte?: Date; lte?: Date };
   sortField: IdBusinessV2OrderSortField;
   sortDirection: 'asc' | 'desc';
@@ -100,6 +116,8 @@ export interface IdBusinessV2MatchingCriteria {
   categoryOptionId: string;
   serviceOptionId: string;
   editingOrderId: string | null;
+  accountSource: IdBusinessV2OrderAccountSource;
+  customerId: string | null;
   requiredBalance: string;
   evaluatedAt: Date;
   keyword: string | null;
@@ -110,11 +128,15 @@ export interface IdBusinessV2MatchingCriteria {
 interface LockedOrderPersistenceRow {
   id: string;
   orderNo: string;
+  customerId: string;
   serviceOptionId: string;
   accountId: string | null;
+  accountSource: IdBusinessV2OrderAccountSource;
+  sourceSoldOrderId: string | null;
   receivedAmount: unknown;
   platformFeeAmount: unknown;
   accountCostAmount: unknown;
+  appliedAccountCostAmount: unknown;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: unknown;
   balanceCostAmount: unknown;
@@ -130,6 +152,7 @@ interface LockedAccountPersistenceRow {
   balanceCostAmount: unknown;
   purchaseCost: unknown;
   soldByOrderId: string | null;
+  soldByCustomerId: string | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   statusCode: string;
@@ -139,7 +162,13 @@ export interface LockedAccountForSale {
   id: string;
   purchaseCost: ReturnType<typeof mapAmount4>;
   soldByOrderId: string | null;
+  soldAt: Date | null;
   lossReportedAt: Date | null;
+  recordStatus: 'active' | 'disabled';
+  disabledReason: string | null;
+  disabledAt: Date | null;
+  currentBalance: ReturnType<typeof mapAmount4>;
+  balanceCostAmount: ReturnType<typeof mapAmount4>;
 }
 
 export interface LockedOrderBalanceAccount {
@@ -364,19 +393,23 @@ export class IdBusinessV2OrdersRepository {
       evaluatedAt: criteria.evaluatedAt,
       editingOrderId: criteria.editingOrderId
     });
+    const ownershipWhere: Prisma.IdBusinessV2AccountWhereInput =
+      criteria.accountSource === 'customer_owned'
+        ? {
+            soldByOrderId: { not: null },
+            soldByOrder: {
+              is: { customerId: criteria.customerId ?? undefined, deletedAt: null }
+            }
+          }
+        : criteria.editingOrderId
+          ? { OR: [{ soldByOrderId: null }, { soldByOrderId: criteria.editingOrderId }] }
+          : { soldByOrderId: null };
     const activeInCountryWhere: Prisma.IdBusinessV2AccountWhereInput = {
       deletedAt: null,
       recordStatus: 'active',
       lossReportedAt: null,
       countryOptionId: criteria.countryOptionId,
-      soldByOrderId: criteria.editingOrderId ? undefined : null,
-      AND: criteria.editingOrderId
-        ? [
-            {
-              OR: [{ soldByOrderId: null }, { soldByOrderId: criteria.editingOrderId }]
-            }
-          ]
-        : undefined
+      AND: [ownershipWhere]
     };
     const normalStatusWhere: Prisma.IdBusinessV2AccountWhereInput = {
       ...activeInCountryWhere,
@@ -410,7 +443,12 @@ export class IdBusinessV2OrdersRepository {
           ...availableWhere,
           OR: [
             { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
-            { appleIdHash: criteria.keywordHash ?? undefined }
+            { appleIdHash: criteria.keywordHash ?? undefined },
+            {
+              soldByOrder: {
+                is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
+              }
+            }
           ]
         }
       : availableWhere;
@@ -500,6 +538,18 @@ export class IdBusinessV2OrdersRepository {
           locks: row.locks
         }
       : null;
+  }
+
+  async findSoldAccountOwnership(tx: V2CommandTransaction, accountId: string) {
+    return tx.idBusinessV2Account.findFirst({
+      where: { id: accountId, deletedAt: null, soldByOrderId: { not: null } },
+      select: {
+        id: true,
+        soldByOrder: {
+          select: { id: true, orderNo: true, customerId: true, deletedAt: true }
+        }
+      }
+    });
   }
 
   async createOrder(tx: V2CommandTransaction, data: Prisma.IdBusinessV2OrderUncheckedCreateInput) {
@@ -924,6 +974,7 @@ export class IdBusinessV2OrdersRepository {
       settlementPlatformOptionId: criteria.settlementPlatformOptionId ?? undefined,
       status: criteria.status ?? undefined,
       accountDisposition: criteria.accountDisposition ?? undefined,
+      accountSource: criteria.accountSource ?? undefined,
       openedAt: criteria.openedAt,
       OR: criteria.keyword
         ? [
@@ -989,11 +1040,15 @@ export class IdBusinessV2OrdersRepository {
       SELECT
         "id",
         "order_no" AS "orderNo",
+        "customer_id" AS "customerId",
         "service_option_id" AS "serviceOptionId",
         "account_id" AS "accountId",
+        "account_source" AS "accountSource",
+        "source_sold_order_id" AS "sourceSoldOrderId",
         "received_amount" AS "receivedAmount",
         "platform_fee_amount" AS "platformFeeAmount",
         "account_cost_amount" AS "accountCostAmount",
+        "applied_account_cost_amount" AS "appliedAccountCostAmount",
         "account_disposition" AS "accountDisposition",
         "balance_amount" AS "balanceAmount",
         "balance_cost_amount" AS "balanceCostAmount",
@@ -1018,6 +1073,7 @@ export class IdBusinessV2OrdersRepository {
         account."balance_cost_amount" AS "balanceCostAmount",
         account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
+        sold_order."customer_id" AS "soldByCustomerId",
         account."loss_reported_at" AS "lossReportedAt",
         account."country_option_id" AS "countryOptionId",
         status."code" AS "statusCode"
@@ -1032,6 +1088,9 @@ export class IdBusinessV2OrdersRepository {
         AND status."type" = 'id_status'
         AND status."status" = 'active'
         AND status."deleted_at" IS NULL
+      LEFT JOIN "id_business_v2_orders" sold_order
+        ON sold_order."id" = account."sold_by_order_id"
+        AND sold_order."deleted_at" IS NULL
       WHERE
         account."id" = CAST(${accountId} AS UUID)
         AND account."deleted_at" IS NULL
@@ -1047,6 +1106,64 @@ export class IdBusinessV2OrdersRepository {
     accountId: string
   ): Promise<LockedAccountForSale | null> {
     return lockAccountForSale(tx, accountId);
+  }
+
+  async findSoldAccountRecoveryBlockers(
+    tx: V2CommandTransaction,
+    input: { accountId: string; sourceOrderId: string; evaluatedAt: Date }
+  ) {
+    const [pendingAfterSalesOrders, activeActivations, activeLocks] = await Promise.all([
+      tx.idBusinessV2Order.count({
+        where: {
+          accountId: input.accountId,
+          accountSource: 'customer_owned',
+          deletedAt: null,
+          status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+        }
+      }),
+      tx.idBusinessV2Activation.count({
+        where: {
+          accountId: input.accountId,
+          status: 'active',
+          renewedBy: { is: null },
+          OR: [{ dueAt: null }, { dueAt: { gt: input.evaluatedAt } }]
+        }
+      }),
+      tx.idBusinessV2AccountLock.count({
+        where: {
+          accountId: input.accountId,
+          status: 'active',
+          expiresAt: { gt: input.evaluatedAt }
+        }
+      })
+    ]);
+    return { pendingAfterSalesOrders, activeActivations, activeLocks };
+  }
+
+  async findPostedOrderCompletionIdCost(tx: V2CommandTransaction, orderId: string) {
+    const journal = await tx.idBusinessV2FinanceJournal.findFirst({
+      where: {
+        sourceType: 'order',
+        sourceId: orderId,
+        journalType: 'order_completed',
+        status: 'posted'
+      },
+      select: {
+        id: true,
+        lines: {
+          where: { accountCode: 'id_cost', direction: 'debit' },
+          select: { amountCny: true },
+          take: 1
+        }
+      }
+    });
+    const line = journal?.lines[0];
+    return journal && line
+      ? {
+          journalId: journal.id,
+          amount: mapAmount4(line.amountCny, 'id_business_v2_finance_journal_lines.amount_cny')
+        }
+      : null;
   }
 
   async lockOrderId(tx: V2CommandTransaction, orderId: string, includeDeleted = false) {
@@ -1115,14 +1232,26 @@ export async function lockAccountForSale(
       id: string;
       purchaseCost: unknown;
       soldByOrderId: string | null;
+      soldAt: Date | null;
       lossReportedAt: Date | null;
+      recordStatus: 'active' | 'disabled';
+      disabledReason: string | null;
+      disabledAt: Date | null;
+      currentBalance: unknown;
+      balanceCostAmount: unknown;
     }>
   >`
       SELECT
         "id",
         "purchase_cost" AS "purchaseCost",
         "sold_by_order_id" AS "soldByOrderId",
-        "loss_reported_at" AS "lossReportedAt"
+        "sold_at" AS "soldAt",
+        "loss_reported_at" AS "lossReportedAt",
+        "record_status" AS "recordStatus",
+        "disabled_reason" AS "disabledReason",
+        "disabled_at" AS "disabledAt",
+        "current_balance" AS "currentBalance",
+        "balance_cost_amount" AS "balanceCostAmount"
       FROM "id_business_v2_accounts"
       WHERE
         "id" = CAST(${accountId} AS UUID)
@@ -1133,23 +1262,49 @@ export async function lockAccountForSale(
   return account
     ? {
         ...account,
-        purchaseCost: mapAmount4(account.purchaseCost, 'id_business_v2_accounts.purchase_cost')
+        soldAt: account.soldAt ?? null,
+        lossReportedAt: account.lossReportedAt ?? null,
+        recordStatus: account.recordStatus ?? 'active',
+        disabledReason: account.disabledReason ?? null,
+        disabledAt: account.disabledAt ?? null,
+        purchaseCost: mapAmount4(account.purchaseCost, 'id_business_v2_accounts.purchase_cost'),
+        currentBalance: mapAmount4(
+          account.currentBalance ?? 0,
+          'id_business_v2_accounts.current_balance'
+        ),
+        balanceCostAmount: mapAmount4(
+          account.balanceCostAmount ?? 0,
+          'id_business_v2_accounts.balance_cost_amount'
+        )
       }
     : null;
 }
 
 function mapLockedOrder(row: LockedOrderPersistenceRow): LockedOrderRow {
+  const accountCostAmount = mapAmount4(
+    row.accountCostAmount,
+    'id_business_v2_orders.account_cost_amount'
+  );
   return {
     ...row,
+    customerId: row.customerId ?? '',
+    accountSource: row.accountSource ?? 'inventory',
+    sourceSoldOrderId: row.sourceSoldOrderId ?? null,
     receivedAmount: mapAmount4(row.receivedAmount, 'id_business_v2_orders.received_amount'),
     platformFeeAmount: mapAmount4(
       row.platformFeeAmount,
       'id_business_v2_orders.platform_fee_amount'
     ),
-    accountCostAmount: mapAmount4(
-      row.accountCostAmount,
-      'id_business_v2_orders.account_cost_amount'
-    ),
+    accountCostAmount,
+    appliedAccountCostAmount:
+      row.appliedAccountCostAmount === undefined
+        ? row.accountDisposition === 'sold'
+          ? accountCostAmount
+          : mapAmount4(0, 'id_business_v2_orders.applied_account_cost_amount')
+        : mapAmount4(
+            row.appliedAccountCostAmount,
+            'id_business_v2_orders.applied_account_cost_amount'
+          ),
     balanceAmount: mapAmount4(row.balanceAmount, 'id_business_v2_orders.balance_amount'),
     balanceCostAmount: mapAmount4(
       row.balanceCostAmount,
@@ -1166,6 +1321,7 @@ function mapLockedOrder(row: LockedOrderPersistenceRow): LockedOrderRow {
 function mapLockedAccount(row: LockedAccountPersistenceRow): LockedAccountRow {
   return {
     ...row,
+    soldByCustomerId: row.soldByCustomerId ?? null,
     currentBalance: mapAmount4(row.currentBalance, 'id_business_v2_accounts.current_balance'),
     balanceCostAmount: mapAmount4(
       row.balanceCostAmount,
@@ -1176,8 +1332,14 @@ function mapLockedAccount(row: LockedAccountPersistenceRow): LockedAccountRow {
 }
 
 function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
+  const accountCostAmount = mapAmount4(
+    row.accountCostAmount,
+    'id_business_v2_orders.account_cost_amount'
+  );
   return {
     ...row,
+    accountSource: row.accountSource ?? 'inventory',
+    sourceSoldOrderId: row.sourceSoldOrderId ?? null,
     receivedAmount: mapAmount4(row.receivedAmount, 'id_business_v2_orders.received_amount'),
     receivedOriginalAmount: mapAmount4(
       row.receivedOriginalAmount,
@@ -1191,10 +1353,16 @@ function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
       row.platformFeeAmount,
       'id_business_v2_orders.platform_fee_amount'
     ),
-    accountCostAmount: mapAmount4(
-      row.accountCostAmount,
-      'id_business_v2_orders.account_cost_amount'
-    ),
+    accountCostAmount,
+    appliedAccountCostAmount:
+      row.appliedAccountCostAmount === undefined
+        ? row.accountDisposition === 'sold'
+          ? accountCostAmount
+          : mapAmount4(0, 'id_business_v2_orders.applied_account_cost_amount')
+        : mapAmount4(
+            row.appliedAccountCostAmount,
+            'id_business_v2_orders.applied_account_cost_amount'
+          ),
     balanceAmount: mapAmount4(row.balanceAmount, 'id_business_v2_orders.balance_amount'),
     balanceCostAmount: mapAmount4(
       row.balanceCostAmount,
@@ -1214,6 +1382,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
     customer,
     serviceOption,
     account,
+    sourceSoldOrder,
     settlementPlatform,
     createdBy,
     locks,
@@ -1245,6 +1414,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
           }
         }
       : null,
+    sourceSoldOrder: sourceSoldOrder ?? null,
     settlementPlatform: settlementPlatform
       ? {
           ...settlementPlatform,
@@ -1259,6 +1429,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
 function mapMatchingAccount(row: MatchingAccountPersistenceRow): IdBusinessV2MatchingAccount {
   return {
     ...row,
+    soldByOrder: row.soldByOrder ?? null,
     currentBalance: mapAmount4(row.currentBalance, 'id_business_v2_accounts.current_balance'),
     balanceCostAmount: mapAmount4(
       row.balanceCostAmount,

@@ -70,14 +70,20 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
   外层事务，不允许开启第二个事务。
 - 加卡使用移动加权平均成本。
 - 订单利润由服务端按 `实收 - 平台手续费 - 余额成本 - 实际计入的 ID 成本 - 退款成本` 计算。
-- 订单保留 `accountCostAmount` 购买成本快照；仅 `accountDisposition=sold` 时由
-  `appliedAccountCostAmount` 计入利润，`retained` 与 `recovered` 的实际计入值为 0。
+- 订单通过 `accountSource=inventory|customer_owned` 区分库存 ID 与客户已购 ID。
+  `customer_owned` 必须保存后端生成的 `sourceSoldOrderId`，并固定为 `retained`。
+- 订单保留 `accountCostAmount` 购买成本快照；只有首次
+  `accountSource=inventory + accountDisposition=sold` 由 `appliedAccountCostAmount` 计入利润。
+  `customer_owned`、`retained` 与 `recovered` 的实际计入值均为 0。
 - ID 通过唯一的 `soldByOrderId` 与 `soldAt` 保存当前卖出证据；普通订单锁释放不解除销售占用。
+- 客户已购订单只建立按业务分类的锁，不改写 `soldByOrderId`、`soldAt` 或 ID 采购成本。
+  原销售订单只有通过回收预检并在同一事务内复核后才能解除归属。
 - ID 报损通过 `IdBusinessV2AccountLoss` 快照、`activeLossRecordId` 和 `account_loss` 余额流水保存；
   报损冻结不清零账户余额与余额人民币成本，余额流水只记录冻结证据，损耗由财务日记确认。
 - 数据库触发器禁止修改或删除报损快照，并在报损时校验冻结、停用和 active loss 必须同一事务成立；
   冻结期间账户业务更新会被数据库拒绝，解除冻结前必须先把 active loss 标记为已冲回并写入冲回财务日记。
-- 报损亏损包含余额人民币成本，未售 ID 同时确认 ID 采购成本；已卖出关系和历史订单利润保持不变，
+- 报损亏损包含余额人民币成本，未售 ID 同时确认 ID 采购成本；已售 ID 的 ID 采购成本损失固定为 0，
+  已售关系和历史订单利润保持不变，
   解除冻结不会自动恢复历史开通记录。
 - 礼品卡“被赎回”可在同一事务内调用账户报损核心逻辑：先写 `gift_card_redeemed` 扣卡流水，再以
   扣卡后快照写 `account_loss` 流水和报损记录；任一步失败都回滚。
@@ -153,7 +159,8 @@ GET   /api/id-business-v2/renewals/warning-summary
 - 实际续费仍只允许处理 7 天内到期或已到期记录。
 - 提醒汇总只返回计数和脱敏预览，不发送外部消息。
 - 手工续费原子创建完成订单、扣减余额、结转成本并生成新开通记录。
-- 已卖出的 ID 不进入续费工作台，普通手工续费订单固定为“保留 ID”。
+- 已售 ID 继续进入续费工作台；续费前同时校验原开通客户和销售归属客户。
+  已售 ID 续费订单标记为 `customer_owned`，关联原销售订单，并通过统一完成入账路径确认余额成本与利润。
 
 ## 7. 汇率采集
 

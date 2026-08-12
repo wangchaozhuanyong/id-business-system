@@ -2,6 +2,7 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
+import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import {
   Amount4,
   Rate8,
@@ -28,6 +29,7 @@ import { IdBusinessV2AccountsRepository } from './persistence/id-business-v2-acc
 export class IdBusinessV2AccountBalanceAdjustmentService {
   constructor(
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
+    private readonly financePostingService: IdBusinessV2FinancePostingService,
     private readonly transactionManager: V2CommandTransactionManager,
     private readonly transactionalAudit: V2TransactionalAuditService,
     private readonly repository: IdBusinessV2AccountsRepository
@@ -97,9 +99,6 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
 
         const locked = await this.lockAccountBalance(tx, accountId);
         assertAccountLossNotReported(locked.lossReportedAt, '已报损冻结 ID 不能调整余额');
-        if (locked.soldByOrderId) {
-          throw new ConflictException('该 ID 已卖出，不能调整余额或人民币成本');
-        }
         if (
           !locked.currentBalance.equals(expected.currentBalance) ||
           !locked.balanceCostAmount.equals(expected.balanceCostAmount)
@@ -112,7 +111,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
 
         const balanceDelta = target.currentBalance.sub(locked.currentBalance);
         const costDelta = target.balanceCostAmount.sub(locked.balanceCostAmount);
-        await this.repository.appendBalanceAdjustment(tx, {
+        const ledgerEntry = await this.repository.appendBalanceAdjustment(tx, {
           accountId,
           balanceDelta,
           costDelta,
@@ -126,6 +125,45 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
           reason,
           operatorId: operator?.id
         });
+        if (!costDelta.equals(0)) {
+          const amount = costDelta.abs();
+          await this.financePostingService.post(tx, {
+            journalType: 'manual_adjustment',
+            sourceType: 'account',
+            sourceId: accountId,
+            sourceReference: ledgerEntry.id,
+            occurredAt: new Date(),
+            summary: `ID 余额成本手工调整：${reason}`,
+            metadata: {
+              balanceLedgerId: ledgerEntry.id,
+              balanceDelta: balanceDelta.toString(),
+              costDelta: costDelta.toString(),
+              reason
+            },
+            idempotencyKey: `auto:account_balance_adjustment:${ledgerEntry.id}`,
+            operator,
+            lines: [
+              {
+                accountCode: 'gift_card_inventory',
+                direction: costDelta.gt(0) ? 'debit' : 'credit',
+                currency: 'CNY',
+                amountOriginal: amount,
+                fxRateToCny: 1,
+                amountCny: amount,
+                memo: '调整 ID 余额库存成本'
+              },
+              {
+                accountCode: 'manual_adjustment',
+                direction: costDelta.gt(0) ? 'credit' : 'debit',
+                currency: 'CNY',
+                amountOriginal: amount,
+                fxRateToCny: 1,
+                amountCny: amount,
+                memo: '余额成本手工调整对方科目'
+              }
+            ]
+          });
+        }
 
         const account = await this.repository.updateActive(tx, accountId, {
           ...updateData,

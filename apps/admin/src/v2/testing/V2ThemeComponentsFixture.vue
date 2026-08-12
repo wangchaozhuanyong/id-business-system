@@ -7,7 +7,7 @@
 
     <section class="v2-theme-components__overview" data-theme-overview>
       <div>
-        <span data-theme-overview-accent>REFERENCE DATA</span>
+        <span data-theme-overview-accent>业务基础资料</span>
         <h2 data-theme-overview-title>业务选项总览</h2>
         <p data-theme-overview-copy>集中维护业务模块共用的分类、国家和结算基础资料。</p>
       </div>

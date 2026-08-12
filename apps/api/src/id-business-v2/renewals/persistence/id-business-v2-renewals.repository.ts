@@ -31,6 +31,13 @@ const RENEWAL_INCLUDE = {
       balanceCostAmount: true,
       recordStatus: true,
       soldByOrderId: true,
+      soldByOrder: {
+        select: {
+          id: true,
+          orderNo: true,
+          customer: { select: { id: true, name: true } }
+        }
+      },
       countryOption: { select: { id: true, code: true, name: true } }
     }
   },
@@ -66,6 +73,7 @@ interface LockedManualRenewalAccountPersistenceRow {
   balanceCostAmount: unknown;
   purchaseCost: unknown;
   soldByOrderId: string | null;
+  soldByCustomerId: string | null;
   lossReportedAt: Date | null;
 }
 
@@ -190,7 +198,7 @@ export class IdBusinessV2RenewalsRepository {
           renewedBy: { is: null },
           status: 'active',
           dueAt: { gt: now },
-          account: { is: { soldByOrderId: null } }
+          account: { is: { recordStatus: 'active', lossReportedAt: null } }
         },
         select: { dueAt: true },
         orderBy: { dueAt: 'asc' }
@@ -248,7 +256,11 @@ export class IdBusinessV2RenewalsRepository {
         orderBy: [{ name: 'asc' }, { id: 'asc' }]
       }),
       this.prisma.idBusinessV2Account.findMany({
-        where: { soldByOrderId: null, activations: { some: actionableWhere } },
+        where: {
+          recordStatus: 'active',
+          lossReportedAt: null,
+          activations: { some: actionableWhere }
+        },
         select: { id: true, appleIdMasked: true },
         orderBy: [{ appleIdMasked: 'asc' }, { id: 'asc' }]
       }),
@@ -373,6 +385,7 @@ export class IdBusinessV2RenewalsRepository {
             deletedAt: true,
             lossReportedAt: true,
             soldByOrderId: true,
+            soldByOrder: { select: { customerId: true } },
             countryOption: { select: { id: true, code: true, name: true } },
             statusOption: { select: { code: true, status: true, deletedAt: true } }
           }
@@ -465,19 +478,23 @@ export class IdBusinessV2RenewalsRepository {
   ): Promise<LockedManualRenewalAccountRow | null> {
     const rows = await tx.$queryRaw<LockedManualRenewalAccountPersistenceRow[]>`
       SELECT
-        "id",
-        "current_balance" AS "currentBalance",
-        "balance_cost_amount" AS "balanceCostAmount",
-        "purchase_cost" AS "purchaseCost",
-        "sold_by_order_id" AS "soldByOrderId",
-        "loss_reported_at" AS "lossReportedAt"
-      FROM "id_business_v2_accounts"
+        account."id",
+        account."current_balance" AS "currentBalance",
+        account."balance_cost_amount" AS "balanceCostAmount",
+        account."purchase_cost" AS "purchaseCost",
+        account."sold_by_order_id" AS "soldByOrderId",
+        sold_order."customer_id" AS "soldByCustomerId",
+        account."loss_reported_at" AS "lossReportedAt"
+      FROM "id_business_v2_accounts" account
+      LEFT JOIN "id_business_v2_orders" sold_order
+        ON sold_order."id" = account."sold_by_order_id"
+        AND sold_order."deleted_at" IS NULL
       WHERE
-        "id" = CAST(${accountId} AS UUID)
-        AND "record_status" = 'active'
-        AND "deleted_at" IS NULL
-        AND "loss_reported_at" IS NULL
-      FOR UPDATE
+        account."id" = CAST(${accountId} AS UUID)
+        AND account."record_status" = 'active'
+        AND account."deleted_at" IS NULL
+        AND account."loss_reported_at" IS NULL
+      FOR UPDATE OF account
     `;
     const account = rows[0];
     return account

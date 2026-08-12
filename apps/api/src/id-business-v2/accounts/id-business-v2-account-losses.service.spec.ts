@@ -281,6 +281,9 @@ describe('IdBusinessV2AccountLossesService', () => {
   });
 
   it('keeps the real account-loss finance posting isolated from supplier fund models', async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      makeLockedAccount({ purchaseCost: new Prisma.Decimal('12.5') })
+    ]);
     const financeCommandRepository = {
       findJournalReplay: vi.fn().mockResolvedValue(null),
       createJournal: vi.fn((client: typeof tx, data: Record<string, unknown>) =>
@@ -428,30 +431,37 @@ describe('IdBusinessV2AccountLossesService', () => {
     );
   });
 
-  it('rejects reporting a sold ID without writing loss records', async () => {
+  it('reports a sold ID with zero ID purchase cost loss and preserved ownership', async () => {
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
         soldByOrderId: '80000000-0000-4000-8000-000000000001',
         soldOrderNo: 'V220260729SOLD001'
       })
     ]);
-    await expect(
-      service.reportLoss(
-        accountId,
-        {
-          reason: '售后确认 ID 死亡',
-          expectedCurrentBalance: '20',
-          expectedBalanceCostAmount: '70',
-          idempotencyKey: 'loss-request-sold'
-        },
-        operator
-      )
-    ).rejects.toThrow('已售出 ID 不能报损');
-    expect(tx.idBusinessV2AccountLoss.create).not.toHaveBeenCalled();
-    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
-    expect(tx.idBusinessV2Account.update).not.toHaveBeenCalledWith(
+    const result = await service.reportLoss(
+      accountId,
+      {
+        reason: '售后确认 ID 死亡',
+        expectedCurrentBalance: '20',
+        expectedBalanceCostAmount: '70',
+        idempotencyKey: 'loss-request-sold'
+      },
+      operator
+    );
+    expect(result.lossRecord).toMatchObject({
+      saleState: 'sold',
+      soldOrderId: '80000000-0000-4000-8000-000000000001',
+      soldOrderNo: 'V220260729SOLD001',
+      idPurchaseCostLossAmount: '0'
+    });
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
       expect.objectContaining({
-        data: expect.objectContaining({ lossReportedAt: expect.any(Date) })
+        journalType: 'account_loss',
+        lines: [
+          expect.objectContaining({ accountCode: 'balance_loss' }),
+          expect.objectContaining({ accountCode: 'gift_card_inventory' })
+        ]
       })
     );
   });

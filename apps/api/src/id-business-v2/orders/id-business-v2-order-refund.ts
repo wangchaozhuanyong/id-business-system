@@ -19,6 +19,7 @@ import type {
   IdBusinessV2OrderStatus
 } from './id-business-v2-order.types';
 import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import { assertSoldAccountCanRecover } from './id-business-v2-order-sold-account-recovery';
 
 const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
 
@@ -95,12 +96,24 @@ export async function refundIdBusinessV2Order(
         reversalLedger = restoration.ledger;
       }
       const effectiveBalanceCost = restoreBalance ? Amount4.zero() : order.balanceCostAmount;
+      const release = await orderLockService.releaseOrderLockInTransaction(
+        tx,
+        order.id,
+        `订单退款：${reason}`,
+        operator
+      );
       if (accountReturned) {
+        if (!order.accountId) throw new ConflictException('已售订单缺少 ID 关联');
+        const account = await repository.lockAccountForSale(tx, order.accountId);
+        if (!account || account.soldByOrderId !== order.id) {
+          throw new ConflictException('ID 售出归属已变更，请刷新后核对');
+        }
+        await assertSoldAccountCanRecover(repository, tx, account, order.id);
         await releaseSoldOrderAccount(tx, repository, order, operator);
       }
       const nextAccountDisposition = accountReturned ? 'recovered' : order.accountDisposition;
       const appliedAccountCostAmount =
-        nextAccountDisposition === 'sold' ? order.accountCostAmount : Amount4.zero();
+        nextAccountDisposition === 'sold' ? order.appliedAccountCostAmount : Amount4.zero();
       const profitAmount = support.calculateProfit(
         order.receivedAmount,
         order.platformFeeAmount,
@@ -108,17 +121,12 @@ export async function refundIdBusinessV2Order(
         effectiveBalanceCost,
         refundCostAmount
       );
-      const release = await orderLockService.releaseOrderLockInTransaction(
-        tx,
-        order.id,
-        `订单退款：${reason}`,
-        operator
-      );
       const statusChangedAt = new Date();
       await repository.updateOrder(tx, order.id, {
         refundCostAmount: refundCostAmount.toString(),
         balanceCostAmount: effectiveBalanceCost.toString(),
         accountDisposition: nextAccountDisposition,
+        appliedAccountCostAmount: appliedAccountCostAmount.toString(),
         profitAmount: profitAmount.toString(),
         status: 'refunded',
         statusChangedAt,
@@ -188,7 +196,7 @@ function buildRefundFinanceLines(
     | 'receivedFxSnapshotId'
     | 'receivedFinanceAccountId'
     | 'balanceCostAmount'
-    | 'accountCostAmount'
+    | 'appliedAccountCostAmount'
     | 'status'
   >,
   refundCostAmount: Amount4,
@@ -200,7 +208,7 @@ function buildRefundFinanceLines(
   const receivedAmount = order.receivedAmount;
   const receivedFxRateToCny = order.receivedFxRateToCny;
   const balanceCostAmount = order.balanceCostAmount;
-  const accountCostAmount = order.accountCostAmount;
+  const appliedAccountCostAmount = order.appliedAccountCostAmount;
   const hasOriginalEvidence = receivedOriginalAmount.gt(0);
   const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
   const rate = hasOriginalEvidence ? receivedFxRateToCny : Rate8.one();
@@ -277,24 +285,24 @@ function buildRefundFinanceLines(
       }
     );
   }
-  if (accountReturned) {
+  if (accountReturned && !appliedAccountCostAmount.isZero()) {
     lines.push(
       {
         accountCode: 'id_inventory' as const,
         direction: 'debit' as const,
         currency: 'CNY' as const,
-        amountOriginal: accountCostAmount,
+        amountOriginal: appliedAccountCostAmount,
         fxRateToCny: 1,
-        amountCny: accountCostAmount,
+        amountCny: appliedAccountCostAmount,
         memo: '退款收回 ID 库存'
       },
       {
         accountCode: 'id_cost' as const,
         direction: 'credit' as const,
         currency: 'CNY' as const,
-        amountOriginal: accountCostAmount,
+        amountOriginal: appliedAccountCostAmount,
         fxRateToCny: 1,
-        amountCny: accountCostAmount,
+        amountCny: appliedAccountCostAmount,
         memo: '冲回已卖 ID 成本'
       }
     );

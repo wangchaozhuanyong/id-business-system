@@ -204,11 +204,7 @@ describe('IdBusinessV2RenewalsService', () => {
         customerId,
         accountId,
         serviceOptionId,
-        account: {
-          is: {
-            soldByOrderId: null
-          }
-        }
+        account: undefined
       })
     );
     expect(call.where.AND[1]).toEqual({

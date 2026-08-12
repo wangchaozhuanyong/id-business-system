@@ -317,6 +317,20 @@ export interface V2FinanceAssetBreakdown {
   unrealizedFxChangeCny: DecimalString | null;
 }
 
+export interface V2FinanceAfterSales {
+  completedOrderCount: number;
+  grossRevenueCny: DecimalString;
+  refundedRevenueCny: DecimalString;
+  platformFeeCny: DecimalString;
+  balanceCostCny: DecimalString;
+  idCostCny: DecimalString;
+  refundLossCny: DecimalString;
+  netProfitCny: DecimalString;
+  pendingOrderCount: number;
+  pendingRevenueCny: DecimalString;
+  pendingProfitCny: DecimalString;
+}
+
 export interface V2FinanceReconciliationIssue {
   code:
     | 'history_incomplete'
@@ -325,7 +339,8 @@ export interface V2FinanceReconciliationIssue {
     | 'order_profit_difference'
     | 'supplier_balance_difference'
     | 'open_supplier_refund'
-    | 'missing_finance_journal';
+    | 'missing_finance_journal'
+    | 'after_sales_id_cost_nonzero';
   severity: 'info' | 'warning' | 'error';
   sourceType: string | null;
   sourceId: string | null;
@@ -373,6 +388,7 @@ export interface V2FinanceOverview {
   profitLoss: V2FinanceProfitLoss;
   currencyBreakdown: V2FinanceCurrencyBreakdown[];
   assets: V2FinanceAssetBreakdown;
+  afterSales: V2FinanceAfterSales;
   settlementPlatformReport: V2SettlementPlatformReport;
   reconciliation: {
     isComplete: boolean;

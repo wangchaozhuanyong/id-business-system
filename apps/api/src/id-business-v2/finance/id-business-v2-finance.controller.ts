@@ -309,6 +309,11 @@ export class IdBusinessV2FinanceController {
     return this.reportsService.assets();
   }
 
+  @Get('reports/after-sales')
+  afterSales(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
+    return this.reportsService.afterSales({ dateFrom, dateTo });
+  }
+
   @Get('reports/reconciliation')
   reconciliation(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
     return this.reportsService.reconciliation({ dateFrom, dateTo });

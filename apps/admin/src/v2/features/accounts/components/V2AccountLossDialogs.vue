@@ -26,7 +26,11 @@
       </dl>
       <el-alert
         type="warning"
-        title="报损后 ID 将显示为已报损冻结，当前余额和人民币成本计入损耗；解除冻结时会自动生成财务冲回。"
+        :title="
+          page.lossTarget.saleState === 'sold'
+            ? '已售 ID 报损只核销剩余余额成本，ID 采购成本为 0，原销售归属保持不变。'
+            : '报损后 ID 将显示为已报损冻结，当前余额成本和未售 ID 采购成本计入损耗。'
+        "
         :closable="false"
         show-icon
       />
@@ -185,7 +189,6 @@ const lossDisabledReason = computed(() => {
   if (!props.page.canReportLoss) return '当前账号无报损冻结权限';
   if (!props.page.lossTarget) return '未选择需要报损的 ID';
   if (props.page.lossTarget.lossStatus === 'reported') return '该 ID 已报损冻结';
-  if (props.page.lossTarget.saleState === 'sold') return '已售出 ID 不能报损';
   return '';
 });
 const unfreezeDisabledReason = computed(() => {

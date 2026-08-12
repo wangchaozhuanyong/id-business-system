@@ -45,7 +45,7 @@ try {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const probe = spawnSync(
       'docker',
-      ['exec', containerName, 'pg_isready', '-U', 'postgres', '-d', databaseName],
+      ['exec', containerName, 'psql', '-U', 'postgres', '-d', databaseName, '-Atc', 'SELECT 1;'],
       { encoding: 'utf8' }
     );
     if (probe.status === 0) {

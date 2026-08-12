@@ -46,6 +46,11 @@ export interface RenewalRecord {
     balanceCostAmount: Amount4;
     recordStatus: string;
     soldByOrderId: string | null;
+    soldByOrder: {
+      id: string;
+      orderNo: string;
+      customer: { id: string; name: string };
+    } | null;
     countryOption: { id: string; code: string; name: string };
   };
   serviceOption: {

@@ -36,6 +36,19 @@
               <dd>{{ page.detail.account?.appleIdMasked || '-' }}</dd>
             </div>
             <div>
+              <dt>ID 来源</dt>
+              <dd>
+                {{ page.detail.accountSource === 'customer_owned' ? '客户已购 ID' : '库存 ID' }}
+              </dd>
+            </div>
+            <div v-if="page.detail.sourceSoldOrder">
+              <dt>原销售订单</dt>
+              <dd>
+                {{ page.detail.sourceSoldOrder.orderNo }} ·
+                {{ page.detail.sourceSoldOrder.customer.name }}
+              </dd>
+            </div>
+            <div>
               <dt>ID 处理状态</dt>
               <dd>{{ page.accountDispositionMeta(page.detail.accountDisposition).label }}</dd>
             </div>

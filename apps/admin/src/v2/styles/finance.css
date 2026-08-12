@@ -1622,7 +1622,7 @@
 .v2-analytics-navigation {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(4, minmax(190px, 1fr));
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
   gap: 8px;
   padding: 8px;
   overflow-x: auto;
@@ -1717,6 +1717,176 @@
   display: grid;
   min-width: 0;
   gap: 14px;
+}
+
+.v2-after-sales-report {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.v2-after-sales-report > header {
+  padding: 15px 16px 13px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-after-sales-report > .el-alert {
+  margin: 0 16px;
+}
+
+.v2-after-sales-report__metrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 16px;
+}
+
+.v2-after-sales-report__metrics article {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: var(--v3-radius-sm);
+  background: var(--v2-surface-muted);
+}
+
+.v2-after-sales-report__metrics span,
+.v2-after-sales-report__metrics small,
+.v2-after-sales-report__details small {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+}
+
+.v2-after-sales-report__metrics strong {
+  overflow-wrap: anywhere;
+  color: var(--v2-text);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.v2-after-sales-report__details {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
+  gap: 14px;
+  padding: 0 16px 16px;
+}
+
+.v2-after-sales-report__details > section,
+.v2-after-sales-report__details > aside {
+  min-width: 0;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: var(--v3-radius-sm);
+}
+
+.v2-after-sales-report__details > section > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-after-sales-report__details dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 3px 14px;
+}
+
+.v2-after-sales-report__details dl > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-after-sales-report__details dl > div:nth-child(odd) {
+  padding-right: 14px;
+}
+
+.v2-after-sales-report__details dl > div:nth-child(even) {
+  padding-left: 14px;
+  border-left: 1px solid var(--v2-border-soft);
+}
+
+.v2-after-sales-report__details dt {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-after-sales-report__details dd {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.v2-after-sales-report__details > aside {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 18px;
+  background: var(--v2-surface-muted);
+}
+
+.v2-after-sales-report__details > aside > span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-after-sales-report__details > aside > strong {
+  overflow-wrap: anywhere;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.v2-after-sales-report__details > aside > p {
+  margin: 6px 0 0;
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .v2-after-sales-report__metrics,
+  .v2-after-sales-report__details,
+  .v2-after-sales-report__details dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .v2-after-sales-report__details > section,
+  .v2-after-sales-report__details > aside {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .v2-after-sales-report__metrics,
+  .v2-after-sales-report__details,
+  .v2-after-sales-report__details dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-after-sales-report__details dl > div:nth-child(odd),
+  .v2-after-sales-report__details dl > div:nth-child(even) {
+    padding-right: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 .v2-analytics-report-list {

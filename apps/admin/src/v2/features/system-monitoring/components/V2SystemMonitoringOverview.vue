@@ -1,7 +1,7 @@
 <template>
   <section class="v2-system-monitoring-overview" aria-label="系统运行总览">
     <div class="v2-system-monitoring-overview__intro">
-      <span class="v2-system-monitoring-overview__eyebrow">SYSTEM EVIDENCE</span>
+      <span class="v2-system-monitoring-overview__eyebrow">系统运行证据</span>
       <h2>系统运行证据</h2>
       <p>仅展示当前运行时可证明的只读结果；未接入证据的项目始终标记为未知。</p>
     </div>

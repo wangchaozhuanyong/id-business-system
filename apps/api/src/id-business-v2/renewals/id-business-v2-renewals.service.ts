@@ -60,7 +60,7 @@ export class IdBusinessV2RenewalsService {
       customerId: this.normalizeOptionalUuid(query.customerId, '客户'),
       serviceOptionId: this.normalizeOptionalUuid(query.serviceOptionId, '业务'),
       accountId: this.normalizeOptionalUuid(query.accountId, '苹果 ID'),
-      requireAvailableAccount: true
+      requireAvailableAccount: false
     };
     const primaryDueFilter: RenewalDueFilter = dueStatus
       ? { kind: 'due_status', status: dueStatus, evaluatedAt: now }
@@ -193,6 +193,8 @@ export class IdBusinessV2RenewalsService {
         currentBalance: item.account.currentBalance.toString(),
         balanceCostAmount: item.account.balanceCostAmount.toString(),
         recordStatus: item.account.recordStatus,
+        saleState: item.account.soldByOrder ? 'sold' : 'available',
+        soldByOrder: item.account.soldByOrder,
         country: item.account.countryOption
       },
       service: item.serviceOption,

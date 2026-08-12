@@ -1,7 +1,7 @@
 <template>
   <section class="v2-accounts-overview" aria-label="ID 资源概览">
     <div class="v2-accounts-overview__intro">
-      <span class="v2-accounts-overview__eyebrow">ID RESOURCE WORKSPACE</span>
+      <span class="v2-accounts-overview__eyebrow">ID 资源管理</span>
       <h2>ID 资源总览</h2>
       <p>当前分类为 {{ page.lifecycleLabel }}，敏感资料默认脱敏并保留访问审计。</p>
     </div>
@@ -72,7 +72,6 @@ const usableCount = computed(
   () =>
     props.page.items.filter(
       (item) =>
-        item.saleState === 'available' &&
         item.lossStatus === 'active' &&
         item.recordStatus === 'active' &&
         item.status.code === 'normal'

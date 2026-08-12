@@ -22,9 +22,11 @@ import type {
   V2OrderListResult,
   V2OptionSelector,
   V2OrderAccountDisposition,
+  V2OrderAccountSource,
   V2OrderStatus
 } from './contracts';
 import { hasUserPermission } from '@/utils/permissions';
+import { getOrCreateOrderActionKey } from './order-idempotency';
 import {
   accountDispositionMeta,
   accountDispositionOptions,
@@ -70,8 +72,7 @@ export function useOrdersPage() {
   const refundSaving = ref(false);
   const lifecycleBusyOrderId = ref('');
   const detailRequest = useV2LatestRequest();
-  const consumptionKeys = new Map<string, string>();
-  const lifecycleKeys = new Map<string, string>();
+  const actionKeys = new Map<string, string>();
   const canConsumeOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.create'));
   const canUpdateOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.update'));
   const canDeleteOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.delete'));
@@ -84,6 +85,7 @@ export function useOrdersPage() {
     settlementPlatformOptionId: '',
     status: '' as V2OrderStatus | '',
     accountDisposition: '' as V2OrderAccountDisposition | '',
+    accountSource: '' as V2OrderAccountSource | '',
     sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
@@ -94,6 +96,7 @@ export function useOrdersPage() {
       Boolean(query.settlementPlatformOptionId) ||
       Boolean(query.status) ||
       Boolean(query.accountDisposition) ||
+      Boolean(query.accountSource) ||
       Boolean(openedRange.value.length)
   );
 
@@ -105,6 +108,7 @@ export function useOrdersPage() {
       settlementPlatformOptionId: query.settlementPlatformOptionId || undefined,
       status: query.status || undefined,
       accountDisposition: query.accountDisposition || undefined,
+      accountSource: query.accountSource || undefined,
       openedFrom: openedRange.value[0] || undefined,
       openedTo: openedRange.value[1] || undefined
     };
@@ -319,9 +323,9 @@ export function useOrdersPage() {
     try {
       const result = await idBusinessV2OrdersApi.refund(order.id, {
         ...payload,
-        idempotencyKey: getLifecycleKey('refund', order.id)
+        idempotencyKey: getOrCreateOrderActionKey(actionKeys, 'refund', order.id)
       });
-      lifecycleKeys.delete(keyName);
+      actionKeys.delete(keyName);
       refundVisible.value = false;
       refundingOrder.value = result.order;
       if (detail.value?.id === order.id) detail.value = result.order;
@@ -372,9 +376,9 @@ export function useOrdersPage() {
     try {
       const result = await idBusinessV2OrdersApi.cancel(order.id, {
         reason,
-        idempotencyKey: getLifecycleKey('cancel', order.id)
+        idempotencyKey: getOrCreateOrderActionKey(actionKeys, 'cancel', order.id)
       });
-      lifecycleKeys.delete(keyName);
+      actionKeys.delete(keyName);
       if (detail.value?.id === order.id) detail.value = result.order;
       ElMessage.success(
         result.idempotentReplay
@@ -458,12 +462,12 @@ export function useOrdersPage() {
     }
 
     consumingOrderId.value = order.id;
-    const idempotencyKey = getConsumptionKey(order.id);
+    const idempotencyKey = getOrCreateOrderActionKey(actionKeys, 'consume', order.id);
     try {
       const result = await idBusinessV2OrdersApi.consumeBalance(order.id, {
         idempotencyKey
       });
-      consumptionKeys.delete(order.id);
+      actionKeys.delete(`consume:${order.id}`);
       ElMessage.success(
         result.idempotentReplay ? '已恢复原扣款流水结果' : '余额已真实扣减，利润已计算'
       );
@@ -509,29 +513,6 @@ export function useOrdersPage() {
     } finally {
       completingOrderId.value = '';
     }
-  }
-
-  function getConsumptionKey(orderId: string) {
-    const existing = consumptionKeys.get(orderId);
-    if (existing) return existing;
-    const key =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? `consume-${crypto.randomUUID()}`
-        : `consume-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-    consumptionKeys.set(orderId, key);
-    return key;
-  }
-
-  function getLifecycleKey(action: 'cancel' | 'refund', orderId: string) {
-    const name = `${action}:${orderId}`;
-    const existing = lifecycleKeys.get(name);
-    if (existing) return existing;
-    const key =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? `${action}-${crypto.randomUUID()}`
-        : `${action}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-    lifecycleKeys.set(name, key);
-    return key;
   }
 
   return {
