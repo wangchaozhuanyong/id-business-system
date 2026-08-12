@@ -18,7 +18,7 @@
         </small>
       </div>
 
-      <div class="v2-branding-preview__stage">
+      <div class="v2-branding-preview__stage" data-theme-branding-preview>
         <div class="v2-branding-preview__brand">
           <V2BrandLogo
             :logo-url="form.logoUrl || V2_BRANDING_DEFAULTS.logoUrl"

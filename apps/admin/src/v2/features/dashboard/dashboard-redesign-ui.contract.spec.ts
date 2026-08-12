@@ -43,4 +43,14 @@ describe('dashboard scheme 3 redesign contract', () => {
     expect(activity).toContain('v2-dashboard-panel__fixed-body');
     expect(view).toContain("import '@/v2/styles/dashboard.css'");
   });
+
+  it('uses theme-aware overview tokens instead of the permanently dark sidebar palette', () => {
+    expect(overview).toContain('data-theme-dashboard-overview');
+    expect(overview).toContain('background: var(--v2-overview-bg)');
+    expect(overview).toContain('background: var(--v2-overview-surface)');
+    expect(overview).toContain('color: var(--v2-overview-text)');
+    expect(overview).toContain('--el-button-text-color: var(--v2-overview-text)');
+    expect(overview).not.toContain('background: var(--v2-sidebar)');
+    expect(overview).not.toContain('color: #f4f7fb');
+  });
 });

@@ -41,6 +41,11 @@ const contrastPairs = [
   ['概览正文', '--v3-overview-bg', '--v3-overview-text', 4.5],
   ['概览次要文字', '--v3-overview-bg', '--v3-overview-text-soft', 4.5],
   ['概览强调文字', '--v3-overview-bg', '--v3-overview-accent', 4.5],
+  ['登录页正文', '--v3-login-bg', '--v3-login-text', 4.5],
+  ['登录页次要文字', '--v3-login-bg', '--v3-login-text-soft', 4.5],
+  ['登录页辅助文字', '--v3-login-bg', '--v3-login-muted', 4.5],
+  ['登录页边界', '--v3-login-bg', '--v3-login-border', 3],
+  ['登录页强调边界', '--v3-login-bg', '--v3-login-border-strong', 3],
   ['焦点边界', '--v3-surface', '--v3-focus-color', 3]
 ];
 

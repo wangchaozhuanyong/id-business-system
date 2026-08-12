@@ -109,6 +109,18 @@
   --v3-overview-control-active-border: #8fa2b6;
   --v3-overview-shadow: 0 8px 24px rgba(42, 63, 83, 0.07);
   --v3-overview-emphasis-shadow: 0 10px 28px rgba(42, 63, 83, 0.09);
+  --v3-login-bg: #eef3f8;
+  --v3-login-bg-strong: #e2eaf3;
+  --v3-login-surface: #ffffff;
+  --v3-login-surface-soft: #f7f9fc;
+  --v3-login-text: #172033;
+  --v3-login-text-soft: #58697d;
+  --v3-login-muted: #526074;
+  --v3-login-border: #79899c;
+  --v3-login-border-strong: #68788b;
+  --v3-login-grid: rgba(49, 95, 168, 0.08);
+  --v3-login-glow: rgba(49, 95, 168, 0.16);
+  --v3-login-panel-shadow: 0 24px 64px rgba(42, 63, 83, 0.14);
   --color-bg: var(--v3-bg);
   --color-surface: var(--v3-surface);
   --color-border: var(--v3-border);
@@ -205,6 +217,18 @@ html[data-v2-theme='dark'] {
   --v3-overview-control-active-border: rgba(255, 255, 255, 0.26);
   --v3-overview-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
   --v3-overview-emphasis-shadow: 0 16px 32px rgba(7, 24, 41, 0.18);
+  --v3-login-bg: #06111f;
+  --v3-login-bg-strong: #0f2238;
+  --v3-login-surface: #111b27;
+  --v3-login-surface-soft: #1b2939;
+  --v3-login-text: #f4f7fb;
+  --v3-login-text-soft: #aab8c8;
+  --v3-login-muted: #8290a3;
+  --v3-login-border: #5f7791;
+  --v3-login-border-strong: #71869e;
+  --v3-login-grid: rgba(255, 255, 255, 0.05);
+  --v3-login-glow: rgba(76, 122, 189, 0.28);
+  --v3-login-panel-shadow: 0 28px 72px rgba(2, 9, 18, 0.36);
 }
 
 /*
@@ -470,17 +494,12 @@ p {
   width: 100%;
   min-height: 100dvh;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(69, 119, 184, 0.3), transparent 27rem),
-    radial-gradient(circle at 78% 58%, rgba(76, 122, 189, 0.24), transparent 32rem),
-    linear-gradient(135deg, #06111f 0%, #0a1727 58%, #0f2238 100%);
-}
-
-html[data-v2-theme='dark'] .login-page {
-  background:
-    radial-gradient(circle at 12% 8%, rgba(69, 119, 184, 0.24), transparent 28rem),
-    radial-gradient(circle at 88% 54%, rgba(48, 79, 118, 0.32), transparent 34rem),
-    linear-gradient(135deg, #06111f 0%, #0a1727 58%, #0f2238 100%);
+  background-color: var(--v3-login-bg);
+  background-image:
+    radial-gradient(circle at 12% 8%, var(--v3-login-glow), transparent 27rem),
+    radial-gradient(circle at 84% 58%, var(--v3-login-glow), transparent 32rem),
+    linear-gradient(135deg, var(--v3-login-bg), var(--v3-login-bg-strong));
+  color: var(--v3-login-text);
 }
 
 .login-canvas {
@@ -505,8 +524,8 @@ html[data-v2-theme='dark'] .login-page {
 
 .login-canvas::before {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.052) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.046) 1px, transparent 1px);
+    linear-gradient(var(--v3-login-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--v3-login-grid) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: linear-gradient(110deg, black 0%, black 42%, transparent 68%);
 }
@@ -514,9 +533,9 @@ html[data-v2-theme='dark'] .login-page {
 .login-canvas::after {
   z-index: -1;
   background:
-    radial-gradient(ellipse at 82% 52%, rgba(248, 251, 255, 0.2), transparent 30rem),
-    radial-gradient(circle at 34% 44%, rgba(85, 140, 210, 0.18), transparent 24rem),
-    radial-gradient(circle at 64% 70%, rgba(8, 28, 54, 0.12), transparent 20rem);
+    radial-gradient(ellipse at 82% 52%, var(--v3-login-surface), transparent 30rem),
+    radial-gradient(circle at 34% 44%, var(--v3-login-glow), transparent 24rem);
+  opacity: 0.42;
 }
 
 .login-brand {
@@ -527,10 +546,10 @@ html[data-v2-theme='dark'] .login-page {
   gap: 13px;
   justify-self: center;
   padding: 8px 16px 8px 8px;
-  border: 1px solid rgba(160, 188, 224, 0.2);
+  border: 1px solid var(--v3-login-border);
   border-radius: 24px;
-  background: rgba(7, 21, 38, 0.32);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--v3-login-surface) 78%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--v3-login-text) 9%, transparent);
   backdrop-filter: blur(18px);
 }
 
@@ -558,13 +577,13 @@ html[data-v2-theme='dark'] .login-page {
 }
 
 .login-brand strong {
-  color: #f5f8fc;
+  color: var(--v3-login-text);
   font-size: 20px;
   letter-spacing: -0.03em;
 }
 
 .login-brand span:last-child {
-  color: rgba(217, 228, 244, 0.62);
+  color: var(--v3-login-text-soft);
   font-size: 14px;
 }
 
@@ -591,7 +610,7 @@ html[data-v2-theme='dark'] .login-page {
   min-width: 0;
   min-height: 0;
   padding: 0;
-  color: #edf4ff;
+  color: var(--v3-login-text);
   text-align: center;
 }
 
@@ -602,7 +621,7 @@ html[data-v2-theme='dark'] .login-page {
 .login-showcase__content h1 {
   max-width: min(760px, 100%);
   margin: 0;
-  color: #f8fbff;
+  color: var(--v3-login-text);
   font-size: clamp(42px, 5vw, 72px);
   font-weight: 800;
   letter-spacing: -0.07em;
@@ -617,17 +636,17 @@ html[data-v2-theme='dark'] .login-page {
   gap: 10px;
   margin: clamp(24px, 3.4vh, 34px) auto 0;
   padding: 12px;
-  border: 1px solid rgba(166, 193, 226, 0.2);
+  border: 1px solid var(--v3-login-border);
   border-radius: 24px;
-  background: rgba(5, 17, 32, 0.4);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--v3-login-surface) 74%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--v3-login-text) 9%, transparent);
   backdrop-filter: blur(18px);
 }
 
 .login-workflow span {
   min-width: 0;
   flex: 1 1 0;
-  color: #eff6ff;
+  color: var(--v3-login-text);
   font-size: 13px;
   font-weight: 800;
   text-align: center;
@@ -669,7 +688,7 @@ html[data-v2-theme='dark'] .login-page {
     var(--v3-surface);
   color: var(--v3-text);
   box-shadow:
-    0 36px 92px rgba(10, 26, 48, 0.2),
+    var(--v3-login-panel-shadow),
     0 1px 0 color-mix(in srgb, #ffffff 66%, transparent) inset;
 }
 
@@ -691,7 +710,7 @@ html[data-v2-theme='dark'] .login-page {
   grid-row: 5;
   justify-self: center;
   margin: clamp(14px, 2.4vh, 22px) 0 0;
-  color: rgba(210, 224, 243, 0.58);
+  color: var(--v3-login-muted);
   font-size: 13px;
   text-align: center;
 }
@@ -749,16 +768,11 @@ html[data-v2-theme='dark'] .login-page {
 
 @media (max-width: 720px) {
   .login-page {
-    background:
-      radial-gradient(circle at 18% 4%, rgba(70, 126, 202, 0.34), transparent 18rem),
-      radial-gradient(circle at 80% 86%, rgba(39, 83, 148, 0.22), transparent 18rem),
-      linear-gradient(180deg, #071323 0%, #0b1b2e 100%);
-  }
-
-  html[data-v2-theme='dark'] .login-page {
-    background:
-      radial-gradient(circle at 18% 4%, rgba(70, 126, 202, 0.28), transparent 18rem),
-      linear-gradient(180deg, #071323 0%, #0b1b2e 100%);
+    background-color: var(--v3-login-bg);
+    background-image:
+      radial-gradient(circle at 18% 4%, var(--v3-login-glow), transparent 18rem),
+      radial-gradient(circle at 80% 86%, var(--v3-login-glow), transparent 18rem),
+      linear-gradient(180deg, var(--v3-login-bg), var(--v3-login-bg-strong));
   }
 
   .login-canvas {
@@ -829,7 +843,7 @@ html[data-v2-theme='dark'] .login-page {
   .login-panel__card {
     padding: 24px 18px 22px;
     border-radius: 28px;
-    box-shadow: 0 24px 72px rgba(5, 19, 38, 0.28);
+    box-shadow: var(--v3-login-panel-shadow);
   }
 
   .login-mobile-ground {
