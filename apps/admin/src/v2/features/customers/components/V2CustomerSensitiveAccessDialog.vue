@@ -15,7 +15,7 @@
       show-icon
     />
     <el-form
-      ref="page.revealFormRef"
+      ref="revealFormRef"
       class="v2-horizontal-form"
       :model="page.revealForm"
       :rules="page.revealRules"
@@ -66,7 +66,7 @@
           (page.sensitiveAccessRequiresApproval &&
             page.sensitiveAccessRequest?.status === 'pending')
         "
-        @click="page.revealContact"
+        @click="page.revealContact(revealFormRef)"
       >
         {{ page.sensitiveAccessActionText }}
       </AppButton>
@@ -75,13 +75,16 @@
 </template>
 
 <script setup lang="ts">
-import type { UnwrapNestedRefs } from 'vue';
+import { ref, type UnwrapNestedRefs } from 'vue';
+import type { FormInstance } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { useCustomersPage } from '../useCustomersPage';
 
 defineProps<{
   page: UnwrapNestedRefs<ReturnType<typeof useCustomersPage>>;
 }>();
+
+const revealFormRef = ref<FormInstance>();
 </script>
 
 <style scoped>

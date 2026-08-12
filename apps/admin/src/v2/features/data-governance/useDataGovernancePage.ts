@@ -76,9 +76,6 @@ export function useDataGovernancePage() {
   const cleanupDrawerVisible = ref(false);
   const decisionDrawerVisible = ref(false);
   const detailDrawerVisible = ref(false);
-  const restoreFormRef = ref<FormInstance>();
-  const cleanupFormRef = ref<FormInstance>();
-  const decisionFormRef = ref<FormInstance>();
   const restoreForm = reactive<RestoreFormModel>({ ...RESTORE_INITIAL });
   const cleanupForm = reactive<CleanupFormModel>({ ...CLEANUP_INITIAL });
   const decisionForm = reactive<DecisionFormModel>({ ...DECISION_INITIAL });
@@ -309,8 +306,8 @@ export function useDataGovernancePage() {
     cleanupDrawerVisible.value = true;
   }
 
-  async function submitRestore() {
-    if (!(await validateV2Form(restoreFormRef.value))) return;
+  async function submitRestore(formInstance?: FormInstance) {
+    if (!(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'restore';
     mutationError.value = '';
     try {
@@ -331,8 +328,8 @@ export function useDataGovernancePage() {
     }
   }
 
-  async function submitCleanup() {
-    if (!(await validateV2Form(cleanupFormRef.value))) return;
+  async function submitCleanup(formInstance?: FormInstance) {
+    if (!(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'cleanup';
     mutationError.value = '';
     try {
@@ -408,8 +405,8 @@ export function useDataGovernancePage() {
     decisionDrawerVisible.value = true;
   }
 
-  async function submitDecision() {
-    if (!decisionTarget.value || !(await validateV2Form(decisionFormRef.value))) return;
+  async function submitDecision(formInstance?: FormInstance) {
+    if (!decisionTarget.value || !(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'decision';
     mutationError.value = '';
     try {
@@ -516,9 +513,6 @@ export function useDataGovernancePage() {
     cleanupDrawerVisible,
     decisionDrawerVisible,
     detailDrawerVisible,
-    restoreFormRef,
-    cleanupFormRef,
-    decisionFormRef,
     restoreForm,
     cleanupForm,
     decisionForm,

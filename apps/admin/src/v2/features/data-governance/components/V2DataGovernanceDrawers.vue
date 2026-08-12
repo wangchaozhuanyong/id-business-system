@@ -29,7 +29,7 @@
         </div>
       </section>
       <el-form
-        ref="page.restoreFormRef"
+        ref="restoreFormRef"
         class="v2-horizontal-form"
         :model="page.restoreForm"
         :rules="page.restoreRules"
@@ -77,7 +77,7 @@
       <AppButton
         variant="primary"
         :loading="page.mutationBusy === 'restore'"
-        @click="page.submitRestore"
+        @click="page.submitRestore(restoreFormRef)"
       >
         生成不可变预览
       </AppButton>
@@ -99,7 +99,7 @@
         show-icon
       />
       <el-form
-        ref="page.cleanupFormRef"
+        ref="cleanupFormRef"
         class="v2-horizontal-form"
         :model="page.cleanupForm"
         :rules="page.cleanupRules"
@@ -156,7 +156,7 @@
       <AppButton
         variant="primary"
         :loading="page.mutationBusy === 'cleanup'"
-        @click="page.submitCleanup"
+        @click="page.submitCleanup(cleanupFormRef)"
       >
         生成不可变预览
       </AppButton>
@@ -197,7 +197,7 @@
         </div>
       </section>
       <el-form
-        ref="page.decisionFormRef"
+        ref="decisionFormRef"
         class="v2-horizontal-form"
         :model="page.decisionForm"
         :rules="page.decisionRules"
@@ -241,7 +241,7 @@
       <AppButton
         :variant="page.decisionForm.decision === 'approved' ? 'primary' : 'danger'"
         :loading="page.mutationBusy === 'decision'"
-        @click="page.submitDecision"
+        @click="page.submitDecision(decisionFormRef)"
       >
         确认{{ page.decisionForm.decision === 'approved' ? '通过' : '驳回' }}
       </AppButton>
@@ -385,7 +385,8 @@
 </template>
 
 <script setup lang="ts">
-import type { UnwrapNestedRefs } from 'vue';
+import { ref, type UnwrapNestedRefs } from 'vue';
+import type { FormInstance } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2Table from '@/v2/components/V2Table.vue';
@@ -396,6 +397,9 @@ import type { useDataGovernancePage } from '../useDataGovernancePage';
 type DataGovernancePage = UnwrapNestedRefs<ReturnType<typeof useDataGovernancePage>>;
 
 const props = defineProps<{ page: DataGovernancePage }>();
+const restoreFormRef = ref<FormInstance>();
+const cleanupFormRef = ref<FormInstance>();
+const decisionFormRef = ref<FormInstance>();
 
 function beforeRestoreClose(done: () => void) {
   props.page.beforeClose(props.page.restoreDirty, done);
