@@ -54,19 +54,18 @@
               />
               <div class="v2-order-entry-group-columns">
                 <div class="v2-order-entry-form-column">
-                  <el-form-item label="业务分类" prop="categoryId">
+                  <el-form-item label="国家" prop="countryId">
                     <el-select
-                      v-model="form.categoryId"
+                      v-model="form.countryId"
                       filterable
-                      :disabled="!form.countryId"
-                      placeholder="选择分类"
-                      @change="handleCategoryChange"
+                      placeholder="选择国家"
+                      @change="handleCountryChange"
                     >
                       <el-option
-                        v-for="category in availableCategories"
-                        :key="category.id"
-                        :label="category.name"
-                        :value="category.id"
+                        v-for="country in entryOptions.countries"
+                        :key="country.id"
+                        :label="country.name"
+                        :value="country.id"
                       />
                     </el-select>
                   </el-form-item>
@@ -110,18 +109,19 @@
                 </div>
 
                 <div class="v2-order-entry-form-column">
-                  <el-form-item label="国家" prop="countryId">
+                  <el-form-item label="业务分类" prop="categoryId">
                     <el-select
-                      v-model="form.countryId"
+                      v-model="form.categoryId"
                       filterable
-                      placeholder="选择国家"
-                      @change="handleCountryChange"
+                      :disabled="!form.countryId"
+                      placeholder="选择分类"
+                      @change="handleCategoryChange"
                     >
                       <el-option
-                        v-for="country in entryOptions.countries"
-                        :key="country.id"
-                        :label="country.name"
-                        :value="country.id"
+                        v-for="category in availableCategories"
+                        :key="category.id"
+                        :label="category.name"
+                        :value="category.id"
                       />
                     </el-select>
                   </el-form-item>

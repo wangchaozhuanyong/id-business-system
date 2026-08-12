@@ -25,10 +25,10 @@ describe('order entry three-module UI contract', () => {
     for (const binding of ['form.countryId', 'form.accountId', 'idSelectionMode']) {
       expect(businessGroup).toContain(binding);
     }
-    expect(businessColumns[0]).toContain('label="业务分类" prop="categoryId"');
-    expect(businessColumns[0]).not.toContain('label="国家" prop="countryId"');
-    expect(businessColumns[1]).toContain('label="国家" prop="countryId"');
-    expect(businessColumns[1]).not.toContain('label="业务分类" prop="categoryId"');
+    expect(businessColumns[0]).toContain('label="国家" prop="countryId"');
+    expect(businessColumns[0]).not.toContain('label="业务分类" prop="categoryId"');
+    expect(businessColumns[1]).toContain('label="业务分类" prop="categoryId"');
+    expect(businessColumns[1]).not.toContain('label="国家" prop="countryId"');
     expect(settlementGroup).toContain('label="结算平台"');
     expect(settlementGroup).toContain('label="平台订单号"');
     expect(settlementGroup).toContain('label="客户业务账号"');
