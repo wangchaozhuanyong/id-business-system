@@ -152,9 +152,9 @@ Supabase 认证闭环复用现有 `V2AuthIdentity.mustResetPassword`、`lastAuth
 历史未登记会话不会在请求阶段自动补建；切换到该版本后，已有 Supabase 登录用户需要重新登录一次。
 
 员工账号和角色权限代码及生产发布已经完成。角色编码创建后保持不可变，`admin` 系统角色只读，当前
-不提供角色硬删除或启停；生产当前只有真实管理员和 `production_smoke_readonly` 自动巡检角色，新增
-真实员工后仍需按职责逐账号复核 Supabase 身份、角色权限和会话撤销。多币种财务 migration 已在生产
-应用，但历史状态仍为 `incomplete`，历史回填、业务期初数据和遗漏开支确认仍属于生产闭环待办。
+不提供角色硬删除或启停。生产已有 `admin`、`yuangong` 和 `production_smoke_readonly` 三个角色；真实
+员工仍需按职责逐账号复核 Supabase 身份、角色权限和会话撤销。多币种财务 migration、历史回填、业务
+期初数据和遗漏开支确认已经完成，生产聚合审计状态为 `completed`。
 
 数据治理闭环使用三个增量 migration：`20260731010000_data_governance_workflow` 建立任务、条目、
 审批和检查点结构，`20260731011000_data_governance_updated_at_defaults` 补齐数据库更新时间默认值，
@@ -171,14 +171,14 @@ migration 已在本地开发库和生产环境应用。2026-08-12 已使用两�
 
 ## 当前待办
 
-- [ ] 复核已执行的多币种财务历史回填，并由业务负责人确认期初余额与遗漏开支
+- [x] 复核已执行的多币种财务历史回填，并由业务负责人确认期初余额与遗漏开支
 - [ ] 按真实生产账号复核当前 22 个真实模块的权限矩阵（当前管理员与只读巡检角色已完成数据库侧
       权限核对；管理员 MFA、真实菜单/写入/敏感字段交互仍待账号持有人验收）
 - [ ] 使用真实业务数据完成一次加卡、订单、退款和手工续费闭环
 - [ ] 对新增真实员工逐账号复核 Supabase 身份、强制改密标记并验证会话撤销
 - [x] 在 Supabase 兼容隔离环境完成全量恢复和备份后新数据对比
 - [x] 使用两个独立生产身份完成数据治理预览、异人审批、分批执行和幂等重放演练
-- [ ] 将生产 API 从 Cloudflare Free Worker 迁移到 Supabase Edge Function，并完成财务写入验收
+- [x] 将生产 API 从 Cloudflare Free Worker 迁移到 Supabase Edge Function，并完成财务写入验收
 
 生产闭环步骤、负责人输入和验收门禁见 `docs/V2_PRODUCTION_CLOSURE.md`。只读聚合审计命令为
 `npm run audit:v2-production-closure:production`。
