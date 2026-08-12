@@ -480,7 +480,11 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
               COALESCE(sum(CASE WHEN line.direction::text = 'debit'
                                 THEN line.amount_cny ELSE -line.amount_cny END), 0) AS amount_cny
        FROM public.id_business_v2_finance_journal_lines line
-       WHERE line.finance_account_id IS NOT NULL AND line.account_code::text = 'cash'
+       JOIN public.id_business_v2_finance_journals journal
+         ON journal.id = line.journal_id
+       WHERE line.finance_account_id IS NOT NULL
+         AND line.account_code::text = 'cash'
+         AND journal.journal_type::text <> 'opening_balance'
        GROUP BY line.finance_account_id
      )
      SELECT account.id::text AS entity_id,
