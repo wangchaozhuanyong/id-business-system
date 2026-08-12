@@ -1,5 +1,10 @@
 <template>
-  <section v-if="page.overview" class="v2-dashboard-overview" aria-label="仪表盘经营概览">
+  <section
+    v-if="page.overview"
+    class="v2-dashboard-overview"
+    data-theme-dashboard-overview
+    aria-label="仪表盘经营概览"
+  >
     <div class="v2-dashboard-overview__intro">
       <span class="v2-dashboard-overview__eyebrow">OPERATIONS CONTROL</span>
       <h2>经营状态总览</h2>
@@ -67,11 +72,11 @@ function valueWithSuffix(value: number | null, suffix: string) {
   align-items: center;
   gap: 20px;
   padding: 18px 20px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--v2-overview-border);
   border-radius: var(--v3-radius);
-  background: var(--v2-sidebar);
-  color: #f4f7fb;
-  box-shadow: 0 16px 32px rgba(7, 24, 41, 0.14);
+  background: var(--v2-overview-bg);
+  color: var(--v2-overview-text);
+  box-shadow: var(--v2-overview-shadow);
 }
 
 .v2-dashboard-overview__intro {
@@ -81,7 +86,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
 }
 
 .v2-dashboard-overview__eyebrow {
-  color: #80aafc;
+  color: var(--v2-overview-accent);
   font-size: 10px;
   font-weight: var(--v3-font-weight-bold);
   letter-spacing: 0.14em;
@@ -100,7 +105,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
 
 .v2-dashboard-overview__intro p {
   max-width: 42ch;
-  color: #9fb0c4;
+  color: var(--v2-overview-text-soft);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -110,7 +115,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
   min-width: 0;
   grid-template-columns: repeat(4, minmax(104px, 1fr));
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--v2-overview-divider);
   border-radius: var(--v3-radius-sm);
 }
 
@@ -119,8 +124,8 @@ function valueWithSuffix(value: number | null, suffix: string) {
   min-width: 0;
   gap: 3px;
   padding: 11px 13px;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.035);
+  border-left: 1px solid var(--v2-overview-divider);
+  background: var(--v2-overview-surface);
 }
 
 .v2-dashboard-overview__metrics article:first-child {
@@ -130,13 +135,13 @@ function valueWithSuffix(value: number | null, suffix: string) {
 .v2-dashboard-overview__metrics span,
 .v2-dashboard-overview__metrics small,
 .v2-dashboard-overview__actions > span {
-  color: #9fb0c4;
+  color: var(--v2-overview-text-soft);
   font-size: 10px;
 }
 
 .v2-dashboard-overview__metrics strong {
   overflow: hidden;
-  color: #f4f7fb;
+  color: var(--v2-overview-text);
   font-size: 19px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -145,7 +150,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
 }
 
 .v2-dashboard-overview__metrics strong.is-danger {
-  color: #ff9b9b;
+  color: var(--v2-danger);
 }
 
 .v2-dashboard-overview__actions {
@@ -156,14 +161,14 @@ function valueWithSuffix(value: number | null, suffix: string) {
 }
 
 .v2-dashboard-overview__actions .app-button--ghost.el-button {
-  --el-button-text-color: #f4f7fb;
-  --el-button-border-color: rgba(255, 255, 255, 0.16);
-  --el-button-hover-text-color: #ffffff;
-  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
-  --el-button-hover-border-color: rgba(255, 255, 255, 0.24);
-  --el-button-active-text-color: #ffffff;
-  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
-  --el-button-active-border-color: rgba(255, 255, 255, 0.26);
+  --el-button-text-color: var(--v2-overview-text);
+  --el-button-border-color: var(--v2-overview-control-border);
+  --el-button-hover-text-color: var(--v2-overview-text);
+  --el-button-hover-bg-color: var(--v2-overview-control-hover);
+  --el-button-hover-border-color: var(--v2-overview-control-hover-border);
+  --el-button-active-text-color: var(--v2-overview-text);
+  --el-button-active-bg-color: var(--v2-overview-control-active);
+  --el-button-active-border-color: var(--v2-overview-control-active-border);
 }
 
 @media (max-width: 1180px) {
@@ -198,7 +203,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
   }
 
   .v2-dashboard-overview__metrics article:nth-child(-n + 2) {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid var(--v2-overview-divider);
   }
 
   .v2-dashboard-overview__actions {
@@ -214,7 +219,7 @@ function valueWithSuffix(value: number | null, suffix: string) {
   .v2-dashboard-overview__metrics article,
   .v2-dashboard-overview__metrics article:nth-child(3) {
     border-left: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid var(--v2-overview-divider);
   }
 
   .v2-dashboard-overview__metrics article:last-child {

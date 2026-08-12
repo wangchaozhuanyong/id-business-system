@@ -35,10 +35,13 @@ try {
   browser = await chromium.launch({ headless: true });
   await warmFixture(browser, '/button-contrast-fixture.html', '[data-button-contrast-fixture]');
   await warmFixture(browser, '/theme-components-fixture.html', '[data-theme-components-fixture]');
+  await warmFixture(browser, '/dashboard-design-fixture.html', '[data-theme-dashboard-overview]');
+  await warmFixture(browser, '/branding-design-fixture.html', '[data-theme-branding-preview]');
   for (const theme of themes) {
     for (const width of viewportWidths) {
       await verifyScenario(browser, theme, width);
       await verifyThemeComponentsScenario(browser, theme, width);
+      await verifyFeatureThemeScenario(browser, theme, width);
     }
   }
 
@@ -48,7 +51,7 @@ try {
       themes,
       viewportWidths,
       variants,
-      componentSurfaces: 13,
+      componentSurfaces: 15,
       minimumTextContrast: 4.5,
       minimumFocusContrast: 3
     })
@@ -405,6 +408,95 @@ async function verifyThemeComponentsScenario(browserInstance, theme, width) {
     }
   } finally {
     await context.close();
+  }
+}
+
+async function verifyFeatureThemeScenario(browserInstance, theme, width) {
+  const scenarios = [
+    {
+      label: '仪表盘经营概览',
+      pathname: '/dashboard-design-fixture.html',
+      readySelector: '[data-theme-dashboard-overview]',
+      surfaceSelector: '[data-theme-dashboard-overview]',
+      textSelector: '[data-theme-dashboard-overview] h2'
+    },
+    {
+      label: '品牌登录页预览',
+      pathname: '/branding-design-fixture.html',
+      readySelector: '[data-theme-branding-preview]',
+      surfaceSelector: '[data-theme-branding-preview]',
+      textSelector: '[data-theme-branding-preview] h3'
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    const context = await browserInstance.newContext({
+      viewport: { width, height: width <= 390 ? 844 : 1000 }
+    });
+    const page = await context.newPage();
+    const runtimeErrors = [];
+
+    page.on('pageerror', (error) => runtimeErrors.push(String(error)));
+    page.on('console', (message) => {
+      if (message.type() === 'error') runtimeErrors.push(message.text());
+    });
+
+    try {
+      const fixtureUrl = new URL(scenario.pathname, adminUrl);
+      fixtureUrl.searchParams.set('theme', theme);
+      await page.goto(fixtureUrl.href, { waitUntil: 'networkidle' });
+      await page.locator(scenario.readySelector).waitFor({ state: 'visible' });
+
+      const themeState = await page.evaluate(() => ({
+        classList: [...document.documentElement.classList],
+        colorScheme: getComputedStyle(document.documentElement).colorScheme,
+        theme: document.documentElement.dataset.v2Theme
+      }));
+      assert.equal(themeState.theme, theme, `${theme} ${width}px ${scenario.label}主题未同步`);
+      assert.equal(
+        themeState.classList.includes('dark'),
+        theme === 'dark',
+        `${theme} ${width}px ${scenario.label}的 Element Plus 主题未同步`
+      );
+      assert.equal(
+        themeState.colorScheme,
+        theme,
+        `${theme} ${width}px ${scenario.label}原生主题未同步`
+      );
+
+      assertThemeSurface(
+        await measureThemeNode(page.locator(scenario.surfaceSelector).first()),
+        theme,
+        { label: scenario.label, width }
+      );
+      assertThemeTextContrast(await measureThemeNode(page.locator(scenario.textSelector).first()), {
+        label: `${scenario.label}标题`,
+        theme,
+        width
+      });
+
+      const overflow = await page.evaluate(() =>
+        Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      );
+      assert.equal(overflow, 0, `${theme} ${width}px ${scenario.label}出现横向溢出`);
+      assert.deepEqual(
+        runtimeErrors,
+        [],
+        `${theme} ${width}px ${scenario.label}浏览器错误：${runtimeErrors.join('\n')}`
+      );
+
+      if (screenshotDirectory) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(
+            screenshotDirectory,
+            `${scenario.pathname.includes('dashboard') ? 'dashboard' : 'branding'}-${theme}-${width}.png`
+          )
+        });
+      }
+    } finally {
+      await context.close();
+    }
   }
 }
 

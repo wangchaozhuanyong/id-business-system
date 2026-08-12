@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import view from './V2BrandingSettingsView.vue?raw';
 import overview from './components/V2BrandingOverview.vue?raw';
@@ -5,6 +7,11 @@ import preview from './components/V2BrandingPreview.vue?raw';
 import api from '../../api/branding.ts?raw';
 import manifest from './manifest.ts?raw';
 import fixture from '../../testing/V2BrandingDesignFixture.vue?raw';
+
+const brandingStyles = readFileSync(
+  fileURLToPath(new URL('../../styles/branding.css', import.meta.url)),
+  'utf8'
+);
 
 describe('branding scheme 3 redesign contract', () => {
   it('composes a status overview and aligned editor-preview workspace', () => {
@@ -52,5 +59,13 @@ describe('branding scheme 3 redesign contract', () => {
     expect(fixture).toContain('Object.assign(savedForm, form)');
     expect(fixture).toContain('已恢复默认内容，尚未保存。');
     expect(fixture).not.toContain('http.');
+  });
+
+  it('keeps the login preview synchronized with the active light or dark theme', () => {
+    expect(preview).toContain('data-theme-branding-preview');
+    expect(brandingStyles).toContain('background-color: var(--v3-login-bg)');
+    expect(brandingStyles).toContain('color: var(--v3-login-text)');
+    expect(brandingStyles).toContain('background: var(--v3-login-surface-soft)');
+    expect(brandingStyles).not.toContain('background: #0d1b2a');
   });
 });

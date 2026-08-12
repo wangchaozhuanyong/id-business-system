@@ -1,5 +1,5 @@
 <template>
-  <main class="login-page">
+  <main class="login-page" data-theme-login-page>
     <section class="login-canvas" aria-label="系统登录">
       <div class="login-brand">
         <V2BrandLogo
@@ -349,17 +349,17 @@ onMounted(() => {
   gap: 10px;
   margin-top: 16px;
   padding: 10px 14px;
-  border: 1px solid rgba(166, 193, 226, 0.18);
+  border: 1px solid var(--v3-login-border);
   border-radius: 999px;
-  background: rgba(5, 17, 32, 0.28);
-  color: rgba(226, 236, 250, 0.76);
+  background: color-mix(in srgb, var(--v3-login-surface) 76%, transparent);
+  color: var(--v3-login-text-soft);
   font-size: 12px;
   font-weight: 650;
   backdrop-filter: blur(16px);
 }
 
 .v2-login-security span {
-  color: #bfdbfe;
+  color: var(--v3-primary);
   font-weight: 800;
 }
 

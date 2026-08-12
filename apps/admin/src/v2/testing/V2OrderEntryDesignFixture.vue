@@ -77,9 +77,9 @@
                     />
                     <div class="v2-order-entry-group-columns">
                       <div class="v2-order-entry-form-column">
-                        <el-form-item label="业务分类" required>
-                          <el-select v-model="form.category" aria-label="业务分类">
-                            <el-option label="ChatGPT" value="ChatGPT" />
+                        <el-form-item label="国家" required>
+                          <el-select v-model="form.country" aria-label="国家">
+                            <el-option label="美国" value="美国" />
                           </el-select>
                         </el-form-item>
                         <el-form-item label="业务名称" required>
@@ -97,9 +97,9 @@
                         </el-form-item>
                       </div>
                       <div class="v2-order-entry-form-column">
-                        <el-form-item label="国家" required>
-                          <el-select v-model="form.country" aria-label="国家">
-                            <el-option label="美国" value="美国" />
+                        <el-form-item label="业务分类" required>
+                          <el-select v-model="form.category" aria-label="业务分类">
+                            <el-option label="ChatGPT" value="ChatGPT" />
                           </el-select>
                         </el-form-item>
                         <el-form-item label="使用 ID" required>
