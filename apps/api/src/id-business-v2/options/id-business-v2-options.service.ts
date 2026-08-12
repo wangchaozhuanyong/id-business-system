@@ -17,6 +17,8 @@ import {
   Amount4,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  createV2DeletePreviewFingerprint,
+  normalizeV2DeletePreviewFingerprint,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import {
@@ -83,6 +85,13 @@ export class IdBusinessV2OptionsService {
 
   async get(id: string) {
     return toOptionResponse(await this.findOptionOrThrow(id));
+  }
+
+  async getDeletePreview(id: string) {
+    const option = await this.findOptionOrThrow(id);
+    this.assertMutable(option);
+    const impact = await this.repository.getDeleteImpact(option);
+    return this.buildDeletePreview(option, impact);
   }
 
   async requireActiveOption(
@@ -270,11 +279,25 @@ export class IdBusinessV2OptionsService {
     );
   }
 
-  remove(id: string, operator?: AuthenticatedUser, metadata: OptionCommandMetadata = {}) {
+  remove(
+    id: string,
+    previewFingerprintValue: string | undefined,
+    operator?: AuthenticatedUser,
+    metadata: OptionCommandMetadata = {}
+  ) {
+    const previewFingerprint = normalizeV2DeletePreviewFingerprint(previewFingerprintValue);
     return this.transactionManager.execute(
       async (tx, context) => {
         const existing = await this.findOptionOrThrowInTransaction(tx, id);
         this.assertMutable(existing);
+        const impact = await this.repository.getDeleteImpact(existing, tx);
+        const preview = this.buildDeletePreview(existing, impact);
+        if (preview.fingerprint !== previewFingerprint) {
+          throw new ConflictException('删除依赖已经变化，请重新预览后再确认');
+        }
+        if (!preview.canDelete) {
+          throw new ConflictException(preview.blockingReasons.join('；'));
+        }
         const cascadedServices = await this.repository.softDeleteDependentServices(tx, {
           optionId: existing.id,
           optionType: existing.type,
@@ -284,11 +307,28 @@ export class IdBusinessV2OptionsService {
         const disabledWallets = await this.repository.disableDependentSupplierWallets(tx, {
           optionId: existing.id,
           optionType: existing.type,
+          deletedAt: context.businessTime,
           operatorId: operator?.id
         });
+        for (const service of cascadedServices) {
+          await this.transactionalAudit.append(tx, {
+            userId: operator?.id,
+            module: 'id_business_v2_options',
+            action: 'id_business_v2.option.delete',
+            objectType: 'id_business_v2_option',
+            objectId: service.id,
+            beforeData: toOptionAuditJson(toOptionResponse(service)),
+            afterData: toOptionAuditJson({
+              cascadedByOptionId: existing.id,
+              deletedAt: context.businessTime.toISOString()
+            }),
+            remark: `连带删除 V2 开通业务：${service.name}`
+          });
+        }
         await this.repository.softDelete(tx, {
           id: existing.id,
           uniqueKey: existing.uniqueKey,
+          status: existing.status,
           deletedAt: context.businessTime,
           operatorId: operator?.id
         });
@@ -300,21 +340,46 @@ export class IdBusinessV2OptionsService {
           objectId: existing.id,
           beforeData: toOptionAuditJson(toOptionResponse(existing)),
           afterData: toOptionAuditJson({
-            cascadedServiceCount: cascadedServices.count,
+            cascadedServiceCount: cascadedServices.length,
             disabledSupplierWalletCount: disabledWallets.count
           }),
           remark: `删除 V2 选项：${existing.name}${
-            cascadedServices.count > 0 ? `，同步删除 ${cascadedServices.count} 个开通业务` : ''
+            cascadedServices.length > 0 ? `，同步删除 ${cascadedServices.length} 个开通业务` : ''
           }`
         });
         return {
           deleted: true,
-          cascadedServiceCount: cascadedServices.count,
+          cascadedServiceCount: cascadedServices.length,
           disabledSupplierWalletCount: disabledWallets.count
         };
       },
       { requestId: metadata.requestId ?? randomUUID(), operator }
     );
+  }
+
+  private buildDeletePreview(
+    option: OptionWithRelations,
+    impact: Awaited<ReturnType<IdBusinessV2OptionRepository['getDeleteImpact']>>
+  ) {
+    const blockingReasons: string[] = [];
+    if (impact.activeAccountCount > 0) {
+      blockingReasons.push(`仍有 ${impact.activeAccountCount} 个启用 ID 引用该选项`);
+    }
+    if (impact.activeOrderCount > 0) {
+      blockingReasons.push(`仍有 ${impact.activeOrderCount} 个进行中订单引用该选项或其业务`);
+    }
+    if (impact.activeActivationCount > 0) {
+      blockingReasons.push(`仍有 ${impact.activeActivationCount} 个活动开通记录引用该选项或其业务`);
+    }
+    return {
+      entityId: option.id,
+      entityName: option.name,
+      entityType: option.type,
+      canDelete: blockingReasons.length === 0,
+      blockingReasons,
+      impact,
+      fingerprint: createV2DeletePreviewFingerprint('option', option.id, option.updatedAt, impact)
+    };
   }
 
   private async findOptionOrThrow(id: string) {

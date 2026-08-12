@@ -13,7 +13,8 @@ const ACTIVATION_INCLUDE = {
       status: true,
       websiteAccountMasked: true,
       receivedAmount: true,
-      profitAmount: true
+      profitAmount: true,
+      displaySnapshot: true
     }
   },
   customer: { select: { id: true, name: true } },
@@ -110,6 +111,21 @@ export class IdBusinessV2ActivationRepository {
                   websiteAccountMasked: { contains: criteria.keyword, mode: 'insensitive' }
                 }
               }
+            },
+            {
+              order: {
+                is: {
+                  displaySnapshot: {
+                    is: {
+                      OR: [
+                        { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
+                        { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
+                        { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } }
+                      ]
+                    }
+                  }
+                }
+              }
             }
           ]
         : undefined
@@ -136,15 +152,32 @@ export class IdBusinessV2ActivationRepository {
 }
 
 function mapActivationRow(row: ActivationPersistenceRow): ActivationRecord {
+  const { displaySnapshot: snapshot, ...order } = row.order;
   return {
     ...row,
     order: {
-      ...row.order,
-      receivedAmount: mapAmount4(row.order.receivedAmount, 'id_business_v2_orders.received_amount'),
-      profitAmount: mapOptionalAmount4(
-        row.order.profitAmount,
-        'id_business_v2_orders.profit_amount'
-      )
+      ...order,
+      receivedAmount: mapAmount4(order.receivedAmount, 'id_business_v2_orders.received_amount'),
+      profitAmount: mapOptionalAmount4(order.profitAmount, 'id_business_v2_orders.profit_amount')
+    },
+    customer: { ...row.customer, name: snapshot?.customerName ?? row.customer.name },
+    account: {
+      ...row.account,
+      appleIdMasked: snapshot?.accountLabel ?? row.account.appleIdMasked,
+      countryOption: {
+        ...row.account.countryOption,
+        name: snapshot?.accountCountryName ?? row.account.countryOption.name
+      }
+    },
+    serviceOption: {
+      ...row.serviceOption,
+      name: snapshot?.serviceName ?? row.serviceOption.name,
+      parent: row.serviceOption.parent
+        ? {
+            ...row.serviceOption.parent,
+            name: snapshot?.serviceCategoryName ?? row.serviceOption.parent.name
+          }
+        : null
     }
   };
 }

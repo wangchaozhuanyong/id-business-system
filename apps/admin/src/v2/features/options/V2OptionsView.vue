@@ -56,12 +56,27 @@
     <V2ConfirmDialog
       v-model="page.deleteDialogVisible"
       title="删除选项"
-      :message="page.getDeleteMessage(page.deletingItem)"
+      message=""
       confirm-text="确认删除"
       danger
       :confirm-loading="page.deleting"
+      :confirm-disabled-reason="page.deleteConfirmDisabledReason"
       @confirm="page.confirmDelete"
-    />
+    >
+      <div class="v2-delete-preview" aria-live="polite">
+        <p>{{ page.getDeleteMessage(page.deletingItem) }}</p>
+        <p v-if="page.deletePreviewLoading" class="v2-delete-preview__status">正在核对关联数据…</p>
+        <dl v-else-if="page.deletePreview" class="v2-delete-preview__counts">
+          <div v-for="item in page.deleteImpactRows" :key="item.label">
+            <dt>{{ item.label }}</dt>
+            <dd>{{ item.value }}</dd>
+          </div>
+        </dl>
+        <p v-if="page.deletePreview?.blockingReasons.length" class="v2-delete-preview__blocking">
+          {{ page.deletePreview.blockingReasons.join('；') }}
+        </p>
+      </div>
+    </V2ConfirmDialog>
   </section>
 </template>
 

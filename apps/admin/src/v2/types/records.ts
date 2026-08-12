@@ -40,6 +40,20 @@ export interface V2Customer {
   updatedAt: string;
 }
 
+export interface V2CustomerDeletePreview {
+  entityId: string;
+  entityName: string;
+  canDelete: boolean;
+  blockingReasons: string[];
+  impact: {
+    orderCount: number;
+    activeOrderCount: number;
+    activationCount: number;
+    activeActivationCount: number;
+  };
+  fingerprint: string;
+}
+
 export type V2CustomerListResult = PaginatedResult<V2Customer>;
 
 export interface V2CustomerListQuery extends V2PageQuery {

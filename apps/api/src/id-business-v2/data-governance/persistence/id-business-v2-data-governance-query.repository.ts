@@ -186,7 +186,17 @@ export class IdBusinessV2DataGovernanceQueryRepository {
       }),
       this.prisma.idBusinessV2Option.findMany({
         where: { id: { in: ids.option } },
-        select: { id: true, name: true, uniqueKey: true, deletedAt: true }
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          status: true,
+          uniqueKey: true,
+          deletedAt: true,
+          parentId: true,
+          countryOptionId: true,
+          statusBeforeDeletion: true
+        }
       }),
       this.prisma.idBusinessV2Order.findMany({
         where: { id: { in: ids.order } },
@@ -200,6 +210,28 @@ export class IdBusinessV2DataGovernanceQueryRepository {
     return this.prisma.idBusinessV2Option.findMany({
       where: { uniqueKey: { in: uniqueKeys } },
       select: { id: true, uniqueKey: true }
+    });
+  }
+
+  findDependentServicesForRestore(parent: {
+    id: string;
+    type: 'country' | 'business_category';
+    deletedAt: Date;
+  }) {
+    return this.prisma.idBusinessV2Option.findMany({
+      where: {
+        type: 'service',
+        deletedAt: parent.deletedAt,
+        deletedByParentOptionId: parent.id,
+        ...(parent.type === 'country' ? { countryOptionId: parent.id } : { parentId: parent.id })
+      },
+      select: {
+        id: true,
+        uniqueKey: true,
+        statusBeforeDeletion: true,
+        deletedByParentOptionId: true
+      },
+      orderBy: { id: 'asc' }
     });
   }
 

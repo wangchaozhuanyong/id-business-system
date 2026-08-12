@@ -76,9 +76,9 @@ export class IdBusinessV2FinanceExpensesService {
         id: item.id,
         journalId: item.journalId,
         categoryOptionId: item.categoryOptionId,
-        categoryName: item.categoryOption.name,
+        categoryName: item.categoryNameSnapshot,
         financeAccountId: item.financeAccountId,
-        financeAccountName: item.financeAccount.name,
+        financeAccountName: item.financeAccountNameSnapshot,
         currency: item.currency,
         amountOriginal: item.amountOriginal,
         fxRateToCny: item.fxRateToCny,
@@ -172,7 +172,9 @@ export class IdBusinessV2FinanceExpensesService {
         id: expenseId,
         journalId: journal.id,
         categoryOptionId,
+        categoryNameSnapshot: category.name,
         financeAccountId,
+        financeAccountNameSnapshot: account.name,
         fxRateSnapshotId: rate.id,
         currency,
         amountOriginal: amount.toString(),
@@ -311,7 +313,9 @@ export class IdBusinessV2FinanceExpensesService {
         id: replacementExpenseId,
         journalId: journal.id,
         categoryOptionId,
+        categoryNameSnapshot: category.name,
         financeAccountId,
+        financeAccountNameSnapshot: account.name,
         fxRateSnapshotId: rate.id,
         currency,
         amountOriginal: amount.toString(),
@@ -344,7 +348,7 @@ export class IdBusinessV2FinanceExpensesService {
           replacementJournalId: replacement.journalId,
           reason
         },
-        remark: `更正经营开支：${original.categoryOption.name}`
+        remark: `更正经营开支：${original.categoryNameSnapshot}`
       });
       return this.toResponse(replacement);
     }, this.commandOptions(operator));
@@ -354,7 +358,9 @@ export class IdBusinessV2FinanceExpensesService {
     id: string;
     journalId: string;
     categoryOptionId: string;
+    categoryNameSnapshot: string;
     financeAccountId: string;
+    financeAccountNameSnapshot: string;
     currency: string;
     amountOriginal: string;
     fxRateToCny: string;
@@ -372,9 +378,9 @@ export class IdBusinessV2FinanceExpensesService {
       id: item.id,
       journalId: item.journalId,
       categoryOptionId: item.categoryOptionId,
-      categoryName: item.categoryOption.name,
+      categoryName: item.categoryNameSnapshot,
       financeAccountId: item.financeAccountId,
-      financeAccountName: item.financeAccount.name,
+      financeAccountName: item.financeAccountNameSnapshot,
       currency: item.currency,
       amountOriginal: item.amountOriginal,
       fxRateToCny: item.fxRateToCny,

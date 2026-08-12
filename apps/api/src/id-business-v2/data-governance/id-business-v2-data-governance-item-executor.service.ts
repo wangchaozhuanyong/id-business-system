@@ -160,7 +160,12 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
     eligibility: GovernanceEligibility,
     operatorId: string
   ): Promise<ExecutionOutcome> {
-    if (!item.sourceDeletedAt || !eligibility.originalUniqueKey) {
+    if (
+      !item.sourceDeletedAt ||
+      !eligibility.originalUniqueKey ||
+      !eligibility.originalStatus ||
+      !eligibility.dependentServices
+    ) {
       return this.missingPreviewSnapshot();
     }
     const current = await this.repository.findOptionRestoreState(tx, item.entityId);
@@ -178,16 +183,95 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
         message: '原唯一键已被其他选项占用。'
       };
     }
+    const dependentServices = eligibility.dependentServices ?? [];
+    for (const dependent of dependentServices) {
+      const dependentCurrent = await this.repository.findOptionRestoreState(tx, dependent.id);
+      if (
+        !dependentCurrent ||
+        !this.sameDate(dependentCurrent.deletedAt, item.sourceDeletedAt) ||
+        dependentCurrent.type !== 'service' ||
+        dependentCurrent.uniqueKey !== dependent.currentUniqueKey ||
+        dependentCurrent.statusBeforeDeletion !== dependent.originalStatus ||
+        dependentCurrent.deletedByParentOptionId !== item.entityId
+      ) {
+        return {
+          status: 'skipped',
+          code: 'dependent_source_changed',
+          message: '关联业务已变化，请重新预览。'
+        };
+      }
+      const dependentConflict = await this.repository.findOptionConflict(
+        tx,
+        dependent.originalUniqueKey
+      );
+      if (dependentConflict && dependentConflict.id !== dependent.id) {
+        return {
+          status: 'skipped',
+          code: 'dependent_unique_key_conflict',
+          message: '关联业务的原唯一键已被占用。'
+        };
+      }
+    }
     const result = await this.repository.restoreOption(tx, {
       id: item.entityId,
       sourceDeletedAt: item.sourceDeletedAt,
       currentUniqueKey: current.uniqueKey,
       originalUniqueKey: eligibility.originalUniqueKey,
+      originalStatus: eligibility.originalStatus,
       operatorId
     });
-    return result.count === 1
-      ? { status: 'succeeded', code: 'option_restored', message: '选项已恢复。' }
-      : this.sourceChanged();
+    if (result.count !== 1) return this.sourceChanged();
+    let restoredDependentServiceCount = 0;
+    for (const dependent of dependentServices) {
+      const restored = await this.repository.restoreDependentService(tx, {
+        ...dependent,
+        parentOptionId: item.entityId,
+        sourceDeletedAt: item.sourceDeletedAt,
+        operatorId
+      });
+      if (restored.count !== 1) {
+        throw new Error('关联业务恢复条件在事务内发生变化');
+      }
+      restoredDependentServiceCount += 1;
+      await this.transactionalAudit.append(tx, {
+        userId: operatorId,
+        module: 'id_business_v2_data_governance',
+        action: 'id_business_v2.option.restore',
+        objectType: 'id_business_v2_option',
+        objectId: dependent.id,
+        afterData: {
+          restoredByOptionId: item.entityId,
+          restoredStatus: dependent.originalStatus
+        },
+        remark: `数据治理连带恢复业务：${dependent.id}`
+      });
+    }
+    const restoredWallets =
+      current.type === 'topup_supplier'
+        ? await this.repository.restoreSupplierWallets(tx, {
+            supplierOptionId: item.entityId,
+            sourceDeletedAt: item.sourceDeletedAt,
+            operatorId
+          })
+        : { count: 0 };
+    return {
+      status: 'succeeded',
+      code: 'option_restored',
+      message:
+        [
+          '选项已恢复',
+          restoredDependentServiceCount > 0
+            ? `恢复 ${restoredDependentServiceCount} 个关联业务`
+            : null,
+          restoredWallets.count > 0 ? `重新启用 ${restoredWallets.count} 个关联供应商钱包` : null
+        ]
+          .filter(Boolean)
+          .join('，') + '。',
+      evidence: {
+        restoredDependentServiceCount,
+        restoredSupplierWalletCount: restoredWallets.count
+      }
+    };
   }
 
   private async restoreOrder(
@@ -295,13 +379,42 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
       detail: typeof record.detail === 'string' ? record.detail : '预览证据缺失。',
       originalUniqueKey:
         typeof record.originalUniqueKey === 'string' ? record.originalUniqueKey : undefined,
+      originalStatus:
+        record.originalStatus === 'active' || record.originalStatus === 'disabled'
+          ? record.originalStatus
+          : undefined,
       expectedStatus: typeof record.expectedStatus === 'string' ? record.expectedStatus : undefined,
       cutoff: typeof record.cutoff === 'string' ? record.cutoff : undefined,
       snapshotId:
         typeof record.snapshotId === 'string' || record.snapshotId === null
           ? record.snapshotId
-          : undefined
+          : undefined,
+      dependentServices: this.parseDependentServices(record.dependentServices)
     };
+  }
+
+  private parseDependentServices(value: unknown): GovernanceEligibility['dependentServices'] {
+    if (!Array.isArray(value)) return undefined;
+    const result: NonNullable<GovernanceEligibility['dependentServices']> = [];
+    for (const item of value) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+      const dependent = item as Record<string, unknown>;
+      if (
+        typeof dependent.id !== 'string' ||
+        typeof dependent.currentUniqueKey !== 'string' ||
+        typeof dependent.originalUniqueKey !== 'string' ||
+        (dependent.originalStatus !== 'active' && dependent.originalStatus !== 'disabled')
+      ) {
+        return undefined;
+      }
+      result.push({
+        id: dependent.id,
+        currentUniqueKey: dependent.currentUniqueKey,
+        originalUniqueKey: dependent.originalUniqueKey,
+        originalStatus: dependent.originalStatus
+      });
+    }
+    return result;
   }
 
   private sameDate(left: Date | null, right: Date) {

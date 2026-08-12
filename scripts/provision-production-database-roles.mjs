@@ -60,6 +60,7 @@ const RUNTIME_TABLES = [
   'id_business_v2_balance_ledger',
   'id_business_v2_account_losses',
   'id_business_v2_orders',
+  'id_business_v2_order_display_snapshots',
   'id_business_v2_account_locks',
   'id_business_v2_activations',
   'id_business_v2_renewal_warning_settings',
@@ -75,6 +76,19 @@ const RUNTIME_TABLES = [
   'id_business_v2_governance_checkpoints',
   'id_business_v2_scope_versions'
 ];
+
+const RUNTIME_DELETE_TABLES = [
+  'ip_whitelists',
+  'user_roles',
+  'role_permissions',
+  'id_business_v2_user_table_preferences',
+  'id_business_v2_exchange_rate_runs',
+  'id_business_v2_exchange_rate_snapshots',
+  'id_business_v2_exchange_rate_provider_snapshots',
+  'id_business_v2_exchange_rate_quote_samples'
+];
+
+const RUNTIME_TRIGGER_MANAGED_TABLES = ['id_business_v2_order_display_snapshots'];
 
 const values = parseArgs(process.argv.slice(2));
 if (!values.apply) {
@@ -167,8 +181,17 @@ try {
   }
 
   await admin.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
+  const runtimeWritableTables = RUNTIME_TABLES.filter(
+    (table) => !RUNTIME_TRIGGER_MANAGED_TABLES.includes(table)
+  );
   await admin.query(
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${RUNTIME_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
+    `GRANT SELECT, INSERT, UPDATE ON TABLE ${runtimeWritableTables.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
+  );
+  await admin.query(
+    `GRANT SELECT ON TABLE ${RUNTIME_TRIGGER_MANAGED_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
+  );
+  await admin.query(
+    `GRANT DELETE ON TABLE ${RUNTIME_DELETE_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
   await admin.query(
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdentifier(RUNTIME_ROLE)}`
@@ -372,12 +395,24 @@ async function verifyRoleCatalog(client) {
 
   const runtimePrivileges = await client.query(
     `SELECT table_name,
-            has_table_privilege($1, format('public.%I', table_name), 'SELECT,INSERT,UPDATE,DELETE') AS dml,
+            has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS can_select,
+            has_table_privilege($1, format('public.%I', table_name), 'INSERT,UPDATE') AS can_write,
+            has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS can_delete,
             has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS can_truncate
      FROM unnest($2::text[]) AS table_name`,
     [RUNTIME_ROLE, RUNTIME_TABLES]
   );
-  if (runtimePrivileges.rows.some((row) => !row.dml || row.can_truncate)) {
+  if (
+    runtimePrivileges.rows.some(
+      (row) =>
+        !row.can_select ||
+        row.can_truncate ||
+        (RUNTIME_TRIGGER_MANAGED_TABLES.includes(row.table_name)
+          ? row.can_write
+          : !row.can_write) ||
+        row.can_delete !== RUNTIME_DELETE_TABLES.includes(row.table_name)
+    )
+  ) {
     throw new Error('运行时角色的表权限不符合最小 DML 要求');
   }
 

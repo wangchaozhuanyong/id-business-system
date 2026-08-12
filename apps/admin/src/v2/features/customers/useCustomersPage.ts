@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
+import { isApiError } from '@/api/apiError';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import {
@@ -15,6 +16,7 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import { idBusinessV2CustomersApi } from './api';
 import type {
   V2Customer,
+  V2CustomerDeletePreview,
   V2CustomerListQuery,
   V2CustomerListResult,
   V2OptionSelector,
@@ -65,6 +67,9 @@ export function useCustomersPage() {
   const deletingItem = ref<V2Customer | null>(null);
   const deleteDialogVisible = ref(false);
   const deleting = ref(false);
+  const deletePreview = ref<V2CustomerDeletePreview | null>(null);
+  const deletePreviewLoading = ref(false);
+  let deletePreviewRequestId = 0;
   const revealTarget = ref<V2Customer | null>(null);
   const revealField = ref<'phone' | 'whatsapp'>('phone');
   const revealDialogVisible = ref(false);
@@ -376,27 +381,71 @@ export function useCustomersPage() {
     }
   }
 
-  function openDelete(item: V2Customer) {
+  const deleteConfirmDisabledReason = computed(() => {
+    if (deletePreviewLoading.value) return '正在核对关联数据';
+    if (!deletePreview.value) return '删除预览不可用';
+    return deletePreview.value.blockingReasons.join('；');
+  });
+  const deleteImpactRows = computed(() => {
+    const impact = deletePreview.value?.impact;
+    if (!impact) return [];
+    return [
+      { label: '关联订单', value: impact.orderCount },
+      { label: '进行中订单', value: impact.activeOrderCount },
+      { label: '关联开通', value: impact.activationCount },
+      { label: '活动开通', value: impact.activeActivationCount }
+    ].filter((item) => item.value > 0);
+  });
+
+  async function openDelete(item: V2Customer) {
     if (customersQuery.isParameterTransition.value) return;
+    const requestId = ++deletePreviewRequestId;
     deletingItem.value = item;
+    deletePreview.value = null;
     deleteDialogVisible.value = true;
+    deletePreviewLoading.value = true;
+    try {
+      const preview = await idBusinessV2CustomersApi.getDeletePreview(item.id);
+      if (requestId === deletePreviewRequestId && deletingItem.value?.id === item.id) {
+        deletePreview.value = preview;
+      }
+    } catch (error) {
+      if (requestId !== deletePreviewRequestId) return;
+      ElMessage.error(getApiErrorMessage(error));
+      deleteDialogVisible.value = false;
+      deletingItem.value = null;
+    } finally {
+      if (requestId === deletePreviewRequestId) deletePreviewLoading.value = false;
+    }
   }
 
   async function confirmDelete() {
-    if (!deletingItem.value) return;
+    if (!deletingItem.value || !deletePreview.value?.canDelete) return;
     deleting.value = true;
     try {
-      await idBusinessV2CustomersApi.remove(deletingItem.value.id);
+      await idBusinessV2CustomersApi.remove(deletingItem.value.id, deletePreview.value.fingerprint);
       ElMessage.success('客户资料已删除');
       deleteDialogVisible.value = false;
       deletingItem.value = null;
+      deletePreview.value = null;
       await loadCustomers();
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
+      if (isApiError(error) && error.kind === 'conflict' && deletingItem.value) {
+        await openDelete(deletingItem.value);
+      }
     } finally {
       deleting.value = false;
     }
   }
+
+  watch(deleteDialogVisible, (visible) => {
+    if (visible) return;
+    deletePreviewRequestId += 1;
+    deletePreviewLoading.value = false;
+    deletePreview.value = null;
+    if (!deleting.value) deletingItem.value = null;
+  });
 
   function selectorLabel(option: V2OptionSelector) {
     return [option.country?.name, option.parent?.name, option.name].filter(Boolean).join(' / ');
@@ -431,6 +480,10 @@ export function useCustomersPage() {
     deletingItem,
     deleteDialogVisible,
     deleting,
+    deletePreview,
+    deletePreviewLoading,
+    deleteConfirmDisabledReason,
+    deleteImpactRows,
     revealTarget,
     revealField,
     revealDialogVisible,

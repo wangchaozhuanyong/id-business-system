@@ -27,6 +27,15 @@ const APPROVER: AuthenticatedUser = {
   permissions: []
 };
 const CUSTOMER_ID = 'd2000000-0000-4000-8000-000000000001';
+const COUNTRY_ID = 'd3000000-0000-4000-8000-000000000001';
+const CATEGORY_ID = 'd3000000-0000-4000-8000-000000000002';
+const SERVICE_ID = 'd3000000-0000-4000-8000-000000000003';
+const SETTLEMENT_ID = 'd3000000-0000-4000-8000-000000000004';
+const EXPENSE_CATEGORY_ID = 'd3000000-0000-4000-8000-000000000005';
+const ORDER_ID = 'd4000000-0000-4000-8000-000000000001';
+const FINANCE_ACCOUNT_ID = 'd5000000-0000-4000-8000-000000000001';
+const FINANCE_JOURNAL_ID = 'd5000000-0000-4000-8000-000000000002';
+const FINANCE_EXPENSE_ID = 'd5000000-0000-4000-8000-000000000003';
 const CANCELLED_RESTORE_KEY = 'governance:integration:restore:cancelled';
 const RESTORE_KEY = 'governance:integration:restore:001';
 const EXECUTION_KEY = 'governance:integration:execute:001';
@@ -245,6 +254,191 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
     expect(
       await prisma.auditLog.count({ where: { module: 'id_business_v2_data_governance' } })
     ).toBe(auditCount);
+  });
+
+  it('captures immutable historical labels and protects audit evidence in PostgreSQL', async () => {
+    await prisma.idBusinessV2Option.createMany({
+      data: [
+        {
+          id: COUNTRY_ID,
+          type: 'country',
+          code: 'integration_country',
+          name: '历史国家',
+          uniqueKey: 'country:root:历史国家',
+          currencyCode: 'USD',
+          updatedByUserId: REQUESTER.id
+        },
+        {
+          id: CATEGORY_ID,
+          type: 'business_category',
+          code: 'integration_category',
+          name: '历史分类',
+          uniqueKey: 'business_category:root:历史分类',
+          updatedByUserId: REQUESTER.id
+        },
+        {
+          id: SETTLEMENT_ID,
+          type: 'settlement_platform',
+          code: 'integration_settlement',
+          name: '历史结算平台',
+          uniqueKey: 'settlement_platform:root:历史结算平台',
+          updatedByUserId: REQUESTER.id
+        },
+        {
+          id: EXPENSE_CATEGORY_ID,
+          type: 'expense_category',
+          code: 'integration_expense',
+          name: '历史开支分类',
+          uniqueKey: 'expense_category:root:历史开支分类',
+          updatedByUserId: REQUESTER.id
+        }
+      ]
+    });
+    await prisma.idBusinessV2Option.create({
+      data: {
+        id: SERVICE_ID,
+        type: 'service',
+        code: 'integration_service',
+        name: '历史业务',
+        uniqueKey: `service:${COUNTRY_ID}:${CATEGORY_ID}:历史业务`,
+        parentId: CATEGORY_ID,
+        countryOptionId: COUNTRY_ID,
+        businessAmount: '20',
+        updatedByUserId: REQUESTER.id
+      }
+    });
+    await prisma.idBusinessV2Order.create({
+      data: {
+        id: ORDER_ID,
+        orderNo: 'GOV-INTEGRATION-ORDER-1',
+        customerId: CUSTOMER_ID,
+        serviceOptionId: SERVICE_ID,
+        idempotencyKey: 'governance:integration:order:1',
+        updatedByUserId: REQUESTER.id
+      }
+    });
+
+    const snapshot = await prisma.idBusinessV2OrderDisplaySnapshot.findUniqueOrThrow({
+      where: { orderId: ORDER_ID }
+    });
+    expect(snapshot).toMatchObject({
+      customerName: '隔离库待恢复客户',
+      serviceName: '历史业务',
+      serviceCategoryName: '历史分类'
+    });
+
+    await prisma.idBusinessV2Customer.update({
+      where: { id: CUSTOMER_ID },
+      data: { name: '客户新名称' }
+    });
+    await prisma.idBusinessV2Option.update({
+      where: { id: SERVICE_ID },
+      data: { name: '业务新名称' }
+    });
+    await prisma.idBusinessV2Order.update({
+      where: { id: ORDER_ID },
+      data: { settlementPlatformOptionId: SETTLEMENT_ID }
+    });
+    expect(
+      await prisma.idBusinessV2OrderDisplaySnapshot.findUniqueOrThrow({
+        where: { orderId: ORDER_ID }
+      })
+    ).toMatchObject({
+      customerName: '隔离库待恢复客户',
+      serviceName: '历史业务',
+      settlementPlatformName: '历史结算平台'
+    });
+
+    await prisma.idBusinessV2FinanceAccount.create({
+      data: {
+        id: FINANCE_ACCOUNT_ID,
+        name: '历史资金账户',
+        accountType: 'cash',
+        currency: 'CNY',
+        currentBalance: '-10',
+        currentBalanceCny: '-10',
+        createdByUserId: REQUESTER.id
+      }
+    });
+    await prisma.idBusinessV2FinanceJournal.create({
+      data: {
+        id: FINANCE_JOURNAL_ID,
+        journalNo: 'GOV-EXPENSE-1',
+        journalType: 'expense',
+        sourceType: 'expense',
+        sourceId: FINANCE_EXPENSE_ID,
+        businessDate: new Date('2026-08-01T00:00:00.000Z'),
+        periodMonth: '2026-08',
+        occurredAt: new Date('2026-08-01T08:00:00.000Z'),
+        summary: '历史开支快照测试',
+        idempotencyKey: 'governance:integration:expense:journal',
+        createdByUserId: REQUESTER.id,
+        lines: {
+          create: [
+            {
+              lineNo: 1,
+              accountCode: 'operating_expense',
+              direction: 'debit',
+              currency: 'CNY',
+              amountOriginal: '10',
+              fxRateToCny: '1',
+              amountCny: '10'
+            },
+            {
+              lineNo: 2,
+              accountCode: 'cash',
+              direction: 'credit',
+              currency: 'CNY',
+              amountOriginal: '10',
+              fxRateToCny: '1',
+              amountCny: '10',
+              financeAccountId: FINANCE_ACCOUNT_ID
+            }
+          ]
+        }
+      }
+    });
+    await prisma.$executeRaw`
+      INSERT INTO public.id_business_v2_finance_expenses (
+        id, journal_id, category_option_id, finance_account_id, currency,
+        amount_original, fx_rate_to_cny, amount_cny, occurred_at,
+        idempotency_key, created_by_user_id
+      ) VALUES (
+        ${FINANCE_EXPENSE_ID}::uuid, ${FINANCE_JOURNAL_ID}::uuid,
+        ${EXPENSE_CATEGORY_ID}::uuid, ${FINANCE_ACCOUNT_ID}::uuid,
+        'CNY'::"IdBusinessV2FinanceCurrency", 10, 1, 10,
+        ${new Date('2026-08-01T08:00:00.000Z')},
+        'governance:integration:expense', ${REQUESTER.id}::uuid
+      )
+    `;
+    const expense = await prisma.idBusinessV2FinanceExpense.findUniqueOrThrow({
+      where: { id: FINANCE_EXPENSE_ID }
+    });
+    expect(expense).toMatchObject({
+      categoryNameSnapshot: '历史开支分类',
+      financeAccountNameSnapshot: '历史资金账户'
+    });
+    await expect(
+      prisma.idBusinessV2FinanceExpense.update({
+        where: { id: FINANCE_EXPENSE_ID },
+        data: { categoryNameSnapshot: '非法修改' }
+      })
+    ).rejects.toThrow('经营开支历史展示快照不可修改');
+
+    await expect(
+      prisma.idBusinessV2OrderDisplaySnapshot.update({
+        where: { orderId: ORDER_ID },
+        data: { customerName: '非法修改' }
+      })
+    ).rejects.toThrow('订单历史展示快照不可直接修改或删除');
+
+    const audit = await prisma.auditLog.findFirstOrThrow();
+    await expect(
+      prisma.auditLog.update({ where: { id: audit.id }, data: { remark: '非法修改' } })
+    ).rejects.toThrow('审计日志不可修改或删除');
+    await expect(prisma.auditLog.delete({ where: { id: audit.id } })).rejects.toThrow(
+      '审计日志不可修改或删除'
+    );
   });
 
   async function assertEmptyGovernanceDatabase() {

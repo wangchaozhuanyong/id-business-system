@@ -9,7 +9,7 @@ import {
 
 if (process.argv.length < 3) {
   throw new Error(
-    '用法: node scripts/run-with-cloudflare-free-secrets.mjs <closure-audit|release-check|smoke-user-provision|data-maintenance|deploy> [args...]'
+    '用法: node scripts/run-with-cloudflare-free-secrets.mjs <closure-audit|integrity-audit|release-check|smoke-user-provision|data-maintenance|deploy> [args...]'
   );
 }
 

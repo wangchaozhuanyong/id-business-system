@@ -325,7 +325,14 @@ export class IdBusinessV2DataGovernanceRepository {
   findOptionRestoreState(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2Option.findUnique({
       where: { id },
-      select: { deletedAt: true, uniqueKey: true }
+      select: {
+        deletedAt: true,
+        uniqueKey: true,
+        type: true,
+        status: true,
+        statusBeforeDeletion: true,
+        deletedByParentOptionId: true
+      }
     });
   }
 
@@ -340,6 +347,7 @@ export class IdBusinessV2DataGovernanceRepository {
       sourceDeletedAt: Date;
       currentUniqueKey: string;
       originalUniqueKey: string;
+      originalStatus: 'active' | 'disabled';
       operatorId: string;
     }
   ) {
@@ -347,11 +355,65 @@ export class IdBusinessV2DataGovernanceRepository {
       where: {
         id: input.id,
         deletedAt: input.sourceDeletedAt,
-        uniqueKey: input.currentUniqueKey
+        uniqueKey: input.currentUniqueKey,
+        statusBeforeDeletion: input.originalStatus
       },
       data: {
         uniqueKey: input.originalUniqueKey,
+        status: input.originalStatus,
+        statusBeforeDeletion: null,
+        deletedByParentOptionId: null,
         deletedAt: null,
+        updatedByUserId: input.operatorId
+      }
+    });
+  }
+
+  restoreDependentService(
+    tx: V2CommandTransaction,
+    input: {
+      id: string;
+      sourceDeletedAt: Date;
+      currentUniqueKey: string;
+      originalUniqueKey: string;
+      originalStatus: 'active' | 'disabled';
+      parentOptionId: string;
+      operatorId: string;
+    }
+  ) {
+    return tx.idBusinessV2Option.updateMany({
+      where: {
+        id: input.id,
+        type: 'service',
+        deletedAt: input.sourceDeletedAt,
+        uniqueKey: input.currentUniqueKey,
+        statusBeforeDeletion: input.originalStatus,
+        deletedByParentOptionId: input.parentOptionId
+      },
+      data: {
+        uniqueKey: input.originalUniqueKey,
+        status: input.originalStatus,
+        statusBeforeDeletion: null,
+        deletedByParentOptionId: null,
+        deletedAt: null,
+        updatedByUserId: input.operatorId
+      }
+    });
+  }
+
+  restoreSupplierWallets(
+    tx: V2CommandTransaction,
+    input: { supplierOptionId: string; sourceDeletedAt: Date; operatorId: string }
+  ) {
+    return tx.idBusinessV2TopupSupplierAccount.updateMany({
+      where: {
+        supplierOptionId: input.supplierOptionId,
+        status: 'disabled',
+        disabledByOptionDeletionAt: input.sourceDeletedAt
+      },
+      data: {
+        status: 'active',
+        disabledByOptionDeletionAt: null,
         updatedByUserId: input.operatorId
       }
     });

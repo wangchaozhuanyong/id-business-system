@@ -17,6 +17,7 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { idBusinessV2OptionsApi } from './api';
 import { resolveCountryCurrencyAutoMatch } from './countryCurrency';
+import { useOptionDeleteFlow } from './useOptionDeleteFlow';
 import type {
   CreateV2OptionInput,
   V2Option,
@@ -81,9 +82,6 @@ export function useOptionsPage() {
   const parentOptionsLoading = ref(false);
   const countryOptions = ref<V2OptionSelector[]>([]);
   const countryOptionsLoading = ref(false);
-  const deleteDialogVisible = ref(false);
-  const deleting = ref(false);
-  const deletingItem = ref<V2Option | null>(null);
   let forceNextListRequest = false;
 
   const query = reactive({
@@ -445,48 +443,14 @@ export function useOptionsPage() {
     }
   }
 
-  function openDelete(item: V2Option) {
-    if (item.isSystem) return;
-    deletingItem.value = item;
-    deleteDialogVisible.value = true;
-  }
-
-  async function confirmDelete() {
-    if (!deletingItem.value) return;
-
-    deleting.value = true;
-    try {
-      await idBusinessV2OptionsApi.remove(deletingItem.value.id);
-      ElMessage.success('选项已删除');
-      deleteDialogVisible.value = false;
-      deletingItem.value = null;
-      if (items.value.length === 1 && query.page > 1) {
-        query.page -= 1;
-      }
-      void loadOptions(true);
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-    } finally {
-      deleting.value = false;
-    }
-  }
+  const deleteFlow = useOptionDeleteFlow({
+    items,
+    currentPage: computed({ get: () => query.page, set: (page) => (query.page = page) }),
+    refresh: () => void loadOptions(true)
+  });
 
   function getSelectorLabel(option: V2OptionSelector) {
     return option.parent?.name ? `${option.parent.name} / ${option.name}` : option.name;
-  }
-
-  function getDeleteTitle(item: V2Option) {
-    if (item.isSystem) return '系统固定选项不能删除';
-    return '删除选项';
-  }
-
-  function getDeleteMessage(item: V2Option | null) {
-    if (!item) return '确认删除该选项？';
-    const cascadeNotice =
-      item.childCount > 0 && (item.type === 'country' || item.type === 'business_category')
-        ? `系统会同时删除关联的开通业务；已有 ID、订单和历史账目仍保留原始名称。`
-        : '已有业务记录会保留原始关联，但后续不能再选择该选项。';
-    return `确认删除“${item.name}”？${cascadeNotice}`;
   }
 
   function formatDecimal(value: string) {
@@ -533,9 +497,7 @@ export function useOptionsPage() {
     parentOptionsLoading,
     countryOptions,
     countryOptionsLoading,
-    deleteDialogVisible,
-    deleting,
-    deletingItem,
+    ...deleteFlow,
     query,
     displayedPage,
     displayedPageSize,
@@ -566,11 +528,7 @@ export function useOptionsPage() {
     openEdit,
     handleFormTypeChange,
     submitForm,
-    openDelete,
-    confirmDelete,
     getSelectorLabel,
-    getDeleteTitle,
-    getDeleteMessage,
     formatDecimal,
     formatDate
   };

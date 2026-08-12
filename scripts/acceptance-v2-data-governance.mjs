@@ -61,10 +61,57 @@ try {
   if (!portMatch) throw new Error('无法解析数据治理隔离 PostgreSQL 端口');
   const databaseUrl = `postgresql://postgres:${databasePassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
 
+  run('docker', [
+    'exec',
+    containerName,
+    'psql',
+    '-U',
+    'postgres',
+    '-d',
+    databaseName,
+    '-v',
+    'ON_ERROR_STOP=1',
+    '-c',
+    "CREATE ROLE id_business_v2_runtime LOGIN PASSWORD 'runtime_acceptance_only'; CREATE ROLE id_business_v2_audit LOGIN PASSWORD 'audit_acceptance_only';"
+  ]);
+
   run('npx', ['prisma', 'migrate', 'deploy', '--schema', 'apps/api/prisma/schema.prisma'], {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: databaseUrl }
   });
+  run('node', ['scripts/v2-data-integrity-audit.mjs'], {
+    stdio: 'inherit',
+    env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl }
+  });
+  const runtimeDeleteTables = run('docker', [
+    'exec',
+    containerName,
+    'psql',
+    '-U',
+    'postgres',
+    '-d',
+    databaseName,
+    '-Atc',
+    `SELECT string_agg(c.relname, ',' ORDER BY c.relname)
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public'
+       AND c.relkind IN ('r', 'p')
+       AND has_table_privilege('id_business_v2_runtime', c.oid, 'DELETE');`
+  ]);
+  const expectedRuntimeDeleteTables = [
+    'id_business_v2_exchange_rate_provider_snapshots',
+    'id_business_v2_exchange_rate_quote_samples',
+    'id_business_v2_exchange_rate_runs',
+    'id_business_v2_exchange_rate_snapshots',
+    'id_business_v2_user_table_preferences',
+    'ip_whitelists',
+    'role_permissions',
+    'user_roles'
+  ].join(',');
+  if (runtimeDeleteTables !== expectedRuntimeDeleteTables) {
+    throw new Error(`运行时 DELETE 白名单不符合预期：${runtimeDeleteTables || '(empty)'}`);
+  }
   run(
     'npm',
     [
@@ -81,6 +128,10 @@ try {
       env: { ...process.env, V2_DATA_GOVERNANCE_DATABASE_URL: databaseUrl }
     }
   );
+  run('node', ['scripts/v2-data-integrity-audit.mjs'], {
+    stdio: 'inherit',
+    env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl }
+  });
 
   const state = JSON.parse(
     run('docker', [
@@ -103,7 +154,8 @@ try {
         'items', (select count(*) from id_business_v2_governance_job_items),
         'approvals', (select count(*) from id_business_v2_governance_approvals),
         'checkpoints', (select count(*) from id_business_v2_governance_checkpoints),
-        'auditLogs', (select count(*) from audit_logs)
+        'auditLogs', (select count(*) from audit_logs),
+        'orderSnapshots', (select count(*) from id_business_v2_order_display_snapshots)
       );`
     ])
   );
@@ -116,7 +168,8 @@ try {
     items: 2,
     approvals: 1,
     checkpoints: 1,
-    auditLogs: 6
+    auditLogs: 6,
+    orderSnapshots: 1
   };
   if (JSON.stringify(state) !== JSON.stringify(expectedState)) {
     throw new Error(`数据治理隔离库终态不符合预期：${JSON.stringify(state)}`);
@@ -127,6 +180,8 @@ try {
       ok: true,
       database: databaseName,
       workflow: [
+        'empty-database-integrity-audit',
+        'populated-database-integrity-audit',
         'requester-preview',
         'requester-cancel',
         'cancelled-task-approval-rejected',

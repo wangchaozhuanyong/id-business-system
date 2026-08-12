@@ -9,6 +9,7 @@ import type {
   CreateV2OptionInput,
   UpdateV2OptionInput,
   V2Option,
+  V2OptionDeletePreview,
   V2OptionBootstrapResult,
   V2OptionListQuery,
   V2OptionListResult,
@@ -127,8 +128,13 @@ export const idBusinessV2OptionsApi = {
     invalidateV2Queries(OPTION_MUTATION_SCOPES);
     return result;
   },
-  async remove(id: string) {
-    const result = await request<{ deleted: true }>(http.delete(`/id-business-v2/options/${id}`));
+  getDeletePreview(id: string) {
+    return request<V2OptionDeletePreview>(http.get(`/id-business-v2/options/${id}/delete-preview`));
+  },
+  async remove(id: string, previewFingerprint: string) {
+    const result = await request<{ deleted: true }>(
+      http.delete(`/id-business-v2/options/${id}`, { params: { previewFingerprint } })
+    );
     invalidateV2Queries(OPTION_MUTATION_SCOPES);
     return result;
   }

@@ -93,12 +93,27 @@
     <V2ConfirmDialog
       v-model="deleteDialogVisible"
       title="删除客户"
-      :message="`确认删除“${deletingItem?.name ?? ''}”？该操作会软删除资料。`"
+      message=""
       confirm-text="确认删除"
       danger
       :confirm-loading="deleting"
+      :confirm-disabled-reason="deleteConfirmDisabledReason"
       @confirm="confirmDelete"
-    />
+    >
+      <div class="v2-delete-preview" aria-live="polite">
+        <p>确认删除“{{ deletingItem?.name ?? '' }}”？该操作会软删除资料。</p>
+        <p v-if="deletePreviewLoading" class="v2-delete-preview__status">正在核对关联数据…</p>
+        <dl v-else-if="deletePreview" class="v2-delete-preview__counts">
+          <div v-for="item in deleteImpactRows" :key="item.label">
+            <dt>{{ item.label }}</dt>
+            <dd>{{ item.value }}</dd>
+          </div>
+        </dl>
+        <p v-if="deletePreview?.blockingReasons.length" class="v2-delete-preview__blocking">
+          {{ deletePreview.blockingReasons.join('；') }}
+        </p>
+      </div>
+    </V2ConfirmDialog>
   </section>
 </template>
 
@@ -125,6 +140,10 @@ const {
   deletingItem,
   deleteDialogVisible,
   deleting,
+  deletePreview,
+  deletePreviewLoading,
+  deleteConfirmDisabledReason,
+  deleteImpactRows,
   formRef,
   form,
   formRules,

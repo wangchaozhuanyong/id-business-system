@@ -42,6 +42,20 @@ test('closure audit receives only the read-only database credential', () => {
   assert.equal(environment.V2_RUNTIME_DATABASE_URL, undefined);
 });
 
+test('integrity audit receives only the read-only database credential', () => {
+  const profile = resolveProductionCommand('integrity-audit');
+  const environment = buildProductionCommandEnvironment(
+    { MIGRATION_DATABASE_URL: secrets.MIGRATION_DATABASE_URL },
+    secrets,
+    profile
+  );
+
+  assert.deepEqual(profile.args, ['scripts/v2-data-integrity-audit.mjs']);
+  assert.equal(environment.DATABASE_URL, secrets.AUDIT_DATABASE_URL);
+  assert.equal(environment.MIGRATION_DATABASE_URL, undefined);
+  assert.equal(environment.V2_RUNTIME_DATABASE_URL, undefined);
+});
+
 test('deploy receives runtime credential but never migration or audit credentials', () => {
   const profile = resolveProductionCommand('deploy');
   const environment = buildProductionCommandEnvironment({}, secrets, profile);

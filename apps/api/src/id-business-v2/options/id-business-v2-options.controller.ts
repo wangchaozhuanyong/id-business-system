@@ -87,6 +87,11 @@ export class IdBusinessV2OptionsController {
     return this.optionsService.getBusinessTree();
   }
 
+  @Get(':id/delete-preview')
+  getDeletePreview(@Param('id') id: string) {
+    return this.optionsService.getDeletePreview(id);
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.optionsService.get(id);
@@ -114,9 +119,12 @@ export class IdBusinessV2OptionsController {
   @Delete(':id')
   remove(
     @Param('id') id: string,
+    @Query('previewFingerprint') previewFingerprint?: string,
     @CurrentUser() operator?: AuthenticatedUser,
     @Req() request?: { requestId?: string }
   ) {
-    return this.optionsService.remove(id, operator, { requestId: request?.requestId });
+    return this.optionsService.remove(id, previewFingerprint, operator, {
+      requestId: request?.requestId
+    });
   }
 }

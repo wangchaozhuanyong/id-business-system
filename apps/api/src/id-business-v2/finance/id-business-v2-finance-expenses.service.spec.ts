@@ -18,7 +18,9 @@ function expenseRow(status: 'posted' | 'reversed' = 'posted') {
     id: expenseId,
     journalId,
     categoryOptionId: categoryId,
+    categoryNameSnapshot: '办公开支',
     financeAccountId: accountId,
+    financeAccountNameSnapshot: '人民币账户',
     currency: 'CNY',
     amountOriginal: '20',
     fxRateToCny: '1',
@@ -76,8 +78,8 @@ describe('IdBusinessV2FinanceExpensesService', () => {
       async (_transaction: unknown, input: Record<string, unknown>) => ({
         ...expenseRow(),
         ...input,
-        categoryOption: { name: '工资' },
-        financeAccount: { name: '人民币账户' },
+        categoryOption: { name: '已改名的分类' },
+        financeAccount: { name: '已改名的账户' },
         journal: { status: 'posted' }
       })
     );
@@ -119,6 +121,8 @@ describe('IdBusinessV2FinanceExpensesService', () => {
       tx,
       expect.objectContaining({
         amountOriginal: '30',
+        categoryNameSnapshot: '工资',
+        financeAccountNameSnapshot: '人民币账户',
         idempotencyKey: 'finance_expense_correction:expense-correction-test:replacement'
       })
     );
@@ -127,6 +131,8 @@ describe('IdBusinessV2FinanceExpensesService', () => {
       expect.objectContaining({ action: 'id_business_v2.finance_expense.correct' })
     );
     expect(result.status).toBe('posted');
+    expect(result.categoryName).toBe('工资');
+    expect(result.financeAccountName).toBe('人民币账户');
   });
 
   it('does not correct an expense whose journal is already reversed', async () => {

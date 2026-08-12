@@ -19,7 +19,9 @@ import type {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const RENEWAL_INCLUDE = {
-  order: { select: { id: true, orderNo: true, websiteAccountMasked: true } },
+  order: {
+    select: { id: true, orderNo: true, websiteAccountMasked: true, displaySnapshot: true }
+  },
   customer: { select: { id: true, name: true } },
   account: {
     select: {
@@ -165,6 +167,7 @@ export class IdBusinessV2RenewalsRepository {
       id: true,
       dueAt: true,
       status: true,
+      order: { select: { displaySnapshot: true } },
       customer: { select: { id: true, name: true } },
       account: { select: { id: true, appleIdMasked: true } },
       serviceOption: { select: { id: true, name: true } }
@@ -194,8 +197,8 @@ export class IdBusinessV2RenewalsRepository {
       })
     ]);
     return {
-      upcoming,
-      expired,
+      upcoming: upcoming.map(mapRenewalWarningSummaryRow),
+      expired: expired.map(mapRenewalWarningSummaryRow),
       nextTimedDueAt: nextTimedActivation?.dueAt ?? null
     };
   }
@@ -519,6 +522,21 @@ export class IdBusinessV2RenewalsRepository {
                   websiteAccountMasked: { contains: criteria.keyword, mode: 'insensitive' }
                 }
               }
+            },
+            {
+              order: {
+                is: {
+                  displaySnapshot: {
+                    is: {
+                      OR: [
+                        { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
+                        { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
+                        { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } }
+                      ]
+                    }
+                  }
+                }
+              }
             }
           ]
         : undefined
@@ -613,10 +631,18 @@ export class IdBusinessV2RenewalsRepository {
 }
 
 function mapRenewalRecord(row: RenewalPersistenceRow): RenewalRecord {
+  const { displaySnapshot: snapshot, ...order } = row.order;
   return {
     ...row,
+    order,
+    customer: { ...row.customer, name: snapshot?.customerName ?? row.customer.name },
     account: {
       ...row.account,
+      appleIdMasked: snapshot?.accountLabel ?? row.account.appleIdMasked,
+      countryOption: {
+        ...row.account.countryOption,
+        name: snapshot?.accountCountryName ?? row.account.countryOption.name
+      },
       currentBalance: mapAmount4(
         row.account.currentBalance,
         'id_business_v2_accounts.current_balance'
@@ -625,6 +651,47 @@ function mapRenewalRecord(row: RenewalPersistenceRow): RenewalRecord {
         row.account.balanceCostAmount,
         'id_business_v2_accounts.balance_cost_amount'
       )
+    },
+    serviceOption: {
+      ...row.serviceOption,
+      name: snapshot?.serviceName ?? row.serviceOption.name,
+      parent: row.serviceOption.parent
+        ? {
+            ...row.serviceOption.parent,
+            name: snapshot?.serviceCategoryName ?? row.serviceOption.parent.name
+          }
+        : null
+    }
+  };
+}
+
+function mapRenewalWarningSummaryRow<
+  TRow extends {
+    order: {
+      displaySnapshot: {
+        customerName: string;
+        serviceName: string;
+        accountLabel: string | null;
+      } | null;
+    };
+    customer: { id: string; name: string };
+    account: { id: string; appleIdMasked: string };
+    serviceOption: { id: string; name: string };
+  }
+>(row: TRow) {
+  const summary = { ...row };
+  delete (summary as Partial<TRow>).order;
+  const snapshot = row.order.displaySnapshot;
+  return {
+    ...summary,
+    customer: { ...row.customer, name: snapshot?.customerName ?? row.customer.name },
+    account: {
+      ...row.account,
+      appleIdMasked: snapshot?.accountLabel ?? row.account.appleIdMasked
+    },
+    serviceOption: {
+      ...row.serviceOption,
+      name: snapshot?.serviceName ?? row.serviceOption.name
     }
   };
 }
