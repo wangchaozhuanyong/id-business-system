@@ -34,6 +34,13 @@ test('integrity queries are wrapped in deterministic count and sample output', (
   assert.match(query, /ORDER BY entity_id LIMIT 10/);
 });
 
+test('finance account reconciliation does not count opening balances twice', () => {
+  const financeAccountCheck = V2_DATA_INTEGRITY_CHECKS.find(
+    (check) => check.code === 'finance_account_balance_mismatch'
+  );
+  assert.match(financeAccountCheck?.sql ?? '', /journal\.journal_type::text <> 'opening_balance'/);
+});
+
 test('assessment fails when any invariant has violations', () => {
   assert.deepEqual(
     assessV2DataIntegrity([
