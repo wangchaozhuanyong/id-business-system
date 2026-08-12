@@ -40,6 +40,9 @@ describe('employees scheme 3 redesign contract', () => {
     expect(api).toContain('http.patch(`/v2/employees/${id}`, input)');
     expect(drawer).toContain('当前登录账号不能修改自己的角色或状态');
     expect(pageState).toContain('所有在线会话会立即失效');
+    expect(pageState).toContain('确认修改员工权限');
+    expect(pageState).toContain('重新登录后新权限才会生效');
+    expect(drawer).toContain(':title="page.securitySensitiveChangeMessage"');
     expect(pageState).toContain('validateV2Form(formInstance)');
   });
 

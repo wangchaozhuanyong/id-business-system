@@ -91,6 +91,25 @@ export function useEmployeesPage() {
   const isEditingSelf = computed(() =>
     Boolean(editingItem.value && editingItem.value.id === authStore.user?.id)
   );
+  const rolesChanged = computed(() => {
+    if (!editingItem.value) return false;
+    const existingRoleIds = editingItem.value.roles.map((role) => role.id).sort();
+    const nextRoleIds = [...form.roleIds].sort();
+    return JSON.stringify(existingRoleIds) !== JSON.stringify(nextRoleIds);
+  });
+  const securitySensitiveChangeMessage = computed(() => {
+    const current = editingItem.value;
+    if (!current || isEditingSelf.value) return '';
+    const disabling = current.status === 'active' && form.status === 'disabled';
+    if (disabling && rolesChanged.value) {
+      return '停用或修改角色都会立即撤销该员工的全部在线会话。';
+    }
+    if (disabling) return '保存后该员工的在线会话会立即失效。';
+    if (rolesChanged.value) {
+      return '保存角色变更后，该员工的在线会话会立即失效，重新登录后新权限才会生效。';
+    }
+    return '';
+  });
   const drawerDirty = computed(() => JSON.stringify(form) !== formBaseline.value);
   const formRules = computed<FormRules<EmployeeFormModel>>(() => ({
     username: editingItem.value
@@ -196,13 +215,17 @@ export function useEmployeesPage() {
     if (!(await validateV2Form(formInstance))) return;
     mutationError.value = '';
     const current = editingItem.value;
-    if (current?.status === 'active' && form.status === 'disabled') {
+    const disabling = current?.status === 'active' && form.status === 'disabled';
+    if (current && (disabling || rolesChanged.value)) {
+      const changingRoles = rolesChanged.value;
       try {
         await ElMessageBox.confirm(
-          `停用后，${current.displayName} 的所有在线会话会立即失效。确认继续吗？`,
-          '确认停用员工账号',
+          changingRoles
+            ? `修改角色后，${current.displayName} 的所有在线会话会立即失效，需重新登录后新权限才会生效。确认继续吗？`
+            : `停用后，${current.displayName} 的所有在线会话会立即失效。确认继续吗？`,
+          changingRoles ? '确认修改员工权限' : '确认停用员工账号',
           {
-            confirmButtonText: '确认停用',
+            confirmButtonText: changingRoles ? '确认修改' : '确认停用',
             cancelButtonText: '取消',
             type: 'warning'
           }
@@ -273,6 +296,8 @@ export function useEmployeesPage() {
     drawerVisible,
     editingItem,
     isEditingSelf,
+    rolesChanged,
+    securitySensitiveChangeMessage,
     saving,
     mutationError,
     form,
