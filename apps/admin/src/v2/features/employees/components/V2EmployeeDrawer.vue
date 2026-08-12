@@ -94,10 +94,10 @@
         :closable="false"
       />
       <el-alert
-        v-else-if="page.editingItem && page.form.status === 'disabled'"
+        v-else-if="page.securitySensitiveChangeMessage"
         class="v2-employee-drawer__inline-alert"
         type="warning"
-        title="保存后该员工的在线会话会立即失效"
+        :title="page.securitySensitiveChangeMessage"
         show-icon
         :closable="false"
       />

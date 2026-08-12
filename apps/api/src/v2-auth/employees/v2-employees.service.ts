@@ -248,6 +248,12 @@ export class V2EmployeesService {
         : this.normalizeRequiredText(dto.displayName, '员工姓名', 100);
     const status = dto.status === undefined ? undefined : this.parseStatus(dto.status, true);
     const roles = dto.roleIds === undefined ? undefined : await this.requireRoles(dto.roleIds);
+    const rolesChanged =
+      roles !== undefined &&
+      !this.haveSameIds(
+        existing.userRoles.map((userRole) => userRole.roleId),
+        roles.map((role) => role.id)
+      );
 
     if (displayName === undefined && status === undefined && roles === undefined) {
       throw new BadRequestException('请至少修改一项员工资料。');
@@ -259,7 +265,7 @@ export class V2EmployeesService {
     const employee = await this.prisma.$transaction(async (transaction) => {
       const revokedAt = new Date();
       let revokedSessionCount = 0;
-      if (status === 'disabled') {
+      if (status === 'disabled' || rolesChanged) {
         const revoked = await transaction.activeSession.updateMany({
           where: {
             userId: existing.id,
@@ -271,7 +277,7 @@ export class V2EmployeesService {
         });
         revokedSessionCount = revoked.count;
       }
-      if (roles) {
+      if (rolesChanged) {
         await transaction.userRole.deleteMany({
           where: {
             userId: existing.id
@@ -314,6 +320,7 @@ export class V2EmployeesService {
           beforeData: this.toAuditData(existing),
           afterData: {
             ...this.toAuditData(updated),
+            rolesChanged,
             revokedSessionCount
           },
           remark: `管理员更新员工账号：${updated.username}`
@@ -391,6 +398,12 @@ export class V2EmployeesService {
       throw new BadRequestException('所选角色不存在，请刷新后重试。');
     }
     return roles;
+  }
+
+  private haveSameIds(left: string[], right: string[]) {
+    if (left.length !== right.length) return false;
+    const rightIds = new Set(right);
+    return left.every((id) => rightIds.has(id));
   }
 
   private normalizeUsername(value: string | undefined) {

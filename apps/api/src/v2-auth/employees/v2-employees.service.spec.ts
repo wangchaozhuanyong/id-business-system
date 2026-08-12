@@ -272,4 +272,75 @@ describe('V2EmployeesService', () => {
     expect(fixture.securityService.invalidateActiveSessionCache).toHaveBeenCalledTimes(1);
     expect(fixture.supabaseAuthService.invalidateAccessTokenCache).toHaveBeenCalledTimes(1);
   });
+
+  it('revokes active sessions atomically when an administrator changes employee roles', async () => {
+    const fixture = createService();
+    const existing = createEmployee();
+    const adminRole = {
+      id: '44444444-4444-4444-8444-444444444444',
+      code: 'admin',
+      name: '管理员'
+    };
+    const updated = createEmployee({
+      userRoles: [
+        {
+          userId: existing.id,
+          roleId: adminRole.id,
+          role: adminRole
+        }
+      ]
+    });
+    fixture.prisma.user.findFirst.mockResolvedValue(existing);
+    fixture.prisma.role.findMany.mockResolvedValue([adminRole]);
+    fixture.transaction.user.update.mockResolvedValue(updated);
+
+    await fixture.service.update(existing.id, { roleIds: [adminRole.id] }, operator);
+
+    expect(fixture.transaction.activeSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: existing.id,
+          revokedAt: null
+        }
+      })
+    );
+    expect(fixture.transaction.userRole.deleteMany).toHaveBeenCalledWith({
+      where: { userId: existing.id }
+    });
+    expect(fixture.auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterData: expect.objectContaining({
+          rolesChanged: true,
+          revokedSessionCount: 2
+        })
+      }),
+      fixture.transaction
+    );
+  });
+
+  it('keeps sessions when submitted roles are unchanged', async () => {
+    const fixture = createService();
+    const existing = createEmployee();
+    fixture.prisma.user.findFirst.mockResolvedValue(existing);
+    fixture.transaction.user.update.mockResolvedValue(existing);
+
+    await fixture.service.update(
+      existing.id,
+      { roleIds: existing.userRoles.map((userRole) => userRole.roleId) },
+      operator
+    );
+
+    expect(fixture.transaction.activeSession.updateMany).not.toHaveBeenCalled();
+    expect(fixture.transaction.userRole.deleteMany).not.toHaveBeenCalled();
+    expect(fixture.transaction.userRole.createMany).not.toHaveBeenCalled();
+    expect(fixture.auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterData: expect.objectContaining({
+          rolesChanged: false,
+          revokedSessionCount: 0
+        })
+      }),
+      fixture.transaction
+    );
+  });
 });
