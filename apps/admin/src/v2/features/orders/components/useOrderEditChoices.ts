@@ -65,7 +65,11 @@ export function useOrderEditChoices(
   const accountChoices = computed(() => {
     const items = candidates.value.map((candidate) => ({
       id: candidate.id,
-      label: `${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}`
+      label: `${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}${
+        candidate.sourceSoldOrder
+          ? ` / ${candidate.sourceSoldOrder.orderNo} / ${candidate.sourceSoldOrder.customer.name}`
+          : ''
+      }`
     }));
     const current = getOrder()?.account;
     if (current && !items.some((item) => item.id === current.id)) {

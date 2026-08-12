@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import view from './V2AccountsView.vue?raw';
 import manifest from './manifest.ts?raw';
 import accountImport from './account-import.ts?raw';
+import accountsApi from '@/v2/api/accounts.ts?raw';
 import rowActions from './components/V2AccountRowActions.vue?raw';
+import saleRecoveryDialog from './components/V2AccountSaleRecoveryDialog.vue?raw';
 import dialogs from './components/V2AccountDialogs.vue?raw';
 import lifecycleTabs from './components/V2AccountLifecycleTabs.vue?raw';
 import createOptions from './useAccountCreateOptions.ts?raw';
@@ -51,7 +53,21 @@ describe('ID management page UI contract', () => {
     expect(runtimeRegistry).toContain(
       "route: '/v2/records/account-losses',\n    navigation: false"
     );
-    expect(rowActions).toContain("props.saleState !== 'sold'");
+    expect(rowActions).toContain('props.canReportLoss && !props.lossReported');
+    expect(rowActions).not.toContain("props.saleState !== 'sold'");
+    expect(rowActions).toContain('command="recover-sale"');
+    expect(rowActions).toContain("props.saleState === 'sold'");
+    expect(list).toContain('@recover-sale="page.openSaleRecovery');
+    expect(dialogs).toContain('<V2AccountSaleRecoveryDialog');
+    expect(saleRecoveryDialog).toContain('require-asterisk-position="right"');
+    expect(saleRecoveryDialog).toContain('恢复原因');
+    expect(saleRecoveryDialog).toContain(':close-on-click-modal="!page.saleRecoverySubmitting"');
+    expect(saleRecoveryDialog).toContain(':before-close="beforeClose"');
+    expect(saleRecoveryDialog).toContain('恢复原因尚未提交，确认关闭吗？');
+    expect(saleRecoveryDialog).toContain('page.loadSaleRecoveryPreview');
+    expect(saleRecoveryDialog).toContain('重新检查');
+    expect(accountsApi).toContain('/recover-sold-account');
+    expect(accountsApi).toContain("'finance-ledger'");
     expect(rowActions).not.toContain('删除 ID');
     expect(list).not.toContain('page.openDelete');
   });

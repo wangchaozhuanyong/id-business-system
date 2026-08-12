@@ -1,7 +1,7 @@
 <template>
   <section v-if="page.overview" class="v2-analytics-overview" aria-label="经营分析概览">
     <div class="v2-analytics-overview__intro">
-      <span class="v2-analytics-overview__eyebrow">BUSINESS CONTROL</span>
+      <span class="v2-analytics-overview__eyebrow">经营分析</span>
       <h2>经营分析总览</h2>
       <p>统一查看已实现利润、原币收支、资产估值与账务闭环，不混入处理中业务。</p>
     </div>

@@ -32,6 +32,12 @@ export interface V2TopupWorkbenchItem {
   lastTopupAt: string | null;
   updatedAt: string;
   status: Pick<V2OptionSelector, 'id' | 'code' | 'name'> & { isSystem: boolean };
+  saleState: 'available' | 'sold';
+  soldByOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
   historicalServices: V2TopupServiceSummary[];
   currentServices: V2TopupServiceSummary[];
   serviceDataAvailable: true;
@@ -58,6 +64,8 @@ export interface V2GiftCardPurchaseSources {
 }
 
 export interface V2TopupWorkbenchListQuery extends V2PageQuery {
+  keyword?: string;
+  accountSource?: 'inventory' | 'customer_owned';
   countryOptionId?: string;
   balancePreset?: Exclude<V2TopupBalancePreset, ''>;
   balanceMin?: string;

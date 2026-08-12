@@ -26,6 +26,8 @@ function createMatchingResult(
       country: option,
       requiredBalance: '10',
       requiredStatusCode: 'normal',
+      accountSource: 'inventory',
+      customerId: null,
       evaluatedAt
     },
     counts: {
@@ -46,6 +48,8 @@ function createMatchingResult(
         estimatedBalanceCostAmount: '50',
         averageCost: '5',
         purchaseCost: '0',
+        saleState: 'unsold',
+        sourceSoldOrder: null,
         balanceAfterMatch,
         updatedAt: evaluatedAt
       }
@@ -69,7 +73,9 @@ describe('useOrderCandidateSelection', () => {
     const form = reactive({
       serviceOptionId: 'service-1',
       balanceAmount: '10',
-      accountId: ''
+      accountId: '',
+      accountSource: 'inventory' as const,
+      customerId: ''
     });
     const scope = effectScope();
     const selection = scope.run(() => useOrderCandidateSelection(form));
@@ -103,7 +109,9 @@ describe('useOrderCandidateSelection', () => {
     const form = reactive({
       serviceOptionId: 'service-1',
       balanceAmount: '10',
-      accountId: ''
+      accountId: '',
+      accountSource: 'inventory' as const,
+      customerId: ''
     });
     const scope = effectScope();
     const selection = scope.run(() => useOrderCandidateSelection(form));

@@ -25,10 +25,6 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
 
   function openReportLoss(item: V2Account) {
     if (!options.canReportLoss.value || item.lossStatus === 'reported') return;
-    if (item.saleState === 'sold') {
-      ElMessage.warning('已售出 ID 不能报损');
-      return;
-    }
     lossTarget.value = item;
     lossReason.value = '';
     lossConfirmed.value = false;
@@ -65,7 +61,11 @@ export function useAccountLossReporting(options: AccountLossReportingOptions) {
         expectedBalanceCostAmount: target.balanceCostAmount,
         idempotencyKey: lossIdempotencyKey.value
       });
-      ElMessage.success('ID 已报损冻结，余额与人民币成本已计入损耗');
+      ElMessage.success(
+        target.saleState === 'sold'
+          ? '已售 ID 已报损冻结，仅剩余余额成本已计入损耗'
+          : 'ID 已报损冻结，余额与人民币成本已计入损耗'
+      );
       lossDialogVisible.value = false;
       lossTarget.value = null;
       await options.refreshAccounts();

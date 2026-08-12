@@ -1,7 +1,7 @@
 <template>
   <section class="v2-options-overview" aria-label="设置管理概览">
     <div class="v2-options-overview__intro">
-      <span class="v2-options-overview__eyebrow">REFERENCE DATA</span>
+      <span class="v2-options-overview__eyebrow">业务基础资料</span>
       <h2>业务选项总览</h2>
       <p>集中维护各业务模块共用的分类、国家、供应商和结算基础资料。</p>
     </div>

@@ -129,7 +129,9 @@ export function useOrderEntryPage() {
   });
   const accountPurchaseCostPreview = computed(() => selectedCandidate.value?.purchaseCost ?? '0');
   const appliedAccountCostPreview = computed(() =>
-    form.accountDisposition === 'sold' ? accountPurchaseCostPreview.value : '0'
+    form.accountSource === 'inventory' && form.accountDisposition === 'sold'
+      ? accountPurchaseCostPreview.value
+      : '0'
   );
   const estimatedBalanceCostPreview = computed(
     () => selectedCandidate.value?.estimatedBalanceCostAmount ?? '0'
@@ -172,6 +174,7 @@ export function useOrderEntryPage() {
       return '请选择可用 ID 并确认成本后自动反算';
     }
     if (
+      form.accountSource === 'inventory' &&
       form.accountDisposition === 'sold' &&
       !isNonNegativeOrderAmount(selectedCandidate.value.purchaseCost)
     ) {
@@ -272,8 +275,16 @@ export function useOrderEntryPage() {
   );
 
   watch(
-    () => [form.serviceOptionId, form.balanceAmount],
+    () => [form.serviceOptionId, form.balanceAmount, form.accountSource, form.customerId],
     () => scheduleCandidateMatch()
+  );
+
+  watch(
+    () => form.accountSource,
+    (source) => {
+      form.accountDisposition = 'retained';
+      handleIdSelectionModeChange(source === 'customer_owned' ? 'manual' : 'auto');
+    }
   );
 
   const {
@@ -371,6 +382,7 @@ export function useOrderEntryPage() {
         customerId: form.customerId,
         serviceOptionId: form.serviceOptionId,
         accountId: form.accountId,
+        accountSource: form.accountSource,
         settlementPlatformOptionId: form.settlementPlatformOptionId,
         platformOrderNo: form.platformOrderNo.trim() || null,
         websiteAccount: form.websiteAccount.trim() || null,
@@ -387,11 +399,15 @@ export function useOrderEntryPage() {
         receivedManualRateReason: usesManualReceiptFx
           ? form.receivedManualRateReason.trim() || undefined
           : undefined,
-        accountDisposition: form.accountDisposition,
+        accountDisposition:
+          form.accountSource === 'customer_owned' ? 'retained' : form.accountDisposition,
         balanceAmount: form.balanceAmount.trim(),
         openedAt: form.openedAt.toISOString(),
         dueAt: form.dueAt.toISOString(),
-        lockScope: form.accountDisposition === 'sold' ? 'global' : 'by_service',
+        lockScope:
+          form.accountSource === 'inventory' && form.accountDisposition === 'sold'
+            ? 'global'
+            : 'by_service',
         idempotencyKey: form.idempotencyKey,
         remark: form.remark.trim() || null
       });

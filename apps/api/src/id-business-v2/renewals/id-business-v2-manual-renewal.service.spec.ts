@@ -75,6 +75,7 @@ function makeSourceActivation(overrides: Record<string, unknown> = {}) {
       recordStatus: 'active',
       deletedAt: null,
       soldByOrderId: null as string | null,
+      soldByOrder: null as { customerId: string } | null,
       countryOption: {
         id: countryOptionId,
         code: 'us',
@@ -133,10 +134,14 @@ describe('IdBusinessV2ManualRenewalService', () => {
   const ordersService = {
     get: vi.fn()
   };
+  const orderCompletionService = {
+    postCompletionJournalInTransaction: vi.fn().mockResolvedValue({ id: 'journal-1' })
+  };
   const service = new IdBusinessV2ManualRenewalService(
     new IdBusinessV2BalanceCalculatorService(),
     orderEntryService as never,
     ordersService as never,
+    orderCompletionService as never,
     new IdBusinessV2RenewalsRepository(prisma as never),
     new V2CommandTransactionManager(prisma as never)
   );
@@ -420,15 +425,36 @@ describe('IdBusinessV2ManualRenewalService', () => {
     await expect(service.create(activationId, makeDto())).rejects.toThrow('该 ID 已被其他订单占用');
   });
 
-  it('rejects renewal when the source ID has already been sold', async () => {
+  it('renews a sold ID for its owning customer with zero repeated ID cost', async () => {
     const source = makeSourceActivation();
     source.account.soldByOrderId = targetOrderId;
+    source.account.soldByOrder = { customerId };
     tx.idBusinessV2Activation.findFirst.mockResolvedValueOnce(source);
+    tx.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce([{ id: activationId }])
+      .mockResolvedValueOnce([
+        {
+          id: accountId,
+          currentBalance: decimal('30'),
+          balanceCostAmount: decimal('90'),
+          purchaseCost: decimal('15'),
+          soldByOrderId: targetOrderId,
+          soldByCustomerId: customerId,
+          lossReportedAt: null
+        }
+      ]);
 
-    await expect(service.create(activationId, makeDto())).rejects.toThrow(
-      '只有启用且状态正常的 ID 才能续费'
+    await expect(service.create(activationId, makeDto(), operator)).resolves.toMatchObject({
+      profitAmount: '37',
+      idempotentReplay: false
+    });
+    expect(orderEntryService.createManualRenewalOrderInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ accountSource: 'customer_owned', customerId, accountId }),
+      operator
     );
-    expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
+    expect(orderCompletionService.postCompletionJournalInTransaction).toHaveBeenCalled();
   });
 
   it('rejects the same renewal period even when a new idempotency key is used', async () => {

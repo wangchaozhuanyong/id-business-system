@@ -149,6 +149,7 @@
               @view-sensitive="page.openSensitiveAccess(row)"
               @edit="page.openEdit(row)"
               @toggle-status="page.openRecordStatusChange(row)"
+              @recover-sale="page.openSaleRecovery(row)"
               @report-loss="page.openReportLoss(row)"
               @unfreeze-loss="page.openUnfreezeLoss(row)"
             />
@@ -246,6 +247,7 @@
               @view-sensitive="page.openSensitiveAccess(item)"
               @edit="page.openEdit(item)"
               @toggle-status="page.openRecordStatusChange(item)"
+              @recover-sale="page.openSaleRecovery(item)"
               @report-loss="page.openReportLoss(item)"
               @unfreeze-loss="page.openUnfreezeLoss(item)"
             />
@@ -305,7 +307,7 @@ const props = defineProps<{
 }>();
 
 const sourceOrderHelp =
-  '这个 ID 被订单卖出后，系统会在这里显示对应订单号；未卖出或没有关联订单时显示空横线。';
+  '这个 ID 被订单卖出后，系统会在这里显示对应订单号；客户退货或操作错误时，可在操作菜单中恢复为可用。';
 const emptyTitle = computed(() => `暂无${props.page.lifecycleLabel}`);
 const emptyDescription = computed(
   () =>

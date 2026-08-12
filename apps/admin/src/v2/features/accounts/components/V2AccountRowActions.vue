@@ -44,10 +44,13 @@
           <el-dropdown-item v-if="canChangeRecordStatus" command="toggle-status">
             {{ recordStatus === 'active' ? '停用 ID' : '启用 ID' }}
           </el-dropdown-item>
+          <el-dropdown-item v-if="canRecoverSale" command="recover-sale">
+            恢复可用
+          </el-dropdown-item>
           <el-dropdown-item
             v-if="canReportCurrentLoss"
             command="report-loss"
-            :divided="canChangeRecordStatus"
+            :divided="canChangeRecordStatus || canRecoverSale"
             class="v2-record-action-danger"
           >
             报损
@@ -79,6 +82,7 @@ const emit = defineEmits<{
   'view-sensitive': [];
   edit: [];
   'toggle-status': [];
+  'recover-sale': [];
   'report-loss': [];
   'unfreeze-loss': [];
 }>();
@@ -90,17 +94,13 @@ const hasActions = computed(
     (props.lossReported && props.canReportLoss) ||
     (!props.lossReported && (props.canUpdate || props.canReportLoss))
 );
-const canChangeRecordStatus = computed(
-  () =>
-    props.canUpdate &&
-    !props.lossReported &&
-    (props.saleState !== 'sold' || props.recordStatus === 'disabled')
-);
-const canReportCurrentLoss = computed(
-  () => props.canReportLoss && !props.lossReported && props.saleState !== 'sold'
+const canChangeRecordStatus = computed(() => props.canUpdate && !props.lossReported);
+const canReportCurrentLoss = computed(() => props.canReportLoss && !props.lossReported);
+const canRecoverSale = computed(
+  () => props.canUpdate && !props.lossReported && props.saleState === 'sold'
 );
 const hasSecondaryActions = computed(
-  () => canChangeRecordStatus.value || canReportCurrentLoss.value
+  () => canChangeRecordStatus.value || canRecoverSale.value || canReportCurrentLoss.value
 );
 
 function closeMenu() {
@@ -111,6 +111,8 @@ function handleCommand(command: string | number | object) {
   if (props.disabled) return;
   if (command === 'toggle-status') {
     emit('toggle-status');
+  } else if (command === 'recover-sale') {
+    emit('recover-sale');
   } else if (command === 'report-loss') {
     emit('report-loss');
   }

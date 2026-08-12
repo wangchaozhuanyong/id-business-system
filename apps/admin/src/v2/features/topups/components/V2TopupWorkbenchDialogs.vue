@@ -15,6 +15,10 @@
           <span>目标 ID</span>
           <strong>{{ page.selectedAccount.appleIdMasked }}</strong>
           <small>礼品卡余额将计入该 ID，并同步写入成本流水。</small>
+          <small v-if="page.selectedAccount.soldByOrder">
+            客户已购 · {{ page.selectedAccount.soldByOrder.orderNo }} ·
+            {{ page.selectedAccount.soldByOrder.customer.name }}
+          </small>
         </div>
         <dl class="v2-topup-credit-target-meta">
           <div>
@@ -330,6 +334,13 @@
       <div>
         <dt>加卡ID</dt>
         <dd>{{ page.selectedAccount.appleIdMasked }}</dd>
+      </div>
+      <div v-if="page.selectedAccount.soldByOrder">
+        <dt>原销售归属</dt>
+        <dd>
+          {{ page.selectedAccount.soldByOrder.orderNo }} ·
+          {{ page.selectedAccount.soldByOrder.customer.name }}
+        </dd>
       </div>
       <div>
         <dt>卡号</dt>

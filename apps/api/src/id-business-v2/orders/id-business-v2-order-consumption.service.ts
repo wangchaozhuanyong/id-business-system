@@ -74,14 +74,18 @@ export class IdBusinessV2OrderConsumptionService {
         prepared.order.accountCostAmount,
         'ID 购买成本快照'
       );
+      const accountSource = prepared.order.accountSource ?? 'inventory';
       if (
+        accountSource === 'inventory' &&
         prepared.order.accountDisposition === 'sold' &&
         prepared.account.soldByOrderId !== prepared.order.id
       ) {
         throw new ConflictException('订单标记为卖出 ID，但 ID 销售占用证据不一致');
       }
       const appliedAccountCostAmount =
-        prepared.order.accountDisposition === 'sold' ? accountCostAmount : Amount4.zero();
+        accountSource === 'inventory' && prepared.order.accountDisposition === 'sold'
+          ? accountCostAmount
+          : Amount4.zero();
       const receivedAmount = prepared.order.receivedAmount;
       const platformFeeAmount = prepared.order.platformFeeAmount;
       const refundCostAmount = prepared.order.refundCostAmount ?? Amount4.zero();
@@ -121,6 +125,7 @@ export class IdBusinessV2OrderConsumptionService {
       const statusChangedAt = new Date();
       await this.repository.updateOrder(tx, prepared.order.id, {
         accountCostAmount: accountCostAmount.toString(),
+        appliedAccountCostAmount: appliedAccountCostAmount.toString(),
         balanceCostAmount: movement.costAmount.toString(),
         profitAmount: profitAmount.toString(),
         status: 'processing',

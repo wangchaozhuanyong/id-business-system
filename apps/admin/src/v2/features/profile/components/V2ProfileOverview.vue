@@ -6,7 +6,7 @@
           {{ page.profile.displayName.trim().slice(0, 1) || page.profile.username.slice(0, 1) }}
         </span>
         <div>
-          <span>MY ACCOUNT</span>
+          <span>我的账户</span>
           <h2>{{ page.profile.displayName }}</h2>
           <p>{{ page.profile.username }} · {{ page.profileRoleLabel(page.profile.roles) }}</p>
         </div>

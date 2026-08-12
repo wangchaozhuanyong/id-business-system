@@ -5,6 +5,7 @@ import { Amount4, Rate8, V2CommandTransactionManager } from '../runtime/public-a
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
 import { getIdBusinessV2SettlementPlatformReport } from './id-business-v2-finance-settlement-platform-report';
 import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
+import { netFinanceAmount } from './persistence/id-business-v2-finance-report.repository';
 
 interface FinanceReportQuery {
   dateFrom?: string;
@@ -40,6 +41,7 @@ export class IdBusinessV2FinanceReportsService {
       currencyBreakdown,
       assets,
       reconciliation,
+      afterSales,
       settlementPlatformReport
     ] = await Promise.all([
       this.getSettings(),
@@ -47,6 +49,7 @@ export class IdBusinessV2FinanceReportsService {
       this.currencyBreakdown(query),
       this.assets(),
       this.reconciliation(query),
+      this.afterSales(query),
       this.settlementPlatformReport(query)
     ]);
     return {
@@ -55,6 +58,7 @@ export class IdBusinessV2FinanceReportsService {
       currencyBreakdown,
       assets,
       reconciliation,
+      afterSales,
       settlementPlatformReport
     };
   }
@@ -124,6 +128,57 @@ export class IdBusinessV2FinanceReportsService {
   async settlementPlatformReport(query: FinanceReportQuery) {
     return getIdBusinessV2SettlementPlatformReport(this.repository, query);
   }
+
+  async afterSales(query: FinanceReportQuery) {
+    const data = await this.repository.loadAfterSales({
+      businessDate: this.parseBusinessDate(query.dateFrom, query.dateTo),
+      occurredAt: this.parseOccurredAt(query.dateFrom, query.dateTo)
+    });
+    const lines = data.journals.flatMap((journal) => journal.lines);
+    const amount = (code: IdBusinessV2FinanceAccountCode, natural: 'debit' | 'credit') =>
+      netFinanceAmount(
+        lines.filter((line) => line.accountCode === code),
+        natural
+      );
+    const grossRevenue = data.journals
+      .filter((journal) => journal.journalType === 'order_completed')
+      .flatMap((journal) => journal.lines)
+      .filter((line) => line.accountCode === 'sales_revenue' && line.direction === 'credit')
+      .reduce((sum, line) => sum.add(line.amountCny), Amount4.zero());
+    const refundedRevenue = data.journals
+      .filter((journal) => journal.journalType === 'order_refund')
+      .flatMap((journal) => journal.lines)
+      .filter((line) => line.accountCode === 'sales_revenue' && line.direction === 'debit')
+      .reduce((sum, line) => sum.add(line.amountCny), Amount4.zero());
+    const platformFee = amount('platform_fee', 'debit');
+    const balanceCost = amount('gift_card_cost', 'debit');
+    const idCost = amount('id_cost', 'debit');
+    const refundLoss = amount('refund_loss', 'debit');
+    const netRevenue = amount('sales_revenue', 'credit');
+    const completedOrderIds = new Set(
+      data.journals
+        .filter((journal) => journal.journalType === 'order_completed' && journal.sourceId)
+        .map((journal) => journal.sourceId)
+    );
+    return {
+      completedOrderCount: completedOrderIds.size,
+      grossRevenueCny: grossRevenue.toString(),
+      refundedRevenueCny: refundedRevenue.toString(),
+      platformFeeCny: platformFee.toString(),
+      balanceCostCny: balanceCost.toString(),
+      idCostCny: idCost.toString(),
+      refundLossCny: refundLoss.toString(),
+      netProfitCny: netRevenue
+        .sub(platformFee)
+        .sub(balanceCost)
+        .sub(idCost)
+        .sub(refundLoss)
+        .toString(),
+      pendingOrderCount: data.pendingOrderCount,
+      pendingRevenueCny: data.pendingRevenue.toString(),
+      pendingProfitCny: data.pendingProfit.toString()
+    };
+  }
   async assets() {
     const [
       { financeAccounts, supplierWallets, giftCardInventory, pendingRefunds, unsoldIds },
@@ -187,6 +242,16 @@ export class IdBusinessV2FinanceReportsService {
     const { completedOrders, missingPurchaseEvidence, pendingRefunds, wallets, orderLines } =
       await this.repository.loadReconciliation(this.parseOccurredAt(query.dateFrom, query.dateTo));
     for (const order of completedOrders) {
+      if (order.accountSource === 'customer_owned' && !order.appliedAccountCostAmount.isZero()) {
+        issues.push({
+          code: 'after_sales_id_cost_nonzero',
+          severity: 'error',
+          sourceType: 'order',
+          sourceId: order.id,
+          message: `售后订单 ${order.orderNo} 出现了不应计入的 ID 成本`,
+          amountCny: order.appliedAccountCostAmount.toString()
+        });
+      }
       const lines = orderLines.filter((line) => line.journal.sourceId === order.id);
       if (lines.length === 0) {
         issues.push({
@@ -222,6 +287,17 @@ export class IdBusinessV2FinanceReportsService {
           amountCny: difference.toString()
         });
       }
+    }
+    const afterSales = await this.afterSales(query);
+    if (Amount4.from(afterSales.idCostCny).gt(0)) {
+      issues.push({
+        code: 'after_sales_id_cost_nonzero',
+        severity: 'error',
+        sourceType: 'order',
+        sourceId: null,
+        message: '售后业务财务凭证出现了不应计入的 ID 成本',
+        amountCny: afterSales.idCostCny
+      });
     }
     for (const account of missingPurchaseEvidence) {
       issues.push({

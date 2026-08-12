@@ -3,7 +3,7 @@
     <V2SectionHeading
       class="v2-topup-command-panel__heading"
       title="ID 筛选"
-      help="按国家、余额范围和 ID 状态缩小可加额账号范围。"
+      help="按 ID 来源、国家、余额范围和状态缩小可加额账号范围。"
     >
       <template #actions>
         <span class="v2-topup-command-panel__result">当前共 {{ page.total }} 个 ID</span>
@@ -11,6 +11,27 @@
     </V2SectionHeading>
 
     <div class="v2-topup-filter-grid" aria-label="ID 加额筛选">
+      <el-input
+        v-model="page.query.keyword"
+        clearable
+        maxlength="255"
+        placeholder="搜索 ID 或原销售订单号"
+        aria-label="搜索 ID 或原销售订单号"
+        @keyup.enter="page.handleSearch"
+        @clear="page.handleSearch"
+      />
+
+      <el-select
+        v-model="page.query.accountSource"
+        clearable
+        placeholder="全部 ID 来源"
+        aria-label="筛选 ID 来源"
+        @change="page.handleFilterChange"
+      >
+        <el-option label="库存 ID" value="inventory" />
+        <el-option label="客户已购 ID" value="customer_owned" />
+      </el-select>
+
       <el-select
         v-model="page.query.countryOptionId"
         clearable
@@ -102,6 +123,8 @@ const filterCount = computed(
   () =>
     [
       props.page.query.countryOptionId,
+      props.page.query.keyword,
+      props.page.query.accountSource,
       props.page.query.balancePreset,
       props.page.query.onlyNormal ? '' : 'includeAbnormal'
     ].filter(Boolean).length

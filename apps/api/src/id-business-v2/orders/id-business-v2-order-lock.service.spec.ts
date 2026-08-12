@@ -440,7 +440,7 @@ describe('IdBusinessV2OrderLockService', () => {
       parent: { id: categoryOptionId }
     });
     await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
-      '该 ID 已卖出，不能再次匹配、加卡或续费'
+      '该 ID 已售出，请使用客户已购 ID 模式'
     );
   });
 

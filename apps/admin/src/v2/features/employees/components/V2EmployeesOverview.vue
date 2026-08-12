@@ -1,7 +1,7 @@
 <template>
   <section class="v2-employees-overview" aria-label="员工账户总览">
     <div class="v2-employees-overview__intro">
-      <span>ACCESS WORKFORCE</span>
+      <span>员工访问管理</span>
       <h2>员工账户总览</h2>
       <p>账号、角色、在线会话和首次改密状态集中管理。</p>
     </div>

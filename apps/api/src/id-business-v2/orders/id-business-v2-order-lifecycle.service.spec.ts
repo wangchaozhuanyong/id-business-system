@@ -120,7 +120,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     $queryRaw: vi.fn(),
     idBusinessV2Order: {
       findUnique: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      count: vi.fn()
     },
     idBusinessV2BalanceLedger: {
       findUnique: vi.fn(),
@@ -128,11 +129,13 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     },
     idBusinessV2Activation: {
       findUnique: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      count: vi.fn()
     },
     idBusinessV2AccountLock: {
       findFirst: vi.fn(),
-      update: vi.fn()
+      update: vi.fn(),
+      count: vi.fn()
     },
     idBusinessV2Customer: {
       findFirst: vi.fn()
@@ -141,6 +144,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       findFirst: vi.fn()
     },
     idBusinessV2Account: {
+      findFirst: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn()
     },
@@ -188,14 +192,15 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
       const sql = Array.from(strings).join('');
       if (sql.includes('id_business_v2_accounts')) {
+        const isSold = storedOrder.accountDisposition === 'sold';
         return [
           {
             id: accountId,
             appleIdMasked: 'us***@example.com',
-            currentBalance: decimal('10'),
-            balanceCostAmount: decimal('30'),
+            currentBalance: decimal(isSold ? '0' : '10'),
+            balanceCostAmount: decimal(isSold ? '0' : '30'),
             purchaseCost: decimal('25'),
-            soldByOrderId: null,
+            soldByOrderId: isSold ? orderId : null,
             lossReportedAt: null
           }
         ];
@@ -226,6 +231,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     });
     tx.idBusinessV2Activation.findUnique.mockResolvedValue(null);
     tx.idBusinessV2Activation.update.mockResolvedValue({ id: 'activation-1' });
+    tx.idBusinessV2Activation.count.mockResolvedValue(0);
+    tx.idBusinessV2Order.count.mockResolvedValue(0);
     tx.idBusinessV2AccountLock.findFirst.mockResolvedValue({
       id: 'lock-1',
       accountId,
@@ -239,6 +246,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       reason: '订单录入'
     });
     tx.idBusinessV2AccountLock.update.mockResolvedValue({ id: 'lock-1' });
+    tx.idBusinessV2AccountLock.count.mockResolvedValue(0);
+    tx.idBusinessV2Account.findFirst.mockResolvedValue(null);
     tx.idBusinessV2Customer.findFirst.mockResolvedValue({ id: customerId });
     tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
       if (where.type === 'settlement_platform') {

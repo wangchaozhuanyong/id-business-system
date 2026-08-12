@@ -159,7 +159,84 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      JOIN public.id_business_v2_orders order_record ON order_record.id = activation.order_id
      WHERE activation.customer_id <> order_record.customer_id
         OR activation.account_id IS DISTINCT FROM order_record.account_id
-        OR activation.service_option_id <> order_record.service_option_id`
+       OR activation.service_option_id <> order_record.service_option_id`
+  ),
+  check(
+    'customer_owned_order_source_mismatch',
+    '客户已购 ID 订单与原销售订单或当前归属不一致',
+    `SELECT after_sales.id::text AS entity_id,
+            jsonb_build_object(
+              'sourceSoldOrderId', after_sales.source_sold_order_id,
+              'accountId', after_sales.account_id
+            ) AS detail
+     FROM public.id_business_v2_orders after_sales
+     LEFT JOIN public.id_business_v2_orders source_order
+       ON source_order.id = after_sales.source_sold_order_id
+     LEFT JOIN public.id_business_v2_accounts account
+       ON account.id = after_sales.account_id
+     WHERE after_sales.account_source::text = 'customer_owned'
+       AND (
+         source_order.id IS NULL
+         OR account.id IS NULL
+         OR source_order.customer_id <> after_sales.customer_id
+         OR source_order.account_id IS DISTINCT FROM after_sales.account_id
+         OR (
+           (
+             after_sales.status::text IN ('draft', 'pending', 'waiting_external', 'processing')
+             OR EXISTS (
+               SELECT 1
+               FROM public.id_business_v2_activations activation
+               WHERE activation.order_id = after_sales.id
+                 AND activation.status::text = 'active'
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM public.id_business_v2_activations renewed_activation
+                   WHERE renewed_activation.renewed_from_activation_id = activation.id
+                 )
+                 AND (activation.due_at IS NULL OR activation.due_at > CURRENT_TIMESTAMP)
+             )
+           )
+           AND (
+             source_order.account_disposition::text <> 'sold'
+             OR account.sold_by_order_id IS DISTINCT FROM after_sales.source_sold_order_id
+           )
+         )
+       )`
+  ),
+  check(
+    'sold_account_ownership_mismatch',
+    '已售 ID 的归属证据与原销售订单不一致',
+    `SELECT account.id::text AS entity_id,
+            jsonb_build_object('soldByOrderId', account.sold_by_order_id) AS detail
+     FROM public.id_business_v2_accounts account
+     LEFT JOIN public.id_business_v2_orders sold_order
+       ON sold_order.id = account.sold_by_order_id
+     WHERE account.sold_by_order_id IS NOT NULL
+       AND (
+         sold_order.id IS NULL
+         OR sold_order.account_id IS DISTINCT FROM account.id
+         OR sold_order.account_disposition::text <> 'sold'
+       )`
+  ),
+  check(
+    'customer_owned_order_duplicate_id_cost',
+    '客户已购 ID 订单重复计入 ID 成本',
+    `SELECT DISTINCT after_sales.id::text AS entity_id,
+            jsonb_build_object(
+              'accountCostAmount', after_sales.account_cost_amount,
+              'appliedAccountCostAmount', after_sales.applied_account_cost_amount
+            ) AS detail
+     FROM public.id_business_v2_orders after_sales
+     LEFT JOIN public.id_business_v2_finance_journals journal
+       ON journal.source_id = after_sales.id::text
+     LEFT JOIN public.id_business_v2_finance_journal_lines line
+       ON line.journal_id = journal.id AND line.account_code::text = 'id_cost'
+     WHERE after_sales.account_source::text = 'customer_owned'
+       AND (
+         after_sales.account_cost_amount <> 0
+         OR after_sales.applied_account_cost_amount <> 0
+         OR line.id IS NOT NULL
+       )`
   ),
   check(
     'customer_service_aggregate_mismatch',
@@ -304,7 +381,6 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
        AND (
          order_record.id IS NULL OR order_record.account_id IS DISTINCT FROM account.id
          OR order_record.account_disposition::text <> 'sold'
-         OR order_record.status::text <> 'completed'
        )
      UNION ALL
      SELECT order_record.id::text AS entity_id,
@@ -312,7 +388,6 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      FROM public.id_business_v2_orders order_record
      LEFT JOIN public.id_business_v2_accounts account ON account.id = order_record.account_id
      WHERE order_record.account_disposition::text = 'sold'
-       AND order_record.status::text = 'completed'
        AND (account.id IS NULL OR account.sold_by_order_id IS DISTINCT FROM order_record.id)`
   ),
   check(
@@ -327,7 +402,17 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
        AND (
          lock_record.expires_at <= CURRENT_TIMESTAMP
          OR account.deleted_at IS NOT NULL OR account.record_status::text <> 'active'
-         OR account.loss_reported_at IS NOT NULL OR account.sold_by_order_id IS NOT NULL
+         OR account.loss_reported_at IS NOT NULL
+         OR (
+           account.sold_by_order_id IS NOT NULL
+           AND NOT (
+             account.sold_by_order_id = order_record.id
+             OR (
+               order_record.account_source::text = 'customer_owned'
+               AND order_record.source_sold_order_id = account.sold_by_order_id
+             )
+           )
+         )
          OR order_record.deleted_at IS NOT NULL
          OR order_record.status::text NOT IN ('draft', 'pending', 'waiting_external', 'processing')
          OR order_record.account_id IS DISTINCT FROM account.id

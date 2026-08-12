@@ -1,7 +1,7 @@
 <template>
   <section class="v2-governance-overview-hero" aria-label="数据治理总览">
     <div class="v2-governance-overview-hero__intro">
-      <span class="v2-governance-overview-hero__eyebrow">DATA CONTROL</span>
+      <span class="v2-governance-overview-hero__eyebrow">数据治理</span>
       <h2>数据治理总览</h2>
       <p>恢复和清理先冻结影响预览、核验备份证据，再由另一名管理员审批并分批执行。</p>
     </div>
@@ -30,7 +30,7 @@
     </div>
 
     <div class="v2-governance-overview-hero__actions">
-      <span>Asia/Kuala_Lumpur</span>
+      <span>吉隆坡时区</span>
       <el-tag :type="page.overview?.approvalReadiness.ready ? 'success' : 'warning'" effect="plain">
         {{ page.overview?.approvalReadiness.ready ? '审批条件就绪' : '审批条件待核验' }}
       </el-tag>

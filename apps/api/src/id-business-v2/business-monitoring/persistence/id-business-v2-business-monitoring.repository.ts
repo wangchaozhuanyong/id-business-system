@@ -160,8 +160,60 @@ export class IdBusinessV2BusinessMonitoringRepository {
         a."updated_at", 'account', a."id"::text, '/v2/accounts'
       FROM "id_business_v2_accounts" a
       WHERE a."deleted_at" IS NULL AND a."record_status"::text = 'active'
-        AND a."sold_by_order_id" IS NULL AND a."loss_reported_at" IS NULL
+        AND a."loss_reported_at" IS NULL
         AND a."current_balance" < 0
+
+      UNION ALL
+
+      SELECT
+        CONCAT('after-sales-order:', o."id", ':ownership'), 'after_sales_ownership_mismatch',
+        'order', 'critical', 1,
+        o."order_no"::text,
+        '客户已购 ID 与原销售订单客户或当前 ID 归属不一致。',
+        o."updated_at", 'order', o."id"::text, '/v2/orders'
+      FROM "id_business_v2_orders" o
+      LEFT JOIN "id_business_v2_orders" source_order ON source_order."id" = o."source_sold_order_id"
+      LEFT JOIN "id_business_v2_accounts" account ON account."id" = o."account_id"
+      WHERE o."deleted_at" IS NULL AND o."account_source"::text = 'customer_owned'
+        AND (
+          source_order."id" IS NULL
+          OR account."id" IS NULL
+          OR source_order."customer_id" IS DISTINCT FROM o."customer_id"
+          OR source_order."account_id" IS DISTINCT FROM o."account_id"
+          OR (
+            (
+              o."status"::text IN ('draft', 'pending', 'waiting_external', 'processing')
+              OR EXISTS (
+                SELECT 1
+                FROM "id_business_v2_activations" activation
+                WHERE activation."order_id" = o."id"
+                  AND activation."status"::text = 'active'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM "id_business_v2_activations" renewed_activation
+                    WHERE renewed_activation."renewed_from_activation_id" = activation."id"
+                  )
+                  AND (activation."due_at" IS NULL OR activation."due_at" > ${now})
+              )
+            )
+            AND (
+              source_order."account_disposition"::text <> 'sold'
+              OR account."sold_by_order_id" IS DISTINCT FROM o."source_sold_order_id"
+            )
+          )
+        )
+
+      UNION ALL
+
+      SELECT
+        CONCAT('after-sales-order:', o."id", ':id-cost'), 'after_sales_duplicate_id_cost',
+        'finance', 'critical', 1,
+        o."order_no"::text,
+        '客户已购 ID 订单出现重复 ID 成本，请立即核对财务凭证。',
+        o."updated_at", 'order', o."id"::text, '/v2/analytics'
+      FROM "id_business_v2_orders" o
+      WHERE o."deleted_at" IS NULL AND o."account_source"::text = 'customer_owned'
+        AND (o."account_cost_amount" <> 0 OR o."applied_account_cost_amount" <> 0)
 
       UNION ALL
 

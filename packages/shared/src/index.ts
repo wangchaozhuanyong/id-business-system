@@ -71,6 +71,7 @@ export {
   type V2FinanceAccountCode,
   type V2FinanceAccountStatus,
   type V2FinanceAccountType,
+  type V2FinanceAfterSales,
   type V2FinanceAssetBreakdown,
   type V2FinanceCurrency,
   type V2FinanceCurrencyBreakdown,

@@ -111,24 +111,28 @@ export class IdBusinessV2AccountLossPostingCoordinator {
           amountCny: account.balanceCostAmount.toString(),
           memo: '冲减礼品卡余额资产'
         },
-        {
-          accountCode: 'id_purchase_loss',
-          direction: 'debit',
-          currency: 'CNY',
-          amountOriginal: idPurchaseCostLossAmount.toString(),
-          fxRateToCny: '1',
-          amountCny: idPurchaseCostLossAmount.toString(),
-          memo: '未售 ID 采购成本报损'
-        },
-        {
-          accountCode: 'id_inventory',
-          direction: 'credit',
-          currency: 'CNY',
-          amountOriginal: idPurchaseCostLossAmount.toString(),
-          fxRateToCny: '1',
-          amountCny: idPurchaseCostLossAmount.toString(),
-          memo: '冲减未售 ID 库存'
-        }
+        ...(idPurchaseCostLossAmount.isZero()
+          ? []
+          : [
+              {
+                accountCode: 'id_purchase_loss' as const,
+                direction: 'debit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: idPurchaseCostLossAmount.toString(),
+                fxRateToCny: '1',
+                amountCny: idPurchaseCostLossAmount.toString(),
+                memo: '未售 ID 采购成本报损'
+              },
+              {
+                accountCode: 'id_inventory' as const,
+                direction: 'credit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: idPurchaseCostLossAmount.toString(),
+                fxRateToCny: '1',
+                amountCny: idPurchaseCostLossAmount.toString(),
+                memo: '冲减未售 ID 库存'
+              }
+            ])
       ]
     });
 

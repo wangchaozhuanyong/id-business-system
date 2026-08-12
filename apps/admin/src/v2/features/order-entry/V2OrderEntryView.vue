@@ -106,6 +106,13 @@
                       </AppButton>
                     </div>
                   </el-form-item>
+
+                  <el-form-item label="ID 来源">
+                    <el-radio-group v-model="form.accountSource" aria-label="ID 来源">
+                      <el-radio-button value="inventory">库存 ID</el-radio-button>
+                      <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
                 </div>
 
                 <div class="v2-order-entry-form-column">
@@ -126,38 +133,18 @@
                     </el-select>
                   </el-form-item>
 
-                  <el-form-item label="使用 ID" prop="accountId">
-                    <el-select
-                      v-model="form.accountId"
-                      filterable
-                      :remote="idSelectionMode === 'manual'"
-                      :reserve-keyword="idSelectionMode === 'manual'"
-                      :remote-method="searchManualCandidates"
-                      :loading="matchingLoading"
-                      :disabled="!canMatch"
-                      :placeholder="
-                        idSelectionMode === 'manual' ? '输入 Apple ID 搜索' : '等待自动匹配'
-                      "
-                    >
-                      <el-option
-                        v-for="candidate in candidateItems"
-                        :key="candidate.id"
-                        :label="`${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}`"
-                        :value="candidate.id"
-                      />
-                    </el-select>
-                  </el-form-item>
-
-                  <el-form-item label="ID 选择方式">
-                    <el-radio-group
-                      v-model="idSelectionMode"
-                      class="v2-order-entry-selection-mode"
-                      @change="handleIdSelectionModeChange"
-                    >
-                      <el-radio value="auto">自动匹配</el-radio>
-                      <el-radio value="manual">手动选择</el-radio>
-                    </el-radio-group>
-                  </el-form-item>
+                  <V2OrderEntryAccountSelect
+                    v-model:account-id="form.accountId"
+                    v-model:id-selection-mode="idSelectionMode"
+                    :account-source="form.accountSource"
+                    :customer-id="form.customerId"
+                    :can-match="canMatch"
+                    :matching-loading="matchingLoading"
+                    :candidates="candidateItems"
+                    :format-decimal="formatDecimal"
+                    @search="searchManualCandidates"
+                    @selection-mode-change="handleIdSelectionModeChange"
+                  />
                 </div>
               </div>
             </section>
@@ -297,7 +284,10 @@
                   <el-form-item label="ID 购买成本">
                     <div class="v2-order-entry-readonly v2-order-entry-cost-check">
                       <strong>¥{{ formatDecimal(appliedAccountCostPreview) }}</strong>
-                      <span v-if="form.accountDisposition === 'sold'">
+                      <span v-if="form.accountSource === 'customer_owned'"
+                        >本单 ID 成本固定为 ¥0</span
+                      >
+                      <span v-else-if="form.accountDisposition === 'sold'">
                         本单计入 ID 成本快照 ¥{{ formatDecimal(accountPurchaseCostPreview) }}
                       </span>
                       <span v-else>
@@ -334,6 +324,7 @@
         <V2OrderEntryCandidates
           v-model:account-id="form.accountId"
           v-model:account-disposition="form.accountDisposition"
+          :account-source="form.accountSource"
           :id-selection-mode="idSelectionMode"
           :can-match="canMatch"
           :matching-loading="matchingLoading"
@@ -405,6 +396,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import V2OrderEntryCandidates from './components/V2OrderEntryCandidates.vue';
+import V2OrderEntryAccountSelect from './components/V2OrderEntryAccountSelect.vue';
 import V2OrderEntryLiveSummary from './components/V2OrderEntryLiveSummary.vue';
 import V2OrderEntryPrerequisiteAlert from './components/V2OrderEntryPrerequisiteAlert.vue';
 import V2OrderEntrySubmitBar from './components/V2OrderEntrySubmitBar.vue';

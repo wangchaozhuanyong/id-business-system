@@ -13,6 +13,8 @@ import {
 type TopupWorkbenchBalancePreset = 'zero' | 'positive_under_20' | 'custom';
 
 export interface ListIdBusinessV2TopupWorkbenchQuery extends PaginationQuery {
+  keyword?: string;
+  accountSource?: string;
   countryOptionId?: string;
   balancePreset?: string;
   balanceMin?: string;
@@ -45,9 +47,15 @@ export class IdBusinessV2TopupWorkbenchService {
     const balancePreset = this.parseBalancePreset(query.balancePreset);
     const balanceRange = this.buildBalanceRange(balancePreset, query.balanceMin, query.balanceMax);
     const onlyNormal = this.parseBoolean(query.onlyNormal, '只显示正常 ID');
+    const keyword = this.normalizeNullableString(query.keyword);
+    if (keyword && keyword.length > 255)
+      throw new BadRequestException('搜索关键词不能超过 255 个字符');
     const countryOptionId = this.normalizeNullableString(query.countryOptionId);
+    const accountSource = this.parseAccountSource(query.accountSource);
     const result = await this.queryRepository.listTopupWorkbench({
       countryOptionId,
+      keyword,
+      accountSource,
       balanceRange,
       onlyNormal,
       sortField: query.sortBy ? (WORKBENCH_SORT_FIELDS[query.sortBy] ?? null) : null,
@@ -71,6 +79,13 @@ export class IdBusinessV2TopupWorkbenchService {
       return value;
     }
     throw new BadRequestException('余额范围类型无效');
+  }
+
+  private parseAccountSource(value: unknown): 'inventory' | 'customer_owned' | null {
+    const normalized = this.normalizeNullableString(value);
+    if (!normalized) return null;
+    if (normalized === 'inventory' || normalized === 'customer_owned') return normalized;
+    throw new BadRequestException('ID 来源无效');
   }
 
   private buildBalanceRange(
@@ -171,6 +186,8 @@ export class IdBusinessV2TopupWorkbenchService {
       lastTopupAt: account.giftCards[0]?.createdAt ?? null,
       updatedAt: account.updatedAt,
       status: account.statusOption,
+      saleState: account.soldByOrder ? 'sold' : 'available',
+      soldByOrder: account.soldByOrder,
       historicalServices,
       currentServices,
       serviceDataAvailable: true

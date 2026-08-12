@@ -17,6 +17,8 @@ export class IdBusinessV2BalancesController {
   listTopupWorkbench(
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('keyword') keyword?: string,
+    @Query('accountSource') accountSource?: string,
     @Query('countryOptionId') countryOptionId?: string,
     @Query('balancePreset') balancePreset?: string,
     @Query('balanceMin') balanceMin?: string,
@@ -28,6 +30,8 @@ export class IdBusinessV2BalancesController {
     return this.topupWorkbenchService.list({
       page,
       pageSize,
+      keyword,
+      accountSource,
       countryOptionId,
       balancePreset,
       balanceMin,
@@ -43,6 +47,8 @@ export class IdBusinessV2BalancesController {
   async bootstrapTopupWorkbench(
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('keyword') keyword?: string,
+    @Query('accountSource') accountSource?: string,
     @Query('countryOptionId') countryOptionId?: string,
     @Query('balancePreset') balancePreset?: string,
     @Query('balanceMin') balanceMin?: string,
@@ -55,6 +61,8 @@ export class IdBusinessV2BalancesController {
       this.topupWorkbenchService.list({
         page,
         pageSize,
+        keyword,
+        accountSource,
         countryOptionId,
         balancePreset,
         balanceMin,

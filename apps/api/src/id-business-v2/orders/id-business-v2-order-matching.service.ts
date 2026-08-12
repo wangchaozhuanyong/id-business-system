@@ -8,6 +8,8 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
 
 export interface FindIdBusinessV2OrderCandidatesQuery {
   serviceOptionId?: string;
+  accountSource?: string;
+  customerId?: string;
   balanceAmount?: string;
   orderId?: string;
   limit?: string;
@@ -26,6 +28,9 @@ export class IdBusinessV2OrderMatchingService {
   ) {}
 
   async findCandidates(query: FindIdBusinessV2OrderCandidatesQuery) {
+    if (query.accountSource === 'customer_owned') {
+      throw new BadRequestException('客户已购 ID 必须手动搜索选择');
+    }
     return this.findEligibleCandidates(query, null, true);
   }
 
@@ -34,6 +39,8 @@ export class IdBusinessV2OrderMatchingService {
     return this.findEligibleCandidates(
       {
         serviceOptionId: dto.serviceOptionId,
+        accountSource: dto.accountSource,
+        customerId: dto.customerId,
         balanceAmount:
           dto.balanceAmount === undefined || dto.balanceAmount === null
             ? undefined
@@ -54,6 +61,11 @@ export class IdBusinessV2OrderMatchingService {
     const requiredBalance = this.normalizeRequiredBalance(query.balanceAmount);
     const limit = this.normalizeLimit(query.limit);
     const editingOrderId = query.orderId ? this.normalizeRequiredUuid(query.orderId, '订单') : null;
+    const accountSource = this.normalizeAccountSource(query.accountSource);
+    const customerId =
+      accountSource === 'customer_owned'
+        ? this.normalizeRequiredUuid(query.customerId, '客户')
+        : null;
     const context = await this.resolveMatchingContext(serviceOptionId);
     const evaluatedAt = new Date();
 
@@ -62,6 +74,8 @@ export class IdBusinessV2OrderMatchingService {
       categoryOptionId: context.category.id,
       serviceOptionId,
       editingOrderId,
+      accountSource,
+      customerId,
       requiredBalance: requiredBalance.toString(),
       evaluatedAt,
       keyword,
@@ -78,6 +92,8 @@ export class IdBusinessV2OrderMatchingService {
         country: context.country,
         requiredBalance: requiredBalance.toString(),
         requiredStatusCode: 'normal',
+        accountSource,
+        customerId,
         evaluatedAt
       },
       counts: {
@@ -138,6 +154,12 @@ export class IdBusinessV2OrderMatchingService {
     return normalized;
   }
 
+  private normalizeAccountSource(value: unknown) {
+    const normalized = this.normalizeNullableString(value) ?? 'inventory';
+    if (normalized === 'inventory' || normalized === 'customer_owned') return normalized;
+    throw new BadRequestException('ID 来源无效');
+  }
+
   private normalizeNullableString(value: unknown) {
     if (value === undefined || value === null) return null;
     if (typeof value !== 'string' && typeof value !== 'number') {
@@ -167,6 +189,8 @@ export class IdBusinessV2OrderMatchingService {
         .calculateAverageCost(currentBalance, balanceCostAmount)
         .toString(),
       purchaseCost: purchaseCost.toString(),
+      saleState: account.soldByOrder ? 'sold' : 'unsold',
+      sourceSoldOrder: account.soldByOrder,
       balanceAfterMatch: currentBalance.sub(requiredBalance).toString(),
       updatedAt: account.updatedAt
     };

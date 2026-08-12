@@ -122,6 +122,34 @@ export interface V2Account {
   updatedAt: string;
 }
 
+export interface RecoverV2SoldAccountResult {
+  accountId: string;
+  orderId: string;
+  recoveredAt: string;
+  lockReleased: boolean;
+  financeJournalId: string | null;
+}
+
+export interface V2SoldAccountRecoveryPreview {
+  canRecover: boolean;
+  currentBalance: string;
+  balanceCostAmount: string;
+  recordStatus: V2RecordStatus;
+  counts: {
+    activeActivations: number;
+    activeLocks: number;
+  };
+  blockers: Array<{
+    code:
+      | 'remaining_balance'
+      | 'remaining_balance_cost'
+      | 'active_activation'
+      | 'active_lock'
+      | 'loss_reported';
+    message: string;
+  }>;
+}
+
 export type V2AccountListResult = PaginatedResult<V2Account>;
 
 export interface V2AccountListQuery extends V2PageQuery {

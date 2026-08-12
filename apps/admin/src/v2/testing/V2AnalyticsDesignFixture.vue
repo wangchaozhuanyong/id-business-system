@@ -68,6 +68,12 @@
                   />
                   <V2SettlementPlatformReport :report="page.overview!.settlementPlatformReport" />
                 </div>
+                <V2AfterSalesReport
+                  v-show="activeAnalysisSection === 'after-sales'"
+                  :report="page.overview!.afterSales"
+                  :format-cny="page.formatCny"
+                  :amount-tone="page.amountTone"
+                />
                 <V2AnalyticsCurrencyReport
                   v-show="activeAnalysisSection === 'cash-flow'"
                   :overview="page.overview!"
@@ -127,6 +133,7 @@ import type {
   V2FinanceSupplierWallet
 } from '@apple-business/shared';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2AfterSalesReport from '@/v2/features/data-analytics/components/V2AfterSalesReport.vue';
 import V2AnalyticsAssetsReport from '@/v2/features/data-analytics/components/V2AnalyticsAssetsReport.vue';
 import V2AnalyticsCurrencyReport from '@/v2/features/data-analytics/components/V2AnalyticsCurrencyReport.vue';
 import V2AnalyticsNavigation, {
@@ -287,6 +294,19 @@ const overview: V2FinanceOverview = {
     totalBookValueCny: emptyState ? '0' : '99641.30',
     totalLatestValuationCny: emptyState ? '0' : '100326.72',
     unrealizedFxChangeCny: emptyState ? '0' : '685.42'
+  },
+  afterSales: {
+    completedOrderCount: emptyState ? 0 : 12,
+    grossRevenueCny: emptyState ? '0' : '16800',
+    refundedRevenueCny: emptyState ? '0' : '600',
+    platformFeeCny: emptyState ? '0' : '420',
+    balanceCostCny: emptyState ? '0' : '7600',
+    idCostCny: '0',
+    refundLossCny: emptyState ? '0' : '120',
+    netProfitCny: emptyState ? '0' : '8060',
+    pendingOrderCount: emptyState ? 0 : 2,
+    pendingRevenueCny: emptyState ? '0' : '2800',
+    pendingProfitCny: emptyState ? '0' : '1100'
   },
   settlementPlatformReport: {
     options: [

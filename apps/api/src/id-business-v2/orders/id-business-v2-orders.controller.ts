@@ -7,6 +7,7 @@ import type { ConsumeIdBusinessV2OrderDto } from './dto/consume-id-business-v2-o
 import type { CreateIdBusinessV2OrderDto } from './dto/create-id-business-v2-order.dto';
 import type { DeleteIdBusinessV2OrderDto } from './dto/delete-id-business-v2-order.dto';
 import type { QuoteIdBusinessV2OrderReceiptFxDto } from './dto/quote-id-business-v2-order-receipt-fx.dto';
+import type { RecoverIdBusinessV2SoldAccountDto } from './dto/recover-id-business-v2-sold-account.dto';
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
@@ -41,6 +42,7 @@ export class IdBusinessV2OrdersController {
     @Query('settlementPlatformOptionId') settlementPlatformOptionId?: string,
     @Query('status') status?: string,
     @Query('accountDisposition') accountDisposition?: string,
+    @Query('accountSource') accountSource?: string,
     @Query('openedFrom') openedFrom?: string,
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
@@ -56,6 +58,7 @@ export class IdBusinessV2OrdersController {
       settlementPlatformOptionId,
       status,
       accountDisposition,
+      accountSource,
       openedFrom,
       openedTo,
       sortBy,
@@ -75,6 +78,7 @@ export class IdBusinessV2OrdersController {
     @Query('settlementPlatformOptionId') settlementPlatformOptionId?: string,
     @Query('status') status?: string,
     @Query('accountDisposition') accountDisposition?: string,
+    @Query('accountSource') accountSource?: string,
     @Query('openedFrom') openedFrom?: string,
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
@@ -91,6 +95,7 @@ export class IdBusinessV2OrdersController {
         settlementPlatformOptionId,
         status,
         accountDisposition,
+        accountSource,
         openedFrom,
         openedTo,
         sortBy,
@@ -112,12 +117,16 @@ export class IdBusinessV2OrdersController {
   @RequirePermissions('apple.order.create')
   findMatchingCandidates(
     @Query('serviceOptionId') serviceOptionId?: string,
+    @Query('accountSource') accountSource?: string,
+    @Query('customerId') customerId?: string,
     @Query('balanceAmount') balanceAmount?: string,
     @Query('orderId') orderId?: string,
     @Query('limit') limit?: string
   ) {
     return this.orderMatchingService.findCandidates({
       serviceOptionId,
+      accountSource,
+      customerId,
       balanceAmount,
       orderId,
       limit
@@ -205,6 +214,22 @@ export class IdBusinessV2OrdersController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.orderLifecycleService.remove(id, dto, operator);
+  }
+
+  @Get(':id/recover-sold-account-preview')
+  @RequirePermissions('apple.account.update')
+  previewSoldAccountRecovery(@Param('id') id: string, @Query('accountId') accountId: string) {
+    return this.orderLifecycleService.previewSoldAccountRecovery(id, accountId);
+  }
+
+  @Post(':id/recover-sold-account')
+  @RequirePermissions('apple.account.update')
+  recoverSoldAccount(
+    @Param('id') id: string,
+    @Body() dto: RecoverIdBusinessV2SoldAccountDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderLifecycleService.recoverSoldAccount(id, dto, operator);
   }
 
   @Get(':id')

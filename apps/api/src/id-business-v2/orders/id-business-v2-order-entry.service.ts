@@ -66,6 +66,7 @@ export interface CreateManualRenewalOrderInput {
   dueAt: Date;
   idempotencyKey: string;
   remark: string | null;
+  accountSource?: 'inventory' | 'customer_owned';
 }
 
 @Injectable()
@@ -181,6 +182,12 @@ export class IdBusinessV2OrderEntryService {
 
         await this.assertActiveCustomer(tx, input.customerId);
         await this.assertActiveService(tx, input.serviceOptionId);
+        const sourceSoldOrderId = await this.resolveAccountSource(
+          tx,
+          input.accountId,
+          input.customerId,
+          input.accountSource
+        );
         const settlementPlatform = await this.resolveSettlementPlatform(
           tx,
           input.settlementPlatformOptionId
@@ -205,6 +212,9 @@ export class IdBusinessV2OrderEntryService {
           receivedAt: orderTimestamp,
           platformFeeAmount: platformFeeAmount.toString(),
           accountCostAmount: 0,
+          appliedAccountCostAmount: 0,
+          accountSource: input.accountSource,
+          sourceSoldOrderId,
           accountDisposition: input.accountDisposition,
           balanceAmount: input.balanceAmount.toString(),
           balanceCostAmount: 0,
@@ -236,6 +246,7 @@ export class IdBusinessV2OrderEntryService {
           order.id,
           input.accountId,
           input.accountDisposition,
+          input.accountSource,
           operator
         );
         const auditedOrder = await this.repository.requireOrderInTransaction(tx, order.id);
@@ -288,6 +299,11 @@ export class IdBusinessV2OrderEntryService {
     const receivedAmount = Amount4.from(input.receivedAmount);
     const balanceAmount = Amount4.from(input.balanceAmount);
     const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
+    const sourceSoldOrderId = await this.resolveRenewalAccountSource(
+      tx,
+      input.accountId,
+      input.customerId
+    );
     const orderTimestamp = new Date();
     const order = await this.repository.createOrder(tx, {
       orderNo: generateOrderNo(),
@@ -307,6 +323,9 @@ export class IdBusinessV2OrderEntryService {
       receivedAt: orderTimestamp,
       platformFeeAmount: platformFeeAmount.toString(),
       accountCostAmount: 0,
+      appliedAccountCostAmount: 0,
+      accountSource: sourceSoldOrderId ? 'customer_owned' : 'inventory',
+      sourceSoldOrderId,
       accountDisposition: 'retained',
       balanceAmount: balanceAmount.toString(),
       balanceCostAmount: 0,
@@ -371,6 +390,12 @@ export class IdBusinessV2OrderEntryService {
     const receivedAmount = Amount4.from(input.receivedAmount);
     const balanceAmount = Amount4.from(input.balanceAmount);
     const platformFeeAmount = calculatePlatformFee(receivedAmount, settlementPlatform);
+    const sourceSoldOrderId = await this.resolveAccountSource(
+      tx,
+      input.accountId,
+      input.customerId,
+      input.accountSource ?? 'customer_owned'
+    );
     const orderTimestamp = new Date();
     const order = await this.repository.createOrder(tx, {
       orderNo: generateOrderNo(),
@@ -390,6 +415,9 @@ export class IdBusinessV2OrderEntryService {
       receivedAt: orderTimestamp,
       platformFeeAmount: platformFeeAmount.toString(),
       accountCostAmount: 0,
+      appliedAccountCostAmount: 0,
+      accountSource: sourceSoldOrderId ? 'customer_owned' : 'inventory',
+      sourceSoldOrderId,
       accountDisposition: 'retained',
       balanceAmount: balanceAmount.toString(),
       balanceCostAmount: 0,
@@ -417,6 +445,38 @@ export class IdBusinessV2OrderEntryService {
     if (!customer) {
       throw new BadRequestException('客户不存在、已停用或已删除');
     }
+  }
+
+  private async resolveRenewalAccountSource(
+    tx: V2CommandTransaction,
+    accountId: string,
+    customerId: string
+  ) {
+    const ownership = await this.repository.findSoldAccountOwnership(tx, accountId);
+    if (!ownership?.soldByOrder) return null;
+    if (ownership.soldByOrder.customerId !== customerId) {
+      throw new ConflictException('已售 ID 只能由原购买客户续费');
+    }
+    return ownership.soldByOrder.id;
+  }
+
+  private async resolveAccountSource(
+    tx: V2CommandTransaction,
+    accountId: string,
+    customerId: string,
+    accountSource: 'inventory' | 'customer_owned'
+  ) {
+    if (accountSource === 'inventory') {
+      return null;
+    }
+    const ownership = await this.repository.findSoldAccountOwnership(tx, accountId);
+    if (!ownership?.soldByOrder || ownership.soldByOrder.deletedAt) {
+      throw new ConflictException('客户已购 ID 缺少有效的原销售订单');
+    }
+    if (ownership.soldByOrder.customerId !== customerId) {
+      throw new ConflictException('该 ID 不属于当前客户');
+    }
+    return ownership.soldByOrder.id;
   }
 
   private async assertActiveService(tx: V2CommandTransaction, serviceOptionId: string) {

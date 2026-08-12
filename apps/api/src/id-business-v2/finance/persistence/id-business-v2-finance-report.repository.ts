@@ -5,7 +5,7 @@ import type {
   Prisma
 } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { Rate8, type V2CommandTransaction } from '../../runtime/public-api';
+import { Amount4, Rate8, type V2CommandTransaction } from '../../runtime/public-api';
 import { mapAmount4, mapRate8 } from '../../runtime/public-api';
 
 export interface FinanceReportPersistenceFilter {
@@ -44,6 +44,82 @@ export class IdBusinessV2FinanceReportRepository {
       _sum: { profitAmount: true }
     });
     return mapAmount4(row._sum.profitAmount ?? 0, 'orders.sum_profit_amount');
+  }
+
+  async loadAfterSales(input: {
+    businessDate?: { gte?: Date; lte?: Date };
+    occurredAt?: { gte?: Date; lte?: Date };
+  }) {
+    const [orders, pendingOrders] = await Promise.all([
+      this.prisma.idBusinessV2Order.findMany({
+        where: { accountSource: 'customer_owned', deletedAt: null },
+        select: { id: true }
+      }),
+      this.prisma.idBusinessV2Order.findMany({
+        where: {
+          accountSource: 'customer_owned',
+          status: { in: ['pending', 'waiting_external', 'processing'] },
+          deletedAt: null,
+          openedAt: input.occurredAt
+        },
+        select: {
+          receivedAmount: true,
+          platformFeeAmount: true,
+          balanceAmount: true,
+          profitAmount: true,
+          account: { select: { currentBalance: true, balanceCostAmount: true } }
+        }
+      })
+    ]);
+    const orderIds = orders.map((order) => order.id);
+    const journals = orderIds.length
+      ? await this.prisma.idBusinessV2FinanceJournal.findMany({
+          where: {
+            status: 'posted',
+            businessDate: input.businessDate,
+            OR: [
+              { sourceType: 'order', sourceId: { in: orderIds } },
+              {
+                journalType: 'reversal',
+                reversalOf: { is: { sourceType: 'order', sourceId: { in: orderIds } } }
+              }
+            ]
+          },
+          select: {
+            id: true,
+            sourceId: true,
+            journalType: true,
+            reversalOf: { select: { sourceId: true, journalType: true } },
+            lines: {
+              where: {
+                accountCode: {
+                  in: ['sales_revenue', 'platform_fee', 'gift_card_cost', 'id_cost', 'refund_loss']
+                }
+              },
+              select: { accountCode: true, direction: true, amountCny: true }
+            }
+          }
+        })
+      : [];
+    return {
+      journals: journals.map((journal) => ({
+        ...journal,
+        lines: journal.lines.map((line) => ({
+          ...line,
+          amountCny: mapAmount4(line.amountCny, 'finance_journal_lines.amount_cny')
+        }))
+      })),
+      pendingOrderCount: pendingOrders.length,
+      pendingRevenue: pendingOrders.reduce(
+        (sum, order) =>
+          sum.add(mapAmount4(order.receivedAmount, 'after_sales_orders.received_amount')),
+        Amount4.zero()
+      ),
+      pendingProfit: pendingOrders.reduce(
+        (sum, order) => sum.add(estimatePendingAfterSalesProfit(order)),
+        Amount4.zero()
+      )
+    };
   }
 
   async groupCashFlow(filter: FinanceReportPersistenceFilter) {
@@ -124,7 +200,13 @@ export class IdBusinessV2FinanceReportRepository {
           deletedAt: null,
           openedAt: occurredAt
         },
-        select: { id: true, orderNo: true, profitAmount: true },
+        select: {
+          id: true,
+          orderNo: true,
+          profitAmount: true,
+          accountSource: true,
+          appliedAccountCostAmount: true
+        },
         orderBy: [{ statusChangedAt: 'desc' }, { id: 'desc' }],
         take: 50
       }),
@@ -187,7 +269,13 @@ export class IdBusinessV2FinanceReportRepository {
     return {
       completedOrders: completedOrders.map((row) => ({
         ...row,
-        profitAmount: row.profitAmount ? mapAmount4(row.profitAmount, 'orders.profit_amount') : null
+        profitAmount: row.profitAmount
+          ? mapAmount4(row.profitAmount, 'orders.profit_amount')
+          : null,
+        appliedAccountCostAmount: mapAmount4(
+          row.appliedAccountCostAmount,
+          'orders.applied_account_cost_amount'
+        )
       })),
       missingPurchaseEvidence: missingPurchaseEvidence.map((row) => ({
         ...row,
@@ -335,6 +423,42 @@ export class IdBusinessV2FinanceReportRepository {
   }
 }
 
+function estimatePendingAfterSalesProfit(order: {
+  receivedAmount: unknown;
+  platformFeeAmount: unknown;
+  balanceAmount: unknown;
+  profitAmount: unknown | null;
+  account: { currentBalance: unknown; balanceCostAmount: unknown } | null;
+}) {
+  if (order.profitAmount !== null) {
+    return mapAmount4(order.profitAmount, 'after_sales_orders.profit_amount');
+  }
+  const receivedAmount = mapAmount4(order.receivedAmount, 'after_sales_orders.received_amount');
+  const platformFeeAmount = mapAmount4(
+    order.platformFeeAmount,
+    'after_sales_orders.platform_fee_amount'
+  );
+  const balanceAmount = mapAmount4(order.balanceAmount, 'after_sales_orders.balance_amount');
+  if (!order.account || balanceAmount.isZero()) {
+    return receivedAmount.sub(platformFeeAmount);
+  }
+  const currentBalance = mapAmount4(
+    order.account.currentBalance,
+    'after_sales_orders.account.current_balance'
+  );
+  const balanceCostAmount = mapAmount4(
+    order.account.balanceCostAmount,
+    'after_sales_orders.account.balance_cost_amount'
+  );
+  const estimatedBalanceCost =
+    currentBalance.lte(0) || balanceCostAmount.isZero()
+      ? Amount4.zero()
+      : balanceAmount.gte(currentBalance)
+        ? balanceCostAmount
+        : balanceCostAmount.ratio(currentBalance).apply(balanceAmount);
+  return receivedAmount.sub(platformFeeAmount).sub(estimatedBalanceCost);
+}
+
 function buildLineWhere(
   filter: FinanceReportPersistenceFilter
 ): Prisma.IdBusinessV2FinanceJournalLineWhereInput {
@@ -359,3 +483,13 @@ function buildLineWhere(
 }
 
 export type FinanceReportAccountCode = IdBusinessV2FinanceAccountCode;
+
+export function netFinanceAmount(
+  lines: Array<{ direction: 'debit' | 'credit'; amountCny: Amount4 }>,
+  natural: 'debit' | 'credit'
+) {
+  return lines.reduce(
+    (sum, line) => (line.direction === natural ? sum.add(line.amountCny) : sum.sub(line.amountCny)),
+    Amount4.zero()
+  );
+}

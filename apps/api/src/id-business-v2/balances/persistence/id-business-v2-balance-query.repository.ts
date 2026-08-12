@@ -18,6 +18,8 @@ export type TopupWorkbenchSortField =
   | 'updatedAt';
 
 export interface TopupWorkbenchCriteria {
+  keyword: string | null;
+  accountSource: 'inventory' | 'customer_owned' | null;
   countryOptionId: string | null;
   balanceRange?: TopupWorkbenchBalanceRange;
   onlyNormal: boolean;
@@ -30,6 +32,13 @@ export interface TopupWorkbenchCriteria {
 const WORKBENCH_ACCOUNT_INCLUDE = {
   countryOption: { select: { id: true, code: true, name: true } },
   statusOption: { select: { id: true, code: true, name: true, isSystem: true } },
+  soldByOrder: {
+    select: {
+      id: true,
+      orderNo: true,
+      customer: { select: { id: true, name: true } }
+    }
+  },
   giftCards: {
     select: { createdAt: true },
     orderBy: { createdAt: 'desc' as const },
@@ -67,6 +76,11 @@ export interface WorkbenchAccountRow {
   updatedAt: Date;
   countryOption: { id: string; code: string; name: string };
   statusOption: { id: string; code: string; name: string; isSystem: boolean };
+  soldByOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
   giftCards: Array<{ createdAt: Date }>;
   activations: Array<{
     id: string;
@@ -92,8 +106,23 @@ export class IdBusinessV2BalanceQueryRepository {
       deletedAt: null,
       recordStatus: 'active',
       lossReportedAt: null,
-      soldByOrderId: null,
+      soldByOrderId:
+        criteria.accountSource === 'inventory'
+          ? null
+          : criteria.accountSource === 'customer_owned'
+            ? { not: null }
+            : undefined,
       countryOptionId: criteria.countryOptionId ?? undefined,
+      OR: criteria.keyword
+        ? [
+            { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            {
+              soldByOrder: {
+                is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
+              }
+            }
+          ]
+        : undefined,
       currentBalance: criteria.balanceRange,
       statusOption: criteria.onlyNormal
         ? {

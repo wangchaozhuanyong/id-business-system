@@ -28,10 +28,6 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
       ElMessage.warning('已报损冻结 ID 不能启用或停用');
       return;
     }
-    if (item.saleState === 'sold' && item.recordStatus === 'active') {
-      ElMessage.warning('已售出 ID 不能停用');
-      return;
-    }
     recordStatusTarget.value = item;
     recordStatusDialogMode.value = 'change';
     recordStatusReason.value = '';

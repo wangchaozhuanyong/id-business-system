@@ -13,6 +13,7 @@ export type IdBusinessV2OrderStatus =
   | 'failed';
 
 export type IdBusinessV2OrderAccountDisposition = 'retained' | 'sold' | 'recovered';
+export type IdBusinessV2OrderAccountSource = 'inventory' | 'customer_owned';
 export type IdBusinessV2AccountLockScope = 'by_service' | 'global';
 export type IdBusinessV2AccountLockStatus = 'active' | 'released' | 'expired';
 export type IdBusinessV2BalanceLedgerEntryType =
@@ -46,6 +47,9 @@ export interface IdBusinessV2OrderRecord {
   receivedAt: Date | null;
   platformFeeAmount: Amount4;
   accountCostAmount: Amount4;
+  appliedAccountCostAmount: Amount4;
+  accountSource: IdBusinessV2OrderAccountSource;
+  sourceSoldOrderId: string | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: Amount4;
   balanceCostAmount: Amount4;
@@ -138,6 +142,11 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
     appleIdMasked: string;
     countryOption: { id: string; code: string; name: string };
   } | null;
+  sourceSoldOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
   settlementPlatform: { id: string; code: string; name: string } | null;
   createdBy: { id: string; username: string; displayName: string } | null;
   locks: IdBusinessV2AccountLockRecord[];
@@ -152,6 +161,11 @@ export interface IdBusinessV2MatchingAccount {
   updatedAt: Date;
   countryOption: { id: string; code: string; name: string };
   statusOption: { id: string; code: string; name: string };
+  soldByOrder: {
+    id: string;
+    orderNo: string;
+    customer: { id: string; name: string };
+  } | null;
 }
 
 export interface IdBusinessV2MatchingContext {

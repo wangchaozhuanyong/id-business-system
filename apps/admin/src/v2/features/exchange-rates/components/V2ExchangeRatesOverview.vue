@@ -27,7 +27,7 @@
 
     <section class="v2-exchange-overview" aria-label="自动采集汇率概览">
       <div class="v2-exchange-overview__intro">
-        <span class="v2-exchange-overview__eyebrow">FX CONTROL CENTER</span>
+        <span class="v2-exchange-overview__eyebrow">汇率管理</span>
         <div class="v2-exchange-overview__title-row">
           <h2>实时汇率总览</h2>
           <el-tag

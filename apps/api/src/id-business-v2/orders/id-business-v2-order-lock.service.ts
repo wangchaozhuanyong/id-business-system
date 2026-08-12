@@ -54,6 +54,9 @@ export class IdBusinessV2OrderLockService {
     const now = new Date();
     const order = await this.lockOrder(tx, normalized.orderId);
     assertReservableOrder(order);
+    if (order.accountSource === 'customer_owned' && normalized.lockScope !== 'by_service') {
+      throw new ConflictException('客户已购 ID 只能按业务范围锁定');
+    }
     if (order.accountId && order.accountId !== normalized.accountId) {
       throw new ConflictException('订单已经绑定其他 ID，不能重复锁定');
     }
@@ -280,8 +283,16 @@ export class IdBusinessV2OrderLockService {
     if (account.statusCode !== 'normal') {
       throw new ConflictException('只有状态正常的 ID 才能锁定或扣减余额');
     }
-    if (account.soldByOrderId && account.soldByOrderId !== order.id) {
-      throw new ConflictException('该 ID 已卖出，不能再次匹配、加卡或续费');
+    if (order.accountSource === 'customer_owned') {
+      if (
+        !order.sourceSoldOrderId ||
+        account.soldByOrderId !== order.sourceSoldOrderId ||
+        account.soldByCustomerId !== order.customerId
+      ) {
+        throw new ConflictException('该 ID 不属于当前客户或原销售归属已变更');
+      }
+    } else if (account.soldByOrderId && account.soldByOrderId !== order.id) {
+      throw new ConflictException('该 ID 已售出，请使用客户已购 ID 模式');
     }
     if (account.currentBalance.lt(order.balanceAmount)) {
       throw new ConflictException(

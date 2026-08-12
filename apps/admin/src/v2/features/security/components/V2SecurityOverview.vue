@@ -1,7 +1,7 @@
 <template>
   <section class="v2-security-overview" aria-label="安全中心总览">
     <div class="v2-security-overview__intro">
-      <span>SECURITY CONTROL</span>
+      <span>安全访问管理</span>
       <h2>安全中心总览</h2>
       <p>统一监控登录风险、在线会话、MFA 策略和访问白名单。</p>
     </div>

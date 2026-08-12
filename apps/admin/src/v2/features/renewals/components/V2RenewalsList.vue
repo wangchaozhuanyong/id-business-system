@@ -54,7 +54,17 @@
           prop="account"
           sortable="custom"
         >
-          <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
+          <template #default="{ row }">
+            <div class="v2-table-cell">
+              <strong>{{ row.account.appleIdMasked }}</strong>
+              <el-tag v-if="row.account.saleState === 'sold'" type="warning" effect="plain">
+                客户已购
+              </el-tag>
+              <small v-if="row.account.soldByOrder">
+                {{ row.account.soldByOrder.orderNo }} · {{ row.account.soldByOrder.customer.name }}
+              </small>
+            </div>
+          </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[2]">
           <template #default="{ row }">{{ row.account.country.name }}</template>
@@ -155,7 +165,19 @@
           <dl>
             <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'account']">
               <dt>ID账号</dt>
-              <dd>{{ item.account.appleIdMasked }}</dd>
+              <dd>
+                {{ item.account.appleIdMasked }}
+                <el-tag v-if="item.account.saleState === 'sold'" type="warning" effect="plain">
+                  客户已购
+                </el-tag>
+              </dd>
+            </div>
+            <div v-if="item.account.soldByOrder">
+              <dt>原销售归属</dt>
+              <dd>
+                {{ item.account.soldByOrder.orderNo }} ·
+                {{ item.account.soldByOrder.customer.name }}
+              </dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'currentBalance']">
               <dt>ID余额</dt>

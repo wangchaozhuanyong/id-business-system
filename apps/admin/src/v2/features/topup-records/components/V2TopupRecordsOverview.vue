@@ -1,7 +1,7 @@
 <template>
   <section class="v2-topup-records-overview" aria-label="加卡与余额记录概览">
     <div class="v2-topup-records-overview__intro">
-      <span class="v2-topup-records-overview__eyebrow">BALANCE RECORDS</span>
+      <span class="v2-topup-records-overview__eyebrow">余额记录</span>
       <h2>{{ activeTab === 'giftCards' ? '加卡记录总览' : '余额流水总览' }}</h2>
       <p>
         {{

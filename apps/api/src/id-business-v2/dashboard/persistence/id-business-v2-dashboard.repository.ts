@@ -78,7 +78,6 @@ export class IdBusinessV2DashboardRepository {
     const availableAccountWhere = {
       deletedAt: null,
       recordStatus: 'active' as const,
-      soldByOrderId: null,
       lossReportedAt: null
     };
     const [
@@ -146,31 +145,38 @@ export class IdBusinessV2DashboardRepository {
       soldByOrderId: null,
       lossReportedAt: null
     };
-    const [totalAccounts, availableAccounts, inventory, financeSettings] = await Promise.all([
-      this.prisma.idBusinessV2Account.count({ where: { deletedAt: null } }),
-      this.prisma.idBusinessV2Account.count({ where: availableWhere }),
-      access.finance
-        ? this.prisma.idBusinessV2Account.aggregate({
-            where: availableWhere,
-            _sum: { balanceCostAmount: true, purchaseCost: true }
-          })
-        : null,
-      access.finance
-        ? this.prisma.idBusinessV2FinanceSettings.findUnique({
-            where: { id: 1 },
-            select: { historyStatus: true }
-          })
-        : null
-    ]);
+    const [totalAccounts, availableAccounts, balanceInventory, idInventory, financeSettings] =
+      await Promise.all([
+        this.prisma.idBusinessV2Account.count({ where: { deletedAt: null } }),
+        this.prisma.idBusinessV2Account.count({ where: availableWhere }),
+        access.finance
+          ? this.prisma.idBusinessV2Account.aggregate({
+              where: { deletedAt: null, lossReportedAt: null },
+              _sum: { balanceCostAmount: true }
+            })
+          : null,
+        access.finance
+          ? this.prisma.idBusinessV2Account.aggregate({
+              where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
+              _sum: { purchaseCost: true }
+            })
+          : null,
+        access.finance
+          ? this.prisma.idBusinessV2FinanceSettings.findUnique({
+              where: { id: 1 },
+              select: { historyStatus: true }
+            })
+          : null
+      ]);
     return {
       totalAccounts,
       availableAccounts,
       balanceCostAmount: mapOptionalAmount4(
-        inventory?._sum.balanceCostAmount,
+        balanceInventory?._sum.balanceCostAmount,
         'id_business_v2_accounts.balance_cost_amount.sum'
       ),
       purchaseCost: mapOptionalAmount4(
-        inventory?._sum.purchaseCost,
+        idInventory?._sum.purchaseCost,
         'id_business_v2_accounts.purchase_cost.sum'
       ),
       financeHistoryStatus: financeSettings?.historyStatus ?? null

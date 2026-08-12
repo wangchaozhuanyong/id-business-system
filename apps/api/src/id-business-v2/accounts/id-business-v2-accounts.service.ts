@@ -263,9 +263,6 @@ export class IdBusinessV2AccountsService {
       async (tx, context) => {
         const existing = await this.repository.lockAccount(tx, id);
         assertAccountLossNotReported(existing.lossReportedAt, '已报损冻结 ID 不能启用或停用');
-        if (targetStatus === 'disabled' && existing.soldByOrderId) {
-          throw new ConflictException('已售出 ID 不能停用');
-        }
         if (existing.recordStatus === targetStatus) {
           return toAccountResponse(existing);
         }

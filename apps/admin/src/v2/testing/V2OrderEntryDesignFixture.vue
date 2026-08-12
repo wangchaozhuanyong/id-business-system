@@ -95,6 +95,12 @@
                             <AppButton variant="ghost">新增客户</AppButton>
                           </div>
                         </el-form-item>
+                        <el-form-item label="ID 来源">
+                          <el-radio-group v-model="accountSource" aria-label="ID 来源">
+                            <el-radio-button value="inventory">库存 ID</el-radio-button>
+                            <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
+                          </el-radio-group>
+                        </el-form-item>
                       </div>
                       <div class="v2-order-entry-form-column">
                         <el-form-item label="业务分类" required>
@@ -105,7 +111,7 @@
                         <el-form-item label="使用 ID" required>
                           <el-select v-model="selectedId" aria-label="使用 ID">
                             <el-option
-                              v-for="candidate in candidates"
+                              v-for="candidate in availableCandidates"
                               :key="candidate.id"
                               :label="`${candidate.appleIdMasked} / 余额 ${candidate.currentBalance}`"
                               :value="candidate.id"
@@ -117,7 +123,9 @@
                             v-model="selectionMode"
                             class="v2-order-entry-selection-mode"
                           >
-                            <el-radio value="auto">自动匹配</el-radio>
+                            <el-radio value="auto" :disabled="accountSource === 'customer_owned'">
+                              自动匹配
+                            </el-radio>
                             <el-radio value="manual">手动选择</el-radio>
                           </el-radio-group>
                         </el-form-item>
@@ -226,13 +234,14 @@
               <V2OrderEntryCandidates
                 v-model:account-id="selectedId"
                 v-model:account-disposition="accountDisposition"
+                :account-source="accountSource"
                 :id-selection-mode="selectionMode"
                 :can-match="true"
                 :matching-loading="false"
                 matching-phase="ready"
                 :matching-parameter-transition="false"
                 :matching-result="matchingResult"
-                :candidate-items="candidates"
+                :candidate-items="availableCandidates"
                 matching-error=""
                 matching-empty-message=""
                 :format-decimal="formatDecimal"
@@ -270,7 +279,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import {
   ArrowDown,
   Bell,
@@ -313,7 +322,7 @@ const candidateSeed = [
   ['73********@qq.com', '122.6', '5.3', '正常']
 ] as const;
 
-const candidates: V2OrderCandidate[] = candidateSeed.map((item, index) => ({
+const inventoryCandidates: V2OrderCandidate[] = candidateSeed.map((item, index) => ({
   id: `candidate-${index + 1}`,
   appleIdMasked: item[0],
   country: { id: 'country-us', code: 'US', name: '美国' },
@@ -323,29 +332,51 @@ const candidates: V2OrderCandidate[] = candidateSeed.map((item, index) => ({
   estimatedBalanceCostAmount: '116',
   averageCost: item[2],
   purchaseCost: '0',
+  saleState: 'unsold',
+  sourceSoldOrder: null,
   balanceAfterMatch: String(Math.max(0, Number(item[1]) - 20).toFixed(1)),
   updatedAt: '2026-08-09T08:40:00.000Z'
 }));
 
-const matchingResult: V2OrderMatchingResult = {
+const customerOwnedCandidates: V2OrderCandidate[] = inventoryCandidates
+  .slice(0, 3)
+  .map((candidate, index) => ({
+    ...candidate,
+    id: `customer-owned-${index + 1}`,
+    purchaseCost: '0',
+    saleState: 'sold',
+    sourceSoldOrder: {
+      id: `sold-order-${index + 1}`,
+      orderNo: `V22026080${index + 1}00012${index + 1}`,
+      customer: { id: 'customer-wangchao', name: '王朝' }
+    }
+  }));
+
+const accountSource = ref<'inventory' | 'customer_owned'>('inventory');
+const availableCandidates = computed(() =>
+  accountSource.value === 'customer_owned' ? customerOwnedCandidates : inventoryCandidates
+);
+const matchingResult = computed<V2OrderMatchingResult>(() => ({
   criteria: {
     service: { id: 'service-plus', code: 'plus-20us', name: 'plus-20us' },
     category: { id: 'category-chatgpt', code: 'chatgpt', name: 'ChatGPT' },
     country: { id: 'country-us', code: 'US', name: '美国' },
     requiredBalance: '20',
     requiredStatusCode: 'normal',
+    accountSource: accountSource.value,
+    customerId: accountSource.value === 'customer_owned' ? 'customer-wangchao' : null,
     evaluatedAt: '2026-08-09T08:40:00.000Z'
   },
   counts: {
-    activeInCountry: 20,
-    normalStatus: 18,
-    sufficientBalance: 15,
-    available: 13
+    activeInCountry: accountSource.value === 'customer_owned' ? 3 : 20,
+    normalStatus: accountSource.value === 'customer_owned' ? 3 : 18,
+    sufficientBalance: accountSource.value === 'customer_owned' ? 3 : 15,
+    available: availableCandidates.value.length
   },
-  selectedCandidateId: candidates[0]?.id ?? null,
-  items: candidates,
+  selectedCandidateId: availableCandidates.value[0]?.id ?? null,
+  items: availableCandidates.value,
   revalidateAt: '2026-08-09T08:41:00.000Z'
-};
+}));
 
 const form = reactive({
   category: 'ChatGPT',
@@ -365,12 +396,18 @@ const form = reactive({
 });
 
 const selectionMode = ref<'auto' | 'manual'>('auto');
-const selectedId = ref(candidates[0]?.id ?? '');
+const selectedId = ref(inventoryCandidates[0]?.id ?? '');
 const accountDisposition = ref<'retained' | 'sold'>('retained');
 const submitted = ref(false);
 const selectedCandidate = computed(
-  () => candidates.find((candidate) => candidate.id === selectedId.value) ?? null
+  () => availableCandidates.value.find((candidate) => candidate.id === selectedId.value) ?? null
 );
+
+watch(accountSource, (source) => {
+  selectionMode.value = source === 'customer_owned' ? 'manual' : 'auto';
+  accountDisposition.value = 'retained';
+  selectedId.value = availableCandidates.value[0]?.id ?? '';
+});
 
 function formatDecimal(value: string) {
   const numeric = Number(value);

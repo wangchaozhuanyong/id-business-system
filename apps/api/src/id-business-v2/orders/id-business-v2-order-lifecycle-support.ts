@@ -23,6 +23,7 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
 import type {
   IdBusinessV2AccountLockScope,
   IdBusinessV2BalanceLedgerRecord,
+  IdBusinessV2OrderAccountSource,
   IdBusinessV2OrderRecord
 } from './id-business-v2-order.types';
 
@@ -356,8 +357,11 @@ export class IdBusinessV2OrderLifecycleSupport {
       websiteAccountMasked: order.websiteAccountMasked,
       receivedAmount: order.receivedAmount.toString(),
       platformFeeAmount: order.platformFeeAmount.toString(),
+      accountSource: order.accountSource,
+      sourceSoldOrderId: order.sourceSoldOrderId,
       accountDisposition: order.accountDisposition,
       accountCostAmount: order.accountCostAmount.toString(),
+      appliedAccountCostAmount: order.appliedAccountCostAmount.toString(),
       balanceAmount: order.balanceAmount.toString(),
       balanceCostAmount: order.balanceCostAmount.toString(),
       refundCostAmount: order.refundCostAmount?.toString() ?? null,
@@ -380,6 +384,7 @@ export class IdBusinessV2OrderLifecycleSupport {
       'customerId',
       'serviceOptionId',
       'accountId',
+      'accountSource',
       'settlementPlatformOptionId',
       'platformOrderNo',
       'websiteAccount',
@@ -407,10 +412,46 @@ export class IdBusinessV2OrderLifecycleSupport {
       dto.customerId,
       dto.serviceOptionId,
       dto.accountId,
+      dto.accountSource,
       dto.balanceAmount,
       dto.accountDisposition,
       dto.lockScope
     ].some((value) => value !== undefined);
+  }
+
+  normalizeAccountSource(
+    value: unknown,
+    fallback: IdBusinessV2OrderAccountSource
+  ): IdBusinessV2OrderAccountSource {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (value === 'inventory' || value === 'customer_owned') return value;
+    throw new BadRequestException('ID 来源无效');
+  }
+
+  async resolveUpdatedAccountSource(
+    tx: V2CommandTransaction,
+    orderId: string,
+    accountId: string,
+    customerId: string,
+    accountSource: IdBusinessV2OrderAccountSource
+  ) {
+    const ownership = await this.repository.findSoldAccountOwnership(tx, accountId);
+    if (accountSource === 'inventory') {
+      if (ownership?.soldByOrder && ownership.soldByOrder.id !== orderId) {
+        throw new ConflictException('该 ID 已售出，请使用客户已购 ID 模式');
+      }
+      return null;
+    }
+    if (!ownership?.soldByOrder || ownership.soldByOrder.deletedAt) {
+      throw new ConflictException('客户已购 ID 缺少有效的原销售订单');
+    }
+    if (ownership.soldByOrder.id === orderId) {
+      throw new ConflictException('订单不能把自身作为原销售订单');
+    }
+    if (ownership.soldByOrder.customerId !== customerId) {
+      throw new ConflictException('该 ID 不属于当前客户');
+    }
+    return ownership.soldByOrder.id;
   }
 
   normalizeUuid(value: unknown, label: string) {

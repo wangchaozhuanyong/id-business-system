@@ -245,6 +245,11 @@ enum IdBusinessV2OrderAccountDisposition {
   recovered
 }
 
+enum IdBusinessV2OrderAccountSource {
+  inventory
+  customer_owned
+}
+
 enum IdBusinessV2AccountLockScope {
   by_service
   global
@@ -1241,6 +1246,9 @@ model IdBusinessV2Order {
   receivedAt                 DateTime?                           @map("received_at") @db.Timestamptz(6)
   platformFeeAmount          Decimal                             @default(0) @map("platform_fee_amount") @db.Decimal(18, 4)
   accountCostAmount          Decimal                             @default(0) @map("account_cost_amount") @db.Decimal(18, 4)
+  appliedAccountCostAmount   Decimal                             @default(0) @map("applied_account_cost_amount") @db.Decimal(18, 4)
+  accountSource              IdBusinessV2OrderAccountSource      @default(inventory) @map("account_source")
+  sourceSoldOrderId          String?                             @map("source_sold_order_id") @db.Uuid
   accountDisposition         IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
   balanceAmount              Decimal                             @default(0) @map("balance_amount") @db.Decimal(18, 4)
   balanceCostAmount          Decimal                             @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
@@ -1262,6 +1270,8 @@ model IdBusinessV2Order {
   serviceOption          IdBusinessV2Option                 @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
   account                IdBusinessV2Account?               @relation("IdBusinessV2OrderAccount", fields: [accountId], references: [id], onDelete: Restrict)
   soldAccount            IdBusinessV2Account?               @relation("IdBusinessV2AccountSoldByOrder")
+  sourceSoldOrder        IdBusinessV2Order?                 @relation("IdBusinessV2OrderAfterSalesSource", fields: [sourceSoldOrderId], references: [id], onDelete: Restrict)
+  afterSalesOrders       IdBusinessV2Order[]                @relation("IdBusinessV2OrderAfterSalesSource")
   settlementPlatform     IdBusinessV2Option?                @relation("IdBusinessV2OrderSettlementPlatform", fields: [settlementPlatformOptionId], references: [id], onDelete: Restrict)
   createdBy              User?                              @relation("IdBusinessV2OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   updatedBy              User?                              @relation("IdBusinessV2OrderUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
@@ -1277,6 +1287,8 @@ model IdBusinessV2Order {
   @@index([serviceOptionId])
   @@index([accountId])
   @@index([accountDisposition])
+  @@index([accountSource, status, statusChangedAt])
+  @@index([sourceSoldOrderId])
   @@index([settlementPlatformOptionId])
   @@index([websiteAccountHash])
   @@index([receivedFxSnapshotId])

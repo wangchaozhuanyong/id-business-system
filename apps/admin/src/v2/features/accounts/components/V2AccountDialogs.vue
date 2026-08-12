@@ -98,8 +98,8 @@
       <V2AccountPurchaseFields :page="page" />
       <el-alert
         v-if="page.editingItem?.saleState === 'sold'"
-        type="warning"
-        title="该 ID 已卖出，余额、人民币成本、加卡和续费均已锁定"
+        type="info"
+        title="该 ID 已归客户所有，余额和人民币成本仍可按实际凭证调整"
         :closable="false"
         show-icon
       />
@@ -109,7 +109,7 @@
             v-model="page.form.currentBalance"
             inputmode="decimal"
             placeholder="0"
-            :disabled="!page.canAdjustBalance || page.editingItem?.saleState === 'sold'"
+            :disabled="!page.canAdjustBalance"
             @input="page.updateBalanceCostFromRate"
           />
         </el-form-item>
@@ -118,7 +118,7 @@
             v-model="page.form.exchangeRate"
             inputmode="decimal"
             placeholder="例如 5.7"
-            :disabled="!page.canAdjustBalance || page.editingItem?.saleState === 'sold'"
+            :disabled="!page.canAdjustBalance"
             @input="page.updateBalanceCostFromRate"
           />
         </el-form-item>
@@ -313,6 +313,7 @@
 
   <V2AccountLossDialogs :page="page" />
   <V2AccountRecordStatusDialog :page="page" />
+  <V2AccountSaleRecoveryDialog :page="page" />
 </template>
 
 <script setup lang="ts">
@@ -329,6 +330,7 @@ import type { useAccountsPage } from '../useAccountsPage';
 import V2AccountLossDialogs from './V2AccountLossDialogs.vue';
 import V2AccountPurchaseFields from './V2AccountPurchaseFields.vue';
 import V2AccountRecordStatusDialog from './V2AccountRecordStatusDialog.vue';
+import V2AccountSaleRecoveryDialog from './V2AccountSaleRecoveryDialog.vue';
 
 type AccountsPage = UnwrapNestedRefs<ReturnType<typeof useAccountsPage>>;
 

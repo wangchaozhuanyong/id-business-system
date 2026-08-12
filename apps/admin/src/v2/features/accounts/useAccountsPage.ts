@@ -32,6 +32,7 @@ import { useAccountPermissions } from './useAccountPermissions';
 import { useAccountPurchaseSources } from './useAccountPurchaseSources';
 import { useAccountCreateOptions } from './useAccountCreateOptions';
 import { useAccountRecordStatus } from './useAccountRecordStatus';
+import { useAccountSaleRecovery } from './useAccountSaleRecovery';
 import { useAccountSensitiveAccess } from './useAccountSensitiveAccess';
 import type {
   CreateV2AccountInput,
@@ -39,6 +40,7 @@ import type {
   UpdateV2AccountInput,
   V2Account,
   V2AccountLifecycle,
+  V2AccountListQuery,
   V2AccountSecretField,
   V2OptionSelector,
   V2RecordStatus
@@ -77,14 +79,7 @@ export function useAccountsPage() {
     recordStatus: '' as V2RecordStatus | '',
     saleState: '' as 'available' | 'sold' | '',
     lifecycle: 'available' as V2AccountLifecycle,
-    sortBy: 'updatedAt' as
-      | 'appleId'
-      | 'currentBalance'
-      | 'balanceCostAmount'
-      | 'purchaseCost'
-      | 'recordStatus'
-      | 'createdAt'
-      | 'updatedAt',
+    sortBy: 'updatedAt' as NonNullable<V2AccountListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
   const activeFilterCount = computed(() => countActiveAccountsFilters(query));
@@ -121,6 +116,10 @@ export function useAccountsPage() {
 
   const accountPermissions = useAccountPermissions(revealTarget);
   const accountRecordStatus = useAccountRecordStatus({
+    canUpdate: accountPermissions.canUpdate,
+    refreshAccounts: loadAccounts
+  });
+  const accountSaleRecovery = useAccountSaleRecovery({
     canUpdate: accountPermissions.canUpdate,
     refreshAccounts: loadAccounts
   });
@@ -552,6 +551,7 @@ export function useAccountsPage() {
     ...accountSensitiveAccess,
     ...accountPermissions,
     ...accountRecordStatus,
+    ...accountSaleRecovery,
     activeFilterCount,
     lifecycleLabel,
     formStatusOptions,

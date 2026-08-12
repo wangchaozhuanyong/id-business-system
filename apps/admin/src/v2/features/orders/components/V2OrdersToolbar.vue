@@ -34,6 +34,16 @@
         />
       </el-select>
       <el-select
+        v-model="page.query.accountSource"
+        clearable
+        placeholder="全部 ID 来源"
+        aria-label="筛选 ID 来源"
+        @change="page.handleFilterChange"
+      >
+        <el-option label="库存 ID" value="inventory" />
+        <el-option label="客户已购 ID" value="customer_owned" />
+      </el-select>
+      <el-select
         v-model="page.query.accountDisposition"
         clearable
         placeholder="全部 ID 处理状态"

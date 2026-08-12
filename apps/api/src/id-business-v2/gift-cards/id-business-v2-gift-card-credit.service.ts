@@ -250,10 +250,6 @@ export class IdBusinessV2GiftCardCreditService {
       if (account.lossReportedAt) {
         throw new ConflictException('已报损冻结 ID 不能继续加卡');
       }
-      if (account.soldByOrderId) {
-        throw new ConflictException('该 ID 已卖出，不能继续加卡');
-      }
-
       const { country, cardName, supplier } = await this.repository.findCreditOptions(tx, {
         countryOptionId: account.countryOptionId,
         cardNameOptionId: requestedCardNameOptionId,

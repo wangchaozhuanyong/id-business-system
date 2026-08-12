@@ -1,7 +1,7 @@
 <template>
   <section class="v2-customers-overview" aria-label="客户资料概览">
     <div class="v2-customers-overview__intro">
-      <span class="v2-customers-overview__eyebrow">CUSTOMER RECORDS</span>
+      <span class="v2-customers-overview__eyebrow">客户资料管理</span>
       <h2>客户资料总览</h2>
       <p>集中维护客户来源、标签和历史业务，敏感联系方式默认脱敏。</p>
     </div>

@@ -4,6 +4,7 @@ import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { Amount4 } from '../runtime/public-api';
 import type {
   IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderAccountSource,
   IdBusinessV2OrderListRecord,
   IdBusinessV2OrderStatus
 } from './id-business-v2-order.types';
@@ -20,6 +21,7 @@ export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
   settlementPlatformOptionId?: string;
   status?: string;
   accountDisposition?: string;
+  accountSource?: string;
   openedFrom?: string;
   openedTo?: string;
   sortBy?: string;
@@ -102,6 +104,7 @@ export class IdBusinessV2OrdersService {
     );
     const status = this.parseStatus(query.status);
     const accountDisposition = this.parseAccountDisposition(query.accountDisposition);
+    const accountSource = this.parseAccountSource(query.accountSource);
     const { items, total } = await this.repository.listOrders({
       keyword,
       websiteAccountHash,
@@ -111,6 +114,7 @@ export class IdBusinessV2OrdersService {
       settlementPlatformOptionId,
       status,
       accountDisposition,
+      accountSource,
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo),
       sortField: this.parseSortField(query.sortBy),
       sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
@@ -156,6 +160,13 @@ export class IdBusinessV2OrdersService {
       return normalized;
     }
     throw new BadRequestException('ID 处理状态无效');
+  }
+
+  private parseAccountSource(value: unknown): IdBusinessV2OrderAccountSource | null {
+    const normalized = this.normalizeNullableString(value);
+    if (!normalized) return null;
+    if (normalized === 'inventory' || normalized === 'customer_owned') return normalized;
+    throw new BadRequestException('ID 来源无效');
   }
 
   private parseDateRange(fromValue: unknown, toValue: unknown) {
@@ -253,10 +264,13 @@ export class IdBusinessV2OrdersService {
       receivedAt: order.receivedAt ?? order.openedAt ?? order.createdAt,
       platformFeeAmount: platformFeeAmount.toString(),
       accountDisposition: order.accountDisposition,
+      accountSource: order.accountSource ?? 'inventory',
+      sourceSoldOrderId: order.sourceSoldOrderId ?? null,
+      sourceSoldOrder: order.sourceSoldOrder ?? null,
       accountCostAmount: accountCostAmount.toString(),
-      appliedAccountCostAmount: (order.accountDisposition === 'sold'
-        ? accountCostAmount
-        : Amount4.zero()
+      appliedAccountCostAmount: (
+        order.appliedAccountCostAmount ??
+        (order.accountDisposition === 'sold' ? accountCostAmount : Amount4.zero())
       ).toString(),
       balanceAmount: balanceAmount.toString(),
       balanceCostAmount: balanceCostAmount.toString(),

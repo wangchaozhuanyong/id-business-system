@@ -203,8 +203,7 @@ export class IdBusinessV2AccountsRepository {
       where: {
         id: accountId,
         deletedAt: null,
-        lossReportedAt: null,
-        soldByOrderId: input.recordStatus === 'disabled' ? null : undefined
+        lossReportedAt: null
       },
       data: {
         recordStatus: input.recordStatus,
@@ -330,7 +329,7 @@ export class IdBusinessV2AccountsRepository {
       operatorId?: string;
     }
   ) {
-    await tx.idBusinessV2BalanceLedger.create({
+    return tx.idBusinessV2BalanceLedger.create({
       data: {
         accountId: input.accountId,
         giftCardId: null,
@@ -473,7 +472,7 @@ export class IdBusinessV2AccountsRepository {
       operatorId?: string;
     }
   ) {
-    await tx.idBusinessV2BalanceLedger.create({
+    return tx.idBusinessV2BalanceLedger.create({
       data: {
         accountId: input.accountId,
         giftCardId: null,

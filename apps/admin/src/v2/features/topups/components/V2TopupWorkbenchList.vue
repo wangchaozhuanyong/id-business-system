@@ -13,7 +13,7 @@
       <header class="v2-topup-list__header">
         <V2SectionHeading
           title="可加额 ID 列表"
-          help="列表保留余额、成本和当前业务快照；加卡操作继续受权限控制。"
+          help="列表保留余额、成本和当前业务快照；已售 ID 保留原销售订单与客户归属。"
         >
           <template #actions>
             <V2TableColumnSettings inline :schema="v2TableSchemas.topups.main" />
@@ -48,7 +48,15 @@
           sortable="custom"
         >
           <template #default="{ row }">
-            <strong class="v2-topup-account v2-table-cell">{{ row.appleIdMasked }}</strong>
+            <div class="v2-table-cell">
+              <strong class="v2-topup-account">{{ row.appleIdMasked }}</strong>
+              <el-tag v-if="row.saleState === 'sold'" type="warning" effect="plain"
+                >客户已购</el-tag
+              >
+              <small v-if="row.soldByOrder">
+                {{ row.soldByOrder.orderNo }} · {{ row.soldByOrder.customer.name }}
+              </small>
+            </div>
           </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.topups.main.columns[1]">
@@ -167,6 +175,9 @@
               <strong v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'appleId']">
                 {{ item.appleIdMasked }}
               </strong>
+              <el-tag v-if="item.saleState === 'sold'" type="warning" effect="plain">
+                客户已购
+              </el-tag>
               <span v-v2-column-visibility="[v2TableSchemas.topups.main.id, '国家']">
                 {{ item.country.name }}
               </span>
@@ -180,6 +191,10 @@
             </el-tag>
           </header>
           <dl>
+            <div v-if="item.soldByOrder">
+              <dt>原销售归属</dt>
+              <dd>{{ item.soldByOrder.orderNo }} · {{ item.soldByOrder.customer.name }}</dd>
+            </div>
             <div v-v2-column-visibility="[v2TableSchemas.topups.main.id, 'currentBalance']">
               <dt>ID 余额</dt>
               <dd>{{ page.formatDecimal(item.currentBalance) }}</dd>

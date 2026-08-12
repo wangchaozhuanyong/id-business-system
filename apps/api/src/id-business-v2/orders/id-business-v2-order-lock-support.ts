@@ -3,17 +3,22 @@ import type { Amount4 } from '../runtime/public-api';
 import type {
   IdBusinessV2AccountLockScope,
   IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderAccountSource,
   IdBusinessV2OrderStatus
 } from './id-business-v2-order.types';
 
 export interface LockedOrderRow {
   id: string;
   orderNo: string;
+  customerId: string;
   serviceOptionId: string;
   accountId: string | null;
+  accountSource: IdBusinessV2OrderAccountSource;
+  sourceSoldOrderId: string | null;
   receivedAmount: Amount4;
   platformFeeAmount: Amount4;
   accountCostAmount: Amount4;
+  appliedAccountCostAmount: Amount4;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: Amount4;
   balanceCostAmount: Amount4;
@@ -29,6 +34,7 @@ export interface LockedAccountRow {
   balanceCostAmount: Amount4;
   purchaseCost: Amount4;
   soldByOrderId: string | null;
+  soldByCustomerId: string | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   statusCode: string;

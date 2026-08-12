@@ -1,7 +1,7 @@
 <template>
   <section class="v2-audit-overview" aria-label="审计日志总览">
     <div class="v2-audit-overview__intro">
-      <span>AUDIT CONTROL</span>
+      <span>操作审计</span>
       <h2>审计日志总览</h2>
       <p>追踪业务变更、敏感资料访问和受控数据恢复入口。</p>
     </div>

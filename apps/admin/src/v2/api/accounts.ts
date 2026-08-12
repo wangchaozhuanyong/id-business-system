@@ -6,6 +6,8 @@ import type {
   ImportV2AccountRowInput,
   ReportV2AccountLossInput,
   ReportV2AccountLossResult,
+  RecoverV2SoldAccountResult,
+  V2SoldAccountRecoveryPreview,
   UnfreezeV2AccountLossInput,
   UnfreezeV2AccountLossResult,
   UpdateV2AccountInput,
@@ -109,6 +111,35 @@ export const idBusinessV2AccountsApi = {
         'order-entry-matching',
         'renewals',
         'renewals-options'
+      ]
+    );
+  },
+  previewSoldAccountRecovery(id: string, orderId: string) {
+    return request<V2SoldAccountRecoveryPreview>(
+      http.get(`/id-business-v2/orders/${orderId}/recover-sold-account-preview`, {
+        params: { accountId: id }
+      })
+    );
+  },
+  recoverSoldAccount(id: string, orderId: string, reason: string) {
+    return withV2QueryInvalidation(
+      request<RecoverV2SoldAccountResult>(
+        http.post(`/id-business-v2/orders/${orderId}/recover-sold-account`, {
+          accountId: id,
+          reason
+        })
+      ),
+      [
+        'accounts',
+        'orders',
+        'activations',
+        'order-entry-options',
+        'order-entry-matching',
+        'renewals',
+        'renewals-options',
+        'finance-ledger',
+        'finance-reports',
+        'dashboard'
       ]
     );
   },

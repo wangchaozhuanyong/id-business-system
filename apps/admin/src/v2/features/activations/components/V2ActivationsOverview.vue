@@ -2,7 +2,7 @@
   <div class="v2-activations-overview-stack">
     <section class="v2-activations-overview" aria-label="开通记录概览">
       <div class="v2-activations-overview__intro">
-        <span class="v2-activations-overview__eyebrow">ACTIVATION LEDGER</span>
+        <span class="v2-activations-overview__eyebrow">开通记录</span>
         <h2>开通记录总览</h2>
         <p>集中核对开通、到期和异常状态；到期状态由系统按当前时间动态计算。</p>
       </div>

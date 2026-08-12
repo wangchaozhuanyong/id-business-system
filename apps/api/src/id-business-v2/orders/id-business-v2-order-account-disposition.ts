@@ -2,13 +2,18 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { Amount4, type V2CommandTransaction } from '../runtime/public-api';
 import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
-import type { IdBusinessV2OrderAccountDisposition } from './id-business-v2-order.types';
+import type {
+  IdBusinessV2OrderAccountDisposition,
+  IdBusinessV2OrderAccountSource
+} from './id-business-v2-order.types';
 
 export interface AccountDispositionOrder {
   id: string;
   accountId: string | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   accountCostAmount: Amount4;
+  appliedAccountCostAmount: Amount4;
+  accountSource: IdBusinessV2OrderAccountSource;
 }
 
 export function normalizeOrderAccountDisposition(
@@ -26,6 +31,7 @@ export async function applyNewOrderAccountDisposition(
   orderId: string,
   accountId: string,
   disposition: IdBusinessV2OrderAccountDisposition,
+  accountSource: IdBusinessV2OrderAccountSource,
   operator?: AuthenticatedUser
 ) {
   const account = await repository.lockAccountForSale(tx, accountId);
@@ -36,7 +42,10 @@ export async function applyNewOrderAccountDisposition(
     throw new ConflictException('已报损冻结 ID 不能用于订单');
   }
 
-  if (disposition === 'sold') {
+  if (accountSource === 'customer_owned' && !account.soldByOrderId) {
+    throw new ConflictException('客户已购 ID 缺少原销售归属');
+  }
+  if (accountSource === 'inventory' && disposition === 'sold') {
     assertAccountCanBeSold(account.soldByOrderId, orderId);
     await markAccountSold(
       tx,
@@ -49,8 +58,15 @@ export async function applyNewOrderAccountDisposition(
   }
 
   await repository.updateOrder(tx, orderId, {
-    accountCostAmount: disposition === 'sold' ? account.purchaseCost.toString() : '0',
-    accountDisposition: disposition,
+    accountCostAmount:
+      accountSource === 'inventory' && disposition === 'sold'
+        ? account.purchaseCost.toString()
+        : '0',
+    appliedAccountCostAmount:
+      accountSource === 'inventory' && disposition === 'sold'
+        ? account.purchaseCost.toString()
+        : '0',
+    accountDisposition: accountSource === 'customer_owned' ? 'retained' : disposition,
     updatedByUserId: operator?.id
   });
 }
@@ -79,7 +95,7 @@ export async function applyUpdatedOrderAccountDisposition(
     await releaseSoldOrderAccount(tx, repository, order, operator);
   }
 
-  if (disposition !== 'sold') {
+  if (order.accountSource === 'customer_owned' || disposition !== 'sold') {
     return Amount4.zero();
   }
 

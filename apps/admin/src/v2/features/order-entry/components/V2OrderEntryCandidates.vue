@@ -29,14 +29,29 @@
     <section class="v2-order-entry-resource-disposition" aria-labelledby="id-disposition-title">
       <header>
         <div>
-          <strong id="id-disposition-title">ID 处理方式</strong>
-          <small>决定本单完成后，这个 ID 是否继续参与后续匹配。</small>
+          <strong id="id-disposition-title">
+            {{ accountSource === 'customer_owned' ? '客户已购 ID' : 'ID 处理方式' }}
+          </strong>
+          <small>
+            {{
+              accountSource === 'customer_owned'
+                ? '保留原销售归属，本单只计余额成本。'
+                : '决定本单完成后，这个 ID 是否继续参与后续匹配。'
+            }}
+          </small>
         </div>
         <span :class="{ 'is-sold': accountDisposition === 'sold' }">
-          {{ accountDisposition === 'sold' ? '卖出后全局锁定' : '保留后继续复用' }}
+          {{
+            accountSource === 'customer_owned'
+              ? '本单 ID 成本 0'
+              : accountDisposition === 'sold'
+                ? '卖出后全局锁定'
+                : '保留后继续复用'
+          }}
         </span>
       </header>
       <el-radio-group
+        v-if="accountSource === 'inventory'"
         v-model="accountDisposition"
         class="v2-order-entry-resource-disposition__options"
         aria-label="ID 处理方式"
@@ -103,6 +118,10 @@
               <small>{{ candidate.country.name }} / {{ candidate.status.name }}</small>
               <small>平均成本 ¥{{ formatDecimal(candidate.averageCost) }}</small>
               <small>ID 购买成本 ¥{{ formatDecimal(candidate.purchaseCost) }}</small>
+              <small v-if="candidate.sourceSoldOrder">
+                原销售订单 {{ candidate.sourceSoldOrder.orderNo }} ·
+                {{ candidate.sourceSoldOrder.customer.name }}
+              </small>
             </span>
             <span class="v2-order-entry-candidate-balance">
               <strong>{{ formatDecimal(candidate.currentBalance) }}</strong>
@@ -148,6 +167,7 @@ const props = defineProps<{
   matchingError: string;
   matchingEmptyMessage: string;
   formatDecimal: (value: string) => string;
+  accountSource: 'inventory' | 'customer_owned';
 }>();
 
 defineEmits<{

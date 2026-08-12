@@ -1,7 +1,7 @@
 <template>
   <section class="v2-finance-expenses-overview" aria-label="经营开支概览">
     <div class="v2-finance-expenses-overview__intro">
-      <span class="v2-finance-expenses-overview__eyebrow">EXPENSE CONTROL</span>
+      <span class="v2-finance-expenses-overview__eyebrow">经营开支管理</span>
       <h2>经营开支总览</h2>
       <p>统一记录日常经营支出，保留原币、交易汇率、人民币金额与更正审计链路。</p>
     </div>

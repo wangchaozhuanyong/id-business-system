@@ -43,6 +43,9 @@ jobs:
       - name: Check admin UI guardrails
         run: npm run check:admin-ui
 
+      - name: Check Chinese UI language
+        run: npm run check:v2-ui-language
+
       - name: Check V2 color contrast tokens
         run: npm run check:v2-color-contrast
 

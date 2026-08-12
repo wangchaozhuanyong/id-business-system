@@ -230,6 +230,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
       },
       data: {
         accountCostAmount: '0',
+        appliedAccountCostAmount: '0',
         balanceCostAmount: '60',
         profitAmount: '37',
         status: 'processing',
