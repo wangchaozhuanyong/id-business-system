@@ -30,6 +30,10 @@ for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
     failures.push(`${projectPath}: 禁止顶部标签布局`);
   }
 
+  if (/\bref\s*=\s*["'][^"']*\.[^"']*["']/.test(source)) {
+    failures.push(`${projectPath}: 模板 ref 不得使用带点路径，必须绑定当前组件的本地 ref`);
+  }
+
   for (const [index, match] of [...source.matchAll(/<el-form(?=\s|>)[\s\S]*?>/g)].entries()) {
     if (!/label-position\s*=\s*["']left["']/.test(match[0])) {
       failures.push(`${projectPath}: el-form ${index + 1} 缺少 label-position="left"`);

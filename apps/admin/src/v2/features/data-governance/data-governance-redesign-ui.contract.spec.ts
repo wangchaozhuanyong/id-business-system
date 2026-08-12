@@ -37,6 +37,12 @@ describe('data governance scheme 3 redesign contract', () => {
     expect(pageState).toContain("trackRouteData: () => activeTab.value === 'jobs'");
     expect(pageState).toContain('enabled: () => Boolean(detailId.value)');
     expect(drawers).toContain('必须由另一名管理员审批');
+    expect(drawers).toContain('ref="restoreFormRef"');
+    expect(drawers).toContain('page.submitRestore(restoreFormRef)');
+    expect(drawers).toContain('page.submitCleanup(cleanupFormRef)');
+    expect(drawers).toContain('page.submitDecision(decisionFormRef)');
+    expect(drawers).not.toContain('ref="page.');
+    expect(pageState).toContain('validateV2Form(formInstance)');
   });
 
   it('keeps column settings in both list headings and stabilizes pagination geometry', () => {

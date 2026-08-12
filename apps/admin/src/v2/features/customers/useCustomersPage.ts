@@ -75,7 +75,6 @@ export function useCustomersPage() {
   const revealDialogVisible = ref(false);
   const revealing = ref(false);
   const formRef = ref<FormInstance>();
-  const revealFormRef = ref<FormInstance>();
 
   const query = reactive({
     page: 1,
@@ -351,8 +350,8 @@ export function useCustomersPage() {
     openRevealContact(item, 'whatsapp');
   }
 
-  async function revealContact() {
-    if (!revealTarget.value || !(await validateV2Form(revealFormRef.value))) return;
+  async function revealContact(formInstance?: FormInstance) {
+    if (!revealTarget.value || !(await validateV2Form(formInstance))) return;
     revealing.value = true;
     try {
       if (sensitiveAccess.requiresApproval.value && !sensitiveAccess.approvedRequestId.value) {
@@ -489,7 +488,6 @@ export function useCustomersPage() {
     revealDialogVisible,
     revealing,
     formRef,
-    revealFormRef,
     query,
     form,
     revealForm,

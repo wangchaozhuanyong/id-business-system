@@ -4,6 +4,7 @@ import pageState from './useCustomersPage.ts?raw';
 import list from './components/V2CustomersList.vue?raw';
 import overview from './components/V2CustomersOverview.vue?raw';
 import toolbar from './components/V2CustomersToolbar.vue?raw';
+import sensitiveDialog from './components/V2CustomerSensitiveAccessDialog.vue?raw';
 
 describe('customers scheme 3 redesign contract', () => {
   it('composes the overview, filters and records list without replacing business drawers', () => {
@@ -40,5 +41,12 @@ describe('customers scheme 3 redesign contract', () => {
     expect(pageState).toContain('getDeletePreview');
     expect(pageState).toContain('deletePreviewRequestId');
     expect(pageState).toContain("error.kind === 'conflict'");
+  });
+
+  it('passes the child-owned sensitive access form instance into validation', () => {
+    expect(sensitiveDialog).toContain('ref="revealFormRef"');
+    expect(sensitiveDialog).toContain('page.revealContact(revealFormRef)');
+    expect(sensitiveDialog).not.toContain('ref="page.');
+    expect(pageState).toContain('validateV2Form(formInstance)');
   });
 });
