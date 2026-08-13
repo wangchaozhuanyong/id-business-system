@@ -2,7 +2,8 @@ import { Client } from 'pg';
 import { normalizeDatabaseConnection } from './production-closure-audit.mjs';
 import { EXPECTED_BACKUP_ROLE } from './production-backup.mjs';
 
-export const BACKUP_TRANSACTION_STALE_MS = 2 * 60 * 1000;
+export const BACKUP_IDLE_TRANSACTION_TIMEOUT_MS = 2 * 60 * 1000;
+export const BACKUP_SESSION_TIMEOUT_MS = 16 * 60 * 1000;
 
 export async function inspectProductionBackupTransactions(
   databaseUrl,
@@ -95,7 +96,7 @@ export async function inspectProductionBackupTransactions(
 
 export function findStaleBackupTransactions(
   transactions,
-  staleAfterMs = BACKUP_TRANSACTION_STALE_MS
+  staleAfterMs = BACKUP_SESSION_TIMEOUT_MS
 ) {
   return transactions.filter(
     (transaction) =>

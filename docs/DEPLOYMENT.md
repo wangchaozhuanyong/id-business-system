@@ -175,9 +175,9 @@ npm run prisma:migrate:production -- \
 ```
 
 该固定脚本只会执行 `prisma migrate deploy`，不会把 `MIGRATION_DATABASE_URL` 注入通用命令、应用
-运行时或发布流程。执行 Prisma 前还会检查专用备份角色事务：正常备份最多等待 3 分钟；发现超过
-2 分钟的 `idle in transaction` 遗留事务时立即停止并报告，不会自动终止连接，也不会写入失败的
-migration 记录。
+运行时或发布流程。执行 Prisma 前还会检查专用备份角色事务：存在任何备份事务时最多等待 3 分钟，
+等待超时会立即停止并报告，不会自动终止连接，也不会写入失败的 migration 记录。超过 16 分钟的
+`idle in transaction` 遗留事务还会由高频备份监控单独告警。
 
 若 `20260809090000_user_table_preferences_runtime_access` 曾因创建策略等待表锁而超时，必须先确认
 PostgreSQL 已回滚整段 migration，再在同一备份与确认门后追加固定参数：

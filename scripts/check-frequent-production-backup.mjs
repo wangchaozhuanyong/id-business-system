@@ -6,7 +6,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
-  BACKUP_TRANSACTION_STALE_MS,
+  BACKUP_IDLE_TRANSACTION_TIMEOUT_MS,
+  BACKUP_SESSION_TIMEOUT_MS,
   describeBackupTransactions,
   findStaleBackupTransactions,
   inspectProductionBackupTransactions
@@ -147,11 +148,11 @@ function assertBackupTimeouts(inspection) {
     inspection.currentSessionIdleTimeoutMs,
     inspection.backupRoleTimeouts?.idleInTransactionMs
   ];
-  if (timeoutValues.some((value) => value <= 0 || value > BACKUP_TRANSACTION_STALE_MS)) {
+  if (timeoutValues.some((value) => value <= 0 || value > BACKUP_IDLE_TRANSACTION_TIMEOUT_MS)) {
     throw new Error('备份角色空闲事务超时不是预期的 2 分钟');
   }
   const roleIdleSessionMs = inspection.backupRoleTimeouts?.idleSessionMs;
-  if (roleIdleSessionMs <= 0 || roleIdleSessionMs > BACKUP_TRANSACTION_STALE_MS) {
-    throw new Error('备份角色空闲会话超时不是预期的 2 分钟');
+  if (roleIdleSessionMs !== BACKUP_SESSION_TIMEOUT_MS) {
+    throw new Error('备份角色空闲会话超时不是预期的 16 分钟');
   }
 }

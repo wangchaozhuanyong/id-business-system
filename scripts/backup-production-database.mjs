@@ -22,6 +22,7 @@ import {
   atomicWriteJson,
   countFingerprint,
   encryptBackupBundle,
+  isRetryableBackupConnectionError,
   parseCoreCounts,
   parsePgRestoreList,
   sha256File
@@ -29,6 +30,8 @@ import {
 import { resolveNativePostgresClient } from './lib/native-postgres-client.mjs';
 
 const BACKUP_TIMEOUT_MS = 15 * 60 * 1000;
+const PG_DUMP_MAX_ATTEMPTS = 3;
+const PG_DUMP_RETRY_DELAY_MS = 2_000;
 const args = parseArgs(process.argv.slice(2));
 const expectedConfirmation = `BACKUP_${EXPECTED_BACKUP_PROJECT_REF}_${args.label}`;
 if (args.confirmation !== expectedConfirmation) {
@@ -67,7 +70,7 @@ try {
 
   const postgresEnvironment = buildPostgresEnvironment(url);
   createdPaths.add(partialDumpPath);
-  await runPostgresCommand({
+  const pgDumpAttempts = await runPgDumpWithRetry({
     client: postgresClient,
     environment: postgresEnvironment,
     directory: backupDirectory,
@@ -185,6 +188,7 @@ try {
     archive: archivePath && archive ? archivePath : null,
     receipt: archive ? receiptPath : null,
     dumpSizeBytes: manifest.sizeBytes,
+    pgDumpAttempts,
     dumpSha256,
     archiveSizeBytes: archive?.sizeBytes ?? null,
     archiveSha256: archive?.sha256 ?? null,
@@ -293,7 +297,7 @@ function buildPostgresEnvironment(url) {
     PGDATABASE: url.pathname.slice(1),
     PGSSLMODE: url.searchParams.get('sslmode') || 'require',
     PGAPPNAME: 'id-business-v2-backup',
-    PGOPTIONS: '-c statement_timeout=900000 -c lock_timeout=30000 -c idle_session_timeout=120000'
+    PGOPTIONS: '-c statement_timeout=900000 -c lock_timeout=30000 -c idle_session_timeout=960000'
   };
 }
 
@@ -311,6 +315,25 @@ function runPostgresCommand(options) {
   return options.client.executor === 'native'
     ? runNativePostgresCommand(options)
     : runPostgresContainer(options);
+}
+
+async function runPgDumpWithRetry(options) {
+  for (let attempt = 1; attempt <= PG_DUMP_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await runPostgresCommand(options);
+      return attempt;
+    } catch (error) {
+      await unlink(options.outputFilePath).catch(ignoreMissingFile);
+      if (attempt >= PG_DUMP_MAX_ATTEMPTS || !isRetryableBackupConnectionError(error)) {
+        throw error;
+      }
+      process.stderr.write(
+        `pg_dump 连接中断，将从头重试（${attempt + 1}/${PG_DUMP_MAX_ATTEMPTS}）\n`
+      );
+      await delay(PG_DUMP_RETRY_DELAY_MS);
+    }
+  }
+  throw new Error('pg_dump 重试状态无效');
 }
 
 function runPostgresContainer({
@@ -446,4 +469,12 @@ function runNativePostgresCommand({
 function boundedAppend(current, chunk, maximumLength = 32_000) {
   const combined = current + String(chunk);
   return combined.length <= maximumLength ? combined : combined.slice(-maximumLength);
+}
+
+function ignoreMissingFile(error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
