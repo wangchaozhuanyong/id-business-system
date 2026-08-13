@@ -153,6 +153,13 @@ test('frequent executor is read-only, bounded and installed without growing log 
   assert.match(backup, /'--pids-limit',\s*'64'/u);
   assert.match(backup, /'--ulimit',\s*'fsize=16777216:16777216'/u);
   assert.match(backup, /PGAPPNAME: 'id-business-v2-backup'/u);
+  assert.doesNotMatch(backup, /idle_in_transaction_session_timeout=900000/u);
+  assert.match(backup, /idle_session_timeout=120000/u);
+  assert.match(monitor, /inspectProductionBackupTransactions/u);
+  assert.match(monitor, /includeRoleTimeouts: true/u);
+  assert.match(monitor, /roleIdleSessionMs <= 0/u);
+  assert.match(monitor, /staleBackupTransactionCount/u);
+  assert.doesNotMatch(monitor, /pg_terminate_backend/u);
   assert.match(restore, /'--memory',\s*'512m'/u);
   assert.match(restore, /setTimeout\(resolve, 2_000\)/u);
   assert.match(nativeClient, /NATIVE_POSTGRES_CLIENT_VERSION = '17\.10'/u);

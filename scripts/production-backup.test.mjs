@@ -27,6 +27,11 @@ import {
   parsePgRestoreList,
   validateManifestAgainstDump
 } from './lib/production-backup.mjs';
+import {
+  BACKUP_TRANSACTION_STALE_MS,
+  describeBackupTransactions,
+  findStaleBackupTransactions
+} from './lib/production-backup-transactions.mjs';
 
 function createCounts() {
   return Object.fromEntries(CORE_BACKUP_TABLES.map((table, index) => [table, index]));
@@ -53,6 +58,44 @@ test('accepts only the dedicated production backup role', () => {
     () => assertExpectedBackupDatabase('postgresql://id_v2_backup:secret@localhost/postgres'),
     /专用只读角色/
   );
+});
+
+test('classifies only expired idle backup transactions as stale', () => {
+  const transactions = [
+    {
+      state: 'active',
+      transactionAgeMs: BACKUP_TRANSACTION_STALE_MS + 1,
+      stateAgeMs: BACKUP_TRANSACTION_STALE_MS + 1
+    },
+    {
+      state: 'idle in transaction',
+      transactionAgeMs: 10 * 60 * 1000,
+      stateAgeMs: BACKUP_TRANSACTION_STALE_MS - 1
+    },
+    {
+      state: 'idle in transaction',
+      transactionAgeMs: 10 * 60 * 1000,
+      stateAgeMs: BACKUP_TRANSACTION_STALE_MS
+    },
+    {
+      state: 'idle in transaction (aborted)',
+      transactionAgeMs: 11 * 60 * 1000,
+      stateAgeMs: 181_000
+    }
+  ];
+
+  const stale = findStaleBackupTransactions(transactions);
+  assert.deepEqual(stale, transactions.slice(2));
+  assert.equal(describeBackupTransactions(stale), '2 个，最长 3 分 1 秒');
+});
+
+test('backup role provisioner configures transaction and session cleanup timeouts', async () => {
+  const source = await readFile(
+    new URL('./provision-production-backup-role.mjs', import.meta.url),
+    'utf8'
+  );
+  assert.match(source, /idle_in_transaction_session_timeout = '2min'/u);
+  assert.match(source, /idle_session_timeout = '2min'/u);
 });
 
 test('requires a real pg_restore catalog with tables and table data', () => {

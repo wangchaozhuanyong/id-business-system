@@ -293,8 +293,7 @@ function buildPostgresEnvironment(url) {
     PGDATABASE: url.pathname.slice(1),
     PGSSLMODE: url.searchParams.get('sslmode') || 'require',
     PGAPPNAME: 'id-business-v2-backup',
-    PGOPTIONS:
-      '-c statement_timeout=900000 -c lock_timeout=30000 -c idle_in_transaction_session_timeout=900000'
+    PGOPTIONS: '-c statement_timeout=900000 -c lock_timeout=30000 -c idle_session_timeout=120000'
   };
 }
 

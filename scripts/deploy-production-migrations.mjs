@@ -8,11 +8,18 @@ import path from 'node:path';
 import process from 'node:process';
 import { Client } from 'pg';
 import { normalizeDatabaseConnection } from './lib/production-closure-audit.mjs';
+import {
+  describeBackupTransactions,
+  findStaleBackupTransactions,
+  inspectProductionBackupTransactions
+} from './lib/production-backup-transactions.mjs';
 
 const EXPECTED_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
 const USER_TABLE_PREFERENCES_RUNTIME_ACCESS_MIGRATION =
   '20260809090000_user_table_preferences_runtime_access';
 const BEIJING_BUSINESS_TIMEZONE_MIGRATION = '20260812180000_beijing_business_timezone';
+const BACKUP_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
+const BACKUP_WAIT_POLL_MS = 5 * 1000;
 const RECOVERABLE_ROLLED_BACK_MIGRATIONS = new Set([
   USER_TABLE_PREFERENCES_RUNTIME_ACCESS_MIGRATION,
   BEIJING_BUSINESS_TIMEZONE_MIGRATION
@@ -48,6 +55,7 @@ if (!direct && !pooler) {
   throw new Error('migration 目标不是已核验的生产 Supabase 项目');
 }
 
+await waitForProductionBackups(databaseUrl);
 const before = await readMigrationState(databaseUrl);
 const environment = { ...process.env };
 for (const key of DATABASE_KEYS) delete environment[key];
@@ -207,6 +215,35 @@ async function assertExpectedRolledBackMigration(databaseUrl, migrationName) {
   }
 }
 
+async function waitForProductionBackups(databaseUrl) {
+  const deadline = Date.now() + BACKUP_WAIT_TIMEOUT_MS;
+  while (true) {
+    const { transactions } = await inspectProductionBackupTransactions(databaseUrl, {
+      applicationName: 'id-v2-production-migration-backup-gate'
+    });
+    const stale = findStaleBackupTransactions(transactions);
+    if (stale.length > 0) {
+      throw new Error(
+        `发现专用备份角色遗留的空闲事务（${describeBackupTransactions(stale)}），` +
+          '已在 Prisma 执行前停止。请先确认备份进程已结束并清理遗留连接。'
+      );
+    }
+    if (transactions.length === 0) return;
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `生产备份事务在 3 分钟内未完成（${describeBackupTransactions(transactions)}），` +
+          '已在 Prisma 执行前停止，请等待备份完成后重试。'
+      );
+    }
+    console.log(
+      `检测到生产备份正在执行（${describeBackupTransactions(transactions)}），等待完成后再迁移。`
+    );
+    await delay(Math.min(BACKUP_WAIT_POLL_MS, remainingMs));
+  }
+}
+
 async function validateBackup(inputPath, expectedSha256) {
   const resolvedPath = await realpath(inputPath);
   const gitCommonDirectory = await realpath(
@@ -310,4 +347,8 @@ function run(command, args, { environment }) {
       else reject(new Error(`生产 migration 失败，退出码 ${code ?? 'unknown'}`));
     });
   });
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
