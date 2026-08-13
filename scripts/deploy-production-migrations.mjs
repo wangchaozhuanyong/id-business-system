@@ -10,7 +10,13 @@ import { Client } from 'pg';
 import { normalizeDatabaseConnection } from './lib/production-closure-audit.mjs';
 
 const EXPECTED_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
-const RECOVERABLE_ROLLED_BACK_MIGRATION = '20260809090000_user_table_preferences_runtime_access';
+const USER_TABLE_PREFERENCES_RUNTIME_ACCESS_MIGRATION =
+  '20260809090000_user_table_preferences_runtime_access';
+const BEIJING_BUSINESS_TIMEZONE_MIGRATION = '20260812180000_beijing_business_timezone';
+const RECOVERABLE_ROLLED_BACK_MIGRATIONS = new Set([
+  USER_TABLE_PREFERENCES_RUNTIME_ACCESS_MIGRATION,
+  BEIJING_BUSINESS_TIMEZONE_MIGRATION
+]);
 const DATABASE_KEYS = [
   'DATABASE_URL',
   'DIRECT_URL',
@@ -109,9 +115,11 @@ function parseArgs(values) {
   }
   if (
     result.resolveRolledBack !== undefined &&
-    result.resolveRolledBack !== RECOVERABLE_ROLLED_BACK_MIGRATION
+    !RECOVERABLE_ROLLED_BACK_MIGRATIONS.has(result.resolveRolledBack)
   ) {
-    throw new Error(`只允许恢复已审查的失败 migration：${RECOVERABLE_ROLLED_BACK_MIGRATION}`);
+    throw new Error(
+      `只允许恢复已审查的失败 migration：${[...RECOVERABLE_ROLLED_BACK_MIGRATIONS].join('、')}`
+    );
   }
   return result;
 }
@@ -124,7 +132,7 @@ async function assertExpectedRolledBackMigration(databaseUrl, migrationName) {
   await client.connect();
   try {
     const failed = await client.query(
-      `SELECT id
+      `SELECT id, applied_steps_count
        FROM public._prisma_migrations
        WHERE migration_name = $1
          AND finished_at IS NULL
@@ -134,9 +142,13 @@ async function assertExpectedRolledBackMigration(databaseUrl, migrationName) {
     if (failed.rowCount !== 1) {
       throw new Error('目标 migration 不存在唯一、尚未处理的失败记录');
     }
+    if (failed.rows[0].applied_steps_count !== 0) {
+      throw new Error('失败 migration 已记录部分执行步骤，拒绝自动标记回滚');
+    }
 
-    const state = (
-      await client.query(`
+    if (migrationName === USER_TABLE_PREFERENCES_RUNTIME_ACCESS_MIGRATION) {
+      const state = (
+        await client.query(`
         SELECT
           CASE
             WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'id_business_v2_runtime')
@@ -155,10 +167,41 @@ async function assertExpectedRolledBackMigration(databaseUrl, migrationName) {
               AND policyname IN ('id_business_v2_runtime_access', 'id_business_v2_audit_read')
           ) AS policy_count
       `)
-    ).rows[0];
-    if (state.runtime_select !== false || state.policy_count !== 0) {
-      throw new Error('失败 migration 存在未预期的部分生效状态，拒绝自动标记回滚');
+      ).rows[0];
+      if (state.runtime_select !== false || state.policy_count !== 0) {
+        throw new Error('失败 migration 存在未预期的部分生效状态，拒绝自动标记回滚');
+      }
+      return;
     }
+
+    if (migrationName === BEIJING_BUSINESS_TIMEZONE_MIGRATION) {
+      const state = (
+        await client.query(`
+          SELECT
+            (
+              SELECT column_default
+              FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name = 'id_business_v2_finance_settings'
+                AND column_name = 'timezone'
+            ) AS timezone_default,
+            (
+              SELECT count(*)::integer
+              FROM public.id_business_v2_finance_settings
+              WHERE timezone = 'Asia/Shanghai'
+            ) AS shanghai_count
+        `)
+      ).rows[0];
+      if (
+        !String(state.timezone_default).includes('Asia/Kuala_Lumpur') ||
+        state.shanghai_count !== 0
+      ) {
+        throw new Error('失败的北京时间 migration 存在未预期的部分生效状态，拒绝自动标记回滚');
+      }
+      return;
+    }
+
+    throw new Error('目标 migration 缺少恢复状态校验');
   } finally {
     await client.end().catch(() => undefined);
   }

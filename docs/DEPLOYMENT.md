@@ -188,6 +188,20 @@ npm run prisma:migrate:production -- \
   --resolve-rolled-back=20260809090000_user_table_preferences_runtime_access
 ```
 
+若 `20260812180000_beijing_business_timezone` 因只读备份事务持有表锁而超时，先确认备份进程已经
+完成，并终止仍处于 `idle in transaction` 且持有
+`id_business_v2_finance_settings` 读锁的 `id_v2_backup` 遗留连接。恢复脚本只会在失败记录的
+`applied_steps_count` 为 0、时区列默认值仍为 `Asia/Kuala_Lumpur` 且没有记录已变为
+`Asia/Shanghai` 时允许标记回滚并重试：
+
+```bash
+npm run prisma:migrate:production -- \
+  --backup=/absolute/path/to/backups/postgres/pre-migration.dump \
+  --backup-sha256=<最新备份 SHA-256> \
+  --confirmation=MIGRATE_fjquufgbnxyocmuzltxi_<SHA-256 前 12 位> \
+  --resolve-rolled-back=20260812180000_beijing_business_timezone
+```
+
 脚本只接受这一条已审查 migration，并在标记回滚前核验失败记录唯一存在、运行角色权限和策略均未
 部分生效；任何状态不一致都会拒绝继续。
 

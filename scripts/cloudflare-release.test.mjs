@@ -180,10 +180,15 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.match(source, /branch !== 'main'/);
   assert.match(source, /head !== originHead/);
   assert.match(source, /prisma:migrate:deploy/);
-  assert.match(source, /RECOVERABLE_ROLLED_BACK_MIGRATION/);
+  assert.match(source, /RECOVERABLE_ROLLED_BACK_MIGRATIONS/);
   assert.match(source, /--resolve-rolled-back=/);
   assert.match(source, /finished_at IS NULL/);
+  assert.match(source, /applied_steps_count !== 0/);
   assert.match(source, /失败 migration 存在未预期的部分生效状态/);
+  assert.match(source, /BEIJING_BUSINESS_TIMEZONE_MIGRATION/);
+  assert.match(source, /timezone_default/);
+  assert.match(source, /shanghai_count !== 0/);
+  assert.match(source, /失败的北京时间 migration 存在未预期的部分生效状态/);
   assert.match(source, /'--rolled-back'/);
   assert.doesNotMatch(source, /shell:\s*true/);
 });
