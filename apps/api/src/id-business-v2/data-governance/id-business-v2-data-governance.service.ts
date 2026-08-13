@@ -149,7 +149,7 @@ export class IdBusinessV2DataGovernanceService {
         '执行后重新统计并对比'
       ],
       generatedAt: now.toISOString(),
-      timezone: 'Asia/Kuala_Lumpur'
+      timezone: 'Asia/Shanghai'
     };
   }
 

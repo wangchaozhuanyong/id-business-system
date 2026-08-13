@@ -1,13 +1,13 @@
+import {
+  addOneInclusiveMonthToV2DateTimeInput,
+  parseV2DateTimeInput,
+  toV2DateTimeInput
+} from './dateTime';
+
 export function calculateOneMonthInclusiveDueAt(openedAt: Date) {
-  const dueAt = new Date(openedAt);
-  const originalDay = dueAt.getDate();
-
-  dueAt.setDate(1);
-  dueAt.setMonth(dueAt.getMonth() + 1);
-
-  const lastDayOfTargetMonth = new Date(dueAt.getFullYear(), dueAt.getMonth() + 1, 0).getDate();
-  dueAt.setDate(Math.min(originalDay, lastDayOfTargetMonth));
-  dueAt.setDate(dueAt.getDate() - 1);
-
-  return dueAt;
+  const openedAtInput = toV2DateTimeInput(openedAt);
+  const openedAtMinute = parseV2DateTimeInput(openedAtInput);
+  const dueAtMinute = parseV2DateTimeInput(addOneInclusiveMonthToV2DateTimeInput(openedAtInput));
+  if (!openedAtMinute || !dueAtMinute) return new Date(Number.NaN);
+  return new Date(dueAtMinute.getTime() + openedAt.getTime() - openedAtMinute.getTime());
 }

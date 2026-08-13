@@ -77,7 +77,7 @@ export interface V2DashboardRecentAudit {
 export interface V2DashboardOverview {
   generatedAt: string;
   businessDate: string;
-  timezone: 'Asia/Kuala_Lumpur';
+  timezone: 'Asia/Shanghai';
   warningDays: number;
   access: V2DashboardAccess;
   business: V2DashboardBusinessMetrics;

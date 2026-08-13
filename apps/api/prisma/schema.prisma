@@ -939,7 +939,7 @@ model IdBusinessV2TopupSupplierLedger {
 model IdBusinessV2FinanceSettings {
   id                 Int                              @id @default(1)
   baseCurrency       IdBusinessV2FinanceCurrency      @default(CNY) @map("base_currency")
-  timezone           String                           @default("Asia/Kuala_Lumpur") @db.VarChar(80)
+  timezone           String                           @default("Asia/Shanghai") @db.VarChar(80)
   enabledAt          DateTime?                        @map("enabled_at") @db.Timestamptz(6)
   historyStatus      IdBusinessV2FinanceHistoryStatus @default(not_started) @map("history_status")
   historyCompletedAt DateTime?                        @map("history_completed_at") @db.Timestamptz(6)

@@ -1,11 +1,12 @@
 import type { V2ProfileSessionRecord } from './contracts';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 
 export function formatProfileDate(value?: string | null) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Kuala_Lumpur',
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -22,7 +23,10 @@ export function profileClientSummary(value?: string | null) {
   return text.length > 80 ? `${text.slice(0, 77)}…` : text;
 }
 
-export function profileSessionStateMeta(item: V2ProfileSessionRecord, now = Date.now()) {
+export function profileSessionStateMeta(
+  item: V2ProfileSessionRecord,
+  now = getV2BusinessNowMs() ?? Number.NEGATIVE_INFINITY
+) {
   if (item.revokedAt) return { label: '已下线', type: 'info' as const };
   if (new Date(item.expiresAt).getTime() <= now) {
     return { label: '已过期', type: 'warning' as const };

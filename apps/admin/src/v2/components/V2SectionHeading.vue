@@ -5,7 +5,7 @@
     :class="{ 'v2-section-heading--compact': compact }"
   >
     <div class="v2-section-heading__heading">
-      <component :is="level" class="v2-section-heading__title">
+      <component :is="level" :id="titleId || undefined" class="v2-section-heading__title">
         <span v-if="step !== undefined && step !== ''" class="v2-section-heading__step">
           {{ step }}
         </span>
@@ -34,6 +34,7 @@ import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 const props = withDefaults(
   defineProps<{
     title: string;
+    titleId?: string;
     help?: string | string[];
     level?: 'h2' | 'h3';
     as?: 'header' | 'div';
@@ -44,6 +45,7 @@ const props = withDefaults(
   }>(),
   {
     help: '',
+    titleId: '',
     level: 'h2',
     as: 'header',
     step: '',

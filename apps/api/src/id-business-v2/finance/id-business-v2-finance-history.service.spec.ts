@@ -14,7 +14,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       idBusinessV2FinanceSettings: {
         findUnique: vi.fn().mockResolvedValue({
           baseCurrency: 'CNY',
-          timezone: 'Asia/Kuala_Lumpur',
+          timezone: 'Asia/Shanghai',
           enabledAt: new Date('2026-07-30T00:00:00.000Z'),
           historyStatus: 'incomplete',
           historyCompletedAt: null,
@@ -22,7 +22,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
         }),
         update: vi.fn().mockResolvedValue({
           baseCurrency: 'CNY',
-          timezone: 'Asia/Kuala_Lumpur',
+          timezone: 'Asia/Shanghai',
           enabledAt: new Date('2026-07-30T00:00:00.000Z'),
           historyStatus: 'completed',
           historyCompletedAt: completedAt,
@@ -178,7 +178,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
   it('rejects a changed confirmation snapshot without writing settings or audit data', async () => {
     const settings = {
       baseCurrency: 'CNY',
-      timezone: 'Asia/Kuala_Lumpur',
+      timezone: 'Asia/Shanghai',
       enabledAt: new Date('2026-07-30T00:00:00.000Z'),
       historyStatus: 'incomplete',
       historyCompletedAt: null,
@@ -250,7 +250,7 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
         }),
         update: vi.fn().mockResolvedValue({
           baseCurrency: 'CNY',
-          timezone: 'Asia/Kuala_Lumpur',
+          timezone: 'Asia/Shanghai',
           enabledAt: new Date('2026-07-30T00:00:00.000Z'),
           historyStatus: 'incomplete',
           historyCompletedAt: null,

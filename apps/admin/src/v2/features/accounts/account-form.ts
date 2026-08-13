@@ -4,6 +4,7 @@ import {
   multiplyDecimalStrings
 } from '@/v2/utils/decimal';
 import type { V2FinanceCurrency } from '@apple-business/shared';
+import { getV2BusinessNowInput } from '@/v2/runtime/businessClock';
 
 export interface AccountFormState {
   appleId: string;
@@ -46,14 +47,9 @@ export function emptyAccountForm(): AccountFormState {
     purchaseFxRateToCny: '',
     purchaseSourceId: '',
     purchaseManualRateReason: '',
-    purchasedAt: toLocalDateTimeInput(new Date()),
+    purchasedAt: getV2BusinessNowInput(),
     remark: ''
   };
-}
-
-function toLocalDateTimeInput(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
 }
 
 export function isNonNegativeDecimal(value: unknown) {

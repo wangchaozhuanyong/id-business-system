@@ -26,11 +26,15 @@ interface TopupPageSnapshot {
 const TOPUP_OPTIONS_SCOPE = 'balances-options';
 const TOPUP_OPTIONS_KEY = 'selectors';
 
-export function useTopupListQuery(getParams: () => V2TopupWorkbenchListQuery) {
+export function useTopupListQuery(
+  getParams: () => V2TopupWorkbenchListQuery,
+  isActive: () => boolean
+) {
   return useV2ModuleQuery<TopupPageSnapshot>({
     moduleKey: 'topup-workbench',
     scope: 'balances',
     key: () => createV2QueryKey(getParams()),
+    enabled: isActive,
     keepPreviousData: true,
     query: async ({ signal }) => {
       const params = getParams();

@@ -20,7 +20,7 @@ import {
   type V2DecimalInput,
   type V2JsonDocument
 } from '../runtime/public-api';
-import { toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
+import { toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import {
   findLockedFinancePeriodStatus,
@@ -103,7 +103,7 @@ export class IdBusinessV2FinancePostingService {
       return replay;
     }
 
-    const business = toKualaLumpurBusinessDate(input.occurredAt);
+    const business = toIdBusinessV2BusinessDate(input.occurredAt);
     await this.assertPeriodOpen(tx, business.month);
 
     const journalId = randomUUID();
@@ -313,7 +313,7 @@ export class IdBusinessV2FinancePostingService {
   }
 
   private buildJournalNo(occurredAt: Date) {
-    const date = toKualaLumpurBusinessDate(occurredAt).text.replaceAll('-', '');
+    const date = toIdBusinessV2BusinessDate(occurredAt).text.replaceAll('-', '');
     return `F${date}-${randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
   }
 }

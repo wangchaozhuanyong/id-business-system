@@ -6,6 +6,7 @@ import accountsApi from '@/v2/api/accounts.ts?raw';
 import rowActions from './components/V2AccountRowActions.vue?raw';
 import saleRecoveryDialog from './components/V2AccountSaleRecoveryDialog.vue?raw';
 import dialogs from './components/V2AccountDialogs.vue?raw';
+import lossDialogs from './components/V2AccountLossDialogs.vue?raw';
 import lifecycleTabs from './components/V2AccountLifecycleTabs.vue?raw';
 import createOptions from './useAccountCreateOptions.ts?raw';
 import list from './components/V2AccountsList.vue?raw';
@@ -13,6 +14,7 @@ import overview from './components/V2AccountsOverview.vue?raw';
 import toolbar from './components/V2AccountsToolbar.vue?raw';
 import accountLossesManifest from '@/v2/features/account-losses/manifest.ts?raw';
 import runtimeRegistry from '@/v2/features/runtimeRegistry.ts?raw';
+import accountsFixture from '@/v2/testing/V2AccountsDesignFixture.vue?raw';
 
 describe('ID management page UI contract', () => {
   it('uses the ID management name in navigation and import materials', () => {
@@ -60,10 +62,10 @@ describe('ID management page UI contract', () => {
     expect(list).toContain('@recover-sale="page.openSaleRecovery');
     expect(dialogs).toContain('<V2AccountSaleRecoveryDialog');
     expect(saleRecoveryDialog).toContain('require-asterisk-position="right"');
-    expect(saleRecoveryDialog).toContain('恢复原因');
+    expect(saleRecoveryDialog).toContain('纠正原因');
     expect(saleRecoveryDialog).toContain(':close-on-click-modal="!page.saleRecoverySubmitting"');
     expect(saleRecoveryDialog).toContain(':before-close="beforeClose"');
-    expect(saleRecoveryDialog).toContain('恢复原因尚未提交，确认关闭吗？');
+    expect(saleRecoveryDialog).toContain('纠正原因尚未提交，确认关闭吗？');
     expect(saleRecoveryDialog).toContain('page.loadSaleRecoveryPreview');
     expect(saleRecoveryDialog).toContain('重新检查');
     expect(accountsApi).toContain('/recover-sold-account');
@@ -77,5 +79,18 @@ describe('ID management page UI contract', () => {
     expect(dialogs).toContain("option.status === 'disabled'");
     expect(dialogs).toContain('（已停用）');
     expect(dialogs).toContain(':disabled="option.status === \'disabled\'"');
+  });
+
+  it('organizes account loss actions into a clear secondary workflow', () => {
+    expect(dialogs).toContain('<V2AccountLossDialogs :page="page" />');
+    expect(lossDialogs).toContain('width="min(600px, calc(100vw - 32px))"');
+    expect(lossDialogs).toContain('class="v2-account-loss-dialog__summary"');
+    expect(lossDialogs).toContain('class="v2-account-loss-dialog__impact"');
+    expect(lossDialogs).toContain('填写报损原因');
+    expect(lossDialogs).toContain('确认损耗影响');
+    expect(lossDialogs).toContain('require-asterisk-position="right"');
+    expect(accountsFixture).toContain('<V2AccountLossDialogs :page="page" />');
+    expect(accountsFixture).toContain("fixtureParams.get('lossDialog') === 'open'");
+    expect(accountsFixture).toContain('未提交报损业务数据');
   });
 });

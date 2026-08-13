@@ -45,7 +45,7 @@
             {{ recordStatus === 'active' ? '停用 ID' : '启用 ID' }}
           </el-dropdown-item>
           <el-dropdown-item v-if="canRecoverSale" command="recover-sale">
-            恢复可用
+            纠正售出
           </el-dropdown-item>
           <el-dropdown-item
             v-if="canReportCurrentLoss"

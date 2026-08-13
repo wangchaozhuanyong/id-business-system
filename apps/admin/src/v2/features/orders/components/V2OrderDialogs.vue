@@ -12,9 +12,30 @@
       @retry="page.retryDetail"
     >
       <div v-if="page.detail" class="v2-order-detail">
-        <section>
-          <h3>订单资料</h3>
-          <dl>
+        <V2DetailSummary
+          heading-id="order-detail-summary"
+          eyebrow="订单对象"
+          :title="page.detail.orderNo"
+          :description="`${page.detail.customer.name} · ${page.detail.service.name}`"
+          :metrics="[
+            { label: '实收金额', value: page.formatDecimal(page.detail.receivedAmount) },
+            {
+              label: '预计利润',
+              value: page.formatNullableDecimal(page.detail.profitAmount),
+              tone: Number(page.detail.profitAmount ?? 0) < 0 ? 'negative' : 'positive'
+            }
+          ]"
+          :facts="[
+            { label: '订单状态', value: page.statusMeta(page.detail.status).label },
+            { label: '使用 ID', value: page.detail.account?.appleIdMasked || '—' },
+            {
+              label: 'ID 处理',
+              value: page.accountDispositionMeta(page.detail.accountDisposition).label
+            }
+          ]"
+        />
+        <V2PanelSection heading-id="order-detail-business" title="业务与 ID" step="01">
+          <dl class="v2-order-detail__facts">
             <div>
               <dt>订单号</dt>
               <dd>{{ page.detail.orderNo }}</dd>
@@ -33,7 +54,7 @@
             </div>
             <div>
               <dt>使用 ID</dt>
-              <dd>{{ page.detail.account?.appleIdMasked || '-' }}</dd>
+              <dd>{{ page.detail.account?.appleIdMasked || '—' }}</dd>
             </div>
             <div>
               <dt>ID 来源</dt>
@@ -54,25 +75,24 @@
             </div>
             <div>
               <dt>国家</dt>
-              <dd>{{ page.detail.account?.country.name || '-' }}</dd>
+              <dd>{{ page.detail.account?.country.name || '—' }}</dd>
             </div>
             <div>
               <dt>网站账号</dt>
-              <dd>{{ page.detail.maskedWebsiteAccount || '-' }}</dd>
+              <dd>{{ page.detail.maskedWebsiteAccount || '—' }}</dd>
             </div>
             <div>
               <dt>结算平台</dt>
-              <dd>{{ page.detail.settlementPlatform?.name || '-' }}</dd>
+              <dd>{{ page.detail.settlementPlatform?.name || '—' }}</dd>
             </div>
             <div>
               <dt>平台订单号</dt>
-              <dd>{{ page.detail.platformOrderNo || '-' }}</dd>
+              <dd>{{ page.detail.platformOrderNo || '—' }}</dd>
             </div>
           </dl>
-        </section>
-        <section>
-          <h3>金额与成本</h3>
-          <dl>
+        </V2PanelSection>
+        <V2PanelSection heading-id="order-detail-finance" title="金额与成本" step="02">
+          <dl class="v2-order-detail__facts">
             <div>
               <dt>实收金额</dt>
               <dd>{{ page.formatDecimal(page.detail.receivedAmount) }}</dd>
@@ -98,7 +118,7 @@
               <dd>{{ page.formatDecimal(page.detail.balanceCostAmount) }}</dd>
             </div>
             <div>
-              <dt>退款成本</dt>
+              <dt>额外退款成本</dt>
               <dd>{{ page.formatNullableDecimal(page.detail.refundCostAmount) }}</dd>
             </div>
             <div>
@@ -118,10 +138,9 @@
               </dd>
             </div>
           </dl>
-        </section>
-        <section>
-          <h3>时间与备注</h3>
-          <dl>
+        </V2PanelSection>
+        <V2PanelSection heading-id="order-detail-timeline" title="时间与备注" step="03">
+          <dl class="v2-order-detail__facts">
             <div>
               <dt>开通时间</dt>
               <dd>{{ page.formatDate(page.detail.openedAt) }}</dd>
@@ -144,13 +163,17 @@
             </div>
             <div>
               <dt>备注</dt>
-              <dd>{{ page.detail.remark || '-' }}</dd>
+              <dd>{{ page.detail.remark || '—' }}</dd>
             </div>
           </dl>
-        </section>
-        <section v-if="page.detail.activeLock">
-          <h3>ID 锁定证据</h3>
-          <dl>
+        </V2PanelSection>
+        <V2PanelSection
+          v-if="page.detail.activeLock"
+          heading-id="order-detail-lock"
+          title="ID 锁定证据"
+          step="04"
+        >
+          <dl class="v2-order-detail__facts">
             <div>
               <dt>锁定范围</dt>
               <dd>{{ page.lockScopeLabel(page.detail.activeLock.lockScope) }}</dd>
@@ -165,10 +188,10 @@
             </div>
             <div>
               <dt>锁定原因</dt>
-              <dd>{{ page.detail.activeLock.reason || '-' }}</dd>
+              <dd>{{ page.detail.activeLock.reason || '—' }}</dd>
             </div>
           </dl>
-        </section>
+        </V2PanelSection>
         <footer class="v2-order-detail-actions">
           <AppButton
             v-if="page.canConsumeOrders && page.detail.operations.canConsume"
@@ -243,6 +266,8 @@
 import { CircleCheck, Coin, Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2OrderEditDrawer from './V2OrderEditDrawer.vue';
 import V2OrderRefundDialog from './V2OrderRefundDialog.vue';
 import type { UnwrapNestedRefs } from 'vue';

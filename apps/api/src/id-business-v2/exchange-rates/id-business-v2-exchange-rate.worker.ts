@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   Rate8,
-  toKualaLumpurBusinessDate,
+  toIdBusinessV2BusinessDate,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
   type Amount4,
@@ -309,7 +309,7 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
           exchangeRateSnapshotId: result.snapshotId,
           averagedAt: result.averagedAt.toISOString()
         },
-        businessDate: toKualaLumpurBusinessDate(capturedAt).date,
+        businessDate: toIdBusinessV2BusinessDate(capturedAt).date,
         capturedAt,
         expiresAt,
         triggeredByUserId: input.triggeredByUserId,

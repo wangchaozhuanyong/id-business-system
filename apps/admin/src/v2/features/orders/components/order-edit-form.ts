@@ -1,6 +1,8 @@
 import type { FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { validateTargetProfitRate } from '@/v2/features/order-entry/order-pricing';
+import { parseV2DateTimeInput } from '@/v2/utils/dateTime';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryCustomer } from '../contracts';
 
 export function createEmptyOrderEditForm() {
@@ -17,8 +19,8 @@ export function createEmptyOrderEditForm() {
     receivedOriginalAmount: '',
     targetProfitRate: '',
     balanceAmount: '',
-    openedAt: null as Date | null,
-    dueAt: null as Date | null,
+    openedAt: null as string | null,
+    dueAt: null as string | null,
     lockScope: 'by_service' as 'by_service' | 'global',
     remark: ''
   };
@@ -90,15 +92,18 @@ export function createOrderEditRules(
       {
         required: true,
         validator: (_rule, value, callback) => {
-          if (!(value instanceof Date) || !(form.openedAt instanceof Date)) {
+          const dueAt = parseV2DateTimeInput(value);
+          const openedAt = parseV2DateTimeInput(form.openedAt);
+          if (!dueAt || !openedAt) {
             callback(new Error('请选择有效时间'));
             return;
           }
-          if (value.getTime() <= form.openedAt.getTime()) {
+          if (dueAt.getTime() <= openedAt.getTime()) {
             callback(new Error('到期时间必须晚于开通时间'));
             return;
           }
-          if (canEditCore() && value.getTime() <= Date.now()) {
+          const businessNow = getV2BusinessNowMs();
+          if (canEditCore() && businessNow !== null && dueAt.getTime() <= businessNow) {
             callback(new Error('待处理订单的到期时间必须晚于当前时间'));
             return;
           }

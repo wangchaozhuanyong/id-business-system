@@ -1,12 +1,12 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import {
-  normalizeAccountLossDate,
   normalizeAccountLossKeyword,
   normalizeAccountLossSaleState,
   normalizeAccountLossStatus,
   normalizeOptionalAccountLossUuid
 } from './id-business-v2-account-loss-input';
+import { buildIdBusinessV2DateRange } from '../runtime/public-api';
 import { toAccountLossRecordResponse } from './id-business-v2-account-loss-response';
 import { IdBusinessV2AccountLossRepository } from './id-business-v2-account-loss.repository';
 
@@ -69,13 +69,10 @@ export class IdBusinessV2AccountLossQueryService {
   }
 
   private buildReportedAtFilter(fromValue?: string, toValue?: string) {
-    const from = normalizeAccountLossDate(fromValue, '开始日期');
-    const to = normalizeAccountLossDate(toValue, '结束日期');
-    if (from && to && from.getTime() > to.getTime()) {
-      throw new BadRequestException('开始日期不能晚于结束日期');
-    }
-    if (!from && !to) return undefined;
-    const exclusiveTo = to ? new Date(to.getTime() + 24 * 60 * 60 * 1000) : undefined;
-    return { gte: from, lt: exclusiveTo };
+    return buildIdBusinessV2DateRange(fromValue, toValue, {
+      from: '开始日期',
+      to: '结束日期',
+      invalidRange: '开始日期不能晚于结束日期'
+    });
   }
 }

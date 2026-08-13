@@ -5,8 +5,9 @@ import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { ensureV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { validateV2Form } from '@/v2/utils/formValidation';
-import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
+import { addOneInclusiveMonthToV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { idBusinessV2OrdersApi } from './api';
 import {
   createConsumptionIdempotencyKey,
@@ -57,6 +58,11 @@ export function useOrderEntryPage() {
   });
   const hasConfiguredCustomers = ref(false);
   const form = reactive(createInitialOrderEntryForm());
+  void ensureV2BusinessNowInput().then((now) => {
+    if (!now || form.openedAt) return;
+    form.openedAt = now;
+    form.dueAt = addOneInclusiveMonthToV2DateTimeInput(now);
+  });
   const {
     idSelectionMode,
     matchingLoading,
@@ -325,9 +331,9 @@ export function useOrderEntryPage() {
   });
   const customerSearching = computed(() => customerOptionsPending.value && optionsLoading.value);
 
-  function handleOpenedAtChange(openedAt: Date | null) {
+  function handleOpenedAtChange(openedAt: string | null) {
     if (openedAt) {
-      form.dueAt = calculateOneMonthInclusiveDueAt(openedAt);
+      form.dueAt = addOneInclusiveMonthToV2DateTimeInput(openedAt);
     }
   }
 
@@ -402,8 +408,8 @@ export function useOrderEntryPage() {
         accountDisposition:
           form.accountSource === 'customer_owned' ? 'retained' : form.accountDisposition,
         balanceAmount: form.balanceAmount.trim(),
-        openedAt: form.openedAt.toISOString(),
-        dueAt: form.dueAt.toISOString(),
+        openedAt: v2DateTimeInputToIso(form.openedAt),
+        dueAt: v2DateTimeInputToIso(form.dueAt),
         lockScope:
           form.accountSource === 'inventory' && form.accountDisposition === 'sold'
             ? 'global'

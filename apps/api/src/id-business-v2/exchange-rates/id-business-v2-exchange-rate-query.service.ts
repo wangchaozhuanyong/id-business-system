@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { Rate8 } from '../runtime/public-api';
+import { Rate8, parseIdBusinessV2DateBoundary } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
 import {
   IdBusinessV2ExchangeRateRepository,
@@ -313,7 +313,7 @@ export class IdBusinessV2ExchangeRateQueryService {
   private runFilters(query: ListIdBusinessV2ExchangeRateRunsQuery) {
     const keyword = query.keyword?.trim();
     const gte = this.dateBoundary(query.collectedFrom, false);
-    const lte = this.dateBoundary(query.collectedTo, true);
+    const lt = this.dateBoundary(query.collectedTo, true);
     return {
       keyword,
       keywordIsUuid: Boolean(keyword && UUID_PATTERN.test(keyword)),
@@ -327,7 +327,7 @@ export class IdBusinessV2ExchangeRateQueryService {
         query.provider === 'binance' || query.provider === 'okx'
           ? (query.provider as 'binance' | 'okx')
           : undefined,
-      startedAt: gte || lte ? { gte, lte } : undefined
+      startedAt: gte || lt ? { gte, lt } : undefined
     };
   }
 
@@ -357,11 +357,11 @@ export class IdBusinessV2ExchangeRateQueryService {
 
   private recordDateRange(fromValue?: string, toValue?: string) {
     const gte = this.dateBoundary(fromValue, false);
-    const lte = this.dateBoundary(toValue, true);
-    if (gte && lte && gte > lte) {
+    const lt = this.dateBoundary(toValue, true);
+    if (gte && lt && gte >= lt) {
       throw new BadRequestException('采集开始日期不能晚于结束日期');
     }
-    return gte || lte ? { gte, lte } : undefined;
+    return gte || lt ? { gte, lt } : undefined;
   }
 
   private fxRecordResponse(snapshot: FxRecordSnapshot, now: Date) {
@@ -451,10 +451,7 @@ export class IdBusinessV2ExchangeRateQueryService {
   }
 
   private dateBoundary(value: string | undefined, end: boolean) {
-    if (!value?.trim()) return undefined;
-    const date = new Date(`${value.trim()}T${end ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime())) throw new BadRequestException('采集日期格式无效');
-    return date;
+    return parseIdBusinessV2DateBoundary(value, '采集日期', end) ?? undefined;
   }
 
   private uuid(value: unknown, label: string) {

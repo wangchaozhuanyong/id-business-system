@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import dialogs from './components/V2TopupWorkbenchDialogs.vue?raw';
 
-const creditDrawer = dialogs.slice(0, dialogs.indexOf('<el-drawer'));
+const creditDrawer = dialogs.slice(dialogs.indexOf('<V2FormDrawer'), dialogs.indexOf('<el-drawer'));
 
 describe('gift card credit dialog UI contract', () => {
   it('uses a compact account overview and two-column task layout', () => {
@@ -33,5 +33,13 @@ describe('gift card credit dialog UI contract', () => {
     expect(creditDrawer).toContain('readonly');
     expect(creditDrawer).not.toContain('v2-topup-credit-summary');
     expect(creditDrawer).not.toContain('卡片价值按“礼品卡面值 × 卡片汇率”计算');
+  });
+
+  it('requires explicit confirmation before opening credit entry for a sold ID', () => {
+    expect(dialogs).toContain('title="确认给已售出 ID 加卡"');
+    expect(dialogs).toContain('confirm-text="确认，为已售 ID 加卡"');
+    expect(dialogs).toContain('page.soldCreditPromptAccount.soldByOrder.orderNo');
+    expect(dialogs).toContain('page.soldCreditPromptAccount.soldByOrder.customer.name');
+    expect(dialogs).toContain('@confirm="page.confirmSoldCreditPrompt"');
   });
 });

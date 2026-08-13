@@ -417,6 +417,7 @@ import { requiresPasswordResetRedirect } from '@/v2/router/passwordReset';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 import { createV2RoutePrefetchController } from '@/v2/runtime/routePrefetch';
 import { startV2ChangeSync, stopV2ChangeSync } from '@/v2/runtime/changeSync';
+import { synchronizeV2BusinessClock } from '@/v2/runtime/businessClock';
 import '@/v2/styles/v2.css';
 
 const V2_PAGE_CACHE_LIMIT = Math.max(
@@ -460,6 +461,7 @@ const queryActivityLabel = computed(() => {
   if (v2QueryActivity.refreshingCount > 0 || v2QueryActivity.lastErrorAt) return '';
   if (!v2QueryActivity.refreshedAt) return '';
   return `更新于 ${new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false
@@ -635,6 +637,7 @@ function refreshSensitiveApprovals(force = false) {
 }
 
 function handleWindowFocus() {
+  void synchronizeV2BusinessClock().catch(() => undefined);
   refreshRenewalWarnings();
   refreshSensitiveApprovals();
 }
@@ -721,6 +724,7 @@ function formatWarningDueAt(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -828,6 +832,7 @@ async function retryDegradedSession() {
 }
 
 onMounted(() => {
+  void synchronizeV2BusinessClock().catch(() => undefined);
   void loadBranding().catch(() => undefined);
   startV2ChangeSync();
   window.addEventListener('keydown', handleKeydown);

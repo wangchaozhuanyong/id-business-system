@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { Amount4 } from '../runtime/public-api';
+import { Amount4, buildIdBusinessV2DateRange } from '../runtime/public-api';
 import type {
   IdBusinessV2OrderAccountDisposition,
   IdBusinessV2OrderAccountSource,
@@ -29,7 +29,6 @@ export interface ListIdBusinessV2OrdersQuery extends PaginationQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'draft',
   'pending',
@@ -54,7 +53,7 @@ const EDITABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'completed',
   'failed'
 ]);
-const REFUNDABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
+const REFUNDABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>(['completed']);
 const CANCELLABLE_ORDER_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'draft',
   'pending',
@@ -170,29 +169,11 @@ export class IdBusinessV2OrdersService {
   }
 
   private parseDateRange(fromValue: unknown, toValue: unknown) {
-    const from = this.parseDate(fromValue, '开通开始日期', false);
-    const to = this.parseDate(toValue, '开通结束日期', true);
-    if (from && to && from.getTime() > to.getTime()) {
-      throw new BadRequestException('开通开始日期不能晚于结束日期');
-    }
-    if (!from && !to) return undefined;
-    return {
-      gte: from ?? undefined,
-      lte: to ?? undefined
-    };
-  }
-
-  private parseDate(value: unknown, label: string, endOfDay: boolean) {
-    const normalized = this.normalizeNullableString(value);
-    if (!normalized) return null;
-    if (!DATE_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    const date = new Date(`${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return date;
+    return buildIdBusinessV2DateRange(fromValue, toValue, {
+      from: '开通开始日期',
+      to: '开通结束日期',
+      invalidRange: '开通开始日期不能晚于结束日期'
+    });
   }
 
   private normalizeKeyword(value: unknown) {

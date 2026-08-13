@@ -161,7 +161,7 @@ export class IdBusinessV2OrderLifecycleService {
             accountSource !== order.accountSource ||
             accountDisposition !== 'sold')
         ) {
-          throw new ConflictException('已售出 ID 请从 ID 管理执行“恢复可用”');
+          throw new ConflictException('已售出 ID 请从 ID 管理执行“纠正售出”');
         }
         const sourceSoldOrderId = await this.support.resolveUpdatedAccountSource(
           tx,

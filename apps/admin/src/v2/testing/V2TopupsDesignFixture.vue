@@ -56,6 +56,38 @@
             <V2TopupWorkbenchOverview :page="page" />
             <V2TopupWorkbenchToolbar :page="page" />
             <V2TopupWorkbenchList :page="page" />
+            <V2ConfirmDialog
+              v-model="soldPromptVisible"
+              title="确认给已售出 ID 加卡"
+              message=""
+              width="min(520px, 92vw)"
+              confirm-text="确认，为已售 ID 加卡"
+              @confirm="confirmSoldPrompt"
+            >
+              <div v-if="soldPromptItem?.soldByOrder" class="v2-topup-sold-credit-prompt">
+                <el-alert
+                  title="该 ID 已售出，请先核对销售归属"
+                  type="warning"
+                  show-icon
+                  :closable="false"
+                />
+                <dl>
+                  <div>
+                    <dt>目标 ID</dt>
+                    <dd>{{ soldPromptItem.appleIdMasked }}</dd>
+                  </div>
+                  <div>
+                    <dt>销售订单</dt>
+                    <dd>{{ soldPromptItem.soldByOrder.orderNo }}</dd>
+                  </div>
+                  <div>
+                    <dt>归属客户</dt>
+                    <dd>{{ soldPromptItem.soldByOrder.customer.name }}</dd>
+                  </div>
+                </dl>
+                <p>继续后可以填写礼品卡资料；最终提交时系统会再次核对该销售归属。</p>
+              </div>
+            </V2ConfirmDialog>
           </section>
         </div>
       </main>
@@ -76,6 +108,7 @@ import {
   User
 } from '@element-plus/icons-vue';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2TopupWorkbenchList from '@/v2/features/topups/components/V2TopupWorkbenchList.vue';
 import V2TopupWorkbenchOverview from '@/v2/features/topups/components/V2TopupWorkbenchOverview.vue';
 import V2TopupWorkbenchToolbar from '@/v2/features/topups/components/V2TopupWorkbenchToolbar.vue';
@@ -106,6 +139,8 @@ const services = [
   { id: 'service-midjourney', code: 'midjourney', name: 'Midjourney' }
 ];
 const notice = ref('');
+const soldPromptVisible = ref(false);
+const soldPromptItem = ref<V2TopupWorkbenchItem | null>(null);
 
 function makeTopupItem(index: number): V2TopupWorkbenchItem {
   const country = countries[index % countries.length];
@@ -152,8 +187,16 @@ const emptyState = new URLSearchParams(window.location.search).get('state') === 
 const allItems: V2TopupWorkbenchItem[] = emptyState
   ? []
   : Array.from({ length: 26 }, (_, index) => makeTopupItem(index));
+const fixtureListState: Record<
+  'available' | 'sold',
+  { page: number; pageSize: number; sortBy: V2TopupWorkbenchSortBy; sortOrder: 'asc' | 'desc' }
+> = {
+  available: { page: 1, pageSize: 10, sortBy: 'updatedAt', sortOrder: 'desc' },
+  sold: { page: 1, pageSize: 10, sortBy: 'updatedAt', sortOrder: 'desc' }
+};
 
 const page = reactive({
+  activeList: 'available' as 'available' | 'sold',
   items: [] as V2TopupWorkbenchItem[],
   total: 0,
   evaluatedAt: '2026-08-10T09:20:00.000Z',
@@ -166,11 +209,10 @@ const page = reactive({
   countryOptions: countries,
   canTopup: true,
   canAdjustBalance: true,
+  displayedPage: 1,
+  displayedPageSize: 10,
   query: {
-    page: 1,
-    pageSize: 10,
     keyword: '',
-    accountSource: '' as '' | 'inventory' | 'customer_owned',
     countryOptionId: '',
     balancePreset: '' as V2TopupBalancePreset,
     balanceMin: '',
@@ -194,23 +236,37 @@ const page = reactive({
   },
   resetFilters: () => {
     Object.assign(page.query, {
-      page: 1,
       keyword: '',
-      accountSource: '',
       countryOptionId: '',
       balancePreset: '',
       balanceMin: '',
       balanceMax: '',
-      onlyNormal: true,
-      sortBy: 'updatedAt',
-      sortOrder: 'desc'
+      onlyNormal: true
     });
+    fixtureListState.available.page = 1;
+    fixtureListState.sold.page = 1;
     applyFilters();
   },
-  handlePageChange: () => applyFilters(),
-  handlePageSizeChange: () => applyFilters(true),
+  changeAccountList: (value: string | number) => {
+    if (value !== 'available' && value !== 'sold') return;
+    page.activeList = value;
+    applyFilters();
+  },
+  handlePageChange: (value: number) => {
+    fixtureListState[page.activeList].page = value;
+    applyFilters();
+  },
+  handlePageSizeChange: (value: number) => {
+    fixtureListState[page.activeList].pageSize = value;
+    applyFilters(true);
+  },
   handleSortChange: () => undefined,
   openCreditDrawer: (item: V2TopupWorkbenchItem) => {
+    if (item.saleState === 'sold') {
+      soldPromptItem.value = item;
+      soldPromptVisible.value = true;
+      return;
+    }
     notice.value = `预览操作：正在为 ${item.appleIdMasked} 录入礼品卡。`;
   },
   openReversalDrawer: (item: V2TopupWorkbenchItem) => {
@@ -222,6 +278,7 @@ const page = reactive({
   formatDecimal: (value: string | number | null | undefined) => value?.toString() ?? '0.0000',
   formatDate: (value: string) =>
     new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -231,6 +288,7 @@ const page = reactive({
     }).format(new Date(value)),
   formatTime: (value: string) =>
     new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
@@ -241,13 +299,20 @@ const page = reactive({
     service.parent ? `${service.parent.name} / ${service.name}` : service.name
 }) as unknown as TopupWorkbenchPage;
 
+function confirmSoldPrompt() {
+  if (!soldPromptItem.value) return;
+  notice.value = `预览操作：已核对 ${soldPromptItem.value.appleIdMasked} 的销售归属。`;
+  soldPromptVisible.value = false;
+}
+
 function decimalWhole(value: string) {
   const normalized = value.trim().split('.')[0] || '0';
   return BigInt(normalized);
 }
 
 function applyFilters(resetPage = false) {
-  if (resetPage) page.query.page = 1;
+  const state = fixtureListState[page.activeList];
+  if (resetPage) state.page = 1;
   const minimum = page.query.balanceMin ? decimalWhole(page.query.balanceMin) : null;
   const maximum = page.query.balanceMax ? decimalWhole(page.query.balanceMax) : null;
   const filtered = allItems.filter((item) => {
@@ -257,11 +322,7 @@ function applyFilters(resetPage = false) {
       !keyword ||
       item.appleIdMasked.toLowerCase().includes(keyword) ||
       item.soldByOrder?.orderNo.toLowerCase().includes(keyword);
-    const matchesSource =
-      !page.query.accountSource ||
-      (page.query.accountSource === 'customer_owned'
-        ? item.saleState === 'sold'
-        : item.saleState === 'available');
+    const matchesSource = item.saleState === page.activeList;
     const matchesPreset =
       !page.query.balancePreset ||
       (page.query.balancePreset === 'zero' && balance === 0n) ||
@@ -278,8 +339,10 @@ function applyFilters(resetPage = false) {
     );
   });
   page.total = filtered.length;
-  const start = (page.query.page - 1) * page.query.pageSize;
-  page.items = filtered.slice(start, start + page.query.pageSize);
+  page.displayedPage = state.page;
+  page.displayedPageSize = state.pageSize;
+  const start = (state.page - 1) * state.pageSize;
+  page.items = filtered.slice(start, start + state.pageSize);
 }
 
 applyFilters();

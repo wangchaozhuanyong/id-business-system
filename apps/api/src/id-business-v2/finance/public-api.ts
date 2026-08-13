@@ -26,7 +26,7 @@ export {
   normalizeFinanceText,
   normalizeFinanceUuid,
   normalizeOptionalFinanceUuid,
-  toKualaLumpurBusinessDate
+  toIdBusinessV2BusinessDate
 } from './id-business-v2-finance-input';
 export { IdBusinessV2FinanceModule } from './id-business-v2-finance.module';
 export {

@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import { createV2QueryKey, useV2Query } from '@/v2/composables/useV2Query';
@@ -54,7 +55,10 @@ export function useV2SensitiveAccessApproval() {
   const request = computed(() => requestQuery.data.value?.items[0] ?? null);
   const requestExpired = computed(() => {
     const expiresAt = request.value?.expiresAt;
-    return Boolean(expiresAt && new Date(expiresAt).getTime() <= Date.now());
+    const businessNow = getV2BusinessNowMs();
+    return Boolean(
+      expiresAt && businessNow !== null && new Date(expiresAt).getTime() <= businessNow
+    );
   });
   const requiresApproval = computed(() => policy.value?.mode === 'approval_required');
   const approvedRequestId = computed(() =>

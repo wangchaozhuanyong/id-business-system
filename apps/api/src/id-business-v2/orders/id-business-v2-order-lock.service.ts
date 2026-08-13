@@ -183,6 +183,47 @@ export class IdBusinessV2OrderLockService {
     };
   }
 
+  async narrowOrderLockToServiceInTransaction(
+    tx: V2CommandTransaction,
+    orderIdValue: string,
+    reason: string,
+    operator?: AuthenticatedUser
+  ) {
+    const orderId = normalizeUuid(orderIdValue, '订单');
+    const order = await this.lockOrder(tx, orderId);
+    const activeLock = await this.repository.findActiveLockForOrder(tx, orderId);
+    if (!activeLock || activeLock.lockScope === 'by_service') {
+      return { changed: false, lock: activeLock ? toLockSummary(activeLock) : null };
+    }
+
+    const lock = await this.repository.updateAccountLock(tx, activeLock.id, {
+      lockScope: 'by_service',
+      serviceOptionId: order.serviceOptionId
+    });
+    await this.repository.appendAudit(tx, {
+      userId: operator?.id,
+      module: 'id_business_v2',
+      action: 'id_business_v2.order_lock.narrow_to_service',
+      objectType: 'id_business_v2_account_lock',
+      objectId: lock.id,
+      beforeData: {
+        orderId: order.id,
+        accountId: lock.accountId,
+        lockScope: activeLock.lockScope,
+        serviceOptionId: activeLock.serviceOptionId
+      },
+      afterData: {
+        orderId: order.id,
+        accountId: lock.accountId,
+        lockScope: 'by_service',
+        serviceOptionId: order.serviceOptionId,
+        reason
+      },
+      remark: `V2 订单锁收窄为当前业务：${order.orderNo}`
+    });
+    return { changed: true, lock: toLockSummary(lock) };
+  }
+
   async prepareOrderConsumptionInTransaction(
     tx: V2CommandTransaction,
     input: PrepareOrderConsumptionInput,

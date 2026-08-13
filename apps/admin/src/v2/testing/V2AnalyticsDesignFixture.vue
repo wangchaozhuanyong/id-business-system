@@ -255,7 +255,7 @@ const journals = emptyState ? [] : Array.from({ length: 10 }, (_, index) => crea
 const overview: V2FinanceOverview = {
   settings: {
     baseCurrency: 'CNY',
-    timezone: 'Asia/Kuala_Lumpur',
+    timezone: 'Asia/Shanghai',
     enabledAt: '2026-01-01T00:00:00.000Z',
     historyStatus: 'completed',
     historyCompletedAt: '2026-02-08T12:00:00.000Z',
@@ -443,7 +443,7 @@ const page = reactive({
   amountTone,
   formatDate: (value: string) =>
     new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Kuala_Lumpur',
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

@@ -21,15 +21,9 @@ export function buildSoldAccountRecoveryPreview(input: {
   activeLocks: number;
 }) {
   const blockers = [
-    ...(input.currentBalance.isZero()
-      ? []
-      : [{ code: 'remaining_balance' as const, message: 'ID 余额尚未清零' }]),
-    ...(input.balanceCostAmount.isZero()
-      ? []
-      : [{ code: 'remaining_balance_cost' as const, message: 'ID 余额成本尚未清零' }]),
     ...((input.pendingAfterSalesOrders ?? 0) === 0
       ? []
-      : [{ code: 'pending_after_sales_order' as const, message: '仍有处理中的售后订单' }]),
+      : [{ code: 'pending_after_sales_order' as const, message: '仍有未结束的客户已购 ID 订单' }]),
     ...(input.activeActivations === 0
       ? []
       : [{ code: 'active_activation' as const, message: '仍有尚未到期的有效业务' }]),
@@ -89,7 +83,7 @@ export async function recoverIdBusinessV2SoldAccount(
   const accountId = support.normalizeUuid(dto.accountId, 'ID');
   const reason = support.normalizeReason(dto.reason);
   if (reason.length > 200) {
-    throw new BadRequestException('恢复原因必须为 2 至 200 个字符');
+    throw new BadRequestException('纠正原因必须为 2 至 200 个字符');
   }
 
   const result = await support.runLifecycleTransaction(
@@ -131,10 +125,10 @@ export async function recoverIdBusinessV2SoldAccount(
         : null;
 
       await releaseSoldOrderAccount(tx, repository, order, operator);
-      const release = await orderLockService.releaseOrderLockInTransaction(
+      const lockNarrowing = await orderLockService.narrowOrderLockToServiceInTransaction(
         tx,
         order.id,
-        `已售出 ID 恢复可用：${reason}`,
+        `纠正 ID 售出记录：${reason}`,
         operator
       );
       const recoveredAt = new Date();
@@ -211,17 +205,18 @@ export async function recoverIdBusinessV2SoldAccount(
           profitAmount: profitAmount?.toString() ?? null,
           recoveredCostAmount: recoveredCost.toString(),
           financeJournalId: financeJournal?.id ?? null,
-          lockReleased: release.released,
+          lockReleased: false,
+          lockScopeNarrowed: lockNarrowing.changed,
           reason
         },
-        remark: `已售出 ID 恢复可用：${order.orderNo}`
+        remark: `纠正 ID 售出记录：${order.orderNo}`
       });
 
       return {
         accountId,
         orderId: order.id,
         recoveredAt,
-        lockReleased: release.released,
+        lockReleased: false,
         financeJournalId: financeJournal?.id ?? null
       };
     },

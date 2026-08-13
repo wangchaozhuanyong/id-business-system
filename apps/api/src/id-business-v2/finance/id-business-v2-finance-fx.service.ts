@@ -12,7 +12,7 @@ import {
   type V2DecimalInput,
   type V2JsonDocument
 } from '../runtime/public-api';
-import { toKualaLumpurBusinessDate } from './id-business-v2-finance-input';
+import { toIdBusinessV2BusinessDate } from './id-business-v2-finance-input';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
 import { IdBusinessV2FinanceQueryRepository } from './persistence/id-business-v2-finance-query.repository';
 
@@ -72,7 +72,7 @@ export class IdBusinessV2FinanceFxService {
             currency: input.currency,
             rateToCny: manualRate.toString(),
             source: 'manual',
-            businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
+            businessDate: toIdBusinessV2BusinessDate(input.occurredAt).date,
             capturedAt: new Date(),
             manualReason: reason,
             createdByUserId: input.operator?.id
@@ -230,7 +230,7 @@ export class IdBusinessV2FinanceFxService {
             exchangeRateSnapshotId: effective.snapshotId,
             averagedAt: effective.averagedAt.toISOString()
           },
-          businessDate: toKualaLumpurBusinessDate(input.occurredAt).date,
+          businessDate: toIdBusinessV2BusinessDate(input.occurredAt).date,
           capturedAt: effective.averagedAt,
           expiresAt: effective.expiresAt,
           createdByUserId: input.operator?.id

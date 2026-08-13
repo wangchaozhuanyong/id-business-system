@@ -1,14 +1,35 @@
 <template>
-  <el-dialog
+  <V2ConfirmDialog
     :model-value="modelValue"
     :title="order ? `退款订单 ${order.orderNo}` : '退款订单'"
-    width="min(520px, 94vw)"
-    destroy-on-close
-    @close="$emit('update:modelValue', false)"
+    message=""
+    width="min(560px, calc(100vw - 32px))"
+    confirm-text="确认退款"
+    danger
+    :confirm-loading="saving"
+    :confirm-disabled-reason="submitDisabledReason"
+    :dirty="formDirty"
+    @update:model-value="$emit('update:modelValue', $event)"
+    @confirm="submit"
   >
+    <V2DetailSummary
+      v-if="order"
+      heading-id="order-refund-summary"
+      eyebrow="退款对象"
+      :title="order.orderNo"
+      :description="`${order.customer.name} · ${order.service.name}`"
+      :metrics="[
+        { label: '订单实收', value: order.receivedAmount },
+        { label: '额外退款成本', value: order.refundCostAmount ?? '0' }
+      ]"
+    />
     <el-alert
       type="warning"
-      title="退款默认只记录真实退款成本，不会自动增加 Apple ID 余额"
+      :title="
+        order?.accountDisposition === 'sold'
+          ? '系统将全额退回本单原实收，并自动把本单售出的 ID 恢复为可用'
+          : '系统将按本单原实收金额执行全额退款'
+      "
       :closable="false"
       show-icon
     />
@@ -25,70 +46,74 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <el-form-item label="退款成本" prop="refundCostAmount">
-        <el-input
-          v-model="form.refundCostAmount"
-          inputmode="decimal"
-          maxlength="19"
-          placeholder="实际承担的退款或补偿成本"
-        />
-      </el-form-item>
+      <V2PanelSection heading-id="order-refund-evidence" title="退款凭证" step="01">
+        <el-form-item prop="refundCostAmount">
+          <template #label>
+            <span class="v2-order-refund-label">
+              额外退款成本
+              <el-tooltip placement="top" :show-after="200" max-width="360px">
+                <template #content>
+                  订单本金由系统按原实收金额自动全额退回。此处仅填写退款过程中额外实际支付的费用，
+                  例如支付通道手续费、平台罚款或额外补偿。不要填写退给客户的订单本金，也不要填写余额成本、
+                  平台手续费或 ID 成本；这些由系统自动计算。没有额外费用时填写 0。
+                </template>
+                <el-icon class="v2-order-refund-help" aria-label="额外退款成本说明">
+                  <QuestionFilled />
+                </el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-input
+            v-model="form.refundCostAmount"
+            inputmode="decimal"
+            maxlength="19"
+            placeholder="没有额外费用时填写 0"
+          />
+        </el-form-item>
 
-      <el-form-item label="退款原因" prop="reason">
-        <el-input
-          v-model="form.reason"
-          type="textarea"
-          :rows="3"
-          maxlength="500"
-          show-word-limit
-          placeholder="填写可核对的退款原因"
-        />
-      </el-form-item>
+        <el-form-item label="退款原因" prop="reason">
+          <el-input
+            v-model="form.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="填写可核对的退款原因"
+          />
+        </el-form-item>
+      </V2PanelSection>
 
-      <el-form-item label="Apple 余额处理">
-        <el-switch
-          v-model="form.restoreBalance"
-          active-text="恢复原消费余额"
-          inactive-text="不恢复余额"
-        />
-        <p class="v2-order-refund-hint">
-          只有确认业务未开通、原余额确实未被消费时才可开启。服务端会检查开通记录并写入反向流水，
-          有开通证据时会拒绝恢复。
-        </p>
-      </el-form-item>
+      <V2PanelSection heading-id="order-refund-impact" title="资产与归属影响" step="02">
+        <el-form-item label="ID 余额处理">
+          <el-switch
+            v-model="form.restoreBalance"
+            active-text="恢复原消费余额"
+            inactive-text="不恢复余额"
+          />
+          <p class="v2-order-refund-hint">
+            仅在原消费余额已实际退回 ID 时开启。系统将按原消费流水精确恢复余额和成本；否则保持 ID
+            当前剩余余额及余额成本不变。
+          </p>
+        </el-form-item>
 
-      <el-form-item v-if="order?.accountDisposition === 'sold'" label="ID 销售处理">
-        <el-checkbox v-model="form.accountReturned">ID 已由客户退回并确认可再次使用</el-checkbox>
-        <p class="v2-order-refund-hint">
-          默认保持“已卖出”。勾选后会解除销售占用，并从本单利润中撤销已计入的 ID 成本。
-        </p>
-      </el-form-item>
+        <el-form-item v-if="order?.accountDisposition === 'sold'" label="ID 销售处理">
+          <div class="v2-order-refund-impact">
+            自动标记为“ID 已退款”，解除客户归属，冲回本单 ID 成本并恢复到可用 ID。
+          </div>
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
-
-    <template #footer>
-      <div class="v2-order-refund-footer">
-        <span v-if="submitDisabledReason" class="v2-submit-disabled-reason" role="status">
-          {{ submitDisabledReason }}
-        </span>
-        <AppButton variant="ghost" @click="$emit('update:modelValue', false)">取消</AppButton>
-        <AppButton
-          variant="danger"
-          :loading="saving"
-          :disabled="Boolean(submitDisabledReason)"
-          :aria-label="submitDisabledReason ? `确认退款：${submitDisabledReason}` : '确认退款'"
-          @click="submit"
-        >
-          确认退款
-        </AppButton>
-      </div>
-    </template>
-  </el-dialog>
+  </V2ConfirmDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
-import AppButton from '@/components/ui/AppButton.vue';
+import { QuestionFilled } from '@element-plus/icons-vue';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { RefundV2OrderInput, V2Order } from '../contracts';
@@ -106,11 +131,14 @@ const emit = defineEmits<{
 
 const formRef = ref<FormInstance>();
 const form = reactive({
-  refundCostAmount: '',
+  refundCostAmount: '0',
   reason: '',
-  restoreBalance: false,
-  accountReturned: false
+  restoreBalance: false
 });
+const { dirty: formDirty, capture: captureFormSnapshot } = useV2FormSnapshot(
+  () => props.modelValue,
+  () => form
+);
 
 const submitDisabledReason = computed(() => (props.order ? '' : '未选择退款订单'));
 
@@ -148,11 +176,11 @@ watch(
   ([visible]) => {
     if (!visible) return;
     Object.assign(form, {
-      refundCostAmount: props.order?.refundCostAmount ?? '',
+      refundCostAmount: props.order?.refundCostAmount ?? '0',
       reason: '',
-      restoreBalance: false,
-      accountReturned: false
+      restoreBalance: false
     });
+    captureFormSnapshot();
   }
 );
 
@@ -161,8 +189,7 @@ async function submit() {
   emit('submit', {
     refundCostAmount: form.refundCostAmount.trim(),
     reason: form.reason.trim(),
-    restoreBalance: form.restoreBalance,
-    accountReturned: form.accountReturned
+    restoreBalance: form.restoreBalance
   });
 }
 
@@ -185,9 +212,19 @@ function isNonNegativeDecimal(value: unknown) {
   line-height: 1.65;
 }
 
-.v2-order-refund-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+.v2-order-refund-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.v2-order-refund-help {
+  color: var(--v2-primary);
+  cursor: help;
+}
+
+.v2-order-refund-impact {
+  color: var(--v2-text-secondary);
+  line-height: 1.65;
 }
 </style>

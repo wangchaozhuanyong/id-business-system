@@ -694,11 +694,35 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
   });
 
-  it('refunds a completed order without restoring Apple balance by default', async () => {
+  it('rejects full refunds before the order is completed', async () => {
+    storedOrder = makeOrder({ status: 'processing' });
+
+    await expect(
+      service.refund(
+        orderId,
+        {
+          refundCostAmount: '0',
+          reason: '尚未完成时误点退款',
+          idempotencyKey: 'lifecycle-key-1'
+        },
+        operator
+      )
+    ).rejects.toThrow('只有已完成订单可以退款');
+
+    expect(financePostingService.post).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+  });
+
+  it('refunds a completed order, cancels its activation and keeps the current ID balance by default', async () => {
     storedOrder = makeOrder({
       status: 'completed'
     });
-    tx.idBusinessV2Activation.findUnique.mockResolvedValue({ id: 'activation-1' });
+    tx.idBusinessV2Activation.findUnique.mockResolvedValue({
+      id: 'activation-1',
+      status: 'active',
+      statusChangedAt: openedAt,
+      remark: '原开通记录'
+    });
 
     const result = await service.refund(
       orderId,
@@ -717,8 +741,24 @@ describe('IdBusinessV2OrderLifecycleService', () => {
         data: expect.objectContaining({
           refundCostAmount: '100',
           balanceCostAmount: '60',
-          profitAmount: '-63',
+          profitAmount: '-163',
           status: 'refunded'
+        })
+      })
+    );
+    expect(tx.idBusinessV2Activation.update).toHaveBeenCalledWith({
+      where: { orderId },
+      data: expect.objectContaining({
+        status: 'cancelled',
+        statusChangedAt: expect.any(Date),
+        remark: expect.stringContaining('订单全额退款并取消开通')
+      })
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'id_business_v2.activation.cancel_by_order_refund',
+          objectId: 'activation-1'
         })
       })
     );
@@ -729,43 +769,26 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     });
   });
 
-  it('keeps a sold ID occupied by default and only recovers it when explicitly returned', async () => {
+  it('automatically recovers a sold ID and reverses its applied ID cost on full refund', async () => {
     storedOrder = makeOrder({
       status: 'completed',
       accountDisposition: 'sold',
       accountCostAmount: decimal('25'),
       profitAmount: decimal('12')
     });
-    tx.idBusinessV2Activation.findUnique.mockResolvedValue({ id: 'activation-1' });
+    tx.idBusinessV2Activation.findUnique.mockResolvedValue({
+      id: 'activation-1',
+      status: 'active',
+      statusChangedAt: openedAt,
+      remark: null
+    });
 
     await service.refund(
       orderId,
       {
         refundCostAmount: '100',
-        reason: '客户退款但未退回 ID',
+        reason: '客户整单退款',
         idempotencyKey: 'lifecycle-key-1'
-      },
-      operator
-    );
-
-    expect(tx.idBusinessV2Account.updateMany).not.toHaveBeenCalled();
-    expect(storedOrder.accountDisposition).toBe('sold');
-    expect(storedOrder.profitAmount?.toString()).toBe('-88');
-
-    storedOrder = makeOrder({
-      status: 'completed',
-      accountDisposition: 'sold',
-      accountCostAmount: decimal('25'),
-      profitAmount: decimal('12')
-    });
-    reversal = null;
-    await service.refund(
-      orderId,
-      {
-        refundCostAmount: '100',
-        reason: '客户退款并退回 ID',
-        accountReturned: true,
-        idempotencyKey: 'returned-key-1'
       },
       operator
     );
@@ -781,18 +804,28 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     );
     expect(storedOrder.accountDisposition).toBe('recovered');
     expect(storedOrder.accountCostAmount.toString()).toBe('25');
-    expect(storedOrder.profitAmount?.toString()).toBe('-63');
+    expect(storedOrder.profitAmount?.toString()).toBe('-163');
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        journalType: 'order_refund',
+        metadata: expect.objectContaining({ accountRecovered: true }),
+        lines: expect.arrayContaining([
+          expect.objectContaining({ accountCode: 'id_inventory', direction: 'debit' }),
+          expect.objectContaining({ accountCode: 'id_cost', direction: 'credit' })
+        ])
+      })
+    );
   });
 
-  it('restores balance for an explicit pre-activation refund and rejects it after activation', async () => {
-    tx.$queryRaw.mockResolvedValueOnce([{ id: orderId }]).mockResolvedValueOnce([
-      {
-        id: accountId,
-        appleIdMasked: 'us***@example.com',
-        currentBalance: decimal('10'),
-        balanceCostAmount: decimal('30')
-      }
-    ]);
+  it('restores balance from the exact consumption ledger when explicitly confirmed', async () => {
+    storedOrder = makeOrder({ status: 'completed' });
+    tx.idBusinessV2Activation.findUnique.mockResolvedValue({
+      id: 'activation-1',
+      status: 'active',
+      statusChangedAt: openedAt,
+      remark: null
+    });
 
     const result = await service.refund(
       orderId,
@@ -806,25 +839,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     );
     expect(result.balanceRestored).toBe(true);
     expect(storedOrder.balanceCostAmount.toString()).toBe('0');
-    expect(storedOrder.profitAmount?.toString()).toBe('-3');
-
-    storedOrder = makeOrder({ status: 'completed' });
-    reversal = null;
-    tx.idBusinessV2Activation.findUnique.mockResolvedValue({ id: 'activation-1' });
-    tx.idBusinessV2Order.update.mockClear();
-    await expect(
-      service.refund(
-        orderId,
-        {
-          refundCostAmount: '100',
-          reason: '已有开通记录',
-          restoreBalance: true,
-          idempotencyKey: 'another-key-1'
-        },
-        operator
-      )
-    ).rejects.toBeInstanceOf(ConflictException);
-    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(storedOrder.profitAmount?.toString()).toBe('-103');
+    expect(tx.idBusinessV2Activation.update).toHaveBeenCalled();
   });
 
   it('returns an exact refund replay without writing a second reversal', async () => {

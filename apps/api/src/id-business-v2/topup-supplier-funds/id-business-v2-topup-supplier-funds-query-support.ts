@@ -3,9 +3,9 @@ import type {
   IdBusinessV2OptionStatus,
   IdBusinessV2TopupSupplierLedgerEntryType
 } from '@prisma/client';
+import { buildIdBusinessV2DateRange } from '../runtime/public-api';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const LEDGER_TYPES = new Set<IdBusinessV2TopupSupplierLedgerEntryType>([
   'opening_balance',
   'payment_credit',
@@ -75,24 +75,11 @@ export abstract class IdBusinessV2TopupSupplierFundsQuerySupport {
   }
 
   protected parseDateRange(dateFromValue: unknown, dateToValue: unknown) {
-    const dateFrom = this.parseDate(dateFromValue, '开始日期', false);
-    const dateTo = this.parseDate(dateToValue, '结束日期', true);
-    if (dateFrom && dateTo && dateFrom.getTime() > dateTo.getTime()) {
-      throw new BadRequestException('开始日期不能晚于结束日期');
-    }
-    if (!dateFrom && !dateTo) return undefined;
-    return { gte: dateFrom ?? undefined, lte: dateTo ?? undefined };
-  }
-
-  private parseDate(value: unknown, label: string, endOfDay: boolean) {
-    const normalized = this.normalizeNullableString(value);
-    if (!normalized) return null;
-    if (!DATE_PATTERN.test(normalized)) throw new BadRequestException(`${label}格式无效`);
-    const date = new Date(`${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return date;
+    return buildIdBusinessV2DateRange(dateFromValue, dateToValue, {
+      from: '开始日期',
+      to: '结束日期',
+      invalidRange: '开始日期不能晚于结束日期'
+    });
   }
 
   private normalizeNullableString(value: unknown) {

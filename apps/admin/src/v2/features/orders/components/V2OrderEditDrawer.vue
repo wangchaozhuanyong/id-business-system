@@ -2,7 +2,10 @@
   <V2FormDrawer
     :model-value="modelValue"
     :title="order ? `修改订单 ${order.orderNo}` : '修改订单'"
+    eyebrow="订单维护"
+    description="按业务对象、价格结算和履约时间分区核对修改"
     confirm-text="保存修改"
+    :dirty="formDirty"
     :confirm-loading="saving"
     :confirm-disabled-reason="submitDisabledReason"
     size="min(720px, 96vw)"
@@ -48,106 +51,51 @@
           show-icon
         />
 
-        <div class="v2-order-edit-grid">
-          <V2OrderEditCoreFields
-            :form="form"
-            :order="order"
-            :customers="visibleCustomerChoices"
-            :customer-keyword="customerKeyword"
-            :customer-searching="customerOptionsPending && optionsLoading"
-            :services="serviceChoices"
-            :accounts="accountChoices"
-            :matching-loading="matchingLoading"
-            :matching-error="matchingError"
-            @search-customers="searchCustomers"
-            @search-candidates="searchCandidates"
-          />
-
-          <V2OrderEditPricingFields
-            v-if="order"
-            v-model:profit-rate-input-value="profitRatePricing.profitRateInputValue"
-            :form="form"
-            :order="order"
-            :settlement-choices="settlementChoices"
-            :received-amount-preview="receivedAmountPreview"
-            :platform-fee-preview="platformFeePreview"
-            :suggested-received="suggestedReceived"
-            :suggested-original-amount="suggestedOriginalAmount"
-            :recommendation-applied="recommendationApplied"
-            :applied-suggested-cny="appliedSuggestedCny"
-            :estimated-profit-preview="estimatedProfitPreview"
-            :estimated-profit-rate-preview="profitRatePricing.estimatedProfitRatePreview"
-            :pricing-input-mode="profitRatePricing.pricingInputMode"
-            :profit-rate-input-hint="profitRatePricing.profitRateInputHint"
-            @settlement-change="handleSettlementChange"
-            @manual-price-input="handleManualPriceInput"
-            @apply-suggested="applySuggestedReceivedAmount"
-            @undo-suggested="undoSuggestedReceivedAmount"
-          />
-
-          <el-form-item label="开通时间" prop="openedAt">
-            <el-date-picker
-              v-model="form.openedAt"
-              type="datetime"
-              format="YYYY-MM-DD HH:mm"
-              placeholder="选择开通时间"
+        <V2PanelSection heading-id="order-edit-core" title="业务对象" step="01">
+          <div class="v2-order-edit-grid">
+            <V2OrderEditCoreFields
+              :form="form"
+              :order="order"
+              :customers="visibleCustomerChoices"
+              :customer-keyword="customerKeyword"
+              :customer-searching="customerOptionsPending && optionsLoading"
+              :services="serviceChoices"
+              :accounts="accountChoices"
+              :matching-loading="matchingLoading"
+              :matching-error="matchingError"
+              @search-customers="searchCustomers"
+              @search-candidates="searchCandidates"
             />
-          </el-form-item>
+          </div>
+        </V2PanelSection>
 
-          <el-form-item label="到期时间" prop="dueAt">
-            <el-date-picker
-              v-model="form.dueAt"
-              type="datetime"
-              format="YYYY-MM-DD HH:mm"
-              placeholder="选择到期时间"
+        <V2PanelSection heading-id="order-edit-pricing" title="价格与结算" step="02">
+          <div class="v2-order-edit-grid">
+            <V2OrderEditPricingFields
+              v-if="order"
+              v-model:profit-rate-input-value="profitRatePricing.profitRateInputValue"
+              :form="form"
+              :order="order"
+              :settlement-choices="settlementChoices"
+              :received-amount-preview="receivedAmountPreview"
+              :platform-fee-preview="platformFeePreview"
+              :suggested-received="suggestedReceived"
+              :suggested-original-amount="suggestedOriginalAmount"
+              :recommendation-applied="recommendationApplied"
+              :applied-suggested-cny="appliedSuggestedCny"
+              :estimated-profit-preview="estimatedProfitPreview"
+              :estimated-profit-rate-preview="profitRatePricing.estimatedProfitRatePreview"
+              :pricing-input-mode="profitRatePricing.pricingInputMode"
+              :profit-rate-input-hint="profitRatePricing.profitRateInputHint"
+              @settlement-change="handleSettlementChange"
+              @manual-price-input="handleManualPriceInput"
+              @apply-suggested="applySuggestedReceivedAmount"
+              @undo-suggested="undoSuggestedReceivedAmount"
             />
-          </el-form-item>
+          </div>
+        </V2PanelSection>
 
-          <el-form-item
-            v-if="order?.operations.canEditCore && form.accountSource === 'inventory'"
-            label="ID 锁范围"
-          >
-            <el-radio-group v-model="form.lockScope" aria-label="ID 锁范围">
-              <el-radio-button
-                v-for="option in lockScopeOptions"
-                :key="option.value"
-                :value="option.value"
-                :disabled="form.accountDisposition === 'sold' && option.value !== 'global'"
-              >
-                {{ option.label }}
-              </el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-        </div>
-
-        <el-form-item label="客户网站账号">
-          <el-input
-            v-model="form.websiteAccount"
-            maxlength="255"
-            autocomplete="off"
-            :disabled="form.clearWebsiteAccount"
-            :placeholder="
-              order?.hasWebsiteAccount ? `留空保持 ${order.maskedWebsiteAccount}` : '选填'
-            "
-          />
-          <el-checkbox
-            v-if="order?.hasWebsiteAccount"
-            v-model="form.clearWebsiteAccount"
-            class="v2-order-edit-clear"
-          >
-            清空已保存的网站账号
-          </el-checkbox>
-        </el-form-item>
-
-        <el-form-item label="备注">
-          <el-input
-            v-model="form.remark"
-            type="textarea"
-            :rows="3"
-            maxlength="2000"
-            show-word-limit
-          />
-        </el-form-item>
+        <V2OrderEditSupplementFields :form="form" :order="order" />
       </el-form>
     </V2AsyncRegion>
   </V2FormDrawer>
@@ -160,8 +108,11 @@ import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2OrdersApi } from '../api';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
 import V2OrderEditCoreFields from './V2OrderEditCoreFields.vue';
 import V2OrderEditPricingFields from './V2OrderEditPricingFields.vue';
+import V2OrderEditSupplementFields from './V2OrderEditSupplementFields.vue';
 import {
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
@@ -175,6 +126,7 @@ import {
 } from '@/v2/features/order-entry/useOrderEntryOptionsQuery';
 import { multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import type {
   UpdateV2OrderInput,
   V2Order,
@@ -216,6 +168,10 @@ const options = ref<V2OrderEntryOptions>({
   latestFxRates: []
 });
 const form = reactive(createEmptyOrderEditForm());
+const { dirty: formDirty, capture: captureFormSnapshot } = useV2FormSnapshot(
+  () => props.modelValue,
+  () => form
+);
 let matchingTimer: ReturnType<typeof setTimeout> | undefined;
 let matchingSequence = 0;
 let initializing = false;
@@ -235,11 +191,6 @@ const {
   mode: 'manual',
   freshnessPolicy: 'event-driven'
 });
-
-const lockScopeOptions = [
-  { label: '当前业务', value: 'by_service' },
-  { label: '整个 ID', value: 'global' }
-];
 
 const { customerChoices, serviceChoices, settlementChoices, accountChoices } = useOrderEditChoices(
   options,
@@ -426,8 +377,8 @@ async function initialize(order: V2Order) {
     receivedOriginalAmount: order.receivedOriginalAmount,
     targetProfitRate: '',
     balanceAmount: order.balanceAmount,
-    openedAt: order.openedAt ? new Date(order.openedAt) : null,
-    dueAt: order.dueAt ? new Date(order.dueAt) : null,
+    openedAt: order.openedAt ? toV2DateTimeInput(order.openedAt) : null,
+    dueAt: order.dueAt ? toV2DateTimeInput(order.dueAt) : null,
     lockScope: order.activeLock?.lockScope ?? 'by_service',
     remark: order.remark ?? ''
   });
@@ -443,6 +394,7 @@ async function initialize(order: V2Order) {
     return;
   }
   if (order.operations.canEditCore) await loadCandidates();
+  captureFormSnapshot();
   initializing = false;
 }
 
@@ -543,8 +495,8 @@ async function submit() {
   }
 
   const payload: UpdateV2OrderInput = {
-    openedAt: form.openedAt.toISOString(),
-    dueAt: form.dueAt.toISOString(),
+    openedAt: v2DateTimeInputToIso(form.openedAt),
+    dueAt: v2DateTimeInputToIso(form.dueAt),
     remark: form.remark.trim() || null,
     expectedUpdatedAt: order.updatedAt
   };

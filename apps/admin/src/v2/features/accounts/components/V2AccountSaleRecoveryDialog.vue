@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="page.saleRecoveryDialogVisible"
-    title="已售出 ID 恢复库存归属"
+    title="纠正 ID 售出记录"
     width="min(520px, 92vw)"
     destroy-on-close
     :close-on-click-modal="!page.saleRecoverySubmitting"
@@ -9,19 +9,38 @@
     :show-close="!page.saleRecoverySubmitting"
     :before-close="beforeClose"
   >
+    <V2DetailSummary
+      v-if="page.saleRecoveryTarget"
+      heading-id="account-sale-recovery-summary"
+      eyebrow="售出误操作纠正"
+      :title="page.saleRecoveryTarget.appleIdMasked"
+      :description="`来源订单 ${page.saleRecoveryTarget.soldByOrder?.orderNo || '—'}`"
+      :facts="
+        page.saleRecoveryPreview
+          ? [
+              { label: '当前余额', value: page.saleRecoveryPreview.currentBalance },
+              { label: '余额成本', value: page.saleRecoveryPreview.balanceCostAmount },
+              {
+                label: '条件检查',
+                value: page.saleRecoveryPreview.canRecover ? '允许纠正' : '暂不可纠正'
+              }
+            ]
+          : []
+      "
+    />
     <el-alert
       type="warning"
-      title="恢复会解除客户归属，但保留 ID 当前启用或停用状态。余额与余额成本必须为零，且有效业务和其他活动锁均已处理完毕。"
+      title="仅用于纠正员工误将 ID 标记为已售出的情况。本操作不退客户款、不改变来源订单业务状态；当前余额、余额成本和 ID 采购成本原值均保留。"
       :closable="false"
       show-icon
     />
     <div v-if="page.saleRecoveryLoading" class="v2-account-sale-recovery-state">
-      正在检查回收条件…
+      正在检查纠正条件…
     </div>
     <el-alert
       v-else-if="page.saleRecoveryError"
       type="error"
-      title="回收条件检查失败"
+      title="纠正条件检查失败"
       :description="page.saleRecoveryError"
       :closable="false"
       show-icon
@@ -29,7 +48,7 @@
     <el-alert
       v-else-if="page.saleRecoveryPreview && !page.saleRecoveryPreview.canRecover"
       type="error"
-      title="当前不能恢复库存归属"
+      title="当前不能纠正售出记录"
       :description="page.saleRecoveryPreview.blockers.map((item) => item.message).join('；')"
       :closable="false"
       show-icon
@@ -44,28 +63,23 @@
       require-asterisk-position="right"
       status-icon
     >
-      <el-form-item label="ID 账号">
-        <span>{{ page.saleRecoveryTarget?.appleIdMasked }}</span>
-      </el-form-item>
-      <el-form-item label="来源订单">
-        <span>{{ page.saleRecoveryTarget?.soldByOrder?.orderNo || '—' }}</span>
-      </el-form-item>
-      <el-form-item v-if="page.saleRecoveryPreview" label="当前余额">
-        <span>
-          {{ page.saleRecoveryPreview.currentBalance }} / 成本
-          {{ page.saleRecoveryPreview.balanceCostAmount }}
-        </span>
-      </el-form-item>
-      <el-form-item label="恢复原因" prop="reason">
-        <el-input
-          v-model="page.saleRecoveryReason"
-          type="textarea"
-          :rows="4"
-          maxlength="200"
-          show-word-limit
-          placeholder="例如：客户退货，已核对 ID 可重新使用"
-        />
-      </el-form-item>
+      <V2PanelSection
+        heading-id="account-sale-recovery-reason"
+        title="纠正依据"
+        step="01"
+        help="记录本次售出误操作及恢复库存归属的依据"
+      >
+        <el-form-item label="纠正原因" prop="reason">
+          <el-input
+            v-model="page.saleRecoveryReason"
+            type="textarea"
+            :rows="4"
+            maxlength="200"
+            show-word-limit
+            placeholder="例如：员工误将未售出的 ID 标记为已售出"
+          />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
 
     <template #footer>
@@ -86,7 +100,7 @@
         :disabled="page.saleRecoveryLoading || !page.saleRecoveryPreview?.canRecover"
         @click="confirmRecovery"
       >
-        确认恢复
+        确认纠正
       </AppButton>
     </template>
   </el-dialog>
@@ -97,6 +111,8 @@ import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
 
@@ -124,7 +140,7 @@ async function canClose() {
   if (props.page.saleRecoverySubmitting) return false;
   if (!props.page.saleRecoveryReason.trim()) return true;
   try {
-    await ElMessageBox.confirm('恢复原因尚未提交，确认关闭吗？', '关闭确认', {
+    await ElMessageBox.confirm('纠正原因尚未提交，确认关闭吗？', '关闭确认', {
       type: 'warning',
       confirmButtonText: '确认关闭',
       cancelButtonText: '继续填写'
@@ -155,7 +171,7 @@ async function confirmRecovery() {
 
 <style scoped>
 .v2-account-sale-recovery-form {
-  margin-top: 18px;
+  margin-top: 6px;
 }
 
 .v2-account-sale-recovery-state {

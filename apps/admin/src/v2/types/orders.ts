@@ -318,7 +318,6 @@ export interface RefundV2OrderInput {
   refundCostAmount: string;
   reason: string;
   restoreBalance?: boolean;
-  accountReturned?: boolean;
   idempotencyKey: string;
 }
 

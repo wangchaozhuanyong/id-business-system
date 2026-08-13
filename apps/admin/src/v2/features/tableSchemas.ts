@@ -856,8 +856,8 @@ export const v2TableSchemas = {
     })
   },
   topups: {
-    main: table({
-      id: 'topup-workbench.main',
+    available: table({
+      id: 'topup-workbench.available',
       feature: 'topup-workbench',
       role: 'primary',
       mobileMode: 'cards',
@@ -881,6 +881,34 @@ export const v2TableSchemas = {
         { key: 'ID 状态', label: 'ID 状态', kind: 'status', widthPreset: 'compact' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
+    }),
+    sold: table({
+      id: 'topup-workbench.sold',
+      feature: 'topup-workbench',
+      role: 'primary',
+      mobileMode: 'cards',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'appleId',
+          label: 'ID 账号',
+          kind: 'identifier',
+          widthPreset: 'identifier',
+          pin: 'start'
+        },
+        { key: '销售订单', label: '销售订单', kind: 'identifier', widthPreset: 'identifier' },
+        { key: '归属客户', label: '归属客户', kind: 'text', widthPreset: 'standard' },
+        { key: '国家', label: '国家', kind: 'text', widthPreset: 'compact' },
+        { key: 'currentBalance', label: '余额', kind: 'numeric', widthPreset: 'compact' },
+        { key: '平均成本', label: '平均成本', kind: 'numeric', widthPreset: 'standard' },
+        { key: '加卡记录', label: '加卡记录', kind: 'text', widthPreset: 'standard' },
+        { key: '余额流水', label: '余额流水', kind: 'text', widthPreset: 'standard' },
+        { key: '最近加卡', label: '最近加卡', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: '当前业务', label: '当前业务', kind: 'text', widthPreset: 'identifier' },
+        { key: 'ID 状态', label: 'ID 状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
     })
   }
 } as const;
@@ -888,7 +916,7 @@ export const v2TableSchemas = {
 export const v2TablesByFeature = {
   'renewal-workbench': [v2TableSchemas.renewals.main],
   'order-entry': [],
-  'topup-workbench': [v2TableSchemas.topups.main],
+  'topup-workbench': [v2TableSchemas.topups.available, v2TableSchemas.topups.sold],
   accounts: [v2TableSchemas.accounts.main, v2TableSchemas.accounts.importErrors],
   orders: [v2TableSchemas.orders.main],
   customers: [v2TableSchemas.customers.main],

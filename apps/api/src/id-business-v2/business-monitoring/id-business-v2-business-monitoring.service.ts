@@ -111,7 +111,7 @@ export class IdBusinessV2BusinessMonitoringService {
         pageSize: pagination.pageSize
       },
       generatedAt: now.toISOString(),
-      timezone: 'Asia/Kuala_Lumpur'
+      timezone: 'Asia/Shanghai'
     };
   }
 

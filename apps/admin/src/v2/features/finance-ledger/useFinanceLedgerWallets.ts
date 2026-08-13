@@ -1,7 +1,9 @@
 import { computed, reactive, ref, type ComputedRef } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { idBusinessV2FinanceApi } from './api';
 import type { V2FinanceAccount, V2FinanceCurrency, V2FinanceSupplierWallet } from './contracts';
 
@@ -41,7 +43,7 @@ export function useFinanceLedgerWallets(input: {
     creditedAmount: '',
     networkFeeAmount: '',
     targetBalance: '',
-    occurredAt: toLocalDateTime(new Date()),
+    occurredAt: getV2BusinessNowInput(),
     fxRateToCny: '',
     manualRateReason: '',
     reason: '',
@@ -104,7 +106,12 @@ export function useFinanceLedgerWallets(input: {
     }
   }
 
-  function openWalletMutation(wallet: V2FinanceSupplierWallet, mode: WalletMutationMode) {
+  async function openWalletMutation(wallet: V2FinanceSupplierWallet, mode: WalletMutationMode) {
+    const occurredAt = await ensureV2BusinessNowInput();
+    if (!occurredAt) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
     selectedWallet.value = wallet;
     walletMutationMode.value = mode;
     Object.assign(walletMutationForm, {
@@ -113,7 +120,7 @@ export function useFinanceLedgerWallets(input: {
       creditedAmount: '',
       networkFeeAmount: '',
       targetBalance: mode === 'adjust' ? wallet.currentBalance : '',
-      occurredAt: toLocalDateTime(new Date()),
+      occurredAt,
       fxRateToCny: '',
       manualRateReason: '',
       reason: '',
@@ -224,11 +231,6 @@ function showWarning(message: string) {
   ElMessage.warning(message);
 }
 
-function toLocalDateTime(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
-}
-
 function toIsoDate(value: string) {
-  return new Date(value).toISOString();
+  return v2DateTimeInputToIso(value);
 }

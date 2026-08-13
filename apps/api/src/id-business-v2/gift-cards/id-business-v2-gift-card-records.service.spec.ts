@@ -362,8 +362,8 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
           status: 'credited',
           countryOptionId: country.id,
           creditedAt: {
-            gte: new Date('2026-07-25T00:00:00.000Z'),
-            lte: new Date('2026-07-26T23:59:59.999Z')
+            gte: new Date('2026-07-24T16:00:00.000Z'),
+            lt: new Date('2026-07-26T16:00:00.000Z')
           },
           OR: expect.any(Array)
         }),

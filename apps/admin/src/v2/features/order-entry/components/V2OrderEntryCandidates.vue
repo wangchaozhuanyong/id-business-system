@@ -53,7 +53,7 @@
       <el-radio-group
         v-if="accountSource === 'inventory'"
         v-model="accountDisposition"
-        class="v2-order-entry-resource-disposition__options"
+        class="v2-order-entry-resource-disposition__options v2-order-entry-segmented-options"
         aria-label="ID 处理方式"
       >
         <el-radio-button value="retained">保留 ID · 继续复用</el-radio-button>

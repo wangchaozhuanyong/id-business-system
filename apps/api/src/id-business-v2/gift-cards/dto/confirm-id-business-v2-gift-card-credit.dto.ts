@@ -19,5 +19,6 @@ export interface ConfirmIdBusinessV2GiftCardCreditDto {
   purchaseManualRateReason?: string | null;
   paidAt?: string | null;
   idempotencyKey: string;
+  confirmedSoldByOrderId?: string;
   remark?: string | null;
 }

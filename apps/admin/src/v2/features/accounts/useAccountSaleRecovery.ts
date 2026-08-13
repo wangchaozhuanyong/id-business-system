@@ -43,7 +43,7 @@ export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
   async function openSaleRecovery(item: V2Account) {
     if (!options.canUpdate.value) return;
     if (item.lossStatus === 'reported') {
-      ElMessage.warning('已报损冻结 ID 不能恢复为可用');
+      ElMessage.warning('已报损冻结 ID 不能纠正售出记录');
       return;
     }
     if (item.saleState !== 'sold' || !item.soldByOrder) {
@@ -73,7 +73,7 @@ export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
         target.soldByOrder.id,
         saleRecoveryReason.value.trim()
       );
-      ElMessage.success('ID 已恢复为库存归属');
+      ElMessage.success('售出记录已纠正，ID 已恢复可用；订单款项未处理');
       saleRecoveryDialogVisible.value = false;
       saleRecoveryTarget.value = null;
       await options.refreshAccounts();

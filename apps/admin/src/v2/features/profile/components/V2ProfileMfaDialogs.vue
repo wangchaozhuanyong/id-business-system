@@ -2,6 +2,8 @@
   <V2FormDrawer
     v-model="page.mfaSetupVisible"
     title="绑定当前账号 MFA"
+    eyebrow="账号保护"
+    description="先录入绑定凭据，再使用当前动态验证码完成校验"
     confirm-text="验证并绑定"
     :confirm-loading="page.mfaEnabling"
     :dirty="true"
@@ -33,27 +35,31 @@
       status-icon
       scroll-to-error
     >
-      <el-form-item label="绑定密钥">
-        <el-input :model-value="page.mfaSetup?.secret || ''" readonly />
-      </el-form-item>
-      <el-form-item label="配置链接">
-        <el-input
-          :model-value="page.mfaSetup?.otpauthUrl || ''"
-          type="textarea"
-          :rows="3"
-          readonly
-          resize="none"
-        />
-      </el-form-item>
-      <el-form-item label="动态验证码" prop="code" required>
-        <el-input
-          v-model="page.mfaCodeForm.code"
-          inputmode="numeric"
-          autocomplete="one-time-code"
-          maxlength="6"
-          placeholder="6 位数字"
-        />
-      </el-form-item>
+      <V2PanelSection heading-id="profile-mfa-credential" title="绑定凭据" step="01">
+        <el-form-item label="绑定密钥">
+          <el-input :model-value="page.mfaSetup?.secret || ''" readonly />
+        </el-form-item>
+        <el-form-item label="配置链接">
+          <el-input
+            :model-value="page.mfaSetup?.otpauthUrl || ''"
+            type="textarea"
+            :rows="3"
+            readonly
+            resize="none"
+          />
+        </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection heading-id="profile-mfa-verification" title="动态验证" step="02">
+        <el-form-item label="动态验证码" prop="code" required>
+          <el-input
+            v-model="page.mfaCodeForm.code"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            placeholder="6 位数字"
+          />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
 
@@ -87,6 +93,7 @@ import { ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import type { useProfilePage } from '../useProfilePage';
 
 type ProfilePage = UnwrapNestedRefs<ReturnType<typeof useProfilePage>>;

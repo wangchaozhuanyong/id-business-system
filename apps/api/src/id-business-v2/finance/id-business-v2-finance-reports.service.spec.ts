@@ -134,7 +134,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
         where: expect.objectContaining({
           createdAt: {
             gte: new Date('2026-06-30T16:00:00.000Z'),
-            lte: new Date('2026-07-31T15:59:59.999Z')
+            lt: new Date('2026-07-31T16:00:00.000Z')
           }
         })
       })

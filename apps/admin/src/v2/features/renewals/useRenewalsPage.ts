@@ -9,21 +9,31 @@ import {
   useV2ModuleQuery
 } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { ensureV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
-import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
+import {
+  addOneInclusiveMonthToV2DateTimeInput,
+  toV2DateTimeInput,
+  v2DateTimeInputToIso
+} from '@/v2/utils/dateTime';
 import { addDecimalStrings, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { idBusinessV2RenewalsApi } from './api';
 import type {
   V2ManualRenewalOptions,
   V2RenewalDueStatus,
   V2RenewalFilterOptions,
-  V2RenewalStatusCode,
   V2RenewalWorkbenchItem,
   V2RenewalWorkbenchQuery,
   V2RenewalWorkbenchResult
 } from './contracts';
 import { useRenewalWarningSettings } from './useRenewalWarningSettings';
 import { useRenewalPricing } from './useRenewalPricing';
+import { useRenewalServiceSelection } from './useRenewalServiceSelection';
+import {
+  formatRenewalDate as formatDate,
+  formatRenewalTime as formatTime,
+  renewalStatusType as statusType
+} from './renewal-presentation';
 
 const dueStatusOptions: Array<{ value: V2RenewalDueStatus; label: string }> = [
   { value: 'due_within_1_hour', label: '1小时内到期' },
@@ -76,14 +86,15 @@ export function useRenewalsPage() {
   const selectedRenewal = ref<V2RenewalWorkbenchItem | null>(null);
   const idempotencyKey = ref('');
   const form = reactive({
+    categoryOptionId: '',
     serviceOptionId: '',
     settlementPlatformOptionId: '',
     platformOrderNo: '',
     receivedAmount: '',
     targetProfitRate: '',
     balanceAmount: '',
-    openedAt: null as Date | null,
-    dueAt: null as Date | null,
+    openedAt: null as string | null,
+    dueAt: null as string | null,
     remark: ''
   });
   const query = reactive({
@@ -201,14 +212,13 @@ export function useRenewalsPage() {
     if (current && previous && current !== previous) refreshedManualOptions.value = null;
   });
 
-  const availableServices = computed(() => {
-    const countryId = selectedRenewal.value?.account.country.id;
-    if (!countryId) return [];
-    return options.value.services.filter((service) => service.country?.id === countryId);
-  });
-  const selectedManualService = computed(
-    () => availableServices.value.find((service) => service.id === form.serviceOptionId) ?? null
-  );
+  const {
+    availableServices,
+    availableCategories,
+    categoryServices,
+    selectedManualService,
+    handleRenewalCategoryChange
+  } = useRenewalServiceSelection(options, selectedRenewal, form);
   const selectedPlatform = computed(
     () =>
       options.value.settlementPlatforms.find(
@@ -382,16 +392,22 @@ export function useRenewalsPage() {
     loadCurrentWorkbench();
   }
 
-  function openRenewalDrawer(renewal: V2RenewalWorkbenchItem) {
+  async function openRenewalDrawer(renewal: V2RenewalWorkbenchItem) {
     if (!canRenew.value || !renewal.withinActionWindow) return;
-    const now = new Date();
+    const businessNow = await ensureV2BusinessNowMs();
+    if (businessNow === null) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
+    const now = new Date(businessNow);
     now.setSeconds(0, 0);
     const sourceDueAt = renewal.dueAt ? new Date(renewal.dueAt) : now;
-    const openedAt = new Date(Math.max(now.getTime(), sourceDueAt.getTime()));
+    const openedAt = toV2DateTimeInput(Math.max(now.getTime(), sourceDueAt.getTime()));
 
     selectedRenewal.value = renewal;
     idempotencyKey.value = globalThis.crypto.randomUUID();
     Object.assign(form, {
+      categoryOptionId: renewal.service.parent?.id ?? '',
       serviceOptionId: renewal.service.id,
       settlementPlatformOptionId: '',
       platformOrderNo: '',
@@ -399,7 +415,7 @@ export function useRenewalsPage() {
       targetProfitRate: '',
       balanceAmount: '',
       openedAt,
-      dueAt: calculateOneMonthInclusiveDueAt(openedAt),
+      dueAt: addOneInclusiveMonthToV2DateTimeInput(openedAt),
       remark: ''
     });
     applySelectedServiceAmount();
@@ -420,8 +436,8 @@ export function useRenewalsPage() {
     return '';
   }
 
-  function handleRenewalOpenedAtChange(openedAt: Date | null) {
-    form.dueAt = openedAt ? calculateOneMonthInclusiveDueAt(openedAt) : null;
+  function handleRenewalOpenedAtChange(openedAt: string | null) {
+    form.dueAt = openedAt ? addOneInclusiveMonthToV2DateTimeInput(openedAt) : null;
   }
 
   function handleSettlementPlatformChange() {
@@ -457,8 +473,8 @@ export function useRenewalsPage() {
         platformOrderNo: form.platformOrderNo.trim() || null,
         receivedAmount: form.receivedAmount.trim(),
         balanceAmount: form.balanceAmount.trim(),
-        openedAt: form.openedAt.toISOString(),
-        dueAt: form.dueAt.toISOString(),
+        openedAt: v2DateTimeInputToIso(form.openedAt),
+        dueAt: v2DateTimeInputToIso(form.dueAt),
         idempotencyKey: idempotencyKey.value,
         remark: form.remark.trim() || null
       });
@@ -493,37 +509,6 @@ export function useRenewalsPage() {
     return formatV2Decimal(value, { minimumFractionDigits: 2 });
   }
 
-  function formatDate(value: string | null) {
-    if (!value) return '-';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '-';
-    return new Intl.DateTimeFormat('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(date);
-  }
-
-  function formatTime(value: string) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '-';
-    return new Intl.DateTimeFormat('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).format(date);
-  }
-
-  function statusType(status: V2RenewalStatusCode) {
-    if (status === 'expired' || status === 'due_within_1_hour') return 'danger';
-    if (status === 'due_within_23_hours') return 'warning';
-    return 'info';
-  }
-
   return {
     dueStatusOptions,
     canRenew,
@@ -555,6 +540,8 @@ export function useRenewalsPage() {
     form,
     query,
     availableServices,
+    availableCategories,
+    categoryServices,
     selectedManualService,
     platformFeePreview,
     estimatedBalanceCostPreview,
@@ -585,6 +572,7 @@ export function useRenewalsPage() {
     openWarningSettings,
     saveWarningSettings,
     handleRenewalOpenedAtChange,
+    handleRenewalCategoryChange,
     handleSettlementPlatformChange,
     applySuggestedReceivedAmount,
     undoSuggestedReceivedAmount,

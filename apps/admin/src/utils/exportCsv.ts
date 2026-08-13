@@ -1,3 +1,6 @@
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
+import { V2_BUSINESS_TIME_ZONE } from '@/v2/utils/dateTime';
+
 export interface CsvColumn<TItem> {
   header: string;
   value: (item: TItem) => string | number | boolean | null | undefined;
@@ -17,17 +20,23 @@ function formatCsvValue(value: string | number | boolean | null | undefined) {
 }
 
 function buildTimestamp() {
-  const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, '0');
-
-  return [
-    now.getFullYear(),
-    pad(now.getMonth() + 1),
-    pad(now.getDate()),
-    pad(now.getHours()),
-    pad(now.getMinutes()),
-    pad(now.getSeconds())
-  ].join('');
+  const now = getV2BusinessNowMs();
+  if (now === null) return 'beijing-time-pending';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: V2_BUSINESS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  return ['year', 'month', 'day', 'hour', 'minute', 'second']
+    .map((type) => get(type as Intl.DateTimeFormatPartTypes))
+    .join('');
 }
 
 export function exportRowsToCsv<TItem>(

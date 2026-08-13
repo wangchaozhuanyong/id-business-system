@@ -22,13 +22,20 @@ describe('order entry three-module UI contract', () => {
     for (const binding of ['form.categoryId', 'form.serviceOptionId', 'form.customerId']) {
       expect(businessGroup).toContain(binding);
     }
-    for (const binding of ['form.countryId', 'form.accountId', 'idSelectionMode']) {
+    for (const binding of ['form.countryId', 'form.accountId']) {
       expect(businessGroup).toContain(binding);
     }
+    expect(businessGroup).toContain('label="ID 来源"');
+    expect(businessGroup).not.toContain('v-model:id-selection-mode="idSelectionMode"');
     expect(businessColumns[0]).toContain('label="国家" prop="countryId"');
     expect(businessColumns[0]).not.toContain('label="业务分类" prop="categoryId"');
     expect(businessColumns[1]).toContain('label="业务分类" prop="categoryId"');
     expect(businessColumns[1]).not.toContain('label="国家" prop="countryId"');
+    expect(businessColumns[0]).not.toContain('label="ID 来源"');
+    expect(businessColumns[1]).toContain('label="ID 来源"');
+    expect(businessColumns[1].indexOf('label="ID 来源"')).toBeGreaterThan(
+      businessColumns[1].indexOf('<V2OrderEntryAccountSelect')
+    );
     expect(settlementGroup).toContain('label="结算平台"');
     expect(settlementGroup).toContain('label="平台订单号"');
     expect(settlementGroup).toContain('label="客户业务账号"');
@@ -57,10 +64,22 @@ describe('order entry three-module UI contract', () => {
     expect(candidates).toContain('const pageSize = 8');
     expect(candidates).toContain('ID 处理方式');
     expect(candidates).toContain('v-model="accountDisposition"');
+    expect(candidates).toContain('v2-order-entry-segmented-options');
     expect(candidates).toContain('value="retained"');
     expect(candidates).toContain('value="sold"');
     expect(view).toContain('v-model:account-disposition="form.accountDisposition"');
     expect(liveSummary).toContain('title="实时核算"');
+    expect(liveSummary).toContain('ID 选择方式');
+    expect(liveSummary).not.toContain('aria-label="ID 来源"');
+    expect(liveSummary).toContain('aria-label="ID 选择方式"');
+    expect(liveSummary).toContain('v2-order-entry-segmented-options');
+    expect(liveSummary).toContain('<el-radio-button value="auto">自动匹配</el-radio-button>');
+    expect(liveSummary).toContain('<el-radio-button value="manual">手动选择</el-radio-button>');
+    expect(liveSummary).not.toContain('<el-radio value="auto">');
+    expect(liveSummary).toContain('v-if="accountSource === \'inventory\'"');
+    expect(view).toContain(':account-source="form.accountSource"');
+    expect(view).toContain('v-model:id-selection-mode="idSelectionMode"');
+    expect(view).toContain('@selection-mode-change="handleIdSelectionModeChange"');
     expect(liveSummary).not.toContain('v-model="accountDisposition"');
     expect(liveSummary).toContain('当前选中 ID');
     expect(liveSummary).toContain('ID 购买成本');

@@ -1117,13 +1117,15 @@ export class IdBusinessV2OrdersRepository {
         where: {
           accountId: input.accountId,
           accountSource: 'customer_owned',
+          sourceSoldOrderId: input.sourceOrderId,
           deletedAt: null,
-          status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+          status: { in: ['draft', 'pending', 'waiting_external', 'processing', 'completed'] }
         }
       }),
       tx.idBusinessV2Activation.count({
         where: {
           accountId: input.accountId,
+          orderId: { not: input.sourceOrderId },
           status: 'active',
           renewedBy: { is: null },
           OR: [{ dueAt: null }, { dueAt: { gt: input.evaluatedAt } }]
@@ -1132,6 +1134,7 @@ export class IdBusinessV2OrdersRepository {
       tx.idBusinessV2AccountLock.count({
         where: {
           accountId: input.accountId,
+          orderId: { not: input.sourceOrderId },
           status: 'active',
           expiresAt: { gt: input.evaluatedAt }
         }
