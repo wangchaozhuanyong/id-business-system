@@ -5,7 +5,13 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { atomicWriteJson } from './lib/production-backup.mjs';
+import {
+  BACKUP_TRANSACTION_STALE_MS,
+  describeBackupTransactions,
+  findStaleBackupTransactions,
+  inspectProductionBackupTransactions
+} from './lib/production-backup-transactions.mjs';
+import { assertExpectedBackupDatabase, atomicWriteJson } from './lib/production-backup.mjs';
 import {
   assertFrequentBackupHealthy,
   formatBytes,
@@ -25,6 +31,20 @@ process.umask(0o077);
 await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
 
 try {
+  const databaseUrl = await resolveBackupDatabaseUrl();
+  const transactionInspection = await inspectProductionBackupTransactions(databaseUrl, {
+    applicationName: 'id-v2-frequent-backup-monitor',
+    includeCurrentSessionTimeout: true,
+    includeRoleTimeouts: true
+  });
+  assertBackupTimeouts(transactionInspection);
+  const staleTransactions = findStaleBackupTransactions(transactionInspection.transactions);
+  if (staleTransactions.length > 0) {
+    throw new Error(
+      `发现专用备份角色遗留的空闲事务：${describeBackupTransactions(staleTransactions)}`
+    );
+  }
+
   const directory = await resolveFrequentBackupDirectory(projectRoot);
   const inventory = await inspectFrequentBackups(directory);
   const health = assertFrequentBackupHealthy(inventory);
@@ -39,6 +59,12 @@ try {
     latestBackupAt: health.latest.createdAt,
     latestArchive: health.latest.archive.name,
     ageMinutes: Number((health.ageMs / 60_000).toFixed(1)),
+    activeBackupTransactionCount: transactionInspection.transactions.length,
+    staleBackupTransactionCount: staleTransactions.length,
+    backupIdleTransactionTimeoutMs: transactionInspection.currentSessionIdleTimeoutMs,
+    backupRoleIdleTransactionTimeoutMs:
+      transactionInspection.backupRoleTimeouts.idleInTransactionMs,
+    backupRoleIdleSessionTimeoutMs: transactionInspection.backupRoleTimeouts.idleSessionMs,
     retainedBackupCount: inventory.backups.length,
     retainedBytes: inventory.totalBytes,
     retainedSize: formatBytes(inventory.totalBytes)
@@ -104,5 +130,28 @@ async function readJsonIfPresent(filePath) {
     return JSON.parse(await readFile(filePath, 'utf8'));
   } catch {
     return {};
+  }
+}
+
+async function resolveBackupDatabaseUrl() {
+  if (process.env.BACKUP_DATABASE_URL) {
+    return assertExpectedBackupDatabase(process.env.BACKUP_DATABASE_URL).toString();
+  }
+  const secretsPath = path.join(projectRoot, '.deploy', 'cloudflare-free.secrets.json');
+  const secrets = JSON.parse(await readFile(secretsPath, 'utf8'));
+  return assertExpectedBackupDatabase(secrets.BACKUP_DATABASE_URL).toString();
+}
+
+function assertBackupTimeouts(inspection) {
+  const timeoutValues = [
+    inspection.currentSessionIdleTimeoutMs,
+    inspection.backupRoleTimeouts?.idleInTransactionMs
+  ];
+  if (timeoutValues.some((value) => value <= 0 || value > BACKUP_TRANSACTION_STALE_MS)) {
+    throw new Error('备份角色空闲事务超时不是预期的 2 分钟');
+  }
+  const roleIdleSessionMs = inspection.backupRoleTimeouts?.idleSessionMs;
+  if (roleIdleSessionMs <= 0 || roleIdleSessionMs > BACKUP_TRANSACTION_STALE_MS) {
+    throw new Error('备份角色空闲会话超时不是预期的 2 分钟');
   }
 }

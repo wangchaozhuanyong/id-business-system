@@ -190,6 +190,11 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.match(source, /shanghai_count !== 0/);
   assert.match(source, /失败的北京时间 migration 存在未预期的部分生效状态/);
   assert.match(source, /'--rolled-back'/);
+  assert.match(source, /waitForProductionBackups/);
+  assert.match(source, /BACKUP_WAIT_TIMEOUT_MS = 3 \* 60 \* 1000/);
+  assert.match(source, /inspectProductionBackupTransactions/);
+  assert.match(source, /已在 Prisma 执行前停止/);
+  assert.doesNotMatch(source, /pg_terminate_backend/);
   assert.doesNotMatch(source, /shell:\s*true/);
 });
 
