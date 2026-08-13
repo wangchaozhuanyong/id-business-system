@@ -45,11 +45,11 @@ export async function calculateFinanceHistoryAssetOpening(
 
   const [accountAssets, unsoldIds, supplierWallets, pendingRefunds, gl] = await Promise.all([
     client.idBusinessV2Account.aggregate({
-      where: { deletedAt: null, lossReportedAt: null },
+      where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
       _sum: { balanceCostAmount: true }
     }),
     client.idBusinessV2Account.aggregate({
-      where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
+      where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
       _sum: { purchaseCost: true }
     }),
     client.idBusinessV2TopupSupplierAccount.aggregate({

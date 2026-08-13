@@ -24,7 +24,7 @@ export const accountDispositionOptions: Array<{
 }> = [
   { value: 'retained', label: '保留 ID', type: 'info' },
   { value: 'sold', label: '已卖出', type: 'danger' },
-  { value: 'recovered', label: 'ID 已退款', type: 'success' }
+  { value: 'recovered', label: '已恢复可用', type: 'success' }
 ];
 
 export function statusMeta(status: V2OrderStatus) {
@@ -37,7 +37,18 @@ export function statusMeta(status: V2OrderStatus) {
   );
 }
 
-export function accountDispositionMeta(disposition: V2OrderAccountDisposition) {
+export function accountDispositionMeta(
+  disposition: V2OrderAccountDisposition,
+  orderStatus?: V2OrderStatus
+) {
+  if (disposition === 'recovered') {
+    return {
+      value: disposition,
+      label: orderStatus === 'refunded' ? 'ID 已退款' : '售出已纠正',
+      type: 'success' as const
+    };
+  }
+
   return (
     accountDispositionOptions.find((option) => option.value === disposition) ?? {
       value: disposition,

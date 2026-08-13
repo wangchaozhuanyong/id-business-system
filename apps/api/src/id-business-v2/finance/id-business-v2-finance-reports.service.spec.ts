@@ -247,6 +247,11 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
           })
           .mockResolvedValueOnce({
             _sum: {
+              balanceCostAmount: decimal('11')
+            }
+          })
+          .mockResolvedValueOnce({
+            _sum: {
               purchaseCost: decimal('7')
             }
           })
@@ -276,6 +281,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
       cashCny: '100',
       supplierPrepaymentCny: '20',
       giftCardInventoryCny: '5',
+      customerOwnedBalanceCostCny: '11',
       unsoldIdInventoryCny: '7',
       supplierRefundReceivableCny: '3',
       totalBookValueCny: '135',

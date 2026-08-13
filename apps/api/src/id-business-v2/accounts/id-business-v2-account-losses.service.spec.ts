@@ -35,6 +35,7 @@ function makeLockedAccount(overrides: Record<string, unknown> = {}) {
     balanceCostAmount: new Prisma.Decimal('70'),
     soldByOrderId: null,
     soldOrderNo: null,
+    ownershipTransferredAt: null,
     lossReportedAt: null,
     activeLossRecordId: null,
     statusOptionId: 'normal-status-id',
@@ -434,8 +435,10 @@ describe('IdBusinessV2AccountLossesService', () => {
   it('reports a sold ID with zero ID purchase cost loss and preserved ownership', async () => {
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
+        purchaseCost: new Prisma.Decimal('12.5'),
         soldByOrderId: '80000000-0000-4000-8000-000000000001',
-        soldOrderNo: 'V220260729SOLD001'
+        soldOrderNo: 'V220260729SOLD001',
+        ownershipTransferredAt: new Date('2026-07-28T00:00:00.000Z')
       })
     ]);
     const result = await service.reportLoss(
@@ -460,7 +463,7 @@ describe('IdBusinessV2AccountLossesService', () => {
         journalType: 'account_loss',
         lines: [
           expect.objectContaining({ accountCode: 'balance_loss' }),
-          expect.objectContaining({ accountCode: 'gift_card_inventory' })
+          expect.objectContaining({ accountCode: 'customer_owned_balance_cost' })
         ]
       })
     );

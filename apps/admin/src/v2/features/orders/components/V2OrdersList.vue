@@ -95,8 +95,11 @@
           sortable="custom"
         >
           <template #default="{ row }">
-            <el-tag :type="page.accountDispositionMeta(row.accountDisposition).type" effect="plain">
-              {{ page.accountDispositionMeta(row.accountDisposition).label }}
+            <el-tag
+              :type="page.accountDispositionMeta(row.accountDisposition, row.status).type"
+              effect="plain"
+            >
+              {{ page.accountDispositionMeta(row.accountDisposition, row.status).label }}
             </el-tag>
           </template>
         </V2TableColumn>
@@ -316,7 +319,7 @@
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'accountDisposition']">
               <dt>ID 处理状态</dt>
-              <dd>{{ page.accountDispositionMeta(item.accountDisposition).label }}</dd>
+              <dd>{{ page.accountDispositionMeta(item.accountDisposition, item.status).label }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, 'accountCostAmount']">
               <dt>ID成本</dt>

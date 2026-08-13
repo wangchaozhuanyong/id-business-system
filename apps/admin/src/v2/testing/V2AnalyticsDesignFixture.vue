@@ -266,6 +266,7 @@ const overview: V2FinanceOverview = {
     platformFeeCny: emptyState ? '0' : '3260.18',
     giftCardCostCny: emptyState ? '0' : '58620.42',
     idCostCny: emptyState ? '0' : '18260.00',
+    customerOwnedBalanceCostCny: emptyState ? '0' : '604.36',
     refundLossCny: emptyState ? '0' : '860.00',
     redemptionLossCny: emptyState ? '0' : '420.00',
     balanceLossCny: emptyState ? '0' : '180.00',
@@ -289,6 +290,7 @@ const overview: V2FinanceOverview = {
     cashCny: emptyState ? '0' : '28680.80',
     supplierPrepaymentCny: emptyState ? '0' : '36200.50',
     giftCardInventoryCny: emptyState ? '0' : '12860.00',
+    customerOwnedBalanceCostCny: emptyState ? '0' : '604.36',
     unsoldIdInventoryCny: emptyState ? '0' : '18640.00',
     supplierRefundReceivableCny: emptyState ? '0' : '3260.00',
     totalBookValueCny: emptyState ? '0' : '99641.30',
@@ -407,7 +409,7 @@ const page = reactive({
   assetRows: [
     { label: '自有资金', value: overview.assets.cashCny },
     { label: '卡商预付款', value: overview.assets.supplierPrepaymentCny },
-    { label: '未消耗余额成本', value: overview.assets.giftCardInventoryCny },
+    { label: '自有 ID 剩余余额成本', value: overview.assets.giftCardInventoryCny },
     { label: '未售 ID 成本', value: overview.assets.unsoldIdInventoryCny },
     { label: '待卡商退款', value: overview.assets.supplierRefundReceivableCny }
   ],
@@ -488,6 +490,7 @@ const accountCodeLabels: Record<V2FinanceAccountCode, string> = {
   platform_fee: '平台手续费',
   gift_card_cost: '余额销售成本',
   id_cost: 'ID 销售成本',
+  customer_owned_balance_cost: '客户已购 ID 余额转移成本',
   refund_loss: '退款损失',
   gift_card_redemption_loss: '礼品卡赎回损失',
   balance_loss: 'ID 余额报损',

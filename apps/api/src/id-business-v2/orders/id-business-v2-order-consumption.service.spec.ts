@@ -47,6 +47,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     balanceCostAmount: amount('90'),
     purchaseCost: amount('25'),
     soldByOrderId: null,
+    ownershipTransferredAt: null,
     countryOptionId: '77777777-7777-4777-8777-777777777777',
     statusCode: 'normal',
     ...overrides
@@ -232,6 +233,8 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         accountCostAmount: '0',
         appliedAccountCostAmount: '0',
         balanceCostAmount: '60',
+        transferredBalanceCostAmount: '0',
+        appliedBalanceCostAmount: '60',
         profitAmount: '37',
         status: 'processing',
         statusChangedAt: expect.any(Date),
@@ -338,6 +341,42 @@ describe('IdBusinessV2OrderConsumptionService', () => {
     const orderUpdate = tx.idBusinessV2Order.update.mock.calls[0]?.[0];
     expect(orderUpdate.data.accountCostAmount.toString()).toBe('25');
     expect(orderUpdate.data.profitAmount.toString()).toBe('12');
+  });
+
+  it('does not charge customer-owned balance cost to an after-sales order', async () => {
+    orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
+      idempotentReplay: false,
+      idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
+      order: makeOrder({ accountSource: 'customer_owned' }),
+      account: makeAccount({
+        ownershipTransferredAt: new Date('2026-07-25T00:00:00.000Z')
+      }),
+      activeLock: { id: lockId },
+      existingEntry: null
+    });
+
+    await service.consume(orderId, { idempotencyKey: 'consume-request-1' });
+
+    const orderUpdate = tx.idBusinessV2Order.update.mock.calls[0]?.[0];
+    expect(orderUpdate.data.appliedBalanceCostAmount.toString()).toBe('0');
+    expect(orderUpdate.data.profitAmount.toString()).toBe('97');
+  });
+
+  it('charges balance cost after a corrected sale returns the ID to company inventory', async () => {
+    orderLockService.prepareOrderConsumptionInTransaction.mockResolvedValueOnce({
+      idempotentReplay: false,
+      idempotencyKey: `order_consumption:${orderId}:consume-request-1`,
+      order: makeOrder({ accountSource: 'customer_owned' }),
+      account: makeAccount({ ownershipTransferredAt: null }),
+      activeLock: { id: lockId },
+      existingEntry: null
+    });
+
+    await service.consume(orderId, { idempotencyKey: 'consume-request-1' });
+
+    const orderUpdate = tx.idBusinessV2Order.update.mock.calls[0]?.[0];
+    expect(orderUpdate.data.appliedBalanceCostAmount.toString()).toBe('60');
+    expect(orderUpdate.data.profitAmount.toString()).toBe('37');
   });
 
   it('allows a real negative profit and records it instead of claiming success with zero', async () => {

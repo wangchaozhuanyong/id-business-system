@@ -197,8 +197,15 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
              )
            )
            AND (
-             source_order.account_disposition::text <> 'sold'
-             OR account.sold_by_order_id IS DISTINCT FROM after_sales.source_sold_order_id
+             source_order.account_disposition::text NOT IN ('sold', 'recovered')
+             OR (
+               source_order.account_disposition::text = 'sold'
+               AND account.sold_by_order_id IS DISTINCT FROM after_sales.source_sold_order_id
+             )
+             OR (
+               source_order.account_disposition::text = 'recovered'
+               AND account.sold_by_order_id IS NOT NULL
+             )
            )
          )
        )`

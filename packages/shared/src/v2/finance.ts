@@ -44,6 +44,7 @@ export type V2FinanceAccountCode =
   | 'platform_fee'
   | 'gift_card_cost'
   | 'id_cost'
+  | 'customer_owned_balance_cost'
   | 'refund_loss'
   | 'gift_card_redemption_loss'
   | 'balance_loss'
@@ -296,6 +297,7 @@ export interface V2FinanceProfitLoss {
   platformFeeCny: DecimalString;
   giftCardCostCny: DecimalString;
   idCostCny: DecimalString;
+  customerOwnedBalanceCostCny: DecimalString;
   refundLossCny: DecimalString;
   redemptionLossCny: DecimalString;
   balanceLossCny: DecimalString;
@@ -310,6 +312,7 @@ export interface V2FinanceAssetBreakdown {
   cashCny: DecimalString;
   supplierPrepaymentCny: DecimalString;
   giftCardInventoryCny: DecimalString;
+  customerOwnedBalanceCostCny: DecimalString;
   unsoldIdInventoryCny: DecimalString;
   supplierRefundReceivableCny: DecimalString;
   totalBookValueCny: DecimalString;

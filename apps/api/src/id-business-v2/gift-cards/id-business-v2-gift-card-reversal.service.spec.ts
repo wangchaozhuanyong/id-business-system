@@ -69,6 +69,7 @@ function makeLockedAccount(overrides: Record<string, unknown> = {}) {
     currentBalance: decimal('150'),
     balanceCostAmount: decimal('840'),
     recordStatus: 'active',
+    ownershipTransferredAt: null,
     lossReportedAt: null,
     ...overrides
   };
@@ -486,6 +487,29 @@ describe('IdBusinessV2GiftCardReversalService', () => {
       reason: '录入目标错误，需要撤回',
       operator
     });
+  });
+
+  it('reverses a customer-owned gift-card cost without changing company inventory', async () => {
+    tx.$queryRaw.mockReset();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        makeLockedAccount({ ownershipTransferredAt: new Date('2026-07-25T00:00:00.000Z') })
+      ])
+      .mockResolvedValueOnce([makeLockedGiftCard()]);
+
+    await service.reverse(giftCardId, makeDto(), operator);
+
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'customer_owned_balance_cost',
+            direction: 'credit'
+          })
+        ])
+      })
+    );
   });
 
   it('returns a matching idempotent replay without a second debit', async () => {

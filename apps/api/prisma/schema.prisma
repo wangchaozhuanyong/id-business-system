@@ -187,6 +187,7 @@ enum IdBusinessV2FinanceAccountCode {
   platform_fee
   gift_card_cost
   id_cost
+  customer_owned_balance_cost
   refund_loss
   gift_card_redemption_loss
   balance_loss
@@ -709,6 +710,7 @@ model IdBusinessV2Account {
   purchasedAt               DateTime?                   @map("purchased_at") @db.Timestamptz(6)
   soldByOrderId             String?                     @unique @map("sold_by_order_id") @db.Uuid
   soldAt                    DateTime?                   @map("sold_at") @db.Timestamptz(6)
+  ownershipTransferredAt    DateTime?                   @map("ownership_transferred_at") @db.Timestamptz(6)
   lossReportedAt            DateTime?                   @map("loss_reported_at") @db.Timestamptz(6)
   activeLossRecordId        String?                     @unique @map("active_loss_record_id") @db.Uuid
   recordStatus              IdBusinessV2RecordStatus    @default(active) @map("record_status")
@@ -747,6 +749,7 @@ model IdBusinessV2Account {
   @@index([purchaseFxSnapshotId])
   @@index([purchaseFinanceAccountId])
   @@index([purchaseSupplierAccountId])
+  @@index([ownershipTransferredAt])
   @@index([lossReportedAt])
   @@index([disabledAt])
   @@index([recordStatus, updatedAt])
@@ -1252,6 +1255,8 @@ model IdBusinessV2Order {
   accountDisposition         IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
   balanceAmount              Decimal                             @default(0) @map("balance_amount") @db.Decimal(18, 4)
   balanceCostAmount          Decimal                             @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
+  transferredBalanceCostAmount Decimal                           @default(0) @map("transferred_balance_cost_amount") @db.Decimal(18, 4)
+  appliedBalanceCostAmount   Decimal                             @default(0) @map("applied_balance_cost_amount") @db.Decimal(18, 4)
   refundCostAmount           Decimal?                            @map("refund_cost_amount") @db.Decimal(18, 4)
   profitAmount               Decimal?                            @map("profit_amount") @db.Decimal(18, 4)
   status                     IdBusinessV2OrderStatus             @default(draft)

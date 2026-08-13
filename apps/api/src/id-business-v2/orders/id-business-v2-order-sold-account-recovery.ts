@@ -21,15 +21,6 @@ export function buildSoldAccountRecoveryPreview(input: {
   activeLocks: number;
 }) {
   const blockers = [
-    ...((input.pendingAfterSalesOrders ?? 0) === 0
-      ? []
-      : [{ code: 'pending_after_sales_order' as const, message: '仍有未结束的客户已购 ID 订单' }]),
-    ...(input.activeActivations === 0
-      ? []
-      : [{ code: 'active_activation' as const, message: '仍有尚未到期的有效业务' }]),
-    ...(input.activeLocks === 0
-      ? []
-      : [{ code: 'active_lock' as const, message: '仍有活动 ID 锁' }]),
     ...(input.lossReportedAt === null
       ? []
       : [{ code: 'loss_reported' as const, message: 'ID 仍处于报损冻结状态' }])
@@ -64,7 +55,7 @@ export async function assertSoldAccountCanRecover(
   });
   if (!preview.canRecover) {
     throw new ConflictException(
-      `当前不能恢复库存归属：${preview.blockers.map((item) => item.message).join('；')}`
+      `当前不能纠正售出记录：${preview.blockers.map((item) => item.message).join('；')}`
     );
   }
   return preview;
@@ -114,12 +105,23 @@ export async function recoverIdBusinessV2SoldAccount(
       if (completionIdCost && !completionIdCost.amount.equals(order.accountCostAmount)) {
         throw new ConflictException('订单 ID 成本快照与已入账金额不一致，请先核对财务记录');
       }
+      const recoveredBalanceCost = account.ownershipTransferredAt
+        ? account.balanceCostAmount
+        : Amount4.zero();
+      const recoveredSourceTransferCost = recoveredBalanceCost.gt(
+        order.transferredBalanceCostAmount
+      )
+        ? order.transferredBalanceCostAmount
+        : recoveredBalanceCost;
+      const appliedBalanceCostAmount = order.balanceCostAmount.add(
+        order.transferredBalanceCostAmount.sub(recoveredSourceTransferCost)
+      );
       const profitAmount = consumption
         ? support.calculateProfit(
             order.receivedAmount,
             order.platformFeeAmount,
             Amount4.zero(),
-            order.balanceCostAmount,
+            appliedBalanceCostAmount,
             order.refundCostAmount
           )
         : null;
@@ -135,49 +137,33 @@ export async function recoverIdBusinessV2SoldAccount(
       await repository.updateOrder(tx, order.id, {
         accountDisposition: 'recovered',
         appliedAccountCostAmount: '0',
+        appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
         profitAmount: profitAmount?.toString() ?? null,
         updatedByUserId: operator?.id
       });
 
       const recoveredCost = completionIdCost?.amount ?? Amount4.zero();
-      const financeJournal = recoveredCost.gt(0)
-        ? await financePostingService.post(tx, {
-            journalType: 'order_recovery',
-            sourceType: 'order',
-            sourceId: order.id,
-            sourceReference: order.orderNo,
-            occurredAt: recoveredAt,
-            summary: `订单收回 ID：${order.orderNo}`,
-            metadata: {
-              reason,
-              accountId,
-              completionJournalId: completionIdCost?.journalId ?? null,
-              accountCostAmountSnapshot: order.accountCostAmount.toString()
-            },
-            idempotencyKey: `auto:order_recovery:${order.id}:${account.soldAt?.getTime() ?? 'legacy'}`,
-            operator,
-            lines: [
-              {
-                accountCode: 'id_inventory',
-                direction: 'debit',
-                currency: 'CNY',
-                amountOriginal: recoveredCost,
-                fxRateToCny: 1,
-                amountCny: recoveredCost,
-                memo: '收回已售 ID 库存成本'
+      const financeJournal =
+        recoveredCost.gt(0) || recoveredBalanceCost.gt(0)
+          ? await financePostingService.post(tx, {
+              journalType: 'order_recovery',
+              sourceType: 'order',
+              sourceId: order.id,
+              sourceReference: order.orderNo,
+              occurredAt: recoveredAt,
+              summary: `订单收回 ID：${order.orderNo}`,
+              metadata: {
+                reason,
+                accountId,
+                completionJournalId: completionIdCost?.journalId ?? null,
+                accountCostAmountSnapshot: order.accountCostAmount.toString(),
+                recoveredBalanceCostAmount: recoveredBalanceCost.toString()
               },
-              {
-                accountCode: 'id_cost',
-                direction: 'credit',
-                currency: 'CNY',
-                amountOriginal: recoveredCost,
-                fxRateToCny: 1,
-                amountCny: recoveredCost,
-                memo: '冲回已售 ID 成本'
-              }
-            ]
-          })
-        : null;
+              idempotencyKey: `auto:order_recovery:${order.id}:${account.soldAt?.getTime() ?? 'legacy'}`,
+              operator,
+              lines: buildSoldAccountRecoveryFinanceLines(recoveredCost, recoveredBalanceCost)
+            })
+          : null;
 
       await repository.appendAudit(tx, {
         userId: operator?.id,
@@ -204,6 +190,8 @@ export async function recoverIdBusinessV2SoldAccount(
           accountCostAmountSnapshot: order.accountCostAmount.toString(),
           profitAmount: profitAmount?.toString() ?? null,
           recoveredCostAmount: recoveredCost.toString(),
+          recoveredBalanceCostAmount: recoveredBalanceCost.toString(),
+          appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
           financeJournalId: financeJournal?.id ?? null,
           lockReleased: false,
           lockScopeNarrowed: lockNarrowing.changed,
@@ -225,4 +213,56 @@ export async function recoverIdBusinessV2SoldAccount(
   );
 
   return { ...result, recoveredAt: result.recoveredAt.toISOString() };
+}
+
+function buildSoldAccountRecoveryFinanceLines(
+  recoveredIdCost: Amount4,
+  recoveredBalanceCost: Amount4
+) {
+  return [
+    ...(recoveredIdCost.isZero()
+      ? []
+      : [
+          {
+            accountCode: 'id_inventory' as const,
+            direction: 'debit' as const,
+            currency: 'CNY' as const,
+            amountOriginal: recoveredIdCost,
+            fxRateToCny: 1,
+            amountCny: recoveredIdCost,
+            memo: '收回已售 ID 库存成本'
+          },
+          {
+            accountCode: 'id_cost' as const,
+            direction: 'credit' as const,
+            currency: 'CNY' as const,
+            amountOriginal: recoveredIdCost,
+            fxRateToCny: 1,
+            amountCny: recoveredIdCost,
+            memo: '冲回已售 ID 成本'
+          }
+        ]),
+    ...(recoveredBalanceCost.isZero()
+      ? []
+      : [
+          {
+            accountCode: 'gift_card_inventory' as const,
+            direction: 'debit' as const,
+            currency: 'CNY' as const,
+            amountOriginal: recoveredBalanceCost,
+            fxRateToCny: 1,
+            amountCny: recoveredBalanceCost,
+            memo: '收回客户已购 ID 当前剩余余额成本'
+          },
+          {
+            accountCode: 'customer_owned_balance_cost' as const,
+            direction: 'credit' as const,
+            currency: 'CNY' as const,
+            amountOriginal: recoveredBalanceCost,
+            fxRateToCny: 1,
+            amountCny: recoveredBalanceCost,
+            memo: '冲回客户已购 ID 余额转移成本'
+          }
+        ])
+  ];
 }

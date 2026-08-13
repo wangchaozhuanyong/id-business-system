@@ -27,7 +27,7 @@ export const ordersFeature = defineV2Feature({
       key: 'accountDisposition',
       label: 'ID 处理状态',
       kind: 'select',
-      options: ['保留 ID', '已卖出', 'ID 已退款']
+      options: ['保留 ID', '已卖出', '已恢复可用']
     },
     { key: 'openedAt', label: '开通时间', kind: 'date-range' }
   ],

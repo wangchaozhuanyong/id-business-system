@@ -51,7 +51,8 @@ export class IdBusinessV2AccountLossPostingCoordinator {
       createdAt: now
     });
 
-    const idPurchaseCostLossAmount = account.soldByOrderId ? Amount4.zero() : account.purchaseCost;
+    const customerOwned = Boolean(account.ownershipTransferredAt);
+    const idPurchaseCostLossAmount = customerOwned ? Amount4.zero() : account.purchaseCost;
     const lossRecord = await this.repository.createLossRecord(tx, {
       accountId,
       ledgerEntryId: ledgerEntry.id,
@@ -103,13 +104,13 @@ export class IdBusinessV2AccountLossPostingCoordinator {
           memo: 'ID 剩余余额成本报损'
         },
         {
-          accountCode: 'gift_card_inventory',
+          accountCode: customerOwned ? 'customer_owned_balance_cost' : 'gift_card_inventory',
           direction: 'credit',
           currency: 'CNY',
           amountOriginal: account.balanceCostAmount.toString(),
           fxRateToCny: '1',
           amountCny: account.balanceCostAmount.toString(),
-          memo: '冲减礼品卡余额资产'
+          memo: customerOwned ? '客户已购 ID 余额成本转为报损' : '冲减礼品卡余额资产'
         },
         ...(idPurchaseCostLossAmount.isZero()
           ? []

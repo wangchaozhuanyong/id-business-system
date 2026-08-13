@@ -55,10 +55,9 @@ test('after-sales integrity keeps recovered history while validating active owne
     /after_sales\.status::text IN \('draft', 'pending', 'waiting_external', 'processing'\)/
   );
   assert.match(sql, /activation\.due_at IS NULL OR activation\.due_at > CURRENT_TIMESTAMP/);
-  assert.doesNotMatch(
-    sql,
-    /OR source_order\.account_disposition::text <> 'sold'\s+OR account\.sold_by_order_id/
-  );
+  assert.match(sql, /source_order\.account_disposition::text NOT IN \('sold', 'recovered'\)/);
+  assert.match(sql, /source_order\.account_disposition::text = 'recovered'/);
+  assert.match(sql, /account\.sold_by_order_id IS NOT NULL/);
 });
 
 test('active locks allow the original sale and ownership-consistent after-sales orders', () => {

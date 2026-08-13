@@ -130,6 +130,7 @@ export class IdBusinessV2GiftCardReversalService {
           action,
           existingEntry.giftCard,
           existingEntry.costAmount,
+          Boolean(account.ownershipTransferredAt),
           reason,
           existingEntry.createdAt,
           operator
@@ -245,6 +246,7 @@ export class IdBusinessV2GiftCardReversalService {
         action,
         updatedGiftCard,
         snapshot.costAmount,
+        Boolean(account.ownershipTransferredAt),
         reason,
         ledgerEntry.createdAt,
         operator
@@ -282,6 +284,7 @@ export class IdBusinessV2GiftCardReversalService {
     action: IdBusinessV2GiftCardReversalAction,
     giftCard: { id: string; codeMasked: string },
     costAmount: Amount4,
+    customerOwned: boolean,
     reason: string,
     occurredAt: Date,
     operator?: AuthenticatedUser
@@ -308,13 +311,13 @@ export class IdBusinessV2GiftCardReversalService {
           memo: reason
         },
         {
-          accountCode: 'gift_card_inventory',
+          accountCode: customerOwned ? 'customer_owned_balance_cost' : 'gift_card_inventory',
           direction: 'credit',
           currency: 'CNY',
           amountOriginal: costAmount,
           fxRateToCny: 1,
           amountCny: costAmount,
-          memo: '冲减礼品卡余额资产'
+          memo: customerOwned ? '冲回客户已购 ID 余额转移成本' : '冲减礼品卡余额资产'
         }
       ]
     });

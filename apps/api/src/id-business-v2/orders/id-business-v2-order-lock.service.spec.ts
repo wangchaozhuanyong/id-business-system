@@ -73,6 +73,8 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     balanceCostAmount: decimal('180'),
     purchaseCost: decimal('25'),
     soldByOrderId: null,
+    soldByCustomerId: null,
+    lossReportedAt: null,
     countryOptionId: '66666666-6666-4666-8666-666666666666',
     statusCode: 'normal',
     ...overrides
@@ -136,7 +138,8 @@ describe('IdBusinessV2OrderLockService', () => {
       update: vi.fn()
     },
     idBusinessV2Order: {
-      update: vi.fn()
+      update: vi.fn(),
+      findFirst: vi.fn()
     },
     idBusinessV2BalanceLedger: {
       findUnique: vi.fn()
@@ -182,6 +185,7 @@ describe('IdBusinessV2OrderLockService', () => {
         ...data
       })
     );
+    tx.idBusinessV2Order.findFirst.mockResolvedValue(null);
     tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
@@ -442,6 +446,36 @@ describe('IdBusinessV2OrderLockService', () => {
     await expect(service.reserveAccountForOrder({ orderId, accountId, expiresAt })).rejects.toThrow(
       '该 ID 已售出，请使用客户已购 ID 模式'
     );
+  });
+
+  it('allows an existing customer-owned order to continue after its source sale was corrected', async () => {
+    const sourceSoldOrderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    tx.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce([
+        makeOrder({
+          accountId,
+          accountSource: 'customer_owned',
+          sourceSoldOrderId
+        })
+      ])
+      .mockResolvedValueOnce([makeAccount()]);
+    tx.idBusinessV2Order.findFirst.mockResolvedValueOnce({ id: sourceSoldOrderId });
+
+    await service.reserveAccountForOrder({ orderId, accountId, expiresAt }, operator);
+
+    expect(tx.idBusinessV2Order.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: sourceSoldOrderId,
+        accountId,
+        customerId: '88888888-8888-4888-8888-888888888888',
+        accountDisposition: 'recovered',
+        status: { in: ['completed', 'refunded'] },
+        deletedAt: null
+      },
+      select: { id: true }
+    });
+    expect(tx.idBusinessV2AccountLock.create).toHaveBeenCalledOnce();
   });
 
   it('maps a database unique-index race to an explicit concurrency conflict', async () => {

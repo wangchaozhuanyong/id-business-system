@@ -90,6 +90,8 @@ describe('IdBusinessV2BusinessMonitoringService', () => {
     const listSource = listSql.strings?.join(' ') ?? '';
     expect(listSource).toContain('LIMIT');
     expect(listSource).toContain('OFFSET');
+    expect(listSource).toContain("NOT IN ('sold', 'recovered')");
+    expect(listSource).toContain('account_disposition');
     expect(listSource).not.toContain('apple_id_encrypted');
     expect(listSource).not.toContain('error_message');
     expect(listSource).not.toContain('token');

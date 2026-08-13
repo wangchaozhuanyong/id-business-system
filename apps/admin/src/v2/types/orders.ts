@@ -317,7 +317,8 @@ export interface UpdateV2OrderInput {
 export interface RefundV2OrderInput {
   refundCostAmount: string;
   reason: string;
-  restoreBalance?: boolean;
+  balanceRefundMode: 'none' | 'full' | 'custom';
+  customRefundBalanceAmount?: string;
   idempotencyKey: string;
 }
 

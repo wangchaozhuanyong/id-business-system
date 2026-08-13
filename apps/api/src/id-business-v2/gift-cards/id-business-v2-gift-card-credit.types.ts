@@ -6,6 +6,7 @@ export interface LockedGiftCardCreditAccountRow {
   currentBalance: Amount4;
   balanceCostAmount: Amount4;
   soldByOrderId: string | null;
+  ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   countryName: string;

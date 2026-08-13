@@ -93,7 +93,14 @@ export class IdBusinessV2FinanceReportRepository {
             lines: {
               where: {
                 accountCode: {
-                  in: ['sales_revenue', 'platform_fee', 'gift_card_cost', 'id_cost', 'refund_loss']
+                  in: [
+                    'sales_revenue',
+                    'platform_fee',
+                    'gift_card_cost',
+                    'id_cost',
+                    'customer_owned_balance_cost',
+                    'refund_loss'
+                  ]
                 }
               },
               select: { accountCode: true, direction: true, amountCny: true }
@@ -139,29 +146,42 @@ export class IdBusinessV2FinanceReportRepository {
   }
 
   async loadAssets() {
-    const [financeAccounts, supplierWallets, accountAssets, pendingRefunds, unsoldIds] =
-      await Promise.all([
-        this.prisma.idBusinessV2FinanceAccount.findMany({
-          where: { status: 'active' },
-          select: { currency: true, currentBalance: true, currentBalanceCny: true }
-        }),
-        this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-          where: { status: 'active' },
-          select: { currency: true, currentBalance: true, currentBalanceCny: true }
-        }),
-        this.prisma.idBusinessV2Account.aggregate({
-          where: { deletedAt: null, lossReportedAt: null },
-          _sum: { balanceCostAmount: true }
-        }),
-        this.prisma.idBusinessV2GiftCard.aggregate({
-          where: { supplierRefundStatus: 'pending' },
-          _sum: { supplierRefundAmountCny: true }
-        }),
-        this.prisma.idBusinessV2Account.aggregate({
-          where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
-          _sum: { purchaseCost: true }
-        })
-      ]);
+    const [
+      financeAccounts,
+      supplierWallets,
+      accountAssets,
+      customerOwnedBalances,
+      pendingRefunds,
+      unsoldIds
+    ] = await Promise.all([
+      this.prisma.idBusinessV2FinanceAccount.findMany({
+        where: { status: 'active' },
+        select: { currency: true, currentBalance: true, currentBalanceCny: true }
+      }),
+      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
+        where: { status: 'active' },
+        select: { currency: true, currentBalance: true, currentBalanceCny: true }
+      }),
+      this.prisma.idBusinessV2Account.aggregate({
+        where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
+        _sum: { balanceCostAmount: true }
+      }),
+      this.prisma.idBusinessV2Account.aggregate({
+        where: {
+          deletedAt: null,
+          ownershipTransferredAt: { not: null }
+        },
+        _sum: { balanceCostAmount: true }
+      }),
+      this.prisma.idBusinessV2GiftCard.aggregate({
+        where: { supplierRefundStatus: 'pending' },
+        _sum: { supplierRefundAmountCny: true }
+      }),
+      this.prisma.idBusinessV2Account.aggregate({
+        where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
+        _sum: { purchaseCost: true }
+      })
+    ]);
     const mapBalance = <
       T extends {
         currency: IdBusinessV2FinanceCurrency;
@@ -182,6 +202,10 @@ export class IdBusinessV2FinanceReportRepository {
       giftCardInventory: mapAmount4(
         accountAssets._sum.balanceCostAmount ?? 0,
         'accounts.sum_balance_cost_amount'
+      ),
+      customerOwnedBalanceCost: mapAmount4(
+        customerOwnedBalances._sum.balanceCostAmount ?? 0,
+        'accounts.sum_customer_owned_balance_cost_amount'
       ),
       pendingRefunds: mapAmount4(
         pendingRefunds._sum.supplierRefundAmountCny ?? 0,
@@ -249,6 +273,7 @@ export class IdBusinessV2FinanceReportRepository {
                 'platform_fee',
                 'gift_card_cost',
                 'id_cost',
+                'customer_owned_balance_cost',
                 'refund_loss',
                 'gift_card_redemption_loss',
                 'balance_loss',
@@ -384,7 +409,7 @@ export class IdBusinessV2FinanceReportRepository {
               {
                 sourceType: 'order',
                 sourceId: { in: orderIds },
-                journalType: { in: ['order_completed', 'order_refund'] }
+                journalType: { in: ['order_completed', 'order_refund', 'historical_backfill'] }
               },
               {
                 journalType: 'reversal',
@@ -392,7 +417,9 @@ export class IdBusinessV2FinanceReportRepository {
                   is: {
                     sourceType: 'order',
                     sourceId: { in: orderIds },
-                    journalType: { in: ['order_completed', 'order_refund'] }
+                    journalType: {
+                      in: ['order_completed', 'order_refund', 'historical_backfill']
+                    }
                   }
                 }
               }

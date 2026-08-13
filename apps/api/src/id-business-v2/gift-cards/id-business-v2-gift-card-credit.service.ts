@@ -234,7 +234,13 @@ export class IdBusinessV2GiftCardCreditService {
                 operator
               })
             : null;
-        await this.postPurchaseJournal(tx, existingEntry.giftCard, supplierFunding, operator);
+        await this.postPurchaseJournal(
+          tx,
+          existingEntry.giftCard,
+          supplierFunding,
+          Boolean(account.ownershipTransferredAt),
+          operator
+        );
         await transactionHook?.({
           tx,
           accountId,
@@ -388,7 +394,13 @@ export class IdBusinessV2GiftCardCreditService {
               purchaseSupplierAccountId: supplierFunding.supplierAccountId
             }
           : giftCard;
-      await this.postPurchaseJournal(tx, journalGiftCard, supplierFunding, operator);
+      await this.postPurchaseJournal(
+        tx,
+        journalGiftCard,
+        supplierFunding,
+        Boolean(account.ownershipTransferredAt),
+        operator
+      );
       const result = toGiftCardCreditResponse(
         updatedAccount,
         journalGiftCard,
@@ -451,6 +463,7 @@ export class IdBusinessV2GiftCardCreditService {
       | 'creditedAt'
     >,
     supplierFunding: CreditResponse['supplierFunding'],
+    customerOwned: boolean,
     operator?: AuthenticatedUser
   ) {
     const purchaseOriginalAmount = giftCard.purchaseOriginalAmount;
@@ -468,14 +481,14 @@ export class IdBusinessV2GiftCardCreditService {
       operator,
       lines: [
         {
-          accountCode: 'gift_card_inventory',
+          accountCode: customerOwned ? 'customer_owned_balance_cost' : 'gift_card_inventory',
           direction: 'debit',
           currency: purchaseCurrency,
           amountOriginal: purchaseOriginalAmount,
           fxRateToCny: purchaseFxRateToCny,
           amountCny: purchaseCostAmount,
           fxRateSnapshotId: giftCard.purchaseFxSnapshotId,
-          memo: '礼品卡余额资产'
+          memo: customerOwned ? '客户已购 ID 加卡成本' : '礼品卡余额资产'
         },
         {
           accountCode: supplierFunding ? 'supplier_prepayment' : 'cash',
