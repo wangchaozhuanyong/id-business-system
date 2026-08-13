@@ -34,7 +34,7 @@
       <header>
         <V2SectionHeading
           title="资产构成"
-          help="展示自有资金、卡商预付款、余额资产、ID 库存和待卡商退款的账面人民币金额。"
+          help="资产合计只包含公司所有的资金、预付款、ID 余额、ID 库存和待退款；客户已购 ID 余额仅作备查。"
         >
           <template #actions>
             <span>共 {{ assetRows.length }} 类资产</span>
@@ -45,6 +45,12 @@
         <div v-for="item in assetRows" :key="item.label">
           <dt>{{ item.label }}</dt>
           <dd>{{ formatCny(item.value) }}</dd>
+        </div>
+      </dl>
+      <dl class="v2-finance-asset-list" aria-label="客户资产备查">
+        <div>
+          <dt>客户已购 ID 剩余余额成本（备查，含报损，不计入资产）</dt>
+          <dd>{{ formatCny(overview.assets.customerOwnedBalanceCostCny) }}</dd>
         </div>
       </dl>
     </article>

@@ -59,6 +59,7 @@ const MATCHING_ACCOUNT_SELECT = {
   currentBalance: true,
   balanceCostAmount: true,
   purchaseCost: true,
+  ownershipTransferredAt: true,
   updatedAt: true,
   countryOption: { select: { id: true, code: true, name: true } },
   statusOption: { select: { id: true, code: true, name: true } },
@@ -140,6 +141,8 @@ interface LockedOrderPersistenceRow {
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: unknown;
   balanceCostAmount: unknown;
+  transferredBalanceCostAmount: unknown;
+  appliedBalanceCostAmount: unknown;
   refundCostAmount: unknown | null;
   profitAmount: unknown | null;
   status: IdBusinessV2OrderStatus;
@@ -153,6 +156,7 @@ interface LockedAccountPersistenceRow {
   purchaseCost: unknown;
   soldByOrderId: string | null;
   soldByCustomerId: string | null;
+  ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   statusCode: string;
@@ -163,6 +167,7 @@ export interface LockedAccountForSale {
   purchaseCost: ReturnType<typeof mapAmount4>;
   soldByOrderId: string | null;
   soldAt: Date | null;
+  ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
   recordStatus: 'active' | 'disabled';
   disabledReason: string | null;
@@ -176,6 +181,8 @@ export interface LockedOrderBalanceAccount {
   appleIdMasked: string;
   currentBalance: ReturnType<typeof mapAmount4>;
   balanceCostAmount: ReturnType<typeof mapAmount4>;
+  soldByOrderId: string | null;
+  ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
 }
 
@@ -585,6 +592,7 @@ export class IdBusinessV2OrdersRepository {
       data: {
         soldByOrderId: null,
         soldAt: null,
+        ownershipTransferredAt: null,
         updatedByUserId: input.updatedByUserId
       }
     });
@@ -611,6 +619,24 @@ export class IdBusinessV2OrdersRepository {
       data: {
         soldByOrderId: input.orderId,
         soldAt: input.soldAt,
+        updatedByUserId: input.updatedByUserId
+      }
+    });
+  }
+
+  transferSoldAccountOwnership(
+    tx: V2CommandTransaction,
+    input: { accountId: string; orderId: string; transferredAt: Date; updatedByUserId?: string }
+  ) {
+    return tx.idBusinessV2Account.updateMany({
+      where: {
+        id: input.accountId,
+        soldByOrderId: input.orderId,
+        ownershipTransferredAt: null,
+        lossReportedAt: null
+      },
+      data: {
+        ownershipTransferredAt: input.transferredAt,
         updatedByUserId: input.updatedByUserId
       }
     });
@@ -1052,6 +1078,8 @@ export class IdBusinessV2OrdersRepository {
         "account_disposition" AS "accountDisposition",
         "balance_amount" AS "balanceAmount",
         "balance_cost_amount" AS "balanceCostAmount",
+        "transferred_balance_cost_amount" AS "transferredBalanceCostAmount",
+        "applied_balance_cost_amount" AS "appliedBalanceCostAmount",
         "refund_cost_amount" AS "refundCostAmount",
         "profit_amount" AS "profitAmount",
         "status"
@@ -1074,6 +1102,7 @@ export class IdBusinessV2OrdersRepository {
         account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
         sold_order."customer_id" AS "soldByCustomerId",
+        account."ownership_transferred_at" AS "ownershipTransferredAt",
         account."loss_reported_at" AS "lossReportedAt",
         account."country_option_id" AS "countryOptionId",
         status."code" AS "statusCode"
@@ -1143,6 +1172,23 @@ export class IdBusinessV2OrdersRepository {
     return { pendingAfterSalesOrders, activeActivations, activeLocks };
   }
 
+  async findRecoveredCustomerOwnedSource(
+    tx: V2CommandTransaction,
+    input: { sourceOrderId: string; accountId: string; customerId: string }
+  ) {
+    return tx.idBusinessV2Order.findFirst({
+      where: {
+        id: input.sourceOrderId,
+        accountId: input.accountId,
+        customerId: input.customerId,
+        accountDisposition: 'recovered',
+        status: { in: ['completed', 'refunded'] },
+        deletedAt: null
+      },
+      select: { id: true }
+    });
+  }
+
   async findPostedOrderCompletionIdCost(tx: V2CommandTransaction, orderId: string) {
     const journal = await tx.idBusinessV2FinanceJournal.findFirst({
       where: {
@@ -1196,6 +1242,8 @@ export class IdBusinessV2OrdersRepository {
         appleIdMasked: string;
         currentBalance: unknown;
         balanceCostAmount: unknown;
+        soldByOrderId: string | null;
+        ownershipTransferredAt: Date | null;
         lossReportedAt: Date | null;
       }>
     >`
@@ -1204,6 +1252,8 @@ export class IdBusinessV2OrdersRepository {
         "apple_id_masked" AS "appleIdMasked",
         "current_balance" AS "currentBalance",
         "balance_cost_amount" AS "balanceCostAmount",
+        "sold_by_order_id" AS "soldByOrderId",
+        "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE "id" = CAST(${accountId} AS UUID) AND "deleted_at" IS NULL
@@ -1236,6 +1286,7 @@ export async function lockAccountForSale(
       purchaseCost: unknown;
       soldByOrderId: string | null;
       soldAt: Date | null;
+      ownershipTransferredAt: Date | null;
       lossReportedAt: Date | null;
       recordStatus: 'active' | 'disabled';
       disabledReason: string | null;
@@ -1249,6 +1300,7 @@ export async function lockAccountForSale(
         "purchase_cost" AS "purchaseCost",
         "sold_by_order_id" AS "soldByOrderId",
         "sold_at" AS "soldAt",
+        "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt",
         "record_status" AS "recordStatus",
         "disabled_reason" AS "disabledReason",
@@ -1313,6 +1365,14 @@ function mapLockedOrder(row: LockedOrderPersistenceRow): LockedOrderRow {
       row.balanceCostAmount,
       'id_business_v2_orders.balance_cost_amount'
     ),
+    transferredBalanceCostAmount: mapAmount4(
+      row.transferredBalanceCostAmount ?? 0,
+      'id_business_v2_orders.transferred_balance_cost_amount'
+    ),
+    appliedBalanceCostAmount: mapAmount4(
+      row.appliedBalanceCostAmount ?? 0,
+      'id_business_v2_orders.applied_balance_cost_amount'
+    ),
     refundCostAmount: mapOptionalAmount4(
       row.refundCostAmount,
       'id_business_v2_orders.refund_cost_amount'
@@ -1370,6 +1430,14 @@ function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
     balanceCostAmount: mapAmount4(
       row.balanceCostAmount,
       'id_business_v2_orders.balance_cost_amount'
+    ),
+    transferredBalanceCostAmount: mapAmount4(
+      row.transferredBalanceCostAmount ?? 0,
+      'id_business_v2_orders.transferred_balance_cost_amount'
+    ),
+    appliedBalanceCostAmount: mapAmount4(
+      row.appliedBalanceCostAmount ?? 0,
+      'id_business_v2_orders.applied_balance_cost_amount'
     ),
     refundCostAmount: mapOptionalAmount4(
       row.refundCostAmount,

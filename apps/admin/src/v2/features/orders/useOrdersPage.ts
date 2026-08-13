@@ -294,10 +294,14 @@ export function useOrdersPage() {
     const order = refundingOrder.value;
     if (!order || !canUpdateOrders.value) return;
 
-    if (payload.restoreBalance) {
+    if (payload.balanceRefundMode !== 'none') {
+      const refundBalanceDescription =
+        payload.balanceRefundMode === 'full'
+          ? `原消费余额 ${formatDecimal(order.balanceAmount)}`
+          : `自定义余额 ${formatDecimal(payload.customRefundBalanceAmount ?? '0')}`;
       try {
         await ElMessageBox.confirm(
-          '该操作会按原消费流水真实增加 ID 余额并恢复余额成本，请确认余额已实际退回。',
+          `该操作会向 ID 退回${refundBalanceDescription}，并按原消费流水恢复对应人民币成本。请确认余额已实际退回。`,
           `确认处理订单 ${order.orderNo} 的退款`,
           {
             type: 'warning',
@@ -326,10 +330,10 @@ export function useOrdersPage() {
           ? '已恢复原退款处理结果'
           : order.accountDisposition === 'sold'
             ? result.balanceRestored
-              ? '订单已全额退款，ID 已恢复可用，原消费余额已恢复'
+              ? `订单已全额退款，ID 已恢复可用，已退回 ${formatDecimal(result.reversalLedger?.balanceAmount ?? '0')} ID 余额`
               : '订单已全额退款，ID 已恢复可用，当前余额保持不变'
             : result.balanceRestored
-              ? '订单已全额退款，原消费余额已恢复'
+              ? `订单已全额退款，已退回 ${formatDecimal(result.reversalLedger?.balanceAmount ?? '0')} ID 余额`
               : '订单已全额退款，ID 当前余额保持不变'
       );
       await loadOrders();

@@ -26,6 +26,7 @@ const EXPENSE_CODES = [
   'platform_fee',
   'gift_card_cost',
   'id_cost',
+  'customer_owned_balance_cost',
   'refund_loss',
   'gift_card_redemption_loss',
   'balance_loss',
@@ -96,6 +97,9 @@ export class IdBusinessV2FinanceReportsService {
       platformFeeCny: (values.get('platform_fee') ?? Amount4.zero()).toString(),
       giftCardCostCny: (values.get('gift_card_cost') ?? Amount4.zero()).toString(),
       idCostCny: (values.get('id_cost') ?? Amount4.zero()).toString(),
+      customerOwnedBalanceCostCny: (
+        values.get('customer_owned_balance_cost') ?? Amount4.zero()
+      ).toString(),
       refundLossCny: (values.get('refund_loss') ?? Amount4.zero()).toString(),
       redemptionLossCny: (values.get('gift_card_redemption_loss') ?? Amount4.zero()).toString(),
       balanceLossCny: (values.get('balance_loss') ?? Amount4.zero()).toString(),
@@ -186,7 +190,14 @@ export class IdBusinessV2FinanceReportsService {
   }
   async assets() {
     const [
-      { financeAccounts, supplierWallets, giftCardInventory, pendingRefunds, unsoldIds },
+      {
+        financeAccounts,
+        supplierWallets,
+        giftCardInventory,
+        customerOwnedBalanceCost,
+        pendingRefunds,
+        unsoldIds
+      },
       latestRates
     ] = await Promise.all([this.repository.loadAssets(), this.loadLatestRates()]);
     const cashBook = financeAccounts.reduce(
@@ -216,6 +227,7 @@ export class IdBusinessV2FinanceReportsService {
       cashCny: cashBook.toString(),
       supplierPrepaymentCny: supplierBook.toString(),
       giftCardInventoryCny: giftCardInventory.toString(),
+      customerOwnedBalanceCostCny: customerOwnedBalanceCost.toString(),
       unsoldIdInventoryCny: idInventory.toString(),
       supplierRefundReceivableCny: refundReceivable.toString(),
       totalBookValueCny: totalBook.toString(),

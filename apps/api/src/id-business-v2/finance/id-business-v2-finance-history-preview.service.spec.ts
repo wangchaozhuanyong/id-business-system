@@ -69,9 +69,9 @@ describe('IdBusinessV2FinanceHistoryPreviewService', () => {
       { id: 'card-withdrawn-zero', status: 'withdrawn', costAmount: decimal('0') }
     ]);
     prisma.idBusinessV2Account.count.mockResolvedValue(2);
-    prisma.idBusinessV2Account.aggregate.mockImplementation(({ where }) =>
+    prisma.idBusinessV2Account.aggregate.mockImplementation(({ _sum }) =>
       Promise.resolve(
-        where.soldByOrderId === null
+        _sum.purchaseCost
           ? { _sum: { purchaseCost: decimal('2.5') } }
           : { _sum: { balanceCostAmount: decimal(giftCardInventoryAmount) } }
       )

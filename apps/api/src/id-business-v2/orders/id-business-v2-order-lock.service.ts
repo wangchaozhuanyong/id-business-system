@@ -325,11 +325,23 @@ export class IdBusinessV2OrderLockService {
       throw new ConflictException('只有状态正常的 ID 才能锁定或扣减余额');
     }
     if (order.accountSource === 'customer_owned') {
-      if (
-        !order.sourceSoldOrderId ||
-        account.soldByOrderId !== order.sourceSoldOrderId ||
-        account.soldByCustomerId !== order.customerId
-      ) {
+      if (!order.sourceSoldOrderId) {
+        throw new ConflictException('该 ID 不属于当前客户或原销售归属已变更');
+      }
+      const ownedByCurrentSale =
+        account.ownershipTransferredAt !== null &&
+        account.soldByOrderId === order.sourceSoldOrderId &&
+        account.soldByCustomerId === order.customerId;
+      const ownedByRecoveredSale =
+        account.soldByOrderId === null &&
+        Boolean(
+          await this.repository.findRecoveredCustomerOwnedSource(tx, {
+            sourceOrderId: order.sourceSoldOrderId,
+            accountId: account.id,
+            customerId: order.customerId
+          })
+        );
+      if (!ownedByCurrentSale && !ownedByRecoveredSale) {
         throw new ConflictException('该 ID 不属于当前客户或原销售归属已变更');
       }
     } else if (account.soldByOrderId && account.soldByOrderId !== order.id) {

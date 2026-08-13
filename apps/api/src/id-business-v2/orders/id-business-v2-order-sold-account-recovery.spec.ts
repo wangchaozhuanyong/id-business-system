@@ -1,4 +1,3 @@
-import { ConflictException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { Amount4 } from '../runtime/public-api';
 import {
@@ -23,6 +22,7 @@ function makeAccount() {
     purchaseCost: Amount4.from('25'),
     soldByOrderId: orderId,
     soldAt: new Date('2026-08-01T00:00:00.000Z'),
+    ownershipTransferredAt: new Date('2026-08-02T00:00:00.000Z'),
     lossReportedAt: null,
     recordStatus: 'active' as const,
     disabledReason: null,
@@ -44,58 +44,71 @@ function makeOrder() {
     receivedAmount: Amount4.from('100'),
     platformFeeAmount: Amount4.from('3'),
     balanceCostAmount: Amount4.from('40'),
+    transferredBalanceCostAmount: Amount4.from('12'),
+    appliedBalanceCostAmount: Amount4.from('52'),
     refundCostAmount: null,
     profitAmount: Amount4.from('32')
   };
 }
 
 describe('sold account recovery', () => {
-  it('returns every blocking reason needed by the recovery dialog', () => {
+  it('reports related business counts without treating them as correction blockers', () => {
     expect(
       buildSoldAccountRecoveryPreview({
         currentBalance: Amount4.from('1'),
         balanceCostAmount: Amount4.from('2'),
-        lossReportedAt: new Date('2026-08-02T00:00:00.000Z'),
+        lossReportedAt: null,
         recordStatus: 'disabled',
         pendingAfterSalesOrders: 1,
         activeActivations: 2,
         activeLocks: 3
       })
     ).toMatchObject({
-      canRecover: false,
+      canRecover: true,
       recordStatus: 'disabled',
-      blockers: [
-        { code: 'pending_after_sales_order' },
-        { code: 'active_activation' },
-        { code: 'active_lock' },
-        { code: 'loss_reported' }
-      ]
+      counts: { pendingAfterSalesOrders: 1, activeActivations: 2, activeLocks: 3 },
+      blockers: []
     });
   });
 
-  it('rechecks blockers in the transaction and leaves ownership unchanged on conflict', async () => {
+  it('keeps loss reporting as the only correction blocker', () => {
+    expect(
+      buildSoldAccountRecoveryPreview({
+        currentBalance: Amount4.zero(),
+        balanceCostAmount: Amount4.zero(),
+        lossReportedAt: new Date('2026-08-02T00:00:00.000Z'),
+        recordStatus: 'active',
+        pendingAfterSalesOrders: 0,
+        activeActivations: 0,
+        activeLocks: 0
+      })
+    ).toMatchObject({ canRecover: false, blockers: [{ code: 'loss_reported' }] });
+  });
+
+  it('rechecks related business in the transaction without blocking correction', async () => {
     const { support, orderLockService, financePostingService, repository } = makeDependencies();
     repository.findSoldAccountRecoveryBlockers.mockResolvedValue({
       pendingAfterSalesOrders: 1,
-      activeActivations: 0,
-      activeLocks: 0
+      activeActivations: 1,
+      activeLocks: 1
     });
 
-    await expect(
-      recoverIdBusinessV2SoldAccount(
-        support as never,
-        orderLockService as never,
-        financePostingService as never,
-        repository as never,
-        orderId,
-        { accountId, reason: '客户退回并已核对' },
-        operator
-      )
-    ).rejects.toBeInstanceOf(ConflictException);
+    await recoverIdBusinessV2SoldAccount(
+      support as never,
+      orderLockService as never,
+      financePostingService as never,
+      repository as never,
+      orderId,
+      { accountId, reason: '员工误操作并已核对' },
+      operator
+    );
 
-    expect(repository.releaseSoldAccount).not.toHaveBeenCalled();
-    expect(repository.updateOrder).not.toHaveBeenCalled();
-    expect(financePostingService.post).not.toHaveBeenCalled();
+    expect(repository.releaseSoldAccount).toHaveBeenCalledOnce();
+    expect(repository.updateOrder).toHaveBeenCalledWith(
+      expect.anything(),
+      orderId,
+      expect.objectContaining({ accountDisposition: 'recovered' })
+    );
   });
 
   it('recovers ownership and reverses the ID cost exactly once after all checks pass', async () => {
@@ -120,14 +133,15 @@ describe('sold account recovery', () => {
       orderId,
       expect.objectContaining({
         accountDisposition: 'recovered',
-        appliedAccountCostAmount: '0'
+        appliedAccountCostAmount: '0',
+        appliedBalanceCostAmount: '40'
       })
     );
     expect(financePostingService.post).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         journalType: 'order_recovery',
-        lines: [
+        lines: expect.arrayContaining([
           expect.objectContaining({
             accountCode: 'id_inventory',
             direction: 'debit',
@@ -137,8 +151,18 @@ describe('sold account recovery', () => {
             accountCode: 'id_cost',
             direction: 'credit',
             amountCny: Amount4.from('25')
+          }),
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            direction: 'debit',
+            amountCny: Amount4.from('12')
+          }),
+          expect.objectContaining({
+            accountCode: 'customer_owned_balance_cost',
+            direction: 'credit',
+            amountCny: Amount4.from('12')
           })
-        ]
+        ])
       })
     );
     expect(orderLockService.releaseOrderLockInTransaction).not.toHaveBeenCalled();

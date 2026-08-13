@@ -4,7 +4,7 @@ import type { IdBusinessV2Order } from '@prisma/client';
 import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { V2CommandTransactionManager } from '../runtime/public-api';
+import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderLifecycleService } from './id-business-v2-order-lifecycle.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
@@ -14,6 +14,7 @@ const serviceId = '33333333-3333-4333-8333-333333333333';
 const accountId = '44444444-4444-4444-8444-444444444444';
 const platformId = '55555555-5555-4555-8555-555555555555';
 const consumptionId = '77777777-7777-4777-8777-777777777777';
+const sourceOrderId = '99999999-9999-4999-8999-999999999999';
 const operator = {
   id: '66666666-6666-4666-8666-666666666666',
   username: 'admin',
@@ -55,8 +56,13 @@ function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
     platformFeeAmount: decimal('3'),
     accountDisposition: 'retained',
     accountCostAmount: decimal('25'),
+    appliedAccountCostAmount: decimal('0'),
+    accountSource: 'inventory',
+    sourceSoldOrderId: null,
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('60'),
+    transferredBalanceCostAmount: decimal('0'),
+    appliedBalanceCostAmount: decimal('60'),
     refundCostAmount: null,
     profitAmount: decimal('37'),
     status: 'processing',
@@ -120,6 +126,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     $queryRaw: vi.fn(),
     idBusinessV2Order: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       update: vi.fn(),
       count: vi.fn()
     },
@@ -201,6 +208,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
             balanceCostAmount: decimal(isSold ? '0' : '30'),
             purchaseCost: decimal('25'),
             soldByOrderId: isSold ? orderId : null,
+            soldAt: isSold ? updatedAt : null,
+            ownershipTransferredAt: isSold ? updatedAt : null,
             lossReportedAt: null
           }
         ];
@@ -208,6 +217,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       return [{ id: orderId }];
     });
     tx.idBusinessV2Order.findUnique.mockImplementation(async () => storedOrder);
+    tx.idBusinessV2Order.findFirst.mockResolvedValue(null);
     tx.idBusinessV2Order.update.mockImplementation(async ({ data }) => {
       storedOrder = {
         ...storedOrder,
@@ -617,6 +627,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       data: {
         soldByOrderId: null,
         soldAt: null,
+        ownershipTransferredAt: null,
         updatedByUserId: operator.id
       }
     });
@@ -676,6 +687,85 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     );
     expect(result.balanceRestored).toBe(true);
     expect(result.reversalLedger?.reversalOfEntryId).toBe(consumptionId);
+  });
+
+  it('restores company inventory when a consumed after-sales order is cancelled after sale correction', async () => {
+    storedOrder = makeOrder({
+      accountSource: 'customer_owned',
+      sourceSoldOrderId: sourceOrderId,
+      appliedBalanceCostAmount: decimal('0')
+    });
+    let sourceOrder = makeOrder({
+      id: sourceOrderId,
+      status: 'completed',
+      accountDisposition: 'recovered',
+      accountSource: 'inventory',
+      sourceSoldOrderId: null,
+      appliedAccountCostAmount: decimal('0'),
+      appliedBalanceCostAmount: decimal('120'),
+      profitAmount: decimal('-23')
+    });
+    tx.idBusinessV2Order.findUnique.mockImplementation(async ({ where }) =>
+      where.id === sourceOrderId ? sourceOrder : storedOrder
+    );
+    tx.idBusinessV2Order.findFirst.mockResolvedValue({ id: sourceOrderId });
+    tx.idBusinessV2Order.update.mockImplementation(async ({ where, data }) => {
+      if (where.id === sourceOrderId) {
+        sourceOrder = { ...sourceOrder, ...data };
+        return sourceOrder;
+      }
+      storedOrder = { ...storedOrder, ...data };
+      return storedOrder;
+    });
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('id_business_v2_accounts')) {
+        return [
+          {
+            id: accountId,
+            appleIdMasked: 'us***@example.com',
+            currentBalance: decimal('10'),
+            balanceCostAmount: decimal('30'),
+            purchaseCost: decimal('25'),
+            soldByOrderId: null,
+            soldAt: null,
+            ownershipTransferredAt: null,
+            lossReportedAt: null
+          }
+        ];
+      }
+      return [{ id: orderId }];
+    });
+
+    await service.cancel(
+      orderId,
+      {
+        reason: '原出售已纠正，取消未开通售后单',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(sourceOrder.appliedBalanceCostAmount.toString()).toBe('60');
+    expect(storedOrder.appliedBalanceCostAmount.toString()).toBe('0');
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        journalType: 'order_cancel',
+        lines: [
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            direction: 'debit',
+            amountCny: Amount4.from('60')
+          }),
+          expect.objectContaining({
+            accountCode: 'customer_owned_balance_cost',
+            direction: 'credit',
+            amountCny: Amount4.from('60')
+          })
+        ]
+      })
+    );
   });
 
   it('does not cancel an order that already has an activation', async () => {
@@ -774,6 +864,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       status: 'completed',
       accountDisposition: 'sold',
       accountCostAmount: decimal('25'),
+      appliedAccountCostAmount: decimal('25'),
       profitAmount: decimal('12')
     });
     tx.idBusinessV2Activation.findUnique.mockResolvedValue({
@@ -782,6 +873,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       statusChangedAt: openedAt,
       remark: null
     });
+    tx.idBusinessV2Order.count.mockResolvedValue(2);
+    tx.idBusinessV2Activation.count.mockResolvedValue(1);
+    tx.idBusinessV2AccountLock.count.mockResolvedValue(1);
 
     await service.refund(
       orderId,
@@ -816,6 +910,9 @@ describe('IdBusinessV2OrderLifecycleService', () => {
         ])
       })
     );
+    expect(tx.idBusinessV2Order.count).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Activation.count).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2AccountLock.count).not.toHaveBeenCalled();
   });
 
   it('restores balance from the exact consumption ledger when explicitly confirmed', async () => {
@@ -841,6 +938,215 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     expect(storedOrder.balanceCostAmount.toString()).toBe('0');
     expect(storedOrder.profitAmount?.toString()).toBe('-103');
     expect(tx.idBusinessV2Activation.update).toHaveBeenCalled();
+  });
+
+  it('refunds a custom amount to the ID balance with proportional CNY cost', async () => {
+    storedOrder = makeOrder({ status: 'completed' });
+
+    const result = await service.refund(
+      orderId,
+      {
+        refundCostAmount: '100',
+        reason: '部分余额实际退回',
+        balanceRefundMode: 'custom',
+        customRefundBalanceAmount: '8',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(result.balanceRestored).toBe(true);
+    expect(result.reversalLedger).toMatchObject({
+      balanceAmount: '8',
+      costAmount: '24'
+    });
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
+      where: { id: accountId },
+      data: {
+        currentBalance: '18',
+        balanceCostAmount: '54',
+        updatedByUserId: operator.id
+      }
+    });
+    expect(storedOrder.balanceCostAmount.toString()).toBe('36');
+    expect(storedOrder.profitAmount?.toString()).toBe('-139');
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          balanceRefundMode: 'custom',
+          refundedBalanceAmount: '8',
+          restoredBalanceCostAmount: '24'
+        }),
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            amountCny: Amount4.from('24')
+          })
+        ])
+      })
+    );
+  });
+
+  it('returns restored after-sales balance cost to company inventory after the sale was corrected', async () => {
+    storedOrder = makeOrder({
+      status: 'completed',
+      accountSource: 'customer_owned',
+      sourceSoldOrderId: sourceOrderId,
+      balanceCostAmount: decimal('60'),
+      appliedBalanceCostAmount: decimal('0'),
+      profitAmount: decimal('97')
+    });
+    let sourceOrder = makeOrder({
+      id: sourceOrderId,
+      orderNo: 'V220260726SOLD001',
+      status: 'completed',
+      accountDisposition: 'recovered',
+      accountSource: 'inventory',
+      sourceSoldOrderId: null,
+      balanceCostAmount: decimal('60'),
+      transferredBalanceCostAmount: decimal('60'),
+      appliedBalanceCostAmount: decimal('80'),
+      profitAmount: decimal('17')
+    });
+    tx.$queryRaw
+      .mockResolvedValueOnce([{ id: orderId }])
+      .mockResolvedValueOnce([{ id: sourceOrderId }])
+      .mockResolvedValueOnce([
+        {
+          id: accountId,
+          appleIdMasked: 'us***@example.com',
+          currentBalance: decimal('0'),
+          balanceCostAmount: decimal('0'),
+          soldByOrderId: null,
+          ownershipTransferredAt: null,
+          lossReportedAt: null
+        }
+      ]);
+    tx.idBusinessV2Order.findUnique.mockImplementation(async ({ where }) =>
+      where.id === sourceOrderId ? sourceOrder : storedOrder
+    );
+    tx.idBusinessV2Order.findFirst.mockResolvedValue({ id: sourceOrderId });
+    tx.idBusinessV2Order.update.mockImplementation(async ({ where, data }) => {
+      if (where.id === sourceOrderId) {
+        sourceOrder = makeOrder({ ...sourceOrder, ...data, id: sourceOrderId });
+        return sourceOrder;
+      }
+      storedOrder = makeOrder({ ...storedOrder, ...data });
+      return storedOrder;
+    });
+
+    await service.refund(
+      orderId,
+      {
+        refundCostAmount: '0',
+        reason: '后续业务退款并恢复余额',
+        balanceRefundMode: 'full',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(sourceOrder.appliedBalanceCostAmount.toString()).toBe('60');
+    expect(sourceOrder.profitAmount?.toString()).toBe('37');
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'id_business_v2.order.restore_recovered_balance_cost',
+        objectId: sourceOrderId
+      })
+    });
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          restoredAppliedBalanceCostAmount: '0',
+          restoredCustomerOwnedBalanceCostAmount: '60',
+          restoredSourceOrderId: sourceOrderId,
+          restoredSourceOrderCostAmount: '20'
+        }),
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'gift_card_inventory',
+            direction: 'debit',
+            amountCny: Amount4.from('60')
+          }),
+          expect.objectContaining({
+            accountCode: 'customer_owned_balance_cost',
+            direction: 'credit',
+            amountCny: Amount4.from('60')
+          })
+        ])
+      })
+    );
+  });
+
+  it('rejects restoring after-sales balance after the ID has been resold', async () => {
+    const resaleOrderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    storedOrder = makeOrder({
+      status: 'completed',
+      accountSource: 'customer_owned',
+      sourceSoldOrderId: sourceOrderId,
+      appliedBalanceCostAmount: decimal('0')
+    });
+    const sourceOrder = makeOrder({
+      id: sourceOrderId,
+      accountDisposition: 'recovered',
+      status: 'completed'
+    });
+    tx.$queryRaw
+      .mockResolvedValueOnce([{ id: orderId }])
+      .mockResolvedValueOnce([{ id: sourceOrderId }])
+      .mockResolvedValueOnce([
+        {
+          id: accountId,
+          appleIdMasked: 'us***@example.com',
+          currentBalance: decimal('10'),
+          balanceCostAmount: decimal('30'),
+          soldByOrderId: resaleOrderId,
+          ownershipTransferredAt: updatedAt,
+          lossReportedAt: null
+        }
+      ]);
+    tx.idBusinessV2Order.findUnique.mockImplementation(async ({ where }) =>
+      where.id === sourceOrderId ? sourceOrder : storedOrder
+    );
+
+    await expect(
+      service.refund(
+        orderId,
+        {
+          refundCostAmount: '0',
+          reason: '旧客户业务退款',
+          balanceRefundMode: 'full',
+          idempotencyKey: 'lifecycle-key-1'
+        },
+        operator
+      )
+    ).rejects.toThrow('该 ID 已转售或归属已变化，订单只能退款，不能恢复 ID 余额');
+
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects a custom ID balance refund above the original consumption', async () => {
+    storedOrder = makeOrder({ status: 'completed' });
+
+    await expect(
+      service.refund(
+        orderId,
+        {
+          refundCostAmount: '0',
+          reason: '输入错误',
+          balanceRefundMode: 'custom',
+          customRefundBalanceAmount: '20.0001',
+          idempotencyKey: 'lifecycle-key-1'
+        },
+        operator
+      )
+    ).rejects.toThrow('退回 ID 余额不能超过本单原消费余额');
+
+    expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
   });
 
   it('returns an exact refund replay without writing a second reversal', async () => {

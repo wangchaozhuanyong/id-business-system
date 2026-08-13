@@ -183,6 +183,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         currentBalance: decimal('20'),
         balanceCostAmount: decimal('50'),
         soldByOrderId: null,
+        ownershipTransferredAt: null,
         lossReportedAt: null,
         countryOptionId,
         countryName: '美国',
@@ -423,7 +424,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
     expect(result.supplierFunding).toBeNull();
   });
 
-  it('credits an active sold ID and keeps the gift-card cost in balance inventory', async () => {
+  it('credits a customer-owned sold ID without adding the cost to company inventory', async () => {
     tx.$queryRaw.mockResolvedValueOnce([
       {
         id: accountId,
@@ -431,6 +432,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         currentBalance: decimal('20'),
         balanceCostAmount: decimal('50'),
         soldByOrderId,
+        ownershipTransferredAt: new Date('2026-07-25T00:00:00.000Z'),
         lossReportedAt: null,
         countryOptionId,
         countryName: '美国',
@@ -469,7 +471,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         journalType: 'gift_card_purchase',
         lines: expect.arrayContaining([
           expect.objectContaining({
-            accountCode: 'gift_card_inventory',
+            accountCode: 'customer_owned_balance_cost',
             direction: 'debit'
           })
         ])

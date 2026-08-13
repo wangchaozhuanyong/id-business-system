@@ -111,6 +111,7 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     platform_fee: '平台手续费',
     gift_card_cost: '余额销售成本',
     id_cost: 'ID 销售成本',
+    customer_owned_balance_cost: '客户已购 ID 余额转移成本',
     refund_loss: '退款损失',
     gift_card_redemption_loss: '礼品卡赎回损失',
     balance_loss: 'ID 余额报损',

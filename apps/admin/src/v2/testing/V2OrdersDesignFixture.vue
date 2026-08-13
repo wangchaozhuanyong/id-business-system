@@ -60,6 +60,13 @@
         </div>
       </main>
     </div>
+
+    <V2OrderRefundDialog
+      v-model="refundDialogVisible"
+      :order="refundOrder"
+      :saving="false"
+      @submit="notice = '预览操作：退款表单校验通过。'"
+    />
   </div>
 </template>
 
@@ -78,6 +85,7 @@ import {
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import V2OrdersList from '@/v2/features/orders/components/V2OrdersList.vue';
 import V2OrdersOverview from '@/v2/features/orders/components/V2OrdersOverview.vue';
+import V2OrderRefundDialog from '@/v2/features/orders/components/V2OrderRefundDialog.vue';
 import V2OrdersToolbar from '@/v2/features/orders/components/V2OrdersToolbar.vue';
 import type { useOrdersPage } from '@/v2/features/orders/useOrdersPage';
 import {
@@ -256,11 +264,14 @@ function makeOrder(index: number): V2Order {
   };
 }
 
-const emptyState = new URLSearchParams(window.location.search).get('state') === 'empty';
+const fixtureParams = new URLSearchParams(window.location.search);
+const emptyState = fixtureParams.get('state') === 'empty';
 const allOrders: V2Order[] = emptyState
   ? []
   : Array.from({ length: 23 }, (_, index) => makeOrder(index));
 const notice = ref('');
+const refundOrder = allOrders.find((order) => order.status === 'completed') ?? null;
+const refundDialogVisible = ref(fixtureParams.get('refundDialog') === 'open');
 
 const page = reactive({
   statusOptions,

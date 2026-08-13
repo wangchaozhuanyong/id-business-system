@@ -43,11 +43,15 @@
           <dd class="is-positive">{{ formatCny(overview.profitLoss.salesRevenueCny) }}</dd>
         </div>
         <div>
-          <dt>余额与 ID 销售成本</dt>
+          <dt>余额、ID 与客户资产转移成本</dt>
           <dd>
             {{
               formatCny(
-                addAmounts(overview.profitLoss.giftCardCostCny, overview.profitLoss.idCostCny)
+                addAmounts(
+                  overview.profitLoss.giftCardCostCny,
+                  overview.profitLoss.idCostCny,
+                  overview.profitLoss.customerOwnedBalanceCostCny
+                )
               )
             }}
           </dd>

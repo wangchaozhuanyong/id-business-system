@@ -6,7 +6,7 @@ import type {
   IdBusinessV2Order
 } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { V2CommandTransactionManager } from '../runtime/public-api';
+import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
@@ -55,6 +55,8 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     sourceSoldOrderId: null,
     balanceAmount: decimal('20'),
     balanceCostAmount: decimal('60'),
+    transferredBalanceCostAmount: decimal('0'),
+    appliedBalanceCostAmount: decimal('60'),
     refundCostAmount: null,
     profitAmount: decimal('37'),
     status: 'processing',
@@ -139,6 +141,9 @@ describe('IdBusinessV2OrderCompletionService', () => {
     idBusinessV2AccountLock: {
       updateMany: vi.fn()
     },
+    idBusinessV2Account: {
+      updateMany: vi.fn()
+    },
     auditLog: {
       create: vi.fn()
     }
@@ -171,7 +176,27 @@ describe('IdBusinessV2OrderCompletionService', () => {
     reversal = null;
     activation = null;
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
-    tx.$queryRaw.mockResolvedValue([{ id: orderId }]);
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('id_business_v2_accounts')) {
+        return [
+          {
+            id: accountId,
+            purchaseCost: decimal('25'),
+            soldByOrderId: orderId,
+            soldAt: openedAt,
+            ownershipTransferredAt: null,
+            lossReportedAt: null,
+            recordStatus: 'active',
+            disabledReason: null,
+            disabledAt: null,
+            currentBalance: decimal('10'),
+            balanceCostAmount: decimal('30')
+          }
+        ];
+      }
+      return [{ id: orderId }];
+    });
     tx.idBusinessV2Order.findUnique.mockImplementation(async () => order);
     tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
       return where.orderId_entryType.entryType === 'order_consumption' ? consumption : reversal;
@@ -182,6 +207,7 @@ describe('IdBusinessV2OrderCompletionService', () => {
       return activation;
     });
     tx.idBusinessV2AccountLock.updateMany.mockResolvedValue({ count: 1 });
+    tx.idBusinessV2Account.updateMany.mockResolvedValue({ count: 1 });
     tx.idBusinessV2Order.update.mockImplementation(async ({ data }) => {
       order = makeOrder({
         ...order,
@@ -230,6 +256,23 @@ describe('IdBusinessV2OrderCompletionService', () => {
       }
     });
     expect(tx.auditLog.create).toHaveBeenCalled();
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'gift_card_cost',
+            direction: 'debit',
+            amountCny: Amount4.from('60')
+          }),
+          expect.objectContaining({
+            accountCode: 'customer_owned_balance_cost',
+            direction: 'debit',
+            amountCny: Amount4.from('30')
+          })
+        ])
+      })
+    );
     expect(result).toMatchObject({
       order: {
         id: orderId,

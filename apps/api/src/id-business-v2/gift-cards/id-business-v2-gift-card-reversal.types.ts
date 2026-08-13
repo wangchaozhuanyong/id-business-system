@@ -5,6 +5,7 @@ export interface LockedGiftCardReversalAccountRow {
   appleIdMasked: string;
   currentBalance: Amount4;
   balanceCostAmount: Amount4;
+  ownershipTransferredAt: Date | null;
   recordStatus: string;
   lossReportedAt: Date | null;
 }

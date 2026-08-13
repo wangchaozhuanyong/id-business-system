@@ -144,13 +144,17 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
             operator,
             lines: [
               {
-                accountCode: 'gift_card_inventory',
+                accountCode: locked.ownershipTransferredAt
+                  ? 'customer_owned_balance_cost'
+                  : 'gift_card_inventory',
                 direction: costDelta.gt(0) ? 'debit' : 'credit',
                 currency: 'CNY',
                 amountOriginal: amount,
                 fxRateToCny: 1,
                 amountCny: amount,
-                memo: '调整 ID 余额库存成本'
+                memo: locked.ownershipTransferredAt
+                  ? '调整客户已购 ID 余额备查成本'
+                  : '调整 ID 余额库存成本'
               },
               {
                 accountCode: 'manual_adjustment',

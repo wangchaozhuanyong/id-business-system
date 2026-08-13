@@ -151,13 +151,13 @@ export class IdBusinessV2DashboardRepository {
         this.prisma.idBusinessV2Account.count({ where: availableWhere }),
         access.finance
           ? this.prisma.idBusinessV2Account.aggregate({
-              where: { deletedAt: null, lossReportedAt: null },
+              where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
               _sum: { balanceCostAmount: true }
             })
           : null,
         access.finance
           ? this.prisma.idBusinessV2Account.aggregate({
-              where: { deletedAt: null, lossReportedAt: null, soldByOrderId: null },
+              where: { deletedAt: null, lossReportedAt: null, ownershipTransferredAt: null },
               _sum: { purchaseCost: true }
             })
           : null,

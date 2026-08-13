@@ -98,9 +98,9 @@ function createClient(input: {
     idBusinessV2Account: {
       aggregate: vi
         .fn()
-        .mockImplementation(({ where }) =>
+        .mockImplementation(({ _sum }) =>
           Promise.resolve(
-            where.soldByOrderId === null
+            _sum.purchaseCost
               ? { _sum: { purchaseCost: input.idInventory } }
               : { _sum: { balanceCostAmount: input.giftCardInventory } }
           )

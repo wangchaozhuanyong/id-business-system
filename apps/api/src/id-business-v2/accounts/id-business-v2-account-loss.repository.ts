@@ -32,6 +32,7 @@ interface LockedAccountPersistenceRow {
   balanceCostAmount: unknown;
   purchaseCost: unknown;
   soldByOrderId: string | null;
+  ownershipTransferredAt: Date | null;
   soldOrderNo: string | null;
   lossReportedAt: Date | null;
   activeLossRecordId: string | null;
@@ -183,6 +184,7 @@ export class IdBusinessV2AccountLossRepository {
         account."balance_cost_amount" AS "balanceCostAmount",
         account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
+        account."ownership_transferred_at" AS "ownershipTransferredAt",
         sold_order."order_no" AS "soldOrderNo",
         account."loss_reported_at" AS "lossReportedAt",
         account."active_loss_record_id" AS "activeLossRecordId",

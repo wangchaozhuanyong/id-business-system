@@ -30,7 +30,8 @@
             { label: '使用 ID', value: page.detail.account?.appleIdMasked || '—' },
             {
               label: 'ID 处理',
-              value: page.accountDispositionMeta(page.detail.accountDisposition).label
+              value: page.accountDispositionMeta(page.detail.accountDisposition, page.detail.status)
+                .label
             }
           ]"
         />
@@ -71,7 +72,12 @@
             </div>
             <div>
               <dt>ID 处理状态</dt>
-              <dd>{{ page.accountDispositionMeta(page.detail.accountDisposition).label }}</dd>
+              <dd>
+                {{
+                  page.accountDispositionMeta(page.detail.accountDisposition, page.detail.status)
+                    .label
+                }}
+              </dd>
             </div>
             <div>
               <dt>国家</dt>
@@ -118,7 +124,7 @@
               <dd>{{ page.formatDecimal(page.detail.balanceCostAmount) }}</dd>
             </div>
             <div>
-              <dt>额外退款成本</dt>
+              <dt>额外退款成本（人民币）</dt>
               <dd>{{ page.formatNullableDecimal(page.detail.refundCostAmount) }}</dd>
             </div>
             <div>

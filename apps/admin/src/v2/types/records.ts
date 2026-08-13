@@ -136,16 +136,12 @@ export interface V2SoldAccountRecoveryPreview {
   balanceCostAmount: string;
   recordStatus: V2RecordStatus;
   counts: {
+    pendingAfterSalesOrders: number;
     activeActivations: number;
     activeLocks: number;
   };
   blockers: Array<{
-    code:
-      | 'remaining_balance'
-      | 'remaining_balance_cost'
-      | 'active_activation'
-      | 'active_lock'
-      | 'loss_reported';
+    code: 'loss_reported';
     message: string;
   }>;
 }

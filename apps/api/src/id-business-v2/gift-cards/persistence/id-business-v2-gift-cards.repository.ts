@@ -341,6 +341,7 @@ export class IdBusinessV2GiftCardsRepository {
         account."current_balance" AS "currentBalance",
         account."balance_cost_amount" AS "balanceCostAmount",
         account."sold_by_order_id" AS "soldByOrderId",
+        account."ownership_transferred_at" AS "ownershipTransferredAt",
         account."loss_reported_at" AS "lossReportedAt",
         account."country_option_id" AS "countryOptionId",
         country_option."name" AS "countryName",
@@ -551,6 +552,7 @@ export class IdBusinessV2GiftCardsRepository {
         account."apple_id_masked" AS "appleIdMasked",
         account."current_balance" AS "currentBalance",
         account."balance_cost_amount" AS "balanceCostAmount",
+        account."ownership_transferred_at" AS "ownershipTransferredAt",
         account."record_status" AS "recordStatus",
         account."loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts" account

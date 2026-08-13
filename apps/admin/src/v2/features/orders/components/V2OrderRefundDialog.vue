@@ -3,7 +3,7 @@
     :model-value="modelValue"
     :title="order ? `退款订单 ${order.orderNo}` : '退款订单'"
     message=""
-    width="min(560px, calc(100vw - 32px))"
+    width="min(620px, calc(100vw - 32px))"
     confirm-text="确认退款"
     danger
     :confirm-loading="saving"
@@ -20,7 +20,7 @@
       :description="`${order.customer.name} · ${order.service.name}`"
       :metrics="[
         { label: '订单实收', value: order.receivedAmount },
-        { label: '额外退款成本', value: order.refundCostAmount ?? '0' }
+        { label: '额外退款成本（人民币）', value: order.refundCostAmount ?? '0' }
       ]"
     />
     <el-alert
@@ -50,10 +50,10 @@
         <el-form-item prop="refundCostAmount">
           <template #label>
             <span class="v2-order-refund-label">
-              额外退款成本
+              额外退款成本（人民币）
               <el-tooltip placement="top" :show-after="200" max-width="360px">
                 <template #content>
-                  订单本金由系统按原实收金额自动全额退回。此处仅填写退款过程中额外实际支付的费用，
+                  此处金额统一按人民币计算。订单本金由系统按原实收金额自动全额退回。此处仅填写退款过程中额外实际支付的费用，
                   例如支付通道手续费、平台罚款或额外补偿。不要填写退给客户的订单本金，也不要填写余额成本、
                   平台手续费或 ID 成本；这些由系统自动计算。没有额外费用时填写 0。
                 </template>
@@ -68,7 +68,9 @@
             inputmode="decimal"
             maxlength="19"
             placeholder="没有额外费用时填写 0"
-          />
+          >
+            <template #append>CNY</template>
+          </el-input>
         </el-form-item>
 
         <el-form-item label="退款原因" prop="reason">
@@ -84,21 +86,43 @@
       </V2PanelSection>
 
       <V2PanelSection heading-id="order-refund-impact" title="资产与归属影响" step="02">
-        <el-form-item label="ID 余额处理">
-          <el-switch
-            v-model="form.restoreBalance"
-            active-text="恢复原消费余额"
-            inactive-text="不恢复余额"
+        <el-form-item label="ID 余额处理" prop="balanceRefundMode">
+          <el-radio-group
+            v-model="form.balanceRefundMode"
+            class="v2-order-refund-modes"
+            aria-label="ID 余额退款方式"
+          >
+            <el-radio-button value="none">余额不退回</el-radio-button>
+            <el-radio-button value="full">原消费余额全部退回</el-radio-button>
+            <el-radio-button value="custom">自定义退款到 ID 余额</el-radio-button>
+          </el-radio-group>
+          <p class="v2-order-refund-hint">
+            请选择实际退回 ID
+            的余额。全部退回会按原消费流水恢复全部余额和人民币成本；自定义退回会按原流水单位成本同比例恢复人民币成本。
+          </p>
+        </el-form-item>
+
+        <el-form-item
+          v-if="form.balanceRefundMode === 'custom'"
+          label="退回 ID 余额"
+          prop="customRefundBalanceAmount"
+        >
+          <el-input
+            v-model="form.customRefundBalanceAmount"
+            inputmode="decimal"
+            maxlength="19"
+            :placeholder="`最多可退回 ${order?.balanceAmount ?? '0'}`"
           />
           <p class="v2-order-refund-hint">
-            仅在原消费余额已实际退回 ID 时开启。系统将按原消费流水精确恢复余额和成本；否则保持 ID
-            当前剩余余额及余额成本不变。
+            本单原消费余额为 {{ order?.balanceAmount ?? '0' }}，自定义退回金额必须大于 0
+            且不能超过该金额。
           </p>
         </el-form-item>
 
         <el-form-item v-if="order?.accountDisposition === 'sold'" label="ID 销售处理">
           <div class="v2-order-refund-impact">
-            自动标记为“ID 已退款”，解除客户归属，冲回本单 ID 成本并恢复到可用 ID。
+            自动解除本单 ID 销售归属，冲回本单已结转的 ID
+            成本并恢复为可用；其他业务记录不影响本次整单退款。
           </div>
         </el-form-item>
       </V2PanelSection>
@@ -114,7 +138,7 @@ import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
 import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
-import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import { V2_DECIMAL_PLACES, addDecimalStrings, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { RefundV2OrderInput, V2Order } from '../contracts';
 
@@ -133,7 +157,8 @@ const formRef = ref<FormInstance>();
 const form = reactive({
   refundCostAmount: '0',
   reason: '',
-  restoreBalance: false
+  balanceRefundMode: 'none' as 'none' | 'full' | 'custom',
+  customRefundBalanceAmount: ''
 });
 const { dirty: formDirty, capture: captureFormSnapshot } = useV2FormSnapshot(
   () => props.modelValue,
@@ -152,6 +177,24 @@ const rules: FormRules = {
             ? undefined
             : new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数的非负金额`)
         ),
+      trigger: 'blur'
+    }
+  ],
+  customRefundBalanceAmount: [
+    {
+      validator: (_rule, value, callback) => {
+        if (form.balanceRefundMode !== 'custom') return callback();
+        if (!isV2UnsignedDecimal(value, { allowZero: false })) {
+          return callback(new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数且大于 0 的余额`));
+        }
+        const maximum = props.order?.balanceAmount ?? '0';
+        const difference = addDecimalStrings(String(value).trim(), `-${maximum}`);
+        callback(
+          difference.startsWith('-') || difference === '0'
+            ? undefined
+            : new Error(`退回 ID 余额不能超过本单原消费余额 ${maximum}`)
+        );
+      },
       trigger: 'blur'
     }
   ],
@@ -178,7 +221,8 @@ watch(
     Object.assign(form, {
       refundCostAmount: props.order?.refundCostAmount ?? '0',
       reason: '',
-      restoreBalance: false
+      balanceRefundMode: 'none',
+      customRefundBalanceAmount: ''
     });
     captureFormSnapshot();
   }
@@ -189,7 +233,10 @@ async function submit() {
   emit('submit', {
     refundCostAmount: form.refundCostAmount.trim(),
     reason: form.reason.trim(),
-    restoreBalance: form.restoreBalance
+    balanceRefundMode: form.balanceRefundMode,
+    ...(form.balanceRefundMode === 'custom'
+      ? { customRefundBalanceAmount: form.customRefundBalanceAmount.trim() }
+      : {})
   });
 }
 
@@ -206,10 +253,26 @@ function isNonNegativeDecimal(value: unknown) {
 }
 
 .v2-order-refund-hint {
+  width: 100%;
   margin: 8px 0 0;
   color: var(--v2-text-soft);
   font-size: 12px;
   line-height: 1.65;
+}
+
+.v2-order-refund-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.v2-order-refund-modes :deep(.el-radio-button__inner) {
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+.v2-order-refund-modes :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-left: 1px solid var(--el-border-color);
 }
 
 .v2-order-refund-label {

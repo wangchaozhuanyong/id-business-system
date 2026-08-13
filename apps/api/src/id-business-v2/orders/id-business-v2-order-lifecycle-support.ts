@@ -139,7 +139,8 @@ export class IdBusinessV2OrderLifecycleSupport {
     consumption: IdBusinessV2BalanceLedgerRecord,
     idempotencyKey: string,
     remark: string,
-    operator?: AuthenticatedUser
+    operator?: AuthenticatedUser,
+    requestedBalanceAmount?: Amount4
   ) {
     if (!order.accountId || consumption.accountId !== order.accountId) {
       throw new ConflictException('订单消费流水与绑定 ID 不一致，不能恢复余额');
@@ -156,13 +157,38 @@ export class IdBusinessV2OrderLifecycleSupport {
     if (account.lossReportedAt) {
       throw new ConflictException('已报损冻结 ID 不能恢复余额');
     }
+    if (order.accountSource === 'customer_owned') {
+      if (!order.sourceSoldOrderId) {
+        throw new ConflictException('客户已购 ID 订单缺少来源销售记录，不能恢复余额');
+      }
+      const ownedBySourceSale = account.soldByOrderId === order.sourceSoldOrderId;
+      const ownedByRecoveredSource =
+        account.soldByOrderId === null &&
+        Boolean(
+          await this.repository.findRecoveredCustomerOwnedSource(tx, {
+            sourceOrderId: order.sourceSoldOrderId,
+            accountId: account.id,
+            customerId: order.customerId
+          })
+        );
+      if (!ownedBySourceSale && !ownedByRecoveredSource) {
+        throw new ConflictException('该 ID 已转售或归属已变化，订单只能退款，不能恢复 ID 余额');
+      }
+    }
+    const balanceAmount = requestedBalanceAmount ?? consumption.balanceAmount;
+    if (balanceAmount.gt(consumption.balanceAmount)) {
+      throw new BadRequestException('退回 ID 余额不能超过本单原消费余额');
+    }
+    const costAmount = balanceAmount.equals(consumption.balanceAmount)
+      ? consumption.costAmount
+      : consumption.costAmount.ratio(consumption.balanceAmount).apply(balanceAmount);
     const movement = this.balanceCalculator.calculateReversalCredit(
       {
         currentBalance: account.currentBalance,
         balanceCostAmount: account.balanceCostAmount
       },
-      consumption.balanceAmount,
-      consumption.costAmount
+      balanceAmount,
+      costAmount
     );
     const ledger = await this.repository.createBalanceLedger(tx, {
       accountId: account.id,

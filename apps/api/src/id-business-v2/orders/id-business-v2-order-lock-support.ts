@@ -22,6 +22,8 @@ export interface LockedOrderRow {
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: Amount4;
   balanceCostAmount: Amount4;
+  transferredBalanceCostAmount: Amount4;
+  appliedBalanceCostAmount: Amount4;
   refundCostAmount: Amount4 | null;
   profitAmount: Amount4 | null;
   status: IdBusinessV2OrderStatus;
@@ -35,6 +37,7 @@ export interface LockedAccountRow {
   purchaseCost: Amount4;
   soldByOrderId: string | null;
   soldByCustomerId: string | null;
+  ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
   statusCode: string;

@@ -14,6 +14,7 @@ const ORDER_REPORT_EXPENSE_CODES = [
   'platform_fee',
   'gift_card_cost',
   'id_cost',
+  'customer_owned_balance_cost',
   'refund_loss'
 ] as const;
 const REPORT_CURRENCIES = ['CNY', 'MYR', 'USD', 'USDT'] as const;
@@ -89,7 +90,9 @@ export async function getIdBusinessV2SettlementPlatformReport(
       journal.journalType === 'reversal' ? journal.reversalOf?.sourceId : journal.sourceId;
     if (
       !orderId ||
-      (originalJournalType !== 'order_completed' && originalJournalType !== 'order_refund')
+      (originalJournalType !== 'order_completed' &&
+        originalJournalType !== 'order_refund' &&
+        originalJournalType !== 'historical_backfill')
     ) {
       continue;
     }
@@ -114,7 +117,7 @@ export async function getIdBusinessV2SettlementPlatformReport(
           bucket.grossReceivedCny = bucket.grossReceivedCny.add(amountCny.mul(sign));
           const currency = getSettlementOriginalAmount(bucket, line.currency);
           currency.grossReceived = currency.grossReceived.add(amountOriginal.mul(sign));
-        } else {
+        } else if (originalJournalType === 'order_refund') {
           const sign = line.direction === 'debit' ? 1 : -1;
           bucket.refundedCny = bucket.refundedCny.add(amountCny.mul(sign));
           const currency = getSettlementOriginalAmount(bucket, line.currency);

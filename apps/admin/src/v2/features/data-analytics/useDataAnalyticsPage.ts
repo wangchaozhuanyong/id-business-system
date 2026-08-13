@@ -100,7 +100,7 @@ export function useDataAnalyticsPage() {
     return [
       { label: '自有资金', value: overview.value.assets.cashCny },
       { label: '卡商预付款', value: overview.value.assets.supplierPrepaymentCny },
-      { label: '未消耗余额成本', value: overview.value.assets.giftCardInventoryCny },
+      { label: '自有 ID 剩余余额成本', value: overview.value.assets.giftCardInventoryCny },
       { label: '未售 ID 成本', value: overview.value.assets.unsoldIdInventoryCny },
       { label: '待卡商退款', value: overview.value.assets.supplierRefundReceivableCny }
     ];
@@ -220,6 +220,7 @@ function accountCodeLabel(value: V2FinanceAccountCode) {
     platform_fee: '平台手续费',
     gift_card_cost: '余额销售成本',
     id_cost: 'ID 销售成本',
+    customer_owned_balance_cost: '客户已购 ID 余额转移成本',
     refund_loss: '退款损失',
     gift_card_redemption_loss: '礼品卡赎回损失',
     balance_loss: 'ID 余额报损',

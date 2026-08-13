@@ -53,6 +53,8 @@ export interface IdBusinessV2OrderRecord {
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: Amount4;
   balanceCostAmount: Amount4;
+  transferredBalanceCostAmount: Amount4;
+  appliedBalanceCostAmount: Amount4;
   refundCostAmount: Amount4 | null;
   profitAmount: Amount4 | null;
   status: IdBusinessV2OrderStatus;
@@ -158,6 +160,7 @@ export interface IdBusinessV2MatchingAccount {
   currentBalance: Amount4;
   balanceCostAmount: Amount4;
   purchaseCost: Amount4;
+  ownershipTransferredAt: Date | null;
   updatedAt: Date;
   countryOption: { id: string; code: string; name: string };
   statusOption: { id: string; code: string; name: string };

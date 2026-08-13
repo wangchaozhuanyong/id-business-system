@@ -256,6 +256,7 @@ export class IdBusinessV2AccountsRepository {
         currentBalance: unknown;
         balanceCostAmount: unknown;
         soldByOrderId: string | null;
+        ownershipTransferredAt: Date | null;
         lossReportedAt: Date | null;
       }>
     >`
@@ -264,6 +265,7 @@ export class IdBusinessV2AccountsRepository {
         "current_balance" AS "currentBalance",
         "balance_cost_amount" AS "balanceCostAmount",
         "sold_by_order_id" AS "soldByOrderId",
+        "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
       WHERE "id" = CAST(${accountId} AS UUID) AND "deleted_at" IS NULL

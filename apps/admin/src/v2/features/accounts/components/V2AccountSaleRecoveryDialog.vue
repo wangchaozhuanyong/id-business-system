@@ -21,6 +21,10 @@
               { label: '当前余额', value: page.saleRecoveryPreview.currentBalance },
               { label: '余额成本', value: page.saleRecoveryPreview.balanceCostAmount },
               {
+                label: '关联业务',
+                value: `${page.saleRecoveryPreview.counts.pendingAfterSalesOrders} 单`
+              },
+              {
                 label: '条件检查',
                 value: page.saleRecoveryPreview.canRecover ? '允许纠正' : '暂不可纠正'
               }
@@ -31,6 +35,18 @@
     <el-alert
       type="warning"
       title="仅用于纠正员工误将 ID 标记为已售出的情况。本操作不退客户款、不改变来源订单业务状态；当前余额、余额成本和 ID 采购成本原值均保留。"
+      :closable="false"
+      show-icon
+    />
+    <el-alert
+      v-if="
+        page.saleRecoveryPreview &&
+        (page.saleRecoveryPreview.counts.pendingAfterSalesOrders > 0 ||
+          page.saleRecoveryPreview.counts.activeActivations > 0 ||
+          page.saleRecoveryPreview.counts.activeLocks > 0)
+      "
+      type="info"
+      title="关联的历史订单、有效业务和业务锁将保持原状，不影响本次售出纠正"
       :closable="false"
       show-icon
     />

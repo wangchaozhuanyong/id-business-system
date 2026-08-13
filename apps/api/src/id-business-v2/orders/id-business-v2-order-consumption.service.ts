@@ -86,13 +86,17 @@ export class IdBusinessV2OrderConsumptionService {
         accountSource === 'inventory' && prepared.order.accountDisposition === 'sold'
           ? accountCostAmount
           : Amount4.zero();
+      const appliedBalanceCostAmount =
+        accountSource === 'customer_owned' && prepared.account.ownershipTransferredAt
+          ? Amount4.zero()
+          : movement.costAmount;
       const receivedAmount = prepared.order.receivedAmount;
       const platformFeeAmount = prepared.order.platformFeeAmount;
       const refundCostAmount = prepared.order.refundCostAmount ?? Amount4.zero();
       const profitAmount = receivedAmount
         .sub(platformFeeAmount)
         .sub(appliedAccountCostAmount)
-        .sub(movement.costAmount)
+        .sub(appliedBalanceCostAmount)
         .sub(refundCostAmount);
       this.assertSignedAmountWithinRange(profitAmount, '订单利润');
 
@@ -127,6 +131,8 @@ export class IdBusinessV2OrderConsumptionService {
         accountCostAmount: accountCostAmount.toString(),
         appliedAccountCostAmount: appliedAccountCostAmount.toString(),
         balanceCostAmount: movement.costAmount.toString(),
+        transferredBalanceCostAmount: '0',
+        appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
         profitAmount: profitAmount.toString(),
         status: 'processing',
         statusChangedAt,
@@ -145,6 +151,7 @@ export class IdBusinessV2OrderConsumptionService {
           accountDisposition: prepared.order.accountDisposition,
           accountCostAmount,
           appliedAccountCostAmount,
+          appliedBalanceCostAmount,
           platformFeeAmount,
           refundCostAmount,
           profitAmount,
@@ -243,6 +250,7 @@ export class IdBusinessV2OrderConsumptionService {
       accountDisposition: string;
       accountCostAmount: Amount4;
       appliedAccountCostAmount: Amount4;
+      appliedBalanceCostAmount: Amount4;
       platformFeeAmount: Amount4;
       refundCostAmount: Amount4;
       profitAmount: Amount4;
@@ -283,6 +291,7 @@ export class IdBusinessV2OrderConsumptionService {
         accountDisposition: input.accountDisposition,
         accountCostAmount: input.accountCostAmount.toString(),
         appliedAccountCostAmount: input.appliedAccountCostAmount.toString(),
+        appliedBalanceCostAmount: input.appliedBalanceCostAmount.toString(),
         platformFeeAmount: input.platformFeeAmount.toString(),
         refundCostAmount: input.refundCostAmount.toString(),
         profitAmount: input.profitAmount.toString(),

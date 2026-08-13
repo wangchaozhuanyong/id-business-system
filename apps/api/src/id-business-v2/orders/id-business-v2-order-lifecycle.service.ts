@@ -11,24 +11,16 @@ import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-ord
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
 import {
   applyUpdatedOrderAccountDisposition,
-  normalizeOrderAccountDisposition,
-  releaseSoldOrderAccount
+  normalizeOrderAccountDisposition
 } from './id-business-v2-order-account-disposition';
-import { buildOrderReversalIdempotencyKey } from './id-business-v2-order-lifecycle-input';
+import { cancelIdBusinessV2Order } from './id-business-v2-order-cancel';
 import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.service';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
-import {
-  IdBusinessV2OrderLifecycleSupport,
-  type LifecycleTransactionResult
-} from './id-business-v2-order-lifecycle-support';
+import { IdBusinessV2OrderLifecycleSupport } from './id-business-v2-order-lifecycle-support';
 import { refundIdBusinessV2Order } from './id-business-v2-order-refund';
-import type {
-  IdBusinessV2BalanceLedgerRecord,
-  IdBusinessV2OrderStatus
-} from './id-business-v2-order.types';
+import type { IdBusinessV2OrderStatus } from './id-business-v2-order.types';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 import {
-  assertSoldAccountCanRecover,
   buildSoldAccountRecoveryPreview,
   recoverIdBusinessV2SoldAccount
 } from './id-business-v2-order-sold-account-recovery';
@@ -41,13 +33,6 @@ const EDITABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
   'completed',
   'failed'
 ]);
-const CANCELLABLE_STATUSES = new Set<IdBusinessV2OrderStatus>([
-  'draft',
-  'pending',
-  'processing',
-  'failed'
-]);
-
 @Injectable()
 export class IdBusinessV2OrderLifecycleService {
   private readonly support: IdBusinessV2OrderLifecycleSupport;
@@ -283,7 +268,7 @@ export class IdBusinessV2OrderLifecycleService {
               receivedAmount,
               platformFeeAmount,
               appliedAccountCostAmount,
-              order.balanceCostAmount,
+              order.appliedBalanceCostAmount,
               order.refundCostAmount
             )
           : null;
@@ -322,6 +307,7 @@ export class IdBusinessV2OrderLifecycleService {
           accountDisposition,
           accountCostAmount: accountCostAmount.toString(),
           appliedAccountCostAmount: appliedAccountCostAmount.toString(),
+          appliedBalanceCostAmount: order.appliedBalanceCostAmount.toString(),
           profitAmount: profitAmount?.toString() ?? null,
           openedAt,
           dueAt,
@@ -418,132 +404,17 @@ export class IdBusinessV2OrderLifecycleService {
     return this.ordersService.get(orderId);
   }
 
-  async cancel(
-    orderIdValue: string,
-    dto: CancelIdBusinessV2OrderDto,
-    operator?: AuthenticatedUser
-  ) {
-    const orderId = this.support.normalizeUuid(orderIdValue, '订单');
-    const reason = this.support.normalizeReason(dto.reason);
-    const idempotencyKey = buildOrderReversalIdempotencyKey(
-      orderId,
-      this.support.normalizeIdempotencyKey(dto.idempotencyKey)
-    );
-
-    const result = await this.support.runLifecycleTransaction(
-      async (tx): Promise<LifecycleTransactionResult> => {
-        const order = await this.support.lockOrder(tx, orderId);
-        const existingReversal = await this.support.findReversal(tx, order.id);
-        if (order.status === 'cancelled') {
-          this.support.assertReversalReplay(existingReversal, idempotencyKey);
-          return {
-            orderId: order.id,
-            reversalLedger: existingReversal,
-            balanceRestored: Boolean(existingReversal),
-            lockReleased: false,
-            idempotentReplay: true
-          };
-        }
-        if (!CANCELLABLE_STATUSES.has(order.status)) {
-          throw new ConflictException('只有草稿、待处理、处理中或失败订单可以取消');
-        }
-        const activation = await this.repository.hasActivationByOrder(tx, order.id);
-        if (activation) {
-          throw new ConflictException('订单已有开通记录，不能取消；请按真实结果执行退款');
-        }
-
-        const consumption = await this.support.findConsumption(tx, order.id);
-        if (order.status === 'processing' && !consumption) {
-          throw new ConflictException('处理中订单缺少消费流水，不能直接取消');
-        }
-        if (existingReversal) {
-          throw new ConflictException('订单消费已经撤销，请刷新后核对订单状态');
-        }
-
-        let reversalLedger: IdBusinessV2BalanceLedgerRecord | null = null;
-        let balanceRestored = false;
-        let profitAmount: Amount4 | null = null;
-        if (consumption) {
-          const restoration = await this.support.restoreConsumption(
-            tx,
-            order,
-            consumption,
-            idempotencyKey,
-            `取消订单：${reason}`,
-            operator
-          );
-          reversalLedger = restoration.ledger;
-          balanceRestored = true;
-          profitAmount = this.support.calculateProfit(
-            order.receivedAmount,
-            order.platformFeeAmount,
-            Amount4.zero(),
-            Amount4.zero(),
-            order.refundCostAmount
-          );
-        }
-
-        const release = await this.orderLockService.releaseOrderLockInTransaction(
-          tx,
-          order.id,
-          `订单取消：${reason}`,
-          operator
-        );
-        const accountRecovered = order.accountDisposition === 'sold';
-        if (accountRecovered) {
-          if (!order.accountId) throw new ConflictException('已售订单缺少 ID 关联');
-          const account = await this.repository.lockAccountForSale(tx, order.accountId);
-          if (!account || account.soldByOrderId !== order.id) {
-            throw new ConflictException('ID 售出归属已变更，请刷新后核对');
-          }
-          await assertSoldAccountCanRecover(this.repository, tx, account, order.id);
-          await releaseSoldOrderAccount(tx, this.repository, order, operator);
-        }
-        const statusChangedAt = new Date();
-        await this.repository.updateOrder(tx, order.id, {
-          status: 'cancelled',
-          statusChangedAt,
-          balanceCostAmount: balanceRestored ? '0' : order.balanceCostAmount.toString(),
-          accountDisposition: accountRecovered ? 'recovered' : order.accountDisposition,
-          appliedAccountCostAmount: accountRecovered
-            ? '0'
-            : order.appliedAccountCostAmount.toString(),
-          profitAmount: profitAmount?.toString() ?? null,
-          updatedByUserId: operator?.id
-        });
-        await this.support.writeLifecycleAudit(
-          tx,
-          'cancel',
-          order,
-          {
-            status: 'cancelled',
-            statusChangedAt,
-            reason,
-            balanceRestored,
-            accountRecovered,
-            accountDisposition: accountRecovered ? 'recovered' : order.accountDisposition,
-            appliedAccountCostAmount: '0',
-            reversalLedgerId: reversalLedger?.id ?? null,
-            profitAmount: profitAmount?.toString() ?? null,
-            lockReleased: release.released
-          },
-          operator
-        );
-        return {
-          orderId: order.id,
-          reversalLedger,
-          balanceRestored,
-          lockReleased: release.released,
-          idempotentReplay: false
-        };
-      },
-      '订单已经取消或消费撤销正在并发处理，请刷新后核对',
+  cancel(orderIdValue: string, dto: CancelIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
+    return cancelIdBusinessV2Order(
+      this.support,
+      this.orderLockService,
+      this.financePostingService,
+      this.repository,
+      orderIdValue,
+      dto,
       operator
     );
-
-    return this.support.buildLifecycleResponse(result);
   }
-
   refund(orderIdValue: string, dto: RefundIdBusinessV2OrderDto, operator?: AuthenticatedUser) {
     return refundIdBusinessV2Order(
       this.support,
@@ -555,7 +426,6 @@ export class IdBusinessV2OrderLifecycleService {
       operator
     );
   }
-
   async previewSoldAccountRecovery(orderIdValue: string, accountIdValue: string) {
     const orderId = this.support.normalizeUuid(orderIdValue, '订单');
     const accountId = this.support.normalizeUuid(accountIdValue, 'ID');

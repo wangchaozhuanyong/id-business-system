@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
 import {
+  Amount4,
   Rate8,
   V2CommandTransactionManager,
   type V2CommandTransaction
@@ -57,6 +58,50 @@ export class IdBusinessV2OrderCompletionService {
       }
 
       const completedAt = context.businessTime;
+      const account = await this.repository.lockAccountForSale(tx, order.accountId!);
+      if (!account) {
+        throw new ConflictException('订单绑定的 ID 不存在或已删除');
+      }
+      const isInventorySale =
+        order.accountSource === 'inventory' && order.accountDisposition === 'sold';
+      if (isInventorySale && account.soldByOrderId !== order.id) {
+        throw new ConflictException('订单售出 ID 的归属证据不一致，请刷新后核对');
+      }
+      if (order.accountSource === 'customer_owned' && !account.ownershipTransferredAt) {
+        const recoveredSource =
+          order.sourceSoldOrderId &&
+          (await this.repository.findRecoveredCustomerOwnedSource(tx, {
+            sourceOrderId: order.sourceSoldOrderId,
+            accountId: account.id,
+            customerId: order.customerId
+          }));
+        if (!recoveredSource) {
+          throw new ConflictException('客户已购 ID 尚未完成所有权转移，不能确认售后订单');
+        }
+      }
+      const transferredBalanceCostAmount = isInventorySale
+        ? account.balanceCostAmount
+        : Amount4.zero();
+      const appliedBalanceCostAmount = order.appliedBalanceCostAmount.add(
+        transferredBalanceCostAmount
+      );
+      const profitAmount = order.receivedAmount
+        .sub(order.platformFeeAmount)
+        .sub(order.appliedAccountCostAmount)
+        .sub(appliedBalanceCostAmount)
+        .sub(order.refundCostAmount ?? 0);
+
+      if (isInventorySale) {
+        const transfer = await this.repository.transferSoldAccountOwnership(tx, {
+          accountId: account.id,
+          orderId: order.id,
+          transferredAt: completedAt,
+          updatedByUserId: operator?.id
+        });
+        if (transfer.count !== 1) {
+          throw new ConflictException('ID 所有权已经变化，请刷新后核对');
+        }
+      }
       const activation = await this.repository.createActivation(tx, {
         orderId: order.id,
         customerId: order.customerId,
@@ -72,6 +117,9 @@ export class IdBusinessV2OrderCompletionService {
       });
 
       await this.repository.updateOrder(tx, order.id, {
+        transferredBalanceCostAmount: transferredBalanceCostAmount.toString(),
+        appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
+        profitAmount: profitAmount.toString(),
         status: 'completed',
         statusChangedAt: completedAt,
         updatedByUserId: operator?.id
@@ -83,7 +131,12 @@ export class IdBusinessV2OrderCompletionService {
       });
       const financeJournal = await this.postCompletionJournalInTransaction(
         tx,
-        order,
+        {
+          ...order,
+          transferredBalanceCostAmount,
+          appliedBalanceCostAmount,
+          profitAmount
+        },
         completedAt,
         operator
       );
@@ -105,6 +158,8 @@ export class IdBusinessV2OrderCompletionService {
           openedAt: activation.openedAt,
           dueAt: activation.dueAt,
           releasedLockCount: releasedLocks.count,
+          transferredBalanceCostAmount: transferredBalanceCostAmount.toString(),
+          appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
           financeJournalId: financeJournal.id
         },
         remark: `V2 订单完成并生成开通记录：${order.orderNo}`
@@ -144,7 +199,8 @@ export class IdBusinessV2OrderCompletionService {
     const receivedAmount = order.receivedAmount;
     const rate = order.receivedFxRateToCny;
     const platformFeeAmount = order.platformFeeAmount;
-    const balanceCostAmount = order.balanceCostAmount;
+    const transferredBalanceCostAmount = order.transferredBalanceCostAmount;
+    const balanceCostAmount = order.appliedBalanceCostAmount.sub(transferredBalanceCostAmount);
     const appliedAccountCostAmount = order.appliedAccountCostAmount;
     const hasOriginalEvidence = receivedOriginalAmount.gt(0);
     const currency = hasOriginalEvidence ? order.receivedCurrency : ('CNY' as const);
@@ -204,24 +260,50 @@ export class IdBusinessV2OrderCompletionService {
           fxRateSnapshotId: order.receivedFxSnapshotId,
           memo: '平台手续费扣款'
         },
-        {
-          accountCode: 'gift_card_cost',
-          direction: 'debit',
-          currency: 'CNY',
-          amountOriginal: balanceCostAmount,
-          fxRateToCny: 1,
-          amountCny: balanceCostAmount,
-          memo: '已消耗礼品卡余额成本'
-        },
-        {
-          accountCode: 'gift_card_inventory',
-          direction: 'credit',
-          currency: 'CNY',
-          amountOriginal: balanceCostAmount,
-          fxRateToCny: 1,
-          amountCny: balanceCostAmount,
-          memo: '结转礼品卡库存成本'
-        },
+        ...(balanceCostAmount.isZero()
+          ? []
+          : [
+              {
+                accountCode: 'gift_card_cost' as const,
+                direction: 'debit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: balanceCostAmount,
+                fxRateToCny: 1,
+                amountCny: balanceCostAmount,
+                memo: '已消耗自有礼品卡余额成本'
+              },
+              {
+                accountCode: 'gift_card_inventory' as const,
+                direction: 'credit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: balanceCostAmount,
+                fxRateToCny: 1,
+                amountCny: balanceCostAmount,
+                memo: '结转自有礼品卡库存成本'
+              }
+            ]),
+        ...(transferredBalanceCostAmount.isZero()
+          ? []
+          : [
+              {
+                accountCode: 'customer_owned_balance_cost' as const,
+                direction: 'debit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: transferredBalanceCostAmount,
+                fxRateToCny: 1,
+                amountCny: transferredBalanceCostAmount,
+                memo: '售出 ID 剩余余额成本转为客户资产'
+              },
+              {
+                accountCode: 'gift_card_inventory' as const,
+                direction: 'credit' as const,
+                currency: 'CNY' as const,
+                amountOriginal: transferredBalanceCostAmount,
+                fxRateToCny: 1,
+                amountCny: transferredBalanceCostAmount,
+                memo: '转出客户已购 ID 剩余余额成本'
+              }
+            ]),
         ...(appliedAccountCostAmount.isZero()
           ? []
           : [
