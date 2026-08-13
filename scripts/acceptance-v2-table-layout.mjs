@@ -1254,6 +1254,13 @@ async function installApiMocks(page, user, unexpectedRequests, tablePreferences)
       await fulfillSuccess(route, createDefaultBrandingSettings());
       return;
     }
+    if (request.method() === 'GET' && url.pathname.endsWith('/api/id-business-v2/time')) {
+      await fulfillSuccess(route, {
+        now: new Date().toISOString(),
+        timezone: 'Asia/Shanghai'
+      });
+      return;
+    }
     if (
       request.method() === 'GET' &&
       url.pathname.endsWith('/api/id-business-v2/customers/bootstrap')

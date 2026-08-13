@@ -7,7 +7,9 @@ import { idBusinessV2ExchangeRatesApi } from './api';
 import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
+import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
+import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import {
   currencyLabel,
   currencySymbol,
@@ -105,7 +107,7 @@ export function useExchangeRatesPage() {
   const manualForm = reactive({
     currency: 'MYR' as V2TrackedExchangeRateCurrency,
     rateToCny: '',
-    recordedAt: new Date(),
+    recordedAt: getV2BusinessNowInput(),
     reason: '',
     sourceReference: ''
   });
@@ -403,11 +405,16 @@ export function useExchangeRatesPage() {
     if (record.exchangeRateRunId) void openRun(record.exchangeRateRunId);
   }
 
-  function openManualCreate() {
+  async function openManualCreate() {
+    const recordedAt = await ensureV2BusinessNowInput();
+    if (!recordedAt) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
     Object.assign(manualForm, {
       currency: 'MYR',
       rateToCny: '',
-      recordedAt: new Date(),
+      recordedAt,
       reason: '',
       sourceReference: ''
     });
@@ -423,7 +430,7 @@ export function useExchangeRatesPage() {
       await idBusinessV2ExchangeRatesApi.createManualRate({
         currency: manualForm.currency,
         rateToCny: manualForm.rateToCny.trim(),
-        recordedAt: manualForm.recordedAt.toISOString(),
+        recordedAt: v2DateTimeInputToIso(manualForm.recordedAt),
         reason: manualForm.reason.trim(),
         sourceReference: manualForm.sourceReference.trim() || null
       });
@@ -461,6 +468,7 @@ export function useExchangeRatesPage() {
   function formatDate(value: string | null | undefined) {
     if (!value) return '-';
     return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

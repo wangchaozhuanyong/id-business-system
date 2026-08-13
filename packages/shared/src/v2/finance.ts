@@ -55,7 +55,7 @@ export type V2FinanceAccountCode =
 
 export interface V2FinanceSettings {
   baseCurrency: 'CNY';
-  timezone: 'Asia/Kuala_Lumpur';
+  timezone: 'Asia/Shanghai';
   enabledAt: IsoDateTimeString | null;
   historyStatus: V2FinanceHistoryStatus;
   historyCompletedAt: IsoDateTimeString | null;

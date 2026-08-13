@@ -90,7 +90,7 @@ export class IdBusinessV2SystemMonitoringService {
       ],
       generatedAt: now.toISOString(),
       probeDurationMs: Math.max(0, Date.now() - startedAt),
-      timezone: 'Asia/Kuala_Lumpur'
+      timezone: 'Asia/Shanghai'
     };
   }
 

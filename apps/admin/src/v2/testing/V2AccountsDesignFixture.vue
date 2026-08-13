@@ -73,6 +73,7 @@
               <span>正式页面继续使用既有报损筛选、财务冲回、分页和恢复流程。</span>
             </section>
           </section>
+          <V2AccountLossDialogs :page="page" />
         </div>
       </main>
     </div>
@@ -94,6 +95,7 @@ import {
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2AccountsList from '@/v2/features/accounts/components/V2AccountsList.vue';
+import V2AccountLossDialogs from '@/v2/features/accounts/components/V2AccountLossDialogs.vue';
 import V2AccountsOverview from '@/v2/features/accounts/components/V2AccountsOverview.vue';
 import V2AccountsToolbar from '@/v2/features/accounts/components/V2AccountsToolbar.vue';
 import { formatAccountDate, formatAccountDecimal } from '@/v2/features/accounts/account-format';
@@ -256,7 +258,8 @@ function makeAccount(index: number, lifecycle: Exclude<V2AccountLifecycle, 'repo
   };
 }
 
-const emptyState = new URLSearchParams(window.location.search).get('state') === 'empty';
+const fixtureParams = new URLSearchParams(window.location.search);
+const emptyState = fixtureParams.get('state') === 'empty';
 const allAccounts: V2Account[] = emptyState
   ? []
   : [
@@ -288,6 +291,15 @@ const page = reactive({
   canRevealSecurity: true,
   activeFilterCount: 0,
   lifecycleLabel: '可用 ID',
+  lossTarget: null as V2Account | null,
+  lossDialogVisible: false,
+  lossSubmitting: false,
+  lossReason: '',
+  lossConfirmed: false,
+  unfreezeTarget: null as V2Account | null,
+  unfreezeDialogVisible: false,
+  unfreezeSubmitting: false,
+  unfreezeReason: '',
   hasLoadedOnce: true,
   isInitialLoading: false,
   query: {
@@ -352,9 +364,24 @@ const page = reactive({
   },
   openReportLoss: (item: V2Account) => {
     notice.value = `预览操作：正在核对 ${item.appleIdMasked} 的报损信息。`;
+    page.lossTarget = item;
+    page.lossReason = '';
+    page.lossConfirmed = false;
+    page.lossDialogVisible = true;
   },
   openUnfreezeLoss: (item: V2Account) => {
     notice.value = `预览操作：正在解除 ${item.appleIdMasked} 的报损冻结。`;
+    page.unfreezeTarget = item;
+    page.unfreezeReason = '';
+    page.unfreezeDialogVisible = true;
+  },
+  confirmReportLoss: async () => {
+    page.lossDialogVisible = false;
+    notice.value = '设计验收完成，未提交报损业务数据。';
+  },
+  confirmUnfreezeLoss: async () => {
+    page.unfreezeDialogVisible = false;
+    notice.value = '设计验收完成，未提交解除冻结业务数据。';
   }
 }) as unknown as AccountsPage;
 
@@ -404,6 +431,10 @@ function applyFilters(resetPage = false) {
 }
 
 applyFilters();
+if (fixtureParams.get('lossDialog') === 'open' && allAccounts[0]) {
+  page.lossTarget = allAccounts[0];
+  page.lossDialogVisible = true;
+}
 </script>
 
 <style scoped>

@@ -54,7 +54,7 @@ export interface V2GovernanceOverview {
   };
   proposedWorkflow: string[];
   generatedAt: string;
-  timezone: 'Asia/Kuala_Lumpur';
+  timezone: 'Asia/Shanghai';
 }
 
 export interface V2GovernanceRecycleItem {

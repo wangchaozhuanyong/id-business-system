@@ -10,7 +10,8 @@ import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-bus
 import type { CreateIdBusinessV2ManualFxRateDto } from './dto/create-id-business-v2-manual-fx-rate.dto';
 import {
   Rate8,
-  toKualaLumpurBusinessDate,
+  buildIdBusinessV2DateRange,
+  toIdBusinessV2BusinessDate,
   V2CommandTransactionManager,
   V2TransactionalAuditService
 } from '../runtime/public-api';
@@ -33,7 +34,6 @@ export interface ListIdBusinessV2ManualFxRatesQuery extends PaginationQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RATE = Rate8.from('9999999999.99999999');
 const EXCHANGE_RATE_PATTERN = v2UnsignedDecimalPattern(V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES);
 type ExchangeRateEntryRecord = NonNullable<
@@ -221,7 +221,7 @@ export class IdBusinessV2ExchangeRatesService {
           rateToCny: rateToCny.toString(),
           source: 'manual',
           sourceReference,
-          businessDate: toKualaLumpurBusinessDate(recordedAt).date,
+          businessDate: toIdBusinessV2BusinessDate(recordedAt).date,
           capturedAt: recordedAt,
           manualReason: reason,
           createdByUserId: operator.id
@@ -292,29 +292,11 @@ export class IdBusinessV2ExchangeRatesService {
   }
 
   private parseDateRange(fromValue?: string, toValue?: string) {
-    const from = this.parseDateBoundary(fromValue, false);
-    const to = this.parseDateBoundary(toValue, true);
-    if (from && to && from > to) {
-      throw new BadRequestException('记录开始日期不能晚于结束日期');
-    }
-    if (!from && !to) return undefined;
-    return {
-      gte: from,
-      lte: to
-    };
-  }
-
-  private parseDateBoundary(value: string | undefined, endOfDay: boolean) {
-    const normalized = value?.trim();
-    if (!normalized) return undefined;
-    if (!DATE_PATTERN.test(normalized)) {
-      throw new BadRequestException('记录日期格式必须为 YYYY-MM-DD');
-    }
-    const date = new Date(`${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime())) {
-      throw new BadRequestException('记录日期无效');
-    }
-    return date;
+    return buildIdBusinessV2DateRange(fromValue, toValue, {
+      from: '记录开始日期',
+      to: '记录结束日期',
+      invalidRange: '记录开始日期不能晚于结束日期'
+    });
   }
 
   private normalizeKeyword(value?: string) {

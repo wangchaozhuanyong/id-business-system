@@ -769,8 +769,8 @@ describe('IdBusinessV2AccountLossesService', () => {
           saleState: 'sold',
           status: 'active',
           reportedAt: {
-            gte: new Date('2026-07-01T00:00:00.000Z'),
-            lt: new Date('2026-07-30T00:00:00.000Z')
+            gte: new Date('2026-06-30T16:00:00.000Z'),
+            lt: new Date('2026-07-29T16:00:00.000Z')
           },
           OR: expect.arrayContaining([
             { reportedByName: { contains: '管理员', mode: 'insensitive' } }

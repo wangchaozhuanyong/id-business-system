@@ -5,7 +5,7 @@ export function formatDashboardDate(value?: string | null, dateOnly = false) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Kuala_Lumpur',
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -18,7 +18,7 @@ export function formatDashboardTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Kuala_Lumpur',
+    timeZone: 'Asia/Shanghai',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false

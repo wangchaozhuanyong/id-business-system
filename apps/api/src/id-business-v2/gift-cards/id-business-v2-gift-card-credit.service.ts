@@ -82,6 +82,9 @@ export class IdBusinessV2GiftCardCreditService {
     const requestedCountryOptionId = dto.countryOptionId
       ? normalizeGiftCardCreditUuid(dto.countryOptionId, '卡片国家')
       : undefined;
+    const confirmedSoldByOrderId = dto.confirmedSoldByOrderId
+      ? normalizeGiftCardCreditUuid(dto.confirmedSoldByOrderId, '已售 ID 来源订单')
+      : null;
     const idempotencyKey = buildGiftCardCreditIdempotencyKey(
       accountId,
       normalizeGiftCardCreditIdempotencyKey(dto.idempotencyKey)
@@ -247,6 +250,7 @@ export class IdBusinessV2GiftCardCreditService {
           true
         );
       }
+      this.assertSoldAccountConfirmation(account.soldByOrderId, confirmedSoldByOrderId);
       if (account.lossReportedAt) {
         throw new ConflictException('已报损冻结 ID 不能继续加卡');
       }
@@ -412,6 +416,22 @@ export class IdBusinessV2GiftCardCreditService {
       replay: execute,
       uniqueConflictMessage: '礼品卡号已入账或请求已处理，请刷新后核对'
     });
+  }
+
+  private assertSoldAccountConfirmation(
+    currentSoldByOrderId: string | null,
+    confirmedSoldByOrderId: string | null
+  ) {
+    if (!currentSoldByOrderId && !confirmedSoldByOrderId) return;
+    if (!currentSoldByOrderId) {
+      throw new ConflictException('该 ID 当前已恢复为未售出，请刷新列表后重新加卡');
+    }
+    if (!confirmedSoldByOrderId) {
+      throw new ConflictException('该 ID 已售出，请确认销售订单和客户归属后重新加卡');
+    }
+    if (currentSoldByOrderId !== confirmedSoldByOrderId) {
+      throw new ConflictException('该 ID 的销售归属已变化，请刷新列表并重新确认后加卡');
+    }
   }
 
   private postPurchaseJournal(

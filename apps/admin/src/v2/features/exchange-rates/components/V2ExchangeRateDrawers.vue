@@ -1,5 +1,16 @@
 <template>
-  <el-drawer v-model="page.settingsVisible" title="采集设置" size="min(480px, 96vw)">
+  <V2FormDrawer
+    v-model="page.settingsVisible"
+    title="采集设置"
+    eyebrow="自动汇率"
+    description="配置采集周期、目标成交额和历史保留范围"
+    size="min(520px, 96vw)"
+    confirm-text="保存设置"
+    :confirm-loading="page.settingsSaving"
+    :confirm-disabled-reason="settingsDisabledReason"
+    :dirty="settingsDirty"
+    @confirm="saveSettings"
+  >
     <el-form
       ref="settingsFormRef"
       :model="page.settingsForm"
@@ -12,64 +23,51 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <el-form-item label="自动采集">
-        <el-switch v-model="page.settingsForm.autoEnabled" />
-      </el-form-item>
-      <el-form-item label="采集周期" prop="intervalMinutes">
-        <el-select v-model="page.settingsForm.intervalMinutes">
-          <el-option
-            v-for="minutes in page.runtime?.settings.allowedIntervals ?? page.defaultIntervals"
-            :key="minutes"
-            :label="page.intervalLabel(minutes)"
-            :value="minutes"
+      <V2PanelSection heading-id="exchange-settings-schedule" title="采集计划" step="01">
+        <el-form-item label="自动采集">
+          <el-switch v-model="page.settingsForm.autoEnabled" />
+        </el-form-item>
+        <el-form-item label="采集周期" prop="intervalMinutes">
+          <el-select v-model="page.settingsForm.intervalMinutes">
+            <el-option
+              v-for="minutes in page.runtime?.settings.allowedIntervals ?? page.defaultIntervals"
+              :key="minutes"
+              :label="page.intervalLabel(minutes)"
+              :value="minutes"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="目标成交额" prop="targetAmountRmb">
+          <el-input
+            v-model="page.settingsForm.targetAmountRmb"
+            inputmode="decimal"
+            maxlength="10"
+            placeholder="5000"
           />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="目标成交额（人民币）" prop="targetAmountRmb">
-        <el-input
-          v-model="page.settingsForm.targetAmountRmb"
-          inputmode="decimal"
-          maxlength="10"
-          placeholder="5000"
+        </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection heading-id="exchange-settings-retention" title="数据保留" step="02">
+        <el-form-item label="保留天数" prop="retentionDays">
+          <el-input-number
+            v-model="page.settingsForm.retentionDays"
+            :min="page.runtime?.settings.allowedRetentionDays.min ?? 7"
+            :max="page.runtime?.settings.allowedRetentionDays.max ?? 3650"
+            :step="1"
+            step-strictly
+            controls-position="right"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-alert
+          type="info"
+          title="保存后会安排一次立即采集"
+          description="CNY 固定为 1 不入库；MYR、USD、USDT 会按采集周期形成自动快照，并按保留天数清理未引用记录。"
+          show-icon
+          :closable="false"
         />
-      </el-form-item>
-      <el-form-item label="数据保留天数" prop="retentionDays">
-        <el-input-number
-          v-model="page.settingsForm.retentionDays"
-          :min="page.runtime?.settings.allowedRetentionDays.min ?? 7"
-          :max="page.runtime?.settings.allowedRetentionDays.max ?? 3650"
-          :step="1"
-          step-strictly
-          controls-position="right"
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-alert
-        type="info"
-        title="保存后会安排一次立即采集"
-        description="CNY 固定为 1 不入库；MYR、USD、USDT 会按采集周期形成自动快照，并按保留天数清理未引用记录。"
-        show-icon
-        :closable="false"
-      />
+      </V2PanelSection>
     </el-form>
-    <template #footer>
-      <div class="v2-exchange-drawer-footer">
-        <span v-if="settingsDisabledReason" class="v2-submit-disabled-reason" role="status">
-          {{ settingsDisabledReason }}
-        </span>
-        <AppButton variant="ghost" @click="page.settingsVisible = false">取消</AppButton>
-        <AppButton
-          variant="primary"
-          :loading="page.settingsSaving"
-          :disabled="Boolean(settingsDisabledReason)"
-          :aria-label="settingsDisabledReason ? `保存设置：${settingsDisabledReason}` : '保存设置'"
-          @click="saveSettings"
-        >
-          保存设置
-        </AppButton>
-      </div>
-    </template>
-  </el-drawer>
+  </V2FormDrawer>
 
   <el-drawer v-model="page.runDetailVisible" title="自动采集批次" size="min(880px, 98vw)">
     <V2AsyncRegion
@@ -84,44 +82,38 @@
       @retry="page.retryRunDetail"
     >
       <section v-if="page.runDetail" class="v2-exchange-detail">
-        <dl class="v2-exchange-detail-summary">
-          <div>
-            <dt>批次编号</dt>
-            <dd>{{ page.runDetail.id }}</dd>
-          </div>
-          <div>
-            <dt>状态</dt>
-            <dd>{{ page.runStatusLabel(page.runDetail.status) }}</dd>
-          </div>
-          <div>
-            <dt>目标成交额</dt>
-            <dd>¥{{ page.formatAmount(page.runDetail.targetAmountRmb) }}</dd>
-          </div>
-          <div>
-            <dt>开始时间</dt>
-            <dd>{{ page.formatDate(page.runDetail.startedAt) }}</dd>
-          </div>
-          <div>
-            <dt>综合买入</dt>
-            <dd>
-              {{ page.formatRate(page.runDetail.snapshot?.combinedMerchantBuyAverageRateToRmb) }}
-            </dd>
-          </div>
-          <div>
-            <dt>综合卖出</dt>
-            <dd>
-              {{ page.formatRate(page.runDetail.snapshot?.combinedMerchantSellAverageRateToRmb) }}
-            </dd>
-          </div>
-          <div class="v2-exchange-detail__primary">
-            <dt>中间价</dt>
-            <dd>{{ page.formatRate(page.runDetail.snapshot?.midRateToRmb) }}</dd>
-          </div>
-          <div v-if="page.runDetail.error" class="v2-exchange-detail__wide">
-            <dt>失败原因</dt>
-            <dd>{{ page.failureLabel(page.runDetail) }}</dd>
-          </div>
-          <div v-if="page.runDetail.error" class="v2-exchange-detail__wide">
+        <V2DetailSummary
+          heading-id="exchange-run-summary"
+          eyebrow="自动采集批次"
+          :title="page.runDetail.id"
+          :description="`${page.runStatusLabel(page.runDetail.status)} · ${page.formatDate(page.runDetail.startedAt)}`"
+          :metrics="[
+            {
+              label: '中间价',
+              value: page.formatRate(page.runDetail.snapshot?.midRateToRmb)
+            },
+            {
+              label: '目标成交额',
+              value: `¥${page.formatAmount(page.runDetail.targetAmountRmb)}`
+            }
+          ]"
+          :facts="[
+            {
+              label: '综合买入',
+              value: page.formatRate(page.runDetail.snapshot?.combinedMerchantBuyAverageRateToRmb)
+            },
+            {
+              label: '综合卖出',
+              value: page.formatRate(page.runDetail.snapshot?.combinedMerchantSellAverageRateToRmb)
+            },
+            {
+              label: '失败原因',
+              value: page.runDetail.error ? page.failureLabel(page.runDetail) : '—'
+            }
+          ]"
+        />
+        <dl v-if="page.runDetail.error" class="v2-exchange-detail-summary">
+          <div class="v2-exchange-detail__wide">
             <dt>技术代码</dt>
             <dd>
               <code>{{ page.runDetail.error.code }}</code>
@@ -195,7 +187,18 @@
     </V2AsyncRegion>
   </el-drawer>
 
-  <el-drawer v-model="page.manualCreateVisible" title="录入人工汇率" size="min(700px, 96vw)">
+  <V2FormDrawer
+    v-model="page.manualCreateVisible"
+    title="录入人工汇率"
+    eyebrow="人工凭证"
+    description="记录汇率数值、证据时间和来源说明"
+    size="min(700px, 96vw)"
+    confirm-text="确认录入"
+    :confirm-loading="page.manualCreating"
+    :confirm-disabled-reason="manualDisabledReason"
+    :dirty="manualDirty"
+    @confirm="createManualEntry"
+  >
     <el-form
       ref="manualFormRef"
       :model="page.manualForm"
@@ -208,96 +211,78 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <el-form-item label="币种" prop="currency">
-        <el-select v-model="page.manualForm.currency">
-          <el-option
-            v-for="currency in page.trackedCurrencies"
-            :key="currency"
-            :label="page.currencyLabel(currency)"
-            :value="currency"
+      <V2PanelSection heading-id="exchange-manual-rate" title="汇率凭证" step="01">
+        <el-form-item label="币种" prop="currency">
+          <el-select v-model="page.manualForm.currency">
+            <el-option
+              v-for="currency in page.trackedCurrencies"
+              :key="currency"
+              :label="page.currencyLabel(currency)"
+              :value="currency"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="兑人民币汇率" prop="rateToCny">
+          <el-input
+            v-model="page.manualForm.rateToCny"
+            inputmode="decimal"
+            placeholder="1.65000000"
           />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="兑人民币汇率" prop="rateToCny">
-        <el-input
-          v-model="page.manualForm.rateToCny"
-          inputmode="decimal"
-          placeholder="1.65000000"
+        </el-form-item>
+        <el-form-item label="记录时间" prop="recordedAt">
+          <el-date-picker
+            v-model="page.manualForm.recordedAt"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm"
+            format="YYYY-MM-DD HH:mm"
+            style="width: 100%"
+          />
+        </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection heading-id="exchange-manual-evidence" title="来源与原因" step="02">
+        <el-form-item label="来源说明" prop="sourceReference">
+          <el-input
+            v-model="page.manualForm.sourceReference"
+            maxlength="500"
+            placeholder="银行成交单、平台截图或人工核对来源"
+          />
+        </el-form-item>
+        <el-form-item label="录入原因" prop="reason">
+          <el-input
+            v-model="page.manualForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-alert
+          type="warning"
+          title="人工记录只进入人工历史，不会覆盖自动采集汇率"
+          :description="`汇率预览：${page.manualPreview}`"
+          show-icon
+          :closable="false"
         />
-      </el-form-item>
-      <el-form-item label="记录时间" prop="recordedAt">
-        <el-date-picker v-model="page.manualForm.recordedAt" type="datetime" style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="来源说明" prop="sourceReference">
-        <el-input
-          v-model="page.manualForm.sourceReference"
-          maxlength="500"
-          placeholder="银行成交单、平台截图或人工核对来源"
-        />
-      </el-form-item>
-      <el-form-item label="原因" prop="reason">
-        <el-input
-          v-model="page.manualForm.reason"
-          type="textarea"
-          :rows="3"
-          maxlength="500"
-          show-word-limit
-        />
-      </el-form-item>
-      <el-alert
-        type="warning"
-        title="人工记录只进入人工历史，不会覆盖自动采集汇率"
-        :description="`汇率预览：${page.manualPreview}`"
-        show-icon
-        :closable="false"
-      />
+      </V2PanelSection>
     </el-form>
-    <template #footer>
-      <div class="v2-exchange-drawer-footer">
-        <span v-if="manualDisabledReason" class="v2-submit-disabled-reason" role="status">
-          {{ manualDisabledReason }}
-        </span>
-        <AppButton variant="ghost" @click="page.manualCreateVisible = false">取消</AppButton>
-        <AppButton
-          variant="primary"
-          :loading="page.manualCreating"
-          :disabled="Boolean(manualDisabledReason)"
-          :aria-label="manualDisabledReason ? `确认录入：${manualDisabledReason}` : '确认录入'"
-          @click="createManualEntry"
-          >确认录入</AppButton
-        >
-      </div>
-    </template>
-  </el-drawer>
+  </V2FormDrawer>
 
   <el-drawer v-model="page.manualDetailVisible" title="人工汇率详情" size="min(560px, 96vw)">
     <section v-if="page.manualDetail" class="v2-exchange-detail">
-      <dl class="v2-exchange-detail-summary">
-        <div>
-          <dt>记录时间</dt>
-          <dd>{{ page.formatDate(page.manualDetail.recordedAt) }}</dd>
-        </div>
-        <div>
-          <dt>操作人</dt>
-          <dd>{{ page.operatorName(page.manualDetail) }}</dd>
-        </div>
-        <div>
-          <dt>币种</dt>
-          <dd>{{ page.currencyLabel(page.manualDetail.currency) }}</dd>
-        </div>
-        <div>
-          <dt>来源说明</dt>
-          <dd>{{ page.manualDetail.sourceReference || '—' }}</dd>
-        </div>
-        <div class="v2-exchange-detail__primary">
-          <dt>兑人民币汇率</dt>
-          <dd>{{ page.formatRate(page.manualDetail.rateToCny) }}</dd>
-        </div>
-        <div class="v2-exchange-detail__wide">
-          <dt>原因</dt>
-          <dd>{{ page.manualDetail.reason || '—' }}</dd>
-        </div>
-      </dl>
+      <V2DetailSummary
+        heading-id="exchange-manual-summary"
+        eyebrow="人工汇率"
+        :title="page.currencyLabel(page.manualDetail.currency)"
+        :description="page.manualDetail.sourceReference || '未填写来源说明'"
+        :metrics="[
+          { label: '兑人民币汇率', value: page.formatRate(page.manualDetail.rateToCny) },
+          { label: '操作人', value: page.operatorName(page.manualDetail) }
+        ]"
+        :facts="[
+          { label: '记录时间', value: page.formatDate(page.manualDetail.recordedAt) },
+          { label: '录入原因', value: page.manualDetail.reason || '—' }
+        ]"
+      />
     </section>
   </el-drawer>
 </template>
@@ -306,8 +291,11 @@
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
@@ -323,6 +311,14 @@ const props = defineProps<{
 
 const settingsFormRef = ref<FormInstance>();
 const manualFormRef = ref<FormInstance>();
+const { dirty: settingsDirty } = useV2FormSnapshot(
+  () => props.page.settingsVisible,
+  () => props.page.settingsForm
+);
+const { dirty: manualDirty } = useV2FormSnapshot(
+  () => props.page.manualCreateVisible,
+  () => props.page.manualForm
+);
 const settingsDisabledReason = computed(() => {
   if (!props.page.canManage) return '当前账号无汇率设置权限';
   if (!props.page.runtime) return '汇率运行配置尚未加载';

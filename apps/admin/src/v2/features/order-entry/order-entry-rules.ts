@@ -1,5 +1,7 @@
 import type { FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
+import { parseV2DateTimeInput } from '@/v2/utils/dateTime';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryForm } from './order-entry-form';
 import { isPositiveOrderAmount, validateTargetProfitRate } from './order-pricing';
 import { createOrderReceiptRules } from './order-receipt';
@@ -48,15 +50,18 @@ export function createOrderEntryRules(
       {
         required: true,
         validator: (_rule, value, callback) => {
-          if (!(value instanceof Date)) {
+          const dueAt = parseV2DateTimeInput(value);
+          const openedAt = parseV2DateTimeInput(form.openedAt);
+          if (!dueAt) {
             callback(new Error('请选择到期时间'));
             return;
           }
-          if (!(form.openedAt instanceof Date) || value.getTime() <= form.openedAt.getTime()) {
+          if (!openedAt || dueAt.getTime() <= openedAt.getTime()) {
             callback(new Error('到期时间必须晚于开通时间'));
             return;
           }
-          if (value.getTime() <= Date.now()) {
+          const businessNow = getV2BusinessNowMs();
+          if (businessNow !== null && dueAt.getTime() <= businessNow) {
             callback(new Error('到期时间必须晚于当前时间'));
             return;
           }

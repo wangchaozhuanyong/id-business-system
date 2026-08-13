@@ -264,43 +264,28 @@
       @retry="page.refreshDetail"
     >
       <div v-if="page.detail" class="v2-governance-detail">
-        <section class="v2-governance-detail-summary">
-          <div>
-            <span>任务编号</span><strong>{{ page.detail.jobNo }}</strong>
-          </div>
-          <div>
-            <span>任务状态</span
-            ><el-tag :type="page.governanceJobStatusMeta[page.detail.status].type" effect="plain">{{
-              page.governanceJobStatusMeta[page.detail.status].label
-            }}</el-tag>
-          </div>
-          <div>
-            <span>申请人</span><strong>{{ page.detail.requestedBy.displayName }}</strong>
-          </div>
-          <div>
-            <span>审批人</span
-            ><strong>{{ page.detail.approval?.approver.displayName ?? '—' }}</strong>
-          </div>
-          <div>
-            <span>预览哈希</span><strong>{{ page.shortHash(page.detail.previewHash) }}</strong>
-          </div>
-          <div>
-            <span>执行结果</span
-            ><strong
-              >成功 {{ page.detail.succeededItems }} / 跳过 {{ page.detail.skippedItems }} / 失败
-              {{ page.detail.failedItems }}</strong
-            >
-          </div>
-          <div class="wide">
-            <span>申请原因</span><strong>{{ page.detail.reason }}</strong>
-          </div>
-          <div class="wide">
-            <span>备份证据</span><strong>{{ page.detail.backupEvidence }}</strong>
-          </div>
-        </section>
+        <V2DetailSummary
+          heading-id="governance-detail-summary"
+          eyebrow="治理任务"
+          :title="page.detail.jobNo"
+          :description="`${page.governanceJobStatusMeta[page.detail.status].label} · 预览 ${page.shortHash(page.detail.previewHash)}`"
+          :metrics="[
+            { label: '成功', value: `${page.detail.succeededItems} 条`, tone: 'positive' },
+            {
+              label: '跳过 / 失败',
+              value: `${page.detail.skippedItems} / ${page.detail.failedItems}`,
+              tone: page.detail.failedItems ? 'negative' : undefined
+            }
+          ]"
+          :facts="[
+            { label: '申请人', value: page.detail.requestedBy.displayName },
+            { label: '审批人', value: page.detail.approval?.approver.displayName ?? '—' },
+            { label: '申请原因', value: page.detail.reason },
+            { label: '备份证据', value: page.detail.backupEvidence }
+          ]"
+        />
 
-        <section>
-          <h3>执行明细</h3>
+        <V2PanelSection heading-id="governance-detail-items" title="执行明细" step="01">
           <V2Table
             :schema="v2TableSchemas.dataGovernance.items"
             :data="page.detail.items"
@@ -338,10 +323,9 @@
               <template #default="{ row }">{{ row.resultAuditLogId ?? '—' }}</template>
             </V2TableColumn>
           </V2Table>
-        </section>
+        </V2PanelSection>
 
-        <section>
-          <h3>执行检查点</h3>
+        <V2PanelSection heading-id="governance-detail-checkpoints" title="执行检查点" step="02">
           <V2Table
             :schema="v2TableSchemas.dataGovernance.checkpoints"
             :data="page.detail.checkpoints"
@@ -378,7 +362,7 @@
               }}</template>
             </V2TableColumn>
           </V2Table>
-        </section>
+        </V2PanelSection>
       </div>
     </V2AsyncRegion>
   </el-drawer>
@@ -389,6 +373,8 @@ import { ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
@@ -422,8 +408,7 @@ function beforeDecisionClose(done: () => void) {
 }
 
 .v2-governance-selection-summary,
-.v2-governance-decision-summary,
-.v2-governance-detail-summary {
+.v2-governance-decision-summary {
   padding: 14px;
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
@@ -437,58 +422,40 @@ function beforeDecisionClose(done: () => void) {
   margin-top: 10px;
 }
 
-.v2-governance-decision-summary,
-.v2-governance-detail-summary {
+.v2-governance-decision-summary {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.v2-governance-decision-summary > div,
-.v2-governance-detail-summary > div {
+.v2-governance-decision-summary > div {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
-.v2-governance-decision-summary .wide,
-.v2-governance-detail-summary .wide {
+.v2-governance-decision-summary .wide {
   grid-column: 1 / -1;
 }
 
 .v2-governance-decision-summary span,
-.v2-governance-detail-summary span,
 .v2-governance-selection-summary span {
   color: var(--v2-text-soft);
   font-size: 11px;
 }
 
-.v2-governance-decision-summary strong,
-.v2-governance-detail-summary strong {
+.v2-governance-decision-summary strong {
   overflow-wrap: anywhere;
   font-size: 12px;
   line-height: 1.6;
 }
 
-.v2-governance-detail section {
-  display: grid;
-  gap: 10px;
-}
-
-.v2-governance-detail h3 {
-  margin: 0;
-  color: var(--v2-text);
-  font-size: 14px;
-}
-
 @media (max-width: 560px) {
-  .v2-governance-decision-summary,
-  .v2-governance-detail-summary {
+  .v2-governance-decision-summary {
     grid-template-columns: 1fr;
   }
 
-  .v2-governance-decision-summary .wide,
-  .v2-governance-detail-summary .wide {
+  .v2-governance-decision-summary .wide {
     grid-column: auto;
   }
 }

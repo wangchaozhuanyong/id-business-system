@@ -459,6 +459,7 @@ export function useOptionsPage() {
 
   function formatDate(value: string) {
     return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

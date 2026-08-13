@@ -7,6 +7,7 @@ import {
   Rate8,
   V2_DECIMAL_PATTERN,
   V2_DECIMAL_PLACES,
+  toIdBusinessV2BusinessDate,
   type V2CommandTransaction,
   type V2DecimalInput
 } from '../runtime/public-api';
@@ -240,7 +241,7 @@ export function normalizeOptionalString(value: unknown, label: string, maxLength
 }
 
 export function generateOrderNo() {
-  const day = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const day = toIdBusinessV2BusinessDate(new Date()).text.replaceAll('-', '');
   return `V2${day}${randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
 }
 

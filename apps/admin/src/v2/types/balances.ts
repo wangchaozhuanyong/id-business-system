@@ -93,6 +93,7 @@ export interface V2GiftCardCreditPayload {
   purchaseManualRateReason?: string;
   paidAt?: string;
   idempotencyKey: string;
+  confirmedSoldByOrderId?: string;
   remark?: string;
 }
 

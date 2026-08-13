@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import { mapAmount4 } from '../../runtime/public-api';
-import { toKualaLumpurBusinessDate } from '../id-business-v2-finance-input';
+import { toIdBusinessV2BusinessDate } from '../id-business-v2-finance-input';
 
 @Injectable()
 export class IdBusinessV2FinanceHistoryCommandRepository {
@@ -13,7 +13,7 @@ export class IdBusinessV2FinanceHistoryCommandRepository {
       create: {
         id: 1,
         baseCurrency: 'CNY',
-        timezone: 'Asia/Kuala_Lumpur',
+        timezone: 'Asia/Shanghai',
         historyStatus: 'not_started'
       }
     });
@@ -150,7 +150,7 @@ export class IdBusinessV2FinanceHistoryCommandRepository {
         source: 'legacy_assumed_cny',
         sourceReference: 'finance-history-backfill-v1',
         sourceEvidence: { assumption: 'Historical amounts are treated as CNY at rate 1' },
-        businessDate: toKualaLumpurBusinessDate(enabledAt).date,
+        businessDate: toIdBusinessV2BusinessDate(enabledAt).date,
         capturedAt: enabledAt,
         createdByUserId
       }

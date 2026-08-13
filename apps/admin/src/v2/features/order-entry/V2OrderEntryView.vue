@@ -106,13 +106,6 @@
                       </AppButton>
                     </div>
                   </el-form-item>
-
-                  <el-form-item label="ID 来源">
-                    <el-radio-group v-model="form.accountSource" aria-label="ID 来源">
-                      <el-radio-button value="inventory">库存 ID</el-radio-button>
-                      <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
-                    </el-radio-group>
-                  </el-form-item>
                 </div>
 
                 <div class="v2-order-entry-form-column">
@@ -135,16 +128,26 @@
 
                   <V2OrderEntryAccountSelect
                     v-model:account-id="form.accountId"
-                    v-model:id-selection-mode="idSelectionMode"
                     :account-source="form.accountSource"
+                    :id-selection-mode="idSelectionMode"
                     :customer-id="form.customerId"
                     :can-match="canMatch"
                     :matching-loading="matchingLoading"
                     :candidates="candidateItems"
                     :format-decimal="formatDecimal"
                     @search="searchManualCandidates"
-                    @selection-mode-change="handleIdSelectionModeChange"
                   />
+
+                  <el-form-item label="ID 来源">
+                    <el-radio-group
+                      v-model="form.accountSource"
+                      class="v2-order-entry-account-source"
+                      aria-label="ID 来源"
+                    >
+                      <el-radio-button value="inventory">库存 ID</el-radio-button>
+                      <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
                 </div>
               </div>
             </section>
@@ -266,6 +269,7 @@
                       type="datetime"
                       placeholder="选择开通时间"
                       format="YYYY-MM-DD HH:mm"
+                      value-format="YYYY-MM-DDTHH:mm"
                       @change="handleOpenedAtChange"
                     />
                   </el-form-item>
@@ -276,6 +280,7 @@
                       type="datetime"
                       placeholder="选择到期时间"
                       format="YYYY-MM-DD HH:mm"
+                      value-format="YYYY-MM-DDTHH:mm"
                     />
                   </el-form-item>
                 </div>
@@ -339,6 +344,8 @@
         />
 
         <V2OrderEntryLiveSummary
+          v-model:id-selection-mode="idSelectionMode"
+          :account-source="form.accountSource"
           :selected-candidate="selectedCandidate"
           :selected-country-name="selectedCountry?.name ?? ''"
           :account-purchase-cost-preview="appliedAccountCostPreview"
@@ -348,6 +355,7 @@
           :estimated-profit-preview="estimatedProfitPreview"
           :estimated-profit-rate-preview="estimatedProfitRatePreview"
           :format-decimal="formatDecimal"
+          @selection-mode-change="handleIdSelectionModeChange"
         />
 
         <V2OrderEntrySubmitBar

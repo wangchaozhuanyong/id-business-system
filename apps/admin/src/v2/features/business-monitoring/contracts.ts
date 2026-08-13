@@ -54,5 +54,5 @@ export interface V2BusinessMonitoringResponse {
     pageSize: number;
   };
   generatedAt: string;
-  timezone: 'Asia/Kuala_Lumpur';
+  timezone: 'Asia/Shanghai';
 }

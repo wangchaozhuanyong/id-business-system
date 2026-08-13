@@ -294,18 +294,10 @@ export function useOrdersPage() {
     const order = refundingOrder.value;
     if (!order || !canUpdateOrders.value) return;
 
-    if (payload.restoreBalance || payload.accountReturned) {
+    if (payload.restoreBalance) {
       try {
         await ElMessageBox.confirm(
-          [
-            payload.restoreBalance ? '该操作会真实增加 ID 余额并写入原消费的反向流水。' : '',
-            payload.accountReturned
-              ? '该操作会解除 ID 的已卖出占用，并从本单利润中撤销 ID 成本。'
-              : '',
-            '请确认实际退款与 ID 收回情况一致。'
-          ]
-            .filter(Boolean)
-            .join(''),
+          '该操作会按原消费流水真实增加 ID 余额并恢复余额成本，请确认余额已实际退回。',
           `确认处理订单 ${order.orderNo} 的退款`,
           {
             type: 'warning',
@@ -332,9 +324,13 @@ export function useOrdersPage() {
       ElMessage.success(
         result.idempotentReplay
           ? '已恢复原退款处理结果'
-          : result.balanceRestored
-            ? '退款已记录，原消费余额已按反向流水恢复'
-            : '退款已记录，Apple 余额保持不变'
+          : order.accountDisposition === 'sold'
+            ? result.balanceRestored
+              ? '订单已全额退款，ID 已恢复可用，原消费余额已恢复'
+              : '订单已全额退款，ID 已恢复可用，当前余额保持不变'
+            : result.balanceRestored
+              ? '订单已全额退款，原消费余额已恢复'
+              : '订单已全额退款，ID 当前余额保持不变'
       );
       await loadOrders();
     } catch (error) {

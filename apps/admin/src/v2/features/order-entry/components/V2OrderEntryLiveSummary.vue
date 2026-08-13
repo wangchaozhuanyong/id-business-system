@@ -6,6 +6,37 @@
       help="随订单资料和所选 ID 实时更新余额、成本与预计利润。"
     />
 
+    <section class="v2-order-entry-id-config" aria-labelledby="id-config-title">
+      <header>
+        <div>
+          <strong id="id-config-title">ID 选择方式</strong>
+          <small>
+            {{
+              accountSource === 'inventory'
+                ? '决定系统如何提供库存候选 ID。'
+                : '客户已购 ID 按原客户归属筛选。'
+            }}
+          </small>
+        </div>
+        <span>{{ accountSource === 'inventory' ? '库存 ID' : '客户已购 ID' }}</span>
+      </header>
+
+      <el-radio-group
+        v-if="accountSource === 'inventory'"
+        v-model="idSelectionMode"
+        class="v2-order-entry-selection-mode v2-order-entry-segmented-options"
+        aria-label="ID 选择方式"
+        @change="$emit('selection-mode-change', $event)"
+      >
+        <el-radio-button value="auto">自动匹配</el-radio-button>
+        <el-radio-button value="manual">手动选择</el-radio-button>
+      </el-radio-group>
+      <div v-else class="v2-order-entry-id-config__fixed-mode">
+        <strong>手动选择</strong>
+        <span>仅显示当前客户名下可继续使用的 ID</span>
+      </div>
+    </section>
+
     <section class="v2-order-entry-selected-id" aria-live="polite">
       <header>
         <span>当前选中 ID</span>
@@ -62,9 +93,16 @@
 
 <script setup lang="ts">
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
-import type { V2OrderCandidate } from '../contracts';
+import type { V2OrderAccountSource, V2OrderCandidate } from '../contracts';
+
+defineEmits<{
+  'selection-mode-change': [value: unknown];
+}>();
+
+const idSelectionMode = defineModel<'auto' | 'manual'>('idSelectionMode', { required: true });
 
 defineProps<{
+  accountSource: V2OrderAccountSource;
   selectedCandidate: V2OrderCandidate | null;
   selectedCountryName: string;
   accountPurchaseCostPreview: string;

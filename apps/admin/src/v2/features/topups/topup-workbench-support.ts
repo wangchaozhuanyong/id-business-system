@@ -1,14 +1,32 @@
 import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
-import type { V2TopupServiceSummary } from './contracts';
+import type { V2TopupServiceSummary, V2TopupWorkbenchItem } from './contracts';
+import { formatV2DateTime, formatV2Time, toV2DateTimeInput } from '@/v2/utils/dateTime';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 
 interface GiftCardValueForm {
   faceValue: string;
   exchangeRate: string;
 }
 
+export function createTopupCreditForm(
+  account: V2TopupWorkbenchItem,
+  cardNameOptionId: string,
+  creditedAt: string
+) {
+  return {
+    cardNameOptionId,
+    countryOptionId: account.country.id,
+    code: '',
+    faceValue: '',
+    exchangeRate: '',
+    supplierOptionId: '',
+    creditedAt,
+    remark: ''
+  };
+}
+
 export function toLocalDateTimeInput(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+  return toV2DateTimeInput(value);
 }
 
 export function calculateCreditCostPreview(form: GiftCardValueForm) {
@@ -58,12 +76,14 @@ export function servicePath(service: V2TopupServiceSummary) {
 
 export function formatElapsed(value: string | null) {
   if (!value) return '-';
-  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  const businessNow = getV2BusinessNowMs();
+  if (businessNow === null) return '-';
+  const elapsed = Math.max(0, businessNow - new Date(value).getTime());
   const hours = Math.floor(elapsed / 3_600_000);
   if (hours < 48) return `${Math.max(1, hours)} 小时前`;
   return `${Math.max(2, Math.floor(hours / 24))} 天前`;
 }
 
 function formatDateTime(value: string, options: Intl.DateTimeFormatOptions) {
-  return new Intl.DateTimeFormat('zh-CN', { ...options, hour12: false }).format(new Date(value));
+  return 'year' in options ? formatV2DateTime(value, options) : formatV2Time(value, options);
 }

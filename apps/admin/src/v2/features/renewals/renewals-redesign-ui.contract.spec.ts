@@ -4,6 +4,9 @@ import pageState from './useRenewalsPage.ts?raw';
 import list from './components/V2RenewalsList.vue?raw';
 import overview from './components/V2RenewalsOverview.vue?raw';
 import toolbar from './components/V2RenewalsToolbar.vue?raw';
+import drawer from './components/V2RenewalOrderDrawer.vue?raw';
+import fixture from '../../testing/V2RenewalsDesignFixture.vue?raw';
+import serviceSelection from './useRenewalServiceSelection.ts?raw';
 
 describe('renewals scheme 3 redesign contract', () => {
   it('composes the overview, filters and list around the existing renewal dialogs', () => {
@@ -56,5 +59,43 @@ describe('renewals scheme 3 redesign contract', () => {
     ]) {
       expect(view).toContain(preview);
     }
+  });
+
+  it('organizes the renewal drawer into a consistent secondary-page structure', () => {
+    for (const section of [
+      '续费对象',
+      '续费业务',
+      '收款与余额',
+      '结算信息',
+      '续费周期',
+      '补充说明',
+      '费用与利润'
+    ]) {
+      expect(drawer).toContain(section);
+    }
+    expect(drawer).toContain('class="v2-renewal-open__facts"');
+    expect(drawer).toContain('class="v2-renewal-open__summary"');
+    expect(drawer).toContain('require-asterisk-position="right"');
+    expect(fixture).toContain('<V2RenewalOrderDrawer');
+    expect(fixture).toContain("fixtureParams.get('drawer') === 'open'");
+    expect(fixture).toContain('未提交任何业务数据');
+  });
+
+  it('defaults to the current service and supports category-first service selection', () => {
+    expect(pageState).toContain("categoryOptionId: renewal.service.parent?.id ?? ''");
+    expect(pageState).toContain('serviceOptionId: renewal.service.id');
+    expect(pageState).toContain('useRenewalServiceSelection(options, selectedRenewal, form)');
+    expect(serviceSelection).toContain('const availableCategories = computed');
+    expect(serviceSelection).toContain('const categoryServices = computed');
+    expect(serviceSelection).toContain('function handleRenewalCategoryChange()');
+    expect(view).toContain('v-model:category-option-id="page.form.categoryOptionId"');
+    expect(view).toContain(':categories="page.availableCategories"');
+    expect(view).toContain(':services="page.categoryServices"');
+    expect(drawer).toContain('label="业务分类"');
+    expect(drawer).toContain('label="续费业务"');
+    expect(drawer).toContain(':disabled="!categoryOptionId"');
+    expect(drawer).toContain(':dirty="formDirty"');
+    expect(drawer).toContain('currentFormSnapshot.value !== initialFormSnapshot.value');
+    expect(fixture).toContain("categoryOptionId: 'category-ai'");
   });
 });

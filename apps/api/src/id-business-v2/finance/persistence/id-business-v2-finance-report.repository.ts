@@ -318,7 +318,7 @@ export class IdBusinessV2FinanceReportRepository {
       create: {
         id: 1,
         baseCurrency: 'CNY',
-        timezone: 'Asia/Kuala_Lumpur',
+        timezone: 'Asia/Shanghai',
         historyStatus: 'incomplete',
         historyNote: '等待确认期初余额和系统外历史开支'
       }

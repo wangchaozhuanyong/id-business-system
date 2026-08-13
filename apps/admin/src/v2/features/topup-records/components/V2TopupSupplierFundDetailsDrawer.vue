@@ -16,75 +16,93 @@
       @retry="load"
     >
       <section v-if="detail" class="v2-supplier-fund-details">
-        <header>
-          <div>
-            <span>当前人民币余额</span>
-            <strong :class="{ 'is-negative': detail.account?.isNegative }">
-              {{
-                detail.account ? `¥${formatDecimal(detail.account.currentBalanceCny)}` : '未初始化'
-              }}
-            </strong>
-          </div>
-        </header>
-        <section v-if="detail.countryStats.length" class="v2-supplier-country-stats">
-          <article v-for="country in detail.countryStats" :key="country.countryOptionId">
-            <strong>{{ country.countryName }}</strong>
-            <span>{{ country.cardCount }} 张卡</span>
-            <span>
-              面值 {{ formatDecimal(country.faceValue) }}
-              {{ country.currencyCode || '' }}
-            </span>
-            <span>人民币成本 ¥{{ formatDecimal(country.costCny) }}</span>
-          </article>
-        </section>
-        <V2Table
-          :schema="v2TableSchemas.topupRecords.supplierFundDetails"
-          :data="detail.items"
-          scrollbar-always-on
-          show-overflow-tooltip
-        >
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[0]">
-            <template #default="{ row }">{{ ledgerTypeLabel(row.entryType) }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[1]">
-            <template #default="{ row }">{{ formatSignedCurrency(row.balanceDeltaCny) }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[2]">
-            <template #default="{ row }">¥{{ formatDecimal(row.balanceBeforeCny) }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[3]">
-            <template #default="{ row }">¥{{ formatDecimal(row.balanceAfterCny) }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[4]">
-            <template #default="{ row }">
-              {{
-                row.giftCard?.codeMasked ||
-                (row.payment ? `付款 ${row.payment.id.slice(0, 8)}` : '—')
-              }}
-            </template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[5]">
-            <template #default="{ row }">{{ row.reason || '—' }}</template>
-          </V2TableColumn>
-          <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[6]">
-            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-          </V2TableColumn>
-        </V2Table>
-        <footer class="v2-records-pagination">
-          <span>共 {{ detail.total }} 条</span>
-          <el-pagination
-            v-pagination-label
-            :current-page="displayedPage"
-            :page-size="displayedPageSize"
-            background
-            :page-sizes="[10, 20, 50, 100]"
-            layout="sizes, prev, pager, next"
-            :total="detail.total"
-            :disabled="loading"
-            @current-change="handlePageChange"
-            @size-change="handlePageSizeChange"
-          />
-        </footer>
+        <V2DetailSummary
+          heading-id="supplier-fund-detail-summary"
+          eyebrow="供应商资金"
+          :title="supplier?.supplier.name || '供应商'"
+          description="集中核对余额变化、入库卡片和每笔资金依据"
+          :metrics="[
+            {
+              label: '当前人民币余额',
+              value: detail.account
+                ? `¥${formatDecimal(detail.account.currentBalanceCny)}`
+                : '未初始化',
+              tone: detail.account?.isNegative ? 'negative' : undefined
+            },
+            { label: '资金流水', value: `${detail.total} 条` }
+          ]"
+          :facts="[
+            { label: '卡片国家/地区', value: `${detail.countryStats.length} 个` },
+            { label: '当前页', value: `第 ${displayedPage} 页` },
+            { label: '每页数量', value: `${displayedPageSize} 条` }
+          ]"
+        />
+        <V2PanelSection heading-id="supplier-fund-country-stats" title="在库卡片概览" step="01">
+          <section v-if="detail.countryStats.length" class="v2-supplier-country-stats">
+            <article v-for="country in detail.countryStats" :key="country.countryOptionId">
+              <strong>{{ country.countryName }}</strong>
+              <span>{{ country.cardCount }} 张卡</span>
+              <span>
+                面值 {{ formatDecimal(country.faceValue) }}
+                {{ country.currencyCode || '' }}
+              </span>
+              <span>人民币成本 ¥{{ formatDecimal(country.costCny) }}</span>
+            </article>
+          </section>
+          <el-empty v-else description="当前没有在库卡片统计" :image-size="72" />
+        </V2PanelSection>
+        <V2PanelSection heading-id="supplier-fund-ledger" title="资金流水" step="02">
+          <V2Table
+            :schema="v2TableSchemas.topupRecords.supplierFundDetails"
+            :data="detail.items"
+            scrollbar-always-on
+            show-overflow-tooltip
+          >
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[0]">
+              <template #default="{ row }">{{ ledgerTypeLabel(row.entryType) }}</template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[1]">
+              <template #default="{ row }">{{
+                formatSignedCurrency(row.balanceDeltaCny)
+              }}</template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[2]">
+              <template #default="{ row }">¥{{ formatDecimal(row.balanceBeforeCny) }}</template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[3]">
+              <template #default="{ row }">¥{{ formatDecimal(row.balanceAfterCny) }}</template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[4]">
+              <template #default="{ row }">
+                {{
+                  row.giftCard?.codeMasked ||
+                  (row.payment ? `付款 ${row.payment.id.slice(0, 8)}` : '—')
+                }}
+              </template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[5]">
+              <template #default="{ row }">{{ row.reason || '—' }}</template>
+            </V2TableColumn>
+            <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[6]">
+              <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+            </V2TableColumn>
+          </V2Table>
+          <footer class="v2-records-pagination">
+            <span>共 {{ detail.total }} 条</span>
+            <el-pagination
+              v-pagination-label
+              :current-page="displayedPage"
+              :page-size="displayedPageSize"
+              background
+              :page-sizes="[10, 20, 50, 100]"
+              layout="sizes, prev, pager, next"
+              :total="detail.total"
+              :disabled="loading"
+              @current-change="handlePageChange"
+              @size-change="handlePageSizeChange"
+            />
+          </footer>
+        </V2PanelSection>
       </section>
     </V2AsyncRegion>
   </el-drawer>
@@ -94,6 +112,8 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';

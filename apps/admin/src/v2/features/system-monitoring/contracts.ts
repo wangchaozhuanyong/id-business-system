@@ -58,5 +58,5 @@ export interface V2SystemMonitoringResponse {
   }>;
   generatedAt: string;
   probeDurationMs: number;
-  timezone: 'Asia/Kuala_Lumpur';
+  timezone: 'Asia/Shanghai';
 }

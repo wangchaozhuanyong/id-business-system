@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2ActivationStatus } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
+import { buildIdBusinessV2DateRange } from '../runtime/public-api';
 import type { ActivationRecord, ActivationSortField } from './activation.types';
 import {
   ID_BUSINESS_V2_DUE_STATUS_CODES,
@@ -25,7 +26,6 @@ export interface ListIdBusinessV2ActivationsQuery extends PaginationQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIVATION_STATUSES = new Set<IdBusinessV2ActivationStatus>([
   'active',
   'expired',
@@ -98,30 +98,12 @@ export class IdBusinessV2ActivationsService {
     fromValue: unknown,
     toValue: unknown,
     label: string
-  ): { gte?: Date; lte?: Date } | undefined {
-    const from = this.parseDate(fromValue, `${label}开始`, false);
-    const to = this.parseDate(toValue, `${label}结束`, true);
-    if (from && to && from.getTime() > to.getTime()) {
-      throw new BadRequestException(`${label}开始不能晚于结束`);
-    }
-    if (!from && !to) return undefined;
-    return {
-      gte: from ?? undefined,
-      lte: to ?? undefined
-    };
-  }
-
-  private parseDate(value: unknown, label: string, endOfDay: boolean) {
-    const normalized = this.normalizeNullableString(value);
-    if (!normalized) return null;
-    if (!DATE_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    const date = new Date(`${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return date;
+  ): { gte?: Date; lt?: Date } | undefined {
+    return buildIdBusinessV2DateRange(fromValue, toValue, {
+      from: `${label}开始`,
+      to: `${label}结束`,
+      invalidRange: `${label}开始不能晚于结束`
+    });
   }
 
   private parseStoredStatus(value: unknown) {

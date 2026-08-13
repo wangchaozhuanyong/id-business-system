@@ -25,6 +25,7 @@ describe('gift card manual rate form', () => {
       supplierOptionId: 'supplier-1',
       creditedAt: '2026-07-29T03:00:00.000Z',
       idempotencyKey: 'request-1',
+      confirmedSoldByOrderId: 'order-1',
       remark: ' manual rate '
     });
 
@@ -37,6 +38,7 @@ describe('gift card manual rate form', () => {
       supplierOptionId: 'supplier-1',
       creditedAt: '2026-07-29T03:00:00.000Z',
       idempotencyKey: 'request-1',
+      confirmedSoldByOrderId: 'order-1',
       remark: 'manual rate'
     });
     expect(payload).not.toHaveProperty('purchaseCurrency');

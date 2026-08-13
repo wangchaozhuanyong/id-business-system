@@ -290,13 +290,14 @@ import V2TopupSupplierFundsMobileList from './V2TopupSupplierFundsMobileList.vue
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { ensureV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
 import {
   formatOptionalSupplierFundDate as formatOptionalDate,
   formatSupplierFundDecimal as formatDecimal,
-  formatSupplierFundSignedCurrency as formatSignedCurrency,
-  toLocalDateTimeInput
+  formatSupplierFundSignedCurrency as formatSignedCurrency
 } from '../topup-supplier-fund-format';
+import { parseV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import type {
   V2TopupSupplierFundItem,
   V2TopupSupplierFundListQuery,
@@ -445,7 +446,12 @@ function handlePageSizeChange(pageSize: number) {
   void fundsQuery.ensureFresh();
 }
 
-function openMutation(item: V2TopupSupplierFundItem, mode: MutationMode) {
+async function openMutation(item: V2TopupSupplierFundItem, mode: MutationMode) {
+  const paidAt = await ensureV2BusinessNowInput();
+  if (!paidAt) {
+    ElMessage.error('无法读取服务器北京时间，请稍后重试');
+    return;
+  }
   selectedSupplier.value = item;
   mutationMode.value = mode;
   Object.assign(balanceForm, {
@@ -459,7 +465,7 @@ function openMutation(item: V2TopupSupplierFundItem, mode: MutationMode) {
     settlementRateCnyUsdt: '',
     network: '',
     transactionHash: '',
-    paidAt: toLocalDateTimeInput(new Date()),
+    paidAt,
     remark: '',
     idempotencyKey: createIdempotencyKey()
   });
@@ -497,7 +503,7 @@ async function submitMutation() {
         ...(paymentForm.transactionHash.trim()
           ? { transactionHash: paymentForm.transactionHash.trim() }
           : {}),
-        paidAt: new Date(paymentForm.paidAt).toISOString(),
+        paidAt: v2DateTimeInputToIso(paymentForm.paidAt),
         ...(paymentForm.remark.trim() ? { remark: paymentForm.remark.trim() } : {}),
         idempotencyKey: paymentForm.idempotencyKey
       });
@@ -531,7 +537,7 @@ function validateMutation() {
       ElMessage.warning('网络手续费必须是最多 4 位小数的非负数字');
       return false;
     }
-    if (!paymentForm.paidAt || Number.isNaN(new Date(paymentForm.paidAt).getTime())) {
+    if (!parseV2DateTimeInput(paymentForm.paidAt)) {
       ElMessage.warning('请选择有效的实际付款时间');
       return false;
     }

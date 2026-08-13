@@ -95,12 +95,6 @@
                             <AppButton variant="ghost">新增客户</AppButton>
                           </div>
                         </el-form-item>
-                        <el-form-item label="ID 来源">
-                          <el-radio-group v-model="accountSource" aria-label="ID 来源">
-                            <el-radio-button value="inventory">库存 ID</el-radio-button>
-                            <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
-                          </el-radio-group>
-                        </el-form-item>
                       </div>
                       <div class="v2-order-entry-form-column">
                         <el-form-item label="业务分类" required>
@@ -118,15 +112,14 @@
                             />
                           </el-select>
                         </el-form-item>
-                        <el-form-item label="ID 选择方式">
+                        <el-form-item label="ID 来源">
                           <el-radio-group
-                            v-model="selectionMode"
-                            class="v2-order-entry-selection-mode"
+                            v-model="accountSource"
+                            class="v2-order-entry-account-source"
+                            aria-label="ID 来源"
                           >
-                            <el-radio value="auto" :disabled="accountSource === 'customer_owned'">
-                              自动匹配
-                            </el-radio>
-                            <el-radio value="manual">手动选择</el-radio>
+                            <el-radio-button value="inventory">库存 ID</el-radio-button>
+                            <el-radio-button value="customer_owned">客户已购 ID</el-radio-button>
                           </el-radio-group>
                         </el-form-item>
                       </div>
@@ -248,6 +241,8 @@
               />
 
               <V2OrderEntryLiveSummary
+                v-model:id-selection-mode="selectionMode"
+                :account-source="accountSource"
                 :selected-candidate="selectedCandidate"
                 selected-country-name="美国"
                 account-purchase-cost-preview="0"

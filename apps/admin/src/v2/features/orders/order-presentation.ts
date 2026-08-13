@@ -24,7 +24,7 @@ export const accountDispositionOptions: Array<{
 }> = [
   { value: 'retained', label: '保留 ID', type: 'info' },
   { value: 'sold', label: '已卖出', type: 'danger' },
-  { value: 'recovered', label: '已收回', type: 'success' }
+  { value: 'recovered', label: 'ID 已退款', type: 'success' }
 ];
 
 export function statusMeta(status: V2OrderStatus) {
@@ -71,6 +71,7 @@ export function profitClass(value: string | null) {
 export function formatDate(value: string | null) {
   if (!value) return '-';
   return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

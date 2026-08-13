@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  toIdBusinessV2BusinessDate,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import {
@@ -393,7 +394,7 @@ export class IdBusinessV2DataGovernancePreviewService {
     const result = await this.transactionManager.execute(
       async (tx, context) => {
         await this.assertApprovalReady(operator.id, tx);
-        const jobNo = `GOV-${context.businessTime.toISOString().slice(0, 10).replaceAll('-', '')}-${jobId.slice(0, 8)}`;
+        const jobNo = `GOV-${toIdBusinessV2BusinessDate(context.businessTime).text.replaceAll('-', '')}-${jobId.slice(0, 8)}`;
         await this.repository.createJob(tx, {
           id: jobId,
           jobNo,

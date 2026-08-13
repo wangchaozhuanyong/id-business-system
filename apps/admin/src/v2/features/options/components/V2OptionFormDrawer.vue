@@ -2,9 +2,12 @@
   <V2FormDrawer
     v-model="drawerVisible"
     :title="editingItem ? '编辑选项' : '新增选项'"
+    eyebrow="业务配置"
+    description="按归属关系、业务参数和展示状态配置选项"
     :confirm-text="editingItem ? '保存修改' : '确认新增'"
     :confirm-loading="saving"
     :confirm-disabled-reason="submitDisabledReason"
+    :dirty="formDirty"
     @confirm="confirm"
   >
     <el-form
@@ -19,150 +22,161 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <el-form-item label="选项类型" prop="type">
-        <el-select
-          v-model="type"
-          :disabled="Boolean(editingItem)"
-          @change="emit('typeChange', $event)"
-        >
-          <el-option
-            v-for="definition in typeDefinitions"
-            :key="definition.type"
-            :label="definition.label"
-            :value="definition.type"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="选项名称" prop="name">
-        <el-input v-model="name" maxlength="160" show-word-limit />
-      </el-form-item>
-
-      <el-form-item
-        v-if="formTypeDefinition?.requiresCountry"
-        label="上级国家"
-        prop="countryOptionId"
-        required
-      >
-        <el-select
-          v-model="countryOptionId"
-          filterable
-          :loading="countryOptionsLoading"
-          placeholder="选择国家"
-        >
-          <el-option
-            v-for="option in countryOptions"
-            :key="option.id"
-            :label="`${option.name} / ${option.currencyCode ?? '未设置货币'}`"
-            :value="option.id"
-            :disabled="!option.currencyCode"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item
-        v-if="formTypeDefinition?.parentType"
-        :label="`上级${parentTypeLabel}`"
-        prop="parentId"
-        required
-      >
-        <el-select
-          v-model="parentId"
-          filterable
-          :loading="parentOptionsLoading"
-          :placeholder="`选择${parentTypeLabel}`"
-        >
-          <el-option
-            v-for="option in parentOptions"
-            :key="option.id"
-            :label="selectorLabel(option)"
-            :value="option.id"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item
-        v-if="formTypeDefinition?.supportsCurrency"
-        label="默认货币"
-        prop="currencyCode"
-      >
-        <el-select
-          v-model="currencyCode"
-          filterable
-          allow-create
-          default-first-option
-          placeholder="选择或输入 3 位货币代码"
-        >
-          <el-option
-            v-for="currency in currencyOptions"
-            :key="currency"
-            :label="currency"
-            :value="currency"
-          />
-        </el-select>
-      </el-form-item>
-
-      <div v-if="formTypeDefinition?.supportsBusinessAmount" class="v2-options-fee-grid">
-        <el-form-item label="业务金额" prop="businessAmount">
-          <el-input-number
-            v-model="businessAmount"
-            :min="Number(V2_DECIMAL_STEP)"
-            :max="99999999999999"
-            :precision="V2_DECIMAL_PLACES"
-            :step="Number(V2_DECIMAL_STEP)"
-            controls-position="right"
-          />
+      <V2PanelSection heading-id="option-identity-section" title="类型与归属" step="01">
+        <el-form-item label="选项类型" prop="type">
+          <el-select
+            v-model="type"
+            :disabled="Boolean(editingItem)"
+            @change="emit('typeChange', $event)"
+          >
+            <el-option
+              v-for="definition in typeDefinitions"
+              :key="definition.type"
+              :label="definition.label"
+              :value="definition.type"
+            />
+          </el-select>
         </el-form-item>
-        <el-form-item label="业务货币">
-          <el-input :model-value="selectedServiceCurrency" disabled />
-        </el-form-item>
-      </div>
 
-      <div v-if="formTypeDefinition?.supportsFees" class="v2-options-fee-grid">
-        <el-form-item label="固定手续费">
+        <el-form-item label="选项名称" prop="name">
+          <el-input v-model="name" maxlength="160" show-word-limit />
+        </el-form-item>
+
+        <el-form-item
+          v-if="formTypeDefinition?.requiresCountry"
+          label="上级国家"
+          prop="countryOptionId"
+          required
+        >
+          <el-select
+            v-model="countryOptionId"
+            filterable
+            :loading="countryOptionsLoading"
+            placeholder="选择国家"
+          >
+            <el-option
+              v-for="option in countryOptions"
+              :key="option.id"
+              :label="`${option.name} / ${option.currencyCode ?? '未设置货币'}`"
+              :value="option.id"
+              :disabled="!option.currencyCode"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item
+          v-if="formTypeDefinition?.parentType"
+          :label="`上级${parentTypeLabel}`"
+          prop="parentId"
+          required
+        >
+          <el-select
+            v-model="parentId"
+            filterable
+            :loading="parentOptionsLoading"
+            :placeholder="`选择${parentTypeLabel}`"
+          >
+            <el-option
+              v-for="option in parentOptions"
+              :key="option.id"
+              :label="selectorLabel(option)"
+              :value="option.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item
+          v-if="formTypeDefinition?.supportsCurrency"
+          label="默认货币"
+          prop="currencyCode"
+        >
+          <el-select
+            v-model="currencyCode"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入 3 位货币代码"
+          >
+            <el-option
+              v-for="currency in currencyOptions"
+              :key="currency"
+              :label="currency"
+              :value="currency"
+            />
+          </el-select>
+        </el-form-item>
+      </V2PanelSection>
+
+      <V2PanelSection
+        v-if="formTypeDefinition?.supportsBusinessAmount || formTypeDefinition?.supportsFees"
+        heading-id="option-business-section"
+        title="业务参数"
+        step="02"
+      >
+        <div v-if="formTypeDefinition?.supportsBusinessAmount" class="v2-options-fee-grid">
+          <el-form-item label="业务金额" prop="businessAmount">
+            <el-input-number
+              v-model="businessAmount"
+              :min="Number(V2_DECIMAL_STEP)"
+              :max="99999999999999"
+              :precision="V2_DECIMAL_PLACES"
+              :step="Number(V2_DECIMAL_STEP)"
+              controls-position="right"
+            />
+          </el-form-item>
+          <el-form-item label="业务货币">
+            <el-input :model-value="selectedServiceCurrency" disabled />
+          </el-form-item>
+        </div>
+
+        <div v-if="formTypeDefinition?.supportsFees" class="v2-options-fee-grid">
+          <el-form-item label="固定手续费">
+            <el-input-number
+              v-model="fixedFee"
+              :min="0"
+              :max="99999999"
+              :precision="V2_DECIMAL_PLACES"
+              :step="Number(V2_DECIMAL_STEP)"
+              controls-position="right"
+            />
+          </el-form-item>
+          <el-form-item label="百分比手续费">
+            <el-input-number
+              v-model="percentageFee"
+              :min="0"
+              :max="100"
+              :precision="V2_DECIMAL_PLACES"
+              :step="Number(V2_DECIMAL_STEP)"
+              controls-position="right"
+            />
+          </el-form-item>
+        </div>
+      </V2PanelSection>
+
+      <V2PanelSection heading-id="option-display-section" title="展示与状态" step="03">
+        <el-form-item label="排序">
           <el-input-number
-            v-model="fixedFee"
+            v-model="sortOrder"
             :min="0"
-            :max="99999999"
-            :precision="V2_DECIMAL_PLACES"
-            :step="Number(V2_DECIMAL_STEP)"
+            :max="99999"
+            :step="10"
             controls-position="right"
           />
         </el-form-item>
-        <el-form-item label="百分比手续费">
-          <el-input-number
-            v-model="percentageFee"
-            :min="0"
-            :max="100"
-            :precision="V2_DECIMAL_PLACES"
-            :step="Number(V2_DECIMAL_STEP)"
-            controls-position="right"
+
+        <el-form-item label="状态">
+          <el-switch
+            v-model="active"
+            active-text="启用"
+            inactive-text="停用"
+            :disabled="Boolean(editingItem?.isSystem)"
           />
         </el-form-item>
-      </div>
 
-      <el-form-item label="排序">
-        <el-input-number
-          v-model="sortOrder"
-          :min="0"
-          :max="99999"
-          :step="10"
-          controls-position="right"
-        />
-      </el-form-item>
-
-      <el-form-item label="状态">
-        <el-switch
-          v-model="active"
-          active-text="启用"
-          inactive-text="停用"
-          :disabled="Boolean(editingItem?.isSystem)"
-        />
-      </el-form-item>
-
-      <el-form-item label="备注">
-        <el-input v-model="remark" type="textarea" :rows="3" maxlength="500" />
-      </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="remark" type="textarea" :rows="3" maxlength="500" />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
 </template>
@@ -171,6 +185,8 @@
 import { computed, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type {
@@ -223,6 +239,17 @@ const formModel = computed(() => ({
   businessAmount: businessAmount.value,
   currencyCode: currencyCode.value
 }));
+const { dirty: formDirty } = useV2FormSnapshot(
+  () => drawerVisible.value,
+  () => ({
+    ...formModel.value,
+    fixedFee: fixedFee.value,
+    percentageFee: percentageFee.value,
+    sortOrder: sortOrder.value,
+    active: active.value,
+    remark: remark.value
+  })
+);
 const formRules = computed<FormRules>(() => ({
   type: [{ required: true, message: '请选择选项类型', trigger: 'change' }],
   name: [

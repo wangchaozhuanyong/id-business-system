@@ -1,4 +1,32 @@
 <template>
+  <V2ConfirmDialog
+    v-model="page.soldCreditPromptVisible"
+    title="确认给已售出 ID 加卡"
+    message=""
+    width="min(520px, 92vw)"
+    confirm-text="确认，为已售 ID 加卡"
+    @confirm="page.confirmSoldCreditPrompt"
+  >
+    <div v-if="page.soldCreditPromptAccount?.soldByOrder" class="v2-topup-sold-credit-prompt">
+      <el-alert title="该 ID 已售出，请先核对销售归属" type="warning" show-icon :closable="false" />
+      <dl>
+        <div>
+          <dt>目标 ID</dt>
+          <dd>{{ page.soldCreditPromptAccount.appleIdMasked }}</dd>
+        </div>
+        <div>
+          <dt>销售订单</dt>
+          <dd>{{ page.soldCreditPromptAccount.soldByOrder.orderNo }}</dd>
+        </div>
+        <div>
+          <dt>归属客户</dt>
+          <dd>{{ page.soldCreditPromptAccount.soldByOrder.customer.name }}</dd>
+        </div>
+      </dl>
+      <p>继续后可以填写礼品卡资料；最终提交时系统会再次核对该销售归属。</p>
+    </div>
+  </V2ConfirmDialog>
+
   <V2FormDrawer
     v-model="page.creditDrawerVisible"
     title="礼品卡入账"

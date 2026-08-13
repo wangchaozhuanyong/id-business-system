@@ -1,30 +1,36 @@
 <template>
-  <el-dialog
+  <V2ConfirmDialog
     v-model="page.recordStatusDialogVisible"
     :title="dialogTitle"
+    message=""
     width="min(500px, 92vw)"
-    destroy-on-close
-    :close-on-click-modal="!page.recordStatusSubmitting"
-    :close-on-press-escape="!page.recordStatusSubmitting"
-    :show-close="!page.recordStatusSubmitting"
+    :cancel-text="page.recordStatusDialogMode === 'view' ? '关闭' : '取消'"
+    :confirm-text="page.targetRecordStatus === 'disabled' ? '确认停用' : '确认启用'"
+    :confirm-visible="page.recordStatusDialogMode === 'change'"
+    :danger="page.targetRecordStatus === 'disabled'"
+    :confirm-loading="page.recordStatusSubmitting"
+    :dirty="Boolean(page.recordStatusReason.trim())"
+    @confirm="confirmChange"
   >
-    <div v-if="page.recordStatusDialogMode === 'view'" class="v2-account-status-detail">
-      <div>
-        <span>ID 账号</span>
-        <strong>{{ page.recordStatusTarget?.appleIdMasked }}</strong>
-      </div>
-      <div>
-        <span>停用原因</span>
-        <strong>{{ page.recordStatusTarget?.disabledReason || '历史记录未填写原因' }}</strong>
-      </div>
-      <div>
-        <span>停用时间</span>
-        <strong>{{ disabledAtText }}</strong>
-      </div>
-    </div>
+    <V2DetailSummary
+      v-if="page.recordStatusTarget"
+      heading-id="account-status-summary"
+      :eyebrow="page.recordStatusDialogMode === 'view' ? '停用记录' : '状态变更对象'"
+      :title="page.recordStatusTarget.appleIdMasked"
+      :description="
+        page.recordStatusDialogMode === 'view'
+          ? page.recordStatusTarget.disabledReason || '历史记录未填写原因'
+          : page.targetRecordStatus === 'disabled'
+            ? '停用后不能继续用于下单、续费或加卡'
+            : '启用后恢复进入可用 ID 范围'
+      "
+      :facts="
+        page.recordStatusDialogMode === 'view' ? [{ label: '停用时间', value: disabledAtText }] : []
+      "
+    />
 
     <el-form
-      v-else
+      v-if="page.recordStatusDialogMode === 'change'"
       ref="formRef"
       class="v2-horizontal-form"
       :model="formModel"
@@ -34,48 +40,35 @@
       require-asterisk-position="right"
       status-icon
     >
-      <el-form-item label="ID 账号">
-        <span>{{ page.recordStatusTarget?.appleIdMasked }}</span>
-      </el-form-item>
-      <el-form-item
-        :label="page.targetRecordStatus === 'disabled' ? '停用原因' : '启用原因'"
-        prop="reason"
-      >
-        <el-input
-          v-model="page.recordStatusReason"
-          type="textarea"
-          :rows="4"
-          maxlength="200"
-          show-word-limit
-          :placeholder="
-            page.targetRecordStatus === 'disabled'
-              ? '说明为什么暂停使用该 ID'
-              : '说明本次恢复启用的核对结果'
-          "
-        />
-      </el-form-item>
+      <V2PanelSection heading-id="account-status-reason" title="变更依据" step="01">
+        <el-form-item
+          :label="page.targetRecordStatus === 'disabled' ? '停用原因' : '启用原因'"
+          prop="reason"
+        >
+          <el-input
+            v-model="page.recordStatusReason"
+            type="textarea"
+            :rows="4"
+            maxlength="200"
+            show-word-limit
+            :placeholder="
+              page.targetRecordStatus === 'disabled'
+                ? '说明为什么暂停使用该 ID'
+                : '说明本次恢复启用的核对结果'
+            "
+          />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
-
-    <template #footer>
-      <AppButton variant="ghost" :disabled="page.recordStatusSubmitting" @click="closeDialog">
-        {{ page.recordStatusDialogMode === 'view' ? '关闭' : '取消' }}
-      </AppButton>
-      <AppButton
-        v-if="page.recordStatusDialogMode === 'change'"
-        :variant="page.targetRecordStatus === 'disabled' ? 'danger' : 'primary'"
-        :loading="page.recordStatusSubmitting"
-        @click="confirmChange"
-      >
-        {{ page.targetRecordStatus === 'disabled' ? '确认停用' : '确认启用' }}
-      </AppButton>
-    </template>
-  </el-dialog>
+  </V2ConfirmDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
-import AppButton from '@/components/ui/AppButton.vue';
+import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
 
@@ -107,43 +100,20 @@ const dialogTitle = computed(() => {
 const disabledAtText = computed(() => {
   const value = props.page.recordStatusTarget?.disabledAt;
   return value
-    ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(
-        new Date(value)
-      )
+    ? new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      }).format(new Date(value))
     : '—';
 });
 
-function closeDialog() {
-  if (!props.page.recordStatusSubmitting) props.page.recordStatusDialogVisible = false;
-}
-
 async function confirmChange() {
+  if (props.page.recordStatusDialogMode === 'view') {
+    props.page.recordStatusDialogVisible = false;
+    return;
+  }
   if (!(await validateV2Form(formRef.value))) return;
   await props.page.confirmRecordStatusChange();
 }
 </script>
-
-<style scoped>
-.v2-account-status-detail {
-  display: grid;
-  gap: 10px;
-}
-
-.v2-account-status-detail > div {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-account-status-detail span {
-  color: var(--v2-text-soft);
-}
-
-.v2-account-status-detail strong {
-  overflow-wrap: anywhere;
-  color: var(--v2-text);
-  font-weight: 500;
-}
-</style>

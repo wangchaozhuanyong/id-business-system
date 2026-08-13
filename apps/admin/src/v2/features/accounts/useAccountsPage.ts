@@ -4,6 +4,7 @@ import { idBusinessV2AccountsApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { parseCsv } from '@/v2/utils/csv';
 import { V2_DECIMAL_PLACES } from '@/v2/utils/decimal';
+import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import {
   calculateBalanceCost,
   calculateExchangeRate,
@@ -409,7 +410,7 @@ export function useAccountsPage() {
           ? `wallet:${item.purchaseSupplierAccountId}`
           : '',
       purchaseManualRateReason: '',
-      purchasedAt: item.purchasedAt,
+      purchasedAt: toV2DateTimeInput(item.purchasedAt),
       remark: item.remark ?? ''
     });
     drawerVisible.value = true;
@@ -476,7 +477,7 @@ export function useAccountsPage() {
           purchaseFxRateToCny: form.purchaseFxRateToCny || undefined,
           purchaseFinanceAccountId: purchaseSourceId,
           purchaseManualRateReason: form.purchaseManualRateReason.trim() || undefined,
-          purchasedAt: new Date(form.purchasedAt).toISOString()
+          purchasedAt: v2DateTimeInputToIso(form.purchasedAt)
         };
         await idBusinessV2AccountsApi.create(payload);
         ElMessage.success('ID 资料已新增');

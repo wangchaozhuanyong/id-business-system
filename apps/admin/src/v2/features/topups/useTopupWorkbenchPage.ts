@@ -6,7 +6,9 @@ import { hasUserPermission } from '@/utils/permissions';
 import { idBusinessV2BalancesApi } from './api';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { V2_DECIMAL_PLACES, addDecimalStrings } from '@/v2/utils/decimal';
+import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { buildManualGiftCardCreditPayload, normalizeGiftCardCode } from './gift-card-credit-form';
 import { useTopupListQuery } from './topup-query';
 import type {
@@ -21,19 +23,28 @@ import type {
 } from './contracts';
 import {
   calculateCreditCostPreview,
+  createTopupCreditForm,
   formatDate,
   formatDecimal,
   formatElapsed,
   formatTime,
   isValidBalanceInput,
-  servicePath,
-  toLocalDateTimeInput
+  servicePath
 } from './topup-workbench-support';
 
+type AccountList = 'available' | 'sold';
+interface TopupListState {
+  page: number;
+  pageSize: number;
+  sortBy: V2TopupWorkbenchSortBy;
+  sortOrder: 'asc' | 'desc';
+}
 export function useTopupWorkbenchPage() {
-  const items = ref<V2TopupWorkbenchItem[]>([]);
-  const total = ref(0);
-  const evaluatedAt = ref('');
+  const activeList = ref<AccountList>('available');
+  const listState = reactive<Record<AccountList, TopupListState>>({
+    available: { page: 1, pageSize: 20, sortBy: 'updatedAt', sortOrder: 'desc' },
+    sold: { page: 1, pageSize: 20, sortBy: 'updatedAt', sortOrder: 'desc' }
+  });
   const cardNameOptions = ref<V2OptionSelector[]>([]);
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2TopupSupplierFundSelector[]>([]);
@@ -45,6 +56,8 @@ export function useTopupWorkbenchPage() {
   );
   const creditDrawerVisible = ref(false);
   const selectedAccount = ref<V2TopupWorkbenchItem | null>(null);
+  const soldCreditPromptVisible = ref(false);
+  const soldCreditPromptAccount = ref<V2TopupWorkbenchItem | null>(null);
   const creditSubmitting = ref(false);
   const creditConfirmationVisible = ref(false);
   const creditIdempotencyKey = ref('');
@@ -70,7 +83,7 @@ export function useTopupWorkbenchPage() {
     faceValue: '',
     exchangeRate: '',
     supplierOptionId: '',
-    creditedAt: toLocalDateTimeInput(new Date()),
+    creditedAt: getV2BusinessNowInput(),
     remark: ''
   });
   const reversalForm = reactive({
@@ -117,23 +130,6 @@ export function useTopupWorkbenchPage() {
     }
     return '';
   });
-  const creditConfirmationMessage = computed(() => {
-    if (!selectedAccount.value) return '';
-    const supplierBalanceText =
-      selectedTopupSupplier.value?.currentBalanceCny != null &&
-      creditProjectedSupplierBalance.value !== null
-        ? `卡商预付款余额将从 ¥${formatDecimal(
-            selectedTopupSupplier.value.currentBalanceCny
-          )} 变为 ¥${formatDecimal(creditProjectedSupplierBalance.value)}。`
-        : '';
-    return `确认向 ${selectedAccount.value.appleIdMasked} 入账${
-      selectedCardName.value?.name ?? '礼品卡'
-    } ${normalizedCreditCode.value}，国家为 ${
-      selectedCountry.value?.name ?? selectedAccount.value.country.name
-    }，面值 ${creditForm.faceValue}，卡片汇率 ${creditForm.exchangeRate}，卡片价值${
-      creditCostPreview.value ? ` ¥${formatDecimal(creditCostPreview.value)}` : '由系统计算'
-    }。${supplierBalanceText}确认后将立即写入 ID 余额、卡商资金和财务流水。`;
-  });
   const reversalDialogTitle = computed(() =>
     pendingReversal.value?.action === 'redeemed' ? '确认标记被赎回' : '确认撤回礼品卡'
   );
@@ -152,25 +148,21 @@ export function useTopupWorkbenchPage() {
   let reversalLoadSequence = 0;
 
   const query = reactive({
-    page: 1,
-    pageSize: 20,
     keyword: '',
-    accountSource: '' as '' | 'inventory' | 'customer_owned',
     countryOptionId: '',
     balancePreset: '' as V2TopupBalancePreset,
     balanceMin: '',
     balanceMax: '',
-    onlyNormal: true,
-    sortBy: 'updatedAt' as V2TopupWorkbenchSortBy,
-    sortOrder: 'desc' as 'asc' | 'desc'
+    onlyNormal: true
   });
 
-  function getTopupListQuery(): V2TopupWorkbenchListQuery {
+  function getTopupListQuery(list: AccountList): V2TopupWorkbenchListQuery {
+    const state = listState[list];
     return {
-      page: query.page,
-      pageSize: query.pageSize,
+      page: state.page,
+      pageSize: state.pageSize,
       keyword: query.keyword.trim() || undefined,
-      accountSource: query.accountSource || undefined,
+      accountSource: list === 'available' ? 'inventory' : 'customer_owned',
       countryOptionId: query.countryOptionId || undefined,
       balancePreset: query.balancePreset || undefined,
       balanceMin:
@@ -178,34 +170,53 @@ export function useTopupWorkbenchPage() {
       balanceMax:
         query.balancePreset === 'custom' ? query.balanceMax.trim() || undefined : undefined,
       onlyNormal: query.onlyNormal,
-      sortBy: query.sortBy,
-      sortOrder: query.sortOrder
+      sortBy: state.sortBy,
+      sortOrder: state.sortOrder
     };
   }
 
-  const topupQuery = useTopupListQuery(getTopupListQuery);
-  watch(
-    topupQuery.data,
-    (snapshot) => {
-      if (!snapshot) return;
-      items.value = snapshot.list.items;
-      total.value = snapshot.list.total;
-      evaluatedAt.value = snapshot.list.evaluatedAt;
-      cardNameOptions.value = snapshot.options.cardNames;
-      countryOptions.value = snapshot.options.countries;
-      topupSupplierOptions.value = snapshot.options.suppliers;
-    },
-    { immediate: true }
+  const availableQuery = useTopupListQuery(
+    () => getTopupListQuery('available'),
+    () => activeList.value === 'available'
   );
+  const soldQuery = useTopupListQuery(
+    () => getTopupListQuery('sold'),
+    () => activeList.value === 'sold'
+  );
+  const topupQuery = computed(() =>
+    activeList.value === 'available' ? availableQuery : soldQuery
+  );
+  for (const source of [availableQuery.data, soldQuery.data]) {
+    watch(
+      source,
+      (snapshot) => {
+        if (!snapshot) return;
+        cardNameOptions.value = snapshot.options.cardNames;
+        countryOptions.value = snapshot.options.countries;
+        topupSupplierOptions.value = snapshot.options.suppliers;
+      },
+      { immediate: true }
+    );
+  }
+  const activeSnapshot = computed(() => topupQuery.value.data.value);
+  const activeState = computed(() => listState[activeList.value]);
+  const items = computed(() => activeSnapshot.value?.list.items ?? []);
+  const total = computed(() => activeSnapshot.value?.list.total ?? 0);
+  const evaluatedAt = computed(() => activeSnapshot.value?.list.evaluatedAt ?? '');
   const loading = computed(
-    () => topupQuery.isInitialLoading.value || topupQuery.isRefreshing.value
+    () => topupQuery.value.isInitialLoading.value || topupQuery.value.isRefreshing.value
   );
-  const displayedPage = computed(() => topupQuery.data.value?.list.page ?? query.page);
-  const displayedPageSize = computed(() => topupQuery.data.value?.list.pageSize ?? query.pageSize);
+  const displayedPage = computed(() => activeSnapshot.value?.list.page ?? activeState.value.page);
+  const displayedPageSize = computed(
+    () => activeSnapshot.value?.list.pageSize ?? activeState.value.pageSize
+  );
   const listError = computed(() =>
-    topupQuery.error.value ? getApiErrorMessage(topupQuery.error.value) : ''
+    topupQuery.value.error.value ? getApiErrorMessage(topupQuery.value.error.value) : ''
   );
-  const { hasLoadedOnce, isInitialLoading } = topupQuery;
+  const queryPhase = computed(() => topupQuery.value.phase.value);
+  const isParameterTransition = computed(() => topupQuery.value.isParameterTransition.value);
+  const hasLoadedOnce = computed(() => topupQuery.value.hasLoadedOnce.value);
+  const isInitialLoading = computed(() => topupQuery.value.isInitialLoading.value);
 
   function validateBalanceFilters() {
     if (query.balancePreset === 'custom') {
@@ -229,21 +240,31 @@ export function useTopupWorkbenchPage() {
 
   async function loadWorkbench() {
     if (!validateBalanceFilters()) return;
-    await topupQuery.refresh();
+    await topupQuery.value.refresh();
   }
 
   function loadCurrentWorkbench() {
     if (!validateBalanceFilters()) return;
-    void topupQuery.ensureFresh();
+    void topupQuery.value.ensureFresh();
+  }
+
+  function resetListPages() {
+    listState.available.page = 1;
+    listState.sold.page = 1;
+  }
+
+  function changeAccountList(value: string | number) {
+    if (value !== 'available' && value !== 'sold') return;
+    activeList.value = value;
   }
 
   function handleSearch() {
-    query.page = 1;
+    resetListPages();
     loadCurrentWorkbench();
   }
 
   function handleFilterChange() {
-    query.page = 1;
+    resetListPages();
     loadCurrentWorkbench();
   }
 
@@ -257,57 +278,70 @@ export function useTopupWorkbenchPage() {
 
   function resetFilters() {
     Object.assign(query, {
-      page: 1,
       keyword: '',
-      accountSource: '',
       countryOptionId: '',
       balancePreset: '',
       balanceMin: '',
       balanceMax: '',
-      onlyNormal: true,
-      sortBy: 'updatedAt',
-      sortOrder: 'desc'
+      onlyNormal: true
     });
+    resetListPages();
     loadCurrentWorkbench();
   }
 
   function handlePageSizeChange(pageSize: number) {
-    query.pageSize = pageSize;
-    query.page = 1;
+    activeState.value.pageSize = pageSize;
+    activeState.value.page = 1;
     loadCurrentWorkbench();
   }
 
   function handlePageChange(page: number) {
-    query.page = page;
+    activeState.value.page = page;
     loadCurrentWorkbench();
   }
 
   function handleSortChange(sort: { prop?: string; order?: 'ascending' | 'descending' | null }) {
     const supported = ['appleId', 'currentBalance', 'balanceCostAmount', 'updatedAt'] as const;
-    query.sortBy =
+    activeState.value.sortBy =
       sort.prop && supported.includes(sort.prop as (typeof supported)[number])
         ? (sort.prop as V2TopupWorkbenchSortBy)
         : 'updatedAt';
-    query.sortOrder = sort.order === 'descending' ? 'desc' : 'asc';
-    query.page = 1;
+    activeState.value.sortOrder = sort.order === 'descending' ? 'desc' : 'asc';
+    activeState.value.page = 1;
     loadCurrentWorkbench();
   }
 
   function openCreditDrawer(account: V2TopupWorkbenchItem) {
+    if (account.saleState === 'sold') {
+      soldCreditPromptAccount.value = account;
+      soldCreditPromptVisible.value = true;
+      return;
+    }
+    beginCreditDrawer(account);
+  }
+
+  function confirmSoldCreditPrompt() {
+    const account = soldCreditPromptAccount.value;
+    if (!account?.soldByOrder) return;
+    soldCreditPromptVisible.value = false;
+    soldCreditPromptAccount.value = null;
+    beginCreditDrawer(account);
+  }
+
+  async function beginCreditDrawer(account: V2TopupWorkbenchItem) {
+    const creditedAt = await ensureV2BusinessNowInput();
+    if (!creditedAt) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
     selectedAccount.value = account;
     creditDrawerVisible.value = true;
     creditConfirmationVisible.value = false;
     creditIdempotencyKey.value = createIdempotencyKey();
-    Object.assign(creditForm, {
-      cardNameOptionId: cardNameOptions.value[0]?.id ?? '',
-      countryOptionId: account.country.id,
-      code: '',
-      faceValue: '',
-      exchangeRate: '',
-      supplierOptionId: '',
-      creditedAt: toLocalDateTimeInput(new Date()),
-      remark: ''
-    });
+    Object.assign(
+      creditForm,
+      createTopupCreditForm(account, cardNameOptions.value[0]?.id ?? '', creditedAt)
+    );
     creditInitialSnapshot.value = snapshotCreditForm();
   }
 
@@ -357,8 +391,9 @@ export function useTopupWorkbenchPage() {
           countryOptionId: creditForm.countryOptionId,
           exchangeRate: creditForm.exchangeRate,
           supplierOptionId: creditForm.supplierOptionId,
-          creditedAt: new Date(creditForm.creditedAt).toISOString(),
+          creditedAt: v2DateTimeInputToIso(creditForm.creditedAt),
           idempotencyKey: creditIdempotencyKey.value,
+          confirmedSoldByOrderId: selectedAccount.value.soldByOrder?.id,
           remark: creditForm.remark
         })
       );
@@ -488,12 +523,13 @@ export function useTopupWorkbenchPage() {
   }
 
   return {
+    activeList,
     items,
     total,
     displayedPage,
     displayedPageSize,
-    queryPhase: topupQuery.phase,
-    isParameterTransition: topupQuery.isParameterTransition,
+    queryPhase,
+    isParameterTransition,
     evaluatedAt,
     loading,
     listError,
@@ -504,6 +540,8 @@ export function useTopupWorkbenchPage() {
     canAdjustBalance,
     creditDrawerVisible,
     selectedAccount,
+    soldCreditPromptVisible,
+    soldCreditPromptAccount,
     creditSubmitting,
     creditConfirmationVisible,
     creditDirty,
@@ -527,11 +565,11 @@ export function useTopupWorkbenchPage() {
     creditProjectedSupplierBalance,
     creditWillOverdraw,
     creditDisabledReason,
-    creditConfirmationMessage,
     reversalDialogTitle,
     reversalConfirmText,
     reversalConfirmationMessage,
     query,
+    changeAccountList,
     loadWorkbench,
     handleSearch,
     handleFilterChange,
@@ -541,6 +579,7 @@ export function useTopupWorkbenchPage() {
     handlePageChange,
     handleSortChange,
     openCreditDrawer,
+    confirmSoldCreditPrompt,
     openAccountRecords,
     normalizeCandidateCode,
     openCardNameOptions,

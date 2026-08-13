@@ -10,7 +10,8 @@ import { getPagination, type PaginationQuery } from '../../common/pagination';
 import {
   Rate8,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  buildIdBusinessV2DateRange
 } from '../runtime/public-api';
 import type {
   CorrectIdBusinessV2FinanceExpenseDto,
@@ -395,10 +396,11 @@ export class IdBusinessV2FinanceExpensesService {
   }
 
   private parseDateRange(from?: string, to?: string) {
-    if (!from && !to) return undefined;
-    const start = from ? normalizeFinanceDate(`${from}T00:00:00+08:00`, '开始日期') : undefined;
-    const end = to ? normalizeFinanceDate(`${to}T23:59:59.999+08:00`, '结束日期') : undefined;
-    return { gte: start, lte: end };
+    return buildIdBusinessV2DateRange(from, to, {
+      from: '开始日期',
+      to: '结束日期',
+      invalidRange: '开始日期不能晚于结束日期'
+    });
   }
 
   private commandOptions(operator?: AuthenticatedUser) {

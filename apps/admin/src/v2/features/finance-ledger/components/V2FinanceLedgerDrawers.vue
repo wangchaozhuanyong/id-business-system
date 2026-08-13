@@ -2,6 +2,8 @@
   <V2FormDrawer
     v-model="page.accountDrawerVisible"
     :title="page.editingAccount ? '编辑资金账户' : '新建资金账户'"
+    eyebrow="自有资金"
+    description="维护账户身份、期初余额和可追溯的汇率依据"
     :confirm-loading="page.accountSubmitting"
     :dirty="page.accountDirty"
     @confirm="page.submitAccount"
@@ -12,59 +14,79 @@
       label-width="126px"
       require-asterisk-position="right"
     >
-      <el-form-item label="账户名称" required>
-        <el-input v-model="page.accountForm.name" maxlength="160" />
-      </el-form-item>
-      <el-form-item label="账户类型" required>
-        <el-select v-model="page.accountForm.accountType" :disabled="Boolean(page.editingAccount)">
-          <el-option label="银行卡" value="bank" />
-          <el-option label="现金" value="cash" />
-          <el-option label="电子钱包" value="ewallet" />
-          <el-option label="USDT 钱包" value="usdt_wallet" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="币种" required>
-        <el-select v-model="page.accountForm.currency" :disabled="Boolean(page.editingAccount)">
-          <el-option label="CNY" value="CNY" />
-          <el-option label="MYR" value="MYR" />
-          <el-option label="USD" value="USD" />
-          <el-option label="USDT" value="USDT" />
-        </el-select>
-      </el-form-item>
-      <el-form-item v-if="!page.editingAccount" label="期初余额" required>
-        <el-input v-model="page.accountForm.openingBalance" inputmode="decimal" />
-      </el-form-item>
-      <template v-if="!page.editingAccount && page.accountForm.currency !== 'CNY'">
-        <el-form-item label="人工汇率">
-          <el-input
-            v-model="page.accountForm.fxRateToCny"
-            inputmode="decimal"
-            placeholder="留空则使用有效采集汇率"
-          />
+      <V2PanelSection heading-id="finance-account-identity" title="账户身份" step="01">
+        <el-form-item label="账户名称" required>
+          <el-input v-model="page.accountForm.name" maxlength="160" />
         </el-form-item>
-        <el-form-item label="人工汇率原因">
-          <el-input
-            v-model="page.accountForm.manualRateReason"
-            type="textarea"
-            :rows="3"
-            maxlength="500"
-          />
+        <el-form-item label="账户类型" required>
+          <el-select
+            v-model="page.accountForm.accountType"
+            :disabled="Boolean(page.editingAccount)"
+          >
+            <el-option label="银行卡" value="bank" />
+            <el-option label="现金" value="cash" />
+            <el-option label="电子钱包" value="ewallet" />
+            <el-option label="USDT 钱包" value="usdt_wallet" />
+          </el-select>
         </el-form-item>
-      </template>
-      <el-form-item v-if="page.editingAccount" label="状态" required>
-        <el-select v-model="page.accountForm.status">
-          <el-option label="启用" value="active" />
-          <el-option label="停用" value="disabled" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="备注">
-        <el-input v-model="page.accountForm.remark" type="textarea" :rows="3" maxlength="2000" />
-      </el-form-item>
+        <el-form-item label="币种" required>
+          <el-select v-model="page.accountForm.currency" :disabled="Boolean(page.editingAccount)">
+            <el-option label="CNY" value="CNY" />
+            <el-option label="MYR" value="MYR" />
+            <el-option label="USD" value="USD" />
+            <el-option label="USDT" value="USDT" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="page.editingAccount" label="状态" required>
+          <el-select v-model="page.accountForm.status">
+            <el-option label="启用" value="active" />
+            <el-option label="停用" value="disabled" />
+          </el-select>
+        </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection
+        v-if="!page.editingAccount"
+        heading-id="finance-account-opening"
+        title="期初余额与汇率"
+        step="02"
+      >
+        <el-form-item label="期初余额" required>
+          <el-input v-model="page.accountForm.openingBalance" inputmode="decimal" />
+        </el-form-item>
+        <template v-if="page.accountForm.currency !== 'CNY'">
+          <el-form-item label="人工汇率">
+            <el-input
+              v-model="page.accountForm.fxRateToCny"
+              inputmode="decimal"
+              placeholder="留空则使用有效采集汇率"
+            />
+          </el-form-item>
+          <el-form-item label="人工汇率原因">
+            <el-input
+              v-model="page.accountForm.manualRateReason"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+            />
+          </el-form-item>
+        </template>
+      </V2PanelSection>
+      <V2PanelSection
+        heading-id="finance-account-remark"
+        title="补充说明"
+        :step="page.editingAccount ? '02' : '03'"
+      >
+        <el-form-item label="备注">
+          <el-input v-model="page.accountForm.remark" type="textarea" :rows="3" maxlength="2000" />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
   <V2FormDrawer
     v-model="page.expenseDrawerVisible"
     :title="page.editingExpense ? '更正经营开支' : '记录额外经营开支'"
+    eyebrow="经营开支"
+    description="按业务证据记录付款、汇率与更正原因，原始流水不会被覆盖"
     :confirm-text="page.editingExpense ? '冲销并重记' : '确认入账'"
     :confirm-loading="page.expenseSubmitting"
     :dirty="page.expenseDirty"
@@ -83,36 +105,41 @@
       label-width="126px"
       require-asterisk-position="right"
     >
-      <el-form-item label="开支分类" required>
-        <el-select v-model="page.expenseForm.categoryOptionId">
-          <el-option
-            v-for="item in page.expenseCategories"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="付款账户" required>
-        <el-select v-model="page.expenseForm.financeAccountId">
-          <el-option
-            v-for="item in page.accounts.filter((account) => account.status === 'active')"
-            :key="item.id"
-            :label="`${item.name} · ${item.currency} · ${formatOriginal(item.currentBalance, item.currency)}`"
-            :value="item.id"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="开支金额" required>
-        <el-input v-model="page.expenseForm.amount" inputmode="decimal">
-          <template #prepend>{{ page.selectedExpenseAccount?.currency || '币种' }}</template>
-        </el-input>
-      </el-form-item>
-      <el-form-item label="发生时间" required>
-        <el-input v-model="page.expenseForm.occurredAt" type="datetime-local" />
-      </el-form-item>
-      <template
+      <V2PanelSection heading-id="finance-expense-payment" title="开支与付款" step="01">
+        <el-form-item label="开支分类" required>
+          <el-select v-model="page.expenseForm.categoryOptionId">
+            <el-option
+              v-for="item in page.expenseCategories"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="付款账户" required>
+          <el-select v-model="page.expenseForm.financeAccountId">
+            <el-option
+              v-for="item in page.accounts.filter((account) => account.status === 'active')"
+              :key="item.id"
+              :label="`${item.name} · ${item.currency} · ${formatOriginal(item.currentBalance, item.currency)}`"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="开支金额" required>
+          <el-input v-model="page.expenseForm.amount" inputmode="decimal">
+            <template #prepend>{{ page.selectedExpenseAccount?.currency || '币种' }}</template>
+          </el-input>
+        </el-form-item>
+        <el-form-item label="发生时间" required>
+          <el-input v-model="page.expenseForm.occurredAt" type="datetime-local" />
+        </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection
         v-if="page.selectedExpenseAccount && page.selectedExpenseAccount.currency !== 'CNY'"
+        heading-id="finance-expense-rate"
+        title="汇率证据"
+        step="02"
       >
         <el-form-item label="人工汇率">
           <el-input
@@ -129,26 +156,34 @@
             maxlength="500"
           />
         </el-form-item>
-      </template>
-      <el-form-item label="收款方">
-        <el-input v-model="page.expenseForm.payee" maxlength="200" />
-      </el-form-item>
-      <el-form-item label="备注">
-        <el-input v-model="page.expenseForm.remark" type="textarea" :rows="3" maxlength="2000" />
-      </el-form-item>
-      <el-form-item v-if="page.editingExpense" label="更正原因" required>
-        <el-input
-          v-model="page.expenseCorrectionReason"
-          type="textarea"
-          :rows="3"
-          maxlength="500"
-        />
-      </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection
+        heading-id="finance-expense-evidence"
+        title="收款与更正依据"
+        :step="page.selectedExpenseAccount?.currency === 'CNY' ? '02' : '03'"
+      >
+        <el-form-item label="收款方">
+          <el-input v-model="page.expenseForm.payee" maxlength="200" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="page.expenseForm.remark" type="textarea" :rows="3" maxlength="2000" />
+        </el-form-item>
+        <el-form-item v-if="page.editingExpense" label="更正原因" required>
+          <el-input
+            v-model="page.expenseCorrectionReason"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+          />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
   <V2FormDrawer
     v-model="page.walletDrawerVisible"
     title="新建供应商多币种钱包"
+    eyebrow="供应商资金"
+    description="建立供应商、币种和期初余额的唯一资金关系"
     :confirm-loading="page.walletSubmitting"
     :dirty="page.walletDirty"
     @confirm="page.submitWallet"
@@ -159,150 +194,55 @@
       label-width="126px"
       require-asterisk-position="right"
     >
-      <el-form-item label="供应商" required>
-        <el-select v-model="page.walletForm.supplierOptionId">
-          <el-option
-            v-for="item in page.supplierOptions"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="币种" required>
-        <el-select v-model="page.walletForm.currency">
-          <el-option label="CNY" value="CNY" />
-          <el-option label="MYR" value="MYR" />
-          <el-option label="USD" value="USD" />
-          <el-option label="USDT" value="USDT" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="期初余额" required>
-        <el-input v-model="page.walletForm.openingBalance" inputmode="decimal" />
-      </el-form-item>
-      <template v-if="page.walletForm.currency !== 'CNY'">
-        <el-form-item label="人工汇率">
-          <el-input
-            v-model="page.walletForm.fxRateToCny"
-            inputmode="decimal"
-            placeholder="留空则使用有效采集汇率"
-          />
+      <V2PanelSection heading-id="finance-wallet-identity" title="钱包归属" step="01">
+        <el-form-item label="供应商" required>
+          <el-select v-model="page.walletForm.supplierOptionId">
+            <el-option
+              v-for="item in page.supplierOptions"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
         </el-form-item>
-        <el-form-item label="人工汇率原因">
-          <el-input
-            v-model="page.walletForm.manualRateReason"
-            type="textarea"
-            :rows="3"
-            maxlength="500"
-          />
+        <el-form-item label="币种" required>
+          <el-select v-model="page.walletForm.currency">
+            <el-option label="CNY" value="CNY" />
+            <el-option label="MYR" value="MYR" />
+            <el-option label="USD" value="USD" />
+            <el-option label="USDT" value="USDT" />
+          </el-select>
         </el-form-item>
-      </template>
-      <el-form-item label="期初依据" required>
-        <el-input v-model="page.walletForm.reason" type="textarea" :rows="3" maxlength="500" />
-      </el-form-item>
+      </V2PanelSection>
+      <V2PanelSection heading-id="finance-wallet-opening" title="期初资金证据" step="02">
+        <el-form-item label="期初余额" required>
+          <el-input v-model="page.walletForm.openingBalance" inputmode="decimal" />
+        </el-form-item>
+        <template v-if="page.walletForm.currency !== 'CNY'">
+          <el-form-item label="人工汇率">
+            <el-input
+              v-model="page.walletForm.fxRateToCny"
+              inputmode="decimal"
+              placeholder="留空则使用有效采集汇率"
+            />
+          </el-form-item>
+          <el-form-item label="人工汇率原因">
+            <el-input
+              v-model="page.walletForm.manualRateReason"
+              type="textarea"
+              :rows="3"
+              maxlength="500"
+            />
+          </el-form-item>
+        </template>
+        <el-form-item label="期初依据" required>
+          <el-input v-model="page.walletForm.reason" type="textarea" :rows="3" maxlength="500" />
+        </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
 
-  <V2FormDrawer
-    v-model="page.walletMutationDrawerVisible"
-    :title="walletMutationTitle"
-    confirm-text="确认入账"
-    :confirm-loading="page.walletMutationSubmitting"
-    :dirty="page.walletMutationDirty"
-    @confirm="page.submitWalletMutation"
-  >
-    <el-alert
-      :title="`${page.selectedWallet?.supplierName || ''} · ${page.selectedWallet?.currency || ''}`"
-      :description="`当前余额 ${page.selectedWallet ? formatOriginal(page.selectedWallet.currentBalance, page.selectedWallet.currency) : '—'}`"
-      type="info"
-      :closable="false"
-    />
-    <el-form
-      class="v2-horizontal-form v2-finance-drawer-form"
-      label-position="left"
-      label-width="126px"
-      require-asterisk-position="right"
-    >
-      <el-form-item
-        v-if="page.walletMutationMode !== 'adjust'"
-        :label="page.walletMutationMode === 'deposit' ? '付款账户' : '收款账户'"
-        required
-      >
-        <el-select v-model="page.walletMutationForm.financeAccountId">
-          <el-option
-            v-for="item in page.matchingFinanceAccounts"
-            :key="item.id"
-            :label="`${item.name} · ${formatOriginal(item.currentBalance, item.currency)}`"
-            :value="item.id"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item
-        v-if="page.walletMutationMode !== 'adjust'"
-        :label="page.walletMutationMode === 'deposit' ? '实际付款金额' : '退款金额'"
-        required
-      >
-        <el-input v-model="page.walletMutationForm.amount" inputmode="decimal" />
-      </el-form-item>
-      <template v-if="page.walletMutationMode === 'deposit'">
-        <el-form-item label="卡商入账金额">
-          <el-input
-            v-model="page.walletMutationForm.creditedAmount"
-            inputmode="decimal"
-            placeholder="留空则等于付款金额"
-          />
-        </el-form-item>
-        <el-form-item label="网络手续费">
-          <el-input v-model="page.walletMutationForm.networkFeeAmount" inputmode="decimal" />
-        </el-form-item>
-        <el-form-item label="网络">
-          <el-input v-model="page.walletMutationForm.network" maxlength="40" />
-        </el-form-item>
-        <el-form-item label="交易哈希">
-          <el-input v-model="page.walletMutationForm.transactionHash" maxlength="180" />
-        </el-form-item>
-      </template>
-      <el-form-item v-if="page.walletMutationMode === 'adjust'" label="调整后余额" required>
-        <el-input v-model="page.walletMutationForm.targetBalance" inputmode="decimal" />
-      </el-form-item>
-      <el-form-item v-if="page.walletMutationMode !== 'adjust'" label="发生时间" required>
-        <el-input v-model="page.walletMutationForm.occurredAt" type="datetime-local" />
-      </el-form-item>
-      <template v-if="page.selectedWallet?.currency !== 'CNY'">
-        <el-form-item label="人工汇率">
-          <el-input
-            v-model="page.walletMutationForm.fxRateToCny"
-            inputmode="decimal"
-            placeholder="留空则锁定有效采集汇率"
-          />
-        </el-form-item>
-        <el-form-item label="人工汇率原因">
-          <el-input
-            v-model="page.walletMutationForm.manualRateReason"
-            type="textarea"
-            :rows="3"
-            maxlength="500"
-          />
-        </el-form-item>
-      </template>
-      <el-form-item v-if="page.walletMutationMode !== 'deposit'" label="操作原因" required>
-        <el-input
-          v-model="page.walletMutationForm.reason"
-          type="textarea"
-          :rows="3"
-          maxlength="500"
-        />
-      </el-form-item>
-      <el-form-item v-if="page.walletMutationMode === 'deposit'" label="备注">
-        <el-input
-          v-model="page.walletMutationForm.remark"
-          type="textarea"
-          :rows="3"
-          maxlength="2000"
-        />
-      </el-form-item>
-    </el-form>
-  </V2FormDrawer>
+  <V2FinanceWalletMutationDrawer :page="page" />
 
   <V2FormDrawer
     v-model="page.reversalDrawerVisible"
@@ -553,6 +493,8 @@
 import { computed, type UnwrapNestedRefs } from 'vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import V2FinanceWalletMutationDrawer from './V2FinanceWalletMutationDrawer.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2FinanceCurrency } from '../contracts';
 import {
@@ -566,16 +508,6 @@ import { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 const { page } = defineProps<{
   page: UnwrapNestedRefs<ReturnType<typeof useFinanceLedgerPage>>;
 }>();
-
-const walletMutationTitle = computed(() => {
-  const action =
-    page.walletMutationMode === 'deposit'
-      ? '供应商充值'
-      : page.walletMutationMode === 'refund'
-        ? '供应商退款'
-        : '供应商余额调整';
-  return `${action}${page.selectedWallet ? ` · ${page.selectedWallet.supplierName}` : ''}`;
-});
 
 const historyPreviewRows = computed(() => {
   const summary = page.historyPreview?.summary;

@@ -31,7 +31,7 @@ const SENSITIVE_ACCESS_SORT_FIELDS: Record<
 };
 const AUDIT_LIST_CACHE_TTL_MS = 120_000;
 const AUDIT_EXPORT_LIMIT = 1_000;
-const MALAYSIA_UTC_OFFSET_MS = 8 * 60 * 60 * 1_000;
+const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1_000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1_000;
 const REDACTED_VALUE = '[REDACTED]';
 const SENSITIVE_AUDIT_KEYS = new Set([
@@ -311,8 +311,8 @@ export class AuditLogsService {
   }
 
   private buildCreatedAtRange(createdFrom?: string, createdTo?: string) {
-    const from = createdFrom ? this.parseMalaysiaDate(createdFrom, false) : undefined;
-    const to = createdTo ? this.parseMalaysiaDate(createdTo, true) : undefined;
+    const from = createdFrom ? this.parseBeijingDate(createdFrom, false) : undefined;
+    const to = createdTo ? this.parseBeijingDate(createdTo, true) : undefined;
     if (from && to && from >= to) {
       throw new BadRequestException('created date range is invalid');
     }
@@ -323,7 +323,7 @@ export class AuditLogsService {
     } satisfies Prisma.DateTimeFilter;
   }
 
-  private parseMalaysiaDate(value: string, endExclusive: boolean) {
+  private parseBeijingDate(value: string, endExclusive: boolean) {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
     if (!match) throw new BadRequestException('created date is invalid');
     const year = Number(match[1]);
@@ -337,7 +337,7 @@ export class AuditLogsService {
     ) {
       throw new BadRequestException('created date is invalid');
     }
-    return new Date(utcDate.getTime() - MALAYSIA_UTC_OFFSET_MS + (endExclusive ? ONE_DAY_MS : 0));
+    return new Date(utcDate.getTime() - BEIJING_UTC_OFFSET_MS + (endExclusive ? ONE_DAY_MS : 0));
   }
 
   private parseApproved(value?: string) {

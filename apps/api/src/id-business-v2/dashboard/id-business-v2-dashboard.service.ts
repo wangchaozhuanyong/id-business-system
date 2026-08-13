@@ -4,7 +4,7 @@ import { Amount4 } from '../runtime/public-api';
 import type { DashboardAccess } from './dashboard.types';
 import { IdBusinessV2DashboardRepository } from './persistence/id-business-v2-dashboard.repository';
 
-const KUALA_LUMPUR_OFFSET = '+08:00';
+const BEIJING_OFFSET = '+08:00';
 const DAY_MS = 24 * 60 * 60 * 1000;
 export type { DashboardAccess } from './dashboard.types';
 
@@ -32,7 +32,7 @@ export class IdBusinessV2DashboardService {
     return {
       generatedAt: now.toISOString(),
       businessDate: window.businessDate,
-      timezone: 'Asia/Kuala_Lumpur',
+      timezone: 'Asia/Shanghai',
       warningDays,
       access,
       business,
@@ -139,12 +139,12 @@ export class IdBusinessV2DashboardService {
 
   private businessDayWindow(now: Date) {
     const businessDate = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kuala_Lumpur',
+      timeZone: 'Asia/Shanghai',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit'
     }).format(now);
-    const start = new Date(`${businessDate}T00:00:00${KUALA_LUMPUR_OFFSET}`);
+    const start = new Date(`${businessDate}T00:00:00${BEIJING_OFFSET}`);
     return { businessDate, start, end: new Date(start.getTime() + DAY_MS) };
   }
 

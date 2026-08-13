@@ -1,5 +1,6 @@
 <template>
   <el-drawer
+    class="v2-form-drawer"
     :model-value="modelValue"
     :title="title"
     :size="size"
@@ -10,6 +11,13 @@
     :before-close="handleBeforeClose"
     @close="$emit('update:modelValue', false)"
   >
+    <template #header>
+      <div class="v2-form-drawer__heading">
+        <span v-if="eyebrow" class="v2-form-drawer__eyebrow">{{ eyebrow }}</span>
+        <h2>{{ title }}</h2>
+        <p v-if="description">{{ description }}</p>
+      </div>
+    </template>
     <div class="v2-form-drawer__body">
       <slot />
     </div>
@@ -47,6 +55,8 @@ const props = withDefaults(
     modelValue: boolean;
     title: string;
     size?: string | number;
+    eyebrow?: string;
+    description?: string;
     confirmText?: string;
     confirmDisabled?: boolean;
     confirmDisabledReason?: string;
@@ -55,6 +65,8 @@ const props = withDefaults(
   }>(),
   {
     size: 'min(520px, 92vw)',
+    eyebrow: '',
+    description: '',
     confirmText: '保存',
     confirmDisabled: false,
     confirmDisabledReason: '',

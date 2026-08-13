@@ -179,7 +179,7 @@ const overview: V2GovernanceOverview = {
     '失败条目保留并支持幂等重放'
   ],
   generatedAt: '2026-08-10T09:20:00.000Z',
-  timezone: 'Asia/Kuala_Lumpur'
+  timezone: 'Asia/Shanghai'
 };
 
 const recycleEntities: V2GovernanceRecycleEntity[] = ['account', 'customer', 'option', 'order'];

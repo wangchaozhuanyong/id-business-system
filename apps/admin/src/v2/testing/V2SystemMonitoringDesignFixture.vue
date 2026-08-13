@@ -214,7 +214,7 @@ const overview: V2SystemMonitoringResponse = {
       ],
   generatedAt: '2026-08-10T16:08:00.000Z',
   probeDurationMs: 164,
-  timezone: 'Asia/Kuala_Lumpur'
+  timezone: 'Asia/Shanghai'
 };
 
 const activeSection = ref<'health' | 'operations' | 'gaps'>('health');

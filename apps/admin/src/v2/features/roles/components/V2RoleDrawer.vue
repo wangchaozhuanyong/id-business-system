@@ -2,6 +2,8 @@
   <V2FormDrawer
     v-model="page.drawerVisible"
     :title="page.editingItem ? '角色详情与权限' : '新建角色'"
+    eyebrow="访问控制"
+    description="按岗位职责配置角色信息、权限范围和敏感字段访问策略"
     :confirm-text="page.editingItem ? '保存修改' : '确认创建'"
     :confirm-loading="page.saving"
     :confirm-disabled="page.isSystemRole"

@@ -499,6 +499,40 @@ describe('IdBusinessV2OrderLockService', () => {
     });
   });
 
+  it('narrows the source sale global lock to its service when correcting the sale flag', async () => {
+    tx.$queryRaw.mockReset().mockResolvedValueOnce([makeOrder({ accountId })]);
+    tx.idBusinessV2AccountLock.findFirst.mockResolvedValueOnce(
+      makeLock({ lockScope: 'global', serviceOptionId: null })
+    );
+
+    const result = await service.narrowOrderLockToServiceInTransaction(
+      tx as never,
+      orderId,
+      '纠正 ID 售出记录',
+      operator
+    );
+
+    expect(tx.idBusinessV2AccountLock.update).toHaveBeenCalledWith({
+      where: { id: lockId },
+      data: {
+        lockScope: 'by_service',
+        serviceOptionId
+      }
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'id_business_v2.order_lock.narrow_to_service',
+          objectId: lockId
+        })
+      })
+    );
+    expect(result).toMatchObject({
+      changed: true,
+      lock: { lockScope: 'by_service', serviceOptionId }
+    });
+  });
+
   it('returns the original consumption for a matching idempotent replay before requiring an active lock', async () => {
     tx.$queryRaw.mockReset().mockResolvedValueOnce([
       makeOrder({

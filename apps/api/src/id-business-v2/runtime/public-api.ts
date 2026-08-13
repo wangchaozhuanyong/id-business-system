@@ -6,7 +6,13 @@ export {
   V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
   type V2DecimalInput
 } from './id-business-v2-decimal';
-export { toKualaLumpurBusinessDate } from './id-business-v2-business-date';
+export {
+  buildIdBusinessV2DateRange,
+  ID_BUSINESS_V2_TIME_ZONE,
+  ID_BUSINESS_V2_UTC_OFFSET,
+  parseIdBusinessV2DateBoundary,
+  toIdBusinessV2BusinessDate
+} from './id-business-v2-time';
 export {
   createV2DeletePreviewFingerprint,
   normalizeV2DeletePreviewFingerprint

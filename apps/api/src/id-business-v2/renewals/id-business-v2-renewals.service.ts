@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
+import { buildIdBusinessV2DateRange } from '../runtime/public-api';
 import {
   IdBusinessV2ActivationStatusService,
   type IdBusinessV2ActivationDueStatus
@@ -31,7 +32,6 @@ export interface ListIdBusinessV2RenewalsQuery extends PaginationQuery {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const RENEWAL_DUE_STATUSES = new Set<IdBusinessV2RenewalDueStatus>([
   'due_within_1_hour',
   'due_within_23_hours',
@@ -129,30 +129,12 @@ export class IdBusinessV2RenewalsService {
   private parseDateRange(
     fromValue: unknown,
     toValue: unknown
-  ): { gte?: Date; lte?: Date } | undefined {
-    const from = this.parseDate(fromValue, '到期日期开始', false);
-    const to = this.parseDate(toValue, '到期日期结束', true);
-    if (from && to && from.getTime() > to.getTime()) {
-      throw new BadRequestException('到期日期开始不能晚于结束');
-    }
-    if (!from && !to) return undefined;
-    return {
-      gte: from ?? undefined,
-      lte: to ?? undefined
-    };
-  }
-
-  private parseDate(value: unknown, label: string, endOfDay: boolean) {
-    const normalized = this.normalizeNullableString(value);
-    if (!normalized) return null;
-    if (!DATE_PATTERN.test(normalized)) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    const date = new Date(`${normalized}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
-      throw new BadRequestException(`${label}格式无效`);
-    }
-    return date;
+  ): { gte?: Date; lt?: Date } | undefined {
+    return buildIdBusinessV2DateRange(fromValue, toValue, {
+      from: '到期日期开始',
+      to: '到期日期结束',
+      invalidRange: '到期日期开始不能晚于结束'
+    });
   }
 
   private normalizeKeyword(value: unknown) {

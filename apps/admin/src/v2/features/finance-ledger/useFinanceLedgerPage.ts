@@ -17,8 +17,19 @@ import { hasUserPermission } from '@/utils/permissions';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import type { V2ModuleKey } from '@/v2/features/feature';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import {
+  ensureV2BusinessNowInput,
+  ensureV2BusinessNowMs,
+  getV2BusinessNowInput,
+  getV2BusinessNowMs
+} from '@/v2/runtime/businessClock';
 import type { V2OptionSelector } from '@/v2/types/options';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
+import {
+  currentV2BusinessMonth,
+  toV2DateTimeInput,
+  v2DateTimeInputToIso
+} from '@/v2/utils/dateTime';
 import { idBusinessV2FinanceApi } from './api';
 import { useFinanceHistory } from './useFinanceHistory';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
@@ -154,7 +165,7 @@ export function useFinanceLedgerPage(
     categoryOptionId: '',
     financeAccountId: '',
     amount: '',
-    occurredAt: toLocalDateTime(new Date()),
+    occurredAt: getV2BusinessNowInput(),
     fxRateToCny: '',
     manualRateReason: '',
     payee: '',
@@ -183,7 +194,7 @@ export function useFinanceLedgerPage(
   const periodDrawerVisible = ref(false);
   const periodSubmitting = ref(false);
   const periodMutationMode = ref<PeriodMutationMode>('close');
-  const periodForm = reactive({ month: currentKualaLumpurMonth(), reason: '' });
+  const periodForm = reactive({ month: currentV2BusinessMonth(getV2BusinessNowMs()), reason: '' });
 
   function refresh() {
     return ledgerQuery.refresh();
@@ -261,14 +272,19 @@ export function useFinanceLedgerPage(
     }
   }
 
-  function openExpense(expense?: V2FinanceExpense) {
+  async function openExpense(expense?: V2FinanceExpense) {
+    const businessNow = expense ? null : await ensureV2BusinessNowInput();
+    if (!expense && !businessNow) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
     editingExpense.value = expense ?? null;
     expenseCorrectionReason.value = '';
     Object.assign(expenseForm, {
       categoryOptionId: expense?.categoryOptionId ?? '',
       financeAccountId: expense?.financeAccountId ?? '',
       amount: expense?.amountOriginal ?? '',
-      occurredAt: toLocalDateTime(expense ? new Date(expense.occurredAt) : new Date()),
+      occurredAt: expense?.occurredAt ? toV2DateTimeInput(expense.occurredAt) : businessNow,
       fxRateToCny: '',
       manualRateReason: '',
       payee: expense?.payee ?? '',
@@ -352,9 +368,14 @@ export function useFinanceLedgerPage(
     }
   }
 
-  function openPeriod(mode: PeriodMutationMode, period?: V2FinancePeriod) {
+  async function openPeriod(mode: PeriodMutationMode, period?: V2FinancePeriod) {
+    const businessNow = period ? null : await ensureV2BusinessNowMs();
+    if (!period && businessNow === null) {
+      ElMessage.error('无法读取服务器北京时间，请稍后重试');
+      return;
+    }
     periodMutationMode.value = mode;
-    periodForm.month = period?.month ?? currentKualaLumpurMonth();
+    periodForm.month = period?.month ?? currentV2BusinessMonth(businessNow);
     periodForm.reason = '';
     periodDrawerVisible.value = true;
   }
@@ -470,19 +491,6 @@ function showWarning(message: string) {
   ElMessage.warning(message);
 }
 
-function toLocalDateTime(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
-}
-
 function toIsoDate(value: string) {
-  return new Date(value).toISOString();
-}
-
-function currentKualaLumpurMonth() {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kuala_Lumpur',
-    year: 'numeric',
-    month: '2-digit'
-  }).format(new Date());
+  return v2DateTimeInputToIso(value);
 }

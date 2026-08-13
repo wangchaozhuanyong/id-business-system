@@ -21,7 +21,7 @@ import type {
 import type { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 import { assertSoldAccountCanRecover } from './id-business-v2-order-sold-account-recovery';
 
-const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['processing', 'completed']);
+const REFUNDABLE_STATUSES = new Set<IdBusinessV2OrderStatus>(['completed']);
 
 export async function refundIdBusinessV2Order(
   support: IdBusinessV2OrderLifecycleSupport,
@@ -33,10 +33,9 @@ export async function refundIdBusinessV2Order(
   operator?: AuthenticatedUser
 ) {
   const orderId = support.normalizeUuid(orderIdValue, '订单');
-  const refundCostAmount = support.normalizeAmount(dto.refundCostAmount, '退款成本', true);
+  const refundCostAmount = support.normalizeAmount(dto.refundCostAmount, '额外退款成本', true);
   const reason = support.normalizeReason(dto.reason);
   const restoreBalance = normalizeLifecycleBoolean(dto.restoreBalance, '是否恢复余额');
-  const accountReturned = normalizeLifecycleBoolean(dto.accountReturned, 'ID 是否已收回');
   const idempotencyKey = buildOrderReversalIdempotencyKey(
     orderId,
     support.normalizeIdempotencyKey(dto.idempotencyKey)
@@ -50,8 +49,7 @@ export async function refundIdBusinessV2Order(
         if (
           order.refundCostAmount === null ||
           !order.refundCostAmount.equals(refundCostAmount) ||
-          Boolean(existingReversal) !== restoreBalance ||
-          (order.accountDisposition === 'recovered') !== accountReturned
+          Boolean(existingReversal) !== restoreBalance
         ) {
           throw new ConflictException('订单已经按其他退款内容处理，请刷新后核对');
         }
@@ -65,10 +63,7 @@ export async function refundIdBusinessV2Order(
         };
       }
       if (!REFUNDABLE_STATUSES.has(order.status)) {
-        throw new ConflictException('只有处理中或已完成订单可以退款');
-      }
-      if (accountReturned && order.accountDisposition !== 'sold') {
-        throw new ConflictException('只有已卖出的 ID 才能在退款时标记为已收回');
+        throw new ConflictException('只有已完成订单可以退款；处理中订单请按真实结果取消或先完成');
       }
 
       const consumption = await support.findConsumption(tx, order.id);
@@ -78,10 +73,7 @@ export async function refundIdBusinessV2Order(
       if (existingReversal) {
         throw new ConflictException('订单消费已经撤销，不能再次退款');
       }
-      const activation = await repository.hasActivationByOrder(tx, order.id);
-      if (restoreBalance && activation) {
-        throw new ConflictException('订单已有开通记录，不能把 Apple 余额自动恢复');
-      }
+      const activation = await repository.findActivationByOrder(tx, order.id);
 
       let reversalLedger: IdBusinessV2BalanceLedgerRecord | null = null;
       if (restoreBalance) {
@@ -102,7 +94,8 @@ export async function refundIdBusinessV2Order(
         `订单退款：${reason}`,
         operator
       );
-      if (accountReturned) {
+      const accountRecovered = order.accountDisposition === 'sold';
+      if (accountRecovered) {
         if (!order.accountId) throw new ConflictException('已售订单缺少 ID 关联');
         const account = await repository.lockAccountForSale(tx, order.accountId);
         if (!account || account.soldByOrderId !== order.id) {
@@ -111,17 +104,48 @@ export async function refundIdBusinessV2Order(
         await assertSoldAccountCanRecover(repository, tx, account, order.id);
         await releaseSoldOrderAccount(tx, repository, order, operator);
       }
-      const nextAccountDisposition = accountReturned ? 'recovered' : order.accountDisposition;
+      const nextAccountDisposition = accountRecovered ? 'recovered' : order.accountDisposition;
       const appliedAccountCostAmount =
         nextAccountDisposition === 'sold' ? order.appliedAccountCostAmount : Amount4.zero();
       const profitAmount = support.calculateProfit(
-        order.receivedAmount,
+        Amount4.zero(),
         order.platformFeeAmount,
         appliedAccountCostAmount,
         effectiveBalanceCost,
         refundCostAmount
       );
       const statusChangedAt = new Date();
+      const activationCancelled = Boolean(activation && activation.status !== 'cancelled');
+      if (activationCancelled && activation) {
+        const activationRemark = appendRefundRemark(activation.remark, reason);
+        await repository.updateActivation(tx, order.id, {
+          status: 'cancelled',
+          statusChangedAt,
+          remark: activationRemark,
+          updatedByUserId: operator?.id
+        });
+        await repository.appendAudit(tx, {
+          userId: operator?.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.activation.cancel_by_order_refund',
+          objectType: 'id_business_v2_activation',
+          objectId: activation.id,
+          beforeData: {
+            orderId: order.id,
+            status: activation.status,
+            statusChangedAt: activation.statusChangedAt,
+            remark: activation.remark
+          },
+          afterData: {
+            orderId: order.id,
+            status: 'cancelled',
+            statusChangedAt,
+            remark: activationRemark,
+            reason
+          },
+          remark: `订单全额退款取消开通：${order.orderNo}`
+        });
+      }
       await repository.updateOrder(tx, order.id, {
         refundCostAmount: refundCostAmount.toString(),
         balanceCostAmount: effectiveBalanceCost.toString(),
@@ -142,12 +166,13 @@ export async function refundIdBusinessV2Order(
         metadata: {
           reason,
           restoreBalance,
-          accountReturned,
+          accountRecovered,
+          activationCancelled,
           originalStatus: order.status
         },
         idempotencyKey: `auto:order_refund:${order.id}`,
         operator,
-        lines: buildRefundFinanceLines(order, refundCostAmount, restoreBalance, accountReturned)
+        lines: buildRefundFinanceLines(order, refundCostAmount, restoreBalance, accountRecovered)
       });
       await support.writeLifecycleAudit(
         tx,
@@ -159,7 +184,8 @@ export async function refundIdBusinessV2Order(
           reason,
           refundCostAmount: refundCostAmount.toString(),
           balanceRestored: restoreBalance,
-          accountReturned,
+          accountRecovered,
+          activationCancelled,
           accountDisposition: nextAccountDisposition,
           accountCostAmountSnapshot: order.accountCostAmount.toString(),
           appliedAccountCostAmount: appliedAccountCostAmount.toString(),
@@ -186,6 +212,11 @@ export async function refundIdBusinessV2Order(
   return support.buildLifecycleResponse(result);
 }
 
+function appendRefundRemark(existingRemark: string | null, reason: string) {
+  const refundRemark = `订单全额退款并取消开通：${reason}`;
+  return existingRemark ? `${existingRemark}\n${refundRemark}` : refundRemark;
+}
+
 function buildRefundFinanceLines(
   order: Pick<
     IdBusinessV2OrderRecord,
@@ -201,7 +232,7 @@ function buildRefundFinanceLines(
   >,
   refundCostAmount: Amount4,
   restoreBalance: boolean,
-  accountReturned: boolean
+  accountRecovered: boolean
 ) {
   const completed = order.status === 'completed';
   const receivedOriginalAmount = order.receivedOriginalAmount;
@@ -285,7 +316,7 @@ function buildRefundFinanceLines(
       }
     );
   }
-  if (accountReturned && !appliedAccountCostAmount.isZero()) {
+  if (accountRecovered && !appliedAccountCostAmount.isZero()) {
     lines.push(
       {
         accountCode: 'id_inventory' as const,

@@ -10,6 +10,7 @@ const accountId = '11111111-1111-4111-8111-111111111111';
 const supplierOptionId = '22222222-2222-4222-8222-222222222222';
 const cardNameOptionId = '77777777-7777-4777-8777-777777777777';
 const countryOptionId = '66666666-6666-4666-8666-666666666666';
+const soldByOrderId = '99999999-9999-4999-8999-999999999999';
 const operator = {
   id: '33333333-3333-4333-8333-333333333333',
   username: 'admin',
@@ -429,7 +430,7 @@ describe('IdBusinessV2GiftCardCreditService', () => {
         appleIdMasked: 'us***@example.com',
         currentBalance: decimal('20'),
         balanceCostAmount: decimal('50'),
-        soldByOrderId: '99999999-9999-4999-8999-999999999999',
+        soldByOrderId,
         lossReportedAt: null,
         countryOptionId,
         countryName: '美国',
@@ -437,7 +438,11 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       }
     ]);
 
-    const result = await service.confirmCredit(accountId, makeDto(), operator);
+    const result = await service.confirmCredit(
+      accountId,
+      makeDto({ confirmedSoldByOrderId: soldByOrderId }),
+      operator
+    );
 
     expect(tx.idBusinessV2GiftCard.create).toHaveBeenCalledOnce();
     expect(tx.idBusinessV2BalanceLedger.create).toHaveBeenCalledWith(
@@ -471,6 +476,59 @@ describe('IdBusinessV2GiftCardCreditService', () => {
       })
     );
     expect(result.account.currentBalance).toBe('30');
+  });
+
+  it('rejects a sold ID until the current sales ownership is confirmed', async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        currentBalance: decimal('20'),
+        balanceCostAmount: decimal('50'),
+        soldByOrderId,
+        lossReportedAt: null,
+        countryOptionId,
+        countryName: '美国',
+        currencyCode: 'USD'
+      }
+    ]);
+
+    await expect(service.confirmCredit(accountId, makeDto(), operator)).rejects.toThrow(
+      '该 ID 已售出，请确认销售订单和客户归属后重新加卡'
+    );
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects credit when the confirmed sales ownership is stale', async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: accountId,
+        appleIdMasked: 'us***@example.com',
+        currentBalance: decimal('20'),
+        balanceCostAmount: decimal('50'),
+        soldByOrderId,
+        lossReportedAt: null,
+        countryOptionId,
+        countryName: '美国',
+        currencyCode: 'USD'
+      }
+    ]);
+
+    await expect(
+      service.confirmCredit(
+        accountId,
+        makeDto({ confirmedSoldByOrderId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }),
+        operator
+      )
+    ).rejects.toThrow('该 ID 的销售归属已变化，请刷新列表并重新确认后加卡');
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale sold confirmation after the ID returns to inventory', async () => {
+    await expect(
+      service.confirmCredit(accountId, makeDto({ confirmedSoldByOrderId: soldByOrderId }), operator)
+    ).rejects.toThrow('该 ID 当前已恢复为未售出，请刷新列表后重新加卡');
+    expect(tx.idBusinessV2GiftCard.create).not.toHaveBeenCalled();
   });
 
   it('records a renewal-workbench source context without logging the gift-card plaintext', async () => {

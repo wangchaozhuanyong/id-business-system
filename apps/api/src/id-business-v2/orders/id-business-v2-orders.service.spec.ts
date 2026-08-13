@@ -204,8 +204,8 @@ describe('IdBusinessV2OrdersService', () => {
           accountId,
           settlementPlatformOptionId,
           openedAt: {
-            gte: new Date('2026-07-01T00:00:00.000Z'),
-            lte: new Date('2026-07-31T23:59:59.999Z')
+            gte: new Date('2026-06-30T16:00:00.000Z'),
+            lt: new Date('2026-07-31T16:00:00.000Z')
           }
         })
       })
@@ -271,7 +271,7 @@ describe('IdBusinessV2OrdersService', () => {
 
   it.each([
     ['pending', true, false, true, true, false, true, false],
-    ['processing', false, true, true, false, true, true, false],
+    ['processing', false, true, true, false, false, true, false],
     ['completed', false, false, true, false, true, false, false],
     ['refunded', false, false, false, false, false, false, true],
     ['cancelled', false, false, false, false, false, false, true],

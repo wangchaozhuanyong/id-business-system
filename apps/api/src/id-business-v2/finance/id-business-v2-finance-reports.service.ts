@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2FinanceAccountCode, IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import { Amount4, Rate8, V2CommandTransactionManager } from '../runtime/public-api';
+import {
+  Amount4,
+  Rate8,
+  V2CommandTransactionManager,
+  buildIdBusinessV2DateRange
+} from '../runtime/public-api';
 import { normalizeFinanceDate } from './id-business-v2-finance-input';
 import { getIdBusinessV2SettlementPlatformReport } from './id-business-v2-finance-settlement-platform-report';
 import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
@@ -403,11 +408,11 @@ export class IdBusinessV2FinanceReportsService {
   }
 
   private parseOccurredAt(from?: string, to?: string) {
-    if (!from && !to) return undefined;
-    return {
-      gte: from ? normalizeFinanceDate(`${from}T00:00:00+08:00`, '开始日期') : undefined,
-      lte: to ? normalizeFinanceDate(`${to}T23:59:59.999+08:00`, '结束日期') : undefined
-    };
+    return buildIdBusinessV2DateRange(from, to, {
+      from: '开始日期',
+      to: '结束日期',
+      invalidRange: '开始日期不能晚于结束日期'
+    });
   }
 
   private async loadLatestRates() {

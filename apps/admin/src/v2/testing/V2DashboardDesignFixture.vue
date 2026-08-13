@@ -116,7 +116,7 @@ const notice = ref('');
 const overview: DashboardOverviewContract = {
   generatedAt: '2026-08-10T09:42:00+08:00',
   businessDate: '2026-08-10',
-  timezone: 'Asia/Kuala_Lumpur',
+  timezone: 'Asia/Shanghai',
   warningDays: 3,
   access: {
     orders: true,

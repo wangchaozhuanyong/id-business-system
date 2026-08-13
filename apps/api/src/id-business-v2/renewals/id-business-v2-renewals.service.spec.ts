@@ -219,8 +219,8 @@ describe('IdBusinessV2RenewalsService', () => {
         },
         {
           dueAt: {
-            gte: new Date('2026-07-26T00:00:00.000Z'),
-            lte: new Date('2026-07-27T23:59:59.999Z')
+            gte: new Date('2026-07-25T16:00:00.000Z'),
+            lt: new Date('2026-07-27T16:00:00.000Z')
           }
         }
       ]
@@ -272,8 +272,8 @@ describe('IdBusinessV2RenewalsService', () => {
         },
         {
           dueAt: {
-            gte: new Date('2026-08-01T00:00:00.000Z'),
-            lte: new Date('2026-08-10T23:59:59.999Z')
+            gte: new Date('2026-07-31T16:00:00.000Z'),
+            lt: new Date('2026-08-10T16:00:00.000Z')
           }
         }
       ]

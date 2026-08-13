@@ -1,4 +1,5 @@
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import { formatV2DateTime, toV2DateTimeInput } from '@/v2/utils/dateTime';
 
 export function formatSupplierFundDecimal(value: string) {
   return formatV2Decimal(value, { minimumFractionDigits: 2 });
@@ -11,14 +12,7 @@ export function formatSupplierFundSignedCurrency(value: string) {
 }
 
 export function formatSupplierFundDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date(value));
+  return formatV2DateTime(value, {}, '—');
 }
 
 export function formatOptionalSupplierFundDate(value: string | null) {
@@ -26,6 +20,5 @@ export function formatOptionalSupplierFundDate(value: string | null) {
 }
 
 export function toLocalDateTimeInput(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+  return toV2DateTimeInput(value);
 }

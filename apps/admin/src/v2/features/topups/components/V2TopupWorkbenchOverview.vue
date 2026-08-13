@@ -3,14 +3,14 @@
     <div class="v2-topup-overview__intro">
       <span class="v2-topup-overview__eyebrow">余额加额工作台</span>
       <h2>ID 加额总览</h2>
-      <p>查找可运营的库存或客户已购 ID 并完成礼品卡入账，余额成本继续由系统联动记录。</p>
+      <p>未售出与已售出 ID 分开处理；已售 ID 加卡前必须核对原销售订单和客户归属。</p>
     </div>
 
     <div class="v2-topup-overview__metrics" aria-label="当前页 ID 加额指标">
       <article>
         <span>筛选结果</span>
         <strong>{{ page.total }}</strong>
-        <small>全部匹配 ID</small>
+        <small>{{ page.activeList === 'sold' ? '已售出 ID' : '未售出 ID' }}</small>
       </article>
       <article>
         <span>当前页</span>

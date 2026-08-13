@@ -53,6 +53,47 @@
             <V2RenewalsToolbar :page="page" />
             <V2RenewalsList :page="page" />
           </section>
+
+          <V2RenewalOrderDrawer
+            v-model="drawerVisible"
+            v-model:confirmation-visible="confirmationVisible"
+            v-model:category-option-id="renewalForm.categoryOptionId"
+            v-model:service-option-id="renewalForm.serviceOptionId"
+            v-model:settlement-platform-option-id="renewalForm.settlementPlatformOptionId"
+            v-model:platform-order-no="renewalForm.platformOrderNo"
+            v-model:received-amount="renewalForm.receivedAmount"
+            v-model:target-profit-rate="renewalForm.targetProfitRate"
+            v-model:balance-amount="renewalForm.balanceAmount"
+            v-model:opened-at="renewalForm.openedAt"
+            v-model:due-at="renewalForm.dueAt"
+            v-model:remark="renewalForm.remark"
+            :renewal="selectedRenewal"
+            :categories="manualRenewalCategories"
+            :services="manualRenewalServices"
+            :settlement-platforms="manualRenewalOptions.settlementPlatforms"
+            :selected-service="selectedManualService"
+            :options-loading="false"
+            options-error=""
+            :submitting="false"
+            submit-disabled-reason=""
+            platform-fee-preview="2.80"
+            estimated-balance-cost-preview="116.00"
+            estimated-profit-preview="31.20"
+            estimated-profit-rate-preview="20.80"
+            :suggested-received="suggestedReceived"
+            :recommendation-applied="recommendationApplied"
+            applied-suggested-cny="150.00"
+            balance-after-preview="304.20"
+            confirmation-message="设计验收夹具不会提交业务数据。"
+            @opened-at-change="handleOpenedAtChange"
+            @category-change="handleCategoryChange"
+            @settlement-platform-change="handleSettlementPlatformChange"
+            @apply-suggested="applySuggestedPrice"
+            @undo-suggested="undoSuggestedPrice"
+            @manual-price-input="recommendationApplied = false"
+            @open-confirmation="confirmationVisible = true"
+            @submit="handleFixtureSubmit"
+          />
         </div>
       </main>
     </div>
@@ -60,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import {
   ArrowDown,
@@ -72,11 +113,14 @@ import {
   User
 } from '@element-plus/icons-vue';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2RenewalOrderDrawer from '@/v2/features/renewals/components/V2RenewalOrderDrawer.vue';
 import V2RenewalsList from '@/v2/features/renewals/components/V2RenewalsList.vue';
 import V2RenewalsOverview from '@/v2/features/renewals/components/V2RenewalsOverview.vue';
 import V2RenewalsToolbar from '@/v2/features/renewals/components/V2RenewalsToolbar.vue';
+import { addOneInclusiveMonthToV2DateTimeInput } from '@/v2/utils/dateTime';
 import type { useRenewalsPage } from '@/v2/features/renewals/useRenewalsPage';
 import type {
+  V2ManualRenewalOptions,
   V2RenewalDueStatus,
   V2RenewalStatusCode,
   V2RenewalWorkbenchItem
@@ -166,7 +210,8 @@ function makeRenewal(index: number): V2RenewalWorkbenchItem {
   };
 }
 
-const emptyState = new URLSearchParams(window.location.search).get('state') === 'empty';
+const fixtureParams = new URLSearchParams(window.location.search);
+const emptyState = fixtureParams.get('state') === 'empty';
 const allRenewals: V2RenewalWorkbenchItem[] = emptyState
   ? []
   : Array.from({ length: 23 }, (_, index) => makeRenewal(index));
@@ -184,6 +229,99 @@ const filterOptions = {
   }))
 };
 const notice = ref('');
+const drawerVisible = ref(false);
+const confirmationVisible = ref(false);
+const selectedRenewal = ref<V2RenewalWorkbenchItem | null>(null);
+const recommendationApplied = ref(false);
+const manualRenewalOptions: V2ManualRenewalOptions = {
+  services: [
+    {
+      id: 'service-1',
+      code: 'chatgpt-plus',
+      name: 'ChatGPT Plus',
+      category: { id: 'category-ai', name: 'AI 工具' },
+      country: {
+        id: 'country-us',
+        code: 'US',
+        name: '美国',
+        currencyCode: 'USD'
+      },
+      businessAmount: '20.00',
+      currencyCode: 'USD'
+    },
+    {
+      id: 'service-2',
+      code: 'claude-pro',
+      name: 'Claude Pro',
+      category: { id: 'category-ai', name: 'AI 工具' },
+      country: {
+        id: 'country-us',
+        code: 'US',
+        name: '美国',
+        currencyCode: 'USD'
+      },
+      businessAmount: '20.00',
+      currencyCode: 'USD'
+    },
+    {
+      id: 'service-3',
+      code: 'netflix-premium',
+      name: 'Netflix Premium',
+      category: { id: 'category-streaming', name: '影音订阅' },
+      country: {
+        id: 'country-us',
+        code: 'US',
+        name: '美国',
+        currencyCode: 'USD'
+      },
+      businessAmount: '22.99',
+      currencyCode: 'USD'
+    }
+  ],
+  settlementPlatforms: [
+    {
+      id: 'platform-1',
+      code: 'alipay',
+      name: '支付宝',
+      fixedFee: '0.00',
+      percentageFee: '1.90'
+    }
+  ]
+};
+const renewalForm = reactive({
+  categoryOptionId: 'category-ai',
+  serviceOptionId: 'service-1',
+  settlementPlatformOptionId: 'platform-1',
+  platformOrderNo: '202608120001',
+  receivedAmount: '150',
+  targetProfitRate: '20',
+  balanceAmount: '20',
+  openedAt: '2026-09-10T16:20',
+  dueAt: '2026-10-09T16:20',
+  remark: ''
+});
+const manualRenewalCategories = [
+  { id: 'category-ai', name: 'AI 工具' },
+  { id: 'category-streaming', name: '影音订阅' }
+];
+const manualRenewalServices = computed(() =>
+  manualRenewalOptions.services.filter(
+    (service) => service.category?.id === renewalForm.categoryOptionId
+  )
+);
+const selectedManualService = computed(
+  () =>
+    manualRenewalOptions.services.find((service) => service.id === renewalForm.serviceOptionId) ??
+    null
+);
+const suggestedReceived = {
+  amount: '150.00',
+  exactAmount: '149.87',
+  platformFee: '2.80',
+  estimatedProfit: '31.20',
+  estimatedProfitRate: '20.80',
+  error: ''
+};
 
 const page = reactive({
   items: [] as V2RenewalWorkbenchItem[],
@@ -241,6 +379,8 @@ const page = reactive({
   handleSortChange: () => undefined,
   openRenewalDrawer: (item: V2RenewalWorkbenchItem) => {
     notice.value = `预览操作：正在为 ${item.customer.name} 录入续费订单。`;
+    selectedRenewal.value = item;
+    drawerVisible.value = true;
   },
   renewalActionDisabledReason: (item: V2RenewalWorkbenchItem) =>
     item.withinActionWindow ? '' : '仅支持为 7 天内到期或已到期记录续费',
@@ -256,6 +396,7 @@ const page = reactive({
   formatDate: (value: string | null) =>
     value
       ? new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai',
           year: 'numeric',
           month: '2-digit',
           day: '2-digit',
@@ -266,6 +407,7 @@ const page = reactive({
       : '—',
   formatTime: (value: string) =>
     new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
@@ -322,7 +464,44 @@ function applyFilters(resetPage = false) {
   ];
 }
 
+function handleOpenedAtChange(value: string | null) {
+  if (!value) return;
+  renewalForm.dueAt = addOneInclusiveMonthToV2DateTimeInput(value);
+}
+
+function handleSettlementPlatformChange() {
+  if (!renewalForm.settlementPlatformOptionId) renewalForm.platformOrderNo = '';
+}
+
+function handleCategoryChange() {
+  const serviceMatchesCategory = manualRenewalOptions.services.some(
+    (service) =>
+      service.id === renewalForm.serviceOptionId &&
+      service.category?.id === renewalForm.categoryOptionId
+  );
+  if (!serviceMatchesCategory) renewalForm.serviceOptionId = '';
+}
+
+function applySuggestedPrice() {
+  renewalForm.receivedAmount = suggestedReceived.amount ?? '';
+  recommendationApplied.value = true;
+}
+
+function undoSuggestedPrice() {
+  renewalForm.receivedAmount = '';
+  recommendationApplied.value = false;
+}
+
+function handleFixtureSubmit() {
+  confirmationVisible.value = false;
+  notice.value = '设计验收完成，未提交任何业务数据。';
+}
+
 applyFilters();
+if (fixtureParams.get('drawer') === 'open' && allRenewals[0]) {
+  selectedRenewal.value = allRenewals[0];
+  drawerVisible.value = true;
+}
 </script>
 
 <style scoped>

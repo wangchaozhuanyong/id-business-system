@@ -6,81 +6,51 @@
     destroy-on-close
   >
     <div v-if="selectedOperation" class="v2-audit-detail">
-      <dl class="v2-audit-detail__meta">
-        <div>
-          <dt>操作人</dt>
-          <dd>{{ auditUserLabel(selectedOperation.user) }}</dd>
+      <V2DetailSummary
+        heading-id="audit-operation-summary"
+        eyebrow="审计对象"
+        :title="operationObjectLabel(selectedOperation)"
+        :description="`${selectedOperation.module} / ${selectedOperation.action}`"
+        :metrics="[
+          { label: '操作人', value: auditUserLabel(selectedOperation.user) },
+          { label: '记录时间', value: formatAuditDate(selectedOperation.createdAt) }
+        ]"
+        :facts="[
+          { label: '来源 IP', value: selectedOperation.ip || '—' },
+          { label: '客户端', value: selectedOperation.userAgent || '—' },
+          { label: '操作说明', value: selectedOperation.remark || '—' }
+        ]"
+      />
+      <V2PanelSection heading-id="audit-operation-changes" title="变更内容" step="01">
+        <div class="v2-audit-detail__changes">
+          <section>
+            <h4>变更前</h4>
+            <pre>{{ formatAuditJson(selectedOperation.beforeData) }}</pre>
+          </section>
+          <section>
+            <h4>变更后</h4>
+            <pre>{{ formatAuditJson(selectedOperation.afterData) }}</pre>
+          </section>
         </div>
-        <div>
-          <dt>时间</dt>
-          <dd>{{ formatAuditDate(selectedOperation.createdAt) }}</dd>
-        </div>
-        <div>
-          <dt>模块 / 动作</dt>
-          <dd>{{ selectedOperation.module }} / {{ selectedOperation.action }}</dd>
-        </div>
-        <div>
-          <dt>对象</dt>
-          <dd>{{ operationObjectLabel(selectedOperation) }}</dd>
-        </div>
-        <div>
-          <dt>IP</dt>
-          <dd>{{ selectedOperation.ip || '—' }}</dd>
-        </div>
-        <div>
-          <dt>客户端</dt>
-          <dd>{{ selectedOperation.userAgent || '—' }}</dd>
-        </div>
-        <div class="v2-audit-detail__wide">
-          <dt>说明</dt>
-          <dd>{{ selectedOperation.remark || '—' }}</dd>
-        </div>
-      </dl>
-      <div class="v2-audit-detail__changes">
-        <section>
-          <h3>变更前</h3>
-          <pre>{{ formatAuditJson(selectedOperation.beforeData) }}</pre>
-        </section>
-        <section>
-          <h3>变更后</h3>
-          <pre>{{ formatAuditJson(selectedOperation.afterData) }}</pre>
-        </section>
-      </div>
+      </V2PanelSection>
     </div>
-    <dl v-else-if="selectedSensitiveAccess" class="v2-audit-detail__meta">
-      <div>
-        <dt>访问人</dt>
-        <dd>{{ auditUserLabel(selectedSensitiveAccess.user) }}</dd>
-      </div>
-      <div>
-        <dt>时间</dt>
-        <dd>{{ formatAuditDate(selectedSensitiveAccess.createdAt) }}</dd>
-      </div>
-      <div>
-        <dt>模块 / 字段</dt>
-        <dd>{{ selectedSensitiveAccess.module }} / {{ selectedSensitiveAccess.fieldName }}</dd>
-      </div>
-      <div>
-        <dt>对象</dt>
-        <dd>{{ sensitiveObjectLabel(selectedSensitiveAccess) }}</dd>
-      </div>
-      <div>
-        <dt>审批状态</dt>
-        <dd>{{ selectedSensitiveAccess.approved ? '已批准' : '未批准' }}</dd>
-      </div>
-      <div>
-        <dt>IP</dt>
-        <dd>{{ selectedSensitiveAccess.ip || '—' }}</dd>
-      </div>
-      <div class="v2-audit-detail__wide">
-        <dt>访问原因</dt>
-        <dd>{{ selectedSensitiveAccess.accessReason || '—' }}</dd>
-      </div>
-      <div class="v2-audit-detail__wide">
-        <dt>客户端</dt>
-        <dd>{{ selectedSensitiveAccess.userAgent || '—' }}</dd>
-      </div>
-    </dl>
+    <V2DetailSummary
+      v-else-if="selectedSensitiveAccess"
+      heading-id="audit-sensitive-summary"
+      eyebrow="敏感访问对象"
+      :title="sensitiveObjectLabel(selectedSensitiveAccess)"
+      :description="`${selectedSensitiveAccess.module} / ${selectedSensitiveAccess.fieldName}`"
+      :metrics="[
+        { label: '访问人', value: auditUserLabel(selectedSensitiveAccess.user) },
+        { label: '审批状态', value: selectedSensitiveAccess.approved ? '已批准' : '未批准' }
+      ]"
+      :facts="[
+        { label: '访问时间', value: formatAuditDate(selectedSensitiveAccess.createdAt) },
+        { label: '来源 IP', value: selectedSensitiveAccess.ip || '—' },
+        { label: '访问原因', value: selectedSensitiveAccess.accessReason || '—' },
+        { label: '客户端', value: selectedSensitiveAccess.userAgent || '—' }
+      ]"
+    />
     <template v-if="selectedOperation" #footer>
       <div class="v2-audit-detail__footer">
         <span>
@@ -101,6 +71,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import {
   auditUserLabel,
   formatAuditDate,
@@ -134,39 +106,9 @@ function handleRestore() {
 
 <style scoped>
 .v2-audit-detail,
-.v2-audit-detail__meta,
 .v2-audit-detail__changes {
   display: grid;
   gap: 16px;
-}
-
-.v2-audit-detail__meta {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0;
-}
-
-.v2-audit-detail__meta div {
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--v3-border);
-  border-radius: 8px;
-  background: var(--v3-surface-soft);
-}
-
-.v2-audit-detail__meta dt {
-  margin-bottom: 6px;
-  color: var(--v3-text-soft);
-  font-size: 12px;
-}
-
-.v2-audit-detail__meta dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--v3-text);
-}
-
-.v2-audit-detail__wide {
-  grid-column: 1 / -1;
 }
 
 .v2-audit-detail__changes {
@@ -191,7 +133,7 @@ function handleRestore() {
   min-width: 0;
 }
 
-.v2-audit-detail__changes h3 {
+.v2-audit-detail__changes h4 {
   margin: 0 0 8px;
   font-size: 14px;
 }
@@ -214,7 +156,6 @@ function handleRestore() {
 }
 
 @media (max-width: 640px) {
-  .v2-audit-detail__meta,
   .v2-audit-detail__changes {
     grid-template-columns: minmax(0, 1fr);
   }

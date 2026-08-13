@@ -3,6 +3,9 @@
     v-model="page.drawerVisible"
     :title="page.editingItem ? '编辑 ID' : '新增 ID'"
     :confirm-text="page.editingItem ? '保存修改' : '确认新增'"
+    eyebrow="ID 资料"
+    description="按身份、采购凭证和余额成本分区核对后保存"
+    :dirty="accountFormDirty"
     :confirm-loading="page.saving"
     :confirm-disabled-reason="page.formDisabledReason"
     size="min(620px, 96vw)"
@@ -21,144 +24,155 @@
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
       autocomplete="off"
     >
-      <el-form-item label="ID 账号" prop="appleId">
-        <el-input
-          v-model="page.form.appleId"
-          name="v2-apple-id-record"
-          autocomplete="off"
-          :placeholder="page.editingItem ? '留空表示不修改' : '输入 Apple ID'"
-        />
-      </el-form-item>
-      <el-form-item label="ID 密码">
-        <el-input
-          v-model="page.form.password"
-          type="password"
-          name="v2-apple-id-record-password"
-          autocomplete="new-password"
-          show-password
-          :placeholder="page.editingItem ? '留空表示不修改' : '输入密码'"
-        />
-      </el-form-item>
-      <el-form-item label="手机号码">
-        <el-input
-          v-model="page.form.phone"
-          name="v2-apple-id-record-phone"
-          autocomplete="off"
-          :placeholder="page.editingItem ? '留空表示不修改' : '输入手机号'"
-        />
-      </el-form-item>
-      <el-form-item label="密保">
-        <el-input
-          v-model="page.form.securityInfo"
-          name="v2-apple-id-record-security"
-          autocomplete="off"
-          type="textarea"
-          :rows="3"
-          :placeholder="page.editingItem ? '留空表示不修改' : '输入密保资料'"
-        />
-      </el-form-item>
-      <div class="v2-record-form-grid">
-        <el-form-item label="国家" prop="countryOptionId">
-          <el-select v-model="page.form.countryOptionId" filterable placeholder="选择国家">
+      <V2PanelSection heading-id="account-identity-section" title="身份资料" step="01">
+        <el-form-item label="ID 账号" prop="appleId">
+          <el-input
+            v-model="page.form.appleId"
+            name="v2-apple-id-record"
+            autocomplete="off"
+            :placeholder="page.editingItem ? '留空表示不修改' : '输入 Apple ID'"
+          />
+        </el-form-item>
+        <el-form-item label="ID 密码">
+          <el-input
+            v-model="page.form.password"
+            type="password"
+            name="v2-apple-id-record-password"
+            autocomplete="new-password"
+            show-password
+            :placeholder="page.editingItem ? '留空表示不修改' : '输入密码'"
+          />
+        </el-form-item>
+        <el-form-item label="手机号码">
+          <el-input
+            v-model="page.form.phone"
+            name="v2-apple-id-record-phone"
+            autocomplete="off"
+            :placeholder="page.editingItem ? '留空表示不修改' : '输入手机号'"
+          />
+        </el-form-item>
+        <el-form-item label="密保">
+          <el-input
+            v-model="page.form.securityInfo"
+            name="v2-apple-id-record-security"
+            autocomplete="off"
+            type="textarea"
+            :rows="3"
+            :placeholder="page.editingItem ? '留空表示不修改' : '输入密保资料'"
+          />
+        </el-form-item>
+        <div class="v2-record-form-grid">
+          <el-form-item label="国家" prop="countryOptionId">
+            <el-select v-model="page.form.countryOptionId" filterable placeholder="选择国家">
+              <el-option
+                v-for="option in page.countryOptions"
+                :key="option.id"
+                :label="option.name"
+                :value="option.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="ID 状态" prop="statusOptionId">
+            <el-select v-model="page.form.statusOptionId" filterable placeholder="选择 ID 状态">
+              <el-option
+                v-for="option in page.formStatusOptions"
+                :key="option.id"
+                :label="option.name"
+                :value="option.id"
+              />
+            </el-select>
+          </el-form-item>
+        </div>
+        <el-form-item label="ID 供应商">
+          <el-select
+            v-model="page.form.supplierOptionId"
+            clearable
+            filterable
+            placeholder="选择供应商"
+          >
             <el-option
-              v-for="option in page.countryOptions"
+              v-for="option in page.supplierOptions"
               :key="option.id"
-              :label="option.name"
+              :label="option.status === 'disabled' ? `${option.name}（已停用）` : option.name"
               :value="option.id"
+              :disabled="option.status === 'disabled'"
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="ID 状态" prop="statusOptionId">
-          <el-select v-model="page.form.statusOptionId" filterable placeholder="选择 ID 状态">
-            <el-option
-              v-for="option in page.formStatusOptions"
-              :key="option.id"
-              :label="option.name"
-              :value="option.id"
+      </V2PanelSection>
+
+      <V2PanelSection heading-id="account-purchase-section" title="采购凭证" step="02">
+        <V2AccountPurchaseFields :page="page" />
+      </V2PanelSection>
+
+      <V2PanelSection heading-id="account-balance-section" title="余额与成本" step="03">
+        <el-alert
+          v-if="page.editingItem?.saleState === 'sold'"
+          type="info"
+          title="该 ID 已归客户所有，余额和人民币成本仍可按实际凭证调整"
+          :closable="false"
+          show-icon
+        />
+        <div class="v2-record-form-grid">
+          <el-form-item label="余额" prop="currentBalance">
+            <el-input
+              v-model="page.form.currentBalance"
+              inputmode="decimal"
+              placeholder="0"
+              :disabled="!page.canAdjustBalance"
+              @input="page.updateBalanceCostFromRate"
             />
-          </el-select>
-        </el-form-item>
-      </div>
-      <el-form-item label="ID 供应商">
-        <el-select
-          v-model="page.form.supplierOptionId"
-          clearable
-          filterable
-          placeholder="选择供应商"
+          </el-form-item>
+          <el-form-item label="汇率" prop="exchangeRate">
+            <el-input
+              v-model="page.form.exchangeRate"
+              inputmode="decimal"
+              placeholder="例如 5.7"
+              :disabled="!page.canAdjustBalance"
+              @input="page.updateBalanceCostFromRate"
+            />
+          </el-form-item>
+          <el-form-item label="人民币成本" prop="balanceCostAmount">
+            <el-input
+              v-model="page.form.balanceCostAmount"
+              inputmode="decimal"
+              placeholder="0"
+              readonly
+            />
+          </el-form-item>
+          <el-form-item v-if="page.editingItem" label="ID购买成本">
+            <el-input-number
+              v-model="page.form.purchaseCost"
+              :min="0"
+              :max="99999999"
+              :precision="V2_DECIMAL_PLACES"
+              :step="Number(V2_DECIMAL_STEP)"
+              controls-position="right"
+              disabled
+            />
+          </el-form-item>
+        </div>
+        <el-form-item
+          v-if="page.editingItem && page.balanceChanged"
+          label="余额修正原因"
+          prop="balanceAdjustmentReason"
         >
-          <el-option
-            v-for="option in page.supplierOptions"
-            :key="option.id"
-            :label="option.status === 'disabled' ? `${option.name}（已停用）` : option.name"
-            :value="option.id"
-            :disabled="option.status === 'disabled'"
-          />
-        </el-select>
-      </el-form-item>
-      <V2AccountPurchaseFields :page="page" />
-      <el-alert
-        v-if="page.editingItem?.saleState === 'sold'"
-        type="info"
-        title="该 ID 已归客户所有，余额和人民币成本仍可按实际凭证调整"
-        :closable="false"
-        show-icon
-      />
-      <div class="v2-record-form-grid">
-        <el-form-item label="余额" prop="currentBalance">
           <el-input
-            v-model="page.form.currentBalance"
-            inputmode="decimal"
-            placeholder="0"
-            :disabled="!page.canAdjustBalance"
-            @input="page.updateBalanceCostFromRate"
+            v-model="page.form.balanceAdjustmentReason"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="说明本次余额或人民币成本修正原因"
           />
         </el-form-item>
-        <el-form-item label="汇率" prop="exchangeRate">
-          <el-input
-            v-model="page.form.exchangeRate"
-            inputmode="decimal"
-            placeholder="例如 5.7"
-            :disabled="!page.canAdjustBalance"
-            @input="page.updateBalanceCostFromRate"
-          />
+      </V2PanelSection>
+
+      <V2PanelSection heading-id="account-remark-section" title="补充说明" step="04">
+        <el-form-item label="备注">
+          <el-input v-model="page.form.remark" type="textarea" :rows="3" maxlength="500" />
         </el-form-item>
-        <el-form-item label="人民币成本" prop="balanceCostAmount">
-          <el-input
-            v-model="page.form.balanceCostAmount"
-            inputmode="decimal"
-            placeholder="0"
-            readonly
-          />
-        </el-form-item>
-        <el-form-item v-if="page.editingItem" label="ID购买成本">
-          <el-input-number
-            v-model="page.form.purchaseCost"
-            :min="0"
-            :max="99999999"
-            :precision="V2_DECIMAL_PLACES"
-            :step="Number(V2_DECIMAL_STEP)"
-            controls-position="right"
-            disabled
-          />
-        </el-form-item>
-      </div>
-      <el-form-item
-        v-if="page.editingItem && page.balanceChanged"
-        label="余额修正原因"
-        prop="balanceAdjustmentReason"
-      >
-        <el-input
-          v-model="page.form.balanceAdjustmentReason"
-          type="textarea"
-          :rows="2"
-          maxlength="200"
-          show-word-limit
-          placeholder="说明本次余额或人民币成本修正原因"
-        />
-      </el-form-item>
-      <el-form-item label="备注">
-        <el-input v-model="page.form.remark" type="textarea" :rows="3" maxlength="500" />
-      </el-form-item>
+      </V2PanelSection>
     </el-form>
   </V2FormDrawer>
 
@@ -324,6 +338,8 @@ import { computed, ref, type UnwrapNestedRefs } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
+import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import { useV2FormSnapshot } from '@/v2/composables/useV2FormSnapshot';
 import { V2_DECIMAL_PLACES, V2_DECIMAL_STEP } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useAccountsPage } from '../useAccountsPage';
@@ -340,6 +356,10 @@ const props = defineProps<{
 
 const formRef = ref<FormInstance>();
 const revealFormRef = ref<FormInstance>();
+const { dirty: accountFormDirty } = useV2FormSnapshot(
+  () => props.page.drawerVisible,
+  () => props.page.form
+);
 const formRules = computed<FormRules>(() => ({
   appleId: props.page.editingItem
     ? []

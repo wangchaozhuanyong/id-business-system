@@ -1,6 +1,7 @@
 import type { V2FinanceCurrency, V2FinanceLatestRate } from '@apple-business/shared';
-import { calculateOneMonthInclusiveDueAt } from '@/v2/utils/subscriptionPeriod';
+import { addOneInclusiveMonthToV2DateTimeInput } from '@/v2/utils/dateTime';
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import { getV2BusinessNowInput, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryCustomer } from './contracts';
 
 function createIdempotencyKey() {
@@ -20,8 +21,7 @@ export function createConsumptionIdempotencyKey() {
 export type V2OrderReceiptFxMode = 'automatic' | 'manual';
 
 export function createInitialOrderEntryForm() {
-  const now = new Date();
-  now.setSeconds(0, 0);
+  const now = getV2BusinessNowInput();
   return {
     countryId: '',
     categoryId: '',
@@ -44,7 +44,7 @@ export function createInitialOrderEntryForm() {
     targetProfitRate: '',
     balanceAmount: '',
     openedAt: now,
-    dueAt: calculateOneMonthInclusiveDueAt(now),
+    dueAt: addOneInclusiveMonthToV2DateTimeInput(now),
     remark: '',
     idempotencyKey: createIdempotencyKey()
   };
@@ -64,7 +64,7 @@ export function formatOrderEntryDecimal(value: string) {
 export function applyLatestOrderEntryFxRate(
   form: V2OrderEntryForm,
   latestFxRates: V2FinanceLatestRate[],
-  evaluatedAt = Date.now()
+  evaluatedAt = getV2BusinessNowMs() ?? Number.NEGATIVE_INFINITY
 ) {
   if (form.receivedCurrency === 'CNY' || form.receivedFxMode === 'manual') return;
   const latest = latestFxRates.find((item) => item.currency === form.receivedCurrency);

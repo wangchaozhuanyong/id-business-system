@@ -27,8 +27,8 @@ function makeAccount() {
     recordStatus: 'active' as const,
     disabledReason: null,
     disabledAt: null,
-    currentBalance: Amount4.zero(),
-    balanceCostAmount: Amount4.zero()
+    currentBalance: Amount4.from('8'),
+    balanceCostAmount: Amount4.from('12')
   };
 }
 
@@ -65,8 +65,6 @@ describe('sold account recovery', () => {
       canRecover: false,
       recordStatus: 'disabled',
       blockers: [
-        { code: 'remaining_balance' },
-        { code: 'remaining_balance_cost' },
         { code: 'pending_after_sales_order' },
         { code: 'active_activation' },
         { code: 'active_lock' },
@@ -143,11 +141,17 @@ describe('sold account recovery', () => {
         ]
       })
     );
-    expect(orderLockService.releaseOrderLockInTransaction).toHaveBeenCalledOnce();
+    expect(orderLockService.releaseOrderLockInTransaction).not.toHaveBeenCalled();
+    expect(orderLockService.narrowOrderLockToServiceInTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      orderId,
+      expect.stringContaining('纠正 ID 售出记录'),
+      operator
+    );
     expect(result).toMatchObject({
       accountId,
       orderId,
-      lockReleased: true,
+      lockReleased: false,
       financeJournalId: 'journal-recovery'
     });
   });
@@ -175,9 +179,16 @@ describe('sold account recovery', () => {
       where: {
         accountId,
         accountSource: 'customer_owned',
+        sourceSoldOrderId: orderId,
         deletedAt: null,
-        status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+        status: { in: ['draft', 'pending', 'waiting_external', 'processing', 'completed'] }
       }
+    });
+    expect(countActivations).toHaveBeenCalledWith({
+      where: expect.objectContaining({ accountId, orderId: { not: orderId }, status: 'active' })
+    });
+    expect(countLocks).toHaveBeenCalledWith({
+      where: expect.objectContaining({ accountId, orderId: { not: orderId }, status: 'active' })
     });
   });
 });
@@ -209,7 +220,11 @@ function makeDependencies() {
     appendAudit: vi.fn().mockResolvedValue({ id: 'audit-1' })
   };
   const orderLockService = {
-    releaseOrderLockInTransaction: vi.fn().mockResolvedValue({ released: true })
+    releaseOrderLockInTransaction: vi.fn().mockResolvedValue({ released: true }),
+    narrowOrderLockToServiceInTransaction: vi.fn().mockResolvedValue({
+      changed: true,
+      lock: { id: 'lock-1', lockScope: 'by_service' }
+    })
   };
   const financePostingService = {
     post: vi.fn().mockResolvedValue({ id: 'journal-recovery' })

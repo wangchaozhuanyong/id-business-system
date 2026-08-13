@@ -4,28 +4,28 @@ import { calculateOneMonthInclusiveDueAt } from './subscriptionPeriod';
 describe('calculateOneMonthInclusiveDueAt', () => {
   it.each([
     {
-      openedAt: new Date(2026, 6, 27, 9, 52, 13, 456),
-      dueAt: new Date(2026, 7, 26, 9, 52, 13, 456)
+      openedAt: new Date('2026-07-27T01:52:13.456Z'),
+      dueAt: new Date('2026-08-26T01:52:13.456Z')
     },
     {
-      openedAt: new Date(2026, 4, 8, 6, 10),
-      dueAt: new Date(2026, 5, 7, 6, 10)
+      openedAt: new Date('2026-05-07T22:10:00.000Z'),
+      dueAt: new Date('2026-06-06T22:10:00.000Z')
     },
     {
-      openedAt: new Date(2026, 0, 31, 6, 10),
-      dueAt: new Date(2026, 1, 27, 6, 10)
+      openedAt: new Date('2026-01-30T22:10:00.000Z'),
+      dueAt: new Date('2026-02-26T22:10:00.000Z')
     },
     {
-      openedAt: new Date(2028, 0, 31, 6, 10),
-      dueAt: new Date(2028, 1, 28, 6, 10)
+      openedAt: new Date('2028-01-30T22:10:00.000Z'),
+      dueAt: new Date('2028-02-27T22:10:00.000Z')
     },
     {
-      openedAt: new Date(2026, 11, 31, 6, 10),
-      dueAt: new Date(2027, 0, 30, 6, 10)
+      openedAt: new Date('2026-12-30T22:10:00.000Z'),
+      dueAt: new Date('2027-01-29T22:10:00.000Z')
     },
     {
-      openedAt: new Date(2026, 1, 9, 9, 52),
-      dueAt: new Date(2026, 2, 8, 9, 52)
+      openedAt: new Date('2026-02-09T01:52:00.000Z'),
+      dueAt: new Date('2026-03-08T01:52:00.000Z')
     }
   ])('calculates $openedAt as $dueAt without mutating the opening time', ({ openedAt, dueAt }) => {
     const originalOpenedAt = new Date(openedAt);

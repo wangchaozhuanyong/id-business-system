@@ -3,6 +3,7 @@ import type { FormInstance } from 'element-plus';
 import type { V2OrderReceiptFxQuote } from '@apple-business/shared';
 import { getApiErrorMessage, isRequestCanceled } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { idBusinessV2OrdersApi } from './api';
 import type { V2OrderEntryForm } from './order-entry-form';
@@ -282,7 +283,9 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
   function scheduleReceiptFxExpiry(quote: V2OrderReceiptFxQuote) {
     clearReceiptFxExpiryTimer();
     if (!quote.expiresAt) return;
-    const delay = Math.max(0, new Date(quote.expiresAt).getTime() - Date.now() + 50);
+    const businessNow = getV2BusinessNowMs();
+    if (businessNow === null) return;
+    const delay = Math.max(0, new Date(quote.expiresAt).getTime() - businessNow + 50);
     receiptFxExpiryTimer = setTimeout(() => {
       receiptFxExpiryTimer = undefined;
       if (
@@ -307,7 +310,10 @@ export function useOrderReceiptPricing(options: UseOrderReceiptPricingOptions) {
   }
 
   function isReceiptFxQuoteExpired(quote: V2OrderReceiptFxQuote) {
-    return Boolean(quote.expiresAt && new Date(quote.expiresAt).getTime() <= Date.now());
+    const businessNow = getV2BusinessNowMs();
+    return Boolean(
+      quote.expiresAt && businessNow !== null && new Date(quote.expiresAt).getTime() <= businessNow
+    );
   }
 
   async function ensureReceiptFxReadyForSubmit() {

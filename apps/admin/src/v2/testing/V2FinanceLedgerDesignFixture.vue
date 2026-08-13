@@ -274,7 +274,7 @@ const page = reactive({
   periods,
   settings: {
     baseCurrency: 'CNY',
-    timezone: 'Asia/Kuala_Lumpur',
+    timezone: 'Asia/Shanghai',
     enabledAt: '2026-01-01T00:00:00.000Z',
     historyStatus: 'completed',
     historyCompletedAt: '2026-02-08T12:00:00.000Z',

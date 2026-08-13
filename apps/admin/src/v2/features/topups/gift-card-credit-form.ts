@@ -25,6 +25,7 @@ export function buildManualGiftCardCreditPayload(input: {
   supplierOptionId: string;
   creditedAt: string;
   idempotencyKey: string;
+  confirmedSoldByOrderId?: string;
   remark: string;
 }): V2GiftCardCreditPayload {
   const remark = input.remark.trim();
@@ -37,6 +38,9 @@ export function buildManualGiftCardCreditPayload(input: {
     supplierOptionId: input.supplierOptionId,
     creditedAt: input.creditedAt,
     idempotencyKey: input.idempotencyKey,
+    ...(input.confirmedSoldByOrderId
+      ? { confirmedSoldByOrderId: input.confirmedSoldByOrderId }
+      : {}),
     ...(remark ? { remark } : {})
   };
 }
