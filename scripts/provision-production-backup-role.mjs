@@ -92,7 +92,7 @@ try {
     `ALTER ROLE ${quoteIdentifier(EXPECTED_BACKUP_ROLE)} SET idle_in_transaction_session_timeout = '2min'`
   );
   await admin.query(
-    `ALTER ROLE ${quoteIdentifier(EXPECTED_BACKUP_ROLE)} SET idle_session_timeout = '2min'`
+    `ALTER ROLE ${quoteIdentifier(EXPECTED_BACKUP_ROLE)} SET idle_session_timeout = '16min'`
   );
   await verifyAdminCatalog(admin);
   await admin.query('COMMIT');

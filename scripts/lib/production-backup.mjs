@@ -19,6 +19,16 @@ export const MAX_PLAINTEXT_DUMP_BYTES = 12 * 1024 * 1024;
 export const MAX_BACKUP_MANIFEST_BYTES = 256 * 1024;
 export const MAX_GITHUB_BACKUP_STORAGE_BYTES = 400 * 1024 * 1024;
 
+export function isRetryableBackupConnectionError(error) {
+  const message = String(error?.message ?? error ?? '');
+  return [
+    'SSL connection has been closed unexpectedly',
+    'server closed the connection unexpectedly',
+    'could not receive data from server',
+    'terminating connection due to idle-session timeout'
+  ].some((pattern) => message.includes(pattern));
+}
+
 export const CORE_BACKUP_TABLES = Object.freeze([
   'users',
   'roles',
