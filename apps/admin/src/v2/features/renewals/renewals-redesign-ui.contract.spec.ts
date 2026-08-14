@@ -21,7 +21,11 @@ describe('renewals scheme 3 redesign contract', () => {
   it('preserves warning settings, renewal permissions and time-window guards', () => {
     expect(overview).toContain('v-if="page.canManageWarning"');
     expect(overview).toContain('@click="page.openWarningSettings"');
-    expect(overview).toContain('@select="page.selectWarningScope"');
+    expect(overview).not.toContain('V2StatusStrip');
+    expect(toolbar).toContain('class="v2-renewal-scope-control"');
+    expect(toolbar).toContain('@click="page.selectWarningScope(item.key)"');
+    expect(toolbar).toContain("props.page.selectWarningScope('warning')");
+    expect(pageState).toContain('const warningOnly = ref(true)');
     expect(list).toContain('v-if="page.canRenew"');
     expect(list).toContain(':disabled="!row.withinActionWindow"');
     expect(list).toContain('@click="page.openRenewalDrawer(row)"');

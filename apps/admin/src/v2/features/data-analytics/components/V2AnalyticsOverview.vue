@@ -8,7 +8,7 @@
 
     <div class="v2-analytics-overview__metrics" aria-label="当前经营分析指标">
       <article>
-        <span>已结算订单</span>
+        <span>当前完成订单</span>
         <strong>{{ page.overview.settlementPlatformReport.totals.completedOrderCount }}</strong>
         <small>当前筛选范围</small>
       </article>

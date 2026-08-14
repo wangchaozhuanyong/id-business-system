@@ -333,13 +333,14 @@ const page = reactive({
   isInitialLoading: false,
   canRenew: true,
   canManageWarning: true,
+  warningDays: 7,
   renewalStatusStripItems: [] as Array<{
     key: string;
     label: string;
     count: number;
     tone?: 'danger' | 'warning' | 'primary' | 'success' | 'neutral';
   }>,
-  activeWarningScope: '' as RenewalWarningScope,
+  activeWarningScope: 'warning' as RenewalWarningScope,
   emptyDescription: '当前筛选条件下没有数据',
   dueStatusOptions,
   dueRange: [] as [string, string] | [],
@@ -364,14 +365,15 @@ const page = reactive({
   },
   selectWarningScope: (key: string) => {
     if (key !== 'warning' && key !== 'expired') return;
-    page.activeWarningScope = page.activeWarningScope === key ? '' : key;
-    page.query.dueStatus = page.activeWarningScope === 'expired' ? 'expired' : '';
+    page.dueRange = [];
+    page.activeWarningScope = key;
+    page.query.dueStatus = key === 'expired' ? 'expired' : '';
     applyFilters(true);
   },
   handleSearch: () => applyFilters(true),
   handleFilterChange: () => applyFilters(true),
   handleTimeFilterChange: () => {
-    page.activeWarningScope = '';
+    page.activeWarningScope = page.query.dueStatus === 'expired' ? 'expired' : '';
     applyFilters(true);
   },
   handlePageChange: () => applyFilters(),

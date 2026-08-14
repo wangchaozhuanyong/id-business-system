@@ -100,7 +100,7 @@ export async function getIdBusinessV2SettlementPlatformReport(
     if (!order) continue;
     const bucket = getBucket(order.settlementPlatform);
 
-    if (originalJournalType === 'order_completed') {
+    if (originalJournalType === 'order_completed' && order.status === 'completed') {
       const current = bucket.completionCountByOrder.get(orderId) ?? 0;
       bucket.completionCountByOrder.set(
         orderId,

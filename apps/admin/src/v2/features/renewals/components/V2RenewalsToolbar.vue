@@ -20,20 +20,20 @@
         @keyup.enter="page.handleSearch"
         @clear="page.handleSearch"
       />
-      <el-select
-        v-model="page.query.dueStatus"
-        clearable
-        placeholder="全部到期状态"
-        aria-label="筛选到期状态"
-        @change="page.handleTimeFilterChange"
-      >
-        <el-option
-          v-for="option in page.dueStatusOptions"
-          :key="option.value"
-          :label="option.label"
-          :value="option.value"
-        />
-      </el-select>
+      <div class="v2-renewal-scope-control" role="group" aria-label="续费到期范围">
+        <button
+          v-for="item in page.renewalStatusStripItems"
+          :key="item.key"
+          type="button"
+          class="v2-renewal-scope-control__button"
+          :class="[`is-${item.tone}`, { 'is-active': page.activeWarningScope === item.key }]"
+          :aria-pressed="page.activeWarningScope === item.key"
+          @click="page.selectWarningScope(item.key)"
+        >
+          <span>{{ item.label }}</span>
+          <strong>{{ item.count }}</strong>
+        </button>
+      </div>
       <el-date-picker
         v-model="page.dueRange"
         type="daterange"
@@ -47,6 +47,20 @@
       <V2FilterDisclosure
         :label="advancedFilterCount ? `更多筛选 · ${advancedFilterCount}` : '更多筛选'"
       >
+        <el-select
+          v-model="page.query.dueStatus"
+          clearable
+          placeholder="全部到期状态"
+          aria-label="筛选到期状态"
+          @change="page.handleTimeFilterChange"
+        >
+          <el-option
+            v-for="option in page.dueStatusOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
         <el-select
           v-model="page.query.customerId"
           clearable
@@ -106,7 +120,7 @@
         可查看任意日期，仅允许对 7 天内到期或已到期记录执行续费。
       </p>
       <span v-if="activeFilterCount">已启用 {{ activeFilterCount }} 个筛选条件</span>
-      <span v-else>当前显示全部续费待办</span>
+      <span v-else>默认显示未来 {{ page.warningDays }} 天预警</span>
     </footer>
   </section>
 </template>
@@ -129,6 +143,7 @@ const props = defineProps<{
 const advancedFilterCount = computed(
   () =>
     [
+      props.page.query.dueStatus,
       props.page.query.customerId,
       props.page.query.serviceOptionId,
       props.page.query.accountId
@@ -140,7 +155,6 @@ const activeFilterCount = computed(
       props.page.query.keyword.trim(),
       props.page.query.dueStatus,
       props.page.dueRange.length ? 'dueRange' : '',
-      props.page.activeWarningScope,
       props.page.query.customerId,
       props.page.query.serviceOptionId,
       props.page.query.accountId
@@ -157,6 +171,6 @@ function resetFilters() {
     dueStatus: ''
   });
   props.page.dueRange.splice(0);
-  props.page.handleTimeFilterChange();
+  props.page.selectWarningScope('warning');
 }
 </script>

@@ -204,13 +204,18 @@ export const v2TableSchemas = {
           widthPreset: 'identifier',
           pin: 'start'
         },
-        { key: '已结算订单', label: '已结算订单', kind: 'numeric', widthPreset: 'standard' },
-        { key: '原币实收', label: '原币实收', kind: 'text', widthPreset: 'identifier' },
-        { key: '原币退款', label: '原币退款', kind: 'text', widthPreset: 'identifier' },
-        { key: '人民币实收', label: '人民币实收', kind: 'numeric', widthPreset: 'standard' },
-        { key: '退款', label: '退款', kind: 'numeric', widthPreset: 'standard' },
+        { key: '已结算订单', label: '当前完成订单', kind: 'numeric', widthPreset: 'standard' },
+        { key: '原币实收', label: '原币实收（退款前）', kind: 'text', widthPreset: 'identifier' },
+        { key: '原币退款', label: '原币已退款', kind: 'text', widthPreset: 'identifier' },
+        {
+          key: '人民币实收',
+          label: '人民币实收（退款前）',
+          kind: 'numeric',
+          widthPreset: 'standard'
+        },
+        { key: '退款', label: '人民币已退款', kind: 'numeric', widthPreset: 'standard' },
         { key: '手续费', label: '手续费', kind: 'numeric', widthPreset: 'standard' },
-        { key: '净入账', label: '净入账', kind: 'numeric', widthPreset: 'standard' },
+        { key: '净入账', label: '净收款', kind: 'numeric', widthPreset: 'standard' },
         { key: '已实现利润', label: '已实现利润', kind: 'numeric', widthPreset: 'standard' },
         { key: '利润率', label: '利润率', kind: 'numeric', widthPreset: 'standard' },
         { key: '处理中预计', label: '处理中预计', kind: 'numeric', widthPreset: 'wide' }
