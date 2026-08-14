@@ -21,9 +21,13 @@ import type {
 } from './dto/id-business-v2-sensitive-access.dto';
 import {
   ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG,
+  getIdBusinessV2SensitiveDescriptorByKey,
+  getIdBusinessV2SensitiveAllowedDisplayModes,
   requireIdBusinessV2SensitiveAccessDescriptor,
   type IdBusinessV2SensitiveAccessDescriptor,
-  type IdBusinessV2SensitiveAccessMode
+  type IdBusinessV2SensitiveAccessMode,
+  type IdBusinessV2SensitiveDisplayContext,
+  type IdBusinessV2SensitiveDisplayMode
 } from './id-business-v2-sensitive-access.catalog';
 import {
   IdBusinessV2SensitiveAccessRepository,
@@ -34,6 +38,13 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPROVAL_DURATION_MS = 15 * 60 * 1000;
+const DISPLAY_MODE_PRIORITY: Record<IdBusinessV2SensitiveDisplayMode, number> = {
+  hidden: 0,
+  masked: 1,
+  reveal_approval: 2,
+  reveal_direct: 3,
+  full: 4
+};
 interface SensitiveAccessAuditMeta {
   requestId?: string;
   ip?: string;
@@ -62,6 +73,67 @@ export class IdBusinessV2SensitiveAccessService {
     };
   }
 
+  async resolveDisplayMode(
+    operatorInput: AuthenticatedUser | undefined,
+    fieldKey: string,
+    context: IdBusinessV2SensitiveDisplayContext,
+    tx?: V2CommandTransaction
+  ): Promise<IdBusinessV2SensitiveDisplayMode> {
+    const operator = this.requireOperator(operatorInput);
+    const descriptor = getIdBusinessV2SensitiveDescriptorByKey(fieldKey);
+    if (
+      !descriptor ||
+      !(descriptor.contexts as readonly IdBusinessV2SensitiveDisplayContext[]).includes(context)
+    ) {
+      throw new BadRequestException('敏感资料字段或使用场景无效');
+    }
+    if (operator.roles.includes('admin')) {
+      if (context === 'audit') return 'masked';
+      return descriptor.secret ? 'reveal_direct' : 'full';
+    }
+    if (!operator.permissions.includes(descriptor.permissionCode)) return 'masked';
+
+    const [policies, grants] = await Promise.all([
+      this.repository.listSensitiveDisplayPolicies(operator.id, [descriptor.key], [context], tx),
+      this.listSensitivePermissionGrants(operator.id, descriptor.permissionCode, tx)
+    ]);
+    const applicablePolicies = policies.filter((policy) =>
+      policy.role.rolePermissions.some(
+        (assignment) => assignment.permission.code === descriptor.permissionCode
+      )
+    );
+    const explicitRoleIds = new Set(applicablePolicies.map((policy) => policy.role.id));
+    const applicableModes: IdBusinessV2SensitiveDisplayMode[] = applicablePolicies
+      .map((policy) => policy.mode)
+      .map((mode) => (descriptor.secret && mode === 'full' ? 'reveal_direct' : mode));
+    for (const grant of grants) {
+      if (explicitRoleIds.has(grant.roleId)) continue;
+      applicableModes.push(
+        this.resolveLegacyDisplayMode(descriptor, context, grant.sensitiveApprovalRequired)
+      );
+    }
+    if (!applicableModes.length) return 'masked';
+    return applicableModes.reduce((current, mode) =>
+      DISPLAY_MODE_PRIORITY[mode] > DISPLAY_MODE_PRIORITY[current] ? mode : current
+    );
+  }
+
+  async resolveDisplayModes(
+    operator: AuthenticatedUser | undefined,
+    fieldKeys: string[],
+    context: IdBusinessV2SensitiveDisplayContext,
+    tx?: V2CommandTransaction
+  ) {
+    const uniqueFieldKeys = [...new Set(fieldKeys)];
+    const entries = await Promise.all(
+      uniqueFieldKeys.map(
+        async (fieldKey) =>
+          [fieldKey, await this.resolveDisplayMode(operator, fieldKey, context, tx)] as const
+      )
+    );
+    return Object.fromEntries(entries) as Record<string, IdBusinessV2SensitiveDisplayMode>;
+  }
+
   async authorize(
     tx: V2CommandTransaction,
     input: {
@@ -70,20 +142,26 @@ export class IdBusinessV2SensitiveAccessService {
       objectType: string;
       objectId: string;
       approvalId?: string | null;
+      context?: IdBusinessV2SensitiveDisplayContext;
       operator?: AuthenticatedUser;
       now?: Date;
     }
   ) {
     const operator = this.requireOperator(input.operator);
     const descriptor = requireIdBusinessV2SensitiveAccessDescriptor(input);
-    const grants = operator.roles.includes('admin')
-      ? []
-      : await this.listSensitivePermissionGrants(operator.id, descriptor.permissionCode, tx);
-    const mode = this.resolveMode(
+    const displayMode = await this.resolveDisplayMode(
       operator,
-      descriptor.permissionCode,
-      this.groupGrantsByPermission(grants)
+      descriptor.key,
+      input.context ?? descriptor.contexts[0],
+      tx
     );
+    const mode: IdBusinessV2SensitiveAccessMode = operator.roles.includes('admin')
+      ? 'admin_bypass'
+      : displayMode === 'reveal_approval'
+        ? 'approval_required'
+        : displayMode === 'reveal_direct' || displayMode === 'full'
+          ? 'direct'
+          : 'denied';
 
     if (mode === 'denied') {
       throw new ForbiddenException('当前账号无权查看该敏感资料');
@@ -128,14 +206,18 @@ export class IdBusinessV2SensitiveAccessService {
 
     return this.transactionManager.execute(
       async (tx) => {
-        const grants = requester.roles.includes('admin')
-          ? []
-          : await this.listSensitivePermissionGrants(requester.id, descriptor.permissionCode, tx);
-        const mode = this.resolveMode(
+        const displayMode = await this.resolveDisplayMode(
           requester,
-          descriptor.permissionCode,
-          this.groupGrantsByPermission(grants)
+          descriptor.key,
+          descriptor.contexts[0],
+          tx
         );
+        const mode =
+          displayMode === 'reveal_approval'
+            ? 'approval_required'
+            : displayMode === 'reveal_direct' || displayMode === 'full'
+              ? 'direct'
+              : 'denied';
         if (mode === 'denied') throw new ForbiddenException('当前账号无权申请查看该资料');
         if (mode !== 'approval_required') {
           throw new BadRequestException('当前角色可以直接查看该字段，无需提交审批');
@@ -352,6 +434,20 @@ export class IdBusinessV2SensitiveAccessService {
     const grants = byPermission.get(permissionCode) ?? [];
     if (!grants.length) return 'denied';
     return grants.some((required) => !required) ? 'direct' : 'approval_required';
+  }
+
+  private resolveLegacyDisplayMode(
+    descriptor: IdBusinessV2SensitiveAccessDescriptor,
+    context: IdBusinessV2SensitiveDisplayContext,
+    approvalRequired: boolean
+  ): IdBusinessV2SensitiveDisplayMode {
+    const allowedModes = getIdBusinessV2SensitiveAllowedDisplayModes(descriptor, context);
+    if (approvalRequired) {
+      return allowedModes.includes('reveal_approval') ? 'reveal_approval' : 'masked';
+    }
+    if (allowedModes.includes('reveal_direct')) return 'reveal_direct';
+    if (allowedModes.includes('full')) return 'full';
+    return 'masked';
   }
 
   private async requireTargetLabel(

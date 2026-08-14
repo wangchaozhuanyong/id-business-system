@@ -12,6 +12,8 @@ export type V2ActivationDueStatus =
   | 'cancelled'
   | 'abnormal';
 
+export type V2ActivationDisplayStatus = V2ActivationDueStatus | 'renewed' | 'upgraded';
+
 export interface V2ActivationOperator {
   id: string;
   username: string;
@@ -44,6 +46,7 @@ export interface V2Activation {
   account: {
     id: string;
     appleIdMasked: string;
+    displayAppleId: string | null;
     country: {
       id: string;
       code: string;
@@ -51,11 +54,12 @@ export interface V2Activation {
     };
   };
   maskedWebsiteAccount: string | null;
+  displayWebsiteAccount: string | null;
   openedAt: string;
   dueAt: string | null;
   storedStatus: V2ActivationStoredStatus;
   status: {
-    code: V2ActivationDueStatus;
+    code: V2ActivationDisplayStatus;
     label: string;
     hoursRemaining: number | null;
     daysRemaining: number | null;

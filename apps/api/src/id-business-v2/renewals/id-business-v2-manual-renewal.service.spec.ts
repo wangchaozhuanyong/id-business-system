@@ -66,7 +66,8 @@ function makeSourceActivation(overrides: Record<string, unknown> = {}) {
       deletedAt: null,
       websiteAccountEncrypted: 'v1:encrypted-website',
       websiteAccountHash: 'website-account-hash',
-      websiteAccountMasked: 'cu***@example.com'
+      websiteAccountMasked: 'cu***@example.com',
+      websiteAccountSearchTokens: ['website-search-token']
     },
     account: {
       id: accountId,
@@ -218,6 +219,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
         websiteAccountEncrypted: 'v1:encrypted-website',
         websiteAccountHash: 'website-account-hash',
         websiteAccountMasked: 'cu***@example.com',
+        websiteAccountSearchTokens: ['website-search-token'],
         openedAt: nextOpenedAt,
         dueAt: nextDueAt
       }),

@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { RequirePermissions } from '../../auth/auth.decorators';
+import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2ActivationsService } from './id-business-v2-activations.service';
 
 @Controller('id-business-v2/activations')
@@ -22,28 +23,32 @@ export class IdBusinessV2ActivationsController {
     @Query('dueFrom') dueFrom?: string,
     @Query('dueTo') dueTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.activationsService.list({
-      page,
-      pageSize,
-      keyword,
-      customerId,
-      serviceOptionId,
-      accountId,
-      status,
-      dueStatus,
-      openedFrom,
-      openedTo,
-      dueFrom,
-      dueTo,
-      sortBy,
-      sortOrder
-    });
+    return this.activationsService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        customerId,
+        serviceOptionId,
+        accountId,
+        status,
+        dueStatus,
+        openedFrom,
+        openedTo,
+        dueFrom,
+        dueTo,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.activationsService.get(id);
+  get(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.activationsService.get(id, operator);
   }
 }

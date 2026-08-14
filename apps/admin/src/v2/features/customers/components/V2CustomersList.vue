@@ -56,9 +56,9 @@
         <V2TableColumn :definition="v2TableSchemas.customers.main.columns[1]">
           <template #default="{ row }">
             <V2CustomerSensitiveContactCell
-              :masked-value="row.maskedPhone"
+              :masked-value="row.displayPhone"
               :has-value="row.hasPhone"
-              :can-reveal="page.canRevealContact && !page.isParameterTransition"
+              :can-reveal="page.canRevealField(row, 'phone') && !page.isParameterTransition"
               reveal-title="查看完整手机号"
               @reveal="page.openRevealPhone(row)"
             />
@@ -69,17 +69,33 @@
           prop="wechat"
           sortable="custom"
         >
-          <template #default="{ row }">{{ row.wechat || '—' }}</template>
+          <template #default="{ row }">
+            <V2CustomerSensitiveContactCell
+              :masked-value="row.wechat"
+              :has-value="row.hasWechat"
+              :can-reveal="page.canRevealField(row, 'wechat') && !page.isParameterTransition"
+              reveal-title="查看完整微信"
+              @reveal="page.openRevealWechat(row)"
+            />
+          </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.customers.main.columns[3]" prop="qq">
-          <template #default="{ row }">{{ row.qq || '—' }}</template>
+          <template #default="{ row }">
+            <V2CustomerSensitiveContactCell
+              :masked-value="row.qq"
+              :has-value="row.hasQq"
+              :can-reveal="page.canRevealField(row, 'qq') && !page.isParameterTransition"
+              reveal-title="查看完整 QQ"
+              @reveal="page.openRevealQq(row)"
+            />
+          </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.customers.main.columns[4]">
           <template #default="{ row }">
             <V2CustomerSensitiveContactCell
-              :masked-value="row.maskedWhatsapp"
+              :masked-value="row.displayWhatsapp"
               :has-value="row.hasWhatsapp"
-              :can-reveal="page.canRevealContact && !page.isParameterTransition"
+              :can-reveal="page.canRevealField(row, 'whatsapp') && !page.isParameterTransition"
               reveal-title="查看完整 WhatsApp"
               @reveal="page.openRevealWhatsapp(row)"
             />
@@ -183,7 +199,7 @@
           <V2CustomerMobileDetails :customer="item" />
           <footer>
             <AppButton
-              v-if="item.hasPhone && page.canRevealContact"
+              v-if="item.hasPhone && page.canRevealField(item, 'phone')"
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, '手机号']"
               size="small"
               variant="ghost"
@@ -193,7 +209,27 @@
               查看手机号
             </AppButton>
             <AppButton
-              v-if="item.hasWhatsapp && page.canRevealContact"
+              v-if="item.hasWechat && page.canRevealField(item, 'wechat')"
+              v-v2-column-visibility="[v2TableSchemas.customers.main.id, '微信']"
+              size="small"
+              variant="ghost"
+              :disabled="page.isParameterTransition"
+              @click="page.openRevealWechat(item)"
+            >
+              查看微信
+            </AppButton>
+            <AppButton
+              v-if="item.hasQq && page.canRevealField(item, 'qq')"
+              v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'QQ']"
+              size="small"
+              variant="ghost"
+              :disabled="page.isParameterTransition"
+              @click="page.openRevealQq(item)"
+            >
+              查看 QQ
+            </AppButton>
+            <AppButton
+              v-if="item.hasWhatsapp && page.canRevealField(item, 'whatsapp')"
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'WhatsApp']"
               size="small"
               variant="ghost"

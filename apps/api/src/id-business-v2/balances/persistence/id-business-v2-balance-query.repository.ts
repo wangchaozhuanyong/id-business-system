@@ -19,6 +19,7 @@ export type TopupWorkbenchSortField =
 
 export interface TopupWorkbenchCriteria {
   keyword: string | null;
+  appleIdSearchTokens: string[];
   accountSource: 'inventory' | 'customer_owned' | null;
   countryOptionId: string | null;
   balanceRange?: TopupWorkbenchBalanceRange;
@@ -70,6 +71,7 @@ type WorkbenchPersistenceRow = Prisma.IdBusinessV2AccountGetPayload<{
 
 export interface WorkbenchAccountRow {
   id: string;
+  appleIdEncrypted: string;
   appleIdMasked: string;
   currentBalance: Amount4;
   balanceCostAmount: Amount4;
@@ -116,6 +118,11 @@ export class IdBusinessV2BalanceQueryRepository {
       OR: criteria.keyword
         ? [
             { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            {
+              appleIdSearchTokens: criteria.appleIdSearchTokens.length
+                ? { hasEvery: criteria.appleIdSearchTokens }
+                : undefined
+            },
             {
               soldByOrder: {
                 is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }

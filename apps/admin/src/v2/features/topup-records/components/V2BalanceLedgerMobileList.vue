@@ -6,7 +6,7 @@
           {{ ledgerTypeLabel(item.entryType) }}
         </strong>
         <span v-v2-column-visibility="[v2TableSchemas.topupRecords.balanceLedger.id, 'ID 账号']">
-          {{ item.account.appleIdMasked }}
+          {{ item.account.displayAppleId || '—' }}
         </span>
         <span v-v2-column-visibility="[v2TableSchemas.topupRecords.balanceLedger.id, '国家']">
           {{ item.account.country.name }}

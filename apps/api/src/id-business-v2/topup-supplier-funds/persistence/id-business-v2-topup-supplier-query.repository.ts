@@ -283,6 +283,7 @@ export class IdBusinessV2TopupSupplierQueryRepository {
           giftCard: {
             select: {
               id: true,
+              codeEncrypted: true,
               codeMasked: true,
               faceValue: true,
               exchangeRate: true,

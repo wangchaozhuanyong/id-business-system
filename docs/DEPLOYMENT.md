@@ -174,6 +174,13 @@ npm run prisma:migrate:production -- \
   --confirmation=MIGRATE_fjquufgbnxyocmuzltxi_<SHA-256 前 12 位>
 ```
 
+敏感资料盲索引 migration 完成后，使用运行时最小权限角色执行可重复的历史数据回填。该命令只会注入
+运行时数据库凭据、`FIELD_ENCRYPTION_KEY` 和 `HASH_SECRET`，不会获得 migration 或审计凭据：
+
+```bash
+npm run backfill:v2-sensitive-search-indexes:production
+```
+
 该固定脚本只会执行 `prisma migrate deploy`，不会把 `MIGRATION_DATABASE_URL` 注入通用命令、应用
 运行时或发布流程。执行 Prisma 前还会检查专用备份角色事务：存在任何备份事务时最多等待 3 分钟，
 等待超时会立即停止并报告，不会自动终止连接，也不会写入失败的 migration 记录。超过 16 分钟的

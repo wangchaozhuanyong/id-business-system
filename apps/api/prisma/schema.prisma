@@ -46,6 +46,26 @@ enum SensitiveAccessApprovalStatus {
   expired
 }
 
+enum IdBusinessV2SensitiveDisplayContext {
+  account_management
+  customer_management
+  order_workbench
+  topup_workbench
+  renewal_workbench
+  business_records
+  dashboard_notifications
+  export
+  audit
+}
+
+enum IdBusinessV2SensitiveDisplayMode {
+  hidden
+  masked
+  reveal_direct
+  reveal_approval
+  full
+}
+
 enum IdBusinessV2OptionType {
   id_status
   id_region
@@ -371,57 +391,59 @@ model User {
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
-  createdBy                           User?                               @relation("UserCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  usersCreated                        User[]                              @relation("UserCreatedBy")
-  userRoles                           UserRole[]
-  v2AuthIdentity                      V2AuthIdentity?
-  auditLogs                           AuditLog[]
-  attachments                         Attachment[]
-  loginLogs                           LoginLog[]                          @relation("LoginLogUser")
-  activeSessions                      ActiveSession[]                     @relation("ActiveSessionUser")
-  securitySettingsUpdated             SecuritySetting[]                   @relation("SecuritySettingUpdatedBy")
-  ipWhitelistsCreated                 IpWhitelist[]                       @relation("IpWhitelistCreatedBy")
-  sensitiveAccessLogs                 SensitiveAccessLog[]                @relation("SensitiveAccessLogUser")
-  sensitiveApprovalsAsked             SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalRequester")
-  sensitiveApprovalsDone              SensitiveAccessApproval[]           @relation("SensitiveAccessApprovalApprover")
-  idBusinessV2OptionsCreated          IdBusinessV2Option[]                @relation("IdBusinessV2OptionCreatedBy")
-  idBusinessV2OptionsUpdated          IdBusinessV2Option[]                @relation("IdBusinessV2OptionUpdatedBy")
-  idBusinessV2CustomersCreated        IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerCreatedBy")
-  idBusinessV2CustomersUpdated        IdBusinessV2Customer[]              @relation("IdBusinessV2CustomerUpdatedBy")
-  idBusinessV2AccountsCreated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountCreatedBy")
-  idBusinessV2AccountsUpdated         IdBusinessV2Account[]               @relation("IdBusinessV2AccountUpdatedBy")
-  idBusinessV2AccountLossesReported   IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReportedBy")
-  idBusinessV2AccountLossesReversed   IdBusinessV2AccountLoss[]           @relation("IdBusinessV2AccountLossReversedBy")
-  idBusinessV2GiftCardsCreated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardCreatedBy")
-  idBusinessV2GiftCardsUpdated        IdBusinessV2GiftCard[]              @relation("IdBusinessV2GiftCardUpdatedBy")
-  idBusinessV2BalanceEntriesCreated   IdBusinessV2BalanceLedger[]         @relation("IdBusinessV2BalanceLedgerCreatedBy")
-  idBusinessV2TopupFundsInitialized   IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountInitializedBy")
-  idBusinessV2TopupFundsUpdated       IdBusinessV2TopupSupplierAccount[]  @relation("IdBusinessV2TopupSupplierAccountUpdatedBy")
-  idBusinessV2TopupPaymentsCreated    IdBusinessV2TopupSupplierPayment[]  @relation("IdBusinessV2TopupSupplierPaymentCreatedBy")
-  idBusinessV2TopupFundEntries        IdBusinessV2TopupSupplierLedger[]   @relation("IdBusinessV2TopupSupplierLedgerCreatedBy")
-  idBusinessV2OrdersCreated           IdBusinessV2Order[]                 @relation("IdBusinessV2OrderCreatedBy")
-  idBusinessV2OrdersUpdated           IdBusinessV2Order[]                 @relation("IdBusinessV2OrderUpdatedBy")
-  idBusinessV2LocksCreated            IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockCreatedBy")
-  idBusinessV2LocksEnded              IdBusinessV2AccountLock[]           @relation("IdBusinessV2AccountLockEndedBy")
-  idBusinessV2ActivationsCreated      IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationCreatedBy")
-  idBusinessV2ActivationsUpdated      IdBusinessV2Activation[]            @relation("IdBusinessV2ActivationUpdatedBy")
-  idBusinessV2RenewalWarningUpdated   IdBusinessV2RenewalWarningSetting[] @relation("IdBusinessV2RenewalWarningUpdatedBy")
-  idBusinessV2ExchangeRateRuns        IdBusinessV2ExchangeRateRun[]       @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
-  idBusinessV2ExchangeRateEntries     IdBusinessV2ExchangeRateEntry[]     @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
-  idBusinessV2ExchangeRateSettings    IdBusinessV2ExchangeRateSettings[]  @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
-  idBusinessV2BrandingSettings        IdBusinessV2BrandingSettings[]      @relation("IdBusinessV2BrandingSettingsUpdatedBy")
-  idBusinessV2TablePreferences        IdBusinessV2UserTablePreference[]
-  idBusinessV2FinanceSettings         IdBusinessV2FinanceSettings[]       @relation("IdBusinessV2FinanceSettingsUpdatedBy")
-  idBusinessV2FinanceAccountsCreated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountCreatedBy")
-  idBusinessV2FinanceAccountsUpdated  IdBusinessV2FinanceAccount[]        @relation("IdBusinessV2FinanceAccountUpdatedBy")
-  idBusinessV2FinanceFxRatesCreated   IdBusinessV2FinanceFxRateSnapshot[] @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy")
-  idBusinessV2FinanceJournalsCreated  IdBusinessV2FinanceJournal[]        @relation("IdBusinessV2FinanceJournalCreatedBy")
-  idBusinessV2FinanceExpensesCreated  IdBusinessV2FinanceExpense[]        @relation("IdBusinessV2FinanceExpenseCreatedBy")
-  idBusinessV2FinancePeriodsClosed    IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodClosedBy")
-  idBusinessV2FinancePeriodsReopened  IdBusinessV2FinancePeriod[]         @relation("IdBusinessV2FinancePeriodReopenedBy")
-  idBusinessV2GovernanceJobsRequested IdBusinessV2GovernanceJob[]         @relation("IdBusinessV2GovernanceJobRequestedBy")
-  idBusinessV2GovernanceJobsExecuted  IdBusinessV2GovernanceJob[]         @relation("IdBusinessV2GovernanceJobExecutedBy")
-  idBusinessV2GovernanceApprovals     IdBusinessV2GovernanceApproval[]    @relation("IdBusinessV2GovernanceApprovalApprover")
+  createdBy                            User?                                @relation("UserCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  usersCreated                         User[]                               @relation("UserCreatedBy")
+  userRoles                            UserRole[]
+  v2AuthIdentity                       V2AuthIdentity?
+  auditLogs                            AuditLog[]
+  attachments                          Attachment[]
+  loginLogs                            LoginLog[]                           @relation("LoginLogUser")
+  activeSessions                       ActiveSession[]                      @relation("ActiveSessionUser")
+  securitySettingsUpdated              SecuritySetting[]                    @relation("SecuritySettingUpdatedBy")
+  ipWhitelistsCreated                  IpWhitelist[]                        @relation("IpWhitelistCreatedBy")
+  sensitiveAccessLogs                  SensitiveAccessLog[]                 @relation("SensitiveAccessLogUser")
+  sensitiveApprovalsAsked              SensitiveAccessApproval[]            @relation("SensitiveAccessApprovalRequester")
+  sensitiveApprovalsDone               SensitiveAccessApproval[]            @relation("SensitiveAccessApprovalApprover")
+  idBusinessV2SensitivePoliciesCreated IdBusinessV2SensitiveDisplayPolicy[] @relation("IdBusinessV2SensitivePolicyCreatedBy")
+  idBusinessV2SensitivePoliciesUpdated IdBusinessV2SensitiveDisplayPolicy[] @relation("IdBusinessV2SensitivePolicyUpdatedBy")
+  idBusinessV2OptionsCreated           IdBusinessV2Option[]                 @relation("IdBusinessV2OptionCreatedBy")
+  idBusinessV2OptionsUpdated           IdBusinessV2Option[]                 @relation("IdBusinessV2OptionUpdatedBy")
+  idBusinessV2CustomersCreated         IdBusinessV2Customer[]               @relation("IdBusinessV2CustomerCreatedBy")
+  idBusinessV2CustomersUpdated         IdBusinessV2Customer[]               @relation("IdBusinessV2CustomerUpdatedBy")
+  idBusinessV2AccountsCreated          IdBusinessV2Account[]                @relation("IdBusinessV2AccountCreatedBy")
+  idBusinessV2AccountsUpdated          IdBusinessV2Account[]                @relation("IdBusinessV2AccountUpdatedBy")
+  idBusinessV2AccountLossesReported    IdBusinessV2AccountLoss[]            @relation("IdBusinessV2AccountLossReportedBy")
+  idBusinessV2AccountLossesReversed    IdBusinessV2AccountLoss[]            @relation("IdBusinessV2AccountLossReversedBy")
+  idBusinessV2GiftCardsCreated         IdBusinessV2GiftCard[]               @relation("IdBusinessV2GiftCardCreatedBy")
+  idBusinessV2GiftCardsUpdated         IdBusinessV2GiftCard[]               @relation("IdBusinessV2GiftCardUpdatedBy")
+  idBusinessV2BalanceEntriesCreated    IdBusinessV2BalanceLedger[]          @relation("IdBusinessV2BalanceLedgerCreatedBy")
+  idBusinessV2TopupFundsInitialized    IdBusinessV2TopupSupplierAccount[]   @relation("IdBusinessV2TopupSupplierAccountInitializedBy")
+  idBusinessV2TopupFundsUpdated        IdBusinessV2TopupSupplierAccount[]   @relation("IdBusinessV2TopupSupplierAccountUpdatedBy")
+  idBusinessV2TopupPaymentsCreated     IdBusinessV2TopupSupplierPayment[]   @relation("IdBusinessV2TopupSupplierPaymentCreatedBy")
+  idBusinessV2TopupFundEntries         IdBusinessV2TopupSupplierLedger[]    @relation("IdBusinessV2TopupSupplierLedgerCreatedBy")
+  idBusinessV2OrdersCreated            IdBusinessV2Order[]                  @relation("IdBusinessV2OrderCreatedBy")
+  idBusinessV2OrdersUpdated            IdBusinessV2Order[]                  @relation("IdBusinessV2OrderUpdatedBy")
+  idBusinessV2LocksCreated             IdBusinessV2AccountLock[]            @relation("IdBusinessV2AccountLockCreatedBy")
+  idBusinessV2LocksEnded               IdBusinessV2AccountLock[]            @relation("IdBusinessV2AccountLockEndedBy")
+  idBusinessV2ActivationsCreated       IdBusinessV2Activation[]             @relation("IdBusinessV2ActivationCreatedBy")
+  idBusinessV2ActivationsUpdated       IdBusinessV2Activation[]             @relation("IdBusinessV2ActivationUpdatedBy")
+  idBusinessV2RenewalWarningUpdated    IdBusinessV2RenewalWarningSetting[]  @relation("IdBusinessV2RenewalWarningUpdatedBy")
+  idBusinessV2ExchangeRateRuns         IdBusinessV2ExchangeRateRun[]        @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
+  idBusinessV2ExchangeRateEntries      IdBusinessV2ExchangeRateEntry[]      @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
+  idBusinessV2ExchangeRateSettings     IdBusinessV2ExchangeRateSettings[]   @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
+  idBusinessV2BrandingSettings         IdBusinessV2BrandingSettings[]       @relation("IdBusinessV2BrandingSettingsUpdatedBy")
+  idBusinessV2TablePreferences         IdBusinessV2UserTablePreference[]
+  idBusinessV2FinanceSettings          IdBusinessV2FinanceSettings[]        @relation("IdBusinessV2FinanceSettingsUpdatedBy")
+  idBusinessV2FinanceAccountsCreated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountCreatedBy")
+  idBusinessV2FinanceAccountsUpdated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountUpdatedBy")
+  idBusinessV2FinanceFxRatesCreated    IdBusinessV2FinanceFxRateSnapshot[]  @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy")
+  idBusinessV2FinanceJournalsCreated   IdBusinessV2FinanceJournal[]         @relation("IdBusinessV2FinanceJournalCreatedBy")
+  idBusinessV2FinanceExpensesCreated   IdBusinessV2FinanceExpense[]         @relation("IdBusinessV2FinanceExpenseCreatedBy")
+  idBusinessV2FinancePeriodsClosed     IdBusinessV2FinancePeriod[]          @relation("IdBusinessV2FinancePeriodClosedBy")
+  idBusinessV2FinancePeriodsReopened   IdBusinessV2FinancePeriod[]          @relation("IdBusinessV2FinancePeriodReopenedBy")
+  idBusinessV2GovernanceJobsRequested  IdBusinessV2GovernanceJob[]          @relation("IdBusinessV2GovernanceJobRequestedBy")
+  idBusinessV2GovernanceJobsExecuted   IdBusinessV2GovernanceJob[]          @relation("IdBusinessV2GovernanceJobExecutedBy")
+  idBusinessV2GovernanceApprovals      IdBusinessV2GovernanceApproval[]     @relation("IdBusinessV2GovernanceApprovalApprover")
 
   @@index([status])
   @@index([createdByUserId])
@@ -611,26 +633,36 @@ model IdBusinessV2Option {
 }
 
 model IdBusinessV2Customer {
-  id                String                   @id @default(uuid()) @db.Uuid
-  name              String                   @db.VarChar(120)
-  phoneEncrypted    String?                  @map("phone_encrypted") @db.Text
-  phoneHash         String?                  @map("phone_hash") @db.VarChar(64)
-  phoneMasked       String?                  @map("phone_masked") @db.VarChar(80)
-  phoneTail         String?                  @map("phone_tail") @db.VarChar(8)
-  wechat            String?                  @db.VarChar(120)
-  qq                String?                  @db.VarChar(120)
-  whatsappEncrypted String?                  @map("whatsapp_encrypted") @db.Text
-  whatsappHash      String?                  @map("whatsapp_hash") @db.VarChar(64)
-  whatsappMasked    String?                  @map("whatsapp_masked") @db.VarChar(80)
-  whatsappTail      String?                  @map("whatsapp_tail") @db.VarChar(8)
-  sourceOptionId    String?                  @map("source_option_id") @db.Uuid
-  recordStatus      IdBusinessV2RecordStatus @default(active) @map("record_status")
-  remark            String?                  @db.Text
-  createdByUserId   String?                  @map("created_by_user_id") @db.Uuid
-  updatedByUserId   String?                  @map("updated_by_user_id") @db.Uuid
-  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt         DateTime?                @map("deleted_at") @db.Timestamptz(6)
+  id                   String                   @id @default(uuid()) @db.Uuid
+  name                 String                   @db.VarChar(120)
+  phoneEncrypted       String?                  @map("phone_encrypted") @db.Text
+  phoneHash            String?                  @map("phone_hash") @db.VarChar(64)
+  phoneMasked          String?                  @map("phone_masked") @db.VarChar(80)
+  phoneTail            String?                  @map("phone_tail") @db.VarChar(8)
+  phoneSearchTokens    String[]                 @default([]) @map("phone_search_tokens")
+  wechat               String?                  @db.VarChar(120)
+  wechatEncrypted      String?                  @map("wechat_encrypted") @db.Text
+  wechatHash           String?                  @map("wechat_hash") @db.VarChar(64)
+  wechatMasked         String?                  @map("wechat_masked") @db.VarChar(120)
+  wechatSearchTokens   String[]                 @default([]) @map("wechat_search_tokens")
+  qq                   String?                  @db.VarChar(120)
+  qqEncrypted          String?                  @map("qq_encrypted") @db.Text
+  qqHash               String?                  @map("qq_hash") @db.VarChar(64)
+  qqMasked             String?                  @map("qq_masked") @db.VarChar(120)
+  qqSearchTokens       String[]                 @default([]) @map("qq_search_tokens")
+  whatsappEncrypted    String?                  @map("whatsapp_encrypted") @db.Text
+  whatsappHash         String?                  @map("whatsapp_hash") @db.VarChar(64)
+  whatsappMasked       String?                  @map("whatsapp_masked") @db.VarChar(80)
+  whatsappTail         String?                  @map("whatsapp_tail") @db.VarChar(8)
+  whatsappSearchTokens String[]                 @default([]) @map("whatsapp_search_tokens")
+  sourceOptionId       String?                  @map("source_option_id") @db.Uuid
+  recordStatus         IdBusinessV2RecordStatus @default(active) @map("record_status")
+  remark               String?                  @db.Text
+  createdByUserId      String?                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId      String?                  @map("updated_by_user_id") @db.Uuid
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt            DateTime?                @map("deleted_at") @db.Timestamptz(6)
 
   sourceOption IdBusinessV2Option?           @relation("IdBusinessV2CustomerSource", fields: [sourceOptionId], references: [id], onDelete: Restrict)
   tags         IdBusinessV2CustomerTag[]
@@ -643,9 +675,14 @@ model IdBusinessV2Customer {
   @@index([name])
   @@index([phoneHash])
   @@index([phoneTail])
-  @@index([qq])
+  @@index([phoneSearchTokens], type: Gin)
+  @@index([wechatHash])
+  @@index([wechatSearchTokens], type: Gin)
+  @@index([qqHash])
+  @@index([qqSearchTokens], type: Gin)
   @@index([whatsappHash])
   @@index([whatsappTail])
+  @@index([whatsappSearchTokens], type: Gin)
   @@index([sourceOptionId])
   @@index([recordStatus, updatedAt])
   @@index([deletedAt])
@@ -689,11 +726,13 @@ model IdBusinessV2Account {
   appleIdEncrypted          String                      @map("apple_id_encrypted") @db.Text
   appleIdHash               String                      @unique @map("apple_id_hash") @db.VarChar(64)
   appleIdMasked             String                      @map("apple_id_masked") @db.VarChar(255)
+  appleIdSearchTokens       String[]                    @default([]) @map("apple_id_search_tokens")
   passwordEncrypted         String?                     @map("password_encrypted") @db.Text
   phoneEncrypted            String?                     @map("phone_encrypted") @db.Text
   phoneHash                 String?                     @map("phone_hash") @db.VarChar(64)
   phoneMasked               String?                     @map("phone_masked") @db.VarChar(80)
   phoneTail                 String?                     @map("phone_tail") @db.VarChar(8)
+  phoneSearchTokens         String[]                    @default([]) @map("phone_search_tokens")
   securityInfoEncrypted     String?                     @map("security_info_encrypted") @db.Text
   countryOptionId           String                      @map("country_option_id") @db.Uuid
   statusOptionId            String                      @map("status_option_id") @db.Uuid
@@ -741,8 +780,10 @@ model IdBusinessV2Account {
   purchaseSupplierAccount IdBusinessV2TopupSupplierAccount?  @relation("IdBusinessV2AccountPurchaseSupplierAccount", fields: [purchaseSupplierAccountId], references: [id], onDelete: Restrict)
 
   @@index([appleIdMasked])
+  @@index([appleIdSearchTokens], type: Gin)
   @@index([phoneHash])
   @@index([phoneTail])
+  @@index([phoneSearchTokens], type: Gin)
   @@index([countryOptionId])
   @@index([statusOptionId])
   @@index([supplierOptionId])
@@ -772,6 +813,7 @@ model IdBusinessV2GiftCard {
   codeHash                   String                          @unique @map("code_hash") @db.VarChar(64)
   codeMasked                 String                          @map("code_masked") @db.VarChar(80)
   codeTail                   String                          @map("code_tail") @db.VarChar(8)
+  codeSearchTokens           String[]                        @default([]) @map("code_search_tokens")
   faceValue                  Decimal                         @map("face_value") @db.Decimal(18, 4)
   exchangeRate               Decimal                         @map("exchange_rate") @db.Decimal(18, 8)
   exchangeRateSource         String                          @default("manual_input") @map("exchange_rate_source") @db.VarChar(40)
@@ -815,6 +857,7 @@ model IdBusinessV2GiftCard {
 
   @@index([accountId, createdAt])
   @@index([accountId, creditedAt])
+  @@index([codeSearchTokens], type: Gin)
   @@index([cardNameOptionId, creditedAt])
   @@index([supplierOptionId])
   @@index([countryOptionId, createdAt])
@@ -1230,46 +1273,47 @@ model IdBusinessV2AccountLoss {
 }
 
 model IdBusinessV2Order {
-  id                         String                              @id @default(uuid()) @db.Uuid
-  orderNo                    String                              @unique @map("order_no") @db.VarChar(40)
-  customerId                 String                              @map("customer_id") @db.Uuid
-  serviceOptionId            String                              @map("service_option_id") @db.Uuid
-  accountId                  String?                             @map("account_id") @db.Uuid
-  settlementPlatformOptionId String?                             @map("settlement_platform_option_id") @db.Uuid
-  platformOrderNo            String?                             @map("platform_order_no") @db.VarChar(160)
-  websiteAccountEncrypted    String?                             @map("website_account_encrypted") @db.Text
-  websiteAccountHash         String?                             @map("website_account_hash") @db.VarChar(64)
-  websiteAccountMasked       String?                             @map("website_account_masked") @db.VarChar(255)
-  receivedAmount             Decimal                             @default(0) @map("received_amount") @db.Decimal(18, 4)
-  receivedOriginalAmount     Decimal                             @default(0) @map("received_original_amount") @db.Decimal(18, 4)
-  receivedCurrency           IdBusinessV2FinanceCurrency         @default(CNY) @map("received_currency")
-  receivedFxRateToCny        Decimal                             @default(1) @map("received_fx_rate_to_cny") @db.Decimal(18, 8)
-  receivedFxSnapshotId       String?                             @map("received_fx_snapshot_id") @db.Uuid
-  receivedFinanceAccountId   String?                             @map("received_finance_account_id") @db.Uuid
-  receivedAt                 DateTime?                           @map("received_at") @db.Timestamptz(6)
-  platformFeeAmount          Decimal                             @default(0) @map("platform_fee_amount") @db.Decimal(18, 4)
-  accountCostAmount          Decimal                             @default(0) @map("account_cost_amount") @db.Decimal(18, 4)
-  appliedAccountCostAmount   Decimal                             @default(0) @map("applied_account_cost_amount") @db.Decimal(18, 4)
-  accountSource              IdBusinessV2OrderAccountSource      @default(inventory) @map("account_source")
-  sourceSoldOrderId          String?                             @map("source_sold_order_id") @db.Uuid
-  accountDisposition         IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
-  balanceAmount              Decimal                             @default(0) @map("balance_amount") @db.Decimal(18, 4)
-  balanceCostAmount          Decimal                             @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
-  transferredBalanceCostAmount Decimal                           @default(0) @map("transferred_balance_cost_amount") @db.Decimal(18, 4)
-  appliedBalanceCostAmount   Decimal                             @default(0) @map("applied_balance_cost_amount") @db.Decimal(18, 4)
-  refundCostAmount           Decimal?                            @map("refund_cost_amount") @db.Decimal(18, 4)
-  profitAmount               Decimal?                            @map("profit_amount") @db.Decimal(18, 4)
-  status                     IdBusinessV2OrderStatus             @default(draft)
-  statusChangedAt            DateTime                            @default(now()) @map("status_changed_at") @db.Timestamptz(6)
-  openedAt                   DateTime?                           @map("opened_at") @db.Timestamptz(6)
-  dueAt                      DateTime?                           @map("due_at") @db.Timestamptz(6)
-  idempotencyKey             String                              @unique @map("idempotency_key") @db.VarChar(160)
-  remark                     String?                             @db.Text
-  createdByUserId            String?                             @map("created_by_user_id") @db.Uuid
-  updatedByUserId            String?                             @map("updated_by_user_id") @db.Uuid
-  createdAt                  DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                  DateTime                            @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt                  DateTime?                           @map("deleted_at") @db.Timestamptz(6)
+  id                           String                              @id @default(uuid()) @db.Uuid
+  orderNo                      String                              @unique @map("order_no") @db.VarChar(40)
+  customerId                   String                              @map("customer_id") @db.Uuid
+  serviceOptionId              String                              @map("service_option_id") @db.Uuid
+  accountId                    String?                             @map("account_id") @db.Uuid
+  settlementPlatformOptionId   String?                             @map("settlement_platform_option_id") @db.Uuid
+  platformOrderNo              String?                             @map("platform_order_no") @db.VarChar(160)
+  websiteAccountEncrypted      String?                             @map("website_account_encrypted") @db.Text
+  websiteAccountHash           String?                             @map("website_account_hash") @db.VarChar(64)
+  websiteAccountMasked         String?                             @map("website_account_masked") @db.VarChar(255)
+  websiteAccountSearchTokens   String[]                            @default([]) @map("website_account_search_tokens")
+  receivedAmount               Decimal                             @default(0) @map("received_amount") @db.Decimal(18, 4)
+  receivedOriginalAmount       Decimal                             @default(0) @map("received_original_amount") @db.Decimal(18, 4)
+  receivedCurrency             IdBusinessV2FinanceCurrency         @default(CNY) @map("received_currency")
+  receivedFxRateToCny          Decimal                             @default(1) @map("received_fx_rate_to_cny") @db.Decimal(18, 8)
+  receivedFxSnapshotId         String?                             @map("received_fx_snapshot_id") @db.Uuid
+  receivedFinanceAccountId     String?                             @map("received_finance_account_id") @db.Uuid
+  receivedAt                   DateTime?                           @map("received_at") @db.Timestamptz(6)
+  platformFeeAmount            Decimal                             @default(0) @map("platform_fee_amount") @db.Decimal(18, 4)
+  accountCostAmount            Decimal                             @default(0) @map("account_cost_amount") @db.Decimal(18, 4)
+  appliedAccountCostAmount     Decimal                             @default(0) @map("applied_account_cost_amount") @db.Decimal(18, 4)
+  accountSource                IdBusinessV2OrderAccountSource      @default(inventory) @map("account_source")
+  sourceSoldOrderId            String?                             @map("source_sold_order_id") @db.Uuid
+  accountDisposition           IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
+  balanceAmount                Decimal                             @default(0) @map("balance_amount") @db.Decimal(18, 4)
+  balanceCostAmount            Decimal                             @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
+  transferredBalanceCostAmount Decimal                             @default(0) @map("transferred_balance_cost_amount") @db.Decimal(18, 4)
+  appliedBalanceCostAmount     Decimal                             @default(0) @map("applied_balance_cost_amount") @db.Decimal(18, 4)
+  refundCostAmount             Decimal?                            @map("refund_cost_amount") @db.Decimal(18, 4)
+  profitAmount                 Decimal?                            @map("profit_amount") @db.Decimal(18, 4)
+  status                       IdBusinessV2OrderStatus             @default(draft)
+  statusChangedAt              DateTime                            @default(now()) @map("status_changed_at") @db.Timestamptz(6)
+  openedAt                     DateTime?                           @map("opened_at") @db.Timestamptz(6)
+  dueAt                        DateTime?                           @map("due_at") @db.Timestamptz(6)
+  idempotencyKey               String                              @unique @map("idempotency_key") @db.VarChar(160)
+  remark                       String?                             @db.Text
+  createdByUserId              String?                             @map("created_by_user_id") @db.Uuid
+  updatedByUserId              String?                             @map("updated_by_user_id") @db.Uuid
+  createdAt                    DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                    DateTime                            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt                    DateTime?                           @map("deleted_at") @db.Timestamptz(6)
 
   customer               IdBusinessV2Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
   serviceOption          IdBusinessV2Option                 @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
@@ -1296,6 +1340,7 @@ model IdBusinessV2Order {
   @@index([sourceSoldOrderId])
   @@index([settlementPlatformOptionId])
   @@index([websiteAccountHash])
+  @@index([websiteAccountSearchTokens], type: Gin)
   @@index([receivedFxSnapshotId])
   @@index([receivedFinanceAccountId])
   @@index([status, statusChangedAt])
@@ -1602,8 +1647,9 @@ model Role {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  userRoles       UserRole[]
-  rolePermissions RolePermission[]
+  userRoles                UserRole[]
+  rolePermissions          RolePermission[]
+  sensitiveDisplayPolicies IdBusinessV2SensitiveDisplayPolicy[]
 
   @@map("roles")
 }
@@ -1644,6 +1690,29 @@ model RolePermission {
   @@id([roleId, permissionId])
   @@index([sensitiveApprovalRequired])
   @@map("role_permissions")
+}
+
+model IdBusinessV2SensitiveDisplayPolicy {
+  id              String                              @id @default(uuid()) @db.Uuid
+  roleId          String                              @map("role_id") @db.Uuid
+  fieldKey        String                              @map("field_key") @db.VarChar(80)
+  context         IdBusinessV2SensitiveDisplayContext
+  mode            IdBusinessV2SensitiveDisplayMode
+  createdByUserId String?                             @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?                             @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  role      Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("IdBusinessV2SensitivePolicyCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("IdBusinessV2SensitivePolicyUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([roleId, fieldKey, context])
+  @@index([roleId, context])
+  @@index([fieldKey, context, mode])
+  @@index([createdByUserId])
+  @@index([updatedByUserId])
+  @@map("id_business_v2_sensitive_display_policies")
 }
 
 model AuditLog {

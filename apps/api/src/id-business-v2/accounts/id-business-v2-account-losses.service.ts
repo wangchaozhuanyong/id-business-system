@@ -57,7 +57,7 @@ export class IdBusinessV2AccountLossesService {
     );
   }
 
-  list(query: ListIdBusinessV2AccountLossesQuery) {
-    return this.queryService.list(query);
+  list(query: ListIdBusinessV2AccountLossesQuery, operator?: AuthenticatedUser) {
+    return this.queryService.list(query, operator);
   }
 }

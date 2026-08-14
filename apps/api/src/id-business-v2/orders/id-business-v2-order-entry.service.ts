@@ -12,6 +12,7 @@ import {
   Amount4,
   Rate8,
   V2CommandTransactionManager,
+  buildIdBusinessV2BlindIndexTokens,
   type V2CommandTransaction,
   type V2DecimalInput
 } from '../runtime/public-api';
@@ -22,6 +23,7 @@ import { IdBusinessV2OrderLockService } from './id-business-v2-order-lock.servic
 import { getIdBusinessV2OrderEntryOptions } from './id-business-v2-order-entry-options';
 import { IdBusinessV2OrdersService } from './id-business-v2-orders.service';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import {
   assertOrderEntryReplayMatches,
   calculatePlatformFee,
@@ -42,6 +44,7 @@ export interface CreateWaitingExternalOrderInput {
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
   websiteAccountMasked: string | null;
+  websiteAccountSearchTokens: string[];
   receivedAmount: V2DecimalInput;
   balanceAmount: V2DecimalInput;
   openedAt: Date;
@@ -60,6 +63,7 @@ export interface CreateManualRenewalOrderInput {
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
   websiteAccountMasked: string | null;
+  websiteAccountSearchTokens: string[];
   receivedAmount: V2DecimalInput;
   balanceAmount: V2DecimalInput;
   openedAt: Date;
@@ -77,10 +81,11 @@ export class IdBusinessV2OrderEntryService {
     private readonly ordersService: IdBusinessV2OrdersService,
     private readonly orderLockService: IdBusinessV2OrderLockService,
     private readonly financeFxService: IdBusinessV2FinanceFxService,
-    private readonly transactionManager: V2CommandTransactionManager
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async getEntryOptions(customerKeywordValue?: string) {
+  async getEntryOptions(customerKeywordValue?: string, operator?: AuthenticatedUser) {
     const [options, latestFxRates] = await Promise.all([
       getIdBusinessV2OrderEntryOptions(
         this.repository,
@@ -89,10 +94,58 @@ export class IdBusinessV2OrderEntryService {
       ),
       this.financeFxService.listLatest()
     ]);
+    const customers = await this.presentEntryCustomers(options.customers, operator);
     return {
       ...options,
+      customers,
       latestFxRates: latestFxRates.items
     };
+  }
+
+  private async presentEntryCustomers(
+    customers: Awaited<ReturnType<typeof getIdBusinessV2OrderEntryOptions>>['customers'],
+    operator?: AuthenticatedUser
+  ) {
+    const modes = operator
+      ? await this.sensitiveAccessService.resolveDisplayModes(
+          operator,
+          ['customer.phone', 'customer.wechat', 'customer.qq', 'customer.whatsapp'],
+          'order_workbench'
+        )
+      : null;
+    return customers.map(({ sensitiveValues, ...customer }) => {
+      if (!modes) return customer;
+      const display = (
+        field: keyof typeof modes,
+        fullValue: string | null,
+        masked: string | null
+      ) => (modes[field] === 'hidden' ? null : modes[field] === 'full' ? fullValue : masked);
+      return {
+        ...customer,
+        maskedPhone: display(
+          'customer.phone',
+          this.fieldEncryptionService.decrypt(sensitiveValues.phoneEncrypted),
+          customer.maskedPhone
+        ),
+        wechat: display(
+          'customer.wechat',
+          this.fieldEncryptionService.decrypt(sensitiveValues.wechatEncrypted) ??
+            sensitiveValues.legacyWechat,
+          customer.wechat
+        ),
+        qq: display(
+          'customer.qq',
+          this.fieldEncryptionService.decrypt(sensitiveValues.qqEncrypted) ??
+            sensitiveValues.legacyQq,
+          customer.qq
+        ),
+        maskedWhatsapp: display(
+          'customer.whatsapp',
+          this.fieldEncryptionService.decrypt(sensitiveValues.whatsappEncrypted),
+          customer.maskedWhatsapp
+        )
+      };
+    });
   }
 
   quoteReceiptFx(dto: QuoteIdBusinessV2OrderReceiptFxDto, operator?: AuthenticatedUser) {
@@ -203,6 +256,11 @@ export class IdBusinessV2OrderEntryService {
           websiteAccountEncrypted: this.fieldEncryptionService.encrypt(input.websiteAccount),
           websiteAccountHash: input.websiteAccountHash,
           websiteAccountMasked: maskWebsiteAccount(input.websiteAccount),
+          websiteAccountSearchTokens: buildIdBusinessV2BlindIndexTokens(
+            input.websiteAccount,
+            'website-account',
+            (value) => this.fieldEncryptionService.hash(value)
+          ),
           receivedAmount: input.receivedAmount.toString(),
           receivedOriginalAmount: receivedOriginalAmount.toString(),
           receivedCurrency,
@@ -315,6 +373,7 @@ export class IdBusinessV2OrderEntryService {
       websiteAccountEncrypted: input.websiteAccountEncrypted,
       websiteAccountHash: input.websiteAccountHash,
       websiteAccountMasked: input.websiteAccountMasked,
+      websiteAccountSearchTokens: input.websiteAccountSearchTokens,
       receivedAmount: receivedAmount.toString(),
       receivedOriginalAmount: receivedAmount.toString(),
       receivedCurrency: 'CNY',
@@ -407,6 +466,7 @@ export class IdBusinessV2OrderEntryService {
       websiteAccountEncrypted: input.websiteAccountEncrypted,
       websiteAccountHash: input.websiteAccountHash,
       websiteAccountMasked: input.websiteAccountMasked,
+      websiteAccountSearchTokens: input.websiteAccountSearchTokens,
       receivedAmount: receivedAmount.toString(),
       receivedOriginalAmount: receivedAmount.toString(),
       receivedCurrency: 'CNY',

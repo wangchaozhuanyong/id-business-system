@@ -373,7 +373,7 @@ function renewal(
     dueAt,
     customer: { name: customer },
     serviceOption: { name: service },
-    account: { appleIdMasked }
+    account: { appleIdMasked, displayAppleId: appleIdMasked }
   };
 }
 

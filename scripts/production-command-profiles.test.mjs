@@ -78,3 +78,17 @@ test('data maintenance receives migration credential only and allows explicit ar
   assert.equal(environment.V2_RUNTIME_DATABASE_URL, undefined);
   assert.equal(environment.AUDIT_DATABASE_URL, undefined);
 });
+
+test('sensitive search backfill receives only runtime access and encryption secrets', () => {
+  const profile = resolveProductionCommand('sensitive-search-backfill');
+  const environment = buildProductionCommandEnvironment({}, secrets, profile);
+
+  assert.deepEqual(profile.args, ['run', 'backfill:v2-sensitive-search-indexes']);
+  assert.equal(profile.allowExtraArgs, undefined);
+  assert.equal(environment.DATABASE_URL, secrets.V2_RUNTIME_DATABASE_URL);
+  assert.equal(environment.FIELD_ENCRYPTION_KEY, secrets.FIELD_ENCRYPTION_KEY);
+  assert.equal(environment.HASH_SECRET, secrets.HASH_SECRET);
+  assert.equal(environment.MIGRATION_DATABASE_URL, undefined);
+  assert.equal(environment.AUDIT_DATABASE_URL, undefined);
+  assert.equal(environment.JWT_SECRET, undefined);
+});

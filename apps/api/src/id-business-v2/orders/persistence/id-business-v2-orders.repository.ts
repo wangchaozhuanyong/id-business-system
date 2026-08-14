@@ -33,6 +33,7 @@ const ORDER_INCLUDE = {
   account: {
     select: {
       id: true,
+      appleIdEncrypted: true,
       appleIdMasked: true,
       countryOption: { select: { id: true, code: true, name: true } }
     }
@@ -55,6 +56,7 @@ const ORDER_INCLUDE = {
 
 const MATCHING_ACCOUNT_SELECT = {
   id: true,
+  appleIdEncrypted: true,
   appleIdMasked: true,
   currentBalance: true,
   balanceCostAmount: true,
@@ -98,6 +100,8 @@ export type IdBusinessV2OrderSortField =
 export interface IdBusinessV2OrderListCriteria {
   keyword: string | null;
   websiteAccountHash: string | null;
+  sensitiveAccountIds: string[];
+  sensitiveWebsiteOrderIds: string[];
   customerId: string | null;
   serviceOptionId: string | null;
   accountId: string | null;
@@ -123,6 +127,7 @@ export interface IdBusinessV2MatchingCriteria {
   evaluatedAt: Date;
   keyword: string | null;
   keywordHash: string | null;
+  keywordSearchTokens: string[];
   limit: number;
 }
 
@@ -216,6 +221,34 @@ export class IdBusinessV2OrdersRepository {
     };
   }
 
+  async findSensitiveSearchCandidates(input: {
+    appleIdTokens: string[];
+    websiteAccountTokens: string[];
+  }) {
+    const [accounts, orders] = await Promise.all([
+      input.appleIdTokens.length
+        ? this.prisma.idBusinessV2Account.findMany({
+            where: {
+              deletedAt: null,
+              appleIdSearchTokens: { hasEvery: input.appleIdTokens }
+            },
+            select: { id: true, appleIdEncrypted: true }
+          })
+        : Promise.resolve([]),
+      input.websiteAccountTokens.length
+        ? this.prisma.idBusinessV2Order.findMany({
+            where: {
+              deletedAt: null,
+              websiteAccountEncrypted: { not: null },
+              websiteAccountSearchTokens: { hasEvery: input.websiteAccountTokens }
+            },
+            select: { id: true, websiteAccountEncrypted: true }
+          })
+        : Promise.resolve([])
+    ]);
+    return { accounts, orders };
+  }
+
   async findOrder(id: string) {
     const row = await this.prisma.idBusinessV2Order.findFirst({
       where: { id, deletedAt: null },
@@ -228,9 +261,22 @@ export class IdBusinessV2OrdersRepository {
     customerKeyword: string | null;
     normalizedContact: string | null;
     contactHash: string | null;
+    phoneSearchTokens: string[];
+    wechatSearchTokens: string[];
+    qqSearchTokens: string[];
+    whatsappSearchTokens: string[];
     maximumCustomers: number;
   }) {
-    const { customerKeyword, normalizedContact, contactHash, maximumCustomers } = criteria;
+    const {
+      customerKeyword,
+      normalizedContact,
+      contactHash,
+      phoneSearchTokens,
+      wechatSearchTokens,
+      qqSearchTokens,
+      whatsappSearchTokens,
+      maximumCustomers
+    } = criteria;
     const [customers, countries, categories, services, settlementPlatforms] = await Promise.all([
       this.prisma.idBusinessV2Customer.findMany({
         where: {
@@ -240,7 +286,15 @@ export class IdBusinessV2OrdersRepository {
             ? [
                 { name: { contains: customerKeyword, mode: 'insensitive' } },
                 { wechat: { contains: customerKeyword, mode: 'insensitive' } },
+                {
+                  wechatSearchTokens: wechatSearchTokens.length
+                    ? { hasEvery: wechatSearchTokens }
+                    : undefined
+                },
                 { qq: { contains: customerKeyword, mode: 'insensitive' } },
+                {
+                  qqSearchTokens: qqSearchTokens.length ? { hasEvery: qqSearchTokens } : undefined
+                },
                 {
                   phoneTail: {
                     contains: normalizedContact?.slice(-8) ?? customerKeyword,
@@ -249,12 +303,22 @@ export class IdBusinessV2OrdersRepository {
                 },
                 { phoneHash: contactHash ?? undefined },
                 {
+                  phoneSearchTokens: phoneSearchTokens.length
+                    ? { hasEvery: phoneSearchTokens }
+                    : undefined
+                },
+                {
                   whatsappTail: {
                     contains: normalizedContact?.slice(-8) ?? customerKeyword,
                     mode: 'insensitive'
                   }
                 },
-                { whatsappHash: contactHash ?? undefined }
+                { whatsappHash: contactHash ?? undefined },
+                {
+                  whatsappSearchTokens: whatsappSearchTokens.length
+                    ? { hasEvery: whatsappSearchTokens }
+                    : undefined
+                }
               ]
             : undefined
         },
@@ -262,8 +326,14 @@ export class IdBusinessV2OrdersRepository {
           id: true,
           name: true,
           wechat: true,
+          wechatEncrypted: true,
+          wechatMasked: true,
           qq: true,
+          qqEncrypted: true,
+          qqMasked: true,
+          phoneEncrypted: true,
           phoneMasked: true,
+          whatsappEncrypted: true,
           whatsappMasked: true
         },
         take: maximumCustomers,
@@ -323,10 +393,18 @@ export class IdBusinessV2OrdersRepository {
       customers: customers.map((customer) => ({
         id: customer.id,
         name: customer.name,
-        wechat: customer.wechat,
-        qq: customer.qq,
+        wechat: customer.wechatMasked ?? (customer.wechat ? '已保存微信' : null),
+        qq: customer.qqMasked ?? (customer.qq ? '已保存 QQ' : null),
         maskedPhone: customer.phoneMasked,
-        maskedWhatsapp: customer.whatsappMasked
+        maskedWhatsapp: customer.whatsappMasked,
+        sensitiveValues: {
+          phoneEncrypted: customer.phoneEncrypted,
+          wechatEncrypted: customer.wechatEncrypted,
+          legacyWechat: customer.wechat,
+          qqEncrypted: customer.qqEncrypted,
+          legacyQq: customer.qq,
+          whatsappEncrypted: customer.whatsappEncrypted
+        }
       })),
       countries: countries.map((country) => ({
         ...country,
@@ -451,6 +529,11 @@ export class IdBusinessV2OrdersRepository {
           OR: [
             { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
             { appleIdHash: criteria.keywordHash ?? undefined },
+            {
+              appleIdSearchTokens: criteria.keywordSearchTokens.length
+                ? { hasEvery: criteria.keywordSearchTokens }
+                : undefined
+            },
             {
               soldByOrder: {
                 is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
@@ -1019,6 +1102,17 @@ export class IdBusinessV2OrdersRepository {
                 is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
               }
             },
+            {
+              account: {
+                is: { appleIdHash: criteria.websiteAccountHash ?? undefined }
+              }
+            },
+            ...(criteria.sensitiveAccountIds.length
+              ? [{ accountId: { in: criteria.sensitiveAccountIds } }]
+              : []),
+            ...(criteria.sensitiveWebsiteOrderIds.length
+              ? [{ id: { in: criteria.sensitiveWebsiteOrderIds } }]
+              : []),
             {
               settlementPlatform: {
                 is: { name: { contains: criteria.keyword, mode: 'insensitive' } }

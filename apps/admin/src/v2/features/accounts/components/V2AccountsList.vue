@@ -51,7 +51,7 @@
           show-overflow-tooltip
         >
           <template #default="{ row }">
-            <strong class="v2-table-cell">{{ row.appleIdMasked }}</strong>
+            <strong class="v2-table-cell">{{ row.displayAppleId || '—' }}</strong>
           </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.accounts.main.columns[1]">
@@ -162,7 +162,7 @@
           <header>
             <div>
               <strong v-v2-column-visibility="[v2TableSchemas.accounts.main.id, 'appleId']">
-                {{ item.appleIdMasked }}
+                {{ item.displayAppleId || '—' }}
               </strong>
               <span v-v2-column-visibility="[v2TableSchemas.accounts.main.id, '国家']">
                 {{ item.country.name }}
@@ -200,7 +200,7 @@
             </div>
             <div>
               <dt>手机号</dt>
-              <dd>{{ item.maskedPhone || '—' }}</dd>
+              <dd>{{ item.displayPhone || '—' }}</dd>
             </div>
             <div>
               <dt>ID 密码</dt>

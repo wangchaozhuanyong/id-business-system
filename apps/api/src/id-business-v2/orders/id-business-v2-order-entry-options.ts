@@ -1,4 +1,5 @@
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { buildIdBusinessV2BlindQueryTokens } from '../runtime/public-api';
 import { normalizeOptionalString } from './id-business-v2-order-entry-support';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
 
@@ -16,6 +17,24 @@ export async function getIdBusinessV2OrderEntryOptions(
     customerKeyword,
     normalizedContact,
     contactHash,
+    phoneSearchTokens: buildIdBusinessV2BlindQueryTokens(
+      normalizedContact,
+      'customer-phone',
+      (value) => fieldEncryptionService.hash(value)
+    ),
+    wechatSearchTokens: buildIdBusinessV2BlindQueryTokens(
+      customerKeyword,
+      'customer-wechat',
+      (value) => fieldEncryptionService.hash(value)
+    ),
+    qqSearchTokens: buildIdBusinessV2BlindQueryTokens(customerKeyword, 'customer-qq', (value) =>
+      fieldEncryptionService.hash(value)
+    ),
+    whatsappSearchTokens: buildIdBusinessV2BlindQueryTokens(
+      normalizedContact,
+      'customer-whatsapp',
+      (value) => fieldEncryptionService.hash(value)
+    ),
     maximumCustomers: MAX_CUSTOMERS
   });
 }

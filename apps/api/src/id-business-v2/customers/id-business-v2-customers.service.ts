@@ -8,17 +8,29 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import type { PaginationQuery } from '../../common/pagination';
 import { IdBusinessV2OptionsService } from '../options/public-api';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  buildIdBusinessV2BlindIndexTokens,
+  buildIdBusinessV2BlindQueryTokens,
   createV2DeletePreviewFingerprint,
   normalizeV2DeletePreviewFingerprint,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
+import {
+  maskIdBusinessV2CustomerContact,
+  maskIdBusinessV2CustomerPhone,
+  toIdBusinessV2CustomerResponse,
+  type IdBusinessV2CustomerContactField
+} from './id-business-v2-customer-presentation';
+import type {
+  IdBusinessV2CustomerAuditRequestMeta,
+  IdBusinessV2CustomerRecordStatus,
+  ListIdBusinessV2CustomersQuery
+} from './id-business-v2-customers.types';
 import type { CreateIdBusinessV2CustomerDto } from './dto/create-id-business-v2-customer.dto';
 import type { RevealIdBusinessV2CustomerPhoneDto } from './dto/reveal-id-business-v2-customer-phone.dto';
 import type { UpdateIdBusinessV2CustomerDto } from './dto/update-id-business-v2-customer.dto';
@@ -27,24 +39,6 @@ import {
   type CustomerWithRelations,
   type UpdateCustomerPersistenceInput
 } from './persistence/id-business-v2-customer.repository';
-
-interface ListIdBusinessV2CustomersQuery extends PaginationQuery {
-  keyword?: string;
-  sourceOptionId?: string;
-  tagOptionId?: string;
-  serviceOptionId?: string;
-  recordStatus?: string;
-  sortBy?: string;
-  sortOrder?: string;
-}
-
-interface AuditRequestMeta {
-  ip?: string | null;
-  userAgent?: string | null;
-  requestId?: string;
-}
-
-type CustomerRecordStatus = 'active' | 'disabled';
 
 @Injectable()
 export class IdBusinessV2CustomersService {
@@ -57,7 +51,7 @@ export class IdBusinessV2CustomersService {
     private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async list(query: ListIdBusinessV2CustomersQuery) {
+  async list(query: ListIdBusinessV2CustomersQuery, operator?: AuthenticatedUser) {
     const keyword = this.normalizeNullableString(query.keyword);
     const normalizedContactKeyword = keyword ? keyword.replace(/[\s()-]/g, '') : null;
     const contactKeyword =
@@ -70,6 +64,22 @@ export class IdBusinessV2CustomersService {
       keyword,
       contactKeyword,
       contactHash: this.fieldEncryptionService.hash(contactKeyword),
+      phoneSearchTokens: buildIdBusinessV2BlindQueryTokens(
+        contactKeyword,
+        'customer-phone',
+        (value) => this.fieldEncryptionService.hash(value)
+      ),
+      wechatSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'customer-wechat', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
+      qqSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'customer-qq', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
+      whatsappSearchTokens: buildIdBusinessV2BlindQueryTokens(
+        contactKeyword,
+        'customer-whatsapp',
+        (value) => this.fieldEncryptionService.hash(value)
+      ),
       sourceOptionId: this.normalizeNullableString(query.sourceOptionId),
       tagOptionId: query.tagOptionId,
       serviceOptionId: query.serviceOptionId,
@@ -77,11 +87,11 @@ export class IdBusinessV2CustomersService {
       sortBy: query.sortBy,
       sortOrder: query.sortOrder
     });
-    return { ...result, items: result.items.map((customer) => this.toResponse(customer)) };
+    return { ...result, items: await this.presentCustomers(result.items, operator) };
   }
 
-  async get(id: string) {
-    return this.toResponse(await this.findCustomerOrThrow(id));
+  async get(id: string, operator?: AuthenticatedUser) {
+    return (await this.presentCustomers([await this.findCustomerOrThrow(id)], operator))[0];
   }
 
   async getDeletePreview(id: string) {
@@ -93,13 +103,15 @@ export class IdBusinessV2CustomersService {
   create(
     dto: CreateIdBusinessV2CustomerDto,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     return this.transactionManager.execute(
       async (tx) => {
         const name = this.normalizeRequiredString(dto.name, '客户名称');
         const phone = this.normalizePhone(dto.phone, '手机号');
         const whatsapp = this.normalizePhone(dto.whatsapp, 'WhatsApp');
+        const wechat = this.normalizeOptionalText(dto.wechat, '微信', 120);
+        const qq = this.normalizeOptionalText(dto.qq, 'QQ', 120);
         const sourceOption = await this.optionsService.requireActiveOption(
           dto.sourceOptionId,
           'customer_source',
@@ -117,21 +129,31 @@ export class IdBusinessV2CustomersService {
           name,
           phoneEncrypted: this.fieldEncryptionService.encrypt(phone),
           phoneHash: this.fieldEncryptionService.hash(phone),
-          phoneMasked: this.maskPhone(phone),
+          phoneMasked: maskIdBusinessV2CustomerPhone(phone),
           phoneTail: phone ? phone.slice(-8) : null,
-          wechat: this.normalizeOptionalText(dto.wechat, '微信', 120),
-          qq: this.normalizeOptionalText(dto.qq, 'QQ', 120),
+          phoneSearchTokens: this.buildContactSearchTokens(phone, 'customer-phone'),
+          wechat: null,
+          wechatEncrypted: this.fieldEncryptionService.encrypt(wechat),
+          wechatHash: this.fieldEncryptionService.hash(wechat),
+          wechatMasked: maskIdBusinessV2CustomerContact(wechat),
+          wechatSearchTokens: this.buildContactSearchTokens(wechat, 'customer-wechat'),
+          qq: null,
+          qqEncrypted: this.fieldEncryptionService.encrypt(qq),
+          qqHash: this.fieldEncryptionService.hash(qq),
+          qqMasked: maskIdBusinessV2CustomerContact(qq),
+          qqSearchTokens: this.buildContactSearchTokens(qq, 'customer-qq'),
           whatsappEncrypted: this.fieldEncryptionService.encrypt(whatsapp),
           whatsappHash: this.fieldEncryptionService.hash(whatsapp),
-          whatsappMasked: this.maskPhone(whatsapp),
+          whatsappMasked: maskIdBusinessV2CustomerPhone(whatsapp),
           whatsappTail: whatsapp ? whatsapp.slice(-8) : null,
+          whatsappSearchTokens: this.buildContactSearchTokens(whatsapp, 'customer-whatsapp'),
           sourceOptionId: sourceOption?.id ?? null,
           recordStatus: this.parseRecordStatus(dto.recordStatus, false) ?? 'active',
           remark: this.normalizeNullableString(dto.remark),
           tagOptionIds: tags.map((tag) => tag.id),
           operatorId: operator?.id
         });
-        const response = this.toResponse(customer);
+        const response = toIdBusinessV2CustomerResponse(customer);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_customers',
@@ -153,7 +175,7 @@ export class IdBusinessV2CustomersService {
     id: string,
     dto: UpdateIdBusinessV2CustomerDto,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     return this.transactionManager.execute(
       async (tx) => {
@@ -162,6 +184,11 @@ export class IdBusinessV2CustomersService {
           dto.phone === undefined ? undefined : this.normalizePhone(dto.phone, '手机号');
         const whatsapp =
           dto.whatsapp === undefined ? undefined : this.normalizePhone(dto.whatsapp, 'WhatsApp');
+        const wechat =
+          dto.wechat === undefined
+            ? undefined
+            : this.normalizeOptionalText(dto.wechat, '微信', 120);
+        const qq = dto.qq === undefined ? undefined : this.normalizeOptionalText(dto.qq, 'QQ', 120);
         const sourceOption =
           dto.sourceOptionId === undefined
             ? undefined
@@ -187,19 +214,38 @@ export class IdBusinessV2CustomersService {
           phoneEncrypted:
             phone === undefined ? undefined : this.fieldEncryptionService.encrypt(phone),
           phoneHash: phone === undefined ? undefined : this.fieldEncryptionService.hash(phone),
-          phoneMasked: phone === undefined ? undefined : this.maskPhone(phone),
+          phoneMasked: phone === undefined ? undefined : maskIdBusinessV2CustomerPhone(phone),
           phoneTail: phone === undefined ? undefined : (phone?.slice(-8) ?? null),
-          wechat:
-            dto.wechat === undefined
+          phoneSearchTokens:
+            phone === undefined
               ? undefined
-              : this.normalizeOptionalText(dto.wechat, '微信', 120),
-          qq: dto.qq === undefined ? undefined : this.normalizeOptionalText(dto.qq, 'QQ', 120),
+              : this.buildContactSearchTokens(phone, 'customer-phone'),
+          wechat: wechat === undefined ? undefined : null,
+          wechatEncrypted:
+            wechat === undefined ? undefined : this.fieldEncryptionService.encrypt(wechat),
+          wechatHash: wechat === undefined ? undefined : this.fieldEncryptionService.hash(wechat),
+          wechatMasked: wechat === undefined ? undefined : maskIdBusinessV2CustomerContact(wechat),
+          wechatSearchTokens:
+            wechat === undefined
+              ? undefined
+              : this.buildContactSearchTokens(wechat, 'customer-wechat'),
+          qq: qq === undefined ? undefined : null,
+          qqEncrypted: qq === undefined ? undefined : this.fieldEncryptionService.encrypt(qq),
+          qqHash: qq === undefined ? undefined : this.fieldEncryptionService.hash(qq),
+          qqMasked: qq === undefined ? undefined : maskIdBusinessV2CustomerContact(qq),
+          qqSearchTokens:
+            qq === undefined ? undefined : this.buildContactSearchTokens(qq, 'customer-qq'),
           whatsappEncrypted:
             whatsapp === undefined ? undefined : this.fieldEncryptionService.encrypt(whatsapp),
           whatsappHash:
             whatsapp === undefined ? undefined : this.fieldEncryptionService.hash(whatsapp),
-          whatsappMasked: whatsapp === undefined ? undefined : this.maskPhone(whatsapp),
+          whatsappMasked:
+            whatsapp === undefined ? undefined : maskIdBusinessV2CustomerPhone(whatsapp),
           whatsappTail: whatsapp === undefined ? undefined : (whatsapp?.slice(-8) ?? null),
+          whatsappSearchTokens:
+            whatsapp === undefined
+              ? undefined
+              : this.buildContactSearchTokens(whatsapp, 'customer-whatsapp'),
           sourceOptionId: sourceOption === undefined ? undefined : (sourceOption?.id ?? null),
           recordStatus:
             dto.recordStatus === undefined
@@ -210,14 +256,14 @@ export class IdBusinessV2CustomersService {
           operatorId: operator?.id
         };
         const customer = await this.repository.update(tx, existing.id, updateInput);
-        const response = this.toResponse(customer);
+        const response = toIdBusinessV2CustomerResponse(customer);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_customers',
           action: 'id_business_v2.customer.update',
           objectType: 'id_business_v2_customer',
           objectId: customer.id,
-          beforeData: toV2JsonDocument(this.toResponse(existing)),
+          beforeData: toV2JsonDocument(toIdBusinessV2CustomerResponse(existing)),
           afterData: toV2JsonDocument(response),
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined,
@@ -233,7 +279,7 @@ export class IdBusinessV2CustomersService {
     id: string,
     previewFingerprintValue: string | undefined,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     const previewFingerprint = normalizeV2DeletePreviewFingerprint(previewFingerprintValue);
     return this.transactionManager.execute(
@@ -258,7 +304,7 @@ export class IdBusinessV2CustomersService {
           action: 'id_business_v2.customer.delete',
           objectType: 'id_business_v2_customer',
           objectId: existing.id,
-          beforeData: toV2JsonDocument(this.toResponse(existing)),
+          beforeData: toV2JsonDocument(toIdBusinessV2CustomerResponse(existing)),
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined,
           remark: `删除 V2 客户：${existing.name}`
@@ -299,7 +345,7 @@ export class IdBusinessV2CustomersService {
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     const result = await this.revealSensitiveContact(id, dto, 'phone', operator, requestMeta);
     return { customerId: result.customerId, phone: result.value, revealedAt: result.revealedAt };
@@ -309,10 +355,30 @@ export class IdBusinessV2CustomersService {
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     const result = await this.revealSensitiveContact(id, dto, 'whatsapp', operator, requestMeta);
     return { customerId: result.customerId, whatsapp: result.value, revealedAt: result.revealedAt };
+  }
+
+  async revealWechat(
+    id: string,
+    dto: RevealIdBusinessV2CustomerPhoneDto,
+    operator?: AuthenticatedUser,
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
+  ) {
+    const result = await this.revealSensitiveContact(id, dto, 'wechat', operator, requestMeta);
+    return { customerId: result.customerId, wechat: result.value, revealedAt: result.revealedAt };
+  }
+
+  async revealQq(
+    id: string,
+    dto: RevealIdBusinessV2CustomerPhoneDto,
+    operator?: AuthenticatedUser,
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
+  ) {
+    const result = await this.revealSensitiveContact(id, dto, 'qq', operator, requestMeta);
+    return { customerId: result.customerId, qq: result.value, revealedAt: result.revealedAt };
   }
 
   private async findCustomerOrThrow(id: string) {
@@ -327,7 +393,10 @@ export class IdBusinessV2CustomersService {
     return customer;
   }
 
-  private parseRecordStatus(value: unknown, required: boolean): CustomerRecordStatus | null {
+  private parseRecordStatus(
+    value: unknown,
+    required: boolean
+  ): IdBusinessV2CustomerRecordStatus | null {
     if (value === undefined || value === null || value === '') {
       if (required) throw new BadRequestException('资料状态不能为空');
       return null;
@@ -387,57 +456,85 @@ export class IdBusinessV2CustomersService {
     throw new ForbiddenException('无权查看完整联系电话');
   }
 
-  private maskPhone(value: string | null) {
-    if (!value) return null;
-    if (value.length <= 4) return '****';
-    return `${value.slice(0, 3)}****${value.slice(-4)}`;
+  private buildContactSearchTokens(
+    value: string | null,
+    namespace: 'customer-phone' | 'customer-wechat' | 'customer-qq' | 'customer-whatsapp'
+  ) {
+    return buildIdBusinessV2BlindIndexTokens(value, namespace, (item) =>
+      this.fieldEncryptionService.hash(item)
+    );
   }
 
-  private toResponse(customer: CustomerWithRelations) {
-    return {
-      id: customer.id,
-      name: customer.name,
-      maskedPhone: customer.phoneMasked,
-      phoneTail: customer.phoneTail,
-      hasPhone: Boolean(customer.phoneEncrypted),
-      wechat: customer.wechat,
-      qq: customer.qq,
-      maskedWhatsapp: customer.whatsappMasked,
-      whatsappTail: customer.whatsappTail,
-      hasWhatsapp: Boolean(customer.whatsappEncrypted),
-      sourceOptionId: customer.sourceOptionId,
-      source: customer.sourceOption,
-      tagOptionIds: customer.tags.map((item) => item.optionId),
-      tags: customer.tags.map((item) => item.option),
-      serviceOptionIds: customer.services.map((item) => item.optionId),
-      services: customer.services.map((item) => ({
-        ...item.option,
-        firstOpenedAt: item.firstOpenedAt!,
-        lastOpenedAt: item.lastOpenedAt!,
-        activationCount: item.activationCount
-      })),
-      recordStatus: customer.recordStatus,
-      remark: customer.remark,
-      createdBy: customer.createdBy,
-      createdAt: customer.createdAt,
-      updatedAt: customer.updatedAt
+  private contactValue(customer: CustomerWithRelations, field: IdBusinessV2CustomerContactField) {
+    if (field === 'phone') return this.fieldEncryptionService.decrypt(customer.phoneEncrypted);
+    if (field === 'whatsapp') {
+      return this.fieldEncryptionService.decrypt(customer.whatsappEncrypted);
+    }
+    if (field === 'wechat') {
+      return this.fieldEncryptionService.decrypt(customer.wechatEncrypted) ?? customer.wechat;
+    }
+    return this.fieldEncryptionService.decrypt(customer.qqEncrypted) ?? customer.qq;
+  }
+
+  private async presentCustomers(customers: CustomerWithRelations[], operator?: AuthenticatedUser) {
+    if (!operator) return customers.map((customer) => toIdBusinessV2CustomerResponse(customer));
+    const modes = await this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['customer.phone', 'customer.wechat', 'customer.qq', 'customer.whatsapp'],
+      'customer_management'
+    );
+    const value = (
+      customer: CustomerWithRelations,
+      field: IdBusinessV2CustomerContactField,
+      masked: string | null
+    ) => {
+      const mode = modes[`customer.${field}`];
+      if (mode === 'hidden') return null;
+      return mode === 'full' ? this.contactValue(customer, field) : masked;
     };
+    return customers.map((customer) =>
+      toIdBusinessV2CustomerResponse(customer, {
+        phone: value(customer, 'phone', customer.phoneMasked),
+        wechat: value(
+          customer,
+          'wechat',
+          customer.wechatMasked ?? maskIdBusinessV2CustomerContact(customer.wechat)
+        ),
+        qq: value(
+          customer,
+          'qq',
+          customer.qqMasked ?? maskIdBusinessV2CustomerContact(customer.qq)
+        ),
+        whatsapp: value(customer, 'whatsapp', customer.whatsappMasked),
+        modes: {
+          phone: modes['customer.phone'],
+          wechat: modes['customer.wechat'],
+          qq: modes['customer.qq'],
+          whatsapp: modes['customer.whatsapp']
+        }
+      })
+    );
   }
 
   private revealSensitiveContact(
     id: string,
     dto: RevealIdBusinessV2CustomerPhoneDto,
-    field: 'phone' | 'whatsapp',
+    field: IdBusinessV2CustomerContactField,
     operator?: AuthenticatedUser,
-    requestMeta: AuditRequestMeta = {}
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
     this.assertContactPermission(operator);
     return this.transactionManager.execute(
       async (tx, context) => {
         const customer = await this.findCustomerOrThrowInTransaction(tx, id);
-        const encryptedValue =
-          field === 'phone' ? customer.phoneEncrypted : customer.whatsappEncrypted;
-        const label = field === 'phone' ? '手机号' : 'WhatsApp';
+        const label =
+          field === 'phone'
+            ? '手机号'
+            : field === 'wechat'
+              ? '微信'
+              : field === 'qq'
+                ? 'QQ'
+                : 'WhatsApp';
         const access = await this.sensitiveAccessService.authorize(tx, {
           approvalId: dto.approvalId,
           module: 'id_business_v2_customer',
@@ -451,7 +548,7 @@ export class IdBusinessV2CustomersService {
           access.mode === 'approval'
             ? access.reason
             : this.normalizeRevealReason(dto.reason, access.reason);
-        const value = this.fieldEncryptionService.decrypt(encryptedValue);
+        const value = this.contactValue(customer, field);
         if (!value) throw new NotFoundException(`该客户没有${label}`);
         await this.repository.appendSensitiveAccess(tx, {
           userId: operator?.id,
@@ -474,7 +571,12 @@ export class IdBusinessV2CustomersService {
             approved: true,
             accessMode: access.mode,
             approvalId: access.approvalId,
-            contactTail: field === 'phone' ? customer.phoneTail : customer.whatsappTail
+            contactTail:
+              field === 'phone'
+                ? customer.phoneTail
+                : field === 'whatsapp'
+                  ? customer.whatsappTail
+                  : null
           }),
           ip: requestMeta.ip ?? undefined,
           userAgent: requestMeta.userAgent ?? undefined,

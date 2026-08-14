@@ -58,6 +58,16 @@ export const idBusinessV2CustomersApi = {
       http.post(`/id-business-v2/customers/${id}/reveal-whatsapp`, payload)
     );
   },
+  revealWechat(id: string, payload: V2RevealInput) {
+    return request<{ customerId: string; wechat: string; revealedAt: string }>(
+      http.post(`/id-business-v2/customers/${id}/reveal-wechat`, payload)
+    );
+  },
+  revealQq(id: string, payload: V2RevealInput) {
+    return request<{ customerId: string; qq: string; revealedAt: string }>(
+      http.post(`/id-business-v2/customers/${id}/reveal-qq`, payload)
+    );
+  },
   getDeletePreview(id: string) {
     return request<V2CustomerDeletePreview>(
       http.get(`/id-business-v2/customers/${id}/delete-preview`)

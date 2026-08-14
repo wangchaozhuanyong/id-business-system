@@ -48,16 +48,21 @@ export class IdBusinessV2TopupSupplierFundsController {
     @Query('entryType') entryType?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.queryService.listLedger(supplierOptionId, {
-      page,
-      pageSize,
-      entryType,
-      dateFrom,
-      dateTo,
-      sortOrder
-    });
+    return this.queryService.listLedger(
+      supplierOptionId,
+      {
+        page,
+        pageSize,
+        entryType,
+        dateFrom,
+        dateTo,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('payments')

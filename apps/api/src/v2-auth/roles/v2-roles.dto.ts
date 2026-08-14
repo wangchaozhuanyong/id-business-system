@@ -12,6 +12,7 @@ export interface CreateV2RoleDto {
   description?: string;
   permissionIds?: string[];
   sensitiveApprovalPermissionIds?: string[];
+  sensitiveDisplayPolicies?: V2SensitiveDisplayPolicyDto[];
 }
 
 export interface UpdateV2RoleDto {
@@ -19,4 +20,11 @@ export interface UpdateV2RoleDto {
   description?: string;
   permissionIds?: string[];
   sensitiveApprovalPermissionIds?: string[];
+  sensitiveDisplayPolicies?: V2SensitiveDisplayPolicyDto[];
+}
+
+export interface V2SensitiveDisplayPolicyDto {
+  fieldKey?: string;
+  context?: string;
+  mode?: string;
 }

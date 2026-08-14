@@ -27,6 +27,9 @@ describe('activations scheme 3 redesign contract', () => {
 
   it('keeps the table, detail action and stable pagination frame', () => {
     expect(list).toContain(':schema="v2TableSchemas.activations.main"');
+    expect(list).toContain(":default-sort=\"{ prop: 'openedAt', order: 'descending' }\"");
+    expect(pageState).toContain("sortBy: 'openedAt'");
+    expect(pageState).toContain("sortOrder: 'desc'");
     expect(list).toContain('@click="page.openDetail(row)"');
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');

@@ -17,6 +17,7 @@ import {
   Amount4,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  buildIdBusinessV2BlindIndexTokens,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
@@ -81,11 +82,14 @@ export class IdBusinessV2AccountsService {
     private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async list(query: ListIdBusinessV2AccountsQuery) {
+  async list(query: ListIdBusinessV2AccountsQuery, operator?: AuthenticatedUser) {
     const result = await this.repository.list(query, (value) =>
       this.fieldEncryptionService.hash(value)
     );
-    return { ...result, items: result.items.map((account) => toAccountResponse(account)) };
+    return {
+      ...result,
+      items: await this.presentAccounts(result.items, operator, 'account_management')
+    };
   }
 
   listPurchaseSources() {
@@ -107,7 +111,11 @@ export class IdBusinessV2AccountsService {
         if (result.total > MAX_ACCOUNT_EXPORT_ROWS) {
           throw new BadRequestException(`单次最多导出 ${MAX_ACCOUNT_EXPORT_ROWS} 条 ID 资料`);
         }
-        const items = result.items.map((account) => toAccountResponse(account));
+        const items = await this.presentAccounts(result.items, operator, 'export', tx);
+        const containsSensitiveFields = items.some(
+          (item) =>
+            item.displayAppleId !== item.appleIdMasked || item.displayPhone !== item.maskedPhone
+        );
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_accounts',
@@ -115,7 +123,7 @@ export class IdBusinessV2AccountsService {
           objectType: 'id_business_v2_account',
           afterData: toV2JsonDocument({
             count: items.length,
-            containsSensitiveFields: false,
+            containsSensitiveFields,
             filters: {
               hasKeyword: Boolean(normalizeNullableString(query.keyword)),
               countryOptionId: normalizeNullableString(query.countryOptionId),
@@ -126,12 +134,12 @@ export class IdBusinessV2AccountsService {
               lifecycle: parseAccountLifecycle(query.lifecycle)
             }
           }),
-          remark: `导出 V2 ID 脱敏资料：${items.length} 条`
+          remark: `导出 V2 ID 资料：${items.length} 条`
         });
         return {
           items,
           total: items.length,
-          containsSensitiveFields: false as const,
+          containsSensitiveFields,
           exportedAt: context.businessTime.toISOString()
         };
       },
@@ -175,8 +183,40 @@ export class IdBusinessV2AccountsService {
     return result;
   }
 
-  async get(id: string) {
-    return toAccountResponse(await this.repository.findByIdOrThrow(id));
+  async get(id: string, operator?: AuthenticatedUser) {
+    const account = await this.repository.findByIdOrThrow(id);
+    return (await this.presentAccounts([account], operator, 'account_management'))[0];
+  }
+
+  private async presentAccounts(
+    accounts: AccountWithRelations[],
+    operator: AuthenticatedUser | undefined,
+    context: 'account_management' | 'export',
+    tx?: V2CommandTransaction
+  ) {
+    if (!operator) return accounts.map((account) => toAccountResponse(account));
+    const modes = await this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['account.apple_id', 'account.phone'],
+      context,
+      tx
+    );
+    return accounts.map((account) =>
+      toAccountResponse(account, {
+        appleId:
+          modes['account.apple_id'] === 'hidden'
+            ? null
+            : modes['account.apple_id'] === 'full'
+              ? this.fieldEncryptionService.decrypt(account.appleIdEncrypted)
+              : account.appleIdMasked,
+        phone:
+          modes['account.phone'] === 'hidden'
+            ? null
+            : modes['account.phone'] === 'full'
+              ? this.fieldEncryptionService.decrypt(account.phoneEncrypted)
+              : account.phoneMasked
+      })
+    );
   }
 
   create(
@@ -419,6 +459,12 @@ export class IdBusinessV2AccountsService {
         appleId === undefined ? undefined : this.fieldEncryptionService.encrypt(appleId)!,
       appleIdHash,
       appleIdMasked: appleId === undefined ? undefined : maskAppleId(appleId),
+      appleIdSearchTokens:
+        appleId === undefined
+          ? undefined
+          : buildIdBusinessV2BlindIndexTokens(appleId, 'apple-id', (value) =>
+              this.fieldEncryptionService.hash(value)
+            ),
       passwordEncrypted:
         dto.password === undefined
           ? undefined
@@ -427,6 +473,12 @@ export class IdBusinessV2AccountsService {
       phoneHash: phone === undefined ? undefined : this.fieldEncryptionService.hash(phone),
       phoneMasked: phone === undefined ? undefined : maskPhone(phone),
       phoneTail: phone === undefined ? undefined : (phone?.slice(-8) ?? null),
+      phoneSearchTokens:
+        phone === undefined
+          ? undefined
+          : buildIdBusinessV2BlindIndexTokens(phone, 'account-phone', (value) =>
+              this.fieldEncryptionService.hash(value)
+            ),
       securityInfoEncrypted:
         dto.securityInfo === undefined
           ? undefined

@@ -25,6 +25,7 @@ const GIFT_CARD_RECORD_INCLUDE = {
   account: {
     select: {
       id: true,
+      appleIdEncrypted: true,
       appleIdMasked: true,
       lossReportedAt: true,
       countryOption: { select: { id: true, code: true, name: true } }
@@ -70,6 +71,7 @@ const BALANCE_LEDGER_INCLUDE = {
   account: {
     select: {
       id: true,
+      appleIdEncrypted: true,
       appleIdMasked: true,
       countryOption: { select: { id: true, code: true, name: true } }
     }
@@ -99,6 +101,7 @@ type BalanceLedgerPersistenceRow = Prisma.IdBusinessV2BalanceLedgerGetPayload<{
 
 export interface GiftCardListCriteria {
   keyword: string | null;
+  codeSearchTokens: string[];
   accountId: string | null;
   cardNameOptionId: string | null;
   countryOptionId: string | null;
@@ -113,6 +116,7 @@ export interface GiftCardListCriteria {
 
 export interface BalanceLedgerListCriteria {
   keyword: string | null;
+  codeSearchTokens: string[];
   accountId: string | null;
   countryOptionId: string | null;
   supplierOptionId: string | null;
@@ -145,6 +149,11 @@ export class IdBusinessV2GiftCardsRepository {
             { cardNameSnapshot: { contains: criteria.keyword, mode: 'insensitive' } },
             { codeMasked: { contains: criteria.keyword, mode: 'insensitive' } },
             { codeTail: { contains: criteria.keyword.slice(-8), mode: 'insensitive' } },
+            {
+              codeSearchTokens: criteria.codeSearchTokens.length
+                ? { hasEvery: criteria.codeSearchTokens }
+                : undefined
+            },
             {
               account: {
                 is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
@@ -202,6 +211,15 @@ export class IdBusinessV2GiftCardsRepository {
             {
               giftCard: {
                 is: {
+                  codeSearchTokens: criteria.codeSearchTokens.length
+                    ? { hasEvery: criteria.codeSearchTokens }
+                    : undefined
+                }
+              }
+            },
+            {
+              giftCard: {
+                is: {
                   supplierOption: {
                     is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
                   }
@@ -246,6 +264,7 @@ export class IdBusinessV2GiftCardsRepository {
       select: {
         id: true,
         cardNameSnapshot: true,
+        codeEncrypted: true,
         codeMasked: true,
         codeTail: true,
         faceValue: true,

@@ -27,6 +27,7 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     websiteAccountEncrypted: 'v1:encrypted',
     websiteAccountHash: 'website-account-hash',
     websiteAccountMasked: 'cu***@example.com',
+    websiteAccountSearchTokens: ['website-search-token'],
     receivedAmount: decimal('99.9'),
     receivedOriginalAmount: decimal('99.9'),
     receivedCurrency: 'CNY',
@@ -90,25 +91,36 @@ describe('IdBusinessV2OrdersService', () => {
       findMany: vi.fn(),
       count: vi.fn(),
       findFirst: vi.fn()
+    },
+    idBusinessV2Account: {
+      findMany: vi.fn()
     }
   };
   const fieldEncryptionService = {
-    hash: vi.fn()
+    hash: vi.fn(),
+    decrypt: vi.fn()
   };
   const service = new IdBusinessV2OrdersService(
     new IdBusinessV2OrdersRepository(prisma as never),
-    fieldEncryptionService as never
+    fieldEncryptionService as never,
+    { resolveDisplayModes: vi.fn() } as never
   );
 
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.idBusinessV2Order.findMany.mockResolvedValue([makeOrder()]);
+    prisma.idBusinessV2Order.findMany.mockImplementation(async (input) =>
+      input?.select ? [] : [makeOrder()]
+    );
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([]);
     prisma.idBusinessV2Order.count.mockResolvedValue(1);
     prisma.idBusinessV2Order.findFirst.mockResolvedValue(makeOrder());
     prisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
       Promise.all(operations)
     );
-    fieldEncryptionService.hash.mockReturnValue('website-account-hash');
+    fieldEncryptionService.hash.mockImplementation((value) =>
+      value === 'customer@example.com' ? 'website-account-hash' : `blind:${value}`
+    );
+    fieldEncryptionService.decrypt.mockReturnValue(null);
   });
 
   it('returns a paginated real order list with Decimal values serialized as strings', async () => {
@@ -170,7 +182,9 @@ describe('IdBusinessV2OrdersService', () => {
 
   it('searches sensitive website accounts by hash without returning secrets', async () => {
     const result = await service.list({ keyword: 'customer@example.com' });
-    const call = prisma.idBusinessV2Order.findMany.mock.calls[0]?.[0];
+    const call = prisma.idBusinessV2Order.findMany.mock.calls.find(([input]) =>
+      Boolean(input?.include)
+    )?.[0];
 
     expect(fieldEncryptionService.hash).toHaveBeenCalledWith('customer@example.com');
     expect(call.where.OR).toContainEqual({ websiteAccountHash: 'website-account-hash' });
@@ -184,6 +198,37 @@ describe('IdBusinessV2OrdersService', () => {
         appleIdMasked: 'us***@example.com'
       }
     });
+  });
+
+  it('finds masked ID and website accounts by an encrypted continuous fragment', async () => {
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([
+      { id: accountId, appleIdEncrypted: 'v1:apple-id-encrypted' }
+    ]);
+    prisma.idBusinessV2Order.findMany.mockImplementation(async (input) =>
+      input?.select
+        ? [{ id: orderId, websiteAccountEncrypted: 'v1:website-account-encrypted' }]
+        : [makeOrder()]
+    );
+    fieldEncryptionService.decrypt.mockImplementation((value) =>
+      value === 'v1:apple-id-encrypted'
+        ? 'user72845@example.com'
+        : value === 'v1:website-account-encrypted'
+          ? 'customer72899@example.com'
+          : null
+    );
+
+    const result = await service.list({ keyword: '728' });
+    const accountCandidateCall = prisma.idBusinessV2Account.findMany.mock.calls[0]?.[0];
+    const listCall = prisma.idBusinessV2Order.findMany.mock.calls.find(([input]) =>
+      Boolean(input?.include)
+    )?.[0];
+
+    expect(accountCandidateCall.where.appleIdSearchTokens.hasEvery).toHaveLength(1);
+    expect(listCall.where.OR).toContainEqual({ accountId: { in: [accountId] } });
+    expect(listCall.where.OR).toContainEqual({ id: { in: [orderId] } });
+    expect(result.items[0]?.account?.appleIdMasked).toBe('us***@example.com');
+    expect(JSON.stringify(result)).not.toContain('user72845@example.com');
+    expect(JSON.stringify(result)).not.toContain('blind:');
   });
 
   it('applies UUID and opened date filters to the database query', async () => {

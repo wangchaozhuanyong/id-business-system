@@ -9,6 +9,7 @@ import {
   V2_DECIMAL_PATTERN,
   V2_DECIMAL_PLACES,
   V2CommandTransactionManager,
+  buildIdBusinessV2BlindIndexTokens,
   toV2JsonDocument,
   type V2CommandTransaction,
   type V2DecimalInput
@@ -330,21 +331,26 @@ export class IdBusinessV2OrderLifecycleSupport {
       return {
         encrypted: null,
         hash: null,
-        masked: null
+        masked: null,
+        searchTokens: []
       };
     }
     if (dto.websiteAccount === undefined) {
       return {
         encrypted: order.websiteAccountEncrypted,
         hash: order.websiteAccountHash,
-        masked: order.websiteAccountMasked
+        masked: order.websiteAccountMasked,
+        searchTokens: order.websiteAccountSearchTokens
       };
     }
     const value = this.normalizeOptionalString(dto.websiteAccount, '客户网站账号', 255);
     return {
       encrypted: this.fieldEncryptionService.encrypt(value),
       hash: this.fieldEncryptionService.hash(value),
-      masked: maskWebsiteAccount(value)
+      masked: maskWebsiteAccount(value),
+      searchTokens: buildIdBusinessV2BlindIndexTokens(value, 'website-account', (token) =>
+        this.fieldEncryptionService.hash(token)
+      )
     };
   }
 

@@ -151,6 +151,7 @@ function makeTopupItem(index: number): V2TopupWorkbenchItem {
   return {
     id: `account-${index + 1}`,
     appleIdMasked: `${String(85 + index).padStart(2, '0')}********@qq.com`,
+    displayAppleId: `${String(85 + index).padStart(2, '0')}********@qq.com`,
     country,
     currentBalance: `${balanceWhole}.2000`,
     balanceCostAmount: `${88 + index}.4000`,

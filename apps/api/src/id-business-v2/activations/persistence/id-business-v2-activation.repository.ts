@@ -12,6 +12,7 @@ const ACTIVATION_INCLUDE = {
       orderNo: true,
       status: true,
       websiteAccountMasked: true,
+      websiteAccountEncrypted: true,
       receivedAmount: true,
       profitAmount: true,
       displaySnapshot: true
@@ -21,6 +22,7 @@ const ACTIVATION_INCLUDE = {
   account: {
     select: {
       id: true,
+      appleIdEncrypted: true,
       appleIdMasked: true,
       countryOption: { select: { id: true, code: true, name: true } }
     }
@@ -31,6 +33,12 @@ const ACTIVATION_INCLUDE = {
       code: true,
       name: true,
       parent: { select: { id: true, name: true } }
+    }
+  },
+  renewedBy: {
+    select: {
+      id: true,
+      serviceOptionId: true
     }
   },
   createdBy: {
@@ -63,7 +71,14 @@ export class IdBusinessV2ActivationRepository {
       this.prisma.idBusinessV2Activation.count({ where }),
       this.prisma.idBusinessV2Activation.findFirst({
         where: {
-          AND: [where, { status: 'active', dueAt: { gt: criteria.evaluatedAt } }]
+          AND: [
+            where,
+            {
+              renewedBy: { is: null },
+              status: 'active',
+              dueAt: { gt: criteria.evaluatedAt }
+            }
+          ]
         },
         select: { dueAt: true },
         orderBy: { dueAt: 'asc' }
@@ -138,13 +153,19 @@ export class IdBusinessV2ActivationRepository {
     if (filter.kind === 'stored_status') return { status: filter.status };
     if (filter.kind === 'expired') {
       return {
+        renewedBy: { is: null },
         OR: [{ status: 'expired' }, { status: 'active', dueAt: { lte: filter.evaluatedAt } }]
       };
     }
     if (filter.kind === 'active') {
-      return { status: 'active', OR: [{ dueAt: null }, { dueAt: { gt: filter.after } }] };
+      return {
+        renewedBy: { is: null },
+        status: 'active',
+        OR: [{ dueAt: null }, { dueAt: { gt: filter.after } }]
+      };
     }
     return {
+      renewedBy: { is: null },
       status: 'active',
       dueAt: { gt: filter.after, lte: filter.atOrBefore }
     };

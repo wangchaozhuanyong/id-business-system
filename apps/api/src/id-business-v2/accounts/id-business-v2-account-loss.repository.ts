@@ -10,6 +10,11 @@ const LOSS_USER_SELECT = {
 } satisfies Prisma.UserSelect;
 
 const REPORTED_BY_INCLUDE = {
+  account: {
+    select: {
+      appleIdEncrypted: true
+    }
+  },
   reportedBy: {
     select: LOSS_USER_SELECT
   },
@@ -62,6 +67,7 @@ export type IdBusinessV2AccountLossRecord = Omit<
 
 export interface AccountLossListPersistenceInput {
   keyword: string | null;
+  appleIdSearchTokens: string[];
   countryOptionId: string | null;
   saleState: 'available' | 'sold' | null;
   status: 'active' | 'reversed' | null;
@@ -92,6 +98,15 @@ export class IdBusinessV2AccountLossRepository {
       OR: input.keyword
         ? [
             { appleIdMasked: { contains: input.keyword, mode: 'insensitive' } },
+            {
+              account: {
+                is: {
+                  appleIdSearchTokens: input.appleIdSearchTokens.length
+                    ? { hasEvery: input.appleIdSearchTokens }
+                    : undefined
+                }
+              }
+            },
             { soldOrderNo: { contains: input.keyword, mode: 'insensitive' } },
             { reason: { contains: input.keyword, mode: 'insensitive' } },
             { reportedByName: { contains: input.keyword, mode: 'insensitive' } },

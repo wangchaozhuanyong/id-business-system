@@ -139,8 +139,8 @@ export function useTopupWorkbenchPage() {
   const reversalConfirmationMessage = computed(() => {
     if (!pendingReversal.value || !reversalAccount.value) return '';
     const actionLabel = pendingReversal.value.action === 'redeemed' ? '标记为被赎回' : '撤回';
-    return `确认将礼品卡 ${pendingReversal.value.giftCard.codeMasked} ${actionLabel}，并从 ${
-      reversalAccount.value.appleIdMasked
+    return `确认将礼品卡 ${pendingReversal.value.giftCard.code || '该卡'} ${actionLabel}，并从 ${
+      reversalAccount.value.displayAppleId || '该 ID'
     } 扣减余额 ${formatDecimal(
       pendingReversal.value.giftCard.faceValue
     )}。人民币成本将按执行时的移动平均成本结转。`;
@@ -351,7 +351,7 @@ export function useTopupWorkbenchPage() {
       query: {
         tab,
         accountId: account.id,
-        accountLabel: account.appleIdMasked
+        accountLabel: account.displayAppleId || '不显示'
       }
     });
   }

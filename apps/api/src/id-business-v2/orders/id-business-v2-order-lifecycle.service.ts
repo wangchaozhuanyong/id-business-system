@@ -300,6 +300,7 @@ export class IdBusinessV2OrderLifecycleService {
           websiteAccountEncrypted: website.encrypted,
           websiteAccountHash: website.hash,
           websiteAccountMasked: website.masked,
+          websiteAccountSearchTokens: website.searchTokens,
           receivedAmount: receivedAmount.toString(),
           receivedOriginalAmount: receivedOriginalAmount.toString(),
           platformFeeAmount: platformFeeAmount.toString(),

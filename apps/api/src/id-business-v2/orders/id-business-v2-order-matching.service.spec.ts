@@ -43,6 +43,7 @@ function makeCountry() {
 function makeAccount() {
   return {
     id: accountId,
+    appleIdEncrypted: 'encrypted-apple-id',
     appleIdMasked: 'us***@example.com',
     currentBalance: decimal('25'),
     balanceCostAmount: decimal('150'),
@@ -79,12 +80,17 @@ describe('IdBusinessV2OrderMatchingService', () => {
     calculateConsumption: vi.fn()
   };
   const fieldEncryptionService = {
-    hash: vi.fn()
+    hash: vi.fn(),
+    decrypt: vi.fn()
+  };
+  const sensitiveAccessService = {
+    resolveDisplayMode: vi.fn()
   };
   const service = new IdBusinessV2OrderMatchingService(
     new IdBusinessV2OrdersRepository(prisma as never),
     balanceCalculator as never,
-    fieldEncryptionService as never
+    fieldEncryptionService as never,
+    sensitiveAccessService as never
   );
 
   beforeEach(() => {
@@ -106,6 +112,8 @@ describe('IdBusinessV2OrderMatchingService', () => {
       costAmount: decimal('120')
     });
     fieldEncryptionService.hash.mockReturnValue('apple-id-search-hash');
+    fieldEncryptionService.decrypt.mockReturnValue('user@example.com');
+    sensitiveAccessService.resolveDisplayMode.mockResolvedValue('masked');
   });
 
   it('derives the country from the active service tree and returns only real eligible candidates', async () => {
@@ -156,6 +164,30 @@ describe('IdBusinessV2OrderMatchingService', () => {
         }
       ]
     });
+  });
+
+  it('returns the policy-selected account value without exposing ciphertext', async () => {
+    sensitiveAccessService.resolveDisplayMode.mockResolvedValue('full');
+
+    const result = await service.findCandidates(
+      {
+        serviceOptionId,
+        balanceAmount: '20'
+      },
+      {
+        id: '77777777-7777-4777-8777-777777777777',
+        username: 'admin',
+        displayName: '管理员',
+        roles: ['admin'],
+        permissions: []
+      }
+    );
+
+    expect(result.items[0]).toMatchObject({
+      appleIdMasked: 'us***@example.com',
+      displayAppleId: 'user@example.com'
+    });
+    expect(JSON.stringify(result)).not.toContain('encrypted-apple-id');
   });
 
   it('maps a Cloudflare runtime decimal before applying Amount4 subtraction', async () => {
@@ -221,6 +253,11 @@ describe('IdBusinessV2OrderMatchingService', () => {
           },
           {
             appleIdHash: 'apple-id-search-hash'
+          },
+          {
+            appleIdSearchTokens: {
+              hasEvery: ['apple-id-search-hash']
+            }
           },
           {
             soldByOrder: {

@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="page.revealDialogVisible"
-    :title="page.revealField === 'phone' ? '查看完整手机号' : '查看完整 WhatsApp'"
+    :title="`查看完整${page.revealFieldLabel}`"
     width="min(440px, 92vw)"
   >
     <el-alert
@@ -48,10 +48,7 @@
           重试
         </AppButton>
       </div>
-      <el-form-item
-        v-if="page.revealForm.value"
-        :label="page.revealField === 'phone' ? '完整手机号' : '完整 WhatsApp'"
-      >
+      <el-form-item v-if="page.revealForm.value" :label="`完整${page.revealFieldLabel}`">
         <el-input v-model="page.revealForm.value" readonly />
       </el-form-item>
     </el-form>

@@ -70,6 +70,10 @@ export interface CustomerListPersistenceInput extends PaginationQuery {
   keyword: string | null;
   contactKeyword: string | null;
   contactHash: string | null;
+  phoneSearchTokens: string[];
+  wechatSearchTokens: string[];
+  qqSearchTokens: string[];
+  whatsappSearchTokens: string[];
   sourceOptionId: string | null;
   tagOptionId?: string;
   serviceOptionId?: string;
@@ -84,12 +88,22 @@ export interface CreateCustomerPersistenceInput {
   phoneHash: string | null;
   phoneMasked: string | null;
   phoneTail: string | null;
+  phoneSearchTokens: string[];
   wechat: string | null;
+  wechatEncrypted: string | null;
+  wechatHash: string | null;
+  wechatMasked: string | null;
+  wechatSearchTokens: string[];
   qq: string | null;
+  qqEncrypted: string | null;
+  qqHash: string | null;
+  qqMasked: string | null;
+  qqSearchTokens: string[];
   whatsappEncrypted: string | null;
   whatsappHash: string | null;
   whatsappMasked: string | null;
   whatsappTail: string | null;
+  whatsappSearchTokens: string[];
   sourceOptionId: string | null;
   recordStatus: IdBusinessV2RecordStatus;
   remark: string | null;
@@ -103,12 +117,22 @@ export interface UpdateCustomerPersistenceInput {
   phoneHash?: string | null;
   phoneMasked?: string | null;
   phoneTail?: string | null;
+  phoneSearchTokens?: string[];
   wechat?: string | null;
+  wechatEncrypted?: string | null;
+  wechatHash?: string | null;
+  wechatMasked?: string | null;
+  wechatSearchTokens?: string[];
   qq?: string | null;
+  qqEncrypted?: string | null;
+  qqHash?: string | null;
+  qqMasked?: string | null;
+  qqSearchTokens?: string[];
   whatsappEncrypted?: string | null;
   whatsappHash?: string | null;
   whatsappMasked?: string | null;
   whatsappTail?: string | null;
+  whatsappSearchTokens?: string[];
   sourceOptionId?: string | null;
   recordStatus?: IdBusinessV2RecordStatus;
   remark?: string | null;
@@ -128,7 +152,7 @@ const CUSTOMER_SORT_FIELDS: Record<
   keyof Prisma.IdBusinessV2CustomerOrderByWithRelationInput
 > = {
   name: 'name',
-  wechat: 'wechat',
+  wechat: 'wechatMasked',
   recordStatus: 'recordStatus',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
@@ -152,7 +176,19 @@ export class IdBusinessV2CustomerRepository {
         ? [
             { name: { contains: input.keyword, mode: 'insensitive' } },
             { wechat: { contains: input.keyword, mode: 'insensitive' } },
+            { wechatHash: input.contactHash ?? undefined },
+            {
+              wechatSearchTokens: input.wechatSearchTokens.length
+                ? { hasEvery: input.wechatSearchTokens }
+                : undefined
+            },
             { qq: { contains: input.keyword, mode: 'insensitive' } },
+            { qqHash: input.contactHash ?? undefined },
+            {
+              qqSearchTokens: input.qqSearchTokens.length
+                ? { hasEvery: input.qqSearchTokens }
+                : undefined
+            },
             {
               phoneTail: {
                 contains: input.contactKeyword?.slice(-8) ?? input.keyword,
@@ -161,12 +197,22 @@ export class IdBusinessV2CustomerRepository {
             },
             { phoneHash: input.contactHash ?? undefined },
             {
+              phoneSearchTokens: input.phoneSearchTokens.length
+                ? { hasEvery: input.phoneSearchTokens }
+                : undefined
+            },
+            {
               whatsappTail: {
                 contains: input.contactKeyword?.slice(-8) ?? input.keyword,
                 mode: 'insensitive'
               }
             },
-            { whatsappHash: input.contactHash ?? undefined }
+            { whatsappHash: input.contactHash ?? undefined },
+            {
+              whatsappSearchTokens: input.whatsappSearchTokens.length
+                ? { hasEvery: input.whatsappSearchTokens }
+                : undefined
+            }
           ]
         : undefined
     };
@@ -223,12 +269,22 @@ export class IdBusinessV2CustomerRepository {
         phoneHash: input.phoneHash,
         phoneMasked: input.phoneMasked,
         phoneTail: input.phoneTail,
+        phoneSearchTokens: input.phoneSearchTokens,
         wechat: input.wechat,
+        wechatEncrypted: input.wechatEncrypted,
+        wechatHash: input.wechatHash,
+        wechatMasked: input.wechatMasked,
+        wechatSearchTokens: input.wechatSearchTokens,
         qq: input.qq,
+        qqEncrypted: input.qqEncrypted,
+        qqHash: input.qqHash,
+        qqMasked: input.qqMasked,
+        qqSearchTokens: input.qqSearchTokens,
         whatsappEncrypted: input.whatsappEncrypted,
         whatsappHash: input.whatsappHash,
         whatsappMasked: input.whatsappMasked,
         whatsappTail: input.whatsappTail,
+        whatsappSearchTokens: input.whatsappSearchTokens,
         sourceOptionId: input.sourceOptionId,
         recordStatus: input.recordStatus,
         remark: input.remark,
@@ -251,12 +307,22 @@ export class IdBusinessV2CustomerRepository {
         phoneHash: input.phoneHash,
         phoneMasked: input.phoneMasked,
         phoneTail: input.phoneTail,
+        phoneSearchTokens: input.phoneSearchTokens,
         wechat: input.wechat,
+        wechatEncrypted: input.wechatEncrypted,
+        wechatHash: input.wechatHash,
+        wechatMasked: input.wechatMasked,
+        wechatSearchTokens: input.wechatSearchTokens,
         qq: input.qq,
+        qqEncrypted: input.qqEncrypted,
+        qqHash: input.qqHash,
+        qqMasked: input.qqMasked,
+        qqSearchTokens: input.qqSearchTokens,
         whatsappEncrypted: input.whatsappEncrypted,
         whatsappHash: input.whatsappHash,
         whatsappMasked: input.whatsappMasked,
         whatsappTail: input.whatsappTail,
+        whatsappSearchTokens: input.whatsappSearchTokens,
         sourceOptionId: input.sourceOptionId,
         recordStatus: input.recordStatus,
         remark: input.remark,
@@ -294,7 +360,7 @@ export class IdBusinessV2CustomerRepository {
     tx: V2CommandTransaction,
     input: {
       userId?: string;
-      fieldName: 'phone' | 'whatsapp';
+      fieldName: 'phone' | 'wechat' | 'qq' | 'whatsapp';
       objectId: string;
       accessReason: string;
       approved: boolean;

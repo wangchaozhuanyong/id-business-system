@@ -238,7 +238,7 @@
 
   <el-dialog
     v-model="page.revealDialogVisible"
-    :title="`查看敏感资料 · ${page.revealTarget?.appleIdMasked ?? ''}`"
+    :title="`查看敏感资料 · ${page.revealTarget?.displayAppleId ?? ''}`"
     width="min(480px, 92vw)"
     destroy-on-close
   >

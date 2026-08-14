@@ -13,7 +13,7 @@
       v-if="page.saleRecoveryTarget"
       heading-id="account-sale-recovery-summary"
       eyebrow="售出误操作纠正"
-      :title="page.saleRecoveryTarget.appleIdMasked"
+      :title="page.saleRecoveryTarget.displayAppleId ?? ''"
       :description="`来源订单 ${page.saleRecoveryTarget.soldByOrder?.orderNo || '—'}`"
       :facts="
         page.saleRecoveryPreview

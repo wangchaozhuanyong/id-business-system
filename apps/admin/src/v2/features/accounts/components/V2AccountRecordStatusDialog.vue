@@ -16,7 +16,7 @@
       v-if="page.recordStatusTarget"
       heading-id="account-status-summary"
       :eyebrow="page.recordStatusDialogMode === 'view' ? '停用记录' : '状态变更对象'"
-      :title="page.recordStatusTarget.appleIdMasked"
+      :title="page.recordStatusTarget.displayAppleId ?? ''"
       :description="
         page.recordStatusDialogMode === 'view'
           ? page.recordStatusTarget.disabledReason || '历史记录未填写原因'

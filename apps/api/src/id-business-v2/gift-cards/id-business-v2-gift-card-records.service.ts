@@ -9,7 +9,12 @@ import { randomUUID } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination } from '../../common/pagination';
 import { IdBusinessV2OptionsService } from '../options/public-api';
-import { V2CommandTransactionManager, buildIdBusinessV2DateRange } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
+import {
+  V2CommandTransactionManager,
+  buildIdBusinessV2BlindQueryTokens,
+  buildIdBusinessV2DateRange
+} from '../runtime/public-api';
 import type { UpdateIdBusinessV2GiftCardMetadataDto } from './dto/update-id-business-v2-gift-card-metadata.dto';
 import {
   type BalanceLedgerRecord,
@@ -55,10 +60,11 @@ export class IdBusinessV2GiftCardRecordsService {
     private readonly repository: IdBusinessV2GiftCardsRepository,
     private readonly optionsService: IdBusinessV2OptionsService,
     private readonly fieldEncryptionService: FieldEncryptionService,
-    private readonly transactionManager: V2CommandTransactionManager
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async listGiftCards(query: ListIdBusinessV2GiftCardRecordsQuery) {
+  async listGiftCards(query: ListIdBusinessV2GiftCardRecordsQuery, operator?: AuthenticatedUser) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const accountId = this.normalizeOptionalUuid(query.accountId, '目标 ID');
@@ -74,6 +80,9 @@ export class IdBusinessV2GiftCardRecordsService {
       status,
       creditedAt: this.parseDateRange(query.dateFrom, query.dateTo),
       keyword,
+      codeSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'gift-card-code', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
       sortField: this.resolveSortField(query, GIFT_CARD_SORT_FIELDS, 'creditedAt'),
       sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
       skip: pagination.skip,
@@ -81,14 +90,14 @@ export class IdBusinessV2GiftCardRecordsService {
     });
 
     return {
-      items: items.map((item) => this.toGiftCardResponse(item)),
+      items: await this.presentGiftCards(items, operator),
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
     };
   }
 
-  async listBalanceLedger(query: ListIdBusinessV2BalanceLedgerQuery) {
+  async listBalanceLedger(query: ListIdBusinessV2BalanceLedgerQuery, operator?: AuthenticatedUser) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const accountId = this.normalizeOptionalUuid(query.accountId, '目标 ID');
@@ -102,6 +111,9 @@ export class IdBusinessV2GiftCardRecordsService {
       entryType,
       createdAt: this.parseDateRange(query.dateFrom, query.dateTo),
       keyword,
+      codeSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'gift-card-code', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
       sortField: this.resolveSortField(query, LEDGER_SORT_FIELDS, 'createdAt'),
       sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
       skip: pagination.skip,
@@ -109,7 +121,7 @@ export class IdBusinessV2GiftCardRecordsService {
     });
 
     return {
-      items: items.map((item) => this.toLedgerResponse(item)),
+      items: await this.presentLedger(items, operator),
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
@@ -170,7 +182,7 @@ export class IdBusinessV2GiftCardRecordsService {
           remark: `V2 礼品卡非账务信息修改：${existing.codeMasked}`
         });
 
-        return this.toGiftCardResponse(updated);
+        return (await this.presentGiftCards([updated], operator))[0];
       },
       {
         requestId: randomUUID(),
@@ -180,7 +192,60 @@ export class IdBusinessV2GiftCardRecordsService {
     );
   }
 
-  private toGiftCardResponse(item: GiftCardRecord) {
+  private async presentationModes(operator?: AuthenticatedUser) {
+    if (!operator) return null;
+    return this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['account.apple_id', 'gift_card.code'],
+      'business_records'
+    );
+  }
+
+  private async presentGiftCards(items: GiftCardRecord[], operator?: AuthenticatedUser) {
+    const modes = await this.presentationModes(operator);
+    return items.map((item) =>
+      this.toGiftCardResponse(item, {
+        appleId:
+          modes?.['account.apple_id'] === 'hidden'
+            ? null
+            : modes?.['account.apple_id'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked,
+        code:
+          modes?.['gift_card.code'] === 'hidden'
+            ? null
+            : modes?.['gift_card.code'] === 'full'
+              ? this.decryptGiftCardCode(item.codeEncrypted)
+              : item.codeMasked
+      })
+    );
+  }
+
+  private async presentLedger(items: BalanceLedgerRecord[], operator?: AuthenticatedUser) {
+    const modes = await this.presentationModes(operator);
+    return items.map((item) =>
+      this.toLedgerResponse(item, {
+        appleId:
+          modes?.['account.apple_id'] === 'hidden'
+            ? null
+            : modes?.['account.apple_id'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked,
+        code: item.giftCard
+          ? modes?.['gift_card.code'] === 'hidden'
+            ? null
+            : modes?.['gift_card.code'] === 'full'
+              ? this.decryptGiftCardCode(item.giftCard.codeEncrypted)
+              : item.giftCard.codeMasked
+          : null
+      })
+    );
+  }
+
+  private toGiftCardResponse(
+    item: GiftCardRecord,
+    presentation?: { appleId: string | null; code: string | null }
+  ) {
     const creditedLedger = item.ledgerEntries[0] ?? null;
     const hasSupplierFunding = Boolean(item.supplierFundEntries[0]);
     return {
@@ -190,7 +255,7 @@ export class IdBusinessV2GiftCardRecordsService {
         ...item.cardNameOption,
         name: item.cardNameSnapshot
       },
-      code: this.decryptGiftCardCode(item.codeEncrypted),
+      code: presentation ? presentation.code : item.codeMasked,
       codeMasked: item.codeMasked,
       codeTail: item.codeTail,
       faceValue: item.faceValue.toString(),
@@ -231,6 +296,7 @@ export class IdBusinessV2GiftCardRecordsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
+        displayAppleId: presentation ? presentation.appleId : item.account.appleIdMasked,
         lossStatus: item.account.lossReportedAt ? ('reported' as const) : ('active' as const),
         lossReportedAt: item.account.lossReportedAt,
         country: item.account.countryOption
@@ -267,7 +333,10 @@ export class IdBusinessV2GiftCardRecordsService {
     };
   }
 
-  private toLedgerResponse(item: BalanceLedgerRecord) {
+  private toLedgerResponse(
+    item: BalanceLedgerRecord,
+    presentation?: { appleId: string | null; code: string | null }
+  ) {
     const { balanceAmount, costAmount, balanceBefore, balanceAfter, costBefore, costAfter } = item;
     return {
       id: item.id,
@@ -287,12 +356,13 @@ export class IdBusinessV2GiftCardRecordsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
+        displayAppleId: presentation ? presentation.appleId : item.account.appleIdMasked,
         country: item.account.countryOption
       },
       giftCard: item.giftCard
         ? {
             id: item.giftCard.id,
-            code: this.decryptGiftCardCode(item.giftCard.codeEncrypted),
+            code: presentation ? presentation.code : item.giftCard.codeMasked,
             codeMasked: item.giftCard.codeMasked,
             codeTail: item.giftCard.codeTail,
             faceValue: item.giftCard.faceValue.toString(),

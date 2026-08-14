@@ -126,6 +126,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
       WHERE a."status"::text = 'active' AND a."due_at" < ${now}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "id_business_v2_activations" replacement
+          WHERE replacement."renewed_from_activation_id" = a."id"
+        )
 
       UNION ALL
 
@@ -138,6 +143,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
       WHERE a."status"::text = 'active' AND a."due_at" >= ${now} AND a."due_at" < ${warningEnd}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "id_business_v2_activations" replacement
+          WHERE replacement."renewed_from_activation_id" = a."id"
+        )
 
       UNION ALL
 

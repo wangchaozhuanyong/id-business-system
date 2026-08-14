@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { RequirePermissions } from '../../auth/auth.decorators';
+import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2OptionsService } from '../options/public-api';
 import { IdBusinessV2TopupSupplierFundsQueryService } from '../topup-supplier-funds/public-api';
 import { IdBusinessV2TopupWorkbenchService } from './id-business-v2-topup-workbench.service';
@@ -25,21 +26,25 @@ export class IdBusinessV2BalancesController {
     @Query('balanceMax') balanceMax?: string,
     @Query('onlyNormal') onlyNormal?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.topupWorkbenchService.list({
-      page,
-      pageSize,
-      keyword,
-      accountSource,
-      countryOptionId,
-      balancePreset,
-      balanceMin,
-      balanceMax,
-      onlyNormal,
-      sortBy,
-      sortOrder
-    });
+    return this.topupWorkbenchService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        accountSource,
+        countryOptionId,
+        balancePreset,
+        balanceMin,
+        balanceMax,
+        onlyNormal,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('workbench/bootstrap')
@@ -55,22 +60,26 @@ export class IdBusinessV2BalancesController {
     @Query('balanceMax') balanceMax?: string,
     @Query('onlyNormal') onlyNormal?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
     const [list, optionGroups, suppliers] = await Promise.all([
-      this.topupWorkbenchService.list({
-        page,
-        pageSize,
-        keyword,
-        accountSource,
-        countryOptionId,
-        balancePreset,
-        balanceMin,
-        balanceMax,
-        onlyNormal,
-        sortBy,
-        sortOrder
-      }),
+      this.topupWorkbenchService.list(
+        {
+          page,
+          pageSize,
+          keyword,
+          accountSource,
+          countryOptionId,
+          balancePreset,
+          balanceMin,
+          balanceMax,
+          onlyNormal,
+          sortBy,
+          sortOrder
+        },
+        operator
+      ),
       this.optionsService.listSelectorGroups(['gift_card_name', 'country']),
       this.supplierFundsQueryService.listBalanceSelectors()
     ]);

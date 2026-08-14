@@ -158,7 +158,9 @@ describe('IdBusinessV2GiftCardReversalService', () => {
     supplierFundsService as never,
     financePostingService as never,
     new IdBusinessV2GiftCardsRepository(prisma as never),
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn() } as never
   );
 
   beforeEach(() => {

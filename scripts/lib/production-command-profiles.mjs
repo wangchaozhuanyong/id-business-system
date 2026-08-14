@@ -68,6 +68,13 @@ export const PRODUCTION_COMMANDS = Object.freeze({
     forwardedSecrets: [],
     allowExtraArgs: true
   },
+  'sensitive-search-backfill': {
+    command: 'npm',
+    args: ['run', 'backfill:v2-sensitive-search-indexes'],
+    requiredSecrets: ['V2_RUNTIME_DATABASE_URL', 'FIELD_ENCRYPTION_KEY', 'HASH_SECRET'],
+    databaseSecret: 'V2_RUNTIME_DATABASE_URL',
+    forwardedSecrets: ['FIELD_ENCRYPTION_KEY', 'HASH_SECRET']
+  },
   deploy: {
     command: 'npm',
     args: ['run', 'deploy:production:with-env'],

@@ -105,8 +105,8 @@ export function useRenewalsPage() {
     serviceOptionId: '',
     accountId: '',
     dueStatus: '' as V2RenewalDueStatus | '',
-    sortBy: 'dueAt' as NonNullable<V2RenewalWorkbenchQuery['sortBy']>,
-    sortOrder: 'asc' as 'asc' | 'desc'
+    sortBy: 'openedAt' as NonNullable<V2RenewalWorkbenchQuery['sortBy']>,
+    sortOrder: 'desc' as 'asc' | 'desc'
   });
 
   function getRenewalsListQuery(): V2RenewalWorkbenchQuery {
@@ -289,7 +289,7 @@ export function useRenewalsPage() {
     const renewal = selectedRenewal.value;
     const service = availableServices.value.find((item) => item.id === form.serviceOptionId);
     if (!renewal || !service || !form.openedAt || !form.dueAt) return '';
-    return `确认给客户“${renewal.customer.name}”的 ${renewal.account.appleIdMasked} 续费“${
+    return `确认给客户“${renewal.customer.name}”的 ${renewal.account.displayAppleId || '该 ID'} 续费“${
       service.name
     }”，立即扣减系统 ID 余额 ${form.balanceAmount}，余额将变为 ${
       balanceAfterPreview.value
@@ -382,10 +382,13 @@ export function useRenewalsPage() {
       'openedAt',
       'dueAt'
     ];
-    query.sortBy = supported.includes(sort.prop as NonNullable<V2RenewalWorkbenchQuery['sortBy']>)
+    const hasSupportedSort = supported.includes(
+      sort.prop as NonNullable<V2RenewalWorkbenchQuery['sortBy']>
+    );
+    query.sortBy = hasSupportedSort
       ? (sort.prop as NonNullable<V2RenewalWorkbenchQuery['sortBy']>)
-      : 'dueAt';
-    query.sortOrder = sort.order === 'descending' ? 'desc' : 'asc';
+      : 'openedAt';
+    query.sortOrder = hasSupportedSort && sort.order === 'ascending' ? 'asc' : 'desc';
     query.page = 1;
     loadCurrentWorkbench();
   }

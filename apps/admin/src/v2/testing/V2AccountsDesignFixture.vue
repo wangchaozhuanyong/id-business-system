@@ -219,9 +219,11 @@ function makeAccount(index: number, lifecycle: Exclude<V2AccountLifecycle, 'repo
   return {
     id: `${lifecycle}-${index + 1}`,
     appleIdMasked: accountNames[index % accountNames.length],
+    displayAppleId: accountNames[index % accountNames.length],
     hasPassword: index % 4 !== 3,
     hasPhone: index % 3 === 0,
     maskedPhone: index % 3 === 0 ? `138****${String(2300 + index).slice(-4)}` : null,
+    displayPhone: index % 3 === 0 ? `138****${String(2300 + index).slice(-4)}` : null,
     phoneTail: index % 3 === 0 ? String(2300 + index).slice(-4) : null,
     hasSecurityInfo: index % 2 === 0,
     countryOptionId: country.id,

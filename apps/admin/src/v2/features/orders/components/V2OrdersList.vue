@@ -79,7 +79,7 @@
         <V2TableColumn :definition="v2TableSchemas.orders.main.columns[6]" show-overflow-tooltip>
           <template #default="{ row }">
             <div>
-              <strong class="v2-table-cell">{{ row.account?.appleIdMasked || '—' }}</strong>
+              <strong class="v2-table-cell">{{ row.account?.displayAppleId || '—' }}</strong>
               <el-tag v-if="row.accountSource === 'customer_owned'" type="warning" effect="plain">
                 客户已购
               </el-tag>
@@ -113,7 +113,7 @@
           </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.orders.main.columns[9]" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+          <template #default="{ row }">{{ row.displayWebsiteAccount || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.orders.main.columns[10]"
@@ -303,7 +303,7 @@
             <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '使用 ID']">
               <dt>使用 ID</dt>
               <dd>
-                {{ item.account?.appleIdMasked || '—' }}
+                {{ item.account?.displayAppleId || '—' }}
                 <el-tag
                   v-if="item.accountSource === 'customer_owned'"
                   type="warning"
@@ -364,7 +364,7 @@
           </dl>
           <footer>
             <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '客户网站账号']">
-              {{ item.maskedWebsiteAccount || '未填写网站账号' }}
+              {{ item.displayWebsiteAccount || '未填写网站账号' }}
             </span>
             <div class="v2-order-row-actions">
               <AppButton size="small" variant="ghost" @click="page.openDetail(item)"

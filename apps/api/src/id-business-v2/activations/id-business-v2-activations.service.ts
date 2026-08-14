@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2ActivationStatus } from '@prisma/client';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { buildIdBusinessV2DateRange } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { ActivationRecord, ActivationSortField } from './activation.types';
 import {
   ID_BUSINESS_V2_DUE_STATUS_CODES,
@@ -46,10 +49,12 @@ const SORT_FIELDS: Record<string, ActivationSortField> = {
 export class IdBusinessV2ActivationsService {
   constructor(
     private readonly repository: IdBusinessV2ActivationRepository,
-    private readonly activationStatusService: IdBusinessV2ActivationStatusService
+    private readonly activationStatusService: IdBusinessV2ActivationStatusService,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async list(query: ListIdBusinessV2ActivationsQuery) {
+  async list(query: ListIdBusinessV2ActivationsQuery, operator?: AuthenticatedUser) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const now = new Date();
@@ -65,14 +70,14 @@ export class IdBusinessV2ActivationsService {
       openedAt: this.parseDateRange(query.openedFrom, query.openedTo, '开通日期'),
       dueAt: this.parseDateRange(query.dueFrom, query.dueTo, '到期日期'),
       sortField: this.buildSortField(query),
-      sortDirection: query.sortOrder === 'desc' ? 'desc' : 'asc',
+      sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
       skip: pagination.skip,
       take: pagination.take,
       evaluatedAt: now
     });
 
     return {
-      items: result.items.map((activation) => this.toResponse(activation, now)),
+      items: await this.presentActivations(result.items, now, operator),
       total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
@@ -81,17 +86,47 @@ export class IdBusinessV2ActivationsService {
     };
   }
 
-  async get(idValue: string) {
+  async get(idValue: string, operator?: AuthenticatedUser) {
     const id = this.normalizeRequiredUuid(idValue, '开通记录');
     const activation = await this.repository.findById(id);
     if (!activation) {
       throw new NotFoundException('开通记录不存在');
     }
-    return this.toResponse(activation, new Date());
+    const now = new Date();
+    return (await this.presentActivations([activation], now, operator))[0];
+  }
+
+  private async presentActivations(
+    activations: ActivationRecord[],
+    evaluatedAt: Date,
+    operator?: AuthenticatedUser
+  ) {
+    if (!operator) return activations.map((item) => this.toResponse(item, evaluatedAt));
+    const modes = await this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['account.apple_id', 'order.website_account'],
+      'business_records'
+    );
+    return activations.map((item) =>
+      this.toResponse(item, evaluatedAt, {
+        appleId:
+          modes['account.apple_id'] === 'hidden'
+            ? null
+            : modes['account.apple_id'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked,
+        websiteAccount:
+          modes['order.website_account'] === 'hidden'
+            ? null
+            : modes['order.website_account'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.order.websiteAccountEncrypted)
+              : item.order.websiteAccountMasked
+      })
+    );
   }
 
   private buildSortField(query: ListIdBusinessV2ActivationsQuery): ActivationSortField {
-    return SORT_FIELDS[query.sortBy ?? 'dueAt'] ?? 'dueAt';
+    return SORT_FIELDS[query.sortBy ?? 'openedAt'] ?? 'openedAt';
   }
 
   private parseDateRange(
@@ -153,10 +188,16 @@ export class IdBusinessV2ActivationsService {
     return String(value).trim() || null;
   }
 
-  private toResponse(activation: ActivationRecord, evaluatedAt: Date) {
-    const status = this.activationStatusService.resolve(
+  private toResponse(
+    activation: ActivationRecord,
+    evaluatedAt: Date,
+    presentation?: { appleId: string | null; websiteAccount: string | null }
+  ) {
+    const status = this.activationStatusService.resolveDisplay(
       activation.status,
       activation.dueAt,
+      activation.serviceOption.id,
+      activation.renewedBy?.serviceOptionId ?? null,
       evaluatedAt
     );
     return {
@@ -174,9 +215,13 @@ export class IdBusinessV2ActivationsService {
       account: {
         id: activation.account.id,
         appleIdMasked: activation.account.appleIdMasked,
+        displayAppleId: presentation ? presentation.appleId : activation.account.appleIdMasked,
         country: activation.account.countryOption
       },
       maskedWebsiteAccount: activation.order.websiteAccountMasked,
+      displayWebsiteAccount: presentation
+        ? presentation.websiteAccount
+        : activation.order.websiteAccountMasked,
       openedAt: activation.openedAt,
       dueAt: activation.dueAt,
       storedStatus: activation.status,

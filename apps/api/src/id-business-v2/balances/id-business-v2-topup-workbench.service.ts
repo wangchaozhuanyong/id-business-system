@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { V2_DECIMAL_PLACES, v2UnsignedDecimalPattern } from '@apple-business/shared';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { Amount4 } from '../runtime/public-api';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { Amount4, buildIdBusinessV2BlindQueryTokens } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import { IdBusinessV2BalanceCalculatorService } from './id-business-v2-balance-calculator.service';
 import {
   IdBusinessV2BalanceQueryRepository,
@@ -38,10 +41,12 @@ const BALANCE_PATTERN = v2UnsignedDecimalPattern(V2_DECIMAL_PLACES);
 export class IdBusinessV2TopupWorkbenchService {
   constructor(
     private readonly queryRepository: IdBusinessV2BalanceQueryRepository,
-    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService
+    private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async list(query: ListIdBusinessV2TopupWorkbenchQuery) {
+  async list(query: ListIdBusinessV2TopupWorkbenchQuery, operator?: AuthenticatedUser) {
     const evaluatedAt = new Date();
     const pagination = getPagination(query);
     const balancePreset = this.parseBalancePreset(query.balancePreset);
@@ -55,6 +60,9 @@ export class IdBusinessV2TopupWorkbenchService {
     const result = await this.queryRepository.listTopupWorkbench({
       countryOptionId,
       keyword,
+      appleIdSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'apple-id', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
       accountSource,
       balanceRange,
       onlyNormal,
@@ -64,8 +72,15 @@ export class IdBusinessV2TopupWorkbenchService {
       take: pagination.take
     });
 
+    const displayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'account.apple_id',
+          'topup_workbench'
+        )
+      : 'masked';
     return {
-      items: result.items.map((account) => this.toResponse(account, evaluatedAt)),
+      items: result.items.map((account) => this.toResponse(account, evaluatedAt, displayMode)),
       total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
@@ -162,7 +177,11 @@ export class IdBusinessV2TopupWorkbenchService {
     return String(value).trim() || null;
   }
 
-  private toResponse(account: WorkbenchAccountRow, evaluatedAt: Date) {
+  private toResponse(
+    account: WorkbenchAccountRow,
+    evaluatedAt: Date,
+    displayMode: 'hidden' | 'masked' | 'reveal_direct' | 'reveal_approval' | 'full'
+  ) {
     const historicalServices = this.uniqueServices(account.activations);
     const currentServices = this.uniqueServices(
       account.activations.filter(
@@ -175,6 +194,12 @@ export class IdBusinessV2TopupWorkbenchService {
     return {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
+      displayAppleId:
+        displayMode === 'hidden'
+          ? null
+          : displayMode === 'full'
+            ? this.fieldEncryptionService.decrypt(account.appleIdEncrypted)
+            : account.appleIdMasked,
       country: account.countryOption,
       currentBalance: account.currentBalance.toString(),
       balanceCostAmount: account.balanceCostAmount.toString(),

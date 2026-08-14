@@ -35,21 +35,25 @@ export class IdBusinessV2AccountsController {
     @Query('saleState') saleState?: string,
     @Query('lifecycle') lifecycle?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.accountsService.list({
-      page,
-      pageSize,
-      keyword,
-      countryOptionId,
-      statusOptionId,
-      supplierOptionId,
-      recordStatus,
-      saleState,
-      lifecycle,
-      sortBy,
-      sortOrder
-    });
+    return this.accountsService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        countryOptionId,
+        statusOptionId,
+        supplierOptionId,
+        recordStatus,
+        saleState,
+        lifecycle,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('bootstrap')
@@ -65,22 +69,26 @@ export class IdBusinessV2AccountsController {
     @Query('saleState') saleState?: string,
     @Query('lifecycle') lifecycle?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
     const [list, optionGroups] = await Promise.all([
-      this.accountsService.list({
-        page,
-        pageSize,
-        keyword,
-        countryOptionId,
-        statusOptionId,
-        supplierOptionId,
-        recordStatus,
-        saleState,
-        lifecycle,
-        sortBy,
-        sortOrder
-      }),
+      this.accountsService.list(
+        {
+          page,
+          pageSize,
+          keyword,
+          countryOptionId,
+          statusOptionId,
+          supplierOptionId,
+          recordStatus,
+          saleState,
+          lifecycle,
+          sortBy,
+          sortOrder
+        },
+        operator
+      ),
       this.optionsService.listSelectorGroups(['country', 'id_status', 'id_supplier'])
     ]);
     return {
@@ -134,8 +142,8 @@ export class IdBusinessV2AccountsController {
 
   @Get(':id')
   @RequirePermissions('apple.account.view')
-  get(@Param('id') id: string) {
-    return this.accountsService.get(id);
+  get(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.accountsService.get(id, operator);
   }
 
   @Post()

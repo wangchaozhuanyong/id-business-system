@@ -17,7 +17,7 @@
           <div>
             <span>续费对象</span>
             <h3 id="renewal-target-heading">{{ renewal.customer.name }}</h3>
-            <p>{{ renewal.account.appleIdMasked }}</p>
+            <p>{{ renewal.account.displayAppleId || '—' }}</p>
           </div>
           <div class="v2-renewal-open__balance">
             <span>当前系统余额</span>
@@ -32,7 +32,7 @@
           </div>
           <div>
             <dt>客户网站账号</dt>
-            <dd>{{ renewal.maskedWebsiteAccount || '未填写' }}</dd>
+            <dd>{{ renewal.displayWebsiteAccount || '未填写' }}</dd>
           </div>
           <div>
             <dt>客户编号</dt>

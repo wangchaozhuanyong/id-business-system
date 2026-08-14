@@ -89,16 +89,19 @@ export function useOrdersPage() {
     sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
     sortOrder: 'desc' as 'asc' | 'desc'
   });
-  const hasActiveFilters = computed(
+  const activeFilterCount = computed(
     () =>
-      Boolean(query.keyword.trim()) ||
-      Boolean(query.serviceOptionId) ||
-      Boolean(query.settlementPlatformOptionId) ||
-      Boolean(query.status) ||
-      Boolean(query.accountDisposition) ||
-      Boolean(query.accountSource) ||
-      Boolean(openedRange.value.length)
+      [
+        query.keyword.trim(),
+        query.serviceOptionId,
+        query.settlementPlatformOptionId,
+        query.status,
+        query.accountDisposition,
+        query.accountSource,
+        openedRange.value.length ? 'opened-range' : ''
+      ].filter(Boolean).length
   );
+  const hasActiveFilters = computed(() => activeFilterCount.value > 0);
 
   function getOrdersListQuery(): V2OrderListQuery {
     return {
@@ -176,6 +179,18 @@ export function useOrdersPage() {
   }
 
   function handleFilterChange() {
+    query.page = 1;
+    loadCurrentOrders();
+  }
+
+  function resetFilters() {
+    query.keyword = '';
+    query.serviceOptionId = '';
+    query.settlementPlatformOptionId = '';
+    query.status = '';
+    query.accountDisposition = '';
+    query.accountSource = '';
+    openedRange.value = [];
     query.page = 1;
     loadCurrentOrders();
   }
@@ -547,10 +562,12 @@ export function useOrdersPage() {
     canUpdateOrders,
     canDeleteOrders,
     hasActiveFilters,
+    activeFilterCount,
     query,
     loadOrders,
     handleSearch,
     handleFilterChange,
+    resetFilters,
     handlePageSizeChange,
     handlePageChange,
     openOrderEntry,

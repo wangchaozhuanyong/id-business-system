@@ -18,6 +18,7 @@ import {
   Rate8,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  buildIdBusinessV2BlindIndexTokens,
   toV2JsonDocument
 } from '../runtime/public-api';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
@@ -164,11 +165,17 @@ export async function createIdBusinessV2Account(
         appleIdEncrypted: fieldEncryptionService.encrypt(appleId)!,
         appleIdHash,
         appleIdMasked: maskAppleId(appleId),
+        appleIdSearchTokens: buildIdBusinessV2BlindIndexTokens(appleId, 'apple-id', (value) =>
+          fieldEncryptionService.hash(value)
+        ),
         passwordEncrypted: fieldEncryptionService.encrypt(normalizeNullableString(dto.password)),
         phoneEncrypted: fieldEncryptionService.encrypt(phone),
         phoneHash: fieldEncryptionService.hash(phone),
         phoneMasked: maskPhone(phone),
         phoneTail: phone ? phone.slice(-8) : null,
+        phoneSearchTokens: buildIdBusinessV2BlindIndexTokens(phone, 'account-phone', (value) =>
+          fieldEncryptionService.hash(value)
+        ),
         securityInfoEncrypted: fieldEncryptionService.encrypt(
           normalizeNullableString(dto.securityInfo)
         ),

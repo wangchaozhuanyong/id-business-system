@@ -32,13 +32,17 @@ export interface AccountLossResponseRow {
   reversedBy: { id: string; username: string; displayName: string } | null;
 }
 
-export function toAccountLossRecordResponse(loss: AccountLossResponseRow) {
+export function toAccountLossRecordResponse(
+  loss: AccountLossResponseRow,
+  displayAppleId: string | null = loss.appleIdMasked
+) {
   return {
     id: loss.id,
     accountId: loss.accountId,
     ledgerEntryId: loss.ledgerEntryId,
     status: loss.status,
     appleIdMasked: loss.appleIdMasked,
+    displayAppleId,
     countryOptionId: loss.countryOptionId,
     countryName: loss.countryName,
     currencyCode: loss.currencyCode,

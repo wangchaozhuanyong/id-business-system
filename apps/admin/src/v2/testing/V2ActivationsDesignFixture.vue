@@ -150,9 +150,12 @@ function makeActivation(index: number): V2Activation {
     account: {
       id: `account-${index + 1}`,
       appleIdMasked: `${String(85 + index).padStart(2, '0')}********@qq.com`,
+      displayAppleId: `${String(85 + index).padStart(2, '0')}********@qq.com`,
       country: { id: 'country-us', code: 'US', name: '美国' }
     },
     maskedWebsiteAccount:
+      index % 4 === 3 ? null : `user_${String(index + 1).padStart(2, '0')}***@mail.com`,
+    displayWebsiteAccount:
       index % 4 === 3 ? null : `user_${String(index + 1).padStart(2, '0')}***@mail.com`,
     openedAt: `2026-08-${day}T08:20:00.000Z`,
     dueAt: `2026-09-${day}T08:20:00.000Z`,
@@ -198,8 +201,8 @@ const page = reactive({
     pageSize: 10,
     keyword: '',
     dueStatus: '' as V2ActivationDueStatus | '',
-    sortBy: 'dueAt',
-    sortOrder: 'asc'
+    sortBy: 'openedAt',
+    sortOrder: 'desc'
   },
   loadActivations: () => {
     notice.value = '开通记录已刷新，到期状态已重新评估。';

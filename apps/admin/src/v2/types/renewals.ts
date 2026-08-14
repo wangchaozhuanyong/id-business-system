@@ -21,6 +21,7 @@ export interface V2RenewalWorkbenchItem {
   account: {
     id: string;
     appleIdMasked: string;
+    displayAppleId: string | null;
     currentBalance: string;
     balanceCostAmount: string;
     recordStatus: 'active' | 'disabled';
@@ -46,6 +47,7 @@ export interface V2RenewalWorkbenchItem {
     } | null;
   };
   maskedWebsiteAccount: string | null;
+  displayWebsiteAccount: string | null;
   openedAt: string;
   dueAt: string | null;
   status: {
@@ -103,6 +105,7 @@ export interface V2RenewalWarningSummary extends V2RenewalWarningSettings, V2Ren
     account: {
       id: string;
       appleIdMasked: string;
+      displayAppleId: string | null;
     };
     service: {
       id: string;
@@ -123,6 +126,7 @@ export interface V2RenewalFilterOptions {
   accounts: Array<{
     id: string;
     appleIdMasked: string;
+    displayAppleId: string | null;
   }>;
   services: Array<{
     id: string;

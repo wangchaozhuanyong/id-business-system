@@ -47,38 +47,45 @@ export class IdBusinessV2GiftCardsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
     const selectedTab = tab === 'ledger' ? 'ledger' : 'giftCards';
     const listPromise =
       selectedTab === 'ledger'
-        ? this.giftCardRecordsService.listBalanceLedger({
-            page,
-            pageSize,
-            keyword,
-            accountId,
-            countryOptionId,
-            supplierOptionId,
-            entryType,
-            dateFrom,
-            dateTo,
-            sortBy,
-            sortOrder
-          })
-        : this.giftCardRecordsService.listGiftCards({
-            page,
-            pageSize,
-            keyword,
-            accountId,
-            cardNameOptionId,
-            countryOptionId,
-            supplierOptionId,
-            status,
-            dateFrom,
-            dateTo,
-            sortBy,
-            sortOrder
-          });
+        ? this.giftCardRecordsService.listBalanceLedger(
+            {
+              page,
+              pageSize,
+              keyword,
+              accountId,
+              countryOptionId,
+              supplierOptionId,
+              entryType,
+              dateFrom,
+              dateTo,
+              sortBy,
+              sortOrder
+            },
+            operator
+          )
+        : this.giftCardRecordsService.listGiftCards(
+            {
+              page,
+              pageSize,
+              keyword,
+              accountId,
+              cardNameOptionId,
+              countryOptionId,
+              supplierOptionId,
+              status,
+              dateFrom,
+              dateTo,
+              sortBy,
+              sortOrder
+            },
+            operator
+          );
     const [list, optionGroups] = await Promise.all([
       listPromise,
       this.optionsService.listSelectorGroups(['gift_card_name', 'country', 'topup_supplier'])
@@ -109,22 +116,26 @@ export class IdBusinessV2GiftCardsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.giftCardRecordsService.listGiftCards({
-      page,
-      pageSize,
-      keyword,
-      accountId,
-      cardNameOptionId,
-      countryOptionId,
-      supplierOptionId,
-      status,
-      dateFrom,
-      dateTo,
-      sortBy,
-      sortOrder
-    });
+    return this.giftCardRecordsService.listGiftCards(
+      {
+        page,
+        pageSize,
+        keyword,
+        accountId,
+        cardNameOptionId,
+        countryOptionId,
+        supplierOptionId,
+        status,
+        dateFrom,
+        dateTo,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('balance-ledger')
@@ -140,21 +151,25 @@ export class IdBusinessV2GiftCardsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.giftCardRecordsService.listBalanceLedger({
-      page,
-      pageSize,
-      keyword,
-      accountId,
-      countryOptionId,
-      supplierOptionId,
-      entryType,
-      dateFrom,
-      dateTo,
-      sortBy,
-      sortOrder
-    });
+    return this.giftCardRecordsService.listBalanceLedger(
+      {
+        page,
+        pageSize,
+        keyword,
+        accountId,
+        countryOptionId,
+        supplierOptionId,
+        entryType,
+        dateFrom,
+        dateTo,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Patch(':giftCardId/metadata')
@@ -196,8 +211,11 @@ export class IdBusinessV2GiftCardsController {
 
   @Get(':accountId/reversible')
   @RequirePermissions('apple.balance.view')
-  listReversible(@Param('accountId') accountId: string) {
-    return this.giftCardReversalService.listReversible(accountId);
+  listReversible(
+    @Param('accountId') accountId: string,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.giftCardReversalService.listReversible(accountId, operator);
   }
 
   @Post(':accountId/credits')

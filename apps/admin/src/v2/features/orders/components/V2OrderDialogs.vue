@@ -27,7 +27,7 @@
           ]"
           :facts="[
             { label: '订单状态', value: page.statusMeta(page.detail.status).label },
-            { label: '使用 ID', value: page.detail.account?.appleIdMasked || '—' },
+            { label: '使用 ID', value: page.detail.account?.displayAppleId || '—' },
             {
               label: 'ID 处理',
               value: page.accountDispositionMeta(page.detail.accountDisposition, page.detail.status)
@@ -55,7 +55,7 @@
             </div>
             <div>
               <dt>使用 ID</dt>
-              <dd>{{ page.detail.account?.appleIdMasked || '—' }}</dd>
+              <dd>{{ page.detail.account?.displayAppleId || '—' }}</dd>
             </div>
             <div>
               <dt>ID 来源</dt>
@@ -85,7 +85,7 @@
             </div>
             <div>
               <dt>网站账号</dt>
-              <dd>{{ page.detail.maskedWebsiteAccount || '—' }}</dd>
+              <dd>{{ page.detail.displayWebsiteAccount || '—' }}</dd>
             </div>
             <div>
               <dt>结算平台</dt>

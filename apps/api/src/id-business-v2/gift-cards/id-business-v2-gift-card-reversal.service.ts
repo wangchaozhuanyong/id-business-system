@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2AccountLossesService } from '../accounts/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { IdBusinessV2FinancePostingService } from '../finance/public-api';
@@ -16,6 +17,7 @@ import {
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type {
   IdBusinessV2GiftCardReversalAction,
   ReverseIdBusinessV2GiftCardDto
@@ -42,10 +44,12 @@ export class IdBusinessV2GiftCardReversalService {
     private readonly supplierFundsService: IdBusinessV2TopupSupplierGiftCardFundsService,
     private readonly financePostingService: IdBusinessV2FinancePostingService,
     private readonly repository: IdBusinessV2GiftCardsRepository,
-    private readonly transactionManager: V2CommandTransactionManager
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async listReversible(accountIdValue: string) {
+  async listReversible(accountIdValue: string, operator?: AuthenticatedUser) {
     const accountId = this.normalizeUuid(accountIdValue, '目标 ID');
     const account = await this.repository.findReversibleAccount(accountId);
     if (!account) {
@@ -54,12 +58,25 @@ export class IdBusinessV2GiftCardReversalService {
 
     const giftCards = await this.repository.listReversibleGiftCards(accountId);
     const items = giftCards.slice(0, 100);
+    const displayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'gift_card.code',
+          'topup_workbench'
+        )
+      : 'masked';
 
     return {
       account,
       items: items.map((giftCard) => ({
         id: giftCard.id,
         cardName: giftCard.cardNameSnapshot,
+        code:
+          displayMode === 'hidden'
+            ? null
+            : displayMode === 'full'
+              ? this.fieldEncryptionService.decrypt(giftCard.codeEncrypted)
+              : giftCard.codeMasked,
         codeMasked: giftCard.codeMasked,
         codeTail: giftCard.codeTail,
         faceValue: giftCard.faceValue.toString(),

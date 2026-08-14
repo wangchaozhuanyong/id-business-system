@@ -65,7 +65,7 @@ export function useOrderEditChoices(
   const accountChoices = computed(() => {
     const items = candidates.value.map((candidate) => ({
       id: candidate.id,
-      label: `${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}${
+      label: `${candidate.displayAppleId || '不显示'} / 余额 ${formatDecimal(candidate.currentBalance)}${
         candidate.sourceSoldOrder
           ? ` / ${candidate.sourceSoldOrder.orderNo} / ${candidate.sourceSoldOrder.customer.name}`
           : ''
@@ -75,7 +75,7 @@ export function useOrderEditChoices(
     if (current && !items.some((item) => item.id === current.id)) {
       items.unshift({
         id: current.id,
-        label: `${current.appleIdMasked} / 当前使用`
+        label: `${current.displayAppleId || '不显示'} / 当前使用`
       });
     }
     return items;

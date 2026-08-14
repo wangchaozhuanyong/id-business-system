@@ -71,7 +71,7 @@
           <article v-for="item in page.overview.upcomingRenewals" :key="item.id">
             <div>
               <strong>{{ item.customer.name }} · {{ item.serviceOption.name }}</strong>
-              <span>{{ item.account.appleIdMasked }}</span>
+              <span>{{ item.account.displayAppleId || '不显示' }}</span>
             </div>
             <div>
               <span>到期时间</span>

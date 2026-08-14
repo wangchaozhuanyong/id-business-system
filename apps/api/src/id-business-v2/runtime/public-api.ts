@@ -18,6 +18,13 @@ export {
   normalizeV2DeletePreviewFingerprint
 } from './id-business-v2-delete-preview';
 export {
+  buildIdBusinessV2BlindIndexTokens,
+  buildIdBusinessV2BlindQueryTokens,
+  matchesIdBusinessV2BlindSearch,
+  normalizeIdBusinessV2BlindSearchText,
+  type IdBusinessV2BlindSearchNamespace
+} from './id-business-v2-blind-search';
+export {
   V2CommandTransactionManager,
   type V2CommandContext,
   type V2CommandRetryMode,

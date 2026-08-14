@@ -254,6 +254,37 @@ test('grants and continuously verifies production access to user table preferenc
   assert.match(verifier, /'id_business_v2_user_table_preferences'/);
 });
 
+test('keeps customer tag replacement compatible with the scoped runtime role', async () => {
+  const migration = await readFile(
+    new URL(
+      '../apps/api/prisma/migrations/20260814010000_customer_tag_runtime_delete_access/migration.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const provisioner = await readFile(
+    new URL('./provision-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const verifier = await readFile(
+    new URL('./verify-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const provisionedDeleteTables = provisioner.match(
+    /const RUNTIME_DELETE_TABLES = \[([\s\S]*?)\];/
+  )?.[1];
+  const verifiedDeleteTables = verifier.match(
+    /const expectedRuntimeDeleteTables = new Set\(\[([\s\S]*?)\]\);/
+  )?.[1];
+
+  assert.match(
+    migration,
+    /GRANT DELETE ON TABLE public\.id_business_v2_customer_tags\s+TO id_business_v2_runtime/
+  );
+  assert.match(provisionedDeleteTables ?? '', /'id_business_v2_customer_tags'/);
+  assert.match(verifiedDeleteTables ?? '', /'id_business_v2_customer_tags'/);
+});
+
 test('requires a clean main checkout synchronized with origin', () => {
   assert.equal(
     parseGitHubRepository('git@github.com:wangchaozhuanyong/id-business-system.git'),

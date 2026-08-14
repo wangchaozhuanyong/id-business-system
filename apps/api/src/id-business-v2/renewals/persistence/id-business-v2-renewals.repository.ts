@@ -20,12 +20,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const RENEWAL_INCLUDE = {
   order: {
-    select: { id: true, orderNo: true, websiteAccountMasked: true, displaySnapshot: true }
+    select: {
+      id: true,
+      orderNo: true,
+      websiteAccountEncrypted: true,
+      websiteAccountMasked: true,
+      displaySnapshot: true
+    }
   },
   customer: { select: { id: true, name: true } },
   account: {
     select: {
       id: true,
+      appleIdEncrypted: true,
       appleIdMasked: true,
       currentBalance: true,
       balanceCostAmount: true,
@@ -177,7 +184,7 @@ export class IdBusinessV2RenewalsRepository {
       status: true,
       order: { select: { displaySnapshot: true } },
       customer: { select: { id: true, name: true } },
-      account: { select: { id: true, appleIdMasked: true } },
+      account: { select: { id: true, appleIdEncrypted: true, appleIdMasked: true } },
       serviceOption: { select: { id: true, name: true } }
     } satisfies Prisma.IdBusinessV2ActivationSelect;
     const [upcoming, expired, nextTimedActivation] = await Promise.all([
@@ -261,7 +268,7 @@ export class IdBusinessV2RenewalsRepository {
           lossReportedAt: null,
           activations: { some: actionableWhere }
         },
-        select: { id: true, appleIdMasked: true },
+        select: { id: true, appleIdEncrypted: true, appleIdMasked: true },
         orderBy: [{ appleIdMasked: 'asc' }, { id: 'asc' }]
       }),
       this.prisma.idBusinessV2Option.findMany({
@@ -375,7 +382,8 @@ export class IdBusinessV2RenewalsRepository {
             deletedAt: true,
             websiteAccountEncrypted: true,
             websiteAccountHash: true,
-            websiteAccountMasked: true
+            websiteAccountMasked: true,
+            websiteAccountSearchTokens: true
           }
         },
         account: {
@@ -643,7 +651,7 @@ export class IdBusinessV2RenewalsRepository {
       openedAt: { openedAt: direction },
       dueAt: { dueAt: direction }
     };
-    return [supported[field] ?? supported.dueAt, { id: 'asc' }];
+    return [supported[field] ?? supported.openedAt, { id: 'desc' }];
   }
 }
 
@@ -692,7 +700,7 @@ function mapRenewalWarningSummaryRow<
       } | null;
     };
     customer: { id: string; name: string };
-    account: { id: string; appleIdMasked: string };
+    account: { id: string; appleIdEncrypted: string; appleIdMasked: string };
     serviceOption: { id: string; name: string };
   }
 >(row: TRow) {

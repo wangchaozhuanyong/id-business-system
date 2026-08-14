@@ -171,6 +171,7 @@ function makeRenewal(index: number): V2RenewalWorkbenchItem {
     account: {
       id: `account-${index + 1}`,
       appleIdMasked: `${String(85 + index).padStart(2, '0')}********@qq.com`,
+      displayAppleId: `${String(85 + index).padStart(2, '0')}********@qq.com`,
       currentBalance: `${324 - index * 4}.20`,
       balanceCostAmount: `${116 - index}.40`,
       recordStatus: 'active',
@@ -195,6 +196,8 @@ function makeRenewal(index: number): V2RenewalWorkbenchItem {
       parent: { id: 'category-ai', name: 'AI 工具' }
     },
     maskedWebsiteAccount:
+      index % 4 === 3 ? null : `user_${String(index + 1).padStart(2, '0')}***@mail.com`,
+    displayWebsiteAccount:
       index % 4 === 3 ? null : `user_${String(index + 1).padStart(2, '0')}***@mail.com`,
     openedAt: `2026-08-${day}T08:20:00.000Z`,
     dueAt: `2026-09-${day}T08:20:00.000Z`,
@@ -353,8 +356,8 @@ const page = reactive({
     serviceOptionId: '',
     accountId: '',
     dueStatus: '' as V2RenewalDueStatus | '',
-    sortBy: 'dueAt',
-    sortOrder: 'asc'
+    sortBy: 'openedAt',
+    sortOrder: 'desc'
   },
   openWarningSettings: () => {
     notice.value = '预览操作：已打开续费预警设置。';

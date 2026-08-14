@@ -74,6 +74,7 @@ export interface V2TopupSupplierLedgerItem {
   } | null;
   giftCard: {
     id: string;
+    code: string | null;
     codeMasked: string;
     faceValue: string;
     exchangeRate: string;

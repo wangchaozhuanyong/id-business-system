@@ -226,7 +226,7 @@ export class IdBusinessV2DashboardRepository {
         dueAt: true,
         customer: { select: { name: true } },
         serviceOption: { select: { name: true } },
-        account: { select: { appleIdMasked: true } }
+        account: { select: { appleIdEncrypted: true, appleIdMasked: true } }
       }
     });
   }

@@ -114,7 +114,9 @@
             class="v2-order-entry-candidate"
           >
             <span class="v2-order-entry-candidate-main">
-              <strong :title="candidate.appleIdMasked">{{ candidate.appleIdMasked }}</strong>
+              <strong :title="candidate.displayAppleId || undefined">
+                {{ candidate.displayAppleId || '不显示' }}
+              </strong>
               <small>{{ candidate.country.name }} / {{ candidate.status.name }}</small>
               <small>平均成本 ¥{{ formatDecimal(candidate.averageCost) }}</small>
               <small>ID 购买成本 ¥{{ formatDecimal(candidate.purchaseCost) }}</small>

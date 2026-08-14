@@ -15,7 +15,10 @@ import type {
   V2RoleListQuery,
   V2RoleMember,
   V2RolePermission,
-  V2RolePermissionGroup
+  V2RolePermissionGroup,
+  V2SensitiveDisplayCatalogItem,
+  V2SensitiveDisplayMode,
+  V2SensitiveDisplayPolicy
 } from './contracts';
 import {
   filterRolePermissionGroups,
@@ -29,6 +32,14 @@ interface RoleFormModel {
   description: string;
   permissionIds: string[];
   sensitiveApprovalPermissionIds: string[];
+  sensitiveDisplayPolicies: V2SensitiveDisplayPolicy[];
+}
+
+export interface V2SensitiveDisplayFieldGroup {
+  fieldKey: string;
+  fieldLabel: string;
+  permissionCode: string;
+  contexts: V2SensitiveDisplayCatalogItem[];
 }
 
 const PERMISSION_MODULE_LABELS: Record<string, string> = {
@@ -55,7 +66,8 @@ function emptyForm(): RoleFormModel {
     code: '',
     description: '',
     permissionIds: [],
-    sensitiveApprovalPermissionIds: []
+    sensitiveApprovalPermissionIds: [],
+    sensitiveDisplayPolicies: []
   };
 }
 
@@ -107,6 +119,14 @@ export function useRolesPage() {
   const displayedPageSize = computed(() => rolesQuery.data.value?.list.pageSize ?? query.pageSize);
   const activeFilterCount = computed(() => (query.keyword.trim() ? 1 : 0));
   const permissions = computed(() => rolesQuery.data.value?.permissions ?? []);
+  const sensitiveDisplayCatalog = computed(
+    () => rolesQuery.data.value?.sensitiveDisplayCatalog ?? []
+  );
+  const sensitiveDisplayModeLabels = computed(
+    () =>
+      rolesQuery.data.value?.sensitiveDisplayModeLabels ??
+      ({} as Record<V2SensitiveDisplayMode, string>)
+  );
   const permissionGroups = computed<V2RolePermissionGroup[]>(() => {
     const groups = new Map<string, V2RolePermission[]>();
     for (const permission of permissions.value) {
@@ -135,6 +155,27 @@ export function useRolesPage() {
     )
   );
   const sensitiveApprovalCount = computed(() => form.sensitiveApprovalPermissionIds.length);
+  const sensitiveDisplayFieldGroups = computed<V2SensitiveDisplayFieldGroup[]>(() => {
+    const selectedPermissionCodes = new Set(
+      permissions.value
+        .filter((permission) => form.permissionIds.includes(permission.id))
+        .map((permission) => permission.code)
+    );
+    const groups = new Map<string, V2SensitiveDisplayFieldGroup>();
+    for (const item of sensitiveDisplayCatalog.value) {
+      if (!selectedPermissionCodes.has(item.permissionCode)) continue;
+      const group = groups.get(item.fieldKey) ?? {
+        fieldKey: item.fieldKey,
+        fieldLabel: item.fieldLabel,
+        permissionCode: item.permissionCode,
+        contexts: []
+      };
+      group.contexts.push(item);
+      groups.set(item.fieldKey, group);
+    }
+    return [...groups.values()];
+  });
+  const sensitiveDisplayPolicyCount = computed(() => form.sensitiveDisplayPolicies.length);
   const filteredPermissionGroups = computed(() =>
     filterRolePermissionGroups(
       permissionGroups.value,
@@ -191,6 +232,28 @@ export function useRolesPage() {
       const selected = new Set(permissionIds);
       form.sensitiveApprovalPermissionIds = form.sensitiveApprovalPermissionIds.filter(
         (permissionId) => selected.has(permissionId)
+      );
+      const selectedPermissionCodes = new Set(
+        permissions.value
+          .filter((permission) => selected.has(permission.id))
+          .map((permission) => permission.code)
+      );
+      const available = sensitiveDisplayCatalog.value.filter((item) =>
+        selectedPermissionCodes.has(item.permissionCode)
+      );
+      const existing = new Map(
+        form.sensitiveDisplayPolicies.map((policy) => [
+          `${policy.fieldKey}:${policy.context}`,
+          policy
+        ])
+      );
+      form.sensitiveDisplayPolicies = available.map(
+        (item) =>
+          existing.get(`${item.fieldKey}:${item.context}`) ?? {
+            fieldKey: item.fieldKey,
+            context: item.context,
+            mode: 'masked'
+          }
       );
     }
   );
@@ -272,12 +335,38 @@ export function useRolesPage() {
     }
     detailError.value = '';
     mutationError.value = '';
+    const legacyPolicies = item.sensitiveDisplayPolicies.length
+      ? item.sensitiveDisplayPolicies
+      : sensitiveDisplayCatalog.value
+          .filter((catalogItem) =>
+            item.permissions.some((permission) => permission.code === catalogItem.permissionCode)
+          )
+          .map((catalogItem) => {
+            const permission = item.permissions.find(
+              (candidate) => candidate.code === catalogItem.permissionCode
+            );
+            return {
+              fieldKey: catalogItem.fieldKey,
+              context: catalogItem.context,
+              mode:
+                permission &&
+                item.sensitiveApprovalPermissionIds.includes(permission.id) &&
+                catalogItem.allowedModes.includes('reveal_approval')
+                  ? ('reveal_approval' as const)
+                  : catalogItem.allowedModes.includes('reveal_direct')
+                    ? ('reveal_direct' as const)
+                    : catalogItem.allowedModes.includes('full')
+                      ? ('full' as const)
+                      : ('masked' as const)
+            };
+          });
     setForm({
       name: item.name,
       code: item.code,
       description: item.description ?? '',
       permissionIds: [...item.permissionIds],
-      sensitiveApprovalPermissionIds: [...item.sensitiveApprovalPermissionIds]
+      sensitiveApprovalPermissionIds: [...item.sensitiveApprovalPermissionIds],
+      sensitiveDisplayPolicies: legacyPolicies.map((policy) => ({ ...policy }))
     });
     resetPermissionWorkspace(item.permissionIds);
     drawerVisible.value = true;
@@ -346,6 +435,25 @@ export function useRolesPage() {
     form.sensitiveApprovalPermissionIds = [...next];
   }
 
+  function getSensitiveDisplayMode(fieldKey: string, context: string) {
+    return (
+      form.sensitiveDisplayPolicies.find(
+        (policy) => policy.fieldKey === fieldKey && policy.context === context
+      )?.mode ?? 'masked'
+    );
+  }
+
+  function setSensitiveDisplayMode(
+    fieldKey: string,
+    context: V2SensitiveDisplayPolicy['context'],
+    mode: V2SensitiveDisplayMode
+  ) {
+    const policy = form.sensitiveDisplayPolicies.find(
+      (item) => item.fieldKey === fieldKey && item.context === context
+    );
+    if (policy) policy.mode = mode;
+  }
+
   function clearPermissionFilters() {
     permissionKeyword.value = '';
     selectedPermissionsOnly.value = false;
@@ -379,7 +487,8 @@ export function useRolesPage() {
           name: form.name.trim(),
           description: form.description.trim(),
           permissionIds: [...form.permissionIds],
-          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds]
+          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds],
+          sensitiveDisplayPolicies: form.sensitiveDisplayPolicies.map((policy) => ({ ...policy }))
         };
         await v2RolesApi.update(current.id, input);
         ElMessage.success('角色权限已更新');
@@ -389,7 +498,8 @@ export function useRolesPage() {
           code: form.code.trim().toLowerCase(),
           description: form.description.trim(),
           permissionIds: [...form.permissionIds],
-          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds]
+          sensitiveApprovalPermissionIds: [...form.sensitiveApprovalPermissionIds],
+          sensitiveDisplayPolicies: form.sensitiveDisplayPolicies.map((policy) => ({ ...policy }))
         };
         await v2RolesApi.create(input);
         ElMessage.success('角色已创建');
@@ -455,6 +565,9 @@ export function useRolesPage() {
     selectedPermissionCount,
     selectedSensitivePermissions,
     sensitiveApprovalCount,
+    sensitiveDisplayFieldGroups,
+    sensitiveDisplayPolicyCount,
+    sensitiveDisplayModeLabels,
     permissionKeyword,
     selectedPermissionsOnly,
     filteredPermissionGroups,
@@ -476,6 +589,8 @@ export function useRolesPage() {
     clearPermissionSelection,
     isSensitiveApprovalRequired,
     toggleSensitiveApproval,
+    getSensitiveDisplayMode,
+    setSensitiveDisplayMode,
     clearPermissionFilters,
     submitRole,
     formatDate

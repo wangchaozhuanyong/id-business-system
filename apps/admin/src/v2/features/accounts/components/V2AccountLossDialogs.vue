@@ -15,7 +15,7 @@
       <section class="v2-account-loss-dialog__summary" aria-labelledby="loss-summary-heading">
         <header>
           <span>报损对象</span>
-          <strong id="loss-summary-heading">{{ page.lossTarget.appleIdMasked }}</strong>
+          <strong id="loss-summary-heading">{{ page.lossTarget.displayAppleId || '—' }}</strong>
           <small>提交后该 ID 将被冻结，不能继续下单、续费或加卡</small>
         </header>
         <dl class="v2-account-loss-dialog__impact">
@@ -103,7 +103,9 @@
       <section class="v2-account-loss-dialog__summary" aria-labelledby="unfreeze-summary-heading">
         <header>
           <span>解除对象</span>
-          <strong id="unfreeze-summary-heading">{{ page.unfreezeTarget.appleIdMasked }}</strong>
+          <strong id="unfreeze-summary-heading">{{
+            page.unfreezeTarget.displayAppleId || '—'
+          }}</strong>
           <small>解除后恢复可用状态，历史开通记录保持不变</small>
         </header>
         <dl class="v2-account-loss-dialog__impact">

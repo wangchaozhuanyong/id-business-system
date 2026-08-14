@@ -14,6 +14,39 @@ export interface V2RoleMember {
   status: 'active' | 'disabled';
 }
 
+export type V2SensitiveDisplayContext =
+  | 'account_management'
+  | 'customer_management'
+  | 'order_workbench'
+  | 'topup_workbench'
+  | 'renewal_workbench'
+  | 'business_records'
+  | 'dashboard_notifications'
+  | 'export'
+  | 'audit';
+
+export type V2SensitiveDisplayMode =
+  | 'hidden'
+  | 'masked'
+  | 'reveal_direct'
+  | 'reveal_approval'
+  | 'full';
+
+export interface V2SensitiveDisplayPolicy {
+  fieldKey: string;
+  context: V2SensitiveDisplayContext;
+  mode: V2SensitiveDisplayMode;
+}
+
+export interface V2SensitiveDisplayCatalogItem {
+  fieldKey: string;
+  fieldLabel: string;
+  permissionCode: string;
+  context: V2SensitiveDisplayContext;
+  contextLabel: string;
+  allowedModes: V2SensitiveDisplayMode[];
+}
+
 export interface V2Role {
   id: string;
   name: string;
@@ -23,6 +56,7 @@ export interface V2Role {
   permissions: V2RolePermission[];
   permissionIds: string[];
   sensitiveApprovalPermissionIds: string[];
+  sensitiveDisplayPolicies: V2SensitiveDisplayPolicy[];
   permissionCount: number;
   memberCount: number;
   createdAt: string;
@@ -57,6 +91,8 @@ export interface V2RoleListResult {
 export interface V2RolesBootstrap {
   list: V2RoleListResult;
   permissions: V2RolePermission[];
+  sensitiveDisplayCatalog: V2SensitiveDisplayCatalogItem[];
+  sensitiveDisplayModeLabels: Record<V2SensitiveDisplayMode, string>;
   generatedAt: string;
 }
 
@@ -66,6 +102,7 @@ export interface CreateV2RoleInput {
   description: string;
   permissionIds: string[];
   sensitiveApprovalPermissionIds: string[];
+  sensitiveDisplayPolicies: V2SensitiveDisplayPolicy[];
 }
 
 export interface UpdateV2RoleInput {
@@ -73,4 +110,5 @@ export interface UpdateV2RoleInput {
   description: string;
   permissionIds: string[];
   sensitiveApprovalPermissionIds: string[];
+  sensitiveDisplayPolicies: V2SensitiveDisplayPolicy[];
 }
