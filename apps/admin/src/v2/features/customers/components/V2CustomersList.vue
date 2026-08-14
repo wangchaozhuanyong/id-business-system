@@ -197,7 +197,7 @@
             </el-tag>
           </header>
           <V2CustomerMobileDetails :customer="item" />
-          <footer>
+          <footer class="v2-customer-mobile-actions">
             <AppButton
               v-if="item.hasPhone && page.canRevealField(item, 'phone')"
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, '手机号']"

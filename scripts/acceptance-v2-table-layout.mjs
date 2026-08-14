@@ -1401,13 +1401,23 @@ function createCustomer(id, name, recordStatus, source, tag, service, now) {
     id,
     name,
     maskedPhone: '138****5678',
+    displayPhone: '138****5678',
     phoneTail: '5678',
     hasPhone: true,
-    wechat: 'layout-test',
-    qq: '10001',
+    wechat: 'lay***est',
+    hasWechat: true,
+    qq: '10***01',
+    hasQq: true,
     maskedWhatsapp: '+60****6789',
+    displayWhatsapp: '+60****6789',
     whatsappTail: '23456789',
     hasWhatsapp: true,
+    contactDisplayModes: {
+      phone: 'reveal_direct',
+      wechat: 'reveal_direct',
+      qq: 'reveal_direct',
+      whatsapp: 'reveal_direct'
+    },
     sourceOptionId: source.id,
     source,
     tagOptionIds: [tag.id],
@@ -1416,6 +1426,7 @@ function createCustomer(id, name, recordStatus, source, tag, service, now) {
     services: [service],
     recordStatus,
     remark: null,
+    createdBy: null,
     createdAt: now,
     updatedAt: now
   };
