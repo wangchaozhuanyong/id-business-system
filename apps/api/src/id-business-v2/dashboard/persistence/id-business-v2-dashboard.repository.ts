@@ -98,12 +98,17 @@ export class IdBusinessV2DashboardRepository {
         : null,
       access.renewals
         ? this.prisma.idBusinessV2Activation.count({
-            where: { status: 'active', dueAt: { lt: window.start } }
+            where: {
+              renewedBy: { is: null },
+              status: 'active',
+              dueAt: { lt: window.start }
+            }
           })
         : null,
       access.renewals
         ? this.prisma.idBusinessV2Activation.count({
             where: {
+              renewedBy: { is: null },
               status: 'active',
               dueAt: { gte: window.start, lt: renewalWarningEnd }
             }
@@ -208,7 +213,11 @@ export class IdBusinessV2DashboardRepository {
 
   loadUpcomingRenewals(renewalWarningEnd: Date) {
     return this.prisma.idBusinessV2Activation.findMany({
-      where: { status: 'active', dueAt: { lt: renewalWarningEnd } },
+      where: {
+        renewedBy: { is: null },
+        status: 'active',
+        dueAt: { lt: renewalWarningEnd }
+      },
       orderBy: [{ dueAt: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
       take: 5,
       select: {

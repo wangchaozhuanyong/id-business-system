@@ -7,7 +7,7 @@
     <header class="v2-analytics-report-list__header">
       <V2SectionHeading
         title="结算平台收款"
-        help="按订单创建时间归属，已结算与处理中金额分开核算。"
+        help="按订单创建时间归属；退款前实收、已退款本金和净收款分开核算。"
       >
         <template #actions>
           <V2TableColumnSettings
@@ -15,7 +15,7 @@
             :schema="v2TableSchemas.dataAnalytics.settlementPlatforms"
           />
           <span>本页 {{ report.rows.length }} 条</span>
-          <strong>{{ report.totals.completedOrderCount }} 笔已结算</strong>
+          <strong>{{ report.totals.completedOrderCount }} 笔当前完成</strong>
         </template>
       </V2SectionHeading>
     </header>
@@ -33,15 +33,15 @@
 
     <div class="v2-settlement-summary">
       <article>
-        <span>人民币实收</span>
+        <span>订单实收（退款前）</span>
         <strong>{{ formatCny(report.totals.grossReceivedCny) }}</strong>
       </article>
       <article>
-        <span>退款金额</span>
+        <span>已退款本金</span>
         <strong>{{ formatCny(report.totals.refundedCny) }}</strong>
       </article>
       <article>
-        <span>净入账</span>
+        <span>净收款</span>
         <strong>{{ formatCny(report.totals.netSettlementCny) }}</strong>
       </article>
       <article>

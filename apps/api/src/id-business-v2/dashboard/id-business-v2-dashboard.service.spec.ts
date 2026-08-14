@@ -144,6 +144,43 @@ describe('IdBusinessV2DashboardService', () => {
     expect(result.business.todayRevenueCny).toBe('50');
   });
 
+  it('excludes activation records that have already been renewed from renewal risks', async () => {
+    const prisma = createPrismaMock();
+    prisma.idBusinessV2RenewalWarningSetting.findUnique.mockResolvedValue({ warningDays: 7 });
+    prisma.idBusinessV2Activation.count.mockResolvedValue(0);
+    prisma.idBusinessV2Activation.findMany.mockResolvedValue([]);
+    const service = createService(prisma);
+
+    await service.overview(user(['apple.renewal_task.view']), new Date('2026-08-13T03:00:00.000Z'));
+
+    expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(1, {
+      where: {
+        renewedBy: { is: null },
+        status: 'active',
+        dueAt: { lt: new Date('2026-08-12T16:00:00.000Z') }
+      }
+    });
+    expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        renewedBy: { is: null },
+        status: 'active',
+        dueAt: {
+          gte: new Date('2026-08-12T16:00:00.000Z'),
+          lt: new Date('2026-08-20T16:00:00.000Z')
+        }
+      }
+    });
+    expect(prisma.idBusinessV2Activation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          renewedBy: { is: null },
+          status: 'active',
+          dueAt: { lt: new Date('2026-08-20T16:00:00.000Z') }
+        }
+      })
+    );
+  });
+
   it('selects only audit summary fields for the team activity feed', async () => {
     const prisma = createPrismaMock();
     prisma.auditLog.findMany.mockResolvedValue([]);

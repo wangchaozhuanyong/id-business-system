@@ -191,6 +191,49 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
     expect(result.historicalUnspecifiedAmountCny).toBe('50');
   });
 
+  it('keeps refunded cash history without counting the order as currently completed', async () => {
+    prisma.idBusinessV2Order.findMany.mockResolvedValue([
+      {
+        id: orderId,
+        status: 'refunded',
+        settlementPlatformOptionId: platformId,
+        settlementPlatform: {
+          id: platformId,
+          name: '微信转账'
+        },
+        receivedAmount: decimal('100'),
+        profitAmount: decimal('-48')
+      }
+    ]);
+    prisma.idBusinessV2FinanceJournal.findMany.mockResolvedValue([
+      {
+        journalType: 'order_completed',
+        sourceId: orderId,
+        reversalOf: null,
+        lines: [
+          line('sales_revenue', 'credit', '100'),
+          line('platform_fee', 'debit', '3'),
+          line('gift_card_cost', 'debit', '40')
+        ]
+      },
+      {
+        journalType: 'order_refund',
+        sourceId: orderId,
+        reversalOf: null,
+        lines: [line('sales_revenue', 'debit', '100'), line('refund_loss', 'debit', '5')]
+      }
+    ]);
+
+    const result = await service.settlementPlatformReport({});
+
+    expect(result.totals).toMatchObject({
+      completedOrderCount: 0,
+      grossReceivedCny: '100',
+      refundedCny: '100',
+      netSettlementCny: '-3'
+    });
+  });
+
   it('applies the platform filter only to the settlement-platform order query', async () => {
     prisma.idBusinessV2Order.findMany.mockResolvedValue([]);
 

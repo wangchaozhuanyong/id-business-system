@@ -76,7 +76,7 @@ export function useRenewalsPage() {
       hasUserPermission(authStore.user, 'apple.order.create')
   );
   const dueRange = ref<[string, string] | []>([]);
-  const warningOnly = ref(false);
+  const warningOnly = ref(true);
   const refreshedManualOptions = ref<V2ManualRenewalOptions | null>(null);
   const optionsLoading = ref(false);
   const optionsError = ref('');
@@ -167,7 +167,7 @@ export function useRenewalsPage() {
     saveWarningSettings
   } = useRenewalWarningSettings({
     onSaved: async () => {
-      warningOnly.value = false;
+      warningOnly.value = true;
       query.dueStatus = '';
       dueRange.value = [];
       query.page = 1;
@@ -353,13 +353,11 @@ export function useRenewalsPage() {
   function selectWarningScope(key: string) {
     dueRange.value = [];
     if (key === 'warning') {
-      const shouldEnable = !warningOnly.value;
-      warningOnly.value = shouldEnable;
+      warningOnly.value = true;
       query.dueStatus = '';
     } else if (key === 'expired') {
-      const shouldClear = !warningOnly.value && query.dueStatus === 'expired';
       warningOnly.value = false;
-      query.dueStatus = shouldClear ? '' : 'expired';
+      query.dueStatus = 'expired';
     }
     handleFilterChange();
   }
@@ -529,6 +527,7 @@ export function useRenewalsPage() {
     warningSettingsSaving,
     warningSettingsError,
     warningDaysInput,
+    warningDays,
     filterOptions,
     options,
     optionsLoading,

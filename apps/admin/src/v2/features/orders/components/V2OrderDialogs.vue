@@ -120,7 +120,7 @@
               <dd>{{ page.formatDecimal(page.detail.balanceAmount) }}</dd>
             </div>
             <div>
-              <dt>余额成本</dt>
+              <dt>余额成本（人民币）</dt>
               <dd>{{ page.formatDecimal(page.detail.balanceCostAmount) }}</dd>
             </div>
             <div>

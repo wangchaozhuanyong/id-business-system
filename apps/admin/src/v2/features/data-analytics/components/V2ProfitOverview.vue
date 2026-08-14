@@ -19,7 +19,7 @@
       >
         {{ formatCny(overview.profitLoss.netProfitCny) }}
       </strong>
-      <p>只包含已完成订单和已确认成本、损失与开支，不把处理中订单并入当期利润。</p>
+      <p>只包含已记账收入与已确认成本、退款、损失和开支，不把处理中订单并入当期利润。</p>
       <footer>
         <div>
           <span>待确认利润</span>
