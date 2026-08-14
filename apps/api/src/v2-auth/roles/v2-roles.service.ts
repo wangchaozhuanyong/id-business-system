@@ -5,14 +5,29 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type {
+  IdBusinessV2SensitiveDisplayContext,
+  IdBusinessV2SensitiveDisplayMode,
+  Prisma
+} from '@prisma/client';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { V2IdentityService } from '../v2-identity.service';
-import { ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES } from '../../id-business-v2/sensitive-access/public-api';
-import type { CreateV2RoleDto, ListV2RolesQuery, UpdateV2RoleDto } from './v2-roles.dto';
+import {
+  ID_BUSINESS_V2_SENSITIVE_MODE_LABELS,
+  ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES,
+  getIdBusinessV2SensitiveAllowedDisplayModes,
+  getIdBusinessV2SensitiveDescriptorByKey,
+  listIdBusinessV2SensitiveDisplayCatalog
+} from '../../id-business-v2/sensitive-access/public-api';
+import type {
+  CreateV2RoleDto,
+  ListV2RolesQuery,
+  UpdateV2RoleDto,
+  V2SensitiveDisplayPolicyDto
+} from './v2-roles.dto';
 
 const ROLE_SORT_FIELDS: Record<string, keyof Prisma.RoleOrderByWithRelationInput> = {
   name: 'name',
@@ -47,6 +62,9 @@ const ROLE_LIST_INCLUDE = {
         code: 'asc' as const
       }
     }
+  },
+  sensitiveDisplayPolicies: {
+    orderBy: [{ fieldKey: 'asc' as const }, { context: 'asc' as const }]
   },
   _count: {
     select: {
@@ -90,6 +108,11 @@ const ROLE_DETAIL_INCLUDE = {
 type RoleListRecord = Prisma.RoleGetPayload<{ include: typeof ROLE_LIST_INCLUDE }>;
 type RoleDetailRecord = Prisma.RoleGetPayload<{ include: typeof ROLE_DETAIL_INCLUDE }>;
 type PermissionCatalogRecord = Prisma.PermissionGetPayload<{ select: typeof PERMISSION_SELECT }>;
+type SensitiveDisplayPolicyInput = {
+  fieldKey: string;
+  context: IdBusinessV2SensitiveDisplayContext;
+  mode: IdBusinessV2SensitiveDisplayMode;
+};
 
 @Injectable()
 export class V2RolesService {
@@ -152,6 +175,8 @@ export class V2RolesService {
         items: list.items.map((role) => this.toResponse(role, permissions))
       },
       permissions,
+      sensitiveDisplayCatalog: listIdBusinessV2SensitiveDisplayCatalog(),
+      sensitiveDisplayModeLabels: ID_BUSINESS_V2_SENSITIVE_MODE_LABELS,
       generatedAt: new Date().toISOString()
     };
   }
@@ -173,6 +198,10 @@ export class V2RolesService {
       dto.sensitiveApprovalPermissionIds,
       permissions
     );
+    const sensitiveDisplayPolicies = this.requireSensitiveDisplayPolicies(
+      dto.sensitiveDisplayPolicies,
+      permissions
+    );
     await this.assertCodeAvailable(code);
 
     try {
@@ -186,6 +215,13 @@ export class V2RolesService {
               create: permissions.map((permission) => ({
                 permissionId: permission.id,
                 sensitiveApprovalRequired: sensitiveApprovalPermissionIds.has(permission.id)
+              }))
+            },
+            sensitiveDisplayPolicies: {
+              create: sensitiveDisplayPolicies.map((policy) => ({
+                ...policy,
+                createdByUserId: operator.id,
+                updatedByUserId: operator.id
               }))
             }
           },
@@ -234,11 +270,22 @@ export class V2RolesService {
     const sensitiveApprovalPermissionIds = permissions
       ? this.requireSensitiveApprovalPermissionIds(dto.sensitiveApprovalPermissionIds, permissions)
       : undefined;
+    const effectivePermissions =
+      permissions ??
+      existing.rolePermissions.map(({ permission }) => ({
+        id: permission.id,
+        code: permission.code
+      }));
+    const sensitiveDisplayPolicies =
+      dto.sensitiveDisplayPolicies === undefined
+        ? undefined
+        : this.requireSensitiveDisplayPolicies(dto.sensitiveDisplayPolicies, effectivePermissions);
     if (
       name === undefined &&
       description === undefined &&
       permissions === undefined &&
-      sensitiveApprovalPermissionIds === undefined
+      sensitiveApprovalPermissionIds === undefined &&
+      sensitiveDisplayPolicies === undefined
     ) {
       throw new BadRequestException('请至少修改一项角色资料。');
     }
@@ -257,6 +304,34 @@ export class V2RolesService {
             sensitiveApprovalRequired: sensitiveApprovalPermissionIds?.has(permission.id) ?? false
           }))
         });
+      }
+      if (sensitiveDisplayPolicies !== undefined) {
+        await transaction.idBusinessV2SensitiveDisplayPolicy.deleteMany({
+          where: { roleId: existing.id }
+        });
+        if (sensitiveDisplayPolicies.length) {
+          await transaction.idBusinessV2SensitiveDisplayPolicy.createMany({
+            data: sensitiveDisplayPolicies.map((policy) => ({
+              roleId: existing.id,
+              ...policy,
+              createdByUserId: operator.id,
+              updatedByUserId: operator.id
+            }))
+          });
+        }
+      } else if (permissions) {
+        const selectedPermissionCodes = new Set(permissions.map((permission) => permission.code));
+        const obsoletePolicyIds = existing.sensitiveDisplayPolicies
+          .filter((policy) => {
+            const descriptor = getIdBusinessV2SensitiveDescriptorByKey(policy.fieldKey);
+            return !descriptor || !selectedPermissionCodes.has(descriptor.permissionCode);
+          })
+          .map((policy) => policy.id);
+        if (obsoletePolicyIds.length) {
+          await transaction.idBusinessV2SensitiveDisplayPolicy.deleteMany({
+            where: { id: { in: obsoletePolicyIds } }
+          });
+        }
       }
       const updated = await transaction.role.update({
         where: {
@@ -382,6 +457,40 @@ export class V2RolesService {
     return selected;
   }
 
+  private requireSensitiveDisplayPolicies(
+    input: V2SensitiveDisplayPolicyDto[] | undefined,
+    permissions: Array<{ id: string; code: string }>
+  ): SensitiveDisplayPolicyInput[] {
+    if (input === undefined) return [];
+    if (!Array.isArray(input) || input.length > 100) {
+      throw new BadRequestException('敏感资料展示策略数量无效。');
+    }
+    const permissionCodes = new Set(permissions.map((permission) => permission.code));
+    const unique = new Set<string>();
+    return input.map((item) => {
+      const fieldKey = typeof item.fieldKey === 'string' ? item.fieldKey.trim() : '';
+      const descriptor = getIdBusinessV2SensitiveDescriptorByKey(fieldKey);
+      if (!descriptor || !permissionCodes.has(descriptor.permissionCode)) {
+        throw new BadRequestException('敏感资料展示策略必须属于当前已选择的权限。');
+      }
+      const context = item.context as IdBusinessV2SensitiveDisplayContext;
+      if (
+        !(descriptor.contexts as readonly IdBusinessV2SensitiveDisplayContext[]).includes(context)
+      ) {
+        throw new BadRequestException('敏感资料展示场景无效。');
+      }
+      const mode = item.mode as IdBusinessV2SensitiveDisplayMode;
+      const allowedModes = getIdBusinessV2SensitiveAllowedDisplayModes(descriptor, context);
+      if (!allowedModes.includes(mode)) {
+        throw new BadRequestException('敏感资料展示方式无效。');
+      }
+      const key = `${fieldKey}:${context}`;
+      if (unique.has(key)) throw new BadRequestException('敏感资料展示策略存在重复项。');
+      unique.add(key);
+      return { fieldKey, context, mode };
+    });
+  }
+
   private normalizeCode(value: string | undefined) {
     const code = (value ?? '').trim().toLowerCase();
     if (!/^[a-z][a-z0-9._-]{2,99}$/.test(code)) {
@@ -472,6 +581,23 @@ export class V2RolesService {
           : role.rolePermissions
               .filter((assignment) => assignment.sensitiveApprovalRequired)
               .map(({ permission }) => permission.id),
+      sensitiveDisplayPolicies:
+        role.code === 'admin'
+          ? listIdBusinessV2SensitiveDisplayCatalog().map((item) => ({
+              fieldKey: item.fieldKey,
+              context: item.context,
+              mode:
+                item.context === 'audit'
+                  ? ('masked' as const)
+                  : !getIdBusinessV2SensitiveDescriptorByKey(item.fieldKey)?.secret
+                    ? ('full' as const)
+                    : ('reveal_direct' as const)
+            }))
+          : role.sensitiveDisplayPolicies.map((policy) => ({
+              fieldKey: policy.fieldKey,
+              context: policy.context,
+              mode: policy.mode
+            })),
       permissionCount: permissions.length,
       memberCount: role._count.userRoles,
       createdAt: role.createdAt.toISOString(),
@@ -502,6 +628,11 @@ export class V2RolesService {
         .filter((assignment) => assignment.sensitiveApprovalRequired)
         .map(({ permission }) => permission.code)
         .sort(),
+      sensitiveDisplayPolicies: role.sensitiveDisplayPolicies.map((policy) => ({
+        fieldKey: policy.fieldKey,
+        context: policy.context,
+        mode: policy.mode
+      })),
       memberCount: role._count.userRoles
     };
   }

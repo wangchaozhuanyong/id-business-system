@@ -213,6 +213,7 @@ function makeOrder(index: number): V2Order {
     account: {
       id: `account-${(index % accounts.length) + 1}`,
       appleIdMasked: accounts[index % accounts.length],
+      displayAppleId: accounts[index % accounts.length],
       country: { id: 'country-us', code: 'US', name: '美国' }
     },
     settlementPlatform: {
@@ -222,6 +223,7 @@ function makeOrder(index: number): V2Order {
     },
     platformOrderNo: index % 3 === 0 ? `PT202608${String(index + 1).padStart(5, '0')}` : null,
     maskedWebsiteAccount: `${String(728455343 + index).slice(0, 5)}****@qq.com`,
+    displayWebsiteAccount: `${String(728455343 + index).slice(0, 5)}****@qq.com`,
     hasWebsiteAccount: true,
     receivedAmount,
     receivedOriginalAmount: receivedAmount,
@@ -279,7 +281,11 @@ const page = reactive({
   items: [] as V2Order[],
   total: 0,
   loading: false,
+  queryPhase: 'ready' as const,
+  isParameterTransition: false,
   listError: '',
+  displayedPage: 1,
+  displayedPageSize: 10,
   serviceOptions,
   settlementOptions,
   openedRange: [] as string[],
@@ -290,6 +296,7 @@ const page = reactive({
   canUpdateOrders: true,
   canDeleteOrders: true,
   hasActiveFilters: false,
+  activeFilterCount: 0,
   hasLoadedOnce: true,
   isInitialLoading: false,
   query: {
@@ -300,6 +307,7 @@ const page = reactive({
     settlementPlatformOptionId: '',
     status: '' as V2OrderStatus | '',
     accountDisposition: '',
+    accountSource: '',
     sortBy: 'openedAt',
     sortOrder: 'desc'
   },
@@ -309,8 +317,26 @@ const page = reactive({
   },
   handleSearch: () => applyFilters(true),
   handleFilterChange: () => applyFilters(true),
-  handlePageSizeChange: () => applyFilters(true),
-  handlePageChange: () => applyFilters(),
+  resetFilters: () => {
+    page.query.keyword = '';
+    page.query.status = '';
+    page.query.accountDisposition = '';
+    page.query.accountSource = '';
+    page.query.serviceOptionId = '';
+    page.query.settlementPlatformOptionId = '';
+    page.openedRange = [];
+    applyFilters(true);
+  },
+  handlePageSizeChange: (pageSize: number) => {
+    page.query.pageSize = pageSize;
+    page.displayedPageSize = pageSize;
+    applyFilters(true);
+  },
+  handlePageChange: (currentPage: number) => {
+    page.query.page = currentPage;
+    page.displayedPage = currentPage;
+    applyFilters();
+  },
   openOrderEntry: () => {
     notice.value = '预览操作：将进入订单录入页。';
   },
@@ -342,7 +368,10 @@ const page = reactive({
 }) as unknown as OrdersPage;
 
 function applyFilters(resetPage = false) {
-  if (resetPage) page.query.page = 1;
+  if (resetPage) {
+    page.query.page = 1;
+    page.displayedPage = 1;
+  }
   const keyword = page.query.keyword.trim().toLowerCase();
   const filtered = allOrders.filter((order) => {
     const matchesKeyword =
@@ -353,13 +382,20 @@ function applyFilters(resetPage = false) {
     const matchesStatus = !page.query.status || order.status === page.query.status;
     const matchesDisposition =
       !page.query.accountDisposition || order.accountDisposition === page.query.accountDisposition;
+    const matchesAccountSource =
+      !page.query.accountSource || order.accountSource === page.query.accountSource;
     const matchesService =
       !page.query.serviceOptionId || order.service.id === page.query.serviceOptionId;
     const matchesSettlement =
       !page.query.settlementPlatformOptionId ||
       order.settlementPlatform?.id === page.query.settlementPlatformOptionId;
     return (
-      matchesKeyword && matchesStatus && matchesDisposition && matchesService && matchesSettlement
+      matchesKeyword &&
+      matchesStatus &&
+      matchesDisposition &&
+      matchesAccountSource &&
+      matchesService &&
+      matchesSettlement
     );
   });
   page.total = filtered.length;
@@ -367,10 +403,20 @@ function applyFilters(resetPage = false) {
     keyword ||
     page.query.status ||
     page.query.accountDisposition ||
+    page.query.accountSource ||
     page.query.serviceOptionId ||
     page.query.settlementPlatformOptionId ||
     page.openedRange.length
   );
+  page.activeFilterCount = [
+    keyword,
+    page.query.status,
+    page.query.accountDisposition,
+    page.query.accountSource,
+    page.query.serviceOptionId,
+    page.query.settlementPlatformOptionId,
+    page.openedRange.length ? 'opened-range' : ''
+  ].filter(Boolean).length;
   const start = (page.query.page - 1) * page.query.pageSize;
   page.items = filtered.slice(start, start + page.query.pageSize);
 }

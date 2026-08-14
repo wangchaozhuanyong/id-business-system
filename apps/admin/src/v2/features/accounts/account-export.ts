@@ -6,9 +6,9 @@ export function exportAccountRowsToCsv(rows: V2Account[]) {
   exportRowsToCsv(
     'ID资料',
     [
-      { header: 'ID账号（脱敏）', value: (row) => row.appleIdMasked },
+      { header: 'ID账号', value: (row) => row.displayAppleId ?? '' },
       { header: 'ID密码', value: (row) => (row.hasPassword ? '已保存' : '') },
-      { header: '手机号码（脱敏）', value: (row) => row.maskedPhone ?? '' },
+      { header: '手机号码', value: (row) => row.displayPhone ?? '' },
       { header: '密保', value: (row) => (row.hasSecurityInfo ? '已保存' : '') },
       { header: '国家', value: (row) => row.country.name },
       { header: 'ID状态', value: (row) => row.status.name },

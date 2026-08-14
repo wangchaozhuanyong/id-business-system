@@ -36,11 +36,13 @@ export interface RenewalRecord {
   order: {
     id: string;
     orderNo: string;
+    websiteAccountEncrypted: string | null;
     websiteAccountMasked: string | null;
   };
   customer: { id: string; name: string };
   account: {
     id: string;
+    appleIdEncrypted: string;
     appleIdMasked: string;
     currentBalance: Amount4;
     balanceCostAmount: Amount4;

@@ -39,7 +39,10 @@ describe('roles scheme 3 redesign contract', () => {
     expect(api).toContain("http.post('/v2/roles', input)");
     expect(api).toContain('http.patch(`/v2/roles/${id}`, input)');
     expect(drawer).toContain('page.isSystemRole');
-    expect(sensitivePolicy).toContain('page.toggleSensitiveApproval');
+    expect(sensitivePolicy).toContain('page.getSensitiveDisplayMode');
+    expect(sensitivePolicy).toContain('page.setSensitiveDisplayMode');
+    expect(sensitivePolicy).toContain('密码和密保需点击查看');
+    expect(sensitivePolicy).not.toContain('group.permissionCode');
     expect(pageState).toContain('将立即影响该角色下');
     expect(pageState).toContain('validateV2Form(formInstance)');
   });

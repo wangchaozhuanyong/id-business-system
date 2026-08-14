@@ -9,7 +9,7 @@
           {{ item.code }}
         </strong>
         <span v-v2-column-visibility="[v2TableSchemas.topupRecords.giftCards.id, '加入 ID']">
-          {{ item.account.appleIdMasked }}
+          {{ item.account.displayAppleId || '—' }}
         </span>
         <span v-v2-column-visibility="[v2TableSchemas.topupRecords.giftCards.id, '国家']">
           {{ item.country.name }}

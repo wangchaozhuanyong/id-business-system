@@ -9,6 +9,7 @@ import {
 import {
   Amount4,
   Rate8,
+  buildIdBusinessV2BlindQueryTokens,
   mapAmount4,
   mapRate8,
   type V2CommandTransaction
@@ -529,6 +530,16 @@ export class IdBusinessV2AccountsRepository {
     const keyword = normalizeNullableString(query.keyword);
     const normalizedAppleId = keyword ? normalizeAppleId(keyword, false) : null;
     const normalizedPhone = keyword ? normalizePhone(keyword) : null;
+    const appleIdSearchTokens = buildIdBusinessV2BlindQueryTokens(
+      normalizedAppleId,
+      'apple-id',
+      (value) => hash(value)
+    );
+    const phoneSearchTokens = buildIdBusinessV2BlindQueryTokens(
+      normalizedPhone,
+      'account-phone',
+      (value) => hash(value)
+    );
     const saleState = parseSaleState(query.saleState);
     const lifecycle = parseAccountLifecycle(query.lifecycle);
     const lifecycleWhere: Prisma.IdBusinessV2AccountWhereInput =
@@ -564,12 +575,22 @@ export class IdBusinessV2AccountsRepository {
             { appleIdMasked: { contains: keyword, mode: 'insensitive' } },
             { appleIdHash: hash(normalizedAppleId) ?? undefined },
             {
+              appleIdSearchTokens: appleIdSearchTokens.length
+                ? { hasEvery: appleIdSearchTokens }
+                : undefined
+            },
+            {
               phoneTail: {
                 contains: normalizedPhone?.slice(-8) ?? keyword,
                 mode: 'insensitive'
               }
             },
             { phoneHash: hash(normalizedPhone) ?? undefined },
+            {
+              phoneSearchTokens: phoneSearchTokens.length
+                ? { hasEvery: phoneSearchTokens }
+                : undefined
+            },
             { supplierOption: { name: { contains: keyword, mode: 'insensitive' } } }
           ]
         : undefined

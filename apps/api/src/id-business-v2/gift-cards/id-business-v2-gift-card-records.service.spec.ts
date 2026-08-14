@@ -182,17 +182,30 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     requireActiveOption: vi.fn()
   };
   const fieldEncryptionService = {
-    decrypt: vi.fn()
+    decrypt: vi.fn(),
+    hash: vi.fn((value: string) => `hash:${value}`)
+  };
+  const sensitiveAccessService = {
+    resolveDisplayModes: vi.fn().mockResolvedValue({
+      'account.apple_id': 'full',
+      'gift_card.code': 'full'
+    })
   };
   const service = new IdBusinessV2GiftCardRecordsService(
     new IdBusinessV2GiftCardsRepository(prisma as never),
     optionsService as never,
     fieldEncryptionService as never,
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    sensitiveAccessService as never
   );
 
   beforeEach(() => {
     vi.resetAllMocks();
+    fieldEncryptionService.hash.mockImplementation((value: string) => `hash:${value}`);
+    sensitiveAccessService.resolveDisplayModes.mockResolvedValue({
+      'account.apple_id': 'full',
+      'gift_card.code': 'full'
+    });
     prisma.$transaction.mockImplementation(async (input) =>
       typeof input === 'function' ? input(tx) : Promise.all(input)
     );
@@ -221,7 +234,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
-  it('returns paginated gift card records with full codes and ID balance snapshots', async () => {
+  it('returns paginated gift card records masked when no operator context is provided', async () => {
     const result = await service.listGiftCards({ page: '2', pageSize: '20' });
 
     expect(prisma.idBusinessV2GiftCard.findMany).toHaveBeenCalledWith(
@@ -238,7 +251,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       items: [
         {
           id: giftCardId,
-          code: 'X123456789ABCDEF',
+          code: 'X123****CDEF',
           codeMasked: 'X123****CDEF',
           faceValue: '20',
           exchangeRate: '5.4',
@@ -266,7 +279,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
     expect(JSON.stringify(result)).not.toContain('codeHash');
     expect(JSON.stringify(result)).not.toContain('balanceBeforeCny');
     expect(JSON.stringify(result)).not.toContain('balanceAfterCny');
-    expect(fieldEncryptionService.decrypt).toHaveBeenCalledWith('v1:must-not-leak');
+    expect(fieldEncryptionService.decrypt).not.toHaveBeenCalled();
   });
 
   it('exposes only supplier-funding existence without leaking supplier balance snapshots', async () => {
@@ -388,7 +401,7 @@ describe('IdBusinessV2GiftCardRecordsService', () => {
       averageCostBefore: '5.4',
       averageCostAfter: '5.4',
       giftCard: {
-        code: 'X123456789ABCDEF',
+        code: 'X123****CDEF',
         codeMasked: 'X123****CDEF'
       },
       operator: {

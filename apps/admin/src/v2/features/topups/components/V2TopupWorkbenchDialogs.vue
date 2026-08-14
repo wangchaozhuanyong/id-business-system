@@ -12,7 +12,7 @@
       <dl>
         <div>
           <dt>目标 ID</dt>
-          <dd>{{ page.soldCreditPromptAccount.appleIdMasked }}</dd>
+          <dd>{{ page.soldCreditPromptAccount.displayAppleId || '不显示' }}</dd>
         </div>
         <div>
           <dt>销售订单</dt>
@@ -41,7 +41,7 @@
       <section class="v2-topup-credit-entry-target v2-topup-credit-entry-target--credit">
         <div class="v2-topup-credit-target-identity">
           <span>目标 ID</span>
-          <strong>{{ page.selectedAccount.appleIdMasked }}</strong>
+          <strong>{{ page.selectedAccount.displayAppleId || '不显示' }}</strong>
           <small>礼品卡余额将计入该 ID，并同步写入成本流水。</small>
           <small v-if="page.selectedAccount.soldByOrder">
             客户已购 · {{ page.selectedAccount.soldByOrder.orderNo }} ·
@@ -259,7 +259,7 @@
       <section class="v2-topup-credit-entry-target">
         <div>
           <span>目标 ID</span>
-          <strong>{{ page.reversalAccount.appleIdMasked }}</strong>
+          <strong>{{ page.reversalAccount.displayAppleId || '不显示' }}</strong>
         </div>
         <div>
           <span>当前余额</span>
@@ -298,7 +298,7 @@
           >
             <header>
               <div>
-                <strong>{{ giftCard.cardName }} · {{ giftCard.codeMasked }}</strong>
+                <strong>{{ giftCard.cardName }} · {{ giftCard.code || '不显示' }}</strong>
                 <span>{{ giftCard.supplier?.name ?? '未记录供应商' }}</span>
               </div>
               <el-tag type="success" effect="plain">已入账</el-tag>
@@ -361,7 +361,7 @@
     <dl v-if="page.selectedAccount" class="v2-topup-credit-confirm">
       <div>
         <dt>加卡ID</dt>
-        <dd>{{ page.selectedAccount.appleIdMasked }}</dd>
+        <dd>{{ page.selectedAccount.displayAppleId || '不显示' }}</dd>
       </div>
       <div v-if="page.selectedAccount.soldByOrder">
         <dt>原销售归属</dt>

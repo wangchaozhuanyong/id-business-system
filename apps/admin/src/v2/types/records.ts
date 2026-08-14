@@ -13,13 +13,21 @@ export interface V2Customer {
   id: string;
   name: string;
   maskedPhone: string | null;
+  displayPhone: string | null;
   phoneTail: string | null;
   hasPhone: boolean;
   wechat: string | null;
+  hasWechat: boolean;
   qq: string | null;
+  hasQq: boolean;
   maskedWhatsapp: string | null;
+  displayWhatsapp: string | null;
   whatsappTail: string | null;
   hasWhatsapp: boolean;
+  contactDisplayModes: Record<
+    'phone' | 'wechat' | 'qq' | 'whatsapp',
+    'hidden' | 'masked' | 'reveal_direct' | 'reveal_approval' | 'full'
+  >;
   sourceOptionId: string | null;
   source: Pick<V2OptionSelector, 'id' | 'code' | 'name'> | null;
   tagOptionIds: string[];
@@ -83,9 +91,11 @@ export type UpdateV2CustomerInput = Partial<CreateV2CustomerInput>;
 export interface V2Account {
   id: string;
   appleIdMasked: string;
+  displayAppleId: string | null;
   hasPassword: boolean;
   hasPhone: boolean;
   maskedPhone: string | null;
+  displayPhone: string | null;
   phoneTail: string | null;
   hasSecurityInfo: boolean;
   countryOptionId: string;
@@ -238,7 +248,7 @@ export interface V2AccountImportResult {
 export interface V2AccountExportResult {
   items: V2Account[];
   total: number;
-  containsSensitiveFields: false;
+  containsSensitiveFields: boolean;
   exportedAt: string;
 }
 
@@ -262,6 +272,7 @@ export interface V2AccountLossRecord {
   ledgerEntryId: string;
   status: 'active' | 'reversed';
   appleIdMasked: string;
+  displayAppleId: string | null;
   countryOptionId: string;
   countryName: string;
   currencyCode: string | null;

@@ -23,6 +23,7 @@ import {
   Amount4,
   Rate8,
   V2CommandTransactionManager,
+  buildIdBusinessV2BlindIndexTokens,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { IdBusinessV2TopupSupplierGiftCardFundsService } from '../topup-supplier-funds/public-api';
@@ -321,6 +322,9 @@ export class IdBusinessV2GiftCardCreditService {
         codeHash,
         codeMasked: maskGiftCardCode(code),
         codeTail: giftCardCodeTail(code),
+        codeSearchTokens: buildIdBusinessV2BlindIndexTokens(code, 'gift-card-code', (value) =>
+          this.fieldEncryptionService.hash(value)
+        ),
         faceValue: snapshot.balanceAmount.toString(),
         exchangeRate: snapshot.exchangeRate.toString(),
         exchangeRateSource: exchangeRateAudit.exchangeRateSource,

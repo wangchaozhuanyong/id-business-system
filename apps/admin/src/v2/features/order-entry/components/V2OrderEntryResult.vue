@@ -11,7 +11,7 @@
     </div>
     <div>
       <span>使用 ID</span>
-      <strong>{{ createdResult.order.account?.appleIdMasked || '-' }}</strong>
+      <strong>{{ createdResult.order.account?.displayAppleId || '-' }}</strong>
     </div>
     <div>
       <span>余额成本</span>

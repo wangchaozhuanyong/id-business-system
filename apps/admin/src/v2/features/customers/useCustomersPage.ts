@@ -44,7 +44,9 @@ function emptyForm(): CustomerFormState {
     phone: '',
     clearPhone: false,
     wechat: '',
+    clearWechat: false,
     qq: '',
+    clearQq: false,
     whatsapp: '',
     clearWhatsapp: false,
     sourceOptionId: '',
@@ -71,7 +73,7 @@ export function useCustomersPage() {
   const deletePreviewLoading = ref(false);
   let deletePreviewRequestId = 0;
   const revealTarget = ref<V2Customer | null>(null);
-  const revealField = ref<'phone' | 'whatsapp'>('phone');
+  const revealField = ref<'phone' | 'wechat' | 'qq' | 'whatsapp'>('phone');
   const revealDialogVisible = ref(false);
   const revealing = ref(false);
   const formRef = ref<FormInstance>();
@@ -92,6 +94,12 @@ export function useCustomersPage() {
   const revealForm = reactive({
     reason: '',
     value: ''
+  });
+  const revealFieldLabel = computed(() => {
+    if (revealField.value === 'phone') return '手机号';
+    if (revealField.value === 'wechat') return '微信';
+    if (revealField.value === 'qq') return 'QQ';
+    return 'WhatsApp';
   });
   const sensitiveAccess = useV2SensitiveAccessApproval();
 
@@ -277,8 +285,10 @@ export function useCustomersPage() {
       name: item.name,
       phone: '',
       clearPhone: false,
-      wechat: item.wechat ?? '',
-      qq: item.qq ?? '',
+      wechat: '',
+      clearWechat: false,
+      qq: '',
+      clearQq: false,
       whatsapp: '',
       clearWhatsapp: false,
       sourceOptionId: item.sourceOptionId ?? '',
@@ -325,7 +335,7 @@ export function useCustomersPage() {
     }
   }
 
-  function openRevealContact(item: V2Customer, field: 'phone' | 'whatsapp') {
+  function openRevealContact(item: V2Customer, field: 'phone' | 'wechat' | 'qq' | 'whatsapp') {
     if (customersQuery.isParameterTransition.value) return;
     revealTarget.value = item;
     revealField.value = field;
@@ -350,6 +360,19 @@ export function useCustomersPage() {
     openRevealContact(item, 'whatsapp');
   }
 
+  function openRevealWechat(item: V2Customer) {
+    openRevealContact(item, 'wechat');
+  }
+
+  function openRevealQq(item: V2Customer) {
+    openRevealContact(item, 'qq');
+  }
+
+  function canRevealField(item: V2Customer, field: 'phone' | 'wechat' | 'qq' | 'whatsapp') {
+    const mode = item.contactDisplayModes[field];
+    return canRevealContact.value && (mode === 'reveal_direct' || mode === 'reveal_approval');
+  }
+
   async function revealContact(formInstance?: FormInstance) {
     if (!revealTarget.value || !(await validateV2Form(formInstance))) return;
     revealing.value = true;
@@ -366,12 +389,18 @@ export function useCustomersPage() {
       if (revealField.value === 'phone') {
         const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, payload);
         revealForm.value = result.phone;
-      } else {
+      } else if (revealField.value === 'whatsapp') {
         const result = await idBusinessV2CustomersApi.revealWhatsapp(
           revealTarget.value.id,
           payload
         );
         revealForm.value = result.whatsapp;
+      } else if (revealField.value === 'wechat') {
+        const result = await idBusinessV2CustomersApi.revealWechat(revealTarget.value.id, payload);
+        revealForm.value = result.wechat;
+      } else {
+        const result = await idBusinessV2CustomersApi.revealQq(revealTarget.value.id, payload);
+        revealForm.value = result.qq;
       }
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
@@ -486,6 +515,7 @@ export function useCustomersPage() {
     deleteImpactRows,
     revealTarget,
     revealField,
+    revealFieldLabel,
     revealDialogVisible,
     revealing,
     formRef,
@@ -523,7 +553,10 @@ export function useCustomersPage() {
     submitForm,
     toggleStatus,
     openRevealPhone,
+    openRevealWechat,
+    openRevealQq,
     openRevealWhatsapp,
+    canRevealField,
     revealContact,
     refreshSensitiveAccess: sensitiveAccess.refresh,
     openDelete,

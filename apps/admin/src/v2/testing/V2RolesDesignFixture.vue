@@ -113,6 +113,7 @@ function makeRole(index: number): V2Role {
     permissions: [],
     permissionIds,
     sensitiveApprovalPermissionIds: index % 3 === 0 ? permissionIds.slice(0, 2) : [],
+    sensitiveDisplayPolicies: [],
     permissionCount: permissionIds.length,
     memberCount: index % 7,
     createdAt: `2026-07-${String(1 + (index % 28)).padStart(2, '0')}T08:20:00.000Z`,

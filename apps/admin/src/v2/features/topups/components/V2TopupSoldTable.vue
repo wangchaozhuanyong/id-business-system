@@ -20,7 +20,7 @@
     >
       <template #default="{ row }">
         <div class="v2-table-cell">
-          <strong class="v2-topup-account">{{ row.appleIdMasked }}</strong>
+          <strong class="v2-topup-account">{{ row.displayAppleId || '不显示' }}</strong>
           <el-tag type="warning" effect="plain">已售出</el-tag>
         </div>
       </template>
@@ -80,7 +80,7 @@
       <header>
         <div>
           <strong v-v2-column-visibility="[v2TableSchemas.topups.sold.id, 'appleId']">
-            {{ item.appleIdMasked }}
+            {{ item.displayAppleId || '不显示' }}
           </strong>
           <el-tag type="warning" effect="plain">已售出</el-tag>
           <span v-v2-column-visibility="[v2TableSchemas.topups.sold.id, '国家']">

@@ -38,6 +38,7 @@ export interface IdBusinessV2OrderRecord {
   websiteAccountEncrypted: string | null;
   websiteAccountHash: string | null;
   websiteAccountMasked: string | null;
+  websiteAccountSearchTokens: string[];
   receivedAmount: Amount4;
   receivedOriginalAmount: Amount4;
   receivedCurrency: IdBusinessV2FinanceCurrency;
@@ -141,6 +142,7 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
   };
   account: {
     id: string;
+    appleIdEncrypted: string;
     appleIdMasked: string;
     countryOption: { id: string; code: string; name: string };
   } | null;
@@ -156,6 +158,7 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
 
 export interface IdBusinessV2MatchingAccount {
   id: string;
+  appleIdEncrypted: string;
   appleIdMasked: string;
   currentBalance: Amount4;
   balanceCostAmount: Amount4;

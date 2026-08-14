@@ -15,7 +15,7 @@
       <V2DetailSummary
         heading-id="account-loss-recovery-summary"
         eyebrow="报损冲回"
-        :title="page.recoveryTarget.appleIdMasked"
+        :title="page.recoveryTarget.displayAppleId || '不显示'"
         description="恢复后回到可用分类，原报损记录和审计证据仍会保留"
         :metrics="[
           {

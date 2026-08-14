@@ -2,7 +2,7 @@
   <dl>
     <div v-v2-column-visibility="[v2TableSchemas.customers.main.id, '手机号']">
       <dt>手机号</dt>
-      <dd>{{ customer.maskedPhone || '—' }}</dd>
+      <dd>{{ customer.displayPhone || '—' }}</dd>
     </div>
     <div v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'wechat']">
       <dt>微信</dt>
@@ -14,7 +14,7 @@
     </div>
     <div v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'WhatsApp']">
       <dt>WhatsApp</dt>
-      <dd>{{ customer.maskedWhatsapp || '—' }}</dd>
+      <dd>{{ customer.displayWhatsapp || '—' }}</dd>
     </div>
     <div v-v2-column-visibility="[v2TableSchemas.customers.main.id, '标签']">
       <dt>标签</dt>

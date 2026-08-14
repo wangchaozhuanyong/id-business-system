@@ -84,7 +84,9 @@ describe('IdBusinessV2TopupWorkbenchService', () => {
   };
   const service = new IdBusinessV2TopupWorkbenchService(
     new IdBusinessV2BalanceQueryRepository(prisma as never),
-    new IdBusinessV2BalanceCalculatorService()
+    new IdBusinessV2BalanceCalculatorService(),
+    { hash: vi.fn(), decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn() } as never
   );
 
   beforeEach(() => {

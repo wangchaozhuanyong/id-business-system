@@ -65,7 +65,9 @@ describe('IdBusinessV2RenewalWarningService', () => {
   };
   const service = new IdBusinessV2RenewalWarningService(
     new IdBusinessV2RenewalsRepository(prisma as never),
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn() } as never
   );
 
   beforeEach(() => {

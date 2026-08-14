@@ -30,11 +30,13 @@ export interface AccountWithRelations {
   appleIdEncrypted: string;
   appleIdHash: string;
   appleIdMasked: string;
+  appleIdSearchTokens: string[];
   passwordEncrypted: string | null;
   phoneEncrypted: string | null;
   phoneHash: string | null;
   phoneMasked: string | null;
   phoneTail: string | null;
+  phoneSearchTokens: string[];
   securityInfoEncrypted: string | null;
   countryOptionId: string;
   statusOptionId: string;
@@ -73,11 +75,13 @@ export interface AccountUpdateData {
   appleIdEncrypted?: string;
   appleIdHash?: string;
   appleIdMasked?: string;
+  appleIdSearchTokens?: string[];
   passwordEncrypted?: string | null;
   phoneEncrypted?: string | null;
   phoneHash?: string | null;
   phoneMasked?: string | null;
   phoneTail?: string | null;
+  phoneSearchTokens?: string[];
   securityInfoEncrypted?: string | null;
   countryOptionId?: string;
   statusOptionId?: string;
@@ -272,13 +276,21 @@ export function maskPhone(value: string | null) {
   return `${value.slice(0, 3)}****${value.slice(-4)}`;
 }
 
-export function toAccountResponse(account: AccountWithRelations) {
+export function toAccountResponse(
+  account: AccountWithRelations,
+  presentation?: {
+    appleId: string | null;
+    phone: string | null;
+  }
+) {
   return {
     id: account.id,
     appleIdMasked: account.appleIdMasked,
+    displayAppleId: presentation ? presentation.appleId : account.appleIdMasked,
     hasPassword: Boolean(account.passwordEncrypted),
     hasPhone: Boolean(account.phoneEncrypted),
     maskedPhone: account.phoneMasked,
+    displayPhone: presentation ? presentation.phone : account.phoneMasked,
     phoneTail: account.phoneTail,
     hasSecurityInfo: Boolean(account.securityInfoEncrypted),
     countryOptionId: account.countryOptionId,

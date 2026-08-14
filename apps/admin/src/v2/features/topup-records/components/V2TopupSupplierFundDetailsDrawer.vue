@@ -75,8 +75,7 @@
             <V2TableColumn :definition="v2TableSchemas.topupRecords.supplierFundDetails.columns[4]">
               <template #default="{ row }">
                 {{
-                  row.giftCard?.codeMasked ||
-                  (row.payment ? `付款 ${row.payment.id.slice(0, 8)}` : '—')
+                  row.giftCard?.code || (row.payment ? `付款 ${row.payment.id.slice(0, 8)}` : '—')
                 }}
               </template>
             </V2TableColumn>

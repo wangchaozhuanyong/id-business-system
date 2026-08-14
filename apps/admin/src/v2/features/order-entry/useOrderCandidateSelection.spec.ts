@@ -41,6 +41,7 @@ function createMatchingResult(
       {
         id: 'candidate-1',
         appleIdMasked: 'test***@example.com',
+        displayAppleId: 'test***@example.com',
         country: option,
         status: option,
         currentBalance,

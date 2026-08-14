@@ -18,7 +18,9 @@ describe('customers scheme 3 redesign contract', () => {
   it('preserves the original permission gates and customer actions', () => {
     expect(overview).toContain('v-if="page.canCreate"');
     expect(overview).toContain('@click="page.loadCustomers"');
-    expect(list).toContain(':can-reveal="page.canRevealContact && !page.isParameterTransition"');
+    expect(list).toContain(":can-reveal=\"page.canRevealField(row, 'phone')");
+    expect(list).toContain("item.hasWechat && page.canRevealField(item, 'wechat')");
+    expect(list).toContain("item.hasQq && page.canRevealField(item, 'qq')");
     expect(list).toContain('@click="page.openEdit(row)"');
     expect(list).toContain('@click="page.toggleStatus(row)"');
     expect(list).toContain('@click="page.openDelete(row)"');

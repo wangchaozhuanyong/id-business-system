@@ -67,6 +67,8 @@
     "prisma:generate": "npm run prisma:generate --workspace @apple-business/api",
     "prisma:validate": "npm run prisma:validate --workspace @apple-business/api",
     "prisma:migrate:deploy": "npm run prisma:migrate:deploy --workspace @apple-business/api",
+    "backfill:v2-sensitive-search-indexes": "npm run prisma:generate --workspace @apple-business/api && npm run build --workspace @apple-business/api && node scripts/backfill-v2-sensitive-search-indexes.mjs",
+    "backfill:v2-sensitive-search-indexes:production": "node scripts/run-with-cloudflare-free-secrets.mjs sensitive-search-backfill",
     "prisma:migrate:production": "node scripts/deploy-production-migrations.mjs",
     "prisma:seed": "npm run prisma:seed --workspace @apple-business/api",
     "prod:config": "docker compose --env-file .env.production -f docker-compose.prod.yml config",

@@ -630,6 +630,7 @@ export const v2TableSchemas = {
         { key: '客户网站账号', label: '客户网站账号', kind: 'identifier', widthPreset: 'wide' },
         { key: 'currentBalance', label: 'ID余额', kind: 'numeric', widthPreset: 'compact' },
         { key: 'service', label: '当前业务', kind: 'text', widthPreset: 'standard' },
+        { key: 'openedAt', label: '开通时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
         { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact', pin: 'end' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }

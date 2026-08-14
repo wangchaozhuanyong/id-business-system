@@ -106,17 +106,47 @@
 }
 
 .v2-orders-toolbar {
-  grid-template-columns:
-    minmax(260px, 1fr) minmax(150px, 180px) minmax(170px, 210px) minmax(126px, max-content)
-    auto;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  display: grid;
+  min-width: 0;
+  gap: 10px;
 }
 
-.v2-orders-toolbar .v2-records-toolbar__actions {
-  flex-wrap: nowrap;
+.v2-orders-toolbar__search-row,
+.v2-orders-toolbar__filter-row {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.v2-orders-toolbar__search-row {
+  grid-template-columns: minmax(280px, 1fr) auto 36px;
+}
+
+.v2-orders-toolbar__filter-row {
+  grid-template-columns:
+    repeat(3, minmax(160px, 210px)) minmax(126px, max-content)
+    auto;
+  justify-content: start;
+}
+
+.v2-orders-toolbar__search-row > .el-input,
+.v2-orders-toolbar__filter-row > .el-select {
+  width: 100%;
+}
+
+.v2-orders-toolbar .v2-filter-disclosure__panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.v2-orders-toolbar .v2-filter-disclosure__panel > .el-input,
+.v2-orders-toolbar .v2-filter-disclosure__panel > .el-select,
+.v2-orders-toolbar .v2-filter-disclosure__panel > .el-date-editor {
+  min-width: 0;
+}
+
+.v2-orders-toolbar .v2-filter-disclosure__panel > .el-date-editor {
+  --el-date-editor-width: 100%;
 }
 
 .v2-orders-list__header {
@@ -241,12 +271,6 @@
     grid-template-columns: minmax(210px, 0.72fr) minmax(480px, 1.5fr) auto;
     gap: 14px;
   }
-
-  .v2-orders-toolbar {
-    grid-template-columns:
-      minmax(220px, 1fr) minmax(140px, 170px) minmax(160px, 190px)
-      minmax(126px, max-content) auto;
-  }
 }
 
 @media (max-width: 1180px) {
@@ -259,16 +283,8 @@
     justify-self: start;
   }
 
-  .v2-orders-toolbar {
-    grid-template-columns: minmax(220px, 1fr) minmax(140px, 170px) minmax(160px, 190px);
-  }
-
-  .v2-orders-toolbar > .v2-filter-disclosure {
-    grid-column: 2;
-  }
-
-  .v2-orders-toolbar .v2-records-toolbar__actions {
-    grid-column: 3;
+  .v2-orders-toolbar__filter-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(126px, max-content) auto;
   }
 }
 
@@ -295,16 +311,16 @@
     padding: 14px;
   }
 
-  .v2-orders-toolbar {
+  .v2-orders-toolbar__filter-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .v2-orders-toolbar > .v2-filter-disclosure,
-  .v2-orders-toolbar .v2-records-toolbar__actions {
-    grid-column: 1 / -1;
+  .v2-orders-toolbar__filter-row > .v2-filter-disclosure,
+  .v2-orders-toolbar__filter-row > .app-button {
+    width: 100%;
   }
 
-  .v2-orders-toolbar .el-date-editor {
+  .v2-orders-toolbar__filter-row .el-date-editor {
     width: 100%;
     grid-column: 1 / -1;
   }
@@ -359,21 +375,28 @@
     flex-direction: column;
   }
 
-  .v2-orders-toolbar {
+  .v2-orders-toolbar__search-row {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
+  .v2-orders-toolbar__search-row > .el-input {
+    grid-column: 1 / -1;
+  }
+
+  .v2-orders-toolbar__search-row > .app-button:not(.app-button--icon) {
+    width: 100%;
+  }
+
+  .v2-orders-toolbar__filter-row {
     grid-template-columns: 1fr;
   }
 
-  .v2-orders-toolbar > .el-input,
-  .v2-orders-toolbar > .v2-filter-disclosure,
-  .v2-orders-toolbar .v2-records-toolbar__actions {
+  .v2-orders-toolbar__filter-row > .v2-filter-disclosure,
+  .v2-orders-toolbar__filter-row > .app-button {
     grid-column: 1;
   }
 
-  .v2-orders-toolbar .v2-records-toolbar__actions {
-    justify-content: stretch;
-  }
-
-  .v2-orders-toolbar .v2-records-toolbar__actions .app-button:not(.app-button--icon) {
-    flex: 1;
+  .v2-orders-toolbar .v2-filter-disclosure__panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

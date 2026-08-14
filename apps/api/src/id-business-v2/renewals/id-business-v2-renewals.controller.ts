@@ -29,22 +29,26 @@ export class IdBusinessV2RenewalsController {
     @Query('dueTo') dueTo?: string,
     @Query('warningOnly') warningOnly?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.renewalsService.listWorkbench({
-      page,
-      pageSize,
-      keyword,
-      customerId,
-      serviceOptionId,
-      accountId,
-      dueStatus,
-      dueFrom,
-      dueTo,
-      warningOnly,
-      sortBy,
-      sortOrder
-    });
+    return this.renewalsService.listWorkbench(
+      {
+        page,
+        pageSize,
+        keyword,
+        customerId,
+        serviceOptionId,
+        accountId,
+        dueStatus,
+        dueFrom,
+        dueTo,
+        warningOnly,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('workbench/bootstrap')
@@ -67,21 +71,24 @@ export class IdBusinessV2RenewalsController {
       operator?.permissions.includes('apple.renewal_task.update') &&
       operator.permissions.includes('apple.order.create');
     const [list, filters, manualOptions] = await Promise.all([
-      this.renewalsService.listWorkbench({
-        page,
-        pageSize,
-        keyword,
-        customerId,
-        serviceOptionId,
-        accountId,
-        dueStatus,
-        dueFrom,
-        dueTo,
-        warningOnly,
-        sortBy,
-        sortOrder
-      }),
-      this.renewalsService.listFilterOptions(),
+      this.renewalsService.listWorkbench(
+        {
+          page,
+          pageSize,
+          keyword,
+          customerId,
+          serviceOptionId,
+          accountId,
+          dueStatus,
+          dueFrom,
+          dueTo,
+          warningOnly,
+          sortBy,
+          sortOrder
+        },
+        operator
+      ),
+      this.renewalsService.listFilterOptions(operator),
       canRenew ? this.manualRenewalService.listOptions() : Promise.resolve(null)
     ]);
     return {
@@ -95,8 +102,8 @@ export class IdBusinessV2RenewalsController {
   }
 
   @Get('workbench/filter-options')
-  listFilterOptions() {
-    return this.renewalsService.listFilterOptions();
+  listFilterOptions(@CurrentUser() operator?: AuthenticatedUser) {
+    return this.renewalsService.listFilterOptions(operator);
   }
 
   @Get('workbench/manual-renewal-options')
@@ -124,8 +131,8 @@ export class IdBusinessV2RenewalsController {
   }
 
   @Get('warning-summary')
-  getWarningSummary() {
-    return this.renewalWarningService.getSummary();
+  getWarningSummary(@CurrentUser() operator?: AuthenticatedUser) {
+    return this.renewalWarningService.getSummary(operator);
   }
 
   @Post(':activationId/manual-renewals')

@@ -28,7 +28,12 @@ describe('orders scheme 3 redesign contract', () => {
     expect(toolbar).toContain('@keyup.enter="page.handleSearch"');
     expect(toolbar).toContain('@change="page.handleFilterChange"');
     expect(toolbar).toContain('@click="page.loadOrders"');
+    expect(toolbar).toContain('@click="page.resetFilters"');
+    expect(toolbar).toContain('page.activeFilterCount');
     expect(toolbar).toContain('title="订单筛选"');
+    expect(toolbar).toContain('v2-orders-toolbar__search-row');
+    expect(toolbar).toContain('v2-orders-toolbar__filter-row');
+    expect(pageState).toContain('function resetFilters()');
   });
 
   it('labels page-scoped metrics explicitly and keeps the create permission gate', () => {

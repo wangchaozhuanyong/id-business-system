@@ -32,6 +32,7 @@
         show-overflow-tooltip
         class="v2-records-table"
         :data="page.items"
+        :default-sort="{ prop: 'openedAt', order: 'descending' }"
         @sort-change="page.handleSortChange"
       >
         <template #empty>
@@ -53,10 +54,10 @@
           <template #default="{ row }">{{ row.service.name }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.activations.main.columns[3]">
-          <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
+          <template #default="{ row }">{{ row.account.displayAppleId || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.activations.main.columns[4]">
-          <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+          <template #default="{ row }">{{ row.displayWebsiteAccount || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.activations.main.columns[5]"
@@ -117,11 +118,11 @@
           <dl>
             <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, '苹果 ID']">
               <dt>苹果 ID</dt>
-              <dd>{{ item.account.appleIdMasked }}</dd>
+              <dd>{{ item.account.displayAppleId || '—' }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, '客户网站账号']">
               <dt>客户网站账号</dt>
-              <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
+              <dd>{{ item.displayWebsiteAccount || '—' }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.activations.main.id, 'openedAt']">
               <dt>开通日期</dt>

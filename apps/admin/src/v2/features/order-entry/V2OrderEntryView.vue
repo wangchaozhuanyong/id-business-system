@@ -361,7 +361,7 @@
         <V2OrderEntrySubmitBar
           :submitting="submitting"
           :disabled-reason="submitDisabledReason"
-          :selected-id="selectedCandidate?.appleIdMasked ?? ''"
+          :selected-id="selectedCandidate?.displayAppleId ?? ''"
           :selected-balance="selectedCandidate?.currentBalance ?? '0'"
           :selected-currency="selectedCountry?.currencyCode ?? ''"
           :estimated-profit="estimatedProfitPreview"

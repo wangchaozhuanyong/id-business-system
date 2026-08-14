@@ -42,19 +42,23 @@ export class IdBusinessV2CustomersController {
     @Query('serviceOptionId') serviceOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.customersService.list({
-      page,
-      pageSize,
-      keyword,
-      sourceOptionId,
-      tagOptionId,
-      serviceOptionId,
-      recordStatus,
-      sortBy,
-      sortOrder
-    });
+    return this.customersService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        sourceOptionId,
+        tagOptionId,
+        serviceOptionId,
+        recordStatus,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('bootstrap')
@@ -68,20 +72,24 @@ export class IdBusinessV2CustomersController {
     @Query('serviceOptionId') serviceOptionId?: string,
     @Query('recordStatus') recordStatus?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
     const [list, optionGroups] = await Promise.all([
-      this.customersService.list({
-        page,
-        pageSize,
-        keyword,
-        sourceOptionId,
-        tagOptionId,
-        serviceOptionId,
-        recordStatus,
-        sortBy,
-        sortOrder
-      }),
+      this.customersService.list(
+        {
+          page,
+          pageSize,
+          keyword,
+          sourceOptionId,
+          tagOptionId,
+          serviceOptionId,
+          recordStatus,
+          sortBy,
+          sortOrder
+        },
+        operator
+      ),
       this.optionsService.listSelectorGroups(['customer_source', 'customer_tag', 'service'])
     ]);
     return {
@@ -103,8 +111,8 @@ export class IdBusinessV2CustomersController {
 
   @Get(':id')
   @RequirePermissions('customer.view')
-  get(@Param('id') id: string) {
-    return this.customersService.get(id);
+  get(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.customersService.get(id, operator);
   }
 
   @Post()
@@ -152,6 +160,32 @@ export class IdBusinessV2CustomersController {
     @Req() request: RequestWithAuditMeta
   ) {
     return this.customersService.revealWhatsapp(id, dto, operator, this.requestMeta(request));
+  }
+
+  @Post(':id/reveal-wechat')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @RequirePermissions('customer.view_phone')
+  revealWechat(
+    @Param('id') id: string,
+    @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
+  ) {
+    return this.customersService.revealWechat(id, dto, operator, this.requestMeta(request));
+  }
+
+  @Post(':id/reveal-qq')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @RequirePermissions('customer.view_phone')
+  revealQq(
+    @Param('id') id: string,
+    @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
+    @CurrentUser() operator: AuthenticatedUser | undefined,
+    @Req() request: RequestWithAuditMeta
+  ) {
+    return this.customersService.revealQq(id, dto, operator, this.requestMeta(request));
   }
 
   @Delete(':id')

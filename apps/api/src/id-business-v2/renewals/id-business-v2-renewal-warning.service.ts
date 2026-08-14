@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { V2CommandTransactionManager } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { UpdateIdBusinessV2RenewalWarningSettingsDto } from './dto/update-id-business-v2-renewal-warning-settings.dto';
 import type {
   IdBusinessV2ActivationStatus,
@@ -20,7 +22,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export class IdBusinessV2RenewalWarningService {
   constructor(
     private readonly repository: IdBusinessV2RenewalsRepository,
-    private readonly transactionManager: V2CommandTransactionManager
+    private readonly transactionManager: V2CommandTransactionManager,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
   async getSettings() {
@@ -94,17 +98,35 @@ export class IdBusinessV2RenewalWarningService {
     };
   }
 
-  async getSummary(now = new Date()) {
+  async getSummary(operatorOrNow?: AuthenticatedUser | Date) {
+    const operator = operatorOrNow instanceof Date ? undefined : operatorOrNow;
+    const now = operatorOrNow instanceof Date ? operatorOrNow : new Date();
     const settings = await this.getSettings();
     const [counts, summary] = await Promise.all([
       this.getWarningCounts({}, now, settings.warningDays),
       this.repository.getWarningSummary(now, settings.warningDays)
     ]);
+    const displayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'account.apple_id',
+          'dashboard_notifications'
+        )
+      : 'masked';
     const { upcoming, expired } = summary;
     const items = [...upcoming, ...expired].slice(0, 5).map((item) => ({
       id: item.id,
       customer: item.customer,
-      account: item.account,
+      account: {
+        id: item.account.id,
+        appleIdMasked: item.account.appleIdMasked,
+        displayAppleId:
+          displayMode === 'hidden'
+            ? null
+            : displayMode === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked
+      },
       service: item.serviceOption,
       dueAt: item.dueAt,
       warningState: this.resolveWarningState(item.status, item.dueAt, now, settings.warningDays)

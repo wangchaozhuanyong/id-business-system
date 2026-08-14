@@ -86,9 +86,17 @@ describe('IdBusinessV2RenewalsService', () => {
   const repository = new IdBusinessV2RenewalsRepository(prisma as never);
   const warningService = new IdBusinessV2RenewalWarningService(
     repository,
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn() } as never
   );
-  const service = new IdBusinessV2RenewalsService(repository, statusService, warningService);
+  const service = new IdBusinessV2RenewalsService(
+    repository,
+    statusService,
+    warningService,
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayModes: vi.fn() } as never
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -156,6 +164,10 @@ describe('IdBusinessV2RenewalsService', () => {
     });
     expect(JSON.stringify(result)).not.toContain('Encrypted');
     expect(JSON.stringify(result)).not.toContain('Hash');
+    expect(prisma.idBusinessV2Activation.findMany.mock.calls[0]?.[0].orderBy).toEqual([
+      { openedAt: 'desc' },
+      { id: 'desc' }
+    ]);
   });
 
   it('defaults to the configured warning window or expired and applies pagination and sorting', async () => {
@@ -169,7 +181,7 @@ describe('IdBusinessV2RenewalsService', () => {
     const call = prisma.idBusinessV2Activation.findMany.mock.calls[0]?.[0];
     expect(call.skip).toBe(10);
     expect(call.take).toBe(10);
-    expect(call.orderBy).toEqual([{ account: { currentBalance: 'desc' } }, { id: 'asc' }]);
+    expect(call.orderBy).toEqual([{ account: { currentBalance: 'desc' } }, { id: 'desc' }]);
     expect(call.where.AND[1]).toEqual({
       renewedBy: {
         is: null
@@ -310,7 +322,13 @@ describe('IdBusinessV2RenewalsService', () => {
 
     expect(result).toEqual({
       customers: [{ id: customerId, name: '测试客户' }],
-      accounts: [{ id: accountId, appleIdMasked: 'us***@example.com' }],
+      accounts: [
+        {
+          id: accountId,
+          appleIdMasked: 'us***@example.com',
+          displayAppleId: 'us***@example.com'
+        }
+      ],
       services: [
         {
           id: serviceOptionId,

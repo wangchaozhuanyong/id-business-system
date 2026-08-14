@@ -62,7 +62,7 @@ export interface V2DashboardUpcomingRenewal {
   dueAt: string | null;
   customer: { name: string };
   serviceOption: { name: string };
-  account: { appleIdMasked: string };
+  account: { appleIdMasked: string; displayAppleId: string | null };
 }
 
 export interface V2DashboardRecentAudit {

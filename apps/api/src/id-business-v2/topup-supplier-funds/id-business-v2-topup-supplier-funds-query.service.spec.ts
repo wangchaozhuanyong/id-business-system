@@ -21,7 +21,9 @@ describe('IdBusinessV2TopupSupplierFundsQueryService', () => {
     }
   };
   const service = new IdBusinessV2TopupSupplierFundsQueryService(
-    new IdBusinessV2TopupSupplierQueryRepository(prisma as never)
+    new IdBusinessV2TopupSupplierQueryRepository(prisma as never),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn() } as never
   );
 
   beforeEach(() => {

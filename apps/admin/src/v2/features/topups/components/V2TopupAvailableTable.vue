@@ -19,7 +19,7 @@
       sortable="custom"
     >
       <template #default="{ row }">
-        <strong class="v2-topup-account">{{ row.appleIdMasked }}</strong>
+        <strong class="v2-topup-account">{{ row.displayAppleId || '不显示' }}</strong>
       </template>
     </V2TableColumn>
     <V2TableColumn :definition="v2TableSchemas.topups.available.columns[1]">
@@ -71,7 +71,7 @@
       <header>
         <div>
           <strong v-v2-column-visibility="[v2TableSchemas.topups.available.id, 'appleId']">
-            {{ item.appleIdMasked }}
+            {{ item.displayAppleId || '不显示' }}
           </strong>
           <span v-v2-column-visibility="[v2TableSchemas.topups.available.id, '国家']">
             {{ item.country.name }}

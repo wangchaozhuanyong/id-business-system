@@ -63,6 +63,7 @@ export interface GiftCardRecord {
   countryOption: { id: string; code: string };
   account: {
     id: string;
+    appleIdEncrypted: string;
     appleIdMasked: string;
     lossReportedAt: Date | null;
     countryOption: OptionSummary;
@@ -108,6 +109,7 @@ export interface BalanceLedgerRecord {
   remark: string | null;
   account: {
     id: string;
+    appleIdEncrypted: string;
     appleIdMasked: string;
     countryOption: OptionSummary;
   };

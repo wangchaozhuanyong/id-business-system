@@ -1,6 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { buildIdBusinessV2DateRange } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import {
   IdBusinessV2ActivationStatusService,
   type IdBusinessV2ActivationDueStatus
@@ -44,10 +47,12 @@ export class IdBusinessV2RenewalsService {
   constructor(
     private readonly repository: IdBusinessV2RenewalsRepository,
     private readonly activationStatusService: IdBusinessV2ActivationStatusService,
-    private readonly renewalWarningService: IdBusinessV2RenewalWarningService
+    private readonly renewalWarningService: IdBusinessV2RenewalWarningService,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async listWorkbench(query: ListIdBusinessV2RenewalsQuery) {
+  async listWorkbench(query: ListIdBusinessV2RenewalsQuery, operator?: AuthenticatedUser) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const dueStatus = this.parseDueStatus(query.dueStatus);
@@ -80,8 +85,8 @@ export class IdBusinessV2RenewalsService {
       this.repository.listWorkbench({
         base,
         dueFilter,
-        sortField: query.sortBy ?? 'dueAt',
-        sortDirection: query.sortOrder === 'desc' ? 'desc' : 'asc',
+        sortField: query.sortBy ?? 'openedAt',
+        sortDirection: query.sortOrder === 'asc' ? 'asc' : 'desc',
         skip: pagination.skip,
         take: pagination.take
       }),
@@ -89,7 +94,7 @@ export class IdBusinessV2RenewalsService {
     ]);
 
     return {
-      items: result.items.map((item) => this.toResponse(item, now, warningSettings.warningDays)),
+      items: await this.presentRenewals(result.items, now, warningSettings.warningDays, operator),
       total: result.total,
       page: pagination.page,
       pageSize: pagination.pageSize,
@@ -106,8 +111,58 @@ export class IdBusinessV2RenewalsService {
     };
   }
 
-  async listFilterOptions() {
-    return this.repository.listFilterOptions();
+  async listFilterOptions(operator?: AuthenticatedUser) {
+    const options = await this.repository.listFilterOptions();
+    const displayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'account.apple_id',
+          'renewal_workbench'
+        )
+      : 'masked';
+    return {
+      ...options,
+      accounts: options.accounts.map((account) => ({
+        id: account.id,
+        appleIdMasked: account.appleIdMasked,
+        displayAppleId:
+          displayMode === 'hidden'
+            ? null
+            : displayMode === 'full'
+              ? this.fieldEncryptionService.decrypt(account.appleIdEncrypted)
+              : account.appleIdMasked
+      }))
+    };
+  }
+
+  private async presentRenewals(
+    items: RenewalRecord[],
+    evaluatedAt: Date,
+    warningDays: number,
+    operator?: AuthenticatedUser
+  ) {
+    if (!operator) return items.map((item) => this.toResponse(item, evaluatedAt, warningDays));
+    const modes = await this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['account.apple_id', 'order.website_account'],
+      'renewal_workbench'
+    );
+    return items.map((item) =>
+      this.toResponse(item, evaluatedAt, warningDays, {
+        appleId:
+          modes['account.apple_id'] === 'hidden'
+            ? null
+            : modes['account.apple_id'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked,
+        websiteAccount:
+          modes['order.website_account'] === 'hidden'
+            ? null
+            : modes['order.website_account'] === 'full'
+              ? this.fieldEncryptionService.decrypt(item.order.websiteAccountEncrypted)
+              : item.order.websiteAccountMasked
+      })
+    );
   }
 
   private parseDueStatus(value: unknown) {
@@ -162,7 +217,12 @@ export class IdBusinessV2RenewalsService {
     return String(value).trim() || null;
   }
 
-  private toResponse(item: RenewalRecord, evaluatedAt: Date, warningDays: number) {
+  private toResponse(
+    item: RenewalRecord,
+    evaluatedAt: Date,
+    warningDays: number,
+    presentation?: { appleId: string | null; websiteAccount: string | null }
+  ) {
     const status = this.activationStatusService.resolve(item.status, item.dueAt, evaluatedAt);
     return {
       id: item.id,
@@ -172,6 +232,7 @@ export class IdBusinessV2RenewalsService {
       account: {
         id: item.account.id,
         appleIdMasked: item.account.appleIdMasked,
+        displayAppleId: presentation ? presentation.appleId : item.account.appleIdMasked,
         currentBalance: item.account.currentBalance.toString(),
         balanceCostAmount: item.account.balanceCostAmount.toString(),
         recordStatus: item.account.recordStatus,
@@ -181,6 +242,9 @@ export class IdBusinessV2RenewalsService {
       },
       service: item.serviceOption,
       maskedWebsiteAccount: item.order.websiteAccountMasked,
+      displayWebsiteAccount: presentation
+        ? presentation.websiteAccount
+        : item.order.websiteAccountMasked,
       openedAt: item.openedAt,
       dueAt: item.dueAt,
       status,

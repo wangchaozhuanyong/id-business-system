@@ -46,7 +46,11 @@
         maxlength="255"
         autocomplete="off"
         :disabled="form.clearWebsiteAccount"
-        :placeholder="order?.hasWebsiteAccount ? `留空保持 ${order.maskedWebsiteAccount}` : '选填'"
+        :placeholder="
+          order?.hasWebsiteAccount
+            ? `留空保持 ${order.displayWebsiteAccount || '已保存账号'}`
+            : '选填'
+        "
       />
       <el-checkbox
         v-if="order?.hasWebsiteAccount"

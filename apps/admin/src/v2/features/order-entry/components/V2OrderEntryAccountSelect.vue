@@ -13,7 +13,7 @@
       <el-option
         v-for="candidate in candidates"
         :key="candidate.id"
-        :label="`${candidate.appleIdMasked} / 余额 ${formatDecimal(candidate.currentBalance)}`"
+        :label="`${candidate.displayAppleId || '不显示'} / 余额 ${formatDecimal(candidate.currentBalance)}`"
         :value="candidate.id"
       />
     </el-select>

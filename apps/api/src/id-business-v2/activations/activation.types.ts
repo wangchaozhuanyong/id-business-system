@@ -42,12 +42,14 @@ export interface ActivationRecord {
     orderNo: string;
     status: string;
     websiteAccountMasked: string | null;
+    websiteAccountEncrypted: string | null;
     receivedAmount: Amount4;
     profitAmount: Amount4 | null;
   };
   customer: { id: string; name: string };
   account: {
     id: string;
+    appleIdEncrypted: string;
     appleIdMasked: string;
     countryOption: { id: string; code: string; name: string };
   };
@@ -57,5 +59,9 @@ export interface ActivationRecord {
     name: string;
     parent: { id: string; name: string } | null;
   };
+  renewedBy: {
+    id: string;
+    serviceOptionId: string;
+  } | null;
   createdBy: { id: string; username: string; displayName: string } | null;
 }

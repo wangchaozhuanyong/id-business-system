@@ -320,6 +320,7 @@ const candidateSeed = [
 const inventoryCandidates: V2OrderCandidate[] = candidateSeed.map((item, index) => ({
   id: `candidate-${index + 1}`,
   appleIdMasked: item[0],
+  displayAppleId: item[0],
   country: { id: 'country-us', code: 'US', name: '美国' },
   status: { id: 'status-normal', code: 'normal', name: item[3] },
   currentBalance: item[1],

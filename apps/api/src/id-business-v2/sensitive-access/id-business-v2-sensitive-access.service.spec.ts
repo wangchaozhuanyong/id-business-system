@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { listIdBusinessV2SensitiveDisplayCatalog } from './id-business-v2-sensitive-access.catalog';
 import { IdBusinessV2SensitiveAccessService } from './id-business-v2-sensitive-access.service';
 
 const requester: AuthenticatedUser = {
@@ -16,6 +17,10 @@ const admin: AuthenticatedUser = {
   displayName: '管理员',
   roles: ['admin'],
   permissions: []
+};
+const accountViewer: AuthenticatedUser = {
+  ...requester,
+  permissions: ['apple.account.view_full']
 };
 const accountId = '33333333-3333-4333-8333-333333333333';
 const approvalId = '44444444-4444-4444-8444-444444444444';
@@ -51,6 +56,7 @@ function createFixture() {
   const tx = { auditLog: { create: vi.fn() } };
   const repository = {
     listSensitivePermissionGrants: vi.fn(),
+    listSensitiveDisplayPolicies: vi.fn().mockResolvedValue([]),
     verifyApproval: vi.fn(),
     findApprovalReason: vi.fn(),
     findPending: vi.fn(),
@@ -113,6 +119,74 @@ describe('IdBusinessV2SensitiveAccessService', () => {
 
     const adminPolicies = await fixture.service.listPolicies(admin);
     expect(adminPolicies.items.every((item) => item.mode === 'admin_bypass')).toBe(true);
+  });
+
+  it('uses safe administrator defaults for inline display and audit contexts', async () => {
+    const fixture = createFixture();
+
+    await expect(
+      fixture.service.resolveDisplayMode(admin, 'account.apple_id', 'account_management')
+    ).resolves.toBe('full');
+    await expect(
+      fixture.service.resolveDisplayMode(admin, 'account.password', 'account_management')
+    ).resolves.toBe('reveal_direct');
+    await expect(
+      fixture.service.resolveDisplayMode(admin, 'account.apple_id', 'audit')
+    ).resolves.toBe('masked');
+  });
+
+  it('never allows full values in audit policy options or legacy role fallbacks', async () => {
+    const fixture = createFixture();
+    fixture.repository.listSensitivePermissionGrants.mockResolvedValue([
+      {
+        roleId: 'legacy-role',
+        sensitiveApprovalRequired: false,
+        permission: { code: 'apple.account.view_full' }
+      }
+    ]);
+
+    expect(
+      listIdBusinessV2SensitiveDisplayCatalog()
+        .filter((item) => item.context === 'audit')
+        .every((item) => !item.allowedModes.includes('full'))
+    ).toBe(true);
+    await expect(
+      fixture.service.resolveDisplayMode(accountViewer, 'account.apple_id', 'audit')
+    ).resolves.toBe('masked');
+  });
+
+  it('requires the base permission and merges policies from multiple roles by visibility', async () => {
+    const fixture = createFixture();
+    fixture.repository.listSensitivePermissionGrants.mockResolvedValue([
+      {
+        roleId: 'role-hidden',
+        sensitiveApprovalRequired: false,
+        permission: { code: 'apple.account.view_full' }
+      },
+      {
+        roleId: 'role-legacy-direct',
+        sensitiveApprovalRequired: false,
+        permission: { code: 'apple.account.view_full' }
+      }
+    ]);
+    fixture.repository.listSensitiveDisplayPolicies.mockResolvedValue([
+      {
+        fieldKey: 'account.apple_id',
+        context: 'account_management',
+        mode: 'hidden',
+        role: {
+          id: 'role-hidden',
+          rolePermissions: [{ permission: { code: 'apple.account.view_full' } }]
+        }
+      }
+    ]);
+
+    await expect(
+      fixture.service.resolveDisplayMode(accountViewer, 'account.apple_id', 'account_management')
+    ).resolves.toBe('reveal_direct');
+    await expect(
+      fixture.service.resolveDisplayMode(requester, 'account.apple_id', 'account_management')
+    ).resolves.toBe('masked');
   });
 
   it('fails closed until a matching approved and unexpired request is provided', async () => {

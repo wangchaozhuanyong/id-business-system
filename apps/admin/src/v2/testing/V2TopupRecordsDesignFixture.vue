@@ -272,6 +272,7 @@ function makeGiftCard(index: number): V2GiftCardRecord {
     account: {
       id: `account-${(index % accounts.length) + 1}`,
       appleIdMasked: accounts[index % accounts.length],
+      displayAppleId: accounts[index % accounts.length],
       lossStatus: 'active',
       lossReportedAt: null,
       country
@@ -341,6 +342,7 @@ function makeLedgerEntry(index: number): V2BalanceLedgerRecord {
     account: {
       id: `account-${(index % accounts.length) + 1}`,
       appleIdMasked: accounts[index % accounts.length],
+      displayAppleId: accounts[index % accounts.length],
       country
     },
     giftCard: entryType.startsWith('gift_card')

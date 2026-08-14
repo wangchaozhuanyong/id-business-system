@@ -100,7 +100,9 @@
           />
           <V2TableColumn :definition="v2TableSchemas.accountLosses.main.columns[1]">
             <template #default="{ row }">
-              <strong class="v2-account-losses__account">{{ row.appleIdMasked }}</strong>
+              <strong class="v2-account-losses__account">{{
+                row.displayAppleId || '不显示'
+              }}</strong>
             </template>
           </V2TableColumn>
           <V2TableColumn
@@ -191,7 +193,7 @@
             <header>
               <div>
                 <strong v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'ID 账号']">
-                  {{ item.appleIdMasked }}
+                  {{ item.displayAppleId || '不显示' }}
                 </strong>
                 <span
                   v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, 'countryName']"

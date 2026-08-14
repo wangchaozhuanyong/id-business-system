@@ -41,10 +41,26 @@
             </el-checkbox>
           </el-form-item>
           <el-form-item label="微信">
-            <el-input v-model="form.wechat" maxlength="120" />
+            <el-input
+              v-model="form.wechat"
+              :disabled="form.clearWechat"
+              maxlength="120"
+              :placeholder="editingItem?.hasWechat ? '留空保持原微信' : '请输入微信'"
+            />
+            <el-checkbox v-if="editingItem?.hasWechat" v-model="form.clearWechat">
+              清空已保存微信
+            </el-checkbox>
           </el-form-item>
           <el-form-item label="QQ">
-            <el-input v-model="form.qq" maxlength="120" />
+            <el-input
+              v-model="form.qq"
+              :disabled="form.clearQq"
+              maxlength="120"
+              :placeholder="editingItem?.hasQq ? '留空保持原 QQ' : '请输入 QQ'"
+            />
+            <el-checkbox v-if="editingItem?.hasQq" v-model="form.clearQq">
+              清空已保存 QQ
+            </el-checkbox>
           </el-form-item>
           <el-form-item label="WhatsApp">
             <el-input

@@ -54,7 +54,9 @@ function makeActivation() {
       code: 'chatgpt-plus',
       name: 'ChatGPT Plus',
       parent: null
-    }
+    },
+    renewedBy: null,
+    createdBy: null
   };
 }
 
@@ -70,7 +72,9 @@ describe('IdBusinessV2ActivationsService', () => {
   };
   const service = new IdBusinessV2ActivationsService(
     new IdBusinessV2ActivationRepository(prisma as never),
-    new IdBusinessV2ActivationStatusService()
+    new IdBusinessV2ActivationStatusService(),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayModes: vi.fn() } as never
   );
 
   beforeEach(() => {
@@ -112,6 +116,47 @@ describe('IdBusinessV2ActivationsService', () => {
     );
   });
 
+  it('defaults to newest opened activation first and ignores replacements for timed refreshes', async () => {
+    await service.list({});
+
+    expect(prisma.idBusinessV2Activation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ openedAt: 'desc' }, { id: 'desc' }]
+      })
+    );
+    expect(prisma.idBusinessV2Activation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: expect.arrayContaining([
+            expect.objectContaining({ renewedBy: { is: null }, status: 'active' })
+          ])
+        })
+      })
+    );
+  });
+
+  it('shows an upgraded source activation as ineffective instead of due soon', async () => {
+    prisma.idBusinessV2Activation.findMany.mockResolvedValueOnce([
+      {
+        ...makeActivation(),
+        dueAt: new Date(Date.now() + 23 * 60 * 60 * 1000),
+        renewedBy: {
+          id: '77777777-7777-4777-8777-777777777777',
+          serviceOptionId: '88888888-8888-4888-8888-888888888888'
+        }
+      }
+    ]);
+
+    const result = await service.list({});
+
+    expect(result.items[0]?.status).toEqual({
+      code: 'upgraded',
+      label: '已升级失效',
+      hoursRemaining: null,
+      daysRemaining: null
+    });
+  });
+
   it('builds a non-overlapping due-window query matching the server-side status', async () => {
     const result = await service.list({
       dueStatus: 'due_within_23_hours'
@@ -120,6 +165,7 @@ describe('IdBusinessV2ActivationsService', () => {
     const call = prisma.idBusinessV2Activation.findMany.mock.calls[0]?.[0];
     expect(call.where.AND).toEqual([
       {
+        renewedBy: { is: null },
         status: 'active',
         dueAt: {
           gt: expect.any(Date),

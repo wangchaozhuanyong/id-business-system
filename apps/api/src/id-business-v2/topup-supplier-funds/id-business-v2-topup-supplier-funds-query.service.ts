@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { Amount4 } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import { IdBusinessV2TopupSupplierFundsQuerySupport } from './id-business-v2-topup-supplier-funds-query-support';
 import { IdBusinessV2TopupSupplierQueryRepository } from './persistence/id-business-v2-topup-supplier-query.repository';
 
@@ -31,7 +34,11 @@ export interface ListIdBusinessV2TopupSupplierLedgerQuery extends PaginationQuer
 
 @Injectable()
 export class IdBusinessV2TopupSupplierFundsQueryService extends IdBusinessV2TopupSupplierFundsQuerySupport {
-  constructor(private readonly repository: IdBusinessV2TopupSupplierQueryRepository) {
+  constructor(
+    private readonly repository: IdBusinessV2TopupSupplierQueryRepository,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
+  ) {
     super();
   }
 
@@ -141,7 +148,11 @@ export class IdBusinessV2TopupSupplierFundsQueryService extends IdBusinessV2Topu
     };
   }
 
-  async listLedger(supplierOptionIdValue: string, query: ListIdBusinessV2TopupSupplierLedgerQuery) {
+  async listLedger(
+    supplierOptionIdValue: string,
+    query: ListIdBusinessV2TopupSupplierLedgerQuery,
+    operator?: AuthenticatedUser
+  ) {
     const supplierOptionId = this.normalizeRequiredUuid(supplierOptionIdValue, '加卡供应商');
     const pagination = getPagination(query);
     const supplier = await this.repository.findSupplierLedgerHeader(supplierOptionId);
@@ -166,6 +177,13 @@ export class IdBusinessV2TopupSupplierFundsQueryService extends IdBusinessV2Topu
       skip: pagination.skip,
       take: pagination.take
     });
+    const giftCardDisplayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'gift_card.code',
+          'business_records'
+        )
+      : 'masked';
     return {
       supplier: { id: supplier.id, code: supplier.code, name: supplier.name },
       account: {
@@ -194,7 +212,16 @@ export class IdBusinessV2TopupSupplierFundsQueryService extends IdBusinessV2Topu
           : null,
         giftCard: entry.giftCard
           ? {
-              ...entry.giftCard,
+              id: entry.giftCard.id,
+              codeMasked: entry.giftCard.codeMasked,
+              code:
+                giftCardDisplayMode === 'hidden'
+                  ? null
+                  : giftCardDisplayMode === 'full'
+                    ? this.fieldEncryptionService.decrypt(entry.giftCard.codeEncrypted)
+                    : entry.giftCard.codeMasked,
+              countryNameSnapshot: entry.giftCard.countryNameSnapshot,
+              currencyCodeSnapshot: entry.giftCard.currencyCodeSnapshot,
               faceValue: entry.giftCard.faceValue.toString(),
               exchangeRate: entry.giftCard.exchangeRate.toString()
             }

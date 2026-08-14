@@ -33,6 +33,7 @@ export interface V2OrderService extends V2OrderOption {
 export interface V2OrderAccount {
   id: string;
   appleIdMasked: string;
+  displayAppleId: string | null;
   country: V2OrderOption;
 }
 
@@ -48,6 +49,7 @@ export interface V2Order {
   settlementPlatform: V2OrderOption | null;
   platformOrderNo: string | null;
   maskedWebsiteAccount: string | null;
+  displayWebsiteAccount: string | null;
   hasWebsiteAccount: boolean;
   receivedAmount: string;
   receivedOriginalAmount: string;
@@ -162,6 +164,7 @@ export interface V2OrderEntryOptions {
 export interface V2OrderCandidate {
   id: string;
   appleIdMasked: string;
+  displayAppleId: string | null;
   country: V2OrderOption;
   status: V2OrderOption;
   currentBalance: string;

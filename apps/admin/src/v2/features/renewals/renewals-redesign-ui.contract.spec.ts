@@ -45,6 +45,10 @@ describe('renewals scheme 3 redesign contract', () => {
       expect(toolbar).toContain(binding);
     }
     expect(list).toContain(':schema="v2TableSchemas.renewals.main"');
+    expect(list).toContain(":default-sort=\"{ prop: 'openedAt', order: 'descending' }\"");
+    expect(list).toContain('prop="openedAt"');
+    expect(pageState).toContain("sortBy: 'openedAt'");
+    expect(pageState).toContain("sortOrder: 'desc'");
     expect(list).toContain(':current-page="page.displayedPage"');
     expect(list).toContain(':page-size="page.displayedPageSize"');
     expect(list).toContain(':disabled="page.queryPhase === \'transitioning\'"');

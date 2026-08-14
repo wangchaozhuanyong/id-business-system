@@ -21,7 +21,7 @@
             heading-id="activation-detail-summary"
             eyebrow="开通对象"
             :title="page.detail.customer.name"
-            :description="`${page.detail.service.name} · ${page.detail.account.appleIdMasked}`"
+            :description="`${page.detail.service.name} · ${page.detail.account.displayAppleId || '—'}`"
             :metrics="[
               { label: '到期状态', value: page.detail.status.label },
               {
@@ -51,7 +51,7 @@
               </div>
               <div>
                 <dt>苹果 ID</dt>
-                <dd>{{ page.detail.account.appleIdMasked }}</dd>
+                <dd>{{ page.detail.account.displayAppleId || '—' }}</dd>
               </div>
               <div>
                 <dt>国家</dt>
@@ -59,7 +59,7 @@
               </div>
               <div>
                 <dt>网站账号</dt>
-                <dd>{{ page.detail.maskedWebsiteAccount || '—' }}</dd>
+                <dd>{{ page.detail.displayWebsiteAccount || '—' }}</dd>
               </div>
               <div>
                 <dt>开通日期</dt>

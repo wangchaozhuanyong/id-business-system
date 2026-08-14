@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma, SensitiveAccessApprovalStatus } from '@prisma/client';
+import type {
+  IdBusinessV2SensitiveDisplayContext,
+  IdBusinessV2SensitiveDisplayMode,
+  Prisma,
+  SensitiveAccessApprovalStatus
+} from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import {
   verifySensitiveAccessApproval,
@@ -30,8 +35,21 @@ export interface SensitiveApprovalFilter {
 }
 
 export interface SensitivePermissionGrant {
+  roleId: string;
   sensitiveApprovalRequired: boolean;
   permission: { code: string };
+}
+
+export interface SensitiveDisplayPolicyRecord {
+  fieldKey: string;
+  context: IdBusinessV2SensitiveDisplayContext;
+  mode: IdBusinessV2SensitiveDisplayMode;
+  role: {
+    id: string;
+    rolePermissions: Array<{
+      permission: { code: string };
+    }>;
+  };
 }
 
 interface CreateSensitiveApprovalInput {
@@ -59,8 +77,40 @@ export class IdBusinessV2SensitiveAccessRepository {
         permission: { code: { in: permissionCodes } }
       },
       select: {
+        roleId: true,
         sensitiveApprovalRequired: true,
         permission: { select: { code: true } }
+      }
+    });
+  }
+
+  listSensitiveDisplayPolicies(
+    userId: string,
+    fieldKeys: string[],
+    contexts: IdBusinessV2SensitiveDisplayContext[],
+    tx?: V2CommandTransaction
+  ): Promise<SensitiveDisplayPolicyRecord[]> {
+    const client = tx ?? this.prisma;
+    return client.idBusinessV2SensitiveDisplayPolicy.findMany({
+      where: {
+        role: { userRoles: { some: { userId } } },
+        fieldKey: { in: fieldKeys },
+        context: { in: contexts }
+      },
+      select: {
+        fieldKey: true,
+        context: true,
+        mode: true,
+        role: {
+          select: {
+            id: true,
+            rolePermissions: {
+              select: {
+                permission: { select: { code: true } }
+              }
+            }
+          }
+        }
       }
     });
   }

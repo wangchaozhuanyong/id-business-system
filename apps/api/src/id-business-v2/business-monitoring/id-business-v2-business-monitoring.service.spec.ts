@@ -92,6 +92,7 @@ describe('IdBusinessV2BusinessMonitoringService', () => {
     expect(listSource).toContain('OFFSET');
     expect(listSource).toContain("NOT IN ('sold', 'recovered')");
     expect(listSource).toContain('account_disposition');
+    expect(listSource.match(/replacement\."renewed_from_activation_id"/g)).toHaveLength(2);
     expect(listSource).not.toContain('apple_id_encrypted');
     expect(listSource).not.toContain('error_message');
     expect(listSource).not.toContain('token');

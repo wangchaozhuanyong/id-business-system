@@ -29,7 +29,11 @@ function user(permissions: string[] = []): AuthenticatedUser {
 }
 
 function createService(prisma: ReturnType<typeof createPrismaMock>) {
-  return new IdBusinessV2DashboardService(new IdBusinessV2DashboardRepository(prisma as never));
+  return new IdBusinessV2DashboardService(
+    new IdBusinessV2DashboardRepository(prisma as never),
+    { decrypt: vi.fn() } as never,
+    { resolveDisplayMode: vi.fn().mockResolvedValue('masked') } as never
+  );
 }
 
 describe('IdBusinessV2DashboardService', () => {

@@ -40,6 +40,7 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     websiteAccountEncrypted: 'encrypted',
     websiteAccountHash: 'hash',
     websiteAccountMasked: 'cu***@example.com',
+    websiteAccountSearchTokens: ['website-search-token'],
     receivedAmount: decimal('100'),
     receivedOriginalAmount: decimal('100'),
     receivedCurrency: 'CNY',

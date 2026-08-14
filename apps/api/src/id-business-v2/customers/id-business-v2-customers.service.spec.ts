@@ -185,7 +185,7 @@ describe('IdBusinessV2CustomersService', () => {
     );
   });
 
-  it('encrypts customer phone and WhatsApp, stores QQ and keeps plaintext out of audit', async () => {
+  it('encrypts every customer contact and keeps plaintext out of audit', async () => {
     prisma.idBusinessV2Customer.create.mockResolvedValue(makeCustomer());
 
     const result = await service.create(
@@ -202,12 +202,15 @@ describe('IdBusinessV2CustomersService', () => {
 
     expect(encryptionService.encrypt).toHaveBeenCalledWith('13800138000');
     expect(encryptionService.encrypt).toHaveBeenCalledWith('+60123456789');
+    expect(encryptionService.encrypt).toHaveBeenCalledWith('10001');
     expect(prisma.idBusinessV2Customer.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           phoneEncrypted: 'encrypted:13800138000',
           phoneHash: 'hash:13800138000',
-          qq: '10001',
+          qq: null,
+          qqEncrypted: 'encrypted:10001',
+          qqHash: 'hash:10001',
           whatsappEncrypted: 'encrypted:+60123456789',
           whatsappHash: 'hash:+60123456789',
           sourceOptionId: source.id,
@@ -253,7 +256,9 @@ describe('IdBusinessV2CustomersService', () => {
     await service.update('customer-1', { qq: '20002' }, operator);
     expect(prisma.idBusinessV2Customer.update.mock.calls[0]?.[0]?.data).toEqual(
       expect.objectContaining({
-        qq: '20002',
+        qq: null,
+        qqEncrypted: 'encrypted:20002',
+        qqHash: 'hash:20002',
         whatsappEncrypted: undefined,
         whatsappHash: undefined,
         whatsappMasked: undefined,

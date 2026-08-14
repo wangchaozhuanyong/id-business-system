@@ -44,7 +44,7 @@
           {{ selectedCandidate?.status.name || '待匹配' }}
         </strong>
       </header>
-      <p>{{ selectedCandidate?.appleIdMasked || '尚未选择可用 ID' }}</p>
+      <p>{{ selectedCandidate?.displayAppleId || '尚未选择可用 ID' }}</p>
       <footer>
         <span>{{ selectedCountryName || '等待国家' }}</span>
         <span> 匹配余额 {{ formatDecimal(selectedCandidate?.currentBalance ?? '0') }} </span>

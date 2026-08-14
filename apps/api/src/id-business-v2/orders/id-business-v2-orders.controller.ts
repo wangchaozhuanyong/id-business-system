@@ -46,24 +46,28 @@ export class IdBusinessV2OrdersController {
     @Query('openedFrom') openedFrom?: string,
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.ordersService.list({
-      page,
-      pageSize,
-      keyword,
-      customerId,
-      serviceOptionId,
-      accountId,
-      settlementPlatformOptionId,
-      status,
-      accountDisposition,
-      accountSource,
-      openedFrom,
-      openedTo,
-      sortBy,
-      sortOrder
-    });
+    return this.ordersService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        customerId,
+        serviceOptionId,
+        accountId,
+        settlementPlatformOptionId,
+        status,
+        accountDisposition,
+        accountSource,
+        openedFrom,
+        openedTo,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 
   @Get('bootstrap')
@@ -82,25 +86,29 @@ export class IdBusinessV2OrdersController {
     @Query('openedFrom') openedFrom?: string,
     @Query('openedTo') openedTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
     const [list, optionGroups] = await Promise.all([
-      this.ordersService.list({
-        page,
-        pageSize,
-        keyword,
-        customerId,
-        serviceOptionId,
-        accountId,
-        settlementPlatformOptionId,
-        status,
-        accountDisposition,
-        accountSource,
-        openedFrom,
-        openedTo,
-        sortBy,
-        sortOrder
-      }),
+      this.ordersService.list(
+        {
+          page,
+          pageSize,
+          keyword,
+          customerId,
+          serviceOptionId,
+          accountId,
+          settlementPlatformOptionId,
+          status,
+          accountDisposition,
+          accountSource,
+          openedFrom,
+          openedTo,
+          sortBy,
+          sortOrder
+        },
+        operator
+      ),
       this.optionsService.listSelectorGroups(['service', 'settlement_platform'])
     ]);
     return {
@@ -121,28 +129,38 @@ export class IdBusinessV2OrdersController {
     @Query('customerId') customerId?: string,
     @Query('balanceAmount') balanceAmount?: string,
     @Query('orderId') orderId?: string,
-    @Query('limit') limit?: string
+    @Query('limit') limit?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.orderMatchingService.findCandidates({
-      serviceOptionId,
-      accountSource,
-      customerId,
-      balanceAmount,
-      orderId,
-      limit
-    });
+    return this.orderMatchingService.findCandidates(
+      {
+        serviceOptionId,
+        accountSource,
+        customerId,
+        balanceAmount,
+        orderId,
+        limit
+      },
+      operator
+    );
   }
 
   @Post('manual-candidates/search')
   @RequirePermissions('apple.order.create')
-  searchManualCandidates(@Body() dto: SearchIdBusinessV2OrderCandidatesDto) {
-    return this.orderMatchingService.searchManualCandidates(dto);
+  searchManualCandidates(
+    @Body() dto: SearchIdBusinessV2OrderCandidatesDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderMatchingService.searchManualCandidates(dto, operator);
   }
 
   @Get('entry-options')
   @RequirePermissions('apple.order.create')
-  getEntryOptions(@Query('customerKeyword') customerKeyword?: string) {
-    return this.orderEntryService.getEntryOptions(customerKeyword);
+  getEntryOptions(
+    @Query('customerKeyword') customerKeyword?: string,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderEntryService.getEntryOptions(customerKeyword, operator);
   }
 
   @Post('receipt-fx-quote')
@@ -234,7 +252,7 @@ export class IdBusinessV2OrdersController {
 
   @Get(':id')
   @RequirePermissions('apple.order.view')
-  get(@Param('id') id: string) {
-    return this.ordersService.get(id);
+  get(@Param('id') id: string, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.ordersService.get(id, operator);
   }
 }

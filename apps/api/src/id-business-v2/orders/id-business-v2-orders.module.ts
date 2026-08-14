@@ -4,6 +4,7 @@ import { IdBusinessV2BalancesModule } from '../balances/public-api';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessModule } from '../sensitive-access/public-api';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
@@ -19,7 +20,8 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
     IdBusinessV2BalancesModule,
     IdBusinessV2FinanceModule,
     IdBusinessV2OptionsModule,
-    IdBusinessV2RuntimeModule
+    IdBusinessV2RuntimeModule,
+    IdBusinessV2SensitiveAccessModule
   ],
   controllers: [IdBusinessV2OrdersController],
   providers: [

@@ -32,6 +32,7 @@
         show-overflow-tooltip
         class="v2-records-table"
         :data="page.items"
+        :default-sort="{ prop: 'openedAt', order: 'descending' }"
         :row-class-name="page.renewalRowClassName"
         @sort-change="page.handleSortChange"
       >
@@ -56,7 +57,7 @@
         >
           <template #default="{ row }">
             <div class="v2-table-cell">
-              <strong>{{ row.account.appleIdMasked }}</strong>
+              <strong>{{ row.account.displayAppleId || '—' }}</strong>
               <el-tag v-if="row.account.saleState === 'sold'" type="warning" effect="plain">
                 客户已购
               </el-tag>
@@ -70,7 +71,7 @@
           <template #default="{ row }">{{ row.account.country.name }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[3]">
-          <template #default="{ row }">{{ row.maskedWebsiteAccount || '—' }}</template>
+          <template #default="{ row }">{{ row.displayWebsiteAccount || '—' }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.renewals.main.columns[4]"
@@ -92,12 +93,19 @@
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.renewals.main.columns[6]"
+          prop="openedAt"
+          sortable="custom"
+        >
+          <template #default="{ row }">{{ page.formatDate(row.openedAt) }}</template>
+        </V2TableColumn>
+        <V2TableColumn
+          :definition="v2TableSchemas.renewals.main.columns[7]"
           prop="dueAt"
           sortable="custom"
         >
           <template #default="{ row }">{{ page.formatDate(row.dueAt) }}</template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[7]">
+        <V2TableColumn :definition="v2TableSchemas.renewals.main.columns[8]">
           <template #default="{ row }">
             <span class="v2-renewal-status">
               <el-tag :type="page.statusType(row.status.code)" effect="plain">
@@ -110,7 +118,7 @@
             </span>
           </template>
         </V2TableColumn>
-        <V2TableActionColumn :definition="v2TableSchemas.renewals.main.columns[8]">
+        <V2TableActionColumn :definition="v2TableSchemas.renewals.main.columns[9]">
           <template #default="{ row }">
             <el-tooltip
               :disabled="!page.renewalActionDisabledReason(row)"
@@ -166,7 +174,7 @@
             <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'account']">
               <dt>ID账号</dt>
               <dd>
-                {{ item.account.appleIdMasked }}
+                {{ item.account.displayAppleId || '—' }}
                 <el-tag v-if="item.account.saleState === 'sold'" type="warning" effect="plain">
                   客户已购
                 </el-tag>
@@ -185,7 +193,11 @@
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, '客户网站账号']">
               <dt>网站账号</dt>
-              <dd>{{ item.maskedWebsiteAccount || '—' }}</dd>
+              <dd>{{ item.displayWebsiteAccount || '—' }}</dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'openedAt']">
+              <dt>开通时间</dt>
+              <dd>{{ page.formatDate(item.openedAt) }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.renewals.main.id, 'dueAt']">
               <dt>到期时间</dt>

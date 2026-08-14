@@ -239,7 +239,7 @@
         <section>
           <span>礼品卡</span>
           <strong>{{ selectedGiftCard.code }}</strong>
-          <small>{{ selectedGiftCard.account.appleIdMasked }}</small>
+          <small>{{ selectedGiftCard.account.displayAppleId || '—' }}</small>
         </section>
         <el-alert
           title="面值、汇率、成本和余额快照不可修改；账务错误请撤回后重新入账"

@@ -15,7 +15,7 @@ export const ordersFeature = defineV2Feature({
       key: 'keyword',
       label: '搜索',
       kind: 'search',
-      placeholder: '订单号、客户、平台订单号'
+      placeholder: '订单号、客户、平台订单号、ID 账号、网站账号'
     },
     {
       key: 'status',

@@ -151,7 +151,8 @@ describe('IdBusinessV2OrderEntryService', () => {
   };
   const fieldEncryptionService = {
     encrypt: vi.fn(),
-    hash: vi.fn()
+    hash: vi.fn(),
+    decrypt: vi.fn()
   };
   const ordersService = {
     get: vi.fn()
@@ -185,7 +186,8 @@ describe('IdBusinessV2OrderEntryService', () => {
     ordersService as never,
     orderLockService as never,
     financeFxService as never,
-    new V2CommandTransactionManager(prisma as never)
+    new V2CommandTransactionManager(prisma as never),
+    { resolveDisplayModes: vi.fn() } as never
   );
 
   beforeEach(() => {
@@ -702,8 +704,8 @@ describe('IdBusinessV2OrderEntryService', () => {
         {
           id: customerId,
           name: '客户 A',
-          wechat: 'customer-a',
-          qq: '10001',
+          wechat: '已保存微信',
+          qq: '已保存 QQ',
           maskedPhone: '138****5678',
           maskedWhatsapp: '+60****5678'
         }
@@ -742,7 +744,7 @@ describe('IdBusinessV2OrderEntryService', () => {
         where: expect.objectContaining({
           deletedAt: null,
           recordStatus: 'active',
-          OR: [
+          OR: expect.arrayContaining([
             { name: { contains: '138 (0013)-5678', mode: 'insensitive' } },
             { wechat: { contains: '138 (0013)-5678', mode: 'insensitive' } },
             { qq: { contains: '138 (0013)-5678', mode: 'insensitive' } },
@@ -750,16 +752,20 @@ describe('IdBusinessV2OrderEntryService', () => {
             { phoneHash: 'website-hash' },
             { whatsappTail: { contains: '00135678', mode: 'insensitive' } },
             { whatsappHash: 'website-hash' }
-          ]
+          ])
         }),
-        select: {
+        select: expect.objectContaining({
           id: true,
           name: true,
           wechat: true,
+          wechatEncrypted: true,
           qq: true,
+          qqEncrypted: true,
+          phoneEncrypted: true,
           phoneMasked: true,
+          whatsappEncrypted: true,
           whatsappMasked: true
-        },
+        }),
         take: 50
       })
     );

@@ -7,6 +7,7 @@ import type { V2StatusStripItem } from '@/v2/components/V2StatusStrip.vue';
 import { idBusinessV2ActivationsApi } from './api';
 import type {
   V2Activation,
+  V2ActivationDisplayStatus,
   V2ActivationDueStatus,
   V2ActivationListQuery,
   V2ActivationListResult
@@ -35,8 +36,8 @@ export function useActivationsPage() {
     pageSize: 20,
     keyword: '',
     dueStatus: '' as V2ActivationDueStatus | '',
-    sortBy: 'dueAt' as NonNullable<V2ActivationListQuery['sortBy']>,
-    sortOrder: 'asc' as 'asc' | 'desc'
+    sortBy: 'openedAt' as NonNullable<V2ActivationListQuery['sortBy']>,
+    sortOrder: 'desc' as 'asc' | 'desc'
   });
 
   function getActivationListQuery(): V2ActivationListQuery {
@@ -156,10 +157,13 @@ export function useActivationsPage() {
       'createdAt',
       'updatedAt'
     ];
-    query.sortBy = supported.includes(sort.prop as NonNullable<V2ActivationListQuery['sortBy']>)
+    const hasSupportedSort = supported.includes(
+      sort.prop as NonNullable<V2ActivationListQuery['sortBy']>
+    );
+    query.sortBy = hasSupportedSort
       ? (sort.prop as NonNullable<V2ActivationListQuery['sortBy']>)
-      : 'dueAt';
-    query.sortOrder = sort.order === 'descending' ? 'desc' : 'asc';
+      : 'openedAt';
+    query.sortOrder = hasSupportedSort && sort.order === 'ascending' ? 'asc' : 'desc';
     query.page = 1;
     loadCurrentActivations();
   }
@@ -200,7 +204,7 @@ export function useActivationsPage() {
     detailTarget.value = null;
   });
 
-  function statusType(status: V2ActivationDueStatus): TagProps['type'] {
+  function statusType(status: V2ActivationDisplayStatus): TagProps['type'] {
     if (status === 'active') return 'success';
     if (status === 'due_within_7_days') return 'primary';
     if (status === 'due_within_23_hours' || status === 'due_within_1_hour') return 'warning';

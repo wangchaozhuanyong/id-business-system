@@ -34,6 +34,14 @@ const permissionSensitive = {
   action: 'view_password'
 };
 
+const permissionAppleId = {
+  id: '77777777-7777-4777-8777-777777777777',
+  name: '查看完整 Apple ID',
+  code: 'apple.account.view_full',
+  module: 'apple.account',
+  action: 'view_full'
+};
+
 function createRole(overrides: Record<string, unknown> = {}) {
   return {
     id: '22222222-2222-4222-8222-222222222222',
@@ -45,6 +53,7 @@ function createRole(overrides: Record<string, unknown> = {}) {
     rolePermissions: [
       { roleId: 'role-id', permissionId: permissionView.id, permission: permissionView }
     ],
+    sensitiveDisplayPolicies: [],
     userRoles: [
       {
         userId: '55555555-5555-4555-8555-555555555555',
@@ -73,6 +82,10 @@ function createService() {
     rolePermission: {
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       createMany: jest.fn().mockResolvedValue({ count: 1 })
+    },
+    idBusinessV2SensitiveDisplayPolicy: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      createMany: jest.fn().mockResolvedValue({ count: 0 })
     },
     auditLog: {
       create: jest.fn().mockResolvedValue({ id: 'audit-id' })
@@ -226,6 +239,58 @@ describe('V2RolesService', () => {
         })
       })
     );
+  });
+
+  it('rejects inline full display for passwords and security information', async () => {
+    const fixture = createService();
+    fixture.prisma.permission.findMany.mockResolvedValue([
+      { id: permissionSensitive.id, code: permissionSensitive.code }
+    ]);
+
+    await expect(
+      fixture.service.create(
+        {
+          name: '不安全角色',
+          code: 'unsafe_secret_role',
+          permissionIds: [permissionSensitive.id],
+          sensitiveDisplayPolicies: [
+            {
+              fieldKey: 'account.password',
+              context: 'account_management',
+              mode: 'full'
+            }
+          ]
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fixture.transaction.role.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects full sensitive values in audit logs even when submitted outside the UI', async () => {
+    const fixture = createService();
+    fixture.prisma.permission.findMany.mockResolvedValue([
+      { id: permissionAppleId.id, code: permissionAppleId.code }
+    ]);
+
+    await expect(
+      fixture.service.create(
+        {
+          name: '不安全审计角色',
+          code: 'unsafe_audit_role',
+          permissionIds: [permissionAppleId.id],
+          sensitiveDisplayPolicies: [
+            {
+              fieldKey: 'account.apple_id',
+              context: 'audit',
+              mode: 'full'
+            }
+          ]
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fixture.transaction.role.create).not.toHaveBeenCalled();
   });
 
   it('protects the system administrator role from changes', async () => {

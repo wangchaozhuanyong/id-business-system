@@ -1,6 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { Amount4 } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { DashboardAccess } from './dashboard.types';
 import { IdBusinessV2DashboardRepository } from './persistence/id-business-v2-dashboard.repository';
 
@@ -10,7 +12,11 @@ export type { DashboardAccess } from './dashboard.types';
 
 @Injectable()
 export class IdBusinessV2DashboardService {
-  constructor(private readonly repository: IdBusinessV2DashboardRepository) {}
+  constructor(
+    private readonly repository: IdBusinessV2DashboardRepository,
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
+  ) {}
 
   async overview(user: AuthenticatedUser | undefined, now = new Date()) {
     if (!user) throw new UnauthorizedException('Authentication required');
@@ -25,7 +31,7 @@ export class IdBusinessV2DashboardService {
         this.loadRisks(access, window, renewalWarningEnd),
         this.loadAssets(access),
         this.loadRecentOrders(access),
-        this.loadUpcomingRenewals(access, renewalWarningEnd),
+        this.loadUpcomingRenewals(access, renewalWarningEnd, user),
         this.loadRecentAudits(access)
       ]);
 
@@ -102,11 +108,31 @@ export class IdBusinessV2DashboardService {
     }));
   }
 
-  private async loadUpcomingRenewals(access: DashboardAccess, renewalWarningEnd: Date) {
+  private async loadUpcomingRenewals(
+    access: DashboardAccess,
+    renewalWarningEnd: Date,
+    operator: AuthenticatedUser
+  ) {
     if (!access.renewals) return [];
-    const items = await this.repository.loadUpcomingRenewals(renewalWarningEnd);
+    const [items, displayMode] = await Promise.all([
+      this.repository.loadUpcomingRenewals(renewalWarningEnd),
+      this.sensitiveAccessService.resolveDisplayMode(
+        operator,
+        'account.apple_id',
+        'dashboard_notifications'
+      )
+    ]);
     return items.map((item) => ({
       ...item,
+      account: {
+        appleIdMasked: item.account.appleIdMasked,
+        displayAppleId:
+          displayMode === 'hidden'
+            ? null
+            : displayMode === 'full'
+              ? this.fieldEncryptionService.decrypt(item.account.appleIdEncrypted)
+              : item.account.appleIdMasked
+      },
       dueAt: item.dueAt?.toISOString() ?? null
     }));
   }

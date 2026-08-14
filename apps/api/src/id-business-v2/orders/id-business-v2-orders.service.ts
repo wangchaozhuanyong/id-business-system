@@ -1,7 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination, type PaginationQuery } from '../../common/pagination';
-import { Amount4, buildIdBusinessV2DateRange } from '../runtime/public-api';
+import {
+  Amount4,
+  buildIdBusinessV2DateRange,
+  buildIdBusinessV2BlindQueryTokens,
+  matchesIdBusinessV2BlindSearch
+} from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type {
   IdBusinessV2OrderAccountDisposition,
   IdBusinessV2OrderAccountSource,
@@ -87,10 +94,11 @@ const ORDER_SORT_FIELDS: Record<string, IdBusinessV2OrderSortField> = {
 export class IdBusinessV2OrdersService {
   constructor(
     private readonly repository: IdBusinessV2OrdersRepository,
-    private readonly fieldEncryptionService: FieldEncryptionService
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async list(query: ListIdBusinessV2OrdersQuery) {
+  async list(query: ListIdBusinessV2OrdersQuery, operator?: AuthenticatedUser) {
     const pagination = getPagination(query);
     const keyword = this.normalizeKeyword(query.keyword);
     const websiteAccountHash = keyword ? this.fieldEncryptionService.hash(keyword) : null;
@@ -104,9 +112,12 @@ export class IdBusinessV2OrdersService {
     const status = this.parseStatus(query.status);
     const accountDisposition = this.parseAccountDisposition(query.accountDisposition);
     const accountSource = this.parseAccountSource(query.accountSource);
+    const sensitiveMatches = await this.resolveSensitiveMatches(keyword);
     const { items, total } = await this.repository.listOrders({
       keyword,
       websiteAccountHash,
+      sensitiveAccountIds: sensitiveMatches.accountIds,
+      sensitiveWebsiteOrderIds: sensitiveMatches.orderIds,
       customerId,
       serviceOptionId,
       accountId,
@@ -122,20 +133,79 @@ export class IdBusinessV2OrdersService {
     });
 
     return {
-      items: items.map((order) => this.toResponse(order)),
+      items: await this.presentOrders(items, operator),
       total,
       page: pagination.page,
       pageSize: pagination.pageSize
     };
   }
 
-  async get(idValue: string) {
+  async get(idValue: string, operator?: AuthenticatedUser) {
     const id = this.normalizeRequiredUuid(idValue, '订单');
     const order = await this.repository.findOrder(id);
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
-    return this.toResponse(order);
+    return (await this.presentOrders([order], operator))[0];
+  }
+
+  private async presentOrders(orders: IdBusinessV2OrderListRecord[], operator?: AuthenticatedUser) {
+    if (!operator) return orders.map((order) => this.toResponse(order));
+    const modes = await this.sensitiveAccessService.resolveDisplayModes(
+      operator,
+      ['account.apple_id', 'order.website_account'],
+      'business_records'
+    );
+    return orders.map((order) =>
+      this.toResponse(order, {
+        appleId:
+          modes['account.apple_id'] === 'hidden'
+            ? null
+            : modes['account.apple_id'] === 'full' && order.account
+              ? this.fieldEncryptionService.decrypt(order.account.appleIdEncrypted)
+              : (order.account?.appleIdMasked ?? null),
+        websiteAccount:
+          modes['order.website_account'] === 'hidden'
+            ? null
+            : modes['order.website_account'] === 'full'
+              ? this.fieldEncryptionService.decrypt(order.websiteAccountEncrypted)
+              : order.websiteAccountMasked
+      })
+    );
+  }
+
+  private async resolveSensitiveMatches(keyword: string | null) {
+    if (!keyword) return { accountIds: [], orderIds: [] };
+    const appleIdTokens = buildIdBusinessV2BlindQueryTokens(keyword, 'apple-id', (value) =>
+      this.fieldEncryptionService.hash(value)
+    );
+    const websiteAccountTokens = buildIdBusinessV2BlindQueryTokens(
+      keyword,
+      'website-account',
+      (value) => this.fieldEncryptionService.hash(value)
+    );
+    if (appleIdTokens.length === 0 && websiteAccountTokens.length === 0) {
+      return { accountIds: [], orderIds: [] };
+    }
+
+    const candidates = await this.repository.findSensitiveSearchCandidates({
+      appleIdTokens,
+      websiteAccountTokens
+    });
+    return {
+      accountIds: candidates.accounts
+        .filter((account) => {
+          const value = this.fieldEncryptionService.decrypt(account.appleIdEncrypted);
+          return value ? matchesIdBusinessV2BlindSearch(value, keyword) : false;
+        })
+        .map((account) => account.id),
+      orderIds: candidates.orders
+        .filter((order) => {
+          const value = this.fieldEncryptionService.decrypt(order.websiteAccountEncrypted);
+          return value ? matchesIdBusinessV2BlindSearch(value, keyword) : false;
+        })
+        .map((order) => order.id)
+    };
   }
 
   private parseSortField(value: unknown): IdBusinessV2OrderSortField {
@@ -205,7 +275,10 @@ export class IdBusinessV2OrdersService {
     return String(value).trim() || null;
   }
 
-  private toResponse(order: IdBusinessV2OrderListRecord) {
+  private toResponse(
+    order: IdBusinessV2OrderListRecord,
+    presentation?: { appleId: string | null; websiteAccount: string | null }
+  ) {
     const activeLock = order.locks?.[0] ?? null;
     const receivedAmount = order.receivedAmount;
     const receivedOriginalAmount = order.receivedOriginalAmount;
@@ -229,12 +302,16 @@ export class IdBusinessV2OrdersService {
         ? {
             id: order.account.id,
             appleIdMasked: order.account.appleIdMasked,
+            displayAppleId: presentation ? presentation.appleId : order.account.appleIdMasked,
             country: order.account.countryOption
           }
         : null,
       settlementPlatform: order.settlementPlatform,
       platformOrderNo: order.platformOrderNo,
       maskedWebsiteAccount: order.websiteAccountMasked,
+      displayWebsiteAccount: presentation
+        ? presentation.websiteAccount
+        : order.websiteAccountMasked,
       hasWebsiteAccount: Boolean(order.websiteAccountEncrypted),
       receivedAmount: receivedAmount.toString(),
       receivedOriginalAmount: receivedOriginalAmount.toString(),

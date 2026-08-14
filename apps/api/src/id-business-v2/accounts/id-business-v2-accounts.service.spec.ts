@@ -124,6 +124,10 @@ describe('IdBusinessV2AccountsService', () => {
     repository
   );
   const sensitiveAccessService = {
+    resolveDisplayModes: vi.fn().mockResolvedValue({
+      'account.apple_id': 'masked',
+      'account.phone': 'masked'
+    }),
     authorize: vi.fn().mockResolvedValue({
       mode: 'direct',
       approvalId: null,

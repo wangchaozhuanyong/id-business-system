@@ -88,7 +88,7 @@
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[6]">
             <template #default="{ row }">
-              {{ row.account.appleIdMasked }}
+              {{ row.account.displayAppleId || '—' }}
               <el-tag
                 v-if="row.account.lossStatus === 'reported'"
                 type="danger"
@@ -252,7 +252,7 @@
             <template #default="{ row }">{{ row.giftCard?.code || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[3]">
-            <template #default="{ row }">{{ row.account.appleIdMasked }}</template>
+            <template #default="{ row }">{{ row.account.displayAppleId || '—' }}</template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.topupRecords.balanceLedger.columns[4]">
             <template #default="{ row }">{{ row.account.country.name }}</template>

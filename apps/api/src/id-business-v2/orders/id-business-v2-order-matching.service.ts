@@ -1,7 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
-import { Amount4, V2_DECIMAL_PATTERN, V2_DECIMAL_PLACES } from '../runtime/public-api';
+import {
+  Amount4,
+  V2_DECIMAL_PATTERN,
+  V2_DECIMAL_PLACES,
+  buildIdBusinessV2BlindQueryTokens
+} from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
+import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
 import type { IdBusinessV2MatchingAccount } from './id-business-v2-order.types';
 import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-orders.repository';
@@ -24,17 +31,21 @@ export class IdBusinessV2OrderMatchingService {
   constructor(
     private readonly repository: IdBusinessV2OrdersRepository,
     private readonly balanceCalculator: IdBusinessV2BalanceCalculatorService,
-    private readonly fieldEncryptionService: FieldEncryptionService
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly sensitiveAccessService: IdBusinessV2SensitiveAccessService
   ) {}
 
-  async findCandidates(query: FindIdBusinessV2OrderCandidatesQuery) {
+  async findCandidates(query: FindIdBusinessV2OrderCandidatesQuery, operator?: AuthenticatedUser) {
     if (query.accountSource === 'customer_owned') {
       throw new BadRequestException('客户已购 ID 必须手动搜索选择');
     }
-    return this.findEligibleCandidates(query, null, true);
+    return this.findEligibleCandidates(query, null, true, operator);
   }
 
-  async searchManualCandidates(dto: SearchIdBusinessV2OrderCandidatesDto) {
+  async searchManualCandidates(
+    dto: SearchIdBusinessV2OrderCandidatesDto,
+    operator?: AuthenticatedUser
+  ) {
     const keyword = this.normalizeSearchKeyword(dto.keyword);
     return this.findEligibleCandidates(
       {
@@ -48,14 +59,16 @@ export class IdBusinessV2OrderMatchingService {
         limit: dto.limit === undefined || dto.limit === null ? undefined : String(dto.limit)
       },
       keyword,
-      false
+      false,
+      operator
     );
   }
 
   private async findEligibleCandidates(
     query: FindIdBusinessV2OrderCandidatesQuery,
     keyword: string | null,
-    autoSelect: boolean
+    autoSelect: boolean,
+    operator?: AuthenticatedUser
   ) {
     const serviceOptionId = this.normalizeRequiredUuid(query.serviceOptionId, '业务');
     const requiredBalance = this.normalizeRequiredBalance(query.balanceAmount);
@@ -82,8 +95,18 @@ export class IdBusinessV2OrderMatchingService {
       keywordHash: keyword
         ? this.fieldEncryptionService.hash(keyword.toLocaleLowerCase('en-US'))
         : null,
+      keywordSearchTokens: buildIdBusinessV2BlindQueryTokens(keyword, 'apple-id', (value) =>
+        this.fieldEncryptionService.hash(value)
+      ),
       limit
     });
+    const displayMode = operator
+      ? await this.sensitiveAccessService.resolveDisplayMode(
+          operator,
+          'account.apple_id',
+          'order_workbench'
+        )
+      : 'masked';
 
     return {
       criteria: {
@@ -101,7 +124,9 @@ export class IdBusinessV2OrderMatchingService {
       },
       revalidateAt: result.nextAvailabilityChangesAt,
       selectedCandidateId: autoSelect ? (result.accounts[0]?.id ?? null) : null,
-      items: result.accounts.map((account) => this.toCandidateResponse(account, requiredBalance))
+      items: result.accounts.map((account) =>
+        this.toCandidateResponse(account, requiredBalance, displayMode)
+      )
     };
   }
 
@@ -168,7 +193,11 @@ export class IdBusinessV2OrderMatchingService {
     return String(value).trim() || null;
   }
 
-  private toCandidateResponse(account: IdBusinessV2MatchingAccount, requiredBalance: Amount4) {
+  private toCandidateResponse(
+    account: IdBusinessV2MatchingAccount,
+    requiredBalance: Amount4,
+    displayMode: 'hidden' | 'masked' | 'reveal_direct' | 'reveal_approval' | 'full'
+  ) {
     const { currentBalance, balanceCostAmount, purchaseCost } = account;
     const consumption = this.balanceCalculator.calculateConsumption(
       {
@@ -180,6 +209,12 @@ export class IdBusinessV2OrderMatchingService {
     return {
       id: account.id,
       appleIdMasked: account.appleIdMasked,
+      displayAppleId:
+        displayMode === 'hidden'
+          ? null
+          : displayMode === 'full'
+            ? this.fieldEncryptionService.decrypt(account.appleIdEncrypted)
+            : account.appleIdMasked,
       country: account.countryOption,
       status: account.statusOption,
       currentBalance: currentBalance.toString(),

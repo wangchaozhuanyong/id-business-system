@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
+import { IdBusinessV2SensitiveAccessModule } from '../sensitive-access/public-api';
 import { IdBusinessV2TopupSupplierFundsController } from './id-business-v2-topup-supplier-funds.controller';
 import { IdBusinessV2TopupSupplierFundsQueryService } from './id-business-v2-topup-supplier-funds-query.service';
 import { IdBusinessV2TopupSupplierFundsService } from './id-business-v2-topup-supplier-funds.service';
@@ -11,10 +13,15 @@ import { IdBusinessV2TopupSupplierCommandRepository } from './persistence/id-bus
 import { IdBusinessV2TopupSupplierQueryRepository } from './persistence/id-business-v2-topup-supplier-query.repository';
 
 @Module({
-  imports: [IdBusinessV2FinanceModule, IdBusinessV2RuntimeModule],
+  imports: [
+    IdBusinessV2FinanceModule,
+    IdBusinessV2RuntimeModule,
+    IdBusinessV2SensitiveAccessModule
+  ],
   controllers: [IdBusinessV2TopupSupplierFundsController],
   providers: [
     IdBusinessV2TopupSupplierFundsService,
+    FieldEncryptionService,
     IdBusinessV2TopupSupplierFundsQueryService,
     IdBusinessV2TopupSupplierGiftCardFundsService,
     IdBusinessV2TopupSupplierReassignmentService,

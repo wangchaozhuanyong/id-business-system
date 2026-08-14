@@ -23,6 +23,7 @@ export interface V2TopupServiceSummary {
 export interface V2TopupWorkbenchItem {
   id: string;
   appleIdMasked: string;
+  displayAppleId: string | null;
   country: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
   currentBalance: string;
   balanceCostAmount: string;
@@ -161,6 +162,7 @@ export type V2GiftCardReversalAction = 'redeemed' | 'withdrawn';
 export interface V2ReversibleGiftCard {
   id: string;
   cardName: string;
+  code: string | null;
   codeMasked: string;
   codeTail: string;
   faceValue: string;
@@ -260,7 +262,7 @@ export interface V2GiftCardRecord {
   id: string;
   cardNameOptionId: string;
   cardName: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
-  code: string;
+  code: string | null;
   codeMasked: string;
   codeTail: string;
   faceValue: string;
@@ -288,6 +290,7 @@ export interface V2GiftCardRecord {
   account: {
     id: string;
     appleIdMasked: string;
+    displayAppleId: string | null;
     lossStatus: 'active' | 'reported';
     lossReportedAt: string | null;
     country: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
@@ -381,11 +384,12 @@ export interface V2BalanceLedgerRecord {
   account: {
     id: string;
     appleIdMasked: string;
+    displayAppleId: string | null;
     country: Pick<V2OptionSelector, 'id' | 'code' | 'name'>;
   };
   giftCard: {
     id: string;
-    code: string;
+    code: string | null;
     codeMasked: string;
     codeTail: string;
     faceValue: string;

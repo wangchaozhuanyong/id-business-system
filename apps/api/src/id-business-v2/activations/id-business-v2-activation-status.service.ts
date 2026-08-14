@@ -13,8 +13,13 @@ export const ID_BUSINESS_V2_DUE_STATUS_CODES = [
 
 export type IdBusinessV2ActivationDueStatus = (typeof ID_BUSINESS_V2_DUE_STATUS_CODES)[number];
 
+export type IdBusinessV2ActivationDisplayStatus =
+  | IdBusinessV2ActivationDueStatus
+  | 'renewed'
+  | 'upgraded';
+
 export interface IdBusinessV2ActivationStatusSnapshot {
-  code: IdBusinessV2ActivationDueStatus;
+  code: IdBusinessV2ActivationDisplayStatus;
   label: string;
   hoursRemaining: number | null;
   daysRemaining: number | null;
@@ -94,6 +99,24 @@ export class IdBusinessV2ActivationStatusService {
     return this.snapshot('active', '正常', remainingMs);
   }
 
+  resolveDisplay(
+    storedStatus: IdBusinessV2ActivationStatus,
+    dueAt: Date | null,
+    serviceOptionId: string,
+    replacementServiceOptionId: string | null,
+    now = new Date()
+  ): IdBusinessV2ActivationStatusSnapshot {
+    if (storedStatus === 'cancelled' || storedStatus === 'abnormal') {
+      return this.resolve(storedStatus, dueAt, now);
+    }
+    if (replacementServiceOptionId) {
+      return replacementServiceOptionId === serviceOptionId
+        ? this.snapshot('renewed', '已续费', null)
+        : this.snapshot('upgraded', '已升级失效', null);
+    }
+    return this.resolve(storedStatus, dueAt, now);
+  }
+
   getFilterWindow(
     dueStatus: IdBusinessV2ActivationDueStatus,
     now = new Date()
@@ -143,7 +166,7 @@ export class IdBusinessV2ActivationStatusService {
   }
 
   private snapshot(
-    code: IdBusinessV2ActivationDueStatus,
+    code: IdBusinessV2ActivationDisplayStatus,
     label: string,
     remainingMs: number | null
   ): IdBusinessV2ActivationStatusSnapshot {

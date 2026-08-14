@@ -184,6 +184,7 @@ export class IdBusinessV2ManualRenewalService {
             websiteAccountEncrypted: sourceActivation.order.websiteAccountEncrypted,
             websiteAccountHash: sourceActivation.order.websiteAccountHash,
             websiteAccountMasked: sourceActivation.order.websiteAccountMasked,
+            websiteAccountSearchTokens: sourceActivation.order.websiteAccountSearchTokens,
             receivedAmount: input.receivedAmount,
             balanceAmount: input.balanceAmount,
             openedAt: input.openedAt,

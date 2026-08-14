@@ -196,6 +196,16 @@
 }
 
 @media (max-width: 900px) {
+  .v2-customer-mobile-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .v2-customer-mobile-actions > .v2-record-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .v2-customers-overview {
     grid-template-columns: 1fr;
     padding: 16px;

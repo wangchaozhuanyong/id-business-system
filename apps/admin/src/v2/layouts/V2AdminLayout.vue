@@ -261,7 +261,10 @@
                     <li v-for="item in renewalWarningSummary.items" :key="item.id">
                       <div>
                         <strong>{{ item.customer.name }}</strong>
-                        <span>{{ item.account.appleIdMasked }} · {{ item.service.name }}</span>
+                        <span
+                          >{{ item.account.displayAppleId || '不显示' }} ·
+                          {{ item.service.name }}</span
+                        >
                       </div>
                       <small :class="`is-${item.warningState}`">
                         {{ item.warningState === 'expired' ? '已到期' : '即将到期' }}

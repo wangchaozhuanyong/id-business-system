@@ -159,7 +159,11 @@ describe('IdBusinessV2AccountLossesService', () => {
   );
   const service = new IdBusinessV2AccountLossesService(
     commandHandler,
-    new IdBusinessV2AccountLossQueryService(repository)
+    new IdBusinessV2AccountLossQueryService(
+      repository,
+      { hash: vi.fn(), decrypt: vi.fn() } as never,
+      { resolveDisplayMode: vi.fn() } as never
+    )
   );
 
   beforeEach(() => {

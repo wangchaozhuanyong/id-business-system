@@ -12,6 +12,10 @@ const accountDispositionMigration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260729070000_order_account_disposition/migration.sql'),
   'utf8'
 );
+const sensitiveSearchMigration = readFileSync(
+  resolve(apiRoot, 'prisma/migrations/20260814020000_sensitive_search_blind_indexes/migration.sql'),
+  'utf8'
+);
 
 function prismaModel(name: string) {
   const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
@@ -63,12 +67,27 @@ describe('V2501 order schema contract', () => {
     expect(order).toContain('websiteAccountEncrypted');
     expect(order).toContain('websiteAccountHash');
     expect(order).toContain('websiteAccountMasked');
+    expect(order).toContain('websiteAccountSearchTokens');
     expect(order).not.toMatch(/\bwebsiteAccount\s+/);
     expect(order).toMatch(/orderNo\s+String\s+@unique/);
     expect(order).toMatch(/idempotencyKey\s+String\s+@unique/);
     expect(order).toContain(
       '@@unique([settlementPlatformOptionId, platformOrderNo], map: "id_business_v2_orders_platform_order_key")'
     );
+  });
+
+  it('indexes encrypted account fragments without storing searchable plaintext', () => {
+    const account = prismaModel('IdBusinessV2Account');
+    const order = prismaModel('IdBusinessV2Order');
+
+    expect(account).toContain('appleIdSearchTokens');
+    expect(account).toContain('@@index([appleIdSearchTokens], type: Gin)');
+    expect(order).toContain('websiteAccountSearchTokens');
+    expect(order).toContain('@@index([websiteAccountSearchTokens], type: Gin)');
+    expect(sensitiveSearchMigration).toContain('USING GIN ("apple_id_search_tokens")');
+    expect(sensitiveSearchMigration).toContain('USING GIN ("website_account_search_tokens")');
+    expect(sensitiveSearchMigration).not.toContain('apple_id_encrypted');
+    expect(sensitiveSearchMigration).not.toContain('website_account_encrypted');
   });
 
   it('enforces active-lock uniqueness and lifecycle evidence in PostgreSQL', () => {

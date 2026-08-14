@@ -50,6 +50,26 @@ describe('IdBusinessV2ActivationStatusService', () => {
     expect(service.resolve('abnormal', expiredDueAt, now).code).toBe('abnormal');
   });
 
+  it('treats a replaced activation as a terminal renewal or upgrade state', () => {
+    const dueSoon = new Date('2026-07-27T10:00:00.000Z');
+
+    expect(service.resolveDisplay('active', dueSoon, 'service-a', 'service-a', now)).toMatchObject({
+      code: 'renewed',
+      label: '已续费',
+      hoursRemaining: null,
+      daysRemaining: null
+    });
+    expect(service.resolveDisplay('active', dueSoon, 'service-a', 'service-b', now)).toMatchObject({
+      code: 'upgraded',
+      label: '已升级失效',
+      hoursRemaining: null,
+      daysRemaining: null
+    });
+    expect(service.resolveDisplay('abnormal', dueSoon, 'service-a', 'service-b', now).code).toBe(
+      'abnormal'
+    );
+  });
+
   it('uses exact and non-overlapping boundaries for every calculated due state', () => {
     const dueAt = (offsetMs: number) => new Date(now.getTime() + offsetMs);
 

@@ -102,7 +102,7 @@
           <el-option
             v-for="option in page.filterOptions.accounts"
             :key="option.id"
-            :label="option.appleIdMasked"
+            :label="option.displayAppleId || '不显示'"
             :value="option.id"
           />
         </el-select>

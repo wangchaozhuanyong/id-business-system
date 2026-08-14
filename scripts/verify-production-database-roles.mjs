@@ -39,6 +39,7 @@ const expectedRuntimeDeleteTables = new Set([
   'user_roles',
   'role_permissions',
   'id_business_v2_user_table_preferences',
+  'id_business_v2_customer_tags',
   'id_business_v2_exchange_rate_runs',
   'id_business_v2_exchange_rate_snapshots',
   'id_business_v2_exchange_rate_provider_snapshots',

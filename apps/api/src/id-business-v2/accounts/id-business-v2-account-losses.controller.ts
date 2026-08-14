@@ -52,19 +52,23 @@ export class IdBusinessV2AccountLossesController {
     @Query('reportedFrom') reportedFrom?: string,
     @Query('reportedTo') reportedTo?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('sortOrder') sortOrder?: string
+    @Query('sortOrder') sortOrder?: string,
+    @CurrentUser() operator?: AuthenticatedUser
   ) {
-    return this.accountLossesService.list({
-      page,
-      pageSize,
-      keyword,
-      countryOptionId,
-      saleState,
-      status,
-      reportedFrom,
-      reportedTo,
-      sortBy,
-      sortOrder
-    });
+    return this.accountLossesService.list(
+      {
+        page,
+        pageSize,
+        keyword,
+        countryOptionId,
+        saleState,
+        status,
+        reportedFrom,
+        reportedTo,
+        sortBy,
+        sortOrder
+      },
+      operator
+    );
   }
 }
