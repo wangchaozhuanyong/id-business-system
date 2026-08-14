@@ -18,6 +18,13 @@ const freezeReversalMigration = readFileSync(
   ),
   'utf8'
 );
+const sensitiveSearchBackfillMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma/migrations/20260814032000_account_loss_sensitive_search_backfill/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('ID Business V2 account loss schema contract', () => {
   it('adds an account loss timestamp and immutable account-loss ledger type', () => {
@@ -98,5 +105,22 @@ describe('ID Business V2 account loss schema contract', () => {
     expect(migration).toContain("VALUES ('account-losses', 0)");
     expect(migration).toContain('CREATE TRIGGER id_business_v2_account_losses_change');
     expect(migration).not.toMatch(/UPDATE "id_business_v2_accounts".*"loss_reported_at"/s);
+  });
+
+  it('allows blind-index maintenance without weakening frozen account fields', () => {
+    expect(sensitiveSearchBackfillMigration).toContain(
+      'CREATE OR REPLACE FUNCTION public.id_business_v2_enforce_reported_account_loss()'
+    );
+    expect(sensitiveSearchBackfillMigration).toContain("'apple_id_search_tokens'");
+    expect(sensitiveSearchBackfillMigration).toContain("'phone_search_tokens'");
+    expect(sensitiveSearchBackfillMigration).toContain("'updated_at'");
+    expect(sensitiveSearchBackfillMigration).toContain('to_jsonb(NEW)');
+    expect(sensitiveSearchBackfillMigration).toContain('to_jsonb(OLD)');
+    expect(sensitiveSearchBackfillMigration).toContain(
+      'Loss-reported ID accounts are frozen until unfreeze is completed'
+    );
+    expect(sensitiveSearchBackfillMigration).toContain(
+      'Loss-reported ID accounts can only unfreeze after loss reversal is posted'
+    );
   });
 });
