@@ -91,6 +91,19 @@
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
+          <button
+            class="v2-workspace-panel__tool is-mail-viewer"
+            type="button"
+            disabled
+            title="邮件服务部署后启用"
+          >
+            <el-icon><Message /></el-icon>
+            <span>
+              <strong>邮箱查询与邮箱池</strong>
+              <small>邮件服务部署后启用</small>
+            </span>
+            <el-icon><Clock /></el-icon>
+          </button>
         </div>
       </div>
     </section>
@@ -110,7 +123,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
-import { ArrowRight, Briefcase, Key, Plus, Setting, TopRight } from '@element-plus/icons-vue';
+import {
+  ArrowRight,
+  Briefcase,
+  Clock,
+  Key,
+  Message,
+  Plus,
+  Setting,
+  TopRight
+} from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
@@ -352,6 +374,14 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   background: var(--v2-surface-hover);
 }
 
+.v2-workspace-panel__tool:disabled {
+  cursor: not-allowed;
+}
+
+.v2-workspace-panel__tool:disabled:hover {
+  background: transparent;
+}
+
 .v2-workspace-panel__links button:focus-visible,
 .v2-workspace-panel__tool:focus-visible {
   outline: none;
@@ -393,6 +423,10 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 .v2-workspace-panel__tool.is-mail-viewer > .el-icon:first-child {
   background: var(--v3-info-soft);
   color: var(--v3-info);
+}
+
+.v2-workspace-panel__tool.is-mail-viewer > .el-icon:last-child {
+  color: var(--v2-text-soft);
 }
 
 .v2-workspace-panel__tool > span {

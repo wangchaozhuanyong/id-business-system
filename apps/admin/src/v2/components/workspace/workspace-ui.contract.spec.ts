@@ -20,6 +20,7 @@ describe('personal workspace UI contract', () => {
   const loginView = read('../../views/V2LoginView.vue');
   const workspaceFixtureEntry = read('../../testing/workspace-design-fixture.ts');
   const workspaceApi = read('../../api/workspace.ts');
+  const baseCss = read('../../styles/base.css');
 
   it('mounts one fixed workspace launcher outside the scrollable navigation', () => {
     const navigationEnd = layout.indexOf('</nav>');
@@ -39,6 +40,8 @@ describe('personal workspace UI contract', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
     expect(launcher).not.toContain('<V2MailViewerDrawer');
+    expect(launcher).toContain('邮箱查询与邮箱池');
+    expect(launcher).toMatch(/class="v2-workspace-panel__tool is-mail-viewer"[^>]*disabled/s);
     expect(shortcutDrawer).toContain('<el-drawer');
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
@@ -70,6 +73,12 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).toMatch(/\.v2-totp-input__field\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/s);
   });
 
+  it('keeps teleported workspace drawers on an opaque themed surface', () => {
+    expect(baseCss).toMatch(/:root\s*\{[^}]*--v2-surface:\s*var\(--v3-surface\)/s);
+    expect(baseCss).toMatch(/:root\s*\{[^}]*--v2-text:\s*var\(--v3-text\)/s);
+    expect(baseCss).toMatch(/:root\s*\{[^}]*--v2-border:\s*var\(--v3-border\)/s);
+  });
+
   it('keeps each TOTP result in one row without exposing a secret summary', () => {
     expect(totpDrawer).toContain('v2-totp-result__line');
     expect(totpDrawer).toContain('v2-totp-result__countdown');
@@ -80,7 +89,7 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).not.toContain('v2-totp-result__timer');
   });
 
-  it('keeps the first-party mailbox implementation dormant until its runtime is deployed', () => {
+  it('keeps a disabled mailbox placeholder until its runtime is deployed', () => {
     expect(mailViewerDrawer).toContain('查询由本系统验证');
     expect(mailViewerDrawer).toContain('@closed="clearAll"');
     expect(mailViewerDrawer).toContain('label="邮件查询"');
@@ -96,7 +105,8 @@ describe('personal workspace UI contract', () => {
     ).not.toMatch(/v-html|localStorage|sessionStorage/);
     expect(workspaceApi).toContain('/public/mailbox/query');
     expect(workspaceApi).not.toContain('icloud.thefindnet.xyz');
-    expect(launcher).not.toContain('邮件查看器');
+    expect(launcher).toContain('邮件服务部署后启用');
+    expect(launcher).not.toContain('<V2MailViewerDrawer');
     expect(router).not.toContain('V2PublicMailboxView');
     expect(router).not.toContain("path: '/mailbox'");
   });
