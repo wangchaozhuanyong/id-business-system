@@ -55,7 +55,7 @@ describe('SecurityService', () => {
   function createService() {
     const securitySettingStore = new Map<string, Record<string, unknown>>();
     const loginLog = {
-      id: 'login-log-id',
+      id: '77777777-7777-4777-8777-777777777777',
       userId,
       username: 'admin',
       status: 'failed',
@@ -138,9 +138,19 @@ describe('SecurityService', () => {
       },
       approver: null
     };
+    let transactionQueue = Promise.resolve<unknown>(undefined);
     const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       $transaction: jest.fn((input: unknown) => {
         if (Array.isArray(input)) return Promise.all(input);
+        if (typeof input === 'function') {
+          const result = transactionQueue.then(() => input(prisma));
+          transactionQueue = result.then(
+            () => undefined,
+            () => undefined
+          );
+          return result;
+        }
         throw new Error('Unexpected transaction input');
       }),
       loginLog: {
@@ -152,7 +162,8 @@ describe('SecurityService', () => {
           })
         ),
         findMany: jest.fn().mockResolvedValue([loginLog]),
-        count: jest.fn().mockResolvedValue(1)
+        count: jest.fn().mockResolvedValue(1),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 })
       },
       activeSession: {
         create: jest.fn().mockResolvedValue(activeSession),
@@ -352,6 +363,75 @@ describe('SecurityService', () => {
 
     expect(result.status).toBe('success');
     expect(result.abnormal).toBe(true);
+  });
+
+  it('reserves and finalizes a login attempt under advisory locks', async () => {
+    const { service, prisma } = createService();
+    (prisma.loginLog.count as jest.Mock).mockResolvedValue(0);
+
+    const reservation = await service.reserveLoginAttempt({
+      username: 'admin',
+      ip: '127.0.0.1',
+      userAgent: 'unit-test'
+    });
+
+    expect(reservation).toEqual({
+      allowed: true,
+      reservationId: '77777777-7777-4777-8777-777777777777'
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.loginLog.create).toHaveBeenCalledWith({
+      data: {
+        username: 'admin',
+        status: 'blocked',
+        failureReason: 'authentication_in_progress',
+        ip: '127.0.0.1',
+        userAgent: 'unit-test',
+        abnormal: false
+      },
+      select: { id: true }
+    });
+
+    await expect(
+      service.finalizeLoginAttempt('77777777-7777-4777-8777-777777777777', {
+        userId,
+        status: 'success'
+      })
+    ).resolves.toBe(true);
+    expect(prisma.loginLog.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: '77777777-7777-4777-8777-777777777777',
+        failureReason: 'authentication_in_progress'
+      },
+      data: {
+        userId,
+        status: 'success',
+        failureReason: null,
+        abnormal: false
+      }
+    });
+  });
+
+  it('serializes concurrent login reservations and enforces the configured threshold', async () => {
+    const { service, prisma } = createService();
+    (prisma.securitySetting.findUnique as jest.Mock).mockResolvedValue({
+      value: { maxFailedAttempts: 1 }
+    });
+    (prisma.loginLog.count as jest.Mock).mockImplementation(() =>
+      Promise.resolve((prisma.loginLog.create as jest.Mock).mock.calls.length)
+    );
+
+    const [first, second] = await Promise.all([
+      service.reserveLoginAttempt({ username: 'admin', ip: '127.0.0.1' }),
+      service.reserveLoginAttempt({ username: 'admin', ip: '127.0.0.1' })
+    ]);
+
+    expect(first).toEqual({
+      allowed: true,
+      reservationId: '77777777-7777-4777-8777-777777777777'
+    });
+    expect(second).toEqual({ allowed: false, retryAfterMs: 900_000 });
+    expect(prisma.loginLog.create).toHaveBeenCalledTimes(1);
   });
 
   it('creates active session with token hash instead of plaintext token', async () => {
@@ -958,6 +1038,39 @@ describe('SecurityService', () => {
     );
     expect(verification.method).toBe('recovery_code');
     expect(status.recoveryCodeCount).toBe(9);
+  });
+
+  it('serializes concurrent recovery-code consumption so the code succeeds only once', async () => {
+    const { service } = createService();
+    const setup = await service.setupMyMfa(authenticatedUser);
+    const enabled = await service.enableMyMfa(authenticatedUser, {
+      code: generateTestTotp(setup.secret)
+    });
+
+    const results = await Promise.allSettled([
+      service.verifyUserMfaCode(userId, enabled.recoveryCodes[0]),
+      service.verifyUserMfaCode(userId, enabled.recoveryCodes[0])
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('does not let an enabled user replace MFA through the setup endpoint', async () => {
+    const { service } = createService();
+    const setup = await service.setupMyMfa(authenticatedUser);
+    await service.enableMyMfa(authenticatedUser, {
+      code: generateTestTotp(setup.secret)
+    });
+
+    await expect(service.setupMyMfa(authenticatedUser)).rejects.toThrow(
+      'MFA 已启用，如需重新绑定请先按安全流程停用。'
+    );
+    await expect(service.getMfaLoginRequirementForUser(authenticatedUser)).resolves.toEqual({
+      required: true,
+      bound: true,
+      reason: 'bound_user'
+    });
   });
 
   it('resets user MFA through admin action', async () => {

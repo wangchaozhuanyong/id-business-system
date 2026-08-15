@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { resolveTrustedClientIp } from '../../common/http/trusted-client-ip';
 import type {
   CreateIdBusinessV2SensitiveAccessRequestDto,
   DecideIdBusinessV2SensitiveAccessRequestDto
@@ -87,7 +88,7 @@ export class IdBusinessV2SensitiveAccessController {
     const userAgentValue = request.headers['user-agent'];
     return {
       requestId: request.requestId,
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: Array.isArray(userAgentValue) ? userAgentValue[0] : userAgentValue
     };
   }

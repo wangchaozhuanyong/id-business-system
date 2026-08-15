@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Header, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { resolveTrustedClientIp } from '../../common/http/trusted-client-ip';
 import type { ChangeIdBusinessV2AccountStatusDto } from './dto/change-id-business-v2-account-status.dto';
 import type { CreateIdBusinessV2AccountDto } from './dto/create-id-business-v2-account.dto';
 import type { ImportIdBusinessV2AccountsDto } from './dto/import-id-business-v2-accounts.dto';
@@ -202,7 +203,7 @@ export class IdBusinessV2AccountsController {
   ) {
     return this.accountsService.revealSecret(id, dto, operator, {
       requestId: request.requestId,
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
   }

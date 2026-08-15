@@ -10,6 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { ApiHttpException, authHttpError } from '../common/errors/api-http.exception';
+import { resolveTrustedClientIp } from '../common/http/trusted-client-ip';
 import { recordServerAuthTiming } from '../common/interceptors/server-timing.interceptor';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
@@ -19,7 +20,7 @@ import { SupabaseAuthService } from './supabase-auth.service';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 
 interface RequestWithAuthHeader {
-  headers: {
+  headers: Record<string, string | string[] | undefined> & {
     authorization?: string;
     'user-agent'?: string;
   };
@@ -88,20 +89,42 @@ export class JwtAuthGuard implements CanActivate {
     allowDuringPasswordReset: boolean | undefined
   ) {
     const identity = await this.authenticateSupabaseToken(token);
-    await this.assertRequestIpAllowed(request.ip);
-    const active = await this.checkActiveSession(() =>
-      this.securityService.ensureActiveSession({
-        userId: identity.userId,
-        sessionIdentifier: `supabase:${identity.sessionId}`,
-        expiresAt: identity.expiresAt,
-        ip: request.ip,
-        userAgent: request.headers['user-agent']
-      })
-    );
-    if (!active) throw this.revokedSessionError();
+    const clientIp = resolveTrustedClientIp(request);
+    await this.assertRequestIpAllowed(clientIp);
+    const strongSessionIdentifier = `supabase:mfa:${identity.sessionId}`;
+    const ordinarySessionIdentifier = `supabase:${identity.sessionId}`;
+    const candidates = identity.mfaVerified
+      ? [strongSessionIdentifier, ordinarySessionIdentifier]
+      : [ordinarySessionIdentifier, strongSessionIdentifier];
+    const activeSessionIdentifier = await this.checkActiveSession(async () => {
+      for (const sessionIdentifier of candidates) {
+        if (
+          await this.securityService.ensureActiveSession({
+            userId: identity.userId,
+            sessionIdentifier,
+            expiresAt: identity.expiresAt,
+            ip: clientIp,
+            userAgent: request.headers['user-agent']
+          })
+        ) {
+          return sessionIdentifier;
+        }
+      }
+      return null;
+    });
+    if (!activeSessionIdentifier) throw this.revokedSessionError();
 
-    request.user = await this.loadAuthenticatedUser(identity.userId);
-    this.assertPasswordResetAccess(request.user, allowDuringPasswordReset);
+    const user = await this.loadAuthenticatedUser(identity.userId);
+    const mfaRequirement = await this.securityService.getMfaLoginRequirementForUser(user);
+    if (mfaRequirement.required && activeSessionIdentifier !== strongSessionIdentifier) {
+      throw authHttpError(
+        HttpStatus.UNAUTHORIZED,
+        'AUTH_MFA_REQUIRED',
+        '当前会话未完成 MFA 验证，请重新登录。'
+      );
+    }
+    request.user = user;
+    this.assertPasswordResetAccess(user, allowDuringPasswordReset);
   }
 
   private async activateLocalSession(
@@ -115,8 +138,19 @@ export class JwtAuthGuard implements CanActivate {
     );
     if (!active) throw this.revokedSessionError();
 
-    await this.assertRequestIpAllowed(request.ip);
+    const clientIp = resolveTrustedClientIp(request);
+    await this.assertRequestIpAllowed(clientIp);
     request.user = await this.loadAuthenticatedUser(payload.sub);
+    if (
+      (await this.securityService.isMfaRequiredForUser(request.user)) &&
+      payload.mfaVerified !== true
+    ) {
+      throw authHttpError(
+        HttpStatus.UNAUTHORIZED,
+        'AUTH_MFA_REQUIRED',
+        '当前会话未完成 MFA 验证，请重新登录。'
+      );
+    }
     this.assertPasswordResetAccess(request.user, allowDuringPasswordReset);
   }
 
@@ -154,7 +188,7 @@ export class JwtAuthGuard implements CanActivate {
     }
   }
 
-  private async checkActiveSession(check: () => Promise<boolean>) {
+  private async checkActiveSession<T>(check: () => Promise<T>): Promise<T> {
     try {
       return await check();
     } catch (error) {

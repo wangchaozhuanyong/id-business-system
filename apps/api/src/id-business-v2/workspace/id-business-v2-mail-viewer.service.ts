@@ -40,22 +40,38 @@ export class IdBusinessV2MailViewerService {
     const ipHash = this.encryption.hash(this.normalizeIp(requestIp));
     if (!emailHash) throw new ServiceUnavailableException('查询校验服务不可用');
 
-    await this.assertRateLimit(emailHash, ipHash);
+    const reservation = await this.repository.reserveQueryAttempt({
+      emailHash,
+      ipHash,
+      since: new Date(Date.now() - RATE_WINDOW_MS),
+      maxEmailAttempts: MAX_EMAIL_ATTEMPTS,
+      maxIpAttempts: MAX_IP_ATTEMPTS
+    });
+    if (!reservation.allowed) {
+      throw new HttpException('查询过于频繁，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     const mailbox = await this.repository.findByEmail(email);
     const valid =
       mailbox?.status === 'active' && this.matchesQueryCode(mailbox.queryCodeHash, queryCode);
     if (!valid) {
-      await this.repository.recordAttempt({
-        emailHash,
-        ipHash,
-        mailboxId: mailbox?.id ?? null,
-        outcome: 'invalid'
-      });
+      if (mailbox) {
+        await this.repository.updateQueryAttempt(reservation.attemptId, {
+          mailboxId: mailbox.id,
+          outcome: 'invalid'
+        });
+      }
       throw new BadRequestException('邮箱或邮件查询码不正确');
     }
 
     const appPassword = this.encryption.decrypt(mailbox.providerCredentialEncrypted);
-    if (!appPassword) throw new ServiceUnavailableException('邮箱授权数据不可用，请联系卖家');
+    if (!appPassword) {
+      await this.repository.updateQueryAttempt(reservation.attemptId, {
+        mailboxId: mailbox.id,
+        outcome: 'provider_error'
+      });
+      throw new ServiceUnavailableException('邮箱授权数据不可用，请联系卖家');
+    }
 
     try {
       const items = await this.mailProvider.query(
@@ -64,9 +80,7 @@ export class IdBusinessV2MailViewerService {
       );
       const queriedAt = new Date();
       await Promise.all([
-        this.repository.recordAttempt({
-          emailHash,
-          ipHash,
+        this.repository.updateQueryAttempt(reservation.attemptId, {
           mailboxId: mailbox.id,
           outcome: 'success'
         }),
@@ -84,9 +98,7 @@ export class IdBusinessV2MailViewerService {
         queriedAt: queriedAt.toISOString()
       };
     } catch (error) {
-      await this.repository.recordAttempt({
-        emailHash,
-        ipHash,
+      await this.repository.updateQueryAttempt(reservation.attemptId, {
         mailboxId: mailbox.id,
         outcome: 'provider_error'
       });
@@ -102,22 +114,6 @@ export class IdBusinessV2MailViewerService {
       }
       throw new ServiceUnavailableException('暂时无法连接邮箱服务，请稍后重试');
     }
-  }
-
-  private async assertRateLimit(emailHash: string, ipHash: string | null) {
-    const since = new Date(Date.now() - RATE_WINDOW_MS);
-    const [emailAttempts, ipAttempts] = await Promise.all([
-      this.repository.countAttempts({ emailHash, since }),
-      ipHash ? this.repository.countAttempts({ ipHash, since }) : Promise.resolve(0)
-    ]);
-    if (emailAttempts < MAX_EMAIL_ATTEMPTS && ipAttempts < MAX_IP_ATTEMPTS) return;
-    await this.repository.recordAttempt({
-      emailHash,
-      ipHash,
-      mailboxId: null,
-      outcome: 'rate_limited'
-    });
-    throw new HttpException('查询过于频繁，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
   }
 
   private matchesQueryCode(storedHash: string, queryCode: string) {

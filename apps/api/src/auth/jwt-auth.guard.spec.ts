@@ -13,6 +13,8 @@ import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 
 interface GuardFixtureOptions {
   allowDuringPasswordReset?: boolean;
+  mfaRequired?: boolean;
+  providerMfaVerified?: boolean;
   user?: AuthenticatedUser;
 }
 
@@ -59,14 +61,21 @@ function createFixture(options: GuardFixtureOptions = {}) {
   } as unknown as V2IdentityService;
   const securityService = {
     isRequestIpAllowed: jest.fn().mockResolvedValue(true),
-    ensureActiveSession: jest.fn().mockResolvedValue(true)
+    ensureActiveSession: jest.fn().mockResolvedValue(true),
+    getMfaLoginRequirementForUser: jest.fn().mockResolvedValue({
+      required: Boolean(options.mfaRequired),
+      bound: Boolean(options.mfaRequired),
+      reason: options.mfaRequired ? 'bound_user' : null
+    }),
+    isMfaRequiredForUser: jest.fn().mockResolvedValue(Boolean(options.mfaRequired))
   } as unknown as SecurityService;
   const supabaseAuthService = {
     isEnabled: jest.fn().mockReturnValue(true),
     authenticateAccessToken: jest.fn().mockResolvedValue({
       userId: user.id,
       sessionId: '44444444-4444-4444-8444-444444444444',
-      expiresAt
+      expiresAt,
+      mfaVerified: Boolean(options.providerMfaVerified)
     })
   } as unknown as SupabaseAuthService;
   const context = {
@@ -110,6 +119,18 @@ describe('JwtAuthGuard', () => {
       userAgent: 'jwt-auth-guard-unit-test'
     });
     expect(fixture.request.user).toEqual(fixture.user);
+  });
+
+  it('requires an MFA-proven active session after the user MFA policy becomes active', async () => {
+    const fixture = createFixture({ mfaRequired: true, providerMfaVerified: true });
+
+    await expect(fixture.guard.canActivate(fixture.context)).resolves.toBe(true);
+
+    expect(fixture.securityService.ensureActiveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionIdentifier: 'supabase:mfa:44444444-4444-4444-8444-444444444444'
+      })
+    );
   });
 
   it('rejects a password-reset-required user from ordinary business endpoints', async () => {
@@ -180,7 +201,7 @@ describe('JwtAuthGuard', () => {
 
   it('fails closed when SecurityService reports an inactive session', async () => {
     const fixture = createFixture();
-    jest.mocked(fixture.securityService.ensureActiveSession).mockResolvedValueOnce(false);
+    jest.mocked(fixture.securityService.ensureActiveSession).mockResolvedValue(false);
 
     await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
     expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();

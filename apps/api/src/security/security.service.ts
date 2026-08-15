@@ -82,6 +82,21 @@ export interface RecordLoginAttemptInput extends RequestMeta {
   abnormal?: boolean;
 }
 
+export interface ReserveLoginAttemptInput extends RequestMeta {
+  username: string;
+}
+
+export type ReserveLoginAttemptResult =
+  | { allowed: true; reservationId: string }
+  | { allowed: false; retryAfterMs: number };
+
+export interface FinalizeLoginAttemptInput {
+  userId?: string | null;
+  status: LoginLogStatus;
+  failureReason?: string | null;
+  abnormal?: boolean;
+}
+
 export interface CreateActiveSessionInput extends RequestMeta {
   userId: string;
   accessToken: string;
@@ -219,6 +234,13 @@ interface UserMfaState {
   lastUsedCounter?: number | null;
   disabledAt?: string | null;
   disabledReason?: string | null;
+}
+
+type MfaStateClient = Pick<Prisma.TransactionClient, '$queryRaw' | 'securitySetting'>;
+
+interface ConsumedMfaCode {
+  method: 'totp' | 'recovery_code';
+  state: UserMfaState;
 }
 
 interface SecurityOverviewCounts {
@@ -359,6 +381,84 @@ export class SecurityService {
       this.overviewCache.clear();
     }
     return this.toLoginLogResponse(log);
+  }
+
+  async reserveLoginAttempt(input: ReserveLoginAttemptInput): Promise<ReserveLoginAttemptResult> {
+    const username = this.normalizeRequiredString(input.username, 'username');
+    const usernameKey = username.toLocaleLowerCase('en-US');
+    const ip = this.normalizeNullableString(input.ip);
+    const userAgent = this.normalizeNullableString(input.userAgent);
+    const windowStart = new Date(Date.now() - LOGIN_FAILURE_WINDOW_MINUTES * 60 * 1000);
+
+    return this.prisma.$transaction(async (client) => {
+      const lockKeys = [`security:login:username:${usernameKey}`];
+      if (ip) lockKeys.push(`security:login:ip:${ip}`);
+      for (const key of lockKeys.sort()) {
+        await client.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+        `;
+      }
+
+      const policy = await client.securitySetting.findUnique({ where: { key: 'password_policy' } });
+      const threshold = this.getPositiveIntegerSetting(
+        ((policy?.value ?? {}) as Record<string, unknown>).maxFailedAttempts,
+        LOGIN_FAILURE_THRESHOLD
+      );
+      const baseWhere: Prisma.LoginLogWhereInput = {
+        status: { in: LOGIN_FAILURE_STATUSES },
+        failureReason: { not: 'authentication_unavailable' },
+        createdAt: { gte: windowStart }
+      };
+      const countQueries = [
+        client.loginLog.count({
+          where: {
+            ...baseWhere,
+            username: { equals: username, mode: 'insensitive' }
+          }
+        })
+      ];
+      if (ip) {
+        countQueries.push(client.loginLog.count({ where: { ...baseWhere, ip } }));
+      }
+      const [usernameFailures = 0, ipFailures = 0] = await Promise.all(countQueries);
+      if (Math.max(usernameFailures, ipFailures) >= threshold) {
+        return {
+          allowed: false as const,
+          retryAfterMs: LOGIN_FAILURE_WINDOW_MINUTES * 60 * 1000
+        };
+      }
+
+      const reservation = await client.loginLog.create({
+        data: {
+          username,
+          status: 'blocked',
+          failureReason: 'authentication_in_progress',
+          ip,
+          userAgent,
+          abnormal: false
+        },
+        select: { id: true }
+      });
+      return { allowed: true as const, reservationId: reservation.id };
+    });
+  }
+
+  async finalizeLoginAttempt(reservationIdInput: string, input: FinalizeLoginAttemptInput) {
+    const reservationId = this.normalizeRequiredUuid(reservationIdInput, 'reservationId');
+    const result = await this.prisma.loginLog.updateMany({
+      where: {
+        id: reservationId,
+        failureReason: 'authentication_in_progress'
+      },
+      data: {
+        userId: input.userId ?? undefined,
+        status: this.parseLoginStatus(input.status, true),
+        failureReason: this.normalizeNullableString(input.failureReason),
+        abnormal: Boolean(input.abnormal)
+      }
+    });
+    if (result.count > 0) this.overviewCache.clear();
+    return result.count === 1;
   }
 
   async createActiveSession(input: CreateActiveSessionInput) {
@@ -932,17 +1032,26 @@ export class SecurityService {
     const secret = this.generateBase32Secret();
     const settings = await this.getMfaSettings();
     const issuer = this.getMfaIssuer(settings.value);
-    const state = await this.saveUserMfaState(user.id, {
-      enabled: false,
-      secretEncrypted: this.fieldEncryptionService.encrypt(secret),
-      recoveryCodeHashes: [],
-      recoveryCodeCount: 0,
-      createdAt: new Date().toISOString(),
-      enabledAt: null,
-      lastUsedAt: null,
-      lastUsedCounter: null,
-      disabledAt: null,
-      disabledReason: null
+    const state = await this.withLockedUserMfaState(user.id, (current, client) => {
+      if (current.enabled) {
+        throw new BadRequestException('MFA 已启用，如需重新绑定请先按安全流程停用。');
+      }
+      return this.saveUserMfaState(
+        user.id,
+        {
+          enabled: false,
+          secretEncrypted: this.fieldEncryptionService.encrypt(secret),
+          recoveryCodeHashes: [],
+          recoveryCodeCount: 0,
+          createdAt: new Date().toISOString(),
+          enabledAt: null,
+          lastUsedAt: null,
+          lastUsedCounter: null,
+          disabledAt: null,
+          disabledReason: null
+        },
+        client
+      );
     });
 
     await this.auditLogsService.create({
@@ -967,24 +1076,30 @@ export class SecurityService {
   }
 
   async enableMyMfa(user: AuthenticatedUser, dto: VerifyMfaInput) {
-    const state = await this.getUserMfaState(user.id);
-    const secret = this.getMfaSecretOrThrow(state);
-    const verification = this.verifyTotp(secret, this.normalizeMfaCode(dto.code));
-    if (!verification.valid) {
-      throw new BadRequestException('动态验证码或恢复码错误，请重新输入。');
-    }
-
+    const code = this.normalizeMfaCode(dto.code);
     const recoveryCodes = this.generateRecoveryCodes();
-    const updated = await this.saveUserMfaState(user.id, {
-      ...state,
-      enabled: true,
-      recoveryCodeHashes: recoveryCodes.map((code) => this.hashRecoveryCode(user.id, code)),
-      recoveryCodeCount: recoveryCodes.length,
-      enabledAt: new Date().toISOString(),
-      lastUsedAt: new Date().toISOString(),
-      lastUsedCounter: verification.counter,
-      disabledAt: null,
-      disabledReason: null
+    const updated = await this.withLockedUserMfaState(user.id, (state, client) => {
+      if (state.enabled) throw new BadRequestException('MFA 已启用。');
+      const secret = this.getMfaSecretOrThrow(state);
+      const verification = this.verifyTotp(secret, code);
+      if (!verification.valid) {
+        throw new BadRequestException('动态验证码或恢复码错误，请重新输入。');
+      }
+      return this.saveUserMfaState(
+        user.id,
+        {
+          ...state,
+          enabled: true,
+          recoveryCodeHashes: recoveryCodes.map((item) => this.hashRecoveryCode(user.id, item)),
+          recoveryCodeCount: recoveryCodes.length,
+          enabledAt: new Date().toISOString(),
+          lastUsedAt: new Date().toISOString(),
+          lastUsedCounter: verification.counter,
+          disabledAt: null,
+          disabledReason: null
+        },
+        client
+      );
     });
 
     await this.auditLogsService.create({
@@ -1004,13 +1119,20 @@ export class SecurityService {
   }
 
   async regenerateMyMfaRecoveryCodes(user: AuthenticatedUser, dto: VerifyMfaInput) {
-    const state = await this.requireEnabledUserMfaState(user.id);
-    await this.verifyMfaCode(user.id, this.normalizeMfaCode(dto.code), state);
+    const code = this.normalizeMfaCode(dto.code);
     const recoveryCodes = this.generateRecoveryCodes();
-    const updated = await this.saveUserMfaState(user.id, {
-      ...state,
-      recoveryCodeHashes: recoveryCodes.map((code) => this.hashRecoveryCode(user.id, code)),
-      recoveryCodeCount: recoveryCodes.length
+    const updated = await this.withLockedUserMfaState(user.id, async (state, client) => {
+      this.assertEnabledUserMfaState(state);
+      const consumed = this.consumeMfaCode(user.id, code, state);
+      return this.saveUserMfaState(
+        user.id,
+        {
+          ...consumed.state,
+          recoveryCodeHashes: recoveryCodes.map((item) => this.hashRecoveryCode(user.id, item)),
+          recoveryCodeCount: recoveryCodes.length
+        },
+        client
+      );
     });
 
     await this.auditLogsService.create({
@@ -1039,15 +1161,22 @@ export class SecurityService {
     ) {
       throw new BadRequestException('管理员强制 MFA 已启用，不能停用当前绑定。');
     }
-    const state = await this.requireEnabledUserMfaState(user.id);
-    await this.verifyMfaCode(user.id, this.normalizeMfaCode(dto.code), state);
-    const updated = await this.saveUserMfaState(user.id, {
-      ...state,
-      enabled: false,
-      recoveryCodeHashes: [],
-      recoveryCodeCount: 0,
-      disabledAt: new Date().toISOString(),
-      disabledReason: this.normalizeNullableString(dto.reason)
+    const code = this.normalizeMfaCode(dto.code);
+    const updated = await this.withLockedUserMfaState(user.id, (state, client) => {
+      this.assertEnabledUserMfaState(state);
+      const consumed = this.consumeMfaCode(user.id, code, state);
+      return this.saveUserMfaState(
+        user.id,
+        {
+          ...consumed.state,
+          enabled: false,
+          recoveryCodeHashes: [],
+          recoveryCodeCount: 0,
+          disabledAt: new Date().toISOString(),
+          disabledReason: this.normalizeNullableString(dto.reason)
+        },
+        client
+      );
     });
 
     await this.auditLogsService.create({
@@ -1065,13 +1194,19 @@ export class SecurityService {
 
   async resetUserMfa(userId: string, operator?: AuthenticatedUser) {
     const normalizedUserId = this.normalizeRequiredUuid(userId, 'userId');
-    const updated = await this.saveUserMfaState(normalizedUserId, {
-      enabled: false,
-      secretEncrypted: null,
-      recoveryCodeHashes: [],
-      recoveryCodeCount: 0,
-      disabledAt: new Date().toISOString(),
-      disabledReason: 'admin_reset'
+    const updated = await this.withLockedUserMfaState(normalizedUserId, (_state, client) => {
+      return this.saveUserMfaState(
+        normalizedUserId,
+        {
+          enabled: false,
+          secretEncrypted: null,
+          recoveryCodeHashes: [],
+          recoveryCodeCount: 0,
+          disabledAt: new Date().toISOString(),
+          disabledReason: 'admin_reset'
+        },
+        client
+      );
     });
 
     await this.auditLogsService.create({
@@ -1152,8 +1287,13 @@ export class SecurityService {
   }
 
   async verifyUserMfaCode(userId: string, code: string | null | undefined) {
-    const state = await this.requireEnabledUserMfaState(userId);
-    return this.verifyMfaCode(userId, this.normalizeMfaCode(code), state);
+    const normalizedCode = this.normalizeMfaCode(code);
+    return this.withLockedUserMfaState(userId, async (state, client) => {
+      this.assertEnabledUserMfaState(state);
+      const consumed = this.consumeMfaCode(userId, normalizedCode, state);
+      await this.saveUserMfaState(userId, consumed.state, client);
+      return { method: consumed.method };
+    });
   }
 
   getPasswordPolicy() {
@@ -1647,8 +1787,11 @@ export class SecurityService {
     return this.toSettingResponse(setting, key, value);
   }
 
-  private async getUserMfaState(userId: string): Promise<UserMfaState> {
-    const setting = await this.prisma.securitySetting.findUnique({
+  private async getUserMfaState(
+    userId: string,
+    client: Pick<Prisma.TransactionClient, 'securitySetting'> = this.prisma
+  ): Promise<UserMfaState> {
+    const setting = await client.securitySetting.findUnique({
       where: { key: this.getUserMfaSettingKey(userId) }
     });
     return this.parseUserMfaState(setting?.value);
@@ -1680,22 +1823,24 @@ export class SecurityService {
     });
   }
 
-  private async requireEnabledUserMfaState(userId: string) {
-    const state = await this.getUserMfaState(userId);
+  private assertEnabledUserMfaState(state: UserMfaState) {
     if (!state.enabled || !state.secretEncrypted) {
       throw new BadRequestException('MFA is not enabled');
     }
-    return state;
   }
 
-  private async saveUserMfaState(userId: string, state: UserMfaState) {
+  private async saveUserMfaState(
+    userId: string,
+    state: UserMfaState,
+    client: Pick<Prisma.TransactionClient, 'securitySetting'> = this.prisma
+  ) {
     const key = this.getUserMfaSettingKey(userId);
     const normalizedState: UserMfaState = {
       ...state,
       recoveryCodeHashes: state.recoveryCodeHashes ?? [],
       recoveryCodeCount: state.recoveryCodeHashes?.length ?? state.recoveryCodeCount ?? 0
     };
-    const setting = await this.prisma.securitySetting.upsert({
+    const setting = await client.securitySetting.upsert({
       where: { key },
       update: {
         value: this.toAuditJson(normalizedState),
@@ -1712,16 +1857,32 @@ export class SecurityService {
     return this.parseUserMfaState(setting.value);
   }
 
-  private async verifyMfaCode(userId: string, code: string, state: UserMfaState) {
+  private async withLockedUserMfaState<T>(
+    userIdInput: string,
+    operation: (state: UserMfaState, client: MfaStateClient) => Promise<T> | T
+  ) {
+    const userId = this.normalizeRequiredUuid(userIdInput, 'userId');
+    return this.prisma.$transaction(async (client) => {
+      await client.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${`security:mfa:${userId}`}, 0))
+      `;
+      const state = await this.getUserMfaState(userId, client);
+      return operation(state, client);
+    });
+  }
+
+  private consumeMfaCode(userId: string, code: string, state: UserMfaState): ConsumedMfaCode {
     const secret = this.getMfaSecretOrThrow(state);
     const totpVerification = this.verifyTotp(secret, code, state.lastUsedCounter ?? null);
     if (totpVerification.valid) {
-      await this.saveUserMfaState(userId, {
-        ...state,
-        lastUsedAt: new Date().toISOString(),
-        lastUsedCounter: totpVerification.counter
-      });
-      return { method: 'totp' as const };
+      return {
+        method: 'totp',
+        state: {
+          ...state,
+          lastUsedAt: new Date().toISOString(),
+          lastUsedCounter: totpVerification.counter
+        }
+      };
     }
 
     const recoveryCodeHashes = state.recoveryCodeHashes ?? [];
@@ -1731,13 +1892,15 @@ export class SecurityService {
     );
     if (recoveryIndex >= 0) {
       const remainingHashes = recoveryCodeHashes.filter((_, index) => index !== recoveryIndex);
-      await this.saveUserMfaState(userId, {
-        ...state,
-        recoveryCodeHashes: remainingHashes,
-        recoveryCodeCount: remainingHashes.length,
-        lastUsedAt: new Date().toISOString()
-      });
-      return { method: 'recovery_code' as const };
+      return {
+        method: 'recovery_code',
+        state: {
+          ...state,
+          recoveryCodeHashes: remainingHashes,
+          recoveryCodeCount: remainingHashes.length,
+          lastUsedAt: new Date().toISOString()
+        }
+      };
     }
 
     throw new BadRequestException('动态验证码或恢复码错误，请重新输入。');

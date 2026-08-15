@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Header, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { resolveTrustedClientIp } from '../../common/http/trusted-client-ip';
 import { IdBusinessV2OptionsService } from '../options/public-api';
 import {
   IdBusinessV2TopupSupplierReassignmentService,
@@ -204,7 +205,7 @@ export class IdBusinessV2GiftCardsController {
   ) {
     const userAgentValue = request.headers['user-agent'];
     return this.sensitiveService.revealCode(giftCardId, dto, operator, {
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: Array.isArray(userAgentValue) ? userAgentValue[0] : userAgentValue
     });
   }

@@ -4,6 +4,7 @@ import { AllowDuringPasswordReset, CurrentUser, Public } from '../auth/auth.deco
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { ChangePasswordDto } from '../auth/dto/change-password.dto';
 import type { LoginDto } from '../auth/dto/login.dto';
+import { resolveTrustedClientIp } from '../common/http/trusted-client-ip';
 
 interface RequestWithMeta {
   ip?: string;
@@ -19,7 +20,7 @@ export class V2AuthController {
   @Post('login')
   login(@Body() dto: LoginDto, @Req() request: RequestWithMeta) {
     return this.authService.login(dto, {
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
   }
@@ -40,7 +41,7 @@ export class V2AuthController {
   @Post('refresh')
   refresh(@CurrentUser() user: AuthenticatedUser, @Req() request: RequestWithMeta) {
     return this.authService.refresh(user, {
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     });
   }
