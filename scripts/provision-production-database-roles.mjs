@@ -209,6 +209,9 @@ try {
     `GRANT SELECT, INSERT ON TABLE ${RUNTIME_APPEND_ONLY_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
   await admin.query(
+    `GRANT UPDATE (mailbox_id, outcome) ON TABLE public.id_business_v2_mail_query_attempts TO ${quoteIdentifier(RUNTIME_ROLE)}`
+  );
+  await admin.query(
     `GRANT DELETE ON TABLE ${RUNTIME_DELETE_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
   for (const signature of PROHIBITED_RUNTIME_FUNCTIONS) {

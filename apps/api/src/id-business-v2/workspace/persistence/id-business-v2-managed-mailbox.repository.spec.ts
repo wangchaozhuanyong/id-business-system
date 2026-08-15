@@ -62,5 +62,8 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
     expect(second).toEqual({ allowed: false });
     expect(attempts.map(({ outcome }) => outcome)).toEqual(['invalid', 'rate_limited']);
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(4);
+    for (const [query] of prisma.$queryRaw.mock.calls) {
+      expect(query.join('')).toContain('SELECT 1::integer AS "locked"');
+    }
   });
 });

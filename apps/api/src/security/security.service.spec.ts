@@ -380,6 +380,9 @@ describe('SecurityService', () => {
       reservationId: '77777777-7777-4777-8777-777777777777'
     });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    for (const [query] of (prisma.$queryRaw as jest.Mock).mock.calls) {
+      expect(query.join('')).toContain('SELECT 1::integer AS "locked"');
+    }
     expect(prisma.loginLog.create).toHaveBeenCalledWith({
       data: {
         username: 'admin',
