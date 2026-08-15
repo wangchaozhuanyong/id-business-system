@@ -90,6 +90,10 @@
           </div>
         </section>
       </nav>
+      <V2WorkspaceLauncher
+        :sidebar-collapsed="sidebarCollapsed"
+        @request-close-navigation="closeMobileMenu"
+      />
     </aside>
 
     <div class="v2-workspace">
@@ -398,6 +402,7 @@ import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/u
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
 import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2WorkspaceLauncher from '@/v2/components/workspace/V2WorkspaceLauncher.vue';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
 import type { V2SensitiveAccessApprovalSummary } from '@/v2/types/sensitiveAccess';
 import { ElMessage } from '@/v2/services/elementPlusMessage';

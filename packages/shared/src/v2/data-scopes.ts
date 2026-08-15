@@ -32,7 +32,8 @@ export const V2_DATA_SCOPES = [
   'renewal-warning-summary',
   'security',
   'supplier-funds',
-  'supplier-payments'
+  'supplier-payments',
+  'workspace'
 ] as const;
 
 export type V2DataScope = (typeof V2_DATA_SCOPES)[number];
@@ -186,7 +187,8 @@ export const V2_SCOPE_DEPENDENCIES = {
     'finance-accounts',
     'finance-ledger',
     'finance-reports'
-  ]
+  ],
+  workspace: ['workspace']
 } as const satisfies Record<V2DataScope, readonly V2DataScope[]>;
 
 const V2_DATA_SCOPE_SET = new Set<string>(V2_DATA_SCOPES);

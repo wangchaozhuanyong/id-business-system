@@ -26,6 +26,9 @@ const ACCESS_CHECK_TABLES = [
   'id_business_v2_options',
   'id_business_v2_branding_settings',
   'id_business_v2_user_table_preferences',
+  'id_business_v2_workspace_shortcuts',
+  'id_business_v2_managed_mailboxes',
+  'id_business_v2_mail_query_attempts',
   'id_business_v2_accounts',
   'id_business_v2_orders',
   'id_business_v2_finance_journals'
@@ -50,6 +53,9 @@ const RUNTIME_TABLES = [
   'id_business_v2_options',
   'id_business_v2_branding_settings',
   'id_business_v2_user_table_preferences',
+  'id_business_v2_workspace_shortcuts',
+  'id_business_v2_managed_mailboxes',
+  'id_business_v2_mail_query_attempts',
   'id_business_v2_customers',
   'id_business_v2_customer_tags',
   'id_business_v2_customer_services',
@@ -91,10 +97,12 @@ const RUNTIME_DELETE_TABLES = [
   'role_permissions',
   'id_business_v2_user_table_preferences',
   'id_business_v2_customer_tags',
-  'id_business_v2_sensitive_display_policies'
+  'id_business_v2_sensitive_display_policies',
+  'id_business_v2_workspace_shortcuts'
 ];
 
 const RUNTIME_TRIGGER_MANAGED_TABLES = ['id_business_v2_order_display_snapshots'];
+const RUNTIME_APPEND_ONLY_TABLES = ['id_business_v2_mail_query_attempts'];
 
 const values = parseArgs(process.argv.slice(2));
 if (!values.apply) {
@@ -188,13 +196,17 @@ try {
 
   await admin.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
   const runtimeWritableTables = RUNTIME_TABLES.filter(
-    (table) => !RUNTIME_TRIGGER_MANAGED_TABLES.includes(table)
+    (table) =>
+      !RUNTIME_TRIGGER_MANAGED_TABLES.includes(table) && !RUNTIME_APPEND_ONLY_TABLES.includes(table)
   );
   await admin.query(
     `GRANT SELECT, INSERT, UPDATE ON TABLE ${runtimeWritableTables.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
   await admin.query(
     `GRANT SELECT ON TABLE ${RUNTIME_TRIGGER_MANAGED_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
+  );
+  await admin.query(
+    `GRANT SELECT, INSERT ON TABLE ${RUNTIME_APPEND_ONLY_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
   await admin.query(
     `GRANT DELETE ON TABLE ${RUNTIME_DELETE_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
@@ -416,22 +428,29 @@ async function verifyRoleCatalog(client) {
   const runtimePrivileges = await client.query(
     `SELECT table_name,
             has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS can_select,
-            has_table_privilege($1, format('public.%I', table_name), 'INSERT,UPDATE') AS can_write,
+            has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS can_insert,
+            has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS can_update,
             has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS can_delete,
             has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS can_truncate
      FROM unnest($2::text[]) AS table_name`,
     [RUNTIME_ROLE, RUNTIME_TABLES]
   );
   if (
-    runtimePrivileges.rows.some(
-      (row) =>
+    runtimePrivileges.rows.some((row) => {
+      const triggerManaged = RUNTIME_TRIGGER_MANAGED_TABLES.includes(row.table_name);
+      const appendOnly = RUNTIME_APPEND_ONLY_TABLES.includes(row.table_name);
+      const invalidWritePrivileges = triggerManaged
+        ? row.can_insert || row.can_update
+        : appendOnly
+          ? !row.can_insert || row.can_update
+          : !row.can_insert || !row.can_update;
+      return (
         !row.can_select ||
         row.can_truncate ||
-        (RUNTIME_TRIGGER_MANAGED_TABLES.includes(row.table_name)
-          ? row.can_write
-          : !row.can_write) ||
+        invalidWritePrivileges ||
         row.can_delete !== RUNTIME_DELETE_TABLES.includes(row.table_name)
-    )
+      );
+    })
   ) {
     throw new Error('运行时角色的表权限不符合最小 DML 要求');
   }

@@ -19,6 +19,7 @@ import { IdBusinessV2SensitiveAccessModule } from './sensitive-access/public-api
 import { IdBusinessV2SystemMonitoringModule } from './system-monitoring/public-api';
 import { IdBusinessV2TablePreferencesModule } from './table-preferences/public-api';
 import { IdBusinessV2TopupSupplierFundsModule } from './topup-supplier-funds/public-api';
+import { IdBusinessV2WorkspaceModule } from './workspace/public-api';
 
 @Module({
   imports: [
@@ -40,7 +41,8 @@ import { IdBusinessV2TopupSupplierFundsModule } from './topup-supplier-funds/pub
     IdBusinessV2TopupSupplierFundsModule,
     IdBusinessV2OrdersModule,
     IdBusinessV2RenewalsModule,
-    IdBusinessV2SystemMonitoringModule
+    IdBusinessV2SystemMonitoringModule,
+    IdBusinessV2WorkspaceModule
   ],
   controllers: [IdBusinessV2TimeController]
 })

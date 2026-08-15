@@ -23,10 +23,21 @@ const V2LoginView = () => import('@/v2/views/V2LoginView.vue');
 const V2ForbiddenView = () => import('@/v2/views/V2ForbiddenView.vue');
 const V2ChangePasswordView = () => import('@/v2/views/V2ChangePasswordView.vue');
 const V2SessionUnavailableView = () => import('@/v2/views/V2SessionUnavailableView.vue');
+const V2PublicMailboxView = () => import('@/v2/views/V2PublicMailboxView.vue');
 
 export const v2Router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/mailbox',
+      name: 'public-mailbox',
+      component: V2PublicMailboxView,
+      meta: {
+        public: true,
+        publicStandalone: true,
+        title: '邮件查询'
+      }
+    },
     {
       path: '/',
       redirect: '/v2'
@@ -77,6 +88,11 @@ export const v2Router = createRouter({
 v2Router.beforeEach(async (to, from) => {
   const authStore = useAuthStore();
   beginV2RoutePerformance(to.path);
+
+  if (to.meta.publicStandalone) {
+    resetV2RouteNavigationState(to.fullPath);
+    return true;
+  }
 
   if (to.path.startsWith('/v2')) {
     setV2RouteNavigationState(to.fullPath, 'pending');

@@ -12,6 +12,9 @@ const tables = [
   'id_business_v2_sensitive_display_policies',
   'id_business_v2_options',
   'id_business_v2_user_table_preferences',
+  'id_business_v2_workspace_shortcuts',
+  'id_business_v2_managed_mailboxes',
+  'id_business_v2_mail_query_attempts',
   'id_business_v2_customers',
   'id_business_v2_accounts',
   'id_business_v2_gift_cards',
@@ -41,7 +44,18 @@ const expectedRuntimeDeleteTables = new Set([
   'role_permissions',
   'id_business_v2_user_table_preferences',
   'id_business_v2_customer_tags',
-  'id_business_v2_sensitive_display_policies'
+  'id_business_v2_sensitive_display_policies',
+  'id_business_v2_workspace_shortcuts'
+]);
+const expectedRestrictedRuntimePrivileges = new Map([
+  [
+    'id_business_v2_order_display_snapshots',
+    { select: true, insert: false, update: false, delete: false }
+  ],
+  [
+    'id_business_v2_mail_query_attempts',
+    { select: true, insert: true, update: false, delete: false }
+  ]
 ]);
 
 const report = {
@@ -49,6 +63,7 @@ const report = {
   profiles: {},
   rowSecurity: [],
   runtimeDeletePrivileges: [],
+  restrictedRuntimePrivileges: [],
   governanceFunctionPrivileges: []
 };
 for (const [name, databaseUrl] of Object.entries(profiles)) {
@@ -109,6 +124,33 @@ try {
     throw new Error(
       `运行时 DELETE 权限不符合最小范围：unexpected=${unexpectedDeletePrivileges.join(',') || '-'} missing=${missingDeletePrivileges.join(',') || '-'}`
     );
+  }
+  report.restrictedRuntimePrivileges = (
+    await admin.query(
+      `SELECT table_name,
+              has_table_privilege('id_business_v2_runtime', format('public.%I', table_name), 'SELECT') AS can_select,
+              has_table_privilege('id_business_v2_runtime', format('public.%I', table_name), 'INSERT') AS can_insert,
+              has_table_privilege('id_business_v2_runtime', format('public.%I', table_name), 'UPDATE') AS can_update,
+              has_table_privilege('id_business_v2_runtime', format('public.%I', table_name), 'DELETE') AS can_delete
+       FROM unnest($1::text[]) AS table_name
+       ORDER BY table_name`,
+      [[...expectedRestrictedRuntimePrivileges.keys()]]
+    )
+  ).rows;
+  if (
+    report.restrictedRuntimePrivileges.length !== expectedRestrictedRuntimePrivileges.size ||
+    report.restrictedRuntimePrivileges.some((row) => {
+      const expected = expectedRestrictedRuntimePrivileges.get(row.table_name);
+      return (
+        !expected ||
+        row.can_select !== expected.select ||
+        row.can_insert !== expected.insert ||
+        row.can_update !== expected.update ||
+        row.can_delete !== expected.delete
+      );
+    })
+  ) {
+    throw new Error('运行时受限制表权限不符合最小 DML 要求');
   }
   report.governanceFunctionPrivileges = (
     await admin.query(

@@ -65,6 +65,30 @@ export {
   type V2TablePreferenceList
 } from './v2/table-preferences.js';
 export {
+  V2_MAIL_VIEWER_LIMITS,
+  V2_MAIL_PROVIDERS,
+  V2_MANAGED_MAILBOX_STATUSES,
+  V2_WORKSPACE_SHORTCUT_LIMITS,
+  type CreateV2ManagedMailboxInput,
+  type CreateV2ManagedMailboxResult,
+  type CreateV2WorkspaceShortcutInput,
+  type RotateV2ManagedMailboxQueryCodeResult,
+  type ReorderV2WorkspaceShortcutsInput,
+  type UpdateV2ManagedMailboxCredentialInput,
+  type UpdateV2ManagedMailboxStatusInput,
+  type UpdateV2WorkspaceShortcutInput,
+  type V2MailProvider,
+  type V2MailViewerMessage,
+  type V2MailViewerQueryInput,
+  type V2MailViewerQueryResult,
+  type V2ManagedMailbox,
+  type V2ManagedMailboxList,
+  type V2ManagedMailboxListQuery,
+  type V2ManagedMailboxStatus,
+  type V2WorkspaceShortcut,
+  type V2WorkspaceShortcutList
+} from './v2/workspace.js';
+export {
   V2_FINANCE_ACCOUNT_TYPES,
   V2_FINANCE_CURRENCIES,
   type V2FinanceAccount,

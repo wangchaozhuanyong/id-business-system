@@ -54,7 +54,8 @@ const expectedBackendDomains = [
   'sensitive-access',
   'system-monitoring',
   'table-preferences',
-  'topup-supplier-funds'
+  'topup-supplier-funds',
+  'workspace'
 ];
 
 checkFrontendFeatures();

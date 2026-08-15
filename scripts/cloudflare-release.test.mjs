@@ -254,6 +254,55 @@ test('grants and continuously verifies production access to user table preferenc
   assert.match(verifier, /'id_business_v2_user_table_preferences'/);
 });
 
+test('keeps workspace and managed mailbox privileges aligned across release tooling', async () => {
+  const migration = await readFile(
+    new URL(
+      '../apps/api/prisma/migrations/20260815100000_managed_mailboxes/migration.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const provisioner = await readFile(
+    new URL('./provision-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const verifier = await readFile(
+    new URL('./verify-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const appendOnlyTables = provisioner.match(
+    /const RUNTIME_APPEND_ONLY_TABLES = \[([\s\S]*?)\];/
+  )?.[1];
+  const provisionedDeleteTables = provisioner.match(
+    /const RUNTIME_DELETE_TABLES = \[([\s\S]*?)\];/
+  )?.[1];
+  const verifiedDeleteTables = verifier.match(
+    /const expectedRuntimeDeleteTables = new Set\(\[([\s\S]*?)\]\);/
+  )?.[1];
+
+  assert.match(
+    migration,
+    /GRANT SELECT, INSERT, UPDATE\s+ON TABLE public\.id_business_v2_managed_mailboxes/
+  );
+  assert.match(
+    migration,
+    /GRANT SELECT, INSERT\s+ON TABLE public\.id_business_v2_mail_query_attempts/
+  );
+  assert.match(appendOnlyTables ?? '', /'id_business_v2_mail_query_attempts'/);
+  assert.doesNotMatch(provisionedDeleteTables ?? '', /'id_business_v2_mail_query_attempts'/);
+  assert.doesNotMatch(verifiedDeleteTables ?? '', /'id_business_v2_mail_query_attempts'/);
+  for (const table of [
+    'id_business_v2_workspace_shortcuts',
+    'id_business_v2_managed_mailboxes',
+    'id_business_v2_mail_query_attempts'
+  ]) {
+    assert.match(provisioner, new RegExp(`'${table}'`));
+    assert.match(verifier, new RegExp(`'${table}'`));
+  }
+  assert.match(provisionedDeleteTables ?? '', /'id_business_v2_workspace_shortcuts'/);
+  assert.match(verifiedDeleteTables ?? '', /'id_business_v2_workspace_shortcuts'/);
+});
+
 test('keeps customer tag replacement compatible with the scoped runtime role', async () => {
   const migration = await readFile(
     new URL(
