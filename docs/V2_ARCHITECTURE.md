@@ -3,7 +3,7 @@
 ## 1. 唯一运行入口
 
 - 管理端入口：`apps/admin/index.html` → `apps/admin/src/main.ts` → `apps/admin/src/App.vue`
-- 管理端路由：`apps/admin/src/v2-router.ts`
+- 管理端与买家公开查询路由：`apps/admin/src/v2-router.ts`
 - API 入口：`apps/api/src/main.ts` → `apps/api/src/app.module.ts`
 - 业务 API 前缀：`/api/id-business-v2`
 - Cloudflare 入口：`apps/api/src/cloudflare-v2-bootstrap.ts`
@@ -38,11 +38,12 @@ contracts 和模块样式。跨模块能力优先放在 `components`、`composab
 - `business-monitoring`
 - `system-monitoring`
 - `data-governance`
+- `workspace`（当前用户快捷网址、前端本地 2FA 计算、受管 Gmail/iCloud 邮箱与公开买家查询）
 
 公共运行能力包括 `v2-auth`、`auth`、`audit-logs`、`common` 和 `security`。模块通过
 `public-api.ts` 暴露稳定边界，禁止跨模块引用内部 service 文件。
 
-`runtime`、`sensitive-access` 和 `table-preferences` 作为 V2 内部基础域同样纳入依赖门禁。
+`runtime`、`sensitive-access`、`table-preferences` 和 `workspace` 作为 V2 内部基础域同样纳入依赖门禁。
 `apps/api/src/id-business-v2` 下所有一级目录都必须登记，跨域 import 只能指向目标域
 `public-api.ts`，并且完整生产依赖图不得出现循环。
 
@@ -57,6 +58,14 @@ Supabase 身份映射，以及续费预警设置所需的系统规则记录。
 
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
+
+受管邮箱应用专用密码通过 `FieldEncryptionService` 加密保存，买家查询码只保存 HMAC 和末四位提示。
+公开查询尝试只记录邮箱/IP 哈希、受管邮箱标识、受控结果枚举和时间，不记录查询码、应用专用密码或
+邮件内容。邮件正文不入库，查询时由 Node 运行时直接读取 Gmail/iCloud INBOX，并在返回前转换为纯文本。
+
+原生 IMAP 依赖 Node TCP/TLS，不能在 Supabase Edge 进程内执行。前端仍可部署于 Cloudflare；邮件查询
+API 必须指向项目现有 Node/PM2/Docker API 运行方式。Edge 环境保留接口边界，但会返回邮件运行时未配置，
+不得访问任何第三方代查域名。具体运行要求见 `docs/V2_MANAGED_MAILBOX.md`。
 
 ## 5. 金额、事务与账务规则
 

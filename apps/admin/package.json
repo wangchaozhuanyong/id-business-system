@@ -16,6 +16,7 @@
     "@supabase/supabase-js": "^2.110.9",
     "axios": "^1.0.0",
     "element-plus": "^2.0.0",
+    "otpauth": "^9.5.1",
     "pinia": "^3.0.0",
     "vue": "^3.0.0",
     "vue-router": "^4.0.0"

@@ -66,10 +66,14 @@ const hasBootRouteError = computed(
 const isSessionUnavailableRoute = computed(
   () => router.currentRoute.value.meta.sessionBoundary === 'unavailable'
 );
+const isStandalonePublicRoute = computed(
+  () => router.currentRoute.value.meta.publicStandalone === true
+);
 type BootStage = 'booting' | 'session-checking' | 'route-loading' | 'ready' | 'degraded' | 'fatal';
 const bootStage = computed<BootStage>(() => {
   if (currentRuntimeError.value && !v2RouteNavigationState.stablePath) return 'fatal';
   if (hasBootRouteError.value) return 'degraded';
+  if (isStandalonePublicRoute.value) return routerSettled.value ? 'ready' : 'route-loading';
   if (isSessionUnavailableRoute.value) return routerSettled.value ? 'ready' : 'route-loading';
   if (authStore.session.kind === 'cold') return 'booting';
   if (
