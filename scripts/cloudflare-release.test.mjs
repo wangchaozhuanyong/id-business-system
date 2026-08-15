@@ -285,6 +285,42 @@ test('keeps customer tag replacement compatible with the scoped runtime role', a
   assert.match(verifiedDeleteTables ?? '', /'id_business_v2_customer_tags'/);
 });
 
+test('keeps sensitive display policies and governed cleanup within scoped database roles', async () => {
+  const provisioner = await readFile(
+    new URL('./provision-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const verifier = await readFile(
+    new URL('./verify-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const provisionedDeleteTables = provisioner.match(
+    /const RUNTIME_DELETE_TABLES = \[([\s\S]*?)\];/
+  )?.[1];
+  const verifiedDeleteTables = verifier.match(
+    /const expectedRuntimeDeleteTables = new Set\(\[([\s\S]*?)\]\);/
+  )?.[1];
+
+  assert.match(provisioner, /'id_business_v2_sensitive_display_policies'/);
+  assert.match(verifier, /'id_business_v2_sensitive_display_policies'/);
+  assert.match(provisionedDeleteTables ?? '', /'id_business_v2_sensitive_display_policies'/);
+  assert.match(verifiedDeleteTables ?? '', /'id_business_v2_sensitive_display_policies'/);
+  for (const source of [provisioner, verifier]) {
+    assert.match(source, /execute_id_business_v2_governance_exchange_rate_cleanup/);
+    assert.match(source, /cleanup_id_business_v2_exchange_rate_history/);
+    assert.match(source, /invoke_id_business_v2_exchange_rate_cron/);
+  }
+  for (const directDeleteTable of [
+    'id_business_v2_exchange_rate_runs',
+    'id_business_v2_exchange_rate_snapshots',
+    'id_business_v2_exchange_rate_provider_snapshots',
+    'id_business_v2_exchange_rate_quote_samples'
+  ]) {
+    assert.doesNotMatch(provisionedDeleteTables ?? '', new RegExp(`'${directDeleteTable}'`));
+    assert.doesNotMatch(verifiedDeleteTables ?? '', new RegExp(`'${directDeleteTable}'`));
+  }
+});
+
 test('requires a clean main checkout synchronized with origin', () => {
   assert.equal(
     parseGitHubRepository('git@github.com:wangchaozhuanyong/id-business-system.git'),

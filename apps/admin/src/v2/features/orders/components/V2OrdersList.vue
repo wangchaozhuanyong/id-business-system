@@ -268,7 +268,11 @@
               </span>
             </div>
             <div class="v2-order-mobile-progress">
-              <el-tag :type="page.statusMeta(item.status).type" effect="plain">
+              <el-tag
+                class="v2-status-tag"
+                :type="page.statusMeta(item.status).type"
+                effect="plain"
+              >
                 {{ page.statusMeta(item.status).label }}
               </el-tag>
               <AppButton

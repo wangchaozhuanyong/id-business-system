@@ -27,12 +27,14 @@ const contrastPairs = [
   ['主按钮悬停', '--v3-primary-solid-hover', '--v3-on-primary-solid', 4.5],
   ['柔和主按钮', '--v3-primary-soft', '--v3-on-primary-soft', 4.5],
   ['柔和主按钮悬停', '--v3-primary-soft', '--v3-primary-2', 4.5],
+  ['进行中状态', '--v3-primary-soft', '--v3-primary-2', 4.5],
   ['成功实底', '--v3-success-solid', '--v3-on-success-solid', 4.5],
   ['成功柔和底', '--v3-success-soft', '--v3-success', 4.5],
   ['警告实底', '--v3-warning-solid', '--v3-on-warning-solid', 4.5],
   ['警告柔和底', '--v3-warning-soft', '--v3-warning', 4.5],
   ['危险实底', '--v3-danger-solid', '--v3-on-danger-solid', 4.5],
   ['危险柔和底', '--v3-danger-soft', '--v3-danger', 4.5],
+  ['中性状态', '--v3-info-soft', '--v3-info', 4.5],
   ['禁用按钮', '--v3-disabled-surface', '--v3-disabled-text', 4.5],
   ['侧栏正文', '--v3-sidebar', '--v3-sidebar-text', 4.5],
   ['侧栏次要文字', '--v3-sidebar', '--v3-sidebar-muted', 4.5],
@@ -152,6 +154,7 @@ for (const snippet of [
   '按钮文字对比度不得低于 4.5:1',
   '图标、边框和焦点指示不得低于 3:1',
   'normal、hover、active、focus、disabled 和 loading',
+  '数据表状态标签统一使用语义柔和底色',
   '`html.dark` 协议',
   '业务页面禁止为深色模式单独覆盖 Element Plus 组件背景'
 ]) {

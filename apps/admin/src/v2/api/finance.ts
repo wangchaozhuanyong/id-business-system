@@ -40,6 +40,14 @@ export interface V2FinanceJournalQuery extends V2FinanceReportQuery {
   periodMonth?: string;
 }
 
+export interface V2DataAnalyticsBootstrap {
+  overview: V2FinanceOverview;
+  accounts: V2FinanceAccount[];
+  wallets: V2FinanceSupplierWallet[];
+  journals: V2FinanceJournal[];
+  generatedAt: string;
+}
+
 export interface V2FinanceHistoryConfirmationInput {
   financeAccountsConfirmed: boolean;
   supplierBalancesConfirmed: boolean;
@@ -78,6 +86,14 @@ const FINANCE_SCOPES = [
 ] as const;
 
 export const idBusinessV2FinanceApi = {
+  analyticsBootstrap(params: V2FinanceReportQuery, options: ApiRequestOptions = {}) {
+    return request<V2DataAnalyticsBootstrap>(
+      http.get('/id-business-v2/finance/analytics/bootstrap', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
   bootstrapLedger(
     params: {
       currency?: V2FinanceCurrency | '';

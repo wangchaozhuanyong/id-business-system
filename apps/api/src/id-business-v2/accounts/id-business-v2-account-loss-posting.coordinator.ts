@@ -6,7 +6,7 @@ import { Amount4, type V2CommandTransaction } from '../runtime/public-api';
 import {
   IdBusinessV2AccountLossRepository,
   type LockedAccountLossRow
-} from './id-business-v2-account-loss.repository';
+} from './persistence/id-business-v2-account-loss.repository';
 
 interface PostAccountLossInput {
   accountId: string;

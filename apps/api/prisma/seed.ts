@@ -8,7 +8,6 @@ const permissions = [
   ['新增 ID', 'apple.account.create'],
   ['导入 ID', 'apple.account.import'],
   ['修改 ID', 'apple.account.update'],
-  ['删除 ID', 'apple.account.delete'],
   ['查看完整 ID', 'apple.account.view_full'],
   ['查看 ID 密码', 'apple.secret.view_password'],
   ['查看 ID 手机号', 'apple.secret.view_phone'],

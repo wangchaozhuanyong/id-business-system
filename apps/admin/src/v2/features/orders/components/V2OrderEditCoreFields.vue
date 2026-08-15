@@ -88,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import V2CustomerRemoteSelect from '@/v2/features/order-entry/components/V2CustomerRemoteSelect.vue';
+import { V2CustomerRemoteSelect } from '@/v2/features/order-entry/public-api';
 import type { V2Order, V2OrderEntryCustomer } from '../contracts';
 import type { OrderEditForm } from './order-edit-form';
 

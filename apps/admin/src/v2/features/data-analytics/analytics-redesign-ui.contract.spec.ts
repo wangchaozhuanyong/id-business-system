@@ -25,13 +25,14 @@ describe('data analytics scheme 3 redesign contract', () => {
     expect(afterSalesReport).toContain('售后订单出现非零 ID 成本');
   });
 
-  it('preserves the current report APIs, async loading standard and all filter dimensions', () => {
+  it('uses the analytics-scoped bootstrap, async loading standard and all filter dimensions', () => {
     expect(view).toContain('<V2AsyncRegion');
     expect(view).toContain('loading-title="正在核算经营数据"');
-    expect(pageState).toContain('idBusinessV2FinanceApi.overview');
-    expect(pageState).toContain('idBusinessV2FinanceApi.listAccounts');
-    expect(pageState).toContain('idBusinessV2FinanceApi.listSupplierWallets');
-    expect(pageState).toContain('idBusinessV2FinanceApi.listJournals');
+    expect(pageState).toContain('idBusinessV2FinanceApi.analyticsBootstrap');
+    expect(pageState).not.toContain('idBusinessV2FinanceApi.overview');
+    expect(pageState).not.toContain('idBusinessV2FinanceApi.listAccounts');
+    expect(pageState).not.toContain('idBusinessV2FinanceApi.listSupplierWallets');
+    expect(pageState).not.toContain('idBusinessV2FinanceApi.listJournals');
     expect(toolbar).toContain('page.filters.dateRange');
     expect(toolbar).toContain('page.filters.currency');
     expect(toolbar).toContain('page.filters.supplierOptionId');

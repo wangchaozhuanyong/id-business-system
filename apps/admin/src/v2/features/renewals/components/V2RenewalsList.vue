@@ -164,6 +164,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.renewals.main.id, '状态']"
+              class="v2-status-tag"
               :type="page.statusType(item.status.code)"
               effect="plain"
             >

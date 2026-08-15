@@ -14,7 +14,7 @@ import {
 } from '../runtime/public-api';
 import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import { toAccountLossRecordResponse } from './id-business-v2-account-loss-response';
-import { IdBusinessV2AccountLossRepository } from './id-business-v2-account-loss.repository';
+import { IdBusinessV2AccountLossRepository } from './persistence/id-business-v2-account-loss.repository';
 
 export interface ListIdBusinessV2AccountLossesQuery extends PaginationQuery {
   keyword?: string;

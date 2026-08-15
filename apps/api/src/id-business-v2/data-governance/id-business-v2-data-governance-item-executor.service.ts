@@ -308,24 +308,37 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
     eligibility: GovernanceEligibility
   ): Promise<ExecutionOutcome> {
     const cutoff = eligibility.cutoff ? new Date(eligibility.cutoff) : null;
-    if (!cutoff || Number.isNaN(cutoff.getTime()) || !eligibility.expectedStatus) {
+    const previewRetentionDays = eligibility.retentionDays;
+    if (
+      !cutoff ||
+      Number.isNaN(cutoff.getTime()) ||
+      !eligibility.expectedStatus ||
+      typeof previewRetentionDays !== 'number' ||
+      !Number.isInteger(previewRetentionDays) ||
+      previewRetentionDays < 7
+    ) {
       return this.missingPreviewSnapshot();
     }
     const run = await this.repository.findExchangeRateRunForCleanup(tx, item.entityId);
     if (!run) return this.notFound();
+    const currentRetentionCutoff = new Date(
+      Date.now() - Math.max(run.retentionDays, previewRetentionDays) * 24 * 60 * 60 * 1_000
+    );
     if (
       run.status === 'running' ||
       run.status !== eligibility.expectedStatus ||
       run.startedAt >= cutoff ||
+      run.startedAt >= currentRetentionCutoff ||
       (run.snapshot?.id ?? null) !== (eligibility.snapshotId ?? null) ||
-      (run.snapshot?._count.giftCards ?? 0) > 0
+      (run.snapshot?._count.giftCards ?? 0) > 0 ||
+      run.financeReferenceCount > 0
     ) {
       return { status: 'skipped', code: 'retention_guard_changed', message: '保留条件已变化。' };
     }
 
     const deleted = await this.repository.deleteExchangeRateRun(tx, {
-      runId: item.entityId,
-      snapshotId: run.snapshot?.id ?? null
+      itemId: item.id,
+      runId: item.entityId
     });
     return {
       status: 'succeeded',
@@ -385,6 +398,10 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           : undefined,
       expectedStatus: typeof record.expectedStatus === 'string' ? record.expectedStatus : undefined,
       cutoff: typeof record.cutoff === 'string' ? record.cutoff : undefined,
+      retentionDays:
+        typeof record.retentionDays === 'number' && Number.isInteger(record.retentionDays)
+          ? record.retentionDays
+          : undefined,
       snapshotId:
         typeof record.snapshotId === 'string' || record.snapshotId === null
           ? record.snapshotId

@@ -100,10 +100,8 @@ try {
        AND has_table_privilege('id_business_v2_runtime', c.oid, 'DELETE');`
   ]);
   const expectedRuntimeDeleteTables = [
-    'id_business_v2_exchange_rate_provider_snapshots',
-    'id_business_v2_exchange_rate_quote_samples',
-    'id_business_v2_exchange_rate_runs',
-    'id_business_v2_exchange_rate_snapshots',
+    'id_business_v2_customer_tags',
+    'id_business_v2_sensitive_display_policies',
     'id_business_v2_user_table_preferences',
     'ip_whitelists',
     'role_permissions',
@@ -111,6 +109,49 @@ try {
   ].join(',');
   if (runtimeDeleteTables !== expectedRuntimeDeleteTables) {
     throw new Error(`运行时 DELETE 白名单不符合预期：${runtimeDeleteTables || '(empty)'}`);
+  }
+  const governanceFunctionPrivileges = run('docker', [
+    'exec',
+    containerName,
+    'psql',
+    '-U',
+    'postgres',
+    '-d',
+    databaseName,
+    '-Atc',
+    `SELECT string_agg(
+       function_record.proname || ':' ||
+       CASE WHEN EXISTS (
+         SELECT 1 FROM aclexplode(COALESCE(
+           function_record.proacl,
+           acldefault('f', function_record.proowner)
+         )) privilege
+         WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE'
+       ) THEN 'public' ELSE 'private' END || ':' ||
+       CASE WHEN has_function_privilege(
+         'id_business_v2_runtime', function_record.oid, 'EXECUTE'
+       ) THEN 'runtime' ELSE 'blocked' END || ':' ||
+       CASE WHEN has_function_privilege(
+         'id_business_v2_audit', function_record.oid, 'EXECUTE'
+       ) THEN 'audit' ELSE 'blocked' END,
+       ',' ORDER BY function_record.proname
+     )
+     FROM pg_proc function_record
+     JOIN pg_namespace namespace ON namespace.oid = function_record.pronamespace
+     WHERE namespace.nspname = 'public'
+       AND function_record.proname IN (
+         'cleanup_id_business_v2_exchange_rate_history',
+         'execute_id_business_v2_governance_exchange_rate_cleanup',
+         'invoke_id_business_v2_exchange_rate_cron'
+       );`
+  ]);
+  const expectedFunctionPrivileges = [
+    'cleanup_id_business_v2_exchange_rate_history:private:blocked:blocked',
+    'execute_id_business_v2_governance_exchange_rate_cleanup:private:runtime:blocked',
+    'invoke_id_business_v2_exchange_rate_cron:private:blocked:blocked'
+  ].join(',');
+  if (governanceFunctionPrivileges !== expectedFunctionPrivileges) {
+    throw new Error(`数据治理特权函数权限不符合预期：${governanceFunctionPrivileges}`);
   }
   run(
     'npm',
@@ -164,11 +205,11 @@ try {
     failedMigrations: 0,
     users: 2,
     customers: 1,
-    jobs: 2,
-    items: 2,
-    approvals: 1,
-    checkpoints: 1,
-    auditLogs: 6,
+    jobs: 3,
+    items: 3,
+    approvals: 2,
+    checkpoints: 2,
+    auditLogs: 10,
     orderSnapshots: 1
   };
   if (JSON.stringify(state) !== JSON.stringify(expectedState)) {
@@ -190,7 +231,8 @@ try {
         'independent-approval',
         'immutable-preview',
         'batch-execution',
-        'idempotent-replay'
+        'idempotent-replay',
+        'approved-exchange-rate-cleanup'
       ],
       verifiedState: state,
       cleanup: 'remove-disposable-postgres-container'

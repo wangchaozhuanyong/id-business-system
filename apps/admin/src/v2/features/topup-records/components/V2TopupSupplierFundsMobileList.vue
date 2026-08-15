@@ -11,6 +11,7 @@
       </div>
       <el-tag
         v-v2-column-visibility="[v2TableSchemas.topupRecords.supplierFunds.id, '资金状态']"
+        class="v2-status-tag"
         :type="!item.initialized ? 'info' : item.isNegative ? 'danger' : 'success'"
         effect="plain"
       >
@@ -65,7 +66,7 @@
 <script setup lang="ts">
 import AppButton from '@/components/ui/AppButton.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
-import type { V2TopupSupplierFundItem } from '@/v2/types/topupSupplierFunds';
+import type { V2TopupSupplierFundItem } from '../contracts';
 import {
   formatSupplierFundDecimal as formatDecimal,
   formatSupplierFundSignedCurrency as formatSignedCurrency

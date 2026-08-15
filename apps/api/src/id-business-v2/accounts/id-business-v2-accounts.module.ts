@@ -15,7 +15,7 @@ import {
 import { IdBusinessV2AccountLossCommandHandler } from './id-business-v2-account-loss.command-handler';
 import { IdBusinessV2AccountLossPostingCoordinator } from './id-business-v2-account-loss-posting.coordinator';
 import { IdBusinessV2AccountLossQueryService } from './id-business-v2-account-loss-query.service';
-import { IdBusinessV2AccountLossRepository } from './id-business-v2-account-loss.repository';
+import { IdBusinessV2AccountLossRepository } from './persistence/id-business-v2-account-loss.repository';
 import { IdBusinessV2AccountLossesService } from './id-business-v2-account-losses.service';
 import { IdBusinessV2AccountsRepository } from './persistence/id-business-v2-accounts.repository';
 

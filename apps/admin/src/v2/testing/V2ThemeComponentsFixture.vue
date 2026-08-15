@@ -82,8 +82,10 @@
             <V2TableColumn :definition="fixtureSchemas.themeComponents.columns[1]" prop="country" />
             <V2TableColumn :definition="fixtureSchemas.themeComponents.columns[2]" prop="balance" />
             <V2TableColumn :definition="fixtureSchemas.themeComponents.columns[3]">
-              <template #default>
-                <el-tag type="success" effect="plain">正常</el-tag>
+              <template #default="{ row }">
+                <el-tag :type="row.statusType" effect="plain">
+                  {{ row.statusLabel }}
+                </el-tag>
               </template>
             </V2TableColumn>
           </V2Table>
@@ -182,8 +184,41 @@ const currentPage = ref(2);
 const dialogVisible = ref(false);
 const drawerVisible = ref(false);
 const rows = [
-  { id: 'te********@icloud.com', country: '美国', balance: '144.00' },
-  { id: 'qa********@icloud.com', country: '菲律宾', balance: '300.00' }
+  {
+    id: 'te********@icloud.com',
+    country: '美国',
+    balance: '144.00',
+    statusType: 'success' as const,
+    statusLabel: '已完成'
+  },
+  {
+    id: 'qa********@icloud.com',
+    country: '菲律宾',
+    balance: '300.00',
+    statusType: 'primary' as const,
+    statusLabel: '处理中'
+  },
+  {
+    id: 'wa********@icloud.com',
+    country: '日本',
+    balance: '88.00',
+    statusType: 'warning' as const,
+    statusLabel: '待处理'
+  },
+  {
+    id: 'fa********@icloud.com',
+    country: '英国',
+    balance: '0.00',
+    statusType: 'danger' as const,
+    statusLabel: '失败'
+  },
+  {
+    id: 'ca********@icloud.com',
+    country: '加拿大',
+    balance: '20.00',
+    statusType: 'info' as const,
+    statusLabel: '已取消'
+  }
 ];
 </script>
 

@@ -13,8 +13,10 @@
 ## 2. 前端模块
 
 每个业务模块位于 `apps/admin/src/v2/features/<module>`，包含页面、composable、子组件、领域
-contracts 和模块样式。跨模块能力只允许放在 `components`、`composables`、`runtime`、`router`、
-`api` 和 `types` 公共目录。页面不得复制另一模块的业务状态和 API 逻辑。
+contracts 和模块样式。跨模块能力优先放在 `components`、`composables`、`runtime`、`router`、
+`api` 和 `types` 公共目录；确需复用另一业务模块时，只能通过目标 feature 的 `public-api.ts`，禁止
+引用其内部页面、组件、composable 或工具文件。feature 实现必须通过本模块 `api.ts` 和
+`contracts.ts` 访问全局 API 与类型实现。页面不得复制另一模块的业务状态和 API 逻辑。
 
 ## 3. 后端模块
 
@@ -39,6 +41,10 @@ contracts 和模块样式。跨模块能力只允许放在 `components`、`compo
 
 公共运行能力包括 `v2-auth`、`auth`、`audit-logs`、`common` 和 `security`。模块通过
 `public-api.ts` 暴露稳定边界，禁止跨模块引用内部 service 文件。
+
+`runtime`、`sensitive-access` 和 `table-preferences` 作为 V2 内部基础域同样纳入依赖门禁。
+`apps/api/src/id-business-v2` 下所有一级目录都必须登记，跨域 import 只能指向目标域
+`public-api.ts`，并且完整生产依赖图不得出现循环。
 
 每个业务模块按职责拆分为 command/query service 与 `persistence/` repository。Prisma Client、
 raw SQL、Prisma runtime 错误识别和数据库 Decimal 行只能出现在 persistence adapter；业务层只能
@@ -237,7 +243,8 @@ GET   /api/id-business-v2/renewals/warning-summary
 ## 11. 模块新增流程
 
 1. 写入 `docs/V2_PRODUCT_SCOPE.md` 和 `docs/V2_TASKS.md`。
-2. 建立独立前端 feature 与后端 domain module。
+2. 建立独立前端 feature 与后端 domain module，并登记模块门禁；跨模块复用只暴露必要的
+   `public-api.ts`。
 3. 明确权限、审计、数据表和事务边界。
 4. 提供加载、错误、空状态和移动端方案。
 5. 添加 service 单测与架构检查。

@@ -288,7 +288,7 @@ import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TopupSupplierFundDetailsDrawer from './V2TopupSupplierFundDetailsDrawer.vue';
 import V2TopupSupplierFundsMobileList from './V2TopupSupplierFundsMobileList.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
+import { idBusinessV2TopupSupplierFundsApi } from '../api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { ensureV2BusinessNowInput } from '@/v2/runtime/businessClock';
 import { isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
@@ -302,7 +302,7 @@ import type {
   V2TopupSupplierFundItem,
   V2TopupSupplierFundListQuery,
   V2TopupSupplierFundSummary
-} from '@/v2/types/topupSupplierFunds';
+} from '../contracts';
 
 defineProps<{ canManage: boolean }>();
 

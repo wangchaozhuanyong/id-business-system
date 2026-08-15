@@ -67,6 +67,7 @@ export interface GovernanceEligibility {
   originalStatus?: 'active' | 'disabled';
   expectedStatus?: string;
   cutoff?: string;
+  retentionDays?: number;
   snapshotId?: string | null;
   dependentServices?: Array<{
     id: string;

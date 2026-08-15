@@ -121,6 +121,34 @@ describe('IdBusinessV2SensitiveAccessService', () => {
     expect(adminPolicies.items.every((item) => item.mode === 'admin_bypass')).toBe(true);
   });
 
+  it('uses explicit display policies when reporting whether sensitive access needs approval', async () => {
+    const fixture = createFixture();
+    fixture.repository.listSensitivePermissionGrants.mockResolvedValue([
+      {
+        roleId: 'role-policy',
+        sensitiveApprovalRequired: false,
+        permission: { code: 'apple.secret.view_password' }
+      }
+    ]);
+    fixture.repository.listSensitiveDisplayPolicies.mockResolvedValue([
+      {
+        fieldKey: 'account.password',
+        context: 'account_management',
+        mode: 'reveal_approval',
+        role: {
+          id: 'role-policy',
+          rolePermissions: [{ permission: { code: 'apple.secret.view_password' } }]
+        }
+      }
+    ]);
+
+    const result = await fixture.service.listPolicies(requester);
+
+    expect(
+      result.items.find((item) => item.permissionCode === 'apple.secret.view_password')?.mode
+    ).toBe('approval_required');
+  });
+
   it('uses safe administrator defaults for inline display and audit contexts', async () => {
     const fixture = createFixture();
 

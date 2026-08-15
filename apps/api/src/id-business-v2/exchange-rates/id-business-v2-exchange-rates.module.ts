@@ -5,7 +5,6 @@ import { IdBusinessV2ExchangeRateCronService } from './id-business-v2-exchange-r
 import { IdBusinessV2ExchangeRateOrderQuoteService } from './id-business-v2-exchange-rate-order-quote.service';
 import { IdBusinessV2ExchangeRatePersistenceService } from './id-business-v2-exchange-rate-persistence.service';
 import { IdBusinessV2ExchangeRateQueryService } from './id-business-v2-exchange-rate-query.service';
-import { IdBusinessV2ExchangeRateRetentionService } from './id-business-v2-exchange-rate-retention.service';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
 import { IdBusinessV2ExchangeRatesController } from './id-business-v2-exchange-rates.controller';
@@ -30,7 +29,6 @@ import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2
     IdBusinessV2ExchangeRateQueryService,
     IdBusinessV2ExchangeRateOrderQuoteService,
     IdBusinessV2ExchangeRateWorker,
-    IdBusinessV2ExchangeRateRetentionService,
     IdBusinessV2ExchangeRateCronService
   ],
   exports: [

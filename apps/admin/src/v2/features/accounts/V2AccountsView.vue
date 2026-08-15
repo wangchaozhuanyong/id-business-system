@@ -37,7 +37,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
-import V2AccountLossesView from '@/v2/features/account-losses/V2AccountLossesView.vue';
+import { V2AccountLossesView } from '@/v2/features/account-losses/public-api';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
 import V2AccountsList from './components/V2AccountsList.vue';
 import V2AccountsOverview from './components/V2AccountsOverview.vue';

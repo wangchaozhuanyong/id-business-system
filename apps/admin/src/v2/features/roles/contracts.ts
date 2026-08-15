@@ -106,6 +106,7 @@ export interface CreateV2RoleInput {
 }
 
 export interface UpdateV2RoleInput {
+  expectedUpdatedAt: string;
   name: string;
   description: string;
   permissionIds: string[];

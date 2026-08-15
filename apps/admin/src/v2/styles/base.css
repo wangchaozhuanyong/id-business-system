@@ -52,6 +52,9 @@
   --v3-on-danger-solid: #ffffff;
   --v3-danger-soft: #fff1f2;
   --v3-danger-border-soft: #f1c5c8;
+  --v3-info: #526074;
+  --v3-info-soft: #f0f2f5;
+  --v3-info-border-soft: #d0d5dc;
   --v3-disabled-surface: #e3e8f0;
   --v3-disabled-text: #526074;
   --v3-disabled-border: #cbd5e1;
@@ -164,6 +167,9 @@ html[data-v2-theme='dark'] {
   --v3-on-danger-solid: #071829;
   --v3-danger-soft: #351d24;
   --v3-danger-border-soft: #6b333c;
+  --v3-info: #b5bfcc;
+  --v3-info-soft: #222c39;
+  --v3-info-border-soft: #596575;
   --v3-disabled-surface: #263241;
   --v3-disabled-text: #aeb9c8;
   --v3-disabled-border: #3a4758;

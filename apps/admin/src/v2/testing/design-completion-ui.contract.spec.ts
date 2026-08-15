@@ -12,6 +12,7 @@ import ordersFixture from './V2OrdersDesignFixture.vue?raw';
 import renewalsFixture from './V2RenewalsDesignFixture.vue?raw';
 import topupRecordsFixture from './V2TopupRecordsDesignFixture.vue?raw';
 import topupsFixture from './V2TopupsDesignFixture.vue?raw';
+import themeComponentsFixture from './V2ThemeComponentsFixture.vue?raw';
 
 function readStyle(relativePath: string) {
   return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8');
@@ -52,5 +53,14 @@ describe('scheme 3 design completion contract', () => {
 
   it('prevents sensitive contact reveal actions from shrinking inside table cells', () => {
     expect(recordsCss).toMatch(/\.v2-sensitive-cell > \.app-button--icon\s*\{[^}]*flex: 0 0 36px/s);
+  });
+
+  it('gives every semantic table status a distinct shared visual treatment', () => {
+    expect(v2Css).toContain('.v2-table-column--status .el-tag');
+    expect(v2Css).toContain('.el-tag.v2-status-tag');
+    for (const statusType of ['primary', 'success', 'warning', 'danger', 'info']) {
+      expect(v2Css).toContain(`.el-tag--${statusType}`);
+      expect(themeComponentsFixture).toContain(`statusType: '${statusType}'`);
+    }
   });
 });

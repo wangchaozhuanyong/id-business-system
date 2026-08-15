@@ -50,9 +50,8 @@ export function dashboardOrderStatusMeta(status: V2DashboardOrderStatus) {
   };
   if (status === 'completed') return { label: labels[status], type: 'success' as const };
   if (status === 'failed') return { label: labels[status], type: 'danger' as const };
-  if (status === 'cancelled' || status === 'refunded') {
-    return { label: labels[status], type: 'info' as const };
-  }
+  if (status === 'refunded') return { label: labels[status], type: 'warning' as const };
+  if (status === 'cancelled') return { label: labels[status], type: 'info' as const };
   return { label: labels[status], type: 'warning' as const };
 }
 

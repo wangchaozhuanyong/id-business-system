@@ -17,6 +17,7 @@ const screenshotDirectory = process.env.V2_COLOR_CONTRAST_SCREENSHOT_DIR
 const themes = ['light', 'dark'];
 const viewportWidths = [1440, 390];
 const variants = ['default', 'primary', 'soft', 'danger', 'success', 'ghost'];
+const statusTypes = ['primary', 'success', 'warning', 'danger', 'info'];
 
 assert.ok(
   ['localhost', '127.0.0.1', '::1'].includes(adminUrl.hostname),
@@ -51,6 +52,7 @@ try {
       themes,
       viewportWidths,
       variants,
+      statusTypes,
       componentSurfaces: 15,
       minimumTextContrast: 4.5,
       minimumFocusContrast: 3
@@ -342,8 +344,7 @@ async function verifyThemeComponentsScenario(browserInstance, theme, width) {
       ['表头文字', '.el-table th.el-table__cell .cell'],
       ['表格文字', '.el-table td.el-table__cell .cell'],
       ['分页文字', '.el-pagination .btn-prev'],
-      ['标签页文字', '.el-tabs__item.is-active'],
-      ['状态标签文字', '.el-tag--success']
+      ['标签页文字', '.el-tabs__item.is-active']
     ];
     for (const [label, selector] of textSelectors) {
       assertThemeTextContrast(await measureThemeNode(page.locator(selector).first()), {
@@ -352,6 +353,24 @@ async function verifyThemeComponentsScenario(browserInstance, theme, width) {
         width
       });
     }
+
+    const statusBackgrounds = [];
+    for (const statusType of statusTypes) {
+      const measurement = await measureThemeNode(
+        page.locator(`.v2-table-column--status .el-tag--${statusType}`).first()
+      );
+      assertThemeTextContrast(measurement, {
+        label: `${statusType} 状态标签文字`,
+        theme,
+        width
+      });
+      statusBackgrounds.push(measurement.background);
+    }
+    assert.equal(
+      new Set(statusBackgrounds).size,
+      statusTypes.length,
+      `${theme} ${width}px 状态标签背景色未完整区分：${statusBackgrounds.join(', ')}`
+    );
 
     await page.locator('[data-theme-dropdown-trigger]').click();
     const dropdown = page.locator('.el-dropdown__popper').filter({ visible: true });

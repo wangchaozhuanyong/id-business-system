@@ -57,7 +57,7 @@ describe('V2 exchange-rate contracts', () => {
     expect(moduleSource).toContain('IdBusinessV2OkxOtcCollector');
     expect(moduleSource).toContain('IdBusinessV2ExchangeRateWorker');
     expect(moduleSource).toContain('IdBusinessV2ExchangeRateCronService');
-    expect(moduleSource).toContain('IdBusinessV2ExchangeRateRetentionService');
+    expect(moduleSource).not.toContain('IdBusinessV2ExchangeRateRetentionService');
   });
 
   it('adds database scheduling, source auditing and permissions without deleting manual data', () => {

@@ -29,4 +29,21 @@ describe('V2 permission catalog contracts', () => {
     expect(migration).toContain('ON CONFLICT DO NOTHING');
     expect(migration).not.toContain('DELETE FROM "role_permissions"');
   });
+
+  it('keeps removed ID deletion outside the assignable permission catalog', () => {
+    const seed = read('prisma/seed.ts');
+    const rolesService = read('src/v2-auth/roles/v2-roles.service.ts');
+    const cleanupMigration = read(
+      'prisma/migrations/20260814110000_remove_retired_account_delete_permission/migration.sql'
+    );
+
+    expect(seed).not.toContain("['删除 ID', 'apple.account.delete']");
+    expect(rolesService).toContain(
+      "DEPRECATED_PERMISSION_CODES = new Set(['apple.account.delete'])"
+    );
+    expect(rolesService).toContain('code: { notIn: [...DEPRECATED_PERMISSION_CODES] }');
+    expect(cleanupMigration).toContain('DELETE FROM "role_permissions"');
+    expect(cleanupMigration).toContain('DELETE FROM "permissions"');
+    expect(cleanupMigration).toContain('WHERE "code" = \'apple.account.delete\'');
+  });
 });

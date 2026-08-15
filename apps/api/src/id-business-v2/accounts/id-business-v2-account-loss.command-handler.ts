@@ -19,7 +19,7 @@ import { IdBusinessV2AccountLossPostingCoordinator } from './id-business-v2-acco
 import {
   IdBusinessV2AccountLossRepository,
   type IdBusinessV2AccountLossRecord
-} from './id-business-v2-account-loss.repository';
+} from './persistence/id-business-v2-account-loss.repository';
 import {
   toAccountLossReportResult,
   toAccountLossUnfreezeResult

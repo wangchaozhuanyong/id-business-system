@@ -1,5 +1,5 @@
 import { exportRowsToCsv } from '@/utils/exportCsv';
-import type { V2GovernanceRecycleEntity } from '../data-governance/contracts';
+import type { V2GovernanceRecycleEntity } from '../data-governance/public-api';
 import type { V2AuditLogRecord, V2AuditUser, V2SensitiveAccessLogRecord } from './contracts';
 
 const RESTORABLE_DELETE_ACTIONS: Record<

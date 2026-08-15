@@ -2,9 +2,9 @@ import { computed, type Ref } from 'vue';
 import {
   calculateProfitRate,
   isNonNegativeOrderAmount,
-  isPositiveOrderAmount
-} from '@/v2/features/order-entry/order-pricing';
-import { useOrderPricingInputMode } from '@/v2/features/order-entry/useOrderPricingInputMode';
+  isPositiveOrderAmount,
+  useOrderPricingInputMode
+} from '@/v2/features/order-entry/public-api';
 import type { V2Order, V2OrderCandidate, V2OrderEntrySettlementPlatform } from '../contracts';
 import type { OrderEditForm } from './order-edit-form';
 

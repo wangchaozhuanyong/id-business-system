@@ -176,6 +176,7 @@
             </div>
             <el-tag
               v-if="'approved' in item"
+              class="v2-status-tag"
               :type="item.approved ? 'success' : 'warning'"
               effect="plain"
             >

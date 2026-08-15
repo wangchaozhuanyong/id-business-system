@@ -179,6 +179,7 @@
               </div>
               <el-tag
                 v-v2-column-visibility="[v2TableSchemas.dataGovernance.jobs.id, '状态']"
+                class="v2-status-tag"
                 :type="page.governanceJobStatusMeta[job.status].type"
                 effect="plain"
               >

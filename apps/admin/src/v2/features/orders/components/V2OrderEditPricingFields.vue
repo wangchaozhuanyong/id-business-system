@@ -120,9 +120,11 @@
 
 <script setup lang="ts">
 import AppButton from '@/components/ui/AppButton.vue';
-import V2OrderProfitRateField from '@/v2/features/order-entry/components/V2OrderProfitRateField.vue';
-import type { SuggestedReceivedAmount } from '@/v2/features/order-entry/order-pricing';
-import type { OrderPricingInputMode } from '@/v2/features/order-entry/useOrderPricingInputMode';
+import {
+  V2OrderProfitRateField,
+  type OrderPricingInputMode,
+  type SuggestedReceivedAmount
+} from '@/v2/features/order-entry/public-api';
 import type { V2Order, V2OrderEntrySettlementPlatform } from '../contracts';
 import { formatDecimal, type OrderEditForm } from './order-edit-form';
 

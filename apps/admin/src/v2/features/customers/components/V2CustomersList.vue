@@ -190,6 +190,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.customers.main.id, 'recordStatus']"
+              class="v2-status-tag"
               :type="item.recordStatus === 'active' ? 'success' : 'info'"
               effect="plain"
             >

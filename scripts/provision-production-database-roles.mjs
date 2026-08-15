@@ -12,6 +12,13 @@ const EXPECTED_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
 const EXPECTED_BACKUP_SHA256 = '56f0cbc93b49c70323c08386d90a687f7b97f4b19dacb1da520d3910918b2d74';
 const RUNTIME_ROLE = 'id_business_v2_runtime';
 const AUDIT_ROLE = 'id_business_v2_audit';
+const PROHIBITED_RUNTIME_FUNCTIONS = [
+  'cleanup_id_business_v2_exchange_rate_history()',
+  'invoke_id_business_v2_exchange_rate_cron()'
+];
+const GOVERNED_RUNTIME_FUNCTIONS = [
+  'execute_id_business_v2_governance_exchange_rate_cleanup(uuid, uuid)'
+];
 const ACCESS_CHECK_TABLES = [
   'users',
   'roles',
@@ -36,6 +43,7 @@ const RUNTIME_TABLES = [
   'permissions',
   'user_roles',
   'role_permissions',
+  'id_business_v2_sensitive_display_policies',
   'audit_logs',
   'attachments',
   'v2_auth_identities',
@@ -83,10 +91,7 @@ const RUNTIME_DELETE_TABLES = [
   'role_permissions',
   'id_business_v2_user_table_preferences',
   'id_business_v2_customer_tags',
-  'id_business_v2_exchange_rate_runs',
-  'id_business_v2_exchange_rate_snapshots',
-  'id_business_v2_exchange_rate_provider_snapshots',
-  'id_business_v2_exchange_rate_quote_samples'
+  'id_business_v2_sensitive_display_policies'
 ];
 
 const RUNTIME_TRIGGER_MANAGED_TABLES = ['id_business_v2_order_display_snapshots'];
@@ -194,6 +199,20 @@ try {
   await admin.query(
     `GRANT DELETE ON TABLE ${RUNTIME_DELETE_TABLES.map(quoteQualified).join(', ')} TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
+  for (const signature of PROHIBITED_RUNTIME_FUNCTIONS) {
+    await admin.query(
+      `REVOKE EXECUTE ON FUNCTION public.${signature} FROM PUBLIC, ${quoteIdentifier(RUNTIME_ROLE)}, ${quoteIdentifier(AUDIT_ROLE)}`
+    );
+  }
+  for (const signature of GOVERNED_RUNTIME_FUNCTIONS) {
+    await admin.query(`REVOKE EXECUTE ON FUNCTION public.${signature} FROM PUBLIC`);
+    await admin.query(
+      `GRANT EXECUTE ON FUNCTION public.${signature} TO ${quoteIdentifier(RUNTIME_ROLE)}`
+    );
+    await admin.query(
+      `REVOKE EXECUTE ON FUNCTION public.${signature} FROM ${quoteIdentifier(AUDIT_ROLE)}`
+    );
+  }
   await admin.query(
     `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdentifier(RUNTIME_ROLE)}`
   );
@@ -415,6 +434,35 @@ async function verifyRoleCatalog(client) {
     )
   ) {
     throw new Error('运行时角色的表权限不符合最小 DML 要求');
+  }
+
+  const functionPrivileges = await client.query(
+    `SELECT target.signature,
+            has_function_privilege($1, format('public.%s', target.signature), 'EXECUTE') AS runtime_execute,
+            has_function_privilege($2, format('public.%s', target.signature), 'EXECUTE') AS audit_execute,
+            EXISTS (
+              SELECT 1
+              FROM pg_proc function_record
+              JOIN pg_namespace namespace ON namespace.oid = function_record.pronamespace,
+                   LATERAL aclexplode(COALESCE(
+                     function_record.proacl,
+                     acldefault('f', function_record.proowner)
+                   )) privilege
+              WHERE namespace.nspname = 'public'
+                AND function_record.oid = to_regprocedure(format('public.%s', target.signature))
+                AND privilege.grantee = 0
+                AND privilege.privilege_type = 'EXECUTE'
+            ) AS public_execute
+     FROM unnest($3::text[]) AS target(signature)`,
+    [RUNTIME_ROLE, AUDIT_ROLE, [...PROHIBITED_RUNTIME_FUNCTIONS, ...GOVERNED_RUNTIME_FUNCTIONS]]
+  );
+  if (
+    functionPrivileges.rows.some((row) => {
+      const governed = GOVERNED_RUNTIME_FUNCTIONS.includes(row.signature);
+      return row.public_execute || row.audit_execute || row.runtime_execute !== governed;
+    })
+  ) {
+    throw new Error('运行时角色的特权函数权限不符合治理要求');
   }
 
   const protectedChecks = await client.query(

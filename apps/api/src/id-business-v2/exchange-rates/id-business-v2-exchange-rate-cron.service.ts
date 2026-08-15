@@ -1,34 +1,21 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import { IdBusinessV2ExchangeRateRetentionService } from './id-business-v2-exchange-rate-retention.service';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
 
 @Injectable()
 export class IdBusinessV2ExchangeRateCronService {
-  constructor(
-    private readonly worker: IdBusinessV2ExchangeRateWorker,
-    private readonly retentionService: IdBusinessV2ExchangeRateRetentionService
-  ) {}
+  constructor(private readonly worker: IdBusinessV2ExchangeRateWorker) {}
 
   async run(authorization?: string) {
     this.assertAuthorized(authorization);
-
-    let collection: Awaited<ReturnType<IdBusinessV2ExchangeRateWorker['runScheduled']>> | undefined;
-    let collectionError: unknown;
-    try {
-      collection = await this.worker.runScheduled();
-    } catch (error) {
-      collectionError = error;
-    }
-
-    const retention = await this.retentionService.cleanup();
-    if (collectionError) {
-      throw collectionError;
-    }
+    const collection = await this.worker.runScheduled();
 
     return {
       collection,
-      retention,
+      retention: {
+        cleanupMode: 'governance_approval_required' as const,
+        automaticCleanupExecuted: false
+      },
       executedAt: new Date().toISOString()
     };
   }
