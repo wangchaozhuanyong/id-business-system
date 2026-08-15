@@ -12,8 +12,10 @@ import type {
 } from '@prisma/client';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { SupabaseAuthService } from '../../auth/supabase-auth.service';
 import { getPagination } from '../../common/pagination';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
 import {
   ID_BUSINESS_V2_SENSITIVE_MODE_LABELS,
@@ -49,6 +51,8 @@ const PERMISSION_ORDER_BY = [
   { action: 'asc' as const },
   { code: 'asc' as const }
 ] satisfies Prisma.PermissionOrderByWithRelationInput[];
+
+const DEPRECATED_PERMISSION_CODES = new Set(['apple.account.delete']);
 
 const ROLE_LIST_INCLUDE = {
   rolePermissions: {
@@ -119,7 +123,9 @@ export class V2RolesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
-    private readonly identityService: V2IdentityService
+    private readonly identityService: V2IdentityService,
+    private readonly securityService: SecurityService,
+    private readonly supabaseAuthService: SupabaseAuthService
   ) {}
 
   async list(query: ListV2RolesQuery) {
@@ -255,6 +261,10 @@ export class V2RolesService {
     if (existing.code === 'admin') {
       throw new ForbiddenException('系统管理员角色不可修改。');
     }
+    const expectedUpdatedAt = this.normalizeExpectedUpdatedAt(dto.expectedUpdatedAt);
+    if (existing.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+      throw new ConflictException('角色已被其他管理员更新，请刷新列表后重试。');
+    }
 
     const name =
       dto.name === undefined ? undefined : this.normalizeRequiredText(dto.name, '角色名称', 100);
@@ -280,6 +290,15 @@ export class V2RolesService {
       dto.sensitiveDisplayPolicies === undefined
         ? undefined
         : this.requireSensitiveDisplayPolicies(dto.sensitiveDisplayPolicies, effectivePermissions);
+    const accessChanged =
+      (permissions !== undefined &&
+        this.hasRolePermissionChanges(
+          existing,
+          permissions,
+          sensitiveApprovalPermissionIds ?? new Set()
+        )) ||
+      (sensitiveDisplayPolicies !== undefined &&
+        this.hasSensitiveDisplayPolicyChanges(existing, sensitiveDisplayPolicies));
     if (
       name === undefined &&
       description === undefined &&
@@ -290,78 +309,108 @@ export class V2RolesService {
       throw new BadRequestException('请至少修改一项角色资料。');
     }
 
-    const role = await this.prisma.$transaction(async (transaction) => {
-      if (permissions) {
-        await transaction.rolePermission.deleteMany({
-          where: {
-            roleId: existing.id
-          }
-        });
-        await transaction.rolePermission.createMany({
-          data: permissions.map((permission) => ({
-            roleId: existing.id,
-            permissionId: permission.id,
-            sensitiveApprovalRequired: sensitiveApprovalPermissionIds?.has(permission.id) ?? false
-          }))
-        });
-      }
-      if (sensitiveDisplayPolicies !== undefined) {
-        await transaction.idBusinessV2SensitiveDisplayPolicy.deleteMany({
-          where: { roleId: existing.id }
-        });
-        if (sensitiveDisplayPolicies.length) {
-          await transaction.idBusinessV2SensitiveDisplayPolicy.createMany({
-            data: sensitiveDisplayPolicies.map((policy) => ({
+    let role: RoleDetailRecord;
+    try {
+      role = await this.prisma.$transaction(async (transaction) => {
+        let revokedSessionCount = 0;
+        if (accessChanged && existing.userRoles.length) {
+          const revoked = await transaction.activeSession.updateMany({
+            where: {
+              userId: { in: existing.userRoles.map((assignment) => assignment.userId) },
+              revokedAt: null
+            },
+            data: {
+              revokedAt: new Date()
+            }
+          });
+          revokedSessionCount = revoked.count;
+        }
+        if (permissions) {
+          await transaction.rolePermission.deleteMany({
+            where: {
+              roleId: existing.id
+            }
+          });
+          await transaction.rolePermission.createMany({
+            data: permissions.map((permission) => ({
               roleId: existing.id,
-              ...policy,
-              createdByUserId: operator.id,
-              updatedByUserId: operator.id
+              permissionId: permission.id,
+              sensitiveApprovalRequired: sensitiveApprovalPermissionIds?.has(permission.id) ?? false
             }))
           });
         }
-      } else if (permissions) {
-        const selectedPermissionCodes = new Set(permissions.map((permission) => permission.code));
-        const obsoletePolicyIds = existing.sensitiveDisplayPolicies
-          .filter((policy) => {
-            const descriptor = getIdBusinessV2SensitiveDescriptorByKey(policy.fieldKey);
-            return !descriptor || !selectedPermissionCodes.has(descriptor.permissionCode);
-          })
-          .map((policy) => policy.id);
-        if (obsoletePolicyIds.length) {
+        if (sensitiveDisplayPolicies !== undefined) {
           await transaction.idBusinessV2SensitiveDisplayPolicy.deleteMany({
-            where: { id: { in: obsoletePolicyIds } }
+            where: { roleId: existing.id }
           });
+          if (sensitiveDisplayPolicies.length) {
+            await transaction.idBusinessV2SensitiveDisplayPolicy.createMany({
+              data: sensitiveDisplayPolicies.map((policy) => ({
+                roleId: existing.id,
+                ...policy,
+                createdByUserId: operator.id,
+                updatedByUserId: operator.id
+              }))
+            });
+          }
+        } else if (permissions) {
+          const selectedPermissionCodes = new Set(permissions.map((permission) => permission.code));
+          const obsoletePolicyIds = existing.sensitiveDisplayPolicies
+            .filter((policy) => {
+              const descriptor = getIdBusinessV2SensitiveDescriptorByKey(policy.fieldKey);
+              return !descriptor || !selectedPermissionCodes.has(descriptor.permissionCode);
+            })
+            .map((policy) => policy.id);
+          if (obsoletePolicyIds.length) {
+            await transaction.idBusinessV2SensitiveDisplayPolicy.deleteMany({
+              where: { id: { in: obsoletePolicyIds } }
+            });
+          }
         }
-      }
-      const updated = await transaction.role.update({
-        where: {
-          id: existing.id
-        },
-        data: {
-          name,
-          description,
-          updatedAt: new Date()
-        },
-        include: ROLE_DETAIL_INCLUDE
+        const updated = await transaction.role.update({
+          where: {
+            id: existing.id,
+            updatedAt: expectedUpdatedAt
+          },
+          data: {
+            name,
+            description,
+            updatedAt: new Date()
+          },
+          include: ROLE_DETAIL_INCLUDE
+        });
+        await this.auditLogsService.create(
+          {
+            userId: operator.id,
+            module: 'roles',
+            action: 'role.update',
+            objectType: 'role',
+            objectId: updated.id,
+            beforeData: this.toAuditData(existing),
+            afterData: {
+              ...this.toAuditData(updated),
+              accessChanged,
+              revokedSessionCount
+            },
+            remark: `管理员更新角色：${updated.name}（${updated.code}）`
+          },
+          transaction
+        );
+        return updated;
       });
-      await this.auditLogsService.create(
-        {
-          userId: operator.id,
-          module: 'roles',
-          action: 'role.update',
-          objectType: 'role',
-          objectId: updated.id,
-          beforeData: this.toAuditData(existing),
-          afterData: this.toAuditData(updated),
-          remark: `管理员更新角色：${updated.name}（${updated.code}）`
-        },
-        transaction
-      );
-      return updated;
-    });
+    } catch (error) {
+      if (this.isRecordNotFoundError(error)) {
+        throw new ConflictException('角色已被其他管理员更新，请刷新列表后重试。');
+      }
+      throw error;
+    }
 
-    for (const assignment of existing.userRoles) {
-      this.identityService.invalidateAuthenticatedUser(assignment.userId);
+    if (accessChanged) {
+      for (const assignment of existing.userRoles) {
+        this.identityService.invalidateAuthenticatedUser(assignment.userId);
+      }
+      this.securityService.invalidateActiveSessionCache();
+      this.supabaseAuthService.invalidateAccessTokenCache();
     }
     return this.toDetailResponse(role, []);
   }
@@ -382,6 +431,9 @@ export class V2RolesService {
 
   private listPermissionCatalog() {
     return this.prisma.permission.findMany({
+      where: {
+        code: { notIn: [...DEPRECATED_PERMISSION_CODES] }
+      },
       select: PERMISSION_SELECT,
       orderBy: PERMISSION_ORDER_BY
     });
@@ -422,7 +474,8 @@ export class V2RolesService {
       where: {
         id: {
           in: permissionIds
-        }
+        },
+        code: { notIn: [...DEPRECATED_PERMISSION_CODES] }
       },
       select: {
         id: true,
@@ -430,7 +483,7 @@ export class V2RolesService {
       }
     });
     if (permissions.length !== permissionIds.length) {
-      throw new BadRequestException('所选权限不存在，请刷新后重试。');
+      throw new BadRequestException('所选权限不存在或已停用，请刷新后重试。');
     }
     return permissions;
   }
@@ -532,6 +585,50 @@ export class V2RolesService {
     return normalized || undefined;
   }
 
+  private normalizeExpectedUpdatedAt(value: string | undefined) {
+    const normalized = value?.trim();
+    const parsed = normalized ? new Date(normalized) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('缺少有效的角色版本，请刷新列表后重试。');
+    }
+    return parsed;
+  }
+
+  private hasRolePermissionChanges(
+    existing: RoleDetailRecord,
+    permissions: Array<{ id: string }>,
+    sensitiveApprovalPermissionIds: Set<string>
+  ) {
+    if (existing.rolePermissions.length !== permissions.length) return true;
+    const existingByPermissionId = new Map(
+      existing.rolePermissions.map((assignment) => [
+        assignment.permissionId,
+        assignment.sensitiveApprovalRequired
+      ])
+    );
+    return permissions.some(
+      (permission) =>
+        existingByPermissionId.get(permission.id) !==
+        sensitiveApprovalPermissionIds.has(permission.id)
+    );
+  }
+
+  private hasSensitiveDisplayPolicyChanges(
+    existing: RoleDetailRecord,
+    policies: SensitiveDisplayPolicyInput[]
+  ) {
+    if (existing.sensitiveDisplayPolicies.length !== policies.length) return true;
+    const existingModes = new Map(
+      existing.sensitiveDisplayPolicies.map((policy) => [
+        `${policy.fieldKey}:${policy.context}`,
+        policy.mode
+      ])
+    );
+    return policies.some(
+      (policy) => existingModes.get(`${policy.fieldKey}:${policy.context}`) !== policy.mode
+    );
+  }
+
   private normalizeUuid(value: string, label: string) {
     const normalized = value.trim();
     if (
@@ -559,10 +656,11 @@ export class V2RolesService {
     role: RoleListRecord | RoleDetailRecord,
     allPermissions: PermissionCatalogRecord[]
   ) {
-    const selectedPermissions =
+    const selectedPermissions = (
       role.code === 'admin' && allPermissions.length
         ? allPermissions
-        : role.rolePermissions.map(({ permission }) => permission);
+        : role.rolePermissions.map(({ permission }) => permission)
+    ).filter((permission) => !DEPRECATED_PERMISSION_CODES.has(permission.code));
     const permissions = selectedPermissions.map((permission) => ({
       ...permission,
       sensitive: ID_BUSINESS_V2_SENSITIVE_PERMISSION_CODES.has(permission.code)
@@ -643,6 +741,15 @@ export class V2RolesService {
       error !== null &&
       'code' in error &&
       (error as { code?: string }).code === 'P2002'
+    );
+  }
+
+  private isRecordNotFoundError(error: unknown) {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'P2025'
     );
   }
 }

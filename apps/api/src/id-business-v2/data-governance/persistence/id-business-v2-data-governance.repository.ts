@@ -438,8 +438,8 @@ export class IdBusinessV2DataGovernanceRepository {
     });
   }
 
-  findExchangeRateRunForCleanup(tx: V2CommandTransaction, id: string) {
-    return tx.idBusinessV2ExchangeRateRun.findUnique({
+  async findExchangeRateRunForCleanup(tx: V2CommandTransaction, id: string) {
+    const run = await tx.idBusinessV2ExchangeRateRun.findUnique({
       where: { id },
       select: {
         status: true,
@@ -452,29 +452,49 @@ export class IdBusinessV2DataGovernanceRepository {
         }
       }
     });
+    if (!run) return null;
+    const [financeReferenceCount, settings] = await Promise.all([
+      run.snapshot
+        ? tx.idBusinessV2FinanceFxRateSnapshot.count({
+            where: { source: 'combined_p2p', sourceReference: run.snapshot.id }
+          })
+        : 0,
+      tx.idBusinessV2ExchangeRateSettings.findUnique({
+        where: { id: 1 },
+        select: { retentionDays: true }
+      })
+    ]);
+    return {
+      ...run,
+      financeReferenceCount,
+      retentionDays: settings?.retentionDays ?? 30
+    };
   }
 
-  async deleteExchangeRateRun(
-    tx: V2CommandTransaction,
-    input: { runId: string; snapshotId: string | null }
-  ) {
-    let deletedQuoteSamples = 0;
-    let deletedProviderSnapshots = 0;
-    let deletedSnapshots = 0;
-    if (input.snapshotId) {
-      const quotes = await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
-        where: { providerSnapshot: { snapshotId: input.snapshotId } }
-      });
-      const providers = await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
-        where: { snapshotId: input.snapshotId }
-      });
-      await tx.idBusinessV2ExchangeRateSnapshot.delete({ where: { id: input.snapshotId } });
-      deletedQuoteSamples = quotes.count;
-      deletedProviderSnapshots = providers.count;
-      deletedSnapshots = 1;
+  async deleteExchangeRateRun(tx: V2CommandTransaction, input: { itemId: string; runId: string }) {
+    const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(Prisma.sql`
+      SELECT public.execute_id_business_v2_governance_exchange_rate_cleanup(
+        ${input.itemId}::UUID,
+        ${input.runId}::UUID
+      ) AS "result"
+    `);
+    const result = rows[0]?.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new Error('汇率治理清理返回格式无效');
     }
-    await tx.idBusinessV2ExchangeRateRun.delete({ where: { id: input.runId } });
-    return { deletedQuoteSamples, deletedProviderSnapshots, deletedSnapshots };
+    return {
+      deletedQuoteSamples: this.cleanupResultCount(result, 'deletedQuoteSamples'),
+      deletedProviderSnapshots: this.cleanupResultCount(result, 'deletedProviderSnapshots'),
+      deletedSnapshots: this.cleanupResultCount(result, 'deletedSnapshots')
+    };
+  }
+
+  private cleanupResultCount(result: Prisma.JsonObject, key: string) {
+    const value = result[key];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new Error('汇率治理清理返回格式无效');
+    }
+    return value;
   }
 
   completeItem(

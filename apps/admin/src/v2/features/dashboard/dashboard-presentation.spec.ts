@@ -23,6 +23,14 @@ describe('dashboard presentation', () => {
       type: 'success'
     });
     expect(dashboardOrderStatusMeta('failed')).toMatchObject({ label: '失败', type: 'danger' });
+    expect(dashboardOrderStatusMeta('refunded')).toMatchObject({
+      label: '已退款',
+      type: 'warning'
+    });
+    expect(dashboardOrderStatusMeta('cancelled')).toMatchObject({
+      label: '已取消',
+      type: 'info'
+    });
     expect(financeHistoryLabel('incomplete')).toBe('历史数据待确认');
   });
 

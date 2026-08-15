@@ -1,5 +1,9 @@
 <template>
-  <el-tag :type="item.status.code === 'normal' ? 'success' : 'warning'" effect="plain">
+  <el-tag
+    class="v2-status-tag"
+    :type="item.status.code === 'normal' ? 'success' : 'warning'"
+    effect="plain"
+  >
     {{ item.status.name }}
   </el-tag>
 </template>

@@ -1,6 +1,6 @@
 import type { FormRules } from 'element-plus';
 import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/utils/decimal';
-import { validateTargetProfitRate } from '@/v2/features/order-entry/order-pricing';
+import { validateTargetProfitRate } from '@/v2/features/order-entry/public-api';
 import { parseV2DateTimeInput } from '@/v2/utils/dateTime';
 import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import type { V2OrderEntryCustomer } from '../contracts';

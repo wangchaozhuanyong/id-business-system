@@ -1,9 +1,8 @@
 import { computed, reactive, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
-import { idBusinessV2OptionsApi } from '@/v2/api/options';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { formatV2Decimal } from '@/v2/utils/decimal';
-import { idBusinessV2AccountLossesApi } from './api';
+import { idBusinessV2AccountLossesApi, idBusinessV2OptionsApi } from './api';
 import { useAccountLossRecovery } from './useAccountLossRecovery';
 import type {
   V2AccountLossListQuery,

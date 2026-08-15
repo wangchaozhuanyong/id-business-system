@@ -5,7 +5,7 @@ import {
   calculatePlatformFeeAmount,
   calculateProfitRate,
   calculateSuggestedReceivedAmount
-} from '@/v2/features/order-entry/order-pricing';
+} from '@/v2/features/order-entry/public-api';
 import type { V2ManualRenewalOptions, V2RenewalWorkbenchItem } from './contracts';
 
 interface RenewalPricingForm {

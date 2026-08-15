@@ -225,6 +225,7 @@
               </div>
               <el-tag
                 v-v2-column-visibility="[v2TableSchemas.topupRecords.supplierPayments.id, '状态']"
+                class="v2-status-tag"
                 :type="item.status === 'active' ? 'success' : 'info'"
                 effect="plain"
               >
@@ -380,16 +381,16 @@ import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
+import { idBusinessV2TopupSupplierFundsApi } from '../api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import { operatorUsername } from '@/v2/utils/operator';
-import type { V2OptionSelector } from '@/v2/types/options';
 import type {
+  V2OptionSelector,
   V2TopupSupplierPaymentItem,
   V2TopupSupplierPaymentListQuery,
   V2TopupSupplierPaymentListResult
-} from '@/v2/types/topupSupplierFunds';
+} from '../contracts';
 
 defineProps<{
   canManage: boolean;

@@ -38,7 +38,11 @@ function createService() {
     idBusinessV2Option: { findMany: vi.fn().mockResolvedValue([]) },
     idBusinessV2Order: { findMany: vi.fn().mockResolvedValue([]) },
     idBusinessV2ExchangeRateRun: { findMany: vi.fn(), count: vi.fn() },
+    idBusinessV2ExchangeRateSettings: {
+      findUnique: vi.fn().mockResolvedValue({ retentionDays: 30 })
+    },
     user: { count: countActiveAdmins },
+    $queryRaw: vi.fn(),
     $transaction: vi.fn(async (callback) => callback(tx))
   };
   const queryService = { job: vi.fn(async (id: string) => ({ id })) };
@@ -113,6 +117,66 @@ describe('IdBusinessV2DataGovernancePreviewService', () => {
       data: expect.objectContaining({
         afterData: expect.objectContaining({ backupEvidenceProvided: true })
       })
+    });
+    expect(prisma.user.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ v2AuthIdentity: { is: { enabled: true } } })
+    });
+    expect(tx.user.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ v2AuthIdentity: { is: { enabled: true } } })
+    });
+  });
+
+  it('rejects cleanup windows shorter than the configured retention policy', async () => {
+    const { service, prisma, tx } = createService();
+    prisma.idBusinessV2ExchangeRateSettings.findUnique.mockResolvedValue({ retentionDays: 90 });
+
+    await expect(
+      service.createCleanupJob(
+        {
+          olderThanDays: 30,
+          reason: '清理超期汇率采集历史',
+          backupEvidence: '备份编号 backup-20260814 已核对',
+          idempotencyKey: 'cleanup:retention:blocked'
+        },
+        OPERATOR
+      )
+    ).rejects.toThrow('不得小于汇率设置中的 90 天');
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2GovernanceJob.create).not.toHaveBeenCalled();
+  });
+
+  it('freezes the configured retention policy in an eligible cleanup preview', async () => {
+    const { service, prisma, tx } = createService();
+    prisma.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: '40000000-0000-4000-8000-000000000001',
+          status: 'success',
+          startedAt: new Date('2026-01-01T00:00:00.000Z'),
+          snapshotId: '40000000-0000-4000-8000-000000000002'
+        }
+      ])
+      .mockResolvedValueOnce([{ total: 1 }]);
+
+    await service.createCleanupJob(
+      {
+        olderThanDays: 30,
+        reason: '清理超期汇率采集历史',
+        backupEvidence: '备份编号 backup-20260814 已核对',
+        idempotencyKey: 'cleanup:retention:eligible'
+      },
+      OPERATOR
+    );
+
+    const createInput = tx.idBusinessV2GovernanceJob.create.mock.calls[0]?.[0];
+    expect(createInput.data.previewSummary).toMatchObject({
+      olderThanDays: 30,
+      configuredRetentionDays: 30,
+      eligibleTotal: 1
+    });
+    expect(createInput.data.items.create[0].eligibility).toMatchObject({
+      retentionDays: 30,
+      snapshotId: '40000000-0000-4000-8000-000000000002'
     });
   });
 

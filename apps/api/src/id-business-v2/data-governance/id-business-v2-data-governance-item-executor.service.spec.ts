@@ -22,6 +22,26 @@ const ITEM = {
   updatedAt: new Date('2026-07-31T10:01:00.000Z')
 };
 const JOB = { id: ITEM.jobId, jobNo: 'GOV-20260731-00000001', type: 'recycle_restore' as const };
+const CLEANUP_ITEM = {
+  ...ITEM,
+  entityType: 'exchange_rate_run' as const,
+  entityId: '50000000-0000-4000-8000-000000000009',
+  sourceDeletedAt: null,
+  eligibility: {
+    eligible: true,
+    code: 'eligible',
+    detail: '可以清理',
+    expectedStatus: 'success',
+    cutoff: '2020-01-01T00:00:00.000Z',
+    retentionDays: 30,
+    snapshotId: '50000000-0000-4000-8000-000000000010'
+  }
+};
+const CLEANUP_JOB = {
+  id: ITEM.jobId,
+  jobNo: 'GOV-20260731-00000002',
+  type: 'exchange_rate_cleanup' as const
+};
 const OPERATOR = {
   id: '50000000-0000-4000-8000-000000000004',
   username: 'admin',
@@ -273,6 +293,106 @@ describe('IdBusinessV2DataGovernanceItemExecutorService', () => {
         data: expect.objectContaining({
           action: 'id_business_v2.option.restore',
           objectId: dependentId
+        })
+      })
+    );
+  });
+
+  it('cleans an approved unreferenced exchange-rate run through the governed database function', async () => {
+    const tx = {
+      idBusinessV2ExchangeRateRun: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: 'success',
+          startedAt: new Date('2000-01-01T00:00:00.000Z'),
+          snapshot: {
+            id: CLEANUP_ITEM.eligibility.snapshotId,
+            _count: { giftCards: 0, providerSnapshots: 2 }
+          }
+        })
+      },
+      idBusinessV2FinanceFxRateSnapshot: { count: vi.fn().mockResolvedValue(0) },
+      idBusinessV2ExchangeRateSettings: {
+        findUnique: vi.fn().mockResolvedValue({ retentionDays: 30 })
+      },
+      idBusinessV2GovernanceJobItem: { update: vi.fn(), updateMany: vi.fn() },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'cleanup-audit' }) },
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          result: {
+            deletedSnapshots: 1,
+            deletedProviderSnapshots: 2,
+            deletedQuoteSamples: 8
+          }
+        }
+      ])
+    };
+    const prisma = { $transaction: vi.fn(async (callback) => callback(tx)) };
+    const service = new IdBusinessV2DataGovernanceItemExecutorService(
+      new IdBusinessV2DataGovernanceRepository(prisma as never),
+      new V2CommandTransactionManager(prisma as never),
+      new V2TransactionalAuditService()
+    );
+
+    await expect(service.process(CLEANUP_ITEM, CLEANUP_JOB, OPERATOR)).resolves.toBe('succeeded');
+
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.idBusinessV2GovernanceJobItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'succeeded',
+          resultCode: 'exchange_rate_run_cleaned'
+        })
+      })
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          afterData: expect.objectContaining({
+            deletedRuns: 1,
+            deletedSnapshots: 1,
+            deletedProviderSnapshots: 2,
+            deletedQuoteSamples: 8
+          })
+        })
+      })
+    );
+  });
+
+  it('skips cleanup when a finance FX snapshot references the exchange-rate evidence', async () => {
+    const tx = {
+      idBusinessV2ExchangeRateRun: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: 'success',
+          startedAt: new Date('2000-01-01T00:00:00.000Z'),
+          snapshot: {
+            id: CLEANUP_ITEM.eligibility.snapshotId,
+            _count: { giftCards: 0, providerSnapshots: 2 }
+          }
+        })
+      },
+      idBusinessV2FinanceFxRateSnapshot: { count: vi.fn().mockResolvedValue(1) },
+      idBusinessV2ExchangeRateSettings: {
+        findUnique: vi.fn().mockResolvedValue({ retentionDays: 30 })
+      },
+      idBusinessV2GovernanceJobItem: { update: vi.fn(), updateMany: vi.fn() },
+      auditLog: { create: vi.fn().mockResolvedValue({ id: 'cleanup-skip-audit' }) },
+      $queryRaw: vi.fn()
+    };
+    const prisma = { $transaction: vi.fn(async (callback) => callback(tx)) };
+    const service = new IdBusinessV2DataGovernanceItemExecutorService(
+      new IdBusinessV2DataGovernanceRepository(prisma as never),
+      new V2CommandTransactionManager(prisma as never),
+      new V2TransactionalAuditService()
+    );
+
+    await expect(service.process(CLEANUP_ITEM, CLEANUP_JOB, OPERATOR)).resolves.toBe('skipped');
+
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2GovernanceJobItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'skipped',
+          resultCode: 'retention_guard_changed'
         })
       })
     );

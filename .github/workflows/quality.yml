@@ -70,6 +70,9 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
+      - name: Verify data governance workflow and database privileges
+        run: npm run acceptance:v2-data-governance
+
       - name: Build shared package
         run: npm run build --workspace @apple-business/shared
 

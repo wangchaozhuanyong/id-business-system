@@ -15,6 +15,13 @@ interface RecycleRow {
   deleted_at: Date;
 }
 
+interface CleanupPreviewRow {
+  id: string;
+  status: string;
+  startedAt: Date;
+  snapshotId: string | null;
+}
+
 const GOVERNANCE_USER_SELECT = {
   id: true,
   username: true,
@@ -82,8 +89,9 @@ export class IdBusinessV2DataGovernanceQueryRepository {
     const activeAdminWhere = {
       status: 'active' as const,
       deletedAt: null,
+      v2AuthIdentity: { is: { enabled: true } },
       userRoles: { some: { role: { code: 'admin' } } }
-    };
+    } satisfies Prisma.UserWhereInput;
     const [activeAdminCount, eligibleApproverCount] = await Promise.all([
       database.user.count({ where: activeAdminWhere }),
       database.user.count({
@@ -236,25 +244,61 @@ export class IdBusinessV2DataGovernanceQueryRepository {
   }
 
   async cleanupPreviewRows(cutoff: Date, take: number) {
-    const where: Prisma.IdBusinessV2ExchangeRateRunWhereInput = {
-      status: { not: 'running' },
-      startedAt: { lt: cutoff },
-      OR: [{ snapshot: { is: null } }, { snapshot: { is: { giftCards: { none: {} } } } }]
-    };
-    const [runs, eligibleTotal] = await Promise.all([
-      this.prisma.idBusinessV2ExchangeRateRun.findMany({
-        where,
-        select: {
-          id: true,
-          status: true,
-          startedAt: true,
-          snapshot: { select: { id: true, _count: { select: { giftCards: true } } } }
-        },
-        orderBy: [{ startedAt: 'asc' }, { id: 'asc' }],
-        take
-      }),
-      this.prisma.idBusinessV2ExchangeRateRun.count({ where })
+    const eligibleWhere = Prisma.sql`
+      run."status" <> 'running'
+      AND run."started_at" < ${cutoff}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "id_business_v2_gift_cards" gift_card
+        WHERE gift_card."exchange_rate_snapshot_id" = snapshot."id"
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "id_business_v2_finance_fx_rate_snapshots" fx_snapshot
+        WHERE fx_snapshot."source" = 'combined_p2p'
+          AND fx_snapshot."source_reference" = snapshot."id"::TEXT
+      )
+    `;
+    const [rows, totals] = await Promise.all([
+      this.prisma.$queryRaw<CleanupPreviewRow[]>(Prisma.sql`
+        SELECT
+          run."id",
+          run."status"::TEXT AS "status",
+          run."started_at" AS "startedAt",
+          snapshot."id" AS "snapshotId"
+        FROM "id_business_v2_exchange_rate_runs" run
+        LEFT JOIN "id_business_v2_exchange_rate_snapshots" snapshot
+          ON snapshot."run_id" = run."id"
+        WHERE ${eligibleWhere}
+        ORDER BY run."started_at" ASC, run."id" ASC
+        LIMIT ${take}
+      `),
+      this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+        SELECT COUNT(*)::INTEGER AS "total"
+        FROM "id_business_v2_exchange_rate_runs" run
+        LEFT JOIN "id_business_v2_exchange_rate_snapshots" snapshot
+          ON snapshot."run_id" = run."id"
+        WHERE ${eligibleWhere}
+      `)
     ]);
-    return { runs, eligibleTotal };
+    return {
+      runs: rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        startedAt: row.startedAt,
+        snapshot: row.snapshotId
+          ? { id: row.snapshotId, _count: { giftCards: 0 }, financeReferenceCount: 0 }
+          : null
+      })),
+      eligibleTotal: totals[0]?.total ?? 0
+    };
+  }
+
+  async exchangeRateRetentionDays() {
+    const settings = await this.prisma.idBusinessV2ExchangeRateSettings.findUnique({
+      where: { id: 1 },
+      select: { retentionDays: true }
+    });
+    return settings?.retentionDays ?? 30;
   }
 }

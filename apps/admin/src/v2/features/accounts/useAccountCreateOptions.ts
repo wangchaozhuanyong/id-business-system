@@ -1,8 +1,8 @@
 import type { Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
-import { idBusinessV2OptionsApi } from '@/v2/api/options';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import type { AccountFormState } from './account-form';
+import { idBusinessV2OptionsApi } from './api';
 import type { V2Account, V2OptionSelector } from './contracts';
 
 interface AccountCreateOptionsContext {

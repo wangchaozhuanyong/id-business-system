@@ -13,3 +13,4 @@ export type {
   V2FinanceSettings,
   V2FinanceSupplierWallet
 } from '@apple-business/shared';
+export type { V2OptionSelector } from '@/v2/types/options';

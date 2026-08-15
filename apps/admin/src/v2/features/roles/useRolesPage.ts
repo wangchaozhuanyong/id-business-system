@@ -484,6 +484,7 @@ export function useRolesPage() {
     try {
       if (current) {
         const input: UpdateV2RoleInput = {
+          expectedUpdatedAt: current.updatedAt,
           name: form.name.trim(),
           description: form.description.trim(),
           permissionIds: [...form.permissionIds],

@@ -17,6 +17,7 @@
       </div>
       <el-tag
         v-v2-column-visibility="[v2TableSchemas.topupRecords.giftCards.id, 'status']"
+        class="v2-status-tag"
         :type="giftCardStatusType(item.status)"
         effect="plain"
       >
@@ -62,11 +63,15 @@
         {{ formatDate(item.creditedAt) }}
       </span>
       <div
-        v-if="item.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)"
+        v-if="
+          actionState(item).canOpenFinancialActions ||
+          actionState(item).canReassignSupplier ||
+          actionState(item).blockedReason
+        "
         class="v2-record-actions"
       >
         <AppButton
-          v-if="canReassignSupplier"
+          v-if="actionState(item).canReassignSupplier"
           size="small"
           variant="soft"
           @click="emit('reassignSupplier', item)"
@@ -74,7 +79,7 @@
           更正供应商
         </AppButton>
         <el-dropdown
-          v-if="canAdjustBalance"
+          v-if="actionState(item).canOpenFinancialActions"
           trigger="click"
           @command="emit('financialCommand', item, $event)"
         >
@@ -91,6 +96,16 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-tag
+          v-if="actionState(item).blockedReason"
+          :type="actionState(item).blockedTagType"
+          effect="plain"
+          size="small"
+          :title="actionState(item).blockedDescription"
+          :aria-label="actionState(item).blockedDescription"
+        >
+          {{ actionState(item).blockedReason }}
+        </el-tag>
       </div>
     </footer>
   </article>
@@ -105,6 +120,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { operatorUsername } from '@/v2/utils/operator';
 import type { V2GiftCardRecord } from '../contracts';
+import { getGiftCardActionState } from '../gift-card-action-state';
 import {
   formatDate,
   formatDecimal,
@@ -113,7 +129,7 @@ import {
   giftCardStatusType
 } from '../topup-records-format';
 
-defineProps<{
+const props = defineProps<{
   items: V2GiftCardRecord[];
   canAdjustBalance: boolean;
   canReassignSupplier: boolean;
@@ -122,4 +138,11 @@ const emit = defineEmits<{
   reassignSupplier: [item: V2GiftCardRecord];
   financialCommand: [item: V2GiftCardRecord, command: unknown];
 }>();
+
+function actionState(giftCard: V2GiftCardRecord) {
+  return getGiftCardActionState(giftCard, {
+    canAdjustBalance: props.canAdjustBalance,
+    canReassignSupplier: props.canReassignSupplier
+  });
+}
 </script>

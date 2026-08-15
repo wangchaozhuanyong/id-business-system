@@ -234,6 +234,7 @@ const operator = { id: 'admin-1', username: 'admin', displayName: '管理员' };
 function makeGiftCard(index: number): V2GiftCardRecord {
   const country = countries[index % countries.length];
   const supplier = suppliers[index % suppliers.length];
+  const accountFrozen = index === 0;
   const status: V2GiftCardRecordStatus =
     index % 7 === 5 ? 'redeemed' : index % 7 === 6 ? 'withdrawn' : 'credited';
   const before = String(86 + index * 3);
@@ -273,8 +274,8 @@ function makeGiftCard(index: number): V2GiftCardRecord {
       id: `account-${(index % accounts.length) + 1}`,
       appleIdMasked: accounts[index % accounts.length],
       displayAppleId: accounts[index % accounts.length],
-      lossStatus: 'active',
-      lossReportedAt: null,
+      lossStatus: accountFrozen ? 'reported' : 'active',
+      lossReportedAt: accountFrozen ? '2026-08-13T00:10:00.000Z' : null,
       country
     },
     creditedLedger: {

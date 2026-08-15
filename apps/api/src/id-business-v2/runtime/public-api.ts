@@ -32,7 +32,11 @@ export {
   type V2CommandTransactionOptions,
   type V2TransactionIsolationLevel
 } from './id-business-v2-command-transaction.service';
-export { getPrismaErrorCode, isPrismaErrorCode } from './id-business-v2-prisma-error';
+export {
+  getPrismaErrorCode,
+  isPrismaErrorCode,
+  isUnsupportedFinanceCurrencyEnumError
+} from './id-business-v2-prisma-error';
 export {
   V2RowMappingError,
   mapAmount4,

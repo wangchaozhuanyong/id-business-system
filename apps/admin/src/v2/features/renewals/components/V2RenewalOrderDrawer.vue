@@ -352,7 +352,7 @@ import { V2_DECIMAL_PLACES, formatV2Decimal, isV2UnsignedDecimal } from '@/v2/ut
 import {
   validateTargetProfitRate,
   type SuggestedReceivedAmount
-} from '@/v2/features/order-entry/order-pricing';
+} from '@/v2/features/order-entry/public-api';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { parseV2DateTimeInput } from '@/v2/utils/dateTime';
 import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';

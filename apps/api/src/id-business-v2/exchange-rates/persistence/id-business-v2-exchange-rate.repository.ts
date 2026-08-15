@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { isUnsupportedFinanceCurrencyEnumError } from '../../finance/id-business-v2-finance-currency-compat';
 import {
+  isUnsupportedFinanceCurrencyEnumError,
   mapAmount4,
   mapOptionalAmount4,
   mapOptionalRate8,

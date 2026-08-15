@@ -114,6 +114,12 @@ export class IdBusinessV2DataGovernancePreviewService {
       requestFingerprint
     );
     if (replay) return replay;
+    const configuredRetentionDays = await this.queryRepository.exchangeRateRetentionDays();
+    if (olderThanDays < configuredRetentionDays) {
+      throw new BadRequestException(
+        `清理保留天数不得小于汇率设置中的 ${configuredRetentionDays} 天`
+      );
+    }
     await this.assertApprovalReady(currentOperator.id);
 
     const cutoff = new Date(Date.now() - olderThanDays * ONE_DAY_MS);
@@ -131,15 +137,17 @@ export class IdBusinessV2DataGovernancePreviewService {
       eligibility: {
         eligible: true,
         code: 'eligible',
-        detail: '已超过保留期、运行已结束且没有礼品卡引用。',
+        detail: '已超过保留期、运行已结束且没有礼品卡或财务快照引用。',
         expectedStatus: run.status,
         cutoff: cutoff.toISOString(),
+        retentionDays: configuredRetentionDays,
         snapshotId: run.snapshot?.id ?? null
       }
     }));
     const previewSummary = {
       requestFingerprint,
       olderThanDays,
+      configuredRetentionDays,
       cutoff: cutoff.toISOString(),
       eligibleTotal,
       selectedItems: items.length,

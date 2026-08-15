@@ -16,6 +16,7 @@ export interface CreateV2RoleDto {
 }
 
 export interface UpdateV2RoleDto {
+  expectedUpdatedAt?: string;
   name?: string;
   description?: string;
   permissionIds?: string[];

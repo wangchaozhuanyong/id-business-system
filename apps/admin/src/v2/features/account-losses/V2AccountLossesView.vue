@@ -206,6 +206,7 @@
               </div>
               <el-tag
                 v-v2-column-visibility="[v2TableSchemas.accountLosses.main.id, '记录状态']"
+                class="v2-status-tag"
                 :type="item.status === 'reversed' ? 'info' : 'danger'"
                 effect="plain"
               >

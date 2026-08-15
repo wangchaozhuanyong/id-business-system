@@ -191,6 +191,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.security.whitelist.id, 'enabled']"
+              class="v2-status-tag"
               :type="item.enabled ? 'success' : 'info'"
               effect="plain"
             >

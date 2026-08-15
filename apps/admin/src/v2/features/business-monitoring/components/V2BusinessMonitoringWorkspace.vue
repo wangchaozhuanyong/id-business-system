@@ -98,6 +98,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.businessMonitoring.main.id, '级别']"
+              class="v2-status-tag"
               :type="page.businessMonitoringSeverityMeta(item.severity).type"
               effect="plain"
             >

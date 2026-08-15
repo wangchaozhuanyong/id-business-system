@@ -116,7 +116,7 @@ import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import { idBusinessV2TopupSupplierFundsApi } from '@/v2/api/topupSupplierFunds';
+import { idBusinessV2TopupSupplierFundsApi } from '../api';
 import {
   formatSupplierFundDate as formatDate,
   formatSupplierFundDecimal as formatDecimal,
@@ -126,7 +126,7 @@ import type {
   V2TopupSupplierFundItem,
   V2TopupSupplierLedgerEntryType,
   V2TopupSupplierLedgerResult
-} from '@/v2/types/topupSupplierFunds';
+} from '../contracts';
 import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 
 const visible = ref(false);

@@ -23,7 +23,7 @@ import {
   getV2BusinessNowInput,
   getV2BusinessNowMs
 } from '@/v2/runtime/businessClock';
-import type { V2OptionSelector } from '@/v2/types/options';
+import type { V2OptionSelector } from './contracts';
 import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import {
   currentV2BusinessMonth,

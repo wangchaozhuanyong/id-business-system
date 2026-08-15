@@ -25,6 +25,13 @@ const previewGuardsMigration = readFileSync(
   ),
   'utf8'
 );
+const securityHardeningMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma/migrations/20260814120000_data_governance_security_hardening/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('ID Business V2 data governance schema contract', () => {
   it('adds the workflow only through a new incremental migration', () => {
@@ -78,6 +85,38 @@ describe('ID Business V2 data governance schema contract', () => {
     );
     expect(migration).not.toMatch(/TRUNCATE\s+TABLE/i);
     expect(migration).not.toMatch(/DROP\s+TABLE/i);
+  });
+
+  it('removes public and runtime execution from privileged maintenance functions', () => {
+    for (const functionName of [
+      'cleanup_id_business_v2_exchange_rate_history',
+      'invoke_id_business_v2_exchange_rate_cron'
+    ]) {
+      expect(securityHardeningMigration).toContain(
+        `REVOKE EXECUTE ON FUNCTION public.${functionName}() FROM PUBLIC`
+      );
+      expect(securityHardeningMigration).toMatch(
+        new RegExp(
+          `REVOKE EXECUTE ON FUNCTION public\\.${functionName}\\(\\)[\\s\\S]*FROM id_business_v2_runtime`
+        )
+      );
+    }
+    expect(securityHardeningMigration).toContain(
+      'execute_id_business_v2_governance_exchange_rate_cleanup'
+    );
+    expect(securityHardeningMigration).toContain(
+      'GRANT EXECUTE ON FUNCTION\n      public.execute_id_business_v2_governance_exchange_rate_cleanup(UUID, UUID)\n      TO id_business_v2_runtime'
+    );
+    expect(securityHardeningMigration).toMatch(
+      /REVOKE DELETE ON TABLE[\s\S]*id_business_v2_exchange_rate_runs[\s\S]*FROM id_business_v2_runtime/
+    );
+    expect(securityHardeningMigration).toContain("governance_item.item_status <> 'processing'");
+    expect(securityHardeningMigration).toContain(
+      'governance_item.requested_by_user_id = governance_item.approver_user_id'
+    );
+    expect(securityHardeningMigration).toContain(
+      'governance_item.job_preview_hash <> governance_item.approval_preview_hash'
+    );
   });
 
   it('publishes governance changes for workflow and recycle-bin source tables', () => {

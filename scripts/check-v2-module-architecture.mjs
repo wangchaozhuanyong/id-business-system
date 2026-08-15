@@ -50,12 +50,18 @@ const expectedBackendDomains = [
   'options',
   'orders',
   'renewals',
-  'system-monitoring'
+  'runtime',
+  'sensitive-access',
+  'system-monitoring',
+  'table-preferences',
+  'topup-supplier-funds'
 ];
 
 checkFrontendFeatures();
+const frontendGraph = checkFrontendBoundaries();
+checkDependencyCycles(frontendGraph, '前端 feature');
 const backendGraph = checkBackendBoundaries();
-checkBackendCycles(backendGraph);
+checkDependencyCycles(backendGraph, '后端业务域');
 checkLineBudgets();
 
 if (issues.length) {
@@ -68,6 +74,10 @@ if (issues.length) {
       ok: true,
       frontendFeatures: expectedFeatures.length,
       backendDomains: expectedBackendDomains.length,
+      crossFeatureImports: [...frontendGraph.values()].reduce(
+        (total, imports) => total + imports.size,
+        0
+      ),
       crossDomainImports: [...backendGraph.values()].reduce(
         (total, imports) => total + imports.size,
         0
@@ -77,6 +87,7 @@ if (issues.length) {
         featureUnitMaxLines: 600,
         backendServiceMaxLines: 600,
         backendUnitMaxLines: 600,
+        crossFeatureImports: 'public-api-only',
         crossDomainImports: 'public-api-only',
         dependencyCycles: 'forbidden'
       }
@@ -173,23 +184,31 @@ function checkFrontendFeatures() {
   }
 }
 
-function checkBackendBoundaries() {
-  const graph = new Map(expectedBackendDomains.map((domain) => [domain, new Set()]));
+function checkFrontendBoundaries() {
+  const graph = new Map(expectedFeatures.map((feature) => [feature, new Set()]));
 
-  for (const domain of expectedBackendDomains) {
-    const domainPath = `${backendRoot}/${domain}`;
-    requireFile(`${domainPath}/public-api.ts`);
-    for (const filePath of recursiveFiles(domainPath).filter((file) => file.endsWith('.ts'))) {
+  for (const feature of expectedFeatures) {
+    const featurePath = `${frontendRoot}/${feature}`;
+    for (const filePath of recursiveFiles(featurePath).filter(isFrontendSourceFile)) {
+      if (isTestFile(filePath)) continue;
       const source = read(filePath);
-      const importPattern = /from\s+['"]\.\.\/([^/'"]+)\/([^'"]+)['"]/g;
-      for (const match of source.matchAll(importPattern)) {
-        const targetDomain = match[1];
-        const targetEntry = match[2];
-        if (!expectedBackendDomains.includes(targetDomain) || targetDomain === domain) continue;
-        graph.get(domain).add(targetDomain);
-        if (targetEntry !== 'public-api') {
+      const basename = path.posix.basename(filePath);
+      if (!['api.ts', 'contracts.ts', 'public-api.ts'].includes(basename)) {
+        if (/from\s+['"]@\/v2\/(?:api|types)\//.test(source)) {
+          issues.push(`${filePath}: feature 实现必须通过本模块 api.ts/contracts.ts 访问共享实现`);
+        }
+        if (/from\s+['"](?:\.\.\/)+\.\.\/(?:api|types)\//.test(source)) {
+          issues.push(`${filePath}: feature 实现禁止使用相对路径绕过本模块门面`);
+        }
+      }
+
+      for (const specifier of importSpecifiers(source)) {
+        const target = resolveFrontendFeatureImport(filePath, specifier);
+        if (!target || target.feature === feature) continue;
+        graph.get(feature).add(target.feature);
+        if (target.entry !== 'public-api' && target.entry !== 'public-api.ts') {
           issues.push(
-            `${filePath}: 跨域依赖 ${targetDomain}/${targetEntry} 必须改为 ${targetDomain}/public-api`
+            `${filePath}: 跨 feature 依赖 ${target.feature}/${target.entry} 必须改为 ${target.feature}/public-api`
           );
         }
       }
@@ -199,7 +218,41 @@ function checkBackendBoundaries() {
   return graph;
 }
 
-function checkBackendCycles(graph) {
+function checkBackendBoundaries() {
+  const graph = new Map(expectedBackendDomains.map((domain) => [domain, new Set()]));
+
+  for (const domain of expectedBackendDomains) {
+    const domainPath = `${backendRoot}/${domain}`;
+    requireFile(`${domainPath}/public-api.ts`);
+    for (const filePath of recursiveFiles(domainPath).filter((file) => file.endsWith('.ts'))) {
+      if (isTestFile(filePath)) continue;
+      const source = read(filePath);
+      for (const specifier of importSpecifiers(source)) {
+        const target = resolveBackendDomainImport(filePath, specifier);
+        if (!target || target.domain === domain) continue;
+        graph.get(domain).add(target.domain);
+        if (target.entry !== 'public-api' && target.entry !== 'public-api.ts') {
+          issues.push(
+            `${filePath}: 跨域依赖 ${target.domain}/${target.entry} 必须改为 ${target.domain}/public-api`
+          );
+        }
+      }
+    }
+  }
+
+  const actualBackendDomains = readdirSync(absolute(backendRoot), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  for (const domain of actualBackendDomains) {
+    if (!expectedBackendDomains.includes(domain)) {
+      issues.push(`${backendRoot}/${domain}: 新后端 domain 必须加入架构门禁清单`);
+    }
+  }
+
+  return graph;
+}
+
+function checkDependencyCycles(graph, label) {
   const visiting = new Set();
   const visited = new Set();
   const stack = [];
@@ -207,7 +260,7 @@ function checkBackendCycles(graph) {
   const visit = (domain) => {
     if (visiting.has(domain)) {
       const cycleStart = stack.indexOf(domain);
-      issues.push(`后端业务域存在循环依赖: ${[...stack.slice(cycleStart), domain].join(' -> ')}`);
+      issues.push(`${label} 存在循环依赖: ${[...stack.slice(cycleStart), domain].join(' -> ')}`);
       return;
     }
     if (visited.has(domain)) return;
@@ -220,6 +273,44 @@ function checkBackendCycles(graph) {
   };
 
   for (const domain of graph.keys()) visit(domain);
+}
+
+function importSpecifiers(source) {
+  return [...source.matchAll(/(?:from\s+|import\()\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+}
+
+function resolveFrontendFeatureImport(filePath, specifier) {
+  let targetPath;
+  if (specifier.startsWith('@/v2/features/')) {
+    targetPath = `${frontendRoot}/${specifier.slice('@/v2/features/'.length)}`;
+  } else if (specifier.startsWith('.')) {
+    targetPath = path.posix.normalize(path.posix.join(path.posix.dirname(filePath), specifier));
+  } else {
+    return null;
+  }
+  const relativePath = path.posix.relative(frontendRoot, targetPath);
+  if (relativePath.startsWith('../')) return null;
+  const [feature, ...entryParts] = relativePath.split('/');
+  if (!expectedFeatures.includes(feature)) return null;
+  return { feature, entry: entryParts.join('/') };
+}
+
+function resolveBackendDomainImport(filePath, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const targetPath = path.posix.normalize(path.posix.join(path.posix.dirname(filePath), specifier));
+  const relativePath = path.posix.relative(backendRoot, targetPath);
+  if (relativePath.startsWith('../')) return null;
+  const [domain, ...entryParts] = relativePath.split('/');
+  if (!expectedBackendDomains.includes(domain)) return null;
+  return { domain, entry: entryParts.join('/') };
+}
+
+function isFrontendSourceFile(filePath) {
+  return filePath.endsWith('.ts') || filePath.endsWith('.vue');
+}
+
+function isTestFile(filePath) {
+  return /\.(?:spec|test)\.ts$/.test(filePath);
 }
 
 function checkLineBudgets() {

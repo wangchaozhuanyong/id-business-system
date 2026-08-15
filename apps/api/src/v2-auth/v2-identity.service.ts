@@ -9,12 +9,24 @@ const AUTHENTICATED_USER_CACHE_TTL_MS = 15_000;
 @Injectable()
 export class V2IdentityService {
   private readonly authenticatedUserCache = new TimedMemoryCache();
+  private readonly authenticatedUserCacheKeys = new Map<string, string>();
 
   constructor(private readonly prisma: PrismaService) {}
 
   async getAuthenticatedUser(userId: string): Promise<AuthenticatedUser> {
+    const authorizationVersion = await this.prisma.idBusinessV2ScopeVersion.findUnique({
+      where: { scope: 'employees' },
+      select: { version: true }
+    });
+    const cacheKey = `${userId}:${authorizationVersion?.version.toString() ?? '0'}`;
+    const previousCacheKey = this.authenticatedUserCacheKeys.get(userId);
+    if (previousCacheKey && previousCacheKey !== cacheKey) {
+      this.authenticatedUserCache.delete(previousCacheKey);
+    }
+    this.authenticatedUserCacheKeys.set(userId, cacheKey);
+
     return this.authenticatedUserCache.getOrSet(
-      userId,
+      cacheKey,
       AUTHENTICATED_USER_CACHE_TTL_MS,
       async () => {
         const user = await this.prisma.user.findFirst({
@@ -72,6 +84,8 @@ export class V2IdentityService {
   }
 
   invalidateAuthenticatedUser(userId: string) {
-    this.authenticatedUserCache.delete(userId);
+    const cacheKey = this.authenticatedUserCacheKeys.get(userId);
+    if (cacheKey) this.authenticatedUserCache.delete(cacheKey);
+    this.authenticatedUserCacheKeys.delete(userId);
   }
 }

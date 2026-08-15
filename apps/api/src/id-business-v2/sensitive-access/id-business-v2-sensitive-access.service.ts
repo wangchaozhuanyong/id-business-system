@@ -33,6 +33,7 @@ import {
   IdBusinessV2SensitiveAccessRepository,
   type SensitiveApprovalFilter,
   type SensitiveApprovalRecord,
+  type SensitiveDisplayPolicyRecord,
   type SensitivePermissionGrant
 } from './persistence/id-business-v2-sensitive-access.repository';
 
@@ -61,15 +62,44 @@ export class IdBusinessV2SensitiveAccessService {
 
   async listPolicies(operator?: AuthenticatedUser) {
     const current = this.requireOperator(operator);
-    const grants = current.roles.includes('admin')
-      ? []
-      : await this.listSensitivePermissionGrants(current.id);
-    const byPermission = this.groupGrantsByPermission(grants);
+    if (current.roles.includes('admin')) {
+      return {
+        items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => ({
+          ...descriptor,
+          mode: 'admin_bypass' as const
+        }))
+      };
+    }
+
+    const contexts = [
+      ...new Set(
+        ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map(
+          (descriptor) => descriptor.contexts[0] as IdBusinessV2SensitiveDisplayContext
+        )
+      )
+    ];
+    const [policies, grants] = await Promise.all([
+      this.repository.listSensitiveDisplayPolicies(
+        current.id,
+        ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => descriptor.key),
+        contexts
+      ),
+      this.listSensitivePermissionGrants(current.id)
+    ]);
     return {
-      items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => ({
-        ...descriptor,
-        mode: this.resolveMode(current, descriptor.permissionCode, byPermission)
-      }))
+      items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => {
+        const displayMode = this.resolveDisplayModeFromRecords(
+          current,
+          descriptor,
+          descriptor.contexts[0],
+          policies,
+          grants
+        );
+        return {
+          ...descriptor,
+          mode: this.toAccessMode(current, displayMode)
+        };
+      })
     };
   }
 
@@ -91,22 +121,41 @@ export class IdBusinessV2SensitiveAccessService {
       if (context === 'audit') return 'masked';
       return descriptor.secret ? 'reveal_direct' : 'full';
     }
-    if (!operator.permissions.includes(descriptor.permissionCode)) return 'masked';
-
     const [policies, grants] = await Promise.all([
       this.repository.listSensitiveDisplayPolicies(operator.id, [descriptor.key], [context], tx),
       this.listSensitivePermissionGrants(operator.id, descriptor.permissionCode, tx)
     ]);
-    const applicablePolicies = policies.filter((policy) =>
-      policy.role.rolePermissions.some(
-        (assignment) => assignment.permission.code === descriptor.permissionCode
-      )
+    return this.resolveDisplayModeFromRecords(operator, descriptor, context, policies, grants);
+  }
+
+  private resolveDisplayModeFromRecords(
+    operator: AuthenticatedUser,
+    descriptor: IdBusinessV2SensitiveAccessDescriptor,
+    context: IdBusinessV2SensitiveDisplayContext,
+    policies: SensitiveDisplayPolicyRecord[],
+    grants: SensitivePermissionGrant[]
+  ): IdBusinessV2SensitiveDisplayMode {
+    if (operator.roles.includes('admin')) {
+      if (context === 'audit') return 'masked';
+      return descriptor.secret ? 'reveal_direct' : 'full';
+    }
+    if (!operator.permissions.includes(descriptor.permissionCode)) return 'masked';
+
+    const applicablePolicies = policies.filter(
+      (policy) =>
+        policy.fieldKey === descriptor.key &&
+        policy.context === context &&
+        policy.role.rolePermissions.some(
+          (assignment) => assignment.permission.code === descriptor.permissionCode
+        )
     );
     const explicitRoleIds = new Set(applicablePolicies.map((policy) => policy.role.id));
     const applicableModes: IdBusinessV2SensitiveDisplayMode[] = applicablePolicies
       .map((policy) => policy.mode)
       .map((mode) => (descriptor.secret && mode === 'full' ? 'reveal_direct' : mode));
-    for (const grant of grants) {
+    for (const grant of grants.filter(
+      (item) => item.permission.code === descriptor.permissionCode
+    )) {
       if (explicitRoleIds.has(grant.roleId)) continue;
       applicableModes.push(
         this.resolveLegacyDisplayMode(descriptor, context, grant.sensitiveApprovalRequired)
@@ -414,26 +463,14 @@ export class IdBusinessV2SensitiveAccessService {
     return this.repository.listSensitivePermissionGrants(userId, permissionCodes, tx);
   }
 
-  private groupGrantsByPermission(grants: SensitivePermissionGrant[]) {
-    const result = new Map<string, boolean[]>();
-    for (const grant of grants) {
-      const items = result.get(grant.permission.code) ?? [];
-      items.push(grant.sensitiveApprovalRequired);
-      result.set(grant.permission.code, items);
-    }
-    return result;
-  }
-
-  private resolveMode(
+  private toAccessMode(
     operator: AuthenticatedUser,
-    permissionCode: string,
-    byPermission: Map<string, boolean[]>
+    displayMode: IdBusinessV2SensitiveDisplayMode
   ): IdBusinessV2SensitiveAccessMode {
     if (operator.roles.includes('admin')) return 'admin_bypass';
-    if (!operator.permissions.includes(permissionCode)) return 'denied';
-    const grants = byPermission.get(permissionCode) ?? [];
-    if (!grants.length) return 'denied';
-    return grants.some((required) => !required) ? 'direct' : 'approval_required';
+    if (displayMode === 'reveal_approval') return 'approval_required';
+    if (displayMode === 'reveal_direct' || displayMode === 'full') return 'direct';
+    return 'denied';
   }
 
   private resolveLegacyDisplayMode(

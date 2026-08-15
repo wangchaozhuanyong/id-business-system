@@ -121,6 +121,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.employees.main.id, 'status']"
+              class="v2-status-tag"
               :type="item.status === 'active' ? 'success' : 'info'"
               effect="plain"
             >

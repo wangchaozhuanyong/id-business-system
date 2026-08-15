@@ -84,6 +84,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.profile.sessions.id, '状态']"
+              class="v2-status-tag"
               :type="page.profileSessionStateMeta(item).type"
               effect="plain"
             >

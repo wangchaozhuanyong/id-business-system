@@ -183,6 +183,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.security.loginLogs.id, 'status']"
+              class="v2-status-tag"
               :type="page.loginStatusMeta(item.status).type"
               effect="plain"
             >
@@ -219,6 +220,7 @@
             </div>
             <el-tag
               v-v2-column-visibility="[v2TableSchemas.security.sessions.id, '状态']"
+              class="v2-status-tag"
               :type="page.sessionStateMeta(item).type"
               effect="plain"
             >

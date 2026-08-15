@@ -147,44 +147,47 @@
           </V2TableColumn>
           <V2TableActionColumn :definition="v2TableSchemas.topupRecords.giftCards.columns[15]">
             <template #default="{ row }">
-              <template
-                v-if="
-                  row.account.lossStatus === 'active' && (canAdjustBalance || canReassignSupplier)
-                "
+              <AppButton
+                v-if="actionState(row).canReassignSupplier"
+                size="small"
+                variant="soft"
+                @click="openSupplierReassignment(row)"
               >
-                <AppButton
-                  v-if="canReassignSupplier"
-                  size="small"
-                  variant="soft"
-                  @click="openSupplierReassignment(row)"
-                >
-                  更正供应商
-                </AppButton>
-                <el-dropdown
-                  v-if="canAdjustBalance"
-                  trigger="click"
-                  @command="handleFinancialCommand(row, $event)"
-                >
-                  <AppButton size="small" variant="ghost">更多操作</AppButton>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="metadata">
-                        <el-icon><Edit /></el-icon>
-                        备注
-                      </el-dropdown-item>
-                      <el-dropdown-item v-if="row.status === 'credited'" command="redeemed" divided>
-                        <el-icon><CircleClose /></el-icon>
-                        标记被赎回
-                      </el-dropdown-item>
-                      <el-dropdown-item v-if="row.status === 'credited'" command="withdrawn">
-                        <el-icon><Back /></el-icon>
-                        撤回并返还供应商
-                      </el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </template>
-              <span v-else>—</span>
+                更正供应商
+              </AppButton>
+              <el-dropdown
+                v-if="actionState(row).canOpenFinancialActions"
+                trigger="click"
+                @command="handleFinancialCommand(row, $event)"
+              >
+                <AppButton size="small" variant="ghost">更多操作</AppButton>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="metadata">
+                      <el-icon><Edit /></el-icon>
+                      备注
+                    </el-dropdown-item>
+                    <el-dropdown-item v-if="row.status === 'credited'" command="redeemed" divided>
+                      <el-icon><CircleClose /></el-icon>
+                      标记被赎回
+                    </el-dropdown-item>
+                    <el-dropdown-item v-if="row.status === 'credited'" command="withdrawn">
+                      <el-icon><Back /></el-icon>
+                      撤回并返还供应商
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-tag
+                v-if="actionState(row).blockedReason"
+                :type="actionState(row).blockedTagType"
+                effect="plain"
+                size="small"
+                :title="actionState(row).blockedDescription"
+                :aria-label="actionState(row).blockedDescription"
+              >
+                {{ actionState(row).blockedReason }}
+              </el-tag>
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -374,6 +377,7 @@ import type {
   V2GiftCardReversalAction
 } from '../contracts';
 import type { V2QueryPhase } from '@/v2/composables/useV2Query';
+import { getGiftCardActionState } from '../gift-card-action-state';
 
 interface SortChange {
   prop?: string;
@@ -428,6 +432,12 @@ const loadGiftCards = (page: number) => emit('giftCardPageChange', page);
 const handleGiftCardPageSizeChange = (pageSize: number) => emit('giftCardPageSizeChange', pageSize);
 const loadBalanceLedger = (page: number) => emit('ledgerPageChange', page);
 const handleLedgerPageSizeChange = (pageSize: number) => emit('ledgerPageSizeChange', pageSize);
+function actionState(giftCard: V2GiftCardRecord) {
+  return getGiftCardActionState(giftCard, {
+    canAdjustBalance: props.canAdjustBalance,
+    canReassignSupplier: props.canReassignSupplier
+  });
+}
 function openMetadataDrawer(giftCard: V2GiftCardRecord) {
   emit('editMetadata', giftCard);
 }

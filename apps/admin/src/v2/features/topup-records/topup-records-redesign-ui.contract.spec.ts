@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import view from './V2TopupRecordsView.vue?raw';
 import overview from './components/V2TopupRecordsOverview.vue?raw';
+import mobileList from './components/V2GiftCardMobileList.vue?raw';
 import tables from './components/V2TopupRecordsTables.vue?raw';
 import pageState from './useTopupRecordsPage.ts?raw';
 
@@ -53,5 +54,11 @@ describe('top-up records scheme 3 redesign contract', () => {
     expect(pageState).toContain('giftCardDisplayedPage.value = snapshot.list.page');
     expect(pageState).toContain('trackRouteData: () =>');
     expect(tables).toContain('useV2StableListFrame');
+  });
+
+  it('shows the same explicit action block reason on desktop and mobile', () => {
+    expect(tables).toContain('actionState(row).blockedReason');
+    expect(mobileList).toContain('actionState(item).blockedReason');
+    expect(tables).not.toContain('<span v-else>—</span>');
   });
 });

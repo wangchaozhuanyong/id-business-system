@@ -55,6 +55,45 @@ export class IdBusinessV2FinanceController {
     private readonly optionsService: IdBusinessV2OptionsService
   ) {}
 
+  @Get('analytics/bootstrap')
+  @RequirePermissions('data.analytics.view')
+  async analyticsBootstrap(
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('currency') currency?: string,
+    @Query('supplierOptionId') supplierOptionId?: string,
+    @Query('journalType') journalType?: string,
+    @Query('financeAccountId') financeAccountId?: string,
+    @Query('settlementPlatformOptionId') settlementPlatformOptionId?: string
+  ) {
+    const reportQuery = {
+      dateFrom,
+      dateTo,
+      currency,
+      supplierOptionId,
+      journalType,
+      financeAccountId,
+      settlementPlatformOptionId
+    };
+    const [overview, accounts, wallets, journals] = await Promise.all([
+      this.reportsService.overview(reportQuery),
+      this.accountsService.list(),
+      this.supplierWalletsService.list(),
+      this.journalsService.list({
+        ...reportQuery,
+        page: '1',
+        pageSize: '50'
+      })
+    ]);
+    return {
+      overview,
+      accounts: accounts.items,
+      wallets: wallets.items,
+      journals: journals.items,
+      generatedAt: new Date().toISOString()
+    };
+  }
+
   @Get('ledger/bootstrap')
   async ledgerBootstrap(
     @Query('currency') currency?: string,
@@ -274,6 +313,7 @@ export class IdBusinessV2FinanceController {
   }
 
   @Get('reports/overview')
+  @RequirePermissions('data.analytics.view')
   overview(
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
@@ -295,26 +335,31 @@ export class IdBusinessV2FinanceController {
   }
 
   @Get('reports/profit-loss')
+  @RequirePermissions('data.analytics.view')
   profitLoss(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
     return this.reportsService.profitLoss({ dateFrom, dateTo });
   }
 
   @Get('reports/currency-breakdown')
+  @RequirePermissions('data.analytics.view')
   currencyBreakdown(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
     return this.reportsService.currencyBreakdown({ dateFrom, dateTo });
   }
 
   @Get('reports/assets')
+  @RequirePermissions('data.analytics.view')
   assets() {
     return this.reportsService.assets();
   }
 
   @Get('reports/after-sales')
+  @RequirePermissions('data.analytics.view')
   afterSales(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
     return this.reportsService.afterSales({ dateFrom, dateTo });
   }
 
   @Get('reports/reconciliation')
+  @RequirePermissions('data.analytics.view')
   reconciliation(@Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
     return this.reportsService.reconciliation({ dateFrom, dateTo });
   }

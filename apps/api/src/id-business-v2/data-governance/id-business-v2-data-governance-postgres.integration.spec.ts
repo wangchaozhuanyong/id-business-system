@@ -39,6 +39,9 @@ const FINANCE_EXPENSE_ID = 'd5000000-0000-4000-8000-000000000003';
 const CANCELLED_RESTORE_KEY = 'governance:integration:restore:cancelled';
 const RESTORE_KEY = 'governance:integration:restore:001';
 const EXECUTION_KEY = 'governance:integration:execute:001';
+const CLEANUP_RUN_ID = 'd6000000-0000-4000-8000-000000000001';
+const CLEANUP_JOB_KEY = 'governance:integration:cleanup:001';
+const CLEANUP_EXECUTION_KEY = 'governance:integration:cleanup:execute:001';
 
 describeWithPostgres('data governance PostgreSQL two-administrator workflow', () => {
   let prisma: PrismaClient;
@@ -109,6 +112,24 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
       data: [
         { userId: REQUESTER.id, roleId: adminRole.id },
         { userId: APPROVER.id, roleId: adminRole.id }
+      ]
+    });
+    await prisma.v2AuthIdentity.createMany({
+      data: [
+        {
+          authUserId: 'd1100000-0000-4000-8000-000000000001',
+          userId: REQUESTER.id,
+          usernameNormalized: REQUESTER.username,
+          authEmail: 'governance-requester@integration.invalid',
+          enabled: true
+        },
+        {
+          authUserId: 'd1100000-0000-4000-8000-000000000002',
+          userId: APPROVER.id,
+          usernameNormalized: APPROVER.username,
+          authEmail: 'governance-approver@integration.invalid',
+          enabled: true
+        }
       ]
     });
     await prisma.idBusinessV2Customer.create({
@@ -254,6 +275,69 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
     expect(
       await prisma.auditLog.count({ where: { module: 'id_business_v2_data_governance' } })
     ).toBe(auditCount);
+  });
+
+  it('executes physical cleanup only through an approved governance item', async () => {
+    await prisma.idBusinessV2ExchangeRateRun.create({
+      data: {
+        id: CLEANUP_RUN_ID,
+        status: 'failed',
+        triggerType: 'system',
+        startedAt: new Date('2020-01-01T00:00:00.000Z'),
+        finishedAt: new Date('2020-01-01T00:01:00.000Z'),
+        errorCode: 'integration_failure',
+        errorMessage: '隔离库汇率治理清理演练',
+        errorProvider: 'system',
+        errorRetryable: false,
+        errorDetails: { source: 'data_governance_integration' }
+      }
+    });
+
+    const preview = await previewService.createCleanupJob(
+      {
+        olderThanDays: 30,
+        reason: '隔离库汇率历史受控清理演练',
+        backupEvidence: '本地汇率治理备份 SHA256 已核对',
+        idempotencyKey: CLEANUP_JOB_KEY
+      },
+      REQUESTER,
+      { requestId: 'governance-integration-cleanup-preview' }
+    );
+    expect(preview).toMatchObject({
+      type: 'exchange_rate_cleanup',
+      status: 'pending_approval',
+      totalItems: 1
+    });
+
+    await approvalService.decide(
+      preview.id,
+      { decision: 'approved', reason: '已复核汇率清理范围和备份证据' },
+      APPROVER,
+      { requestId: 'governance-integration-cleanup-approval' }
+    );
+    const executed = await executionService.execute(
+      preview.id,
+      { batchSize: 1, idempotencyKey: CLEANUP_EXECUTION_KEY },
+      APPROVER,
+      { requestId: 'governance-integration-cleanup-execution' }
+    );
+
+    expect(executed).toMatchObject({
+      checkpoint: { status: 'completed', succeededItems: 1 },
+      job: { status: 'succeeded', succeededItems: 1 }
+    });
+    expect(
+      await prisma.idBusinessV2ExchangeRateRun.findUnique({ where: { id: CLEANUP_RUN_ID } })
+    ).toBeNull();
+    expect(
+      await prisma.idBusinessV2GovernanceJobItem.findFirstOrThrow({
+        where: { jobId: preview.id }
+      })
+    ).toMatchObject({
+      status: 'succeeded',
+      resultCode: 'exchange_rate_run_cleaned',
+      resultAuditLogId: expect.any(String)
+    });
   });
 
   it('captures immutable historical labels and protects audit evidence in PostgreSQL', async () => {

@@ -98,6 +98,7 @@
           </div>
           <el-tag
             v-v2-column-visibility="[v2TableSchemas.security.mfaUsers.id, 'MFA']"
+            class="v2-status-tag"
             :type="item.enabled ? 'success' : item.configured ? 'warning' : 'info'"
             effect="plain"
           >

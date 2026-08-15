@@ -9,6 +9,7 @@ const tables = [
   'users',
   'roles',
   'permissions',
+  'id_business_v2_sensitive_display_policies',
   'id_business_v2_options',
   'id_business_v2_user_table_preferences',
   'id_business_v2_customers',
@@ -40,13 +41,16 @@ const expectedRuntimeDeleteTables = new Set([
   'role_permissions',
   'id_business_v2_user_table_preferences',
   'id_business_v2_customer_tags',
-  'id_business_v2_exchange_rate_runs',
-  'id_business_v2_exchange_rate_snapshots',
-  'id_business_v2_exchange_rate_provider_snapshots',
-  'id_business_v2_exchange_rate_quote_samples'
+  'id_business_v2_sensitive_display_policies'
 ]);
 
-const report = { ok: true, profiles: {}, rowSecurity: [], runtimeDeletePrivileges: [] };
+const report = {
+  ok: true,
+  profiles: {},
+  rowSecurity: [],
+  runtimeDeletePrivileges: [],
+  governanceFunctionPrivileges: []
+};
 for (const [name, databaseUrl] of Object.entries(profiles)) {
   const client = new Client({
     ...normalizeDatabaseConnection(databaseUrl),
@@ -105,6 +109,52 @@ try {
     throw new Error(
       `运行时 DELETE 权限不符合最小范围：unexpected=${unexpectedDeletePrivileges.join(',') || '-'} missing=${missingDeletePrivileges.join(',') || '-'}`
     );
+  }
+  report.governanceFunctionPrivileges = (
+    await admin.query(
+      `SELECT function_record.proname AS function_name,
+              has_function_privilege(
+                'id_business_v2_runtime',
+                function_record.oid,
+                'EXECUTE'
+              ) AS runtime_execute,
+              has_function_privilege(
+                'id_business_v2_audit',
+                function_record.oid,
+                'EXECUTE'
+              ) AS audit_execute,
+              EXISTS (
+                SELECT 1
+                FROM aclexplode(COALESCE(
+                  function_record.proacl,
+                  acldefault('f', function_record.proowner)
+                )) privilege
+                WHERE privilege.grantee = 0
+                  AND privilege.privilege_type = 'EXECUTE'
+              ) AS public_execute
+       FROM pg_proc function_record
+       JOIN pg_namespace namespace ON namespace.oid = function_record.pronamespace
+       WHERE namespace.nspname = 'public'
+         AND function_record.proname = ANY($1::text[])
+       ORDER BY function_record.proname`,
+      [
+        [
+          'cleanup_id_business_v2_exchange_rate_history',
+          'execute_id_business_v2_governance_exchange_rate_cleanup',
+          'invoke_id_business_v2_exchange_rate_cron'
+        ]
+      ]
+    )
+  ).rows;
+  if (
+    report.governanceFunctionPrivileges.length !== 3 ||
+    report.governanceFunctionPrivileges.some((row) => {
+      const governed =
+        row.function_name === 'execute_id_business_v2_governance_exchange_rate_cleanup';
+      return row.public_execute || row.audit_execute || row.runtime_execute !== governed;
+    })
+  ) {
+    throw new Error('数据治理特权函数权限不符合最小范围');
   }
   report.rowSecurity = (
     await admin.query(

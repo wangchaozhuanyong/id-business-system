@@ -52,17 +52,12 @@ export function useDataAnalyticsPage() {
     key: () => createV2QueryKey(applied.value),
     keepPreviousData: true,
     query: async ({ signal }) => {
-      const [overview, accountsResult, walletsResult, journalsResult] = await Promise.all([
-        idBusinessV2FinanceApi.overview(applied.value, { signal }),
-        idBusinessV2FinanceApi.listAccounts({}, { signal }),
-        idBusinessV2FinanceApi.listSupplierWallets({}, { signal }),
-        idBusinessV2FinanceApi.listJournals({ ...applied.value, page: 1, pageSize: 50 }, { signal })
-      ]);
+      const snapshot = await idBusinessV2FinanceApi.analyticsBootstrap(applied.value, { signal });
       return {
-        overview,
-        accounts: accountsResult.items,
-        wallets: walletsResult.items,
-        journals: journalsResult.items
+        overview: snapshot.overview,
+        accounts: snapshot.accounts,
+        wallets: snapshot.wallets,
+        journals: snapshot.journals
       };
     }
   });

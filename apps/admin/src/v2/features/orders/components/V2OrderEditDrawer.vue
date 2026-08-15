@@ -117,13 +117,11 @@ import {
   calculateEstimatedProfitAmount,
   calculatePlatformFeeAmount,
   calculateSuggestedOriginalAmount,
-  calculateSuggestedReceivedAmount
-} from '@/v2/features/order-entry/order-pricing';
-import {
+  calculateSuggestedReceivedAmount,
   getVisibleOrderEntryCustomers,
   preserveSelectedOrderEntryCustomer,
   useOrderEntryOptionsQuery
-} from '@/v2/features/order-entry/useOrderEntryOptionsQuery';
+} from '@/v2/features/order-entry/public-api';
 import { multiplyDecimalStrings } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { V2RolesService } from './v2-roles.service';
 
@@ -51,7 +51,12 @@ function createRole(overrides: Record<string, unknown> = {}) {
     createdAt: new Date('2026-07-30T08:00:00.000Z'),
     updatedAt: new Date('2026-07-30T08:00:00.000Z'),
     rolePermissions: [
-      { roleId: 'role-id', permissionId: permissionView.id, permission: permissionView }
+      {
+        roleId: 'role-id',
+        permissionId: permissionView.id,
+        permission: permissionView,
+        sensitiveApprovalRequired: false
+      }
     ],
     sensitiveDisplayPolicies: [],
     userRoles: [
@@ -87,6 +92,9 @@ function createService() {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       createMany: jest.fn().mockResolvedValue({ count: 0 })
     },
+    activeSession: {
+      updateMany: jest.fn().mockResolvedValue({ count: 2 })
+    },
     auditLog: {
       create: jest.fn().mockResolvedValue({ id: 'audit-id' })
     }
@@ -116,17 +124,27 @@ function createService() {
   const identityService = {
     invalidateAuthenticatedUser: jest.fn()
   };
+  const securityService = {
+    invalidateActiveSessionCache: jest.fn()
+  };
+  const supabaseAuthService = {
+    invalidateAccessTokenCache: jest.fn()
+  };
 
   return {
     service: new V2RolesService(
       prisma as never,
       auditLogsService as never,
-      identityService as never
+      identityService as never,
+      securityService as never,
+      supabaseAuthService as never
     ),
     prisma,
     transaction,
     auditLogsService,
-    identityService
+    identityService,
+    securityService,
+    supabaseAuthService
   };
 }
 
@@ -357,7 +375,8 @@ describe('V2RolesService', () => {
         {
           roleId: 'role-id',
           permissionId: permissionUpdate.id,
-          permission: permissionUpdate
+          permission: permissionUpdate,
+          sensitiveApprovalRequired: false
         }
       ]
     });
@@ -373,6 +392,7 @@ describe('V2RolesService', () => {
     const result = await fixture.service.update(
       existing.id,
       {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
         name: '高级运营',
         permissionIds: [permissionUpdate.id]
       },
@@ -394,6 +414,23 @@ describe('V2RolesService', () => {
         }
       ]
     });
+    expect(fixture.transaction.activeSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: { in: ['55555555-5555-4555-8555-555555555555'] },
+        revokedAt: null
+      },
+      data: {
+        revokedAt: expect.any(Date)
+      }
+    });
+    expect(fixture.transaction.role.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: existing.id,
+          updatedAt: existing.updatedAt
+        }
+      })
+    );
     expect(fixture.auditLogsService.create).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'role.update',
@@ -401,13 +438,88 @@ describe('V2RolesService', () => {
           permissionCodes: ['apple.order.view']
         }),
         afterData: expect.objectContaining({
-          permissionCodes: ['apple.order.update']
+          permissionCodes: ['apple.order.update'],
+          accessChanged: true,
+          revokedSessionCount: 2
         })
       }),
       fixture.transaction
     );
     expect(fixture.identityService.invalidateAuthenticatedUser).toHaveBeenCalledWith(
       '55555555-5555-4555-8555-555555555555'
+    );
+    expect(fixture.securityService.invalidateActiveSessionCache).toHaveBeenCalledTimes(1);
+    expect(fixture.supabaseAuthService.invalidateAccessTokenCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a stale role version before starting the update transaction', async () => {
+    const fixture = createService();
+    const existing = createRole();
+    fixture.prisma.role.findUnique.mockResolvedValue(existing);
+
+    await expect(
+      fixture.service.update(
+        existing.id,
+        {
+          expectedUpdatedAt: '2026-07-30T07:59:59.000Z',
+          name: '过期修改'
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(fixture.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('maps a concurrent transaction update to a role version conflict', async () => {
+    const fixture = createService();
+    const existing = createRole();
+    fixture.prisma.role.findUnique.mockResolvedValue(existing);
+    fixture.prisma.$transaction.mockRejectedValueOnce({ code: 'P2025' });
+
+    await expect(
+      fixture.service.update(
+        existing.id,
+        {
+          expectedUpdatedAt: existing.updatedAt.toISOString(),
+          name: '并发修改'
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('keeps member sessions when only role metadata changes', async () => {
+    const fixture = createService();
+    const existing = createRole();
+    const updated = createRole({
+      name: '运营团队',
+      updatedAt: new Date('2026-07-30T09:00:00.000Z')
+    });
+    fixture.prisma.role.findUnique.mockResolvedValue(existing);
+    fixture.transaction.role.update.mockResolvedValue(updated);
+
+    await fixture.service.update(
+      existing.id,
+      {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
+        name: '运营团队'
+      },
+      operator
+    );
+
+    expect(fixture.transaction.activeSession.updateMany).not.toHaveBeenCalled();
+    expect(fixture.identityService.invalidateAuthenticatedUser).not.toHaveBeenCalled();
+    expect(fixture.securityService.invalidateActiveSessionCache).not.toHaveBeenCalled();
+    expect(fixture.supabaseAuthService.invalidateAccessTokenCache).not.toHaveBeenCalled();
+    expect(fixture.auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterData: expect.objectContaining({
+          accessChanged: false,
+          revokedSessionCount: 0
+        })
+      }),
+      fixture.transaction
     );
   });
 });
