@@ -100,22 +100,55 @@ export class IdBusinessV2ManagedMailboxRepository {
     return this.prisma.idBusinessV2ManagedMailbox.update({ where: { id }, data: input });
   }
 
-  countAttempts(input: { emailHash?: string; ipHash?: string; since: Date }) {
-    return this.prisma.idBusinessV2MailQueryAttempt.count({
-      where: {
-        createdAt: { gte: input.since },
-        ...(input.emailHash ? { emailHash: input.emailHash } : {}),
-        ...(input.ipHash ? { ipHash: input.ipHash } : {})
+  reserveQueryAttempt(input: {
+    emailHash: string;
+    ipHash: string | null;
+    since: Date;
+    maxEmailAttempts: number;
+    maxIpAttempts: number;
+  }) {
+    return this.prisma.$transaction(async (client) => {
+      const lockKeys = [`mail-viewer:email:${input.emailHash}`];
+      if (input.ipHash) lockKeys.push(`mail-viewer:ip:${input.ipHash}`);
+      for (const key of lockKeys.sort()) {
+        await client.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+        `;
       }
+
+      const counts = [
+        client.idBusinessV2MailQueryAttempt.count({
+          where: { emailHash: input.emailHash, createdAt: { gte: input.since } }
+        })
+      ];
+      if (input.ipHash) {
+        counts.push(
+          client.idBusinessV2MailQueryAttempt.count({
+            where: { ipHash: input.ipHash, createdAt: { gte: input.since } }
+          })
+        );
+      }
+      const [emailAttempts = 0, ipAttempts = 0] = await Promise.all(counts);
+      const allowed = emailAttempts < input.maxEmailAttempts && ipAttempts < input.maxIpAttempts;
+      const attempt = await client.idBusinessV2MailQueryAttempt.create({
+        data: {
+          emailHash: input.emailHash,
+          ipHash: input.ipHash,
+          mailboxId: null,
+          outcome: allowed ? 'invalid' : 'rate_limited'
+        },
+        select: { id: true }
+      });
+      return allowed
+        ? { allowed: true as const, attemptId: attempt.id }
+        : { allowed: false as const };
     });
   }
 
-  recordAttempt(input: {
-    emailHash: string;
-    ipHash: string | null;
-    mailboxId: string | null;
-    outcome: IdBusinessV2MailQueryOutcome;
-  }) {
-    return this.prisma.idBusinessV2MailQueryAttempt.create({ data: input });
+  updateQueryAttempt(
+    id: string,
+    input: { mailboxId: string | null; outcome: IdBusinessV2MailQueryOutcome }
+  ) {
+    return this.prisma.idBusinessV2MailQueryAttempt.update({ where: { id }, data: input });
   }
 }

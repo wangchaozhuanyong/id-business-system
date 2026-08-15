@@ -22,6 +22,7 @@ export interface SupabaseSessionIdentity {
   userId: string;
   sessionId: string;
   expiresAt: Date;
+  mfaVerified: boolean;
 }
 
 export interface SupabaseLoginResult {
@@ -30,6 +31,7 @@ export interface SupabaseLoginResult {
   expiresAt: string;
   userId: string;
   sessionId: string;
+  mfaVerified: boolean;
 }
 
 export interface CreateManagedAuthUserInput {
@@ -109,6 +111,7 @@ export class SupabaseAuthService {
     }
 
     let session = signInResult.data.session;
+    let providerMfaVerified = false;
     const factorResult = await client.auth.mfa.listFactors();
     if (factorResult.error || !factorResult.data) {
       await this.logout(session.access_token).catch(() => undefined);
@@ -138,6 +141,7 @@ export class SupabaseAuthService {
         token_type: verifyResult.data.token_type,
         user: verifyResult.data.user
       };
+      providerMfaVerified = true;
     }
 
     await this.prisma.v2AuthIdentity.update({
@@ -155,6 +159,9 @@ export class SupabaseAuthService {
         session.access_token,
         identity.userId
       );
+      if (providerMfaVerified && !sessionIdentity.mfaVerified) {
+        sessionIdentity = { ...sessionIdentity, mfaVerified: true };
+      }
     } catch (error) {
       await this.logout(session.access_token).catch(() => undefined);
       throw error;
@@ -239,7 +246,8 @@ export class SupabaseAuthService {
     const sessionIdentity = {
       userId: identity.userId,
       sessionId,
-      expiresAt: this.getClaimsExpiry(claims.exp)
+      expiresAt: this.getClaimsExpiry(claims.exp),
+      mfaVerified: (claims as { aal?: unknown }).aal === 'aal2'
     };
     this.cacheIdentity(accessToken, sessionIdentity, this.getVerifiedTokenCacheExpiry(claims.exp));
     return sessionIdentity;
@@ -398,7 +406,8 @@ export class SupabaseAuthService {
       refreshToken: session.refresh_token,
       expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
       userId: identity.userId,
-      sessionId: identity.sessionId
+      sessionId: identity.sessionId,
+      mfaVerified: identity.mfaVerified
     };
   }
 
@@ -431,6 +440,7 @@ export class SupabaseAuthService {
 
     try {
       const payload = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8')) as {
+        aal?: string;
         exp?: number;
         session_id?: string;
       };
@@ -440,7 +450,8 @@ export class SupabaseAuthService {
       return {
         userId,
         sessionId: payload.session_id,
-        expiresAt: this.getClaimsExpiry(payload.exp)
+        expiresAt: this.getClaimsExpiry(payload.exp),
+        mfaVerified: payload.aal === 'aal2'
       };
     } catch {
       throw new ServiceUnavailableException('Supabase 登录会话缺少稳定会话标识。');

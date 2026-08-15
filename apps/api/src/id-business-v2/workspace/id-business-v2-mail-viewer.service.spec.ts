@@ -31,9 +31,9 @@ function mailbox(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2MailViewerService', () => {
   const repository = {
-    countAttempts: vi.fn(),
     findByEmail: vi.fn(),
-    recordAttempt: vi.fn(),
+    reserveQueryAttempt: vi.fn(),
+    updateQueryAttempt: vi.fn(),
     updateQueryState: vi.fn()
   };
   const encryption = {
@@ -49,9 +49,9 @@ describe('IdBusinessV2MailViewerService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    repository.countAttempts.mockResolvedValue(0);
+    repository.reserveQueryAttempt.mockResolvedValue({ allowed: true, attemptId: 'attempt-1' });
     repository.findByEmail.mockResolvedValue(mailbox());
-    repository.recordAttempt.mockResolvedValue({ id: 'attempt-1' });
+    repository.updateQueryAttempt.mockResolvedValue({ id: 'attempt-1' });
     repository.updateQueryState.mockResolvedValue(mailbox());
     encryption.decrypt.mockReturnValue('provider-app-password');
     provider.query.mockResolvedValue([
@@ -82,7 +82,8 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(result).toMatchObject({ email: 'member@gmail.com', provider: 'gmail' });
     expect(JSON.stringify(result)).not.toContain('buyer-code');
     expect(JSON.stringify(result)).not.toContain('provider-app-password');
-    expect(repository.recordAttempt).toHaveBeenCalledWith(
+    expect(repository.updateQueryAttempt).toHaveBeenCalledWith(
+      'attempt-1',
       expect.objectContaining({ outcome: 'success', mailboxId: mailbox().id })
     );
   });
@@ -106,16 +107,14 @@ describe('IdBusinessV2MailViewerService', () => {
   });
 
   it('rate limits by email or IP before reading provider credentials', async () => {
-    repository.countAttempts.mockResolvedValueOnce(15).mockResolvedValueOnce(0);
+    repository.reserveQueryAttempt.mockResolvedValueOnce({ allowed: false });
     const error = await service
       .query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HttpException);
     expect((error as HttpException).getStatus()).toBe(429);
     expect(repository.findByEmail).not.toHaveBeenCalled();
-    expect(repository.recordAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'rate_limited' })
-    );
+    expect(repository.updateQueryAttempt).not.toHaveBeenCalled();
   });
 
   it('marks revoked provider authorization without leaking the provider password', async () => {
@@ -148,6 +147,6 @@ describe('IdBusinessV2MailViewerService', () => {
     await expect(
       service.query({ credential: 'member@gmail.com----buyer-code', limit: 21 })
     ).rejects.toThrow('返回封数必须为 1 至 20 的整数');
-    expect(repository.countAttempts).not.toHaveBeenCalled();
+    expect(repository.reserveQueryAttempt).not.toHaveBeenCalled();
   });
 });

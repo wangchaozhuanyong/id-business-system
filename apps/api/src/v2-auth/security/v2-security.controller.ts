@@ -1,17 +1,7 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Headers,
-  Ip,
-  Param,
-  Patch,
-  Post,
-  Query
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { TrustedClientIp } from '../../common/http/trusted-client-ip';
 import {
   SecurityService,
   type DisableMfaInput,
@@ -191,7 +181,7 @@ export class V2SecurityController {
   createIpWhitelist(
     @Body() dto: SaveIpWhitelistInput,
     @CurrentUser() operator: AuthenticatedUser,
-    @Ip() requestIp?: string
+    @TrustedClientIp() requestIp?: string
   ) {
     return this.securityService.createIpWhitelistSafely(dto, operator, requestIp);
   }
@@ -201,7 +191,7 @@ export class V2SecurityController {
     @Param('id') id: string,
     @Body() dto: SaveIpWhitelistInput,
     @CurrentUser() operator: AuthenticatedUser,
-    @Ip() requestIp?: string
+    @TrustedClientIp() requestIp?: string
   ) {
     return this.securityService.updateIpWhitelistSafely(id, dto, operator, requestIp);
   }
@@ -210,7 +200,7 @@ export class V2SecurityController {
   removeIpWhitelist(
     @Param('id') id: string,
     @CurrentUser() operator: AuthenticatedUser,
-    @Ip() requestIp?: string
+    @TrustedClientIp() requestIp?: string
   ) {
     return this.securityService.removeIpWhitelistSafely(id, operator, requestIp);
   }

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   HttpStatus,
   Injectable,
   Logger,
@@ -12,7 +13,7 @@ import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { authHttpError } from '../common/errors/api-http.exception';
+import { ApiHttpException, authHttpError } from '../common/errors/api-http.exception';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
@@ -47,13 +48,14 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto, requestMeta?: LoginRequestMeta) {
+    const input = this.normalizeLoginInput(dto);
     const ipAllowed = await this.securityService.isRequestIpAllowed(requestMeta?.ip, [
       'admin',
       'api'
     ]);
     if (!ipAllowed) {
       await this.securityService.recordLoginAttempt({
-        username: dto.username,
+        username: input.username,
         status: 'blocked',
         failureReason: 'ip_not_allowed',
         ip: requestMeta?.ip,
@@ -66,125 +68,137 @@ export class AuthService {
       );
     }
 
-    if (this.supabaseAuthService?.isEnabled()) {
-      return this.loginWithSupabase(dto, requestMeta);
-    }
-
-    const user = await this.prisma.user.findFirst({
-      where: {
-        username: dto.username,
-        deletedAt: null
-      }
-    });
-
-    if (!user || user.status !== 'active') {
-      await this.securityService.recordLoginAttempt({
-        username: dto.username,
-        userId: user?.id ?? null,
-        status: user ? 'blocked' : 'failed',
-        failureReason: user ? `user_status_${user.status}` : 'user_not_found',
-        ip: requestMeta?.ip,
-        userAgent: requestMeta?.userAgent
-      });
-      throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
-    }
-
-    const passwordValid = await verifyPassword(dto.password, user.passwordHash);
-    if (!passwordValid) {
-      await this.securityService.recordLoginAttempt({
-        username: dto.username,
-        userId: user.id,
-        status: 'failed',
-        failureReason: 'password_invalid',
-        ip: requestMeta?.ip,
-        userAgent: requestMeta?.userAgent
-      });
-      throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
-    }
-
-    const authenticatedUser = await this.identityService.getAuthenticatedUser(user.id);
-    const mfaRequirement =
-      await this.securityService.getMfaLoginRequirementForUser(authenticatedUser);
-    if (mfaRequirement.required) {
-      if (!mfaRequirement.bound) {
-        await this.securityService.recordLoginAttempt({
-          username: dto.username,
-          userId: user.id,
-          status: 'blocked',
-          failureReason: 'mfa_not_bound',
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
-        });
-        throw new UnauthorizedException(
-          '管理员账号必须先绑定 MFA 后才能登录，请联系已登录管理员处理。'
-        );
-      }
-
-      const mfaCode = dto.mfaCode?.trim();
-      if (!mfaCode) {
-        await this.securityService.recordLoginAttempt({
-          username: dto.username,
-          userId: user.id,
-          status: 'blocked',
-          failureReason: 'mfa_required',
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
-        });
-        throw new UnauthorizedException('需要输入动态验证码或恢复码。');
-      }
-
-      try {
-        await this.securityService.verifyUserMfaCode(user.id, mfaCode);
-      } catch {
-        await this.securityService.recordLoginAttempt({
-          username: dto.username,
-          userId: user.id,
-          status: 'blocked',
-          failureReason: 'mfa_invalid',
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
-        });
-        throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
-      }
-    }
-
-    const response = this.createAuthResponse(authenticatedUser);
-
-    await this.securityService.createActiveSession({
-      userId: user.id,
-      accessToken: response.accessToken,
-      expiresAt: this.getTokenExpiresAt(response.accessToken),
+    const reservation = await this.securityService.reserveLoginAttempt({
+      username: input.username,
       ip: requestMeta?.ip,
       userAgent: requestMeta?.userAgent
     });
+    if (!reservation.allowed) {
+      throw new ApiHttpException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'AUTH_RATE_LIMITED',
+        '登录尝试过于频繁，请稍后重试。',
+        { retryAfterMs: reservation.retryAfterMs, retryable: true }
+      );
+    }
 
-    await Promise.all([
-      this.prisma.user.update({
+    try {
+      if (this.supabaseAuthService?.isEnabled()) {
+        return await this.loginWithSupabase(input, requestMeta, reservation.reservationId);
+      }
+
+      const user = await this.prisma.user.findFirst({
         where: {
-          id: user.id
-        },
-        data: {
-          lastLoginAt: new Date()
+          username: input.username,
+          deletedAt: null
         }
-      }),
-      this.auditLogsService.create({
+      });
+
+      if (!user || user.status !== 'active') {
+        await this.securityService.finalizeLoginAttempt(reservation.reservationId, {
+          userId: user?.id ?? null,
+          status: user ? 'blocked' : 'failed',
+          failureReason: user ? `user_status_${user.status}` : 'user_not_found'
+        });
+        throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
+      }
+
+      const passwordValid = await verifyPassword(input.password, user.passwordHash);
+      if (!passwordValid) {
+        await this.securityService.finalizeLoginAttempt(reservation.reservationId, {
+          userId: user.id,
+          status: 'failed',
+          failureReason: 'password_invalid'
+        });
+        throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
+      }
+
+      const authenticatedUser = await this.identityService.getAuthenticatedUser(user.id);
+      const mfaRequirement =
+        await this.securityService.getMfaLoginRequirementForUser(authenticatedUser);
+      if (mfaRequirement.required) {
+        if (!mfaRequirement.bound) {
+          await this.securityService.finalizeLoginAttempt(reservation.reservationId, {
+            userId: user.id,
+            status: 'blocked',
+            failureReason: 'mfa_not_bound'
+          });
+          throw new UnauthorizedException(
+            '管理员账号必须先绑定 MFA 后才能登录，请联系已登录管理员处理。'
+          );
+        }
+
+        const mfaCode = input.mfaCode?.trim();
+        if (!mfaCode) {
+          await this.securityService.finalizeLoginAttempt(reservation.reservationId, {
+            userId: user.id,
+            status: 'blocked',
+            failureReason: 'mfa_required'
+          });
+          throw new UnauthorizedException('需要输入动态验证码或恢复码。');
+        }
+
+        try {
+          await this.securityService.verifyUserMfaCode(user.id, mfaCode);
+        } catch {
+          await this.securityService.finalizeLoginAttempt(reservation.reservationId, {
+            userId: user.id,
+            status: 'blocked',
+            failureReason: 'mfa_invalid'
+          });
+          throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
+        }
+      }
+
+      const response = this.createAuthResponse(authenticatedUser, mfaRequirement.required);
+
+      await this.securityService.createActiveSession({
         userId: user.id,
-        module: 'auth',
-        action: 'login',
-        objectType: 'user',
-        objectId: user.id,
-        remark: 'User logged in'
-      }),
-      this.securityService.recordLoginAttempt({
-        username: user.username,
-        userId: user.id,
-        status: 'success',
+        accessToken: response.accessToken,
+        expiresAt: this.getTokenExpiresAt(response.accessToken),
         ip: requestMeta?.ip,
         userAgent: requestMeta?.userAgent
-      })
-    ]).catch(() => undefined);
+      });
+      const finalized = await this.securityService
+        .finalizeLoginAttempt(reservation.reservationId, {
+          userId: user.id,
+          status: 'success'
+        })
+        .catch(() => false);
+      if (!finalized) {
+        await this.securityService
+          .revokeAccessToken(response.accessToken, authenticatedUser)
+          .catch(() => undefined);
+        throw new ServiceUnavailableException('登录安全记录写入失败，请重新登录。');
+      }
 
-    return response;
+      await Promise.all([
+        this.prisma.user.update({
+          where: { id: user.id },
+          data: { lastLoginAt: new Date() }
+        }),
+        this.auditLogsService.create({
+          userId: user.id,
+          module: 'auth',
+          action: 'login',
+          objectType: 'user',
+          objectId: user.id,
+          remark: 'User logged in'
+        })
+      ]).catch(() => undefined);
+
+      return response;
+    } catch (error) {
+      await this.securityService
+        .finalizeLoginAttempt(reservation.reservationId, {
+          status: this.isRetryableLoginFailure(error) ? 'blocked' : 'failed',
+          failureReason: this.isRetryableLoginFailure(error)
+            ? 'authentication_unavailable'
+            : 'authentication_failed'
+        })
+        .catch(() => undefined);
+      throw error;
+    }
   }
 
   async logout(accessToken?: string, user?: AuthenticatedUser) {
@@ -193,10 +207,14 @@ export class AuthService {
       const localRevocation = async () => {
         if (!accessToken) return;
         const identity = await supabaseAuthService.authenticateAccessToken(accessToken);
-        await this.securityService.revokeSessionIdentifier(
-          this.getSupabaseSessionIdentifier(identity.sessionId),
-          user
-        );
+        const strongIdentifier = this.getSupabaseSessionIdentifier(identity.sessionId, true);
+        const ordinaryIdentifier = this.getSupabaseSessionIdentifier(identity.sessionId, false);
+        const identifiers = identity.mfaVerified
+          ? [strongIdentifier, ordinaryIdentifier]
+          : [ordinaryIdentifier, strongIdentifier];
+        for (const identifier of identifiers) {
+          if (await this.securityService.revokeSessionIdentifier(identifier, user)) break;
+        }
       };
       const [localResult, providerResult] = await Promise.allSettled([
         localRevocation(),
@@ -243,7 +261,8 @@ export class AuthService {
       throw new BadRequestException('Supabase 登录会话由客户端安全刷新。');
     }
 
-    const response = this.createAuthResponse(user);
+    const mfaRequired = await this.securityService.isMfaRequiredForUser(user);
+    const response = this.createAuthResponse(user, mfaRequired);
     await this.securityService.createActiveSession({
       userId: user.id,
       accessToken: response.accessToken,
@@ -566,11 +585,12 @@ export class AuthService {
     }
   }
 
-  private createAuthResponse(user: AuthenticatedUser) {
+  private createAuthResponse(user: AuthenticatedUser, mfaVerified: boolean) {
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
-      jti: randomUUID()
+      jti: randomUUID(),
+      mfaVerified
     };
 
     return {
@@ -579,7 +599,11 @@ export class AuthService {
     };
   }
 
-  private async loginWithSupabase(dto: LoginDto, requestMeta?: LoginRequestMeta) {
+  private async loginWithSupabase(
+    dto: LoginDto,
+    requestMeta: LoginRequestMeta | undefined,
+    reservationId: string
+  ) {
     try {
       const session = await this.supabaseAuthService!.login(
         dto.username,
@@ -587,10 +611,36 @@ export class AuthService {
         dto.mfaCode ?? undefined
       );
       const authenticatedUser = await this.identityService.getAuthenticatedUser(session.userId);
+      const mfaRequirement =
+        await this.securityService.getMfaLoginRequirementForUser(authenticatedUser);
+      let mfaVerified = session.mfaVerified;
+      if (mfaRequirement.required) {
+        if (!mfaRequirement.bound) {
+          await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
+          throw new UnauthorizedException(
+            '管理员账号必须先绑定 MFA 后才能登录，请联系已登录管理员处理。'
+          );
+        }
+        if (!mfaVerified) {
+          const mfaCode = dto.mfaCode?.trim();
+          if (!mfaCode) {
+            await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
+            throw new UnauthorizedException('需要输入动态验证码或恢复码。');
+          }
+          try {
+            await this.securityService.verifyUserMfaCode(authenticatedUser.id, mfaCode);
+            mfaVerified = true;
+          } catch {
+            await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
+            throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
+          }
+        }
+      }
+      const sessionIdentifier = this.getSupabaseSessionIdentifier(session.sessionId, mfaVerified);
       try {
         await this.securityService.createProviderActiveSession({
           userId: authenticatedUser.id,
-          sessionIdentifier: this.getSupabaseSessionIdentifier(session.sessionId),
+          sessionIdentifier,
           expiresAt: new Date(session.expiresAt),
           ip: requestMeta?.ip,
           userAgent: requestMeta?.userAgent
@@ -600,6 +650,20 @@ export class AuthService {
         throw new ServiceUnavailableException('登录会话登记失败，请重新登录。', {
           cause: error
         });
+      }
+
+      const finalized = await this.securityService
+        .finalizeLoginAttempt(reservationId, {
+          userId: authenticatedUser.id,
+          status: 'success'
+        })
+        .catch(() => false);
+      if (!finalized) {
+        await Promise.allSettled([
+          this.supabaseAuthService!.logout(session.accessToken),
+          this.securityService.revokeSessionIdentifier(sessionIdentifier, authenticatedUser)
+        ]);
+        throw new ServiceUnavailableException('登录安全记录写入失败，请重新登录。');
       }
 
       await Promise.all([
@@ -618,13 +682,6 @@ export class AuthService {
           objectType: 'user',
           objectId: authenticatedUser.id,
           remark: 'User logged in through Supabase Auth'
-        }),
-        this.securityService.recordLoginAttempt({
-          username: authenticatedUser.username,
-          userId: authenticatedUser.id,
-          status: 'success',
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
         })
       ]).catch(() => undefined);
 
@@ -635,13 +692,11 @@ export class AuthService {
         user: authenticatedUser
       };
     } catch (error) {
+      const retryable = this.isRetryableLoginFailure(error);
       await this.securityService
-        .recordLoginAttempt({
-          username: dto.username,
-          status: 'failed',
-          failureReason: 'supabase_auth_failed',
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
+        .finalizeLoginAttempt(reservationId, {
+          status: retryable ? 'blocked' : 'failed',
+          failureReason: retryable ? 'authentication_unavailable' : 'supabase_auth_failed'
         })
         .catch(() => undefined);
       throw error;
@@ -666,8 +721,29 @@ export class AuthService {
     }
   }
 
-  private getSupabaseSessionIdentifier(sessionId: string) {
-    return `supabase:${sessionId}`;
+  private getSupabaseSessionIdentifier(sessionId: string, mfaVerified = false) {
+    return `supabase:${mfaVerified ? 'mfa:' : ''}${sessionId}`;
+  }
+
+  private normalizeLoginInput(dto: LoginDto): LoginDto {
+    const username = typeof dto?.username === 'string' ? dto.username.trim() : '';
+    const password = typeof dto?.password === 'string' ? dto.password : '';
+    const mfaCode = dto?.mfaCode;
+    if (!username || username.length > 100 || !password || password.length > 160) {
+      throw new UnauthorizedException('账号或密码错误，请检查账号和密码后重试。');
+    }
+    if (mfaCode !== null && mfaCode !== undefined && typeof mfaCode !== 'string') {
+      throw new UnauthorizedException('动态验证码或恢复码格式不正确。');
+    }
+    const normalizedMfaCode = mfaCode?.trim() ?? null;
+    if (normalizedMfaCode && normalizedMfaCode.length > 64) {
+      throw new UnauthorizedException('动态验证码或恢复码格式不正确。');
+    }
+    return { username, password, mfaCode: normalizedMfaCode };
+  }
+
+  private isRetryableLoginFailure(error: unknown) {
+    return error instanceof HttpException && error.getStatus() >= 500;
   }
 
   private normalizePassword(value: string | undefined, label: string) {

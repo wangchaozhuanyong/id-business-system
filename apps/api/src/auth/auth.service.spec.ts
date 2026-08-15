@@ -18,6 +18,7 @@ describe('AuthService', () => {
   const userId = '33333333-3333-4333-8333-333333333333';
   const authUserId = '44444444-4444-4444-8444-444444444444';
   const supabaseSessionId = '55555555-5555-4555-8555-555555555555';
+  const loginReservationId = '66666666-6666-4666-8666-666666666666';
   const fixturePassword = 'UnitTestPassword123!';
   const newPassword = 'NewUnitTestPassword456!';
   const supabaseSession = {
@@ -25,7 +26,8 @@ describe('AuthService', () => {
     refreshToken: 'supabase-refresh-token',
     expiresAt: '2030-01-01T00:00:00.000Z',
     userId,
-    sessionId: supabaseSessionId
+    sessionId: supabaseSessionId,
+    mfaVerified: false
   };
   const authenticatedUser = {
     id: userId,
@@ -122,6 +124,11 @@ describe('AuthService', () => {
       }),
       verifyUserMfaCode: jest.fn().mockResolvedValue({ method: 'totp' }),
       recordLoginAttempt: jest.fn().mockResolvedValue({}),
+      reserveLoginAttempt: jest.fn().mockResolvedValue({
+        allowed: true,
+        reservationId: loginReservationId
+      }),
+      finalizeLoginAttempt: jest.fn().mockResolvedValue(true),
       createActiveSession: jest.fn().mockResolvedValue({}),
       createProviderActiveSession: jest.fn().mockResolvedValue({}),
       revokeAccessToken: jest.fn().mockResolvedValue(true),
@@ -134,7 +141,8 @@ describe('AuthService', () => {
       authenticateAccessToken: jest.fn().mockResolvedValue({
         userId,
         sessionId: supabaseSessionId,
-        expiresAt: new Date(supabaseSession.expiresAt)
+        expiresAt: new Date(supabaseSession.expiresAt),
+        mfaVerified: false
       }),
       login: jest.fn().mockResolvedValue(supabaseSession),
       logout: jest.fn().mockResolvedValue(undefined),
@@ -178,9 +186,9 @@ describe('AuthService', () => {
       )
     ).rejects.toThrow(new UnauthorizedException('需要输入动态验证码或恢复码。'));
 
-    expect(securityService.recordLoginAttempt).toHaveBeenCalledWith(
+    expect(securityService.finalizeLoginAttempt).toHaveBeenCalledWith(
+      loginReservationId,
       expect.objectContaining({
-        username: 'admin',
         userId,
         status: 'blocked',
         failureReason: 'mfa_required'
@@ -210,9 +218,9 @@ describe('AuthService', () => {
       new UnauthorizedException('管理员账号必须先绑定 MFA 后才能登录，请联系已登录管理员处理。')
     );
 
-    expect(securityService.recordLoginAttempt).toHaveBeenCalledWith(
+    expect(securityService.finalizeLoginAttempt).toHaveBeenCalledWith(
+      loginReservationId,
       expect.objectContaining({
-        username: 'admin',
         userId,
         status: 'blocked',
         failureReason: 'mfa_not_bound'
@@ -254,6 +262,32 @@ describe('AuthService', () => {
     expect(jwtService.sign).not.toHaveBeenCalled();
   });
 
+  it('rate limits before loading the user when the login threshold is reached', async () => {
+    const { service, prisma, jwtService, securityService } = await createService();
+    (securityService.reserveLoginAttempt as jest.Mock).mockResolvedValueOnce({
+      allowed: false,
+      retryAfterMs: 900_000
+    });
+
+    const error = await service
+      .login(
+        { username: 'admin', password: fixturePassword },
+        { ip: '127.0.0.1', userAgent: 'unit-test' }
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiHttpException);
+    expect((error as ApiHttpException).getStatus()).toBe(429);
+    expect((error as ApiHttpException).getResponse()).toMatchObject({
+      errorCode: 'AUTH_RATE_LIMITED',
+      retryAfterMs: 900_000,
+      retryable: true
+    });
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(securityService.finalizeLoginAttempt).not.toHaveBeenCalled();
+    expect(jwtService.sign).not.toHaveBeenCalled();
+  });
+
   it('blocks token issuance when bound MFA code is invalid', async () => {
     const { service, jwtService, securityService } = await createService({
       mfaRequired: true
@@ -273,7 +307,8 @@ describe('AuthService', () => {
       )
     ).rejects.toThrow(new UnauthorizedException('动态验证码或恢复码错误，请重新输入。'));
 
-    expect(securityService.recordLoginAttempt).toHaveBeenCalledWith(
+    expect(securityService.finalizeLoginAttempt).toHaveBeenCalledWith(
+      loginReservationId,
       expect.objectContaining({
         status: 'blocked',
         failureReason: 'mfa_invalid'
@@ -300,11 +335,13 @@ describe('AuthService', () => {
     expect(jwtService.sign).toHaveBeenCalledWith({
       sub: userId,
       username: 'admin',
-      jti: expect.any(String)
+      jti: expect.any(String),
+      mfaVerified: true
     });
-    expect(securityService.recordLoginAttempt).toHaveBeenCalledWith(
+    expect(securityService.finalizeLoginAttempt).toHaveBeenCalledWith(
+      loginReservationId,
       expect.objectContaining({
-        username: 'admin',
+        userId,
         status: 'success'
       })
     );
@@ -313,6 +350,20 @@ describe('AuthService', () => {
         userId,
         accessToken: result.accessToken
       })
+    );
+  });
+
+  it('revokes a local session when its successful login record cannot be finalized', async () => {
+    const { service, securityService } = await createService();
+    jest.mocked(securityService.finalizeLoginAttempt).mockResolvedValueOnce(false);
+
+    await expect(service.login({ username: 'admin', password: fixturePassword })).rejects.toThrow(
+      '登录安全记录写入失败，请重新登录。'
+    );
+
+    expect(securityService.revokeAccessToken).toHaveBeenCalledWith(
+      expect.any(String),
+      authenticatedUser
     );
   });
 
@@ -434,6 +485,39 @@ describe('AuthService', () => {
       ip: '127.0.0.1',
       userAgent: 'unit-test'
     });
+  });
+
+  it('enforces application MFA before registering a Supabase session', async () => {
+    const { service, securityService } = await createService({
+      supabaseEnabled: true,
+      mfaRequired: true
+    });
+
+    await expect(
+      service.login({ username: 'admin', password: fixturePassword, mfaCode: '123456' })
+    ).resolves.toEqual(expect.objectContaining({ accessToken: supabaseSession.accessToken }));
+
+    expect(securityService.verifyUserMfaCode).toHaveBeenCalledWith(userId, '123456');
+    expect(securityService.createProviderActiveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionIdentifier: `supabase:mfa:${supabaseSessionId}` })
+    );
+  });
+
+  it('revokes both sides when a Supabase login reservation cannot be finalized', async () => {
+    const { service, securityService, supabaseAuthService } = await createService({
+      supabaseEnabled: true
+    });
+    jest.mocked(securityService.finalizeLoginAttempt).mockResolvedValueOnce(false);
+
+    await expect(service.login({ username: 'admin', password: fixturePassword })).rejects.toThrow(
+      '登录安全记录写入失败，请重新登录。'
+    );
+
+    expect(supabaseAuthService.logout).toHaveBeenCalledWith(supabaseSession.accessToken);
+    expect(securityService.revokeSessionIdentifier).toHaveBeenCalledWith(
+      `supabase:${supabaseSessionId}`,
+      authenticatedUser
+    );
   });
 
   it('logs out the new Supabase session when local session registration fails', async () => {

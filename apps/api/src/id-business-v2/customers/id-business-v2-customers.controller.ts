@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { resolveTrustedClientIp } from '../../common/http/trusted-client-ip';
 import type { CreateIdBusinessV2CustomerDto } from './dto/create-id-business-v2-customer.dto';
 import type { RevealIdBusinessV2CustomerPhoneDto } from './dto/reveal-id-business-v2-customer-phone.dto';
 import type { UpdateIdBusinessV2CustomerDto } from './dto/update-id-business-v2-customer.dto';
@@ -207,7 +208,7 @@ export class IdBusinessV2CustomersController {
   private requestMeta(request: RequestWithAuditMeta) {
     return {
       requestId: request.requestId,
-      ip: request.ip,
+      ip: resolveTrustedClientIp(request),
       userAgent: this.getHeaderValue(request.headers['user-agent'])
     };
   }

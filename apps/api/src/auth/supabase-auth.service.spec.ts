@@ -225,7 +225,8 @@ describe('SupabaseAuthService', () => {
       refreshToken: session.refresh_token,
       expiresAt: new Date(session.expires_at * 1000).toISOString(),
       userId,
-      sessionId: providerSessionId
+      sessionId: providerSessionId,
+      mfaVerified: false
     });
 
     expect(serviceClient.auth.admin.updateUserById).toHaveBeenCalledWith(authUserId, {
@@ -342,18 +343,21 @@ describe('SupabaseAuthService', () => {
       {
         userId,
         sessionId: providerSessionId,
-        expiresAt: new Date(expiresAtSeconds * 1000)
+        expiresAt: new Date(expiresAtSeconds * 1000),
+        mfaVerified: false
       },
       {
         userId,
         sessionId: providerSessionId,
-        expiresAt: new Date(expiresAtSeconds * 1000)
+        expiresAt: new Date(expiresAtSeconds * 1000),
+        mfaVerified: false
       }
     ]);
     await expect(service.authenticateAccessToken(session.access_token)).resolves.toEqual({
       userId,
       sessionId: providerSessionId,
-      expiresAt: new Date(expiresAtSeconds * 1000)
+      expiresAt: new Date(expiresAtSeconds * 1000),
+      mfaVerified: false
     });
 
     expect(publicClient.auth.getClaims).toHaveBeenCalledTimes(1);

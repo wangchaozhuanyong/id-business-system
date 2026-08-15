@@ -11,4 +11,5 @@ export interface JwtPayload {
   sub: string;
   username: string;
   jti: string;
+  mfaVerified?: boolean;
 }
