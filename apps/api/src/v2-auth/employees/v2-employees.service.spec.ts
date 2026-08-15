@@ -16,7 +16,8 @@ function createEmployee(overrides: Record<string, unknown> = {}) {
     username: 'operator01',
     displayName: '运营一号',
     passwordHash: 'hidden',
-    phone: null,
+    phoneEncrypted: 'v1:encrypted-user-phone',
+    phoneMasked: '***6789',
     email: null,
     status: 'active',
     lastLoginAt: null,
@@ -158,7 +159,9 @@ describe('V2EmployeesService', () => {
     );
     const auditInput = fixture.auditLogsService.create.mock.calls[0]?.[0];
     expect(JSON.stringify(auditInput)).not.toContain('StrongPass1');
+    expect(JSON.stringify(auditInput)).not.toContain('encrypted-user-phone');
     expect(JSON.stringify(result)).not.toContain('password');
+    expect(JSON.stringify(result)).not.toContain('encrypted-user-phone');
   });
 
   it('rejects creating an employee without a role', async () => {

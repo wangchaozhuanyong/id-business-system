@@ -174,6 +174,11 @@ npm run prisma:migrate:production -- \
   --confirmation=MIGRATE_fjquufgbnxyocmuzltxi_<SHA-256 前 12 位>
 ```
 
+该固定命令在 `prisma migrate deploy` 成功后，会使用同一迁移数据库连接和部署凭据中的
+`FIELD_ENCRYPTION_KEY` 自动执行员工账号手机号历史回填：写入 `phone_encrypted`、校验脱敏值、清空
+历史 `phone` 明文并验证 `users_phone_plaintext_forbidden` 约束。任一步失败都会令命令失败，禁止在回填
+未完成时继续发布；日志只输出处理数量，不输出手机号或密文。
+
 敏感资料盲索引 migration 完成后，使用运行时最小权限角色执行可重复的历史数据回填。该命令只会注入
 运行时数据库凭据、`FIELD_ENCRYPTION_KEY` 和 `HASH_SECRET`，不会获得 migration 或审计凭据：
 
@@ -181,8 +186,9 @@ npm run prisma:migrate:production -- \
 npm run backfill:v2-sensitive-search-indexes:production
 ```
 
-该固定脚本只会执行 `prisma migrate deploy`，不会把 `MIGRATION_DATABASE_URL` 注入通用命令、应用
-运行时或发布流程。执行 Prisma 前还会检查专用备份角色事务：存在任何备份事务时最多等待 3 分钟，
+该固定脚本只会执行 `prisma migrate deploy` 和已审查的员工手机号加密回填，不会把
+`MIGRATION_DATABASE_URL` 注入通用命令、应用运行时或发布流程。执行 Prisma 前还会检查专用备份角色
+事务：存在任何备份事务时最多等待 3 分钟，
 等待超时会立即停止并报告，不会自动终止连接，也不会写入失败的 migration 记录。超过 16 分钟的
 `idle in transaction` 遗留事务还会由高频备份监控单独告警。
 

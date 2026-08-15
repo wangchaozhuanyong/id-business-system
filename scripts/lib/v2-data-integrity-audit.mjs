@@ -1,5 +1,33 @@
 export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   check(
+    'auth_user_phone_storage_invalid',
+    '员工账号手机号仍为明文、密文与脱敏状态不完整或禁止明文约束未验证',
+    `SELECT user_record.id::text AS entity_id,
+            jsonb_build_object(
+              'hasPlaintext', user_record.phone IS NOT NULL,
+              'hasEncrypted', user_record.phone_encrypted IS NOT NULL,
+              'hasMasked', user_record.phone_masked IS NOT NULL
+            ) AS detail
+     FROM public.users user_record
+     WHERE user_record.phone IS NOT NULL
+        OR (user_record.phone_encrypted IS NULL) <> (user_record.phone_masked IS NULL)
+        OR (
+          user_record.phone_encrypted IS NOT NULL
+          AND user_record.phone_encrypted !~ '^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]{22}:[A-Za-z0-9_-]+$'
+        )
+     UNION ALL
+     SELECT 'users_phone_plaintext_forbidden' AS entity_id,
+            jsonb_build_object('constraintValidated', false) AS detail
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM pg_constraint constraint_record
+       WHERE constraint_record.conrelid = 'public.users'::regclass
+         AND constraint_record.conname = 'users_phone_plaintext_forbidden'
+         AND constraint_record.contype = 'c'
+         AND constraint_record.convalidated
+     )`
+  ),
+  check(
     'finance_expense_display_snapshot_missing',
     '经营开支历史分类名或资金账户名快照缺失',
     `SELECT expense.id::text AS entity_id,
