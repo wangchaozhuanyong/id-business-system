@@ -112,7 +112,10 @@ export class IdBusinessV2ManagedMailboxRepository {
       if (input.ipHash) lockKeys.push(`mail-viewer:ip:${input.ipHash}`);
       for (const key of lockKeys.sort()) {
         await client.$queryRaw`
-          SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+          SELECT 1::integer AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+          ) AS "mail_query_attempt_lock"
         `;
       }
 

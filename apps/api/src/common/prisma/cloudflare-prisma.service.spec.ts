@@ -31,7 +31,11 @@ vi.mock('@prisma/adapter-pg', () => ({
   PrismaPg: prismaMocks.PrismaPg
 }));
 
-import { CloudflarePrismaService, runWithCloudflarePrisma } from './cloudflare-prisma.service';
+import {
+  CloudflarePrismaService,
+  normalizeCloudflareDatabaseConnectionString,
+  runWithCloudflarePrisma
+} from './cloudflare-prisma.service';
 
 describe('CloudflarePrismaService', () => {
   beforeEach(() => {
@@ -66,5 +70,24 @@ describe('CloudflarePrismaService', () => {
       'Cloudflare Prisma client is only available during a request'
     );
     expect(prismaMocks.PrismaClient).not.toHaveBeenCalled();
+  });
+
+  it('keeps sslmode=require encrypted while opting into explicit libpq compatibility', () => {
+    const connectionString = normalizeCloudflareDatabaseConnectionString(
+      'postgresql://runtime:secret@db.example.test/app?sslmode=require&schema=public'
+    );
+    const url = new URL(connectionString);
+
+    expect(url.searchParams.get('sslmode')).toBe('require');
+    expect(url.searchParams.get('uselibpqcompat')).toBe('true');
+    expect(url.searchParams.get('schema')).toBe('public');
+  });
+
+  it('preserves stricter certificate verification modes', () => {
+    const connectionString = normalizeCloudflareDatabaseConnectionString(
+      'postgresql://runtime:secret@db.example.test/app?sslmode=verify-full'
+    );
+
+    expect(new URL(connectionString).searchParams.has('uselibpqcompat')).toBe(false);
   });
 });

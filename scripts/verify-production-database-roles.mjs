@@ -64,6 +64,7 @@ const report = {
   rowSecurity: [],
   runtimeDeletePrivileges: [],
   restrictedRuntimePrivileges: [],
+  restrictedRuntimeColumnPrivileges: [],
   governanceFunctionPrivileges: []
 };
 for (const [name, databaseUrl] of Object.entries(profiles)) {
@@ -151,6 +152,25 @@ try {
     })
   ) {
     throw new Error('运行时受限制表权限不符合最小 DML 要求');
+  }
+  report.restrictedRuntimeColumnPrivileges = (
+    await admin.query(
+      `SELECT column_name,
+              has_column_privilege(
+                'id_business_v2_runtime',
+                'public.id_business_v2_mail_query_attempts',
+                column_name,
+                'UPDATE'
+              ) AS can_update
+       FROM unnest(ARRAY['mailbox_id', 'outcome']::text[]) AS column_name
+       ORDER BY column_name`
+    )
+  ).rows;
+  if (
+    report.restrictedRuntimeColumnPrivileges.length !== 2 ||
+    report.restrictedRuntimeColumnPrivileges.some((row) => !row.can_update)
+  ) {
+    throw new Error('运行时邮箱查询记录缺少最小结果更新权限');
   }
   report.governanceFunctionPrivileges = (
     await admin.query(

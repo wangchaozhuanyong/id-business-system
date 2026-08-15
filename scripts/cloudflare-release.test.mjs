@@ -269,6 +269,13 @@ test('keeps workspace and managed mailbox privileges aligned across release tool
     ),
     'utf8'
   );
+  const reservationAccessMigration = await readFile(
+    new URL(
+      '../apps/api/prisma/migrations/20260815205000_atomic_security_reservation_runtime_access/migration.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
   const provisioner = await readFile(
     new URL('./provision-production-database-roles.mjs', import.meta.url),
     'utf8'
@@ -295,6 +302,15 @@ test('keeps workspace and managed mailbox privileges aligned across release tool
     migration,
     /GRANT SELECT, INSERT\s+ON TABLE public\.id_business_v2_mail_query_attempts/
   );
+  assert.match(
+    reservationAccessMigration,
+    /GRANT UPDATE \(mailbox_id, outcome\)\s+ON TABLE public\.id_business_v2_mail_query_attempts/
+  );
+  assert.match(
+    provisioner,
+    /GRANT UPDATE \(mailbox_id, outcome\) ON TABLE public\.id_business_v2_mail_query_attempts/
+  );
+  assert.match(verifier, /has_column_privilege\(/);
   assert.match(appendOnlyTables ?? '', /'id_business_v2_mail_query_attempts'/);
   assert.doesNotMatch(provisionedDeleteTables ?? '', /'id_business_v2_mail_query_attempts'/);
   assert.doesNotMatch(verifiedDeleteTables ?? '', /'id_business_v2_mail_query_attempts'/);

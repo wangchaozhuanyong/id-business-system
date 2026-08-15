@@ -395,7 +395,10 @@ export class SecurityService {
       if (ip) lockKeys.push(`security:login:ip:${ip}`);
       for (const key of lockKeys.sort()) {
         await client.$queryRaw`
-          SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+          SELECT 1::integer AS "locked"
+          FROM (
+            SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
+          ) AS "login_attempt_lock"
         `;
       }
 
@@ -1864,7 +1867,10 @@ export class SecurityService {
     const userId = this.normalizeRequiredUuid(userIdInput, 'userId');
     return this.prisma.$transaction(async (client) => {
       await client.$queryRaw`
-        SELECT pg_advisory_xact_lock(hashtextextended(${`security:mfa:${userId}`}, 0))
+        SELECT 1::integer AS "locked"
+        FROM (
+          SELECT pg_advisory_xact_lock(hashtextextended(${`security:mfa:${userId}`}, 0))
+        ) AS "mfa_state_lock"
       `;
       const state = await this.getUserMfaState(userId, client);
       return operation(state, client);

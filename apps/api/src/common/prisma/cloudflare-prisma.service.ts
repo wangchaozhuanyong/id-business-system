@@ -60,7 +60,7 @@ function createPrismaOptions(runtimeConnectionString?: string) {
 
   return {
     adapter: new PrismaPg({
-      connectionString,
+      connectionString: normalizeCloudflareDatabaseConnectionString(connectionString),
       max: 1,
       connectionTimeoutMillis: 10_000,
       idleTimeoutMillis: 30_000
@@ -71,4 +71,13 @@ function createPrismaOptions(runtimeConnectionString?: string) {
 function getSupabaseEdgePrismaClient() {
   supabaseEdgeClient ??= new PrismaClient(createPrismaOptions());
   return supabaseEdgeClient;
+}
+
+export function normalizeCloudflareDatabaseConnectionString(connectionString: string) {
+  const url = new URL(connectionString);
+  if (url.searchParams.get('sslmode')?.toLowerCase() === 'require') {
+    // pg currently treats "require" as certificate verification unless libpq semantics are explicit.
+    url.searchParams.set('uselibpqcompat', 'true');
+  }
+  return url.toString();
 }
