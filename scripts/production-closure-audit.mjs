@@ -108,6 +108,13 @@ async function readAuth(database) {
           AND NOT EXISTS (
             SELECT 1 FROM smoke_users smoke WHERE smoke.user_id = user_record.id
           )
+      ),
+      active_admins AS (
+        SELECT DISTINCT business_user.id
+        FROM active_business_users business_user
+        JOIN user_roles assignment ON assignment.user_id = business_user.id
+        JOIN roles role ON role.id = assignment.role_id
+        WHERE role.code = 'admin'
       )
       SELECT
         (SELECT count(*) FROM users)::int AS "totalUsers",
@@ -128,7 +135,25 @@ async function readAuth(database) {
         (SELECT count(*) FROM active_sessions session
           JOIN active_business_users business_user ON business_user.id = session.user_id
           WHERE session.revoked_at IS NULL AND session.expires_at > now())::int
-          AS "activeBusinessSessions"
+          AS "activeBusinessSessions",
+        (SELECT count(*) FROM active_admins)::int AS "activeAdmins",
+        (SELECT count(*) FROM active_admins admin_user
+          JOIN security_settings setting
+            ON setting.key = 'mfa_user_' || admin_user.id::text
+          WHERE NULLIF(setting.value ->> 'secretEncrypted', '') IS NOT NULL)::int
+          AS "adminsMfaConfigured",
+        (SELECT count(*) FROM active_admins admin_user
+          JOIN security_settings setting
+            ON setting.key = 'mfa_user_' || admin_user.id::text
+          WHERE setting.value ->> 'enabled' = 'true'
+            AND NULLIF(setting.value ->> 'secretEncrypted', '') IS NOT NULL)::int
+          AS "adminsMfaEnabled",
+        COALESCE((SELECT setting.value ->> 'enabled' = 'true'
+          FROM security_settings setting WHERE setting.key = 'mfa_settings'), false)
+          AS "mfaPolicyEnabled",
+        COALESCE((SELECT setting.value ->> 'requiredForAdmins' = 'true'
+          FROM security_settings setting WHERE setting.key = 'mfa_settings'), false)
+          AS "mfaRequiredForAdmins"
     `,
     [PRODUCTION_SMOKE_ROLE_CODE]
   );
