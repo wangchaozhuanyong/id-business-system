@@ -3,7 +3,7 @@
     class="v2-totp-drawer"
     :model-value="modelValue"
     title="在线计算 2FA 验证码"
-    size="min(620px, 100vw)"
+    size="min(620px, 100%)"
     append-to-body
     destroy-on-close
     :before-close="handleBeforeClose"
@@ -125,7 +125,15 @@ import {
   type V2TotpInputError
 } from './totp';
 
-const props = defineProps<{ modelValue: boolean }>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    syncServerTime?: boolean;
+  }>(),
+  {
+    syncServerTime: true
+  }
+);
 defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 const secretInput = ref('');
@@ -171,6 +179,11 @@ onBeforeUnmount(() => {
 
 async function calibrateTime() {
   timeState.value = 'checking';
+  if (!props.syncServerTime) {
+    timeState.value = getV2BusinessNowMs() === null ? 'local' : 'calibrated';
+    refreshCodes();
+    return;
+  }
   try {
     await synchronizeV2BusinessClock();
   } catch {
