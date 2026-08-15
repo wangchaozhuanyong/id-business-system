@@ -16,6 +16,7 @@ describe('personal workspace UI contract', () => {
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
   const mailMessageList = read('./V2MailMessageList.vue');
   const publicMailboxView = read('../../views/V2PublicMailboxView.vue');
+  const router = read('../../../v2-router.ts');
   const workspaceFixtureEntry = read('../../testing/workspace-design-fixture.ts');
   const workspaceApi = read('../../api/workspace.ts');
 
@@ -36,7 +37,7 @@ describe('personal workspace UI contract', () => {
   it('keeps tools and shortcut management in right-side drawers', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
-    expect(launcher).toContain('<V2MailViewerDrawer');
+    expect(launcher).not.toContain('<V2MailViewerDrawer');
     expect(shortcutDrawer).toContain('<el-drawer');
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
@@ -68,7 +69,7 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).not.toContain('v2-totp-result__timer');
   });
 
-  it('uses the first-party mailbox pool and never renders provider HTML', () => {
+  it('keeps the first-party mailbox implementation dormant until its runtime is deployed', () => {
     expect(mailViewerDrawer).toContain('查询由本系统验证');
     expect(mailViewerDrawer).toContain('@closed="clearAll"');
     expect(mailViewerDrawer).toContain('label="邮件查询"');
@@ -84,6 +85,9 @@ describe('personal workspace UI contract', () => {
     ).not.toMatch(/v-html|localStorage|sessionStorage/);
     expect(workspaceApi).toContain('/public/mailbox/query');
     expect(workspaceApi).not.toContain('icloud.thefindnet.xyz');
+    expect(launcher).not.toContain('邮件查看器');
+    expect(router).not.toContain('V2PublicMailboxView');
+    expect(router).not.toContain("path: '/mailbox'");
   });
 
   it('seeds the workspace fixture admin session before mounting child tools', () => {
