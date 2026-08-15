@@ -91,18 +91,6 @@
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
-          <button
-            class="v2-workspace-panel__tool is-mail-viewer"
-            type="button"
-            @click="openMailViewer"
-          >
-            <el-icon><Message /></el-icon>
-            <span>
-              <strong>邮件查看器</strong>
-              <small>谷歌与苹果邮箱查询管理</small>
-            </span>
-            <el-icon><ArrowRight /></el-icon>
-          </button>
         </div>
       </div>
     </section>
@@ -116,29 +104,19 @@
       :refresh="shortcutsQuery.refresh"
     />
     <V2TotpToolDrawer v-model="totpToolOpen" />
-    <V2MailViewerDrawer v-model="mailViewerOpen" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
-import {
-  ArrowRight,
-  Briefcase,
-  Key,
-  Message,
-  Plus,
-  Setting,
-  TopRight
-} from '@element-plus/icons-vue';
+import { ArrowRight, Briefcase, Key, Plus, Setting, TopRight } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
 import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
 
@@ -152,7 +130,6 @@ const panelOpen = ref(false);
 const workspaceActivated = ref(false);
 const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
-const mailViewerOpen = ref(false);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',
   scope: 'workspace',
@@ -189,12 +166,6 @@ function openSettings() {
 function openTotpTool() {
   panelOpen.value = false;
   totpToolOpen.value = true;
-  emit('requestCloseNavigation');
-}
-
-function openMailViewer() {
-  panelOpen.value = false;
-  mailViewerOpen.value = true;
   emit('requestCloseNavigation');
 }
 
