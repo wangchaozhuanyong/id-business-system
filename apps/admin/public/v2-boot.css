@@ -1,0 +1,138 @@
+:root {
+  --boot-font-sans:
+    'PingFang SC', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei',
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --boot-bg: #f5f7fa;
+  --boot-surface: #ffffff;
+  --boot-text: #172033;
+  --boot-text-soft: #66748a;
+  --boot-border: #dce3ec;
+  --boot-border-soft: #e9eef4;
+  --boot-primary: #2563eb;
+  --boot-primary-solid: #2563eb;
+  --boot-shadow: 0 1px 2px rgba(18, 32, 52, 0.06);
+  --boot-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html[data-v2-theme='dark'] {
+  --boot-bg: #0a111a;
+  --boot-surface: #111b27;
+  --boot-text: #edf2f8;
+  --boot-text-soft: #9ba8b9;
+  --boot-border: #2a3443;
+  --boot-border-soft: #222c39;
+  --boot-primary: #4f83f3;
+  --boot-primary-solid: #3564c4;
+  --boot-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--boot-bg);
+  color: var(--boot-text);
+  font-family: var(--boot-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+.v2-boot {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+}
+
+.v2-boot__panel {
+  display: grid;
+  width: min(100%, 420px);
+  justify-items: center;
+  gap: 18px;
+  padding: 40px 34px;
+  border: 1px solid var(--boot-border);
+  border-radius: 12px;
+  background: var(--boot-surface);
+  box-shadow: var(--boot-shadow);
+  text-align: center;
+}
+
+.v2-boot__mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--boot-primary-solid);
+  color: #fff;
+  font-weight: 800;
+}
+
+.v2-boot__copy strong {
+  color: var(--boot-text);
+  font-size: 17px;
+}
+
+.v2-boot__status {
+  margin: 8px 0 0;
+  color: var(--boot-text-soft);
+  line-height: 1.65;
+}
+
+.v2-boot__progress {
+  width: 120px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--boot-border-soft);
+}
+
+.v2-boot__progress::after {
+  display: block;
+  width: 45%;
+  height: 100%;
+  border-radius: inherit;
+  animation: v2-boot-progress 1s var(--boot-ease) infinite alternate;
+  background: var(--boot-primary);
+  content: '';
+}
+
+.v2-boot__retry {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--boot-primary);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+@keyframes v2-boot-progress {
+  from {
+    transform: translateX(-70%);
+  }
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-boot__progress::after {
+    animation: none;
+    transform: none;
+  }
+}

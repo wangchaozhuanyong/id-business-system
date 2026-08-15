@@ -334,6 +334,7 @@ function validateStartupArchitecture() {
     bootGate: 'apps/admin/src/v2/components/V2BootGate.vue',
     entry: 'apps/admin/src/main.ts',
     html: 'apps/admin/index.html',
+    bootScript: 'apps/admin/public/v2-boot.js',
     layout: 'apps/admin/src/v2/layouts/V2AdminLayout.vue',
     performance: 'apps/admin/src/runtime/performance.ts',
     query: 'apps/admin/src/v2/composables/useV2Query.ts',
@@ -358,10 +359,13 @@ function validateStartupArchitecture() {
   }
 
   requirePatterns(files.html, sources.html, [
-    [/id-business-v2-theme/, '缺少同步主题初始化'],
+    [/src="\/v2-boot\.js"/, 'HTML 没有加载外部启动恢复脚本'],
     [/class="v2-boot"/, '缺少路由中性的 HTML 启动占位'],
-    [/正在安全打开页面/, 'HTML 启动占位没有使用统一安全加载文案'],
-    [/vite:preloadError/, 'HTML 没有覆盖核心模块加载失败']
+    [/正在安全打开页面/, 'HTML 启动占位没有使用统一安全加载文案']
+  ]);
+  requirePatterns(files.bootScript, sources.bootScript, [
+    [/id-business-v2-theme/, '外部启动脚本缺少同步主题初始化'],
+    [/vite:preloadError/, '外部启动脚本没有覆盖核心模块加载失败']
   ]);
   forbidPatterns(files.html, sources.html, [
     [/v2-boot__sidebar/, 'HTML 启动占位不得伪造工作区侧边栏'],
@@ -467,7 +471,8 @@ function validateStartupArchitecture() {
   requirePatterns(files.credential, sources.credential, [
     [/apple_business_auth_v2/, '会话凭据没有收敛为单一原子 V2 记录'],
     [/tokenRevision/, '原子凭据缺少 token 修订隔离'],
-    [/typeof localStorage === 'undefined'/, '凭据存储没有兼容 SSR 和无存储测试环境']
+    [/getBrowserStorage\('sessionStorage'\)/, '凭据没有使用标签页级会话存储'],
+    [/const storage = globalThis\[name\]/, '凭据存储没有兼容 SSR 和无存储测试环境']
   ]);
   requirePatterns(files.requestPolicy, sources.requestPolicy, [
     [/ENDPOINT_POLICIES/, '会话例外没有通过结构化 endpoint registry 声明'],

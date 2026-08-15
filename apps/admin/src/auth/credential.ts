@@ -35,45 +35,62 @@ export function createStoredCredential(
 
 export function readStoredCredential(): StoredCredentialV2 | null {
   const storage = getCredentialStorage();
-  if (!storage) return null;
-  const stored = readJson(AUTH_CREDENTIAL_STORAGE_KEY);
+  const persistentStorage = getPersistentStorage();
+  if (!storage) {
+    clearPersistentCredentialKeys(persistentStorage);
+    return null;
+  }
+
+  const stored = readJson(storage, AUTH_CREDENTIAL_STORAGE_KEY);
   if (isStoredCredentialV2(stored)) {
-    clearLegacyCredentialKeys();
+    clearLegacyCredentialKeys(storage);
+    clearPersistentCredentialKeys(persistentStorage);
     return stored;
   }
-  if (stored !== null) storage.removeItem(AUTH_CREDENTIAL_STORAGE_KEY);
+  if (stored !== null) removeStorageValue(storage, AUTH_CREDENTIAL_STORAGE_KEY);
 
-  const legacyToken = storage.getItem(LEGACY_TOKEN_STORAGE_KEY)?.trim() ?? '';
-  const legacyUserValue = readJson(LEGACY_CURRENT_USER_STORAGE_KEY);
-  const legacyUser = isCurrentUser(legacyUserValue) ? legacyUserValue : null;
-  clearLegacyCredentialKeys();
-  if (!legacyToken || !legacyUser) return null;
+  const persistedCredential = readJson(persistentStorage, AUTH_CREDENTIAL_STORAGE_KEY);
+  if (isStoredCredentialV2(persistedCredential)) {
+    clearPersistentCredentialKeys(persistentStorage);
+    return writeStoredCredential(persistedCredential) ? persistedCredential : null;
+  }
 
-  const migrated = createStoredCredential(legacyToken, legacyUser);
-  writeStoredCredential(migrated);
-  return migrated;
+  const legacyCredential = readLegacyCredential(persistentStorage) ?? readLegacyCredential(storage);
+  clearLegacyCredentialKeys(storage);
+  clearPersistentCredentialKeys(persistentStorage);
+  if (!legacyCredential) return null;
+
+  const migrated = createStoredCredential(legacyCredential.token, legacyCredential.user);
+  return writeStoredCredential(migrated) ? migrated : null;
 }
 
 export function writeStoredCredential(credential: StoredCredentialV2) {
   const storage = getCredentialStorage();
+  clearPersistentCredentialKeys(getPersistentStorage());
   if (!storage) return false;
-  storage.setItem(AUTH_CREDENTIAL_STORAGE_KEY, JSON.stringify(credential));
-  clearLegacyCredentialKeys();
-  return true;
+  try {
+    storage.setItem(AUTH_CREDENTIAL_STORAGE_KEY, JSON.stringify(credential));
+    clearLegacyCredentialKeys(storage);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clearStoredCredential(expected?: { credentialId: string; tokenRevision?: number }) {
   const storage = getCredentialStorage();
+  const persistentStorage = getPersistentStorage();
+  clearPersistentCredentialKeys(persistentStorage);
   if (!storage) return true;
-  const stored = readJson(AUTH_CREDENTIAL_STORAGE_KEY);
+  const stored = readJson(storage, AUTH_CREDENTIAL_STORAGE_KEY);
   if (expected && isStoredCredentialV2(stored)) {
     if (stored.credentialId !== expected.credentialId) return false;
     if (expected.tokenRevision !== undefined && stored.tokenRevision !== expected.tokenRevision) {
       return false;
     }
   }
-  storage.removeItem(AUTH_CREDENTIAL_STORAGE_KEY);
-  clearLegacyCredentialKeys();
+  removeStorageValue(storage, AUTH_CREDENTIAL_STORAGE_KEY);
+  clearLegacyCredentialKeys(storage);
   return true;
 }
 
@@ -132,10 +149,8 @@ function isStoredCredentialV2(value: unknown): value is StoredCredentialV2 {
   );
 }
 
-function readJson(key: string) {
-  const storage = getCredentialStorage();
-  if (!storage) return null;
-  const raw = storage.getItem(key);
+function readJson(storage: Storage | null, key: string) {
+  const raw = readStorageValue(storage, key);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as unknown;
@@ -144,17 +159,52 @@ function readJson(key: string) {
   }
 }
 
-function clearLegacyCredentialKeys() {
-  const storage = getCredentialStorage();
+function readLegacyCredential(storage: Storage | null) {
+  const token = readStorageValue(storage, LEGACY_TOKEN_STORAGE_KEY)?.trim() ?? '';
+  const user = readJson(storage, LEGACY_CURRENT_USER_STORAGE_KEY);
+  return token && isCurrentUser(user) ? { token, user } : null;
+}
+
+function readStorageValue(storage: Storage | null, key: string) {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function removeStorageValue(storage: Storage | null, key: string) {
   if (!storage) return;
-  storage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
-  storage.removeItem(LEGACY_CURRENT_USER_STORAGE_KEY);
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Storage cleanup is best-effort when the browser denies access.
+  }
+}
+
+function clearLegacyCredentialKeys(storage: Storage | null) {
+  removeStorageValue(storage, LEGACY_TOKEN_STORAGE_KEY);
+  removeStorageValue(storage, LEGACY_CURRENT_USER_STORAGE_KEY);
+}
+
+function clearPersistentCredentialKeys(storage: Storage | null) {
+  removeStorageValue(storage, AUTH_CREDENTIAL_STORAGE_KEY);
+  clearLegacyCredentialKeys(storage);
 }
 
 function getCredentialStorage(): Storage | null {
-  if (typeof localStorage === 'undefined') return null;
+  return getBrowserStorage('sessionStorage');
+}
+
+function getPersistentStorage(): Storage | null {
+  return getBrowserStorage('localStorage');
+}
+
+function getBrowserStorage(name: 'localStorage' | 'sessionStorage'): Storage | null {
   try {
-    return localStorage;
+    const storage = globalThis[name];
+    return typeof storage === 'undefined' ? null : storage;
   } catch {
     return null;
   }

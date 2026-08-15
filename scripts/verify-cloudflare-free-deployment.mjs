@@ -1,4 +1,5 @@
 import process from 'node:process';
+import { createHmac, randomUUID } from 'node:crypto';
 import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE } from './lib/cloudflare-release.mjs';
 
 const baseUrl = process.argv
@@ -21,7 +22,7 @@ const publicEndpoints = apiOnly
   : ['/', '/api/health/live', '/api/health/ready'];
 const checks = [];
 for (const endpoint of publicEndpoints) {
-  const response = await fetch(`${baseUrl}${endpoint}`);
+  const response = await fetch(`${baseUrl}${endpoint}`, { headers: requestHeaders() });
   checks.push({ path: endpoint, status: response.status });
   if (!response.ok) {
     throw new Error(`${endpoint} 公共健康检查失败，HTTP ${response.status}`);
@@ -30,9 +31,9 @@ for (const endpoint of publicEndpoints) {
 
 const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
   method: 'POST',
-  headers: {
+  headers: requestHeaders({
     'content-type': 'application/json'
-  },
+  }),
   body: JSON.stringify({ username, password })
 });
 const loginPayload = await readJson(loginResponse);
@@ -56,9 +57,9 @@ checks.push({ path: '/api/auth/login', status: loginResponse.status });
 
 for (const endpoint of endpoints) {
   const response = await fetch(`${baseUrl}${endpoint}`, {
-    headers: {
+    headers: requestHeaders({
       authorization: `Bearer ${accessToken}`
-    }
+    })
   });
   checks.push({ path: endpoint, status: response.status });
 
@@ -85,10 +86,10 @@ for (const endpoint of endpoints) {
 
 const deniedFinanceWrite = await fetch(`${baseUrl}/api/id-business-v2/finance/accounts`, {
   method: 'POST',
-  headers: {
+  headers: requestHeaders({
     authorization: `Bearer ${accessToken}`,
     'content-type': 'application/json'
-  },
+  }),
   body: JSON.stringify({
     currency: 'CNY',
     name: 'production-smoke-must-not-create'
@@ -106,9 +107,9 @@ if (deniedFinanceWrite.status !== 403) {
 
 const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
   method: 'POST',
-  headers: {
+  headers: requestHeaders({
     authorization: `Bearer ${accessToken}`
-  }
+  })
 });
 checks.push({ path: '/api/auth/logout', status: logoutResponse.status });
 if (!logoutResponse.ok) {
@@ -135,4 +136,23 @@ async function readJson(response) {
   } catch {
     return null;
   }
+}
+
+function requestHeaders(headers = {}) {
+  if (!apiOnly) return headers;
+  const secret = process.env.V2_TRUSTED_PROXY_SECRET?.trim() ?? '';
+  if (secret.length < 32) throw new Error('缺少 V2_TRUSTED_PROXY_SECRET，无法直连巡检 API');
+  const clientIp = '127.0.0.1';
+  const requestId = `release-smoke-${randomUUID()}`;
+  const timestamp = String(Date.now());
+  const signature = createHmac('sha256', secret)
+    .update(`${timestamp}\n${requestId}\n${clientIp}`)
+    .digest('hex');
+  return {
+    ...headers,
+    'x-request-id': requestId,
+    'x-v2-client-ip': clientIp,
+    'x-v2-proxy-signature': signature,
+    'x-v2-proxy-timestamp': timestamp
+  };
 }

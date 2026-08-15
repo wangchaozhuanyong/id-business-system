@@ -29,6 +29,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'JWT_SECRET',
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
+      'V2_TRUSTED_PROXY_SECRET',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ],
@@ -38,6 +39,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'JWT_SECRET',
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
+      'V2_TRUSTED_PROXY_SECRET',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ]
@@ -83,6 +85,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'JWT_SECRET',
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
+      'V2_TRUSTED_PROXY_SECRET',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ],
@@ -92,6 +95,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'JWT_SECRET',
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
+      'V2_TRUSTED_PROXY_SECRET',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ]

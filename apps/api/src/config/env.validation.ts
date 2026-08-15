@@ -18,6 +18,7 @@ export interface RawEnv {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   SUPABASE_SECRET_KEY?: string;
   SUPABASE_EDGE_FUNCTION?: string;
+  V2_TRUSTED_PROXY_SECRET?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP?: string;
   ID_BUSINESS_V2_FREE_MANUAL_MODE?: string;
@@ -174,6 +175,9 @@ function validateSecrets(config: RawEnv, nodeEnv: RuntimeEnv, authProvider: Auth
 
   if (authProvider === 'local' && !isStrongSecret(config.JWT_SECRET)) {
     throw new Error('JWT_SECRET must contain at least 32 non-placeholder characters');
+  }
+  if (config.SUPABASE_EDGE_FUNCTION === 'true' && !isStrongSecret(config.V2_TRUSTED_PROXY_SECRET)) {
+    throw new Error('V2_TRUSTED_PROXY_SECRET must contain at least 32 non-placeholder characters');
   }
 }
 

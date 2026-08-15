@@ -12,6 +12,7 @@ const secrets = {
   JWT_SECRET: 'jwt-secret',
   FIELD_ENCRYPTION_KEY: 'field-key',
   HASH_SECRET: 'hash-secret',
+  V2_TRUSTED_PROXY_SECRET: 'trusted-proxy-secret',
   SMOKE_TEST_USERNAME: 'smoke-user',
   SMOKE_TEST_PASSWORD: 'smoke-password'
 };
@@ -65,6 +66,7 @@ test('deploy receives runtime credential but never migration or audit credential
   assert.equal(environment.AUDIT_DATABASE_URL, undefined);
   assert.equal(environment.MIGRATION_DATABASE_URL, undefined);
   assert.equal(environment.JWT_SECRET, secrets.JWT_SECRET);
+  assert.equal(environment.V2_TRUSTED_PROXY_SECRET, secrets.V2_TRUSTED_PROXY_SECRET);
 });
 
 test('data maintenance receives migration credential only and allows explicit arguments', () => {

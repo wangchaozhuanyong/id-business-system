@@ -114,6 +114,7 @@ describe('auth session gate', () => {
       }
     );
     vi.stubGlobal('localStorage', new MemoryStorage());
+    vi.stubGlobal('sessionStorage', new MemoryStorage());
     vi.stubGlobal('window', new EventTarget());
     vi.stubGlobal('BroadcastChannel', undefined);
     setActivePinia(createPinia());
@@ -131,9 +132,9 @@ describe('auth session gate', () => {
     await expect(authStore.ensureSessionReady()).resolves.toBe('ready');
     expect(authApiMocks.me).toHaveBeenCalledTimes(1);
     expect(authStore.user).toEqual(verifiedUser);
-    expect(JSON.parse(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').userCache).toEqual(
-      verifiedUser
-    );
+    expect(
+      JSON.parse(sessionStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').userCache
+    ).toEqual(verifiedUser);
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
   });
@@ -194,6 +195,7 @@ describe('auth session gate', () => {
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
+    expect(sessionStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
   });
 
   it('clears both the Supabase and local sessions after changing the password', async () => {
@@ -230,6 +232,7 @@ describe('auth session gate', () => {
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(CURRENT_USER_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
+    expect(sessionStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
   });
 
   it('keeps the business identity ready when Supabase refreshes the same auth user token', async () => {
@@ -255,9 +258,10 @@ describe('auth session gate', () => {
     expect(authStore.session.kind).toBe('ready');
     expect(authStore.user).toEqual(verifiedUser);
     expect(authStore.token).toBe('refreshed-access-token');
-    expect(JSON.parse(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').token).toBe(
+    expect(JSON.parse(sessionStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY) ?? '{}').token).toBe(
       'refreshed-access-token'
     );
+    expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
     expect(authApiMocks.me).toHaveBeenCalledTimes(2);
   });

@@ -41,6 +41,7 @@ describe('HTTP identity boundary', () => {
 
   it('rejects a late successful response from an older token revision', async () => {
     vi.stubGlobal('localStorage', new MemoryStorage());
+    vi.stubGlobal('sessionStorage', new MemoryStorage());
     writeStoredCredential(createStoredCredential('token-1', null));
     sessionCoordinator.hydrate();
 

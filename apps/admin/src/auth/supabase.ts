@@ -6,6 +6,7 @@ import {
   type Subscription
 } from '@supabase/supabase-js';
 import { getSupabaseAuthConfig } from '@/auth/supabase-config';
+import { createSupabaseAuthStorage, getSupabaseAuthStorageKey } from '@/auth/supabase-storage';
 
 const supabaseConfig = getSupabaseAuthConfig();
 
@@ -14,7 +15,9 @@ const supabase = supabaseConfig
       auth: {
         autoRefreshToken: true,
         detectSessionInUrl: false,
-        persistSession: true
+        persistSession: true,
+        storage: createSupabaseAuthStorage(supabaseConfig.url),
+        storageKey: getSupabaseAuthStorageKey(supabaseConfig.url)
       }
     })
   : null;

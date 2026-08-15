@@ -23,6 +23,7 @@ const validEnvironment = {
   JWT_SECRET: 'j'.repeat(32),
   FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
   HASH_SECRET: 'h'.repeat(32),
+  V2_TRUSTED_PROXY_SECRET: 't'.repeat(32),
   SMOKE_TEST_USERNAME: 'production_release_smoke',
   SMOKE_TEST_PASSWORD: 'p'.repeat(24)
 };
@@ -136,8 +137,10 @@ test('deploys and verifies Supabase API before switching the Cloudflare proxy', 
   assert.notEqual(apiVerification, -1);
   assert.notEqual(cloudflareDeploy, -1);
   assert.match(source, /'--use-docker'/);
+  assert.match(source, /'secret',\s*\n\s*'bulk'/);
   assert.ok(supabaseDeploy < apiVerification);
   assert.ok(apiVerification < cloudflareDeploy);
+  assert.match(source, /V2_TRUSTED_PROXY_SECRET/);
 });
 
 test('keeps Supabase Edge authentication configurable for the current local accounts', async () => {
@@ -180,6 +183,10 @@ test('keeps production migrations behind a backup fingerprint and clean main gat
   assert.match(source, /branch !== 'main'/);
   assert.match(source, /head !== originHead/);
   assert.match(source, /prisma:migrate:deploy/);
+  assert.match(source, /FIELD_ENCRYPTION_KEY/);
+  assert.match(source, /backfill:user-phone/);
+  assert.match(source, /userPhoneEncryption: 'verified'/);
+  assert.ok(source.indexOf('prisma:migrate:deploy') < source.indexOf('backfill:user-phone'));
   assert.match(source, /RECOVERABLE_ROLLED_BACK_MIGRATIONS/);
   assert.match(source, /--resolve-rolled-back=/);
   assert.match(source, /finished_at IS NULL/);
