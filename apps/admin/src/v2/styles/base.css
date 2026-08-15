@@ -131,6 +131,26 @@
   --color-primary: var(--v3-primary);
   --radius-md: var(--v3-radius);
   --shadow-panel: var(--v3-shadow-md);
+  --v2-bg: var(--v3-bg);
+  --v2-surface: var(--v3-surface);
+  --v2-surface-muted: var(--v3-surface-2);
+  --v2-surface-soft: var(--v3-surface-2);
+  --v2-surface-hover: var(--v3-surface-hover);
+  --v2-text: var(--v3-text);
+  --v2-text-soft: var(--v3-text-soft);
+  --v2-border: var(--v3-border);
+  --v2-border-soft: var(--v3-border-soft);
+  --v2-accent: var(--v3-primary);
+  --v2-accent-solid: var(--v3-primary-solid);
+  --v2-on-accent-solid: var(--v3-on-primary-solid);
+  --v2-accent-soft: var(--v3-primary-soft);
+  --v2-success: var(--v3-success);
+  --v2-success-solid: var(--v3-success-solid);
+  --v2-on-success-solid: var(--v3-on-success-solid);
+  --v2-danger: var(--v3-danger);
+  --v2-danger-solid: var(--v3-danger-solid);
+  --v2-on-danger-solid: var(--v3-on-danger-solid);
+  --v2-focus: var(--v3-focus-ring);
 }
 
 html[data-v2-theme='dark'] {
