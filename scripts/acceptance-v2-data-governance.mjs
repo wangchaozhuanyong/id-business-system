@@ -103,6 +103,7 @@ try {
     'id_business_v2_customer_tags',
     'id_business_v2_sensitive_display_policies',
     'id_business_v2_user_table_preferences',
+    'id_business_v2_workspace_shortcuts',
     'ip_whitelists',
     'role_permissions',
     'user_roles'
