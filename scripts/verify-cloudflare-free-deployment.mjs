@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { createHmac, randomUUID } from 'node:crypto';
 import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE } from './lib/cloudflare-release.mjs';
+import { fetchWithDeploymentRetry } from './lib/deployment-smoke-retry.mjs';
 
 const baseUrl = process.argv
   .find((argument, index) => index >= 2 && !argument.startsWith('--'))
@@ -22,14 +23,16 @@ const publicEndpoints = apiOnly
   : ['/', '/api/health/live', '/api/health/ready'];
 const checks = [];
 for (const endpoint of publicEndpoints) {
-  const response = await fetch(`${baseUrl}${endpoint}`, { headers: requestHeaders() });
+  const response = await fetchWithDeploymentRetry(`${baseUrl}${endpoint}`, {
+    headers: requestHeaders()
+  });
   checks.push({ path: endpoint, status: response.status });
   if (!response.ok) {
     throw new Error(`${endpoint} 公共健康检查失败，HTTP ${response.status}`);
   }
 }
 
-const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
+const loginResponse = await fetchWithDeploymentRetry(`${baseUrl}/api/auth/login`, {
   method: 'POST',
   headers: requestHeaders({
     'content-type': 'application/json'
@@ -56,7 +59,7 @@ const endpoints = [
 checks.push({ path: '/api/auth/login', status: loginResponse.status });
 
 for (const endpoint of endpoints) {
-  const response = await fetch(`${baseUrl}${endpoint}`, {
+  const response = await fetchWithDeploymentRetry(`${baseUrl}${endpoint}`, {
     headers: requestHeaders({
       authorization: `Bearer ${accessToken}`
     })
@@ -84,17 +87,20 @@ for (const endpoint of endpoints) {
   }
 }
 
-const deniedFinanceWrite = await fetch(`${baseUrl}/api/id-business-v2/finance/accounts`, {
-  method: 'POST',
-  headers: requestHeaders({
-    authorization: `Bearer ${accessToken}`,
-    'content-type': 'application/json'
-  }),
-  body: JSON.stringify({
-    currency: 'CNY',
-    name: 'production-smoke-must-not-create'
-  })
-});
+const deniedFinanceWrite = await fetchWithDeploymentRetry(
+  `${baseUrl}/api/id-business-v2/finance/accounts`,
+  {
+    method: 'POST',
+    headers: requestHeaders({
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json'
+    }),
+    body: JSON.stringify({
+      currency: 'CNY',
+      name: 'production-smoke-must-not-create'
+    })
+  }
+);
 checks.push({
   path: '/api/id-business-v2/finance/accounts [denied-write]',
   status: deniedFinanceWrite.status
@@ -105,7 +111,7 @@ if (deniedFinanceWrite.status !== 403) {
   );
 }
 
-const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
+const logoutResponse = await fetchWithDeploymentRetry(`${baseUrl}/api/auth/logout`, {
   method: 'POST',
   headers: requestHeaders({
     authorization: `Bearer ${accessToken}`

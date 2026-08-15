@@ -16,6 +16,7 @@ import {
   validateReleaseEnvironment,
   validateWranglerConfig
 } from './lib/cloudflare-release.mjs';
+import { fetchWithDeploymentRetry } from './lib/deployment-smoke-retry.mjs';
 
 const validEnvironment = {
   DATABASE_URL:
@@ -58,6 +59,59 @@ test('forces the Cloudflare production frontend to use version polling', () => {
   assert.equal(buildEnvironment.VITE_API_BASE_URL, '/api');
   assert.equal(buildEnvironment.VITE_V2_REALTIME_CHANGES_ENABLED, 'false');
   assert.equal(buildEnvironment.KEEP_ME, 'yes');
+});
+
+test('retries only transient deployment responses with a bounded attempt count', async () => {
+  const statuses = [503, 502, 200];
+  const attempts = [];
+  const delays = [];
+  const response = await fetchWithDeploymentRetry('https://example.com/health', undefined, {
+    fetchImpl: async () => {
+      const status = statuses.shift();
+      attempts.push(status);
+      return new Response(null, { status });
+    },
+    maxAttempts: 5,
+    retryDelayMs: 10,
+    sleep: async (delayMs) => delays.push(delayMs)
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(attempts, [503, 502, 200]);
+  assert.deepEqual(delays, [10, 10]);
+});
+
+test('does not retry deterministic smoke failures', async () => {
+  let attempts = 0;
+  const response = await fetchWithDeploymentRetry('https://example.com/login', undefined, {
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response(null, { status: 403 });
+    },
+    sleep: async () => assert.fail('deterministic failures must not wait')
+  });
+
+  assert.equal(response.status, 403);
+  assert.equal(attempts, 1);
+});
+
+test('retries transient network failures and preserves the final error', async () => {
+  const expected = new Error('temporary network failure');
+  let attempts = 0;
+
+  await assert.rejects(
+    fetchWithDeploymentRetry('https://example.com/health', undefined, {
+      fetchImpl: async () => {
+        attempts += 1;
+        throw expected;
+      },
+      maxAttempts: 3,
+      retryDelayMs: 0,
+      sleep: async () => undefined
+    }),
+    (error) => error === expected
+  );
+  assert.equal(attempts, 3);
 });
 
 test('pins the Supabase function to the production database region', () => {
