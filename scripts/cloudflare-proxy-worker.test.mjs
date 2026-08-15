@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import worker, {
   resolveFunctionRegion,
@@ -7,6 +8,17 @@ import worker, {
 
 const apiBaseUrl = 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api';
 const functionRegion = 'ap-northeast-1';
+const trustedProxySecret = 'trusted-proxy-secret-for-worker-tests-1234';
+const clientIp = '203.0.113.25';
+
+function workerEnvironment(overrides = {}) {
+  return {
+    SUPABASE_API_BASE_URL: apiBaseUrl,
+    SUPABASE_FUNCTION_REGION: functionRegion,
+    V2_TRUSTED_PROXY_SECRET: trustedProxySecret,
+    ...overrides
+  };
+}
 
 test('maps same-origin API paths and query strings to the fixed Supabase function', () => {
   const target = resolveTargetUrl(
@@ -45,12 +57,18 @@ test('forwards method, body, authorization and request correlation without expos
         method: 'POST',
         headers: {
           Authorization: 'Bearer test-token',
+          'CF-Connecting-IP': clientIp,
           'Content-Type': 'application/json',
-          'X-Request-Id': 'client-request-1234'
+          'X-Forwarded-For': '198.51.100.10',
+          'X-Real-Ip': '198.51.100.11',
+          'X-Request-Id': 'client-request-1234',
+          'X-V2-Client-Ip': '198.51.100.12',
+          'X-V2-Proxy-Signature': '0'.repeat(64),
+          'X-V2-Proxy-Timestamp': '1786816800000'
         },
         body: JSON.stringify({ name: '测试账户' })
       }),
-      { SUPABASE_API_BASE_URL: apiBaseUrl, SUPABASE_FUNCTION_REGION: functionRegion }
+      workerEnvironment()
     );
 
     assert.equal(response.status, 201);
@@ -66,6 +84,15 @@ test('forwards method, body, authorization and request correlation without expos
     assert.equal(capturedRequest.headers.get('x-forwarded-proto'), 'https');
     assert.equal(capturedRequest.headers.get('x-request-id'), 'client-request-1234');
     assert.equal(capturedRequest.headers.get('x-region'), functionRegion);
+    assert.equal(capturedRequest.headers.get('cf-connecting-ip'), null);
+    assert.equal(capturedRequest.headers.get('x-forwarded-for'), null);
+    assert.equal(capturedRequest.headers.get('x-real-ip'), null);
+    assert.equal(capturedRequest.headers.get('x-v2-client-ip'), clientIp);
+    const signedAt = capturedRequest.headers.get('x-v2-proxy-timestamp');
+    const expectedSignature = createHmac('sha256', trustedProxySecret)
+      .update(`${signedAt}\nclient-request-1234\n${clientIp}`)
+      .digest('hex');
+    assert.equal(capturedRequest.headers.get('x-v2-proxy-signature'), expectedSignature);
     assert.deepEqual(await capturedRequest.json(), { name: '测试账户' });
   } finally {
     globalThis.fetch = originalFetch;
@@ -87,9 +114,9 @@ test('owns Supabase region routing and rejects invalid deployment values', async
   try {
     await worker.fetch(
       new Request('https://admin.example.test/api/health/live', {
-        headers: { 'x-region': 'us-east-1' }
+        headers: { 'cf-connecting-ip': clientIp, 'x-region': 'us-east-1' }
       }),
-      { SUPABASE_API_BASE_URL: apiBaseUrl }
+      workerEnvironment({ SUPABASE_FUNCTION_REGION: '' })
     );
     assert.equal(capturedRequest.headers.get('x-region'), null);
   } finally {
@@ -107,8 +134,10 @@ test('returns a stable retryable 503 when Supabase cannot be reached', async () 
 
   try {
     const response = await worker.fetch(
-      new Request('https://admin.example.test/api/health/ready'),
-      { SUPABASE_API_BASE_URL: apiBaseUrl }
+      new Request('https://admin.example.test/api/health/ready', {
+        headers: { 'cf-connecting-ip': clientIp }
+      }),
+      workerEnvironment()
     );
     const body = await response.json();
 

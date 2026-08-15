@@ -28,6 +28,9 @@ requireHttps('APP_PUBLIC_URL');
 requireEnum('AUTH_PROVIDER', ['local', 'supabase']);
 requireSecret('FIELD_ENCRYPTION_KEY');
 requireSecret('HASH_SECRET');
+if (values.get('SUPABASE_EDGE_FUNCTION') === 'true') {
+  requireSecret('V2_TRUSTED_PROXY_SECRET');
+}
 
 if (values.get('AUTH_PROVIDER') === 'local') {
   requireSecret('JWT_SECRET');

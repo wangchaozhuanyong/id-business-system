@@ -50,6 +50,28 @@ describe('validateEnv', () => {
     ).not.toThrow();
   });
 
+  it('requires a strong trusted proxy secret for the production Edge runtime', () => {
+    const productionEdgeEnv = {
+      NODE_ENV: 'production',
+      APP_PUBLIC_URL: 'https://admin.company.io',
+      CORS_ORIGIN: 'https://admin.company.io',
+      DATABASE_URL: 'postgresql://user:password@db.company.io/app',
+      AUTH_PROVIDER: 'local',
+      JWT_SECRET: 'j'.repeat(32),
+      FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
+      HASH_SECRET: 'h'.repeat(32),
+      SUPABASE_EDGE_FUNCTION: 'true',
+      ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: 'false'
+    };
+
+    expect(() => validateEnv(productionEdgeEnv)).toThrow(
+      'V2_TRUSTED_PROXY_SECRET must contain at least 32 non-placeholder characters'
+    );
+    expect(() =>
+      validateEnv({ ...productionEdgeEnv, V2_TRUSTED_PROXY_SECRET: 'p'.repeat(32) })
+    ).not.toThrow();
+  });
+
   it('rejects removed runtime targets', () => {
     expect(() =>
       validateEnv({

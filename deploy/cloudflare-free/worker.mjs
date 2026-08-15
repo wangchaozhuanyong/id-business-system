@@ -29,6 +29,7 @@ export default {
       upstreamHeaders.set('x-forwarded-host', incomingUrl.host);
       upstreamHeaders.set('x-forwarded-proto', incomingUrl.protocol.replace(':', ''));
       upstreamHeaders.set('x-request-id', requestId);
+      await applyTrustedClientIpHeaders(upstreamHeaders, request, env, requestId);
       const functionRegion = resolveFunctionRegion(env.SUPABASE_FUNCTION_REGION);
       if (functionRegion) {
         upstreamHeaders.set('x-region', functionRegion);
@@ -117,6 +118,50 @@ export function resolveFunctionRegion(value) {
 function resolveRequestId(value) {
   const normalized = String(value ?? '').trim();
   return /^[A-Za-z0-9._:-]{8,128}$/.test(normalized) ? normalized : crypto.randomUUID();
+}
+
+async function applyTrustedClientIpHeaders(headers, request, env, requestId) {
+  const secret = String(env.V2_TRUSTED_PROXY_SECRET ?? '').trim();
+  const clientIp = String(request.headers.get('cf-connecting-ip') ?? '').trim();
+  if (secret.length < 32) throw new Error('V2_TRUSTED_PROXY_SECRET is invalid');
+  if (!/^[0-9A-Fa-f:.]{2,45}$/.test(clientIp)) {
+    throw new Error('Cloudflare client IP is unavailable');
+  }
+
+  const timestamp = String(Date.now());
+  const signature = await createClientIpSignature(secret, timestamp, requestId, clientIp);
+  for (const name of [
+    'cf-connecting-ip',
+    'forwarded',
+    'x-forwarded-for',
+    'x-real-ip',
+    'x-v2-client-ip',
+    'x-v2-proxy-timestamp',
+    'x-v2-proxy-signature'
+  ]) {
+    headers.delete(name);
+  }
+  headers.set('x-v2-client-ip', clientIp);
+  headers.set('x-v2-proxy-timestamp', timestamp);
+  headers.set('x-v2-proxy-signature', signature);
+}
+
+async function createClientIpSignature(secret, timestamp, requestId, clientIp) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${timestamp}\n${requestId}\n${clientIp}`)
+  );
+  return [...new Uint8Array(signature)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function logProxyFailure(input) {

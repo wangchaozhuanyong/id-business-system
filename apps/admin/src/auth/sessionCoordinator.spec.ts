@@ -170,6 +170,7 @@ describe('SessionCoordinator', () => {
     resetSessionCoordinatorForTests();
     vi.clearAllMocks();
     vi.stubGlobal('localStorage', new MemoryStorage());
+    vi.stubGlobal('sessionStorage', new MemoryStorage());
     vi.stubGlobal('window', new EventTarget());
     vi.stubGlobal('navigator', {});
     vi.stubGlobal('BroadcastChannel', TestBroadcastChannel);
@@ -472,8 +473,7 @@ describe('SessionCoordinator', () => {
     now += 1_000;
   });
 
-  it('backs off when another tab wins the fallback lease claim', async () => {
-    let credential = createStoredCredential('lease-token', null);
+  it('retries locally when another tab wins the fallback lease without sharing credentials', async () => {
     let leaseStolen = false;
     const storage = new (class extends MemoryStorage {
       override setItem(key: string, value: string) {
@@ -481,24 +481,17 @@ describe('SessionCoordinator', () => {
         if (key !== 'apple_business_session_validation_lease' || leaseStolen) return;
         leaseStolen = true;
         const lease = JSON.parse(value) as Record<string, unknown>;
-        super.setItem(key, JSON.stringify({ ...lease, ownerId: 'peer-tab' }));
-        super.setItem(
-          AUTH_CREDENTIAL_STORAGE_KEY,
-          JSON.stringify({
-            ...credential,
-            updatedAt: credential.updatedAt + 1,
-            userCache: user
-          })
-        );
+        super.setItem(key, JSON.stringify({ ...lease, expiresAt: 0, ownerId: 'peer-tab' }));
       }
     })();
     vi.stubGlobal('localStorage', storage);
-    credential = seedCredential('lease-token');
+    seedCredential('lease-token');
+    authApiMocks.me.mockResolvedValueOnce(user);
 
     await expect(sessionCoordinator.ensureSession()).resolves.toBe('ready');
 
     expect(leaseStolen).toBe(true);
-    expect(authApiMocks.me).not.toHaveBeenCalled();
+    expect(authApiMocks.me).toHaveBeenCalledTimes(1);
     expect(sessionCoordinator.state.value).toMatchObject({ kind: 'ready', user });
   });
 });

@@ -38,6 +38,7 @@ await run('node', [
 await run('npm', ['run', 'build:cloudflare-free'], {
   env: createCloudflareProductionBuildEnvironment(process.env)
 });
+await syncCloudflareRuntimeSecrets();
 await run('npx', [
   'wrangler@4.114.0',
   'deploy',
@@ -71,7 +72,8 @@ async function syncSupabaseRuntimeSecrets() {
     'V2_RUNTIME_DATABASE_URL',
     'JWT_SECRET',
     'FIELD_ENCRYPTION_KEY',
-    'HASH_SECRET'
+    'HASH_SECRET',
+    'V2_TRUSTED_PROXY_SECRET'
   ];
   for (const key of requiredSecrets) {
     if (typeof process.env[key] !== 'string' || !process.env[key]) {
@@ -88,6 +90,7 @@ async function syncSupabaseRuntimeSecrets() {
     FIELD_ENCRYPTION_KEY: process.env.FIELD_ENCRYPTION_KEY,
     HASH_SECRET: process.env.HASH_SECRET,
     JWT_SECRET: process.env.JWT_SECRET,
+    V2_TRUSTED_PROXY_SECRET: process.env.V2_TRUSTED_PROXY_SECRET,
     V2_RUNTIME_DATABASE_URL: process.env.V2_RUNTIME_DATABASE_URL
   };
 
@@ -107,6 +110,31 @@ async function syncSupabaseRuntimeSecrets() {
       envFile,
       '--project-ref',
       RELEASE_SUPABASE_PROJECT_REF
+    ]);
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
+async function syncCloudflareRuntimeSecrets() {
+  const secret = process.env.V2_TRUSTED_PROXY_SECRET;
+  if (typeof secret !== 'string' || secret.length < 32) {
+    throw new Error('Cloudflare 运行密钥缺少 V2_TRUSTED_PROXY_SECRET');
+  }
+
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'id-v2-cloudflare-secrets-'));
+  const secretFile = path.join(temporaryDirectory, 'worker-secrets.json');
+  try {
+    await writeFile(secretFile, JSON.stringify({ V2_TRUSTED_PROXY_SECRET: secret }), {
+      mode: 0o600
+    });
+    await run('npx', [
+      'wrangler@4.114.0',
+      'secret',
+      'bulk',
+      secretFile,
+      '--config',
+      'wrangler.cloudflare-free.jsonc'
     ]);
   } finally {
     await rm(temporaryDirectory, { force: true, recursive: true });

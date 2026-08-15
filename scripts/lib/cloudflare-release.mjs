@@ -38,6 +38,7 @@ export function validateReleaseEnvironment(env) {
   validateSecret(env.JWT_SECRET, 'JWT_SECRET', 32, errors);
   validateSecret(env.FIELD_ENCRYPTION_KEY, 'FIELD_ENCRYPTION_KEY', 32, errors);
   validateSecret(env.HASH_SECRET, 'HASH_SECRET', 32, errors);
+  validateSecret(env.V2_TRUSTED_PROXY_SECRET, 'V2_TRUSTED_PROXY_SECRET', 32, errors);
 
   const username = env.SMOKE_TEST_USERNAME?.trim() ?? '';
   if (!username || username.length > 100 || unsafeValuePattern.test(username)) {
