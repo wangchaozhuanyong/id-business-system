@@ -22,7 +22,7 @@ describe('V2ProfileService', () => {
           username: user.username,
           displayName: user.displayName,
           email: 'operator@example.com',
-          phone: '+60 12 345 6789',
+          phoneMasked: '***6789',
           status: 'active',
           lastLoginAt: now,
           createdAt: now,
@@ -72,7 +72,7 @@ describe('V2ProfileService', () => {
       roles: [{ code: 'operator', name: '操作员' }]
     });
     expect(serialized).not.toContain('operator@example.com');
-    expect(serialized).not.toContain('+60 12 345 6789');
+    expect(serialized).not.toContain('phoneEncrypted');
     expect(securityService.listUserActiveSessions).toHaveBeenCalledWith(
       user.id,
       { page: '1', pageSize: '20', revoked: 'false' },

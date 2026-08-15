@@ -45,6 +45,10 @@ const secretsPath = await realpath(path.resolve('.deploy/cloudflare-free.secrets
 const secrets = JSON.parse(await readFile(secretsPath, 'utf8'));
 const databaseUrl = secrets.MIGRATION_DATABASE_URL;
 if (!databaseUrl) throw new Error('部署凭据缺少 MIGRATION_DATABASE_URL');
+const fieldEncryptionKey = secrets.FIELD_ENCRYPTION_KEY;
+if (typeof fieldEncryptionKey !== 'string' || fieldEncryptionKey.trim().length < 32) {
+  throw new Error('部署凭据缺少有效 FIELD_ENCRYPTION_KEY');
+}
 const url = new URL(databaseUrl);
 const direct =
   url.hostname === `db.${EXPECTED_PROJECT_REF}.supabase.co` && url.username === 'postgres';
@@ -59,6 +63,7 @@ await waitForProductionBackups(databaseUrl);
 const before = await readMigrationState(databaseUrl);
 const environment = { ...process.env };
 for (const key of DATABASE_KEYS) delete environment[key];
+delete environment.FIELD_ENCRYPTION_KEY;
 environment.DATABASE_URL = databaseUrl;
 environment.DIRECT_URL = databaseUrl;
 
@@ -86,6 +91,9 @@ if (args.resolveRolledBack) {
 await run('npm', ['run', 'prisma:migrate:deploy', '--workspace', '@apple-business/api'], {
   environment
 });
+await run('npm', ['run', 'backfill:user-phone'], {
+  environment: { ...environment, FIELD_ENCRYPTION_KEY: fieldEncryptionKey }
+});
 
 const after = await readMigrationState(databaseUrl);
 console.log(
@@ -96,6 +104,7 @@ console.log(
       backup: backupPath,
       backupSha256: args.backupSha256,
       resolvedRolledBackMigration: args.resolveRolledBack ?? null,
+      userPhoneEncryption: 'verified',
       migrationsBefore: before,
       migrationsAfter: after
     },

@@ -9,6 +9,7 @@ import {
 test('integrity audit covers lifecycle, ledger, finance, and audit invariants', () => {
   const codes = new Set(V2_DATA_INTEGRITY_CHECKS.map((check) => check.code));
   for (const expected of [
+    'auth_user_phone_storage_invalid',
     'finance_expense_display_snapshot_missing',
     'finance_expense_display_snapshot_not_protected',
     'order_display_snapshot_missing',
@@ -26,6 +27,20 @@ test('integrity audit covers lifecycle, ledger, finance, and audit invariants', 
     assert.ok(codes.has(expected), `missing ${expected}`);
   }
   assert.equal(codes.size, V2_DATA_INTEGRITY_CHECKS.length);
+});
+
+test('user phone integrity rejects plaintext and an unverified database constraint', () => {
+  const phoneCheck = V2_DATA_INTEGRITY_CHECKS.find(
+    (check) => check.code === 'auth_user_phone_storage_invalid'
+  );
+  const sql = phoneCheck?.sql ?? '';
+
+  assert.match(sql, /user_record\.phone IS NOT NULL/);
+  assert.match(sql, /phone_encrypted IS NULL/);
+  assert.match(sql, /phone_masked IS NULL/);
+  assert.match(sql, /users_phone_plaintext_forbidden/);
+  assert.match(sql, /constraint_record\.convalidated/);
+  assert.doesNotMatch(sql, /'phoneEncrypted'|'phoneMasked'|'phone'/);
 });
 
 test('integrity queries are wrapped in deterministic count and sample output', () => {

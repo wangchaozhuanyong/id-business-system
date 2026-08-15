@@ -50,7 +50,7 @@ export class V2ProfileService {
         username: true,
         displayName: true,
         email: true,
-        phone: true,
+        phoneMasked: true,
         status: true,
         lastLoginAt: true,
         createdAt: true,
@@ -80,7 +80,7 @@ export class V2ProfileService {
       username: user.username,
       displayName: user.displayName,
       emailMasked: this.maskEmail(user.email),
-      phoneMasked: this.maskPhone(user.phone),
+      phoneMasked: user.phoneMasked,
       status: user.status,
       roles: user.userRoles.map(({ role }) => role),
       mustResetPassword: user.v2AuthIdentity?.mustResetPassword ?? false,
@@ -141,11 +141,5 @@ export class V2ProfileService {
     const separator = value.lastIndexOf('@');
     if (separator <= 0 || separator === value.length - 1) return '***';
     return `${value.slice(0, 1)}***@${value.slice(separator + 1)}`;
-  }
-
-  private maskPhone(value: string | null) {
-    if (!value) return null;
-    const compact = value.replace(/\s+/g, '');
-    return compact.length <= 4 ? '***' : `***${compact.slice(-4)}`;
   }
 }
