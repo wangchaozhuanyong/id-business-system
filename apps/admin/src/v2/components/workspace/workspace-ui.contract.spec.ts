@@ -17,6 +17,7 @@ describe('personal workspace UI contract', () => {
   const mailMessageList = read('./V2MailMessageList.vue');
   const publicMailboxView = read('../../views/V2PublicMailboxView.vue');
   const router = read('../../../v2-router.ts');
+  const loginView = read('../../views/V2LoginView.vue');
   const workspaceFixtureEntry = read('../../testing/workspace-design-fixture.ts');
   const workspaceApi = read('../../api/workspace.ts');
 
@@ -44,13 +45,23 @@ describe('personal workspace UI contract', () => {
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
-    expect(totpDrawer).toContain('size="min(620px, 100vw)"');
+    expect(totpDrawer).toContain('size="min(620px, 100%)"');
   });
 
   it('does not persist or transmit TOTP input', () => {
     expect(totpDrawer).not.toMatch(/localStorage|sessionStorage|idBusinessV2WorkspaceApi|http\./);
     expect(totpDrawer).toContain('getV2BusinessNowMs() ?? Date.now()');
     expect(totpDrawer).toContain('@closed="clearAll"');
+  });
+
+  it('exposes the local TOTP tool on the public login page', () => {
+    expect(loginView).toContain(
+      '<V2TotpToolDrawer v-model="totpToolOpen" :sync-server-time="false" />'
+    );
+    expect(loginView).toContain('native-type="button"');
+    expect(loginView).toContain('@click="totpToolOpen = true"');
+    expect(loginView).toContain('在线计算 2FA 验证码');
+    expect(totpDrawer).toContain('if (!props.syncServerTime)');
   });
 
   it('aligns the TOTP input frame with the full drawer content width', () => {

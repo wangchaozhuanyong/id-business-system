@@ -119,6 +119,18 @@
                 </el-input>
               </el-form-item>
 
+              <div class="v2-login-tools">
+                <AppButton
+                  variant="ghost"
+                  class="v2-login-totp-trigger"
+                  native-type="button"
+                  @click="totpToolOpen = true"
+                >
+                  <el-icon><Key /></el-icon>
+                  在线计算 2FA 验证码
+                </AppButton>
+              </div>
+
               <div
                 v-if="loginError"
                 id="v2-login-error-message"
@@ -158,6 +170,8 @@
         <p class="login-showcase__footer">{{ branding.footerText }}</p>
       </div>
     </section>
+
+    <V2TotpToolDrawer v-model="totpToolOpen" :sync-server-time="false" />
   </main>
 </template>
 
@@ -171,6 +185,7 @@ import { isApiError } from '@/api/apiError';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
+import V2TotpToolDrawer from '@/v2/components/workspace/V2TotpToolDrawer.vue';
 import { getSafeV2Redirect } from '@/v2/router/passwordReset';
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -184,6 +199,7 @@ const { branding, heroTitleLines, loadBranding } = useV2Branding();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
 const loginError = ref('');
+const totpToolOpen = ref(false);
 const currentTheme = ref<V2Theme>(getPreferredV2Theme());
 const systemHealthStatus = ref<'checking' | 'ready' | 'unavailable'>('checking');
 const systemHealthText = computed(() => {
@@ -431,6 +447,18 @@ onMounted(() => {
 .login-panel :deep(.el-input__inner:-webkit-autofill) {
   -webkit-box-shadow: 0 0 0 1000px var(--v3-surface) inset;
   -webkit-text-fill-color: var(--v3-text);
+}
+
+.v2-login-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -8px;
+}
+
+.login-panel :deep(.v2-login-totp-trigger) {
+  min-height: 38px;
+  border-radius: 12px;
+  font-weight: 650;
 }
 
 .login-panel :deep(.full-button) {
