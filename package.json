@@ -122,6 +122,7 @@
     "@nestjs/jwt": "^11.0.2"
   },
   "overrides": {
+    "deepmerge-ts": "8.0.1",
     "@nestjs/platform-express": {
       "multer": "2.2.0"
     }
