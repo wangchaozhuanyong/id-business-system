@@ -346,12 +346,12 @@
 }
 
 .v2-topup-credit-entry-target--credit {
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 15px 18px;
+  grid-template-columns: minmax(0, 1fr) 230px;
+  align-items: stretch;
+  padding: 16px 20px;
   border: 1px solid var(--v2-border-soft);
-  border-left: 3px solid var(--v2-accent-solid);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--v2-surface-muted) 86%, var(--v2-surface));
+  background: var(--v2-surface-muted);
 }
 
 .v2-topup-credit-target-identity small {
@@ -362,15 +362,16 @@
 
 .v2-topup-credit-target-meta {
   display: grid;
-  min-width: 230px;
-  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }
 
 .v2-topup-credit-target-meta > div {
   display: grid;
-  gap: 4px;
-  padding: 0 16px;
+  align-content: center;
+  gap: 5px;
+  padding-left: 16px;
   border-left: 1px solid var(--v2-border);
 }
 
@@ -398,7 +399,7 @@
 
 .v2-topup-credit-form .el-form-item {
   min-width: 0;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .v2-topup-credit-form .el-select {
@@ -418,25 +419,16 @@
   display: grid;
   justify-items: start;
   gap: 8px;
-  margin-bottom: 4px;
 }
 
 .v2-topup-credit-layout {
   display: grid;
+  overflow: hidden;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-}
-
-.v2-topup-credit-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 20px;
-}
-
-.v2-topup-credit-fieldset > header > span {
-  color: var(--v2-text-soft);
-  font-size: 12px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 12px;
+  background: var(--v2-surface);
 }
 
 .v2-topup-credit-settlement-preview .is-negative,
@@ -447,74 +439,60 @@
 .v2-topup-credit-fieldset {
   display: grid;
   min-width: 0;
-  gap: 4px;
-  padding: 18px 20px 20px;
-  border: 1px solid var(--v2-border-soft);
-  border-radius: 12px;
+  gap: 0;
+  padding: 0 20px 8px;
   background: var(--v2-surface);
 }
 
+.v2-topup-credit-fieldset + .v2-topup-credit-fieldset {
+  border-top: 1px solid var(--v2-border-soft);
+}
+
 .v2-topup-credit-fieldset > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-topup-credit-section-title {
   display: grid;
-  min-width: 0;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.v2-topup-credit-section-title > span {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--v2-accent-soft);
-  color: var(--v2-accent);
-  font-size: 12px;
-  font-weight: var(--v3-font-weight-bold);
-  font-variant-numeric: tabular-nums;
-}
-
-.v2-topup-credit-section-title > div {
-  display: grid;
-  min-width: 0;
   gap: 2px;
+  margin: 0 -20px 18px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--v2-border-soft);
+  background: var(--v2-surface-muted);
 }
 
 .v2-topup-credit-fieldset > header strong {
   color: var(--v2-text);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 21px;
 }
 
-.v2-topup-credit-section-title small {
+.v2-topup-credit-fieldset > header small {
   color: var(--v2-text-soft);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 17px;
 }
 
-.v2-topup-credit-fieldset > header .v2-topup-credit-formula {
-  flex: 0 0 auto;
-  padding-top: 5px;
-  color: var(--v2-accent);
-  font-size: 11px;
+.v2-topup-credit-content-offset {
+  min-width: 0;
+  margin: 0 0 14px 108px;
+}
+
+.v2-topup-credit-aligned-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 108px minmax(0, 1fr);
+  align-items: start;
+}
+
+.v2-topup-credit-aligned-label {
+  padding-right: 12px;
+  color: var(--v2-text);
+  font-size: 13px;
   font-weight: var(--v3-font-weight-semibold);
-  white-space: nowrap;
+  line-height: 32px;
 }
 
 .v2-topup-credit-settlement-preview {
   overflow: hidden;
-  margin: 2px 0 12px;
+  min-width: 0;
+  margin: 0 0 14px;
   border: 1px solid var(--v2-border-soft);
   border-radius: 10px;
   background: var(--v2-surface-muted);
@@ -571,8 +549,8 @@
 }
 
 .v2-topup-credit-impact-note {
-  margin: 0;
-  padding: 12px 0 0 108px;
+  margin: 0 0 8px 108px;
+  padding-top: 12px;
   border-top: 1px solid var(--v2-border-soft);
   color: var(--v2-text-soft);
   font-size: 11px;
@@ -872,18 +850,6 @@
     grid-column: 1 / -1;
   }
 
-  .v2-topup-credit-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .v2-topup-credit-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .v2-topup-credit-fieldset > header {
-    align-items: center;
-  }
-
   .v2-topup-usdt-reference > header {
     align-items: flex-start;
   }
@@ -939,17 +905,12 @@
   }
 
   .v2-topup-credit-fieldset {
-    padding: 16px 14px 18px;
+    padding-inline: 14px;
   }
 
   .v2-topup-credit-fieldset > header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .v2-topup-credit-fieldset > header .v2-topup-credit-formula {
-    padding: 0 0 0 38px;
+    margin-inline: -14px;
+    padding-inline: 14px;
   }
 
   .v2-topup-credit-settlement-preview dl {
@@ -966,7 +927,7 @@
   }
 
   .v2-topup-credit-impact-note {
-    padding-left: 0;
+    margin-left: 108px;
   }
 }
 

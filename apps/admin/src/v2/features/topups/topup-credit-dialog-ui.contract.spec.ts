@@ -4,16 +4,19 @@ import dialogs from './components/V2TopupWorkbenchDialogs.vue?raw';
 const creditDrawer = dialogs.slice(dialogs.indexOf('<V2FormDrawer'), dialogs.indexOf('<el-drawer'));
 
 describe('gift card credit dialog UI contract', () => {
-  it('uses a compact account overview and a two-step vertical task flow', () => {
+  it('uses a compact account overview and one consistent form alignment axis', () => {
     expect(creditDrawer).toContain('size="min(780px, 96vw)"');
     expect(creditDrawer).toContain('description="填写卡片资料并核对卡商结算变化"');
     expect(creditDrawer).toContain('v2-topup-credit-entry-target--credit');
     expect(creditDrawer).toContain('v2-topup-credit-layout');
-    expect(creditDrawer).toContain('v2-topup-credit-section-title');
     expect(creditDrawer).toContain('v2-topup-credit-card-panel');
     expect(creditDrawer).toContain('v2-topup-credit-settlement-panel');
+    expect(creditDrawer).toContain('v2-topup-credit-aligned-row');
+    expect(creditDrawer).toContain('v2-topup-credit-aligned-label');
     expect(creditDrawer).toContain('卡片资料');
     expect(creditDrawer).toContain('结算与备注');
+    expect(creditDrawer).not.toContain('v2-topup-credit-grid');
+    expect(creditDrawer).not.toContain('v2-topup-credit-section-title');
   });
 
   it('keeps every business input while removing duplicate calculation blocks', () => {
