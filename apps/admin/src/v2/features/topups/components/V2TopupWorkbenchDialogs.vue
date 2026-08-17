@@ -30,7 +30,8 @@
   <V2FormDrawer
     v-model="page.creditDrawerVisible"
     title="礼品卡入账"
-    size="min(960px, 96vw)"
+    description="填写卡片资料并核对卡商结算变化"
+    size="min(780px, 96vw)"
     confirm-text="确认入账"
     :confirm-disabled-reason="page.creditDisabledReason"
     :confirm-loading="page.creditSubmitting"
@@ -77,9 +78,12 @@
         <div class="v2-topup-credit-layout">
           <section class="v2-topup-credit-fieldset v2-topup-credit-card-panel">
             <header>
-              <div>
-                <strong>卡片资料</strong>
-                <span>填写卡片身份和人民币换算依据。</span>
+              <div class="v2-topup-credit-section-title">
+                <span aria-hidden="true">1</span>
+                <div>
+                  <strong>卡片资料</strong>
+                  <small>填写卡片身份和人民币换算依据。</small>
+                </div>
               </div>
               <span class="v2-topup-credit-formula">面值 × 汇率 = 卡片价值</span>
             </header>
@@ -152,26 +156,34 @@
 
           <section class="v2-topup-credit-fieldset v2-topup-credit-settlement-panel">
             <header>
-              <div>
-                <strong>结算与备注</strong>
-                <span>核对卡商资金变化后再确认入账。</span>
+              <div class="v2-topup-credit-section-title">
+                <span aria-hidden="true">2</span>
+                <div>
+                  <strong>结算与备注</strong>
+                  <small>核对卡商资金变化后再确认入账。</small>
+                </div>
               </div>
             </header>
 
-            <el-form-item label="加卡供应商" prop="supplierOptionId">
-              <el-select
-                v-model="page.creditForm.supplierOptionId"
-                filterable
-                placeholder="选择启用的加卡供应商"
-              >
-                <el-option
-                  v-for="option in page.topupSupplierOptions"
-                  :key="option.id"
-                  :label="`${option.name}${option.initialized ? '' : '（资金未初始化）'}`"
-                  :value="option.id"
-                />
-              </el-select>
-            </el-form-item>
+            <div class="v2-topup-credit-grid">
+              <el-form-item label="加卡供应商" prop="supplierOptionId">
+                <el-select
+                  v-model="page.creditForm.supplierOptionId"
+                  filterable
+                  placeholder="选择启用的加卡供应商"
+                >
+                  <el-option
+                    v-for="option in page.topupSupplierOptions"
+                    :key="option.id"
+                    :label="`${option.name}${option.initialized ? '' : '（资金未初始化）'}`"
+                    :value="option.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="加卡时间" prop="creditedAt">
+                <el-input v-model="page.creditForm.creditedAt" type="datetime-local" />
+              </el-form-item>
+            </div>
             <el-alert
               v-if="!page.topupSupplierOptions.length"
               title="暂无启用的加卡供应商，请先到选项设置完成配置"
@@ -185,17 +197,17 @@
               aria-label="礼品卡结算预览"
               aria-live="polite"
             >
-              <div class="v2-topup-credit-settlement-value">
-                <span>本次卡片价值</span>
-                <strong>
-                  {{
-                    page.creditCostPreview
-                      ? `¥${page.formatDecimal(page.creditCostPreview)}`
-                      : '待计算'
-                  }}
-                </strong>
-              </div>
               <dl>
+                <div class="v2-topup-credit-settlement-value">
+                  <dt>本次卡片价值</dt>
+                  <dd>
+                    {{
+                      page.creditCostPreview
+                        ? `¥${page.formatDecimal(page.creditCostPreview)}`
+                        : '待计算'
+                    }}
+                  </dd>
+                </div>
                 <div>
                   <dt>卡商当前余额</dt>
                   <dd>
@@ -227,10 +239,7 @@
               title="卡商预付款余额不足；仍可入账，负数余额表示欠卡商金额"
             />
 
-            <el-form-item label="加卡时间" prop="creditedAt">
-              <el-input v-model="page.creditForm.creditedAt" type="datetime-local" />
-            </el-form-item>
-            <el-form-item label="备注">
+            <el-form-item label="备注" class="v2-topup-credit-remark">
               <el-input
                 v-model="page.creditForm.remark"
                 type="textarea"
