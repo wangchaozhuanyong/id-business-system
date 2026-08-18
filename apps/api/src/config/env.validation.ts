@@ -7,6 +7,7 @@ export interface RawEnv {
   APP_PUBLIC_URL?: string;
   CORS_ORIGIN?: string;
   DATABASE_URL?: string;
+  V2_RUNTIME_DATABASE_URL?: string;
   JWT_SECRET?: string;
   JWT_EXPIRES_IN?: string;
   FIELD_ENCRYPTION_KEY?: string;
@@ -156,6 +157,9 @@ function validatePublicUrl(name: string, value: string, nodeEnv: RuntimeEnv) {
 
 function validateDatabase(config: RawEnv, nodeEnv: RuntimeEnv) {
   if (!config.DATABASE_URL) {
+    if (config.SUPABASE_EDGE_FUNCTION === 'true' && config.V2_RUNTIME_DATABASE_URL) {
+      return;
+    }
     if (nodeEnv === 'production') throw new Error('DATABASE_URL is required in production');
     return;
   }

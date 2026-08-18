@@ -83,6 +83,38 @@ describe('CloudflarePrismaService', () => {
     expect(url.searchParams.get('schema')).toBe('public');
   });
 
+  it('falls back to V2_RUNTIME_DATABASE_URL when DATABASE_URL is absent', async () => {
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    const originalRuntimeUrl = process.env.V2_RUNTIME_DATABASE_URL;
+    try {
+      delete process.env.DATABASE_URL;
+      process.env.V2_RUNTIME_DATABASE_URL = 'postgres://runtime:secret@example.test/app';
+
+      const service = new CloudflarePrismaService() as unknown as {
+        idBusinessV2Account: {
+          findMany(): Promise<unknown[]>;
+        };
+      };
+      await expect(
+        runWithCloudflarePrisma(
+          () => service.idBusinessV2Account.findMany(),
+          undefined
+        )
+      ).resolves.toEqual([]);
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+      if (originalRuntimeUrl === undefined) {
+        delete process.env.V2_RUNTIME_DATABASE_URL;
+      } else {
+        process.env.V2_RUNTIME_DATABASE_URL = originalRuntimeUrl;
+      }
+    }
+  });
+
   it('preserves stricter certificate verification modes', () => {
     const connectionString = normalizeCloudflareDatabaseConnectionString(
       'postgresql://runtime:secret@db.example.test/app?sslmode=verify-full'
