@@ -96,10 +96,7 @@ describe('CloudflarePrismaService', () => {
         };
       };
       await expect(
-        runWithCloudflarePrisma(
-          () => service.idBusinessV2Account.findMany(),
-          undefined
-        )
+        runWithCloudflarePrisma(() => service.idBusinessV2Account.findMany(), undefined)
       ).resolves.toEqual([]);
     } finally {
       if (originalDatabaseUrl === undefined) {

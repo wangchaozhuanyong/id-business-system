@@ -55,7 +55,10 @@ function resolveEdgeDatabaseUrl() {
   }
   if (isSupabasePooler) {
     const poolerPrefix = 'id_business_v2_runtime.';
-    if (!connectionUrl.username.startsWith(poolerPrefix) || connectionUrl.username.length <= poolerPrefix.length) {
+    if (
+      !connectionUrl.username.startsWith(poolerPrefix) ||
+      connectionUrl.username.length <= poolerPrefix.length
+    ) {
       throw new Error('V2_RUNTIME_DATABASE_URL must use the scoped runtime pooler role');
     }
     const scopedProjectRef = connectionUrl.username.slice(poolerPrefix.length);
