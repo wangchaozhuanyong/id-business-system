@@ -42,25 +42,50 @@ function resolveAuthProvider(): AuthProvider {
 function resolveEdgeDatabaseUrl() {
   const rawConnectionString = requireEnv('V2_RUNTIME_DATABASE_URL');
   const connectionUrl = new URL(rawConnectionString);
-  const projectUrl = new URL(requireEnv('SUPABASE_URL'));
-  const projectRef = projectUrl.hostname.split('.', 1)[0];
-  const directHost = `db.${projectRef}.supabase.co`;
-  const isSupabaseDirect = connectionUrl.hostname === directHost;
+  const projectRef = getSupabaseProjectRef();
+  const directHost = projectRef ? `db.${projectRef}.supabase.co` : '';
+  const isSupabaseDirect = Boolean(directHost) && connectionUrl.hostname === directHost;
   const isSupabasePooler = connectionUrl.hostname.endsWith('.pooler.supabase.com');
 
   if (!isSupabaseDirect && !isSupabasePooler) {
     throw new Error('V2_RUNTIME_DATABASE_URL must target the current Supabase project');
   }
-  if (
-    connectionUrl.hostname === directHost &&
-    connectionUrl.username !== 'id_business_v2_runtime'
-  ) {
+  if (isSupabaseDirect && connectionUrl.username !== 'id_business_v2_runtime') {
     throw new Error('V2_RUNTIME_DATABASE_URL must use id_business_v2_runtime');
   }
-  if (isSupabasePooler && connectionUrl.username !== `id_business_v2_runtime.${projectRef}`) {
-    throw new Error('V2_RUNTIME_DATABASE_URL must use the scoped runtime pooler role');
+  if (isSupabasePooler) {
+    const poolerPrefix = 'id_business_v2_runtime.';
+    if (
+      !connectionUrl.username.startsWith(poolerPrefix) ||
+      connectionUrl.username.length <= poolerPrefix.length
+    ) {
+      throw new Error('V2_RUNTIME_DATABASE_URL must use the scoped runtime pooler role');
+    }
+    const scopedProjectRef = connectionUrl.username.slice(poolerPrefix.length);
+    if (projectRef && scopedProjectRef !== projectRef) {
+      throw new Error('V2_RUNTIME_DATABASE_URL must target the current Supabase project');
+    }
   }
   return connectionUrl.toString();
+}
+
+function getSupabaseProjectRef() {
+  const configuredProjectRef = Deno.env.get('V2_SUPABASE_PROJECT_REF')?.trim();
+  if (configuredProjectRef) {
+    if (!/^[a-z0-9]{20}$/.test(configuredProjectRef)) {
+      throw new Error('V2_SUPABASE_PROJECT_REF is invalid');
+    }
+    return configuredProjectRef;
+  }
+
+  try {
+    const projectUrl = new URL(requireEnv('SUPABASE_URL'));
+    const match = projectUrl.hostname.match(/^([a-z0-9]{20})\.supabase\.co$/);
+    if (match?.[1]) return match[1];
+  } catch {
+    // Fall through to the explicit configuration error below.
+  }
+  throw new Error('V2_SUPABASE_PROJECT_REF is required when SUPABASE_URL is internal');
 }
 
 for (const name of requiredSecrets) {

@@ -30,6 +30,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
       'V2_TRUSTED_PROXY_SECRET',
+      'API_UPSTREAM_BASE_URL',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ],
@@ -40,6 +41,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
       'V2_TRUSTED_PROXY_SECRET',
+      'API_UPSTREAM_BASE_URL',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ]
@@ -86,6 +88,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
       'V2_TRUSTED_PROXY_SECRET',
+      'API_UPSTREAM_BASE_URL',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ],
@@ -96,6 +99,7 @@ export const PRODUCTION_COMMANDS = Object.freeze({
       'FIELD_ENCRYPTION_KEY',
       'HASH_SECRET',
       'V2_TRUSTED_PROXY_SECRET',
+      'API_UPSTREAM_BASE_URL',
       'SMOKE_TEST_USERNAME',
       'SMOKE_TEST_PASSWORD'
     ]

@@ -32,6 +32,38 @@ for (const endpoint of publicEndpoints) {
   }
 }
 
+const invalidMailboxQueryResponse = await fetchWithDeploymentRetry(
+  `${baseUrl}/api/public/mailbox/query`,
+  {
+    method: 'POST',
+    headers: requestHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ credential: 'invalid', limit: 5 })
+  }
+);
+checks.push({
+  path: '/api/public/mailbox/query [invalid-input]',
+  status: invalidMailboxQueryResponse.status
+});
+if (invalidMailboxQueryResponse.status !== 400) {
+  throw new Error(
+    `/api/public/mailbox/query 路由验证失败，期望 HTTP 400，实际 HTTP ${invalidMailboxQueryResponse.status}`
+  );
+}
+
+const anonymousMailboxAdminResponse = await fetchWithDeploymentRetry(
+  `${baseUrl}/api/id-business-v2/workspace-mailboxes`,
+  { headers: requestHeaders() }
+);
+checks.push({
+  path: '/api/id-business-v2/workspace-mailboxes [anonymous]',
+  status: anonymousMailboxAdminResponse.status
+});
+if (anonymousMailboxAdminResponse.status !== 401) {
+  throw new Error(
+    `/api/id-business-v2/workspace-mailboxes 权限验证失败，期望 HTTP 401，实际 HTTP ${anonymousMailboxAdminResponse.status}`
+  );
+}
+
 const loginResponse = await fetchWithDeploymentRetry(`${baseUrl}/api/auth/login`, {
   method: 'POST',
   headers: requestHeaders({

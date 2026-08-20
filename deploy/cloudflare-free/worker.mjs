@@ -1,7 +1,4 @@
 const API_PREFIX = '/api';
-const SUPABASE_FUNCTION_PATH = '/functions/v1/v2-api';
-const SUPABASE_API_BASE_URL = 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api';
-const SUPABASE_FUNCTION_REGION_PATTERN = /^[a-z]{2}-[a-z]+-\d$/u;
 
 export default {
   async fetch(request, env) {
@@ -23,20 +20,14 @@ export default {
     }
 
     try {
-      const targetUrl = resolveTargetUrl(incomingUrl, env.SUPABASE_API_BASE_URL);
+      const targetUrl = resolveTargetUrl(incomingUrl, env.API_UPSTREAM_BASE_URL);
       const upstreamHeaders = new Headers(request.headers);
       upstreamHeaders.delete('host');
       upstreamHeaders.set('x-forwarded-host', incomingUrl.host);
       upstreamHeaders.set('x-forwarded-proto', incomingUrl.protocol.replace(':', ''));
       upstreamHeaders.set('x-request-id', requestId);
       await applyTrustedClientIpHeaders(upstreamHeaders, request, env, requestId);
-      const functionRegion = resolveFunctionRegion(env.SUPABASE_FUNCTION_REGION);
-      if (functionRegion) {
-        upstreamHeaders.set('x-region', functionRegion);
-      } else {
-        // Region routing is deployment-owned. Never trust a caller-provided override.
-        upstreamHeaders.delete('x-region');
-      }
+      upstreamHeaders.delete('x-region');
 
       const upstreamRequest = new Request(new Request(targetUrl, request), {
         headers: upstreamHeaders,
@@ -96,23 +87,25 @@ export default {
 
 export function resolveTargetUrl(incomingUrl, apiBaseUrl) {
   const baseUrl = new URL(String(apiBaseUrl ?? ''));
-  if (baseUrl.href.replace(/\/+$/, '') !== SUPABASE_API_BASE_URL) {
-    throw new Error('SUPABASE_API_BASE_URL is invalid');
+  if (
+    baseUrl.protocol !== 'https:' ||
+    baseUrl.username ||
+    baseUrl.password ||
+    baseUrl.search ||
+    baseUrl.hash ||
+    (baseUrl.pathname !== '/' && baseUrl.pathname !== '') ||
+    baseUrl.hostname === incomingUrl.hostname ||
+    baseUrl.hostname.endsWith('.supabase.co') ||
+    baseUrl.hostname.endsWith('.workers.dev') ||
+    baseUrl.hostname.endsWith('.pages.dev')
+  ) {
+    throw new Error('API_UPSTREAM_BASE_URL must target the dedicated Node API origin');
   }
 
   const targetUrl = new URL(baseUrl);
-  targetUrl.pathname = `${SUPABASE_FUNCTION_PATH}${incomingUrl.pathname}`;
+  targetUrl.pathname = incomingUrl.pathname;
   targetUrl.search = incomingUrl.search;
   return targetUrl;
-}
-
-export function resolveFunctionRegion(value) {
-  const normalized = String(value ?? '').trim();
-  if (!normalized) return null;
-  if (!SUPABASE_FUNCTION_REGION_PATTERN.test(normalized)) {
-    throw new Error('SUPABASE_FUNCTION_REGION is invalid');
-  }
-  return normalized;
 }
 
 function resolveRequestId(value) {
@@ -172,7 +165,7 @@ function logProxyFailure(input) {
       path: input.path,
       requestId: input.requestId,
       status: input.status,
-      target: 'supabase-v2-api'
+      target: 'node-api'
     })
   );
 }

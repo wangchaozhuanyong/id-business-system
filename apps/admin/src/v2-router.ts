@@ -23,6 +23,7 @@ const V2LoginView = () => import('@/v2/views/V2LoginView.vue');
 const V2ForbiddenView = () => import('@/v2/views/V2ForbiddenView.vue');
 const V2ChangePasswordView = () => import('@/v2/views/V2ChangePasswordView.vue');
 const V2SessionUnavailableView = () => import('@/v2/views/V2SessionUnavailableView.vue');
+const V2PublicMailboxView = () => import('@/v2/views/V2PublicMailboxView.vue');
 
 export const v2Router = createRouter({
   history: createWebHistory(),
@@ -64,6 +65,15 @@ export const v2Router = createRouter({
       meta: {
         title: '修改密码',
         allowDuringPasswordReset: true
+      }
+    },
+    {
+      path: '/mailbox',
+      name: 'public-mailbox',
+      component: V2PublicMailboxView,
+      meta: {
+        title: '邮件查询',
+        publicStandalone: true
       }
     },
     ...v2Routes,

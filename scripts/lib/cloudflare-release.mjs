@@ -4,8 +4,6 @@ export const RELEASE_WORKER_NAME = 'daichongxitong-v2-free-20260727';
 export const RELEASE_ACCOUNT_ID = 'a7e061557092f924beb4a7c8adc39c3d';
 export const RELEASE_PUBLIC_URL = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
 export const RELEASE_SUPABASE_PROJECT_REF = 'fjquufgbnxyocmuzltxi';
-export const RELEASE_SUPABASE_API_BASE_URL = `https://${RELEASE_SUPABASE_PROJECT_REF}.supabase.co/functions/v1/v2-api`;
-export const RELEASE_SUPABASE_FUNCTION_REGION = 'ap-northeast-1';
 export const RELEASE_V2_REALTIME_CHANGES_ENABLED = 'false';
 export const REQUIRED_CHECKS = ['quality', 'production-images'];
 export const SMOKE_ROLE_CODE = 'production_smoke_readonly';
@@ -39,6 +37,7 @@ export function validateReleaseEnvironment(env) {
   validateSecret(env.FIELD_ENCRYPTION_KEY, 'FIELD_ENCRYPTION_KEY', 32, errors);
   validateSecret(env.HASH_SECRET, 'HASH_SECRET', 32, errors);
   validateSecret(env.V2_TRUSTED_PROXY_SECRET, 'V2_TRUSTED_PROXY_SECRET', 32, errors);
+  validateNodeApiBaseUrl(env.API_UPSTREAM_BASE_URL, errors);
 
   const username = env.SMOKE_TEST_USERNAME?.trim() ?? '';
   if (!username || username.length > 100 || unsafeValuePattern.test(username)) {
@@ -100,14 +99,36 @@ export function validateWranglerConfig(config) {
   if (vars.APP_PUBLIC_URL !== RELEASE_PUBLIC_URL) {
     errors.push(`APP_PUBLIC_URL 必须固定为 ${RELEASE_PUBLIC_URL}`);
   }
-  if (vars.SUPABASE_API_BASE_URL !== RELEASE_SUPABASE_API_BASE_URL) {
-    errors.push(`SUPABASE_API_BASE_URL 必须固定为 ${RELEASE_SUPABASE_API_BASE_URL}`);
+  if ('SUPABASE_API_BASE_URL' in vars || 'SUPABASE_FUNCTION_REGION' in vars) {
+    errors.push('Cloudflare 生产代理不得继续指向 Supabase Edge API');
   }
-  if (vars.SUPABASE_FUNCTION_REGION !== RELEASE_SUPABASE_FUNCTION_REGION) {
-    errors.push(`SUPABASE_FUNCTION_REGION 必须固定为 ${RELEASE_SUPABASE_FUNCTION_REGION}`);
+  if ('API_UPSTREAM_BASE_URL' in vars) {
+    errors.push('API_UPSTREAM_BASE_URL 必须作为 Worker secret 注入');
   }
 
   return errors;
+}
+
+function validateNodeApiBaseUrl(value, errors) {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.pathname !== '/' && url.pathname !== '') ||
+      url.hostname.endsWith('.supabase.co') ||
+      url.hostname.endsWith('.workers.dev') ||
+      url.hostname.endsWith('.pages.dev') ||
+      unsafeValuePattern.test(value)
+    ) {
+      throw new Error();
+    }
+  } catch {
+    errors.push('API_UPSTREAM_BASE_URL 必须是独立 Node API 的生产 HTTPS 根地址');
+  }
 }
 
 export function validateGitState(state) {

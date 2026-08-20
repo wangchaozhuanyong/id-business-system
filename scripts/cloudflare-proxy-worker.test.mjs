@@ -1,42 +1,42 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import worker, {
-  resolveFunctionRegion,
-  resolveTargetUrl
-} from '../deploy/cloudflare-free/worker.mjs';
+import worker, { resolveTargetUrl } from '../deploy/cloudflare-free/worker.mjs';
 
-const apiBaseUrl = 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api';
-const functionRegion = 'ap-northeast-1';
+const apiBaseUrl = 'https://api.id-business.company.cn';
 const trustedProxySecret = 'trusted-proxy-secret-for-worker-tests-1234';
 const clientIp = '203.0.113.25';
 
 function workerEnvironment(overrides = {}) {
   return {
-    SUPABASE_API_BASE_URL: apiBaseUrl,
-    SUPABASE_FUNCTION_REGION: functionRegion,
+    API_UPSTREAM_BASE_URL: apiBaseUrl,
     V2_TRUSTED_PROXY_SECRET: trustedProxySecret,
     ...overrides
   };
 }
 
-test('maps same-origin API paths and query strings to the fixed Supabase function', () => {
+test('maps same-origin API paths and query strings to the dedicated Node API', () => {
   const target = resolveTargetUrl(
     new URL('https://admin.example.test/api/id-business-v2/orders?page=2'),
     apiBaseUrl
   );
 
-  assert.equal(
-    target.href,
-    'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api/api/id-business-v2/orders?page=2'
+  assert.equal(target.href, 'https://api.id-business.company.cn/api/id-business-v2/orders?page=2');
+  assert.throws(
+    () =>
+      resolveTargetUrl(
+        new URL('https://admin.example.test/api/health/live'),
+        'https://fjquufgbnxyocmuzltxi.supabase.co'
+      ),
+    /dedicated Node API origin/
   );
   assert.throws(
     () =>
       resolveTargetUrl(
         new URL('https://admin.example.test/api/health/live'),
-        'https://attacker.example.test/functions/v1/v2-api'
+        'https://admin.example.test'
       ),
-    /SUPABASE_API_BASE_URL is invalid/
+    /dedicated Node API origin/
   );
 });
 
@@ -83,7 +83,7 @@ test('forwards method, body, authorization and request correlation without expos
     assert.equal(capturedRequest.headers.get('x-forwarded-host'), 'admin.example.test');
     assert.equal(capturedRequest.headers.get('x-forwarded-proto'), 'https');
     assert.equal(capturedRequest.headers.get('x-request-id'), 'client-request-1234');
-    assert.equal(capturedRequest.headers.get('x-region'), functionRegion);
+    assert.equal(capturedRequest.headers.get('x-region'), null);
     assert.equal(capturedRequest.headers.get('cf-connecting-ip'), null);
     assert.equal(capturedRequest.headers.get('x-forwarded-for'), null);
     assert.equal(capturedRequest.headers.get('x-real-ip'), null);
@@ -99,11 +99,7 @@ test('forwards method, body, authorization and request correlation without expos
   }
 });
 
-test('owns Supabase region routing and rejects invalid deployment values', async () => {
-  assert.equal(resolveFunctionRegion(functionRegion), functionRegion);
-  assert.equal(resolveFunctionRegion(''), null);
-  assert.throws(() => resolveFunctionRegion('https://attacker.example.test'), /is invalid/);
-
+test('removes caller-controlled region routing before forwarding to Node', async () => {
   const originalFetch = globalThis.fetch;
   let capturedRequest;
   globalThis.fetch = async (request) => {
@@ -116,7 +112,7 @@ test('owns Supabase region routing and rejects invalid deployment values', async
       new Request('https://admin.example.test/api/health/live', {
         headers: { 'cf-connecting-ip': clientIp, 'x-region': 'us-east-1' }
       }),
-      workerEnvironment({ SUPABASE_FUNCTION_REGION: '' })
+      workerEnvironment()
     );
     assert.equal(capturedRequest.headers.get('x-region'), null);
   } finally {
@@ -124,7 +120,7 @@ test('owns Supabase region routing and rejects invalid deployment values', async
   }
 });
 
-test('returns a stable retryable 503 when Supabase cannot be reached', async () => {
+test('returns a stable retryable 503 when the Node API cannot be reached', async () => {
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
   globalThis.fetch = async () => {

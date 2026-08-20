@@ -94,15 +94,15 @@
           <button
             class="v2-workspace-panel__tool is-mail-viewer"
             type="button"
-            disabled
-            title="邮件服务部署后启用"
+            title="邮箱查询与邮箱池"
+            @click="openMailViewerTool"
           >
             <el-icon><Message /></el-icon>
             <span>
               <strong>邮箱查询与邮箱池</strong>
-              <small>邮件服务部署后启用</small>
+              <small>用于查询邮件和维护邮箱池</small>
             </span>
-            <el-icon><Clock /></el-icon>
+            <el-icon><ArrowRight /></el-icon>
           </button>
         </div>
       </div>
@@ -116,6 +116,7 @@
       :writes-allowed="authStore.writesAllowed"
       :refresh="shortcutsQuery.refresh"
     />
+    <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
     <V2TotpToolDrawer v-model="totpToolOpen" />
   </div>
 </template>
@@ -126,7 +127,6 @@ import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-busine
 import {
   ArrowRight,
   Briefcase,
-  Clock,
   Key,
   Message,
   Plus,
@@ -141,6 +141,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
 import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
+import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
 
 defineProps<{ sidebarCollapsed: boolean }>();
 const emit = defineEmits<{ requestCloseNavigation: [] }>();
@@ -152,6 +153,7 @@ const panelOpen = ref(false);
 const workspaceActivated = ref(false);
 const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
+const mailViewerDrawerOpen = ref(false);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',
   scope: 'workspace',
@@ -188,6 +190,12 @@ function openSettings() {
 function openTotpTool() {
   panelOpen.value = false;
   totpToolOpen.value = true;
+  emit('requestCloseNavigation');
+}
+
+function openMailViewerTool() {
+  panelOpen.value = false;
+  mailViewerDrawerOpen.value = true;
   emit('requestCloseNavigation');
 }
 

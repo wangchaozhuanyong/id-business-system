@@ -6,8 +6,6 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   RELEASE_PUBLIC_URL,
-  RELEASE_SUPABASE_API_BASE_URL,
-  RELEASE_SUPABASE_PROJECT_REF,
   createCloudflareProductionBuildEnvironment
 } from './lib/cloudflare-release.mjs';
 
@@ -16,22 +14,12 @@ await run('node', ['scripts/validate-cloudflare-free-release.mjs']);
 const config = JSON.parse(await readFile('wrangler.cloudflare-free.jsonc', 'utf8'));
 const commit = (await capture('git', ['rev-parse', 'HEAD'])).trim();
 const shortCommit = commit.slice(0, 12);
+const apiUpstreamBaseUrl = process.env.API_UPSTREAM_BASE_URL;
 
-await run('npm', ['run', 'build:supabase-v2-api']);
-await syncSupabaseRuntimeSecrets();
-await run('npx', [
-  'supabase@2.111.0',
-  'functions',
-  'deploy',
-  'v2-api',
-  '--project-ref',
-  RELEASE_SUPABASE_PROJECT_REF,
-  '--use-docker',
-  '--no-verify-jwt'
-]);
+await run('bash', ['scripts/deploy-pm2-api.sh']);
 await run('node', [
   'scripts/verify-cloudflare-free-deployment.mjs',
-  RELEASE_SUPABASE_API_BASE_URL,
+  apiUpstreamBaseUrl,
   '--api-only'
 ]);
 
@@ -59,7 +47,7 @@ console.log(
       commit,
       worker: config.name,
       publicUrl: RELEASE_PUBLIC_URL,
-      apiBaseUrl: RELEASE_SUPABASE_API_BASE_URL,
+      apiBaseUrl: apiUpstreamBaseUrl,
       smokeVerified: true
     },
     null,
@@ -67,67 +55,26 @@ console.log(
   )
 );
 
-async function syncSupabaseRuntimeSecrets() {
-  const requiredSecrets = [
-    'V2_RUNTIME_DATABASE_URL',
-    'JWT_SECRET',
-    'FIELD_ENCRYPTION_KEY',
-    'HASH_SECRET',
-    'V2_TRUSTED_PROXY_SECRET'
-  ];
-  for (const key of requiredSecrets) {
-    if (typeof process.env[key] !== 'string' || !process.env[key]) {
-      throw new Error(`Supabase 运行密钥缺少 ${key}`);
-    }
-  }
-
-  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'id-v2-supabase-secrets-'));
-  const envFile = path.join(temporaryDirectory, 'runtime.env');
-  const entries = {
-    APP_PUBLIC_URL: RELEASE_PUBLIC_URL,
-    AUTH_PROVIDER: 'local',
-    CORS_ORIGIN: RELEASE_PUBLIC_URL,
-    FIELD_ENCRYPTION_KEY: process.env.FIELD_ENCRYPTION_KEY,
-    HASH_SECRET: process.env.HASH_SECRET,
-    JWT_SECRET: process.env.JWT_SECRET,
-    V2_TRUSTED_PROXY_SECRET: process.env.V2_TRUSTED_PROXY_SECRET,
-    V2_RUNTIME_DATABASE_URL: process.env.V2_RUNTIME_DATABASE_URL
-  };
-
-  try {
-    await writeFile(
-      envFile,
-      `${Object.entries(entries)
-        .map(([key, value]) => `${key}=${encodeEnvValue(value)}`)
-        .join('\n')}\n`,
-      { mode: 0o600 }
-    );
-    await run('npx', [
-      'supabase@2.111.0',
-      'secrets',
-      'set',
-      '--env-file',
-      envFile,
-      '--project-ref',
-      RELEASE_SUPABASE_PROJECT_REF
-    ]);
-  } finally {
-    await rm(temporaryDirectory, { force: true, recursive: true });
-  }
-}
-
 async function syncCloudflareRuntimeSecrets() {
   const secret = process.env.V2_TRUSTED_PROXY_SECRET;
   if (typeof secret !== 'string' || secret.length < 32) {
     throw new Error('Cloudflare 运行密钥缺少 V2_TRUSTED_PROXY_SECRET');
   }
+  if (typeof apiUpstreamBaseUrl !== 'string' || !apiUpstreamBaseUrl) {
+    throw new Error('Cloudflare 运行配置缺少 API_UPSTREAM_BASE_URL');
+  }
 
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'id-v2-cloudflare-secrets-'));
   const secretFile = path.join(temporaryDirectory, 'worker-secrets.json');
   try {
-    await writeFile(secretFile, JSON.stringify({ V2_TRUSTED_PROXY_SECRET: secret }), {
-      mode: 0o600
-    });
+    await writeFile(
+      secretFile,
+      JSON.stringify({
+        API_UPSTREAM_BASE_URL: apiUpstreamBaseUrl,
+        V2_TRUSTED_PROXY_SECRET: secret
+      }),
+      { mode: 0o600 }
+    );
     await run('npx', [
       'wrangler@4.114.0',
       'secret',
@@ -139,13 +86,6 @@ async function syncCloudflareRuntimeSecrets() {
   } finally {
     await rm(temporaryDirectory, { force: true, recursive: true });
   }
-}
-
-function encodeEnvValue(value) {
-  if (/[\r\n]/.test(value)) {
-    throw new Error('Supabase 运行密钥不得包含换行符');
-  }
-  return JSON.stringify(value);
 }
 
 function capture(command, args) {

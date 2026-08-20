@@ -41,11 +41,13 @@ describe('IdBusinessV2MailViewerService', () => {
     hash: vi.fn((value: string | null | undefined) => (value ? `hash:${value}` : null))
   };
   const provider = { query: vi.fn() };
+  const logger = { log: vi.fn(), warn: vi.fn() };
   const service = new IdBusinessV2MailViewerService(
     repository as never,
     encryption as never,
     provider as never
   );
+  (service as unknown as { logger: typeof logger }).logger = logger;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,7 +70,8 @@ describe('IdBusinessV2MailViewerService', () => {
   it('verifies the buyer code locally and reads the managed mailbox without exposing secrets', async () => {
     const result = await service.query(
       { credential: 'Member@GMAIL.COM----buyer-code', limit: 5 },
-      '203.0.113.20'
+      '203.0.113.20',
+      'request-mail-query-success'
     );
 
     expect(provider.query).toHaveBeenCalledWith(
@@ -86,6 +89,12 @@ describe('IdBusinessV2MailViewerService', () => {
       'attempt-1',
       expect.objectContaining({ outcome: 'success', mailboxId: mailbox().id })
     );
+    const loggedEvent = String(logger.log.mock.calls[0]?.[0] ?? '');
+    expect(loggedEvent).toContain('request-mail-query-success');
+    expect(loggedEvent).toContain('managed_mailbox_query');
+    expect(loggedEvent).not.toContain('member@gmail.com');
+    expect(loggedEvent).not.toContain('buyer-code');
+    expect(loggedEvent).not.toContain('provider-app-password');
   });
 
   it('returns the same generic failure for an unknown mailbox, disabled mailbox or wrong code', async () => {

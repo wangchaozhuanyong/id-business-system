@@ -7,6 +7,7 @@ import { IdBusinessV2MailViewerService } from './id-business-v2-mail-viewer.serv
 interface PublicMailRequest {
   headers?: Record<string, string | string[] | undefined>;
   ip?: string;
+  requestId?: string;
 }
 
 @Public()
@@ -18,6 +19,10 @@ export class IdBusinessV2PublicMailboxController {
   @Header('Cache-Control', 'private, no-store')
   @Header('Pragma', 'no-cache')
   query(@Body() dto: QueryIdBusinessV2MailViewerDto, @Req() request?: PublicMailRequest) {
-    return this.mailViewerService.query(dto, resolveTrustedClientIp(request));
+    return this.mailViewerService.query(
+      dto,
+      resolveTrustedClientIp(request),
+      request?.requestId ?? 'public-mailbox-query'
+    );
   }
 }
