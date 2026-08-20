@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-.deploy/local-deploy.env}"
+EXPECTED_API_UPSTREAM_BASE_URL="${API_UPSTREAM_BASE_URL:-}"
 if [[ ! -f "$DEPLOY_ENV_FILE" ]]; then
   echo "Missing ${DEPLOY_ENV_FILE}. No remote API host is currently configured." >&2
   exit 1
@@ -36,6 +37,7 @@ require_var SERVER_APP_DIR
 require_var SERVER_API_PORT
 require_var SERVER_SSH_KEY
 require_var API_BASE_URL
+require_var API_UPSTREAM_BASE_URL
 
 case "${SERVER_PROVIDER,,}" in
   aws | amazon | ec2)
@@ -52,6 +54,16 @@ fi
 SSH_TARGET="${SERVER_SSH_USER}@${SERVER_SSH_HOST}"
 SSH_OPTS=(-i "$SERVER_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new)
 API_BASE_URL="${API_BASE_URL%/}"
+API_UPSTREAM_BASE_URL="${API_UPSTREAM_BASE_URL%/}"
+EXPECTED_API_UPSTREAM_BASE_URL="${EXPECTED_API_UPSTREAM_BASE_URL%/}"
+if [[ -n "$EXPECTED_API_UPSTREAM_BASE_URL" && "$API_UPSTREAM_BASE_URL" != "$EXPECTED_API_UPSTREAM_BASE_URL" ]]; then
+  echo "API_UPSTREAM_BASE_URL differs between deployment credentials and local deploy config" >&2
+  exit 1
+fi
+if [[ "$API_BASE_URL" != "${API_UPSTREAM_BASE_URL}/api" ]]; then
+  echo "SERVER_API_BASE_URL must equal API_UPSTREAM_BASE_URL plus /api" >&2
+  exit 1
+fi
 
 remote() {
   ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "$@"
@@ -128,13 +140,59 @@ cd "$APP_DIR"
 node - <<'NODE'
 const fs = require('fs');
 const text = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
-const required = ['DATABASE_URL', 'APP_PORT'];
+const required = [
+  'APP_PORT',
+  'CORS_ORIGIN',
+  'DATABASE_URL',
+  'FIELD_ENCRYPTION_KEY',
+  'HASH_SECRET',
+  'JWT_SECRET',
+  'V2_TRUSTED_PROXY_SECRET'
+];
 const missing = required.filter((key) => !new RegExp(`^${key}=`, 'm').test(text));
 if (missing.length) {
   console.error(`Remote .env is missing: ${missing.join(', ')}`);
   process.exit(1);
 }
+const edgeRuntime = text
+  .split(/\r?\n/)
+  .find((item) => item.startsWith('SUPABASE_EDGE_FUNCTION='))
+  ?.slice('SUPABASE_EDGE_FUNCTION='.length)
+  .trim()
+  .replace(/^['"]|['"]$/g, '');
+if (edgeRuntime === 'true') {
+  console.error('Remote Node API must not set SUPABASE_EDGE_FUNCTION=true.');
+  process.exit(1);
+}
 console.log('Remote .env has required runtime keys.');
+NODE
+
+node - <<'NODE'
+const tls = require('node:tls');
+const hosts = ['imap.gmail.com', 'imap.mail.me.com'];
+Promise.all(
+  hosts.map(
+    (host) =>
+      new Promise((resolve, reject) => {
+        const socket = tls.connect({ host, port: 993, servername: host });
+        const timer = setTimeout(() => socket.destroy(new Error(`IMAP TLS timeout: ${host}`)), 10000);
+        socket.once('secureConnect', () => {
+          clearTimeout(timer);
+          socket.destroy();
+          resolve();
+        });
+        socket.once('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      })
+  )
+)
+  .then(() => console.log('Remote IMAP TLS egress is available.'))
+  .catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 NODE
 
 if ! pm2 jlist | node -e "
@@ -206,5 +264,7 @@ REMOTE_HEALTH
 echo "==> Checking public API health and route presence"
 check_http_status GET "${API_BASE_URL}/health/ready" 200
 check_http_status GET "${API_BASE_URL}/id-business-v2/scope" 401
+check_http_status GET "${API_BASE_URL}/id-business-v2/workspace-mailboxes" 401
+check_http_status POST "${API_BASE_URL}/public/mailbox/query" 400
 
 echo "Deployment finished for PM2 API: ${SERVER_PM2_APP}"

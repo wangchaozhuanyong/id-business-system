@@ -5,8 +5,6 @@ import {
   RELEASE_ACCOUNT_ID,
   RELEASE_PUBLIC_URL,
   RELEASE_REPOSITORY,
-  RELEASE_SUPABASE_API_BASE_URL,
-  RELEASE_SUPABASE_FUNCTION_REGION,
   RELEASE_V2_REALTIME_CHANGES_ENABLED,
   RELEASE_WORKER_NAME,
   createCloudflareProductionBuildEnvironment,
@@ -25,6 +23,7 @@ const validEnvironment = {
   FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
   HASH_SECRET: 'h'.repeat(32),
   V2_TRUSTED_PROXY_SECRET: 't'.repeat(32),
+  API_UPSTREAM_BASE_URL: 'https://api.id-business.company.cn',
   SMOKE_TEST_USERNAME: 'production_release_smoke',
   SMOKE_TEST_PASSWORD: 'p'.repeat(24)
 };
@@ -38,9 +37,7 @@ const validConfig = {
     run_worker_first: ['/api/*']
   },
   vars: {
-    APP_PUBLIC_URL: RELEASE_PUBLIC_URL,
-    SUPABASE_API_BASE_URL: RELEASE_SUPABASE_API_BASE_URL,
-    SUPABASE_FUNCTION_REGION: RELEASE_SUPABASE_FUNCTION_REGION
+    APP_PUBLIC_URL: RELEASE_PUBLIC_URL
   }
 };
 
@@ -114,9 +111,15 @@ test('retries transient network failures and preserves the final error', async (
   assert.equal(attempts, 3);
 });
 
-test('pins the Supabase function to the production database region', () => {
-  assert.equal(RELEASE_SUPABASE_FUNCTION_REGION, 'ap-northeast-1');
-  assert.equal(validConfig.vars.SUPABASE_FUNCTION_REGION, RELEASE_SUPABASE_FUNCTION_REGION);
+test('requires a dedicated Node API upstream outside public Worker configuration', () => {
+  assert.equal(validateReleaseEnvironment(validEnvironment).length, 0);
+  assert.equal('API_UPSTREAM_BASE_URL' in validConfig.vars, false);
+  assert.ok(
+    validateReleaseEnvironment({
+      ...validEnvironment,
+      API_UPSTREAM_BASE_URL: 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api'
+    }).some((error) => error.includes('Node API'))
+  );
 });
 
 test('keeps the production performance probe within smoke permissions and always logs out', async () => {
@@ -172,29 +175,35 @@ test('rejects local database, weak smoke credentials and target drift', () => {
     name: 'wrong-worker',
     alias: { '@cloudflare-prisma/client': './generated/client.ts' },
     compatibility_flags: ['nodejs_compat'],
-    hyperdrive: [{ binding: 'HYPERDRIVE', id: 'a'.repeat(32) }]
+    hyperdrive: [{ binding: 'HYPERDRIVE', id: 'a'.repeat(32) }],
+    vars: {
+      ...validConfig.vars,
+      SUPABASE_API_BASE_URL: 'https://fjquufgbnxyocmuzltxi.supabase.co/functions/v1/v2-api'
+    }
   });
   assert.ok(configErrors.some((error) => error.includes('account_id')));
   assert.ok(configErrors.some((error) => error.includes('Worker 名称')));
   assert.ok(configErrors.some((error) => error.includes('NestJS/Prisma')));
   assert.ok(configErrors.some((error) => error.includes('Hyperdrive')));
   assert.ok(configErrors.some((error) => error.includes('nodejs_compat')));
+  assert.ok(configErrors.some((error) => error.includes('Supabase Edge API')));
 });
 
-test('deploys and verifies Supabase API before switching the Cloudflare proxy', async () => {
+test('deploys and verifies the Node API before switching the Cloudflare proxy', async () => {
   const source = await readFile(new URL('./deploy-cloudflare-free.mjs', import.meta.url), 'utf8');
-  const supabaseDeploy = source.indexOf("'functions',\n  'deploy',\n  'v2-api'");
-  const apiVerification = source.indexOf("RELEASE_SUPABASE_API_BASE_URL,\n  '--api-only'");
+  const nodeDeploy = source.indexOf("run('bash', ['scripts/deploy-pm2-api.sh'])");
+  const apiVerification = source.indexOf("apiUpstreamBaseUrl,\n  '--api-only'");
   const cloudflareDeploy = source.indexOf("'wrangler@4.114.0',\n  'deploy'");
 
-  assert.notEqual(supabaseDeploy, -1);
+  assert.notEqual(nodeDeploy, -1);
   assert.notEqual(apiVerification, -1);
   assert.notEqual(cloudflareDeploy, -1);
-  assert.match(source, /'--use-docker'/);
   assert.match(source, /'secret',\s*\n\s*'bulk'/);
-  assert.ok(supabaseDeploy < apiVerification);
+  assert.doesNotMatch(source, /'functions',\s*\n\s*'deploy'/);
+  assert.ok(nodeDeploy < apiVerification);
   assert.ok(apiVerification < cloudflareDeploy);
   assert.match(source, /V2_TRUSTED_PROXY_SECRET/);
+  assert.match(source, /API_UPSTREAM_BASE_URL/);
 });
 
 test('keeps Supabase Edge authentication configurable for the current local accounts', async () => {
@@ -215,6 +224,7 @@ test('requires the scoped runtime database role without an admin fallback', asyn
   );
 
   assert.match(source, /requireEnv\('V2_RUNTIME_DATABASE_URL'\)/);
+  assert.match(source, /V2_SUPABASE_PROJECT_REF/);
   assert.doesNotMatch(source, /firstEnv\('SUPABASE_DB_URL', 'DATABASE_URL'\)/);
   assert.match(source, /id_business_v2_runtime/);
 

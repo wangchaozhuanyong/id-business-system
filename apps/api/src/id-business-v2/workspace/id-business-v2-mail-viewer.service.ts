@@ -3,9 +3,14 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   ServiceUnavailableException
 } from '@nestjs/common';
-import { V2_MAIL_VIEWER_LIMITS, type V2MailViewerQueryResult } from '@apple-business/shared';
+import {
+  V2_MAIL_VIEWER_LIMITS,
+  type V2MailProvider,
+  type V2MailViewerQueryResult
+} from '@apple-business/shared';
 import { timingSafeEqual } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import type { QueryIdBusinessV2MailViewerDto } from './dto/id-business-v2-mail-viewer.dto';
@@ -24,6 +29,8 @@ const MAX_IP_ATTEMPTS = 40;
 
 @Injectable()
 export class IdBusinessV2MailViewerService {
+  private readonly logger = new Logger(IdBusinessV2MailViewerService.name);
+
   constructor(
     private readonly repository: IdBusinessV2ManagedMailboxRepository,
     private readonly encryption: FieldEncryptionService,
@@ -32,8 +39,10 @@ export class IdBusinessV2MailViewerService {
 
   async query(
     dto: QueryIdBusinessV2MailViewerDto,
-    requestIp?: string | null
+    requestIp?: string | null,
+    requestId = 'public-mailbox-query'
   ): Promise<V2MailViewerQueryResult> {
+    const startedAt = Date.now();
     const { email, queryCode } = this.normalizeCredential(dto.credential);
     const limit = this.normalizeLimit(dto.limit);
     const emailHash = this.encryption.hash(email);
@@ -48,6 +57,7 @@ export class IdBusinessV2MailViewerService {
       maxIpAttempts: MAX_IP_ATTEMPTS
     });
     if (!reservation.allowed) {
+      this.logQueryEvent({ outcome: 'rate_limited', requestId, startedAt });
       throw new HttpException('查询过于频繁，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
     }
 
@@ -61,6 +71,7 @@ export class IdBusinessV2MailViewerService {
           outcome: 'invalid'
         });
       }
+      this.logQueryEvent({ outcome: 'invalid', requestId, startedAt });
       throw new BadRequestException('邮箱或邮件查询码不正确');
     }
 
@@ -69,6 +80,13 @@ export class IdBusinessV2MailViewerService {
       await this.repository.updateQueryAttempt(reservation.attemptId, {
         mailboxId: mailbox.id,
         outcome: 'provider_error'
+      });
+      this.logQueryEvent({
+        errorCode: 'credential_unavailable',
+        outcome: 'provider_error',
+        provider: mailbox.provider,
+        requestId,
+        startedAt
       });
       throw new ServiceUnavailableException('邮箱授权数据不可用，请联系卖家');
     }
@@ -91,6 +109,12 @@ export class IdBusinessV2MailViewerService {
           status: 'active'
         })
       ]);
+      this.logQueryEvent({
+        outcome: 'success',
+        provider: mailbox.provider,
+        requestId,
+        startedAt
+      });
       return {
         email: mailbox.email,
         items,
@@ -107,11 +131,35 @@ export class IdBusinessV2MailViewerService {
           lastErrorCode: 'provider_auth_failed',
           status: 'auth_failed'
         });
+        this.logQueryEvent({
+          errorCode: 'provider_auth_failed',
+          outcome: 'provider_error',
+          provider: mailbox.provider,
+          requestId,
+          startedAt
+        });
         throw new ServiceUnavailableException('邮箱授权已失效，请联系卖家更新');
       }
       if (error instanceof MailProviderUnavailableError && error.code === 'edge_runtime') {
+        this.logQueryEvent({
+          errorCode: 'edge_runtime',
+          outcome: 'provider_error',
+          provider: mailbox.provider,
+          requestId,
+          startedAt
+        });
         throw new ServiceUnavailableException('邮件查询服务尚未配置，请联系卖家');
       }
+      this.logQueryEvent({
+        errorCode:
+          error instanceof MailProviderUnavailableError
+            ? error.code
+            : 'unclassified_provider_error',
+        outcome: 'provider_error',
+        provider: mailbox.provider,
+        requestId,
+        startedAt
+      });
       throw new ServiceUnavailableException('暂时无法连接邮箱服务，请稍后重试');
     }
   }
@@ -158,5 +206,28 @@ export class IdBusinessV2MailViewerService {
   private normalizeIp(value: string | null | undefined) {
     const ip = value?.split(',')[0]?.trim();
     return ip ? (ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip) : null;
+  }
+
+  private logQueryEvent(input: {
+    errorCode?: string;
+    outcome: 'invalid' | 'provider_error' | 'rate_limited' | 'success';
+    provider?: V2MailProvider;
+    requestId: string;
+    startedAt: number;
+  }) {
+    const event = JSON.stringify({
+      durationMs: Math.max(0, Date.now() - input.startedAt),
+      errorCode: input.errorCode,
+      outcome: input.outcome,
+      provider: input.provider,
+      rateLimited: input.outcome === 'rate_limited',
+      requestId: input.requestId,
+      type: 'managed_mailbox_query'
+    });
+    if (input.outcome === 'success') {
+      this.logger.log(event);
+      return;
+    }
+    this.logger.warn(event);
   }
 }

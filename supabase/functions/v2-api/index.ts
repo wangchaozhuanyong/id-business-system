@@ -55,7 +55,10 @@ function resolveEdgeDatabaseUrl() {
   }
   if (isSupabasePooler) {
     const poolerPrefix = 'id_business_v2_runtime.';
-    if (!connectionUrl.username.startsWith(poolerPrefix) || connectionUrl.username.length <= poolerPrefix.length) {
+    if (
+      !connectionUrl.username.startsWith(poolerPrefix) ||
+      connectionUrl.username.length <= poolerPrefix.length
+    ) {
       throw new Error('V2_RUNTIME_DATABASE_URL must use the scoped runtime pooler role');
     }
     const scopedProjectRef = connectionUrl.username.slice(poolerPrefix.length);
@@ -67,15 +70,22 @@ function resolveEdgeDatabaseUrl() {
 }
 
 function getSupabaseProjectRef() {
+  const configuredProjectRef = Deno.env.get('V2_SUPABASE_PROJECT_REF')?.trim();
+  if (configuredProjectRef) {
+    if (!/^[a-z0-9]{20}$/.test(configuredProjectRef)) {
+      throw new Error('V2_SUPABASE_PROJECT_REF is invalid');
+    }
+    return configuredProjectRef;
+  }
+
   try {
     const projectUrl = new URL(requireEnv('SUPABASE_URL'));
-    if (!projectUrl.hostname.endsWith('.supabase.co')) {
-      return '';
-    }
-    return projectUrl.hostname.split('.', 1)[0];
+    const match = projectUrl.hostname.match(/^([a-z0-9]{20})\.supabase\.co$/);
+    if (match?.[1]) return match[1];
   } catch {
-    return '';
+    // Fall through to the explicit configuration error below.
   }
+  throw new Error('V2_SUPABASE_PROJECT_REF is required when SUPABASE_URL is internal');
 }
 
 for (const name of requiredSecrets) {

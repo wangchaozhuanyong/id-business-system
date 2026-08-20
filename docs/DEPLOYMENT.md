@@ -83,7 +83,7 @@ curl --fail https://your-api-domain.com/api/health/live
 curl --fail https://your-api-domain.com/api/health/ready
 ```
 
-## 6. Cloudflare / Supabase
+## 6. Cloudflare / Node API
 
 Cloudflare 静态管理端与轻量 API 转发构建：
 
@@ -92,14 +92,16 @@ npm run build:cloudflare-free
 npm run cloudflare:free:dry-run
 ```
 
-Supabase Edge Function 构建：
+Node API 远程部署配置从模板复制到 Git 忽略目录：
 
 ```bash
-npm run build:supabase-v2-api
+cp deploy/pm2-api.env.example .deploy/local-deploy.env
+npm run deploy:pm2-api
 ```
 
-发布前确认 Cloudflare、Supabase 项目和数据库都属于当前系统，且域名与
-`CORS_ORIGIN`、`APP_PUBLIC_URL`、`VITE_API_BASE_URL` 一致。
+发布前确认 Cloudflare、Node API、Supabase 数据库都属于当前系统，且域名与
+`CORS_ORIGIN`、`APP_PUBLIC_URL`、`API_UPSTREAM_BASE_URL` 一致。Node 环境必须使用
+`SUPABASE_EDGE_FUNCTION=false`。
 
 ## 7. 发布检查
 
@@ -113,7 +115,7 @@ npm run git:readiness
 ```
 
 当前生产使用 Cloudflare 承载静态管理端，`/api/*` 仅做轻量同源转发；NestJS、
-Prisma、认证和业务事务运行在 Supabase Edge Function。确认当前分支、提交、远端和目标
+Prisma、认证、业务事务和 IMAP 都运行在独立 Node API。确认当前分支、提交、远端和目标
 环境后，执行一次：
 
 ```bash
@@ -125,14 +127,14 @@ Cloudflare 发布命令包含以下硬门禁：
 - 当前分支必须为干净的 `main`，且 `HEAD` 与 `origin/main` 完全一致。
 - GitHub `quality`、`production-images` 必须成功，`main` 必须启用 PR、管理员约束、线性历史、
   对话解决和禁止强推/删除的保护规则。
-- Supabase project/function、Cloudflare account/Worker 和公开域名必须与仓库固定生产配置一致。
-- 发布顺序固定为：构建并发布 Supabase API、完成 API 独立巡检、发布 Cloudflare 静态端与转发层、完成整站巡检。
+- Supabase project/database、Node API、Cloudflare account/Worker 和公开域名必须与仓库固定生产配置一致。
+- 发布顺序固定为：部署 Node API、完成 API 独立巡检、发布 Cloudflare 静态端与转发层、完成整站巡检。
 - Cloudflare Worker 不得绑定 Hyperdrive，不得打包 NestJS/Prisma；前端固定使用同源 `/api`。
 - `.deploy/cloudflare-free.secrets.json` 必须将数据库凭据拆分为
   `V2_RUNTIME_DATABASE_URL`、`AUDIT_DATABASE_URL`、`MIGRATION_DATABASE_URL`、
   `BACKUP_DATABASE_URL`，并包含
   `JWT_SECRET`、`FIELD_ENCRYPTION_KEY`、`HASH_SECRET`、`SMOKE_TEST_USERNAME`、
-  `SMOKE_TEST_PASSWORD`。该文件必须保持 Git 忽略且权限为 `0600`。
+  `SMOKE_TEST_PASSWORD`、`API_UPSTREAM_BASE_URL`。该文件必须保持 Git 忽略且权限为 `0600`。
 - `V2_RUNTIME_DATABASE_URL` 只允许当前业务表 DML，不拥有表、不具备 `ALTER`、`TRUNCATE`、
   禁用触发器或修改 `_prisma_migrations` 的权限；`AUDIT_DATABASE_URL` 只读；
   `MIGRATION_DATABASE_URL` 仅供离线迁移管理员使用，不会注入发布、巡检或应用运行时。
