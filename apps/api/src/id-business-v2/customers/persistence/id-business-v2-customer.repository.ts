@@ -6,7 +6,10 @@ import {
   verifySensitiveAccessApproval,
   type SensitiveAccessApprovalCheckInput
 } from '../../../common/sensitive-access-approval';
-import type { V2CommandTransaction } from '../../runtime/public-api';
+import {
+  buildV2StringArrayContainsFilter,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 
 export const CUSTOMER_INCLUDE = {
   sourceOption: {
@@ -174,44 +177,34 @@ export class IdBusinessV2CustomerRepository {
         : undefined,
       OR: input.keyword
         ? [
-            { name: { contains: input.keyword, mode: 'insensitive' } },
-            { wechat: { contains: input.keyword, mode: 'insensitive' } },
+            { name: { contains: input.keyword } },
+            { wechat: { contains: input.keyword } },
             { wechatHash: input.contactHash ?? undefined },
             {
-              wechatSearchTokens: input.wechatSearchTokens.length
-                ? { hasEvery: input.wechatSearchTokens }
-                : undefined
+              wechatSearchTokens: buildV2StringArrayContainsFilter(input.wechatSearchTokens)
             },
-            { qq: { contains: input.keyword, mode: 'insensitive' } },
+            { qq: { contains: input.keyword } },
             { qqHash: input.contactHash ?? undefined },
             {
-              qqSearchTokens: input.qqSearchTokens.length
-                ? { hasEvery: input.qqSearchTokens }
-                : undefined
+              qqSearchTokens: buildV2StringArrayContainsFilter(input.qqSearchTokens)
             },
             {
               phoneTail: {
-                contains: input.contactKeyword?.slice(-8) ?? input.keyword,
-                mode: 'insensitive'
+                contains: input.contactKeyword?.slice(-8) ?? input.keyword
               }
             },
             { phoneHash: input.contactHash ?? undefined },
             {
-              phoneSearchTokens: input.phoneSearchTokens.length
-                ? { hasEvery: input.phoneSearchTokens }
-                : undefined
+              phoneSearchTokens: buildV2StringArrayContainsFilter(input.phoneSearchTokens)
             },
             {
               whatsappTail: {
-                contains: input.contactKeyword?.slice(-8) ?? input.keyword,
-                mode: 'insensitive'
+                contains: input.contactKeyword?.slice(-8) ?? input.keyword
               }
             },
             { whatsappHash: input.contactHash ?? undefined },
             {
-              whatsappSearchTokens: input.whatsappSearchTokens.length
-                ? { hasEvery: input.whatsappSearchTokens }
-                : undefined
+              whatsappSearchTokens: buildV2StringArrayContainsFilter(input.whatsappSearchTokens)
             }
           ]
         : undefined

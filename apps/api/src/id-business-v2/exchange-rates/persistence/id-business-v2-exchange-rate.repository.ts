@@ -88,9 +88,9 @@ export class IdBusinessV2ExchangeRateRepository {
       OR: input.keyword
         ? [
             ...(input.keywordIsUuid ? [{ id: input.keyword }] : []),
-            { remark: { contains: input.keyword, mode: 'insensitive' } },
-            { createdBy: { is: { username: { contains: input.keyword, mode: 'insensitive' } } } },
-            { createdBy: { is: { displayName: { contains: input.keyword, mode: 'insensitive' } } } }
+            { remark: { contains: input.keyword } },
+            { createdBy: { is: { username: { contains: input.keyword } } } },
+            { createdBy: { is: { displayName: { contains: input.keyword } } } }
           ]
         : undefined
     };
@@ -150,51 +150,8 @@ export class IdBusinessV2ExchangeRateRepository {
   }
 
   async findSettings() {
-    const retentionDaysExpression = (await this.hasRetentionDaysColumn())
-      ? Prisma.sql`"retention_days"`
-      : Prisma.sql`30`;
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        id: number;
-        autoEnabled: boolean;
-        intervalMinutes: number;
-        targetAmountRmb: Prisma.Decimal;
-        retentionDays: number;
-        nextRunAt: Date | null;
-        updatedByUserId: string | null;
-        createdAt: Date;
-        updatedAt: Date;
-      }>
-    >(Prisma.sql`
-      SELECT
-        "id",
-        "auto_enabled" AS "autoEnabled",
-        "interval_minutes" AS "intervalMinutes",
-        "target_amount_rmb" AS "targetAmountRmb",
-        ${retentionDaysExpression} AS "retentionDays",
-        "next_run_at" AS "nextRunAt",
-        "updated_by_user_id" AS "updatedByUserId",
-        "created_at" AS "createdAt",
-        "updated_at" AS "updatedAt"
-      FROM "id_business_v2_exchange_rate_settings"
-      WHERE "id" = 1
-      LIMIT 1
-    `);
-    const row = rows[0];
+    const row = await this.prisma.idBusinessV2ExchangeRateSettings.findUnique({ where: { id: 1 } });
     return row ? mapExchangeRateSettings(row) : null;
-  }
-
-  private async hasRetentionDaysColumn() {
-    const rows = await this.prisma.$queryRaw<Array<{ exists: boolean }>>(Prisma.sql`
-      SELECT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'id_business_v2_exchange_rate_settings'
-          AND column_name = 'retention_days'
-      ) AS "exists"
-    `);
-    return rows[0]?.exists ?? false;
   }
 
   async createDefaultSettings(tx: V2CommandTransaction, now: Date) {
@@ -232,35 +189,34 @@ export class IdBusinessV2ExchangeRateRepository {
 
   async claimDueSchedule(tx: V2CommandTransaction) {
     const rows = await tx.$queryRaw<
-      Array<{ targetAmountRmb: Prisma.Decimal; intervalMinutes: number; nextRunAt: Date }>
+      Array<{ targetAmountRmb: Prisma.Decimal; intervalMinutes: number }>
     >(Prisma.sql`
-      UPDATE "id_business_v2_exchange_rate_settings"
-      SET
-        "next_run_at" = to_timestamp(
-          (
-            FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) / ("interval_minutes" * 60)) + 1
-          ) * ("interval_minutes" * 60)
-        ),
-        "updated_at" = clock_timestamp()
-      WHERE
-        "id" = 1
-        AND "auto_enabled" = true
-        AND "next_run_at" <= clock_timestamp()
-      RETURNING
+      SELECT
         "target_amount_rmb" AS "targetAmountRmb",
-        "interval_minutes" AS "intervalMinutes",
-        "next_run_at" AS "nextRunAt"
+        "interval_minutes" AS "intervalMinutes"
+      FROM "id_business_v2_exchange_rate_settings"
+      WHERE "id" = 1
+        AND "auto_enabled" = true
+        AND "next_run_at" <= UTC_TIMESTAMP(6)
+      FOR UPDATE
     `);
     const row = rows[0];
-    return row
-      ? {
-          ...row,
-          targetAmountRmb: mapAmount4(
-            row.targetAmountRmb,
-            'id_business_v2_exchange_rate_settings.target_amount_rmb'
-          )
-        }
-      : null;
+    if (!row) return null;
+
+    const intervalMs = row.intervalMinutes * 60 * 1_000;
+    const nextRunAt = new Date((Math.floor(Date.now() / intervalMs) + 1) * intervalMs);
+    await tx.idBusinessV2ExchangeRateSettings.update({
+      where: { id: 1 },
+      data: { nextRunAt }
+    });
+    return {
+      ...row,
+      nextRunAt,
+      targetAmountRmb: mapAmount4(
+        row.targetAmountRmb,
+        'id_business_v2_exchange_rate_settings.target_amount_rmb'
+      )
+    };
   }
 
   createRun(
@@ -361,8 +317,8 @@ export class IdBusinessV2ExchangeRateRepository {
       OR: input.keyword
         ? [
             ...(input.keywordIsUuid ? [{ id: input.keyword }] : []),
-            { errorCode: { contains: input.keyword, mode: 'insensitive' } },
-            { errorMessage: { contains: input.keyword, mode: 'insensitive' } }
+            { errorCode: { contains: input.keyword } },
+            { errorMessage: { contains: input.keyword } }
           ]
         : undefined,
       snapshot: input.provider
@@ -471,10 +427,10 @@ export class IdBusinessV2ExchangeRateRepository {
       capturedAt: input.recordedAt,
       OR: input.keyword
         ? [
-            { manualReason: { contains: input.keyword, mode: 'insensitive' } },
-            { sourceReference: { contains: input.keyword, mode: 'insensitive' } },
-            { createdBy: { is: { username: { contains: input.keyword, mode: 'insensitive' } } } },
-            { createdBy: { is: { displayName: { contains: input.keyword, mode: 'insensitive' } } } }
+            { manualReason: { contains: input.keyword } },
+            { sourceReference: { contains: input.keyword } },
+            { createdBy: { is: { username: { contains: input.keyword } } } },
+            { createdBy: { is: { displayName: { contains: input.keyword } } } }
           ]
         : undefined
     };
@@ -549,10 +505,129 @@ export class IdBusinessV2ExchangeRateRepository {
   }
 
   async cleanupHistory(tx: V2CommandTransaction) {
-    const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(
-      Prisma.sql`SELECT "cleanup_id_business_v2_exchange_rate_history"() AS "result"`
+    const settings = await tx.idBusinessV2ExchangeRateSettings.findUnique({
+      where: { id: 1 },
+      select: { retentionDays: true }
+    });
+    const retentionDays = Math.min(Math.max(settings?.retentionDays ?? 30, 7), 3650);
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1_000);
+
+    const runCandidates = await tx.idBusinessV2ExchangeRateRun.findMany({
+      where: { status: { not: 'running' }, startedAt: { lt: cutoff } },
+      select: {
+        id: true,
+        snapshot: { select: { id: true, _count: { select: { giftCards: true } } } }
+      }
+    });
+    const referencedSnapshotIds = runCandidates
+      .map((run) => run.snapshot?.id)
+      .filter((id): id is string => Boolean(id));
+    const financeReferences = referencedSnapshotIds.length
+      ? await tx.idBusinessV2FinanceFxRateSnapshot.findMany({
+          where: { source: 'combined_p2p', sourceReference: { in: referencedSnapshotIds } },
+          select: { sourceReference: true }
+        })
+      : [];
+    const financeReferenceSet = new Set(
+      financeReferences.map((snapshot) => snapshot.sourceReference).filter(Boolean)
     );
-    return rows[0]?.result;
+    const eligibleRuns = runCandidates.filter(
+      (run) =>
+        (run.snapshot?._count.giftCards ?? 0) === 0 &&
+        (!run.snapshot || !financeReferenceSet.has(run.snapshot.id))
+    );
+    const eligibleRunIds = eligibleRuns.map((run) => run.id);
+    const eligibleSnapshotIds = eligibleRuns
+      .map((run) => run.snapshot?.id)
+      .filter((id): id is string => Boolean(id));
+
+    const fxCandidates = await tx.idBusinessV2FinanceFxRateSnapshot.findMany({
+      where: {
+        source: { in: AUTOMATIC_FX_RATE_SOURCES },
+        capturedAt: { lt: cutoff }
+      },
+      select: {
+        id: true,
+        _count: {
+          select: {
+            journalLines: true,
+            expenses: true,
+            supplierPayments: true,
+            accountPurchases: true,
+            giftCardPurchases: true,
+            orderReceipts: true
+          }
+        }
+      }
+    });
+    const eligibleFxSnapshotIds = fxCandidates
+      .filter((snapshot) => Object.values(snapshot._count).every((count) => count === 0))
+      .map((snapshot) => snapshot.id);
+
+    const providerSnapshots = eligibleSnapshotIds.length
+      ? await tx.idBusinessV2ExchangeRateProviderSnapshot.findMany({
+          where: { snapshotId: { in: eligibleSnapshotIds } },
+          select: { id: true }
+        })
+      : [];
+    const providerSnapshotIds = providerSnapshots.map((snapshot) => snapshot.id);
+    await tx.$executeRaw`SET @idv2_exchange_rate_retention_cleanup = 1`;
+    let deletedQuoteSamples: number;
+    let deletedProviderSnapshots: number;
+    let deletedSnapshots: number;
+    let deletedRuns: number;
+    let deletedFxRateSnapshots: number;
+    try {
+      deletedQuoteSamples = providerSnapshotIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
+              where: { providerSnapshotId: { in: providerSnapshotIds } }
+            })
+          ).count
+        : 0;
+      deletedProviderSnapshots = eligibleSnapshotIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
+              where: { snapshotId: { in: eligibleSnapshotIds } }
+            })
+          ).count
+        : 0;
+      deletedSnapshots = eligibleRunIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
+              where: { runId: { in: eligibleRunIds } }
+            })
+          ).count
+        : 0;
+      deletedRuns = eligibleRunIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateRun.deleteMany({
+              where: { id: { in: eligibleRunIds } }
+            })
+          ).count
+        : 0;
+      deletedFxRateSnapshots = eligibleFxSnapshotIds.length
+        ? (
+            await tx.idBusinessV2FinanceFxRateSnapshot.deleteMany({
+              where: { id: { in: eligibleFxSnapshotIds } }
+            })
+          ).count
+        : 0;
+    } finally {
+      await tx.$executeRaw`SET @idv2_exchange_rate_retention_cleanup = NULL`;
+    }
+
+    return {
+      cutoff: cutoff.toISOString(),
+      retentionDays,
+      deletedRuns,
+      deletedSnapshots,
+      deletedProviderSnapshots,
+      deletedQuoteSamples,
+      deletedFxRateSnapshots,
+      preservedReferencedRuns: runCandidates.length - eligibleRuns.length,
+      preservedReferencedFxRateSnapshots: fxCandidates.length - eligibleFxSnapshotIds.length
+    };
   }
 }
 

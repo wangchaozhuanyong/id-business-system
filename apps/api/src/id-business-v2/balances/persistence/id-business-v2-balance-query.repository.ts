@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { mapAmount4, type Amount4 } from '../../runtime/public-api';
+import {
+  buildV2StringArrayContainsFilter,
+  mapAmount4,
+  type Amount4
+} from '../../runtime/public-api';
 
 export interface TopupWorkbenchBalanceRange {
   equals?: string;
@@ -117,15 +121,13 @@ export class IdBusinessV2BalanceQueryRepository {
       countryOptionId: criteria.countryOptionId ?? undefined,
       OR: criteria.keyword
         ? [
-            { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            { appleIdMasked: { contains: criteria.keyword } },
             {
-              appleIdSearchTokens: criteria.appleIdSearchTokens.length
-                ? { hasEvery: criteria.appleIdSearchTokens }
-                : undefined
+              appleIdSearchTokens: buildV2StringArrayContainsFilter(criteria.appleIdSearchTokens)
             },
             {
               soldByOrder: {
-                is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { orderNo: { contains: criteria.keyword } }
               }
             }
           ]

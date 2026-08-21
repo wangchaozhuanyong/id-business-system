@@ -213,7 +213,7 @@ describe('IdBusinessV2OrderLockService', () => {
     const orderSql = tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray;
     const accountSql = tx.$queryRaw.mock.calls[1]?.[0] as TemplateStringsArray;
     expect(Array.from(orderSql).join('')).toContain('FOR UPDATE');
-    expect(Array.from(accountSql).join('')).toContain('FOR UPDATE OF account');
+    expect(Array.from(accountSql).join('')).toContain('FOR UPDATE');
     expect(tx.idBusinessV2AccountLock.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({

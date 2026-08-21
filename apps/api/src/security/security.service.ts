@@ -19,6 +19,7 @@ import { TimedMemoryCache } from '../common/cache/timed-memory-cache';
 import { FieldEncryptionService } from '../common/crypto/field-encryption.service';
 import { getPagination, type PaginationQuery } from '../common/pagination';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { acquireMysqlTransactionLock } from '../common/prisma/mysql-transaction-lock';
 
 const ACTIVE_SESSION_TOUCH_INTERVAL_MS = 60_000;
 const ACTIVE_TOKEN_CACHE_TTL_MS = 15_000;
@@ -298,7 +299,7 @@ export class SecurityService {
     try {
       const rows = await this.prisma.$queryRaw<SecurityOverviewCountsRow[]>`
         SELECT
-          (SELECT COUNT(*) FROM login_logs WHERE status::text = 'failed') AS "failedLoginCount",
+          (SELECT COUNT(*) FROM login_logs WHERE status = 'failed') AS "failedLoginCount",
           (SELECT COUNT(*) FROM login_logs WHERE abnormal = true) AS "abnormalLoginCount",
           (
             SELECT COUNT(*)
@@ -308,7 +309,7 @@ export class SecurityService {
           (
             SELECT COUNT(*)
             FROM sensitive_access_approvals
-            WHERE status::text = 'pending'
+            WHERE status = 'pending'
           ) AS "pendingApprovalCount",
           (SELECT COUNT(*) FROM ip_whitelists WHERE enabled = true) AS "enabledWhitelistCount"
       `;
@@ -394,12 +395,7 @@ export class SecurityService {
       const lockKeys = [`security:login:username:${usernameKey}`];
       if (ip) lockKeys.push(`security:login:ip:${ip}`);
       for (const key of lockKeys.sort()) {
-        await client.$queryRaw`
-          SELECT 1::integer AS "locked"
-          FROM (
-            SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
-          ) AS "login_attempt_lock"
-        `;
+        await acquireMysqlTransactionLock(client, key);
       }
 
       const policy = await client.securitySetting.findUnique({ where: { key: 'password_policy' } });
@@ -416,7 +412,7 @@ export class SecurityService {
         client.loginLog.count({
           where: {
             ...baseWhere,
-            username: { equals: username, mode: 'insensitive' }
+            username: { equals: username }
           }
         })
       ];
@@ -742,9 +738,9 @@ export class SecurityService {
       abnormal,
       OR: keyword
         ? [
-            { username: { contains: keyword, mode: 'insensitive' } },
-            { ip: { contains: keyword, mode: 'insensitive' } },
-            { failureReason: { contains: keyword, mode: 'insensitive' } }
+            { username: { contains: keyword } },
+            { ip: { contains: keyword } },
+            { failureReason: { contains: keyword } }
           ]
         : undefined
     };
@@ -814,10 +810,10 @@ export class SecurityService {
       revokedAt: revoked === undefined ? undefined : revoked ? { not: null } : null,
       OR: keyword
         ? [
-            { ip: { contains: keyword, mode: 'insensitive' } },
-            { userAgent: { contains: keyword, mode: 'insensitive' } },
-            { user: { is: { username: { contains: keyword, mode: 'insensitive' } } } },
-            { user: { is: { displayName: { contains: keyword, mode: 'insensitive' } } } }
+            { ip: { contains: keyword } },
+            { userAgent: { contains: keyword } },
+            { user: { is: { username: { contains: keyword } } } },
+            { user: { is: { displayName: { contains: keyword } } } }
           ]
         : undefined
     };
@@ -975,10 +971,7 @@ export class SecurityService {
     const where: Prisma.UserWhereInput = {
       deletedAt: null,
       OR: keyword
-        ? [
-            { username: { contains: keyword, mode: 'insensitive' } },
-            { displayName: { contains: keyword, mode: 'insensitive' } }
-          ]
+        ? [{ username: { contains: keyword } }, { displayName: { contains: keyword } }]
         : undefined
     };
     const [users, total] = await Promise.all([
@@ -1353,10 +1346,7 @@ export class SecurityService {
       scope: scope ?? undefined,
       enabled,
       OR: keyword
-        ? [
-            { ipOrCidr: { contains: keyword, mode: 'insensitive' } },
-            { remark: { contains: keyword, mode: 'insensitive' } }
-          ]
+        ? [{ ipOrCidr: { contains: keyword } }, { remark: { contains: keyword } }]
         : undefined
     };
 
@@ -1541,10 +1531,10 @@ export class SecurityService {
       approved,
       OR: keyword
         ? [
-            { module: { contains: keyword, mode: 'insensitive' } },
-            { fieldName: { contains: keyword, mode: 'insensitive' } },
-            { objectType: { contains: keyword, mode: 'insensitive' } },
-            { accessReason: { contains: keyword, mode: 'insensitive' } }
+            { module: { contains: keyword } },
+            { fieldName: { contains: keyword } },
+            { objectType: { contains: keyword } },
+            { accessReason: { contains: keyword } }
           ]
         : undefined
     };
@@ -1618,10 +1608,10 @@ export class SecurityService {
       module: query.module || undefined,
       OR: keyword
         ? [
-            { module: { contains: keyword, mode: 'insensitive' } },
-            { fieldName: { contains: keyword, mode: 'insensitive' } },
-            { objectType: { contains: keyword, mode: 'insensitive' } },
-            { reason: { contains: keyword, mode: 'insensitive' } }
+            { module: { contains: keyword } },
+            { fieldName: { contains: keyword } },
+            { objectType: { contains: keyword } },
+            { reason: { contains: keyword } }
           ]
         : undefined
     };
@@ -1679,14 +1669,14 @@ export class SecurityService {
     const keyword = query.keyword?.trim();
     const where: Prisma.AuditLogWhereInput = {
       OR: [
-        { action: { contains: 'sensitive', mode: 'insensitive' } },
-        { action: { contains: 'reveal', mode: 'insensitive' } },
-        { module: { contains: 'security', mode: 'insensitive' } },
+        { action: { contains: 'sensitive' } },
+        { action: { contains: 'reveal' } },
+        { module: { contains: 'security' } },
         ...(keyword
           ? [
-              { action: { contains: keyword, mode: 'insensitive' as const } },
-              { module: { contains: keyword, mode: 'insensitive' as const } },
-              { remark: { contains: keyword, mode: 'insensitive' as const } }
+              { action: { contains: keyword } },
+              { module: { contains: keyword } },
+              { remark: { contains: keyword } }
             ]
           : [])
       ]
@@ -1866,12 +1856,7 @@ export class SecurityService {
   ) {
     const userId = this.normalizeRequiredUuid(userIdInput, 'userId');
     return this.prisma.$transaction(async (client) => {
-      await client.$queryRaw`
-        SELECT 1::integer AS "locked"
-        FROM (
-          SELECT pg_advisory_xact_lock(hashtextextended(${`security:mfa:${userId}`}, 0))
-        ) AS "mfa_state_lock"
-      `;
+      await acquireMysqlTransactionLock(client, `security:mfa:${userId}`);
       const state = await this.getUserMfaState(userId, client);
       return operation(state, client);
     });

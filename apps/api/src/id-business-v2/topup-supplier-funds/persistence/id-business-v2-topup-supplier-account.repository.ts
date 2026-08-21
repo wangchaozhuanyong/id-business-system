@@ -36,13 +36,13 @@ export class IdBusinessV2TopupSupplierAccountRepository {
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = account."supplier_option_id"
       WHERE
-        account."supplier_option_id" = CAST(${supplierOptionId} AS UUID)
+        account."supplier_option_id" = ${supplierOptionId}
         AND account."currency" = 'CNY'
         AND account."status" = 'active'
         AND supplier."type" = 'topup_supplier'
         AND supplier."status" = 'active'
         AND supplier."deleted_at" IS NULL
-      FOR UPDATE OF account
+      FOR UPDATE
     `);
     return rows[0] ? mapLockedSupplierAccount(rows[0]) : null;
   }
@@ -60,8 +60,8 @@ export class IdBusinessV2TopupSupplierAccountRepository {
       FROM "id_business_v2_topup_supplier_accounts" account
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = account."supplier_option_id"
-      WHERE account."id" = CAST(${accountId} AS UUID)
-      FOR UPDATE OF account
+      WHERE account."id" = ${accountId}
+      FOR UPDATE
     `);
     return rows[0] ? mapLockedSupplierAccount(rows[0]) : null;
   }
@@ -81,10 +81,10 @@ export class IdBusinessV2TopupSupplierAccountRepository {
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = account."supplier_option_id"
       WHERE
-        account."id" IN (${Prisma.join(uniqueIds.map((id) => Prisma.sql`CAST(${id} AS UUID)`))})
+        account."id" IN (${Prisma.join(uniqueIds.map((id) => Prisma.sql`${id}`))})
         AND account."currency" = 'CNY'
       ORDER BY account."id"
-      FOR UPDATE OF account
+      FOR UPDATE
     `);
     return new Map(rows.map((row) => [row.id, mapLockedSupplierAccount(row)]));
   }

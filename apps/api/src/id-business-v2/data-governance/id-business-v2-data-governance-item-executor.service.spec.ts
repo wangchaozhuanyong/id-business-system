@@ -327,15 +327,24 @@ describe('IdBusinessV2DataGovernanceItemExecutorService', () => {
       ])
     };
     const prisma = { $transaction: vi.fn(async (callback) => callback(tx)) };
+    const repository = new IdBusinessV2DataGovernanceRepository(prisma as never);
+    const deleteExchangeRateRun = vi.spyOn(repository, 'deleteExchangeRateRun').mockResolvedValue({
+      deletedSnapshots: 1,
+      deletedProviderSnapshots: 2,
+      deletedQuoteSamples: 8
+    });
     const service = new IdBusinessV2DataGovernanceItemExecutorService(
-      new IdBusinessV2DataGovernanceRepository(prisma as never),
+      repository,
       new V2CommandTransactionManager(prisma as never),
       new V2TransactionalAuditService()
     );
 
     await expect(service.process(CLEANUP_ITEM, CLEANUP_JOB, OPERATOR)).resolves.toBe('succeeded');
 
-    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(deleteExchangeRateRun).toHaveBeenCalledWith(tx, {
+      itemId: CLEANUP_ITEM.id,
+      runId: CLEANUP_ITEM.entityId
+    });
     expect(tx.idBusinessV2GovernanceJobItem.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

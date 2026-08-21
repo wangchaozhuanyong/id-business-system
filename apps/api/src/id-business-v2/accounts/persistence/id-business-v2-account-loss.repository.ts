@@ -1,7 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { Amount4, mapAmount4, type V2CommandTransaction } from '../../runtime/public-api';
+import {
+  Amount4,
+  buildV2StringArrayContainsFilter,
+  mapAmount4,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 
 const LOSS_USER_SELECT = {
   id: true,
@@ -97,27 +102,25 @@ export class IdBusinessV2AccountLossRepository {
           : undefined,
       OR: input.keyword
         ? [
-            { appleIdMasked: { contains: input.keyword, mode: 'insensitive' } },
+            { appleIdMasked: { contains: input.keyword } },
             {
               account: {
                 is: {
-                  appleIdSearchTokens: input.appleIdSearchTokens.length
-                    ? { hasEvery: input.appleIdSearchTokens }
-                    : undefined
+                  appleIdSearchTokens: buildV2StringArrayContainsFilter(input.appleIdSearchTokens)
                 }
               }
             },
-            { soldOrderNo: { contains: input.keyword, mode: 'insensitive' } },
-            { reason: { contains: input.keyword, mode: 'insensitive' } },
-            { reportedByName: { contains: input.keyword, mode: 'insensitive' } },
+            { soldOrderNo: { contains: input.keyword } },
+            { reason: { contains: input.keyword } },
+            { reportedByName: { contains: input.keyword } },
             {
               reportedBy: {
-                is: { displayName: { contains: input.keyword, mode: 'insensitive' } }
+                is: { displayName: { contains: input.keyword } }
               }
             },
             {
               reportedBy: {
-                is: { username: { contains: input.keyword, mode: 'insensitive' } }
+                is: { username: { contains: input.keyword } }
               }
             }
           ]
@@ -214,9 +217,9 @@ export class IdBusinessV2AccountLossRepository {
       LEFT JOIN "id_business_v2_orders" sold_order
         ON sold_order."id" = account."sold_by_order_id"
       WHERE
-        account."id" = CAST(${accountId} AS UUID)
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
-      FOR UPDATE OF account
+      FOR UPDATE
     `;
     const account = rows[0];
     if (!account) throw new NotFoundException('ID 不存在或已删除');

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import type { V2CommandTransaction } from '../../runtime/public-api';
+import { isV2MysqlDatabase, type V2CommandTransaction } from '../../runtime/public-api';
 import type {
   GovernanceJobStatus,
   GovernanceJobType,
@@ -110,22 +110,22 @@ export class IdBusinessV2DataGovernanceQueryRepository {
       this.prisma.$queryRaw<RecycleRow[]>(Prisma.sql`
         SELECT recycled.id, recycled.entity, recycled.label, recycled.deleted_at
         FROM (
-          SELECT id, 'account'::text AS entity, apple_id_masked AS label, deleted_at
+          SELECT id, 'account' AS entity, apple_id_masked AS label, deleted_at
           FROM id_business_v2_accounts WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'customer'::text AS entity, name AS label, deleted_at
+          SELECT id, 'customer' AS entity, name AS label, deleted_at
           FROM id_business_v2_customers WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'option'::text AS entity, name AS label, deleted_at
+          SELECT id, 'option' AS entity, name AS label, deleted_at
           FROM id_business_v2_options WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'order'::text AS entity, order_no AS label, deleted_at
+          SELECT id, 'order' AS entity, order_no AS label, deleted_at
           FROM id_business_v2_orders WHERE deleted_at IS NOT NULL
         ) recycled
         WHERE (${entityFilter} = '' OR recycled.entity = ${entityFilter})
         ORDER BY recycled.deleted_at DESC, recycled.id DESC
-        OFFSET ${input.skip}
         LIMIT ${input.take}
+        OFFSET ${input.skip}
       `),
       this.recycleCounts()
     ]);
@@ -244,6 +244,8 @@ export class IdBusinessV2DataGovernanceQueryRepository {
   }
 
   async cleanupPreviewRows(cutoff: Date, take: number) {
+    if (isV2MysqlDatabase()) return this.cleanupPreviewRowsMysql(cutoff, take);
+
     const eligibleWhere = Prisma.sql`
       run."status" <> 'running'
       AND run."started_at" < ${cutoff}
@@ -256,14 +258,14 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         SELECT 1
         FROM "id_business_v2_finance_fx_rate_snapshots" fx_snapshot
         WHERE fx_snapshot."source" = 'combined_p2p'
-          AND fx_snapshot."source_reference" = snapshot."id"::TEXT
+          AND fx_snapshot."source_reference" = CAST(snapshot."id" AS VARCHAR(36))
       )
     `;
     const [rows, totals] = await Promise.all([
       this.prisma.$queryRaw<CleanupPreviewRow[]>(Prisma.sql`
         SELECT
           run."id",
-          run."status"::TEXT AS "status",
+          run."status" AS "status",
           run."started_at" AS "startedAt",
           snapshot."id" AS "snapshotId"
         FROM "id_business_v2_exchange_rate_runs" run
@@ -273,8 +275,8 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         ORDER BY run."started_at" ASC, run."id" ASC
         LIMIT ${take}
       `),
-      this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
-        SELECT COUNT(*)::INTEGER AS "total"
+      this.prisma.$queryRaw<Array<{ total: number | bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS "total"
         FROM "id_business_v2_exchange_rate_runs" run
         LEFT JOIN "id_business_v2_exchange_rate_snapshots" snapshot
           ON snapshot."run_id" = run."id"
@@ -290,7 +292,58 @@ export class IdBusinessV2DataGovernanceQueryRepository {
           ? { id: row.snapshotId, _count: { giftCards: 0 }, financeReferenceCount: 0 }
           : null
       })),
-      eligibleTotal: totals[0]?.total ?? 0
+      eligibleTotal: Number(totals[0]?.total ?? 0)
+    };
+  }
+
+  private async cleanupPreviewRowsMysql(cutoff: Date, take: number) {
+    const eligibleWhere = Prisma.sql`
+      run.\`status\` <> 'running'
+      AND run.\`started_at\` < ${cutoff}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM \`id_business_v2_gift_cards\` gift_card
+        WHERE gift_card.\`exchange_rate_snapshot_id\` = snapshot.\`id\`
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM \`id_business_v2_finance_fx_rate_snapshots\` fx_snapshot
+        WHERE fx_snapshot.\`source\` = 'combined_p2p'
+          AND fx_snapshot.\`source_reference\` = CAST(snapshot.\`id\` AS CHAR(36))
+      )
+    `;
+    const [rows, totals] = await Promise.all([
+      this.prisma.$queryRaw<CleanupPreviewRow[]>(Prisma.sql`
+        SELECT
+          run.\`id\`,
+          run.\`status\` AS \`status\`,
+          run.\`started_at\` AS \`startedAt\`,
+          snapshot.\`id\` AS \`snapshotId\`
+        FROM \`id_business_v2_exchange_rate_runs\` run
+        LEFT JOIN \`id_business_v2_exchange_rate_snapshots\` snapshot
+          ON snapshot.\`run_id\` = run.\`id\`
+        WHERE ${eligibleWhere}
+        ORDER BY run.\`started_at\` ASC, run.\`id\` ASC
+        LIMIT ${take}
+      `),
+      this.prisma.$queryRaw<Array<{ total: number | bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS \`total\`
+        FROM \`id_business_v2_exchange_rate_runs\` run
+        LEFT JOIN \`id_business_v2_exchange_rate_snapshots\` snapshot
+          ON snapshot.\`run_id\` = run.\`id\`
+        WHERE ${eligibleWhere}
+      `)
+    ]);
+    return {
+      runs: rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        startedAt: row.startedAt,
+        snapshot: row.snapshotId
+          ? { id: row.snapshotId, _count: { giftCards: 0 }, financeReferenceCount: 0 }
+          : null
+      })),
+      eligibleTotal: Number(totals[0]?.total ?? 0)
     };
   }
 

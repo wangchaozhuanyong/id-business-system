@@ -11,8 +11,11 @@
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vitest run --passWithNoTests",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:mysql:generate": "DATABASE_URL=mysql://prisma:prisma@127.0.0.1:3306/id_business_v2 prisma generate --schema prisma-mysql/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:mysql:validate": "DATABASE_URL=mysql://prisma:prisma@127.0.0.1:3306/id_business_v2 prisma validate --schema prisma-mysql/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:mysql:migrate:deploy": "prisma migrate deploy --schema prisma-mysql/schema.prisma",
     "prisma:seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {

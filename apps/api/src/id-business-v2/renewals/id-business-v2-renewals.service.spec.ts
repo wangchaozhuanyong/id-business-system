@@ -243,9 +243,9 @@ describe('IdBusinessV2RenewalsService', () => {
           displaySnapshot: {
             is: {
               OR: [
-                { customerName: { contains: '测试', mode: 'insensitive' } },
-                { serviceName: { contains: '测试', mode: 'insensitive' } },
-                { accountLabel: { contains: '测试', mode: 'insensitive' } }
+                { customerName: { contains: '测试' } },
+                { serviceName: { contains: '测试' } },
+                { accountLabel: { contains: '测试' } }
               ]
             }
           }

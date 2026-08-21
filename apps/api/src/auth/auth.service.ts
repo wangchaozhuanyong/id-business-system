@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ApiHttpException, authHttpError } from '../common/errors/api-http.exception';
+import { acquireMysqlTransactionLock } from '../common/prisma/mysql-transaction-lock';
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
@@ -294,14 +295,7 @@ export class AuthService {
     try {
       await this.prisma.$transaction(
         async (transaction: Prisma.TransactionClient) => {
-          await transaction.$queryRaw`
-            SELECT 1::integer AS "locked"
-            FROM (
-              SELECT pg_advisory_xact_lock(
-                hashtextextended(${`auth-password:${user.id}`}, 0)
-              )
-            ) AS "password_lock"
-          `;
+          await acquireMysqlTransactionLock(transaction, `auth-password:${user.id}`);
           const currentUser = await transaction.user.findFirst({
             where: {
               id: user.id,
@@ -459,14 +453,7 @@ export class AuthService {
     try {
       return await this.prisma.$transaction(
         async (transaction: Prisma.TransactionClient) => {
-          await transaction.$queryRaw`
-            SELECT 1::integer AS "locked"
-            FROM (
-              SELECT pg_advisory_xact_lock(
-                hashtextextended(${`auth-password:${input.userId}`}, 0)
-              )
-            ) AS "password_lock"
-          `;
+          await acquireMysqlTransactionLock(transaction, `auth-password:${input.userId}`);
           const currentUser = await transaction.user.findFirst({
             where: {
               id: input.userId,

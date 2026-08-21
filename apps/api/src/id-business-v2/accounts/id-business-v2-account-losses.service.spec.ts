@@ -779,9 +779,7 @@ describe('IdBusinessV2AccountLossesService', () => {
             gte: new Date('2026-06-30T16:00:00.000Z'),
             lt: new Date('2026-07-29T16:00:00.000Z')
           },
-          OR: expect.arrayContaining([
-            { reportedByName: { contains: '管理员', mode: 'insensitive' } }
-          ])
+          OR: expect.arrayContaining([{ reportedByName: { contains: '管理员' } }])
         }),
         orderBy: [{ lossCostAmount: 'desc' }, { reportedAt: 'desc' }, { id: 'desc' }]
       })

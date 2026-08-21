@@ -1,0 +1,15 @@
+[Unit]
+Description=ID Business V2 MySQL logical backup
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+Group=ec2-user
+SupplementaryGroups=docker
+ExecStart=/opt/id-business-v2/current/scripts/backup-aws-mysql.sh
+
+[Install]
+WantedBy=multi-user.target

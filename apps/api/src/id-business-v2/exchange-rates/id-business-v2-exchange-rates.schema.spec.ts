@@ -108,8 +108,8 @@ describe('V2 exchange-rate contracts', () => {
     expect(cleanupFunction).toContain('"received_fx_snapshot_id" = fx_snapshot."id"');
     expect(cleanupFunction).toContain("'deletedFxRateSnapshots'");
     expect(cleanupFunction).not.toContain('id_business_v2_exchange_rate_entries');
-    expect(persistenceRepository).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
-    expect(persistenceRepository).toContain('FLOOR');
+    expect(persistenceRepository).toContain('UTC_TIMESTAMP(6)');
+    expect(persistenceRepository).toContain('FOR UPDATE');
   });
 
   it('keeps purchase quotes independent, decimal based and immutable', () => {
@@ -141,6 +141,13 @@ describe('V2 exchange-rate contracts', () => {
     const dailyMigration = read(
       'prisma/migrations/20260821114000_purchase_rate_daily_open_provider/migration.sql'
     );
+    const mysqlDailyMigration = read(
+      'prisma-mysql/migrations/20260821114000_mysql_purchase_rate_daily_open_provider/migration.sql'
+    );
+    const mysqlTransferGuardMigration = read(
+      'prisma-mysql/migrations/20260821115000_mysql_data_transfer_guard/migration.sql'
+    );
+    const mysqlTransferScript = read('../../scripts/migrate-postgres-to-mysql.mjs');
     const controller = read(
       'src/id-business-v2/exchange-rates/id-business-v2-exchange-rates.controller.ts'
     );
@@ -161,6 +168,15 @@ describe('V2 exchange-rate contracts', () => {
     expect(dailyMigration).toContain("'id-business-v2-purchase-rate-daily'");
     expect(dailyMigration).toContain("'5 1 * * *'");
     expect(dailyMigration).toContain("AT TIME ZONE 'UTC'");
+    expect(mysqlDailyMigration).toContain("'exchange_rate_api'");
+    expect(mysqlDailyMigration).toContain('DEFAULT 1440');
+    expect(mysqlDailyMigration).toContain('UTC_TIMESTAMP(6)');
+    expect(mysqlDailyMigration).toContain('idv2_purchase_rate_settings_interval_check');
+    expect(mysqlTransferGuardMigration).toContain('@idv2_data_migration');
+    expect(mysqlTransferGuardMigration).toContain('idv2_expense_snapshot_on_insert');
+    expect(mysqlTransferScript).toContain('SET @idv2_data_migration = 1');
+    expect(mysqlTransferScript).toContain('SET @idv2_data_migration = NULL');
+    expect(mysqlTransferScript).toContain('verifyDestinationForeignKeys');
     expect(controller).toContain("@Post('purchase-quotes/refresh')");
     expect(controller).toContain("@Post('purchase-quotes/runs/:id/confirm')");
     expect(controller).toContain("@Patch('purchase-quotes/bulk')");

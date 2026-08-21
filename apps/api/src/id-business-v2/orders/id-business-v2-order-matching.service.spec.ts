@@ -247,8 +247,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
         OR: [
           {
             appleIdMasked: {
-              contains: 'Target@Example.com',
-              mode: 'insensitive'
+              contains: 'Target@Example.com'
             }
           },
           {
@@ -263,8 +262,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
             soldByOrder: {
               is: {
                 orderNo: {
-                  contains: 'Target@Example.com',
-                  mode: 'insensitive'
+                  contains: 'Target@Example.com'
                 }
               }
             }

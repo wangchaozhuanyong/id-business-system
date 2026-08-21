@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { verifySensitiveAccessApproval } from '../../../common/sensitive-access-approval';
-import { mapAmount4, mapRate8, type V2CommandTransaction } from '../../runtime/public-api';
+import {
+  buildV2StringArrayContainsFilter,
+  mapAmount4,
+  mapRate8,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 import type {
   GiftCardCreditAccountRecord,
   GiftCardCreditLedgerRecord,
@@ -146,22 +151,20 @@ export class IdBusinessV2GiftCardsRepository {
       creditedAt: criteria.creditedAt,
       OR: criteria.keyword
         ? [
-            { cardNameSnapshot: { contains: criteria.keyword, mode: 'insensitive' } },
-            { codeMasked: { contains: criteria.keyword, mode: 'insensitive' } },
-            { codeTail: { contains: criteria.keyword.slice(-8), mode: 'insensitive' } },
+            { cardNameSnapshot: { contains: criteria.keyword } },
+            { codeMasked: { contains: criteria.keyword } },
+            { codeTail: { contains: criteria.keyword.slice(-8) } },
             {
-              codeSearchTokens: criteria.codeSearchTokens.length
-                ? { hasEvery: criteria.codeSearchTokens }
-                : undefined
+              codeSearchTokens: buildV2StringArrayContainsFilter(criteria.codeSearchTokens)
             },
             {
               account: {
-                is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { appleIdMasked: { contains: criteria.keyword } }
               }
             },
             {
               supplierOption: {
-                is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { name: { contains: criteria.keyword } }
               }
             }
           ]
@@ -195,25 +198,23 @@ export class IdBusinessV2GiftCardsRepository {
         ? [
             {
               account: {
-                is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { appleIdMasked: { contains: criteria.keyword } }
               }
             },
             {
               giftCard: {
-                is: { codeMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { codeMasked: { contains: criteria.keyword } }
               }
             },
             {
               giftCard: {
-                is: { codeTail: { contains: criteria.keyword.slice(-8), mode: 'insensitive' } }
+                is: { codeTail: { contains: criteria.keyword.slice(-8) } }
               }
             },
             {
               giftCard: {
                 is: {
-                  codeSearchTokens: criteria.codeSearchTokens.length
-                    ? { hasEvery: criteria.codeSearchTokens }
-                    : undefined
+                  codeSearchTokens: buildV2StringArrayContainsFilter(criteria.codeSearchTokens)
                 }
               }
             },
@@ -221,7 +222,7 @@ export class IdBusinessV2GiftCardsRepository {
               giftCard: {
                 is: {
                   supplierOption: {
-                    is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
+                    is: { name: { contains: criteria.keyword } }
                   }
                 }
               }
@@ -369,11 +370,11 @@ export class IdBusinessV2GiftCardsRepository {
       INNER JOIN "id_business_v2_options" country_option
         ON country_option."id" = account."country_option_id"
       WHERE
-        account."id" = CAST(${accountId} AS UUID)
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
         AND account."record_status" = 'active'
         AND account."loss_reported_at" IS NULL
-      FOR UPDATE OF account
+      FOR UPDATE
     `;
     const account = rows[0];
     return account
@@ -575,8 +576,8 @@ export class IdBusinessV2GiftCardsRepository {
         account."record_status" AS "recordStatus",
         account."loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts" account
-      WHERE account."id" = CAST(${accountId} AS UUID) AND account."deleted_at" IS NULL
-      FOR UPDATE OF account
+      WHERE account."id" = ${accountId} AND account."deleted_at" IS NULL
+      FOR UPDATE
     `;
     const account = rows[0];
     return account
@@ -620,7 +621,7 @@ export class IdBusinessV2GiftCardsRepository {
         "status",
         "created_at" AS "createdAt"
       FROM "id_business_v2_gift_cards"
-      WHERE "id" = CAST(${giftCardId} AS UUID)
+      WHERE "id" = ${giftCardId}
       FOR UPDATE
     `;
     const giftCard = rows[0];

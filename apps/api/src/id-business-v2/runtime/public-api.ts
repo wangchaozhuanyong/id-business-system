@@ -33,6 +33,10 @@ export {
   type V2TransactionIsolationLevel
 } from './id-business-v2-command-transaction.service';
 export {
+  buildV2StringArrayContainsFilter,
+  isV2MysqlDatabase
+} from './id-business-v2-database-filter';
+export {
   getPrismaErrorCode,
   isPrismaErrorCode,
   isUnsupportedFinanceCurrencyEnumError
@@ -42,7 +46,8 @@ export {
   mapAmount4,
   mapOptionalAmount4,
   mapOptionalRate8,
-  mapRate8
+  mapRate8,
+  mapStringArray
 } from './id-business-v2-row-mapper';
 export {
   V2TransactionalAuditService,

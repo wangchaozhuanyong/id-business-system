@@ -110,20 +110,20 @@ export class IdBusinessV2ActivationRepository {
       AND: criteria.dueFilter ? [this.mapDueFilter(criteria.dueFilter)] : undefined,
       OR: criteria.keyword
         ? [
-            { order: { is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } } } },
-            { customer: { is: { name: { contains: criteria.keyword, mode: 'insensitive' } } } },
+            { order: { is: { orderNo: { contains: criteria.keyword } } } },
+            { customer: { is: { name: { contains: criteria.keyword } } } },
             {
-              serviceOption: { is: { name: { contains: criteria.keyword, mode: 'insensitive' } } }
+              serviceOption: { is: { name: { contains: criteria.keyword } } }
             },
             {
               account: {
-                is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { appleIdMasked: { contains: criteria.keyword } }
               }
             },
             {
               order: {
                 is: {
-                  websiteAccountMasked: { contains: criteria.keyword, mode: 'insensitive' }
+                  websiteAccountMasked: { contains: criteria.keyword }
                 }
               }
             },
@@ -133,9 +133,9 @@ export class IdBusinessV2ActivationRepository {
                   displaySnapshot: {
                     is: {
                       OR: [
-                        { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
-                        { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
-                        { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } }
+                        { customerName: { contains: criteria.keyword } },
+                        { serviceName: { contains: criteria.keyword } },
+                        { accountLabel: { contains: criteria.keyword } }
                       ]
                     }
                   }

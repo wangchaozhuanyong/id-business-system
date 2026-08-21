@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type IdBusinessV2GovernanceJobItem } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import type { V2CommandTransaction } from '../../runtime/public-api';
+import { isV2MysqlDatabase, type V2CommandTransaction } from '../../runtime/public-api';
 import type {
   GovernanceApprovalDecision,
   GovernanceJobType,
@@ -472,20 +472,93 @@ export class IdBusinessV2DataGovernanceRepository {
   }
 
   async deleteExchangeRateRun(tx: V2CommandTransaction, input: { itemId: string; runId: string }) {
-    const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(Prisma.sql`
-      SELECT public.execute_id_business_v2_governance_exchange_rate_cleanup(
-        ${input.itemId}::UUID,
-        ${input.runId}::UUID
-      ) AS "result"
-    `);
-    const result = rows[0]?.result;
-    if (!result || typeof result !== 'object' || Array.isArray(result)) {
-      throw new Error('汇率治理清理返回格式无效');
+    if (!isV2MysqlDatabase()) {
+      const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(Prisma.sql`
+        SELECT public.execute_id_business_v2_governance_exchange_rate_cleanup(
+          ${input.itemId}::UUID,
+          ${input.runId}::UUID
+        ) AS "result"
+      `);
+      const result = rows[0]?.result;
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        throw new Error('汇率治理清理返回格式无效');
+      }
+      return {
+        deletedQuoteSamples: this.cleanupResultCount(result, 'deletedQuoteSamples'),
+        deletedProviderSnapshots: this.cleanupResultCount(result, 'deletedProviderSnapshots'),
+        deletedSnapshots: this.cleanupResultCount(result, 'deletedSnapshots')
+      };
+    }
+
+    const item = await tx.idBusinessV2GovernanceJobItem.findUnique({
+      where: { id: input.itemId },
+      include: { job: { include: { approval: true } } }
+    });
+    const approval = item?.job.approval;
+    const eligibility = item?.eligibility;
+    if (
+      !item ||
+      item.entityType !== 'exchange_rate_run' ||
+      item.entityId !== input.runId ||
+      item.status !== 'processing' ||
+      item.job.type !== 'exchange_rate_cleanup' ||
+      item.job.status !== 'running' ||
+      !approval ||
+      approval.decision !== 'approved' ||
+      approval.approverUserId === item.job.requestedByUserId ||
+      approval.previewHash !== item.job.previewHash ||
+      !item.job.executedByUserId ||
+      item.job.backupEvidence.trim().length < 8 ||
+      !eligibility ||
+      typeof eligibility !== 'object' ||
+      Array.isArray(eligibility) ||
+      eligibility.eligible !== true
+    ) {
+      throw new Error('汇率治理清理审批证据无效');
+    }
+
+    const snapshot = await tx.idBusinessV2ExchangeRateSnapshot.findUnique({
+      where: { runId: input.runId },
+      select: { id: true }
+    });
+    const providerSnapshots = snapshot
+      ? await tx.idBusinessV2ExchangeRateProviderSnapshot.findMany({
+          where: { snapshotId: snapshot.id },
+          select: { id: true }
+        })
+      : [];
+    const providerSnapshotIds = providerSnapshots.map((row) => row.id);
+    const deletedQuoteSamples = providerSnapshotIds.length
+      ? (
+          await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
+            where: { providerSnapshotId: { in: providerSnapshotIds } }
+          })
+        ).count
+      : 0;
+    const deletedProviderSnapshots = snapshot
+      ? (
+          await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
+            where: { snapshotId: snapshot.id }
+          })
+        ).count
+      : 0;
+    const deletedSnapshots = snapshot
+      ? (
+          await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
+            where: { id: snapshot.id }
+          })
+        ).count
+      : 0;
+    const deletedRuns = (
+      await tx.idBusinessV2ExchangeRateRun.deleteMany({ where: { id: input.runId } })
+    ).count;
+    if (deletedRuns !== 1) {
+      throw new Error('汇率治理清理源数据已变化');
     }
     return {
-      deletedQuoteSamples: this.cleanupResultCount(result, 'deletedQuoteSamples'),
-      deletedProviderSnapshots: this.cleanupResultCount(result, 'deletedProviderSnapshots'),
-      deletedSnapshots: this.cleanupResultCount(result, 'deletedSnapshots')
+      deletedQuoteSamples,
+      deletedProviderSnapshots,
+      deletedSnapshots
     };
   }
 
