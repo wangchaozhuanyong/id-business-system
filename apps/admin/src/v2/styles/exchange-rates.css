@@ -473,6 +473,165 @@
   overflow-x: auto;
 }
 
+.v2-purchase-quotes {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.v2-exchange-toolbar--purchase {
+  grid-template-columns: minmax(240px, 420px);
+}
+
+.v2-purchase-currency {
+  display: grid;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.v2-purchase-currency span,
+.v2-purchase-muted {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-purchase-preview {
+  display: grid;
+  gap: 7px;
+  padding: 16px;
+  border: 1px solid var(--v2-border);
+  border-radius: 12px;
+  background: var(--v2-surface-muted);
+}
+
+.v2-purchase-preview > span,
+.v2-purchase-preview > small {
+  color: var(--v2-text-soft);
+}
+
+.v2-purchase-preview > strong {
+  color: var(--v2-text-strong);
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.v2-purchase-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.v2-purchase-status-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--v2-border);
+  border-radius: 14px;
+  background: var(--v2-surface-muted);
+}
+
+.v2-purchase-status-grid span,
+.v2-purchase-status-grid small,
+.v2-purchase-run-list small,
+.v2-purchase-snapshot-list small,
+.v2-purchase-candidate-list small {
+  color: var(--v2-text-soft);
+}
+
+.v2-purchase-status-grid strong {
+  overflow: hidden;
+  color: var(--v2-text-strong);
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-purchase-history,
+.v2-purchase-run-detail,
+.v2-purchase-text {
+  display: grid;
+  gap: 18px;
+}
+
+.v2-purchase-history__filters {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.v2-purchase-history__filters .el-select {
+  width: min(280px, 100%);
+}
+
+.v2-purchase-run-list,
+.v2-purchase-snapshot-list,
+.v2-purchase-candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.v2-purchase-run-list button,
+.v2-purchase-snapshot-list article,
+.v2-purchase-candidate-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 10px 18px;
+  align-items: center;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--v2-border);
+  border-radius: 12px;
+  color: var(--v2-text-strong);
+  text-align: left;
+  background: var(--v2-surface-muted);
+}
+
+.v2-purchase-run-list button {
+  cursor: pointer;
+}
+
+.v2-purchase-run-list button:hover,
+.v2-purchase-run-list button:focus-visible {
+  border-color: var(--v2-accent);
+  outline: none;
+}
+
+.v2-purchase-run-list button > span {
+  display: grid;
+  gap: 4px;
+}
+
+.v2-purchase-snapshot-list article {
+  grid-template-columns: minmax(140px, 1fr) repeat(2, minmax(130px, 0.8fr));
+}
+
+.v2-purchase-snapshot-list article small {
+  grid-column: 1 / -1;
+}
+
+.v2-purchase-candidate-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.v2-purchase-candidate-list article {
+  grid-template-columns: 1fr;
+}
+
+.v2-purchase-candidate-list article.is-abnormal {
+  border-color: color-mix(in srgb, var(--el-color-warning) 42%, var(--v2-border));
+  background: color-mix(in srgb, var(--el-color-warning) 8%, var(--v2-surface-muted));
+}
+
+.v2-purchase-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.v2-purchase-text .el-radio-group {
+  justify-self: start;
+}
+
 @media (max-width: 1260px) {
   .v2-exchange-overview {
     grid-template-columns: minmax(0, 1fr) minmax(210px, 0.7fr);
@@ -517,6 +676,11 @@
 }
 
 @media (max-width: 900px) {
+  .v2-purchase-status-grid,
+  .v2-purchase-candidate-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .v2-exchange-overview {
     grid-template-columns: 1fr;
     padding: 16px;
@@ -599,6 +763,17 @@
 }
 
 @media (max-width: 560px) {
+  .v2-purchase-status-grid,
+  .v2-purchase-candidate-list,
+  .v2-purchase-run-list button,
+  .v2-purchase-snapshot-list article {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-purchase-review-actions {
+    display: grid;
+  }
+
   .v2-exchange-overview__metrics,
   .v2-exchange-overview__actions,
   .v2-exchange-receipt-rates > dl {

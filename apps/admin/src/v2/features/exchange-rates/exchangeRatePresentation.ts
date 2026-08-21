@@ -1,3 +1,5 @@
+import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
+import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
 import type {
   V2ExchangeRateCurrency,
   V2ExchangeRateRecord,
@@ -116,4 +118,56 @@ export function receiptFxSourceLabel(source: string | null | undefined) {
   if (source === 'ecb_cross') return 'ECB 交叉汇率';
   if (source === 'manual') return '人工汇率';
   return source || '暂无来源';
+}
+
+export function parseExchangeRateInput(value: string) {
+  const normalized = value.trim();
+  return isV2UnsignedDecimal(normalized, {
+    allowZero: false,
+    decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
+  })
+    ? normalized
+    : null;
+}
+
+export function formatRate(value: string | null | undefined) {
+  return formatV2Decimal(value);
+}
+
+export function formatAmount(value: string | null | undefined) {
+  return formatV2Decimal(value);
+}
+
+export function formatDate(value: string | null | undefined) {
+  if (!value) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(new Date(value));
+}
+
+export function formatPercent(value: string | null | undefined) {
+  if (!value) return '-';
+  return `${formatV2Decimal(multiplyDecimalStrings(value, '100'))}%`;
+}
+
+export function intervalLabel(minutes: number | undefined) {
+  if (!minutes) return '-';
+  if (minutes < 60) return `${minutes} 分钟`;
+  if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
+  return `${minutes / 60} 小时`;
+}
+
+export function operatorName(entry: { createdBy: { username: string } | null }) {
+  return entry.createdBy?.username || '-';
+}
+
+export function receiptFxCapturedLabel(rate: V2ExchangeRateReceiptFxRate) {
+  return rate.capturedAt ? `采集于 ${formatDate(rate.capturedAt)}` : '暂无记录';
 }

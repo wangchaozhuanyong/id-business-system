@@ -41,6 +41,14 @@ export {
   v2UnsignedDecimalPattern
 } from './v2/decimal.js';
 export {
+  V2_PURCHASE_RATE_ROUNDING_MODES,
+  calculateV2PurchaseRate,
+  formatV2PurchaseRate,
+  type CalculateV2PurchaseRateInput,
+  type V2PurchaseRateCalculation,
+  type V2PurchaseRateRoundingMode
+} from './v2/purchase-rate.js';
+export {
   V2_BRANDING_DEFAULTS,
   V2_BRANDING_LIMITS,
   splitV2BrandingHeroTitle,

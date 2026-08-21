@@ -1,17 +1,30 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
+import { IdBusinessV2PurchaseRateWorker } from './id-business-v2-purchase-rate.worker';
 
 @Injectable()
 export class IdBusinessV2ExchangeRateCronService {
-  constructor(private readonly worker: IdBusinessV2ExchangeRateWorker) {}
+  constructor(
+    private readonly worker: IdBusinessV2ExchangeRateWorker,
+    private readonly purchaseRateWorker: IdBusinessV2PurchaseRateWorker
+  ) {}
 
   async run(authorization?: string) {
     this.assertAuthorized(authorization);
-    const collection = await this.worker.runScheduled();
+    const [collectionResult, purchaseRateResult] = await Promise.allSettled([
+      this.worker.runScheduled(),
+      this.purchaseRateWorker.runScheduled()
+    ]);
+    const purchaseRates =
+      purchaseRateResult.status === 'fulfilled'
+        ? purchaseRateResult.value
+        : ({ status: 'failed', reason: 'unexpected_error' } as const);
+    if (collectionResult.status === 'rejected') throw collectionResult.reason;
 
     return {
-      collection,
+      collection: collectionResult.value,
+      purchaseRates,
       retention: {
         cleanupMode: 'governance_approval_required' as const,
         automaticCleanupExecuted: false

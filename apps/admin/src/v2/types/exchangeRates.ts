@@ -1,4 +1,5 @@
 import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';
+import type { V2PurchaseRateRoundingMode } from '@apple-business/shared';
 
 export interface V2ExchangeRateOperator {
   id: string;
@@ -269,4 +270,166 @@ export interface CreateV2ManualFxRateInput {
   recordedAt: string;
   reason: string;
   sourceReference?: string | null;
+}
+
+export interface V2PurchaseRateSnapshot {
+  id: string;
+  currencyCode: string;
+  marketRateCnyPerUnit: string;
+  purchaseRatio: string;
+  quoteUnit: string;
+  purchaseRateRaw: string;
+  purchaseRateDisplay: string;
+  purchaseRateFormatted: string;
+  decimalPlaces: number;
+  roundingMode: V2PurchaseRateRoundingMode;
+  marketRateSource: 'manual' | 'currencyapi';
+  marketRateSourceReference: string | null;
+  marketRateCapturedAt: string;
+  fetchRunId: string | null;
+  changeRate: string | null;
+  validationStatus: 'normal' | 'confirmed_abnormal';
+  staleAt: string;
+  stale: boolean;
+  createdBy: V2ExchangeRateOperator | null;
+  createdAt: string;
+}
+
+export interface V2PurchaseQuote {
+  code: string;
+  nameCn: string;
+  displayName: string | null;
+  purchaseRatio: string;
+  purchaseRatioPercent: string;
+  quoteUnit: string;
+  decimalPlaces: number;
+  roundingMode: V2PurchaseRateRoundingMode;
+  enabled: boolean;
+  sortOrder: number;
+  updatedBy: V2ExchangeRateOperator | null;
+  createdAt: string;
+  updatedAt: string;
+  latestSnapshot: V2PurchaseRateSnapshot | null;
+}
+
+export interface V2PurchaseQuoteList {
+  items: V2PurchaseQuote[];
+  calculationRule: string;
+  marketRateMode: 'automatic_with_manual_fallback';
+  marketRateNotice: string;
+  staleMinutes: number;
+}
+
+export interface UpdateV2PurchaseQuoteInput {
+  nameCn: string;
+  displayName?: string | null;
+  purchaseRatioPercent: string;
+  quoteUnit: string;
+  decimalPlaces: number;
+  roundingMode: V2PurchaseRateRoundingMode;
+  enabled: boolean;
+  sortOrder: number;
+  marketRateCnyPerUnit?: string | null;
+  marketRateCapturedAt?: string | null;
+  marketRateSourceReference?: string | null;
+}
+
+export type V2PurchaseRateRunStatus =
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'pending_review'
+  | 'rejected';
+
+export interface V2PurchaseRateCandidateQuote {
+  currencyCode: string;
+  marketRateCnyPerUnit: string;
+  providerQuotePerCny: string;
+  purchaseRatio: string;
+  quoteUnit: string;
+  purchaseRateRaw: string;
+  purchaseRateDisplay: string;
+  decimalPlaces: number;
+  roundingMode: V2PurchaseRateRoundingMode;
+  previousMarketRateCnyPerUnit: string | null;
+  changeRate: string | null;
+  abnormal: boolean;
+}
+
+export interface V2PurchaseRateSettings {
+  autoEnabled: boolean;
+  intervalMinutes: 60;
+  staleMinutes: number;
+  abnormalChangeRate: string;
+  abnormalChangePercent: string;
+  nextRunAt: string | null;
+  updatedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  allowedStaleMinutes: { min: number; max: number };
+}
+
+export interface V2PurchaseRateRun {
+  id: string;
+  status: V2PurchaseRateRunStatus;
+  triggerType: 'manual' | 'scheduled' | 'system';
+  provider: 'currencyapi';
+  baseCurrency: 'CNY';
+  requestedCurrencyCodes: string[];
+  abnormalCurrencyCodes: string[];
+  startedAt: string;
+  finishedAt: string | null;
+  providerUpdatedAt: string | null;
+  publishedAt: string | null;
+  attemptCount: number;
+  sourceContract: string | null;
+  sourceReference: string | null;
+  maximumChangeRate: string | null;
+  error: { code: string; message: string | null; retryable: boolean | null } | null;
+  triggeredBy: V2ExchangeRateOperator | null;
+  reviewedBy: V2ExchangeRateOperator | null;
+  reviewedAt: string | null;
+  reviewRemark: string | null;
+  snapshotCount: number;
+  candidateQuotes?: V2PurchaseRateCandidateQuote[] | null;
+  createdAt: string;
+}
+
+export type V2PurchaseRateRunListResult = PaginatedResult<V2PurchaseRateRun>;
+
+export interface V2PurchaseRateRuntime {
+  settings: V2PurchaseRateSettings;
+  scheduler: {
+    schedule: '5 * * * *';
+    localTickIntervalMs: number;
+    localRunning: boolean;
+    lastTickAt: string | null;
+    databaseRunning: V2PurchaseRateRun | null;
+  };
+  provider: {
+    code: 'currencyapi';
+    configured: boolean;
+    source: string;
+    contract: string;
+  };
+  latestRun: V2PurchaseRateRun | null;
+  successBoundary: string;
+  networkEnabled: boolean;
+}
+
+export interface V2PurchaseRateHistoryItem extends Omit<
+  V2PurchaseRateSnapshot,
+  'purchaseRateFormatted' | 'staleAt' | 'stale'
+> {
+  currencyName: string;
+}
+
+export type V2PurchaseRateHistoryResult = PaginatedResult<V2PurchaseRateHistoryItem>;
+
+export interface V2PurchaseQuoteTextResult {
+  format: 'wechat' | 'monospace' | 'plain';
+  text: string;
+  generatedAt: string;
+  currencyCount: number;
+  containsStaleQuotes: boolean;
 }

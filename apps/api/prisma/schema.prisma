@@ -334,6 +334,30 @@ enum IdBusinessV2ExchangeRateErrorProvider {
   system
 }
 
+enum IdBusinessV2PurchaseRateRoundingMode {
+  ROUND_DOWN
+  ROUND_HALF_UP
+  ROUND_UP
+}
+
+enum IdBusinessV2PurchaseMarketRateSource {
+  manual
+  currencyapi
+}
+
+enum IdBusinessV2PurchaseRateFetchRunStatus {
+  running
+  success
+  failed
+  pending_review
+  rejected
+}
+
+enum IdBusinessV2PurchaseRateValidationStatus {
+  normal
+  confirmed_abnormal
+}
+
 enum IdBusinessV2GovernanceJobType {
   recycle_restore
   exchange_rate_cleanup
@@ -450,6 +474,11 @@ model User {
   idBusinessV2ExchangeRateRuns         IdBusinessV2ExchangeRateRun[]        @relation("IdBusinessV2ExchangeRateRunTriggeredBy")
   idBusinessV2ExchangeRateEntries      IdBusinessV2ExchangeRateEntry[]      @relation("IdBusinessV2ExchangeRateEntryCreatedBy")
   idBusinessV2ExchangeRateSettings     IdBusinessV2ExchangeRateSettings[]   @relation("IdBusinessV2ExchangeRateSettingsUpdatedBy")
+  idBusinessV2PurchaseCurrencies       IdBusinessV2PurchaseCurrency[]       @relation("IdBusinessV2PurchaseCurrencyUpdatedBy")
+  idBusinessV2PurchaseRateSnapshots    IdBusinessV2PurchaseRateSnapshot[]   @relation("IdBusinessV2PurchaseRateSnapshotCreatedBy")
+  idBusinessV2PurchaseRateSettings     IdBusinessV2PurchaseRateSettings[]   @relation("IdBusinessV2PurchaseRateSettingsUpdatedBy")
+  idBusinessV2PurchaseRateRuns         IdBusinessV2PurchaseRateFetchRun[]   @relation("IdBusinessV2PurchaseRateRunTriggeredBy")
+  idBusinessV2PurchaseRateRunsReviewed IdBusinessV2PurchaseRateFetchRun[]   @relation("IdBusinessV2PurchaseRateRunReviewedBy")
   idBusinessV2BrandingSettings         IdBusinessV2BrandingSettings[]       @relation("IdBusinessV2BrandingSettingsUpdatedBy")
   idBusinessV2TablePreferences         IdBusinessV2UserTablePreference[]
   idBusinessV2WorkspaceShortcuts       IdBusinessV2WorkspaceShortcut[]
@@ -1566,6 +1595,114 @@ model IdBusinessV2ExchangeRateSettings {
   @@index([nextRunAt])
   @@index([updatedByUserId])
   @@map("id_business_v2_exchange_rate_settings")
+}
+
+model IdBusinessV2PurchaseCurrency {
+  code            String                               @id @db.VarChar(3)
+  nameCn          String                               @map("name_cn") @db.VarChar(50)
+  displayName     String?                              @map("display_name") @db.VarChar(100)
+  purchaseRatio   Decimal                              @map("purchase_ratio") @db.Decimal(12, 8)
+  quoteUnit       Decimal                              @default(1) @map("quote_unit") @db.Decimal(18, 8)
+  decimalPlaces   Int                                  @default(4) @map("decimal_places")
+  roundingMode    IdBusinessV2PurchaseRateRoundingMode @default(ROUND_DOWN) @map("rounding_mode")
+  enabled         Boolean                              @default(true)
+  sortOrder       Int                                  @default(0) @map("sort_order")
+  updatedByUserId String?                              @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime                             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User?                              @relation("IdBusinessV2PurchaseCurrencyUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  snapshots IdBusinessV2PurchaseRateSnapshot[]
+
+  @@index([enabled, sortOrder])
+  @@index([updatedByUserId])
+  @@map("id_business_v2_purchase_currencies")
+}
+
+model IdBusinessV2PurchaseRateSettings {
+  id                 Int       @id @default(1)
+  autoEnabled        Boolean   @default(true) @map("auto_enabled")
+  intervalMinutes    Int       @default(60) @map("interval_minutes")
+  staleMinutes       Int       @default(120) @map("stale_minutes")
+  abnormalChangeRate Decimal   @default(0.1) @map("abnormal_change_rate") @db.Decimal(9, 8)
+  nextRunAt          DateTime? @map("next_run_at") @db.Timestamptz(6)
+  updatedByUserId    String?   @map("updated_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("IdBusinessV2PurchaseRateSettingsUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([nextRunAt])
+  @@index([updatedByUserId])
+  @@map("id_business_v2_purchase_rate_settings")
+}
+
+model IdBusinessV2PurchaseRateFetchRun {
+  id                     String                                 @id @default(uuid()) @db.Uuid
+  status                 IdBusinessV2PurchaseRateFetchRunStatus @default(running)
+  triggerType            IdBusinessV2ExchangeRateTriggerType    @map("trigger_type")
+  provider               IdBusinessV2PurchaseMarketRateSource   @default(currencyapi)
+  baseCurrency           String                                 @default("CNY") @map("base_currency") @db.VarChar(3)
+  requestedCurrencyCodes String[]                               @default([]) @map("requested_currency_codes")
+  abnormalCurrencyCodes  String[]                               @default([]) @map("abnormal_currency_codes")
+  startedAt              DateTime                               @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt             DateTime?                              @map("finished_at") @db.Timestamptz(6)
+  providerUpdatedAt      DateTime?                              @map("provider_updated_at") @db.Timestamptz(6)
+  publishedAt            DateTime?                              @map("published_at") @db.Timestamptz(6)
+  attemptCount           Int                                    @default(0) @map("attempt_count")
+  sourceContract         String?                                @map("source_contract") @db.VarChar(120)
+  sourceReference        String?                                @map("source_reference") @db.VarChar(500)
+  candidateQuotes        Json?                                  @map("candidate_quotes")
+  maximumChangeRate      Decimal?                               @map("maximum_change_rate") @db.Decimal(26, 8)
+  errorCode              String?                                @map("error_code") @db.VarChar(120)
+  errorMessage           String?                                @map("error_message") @db.Text
+  errorRetryable         Boolean?                               @map("error_retryable")
+  triggeredByUserId      String?                                @map("triggered_by_user_id") @db.Uuid
+  reviewedByUserId       String?                                @map("reviewed_by_user_id") @db.Uuid
+  reviewedAt             DateTime?                              @map("reviewed_at") @db.Timestamptz(6)
+  reviewRemark           String?                                @map("review_remark") @db.VarChar(500)
+  createdAt              DateTime                               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  triggeredBy User?                              @relation("IdBusinessV2PurchaseRateRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  reviewedBy  User?                              @relation("IdBusinessV2PurchaseRateRunReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  snapshots   IdBusinessV2PurchaseRateSnapshot[]
+
+  @@index([status, startedAt])
+  @@index([triggerType, startedAt])
+  @@index([triggeredByUserId])
+  @@index([reviewedByUserId])
+  @@index([createdAt])
+  @@map("id_business_v2_purchase_rate_fetch_runs")
+}
+
+model IdBusinessV2PurchaseRateSnapshot {
+  id                        String                                   @id @default(uuid()) @db.Uuid
+  currencyCode              String                                   @map("currency_code") @db.VarChar(3)
+  marketRateCnyPerUnit      Decimal                                  @map("market_rate_cny_per_unit") @db.Decimal(18, 8)
+  purchaseRatio             Decimal                                  @map("purchase_ratio") @db.Decimal(12, 8)
+  quoteUnit                 Decimal                                  @map("quote_unit") @db.Decimal(18, 8)
+  purchaseRateRaw           Decimal                                  @map("purchase_rate_raw") @db.Decimal(18, 8)
+  purchaseRateDisplay       Decimal                                  @map("purchase_rate_display") @db.Decimal(18, 8)
+  decimalPlaces             Int                                      @map("decimal_places")
+  roundingMode              IdBusinessV2PurchaseRateRoundingMode     @map("rounding_mode")
+  marketRateSource          IdBusinessV2PurchaseMarketRateSource     @default(manual) @map("market_rate_source")
+  marketRateSourceReference String?                                  @map("market_rate_source_reference") @db.VarChar(500)
+  marketRateCapturedAt      DateTime                                 @map("market_rate_captured_at") @db.Timestamptz(6)
+  fetchRunId                String?                                  @map("fetch_run_id") @db.Uuid
+  changeRate                Decimal?                                 @map("change_rate") @db.Decimal(26, 8)
+  validationStatus          IdBusinessV2PurchaseRateValidationStatus @default(normal) @map("validation_status")
+  createdByUserId           String?                                  @map("created_by_user_id") @db.Uuid
+  createdAt                 DateTime                                 @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  currency  IdBusinessV2PurchaseCurrency      @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  fetchRun  IdBusinessV2PurchaseRateFetchRun? @relation(fields: [fetchRunId], references: [id], onDelete: Restrict)
+  createdBy User?                             @relation("IdBusinessV2PurchaseRateSnapshotCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([currencyCode, createdAt])
+  @@index([marketRateCapturedAt])
+  @@index([fetchRunId])
+  @@index([createdByUserId])
+  @@map("id_business_v2_purchase_rate_snapshots")
 }
 
 model IdBusinessV2BrandingSettings {

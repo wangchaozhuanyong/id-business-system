@@ -73,7 +73,8 @@ async function syncSupabaseRuntimeSecrets() {
     'JWT_SECRET',
     'FIELD_ENCRYPTION_KEY',
     'HASH_SECRET',
-    'V2_TRUSTED_PROXY_SECRET'
+    'V2_TRUSTED_PROXY_SECRET',
+    'CURRENCY_API_KEY'
   ];
   for (const key of requiredSecrets) {
     if (typeof process.env[key] !== 'string' || !process.env[key]) {
@@ -87,6 +88,9 @@ async function syncSupabaseRuntimeSecrets() {
     APP_PUBLIC_URL: RELEASE_PUBLIC_URL,
     AUTH_PROVIDER: 'local',
     CORS_ORIGIN: RELEASE_PUBLIC_URL,
+    CURRENCY_API_KEY: process.env.CURRENCY_API_KEY,
+    CURRENCY_RATE_PROVIDER: 'currencyapi',
+    CURRENCY_RATE_REQUEST_TIMEOUT_MS: '10000',
     FIELD_ENCRYPTION_KEY: process.env.FIELD_ENCRYPTION_KEY,
     HASH_SECRET: process.env.HASH_SECRET,
     JWT_SECRET: process.env.JWT_SECRET,

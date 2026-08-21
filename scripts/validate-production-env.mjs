@@ -46,6 +46,9 @@ requireBoolean('ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED');
 requireBoolean('ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP');
 requireBoolean('ID_BUSINESS_V2_FREE_MANUAL_MODE');
 requireInteger('ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS', 60000, 3600000);
+requireEnum('CURRENCY_RATE_PROVIDER', ['currencyapi']);
+requireSecret('CURRENCY_API_KEY');
+requireInteger('CURRENCY_RATE_REQUEST_TIMEOUT_MS', 1000, 30000);
 
 if (
   values.get('SUPABASE_EDGE_FUNCTION') === 'true' &&

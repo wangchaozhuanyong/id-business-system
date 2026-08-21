@@ -85,6 +85,58 @@
         </dl>
       </section>
 
+      <section class="v2-system-details__panel" aria-label="收购汇率任务证据">
+        <V2SectionHeading
+          title="收购汇率任务证据"
+          help="监控供应商配置、每小时任务、异常审核和最新有效报价时间。"
+        >
+          <template #actions>
+            <el-tag
+              :type="page.overview.purchaseRate?.providerConfigured ? 'success' : 'danger'"
+              effect="plain"
+            >
+              {{ page.overview.purchaseRate?.providerConfigured ? '供应商已配置' : '供应商未配置' }}
+            </el-tag>
+          </template>
+        </V2SectionHeading>
+        <dl class="v2-system-details__metrics">
+          <div>
+            <dt>自动采集</dt>
+            <dd>
+              {{ page.overview.purchaseRate?.settings?.autoEnabled ? '已启用' : '已停用或未知' }}
+            </dd>
+          </div>
+          <div>
+            <dt>最近批次</dt>
+            <dd>
+              {{ page.exchangeRunStatusLabel(page.overview.purchaseRate?.latestRun?.status) }}
+            </dd>
+          </div>
+          <div>
+            <dt>异常币种</dt>
+            <dd>
+              {{ page.overview.purchaseRate?.latestRun?.abnormalCurrencyCodes.join('、') || '无' }}
+            </dd>
+          </div>
+          <div>
+            <dt>最新报价时间</dt>
+            <dd>
+              {{ page.formatSystemMonitoringDate(page.overview.purchaseRate?.latestSnapshotAt) }}
+            </dd>
+          </div>
+          <div>
+            <dt>过期阈值</dt>
+            <dd>{{ page.overview.purchaseRate?.settings?.staleMinutes ?? '—' }} 分钟</dd>
+          </div>
+          <div>
+            <dt>下次计划</dt>
+            <dd>
+              {{ page.formatSystemMonitoringDate(page.overview.purchaseRate?.settings?.nextRunAt) }}
+            </dd>
+          </div>
+        </dl>
+      </section>
+
       <section class="v2-system-details__boundary">
         <el-icon aria-hidden="true"><InfoFilled /></el-icon>
         <div>

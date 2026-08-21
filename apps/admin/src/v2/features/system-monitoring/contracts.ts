@@ -50,6 +50,26 @@ export interface V2SystemMonitoringResponse {
   authentication: V2SystemMonitoringAuthentication;
   authAvailability: V2SystemMonitoringAuthAvailability;
   exchangeRate: V2SystemMonitoringExchangeRate | null;
+  purchaseRate: {
+    providerConfigured: boolean;
+    settings: {
+      autoEnabled: boolean;
+      staleMinutes: number;
+      abnormalChangeRate: string;
+      nextRunAt: string | null;
+      updatedAt: string;
+    } | null;
+    latestRun: {
+      id: string;
+      status: 'running' | 'success' | 'failed' | 'pending_review' | 'rejected';
+      triggerType: 'manual' | 'scheduled' | 'system';
+      startedAt: string;
+      finishedAt: string | null;
+      errorCode: string | null;
+      abnormalCurrencyCodes: string[];
+    } | null;
+    latestSnapshotAt: string | null;
+  } | null;
   observabilityGaps: Array<{
     key: string;
     title: string;

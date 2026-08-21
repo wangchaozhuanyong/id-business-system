@@ -380,6 +380,24 @@ export const v2TableSchemas = {
     })
   },
   exchangeRates: {
+    purchaseQuotes: table({
+      id: 'exchange-rates.purchase-quotes',
+      feature: 'exchange-rates',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'code' },
+      columns: [
+        { key: '币种', label: '货币', kind: 'identifier', widthPreset: 'identifier', pin: 'start' },
+        { key: '市场汇率', label: '国际人民币汇率', kind: 'numeric', widthPreset: 'standard' },
+        { key: '收购比例', label: '收购比例', kind: 'numeric', widthPreset: 'compact' },
+        { key: '显示单位', label: '显示单位', kind: 'numeric', widthPreset: 'compact' },
+        { key: '今日收购价', label: '今日收购价', kind: 'numeric', widthPreset: 'standard' },
+        { key: '小数规则', label: '小数规则', kind: 'text', widthPreset: 'standard' },
+        { key: '汇率时间', label: '汇率时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
+    }),
     snapshots: table({
       id: 'exchange-rates.snapshots',
       feature: 'exchange-rates',
@@ -936,6 +954,7 @@ export const v2TablesByFeature = {
   'account-losses': [v2TableSchemas.accountLosses.main],
   'activation-records': [v2TableSchemas.activations.main],
   'exchange-rates': [
+    v2TableSchemas.exchangeRates.purchaseQuotes,
     v2TableSchemas.exchangeRates.snapshots,
     v2TableSchemas.exchangeRates.manualChanges,
     v2TableSchemas.exchangeRates.offers

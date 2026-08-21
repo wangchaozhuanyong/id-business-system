@@ -184,6 +184,26 @@ const overview: V2SystemMonitoringResponse = {
       errorCode: 'UPSTREAM_TIMEOUT'
     }
   },
+  purchaseRate: {
+    providerConfigured: true,
+    settings: {
+      autoEnabled: true,
+      staleMinutes: 120,
+      abnormalChangeRate: '0.1',
+      nextRunAt: '2026-08-10T17:05:00.000Z',
+      updatedAt: '2026-08-10T15:30:00.000Z'
+    },
+    latestRun: {
+      id: 'purchase-run-fixture-1',
+      status: 'success',
+      triggerType: 'scheduled',
+      startedAt: '2026-08-10T16:05:00.000Z',
+      finishedAt: '2026-08-10T16:05:08.000Z',
+      errorCode: null,
+      abnormalCurrencyCodes: []
+    },
+    latestSnapshotAt: '2026-08-10T16:00:00.000Z'
+  },
   observabilityGaps: emptyState
     ? []
     : [
