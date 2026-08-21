@@ -36,5 +36,6 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml lo
 手工维护和计算逻辑仍可使用，配置真实 Key 后再单独开启自动采集。
 
 服务器启用 `id-business-v2-mysql-backup.timer`，每天将事务一致的逻辑备份写到
-`/opt/id-business-v2/backups/mysql`。EC2 磁盘已加密，但这些备份仍与服务器同盘；正式长期使用前应再增加
-一个加密的跨机器备份目标。
+`/opt/id-business-v2/backups/mysql`。配置 `MYSQL_BACKUP_S3_BUCKET` 后，同一份备份还会通过实例 IAM
+角色上传到私有 S3，强制 TLS 和 AES-256 服务端加密，并在上传后核对对象大小。S3 桶应启用全部公共访问
+阻止、版本控制和生命周期保留策略；实例角色只授予指定备份前缀的上传、读取和列举权限。

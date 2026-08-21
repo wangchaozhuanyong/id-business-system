@@ -571,41 +571,51 @@ export class IdBusinessV2ExchangeRateRepository {
         })
       : [];
     const providerSnapshotIds = providerSnapshots.map((snapshot) => snapshot.id);
-    const deletedQuoteSamples = providerSnapshotIds.length
-      ? (
-          await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
-            where: { providerSnapshotId: { in: providerSnapshotIds } }
-          })
-        ).count
-      : 0;
-    const deletedProviderSnapshots = eligibleSnapshotIds.length
-      ? (
-          await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
-            where: { snapshotId: { in: eligibleSnapshotIds } }
-          })
-        ).count
-      : 0;
-    const deletedSnapshots = eligibleRunIds.length
-      ? (
-          await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
-            where: { runId: { in: eligibleRunIds } }
-          })
-        ).count
-      : 0;
-    const deletedRuns = eligibleRunIds.length
-      ? (
-          await tx.idBusinessV2ExchangeRateRun.deleteMany({
-            where: { id: { in: eligibleRunIds } }
-          })
-        ).count
-      : 0;
-    const deletedFxRateSnapshots = eligibleFxSnapshotIds.length
-      ? (
-          await tx.idBusinessV2FinanceFxRateSnapshot.deleteMany({
-            where: { id: { in: eligibleFxSnapshotIds } }
-          })
-        ).count
-      : 0;
+    await tx.$executeRaw`SET @idv2_exchange_rate_retention_cleanup = 1`;
+    let deletedQuoteSamples: number;
+    let deletedProviderSnapshots: number;
+    let deletedSnapshots: number;
+    let deletedRuns: number;
+    let deletedFxRateSnapshots: number;
+    try {
+      deletedQuoteSamples = providerSnapshotIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
+              where: { providerSnapshotId: { in: providerSnapshotIds } }
+            })
+          ).count
+        : 0;
+      deletedProviderSnapshots = eligibleSnapshotIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
+              where: { snapshotId: { in: eligibleSnapshotIds } }
+            })
+          ).count
+        : 0;
+      deletedSnapshots = eligibleRunIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
+              where: { runId: { in: eligibleRunIds } }
+            })
+          ).count
+        : 0;
+      deletedRuns = eligibleRunIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateRun.deleteMany({
+              where: { id: { in: eligibleRunIds } }
+            })
+          ).count
+        : 0;
+      deletedFxRateSnapshots = eligibleFxSnapshotIds.length
+        ? (
+            await tx.idBusinessV2FinanceFxRateSnapshot.deleteMany({
+              where: { id: { in: eligibleFxSnapshotIds } }
+            })
+          ).count
+        : 0;
+    } finally {
+      await tx.$executeRaw`SET @idv2_exchange_rate_retention_cleanup = NULL`;
+    }
 
     return {
       cutoff: cutoff.toISOString(),
