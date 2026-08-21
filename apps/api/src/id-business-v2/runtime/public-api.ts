@@ -42,7 +42,8 @@ export {
   mapAmount4,
   mapOptionalAmount4,
   mapOptionalRate8,
-  mapRate8
+  mapRate8,
+  mapStringArray
 } from './id-business-v2-row-mapper';
 export {
   V2TransactionalAuditService,

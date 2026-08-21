@@ -14,6 +14,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { SupabaseAuthService } from '../../auth/supabase-auth.service';
 import { getPagination } from '../../common/pagination';
+import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
@@ -145,9 +146,9 @@ export class V2RolesService {
     const where: Prisma.RoleWhereInput = {
       OR: keyword
         ? [
-            { name: { contains: keyword, mode: 'insensitive' } },
-            { code: { contains: keyword, mode: 'insensitive' } },
-            { description: { contains: keyword, mode: 'insensitive' } }
+            { name: { contains: keyword } },
+            { code: { contains: keyword } },
+            { description: { contains: keyword } }
           ]
         : undefined
     };
@@ -245,6 +246,7 @@ export class V2RolesService {
           },
           transaction
         );
+        await bumpV2ScopeVersions(transaction, ['employees', 'security']);
         return created;
       });
       return this.toDetailResponse(role, []);
@@ -396,6 +398,7 @@ export class V2RolesService {
           },
           transaction
         );
+        await bumpV2ScopeVersions(transaction, ['employees', 'security']);
         return updated;
       });
     } catch (error) {
@@ -443,8 +446,7 @@ export class V2RolesService {
     const existing = await this.prisma.role.findFirst({
       where: {
         code: {
-          equals: code,
-          mode: 'insensitive'
+          equals: code
         }
       },
       select: {

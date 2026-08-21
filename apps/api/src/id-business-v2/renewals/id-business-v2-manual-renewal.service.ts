@@ -15,6 +15,7 @@ import {
 import {
   Amount4,
   V2CommandTransactionManager,
+  mapStringArray,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import type { CreateIdBusinessV2ManualRenewalDto } from './dto/create-id-business-v2-manual-renewal.dto';
@@ -184,7 +185,10 @@ export class IdBusinessV2ManualRenewalService {
             websiteAccountEncrypted: sourceActivation.order.websiteAccountEncrypted,
             websiteAccountHash: sourceActivation.order.websiteAccountHash,
             websiteAccountMasked: sourceActivation.order.websiteAccountMasked,
-            websiteAccountSearchTokens: sourceActivation.order.websiteAccountSearchTokens,
+            websiteAccountSearchTokens: mapStringArray(
+              sourceActivation.order.websiteAccountSearchTokens,
+              'id_business_v2_orders.website_account_search_tokens'
+            ),
             receivedAmount: input.receivedAmount,
             balanceAmount: input.balanceAmount,
             openedAt: input.openedAt,

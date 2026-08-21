@@ -15,7 +15,7 @@ export async function lockFinanceAccount(tx: Prisma.TransactionClient, accountId
   const rows = await tx.$queryRaw<Array<{ id: string; status: string; currentBalance: unknown }>>`
     SELECT "id", "status", "current_balance" AS "currentBalance"
     FROM "id_business_v2_finance_accounts"
-    WHERE "id" = CAST(${accountId} AS UUID)
+    WHERE "id" = ${accountId}
     FOR UPDATE
   `;
   const row = rows[0];

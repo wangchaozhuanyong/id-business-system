@@ -89,7 +89,7 @@ export class IdBusinessV2TopupSupplierQueryRepository {
       type: 'topup_supplier',
       deletedAt: null,
       status: criteria.status ?? undefined,
-      name: criteria.keyword ? { contains: criteria.keyword, mode: 'insensitive' } : undefined,
+      name: criteria.keyword ? { contains: criteria.keyword } : undefined,
       topupFundAccounts: accountWhere
     };
     const orderBy: Prisma.IdBusinessV2OptionOrderByWithRelationInput[] =
@@ -152,10 +152,10 @@ export class IdBusinessV2TopupSupplierQueryRepository {
             : undefined,
       OR: criteria.keyword
         ? [
-            { supplierNameSnapshot: { contains: criteria.keyword, mode: 'insensitive' } },
-            { transactionHash: { contains: criteria.keyword, mode: 'insensitive' } },
-            { network: { contains: criteria.keyword, mode: 'insensitive' } },
-            { remark: { contains: criteria.keyword, mode: 'insensitive' } }
+            { supplierNameSnapshot: { contains: criteria.keyword } },
+            { transactionHash: { contains: criteria.keyword } },
+            { network: { contains: criteria.keyword } },
+            { remark: { contains: criteria.keyword } }
           ]
         : undefined
     };
@@ -440,11 +440,11 @@ export class IdBusinessV2TopupSupplierQueryRepository {
         COALESCE(SUM(CASE WHEN ledger."entry_type" = 'payment_credit' THEN ledger."amount_cny" WHEN ledger."entry_type" = 'payment_reversal' THEN -ledger."amount_cny" ELSE 0 END), 0) AS "paymentsCny",
         COALESCE(SUM(CASE WHEN ledger."entry_type" = 'gift_card_debit' THEN ledger."amount_cny" WHEN ledger."entry_type" = 'gift_card_withdrawal_reversal' THEN -ledger."amount_cny" ELSE 0 END), 0) AS "topupDeductionsCny",
         COALESCE(SUM(CASE WHEN ledger."entry_type" IN ('opening_balance', 'manual_adjustment') THEN ledger."balance_after_cny" - ledger."balance_before_cny" ELSE 0 END), 0) AS "netAdjustmentsCny",
-        MAX(ledger."created_at") FILTER (WHERE ledger."entry_type" = 'payment_credit') AS "lastPaymentAt",
-        MAX(ledger."created_at") FILTER (WHERE ledger."entry_type" = 'gift_card_debit') AS "lastTopupAt"
+        MAX(CASE WHEN ledger."entry_type" = 'payment_credit' THEN ledger."created_at" END) AS "lastPaymentAt",
+        MAX(CASE WHEN ledger."entry_type" = 'gift_card_debit' THEN ledger."created_at" END) AS "lastTopupAt"
       FROM "id_business_v2_topup_supplier_ledger" ledger
       WHERE ledger."supplier_account_id" IN (
-        ${Prisma.join(accountIds.map((id) => Prisma.sql`CAST(${id} AS UUID)`))}
+        ${Prisma.join(accountIds.map((id) => Prisma.sql`${id}`))}
       )
       GROUP BY ledger."supplier_account_id"
     `);
@@ -476,13 +476,13 @@ export class IdBusinessV2TopupSupplierQueryRepository {
         gift_card."country_option_id" AS "countryOptionId",
         gift_card."country_name_snapshot" AS "countryName",
         gift_card."currency_code_snapshot" AS "currencyCode",
-        COUNT(*)::bigint AS "cardCount",
+        COUNT(*) AS "cardCount",
         COALESCE(SUM(gift_card."face_value"), 0) AS "faceValue",
         COALESCE(SUM(ledger."amount_cny"), 0) AS "costCny"
       FROM "id_business_v2_topup_supplier_ledger" ledger
       INNER JOIN "id_business_v2_gift_cards" gift_card ON gift_card."id" = ledger."gift_card_id"
       LEFT JOIN "id_business_v2_topup_supplier_ledger" reversal ON reversal."reversal_of_entry_id" = ledger."id"
-      WHERE ledger."supplier_account_id" = CAST(${accountId} AS UUID)
+      WHERE ledger."supplier_account_id" = ${accountId}
         AND ledger."entry_type" = 'gift_card_debit'
         AND reversal."id" IS NULL
       GROUP BY gift_card."country_option_id", gift_card."country_name_snapshot", gift_card."currency_code_snapshot"

@@ -50,6 +50,20 @@ describe('validateEnv', () => {
     ).not.toThrow();
   });
 
+  it('accepts a MySQL production database', () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: 'production',
+        APP_PUBLIC_URL: 'https://admin.company.io',
+        CORS_ORIGIN: 'https://admin.company.io',
+        DATABASE_URL: 'mysql://user:password@mysql.company.io/id_business',
+        FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
+        HASH_SECRET: 'h'.repeat(32),
+        JWT_SECRET: 'j'.repeat(32)
+      })
+    ).not.toThrow();
+  });
+
   it('requires a strong trusted proxy secret for the production Edge runtime', () => {
     const productionEdgeEnv = {
       NODE_ENV: 'production',

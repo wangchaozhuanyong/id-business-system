@@ -215,31 +215,31 @@ export class AuditLogsService {
     const module = query.module?.trim();
     const action = query.action?.trim();
     return {
-      module: module ? { contains: module, mode: 'insensitive' } : undefined,
-      action: action ? { contains: action, mode: 'insensitive' } : undefined,
+      module: module ? { contains: module } : undefined,
+      action: action ? { contains: action } : undefined,
       createdAt: this.buildCreatedAtRange(query.createdFrom, query.createdTo),
       user: operator
         ? {
             is: {
               OR: [
-                { username: { contains: operator, mode: 'insensitive' } },
-                { displayName: { contains: operator, mode: 'insensitive' } }
+                { username: { contains: operator } },
+                { displayName: { contains: operator } }
               ]
             }
           }
         : undefined,
       OR: keyword
         ? [
-            { module: { contains: keyword, mode: 'insensitive' } },
-            { action: { contains: keyword, mode: 'insensitive' } },
-            { remark: { contains: keyword, mode: 'insensitive' } },
-            { objectType: { contains: keyword, mode: 'insensitive' } },
+            { module: { contains: keyword } },
+            { action: { contains: keyword } },
+            { remark: { contains: keyword } },
+            { objectType: { contains: keyword } },
             {
               user: {
                 is: {
                   OR: [
-                    { username: { contains: keyword, mode: 'insensitive' } },
-                    { displayName: { contains: keyword, mode: 'insensitive' } }
+                    { username: { contains: keyword } },
+                    { displayName: { contains: keyword } }
                   ]
                 }
               }
@@ -257,32 +257,32 @@ export class AuditLogsService {
     const module = query.module?.trim();
     const fieldName = query.fieldName?.trim();
     return {
-      module: module ? { contains: module, mode: 'insensitive' } : undefined,
-      fieldName: fieldName ? { contains: fieldName, mode: 'insensitive' } : undefined,
+      module: module ? { contains: module } : undefined,
+      fieldName: fieldName ? { contains: fieldName } : undefined,
       approved: this.parseApproved(query.approved),
       createdAt: this.buildCreatedAtRange(query.createdFrom, query.createdTo),
       user: operator
         ? {
             is: {
               OR: [
-                { username: { contains: operator, mode: 'insensitive' } },
-                { displayName: { contains: operator, mode: 'insensitive' } }
+                { username: { contains: operator } },
+                { displayName: { contains: operator } }
               ]
             }
           }
         : undefined,
       OR: keyword
         ? [
-            { module: { contains: keyword, mode: 'insensitive' } },
-            { fieldName: { contains: keyword, mode: 'insensitive' } },
-            { objectType: { contains: keyword, mode: 'insensitive' } },
-            { accessReason: { contains: keyword, mode: 'insensitive' } },
+            { module: { contains: keyword } },
+            { fieldName: { contains: keyword } },
+            { objectType: { contains: keyword } },
+            { accessReason: { contains: keyword } },
             {
               user: {
                 is: {
                   OR: [
-                    { username: { contains: keyword, mode: 'insensitive' } },
-                    { displayName: { contains: keyword, mode: 'insensitive' } }
+                    { username: { contains: keyword } },
+                    { displayName: { contains: keyword } }
                   ]
                 }
               }

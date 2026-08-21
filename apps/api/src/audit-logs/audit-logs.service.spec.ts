@@ -113,7 +113,7 @@ describe('AuditLogsService', () => {
         skip: 20,
         take: 20,
         where: expect.objectContaining({
-          module: { contains: 'business', mode: 'insensitive' },
+          module: { contains: 'business' },
           createdAt: {
             gte: new Date('2026-07-29T16:00:00.000Z'),
             lt: new Date('2026-07-31T16:00:00.000Z')
@@ -144,7 +144,7 @@ describe('AuditLogsService', () => {
     expect(sensitiveAccessLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          fieldName: { contains: 'password', mode: 'insensitive' },
+          fieldName: { contains: 'password' },
           approved: true
         }),
         orderBy: [{ module: 'asc' }, { createdAt: 'desc' }]

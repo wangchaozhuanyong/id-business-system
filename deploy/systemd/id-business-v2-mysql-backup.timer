@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily ID Business V2 MySQL logical backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=id-business-v2-mysql-backup.service
+
+[Install]
+WantedBy=timers.target

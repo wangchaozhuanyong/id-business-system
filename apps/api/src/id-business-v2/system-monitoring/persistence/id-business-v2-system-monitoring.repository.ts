@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { mapStringArray } from '../../runtime/public-api';
 
 export interface ChangeSyncProbeRow {
   _count: { _all: number };
@@ -117,7 +118,15 @@ export class IdBusinessV2SystemMonitoringRepository {
       latestRun,
       purchaseRate: {
         settings: purchaseSettings,
-        latestRun: purchaseRun,
+        latestRun: purchaseRun
+          ? {
+              ...purchaseRun,
+              abnormalCurrencyCodes: mapStringArray(
+                purchaseRun.abnormalCurrencyCodes,
+                'id_business_v2_purchase_rate_fetch_runs.abnormal_currency_codes'
+              )
+            }
+          : null,
         latestSnapshot: purchaseSnapshot
       }
     };

@@ -12,7 +12,7 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
     }> = [];
     let transactionQueue = Promise.resolve<unknown>(undefined);
     const prisma = {
-      $queryRaw: vi.fn().mockResolvedValue([{ locked: 1 }]),
+      $executeRaw: vi.fn().mockResolvedValue(1),
       $transaction: vi.fn((callback: (client: unknown) => Promise<unknown>) => {
         const result = transactionQueue.then(() => callback(prisma));
         transactionQueue = result.then(
@@ -61,9 +61,9 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
     expect(first).toEqual({ allowed: true, attemptId: 'attempt-1' });
     expect(second).toEqual({ allowed: false });
     expect(attempts.map(({ outcome }) => outcome)).toEqual(['invalid', 'rate_limited']);
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(4);
-    for (const [query] of prisma.$queryRaw.mock.calls) {
-      expect(query.join('')).toContain('SELECT 1::integer AS "locked"');
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(4);
+    for (const [query] of prisma.$executeRaw.mock.calls) {
+      expect(query.join('')).toContain('INSERT INTO "mysql_transaction_locks"');
     }
   });
 });

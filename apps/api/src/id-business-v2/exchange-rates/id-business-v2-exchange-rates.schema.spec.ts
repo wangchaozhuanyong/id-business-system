@@ -108,8 +108,8 @@ describe('V2 exchange-rate contracts', () => {
     expect(cleanupFunction).toContain('"received_fx_snapshot_id" = fx_snapshot."id"');
     expect(cleanupFunction).toContain("'deletedFxRateSnapshots'");
     expect(cleanupFunction).not.toContain('id_business_v2_exchange_rate_entries');
-    expect(persistenceRepository).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
-    expect(persistenceRepository).toContain('FLOOR');
+    expect(persistenceRepository).toContain('UTC_TIMESTAMP(6)');
+    expect(persistenceRepository).toContain('FOR UPDATE');
   });
 
   it('keeps purchase quotes independent, decimal based and immutable', () => {

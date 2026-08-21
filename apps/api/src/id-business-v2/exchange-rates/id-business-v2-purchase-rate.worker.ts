@@ -14,7 +14,8 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   Rate8,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  mapStringArray
 } from '../runtime/public-api';
 import { IdBusinessV2PurchaseRateProviderService } from './id-business-v2-purchase-rate-provider.service';
 import {
@@ -396,6 +397,14 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
         if (run.status !== 'pending_review') {
           throw new ConflictException('该批次已不处于待审核状态');
         }
+        const abnormalCurrencyCodes = mapStringArray(
+          run.abnormalCurrencyCodes,
+          'id_business_v2_purchase_rate_fetch_runs.abnormal_currency_codes'
+        );
+        const requestedCurrencyCodes = mapStringArray(
+          run.requestedCurrencyCodes,
+          'id_business_v2_purchase_rate_fetch_runs.requested_currency_codes'
+        );
         const reviewedAt = new Date();
         if (!confirm) {
           const rejected = await this.repository.rejectRun(tx, id, {
@@ -410,7 +419,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
             action: 'id_business_v2.exchange_rate.purchase_rate.review.reject',
             objectType: 'id_business_v2_purchase_rate_fetch_run',
             objectId: id,
-            afterData: { abnormalCurrencyCodes: run.abnormalCurrencyCodes, remark },
+            afterData: { abnormalCurrencyCodes, remark },
             remark: '异常收购汇率批次已驳回，未发布候选报价'
           });
           return { status: 'rejected' as const };
@@ -418,7 +427,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
 
         const candidates = this.queryService.parseCandidates(
           run.candidateQuotes,
-          run.requestedCurrencyCodes
+          requestedCurrencyCodes
         );
         if (!run.providerUpdatedAt || !run.sourceContract || !run.sourceReference) {
           throw new ConflictException('该异常批次缺少可发布的供应商证据');
@@ -456,7 +465,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
           objectType: 'id_business_v2_purchase_rate_fetch_run',
           objectId: id,
           afterData: {
-            abnormalCurrencyCodes: run.abnormalCurrencyCodes,
+            abnormalCurrencyCodes,
             publishedCurrencyCount: candidates.length,
             remark
           },

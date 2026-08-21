@@ -30,6 +30,14 @@ export function mapOptionalRate8(value: unknown, field = 'optional decimal rate'
   return mapRate8(value, field);
 }
 
+export function mapStringArray(value: unknown, field = 'string array') {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new V2RowMappingError(field);
+  }
+  return [...value] as string[];
+}
+
 function mapDecimal<TValue>(
   value: unknown,
   field: string,

@@ -110,22 +110,22 @@ export class IdBusinessV2DataGovernanceQueryRepository {
       this.prisma.$queryRaw<RecycleRow[]>(Prisma.sql`
         SELECT recycled.id, recycled.entity, recycled.label, recycled.deleted_at
         FROM (
-          SELECT id, 'account'::text AS entity, apple_id_masked AS label, deleted_at
+          SELECT id, 'account' AS entity, apple_id_masked AS label, deleted_at
           FROM id_business_v2_accounts WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'customer'::text AS entity, name AS label, deleted_at
+          SELECT id, 'customer' AS entity, name AS label, deleted_at
           FROM id_business_v2_customers WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'option'::text AS entity, name AS label, deleted_at
+          SELECT id, 'option' AS entity, name AS label, deleted_at
           FROM id_business_v2_options WHERE deleted_at IS NOT NULL
           UNION ALL
-          SELECT id, 'order'::text AS entity, order_no AS label, deleted_at
+          SELECT id, 'order' AS entity, order_no AS label, deleted_at
           FROM id_business_v2_orders WHERE deleted_at IS NOT NULL
         ) recycled
         WHERE (${entityFilter} = '' OR recycled.entity = ${entityFilter})
         ORDER BY recycled.deleted_at DESC, recycled.id DESC
-        OFFSET ${input.skip}
         LIMIT ${input.take}
+        OFFSET ${input.skip}
       `),
       this.recycleCounts()
     ]);
@@ -256,14 +256,14 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         SELECT 1
         FROM "id_business_v2_finance_fx_rate_snapshots" fx_snapshot
         WHERE fx_snapshot."source" = 'combined_p2p'
-          AND fx_snapshot."source_reference" = snapshot."id"::TEXT
+          AND fx_snapshot."source_reference" = snapshot."id"
       )
     `;
     const [rows, totals] = await Promise.all([
       this.prisma.$queryRaw<CleanupPreviewRow[]>(Prisma.sql`
         SELECT
           run."id",
-          run."status"::TEXT AS "status",
+          run."status" AS "status",
           run."started_at" AS "startedAt",
           snapshot."id" AS "snapshotId"
         FROM "id_business_v2_exchange_rate_runs" run
@@ -274,7 +274,7 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         LIMIT ${take}
       `),
       this.prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
-        SELECT COUNT(*)::INTEGER AS "total"
+        SELECT COUNT(*) AS "total"
         FROM "id_business_v2_exchange_rate_runs" run
         LEFT JOIN "id_business_v2_exchange_rate_snapshots" snapshot
           ON snapshot."run_id" = run."id"

@@ -96,8 +96,8 @@ describe('IdBusinessV2ManagedMailboxService', () => {
         provider: 'gmail',
         status: 'active',
         OR: [
-          { email: { contains: 'member', mode: 'insensitive' } },
-          { label: { contains: 'member', mode: 'insensitive' } }
+          { email: { contains: 'member' } },
+          { label: { contains: 'member' } }
         ]
       }
     });

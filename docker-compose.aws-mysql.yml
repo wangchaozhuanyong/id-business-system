@@ -1,0 +1,132 @@
+name: ${COMPOSE_PROJECT_NAME:-id-business-v2-prod}
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: '${DOCKER_LOG_MAX_FILE:-10}'
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?set MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER:?set MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+      - --sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+    ports:
+      - '127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306'
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'mysqladmin ping -h 127.0.0.1 -u root --password="$${MYSQL_ROOT_PASSWORD}" --silent'
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.mysql
+    restart: 'no'
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}
+    command:
+      ['npx', 'prisma', 'migrate', 'deploy', '--schema', 'apps/api/prisma-mysql/schema.prisma']
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.mysql
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      APP_PORT: 3000
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:?set APP_PUBLIC_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
+      DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}
+      AUTH_PROVIDER: local
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?set FIELD_ENCRYPTION_KEY}
+      HASH_SECRET: ${HASH_SECRET:?set HASH_SECRET}
+      SUPABASE_EDGE_FUNCTION: 'false'
+      ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: ${ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED:-false}
+      ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP: ${ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP:-false}
+      ID_BUSINESS_V2_FREE_MANUAL_MODE: ${ID_BUSINESS_V2_FREE_MANUAL_MODE:-false}
+      ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS: ${ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS:-600000}
+      ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED: ${ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED:-false}
+      CURRENCY_RATE_PROVIDER: ${CURRENCY_RATE_PROVIDER:-currencyapi}
+      CURRENCY_API_KEY: ${CURRENCY_API_KEY:-}
+      CURRENCY_RATE_REQUEST_TIMEOUT_MS: ${CURRENCY_RATE_REQUEST_TIMEOUT_MS:-10000}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        AUTH_PROVIDER: local
+        VITE_API_BASE_URL: /api
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-ID 业务管理系统}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/caddy/Caddyfile.aws:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      admin:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:

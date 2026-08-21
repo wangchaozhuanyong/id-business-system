@@ -13,6 +13,7 @@ import { hashPassword } from '../../auth/password-hasher';
 import { SupabaseAuthService } from '../../auth/supabase-auth.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
+import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
@@ -95,10 +96,7 @@ export class V2EmployeesService {
           }
         : undefined,
       OR: keyword
-        ? [
-            { username: { contains: keyword, mode: 'insensitive' } },
-            { displayName: { contains: keyword, mode: 'insensitive' } }
-          ]
+        ? [{ username: { contains: keyword } }, { displayName: { contains: keyword } }]
         : undefined
     };
     const now = new Date();
@@ -218,6 +216,7 @@ export class V2EmployeesService {
           },
           transaction
         );
+        await bumpV2ScopeVersions(transaction, ['employees', 'security']);
         return created;
       });
       return this.toResponse(employee);
@@ -327,6 +326,7 @@ export class V2EmployeesService {
         },
         transaction
       );
+      await bumpV2ScopeVersions(transaction, ['employees', 'security']);
       return updated;
     });
 
@@ -354,8 +354,7 @@ export class V2EmployeesService {
     const existing = await this.prisma.user.findFirst({
       where: {
         username: {
-          equals: username,
-          mode: 'insensitive'
+          equals: username
         },
         deletedAt: null
       },
