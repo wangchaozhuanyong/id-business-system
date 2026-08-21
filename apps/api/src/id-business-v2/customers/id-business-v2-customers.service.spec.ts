@@ -177,7 +177,7 @@ describe('IdBusinessV2CustomersService', () => {
             }
           },
           OR: expect.arrayContaining([
-            { qq: { contains: '+60 12-345 6789', mode: 'insensitive' } },
+            { qq: { contains: '+60 12-345 6789' } },
             { whatsappHash: 'hash:+60123456789' }
           ])
         })

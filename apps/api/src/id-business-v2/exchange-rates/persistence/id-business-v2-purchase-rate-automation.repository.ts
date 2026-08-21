@@ -64,18 +64,7 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
         updatedAt: Date;
       }>
     >(Prisma.sql`
-      UPDATE "id_business_v2_purchase_rate_settings"
-      SET
-        "next_run_at" = (
-          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
-          + INTERVAL '1 day 1 hour 5 minutes'
-        ) AT TIME ZONE 'UTC',
-        "updated_at" = clock_timestamp()
-      WHERE "id" = 1
-        AND "auto_enabled" = TRUE
-        AND "next_run_at" IS NOT NULL
-        AND "next_run_at" <= clock_timestamp()
-      RETURNING
+      SELECT
         "auto_enabled" AS "autoEnabled",
         "interval_minutes" AS "intervalMinutes",
         "stale_minutes" AS "staleMinutes",
@@ -84,8 +73,25 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
         "updated_by_user_id" AS "updatedByUserId",
         "created_at" AS "createdAt",
         "updated_at" AS "updatedAt"
+      FROM "id_business_v2_purchase_rate_settings"
+      WHERE "id" = 1
+        AND "auto_enabled" = TRUE
+        AND "next_run_at" IS NOT NULL
+        AND "next_run_at" <= UTC_TIMESTAMP(6)
+      FOR UPDATE
     `);
-    return rows[0] ? this.mapSettings(rows[0]) : null;
+    const row = rows[0];
+    if (!row) return null;
+
+    const now = new Date();
+    const nextRunAt = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 1, 5)
+    );
+    const updated = await tx.idBusinessV2PurchaseRateSettings.update({
+      where: { id: 1 },
+      data: { nextRunAt }
+    });
+    return this.mapSettings(updated);
   }
 
   createDefaultSettings(tx: V2CommandTransaction, now: Date) {

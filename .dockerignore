@@ -9,8 +9,11 @@ coverage
 
 .env
 .env.production
+.env.aws.production
 .env.local
 .env.*.local
+
+.deploy
 
 .git
 .github

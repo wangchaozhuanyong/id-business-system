@@ -31,7 +31,7 @@ function settingsRecord(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2ExchangeRateSettingsService', () => {
   const tx = {
-    idBusinessV2ExchangeRateSettings: { create: vi.fn(), upsert: vi.fn() },
+    idBusinessV2ExchangeRateSettings: { create: vi.fn(), upsert: vi.fn(), update: vi.fn() },
     $queryRaw: vi.fn(),
     auditLog: { create: vi.fn() }
   };
@@ -62,6 +62,7 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
         updatedByUserId: operator.id
       })
     );
+    tx.idBusinessV2ExchangeRateSettings.update.mockResolvedValue(settingsRecord());
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
@@ -162,8 +163,12 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
     expect(claimed?.targetAmountRmb.toString()).toBe('5000');
     expect(claimed?.intervalMinutes).toBe(15);
     const query = tx.$queryRaw.mock.calls[0]?.[0] as { strings?: string[] };
-    expect(query.strings?.join('')).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
-    expect(query.strings?.join('')).toContain('FLOOR');
+    expect(query.strings?.join('')).toContain('UTC_TIMESTAMP(6)');
+    expect(query.strings?.join('')).toContain('FOR UPDATE');
+    expect(tx.idBusinessV2ExchangeRateSettings.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { nextRunAt: new Date('2026-07-27T10:15:00.000Z') }
+    });
 
     tx.$queryRaw.mockResolvedValue([]);
     await expect(service.claimDueSchedule()).resolves.toBeNull();

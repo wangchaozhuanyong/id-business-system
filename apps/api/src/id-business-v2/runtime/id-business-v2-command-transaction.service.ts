@@ -1,6 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { isUniqueConstraintError, isWriteConflictError } from './id-business-v2-prisma-error';
 
@@ -71,11 +72,18 @@ export class V2CommandTransactionManager {
     for (let attempt = 1; attempt <= maxWriteConflictRetries + 1; attempt += 1) {
       const context: V2CommandContext = { ...baseContext, attempt };
       try {
-        return await this.prisma.$transaction((tx) => work(tx, context), {
-          isolationLevel,
-          maxWait: options.maxWaitMs,
-          timeout: options.timeoutMs
-        });
+        return await this.prisma.$transaction(
+          async (tx) => {
+            const result = await work(tx, context);
+            await bumpV2ScopeVersions(tx, undefined, context.businessTime);
+            return result;
+          },
+          {
+            isolationLevel,
+            maxWait: options.maxWaitMs,
+            timeout: options.timeoutMs
+          }
+        );
       } catch (error) {
         if (isWriteConflictError(error) && retryable && attempt <= maxWriteConflictRetries) {
           continue;
@@ -84,11 +92,18 @@ export class V2CommandTransactionManager {
         if (isUniqueConstraintError(error)) {
           if (retryable) {
             const replayContext: V2CommandContext = { ...baseContext, attempt: attempt + 1 };
-            return this.prisma.$transaction((tx) => options.replay(tx, replayContext), {
-              isolationLevel,
-              maxWait: options.maxWaitMs,
-              timeout: options.timeoutMs
-            });
+            return this.prisma.$transaction(
+              async (tx) => {
+                const result = await options.replay(tx, replayContext);
+                await bumpV2ScopeVersions(tx, undefined, replayContext.businessTime);
+                return result;
+              },
+              {
+                isolationLevel,
+                maxWait: options.maxWaitMs,
+                timeout: options.timeoutMs
+              }
+            );
           }
           throw new ConflictException(
             options.uniqueConflictMessage ?? '数据已被其他操作创建，请刷新后核对'

@@ -247,8 +247,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
         OR: [
           {
             appleIdMasked: {
-              contains: 'Target@Example.com',
-              mode: 'insensitive'
+              contains: 'Target@Example.com'
             }
           },
           {
@@ -256,15 +255,14 @@ describe('IdBusinessV2OrderMatchingService', () => {
           },
           {
             appleIdSearchTokens: {
-              hasEvery: ['apple-id-search-hash']
+              array_contains: ['apple-id-search-hash']
             }
           },
           {
             soldByOrder: {
               is: {
                 orderNo: {
-                  contains: 'Target@Example.com',
-                  mode: 'insensitive'
+                  contains: 'Target@Example.com'
                 }
               }
             }

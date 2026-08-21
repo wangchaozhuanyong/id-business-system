@@ -52,8 +52,8 @@ export class IdBusinessV2BusinessMonitoringRepository {
   }): Promise<BusinessMonitoringPage> {
     const findings = this.findingsSql(input.now, input.warningDays);
     const filters = Prisma.sql`
-      WHERE (${input.severity}::text IS NULL OR "severity" = ${input.severity})
-        AND (${input.category}::text IS NULL OR "category" = ${input.category})
+      WHERE (${input.severity} IS NULL OR "severity" = ${input.severity})
+        AND (${input.category} IS NULL OR "category" = ${input.category})
     `;
 
     return Promise.all([
@@ -68,11 +68,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
       `),
       this.prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
         WITH "findings" AS (${findings})
-        SELECT COUNT(*)::bigint AS "count" FROM "findings" ${filters}
+        SELECT COUNT(*) AS "count" FROM "findings" ${filters}
       `),
       this.prisma.$queryRaw<BusinessMonitoringSummaryRow[]>(Prisma.sql`
         WITH "findings" AS (${findings})
-        SELECT "severity", "category", COUNT(*)::bigint AS "count"
+        SELECT "severity", "category", COUNT(*) AS "count"
         FROM "findings"
         GROUP BY "severity", "category"
       `)
@@ -90,29 +90,29 @@ export class IdBusinessV2BusinessMonitoringRepository {
     return Prisma.sql`
       SELECT
         CONCAT('order:', o."id", ':failed') AS "id",
-        'order_failed'::text AS "ruleKey",
-        'order'::text AS "category",
-        'critical'::text AS "severity",
-        1::int AS "severityRank",
-        o."order_no"::text AS "subject",
-        '订单当前状态为失败，请复核并修正源订单。'::text AS "description",
+        'order_failed' AS "ruleKey",
+        'order' AS "category",
+        'critical' AS "severity",
+        1 AS "severityRank",
+        o."order_no" AS "subject",
+        '订单当前状态为失败，请复核并修正源订单。' AS "description",
         o."status_changed_at" AS "detectedAt",
-        'order'::text AS "sourceType",
-        o."id"::text AS "sourceId",
-        '/v2/orders'::text AS "route"
+        'order' AS "sourceType",
+        o."id" AS "sourceId",
+        '/v2/orders' AS "route"
       FROM "id_business_v2_orders" o
-      WHERE o."deleted_at" IS NULL AND o."status"::text = 'failed'
+      WHERE o."deleted_at" IS NULL AND o."status" = 'failed'
 
       UNION ALL
 
       SELECT
         CONCAT('order:', o."id", ':stalled'), 'order_stalled', 'order', 'warning', 2,
-        o."order_no"::text,
+        o."order_no",
         '订单超过 24 小时未更新，请确认是否继续处理。',
-        o."updated_at", 'order', o."id"::text, '/v2/orders'
+        o."updated_at", 'order', o."id", '/v2/orders'
       FROM "id_business_v2_orders" o
       WHERE o."deleted_at" IS NULL
-        AND o."status"::text IN ('draft', 'pending', 'waiting_external', 'processing')
+        AND o."status" IN ('draft', 'pending', 'waiting_external', 'processing')
         AND o."updated_at" < ${stalledBefore}
 
       UNION ALL
@@ -121,11 +121,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
         CONCAT('activation:', a."id", ':overdue'), 'renewal_overdue', 'renewal', 'critical', 1,
         CONCAT(c."name", ' · ', s."name"),
         '开通记录已超过到期时间，请续费或修正状态。',
-        a."due_at", 'activation', a."id"::text, '/v2/workbench/renewals'
+        a."due_at", 'activation', a."id", '/v2/workbench/renewals'
       FROM "id_business_v2_activations" a
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
-      WHERE a."status"::text = 'active' AND a."due_at" < ${now}
+      WHERE a."status" = 'active' AND a."due_at" < ${now}
         AND NOT EXISTS (
           SELECT 1
           FROM "id_business_v2_activations" replacement
@@ -138,11 +138,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
         CONCAT('activation:', a."id", ':due-soon'), 'renewal_due_soon', 'renewal', 'warning', 2,
         CONCAT(c."name", ' · ', s."name"),
         '开通记录已进入续费预警窗口。',
-        a."due_at", 'activation', a."id"::text, '/v2/workbench/renewals'
+        a."due_at", 'activation', a."id", '/v2/workbench/renewals'
       FROM "id_business_v2_activations" a
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
-      WHERE a."status"::text = 'active' AND a."due_at" >= ${now} AND a."due_at" < ${warningEnd}
+      WHERE a."status" = 'active' AND a."due_at" >= ${now} AND a."due_at" < ${warningEnd}
         AND NOT EXISTS (
           SELECT 1
           FROM "id_business_v2_activations" replacement
@@ -155,21 +155,21 @@ export class IdBusinessV2BusinessMonitoringRepository {
         CONCAT('activation:', a."id", ':abnormal'), 'activation_abnormal', 'renewal', 'critical', 1,
         CONCAT(c."name", ' · ', s."name"),
         '开通记录当前状态为异常，请复核源订单和到期信息。',
-        a."status_changed_at", 'activation', a."id"::text, '/v2/records/activations'
+        a."status_changed_at", 'activation', a."id", '/v2/records/activations'
       FROM "id_business_v2_activations" a
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
-      WHERE a."status"::text = 'abnormal'
+      WHERE a."status" = 'abnormal'
 
       UNION ALL
 
       SELECT
         CONCAT('account:', a."id", ':negative-balance'), 'account_negative_balance', 'balance', 'warning', 2,
-        a."apple_id_masked"::text,
-        CONCAT('当前余额为 ', a."current_balance"::text, '，请核对余额流水。'),
-        a."updated_at", 'account', a."id"::text, '/v2/accounts'
+        a."apple_id_masked",
+        CONCAT('当前余额为 ', a."current_balance", '，请核对余额流水。'),
+        a."updated_at", 'account', a."id", '/v2/accounts'
       FROM "id_business_v2_accounts" a
-      WHERE a."deleted_at" IS NULL AND a."record_status"::text = 'active'
+      WHERE a."deleted_at" IS NULL AND a."record_status" = 'active'
         AND a."loss_reported_at" IS NULL
         AND a."current_balance" < 0
 
@@ -178,26 +178,26 @@ export class IdBusinessV2BusinessMonitoringRepository {
       SELECT
         CONCAT('after-sales-order:', o."id", ':ownership'), 'after_sales_ownership_mismatch',
         'order', 'critical', 1,
-        o."order_no"::text,
+        o."order_no",
         '客户已购 ID 与原销售订单客户或当前 ID 归属不一致。',
-        o."updated_at", 'order', o."id"::text, '/v2/orders'
+        o."updated_at", 'order', o."id", '/v2/orders'
       FROM "id_business_v2_orders" o
       LEFT JOIN "id_business_v2_orders" source_order ON source_order."id" = o."source_sold_order_id"
       LEFT JOIN "id_business_v2_accounts" account ON account."id" = o."account_id"
-      WHERE o."deleted_at" IS NULL AND o."account_source"::text = 'customer_owned'
+      WHERE o."deleted_at" IS NULL AND o."account_source" = 'customer_owned'
         AND (
           source_order."id" IS NULL
           OR account."id" IS NULL
-          OR source_order."customer_id" IS DISTINCT FROM o."customer_id"
-          OR source_order."account_id" IS DISTINCT FROM o."account_id"
+          OR NOT (source_order."customer_id" <=> o."customer_id")
+          OR NOT (source_order."account_id" <=> o."account_id")
           OR (
             (
-              o."status"::text IN ('draft', 'pending', 'waiting_external', 'processing')
+              o."status" IN ('draft', 'pending', 'waiting_external', 'processing')
               OR EXISTS (
                 SELECT 1
                 FROM "id_business_v2_activations" activation
                 WHERE activation."order_id" = o."id"
-                  AND activation."status"::text = 'active'
+                  AND activation."status" = 'active'
                   AND NOT EXISTS (
                     SELECT 1
                     FROM "id_business_v2_activations" renewed_activation
@@ -207,13 +207,13 @@ export class IdBusinessV2BusinessMonitoringRepository {
               )
             )
             AND (
-              source_order."account_disposition"::text NOT IN ('sold', 'recovered')
+              source_order."account_disposition" NOT IN ('sold', 'recovered')
               OR (
-                source_order."account_disposition"::text = 'sold'
-                AND account."sold_by_order_id" IS DISTINCT FROM o."source_sold_order_id"
+                source_order."account_disposition" = 'sold'
+                AND NOT (account."sold_by_order_id" <=> o."source_sold_order_id")
               )
               OR (
-                source_order."account_disposition"::text = 'recovered'
+                source_order."account_disposition" = 'recovered'
                 AND account."sold_by_order_id" IS NOT NULL
               )
             )
@@ -225,23 +225,23 @@ export class IdBusinessV2BusinessMonitoringRepository {
       SELECT
         CONCAT('after-sales-order:', o."id", ':id-cost'), 'after_sales_duplicate_id_cost',
         'finance', 'critical', 1,
-        o."order_no"::text,
+        o."order_no",
         '客户已购 ID 订单出现重复 ID 成本，请立即核对财务凭证。',
-        o."updated_at", 'order', o."id"::text, '/v2/analytics'
+        o."updated_at", 'order', o."id", '/v2/analytics'
       FROM "id_business_v2_orders" o
-      WHERE o."deleted_at" IS NULL AND o."account_source"::text = 'customer_owned'
+      WHERE o."deleted_at" IS NULL AND o."account_source" = 'customer_owned'
         AND (o."account_cost_amount" <> 0 OR o."applied_account_cost_amount" <> 0)
 
       UNION ALL
 
       SELECT
         CONCAT('supplier-fund:', f."id", ':negative'), 'supplier_fund_negative', 'balance', 'critical', 1,
-        o."name"::text,
-        CONCAT('当前人民币余额为 ', f."current_balance_cny"::text, '，请核对付款、加卡和调账流水。'),
-        f."updated_at", 'supplier_fund', f."id"::text, '/v2/records/topups'
+        o."name",
+        CONCAT('当前人民币余额为 ', f."current_balance_cny", '，请核对付款、加卡和调账流水。'),
+        f."updated_at", 'supplier_fund', f."id", '/v2/records/topups'
       FROM "id_business_v2_topup_supplier_accounts" f
       JOIN "id_business_v2_options" o ON o."id" = f."supplier_option_id"
-      WHERE f."status"::text = 'active' AND f."current_balance_cny" < 0
+      WHERE f."status" = 'active' AND f."current_balance_cny" < 0
 
       UNION ALL
 
@@ -249,9 +249,9 @@ export class IdBusinessV2BusinessMonitoringRepository {
         CONCAT('exchange-run:', r."id", ':failed'), 'exchange_rate_failed', 'exchange_rate', 'warning', 2,
         CONCAT(r."asset", '/', r."fiat"),
         CONCAT('采集失败', CASE WHEN r."error_code" IS NULL THEN '' ELSE CONCAT('：', r."error_code") END),
-        r."started_at", 'exchange_rate_run', r."id"::text, '/v2/exchange-rates'
+        r."started_at", 'exchange_rate_run', r."id", '/v2/exchange-rates'
       FROM "id_business_v2_exchange_rate_runs" r
-      WHERE r."status"::text = 'failed' AND r."started_at" >= ${failedSince}
+      WHERE r."status" = 'failed' AND r."started_at" >= ${failedSince}
 
       UNION ALL
 
@@ -259,9 +259,9 @@ export class IdBusinessV2BusinessMonitoringRepository {
         CONCAT('finance-settings:', f."id", ':history'), 'finance_history_incomplete', 'finance', 'warning', 2,
         '财务历史基线',
         '历史回填、期初余额或遗漏开支尚未完整确认。',
-        f."updated_at", 'finance_settings', f."id"::text, '/v2/finance/ledger'
+        f."updated_at", 'finance_settings', f."id", '/v2/finance/ledger'
       FROM "id_business_v2_finance_settings" f
-      WHERE f."history_status"::text <> 'completed'
+      WHERE f."history_status" <> 'completed'
     `;
   }
 }

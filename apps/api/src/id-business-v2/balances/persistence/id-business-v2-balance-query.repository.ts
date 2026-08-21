@@ -117,15 +117,15 @@ export class IdBusinessV2BalanceQueryRepository {
       countryOptionId: criteria.countryOptionId ?? undefined,
       OR: criteria.keyword
         ? [
-            { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            { appleIdMasked: { contains: criteria.keyword } },
             {
               appleIdSearchTokens: criteria.appleIdSearchTokens.length
-                ? { hasEvery: criteria.appleIdSearchTokens }
+                ? { array_contains: criteria.appleIdSearchTokens }
                 : undefined
             },
             {
               soldByOrder: {
-                is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { orderNo: { contains: criteria.keyword } }
               }
             }
           ]

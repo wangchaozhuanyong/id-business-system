@@ -31,6 +31,22 @@ describe('V2CommandTransactionManager', () => {
     });
   });
 
+  it('bumps all portable scope versions in the same successful transaction', async () => {
+    const tx = {
+      idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 35 }) }
+    };
+    const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
+    const manager = new V2CommandTransactionManager(prisma as never);
+
+    await expect(
+      manager.execute(async () => 'created', { requestId: 'request-scope' })
+    ).resolves.toBe('created');
+    expect(tx.idBusinessV2ScopeVersion.updateMany).toHaveBeenCalledWith({
+      where: { scope: { in: expect.arrayContaining(['accounts', 'orders', 'exchange-rates']) } },
+      data: { version: { increment: 1 }, updatedAt: expect.any(Date) }
+    });
+  });
+
   it('retries only an explicitly replayable command and preserves command context', async () => {
     const businessTime = new Date('2026-07-31T12:00:00.000Z');
     const prisma = {

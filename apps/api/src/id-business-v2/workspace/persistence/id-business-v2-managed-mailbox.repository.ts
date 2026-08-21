@@ -5,6 +5,7 @@ import type {
   Prisma
 } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 
 type MailboxPersistenceClient = Pick<
@@ -111,12 +112,7 @@ export class IdBusinessV2ManagedMailboxRepository {
       const lockKeys = [`mail-viewer:email:${input.emailHash}`];
       if (input.ipHash) lockKeys.push(`mail-viewer:ip:${input.ipHash}`);
       for (const key of lockKeys.sort()) {
-        await client.$queryRaw`
-          SELECT 1::integer AS "locked"
-          FROM (
-            SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))
-          ) AS "mail_query_attempt_lock"
-        `;
+        await acquireMysqlTransactionLock(client, key);
       }
 
       const counts = [

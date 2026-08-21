@@ -56,6 +56,7 @@ describe('AuthService', () => {
       deletedAt: null
     };
     const transaction = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       user: {
         findFirst: jest.fn().mockImplementation(() =>
@@ -602,7 +603,7 @@ describe('AuthService', () => {
         })
       })
     });
-    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.$executeRaw).toHaveBeenCalledTimes(1);
     const serializedAudit = JSON.stringify(
       jest.mocked(transaction.auditLog.create).mock.calls[0]?.[0]
     );

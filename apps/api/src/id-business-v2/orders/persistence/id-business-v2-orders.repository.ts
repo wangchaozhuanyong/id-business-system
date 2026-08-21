@@ -5,6 +5,7 @@ import {
   mapAmount4,
   mapOptionalAmount4,
   mapRate8,
+  mapStringArray,
   type V2CommandTransaction
 } from '../../runtime/public-api';
 import type { LockedAccountRow, LockedOrderRow } from '../id-business-v2-order-lock-support';
@@ -230,7 +231,7 @@ export class IdBusinessV2OrdersRepository {
         ? this.prisma.idBusinessV2Account.findMany({
             where: {
               deletedAt: null,
-              appleIdSearchTokens: { hasEvery: input.appleIdTokens }
+              appleIdSearchTokens: { array_contains: input.appleIdTokens }
             },
             select: { id: true, appleIdEncrypted: true }
           })
@@ -240,7 +241,7 @@ export class IdBusinessV2OrdersRepository {
             where: {
               deletedAt: null,
               websiteAccountEncrypted: { not: null },
-              websiteAccountSearchTokens: { hasEvery: input.websiteAccountTokens }
+              websiteAccountSearchTokens: { array_contains: input.websiteAccountTokens }
             },
             select: { id: true, websiteAccountEncrypted: true }
           })
@@ -284,39 +285,39 @@ export class IdBusinessV2OrdersRepository {
           recordStatus: 'active',
           OR: customerKeyword
             ? [
-                { name: { contains: customerKeyword, mode: 'insensitive' } },
-                { wechat: { contains: customerKeyword, mode: 'insensitive' } },
+                { name: { contains: customerKeyword } },
+                { wechat: { contains: customerKeyword } },
                 {
                   wechatSearchTokens: wechatSearchTokens.length
-                    ? { hasEvery: wechatSearchTokens }
+                    ? { array_contains: wechatSearchTokens }
                     : undefined
                 },
-                { qq: { contains: customerKeyword, mode: 'insensitive' } },
+                { qq: { contains: customerKeyword } },
                 {
-                  qqSearchTokens: qqSearchTokens.length ? { hasEvery: qqSearchTokens } : undefined
+                  qqSearchTokens: qqSearchTokens.length
+                    ? { array_contains: qqSearchTokens }
+                    : undefined
                 },
                 {
                   phoneTail: {
-                    contains: normalizedContact?.slice(-8) ?? customerKeyword,
-                    mode: 'insensitive'
+                    contains: normalizedContact?.slice(-8) ?? customerKeyword
                   }
                 },
                 { phoneHash: contactHash ?? undefined },
                 {
                   phoneSearchTokens: phoneSearchTokens.length
-                    ? { hasEvery: phoneSearchTokens }
+                    ? { array_contains: phoneSearchTokens }
                     : undefined
                 },
                 {
                   whatsappTail: {
-                    contains: normalizedContact?.slice(-8) ?? customerKeyword,
-                    mode: 'insensitive'
+                    contains: normalizedContact?.slice(-8) ?? customerKeyword
                   }
                 },
                 { whatsappHash: contactHash ?? undefined },
                 {
                   whatsappSearchTokens: whatsappSearchTokens.length
-                    ? { hasEvery: whatsappSearchTokens }
+                    ? { array_contains: whatsappSearchTokens }
                     : undefined
                 }
               ]
@@ -527,16 +528,16 @@ export class IdBusinessV2OrdersRepository {
       ? {
           ...availableWhere,
           OR: [
-            { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            { appleIdMasked: { contains: criteria.keyword } },
             { appleIdHash: criteria.keywordHash ?? undefined },
             {
               appleIdSearchTokens: criteria.keywordSearchTokens.length
-                ? { hasEvery: criteria.keywordSearchTokens }
+                ? { array_contains: criteria.keywordSearchTokens }
                 : undefined
             },
             {
               soldByOrder: {
-                is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { orderNo: { contains: criteria.keyword } }
               }
             }
           ]
@@ -1087,19 +1088,19 @@ export class IdBusinessV2OrdersRepository {
       openedAt: criteria.openedAt,
       OR: criteria.keyword
         ? [
-            { orderNo: { contains: criteria.keyword, mode: 'insensitive' } },
-            { platformOrderNo: { contains: criteria.keyword, mode: 'insensitive' } },
-            { websiteAccountMasked: { contains: criteria.keyword, mode: 'insensitive' } },
+            { orderNo: { contains: criteria.keyword } },
+            { platformOrderNo: { contains: criteria.keyword } },
+            { websiteAccountMasked: { contains: criteria.keyword } },
             { websiteAccountHash: criteria.websiteAccountHash ?? undefined },
-            { customer: { is: { name: { contains: criteria.keyword, mode: 'insensitive' } } } },
+            { customer: { is: { name: { contains: criteria.keyword } } } },
             {
               serviceOption: {
-                is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { name: { contains: criteria.keyword } }
               }
             },
             {
               account: {
-                is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { appleIdMasked: { contains: criteria.keyword } }
               }
             },
             {
@@ -1115,21 +1116,20 @@ export class IdBusinessV2OrdersRepository {
               : []),
             {
               settlementPlatform: {
-                is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { name: { contains: criteria.keyword } }
               }
             },
             {
               displaySnapshot: {
                 is: {
                   OR: [
-                    { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
-                    { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
-                    { serviceCategoryName: { contains: criteria.keyword, mode: 'insensitive' } },
-                    { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } },
+                    { customerName: { contains: criteria.keyword } },
+                    { serviceName: { contains: criteria.keyword } },
+                    { serviceCategoryName: { contains: criteria.keyword } },
+                    { accountLabel: { contains: criteria.keyword } },
                     {
                       settlementPlatformName: {
-                        contains: criteria.keyword,
-                        mode: 'insensitive'
+                        contains: criteria.keyword
                       }
                     }
                   ]
@@ -1179,7 +1179,7 @@ export class IdBusinessV2OrdersRepository {
         "status"
       FROM "id_business_v2_orders"
       WHERE
-        "id" = CAST(${orderId} AS UUID)
+        "id" = ${orderId}
         AND "deleted_at" IS NULL
       FOR UPDATE
     `;
@@ -1215,11 +1215,11 @@ export class IdBusinessV2OrdersRepository {
         ON sold_order."id" = account."sold_by_order_id"
         AND sold_order."deleted_at" IS NULL
       WHERE
-        account."id" = CAST(${accountId} AS UUID)
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
         AND account."record_status" = 'active'
         AND account."loss_reported_at" IS NULL
-      FOR UPDATE OF account
+      FOR UPDATE
     `;
     return rows[0] ? mapLockedAccount(rows[0]) : null;
   }
@@ -1314,13 +1314,13 @@ export class IdBusinessV2OrdersRepository {
       ? await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id"
           FROM "id_business_v2_orders"
-          WHERE "id" = CAST(${orderId} AS UUID)
+          WHERE "id" = ${orderId}
           FOR UPDATE
         `
       : await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id"
           FROM "id_business_v2_orders"
-          WHERE "id" = CAST(${orderId} AS UUID) AND "deleted_at" IS NULL
+          WHERE "id" = ${orderId} AND "deleted_at" IS NULL
           FOR UPDATE
         `;
     return rows[0] ?? null;
@@ -1350,7 +1350,7 @@ export class IdBusinessV2OrdersRepository {
         "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
-      WHERE "id" = CAST(${accountId} AS UUID) AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     const account = rows[0];
@@ -1403,7 +1403,7 @@ export async function lockAccountForSale(
         "balance_cost_amount" AS "balanceCostAmount"
       FROM "id_business_v2_accounts"
       WHERE
-        "id" = CAST(${accountId} AS UUID)
+        "id" = ${accountId}
         AND "deleted_at" IS NULL
       FOR UPDATE
     `;
@@ -1495,6 +1495,10 @@ function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
   );
   return {
     ...row,
+    websiteAccountSearchTokens: mapStringArray(
+      row.websiteAccountSearchTokens,
+      'id_business_v2_orders.website_account_search_tokens'
+    ),
     accountSource: row.accountSource ?? 'inventory',
     sourceSoldOrderId: row.sourceSoldOrderId ?? null,
     receivedAmount: mapAmount4(row.receivedAmount, 'id_business_v2_orders.received_amount'),

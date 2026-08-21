@@ -745,12 +745,12 @@ describe('IdBusinessV2OrderEntryService', () => {
           deletedAt: null,
           recordStatus: 'active',
           OR: expect.arrayContaining([
-            { name: { contains: '138 (0013)-5678', mode: 'insensitive' } },
-            { wechat: { contains: '138 (0013)-5678', mode: 'insensitive' } },
-            { qq: { contains: '138 (0013)-5678', mode: 'insensitive' } },
-            { phoneTail: { contains: '00135678', mode: 'insensitive' } },
+            { name: { contains: '138 (0013)-5678' } },
+            { wechat: { contains: '138 (0013)-5678' } },
+            { qq: { contains: '138 (0013)-5678' } },
+            { phoneTail: { contains: '00135678' } },
             { phoneHash: 'website-hash' },
-            { whatsappTail: { contains: '00135678', mode: 'insensitive' } },
+            { whatsappTail: { contains: '00135678' } },
             { whatsappHash: 'website-hash' }
           ])
         }),

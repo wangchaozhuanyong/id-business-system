@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { V2_DATA_SCOPES } from '@apple-business/shared';
 import { hashPassword } from '../src/auth/password-hasher';
 
 const prisma = new PrismaClient();
@@ -87,6 +88,16 @@ async function main() {
         }
       });
     })
+  );
+
+  await Promise.all(
+    V2_DATA_SCOPES.map((scope) =>
+      prisma.idBusinessV2ScopeVersion.upsert({
+        where: { scope },
+        update: {},
+        create: { scope, version: 0 }
+      })
+    )
   );
 
   await prisma.$transaction([

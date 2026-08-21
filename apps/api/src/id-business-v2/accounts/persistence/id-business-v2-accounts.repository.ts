@@ -12,6 +12,7 @@ import {
   buildIdBusinessV2BlindQueryTokens,
   mapAmount4,
   mapRate8,
+  mapStringArray,
   type V2CommandTransaction
 } from '../../runtime/public-api';
 import {
@@ -154,7 +155,7 @@ export class IdBusinessV2AccountsRepository {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "id_business_v2_accounts"
-      WHERE "id" = CAST(${accountId} AS UUID) AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     if (!rows[0]) throw new NotFoundException('ID 资料不存在');
@@ -269,7 +270,7 @@ export class IdBusinessV2AccountsRepository {
         "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
-      WHERE "id" = CAST(${accountId} AS UUID) AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     const row = rows[0];
@@ -303,8 +304,8 @@ export class IdBusinessV2AccountsRepository {
       FROM "id_business_v2_topup_supplier_accounts" wallet
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = wallet."supplier_option_id"
-      WHERE wallet."id" = CAST(${walletId} AS UUID)
-      FOR UPDATE OF wallet
+      WHERE wallet."id" = ${walletId}
+      FOR UPDATE
     `;
     const row = rows[0];
     return row
@@ -501,6 +502,14 @@ export class IdBusinessV2AccountsRepository {
   private mapAccount(row: PersistedAccount): AccountWithRelations {
     return {
       ...row,
+      appleIdSearchTokens: mapStringArray(
+        row.appleIdSearchTokens,
+        'id_business_v2_accounts.apple_id_search_tokens'
+      ),
+      phoneSearchTokens: mapStringArray(
+        row.phoneSearchTokens,
+        'id_business_v2_accounts.phone_search_tokens'
+      ),
       currentBalance: mapAmount4(row.currentBalance, 'id_business_v2_accounts.current_balance'),
       balanceCostAmount: mapAmount4(
         row.balanceCostAmount,
@@ -572,26 +581,25 @@ export class IdBusinessV2AccountsRepository {
           : lifecycleWhere.soldByOrderId,
       OR: keyword
         ? [
-            { appleIdMasked: { contains: keyword, mode: 'insensitive' } },
+            { appleIdMasked: { contains: keyword } },
             { appleIdHash: hash(normalizedAppleId) ?? undefined },
             {
               appleIdSearchTokens: appleIdSearchTokens.length
-                ? { hasEvery: appleIdSearchTokens }
+                ? { array_contains: appleIdSearchTokens }
                 : undefined
             },
             {
               phoneTail: {
-                contains: normalizedPhone?.slice(-8) ?? keyword,
-                mode: 'insensitive'
+                contains: normalizedPhone?.slice(-8) ?? keyword
               }
             },
             { phoneHash: hash(normalizedPhone) ?? undefined },
             {
               phoneSearchTokens: phoneSearchTokens.length
-                ? { hasEvery: phoneSearchTokens }
+                ? { array_contains: phoneSearchTokens }
                 : undefined
             },
-            { supplierOption: { name: { contains: keyword, mode: 'insensitive' } } }
+            { supplierOption: { name: { contains: keyword } } }
           ]
         : undefined
     };

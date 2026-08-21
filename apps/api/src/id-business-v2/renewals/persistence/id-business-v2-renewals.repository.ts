@@ -474,7 +474,7 @@ export class IdBusinessV2RenewalsRepository {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "id_business_v2_activations"
-      WHERE "id" = CAST(${activationId} AS UUID)
+      WHERE "id" = ${activationId}
       FOR UPDATE
     `;
     return rows[0] ?? null;
@@ -498,11 +498,11 @@ export class IdBusinessV2RenewalsRepository {
         ON sold_order."id" = account."sold_by_order_id"
         AND sold_order."deleted_at" IS NULL
       WHERE
-        account."id" = CAST(${accountId} AS UUID)
+        account."id" = ${accountId}
         AND account."record_status" = 'active'
         AND account."deleted_at" IS NULL
         AND account."loss_reported_at" IS NULL
-      FOR UPDATE OF account
+      FOR UPDATE
     `;
     const account = rows[0];
     return account
@@ -529,22 +529,22 @@ export class IdBusinessV2RenewalsRepository {
       account: criteria.requireAvailableAccount ? { is: { soldByOrderId: null } } : undefined,
       OR: criteria.keyword
         ? [
-            { order: { is: { orderNo: { contains: criteria.keyword, mode: 'insensitive' } } } },
-            { customer: { is: { name: { contains: criteria.keyword, mode: 'insensitive' } } } },
+            { order: { is: { orderNo: { contains: criteria.keyword } } } },
+            { customer: { is: { name: { contains: criteria.keyword } } } },
             {
               serviceOption: {
-                is: { name: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { name: { contains: criteria.keyword } }
               }
             },
             {
               account: {
-                is: { appleIdMasked: { contains: criteria.keyword, mode: 'insensitive' } }
+                is: { appleIdMasked: { contains: criteria.keyword } }
               }
             },
             {
               order: {
                 is: {
-                  websiteAccountMasked: { contains: criteria.keyword, mode: 'insensitive' }
+                  websiteAccountMasked: { contains: criteria.keyword }
                 }
               }
             },
@@ -554,9 +554,9 @@ export class IdBusinessV2RenewalsRepository {
                   displaySnapshot: {
                     is: {
                       OR: [
-                        { customerName: { contains: criteria.keyword, mode: 'insensitive' } },
-                        { serviceName: { contains: criteria.keyword, mode: 'insensitive' } },
-                        { accountLabel: { contains: criteria.keyword, mode: 'insensitive' } }
+                        { customerName: { contains: criteria.keyword } },
+                        { serviceName: { contains: criteria.keyword } },
+                        { accountLabel: { contains: criteria.keyword } }
                       ]
                     }
                   }

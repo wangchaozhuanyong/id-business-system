@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ExchangeRateRetentionService } from './id-business-v2-exchange-rate-retention.service';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
-import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
 
 describe('IdBusinessV2ExchangeRateRetentionService', () => {
   const result = {
@@ -16,14 +15,16 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
     preservedReferencedFxRateSnapshots: 2
   };
   const tx = {
-    $queryRaw: vi.fn(),
     auditLog: { create: vi.fn() }
   };
   const prisma = {
     $transaction: vi.fn()
   };
+  const repository = {
+    cleanupHistory: vi.fn()
+  };
   const service = new IdBusinessV2ExchangeRateRetentionService(
-    new IdBusinessV2ExchangeRateRepository(prisma as never),
+    repository as never,
     new V2CommandTransactionManager(prisma as never),
     new V2TransactionalAuditService()
   );
@@ -31,13 +32,13 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
-    tx.$queryRaw.mockResolvedValue([{ result }]);
+    repository.cleanupHistory.mockResolvedValue(result);
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
   it('runs configured retention cleanup and records aggregate audit evidence', async () => {
     await expect(service.cleanup()).resolves.toEqual(result);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(repository.cleanupHistory).toHaveBeenCalledWith(tx);
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'id_business_v2.exchange_rate.retention_cleanup',
@@ -47,7 +48,7 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
   });
 
   it('rejects malformed database cleanup results', async () => {
-    tx.$queryRaw.mockResolvedValue([{ result: { cutoff: '' } }]);
+    repository.cleanupHistory.mockResolvedValue({ cutoff: '' });
     await expect(service.cleanup()).rejects.toThrow('汇率保留清理');
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
@@ -61,7 +62,7 @@ describe('IdBusinessV2ExchangeRateRetentionService', () => {
       deletedQuoteSamples: 0,
       deletedFxRateSnapshots: 0
     };
-    tx.$queryRaw.mockResolvedValue([{ result: emptyResult }]);
+    repository.cleanupHistory.mockResolvedValue(emptyResult);
 
     await expect(service.cleanup()).resolves.toEqual(emptyResult);
     expect(tx.auditLog.create).not.toHaveBeenCalled();

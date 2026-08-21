@@ -146,9 +146,9 @@ export class IdBusinessV2OptionRepository {
       parentId: criteria.parentId,
       OR: criteria.keyword
         ? [
-            { name: { contains: criteria.keyword, mode: 'insensitive' } },
-            { code: { contains: criteria.keyword, mode: 'insensitive' } },
-            { remark: { contains: criteria.keyword, mode: 'insensitive' } }
+            { name: { contains: criteria.keyword } },
+            { code: { contains: criteria.keyword } },
+            { remark: { contains: criteria.keyword } }
           ]
         : undefined
     };

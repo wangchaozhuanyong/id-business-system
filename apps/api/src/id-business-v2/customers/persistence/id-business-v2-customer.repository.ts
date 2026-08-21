@@ -174,43 +174,41 @@ export class IdBusinessV2CustomerRepository {
         : undefined,
       OR: input.keyword
         ? [
-            { name: { contains: input.keyword, mode: 'insensitive' } },
-            { wechat: { contains: input.keyword, mode: 'insensitive' } },
+            { name: { contains: input.keyword } },
+            { wechat: { contains: input.keyword } },
             { wechatHash: input.contactHash ?? undefined },
             {
               wechatSearchTokens: input.wechatSearchTokens.length
-                ? { hasEvery: input.wechatSearchTokens }
+                ? { array_contains: input.wechatSearchTokens }
                 : undefined
             },
-            { qq: { contains: input.keyword, mode: 'insensitive' } },
+            { qq: { contains: input.keyword } },
             { qqHash: input.contactHash ?? undefined },
             {
               qqSearchTokens: input.qqSearchTokens.length
-                ? { hasEvery: input.qqSearchTokens }
+                ? { array_contains: input.qqSearchTokens }
                 : undefined
             },
             {
               phoneTail: {
-                contains: input.contactKeyword?.slice(-8) ?? input.keyword,
-                mode: 'insensitive'
+                contains: input.contactKeyword?.slice(-8) ?? input.keyword
               }
             },
             { phoneHash: input.contactHash ?? undefined },
             {
               phoneSearchTokens: input.phoneSearchTokens.length
-                ? { hasEvery: input.phoneSearchTokens }
+                ? { array_contains: input.phoneSearchTokens }
                 : undefined
             },
             {
               whatsappTail: {
-                contains: input.contactKeyword?.slice(-8) ?? input.keyword,
-                mode: 'insensitive'
+                contains: input.contactKeyword?.slice(-8) ?? input.keyword
               }
             },
             { whatsappHash: input.contactHash ?? undefined },
             {
               whatsappSearchTokens: input.whatsappSearchTokens.length
-                ? { hasEvery: input.whatsappSearchTokens }
+                ? { array_contains: input.whatsappSearchTokens }
                 : undefined
             }
           ]

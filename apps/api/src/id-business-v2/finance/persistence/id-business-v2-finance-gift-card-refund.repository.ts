@@ -34,7 +34,7 @@ export async function lockFinanceGiftCardRefund(
       "supplier_refund_amount_cny" AS "supplierRefundAmountCny",
       "purchase_supplier_account_id" AS "purchaseSupplierAccountId"
     FROM "id_business_v2_gift_cards"
-    WHERE "id" = CAST(${giftCardId} AS UUID)
+    WHERE "id" = ${giftCardId}
     FOR UPDATE
   `;
   const row = rows[0];
