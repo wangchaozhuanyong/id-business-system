@@ -1,5 +1,9 @@
 <template>
   <el-tabs v-model="page.activeTab" class="v2-exchange-tabs">
+    <el-tab-pane label="收购报价" name="purchase">
+      <V2PurchaseQuotePanel :page="page" />
+    </el-tab-pane>
+
     <el-tab-pane label="自动采集记录" name="automatic">
       <section class="v2-exchange-command-panel" aria-label="自动采集记录筛选工具">
         <V2SectionHeading
@@ -372,6 +376,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
+import V2PurchaseQuotePanel from './V2PurchaseQuotePanel.vue';
 import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';

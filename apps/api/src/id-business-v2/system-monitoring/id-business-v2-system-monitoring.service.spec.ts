@@ -5,6 +5,7 @@ import { IdBusinessV2SystemMonitoringRepository } from './persistence/id-busines
 
 const originalManualMode = process.env.ID_BUSINESS_V2_FREE_MANUAL_MODE;
 const originalAutoMode = process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
+const originalCurrencyApiKey = process.env.CURRENCY_API_KEY;
 
 function createPrismaMock() {
   return {
@@ -33,6 +34,31 @@ function createPrismaMock() {
         errorCode: null
       })
     },
+    idBusinessV2PurchaseRateSettings: {
+      findUnique: vi.fn().mockResolvedValue({
+        autoEnabled: true,
+        staleMinutes: 120,
+        abnormalChangeRate: { toString: () => '0.1' },
+        nextRunAt: new Date('2026-07-31T12:05:00.000Z'),
+        updatedAt: new Date('2026-07-31T10:00:00.000Z')
+      })
+    },
+    idBusinessV2PurchaseRateFetchRun: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'purchase-run-id',
+        status: 'success',
+        triggerType: 'scheduled',
+        startedAt: new Date('2026-07-31T11:05:00.000Z'),
+        finishedAt: new Date('2026-07-31T11:05:10.000Z'),
+        errorCode: null,
+        abnormalCurrencyCodes: []
+      })
+    },
+    idBusinessV2PurchaseRateSnapshot: {
+      findFirst: vi.fn().mockResolvedValue({
+        marketRateCapturedAt: new Date('2026-07-31T11:00:00.000Z')
+      })
+    },
     loginLog: {
       count: vi.fn().mockResolvedValueOnce(8).mockResolvedValueOnce(2).mockResolvedValueOnce(1)
     },
@@ -44,6 +70,7 @@ function createService(
   prisma: ReturnType<typeof createPrismaMock>,
   monitor = new AuthAvailabilityMonitor()
 ) {
+  process.env.CURRENCY_API_KEY = 'test-currency-api-key';
   return new IdBusinessV2SystemMonitoringService(
     new IdBusinessV2SystemMonitoringRepository(prisma as never),
     monitor
@@ -55,6 +82,8 @@ afterEach(() => {
   else process.env.ID_BUSINESS_V2_FREE_MANUAL_MODE = originalManualMode;
   if (originalAutoMode === undefined) delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
   else process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED = originalAutoMode;
+  if (originalCurrencyApiKey === undefined) delete process.env.CURRENCY_API_KEY;
+  else process.env.CURRENCY_API_KEY = originalCurrencyApiKey;
 });
 
 describe('IdBusinessV2SystemMonitoringService', () => {

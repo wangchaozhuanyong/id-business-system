@@ -4,6 +4,7 @@ import type {
   CreateV2ExchangeRateEntryInput,
   CreateV2ManualFxRateInput,
   UpdateV2ExchangeRateSettingsInput,
+  UpdateV2PurchaseQuoteInput,
   V2ExchangeRateEffective,
   V2ExchangeRateEntry,
   V2ExchangeRateListQuery,
@@ -19,7 +20,15 @@ import type {
   V2ExchangeRateSettings,
   V2ManualFxRate,
   V2ManualFxRateListQuery,
-  V2ManualFxRateListResult
+  V2ManualFxRateListResult,
+  V2PurchaseQuote,
+  V2PurchaseQuoteList,
+  V2PurchaseQuoteTextResult,
+  V2PurchaseRateHistoryResult,
+  V2PurchaseRateRun,
+  V2PurchaseRateRunListResult,
+  V2PurchaseRateRuntime,
+  V2PurchaseRateSettings
 } from '@/v2/types/exchangeRates';
 
 export const idBusinessV2ExchangeRatesApi = {
@@ -105,6 +114,131 @@ export const idBusinessV2ExchangeRatesApi = {
       'exchange-rates'
     );
   },
+  listPurchaseQuotes(options: ApiRequestOptions = {}) {
+    return request<V2PurchaseQuoteList>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes', { signal: options.signal })
+    );
+  },
+  getPurchaseQuote(code: string, options: ApiRequestOptions = {}) {
+    return request<V2PurchaseQuote>(
+      http.get(`/id-business-v2/exchange-rates/purchase-quotes/${code}`, {
+        signal: options.signal
+      })
+    );
+  },
+  updatePurchaseQuote(code: string, input: UpdateV2PurchaseQuoteInput) {
+    return withV2QueryInvalidation(
+      request<V2PurchaseQuote>(
+        http.patch(`/id-business-v2/exchange-rates/purchase-quotes/${code}`, input)
+      ),
+      'exchange-rates'
+    );
+  },
+  purchaseRateRuntime(options: ApiRequestOptions = {}) {
+    return request<V2PurchaseRateRuntime>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes/runtime', {
+        signal: options.signal
+      })
+    );
+  },
+  purchaseRateSettings(options: ApiRequestOptions = {}) {
+    return request<V2PurchaseRateSettings>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes/settings', {
+        signal: options.signal
+      })
+    );
+  },
+  updatePurchaseRateSettings(input: {
+    autoEnabled: boolean;
+    staleMinutes: number;
+    abnormalChangePercent: string;
+  }) {
+    return withV2QueryInvalidation(
+      request<V2PurchaseRateSettings>(
+        http.patch('/id-business-v2/exchange-rates/purchase-quotes/settings', input)
+      ),
+      'exchange-rates'
+    );
+  },
+  refreshPurchaseRates() {
+    return withV2QueryInvalidation(
+      request<{
+        status: 'success' | 'failed' | 'pending_review' | 'skipped';
+        runId?: string;
+        errorMessage?: string;
+        abnormalCurrencyCodes?: string[];
+      }>(http.post('/id-business-v2/exchange-rates/purchase-quotes/refresh')),
+      'exchange-rates'
+    );
+  },
+  listPurchaseRateRuns(
+    params: { page?: number; pageSize?: number; status?: string },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2PurchaseRateRunListResult>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes/runs', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
+  getPurchaseRateRun(id: string, options: ApiRequestOptions = {}) {
+    return request<V2PurchaseRateRun>(
+      http.get(`/id-business-v2/exchange-rates/purchase-quotes/runs/${id}`, {
+        signal: options.signal
+      })
+    );
+  },
+  confirmPurchaseRateRun(id: string, remark?: string) {
+    return withV2QueryInvalidation(
+      request<{ run: V2PurchaseRateRun }>(
+        http.post(`/id-business-v2/exchange-rates/purchase-quotes/runs/${id}/confirm`, {
+          remark: remark || null
+        })
+      ),
+      'exchange-rates'
+    );
+  },
+  rejectPurchaseRateRun(id: string, remark?: string) {
+    return withV2QueryInvalidation(
+      request<{ run: V2PurchaseRateRun }>(
+        http.post(`/id-business-v2/exchange-rates/purchase-quotes/runs/${id}/reject`, {
+          remark: remark || null
+        })
+      ),
+      'exchange-rates'
+    );
+  },
+  listPurchaseRateHistory(
+    params: { page?: number; pageSize?: number; currencyCode?: string },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2PurchaseRateHistoryResult>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes/history', {
+        params,
+        signal: options.signal
+      })
+    );
+  },
+  bulkUpdatePurchaseQuotes(input: { currencyCodes: string[]; purchaseRatioPercent: string }) {
+    return withV2QueryInvalidation(
+      request<V2PurchaseQuoteList>(
+        http.patch('/id-business-v2/exchange-rates/purchase-quotes/bulk', input)
+      ),
+      'exchange-rates'
+    );
+  },
+  generatePurchaseQuoteText(
+    format: 'wechat' | 'monospace' | 'plain',
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2PurchaseQuoteTextResult>(
+      http.get('/id-business-v2/exchange-rates/purchase-quotes/text', {
+        params: { format },
+        signal: options.signal
+      })
+    );
+  },
   listManualEntries(params: V2ExchangeRateListQuery, options: ApiRequestOptions = {}) {
     return request<V2ExchangeRateListResult>(
       http.get('/id-business-v2/exchange-rates/manual-entries', {
@@ -157,6 +291,7 @@ export const idBusinessV2ExchangeRatesApi = {
       runs: V2ExchangeRateRunListResult;
       records: V2ExchangeRateRecordListResult;
       manualEntries: V2ManualFxRateListResult;
+      purchaseQuotes: V2PurchaseQuoteList;
       latestReceiptFxRates: V2ExchangeRateReceiptFxRate[];
       generatedAt: string;
     }>(

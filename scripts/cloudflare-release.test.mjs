@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   RELEASE_ACCOUNT_ID,
   RELEASE_PUBLIC_URL,
@@ -25,6 +29,7 @@ const validEnvironment = {
   FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
   HASH_SECRET: 'h'.repeat(32),
   V2_TRUSTED_PROXY_SECRET: 't'.repeat(32),
+  CURRENCY_API_KEY: 'c'.repeat(40),
   SMOKE_TEST_USERNAME: 'production_release_smoke',
   SMOKE_TEST_PASSWORD: 'p'.repeat(24)
 };
@@ -195,6 +200,9 @@ test('deploys and verifies Supabase API before switching the Cloudflare proxy', 
   assert.ok(supabaseDeploy < apiVerification);
   assert.ok(apiVerification < cloudflareDeploy);
   assert.match(source, /V2_TRUSTED_PROXY_SECRET/);
+  assert.match(source, /CURRENCY_API_KEY/);
+  assert.match(source, /CURRENCY_RATE_PROVIDER:\s*'currencyapi'/);
+  assert.match(source, /CURRENCY_RATE_REQUEST_TIMEOUT_MS:\s*'10000'/);
 });
 
 test('keeps Supabase Edge authentication configurable for the current local accounts', async () => {
@@ -206,6 +214,82 @@ test('keeps Supabase Edge authentication configurable for the current local acco
   assert.match(source, /Deno\.env\.get\('AUTH_PROVIDER'\)/);
   assert.doesNotMatch(source, /AUTH_PROVIDER:\s*'supabase'/);
   assert.match(source, /authProvider === 'local'[\s\S]*requireEnv\('JWT_SECRET'\)/);
+});
+
+test('binds and validates the CurrencyAPI production runtime configuration', async () => {
+  const [edgeSource, productionExample] = await Promise.all([
+    readFile(new URL('../supabase/functions/v2-api/index.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../.env.production.example', import.meta.url), 'utf8')
+  ]);
+
+  for (const name of [
+    'CURRENCY_RATE_PROVIDER',
+    'CURRENCY_API_KEY',
+    'CURRENCY_RATE_REQUEST_TIMEOUT_MS'
+  ]) {
+    assert.match(edgeSource, new RegExp(`${name}:`));
+    assert.match(productionExample, new RegExp(`^${name}=`, 'm'));
+  }
+  assert.match(edgeSource, /CURRENCY_API_KEY[\s\S]*requireEnv\('CURRENCY_API_KEY'\)/);
+  assert.match(edgeSource, /value < 1000 \|\| value > 30000/);
+
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'id-v2-production-env-'));
+  const envPath = path.join(temporaryDirectory, '.env.production');
+  const validatorPath = fileURLToPath(new URL('./validate-production-env.mjs', import.meta.url));
+  const validValues = {
+    NODE_ENV: 'production',
+    APP_PORT: '3000',
+    DATABASE_URL: 'postgresql://runtime:secure@db.company.cn:5432/business',
+    CORS_ORIGIN: 'https://admin.company.cn',
+    APP_PUBLIC_URL: 'https://admin.company.cn',
+    AUTH_PROVIDER: 'local',
+    SUPABASE_EDGE_FUNCTION: 'true',
+    FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
+    HASH_SECRET: 'h'.repeat(32),
+    V2_TRUSTED_PROXY_SECRET: 't'.repeat(32),
+    JWT_SECRET: 'j'.repeat(32),
+    ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: 'true',
+    ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP: 'false',
+    ID_BUSINESS_V2_FREE_MANUAL_MODE: 'false',
+    ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS: '600000',
+    ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET: 'r'.repeat(32),
+    CURRENCY_RATE_PROVIDER: 'currencyapi',
+    CURRENCY_API_KEY: 'c'.repeat(40),
+    CURRENCY_RATE_REQUEST_TIMEOUT_MS: '10000'
+  };
+  const validate = () =>
+    spawnSync(process.execPath, [validatorPath], {
+      encoding: 'utf8',
+      env: { ...process.env, PROD_ENV_FILE: envPath }
+    });
+  const writeValues = (values) =>
+    writeFile(
+      envPath,
+      `${Object.entries(values)
+        .map(([name, value]) => `${name}=${value}`)
+        .join('\n')}\n`,
+      'utf8'
+    );
+
+  try {
+    await writeValues(validValues);
+    const validResult = validate();
+    assert.equal(validResult.status, 0, validResult.stderr);
+
+    await writeValues({
+      ...validValues,
+      CURRENCY_RATE_PROVIDER: 'unsupported',
+      CURRENCY_API_KEY: 'short',
+      CURRENCY_RATE_REQUEST_TIMEOUT_MS: '999'
+    });
+    const invalidResult = validate();
+    assert.notEqual(invalidResult.status, 0);
+    assert.match(invalidResult.stderr, /CURRENCY_RATE_PROVIDER/);
+    assert.match(invalidResult.stderr, /CURRENCY_API_KEY/);
+    assert.match(invalidResult.stderr, /CURRENCY_RATE_REQUEST_TIMEOUT_MS/);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 test('requires the scoped runtime database role without an admin fallback', async () => {

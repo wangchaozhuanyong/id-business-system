@@ -36,6 +36,7 @@ export class IdBusinessV2SystemMonitoringService {
     const databaseCheck = this.databaseCheck(database);
     const changeSyncCheck = this.changeSyncCheck(changeSync);
     const schedulerCheck = this.schedulerCheck(exchangeRate, now);
+    const purchaseRateCheck = this.purchaseRateCheck(exchangeRate, now);
     const authenticationCheck = this.authenticationCheck(authentication);
     const authAvailability = this.authAvailabilityMonitor.getSnapshot(now.getTime());
     const authAvailabilityCheck = this.authAvailabilityCheck(authAvailability);
@@ -50,6 +51,7 @@ export class IdBusinessV2SystemMonitoringService {
       databaseCheck,
       changeSyncCheck,
       schedulerCheck,
+      purchaseRateCheck,
       authenticationCheck,
       authAvailabilityCheck
     ];
@@ -62,6 +64,7 @@ export class IdBusinessV2SystemMonitoringService {
         : { attempts: null, failed: null, abnormal: null, activeSessions: null },
       authAvailability,
       exchangeRate: this.exchangeRateDetails(exchangeRate),
+      purchaseRate: this.purchaseRateDetails(exchangeRate),
       observabilityGaps: [
         {
           key: 'realtime_transport',
@@ -222,6 +225,93 @@ export class IdBusinessV2SystemMonitoringService {
         };
   }
 
+  private purchaseRateCheck(result: ProbeResult<ExchangeRateProbeRow>, now: Date) {
+    if (!result.ok || !result.value) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'degraded' as const,
+        value: '查询失败',
+        detail: '无法读取收购汇率调度设置、最近批次或最新有效快照。'
+      };
+    }
+    const { settings, latestRun, latestSnapshot } = result.value.purchaseRate;
+    if (!settings) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'unknown' as const,
+        value: '尚未配置',
+        detail: '数据库中没有收购汇率采集设置。'
+      };
+    }
+    if (!settings.autoEnabled) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'healthy' as const,
+        value: '按配置停用',
+        detail: '收购汇率自动采集已由管理员明确停用。'
+      };
+    }
+    if (!process.env.CURRENCY_API_KEY?.trim()) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'degraded' as const,
+        value: '供应商未配置',
+        detail: '自动采集已开启，但服务端未配置 CurrencyAPI 密钥。'
+      };
+    }
+    if (latestRun?.status === 'failed' || latestRun?.status === 'pending_review') {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'degraded' as const,
+        value: latestRun.status === 'pending_review' ? '等待异常审核' : '最近一次失败',
+        detail:
+          latestRun.status === 'pending_review'
+            ? `异常币种：${latestRun.abnormalCurrencyCodes.join('、') || '待查看批次详情'}。原报价继续有效。`
+            : latestRun.errorCode
+              ? `安全错误码：${latestRun.errorCode}。原报价继续有效。`
+              : '最近一次自动采集失败，原报价继续有效。'
+      };
+    }
+    if (
+      latestRun?.status === 'running' &&
+      now.getTime() - latestRun.startedAt.getTime() > 15 * 60_000
+    ) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'degraded' as const,
+        value: '运行超时',
+        detail: '最近运行已超过 15 分钟，任务锁应由自动恢复逻辑关闭。'
+      };
+    }
+    if (
+      latestSnapshot &&
+      now.getTime() - latestSnapshot.marketRateCapturedAt.getTime() > settings.staleMinutes * 60_000
+    ) {
+      return {
+        key: 'purchase_rate_scheduler',
+        title: '收购汇率采集任务',
+        status: 'degraded' as const,
+        value: '报价已过期',
+        detail: `最近有效供应商数据时间：${latestSnapshot.marketRateCapturedAt.toISOString()}。`
+      };
+    }
+    return {
+      key: 'purchase_rate_scheduler',
+      title: '收购汇率采集任务',
+      status: (latestSnapshot ? 'healthy' : 'unknown') as MonitorStatus,
+      value: latestSnapshot ? '最近报价有效' : '尚无有效报价',
+      detail: settings.nextRunAt
+        ? `下次计划时间：${settings.nextRunAt.toISOString()}`
+        : '自动采集已开启，但未记录下次计划时间。'
+    };
+  }
+
   private authAvailabilityCheck(snapshot: ReturnType<AuthAvailabilityMonitor['getSnapshot']>) {
     const rate = `${(snapshot.unavailableRate * 100).toFixed(2)}%`;
     if (snapshot.totalChecks === 0) {
@@ -263,6 +353,31 @@ export class IdBusinessV2SystemMonitoringService {
             finishedAt: latestRun.finishedAt?.toISOString() ?? null
           }
         : null
+    };
+  }
+
+  private purchaseRateDetails(result: ProbeResult<ExchangeRateProbeRow>) {
+    if (!result.ok || !result.value) return null;
+    const { settings, latestRun, latestSnapshot } = result.value.purchaseRate;
+    return {
+      providerConfigured: Boolean(process.env.CURRENCY_API_KEY?.trim()),
+      settings: settings
+        ? {
+            autoEnabled: settings.autoEnabled,
+            staleMinutes: settings.staleMinutes,
+            abnormalChangeRate: settings.abnormalChangeRate.toString(),
+            nextRunAt: settings.nextRunAt?.toISOString() ?? null,
+            updatedAt: settings.updatedAt.toISOString()
+          }
+        : null,
+      latestRun: latestRun
+        ? {
+            ...latestRun,
+            startedAt: latestRun.startedAt.toISOString(),
+            finishedAt: latestRun.finishedAt?.toISOString() ?? null
+          }
+        : null,
+      latestSnapshotAt: latestSnapshot?.marketRateCapturedAt.toISOString() ?? null
     };
   }
 

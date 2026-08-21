@@ -1,5 +1,4 @@
 import { computed, reactive, ref, watch } from 'vue';
-import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
@@ -8,7 +7,7 @@ import { createV2QueryKey, primeV2Query, useV2ModuleQuery } from '@/v2/composabl
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 import { ensureV2BusinessNowInput, getV2BusinessNowInput } from '@/v2/runtime/businessClock';
-import { formatV2Decimal, isV2UnsignedDecimal, multiplyDecimalStrings } from '@/v2/utils/decimal';
+import { isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import {
   currencyLabel,
@@ -16,7 +15,15 @@ import {
   defaultIntervals,
   failureLabel,
   failureReason,
+  formatAmount,
+  formatDate,
+  formatPercent,
+  formatRate,
+  intervalLabel,
+  operatorName,
+  parseExchangeRateInput,
   providerLabel,
+  receiptFxCapturedLabel,
   receiptFxSourceLabel,
   receiptFxStatusLabel,
   receiptFxStatusType,
@@ -32,14 +39,18 @@ import type {
   V2ExchangeRateRecord,
   V2ExchangeRateRecordListResult,
   V2ExchangeRateOverview,
-  V2ExchangeRateReceiptFxRate,
   V2ExchangeRateRunDetail,
   V2ExchangeRateRunListResult,
   V2ExchangeRateRuntime,
   V2ManualFxRate,
   V2ManualFxRateListResult,
+  V2PurchaseQuote,
+  V2PurchaseQuoteList,
   V2TrackedExchangeRateCurrency
 } from './contracts';
+import { useExchangeRateFilters } from './useExchangeRateFilters';
+import { usePurchaseQuoteEditor } from './usePurchaseQuoteEditor';
+import { usePurchaseRateAutomation } from './usePurchaseRateAutomation';
 
 interface ExchangeRatePageSnapshot {
   overview: V2ExchangeRateOverview;
@@ -47,11 +58,12 @@ interface ExchangeRatePageSnapshot {
   runs?: V2ExchangeRateRunListResult;
   records?: V2ExchangeRateRecordListResult;
   manualEntries?: V2ManualFxRateListResult;
+  purchaseQuotes?: V2PurchaseQuoteList;
 }
 
 export function useExchangeRatesPage() {
   const authStore = useAuthStore();
-  const activeTab = ref<'automatic' | 'manual'>('automatic');
+  const activeTab = ref<'purchase' | 'automatic' | 'manual'>('purchase');
   const overview = ref<V2ExchangeRateOverview | null>(null);
   const runtime = ref<V2ExchangeRateRuntime | null>(null);
   const collecting = ref(false);
@@ -60,13 +72,11 @@ export function useExchangeRatesPage() {
   const recordResolved = ref(false);
   const recordDisplayedPage = ref(1);
   const recordDisplayedPageSize = ref(20);
-  const recordDateRange = ref<[string, string] | []>([]);
   const manualEntries = ref<V2ManualFxRate[]>([]);
   const manualTotal = ref(0);
   const manualResolved = ref(false);
   const manualDisplayedPage = ref(1);
   const manualDisplayedPageSize = ref(20);
-  const manualDateRange = ref<[string, string] | []>([]);
   const settingsVisible = ref(false);
   const settingsSaving = ref(false);
   const runDetailVisible = ref(false);
@@ -79,25 +89,22 @@ export function useExchangeRatesPage() {
   const manualCreating = ref(false);
   const manualDetailVisible = ref(false);
   const manualDetail = ref<V2ManualFxRate | null>(null);
+  const purchaseQuotes = ref<V2PurchaseQuote[]>([]);
+  const purchaseQuoteMeta = ref<Pick<
+    V2PurchaseQuoteList,
+    'calculationRule' | 'marketRateMode' | 'marketRateNotice'
+  > | null>(null);
+  const purchaseResolved = ref(false);
 
   const canCollect = computed(() =>
     hasUserPermission(authStore.user, 'apple.exchange_rate.collect')
   );
   const canManage = computed(() => hasUserPermission(authStore.user, 'apple.exchange_rate.manage'));
   const canCreate = computed(() => hasUserPermission(authStore.user, 'apple.exchange_rate.create'));
-  const recordQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    currency: '' as '' | V2TrackedExchangeRateCurrency,
-    source: '' as '' | 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross',
-    status: '' as '' | 'available' | 'expired'
+  const filters = useExchangeRateFilters({
+    ensureFresh: () => exchangeRateQuery.ensureFresh()
   });
-  const manualQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    currency: '' as '' | V2TrackedExchangeRateCurrency
-  });
+  const { recordQuery, manualQuery, recordDateRange, manualDateRange } = filters;
   const settingsForm = reactive({
     autoEnabled: true,
     intervalMinutes: 15,
@@ -120,37 +127,19 @@ export function useExchangeRatesPage() {
     )}。上次成功值已标记过期，不会自动带入加卡。`;
   });
   const manualPreview = computed(() => {
-    const value = parseRate(manualForm.rateToCny);
+    const value = parseExchangeRateInput(manualForm.rateToCny);
     return value ? `${currencyLabel(manualForm.currency)} / CNY ${formatRate(value)}` : '-';
   });
-
-  function getRecordRequest() {
-    return {
-      ...recordQuery,
-      currency: recordQuery.currency || undefined,
-      source: recordQuery.source || undefined,
-      status: recordQuery.status || undefined,
-      capturedFrom: recordDateRange.value[0] || undefined,
-      capturedTo: recordDateRange.value[1] || undefined,
-      sortOrder: 'desc' as const
-    };
-  }
-
-  function getManualRequest() {
-    return {
-      ...manualQuery,
-      keyword: manualQuery.keyword.trim() || undefined,
-      currency: manualQuery.currency || undefined,
-      recordedFrom: manualDateRange.value[0] || undefined,
-      recordedTo: manualDateRange.value[1] || undefined,
-      sortOrder: 'desc' as const
-    };
-  }
 
   function getPageKey(tab = activeTab.value) {
     return createV2QueryKey({
       tab,
-      query: tab === 'automatic' ? getRecordRequest() : getManualRequest()
+      query:
+        tab === 'automatic'
+          ? filters.getRecordRequest()
+          : tab === 'manual'
+            ? filters.getManualRequest()
+            : undefined
     });
   }
 
@@ -176,8 +165,20 @@ export function useExchangeRatesPage() {
     scope: 'exchange-rates',
     key: () => getPageKey(),
     keepPreviousData: true,
-    getRevalidateAt: (snapshot) =>
-      snapshot.overview.effective.expiresAt ?? snapshot.overview.lastSuccess?.expiresAt ?? null,
+    getRevalidateAt: (snapshot) => {
+      const deadlines = [
+        snapshot.overview.effective.expiresAt,
+        snapshot.overview.lastSuccess?.expiresAt,
+        ...(snapshot.purchaseQuotes?.items
+          .map((quote) => quote.latestSnapshot)
+          .filter((item) => item && !item.stale)
+          .map((item) => item!.staleAt) ?? [])
+      ]
+        .filter(Boolean)
+        .map((value) => new Date(value!).getTime())
+        .filter((value) => Number.isFinite(value) && value > Date.now());
+      return deadlines.length ? Math.min(...deadlines) : null;
+    },
     query: async ({ signal }) => {
       if (isDefaultAutomaticRequest()) {
         const result = await idBusinessV2ExchangeRatesApi.bootstrap(
@@ -198,7 +199,17 @@ export function useExchangeRatesPage() {
             overview: result.overview,
             runtime: result.runtime,
             records: result.records,
-            manualEntries: result.manualEntries
+            manualEntries: result.manualEntries,
+            purchaseQuotes: result.purchaseQuotes
+          }
+        });
+        primeV2Query<ExchangeRatePageSnapshot>({
+          scope: 'exchange-rates',
+          key: getPageKey('purchase'),
+          data: {
+            overview: result.overview,
+            runtime: result.runtime,
+            purchaseQuotes: result.purchaseQuotes
           }
         });
         return {
@@ -206,7 +217,8 @@ export function useExchangeRatesPage() {
           runtime: result.runtime,
           runs: result.runs,
           records: result.records,
-          manualEntries: result.manualEntries
+          manualEntries: result.manualEntries,
+          purchaseQuotes: result.purchaseQuotes
         };
       }
 
@@ -214,20 +226,30 @@ export function useExchangeRatesPage() {
         idBusinessV2ExchangeRatesApi.overview({ signal }),
         idBusinessV2ExchangeRatesApi.runtime({ signal }),
         activeTab.value === 'automatic'
-          ? idBusinessV2ExchangeRatesApi.listRecords(getRecordRequest(), { signal })
-          : idBusinessV2ExchangeRatesApi.listManualRates(getManualRequest(), { signal })
+          ? idBusinessV2ExchangeRatesApi.listRecords(filters.getRecordRequest(), { signal })
+          : activeTab.value === 'manual'
+            ? idBusinessV2ExchangeRatesApi.listManualRates(filters.getManualRequest(), { signal })
+            : idBusinessV2ExchangeRatesApi.listPurchaseQuotes({ signal })
       ]);
-      return activeTab.value === 'automatic'
-        ? {
-            overview: nextOverview,
-            runtime: nextRuntime,
-            records: list as V2ExchangeRateRecordListResult
-          }
-        : {
-            overview: nextOverview,
-            runtime: nextRuntime,
-            manualEntries: list as V2ManualFxRateListResult
-          };
+      if (activeTab.value === 'automatic') {
+        return {
+          overview: nextOverview,
+          runtime: nextRuntime,
+          records: list as V2ExchangeRateRecordListResult
+        };
+      }
+      if (activeTab.value === 'manual') {
+        return {
+          overview: nextOverview,
+          runtime: nextRuntime,
+          manualEntries: list as V2ManualFxRateListResult
+        };
+      }
+      return {
+        overview: nextOverview,
+        runtime: nextRuntime,
+        purchaseQuotes: list as V2PurchaseQuoteList
+      };
     }
   });
   watch(
@@ -250,6 +272,15 @@ export function useExchangeRatesPage() {
         manualDisplayedPageSize.value = snapshot.manualEntries.pageSize;
         manualResolved.value = true;
       }
+      if (snapshot.purchaseQuotes) {
+        purchaseQuotes.value = snapshot.purchaseQuotes.items;
+        purchaseQuoteMeta.value = {
+          calculationRule: snapshot.purchaseQuotes.calculationRule,
+          marketRateMode: snapshot.purchaseQuotes.marketRateMode,
+          marketRateNotice: snapshot.purchaseQuotes.marketRateNotice
+        };
+        purchaseResolved.value = true;
+      }
     },
     { immediate: true }
   );
@@ -261,8 +292,10 @@ export function useExchangeRatesPage() {
   );
   const recordLoading = computed(() => activeTab.value === 'automatic' && headerLoading.value);
   const manualLoading = computed(() => activeTab.value === 'manual' && headerLoading.value);
+  const purchaseLoading = computed(() => activeTab.value === 'purchase' && headerLoading.value);
   const recordError = computed(() => (activeTab.value === 'automatic' ? headerError.value : ''));
   const manualError = computed(() => (activeTab.value === 'manual' ? headerError.value : ''));
+  const purchaseError = computed(() => (activeTab.value === 'purchase' ? headerError.value : ''));
   const receiptFxRates = computed(() => overview.value?.latestReceiptFxRates ?? []);
 
   function loadHeader() {
@@ -279,35 +312,14 @@ export function useExchangeRatesPage() {
     return activeTab.value === 'manual' ? exchangeRateQuery.refresh() : Promise.resolve(undefined);
   }
 
-  function loadAll() {
-    return exchangeRateQuery.refresh();
+  function loadPurchaseQuotes() {
+    return activeTab.value === 'purchase'
+      ? exchangeRateQuery.refresh()
+      : Promise.resolve(undefined);
   }
 
-  function searchRecords() {
-    recordQuery.page = 1;
-    void exchangeRateQuery.ensureFresh();
-  }
-  function handleRecordPageChange(page: number) {
-    recordQuery.page = page;
-    void exchangeRateQuery.ensureFresh();
-  }
-  function resetRecordPage(pageSize: number) {
-    recordQuery.pageSize = pageSize;
-    recordQuery.page = 1;
-    void exchangeRateQuery.ensureFresh();
-  }
-  function searchManual() {
-    manualQuery.page = 1;
-    void exchangeRateQuery.ensureFresh();
-  }
-  function handleManualPageChange(page: number) {
-    manualQuery.page = page;
-    void exchangeRateQuery.ensureFresh();
-  }
-  function resetManualPage(pageSize: number) {
-    manualQuery.pageSize = pageSize;
-    manualQuery.page = 1;
-    void exchangeRateQuery.ensureFresh();
+  function loadAll() {
+    return exchangeRateQuery.refresh();
   }
 
   async function collectNow() {
@@ -422,7 +434,7 @@ export function useExchangeRatesPage() {
   }
 
   async function createManualEntry() {
-    if (!parseRate(manualForm.rateToCny) || manualForm.reason.trim().length < 2) {
+    if (!parseExchangeRateInput(manualForm.rateToCny) || manualForm.reason.trim().length < 2) {
       return;
     }
     manualCreating.value = true;
@@ -450,50 +462,14 @@ export function useExchangeRatesPage() {
     manualDetailVisible.value = true;
   }
 
-  function parseRate(value: string) {
-    const normalized = value.trim();
-    return isV2UnsignedDecimal(normalized, {
-      allowZero: false,
-      decimalPlaces: V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES
-    })
-      ? normalized
-      : null;
-  }
-  function formatRate(value: string | null | undefined) {
-    return formatV2Decimal(value);
-  }
-  function formatAmount(value: string | null | undefined) {
-    return formatV2Decimal(value);
-  }
-  function formatDate(value: string | null | undefined) {
-    if (!value) return '-';
-    return new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).format(new Date(value));
-  }
-  function formatPercent(value: string | null | undefined) {
-    if (!value) return '-';
-    return `${formatV2Decimal(multiplyDecimalStrings(value, '100'))}%`;
-  }
-  function intervalLabel(minutes: number | undefined) {
-    if (!minutes) return '-';
-    if (minutes < 60) return `${minutes} 分钟`;
-    if (minutes % 1440 === 0) return `${minutes / 1440} 天`;
-    return `${minutes / 60} 小时`;
-  }
-  function operatorName(entry: { createdBy: { username: string } | null }) {
-    return entry.createdBy?.username || '-';
-  }
-  function receiptFxCapturedLabel(rate: V2ExchangeRateReceiptFxRate) {
-    return rate.capturedAt ? `采集于 ${formatDate(rate.capturedAt)}` : '暂无记录';
-  }
+  const purchaseQuoteEditor = usePurchaseQuoteEditor({
+    refresh: () => exchangeRateQuery.refresh()
+  });
+  const purchaseAutomation = usePurchaseRateAutomation({
+    enabled: () => activeTab.value === 'purchase',
+    quotes: () => purchaseQuotes.value,
+    refreshQuotes: () => exchangeRateQuery.refresh()
+  });
 
   watch(activeTab, () => {
     void exchangeRateQuery.ensureFresh();
@@ -526,7 +502,7 @@ export function useExchangeRatesPage() {
     recordLoading,
     recordError,
     recordResolved,
-    recordDateRange,
+    ...filters,
     receiptFxRates,
     manualEntries,
     manualTotal,
@@ -535,7 +511,6 @@ export function useExchangeRatesPage() {
     manualLoading,
     manualError,
     manualResolved,
-    manualDateRange,
     settingsVisible,
     settingsSaving,
     runDetailVisible,
@@ -547,11 +522,16 @@ export function useExchangeRatesPage() {
     manualCreating,
     manualDetailVisible,
     manualDetail,
+    purchaseQuotes,
+    purchaseQuoteMeta,
+    purchaseResolved,
+    purchaseLoading,
+    purchaseError,
+    ...purchaseQuoteEditor,
+    purchaseAutomation,
     canCollect,
     canManage,
     canCreate,
-    recordQuery,
-    manualQuery,
     settingsForm,
     manualForm,
     latestFailureDescription,
@@ -559,13 +539,8 @@ export function useExchangeRatesPage() {
     loadHeader,
     loadRecords,
     loadManualEntries,
+    loadPurchaseQuotes,
     loadAll,
-    searchRecords,
-    handleRecordPageChange,
-    resetRecordPage,
-    searchManual,
-    handleManualPageChange,
-    resetManualPage,
     collectNow,
     openSettings,
     saveSettings,

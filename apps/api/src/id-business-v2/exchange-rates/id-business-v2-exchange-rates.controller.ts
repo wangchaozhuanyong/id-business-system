@@ -4,11 +4,18 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { CreateIdBusinessV2ExchangeRateEntryDto } from './dto/create-id-business-v2-exchange-rate-entry.dto';
 import type { CreateIdBusinessV2ManualFxRateDto } from './dto/create-id-business-v2-manual-fx-rate.dto';
 import type { UpdateIdBusinessV2ExchangeRateSettingsDto } from './dto/update-id-business-v2-exchange-rate-settings.dto';
+import type { UpdateIdBusinessV2PurchaseQuoteDto } from './dto/update-id-business-v2-purchase-quote.dto';
+import type { UpdateIdBusinessV2PurchaseRateSettingsDto } from './dto/update-id-business-v2-purchase-rate-settings.dto';
+import type { BulkUpdateIdBusinessV2PurchaseQuotesDto } from './dto/bulk-update-id-business-v2-purchase-quotes.dto';
 import { IdBusinessV2ExchangeRateCronService } from './id-business-v2-exchange-rate-cron.service';
 import { IdBusinessV2ExchangeRateQueryService } from './id-business-v2-exchange-rate-query.service';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
 import { IdBusinessV2ExchangeRateWorker } from './id-business-v2-exchange-rate.worker';
 import { IdBusinessV2ExchangeRatesService } from './id-business-v2-exchange-rates.service';
+import { IdBusinessV2PurchaseQuoteService } from './id-business-v2-purchase-quote.service';
+import { IdBusinessV2PurchaseRateSettingsService } from './id-business-v2-purchase-rate-settings.service';
+import { IdBusinessV2PurchaseRateQueryService } from './id-business-v2-purchase-rate-query.service';
+import { IdBusinessV2PurchaseRateWorker } from './id-business-v2-purchase-rate.worker';
 
 @Controller('id-business-v2/exchange-rates')
 @RequirePermissions('apple.exchange_rate.view')
@@ -18,7 +25,11 @@ export class IdBusinessV2ExchangeRatesController {
     private readonly queryService: IdBusinessV2ExchangeRateQueryService,
     private readonly settingsService: IdBusinessV2ExchangeRateSettingsService,
     private readonly worker: IdBusinessV2ExchangeRateWorker,
-    private readonly cronService: IdBusinessV2ExchangeRateCronService
+    private readonly cronService: IdBusinessV2ExchangeRateCronService,
+    private readonly purchaseQuoteService: IdBusinessV2PurchaseQuoteService,
+    private readonly purchaseRateSettingsService: IdBusinessV2PurchaseRateSettingsService,
+    private readonly purchaseRateWorker: IdBusinessV2PurchaseRateWorker,
+    private readonly purchaseRateQueryService: IdBusinessV2PurchaseRateQueryService
   ) {}
 
   @Post('cron')
@@ -50,7 +61,7 @@ export class IdBusinessV2ExchangeRatesController {
     @Query('manualRecordedFrom') manualRecordedFrom?: string,
     @Query('manualRecordedTo') manualRecordedTo?: string
   ) {
-    const [overview, runtime, runs, records, manualEntries] = await Promise.all([
+    const [overview, runtime, runs, records, manualEntries, purchaseQuotes] = await Promise.all([
       this.queryService.getOverview(),
       this.worker.getRuntime(),
       this.queryService.listRuns({
@@ -79,7 +90,8 @@ export class IdBusinessV2ExchangeRatesController {
         recordedFrom: manualRecordedFrom,
         recordedTo: manualRecordedTo,
         sortOrder: 'desc'
-      })
+      }),
+      this.purchaseQuoteService.list()
     ]);
     return {
       overview,
@@ -87,6 +99,7 @@ export class IdBusinessV2ExchangeRatesController {
       runs,
       records,
       manualEntries,
+      purchaseQuotes,
       latestReceiptFxRates: overview.latestReceiptFxRates,
       generatedAt: new Date().toISOString()
     };
@@ -272,6 +285,116 @@ export class IdBusinessV2ExchangeRatesController {
   @Get('manual-rates/:id')
   getManualRate(@Param('id') id: string) {
     return this.exchangeRatesService.getManualFxRate(id);
+  }
+
+  @Get('purchase-quotes')
+  listPurchaseQuotes() {
+    return this.purchaseQuoteService.list();
+  }
+
+  @Get('purchase-quotes/runtime')
+  getPurchaseRateRuntime() {
+    return this.purchaseRateWorker.getRuntime();
+  }
+
+  @Get('purchase-quotes/settings')
+  getPurchaseRateSettings() {
+    return this.purchaseRateSettingsService.get();
+  }
+
+  @Patch('purchase-quotes/settings')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
+  updatePurchaseRateSettings(
+    @Body() dto: UpdateIdBusinessV2PurchaseRateSettingsDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseRateSettingsService.update(dto, operator, request?.requestId);
+  }
+
+  @Post('purchase-quotes/refresh')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.collect')
+  refreshPurchaseRates(
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseRateWorker.collectManual(operator, request?.requestId);
+  }
+
+  @Get('purchase-quotes/runs')
+  listPurchaseRateRuns(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string
+  ) {
+    return this.purchaseRateQueryService.listRuns({ page, pageSize, status });
+  }
+
+  @Get('purchase-quotes/runs/:id')
+  getPurchaseRateRun(@Param('id') id: string) {
+    return this.purchaseRateQueryService.getRun(id);
+  }
+
+  @Post('purchase-quotes/runs/:id/confirm')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
+  confirmPurchaseRateRun(
+    @Param('id') id: string,
+    @Body() dto: { remark?: string | null },
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseRateWorker.confirmRun(id, dto, operator, request?.requestId);
+  }
+
+  @Post('purchase-quotes/runs/:id/reject')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
+  rejectPurchaseRateRun(
+    @Param('id') id: string,
+    @Body() dto: { remark?: string | null },
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseRateWorker.rejectRun(id, dto, operator, request?.requestId);
+  }
+
+  @Get('purchase-quotes/history')
+  listPurchaseRateHistory(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('currencyCode') currencyCode?: string
+  ) {
+    return this.purchaseRateQueryService.listSnapshots({ page, pageSize, currencyCode });
+  }
+
+  @Patch('purchase-quotes/bulk')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
+  bulkUpdatePurchaseQuotes(
+    @Body() dto: BulkUpdateIdBusinessV2PurchaseQuotesDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseQuoteService.bulkUpdate(dto, operator, request?.requestId);
+  }
+
+  @Get('purchase-quotes/text')
+  generatePurchaseQuoteText(@Query('format') format?: string) {
+    return this.purchaseQuoteService.generateText(format);
+  }
+
+  @Get('purchase-quotes/:code')
+  getPurchaseQuote(@Param('code') code: string) {
+    return this.purchaseQuoteService.get(code);
+  }
+
+  @Patch('purchase-quotes/:code')
+  @RequirePermissions('apple.exchange_rate.view', 'apple.exchange_rate.manage')
+  updatePurchaseQuote(
+    @Param('code') code: string,
+    @Body() dto: UpdateIdBusinessV2PurchaseQuoteDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.purchaseQuoteService.update(code, dto, operator, request?.requestId);
   }
 
   @Get(':id')

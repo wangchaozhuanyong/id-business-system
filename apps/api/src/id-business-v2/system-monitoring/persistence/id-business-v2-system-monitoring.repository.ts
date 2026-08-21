@@ -22,6 +22,27 @@ export interface ExchangeRateProbeRow {
     finishedAt: Date | null;
     errorCode: string | null;
   } | null;
+  purchaseRate: {
+    settings: {
+      autoEnabled: boolean;
+      staleMinutes: number;
+      abnormalChangeRate: Prisma.Decimal;
+      nextRunAt: Date | null;
+      updatedAt: Date;
+    } | null;
+    latestRun: {
+      id: string;
+      status: 'running' | 'success' | 'failed' | 'pending_review' | 'rejected';
+      triggerType: 'manual' | 'scheduled' | 'system';
+      startedAt: Date;
+      finishedAt: Date | null;
+      errorCode: string | null;
+      abnormalCurrencyCodes: string[];
+    } | null;
+    latestSnapshot: {
+      marketRateCapturedAt: Date;
+    } | null;
+  };
 }
 
 export interface AuthenticationProbeRow {
@@ -47,24 +68,59 @@ export class IdBusinessV2SystemMonitoringRepository {
   }
 
   async loadExchangeRate(): Promise<ExchangeRateProbeRow> {
-    const [settings, latestRun] = await Promise.all([
-      this.prisma.idBusinessV2ExchangeRateSettings.findUnique({
-        where: { id: 1 },
-        select: { autoEnabled: true, intervalMinutes: true, nextRunAt: true, updatedAt: true }
-      }),
-      this.prisma.idBusinessV2ExchangeRateRun.findFirst({
-        select: {
-          id: true,
-          status: true,
-          triggerType: true,
-          startedAt: true,
-          finishedAt: true,
-          errorCode: true
-        },
-        orderBy: [{ startedAt: 'desc' }, { id: 'desc' }]
-      })
-    ]);
-    return { settings, latestRun };
+    const [settings, latestRun, purchaseSettings, purchaseRun, purchaseSnapshot] =
+      await Promise.all([
+        this.prisma.idBusinessV2ExchangeRateSettings.findUnique({
+          where: { id: 1 },
+          select: { autoEnabled: true, intervalMinutes: true, nextRunAt: true, updatedAt: true }
+        }),
+        this.prisma.idBusinessV2ExchangeRateRun.findFirst({
+          select: {
+            id: true,
+            status: true,
+            triggerType: true,
+            startedAt: true,
+            finishedAt: true,
+            errorCode: true
+          },
+          orderBy: [{ startedAt: 'desc' }, { id: 'desc' }]
+        }),
+        this.prisma.idBusinessV2PurchaseRateSettings.findUnique({
+          where: { id: 1 },
+          select: {
+            autoEnabled: true,
+            staleMinutes: true,
+            abnormalChangeRate: true,
+            nextRunAt: true,
+            updatedAt: true
+          }
+        }),
+        this.prisma.idBusinessV2PurchaseRateFetchRun.findFirst({
+          select: {
+            id: true,
+            status: true,
+            triggerType: true,
+            startedAt: true,
+            finishedAt: true,
+            errorCode: true,
+            abnormalCurrencyCodes: true
+          },
+          orderBy: [{ startedAt: 'desc' }, { id: 'desc' }]
+        }),
+        this.prisma.idBusinessV2PurchaseRateSnapshot.findFirst({
+          select: { marketRateCapturedAt: true },
+          orderBy: [{ marketRateCapturedAt: 'desc' }, { id: 'desc' }]
+        })
+      ]);
+    return {
+      settings,
+      latestRun,
+      purchaseRate: {
+        settings: purchaseSettings,
+        latestRun: purchaseRun,
+        latestSnapshot: purchaseSnapshot
+      }
+    };
   }
 
   async loadAuthentication(since: Date, now: Date): Promise<AuthenticationProbeRow> {

@@ -1,4 +1,7 @@
 <template>
+  <V2PurchaseQuoteDrawer :page="page" />
+  <V2PurchaseRateAutomationDrawers :page="page" />
+
   <V2FormDrawer
     v-model="page.settingsVisible"
     title="采集设置"
@@ -302,6 +305,8 @@ import { V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES } from '@apple-business/shared';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
+import V2PurchaseQuoteDrawer from './V2PurchaseQuoteDrawer.vue';
+import V2PurchaseRateAutomationDrawers from './V2PurchaseRateAutomationDrawers.vue';
 
 type ExchangeRatesPage = UnwrapNestedRefs<ReturnType<typeof useExchangeRatesPage>>;
 

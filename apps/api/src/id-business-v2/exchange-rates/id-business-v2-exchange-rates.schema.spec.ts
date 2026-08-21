@@ -111,4 +111,46 @@ describe('V2 exchange-rate contracts', () => {
     expect(persistenceRepository).toContain('EXTRACT(EPOCH FROM clock_timestamp())');
     expect(persistenceRepository).toContain('FLOOR');
   });
+
+  it('keeps purchase quotes independent, decimal based and immutable', () => {
+    const migration = read(
+      'prisma/migrations/20260820090000_purchase_quote_calculation/migration.sql'
+    );
+    const controller = read(
+      'src/id-business-v2/exchange-rates/id-business-v2-exchange-rates.controller.ts'
+    );
+
+    expect(migration).toContain('id_business_v2_purchase_currencies');
+    expect(migration).toContain('id_business_v2_purchase_rate_snapshots');
+    expect(migration).toContain('purchase_rate_snapshot_immutable');
+    expect(migration).toContain('DECIMAL(12, 8)');
+    expect(migration).toContain("('USD', '美元', '美元', 0.70000000");
+    expect(migration).toContain("('EUR', '欧元', '欧元', 0.60000000");
+    expect(controller).toContain("@Get('purchase-quotes')");
+    expect(controller).toContain("@Patch('purchase-quotes/:code')");
+    expect(controller).toContain("'apple.exchange_rate.manage'");
+  });
+
+  it('adds hourly automatic purchase rates with a database lock and review boundary', () => {
+    const migration = read(
+      'prisma/migrations/20260820100000_purchase_rate_automation/migration.sql'
+    );
+    const controller = read(
+      'src/id-business-v2/exchange-rates/id-business-v2-exchange-rates.controller.ts'
+    );
+
+    expect(migration).toContain('id_business_v2_purchase_rate_fetch_runs');
+    expect(migration).toContain('id_business_v2_purchase_rate_fetch_runs_one_running_idx');
+    expect(migration).toContain('WHERE "status" = \'running\'');
+    expect(migration).toContain("'5 * * * *'");
+    expect(migration).toContain("'pending_review'");
+    expect(migration).toContain('abnormal_change_rate');
+    expect(migration).toContain('"maximum_change_rate" DECIMAL(26, 8)');
+    expect(migration).toContain('ADD COLUMN "change_rate" DECIMAL(26, 8)');
+    expect(migration).toContain('WHEN EXTRACT(MINUTE FROM CURRENT_TIMESTAMP) < 5');
+    expect(controller).toContain("@Post('purchase-quotes/refresh')");
+    expect(controller).toContain("@Post('purchase-quotes/runs/:id/confirm')");
+    expect(controller).toContain("@Patch('purchase-quotes/bulk')");
+    expect(controller).toContain("@Get('purchase-quotes/text')");
+  });
 });

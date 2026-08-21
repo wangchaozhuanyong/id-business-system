@@ -68,9 +68,13 @@ export function formatSystemMonitoringDetail(detail: string) {
   );
 }
 
-export function exchangeRunStatusLabel(status?: 'running' | 'success' | 'failed') {
+export function exchangeRunStatusLabel(
+  status?: 'running' | 'success' | 'failed' | 'pending_review' | 'rejected'
+) {
   if (status === 'running') return '运行中';
   if (status === 'success') return '成功';
   if (status === 'failed') return '失败';
+  if (status === 'pending_review') return '等待审核';
+  if (status === 'rejected') return '已驳回';
   return '无运行记录';
 }
