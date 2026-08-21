@@ -32,7 +32,10 @@ export {
   type V2CommandTransactionOptions,
   type V2TransactionIsolationLevel
 } from './id-business-v2-command-transaction.service';
-export { buildV2StringArrayContainsFilter } from './id-business-v2-database-filter';
+export {
+  buildV2StringArrayContainsFilter,
+  isV2MysqlDatabase
+} from './id-business-v2-database-filter';
 export {
   getPrismaErrorCode,
   isPrismaErrorCode,

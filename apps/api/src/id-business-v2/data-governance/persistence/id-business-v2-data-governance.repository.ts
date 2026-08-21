@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type IdBusinessV2GovernanceJobItem } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import type { V2CommandTransaction } from '../../runtime/public-api';
+import { isV2MysqlDatabase, type V2CommandTransaction } from '../../runtime/public-api';
 import type {
   GovernanceApprovalDecision,
   GovernanceJobType,
@@ -472,6 +472,24 @@ export class IdBusinessV2DataGovernanceRepository {
   }
 
   async deleteExchangeRateRun(tx: V2CommandTransaction, input: { itemId: string; runId: string }) {
+    if (!isV2MysqlDatabase()) {
+      const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(Prisma.sql`
+        SELECT public.execute_id_business_v2_governance_exchange_rate_cleanup(
+          ${input.itemId}::UUID,
+          ${input.runId}::UUID
+        ) AS "result"
+      `);
+      const result = rows[0]?.result;
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        throw new Error('汇率治理清理返回格式无效');
+      }
+      return {
+        deletedQuoteSamples: this.cleanupResultCount(result, 'deletedQuoteSamples'),
+        deletedProviderSnapshots: this.cleanupResultCount(result, 'deletedProviderSnapshots'),
+        deletedSnapshots: this.cleanupResultCount(result, 'deletedSnapshots')
+      };
+    }
+
     const item = await tx.idBusinessV2GovernanceJobItem.findUnique({
       where: { id: input.itemId },
       include: { job: { include: { approval: true } } }
@@ -542,6 +560,14 @@ export class IdBusinessV2DataGovernanceRepository {
       deletedProviderSnapshots,
       deletedSnapshots
     };
+  }
+
+  private cleanupResultCount(result: Prisma.JsonObject, key: string) {
+    const value = result[key];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      throw new Error('汇率治理清理返回格式无效');
+    }
+    return value;
   }
 
   completeItem(
