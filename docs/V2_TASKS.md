@@ -13,6 +13,10 @@
 
 ## 当前已完成
 
+- [x] AWS Node 邮箱入口恢复：AWS/MySQL 生产链路已提供 `SUPABASE_EDGE_FUNCTION=false` 的 Node/Docker
+      API 运行时，恢复个人工作区邮箱查询抽屉、公开 `/mailbox` 页面、邮箱池管理接口和公开查询接口注册；
+      Supabase Edge 回退链路仍由 IMAP Provider 明确拒绝执行，不接入第三方代查服务。
+
 - [x] 多币种人民币收购价完整闭环：初始化 15 个独立币种配置，使用 BigInt 十进制算法按各币种兑人民币
       市场汇率、独立比例、显示单位和舍入方式生成不可变快照；接入 CurrencyAPI CNY 基准 Provider、
       每小时第 5 分钟数据库 Cron、唯一运行锁、有限重试、全币种原子发布、失败保留旧值、过期提醒和
