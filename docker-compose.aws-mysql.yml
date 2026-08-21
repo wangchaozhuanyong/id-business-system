@@ -22,6 +22,7 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
       - --default-time-zone=+00:00
       - --sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+      - --log-bin-trust-function-creators=1
     ports:
       - '127.0.0.1:${MYSQL_HOST_PORT:-3306}:3306'
     volumes:
