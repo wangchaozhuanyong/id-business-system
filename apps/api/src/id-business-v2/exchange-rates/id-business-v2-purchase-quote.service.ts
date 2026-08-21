@@ -60,7 +60,7 @@ export class IdBusinessV2PurchaseQuoteService {
       calculationRule: '收购价 = 该币种兑人民币市场汇率 × 该币种独立收购比例 × 显示单位',
       marketRateMode: 'automatic_with_manual_fallback' as const,
       marketRateNotice:
-        '默认由 CurrencyAPI 以人民币为基准自动采集；自动采集失败或异常时保留上一批有效报价，也可由管理员手工修正。',
+        '默认由 ExchangeRate-API 免费开放接口以人民币为基准每日自动采集；自动采集失败或异常时保留上一批有效报价，也可由管理员手工修正。',
       staleMinutes: settings.staleMinutes
     };
   }

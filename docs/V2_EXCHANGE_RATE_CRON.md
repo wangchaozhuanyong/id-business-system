@@ -24,7 +24,7 @@ npm run prisma:migrate:deploy --workspace @apple-business/api
 2. 给汇率设置增加 `retention_days`，默认 30，并安装受控的保留清理函数。
 3. 在 Supabase 支持扩展时启用 `pg_net` 和 `pg_cron`。
 4. 创建 `id-business-v2-exchange-rate-every-30-minutes` Cron job。
-5. 创建 `id-business-v2-purchase-rate-hourly` Cron job，在每小时第 5 分钟调用同一受保护入口；业务层只在
+5. 创建 `id-business-v2-purchase-rate-daily` Cron job，在 UTC 每天 01:05（北京时间 09:05）调用同一受保护入口；业务层只在
    收购汇率任务到期时领取设置并执行，数据库部分唯一索引阻止并发采集。
 
 普通 PostgreSQL 没有 `pg_net` 或 `pg_cron` 时，迁移会保留业务表和清理函数，但跳过外部 Cron。
@@ -37,7 +37,6 @@ npm run prisma:migrate:deploy --workspace @apple-business/api
 
 ```text
 ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET
-CURRENCY_API_KEY
 ```
 
 在 Supabase Vault 配置两项：
@@ -54,12 +53,11 @@ https://<project-ref>.supabase.co/functions/v1/v2-api/api/id-business-v2/exchang
 ```
 
 Vault 的 `id_business_v2_exchange_rate_cron_secret` 必须与 Edge Function Secret 完全一致。
-`CURRENCY_API_KEY` 只配置在 API 运行环境，供应商请求使用 `apikey` 请求头，不得写入 Vault Cron URL、
-浏览器环境变量、日志或数据库来源地址。可选配置 `CURRENCY_RATE_PROVIDER=currencyapi` 和
-`CURRENCY_RATE_REQUEST_TIMEOUT_MS=10000`。
+收购汇率使用 ExchangeRate-API 免费开放接口，不需要 API Key。可选配置
+`CURRENCY_RATE_PROVIDER=exchange_rate_api` 和 `CURRENCY_RATE_REQUEST_TIMEOUT_MS=10000`。
 
-Supabase Edge Function 的启动包装层已显式把以上三个变量传入 Node 运行环境，并校验
-Provider 固定为 `currencyapi`、请求超时为 1000–30000 毫秒。发布前还必须通过 `npm run prod:env:check`；
+Supabase Edge Function 的启动包装层显式传入 Provider 和超时配置，并校验 Provider 固定为
+`exchange_rate_api`、请求超时为 1000–30000 毫秒。发布前还必须通过 `npm run prod:env:check`；
 仅在 Supabase Secrets 中写入变量、但未重新部署 Edge Function 时，运行中的 API 仍不会获得新配置。
 
 收购汇率成功边界要求所有已启用币种同时返回正数、方向转换和 Decimal 计算全部成功，并且供应商时间
@@ -77,7 +75,7 @@ WHERE "jobname" = 'id-business-v2-exchange-rate-every-30-minutes';
 
 SELECT "jobid", "jobname", "schedule", "active"
 FROM cron.job
-WHERE "jobname" = 'id-business-v2-purchase-rate-hourly';
+WHERE "jobname" = 'id-business-v2-purchase-rate-daily';
 
 SELECT "status", "trigger_type", "started_at", "finished_at", "error_code"
 FROM "id_business_v2_exchange_rate_runs"
@@ -98,7 +96,7 @@ LIMIT 10;
 上线完成必须同时看到：
 
 - Cron job 为 `active=true`，计划表达式为 `*/30 * * * *`。
-- 收购汇率 Cron job 为 `active=true`，计划表达式为 `5 * * * *`。
+- 收购汇率 Cron job 为 `active=true`，计划表达式为 `5 1 * * *`。
 - 新批次的 `trigger_type=scheduled`。
 - 成功批次有完整四方向快照和有效样本。
 - 汇率页面的 `latestReceiptFxRates` 固定显示 `CNY、MYR、USD、USDT`；`MYR、USD、USDT` 自动记录里各有按币种快照。

@@ -254,13 +254,13 @@ export class IdBusinessV2SystemMonitoringService {
         detail: '收购汇率自动采集已由管理员明确停用。'
       };
     }
-    if (!process.env.CURRENCY_API_KEY?.trim()) {
+    if (!this.purchaseRateProviderConfigured()) {
       return {
         key: 'purchase_rate_scheduler',
         title: '收购汇率采集任务',
         status: 'degraded' as const,
         value: '供应商未配置',
-        detail: '自动采集已开启，但服务端未配置 CurrencyAPI 密钥。'
+        detail: '自动采集已开启，但服务端汇率供应商配置不受支持。'
       };
     }
     if (latestRun?.status === 'failed' || latestRun?.status === 'pending_review') {
@@ -360,7 +360,7 @@ export class IdBusinessV2SystemMonitoringService {
     if (!result.ok || !result.value) return null;
     const { settings, latestRun, latestSnapshot } = result.value.purchaseRate;
     return {
-      providerConfigured: Boolean(process.env.CURRENCY_API_KEY?.trim()),
+      providerConfigured: this.purchaseRateProviderConfigured(),
       settings: settings
         ? {
             autoEnabled: settings.autoEnabled,
@@ -386,6 +386,11 @@ export class IdBusinessV2SystemMonitoringService {
       process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED === 'false'
       ? ('manual_only' as const)
       : ('automatic_capable' as const);
+  }
+
+  private purchaseRateProviderConfigured() {
+    const provider = process.env.CURRENCY_RATE_PROVIDER?.trim().toLowerCase();
+    return !provider || provider === 'exchange_rate_api';
   }
 
   private overallStatus(statuses: MonitorStatus[]) {

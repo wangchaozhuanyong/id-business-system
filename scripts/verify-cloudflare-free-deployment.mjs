@@ -54,7 +54,9 @@ const endpoints = [
   '/api/id-business-v2/customers',
   '/api/id-business-v2/activations',
   '/api/id-business-v2/balances/workbench',
-  '/api/id-business-v2/exchange-rates/effective'
+  '/api/id-business-v2/exchange-rates/effective',
+  '/api/id-business-v2/exchange-rates/purchase-quotes',
+  '/api/id-business-v2/exchange-rates/purchase-quotes/runtime'
 ];
 checks.push({ path: '/api/auth/login', status: loginResponse.status });
 

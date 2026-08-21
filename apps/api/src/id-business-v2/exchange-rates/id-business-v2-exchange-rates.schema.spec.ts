@@ -131,9 +131,15 @@ describe('V2 exchange-rate contracts', () => {
     expect(controller).toContain("'apple.exchange_rate.manage'");
   });
 
-  it('adds hourly automatic purchase rates with a database lock and review boundary', () => {
+  it('keeps the historical hourly migration immutable and upgrades it to the daily free provider', () => {
     const migration = read(
       'prisma/migrations/20260820100000_purchase_rate_automation/migration.sql'
+    );
+    const providerMigration = read(
+      'prisma/migrations/20260821113000_purchase_rate_open_provider_enum/migration.sql'
+    );
+    const dailyMigration = read(
+      'prisma/migrations/20260821114000_purchase_rate_daily_open_provider/migration.sql'
     );
     const controller = read(
       'src/id-business-v2/exchange-rates/id-business-v2-exchange-rates.controller.ts'
@@ -148,6 +154,13 @@ describe('V2 exchange-rate contracts', () => {
     expect(migration).toContain('"maximum_change_rate" DECIMAL(26, 8)');
     expect(migration).toContain('ADD COLUMN "change_rate" DECIMAL(26, 8)');
     expect(migration).toContain('WHEN EXTRACT(MINUTE FROM CURRENT_TIMESTAMP) < 5');
+    expect(providerMigration).toContain("ADD VALUE IF NOT EXISTS 'exchange_rate_api'");
+    expect(dailyMigration).toContain("SET DEFAULT 'exchange_rate_api'");
+    expect(dailyMigration).toContain('"interval_minutes" = 1440');
+    expect(dailyMigration).toContain('"stale_minutes" >= 1440');
+    expect(dailyMigration).toContain("'id-business-v2-purchase-rate-daily'");
+    expect(dailyMigration).toContain("'5 1 * * *'");
+    expect(dailyMigration).toContain("AT TIME ZONE 'UTC'");
     expect(controller).toContain("@Post('purchase-quotes/refresh')");
     expect(controller).toContain("@Post('purchase-quotes/runs/:id/confirm')");
     expect(controller).toContain("@Patch('purchase-quotes/bulk')");

@@ -283,7 +283,7 @@ export interface V2PurchaseRateSnapshot {
   purchaseRateFormatted: string;
   decimalPlaces: number;
   roundingMode: V2PurchaseRateRoundingMode;
-  marketRateSource: 'manual' | 'currencyapi';
+  marketRateSource: 'manual' | 'currencyapi' | 'exchange_rate_api';
   marketRateSourceReference: string | null;
   marketRateCapturedAt: string;
   fetchRunId: string | null;
@@ -358,7 +358,7 @@ export interface V2PurchaseRateCandidateQuote {
 
 export interface V2PurchaseRateSettings {
   autoEnabled: boolean;
-  intervalMinutes: 60;
+  intervalMinutes: 1440;
   staleMinutes: number;
   abnormalChangeRate: string;
   abnormalChangePercent: string;
@@ -373,7 +373,7 @@ export interface V2PurchaseRateRun {
   id: string;
   status: V2PurchaseRateRunStatus;
   triggerType: 'manual' | 'scheduled' | 'system';
-  provider: 'currencyapi';
+  provider: 'currencyapi' | 'exchange_rate_api';
   baseCurrency: 'CNY';
   requestedCurrencyCodes: string[];
   abnormalCurrencyCodes: string[];
@@ -400,14 +400,14 @@ export type V2PurchaseRateRunListResult = PaginatedResult<V2PurchaseRateRun>;
 export interface V2PurchaseRateRuntime {
   settings: V2PurchaseRateSettings;
   scheduler: {
-    schedule: '5 * * * *';
+    schedule: '5 1 * * *';
     localTickIntervalMs: number;
     localRunning: boolean;
     lastTickAt: string | null;
     databaseRunning: V2PurchaseRateRun | null;
   };
   provider: {
-    code: 'currencyapi';
+    code: 'exchange_rate_api';
     configured: boolean;
     source: string;
     contract: string;

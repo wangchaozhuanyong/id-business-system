@@ -13,7 +13,7 @@ import { IdBusinessV2OkxOtcCollector } from './id-business-v2-okx-otc.collector'
 import { IdBusinessV2OtcAverageService } from './id-business-v2-otc-average.service';
 import { IdBusinessV2OtcMidRateService } from './id-business-v2-otc-mid-rate.service';
 import { IdBusinessV2PurchaseQuoteService } from './id-business-v2-purchase-quote.service';
-import { IdBusinessV2CurrencyApiPurchaseRateProvider } from './id-business-v2-currencyapi-purchase-rate.provider';
+import { IdBusinessV2ExchangeRateApiPurchaseRateProvider } from './id-business-v2-exchange-rate-api-purchase-rate.provider';
 import { IdBusinessV2PurchaseRateProviderService } from './id-business-v2-purchase-rate-provider.service';
 import { IdBusinessV2PurchaseRateQueryService } from './id-business-v2-purchase-rate-query.service';
 import { IdBusinessV2PurchaseRateSettingsService } from './id-business-v2-purchase-rate-settings.service';
@@ -35,7 +35,7 @@ import { IdBusinessV2PurchaseRateAutomationRepository } from './persistence/id-b
     IdBusinessV2PurchaseQuoteRepository,
     IdBusinessV2PurchaseQuoteService,
     IdBusinessV2PurchaseRateAutomationRepository,
-    IdBusinessV2CurrencyApiPurchaseRateProvider,
+    IdBusinessV2ExchangeRateApiPurchaseRateProvider,
     IdBusinessV2PurchaseRateProviderService,
     IdBusinessV2PurchaseRateQueryService,
     IdBusinessV2PurchaseRateSettingsService,

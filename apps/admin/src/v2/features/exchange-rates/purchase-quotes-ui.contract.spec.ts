@@ -17,6 +17,8 @@ describe('purchase quote UI contract', () => {
     expect(panel).toContain('已启用币种');
     expect(panel).toContain('下一次更新时间');
     expect(panel).toContain('汇率接口状态');
+    expect(panel).toContain('Rates By Exchange Rate API');
+    expect(panel).toContain('每天北京时间 09:05 执行');
     expect(panel).toContain("? '部分收购报价已超过有效时限'");
     expect(panel).toContain("? 'error'");
     expect(panel).toContain('V2TableActionColumn');
@@ -40,6 +42,7 @@ describe('purchase quote UI contract', () => {
     expect(panel).toContain('生成报价文本');
     expect(panel).toContain('批量设置比例');
     expect(automationDrawers).toContain('确认并发布候选报价');
+    expect(automationDrawers).toContain('每天北京时间 09:05');
     expect(automationDrawers).toContain('微信排版');
     expect(automationDrawers).toContain('等宽排版');
     expect(automationDrawers).toContain('纯文本');

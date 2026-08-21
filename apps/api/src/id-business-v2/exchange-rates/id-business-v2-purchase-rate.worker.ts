@@ -198,7 +198,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
             objectId: runId,
             afterData: {
               triggerType: input.triggerType,
-              provider: 'currencyapi',
+              provider: 'exchange_rate_api',
               currencyCodes: currencies.map((currency) => currency.code)
             },
             remark: '收购汇率采集任务开始'
@@ -532,7 +532,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
     providerUpdatedAt: Date,
     createdByUserId: string | undefined,
     confirmed: boolean,
-    sourceReference = 'https://api.currencyapi.com/v3/latest?base_currency=CNY'
+    sourceReference = 'https://open.er-api.com/v6/latest/CNY'
   ) {
     return candidates.map((candidate) => ({
       id: randomUUID(),
@@ -544,7 +544,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
       purchaseRateDisplay: candidate.purchaseRateDisplay,
       decimalPlaces: candidate.decimalPlaces,
       roundingMode: candidate.roundingMode,
-      marketRateSource: 'currencyapi' as const,
+      marketRateSource: 'exchange_rate_api' as const,
       marketRateSourceReference: sourceReference,
       marketRateCapturedAt: providerUpdatedAt,
       fetchRunId: runId,

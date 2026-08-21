@@ -9,7 +9,6 @@ type AuthProvider = 'local' | 'supabase';
 const defaultAdminPublicUrl = 'https://daichongxitong-v2-free-20260727.ppfzj1314.workers.dev';
 
 const requiredSecrets = [
-  'CURRENCY_API_KEY',
   'FIELD_ENCRYPTION_KEY',
   'HASH_SECRET',
   'ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET',
@@ -41,9 +40,9 @@ function resolveAuthProvider(): AuthProvider {
 }
 
 function resolveCurrencyRateProvider() {
-  const value = Deno.env.get('CURRENCY_RATE_PROVIDER')?.trim().toLowerCase() || 'currencyapi';
-  if (value !== 'currencyapi') {
-    throw new Error('CURRENCY_RATE_PROVIDER must be currencyapi');
+  const value = Deno.env.get('CURRENCY_RATE_PROVIDER')?.trim().toLowerCase() || 'exchange_rate_api';
+  if (value !== 'exchange_rate_api') {
+    throw new Error('CURRENCY_RATE_PROVIDER must be exchange_rate_api');
   }
   return value;
 }
@@ -123,7 +122,6 @@ Object.assign(process.env, {
   SUPABASE_SERVICE_ROLE_KEY: firstEnv('SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'),
   V2_TRUSTED_PROXY_SECRET: requireEnv('V2_TRUSTED_PROXY_SECRET'),
   CURRENCY_RATE_PROVIDER: resolveCurrencyRateProvider(),
-  CURRENCY_API_KEY: requireEnv('CURRENCY_API_KEY'),
   CURRENCY_RATE_REQUEST_TIMEOUT_MS: resolveCurrencyRateRequestTimeoutMs(),
   ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: 'true',
   ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP: 'false',

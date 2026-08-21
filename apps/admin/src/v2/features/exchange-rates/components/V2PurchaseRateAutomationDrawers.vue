@@ -3,7 +3,7 @@
     v-model="automation.settingsVisible"
     title="自动采集设置"
     eyebrow="人民币收购报价"
-    description="配置每小时自动采集、过期提醒和异常波动阈值"
+    description="配置每日免费自动采集、过期提醒和异常波动阈值"
     size="min(600px, 96vw)"
     confirm-text="保存设置"
     :confirm-loading="automation.settingsSaving"
@@ -22,16 +22,16 @@
           <el-switch v-model="automation.settingsForm.autoEnabled" />
         </el-form-item>
         <el-form-item label="执行时间">
-          <el-input model-value="每小时第 5 分钟" disabled />
+          <el-input model-value="每天北京时间 09:05" disabled />
         </el-form-item>
       </V2PanelSection>
       <V2PanelSection heading-id="purchase-rate-safety" title="安全阈值" step="02">
         <el-form-item label="过期提醒（分钟）" required>
           <el-input-number
             v-model="automation.settingsForm.staleMinutes"
-            :min="automation.runtime?.settings.allowedStaleMinutes.min ?? 30"
-            :max="automation.runtime?.settings.allowedStaleMinutes.max ?? 1440"
-            :step="30"
+            :min="automation.runtime?.settings.allowedStaleMinutes.min ?? 1440"
+            :max="automation.runtime?.settings.allowedStaleMinutes.max ?? 4320"
+            :step="60"
             step-strictly
             controls-position="right"
             style="width: 100%"
@@ -405,6 +405,8 @@ function triggerLabel(trigger: string) {
 }
 
 function sourceLabel(source: string) {
-  return source === 'currencyapi' ? 'CurrencyAPI 自动采集' : '管理员手工录入';
+  if (source === 'exchange_rate_api') return 'ExchangeRate-API 免费自动采集';
+  if (source === 'currencyapi') return 'CurrencyAPI 历史自动采集';
+  return '管理员手工录入';
 }
 </script>
