@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2WorkspaceController } from './id-business-v2-workspace.controller';
 import { IdBusinessV2WorkspaceService } from './id-business-v2-workspace.service';
@@ -20,6 +21,7 @@ import { IdBusinessV2ImapMailProvider } from './providers/id-business-v2-imap-ma
   providers: [
     IdBusinessV2WorkspaceService,
     IdBusinessV2WorkspaceRepository,
+    FieldEncryptionService,
     IdBusinessV2ManagedMailboxService,
     IdBusinessV2ManagedMailboxRepository,
     IdBusinessV2MailViewerService,
