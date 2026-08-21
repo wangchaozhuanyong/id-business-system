@@ -13,8 +13,10 @@ import {
 import type { UpdateIdBusinessV2PurchaseRateSettingsDto } from './dto/update-id-business-v2-purchase-rate-settings.dto';
 import { IdBusinessV2PurchaseRateAutomationRepository } from './persistence/id-business-v2-purchase-rate-automation.repository';
 
-const MIN_STALE_MINUTES = 30;
-const MAX_STALE_MINUTES = 1440;
+const DAILY_INTERVAL_MINUTES = 1440;
+const DEFAULT_STALE_MINUTES = 1800;
+const MIN_STALE_MINUTES = 1440;
+const MAX_STALE_MINUTES = 4320;
 const PERCENT_PATTERN = v2UnsignedDecimalPattern(8);
 
 @Injectable()
@@ -57,10 +59,10 @@ export class IdBusinessV2PurchaseRateSettingsService {
       async (tx) => {
         const updated = await this.repository.updateSettings(tx, {
           autoEnabled: dto.autoEnabled,
-          intervalMinutes: 60,
+          intervalMinutes: DAILY_INTERVAL_MINUTES,
           staleMinutes,
           abnormalChangeRate: abnormalChangeRate.toString(),
-          nextRunAt: dto.autoEnabled ? this.nextHourlyRun(now) : null,
+          nextRunAt: dto.autoEnabled ? this.nextDailyRun(now) : null,
           updatedBy: { connect: { id: operator.id } }
         });
         await this.audit.append(tx, {
@@ -96,7 +98,7 @@ export class IdBusinessV2PurchaseRateSettingsService {
         async (tx) => {
           const created = await this.repository.createDefaultSettings(
             tx,
-            this.nextHourlyRun(new Date())
+            this.nextDailyRun(new Date())
           );
           await this.audit.append(tx, {
             module: 'id_business_v2',
@@ -105,8 +107,8 @@ export class IdBusinessV2PurchaseRateSettingsService {
             objectId: '1',
             afterData: {
               autoEnabled: true,
-              intervalMinutes: 60,
-              staleMinutes: 120,
+              intervalMinutes: DAILY_INTERVAL_MINUTES,
+              staleMinutes: DEFAULT_STALE_MINUTES,
               abnormalChangeRate: '0.1'
             },
             remark: '收购汇率自动采集设置初始化'
@@ -138,10 +140,10 @@ export class IdBusinessV2PurchaseRateSettingsService {
     return Rate8.from(divideDecimalStrings(percent.toString(), '100', 8));
   }
 
-  private nextHourlyRun(now: Date) {
+  private nextDailyRun(now: Date) {
     const next = new Date(now);
-    next.setUTCMinutes(5, 0, 0);
-    if (next.getTime() <= now.getTime()) next.setUTCHours(next.getUTCHours() + 1);
+    next.setUTCHours(1, 5, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
     return next;
   }
 

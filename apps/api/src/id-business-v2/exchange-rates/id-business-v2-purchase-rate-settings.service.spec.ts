@@ -12,10 +12,10 @@ const operator = {
 function setup() {
   const row = {
     autoEnabled: true,
-    intervalMinutes: 60,
-    staleMinutes: 120,
+    intervalMinutes: 1440,
+    staleMinutes: 1800,
     abnormalChangeRate: { toString: () => '0.1' },
-    nextRunAt: new Date('2026-08-20T10:05:00.000Z'),
+    nextRunAt: new Date('2026-08-21T01:05:00.000Z'),
     updatedByUserId: operator.id,
     createdAt: new Date('2026-08-20T00:00:00.000Z'),
     updatedAt: new Date('2026-08-20T10:03:00.000Z')
@@ -43,27 +43,27 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it('stores a percentage as a decimal ratio and schedules the next hour boundary at minute five', async () => {
+  it('stores a percentage as a decimal ratio and schedules the next daily run', async () => {
     const { service, repository, audit } = setup();
 
     await expect(
       service.update(
-        { autoEnabled: true, staleMinutes: 120, abnormalChangePercent: '10' },
+        { autoEnabled: true, staleMinutes: 1800, abnormalChangePercent: '10' },
         operator,
         'settings-1'
       )
     ).resolves.toMatchObject({
       autoEnabled: true,
-      intervalMinutes: 60,
+      intervalMinutes: 1440,
       abnormalChangeRate: '0.1',
       abnormalChangePercent: '10'
     });
     expect(repository.updateSettings).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        intervalMinutes: 60,
+        intervalMinutes: 1440,
         abnormalChangeRate: '0.1',
-        nextRunAt: new Date('2026-08-20T10:05:00.000Z')
+        nextRunAt: new Date('2026-08-21T01:05:00.000Z')
       })
     );
     expect(audit.append).toHaveBeenCalledOnce();
@@ -73,11 +73,14 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
     const { service, repository } = setup();
 
     await expect(
-      service.update({ autoEnabled: true, staleMinutes: 29, abnormalChangePercent: '10' }, operator)
-    ).rejects.toThrow('过期提醒时间必须是 30 到 1440 分钟之间的整数');
+      service.update(
+        { autoEnabled: true, staleMinutes: 1439, abnormalChangePercent: '10' },
+        operator
+      )
+    ).rejects.toThrow('过期提醒时间必须是 1440 到 4320 分钟之间的整数');
     await expect(
       service.update(
-        { autoEnabled: true, staleMinutes: 120, abnormalChangePercent: '101' },
+        { autoEnabled: true, staleMinutes: 1800, abnormalChangePercent: '101' },
         operator
       )
     ).rejects.toThrow('异常波动阈值必须大于 0% 且不超过 100%');
@@ -93,7 +96,7 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
     });
 
     await service.update(
-      { autoEnabled: false, staleMinutes: 120, abnormalChangePercent: '10' },
+      { autoEnabled: false, staleMinutes: 1800, abnormalChangePercent: '10' },
       operator,
       'settings-2'
     );

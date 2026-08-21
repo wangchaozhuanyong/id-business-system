@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { IdBusinessV2CurrencyApiPurchaseRateProvider } from './id-business-v2-currencyapi-purchase-rate.provider';
+import { IdBusinessV2ExchangeRateApiPurchaseRateProvider } from './id-business-v2-exchange-rate-api-purchase-rate.provider';
 import {
   ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER,
   IdBusinessV2PurchaseRateProviderError,
@@ -9,7 +9,7 @@ import {
 
 @Injectable()
 export class IdBusinessV2PurchaseRateProviderService implements IdBusinessV2PurchaseRateProvider {
-  constructor(private readonly currencyApi: IdBusinessV2CurrencyApiPurchaseRateProvider) {}
+  constructor(private readonly exchangeRateApi: IdBusinessV2ExchangeRateApiPurchaseRateProvider) {}
 
   fetchLatest(currencyCodes: string[]): Promise<IdBusinessV2PurchaseRateProviderResult> {
     const configured = (process.env.CURRENCY_RATE_PROVIDER || ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER)
@@ -22,19 +22,18 @@ export class IdBusinessV2PurchaseRateProviderService implements IdBusinessV2Purc
         false
       );
     }
-    return this.currencyApi.fetchLatest(currencyCodes);
+    return this.exchangeRateApi.fetchLatest(currencyCodes);
   }
 
   getRuntime() {
     return {
       code: ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER,
       configured:
-        Boolean(process.env.CURRENCY_API_KEY?.trim()) &&
-        (!process.env.CURRENCY_RATE_PROVIDER ||
-          process.env.CURRENCY_RATE_PROVIDER.trim().toLowerCase() ===
-            ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER),
-      source: 'https://api.currencyapi.com/',
-      contract: 'currencyapi-v3-latest-cny-base'
+        !process.env.CURRENCY_RATE_PROVIDER ||
+        process.env.CURRENCY_RATE_PROVIDER.trim().toLowerCase() ===
+          ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER,
+      source: 'https://www.exchangerate-api.com',
+      contract: 'exchange-rate-api-open-v6-daily-cny-base'
     };
   }
 }

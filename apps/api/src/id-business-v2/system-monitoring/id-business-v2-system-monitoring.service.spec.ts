@@ -5,7 +5,7 @@ import { IdBusinessV2SystemMonitoringRepository } from './persistence/id-busines
 
 const originalManualMode = process.env.ID_BUSINESS_V2_FREE_MANUAL_MODE;
 const originalAutoMode = process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
-const originalCurrencyApiKey = process.env.CURRENCY_API_KEY;
+const originalCurrencyRateProvider = process.env.CURRENCY_RATE_PROVIDER;
 
 function createPrismaMock() {
   return {
@@ -37,7 +37,7 @@ function createPrismaMock() {
     idBusinessV2PurchaseRateSettings: {
       findUnique: vi.fn().mockResolvedValue({
         autoEnabled: true,
-        staleMinutes: 120,
+        staleMinutes: 1800,
         abnormalChangeRate: { toString: () => '0.1' },
         nextRunAt: new Date('2026-07-31T12:05:00.000Z'),
         updatedAt: new Date('2026-07-31T10:00:00.000Z')
@@ -70,7 +70,7 @@ function createService(
   prisma: ReturnType<typeof createPrismaMock>,
   monitor = new AuthAvailabilityMonitor()
 ) {
-  process.env.CURRENCY_API_KEY = 'test-currency-api-key';
+  process.env.CURRENCY_RATE_PROVIDER = 'exchange_rate_api';
   return new IdBusinessV2SystemMonitoringService(
     new IdBusinessV2SystemMonitoringRepository(prisma as never),
     monitor
@@ -82,8 +82,8 @@ afterEach(() => {
   else process.env.ID_BUSINESS_V2_FREE_MANUAL_MODE = originalManualMode;
   if (originalAutoMode === undefined) delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED;
   else process.env.ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED = originalAutoMode;
-  if (originalCurrencyApiKey === undefined) delete process.env.CURRENCY_API_KEY;
-  else process.env.CURRENCY_API_KEY = originalCurrencyApiKey;
+  if (originalCurrencyRateProvider === undefined) delete process.env.CURRENCY_RATE_PROVIDER;
+  else process.env.CURRENCY_RATE_PROVIDER = originalCurrencyRateProvider;
 });
 
 describe('IdBusinessV2SystemMonitoringService', () => {

@@ -132,7 +132,7 @@ Cloudflare 发布命令包含以下硬门禁：
   `V2_RUNTIME_DATABASE_URL`、`AUDIT_DATABASE_URL`、`MIGRATION_DATABASE_URL`、
   `BACKUP_DATABASE_URL`，并包含
   `JWT_SECRET`、`FIELD_ENCRYPTION_KEY`、`HASH_SECRET`、`SMOKE_TEST_USERNAME`、
-  `SMOKE_TEST_PASSWORD`、`CURRENCY_API_KEY`。该文件必须保持 Git 忽略且权限为 `0600`。
+  `SMOKE_TEST_PASSWORD`。免费收购汇率接口不需要 API Key；该文件必须保持 Git 忽略且权限为 `0600`。
 - `V2_RUNTIME_DATABASE_URL` 只允许当前业务表 DML，不拥有表、不具备 `ALTER`、`TRUNCATE`、
   禁用触发器或修改 `_prisma_migrations` 的权限；`AUDIT_DATABASE_URL` 只读；
   `MIGRATION_DATABASE_URL` 仅供离线迁移管理员使用，不会注入发布、巡检或应用运行时。

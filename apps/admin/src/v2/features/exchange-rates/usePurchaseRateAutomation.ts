@@ -28,7 +28,7 @@ export function usePurchaseRateAutomation(options: {
   const settingsSaving = ref(false);
   const settingsForm = reactive({
     autoEnabled: true,
-    staleMinutes: 120,
+    staleMinutes: 1800,
     abnormalChangePercent: '10'
   });
   const bulkVisible = ref(false);
@@ -143,8 +143,8 @@ export function usePurchaseRateAutomation(options: {
   async function saveSettings() {
     if (
       !Number.isInteger(settingsForm.staleMinutes) ||
-      settingsForm.staleMinutes < (runtime.value?.settings.allowedStaleMinutes.min ?? 30) ||
-      settingsForm.staleMinutes > (runtime.value?.settings.allowedStaleMinutes.max ?? 1440) ||
+      settingsForm.staleMinutes < (runtime.value?.settings.allowedStaleMinutes.min ?? 1440) ||
+      settingsForm.staleMinutes > (runtime.value?.settings.allowedStaleMinutes.max ?? 4320) ||
       !isV2UnsignedDecimal(settingsForm.abnormalChangePercent, {
         allowZero: false,
         decimalPlaces: 8

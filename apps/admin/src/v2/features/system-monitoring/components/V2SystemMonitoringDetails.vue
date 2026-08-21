@@ -88,7 +88,7 @@
       <section class="v2-system-details__panel" aria-label="收购汇率任务证据">
         <V2SectionHeading
           title="收购汇率任务证据"
-          help="监控供应商配置、每小时任务、异常审核和最新有效报价时间。"
+          help="监控免费供应商配置、每日任务、异常审核和最新有效报价时间。"
         >
           <template #actions>
             <el-tag

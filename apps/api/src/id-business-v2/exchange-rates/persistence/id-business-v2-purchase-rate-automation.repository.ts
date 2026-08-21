@@ -66,14 +66,15 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
     >(Prisma.sql`
       UPDATE "id_business_v2_purchase_rate_settings"
       SET
-        "next_run_at" = date_trunc('hour', clock_timestamp()) + INTERVAL '65 minutes',
+        "next_run_at" = (
+          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
+          + INTERVAL '1 day 1 hour 5 minutes'
+        ) AT TIME ZONE 'UTC',
         "updated_at" = clock_timestamp()
       WHERE "id" = 1
         AND "auto_enabled" = TRUE
         AND "next_run_at" IS NOT NULL
         AND "next_run_at" <= clock_timestamp()
-        AND EXTRACT(MINUTE FROM clock_timestamp()) >= 5
-        AND EXTRACT(MINUTE FROM clock_timestamp()) < 15
       RETURNING
         "auto_enabled" AS "autoEnabled",
         "interval_minutes" AS "intervalMinutes",
@@ -92,8 +93,8 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
       data: {
         id: 1,
         autoEnabled: true,
-        intervalMinutes: 60,
-        staleMinutes: 120,
+        intervalMinutes: 1440,
+        staleMinutes: 1800,
         abnormalChangeRate: '0.1',
         nextRunAt: now
       }
@@ -136,7 +137,7 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
           id: input.id,
           status: 'running',
           triggerType: input.triggerType,
-          provider: 'currencyapi',
+          provider: 'exchange_rate_api',
           baseCurrency: 'CNY',
           requestedCurrencyCodes: input.requestedCurrencyCodes,
           startedAt: input.startedAt,

@@ -6,31 +6,30 @@ import {
   type IdBusinessV2PurchaseRateProviderResult
 } from './id-business-v2-purchase-rate-provider.types';
 
-const ENDPOINT = 'https://api.currencyapi.com/v3/latest';
-const SOURCE_CONTRACT = 'currencyapi-v3-latest-cny-base';
+const ENDPOINT = 'https://open.er-api.com/v6/latest/CNY';
+const PROVIDER_URL = 'https://www.exchangerate-api.com';
+const DOCUMENTATION_URL = 'https://www.exchangerate-api.com/docs/free';
+const TERMS_URL = 'https://www.exchangerate-api.com/terms';
+const SOURCE_CONTRACT = 'exchange-rate-api-open-v6-daily-cny-base';
 const CURRENCY_CODE_PATTERN = /^[A-Z]{3}$/;
 const DECIMAL_PATTERN = /^\d+(?:\.\d+)?$/;
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 30_000;
 
-interface CurrencyApiPayload {
-  meta?: { last_updated_at?: unknown };
-  data?: Record<string, { code?: unknown; value?: unknown }>;
+interface ExchangeRateApiPayload {
+  result?: unknown;
+  provider?: unknown;
+  documentation?: unknown;
+  terms_of_use?: unknown;
+  time_last_update_unix?: unknown;
+  base_code?: unknown;
+  rates?: Record<string, unknown>;
 }
 
 @Injectable()
-export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2PurchaseRateProvider {
+export class IdBusinessV2ExchangeRateApiPurchaseRateProvider implements IdBusinessV2PurchaseRateProvider {
   async fetchLatest(currencyCodes: string[]): Promise<IdBusinessV2PurchaseRateProviderResult> {
-    const apiKey = process.env.CURRENCY_API_KEY?.trim();
-    if (!apiKey) {
-      throw new IdBusinessV2PurchaseRateProviderError(
-        'purchase_rate_provider_not_configured',
-        '收购汇率供应商密钥未配置',
-        false
-      );
-    }
-
     const normalizedCodes = [...new Set(currencyCodes.map((code) => code.trim().toUpperCase()))];
     if (
       normalizedCodes.length === 0 ||
@@ -43,15 +42,11 @@ export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2
       );
     }
 
-    const url = new URL(ENDPOINT);
-    url.searchParams.set('base_currency', 'CNY');
-    url.searchParams.set('currencies', normalizedCodes.join(','));
-    const timeoutMs = this.requestTimeoutMs();
     let response: Response;
     try {
-      response = await fetch(url, {
-        headers: { accept: 'application/json', apikey: apiKey },
-        signal: AbortSignal.timeout(timeoutMs)
+      response = await fetch(ENDPOINT, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(this.requestTimeoutMs())
       });
     } catch (error) {
       throw new IdBusinessV2PurchaseRateProviderError(
@@ -74,9 +69,11 @@ export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2
       );
     }
 
-    let payload: CurrencyApiPayload;
+    let responseBody: string;
+    let payload: ExchangeRateApiPayload;
     try {
-      payload = (await response.json()) as CurrencyApiPayload;
+      responseBody = await response.text();
+      payload = JSON.parse(responseBody) as ExchangeRateApiPayload;
     } catch {
       throw new IdBusinessV2PurchaseRateProviderError(
         'purchase_rate_provider_invalid_json',
@@ -85,12 +82,13 @@ export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2
       );
     }
 
-    const providerUpdatedAt = this.parseProviderTimestamp(payload.meta?.last_updated_at);
+    this.assertContract(payload);
+    const providerUpdatedAt = this.parseProviderTimestamp(payload.time_last_update_unix);
+    const rawRates = this.extractRatesObject(responseBody);
     const quotePerCny: Record<string, string> = {};
     for (const code of normalizedCodes) {
-      const entry = payload.data?.[code];
-      const value = this.parsePositiveDecimal(entry?.value);
-      if (!entry || entry.code !== code || !value) {
+      const value = this.extractPositiveRate(rawRates, code);
+      if (!value) {
         throw new IdBusinessV2PurchaseRateProviderError(
           'purchase_rate_provider_incomplete_response',
           `自动汇率供应商缺少有效的 ${code} 汇率`,
@@ -106,19 +104,37 @@ export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2
       providerUpdatedAt,
       quotePerCny,
       sourceContract: SOURCE_CONTRACT,
-      sourceReference: url.toString()
+      sourceReference: ENDPOINT
     };
   }
 
+  private assertContract(payload: ExchangeRateApiPayload) {
+    if (
+      payload.result !== 'success' ||
+      payload.base_code !== 'CNY' ||
+      payload.provider !== PROVIDER_URL ||
+      payload.documentation !== DOCUMENTATION_URL ||
+      payload.terms_of_use !== TERMS_URL ||
+      !payload.rates ||
+      typeof payload.rates !== 'object'
+    ) {
+      throw new IdBusinessV2PurchaseRateProviderError(
+        'purchase_rate_provider_contract_invalid',
+        '自动汇率供应商响应契约无效',
+        true
+      );
+    }
+  }
+
   private parseProviderTimestamp(value: unknown) {
-    if (typeof value !== 'string' || !value.trim()) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
       throw new IdBusinessV2PurchaseRateProviderError(
         'purchase_rate_provider_timestamp_missing',
         '自动汇率供应商未返回数据时间',
         true
       );
     }
-    const timestamp = new Date(value);
+    const timestamp = new Date(value * 1000);
     if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() > Date.now() + 5 * 60_000) {
       throw new IdBusinessV2PurchaseRateProviderError(
         'purchase_rate_provider_timestamp_invalid',
@@ -129,9 +145,39 @@ export class IdBusinessV2CurrencyApiPurchaseRateProvider implements IdBusinessV2
     return timestamp;
   }
 
-  private parsePositiveDecimal(value: unknown) {
-    if (typeof value !== 'number' && typeof value !== 'string') return null;
-    const normalized = String(value).trim();
+  private extractRatesObject(rawJson: string) {
+    const ratesProperty = /"rates"\s*:/.exec(rawJson);
+    if (!ratesProperty) return null;
+    let start = ratesProperty.index + ratesProperty[0].length;
+    while (/\s/.test(rawJson[start] ?? '')) start += 1;
+    if (rawJson[start] !== '{') return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < rawJson.length; index += 1) {
+      const character = rawJson[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === '{') depth += 1;
+      if (character === '}' && --depth === 0) return rawJson.slice(start, index + 1);
+    }
+    return null;
+  }
+
+  private extractPositiveRate(rawRates: string | null, code: string) {
+    if (!rawRates) return null;
+    const match = new RegExp(`"${code}"\\s*:\\s*(\\d+(?:\\.\\d+)?)(?=\\s*[,}])`).exec(rawRates);
+    if (!match) return null;
+    const normalized = match[1];
     if (!DECIMAL_PATTERN.test(normalized)) return null;
     try {
       return BigInt(normalized.replace('.', '')) > 0n ? normalized : null;

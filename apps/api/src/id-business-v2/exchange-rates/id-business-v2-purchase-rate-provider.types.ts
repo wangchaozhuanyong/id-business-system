@@ -1,4 +1,4 @@
-export const ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER = 'currencyapi' as const;
+export const ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER = 'exchange_rate_api' as const;
 
 export interface IdBusinessV2PurchaseRateProviderResult {
   provider: typeof ID_BUSINESS_V2_PURCHASE_RATE_PROVIDER;

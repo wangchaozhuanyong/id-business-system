@@ -26,8 +26,8 @@ function currency(previousMarketRate?: string) {
 function setup(previousMarketRate?: string) {
   const settings = {
     autoEnabled: true,
-    intervalMinutes: 60,
-    staleMinutes: 120,
+    intervalMinutes: 1440,
+    staleMinutes: 1800,
     abnormalChangeRate: Rate8.from('0.1'),
     nextRunAt: new Date('2026-08-20T11:05:00.000Z'),
     updatedByUserId: null,
@@ -50,12 +50,12 @@ function setup(previousMarketRate?: string) {
   const settingsService = { getRecord: vi.fn().mockResolvedValue(settings) };
   const provider = {
     fetchLatest: vi.fn().mockResolvedValue({
-      provider: 'currencyapi',
+      provider: 'exchange_rate_api',
       baseCurrency: 'CNY',
       providerUpdatedAt: new Date(),
       quotePerCny: { USD: '0.125' },
-      sourceContract: 'currencyapi-v3-latest-cny-base',
-      sourceReference: 'https://api.currencyapi.com/v3/latest?base_currency=CNY&currencies=USD'
+      sourceContract: 'exchange-rate-api-open-v6-daily-cny-base',
+      sourceReference: 'https://open.er-api.com/v6/latest/CNY'
     }),
     getRuntime: vi.fn()
   };
@@ -109,7 +109,7 @@ describe('IdBusinessV2PurchaseRateWorker', () => {
             marketRateCnyPerUnit: '8',
             purchaseRateRaw: '5.6',
             purchaseRateDisplay: '5.6',
-            marketRateSource: 'currencyapi'
+            marketRateSource: 'exchange_rate_api'
           })
         ]
       })
@@ -155,8 +155,8 @@ describe('IdBusinessV2PurchaseRateWorker', () => {
     const { worker, repository, provider } = setup('7');
     provider.fetchLatest.mockRejectedValueOnce(
       new IdBusinessV2PurchaseRateProviderError(
-        'purchase_rate_provider_not_configured',
-        '收购汇率供应商密钥未配置',
+        'purchase_rate_provider_unsupported',
+        '收购汇率供应商配置不受支持',
         false
       )
     );
@@ -164,7 +164,7 @@ describe('IdBusinessV2PurchaseRateWorker', () => {
     await expect(worker.collectManual(operator, 'request-4')).resolves.toMatchObject({
       status: 'failed',
       retainedPreviousQuotes: true,
-      errorCode: 'purchase_rate_provider_not_configured'
+      errorCode: 'purchase_rate_provider_unsupported'
     });
     expect(repository.markRunFailed).toHaveBeenCalledWith(
       expect.anything(),
@@ -177,12 +177,12 @@ describe('IdBusinessV2PurchaseRateWorker', () => {
   it('rejects provider data older than the configured validity window', async () => {
     const { worker, repository, provider } = setup('7');
     provider.fetchLatest.mockResolvedValueOnce({
-      provider: 'currencyapi',
+      provider: 'exchange_rate_api',
       baseCurrency: 'CNY',
-      providerUpdatedAt: new Date(Date.now() - 121 * 60_000),
+      providerUpdatedAt: new Date(Date.now() - 1801 * 60_000),
       quotePerCny: { USD: '0.125' },
-      sourceContract: 'currencyapi-v3-latest-cny-base',
-      sourceReference: 'https://api.currencyapi.com/v3/latest?base_currency=CNY&currencies=USD'
+      sourceContract: 'exchange-rate-api-open-v6-daily-cny-base',
+      sourceReference: 'https://open.er-api.com/v6/latest/CNY'
     });
 
     await expect(worker.collectManual(operator, 'request-5')).resolves.toMatchObject({
@@ -225,8 +225,8 @@ describe('IdBusinessV2PurchaseRateWorker', () => {
       status: 'pending_review',
       candidateQuotes: [candidate],
       providerUpdatedAt: new Date('2026-08-20T10:00:00.000Z'),
-      sourceContract: 'currencyapi-v3-latest-cny-base',
-      sourceReference: 'https://api.currencyapi.com/v3/latest?base_currency=CNY&currencies=USD',
+      sourceContract: 'exchange-rate-api-open-v6-daily-cny-base',
+      sourceReference: 'https://open.er-api.com/v6/latest/CNY',
       finishedAt: new Date('2026-08-20T10:00:01.000Z'),
       attemptCount: 1,
       maximumChangeRate: Rate8.from('0.14285714'),

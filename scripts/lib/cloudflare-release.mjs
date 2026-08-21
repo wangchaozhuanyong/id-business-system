@@ -39,8 +39,6 @@ export function validateReleaseEnvironment(env) {
   validateSecret(env.FIELD_ENCRYPTION_KEY, 'FIELD_ENCRYPTION_KEY', 32, errors);
   validateSecret(env.HASH_SECRET, 'HASH_SECRET', 32, errors);
   validateSecret(env.V2_TRUSTED_PROXY_SECRET, 'V2_TRUSTED_PROXY_SECRET', 32, errors);
-  validateSecret(env.CURRENCY_API_KEY, 'CURRENCY_API_KEY', 32, errors);
-
   const username = env.SMOKE_TEST_USERNAME?.trim() ?? '';
   if (!username || username.length > 100 || unsafeValuePattern.test(username)) {
     errors.push('SMOKE_TEST_USERNAME 必须是有效的生产巡检账号');

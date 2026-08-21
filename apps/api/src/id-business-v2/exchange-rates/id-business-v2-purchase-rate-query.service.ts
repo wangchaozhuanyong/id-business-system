@@ -33,7 +33,7 @@ export class IdBusinessV2PurchaseRateQueryService {
     return {
       settings,
       scheduler: {
-        schedule: '5 * * * *' as const,
+        schedule: '5 1 * * *' as const,
         localTickIntervalMs: local.tickIntervalMs,
         localRunning: local.running,
         lastTickAt: local.lastTickAt,

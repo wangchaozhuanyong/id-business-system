@@ -343,6 +343,7 @@ enum IdBusinessV2PurchaseRateRoundingMode {
 enum IdBusinessV2PurchaseMarketRateSource {
   manual
   currencyapi
+  exchange_rate_api
 }
 
 enum IdBusinessV2PurchaseRateFetchRunStatus {
@@ -1622,8 +1623,8 @@ model IdBusinessV2PurchaseCurrency {
 model IdBusinessV2PurchaseRateSettings {
   id                 Int       @id @default(1)
   autoEnabled        Boolean   @default(true) @map("auto_enabled")
-  intervalMinutes    Int       @default(60) @map("interval_minutes")
-  staleMinutes       Int       @default(120) @map("stale_minutes")
+  intervalMinutes    Int       @default(1440) @map("interval_minutes")
+  staleMinutes       Int       @default(1800) @map("stale_minutes")
   abnormalChangeRate Decimal   @default(0.1) @map("abnormal_change_rate") @db.Decimal(9, 8)
   nextRunAt          DateTime? @map("next_run_at") @db.Timestamptz(6)
   updatedByUserId    String?   @map("updated_by_user_id") @db.Uuid
@@ -1641,7 +1642,7 @@ model IdBusinessV2PurchaseRateFetchRun {
   id                     String                                 @id @default(uuid()) @db.Uuid
   status                 IdBusinessV2PurchaseRateFetchRunStatus @default(running)
   triggerType            IdBusinessV2ExchangeRateTriggerType    @map("trigger_type")
-  provider               IdBusinessV2PurchaseMarketRateSource   @default(currencyapi)
+  provider               IdBusinessV2PurchaseMarketRateSource   @default(exchange_rate_api)
   baseCurrency           String                                 @default("CNY") @map("base_currency") @db.VarChar(3)
   requestedCurrencyCodes String[]                               @default([]) @map("requested_currency_codes")
   abnormalCurrencyCodes  String[]                               @default([]) @map("abnormal_currency_codes")

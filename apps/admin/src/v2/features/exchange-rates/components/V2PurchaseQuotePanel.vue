@@ -19,7 +19,7 @@
               ? '部分收购报价已超过有效时限'
               : page.purchaseAutomation.pendingReviewRun
                 ? '检测到异常波动，候选报价尚未发布'
-                : '多币种市场汇率自动采集已接入'
+                : '多币种市场汇率每日免费自动采集已接入'
       "
       :description="page.purchaseQuoteMeta?.marketRateNotice"
       show-icon
@@ -35,9 +35,13 @@
       <article>
         <span>数据供应商</span>
         <strong>{{
-          page.purchaseAutomation.runtime?.provider.configured ? 'CurrencyAPI' : '待配置'
+          page.purchaseAutomation.runtime?.provider.configured ? 'ExchangeRate-API' : '待配置'
         }}</strong>
-        <small>人民币基准 · 各币种独立</small>
+        <small>
+          <a href="https://www.exchangerate-api.com" target="_blank" rel="noreferrer">
+            {{ exchangeRateAttribution }}
+          </a>
+        </small>
       </article>
       <article>
         <span>已启用币种</span>
@@ -50,7 +54,7 @@
         <small>
           {{
             page.purchaseAutomation.runtime?.settings.autoEnabled
-              ? '每小时第 5 分钟执行'
+              ? '每天北京时间 09:05 执行'
               : '自动采集已停用'
           }}
         </small>
@@ -301,6 +305,7 @@ const props = defineProps<{
 }>();
 
 const keyword = ref('');
+const exchangeRateAttribution = 'Rates By Exchange Rate API';
 const currentPage = ref(1);
 const pageSize = ref(10);
 const enabledQuoteCount = computed(
