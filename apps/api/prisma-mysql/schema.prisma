@@ -336,6 +336,7 @@ enum IdBusinessV2PurchaseRateRoundingMode {
 enum IdBusinessV2PurchaseMarketRateSource {
   manual
   currencyapi
+  exchange_rate_api
 }
 
 enum IdBusinessV2PurchaseRateFetchRunStatus {
@@ -683,22 +684,22 @@ model IdBusinessV2Customer {
   phoneHash            String?                  @map("phone_hash") @db.VarChar(64)
   phoneMasked          String?                  @map("phone_masked") @db.VarChar(80)
   phoneTail            String?                  @map("phone_tail") @db.VarChar(8)
-  phoneSearchTokens    Json                 @default("[]") @map("phone_search_tokens")
+  phoneSearchTokens    Json                     @default("[]") @map("phone_search_tokens")
   wechat               String?                  @db.VarChar(120)
   wechatEncrypted      String?                  @map("wechat_encrypted") @db.Text
   wechatHash           String?                  @map("wechat_hash") @db.VarChar(64)
   wechatMasked         String?                  @map("wechat_masked") @db.VarChar(120)
-  wechatSearchTokens   Json                 @default("[]") @map("wechat_search_tokens")
+  wechatSearchTokens   Json                     @default("[]") @map("wechat_search_tokens")
   qq                   String?                  @db.VarChar(120)
   qqEncrypted          String?                  @map("qq_encrypted") @db.Text
   qqHash               String?                  @map("qq_hash") @db.VarChar(64)
   qqMasked             String?                  @map("qq_masked") @db.VarChar(120)
-  qqSearchTokens       Json                 @default("[]") @map("qq_search_tokens")
+  qqSearchTokens       Json                     @default("[]") @map("qq_search_tokens")
   whatsappEncrypted    String?                  @map("whatsapp_encrypted") @db.Text
   whatsappHash         String?                  @map("whatsapp_hash") @db.VarChar(64)
   whatsappMasked       String?                  @map("whatsapp_masked") @db.VarChar(80)
   whatsappTail         String?                  @map("whatsapp_tail") @db.VarChar(8)
-  whatsappSearchTokens Json                 @default("[]") @map("whatsapp_search_tokens")
+  whatsappSearchTokens Json                     @default("[]") @map("whatsapp_search_tokens")
   sourceOptionId       String?                  @map("source_option_id") @db.Char(36)
   recordStatus         IdBusinessV2RecordStatus @default(active) @map("record_status")
   remark               String?                  @db.Text
@@ -766,13 +767,13 @@ model IdBusinessV2Account {
   appleIdEncrypted          String                      @map("apple_id_encrypted") @db.Text
   appleIdHash               String                      @unique @map("apple_id_hash") @db.VarChar(64)
   appleIdMasked             String                      @map("apple_id_masked") @db.VarChar(255)
-  appleIdSearchTokens       Json                    @default("[]") @map("apple_id_search_tokens")
+  appleIdSearchTokens       Json                        @default("[]") @map("apple_id_search_tokens")
   passwordEncrypted         String?                     @map("password_encrypted") @db.Text
   phoneEncrypted            String?                     @map("phone_encrypted") @db.Text
   phoneHash                 String?                     @map("phone_hash") @db.VarChar(64)
   phoneMasked               String?                     @map("phone_masked") @db.VarChar(80)
   phoneTail                 String?                     @map("phone_tail") @db.VarChar(8)
-  phoneSearchTokens         Json                    @default("[]") @map("phone_search_tokens")
+  phoneSearchTokens         Json                        @default("[]") @map("phone_search_tokens")
   securityInfoEncrypted     String?                     @map("security_info_encrypted") @db.Text
   countryOptionId           String                      @map("country_option_id") @db.Char(36)
   statusOptionId            String                      @map("status_option_id") @db.Char(36)
@@ -851,7 +852,7 @@ model IdBusinessV2GiftCard {
   codeHash                   String                          @unique @map("code_hash") @db.VarChar(64)
   codeMasked                 String                          @map("code_masked") @db.VarChar(80)
   codeTail                   String                          @map("code_tail") @db.VarChar(8)
-  codeSearchTokens           Json                        @default("[]") @map("code_search_tokens")
+  codeSearchTokens           Json                            @default("[]") @map("code_search_tokens")
   faceValue                  Decimal                         @map("face_value") @db.Decimal(18, 4)
   exchangeRate               Decimal                         @map("exchange_rate") @db.Decimal(18, 8)
   exchangeRateSource         String                          @default("manual_input") @map("exchange_rate_source") @db.VarChar(40)
@@ -1320,7 +1321,7 @@ model IdBusinessV2Order {
   websiteAccountEncrypted      String?                             @map("website_account_encrypted") @db.Text
   websiteAccountHash           String?                             @map("website_account_hash") @db.VarChar(64)
   websiteAccountMasked         String?                             @map("website_account_masked") @db.VarChar(255)
-  websiteAccountSearchTokens   Json                            @default("[]") @map("website_account_search_tokens")
+  websiteAccountSearchTokens   Json                                @default("[]") @map("website_account_search_tokens")
   receivedAmount               Decimal                             @default(0) @map("received_amount") @db.Decimal(18, 4)
   receivedOriginalAmount       Decimal                             @default(0) @map("received_original_amount") @db.Decimal(18, 4)
   receivedCurrency             IdBusinessV2FinanceCurrency         @default(CNY) @map("received_currency")
@@ -1607,8 +1608,8 @@ model IdBusinessV2PurchaseCurrency {
 model IdBusinessV2PurchaseRateSettings {
   id                 Int       @id @default(1)
   autoEnabled        Boolean   @default(true) @map("auto_enabled")
-  intervalMinutes    Int       @default(60) @map("interval_minutes")
-  staleMinutes       Int       @default(120) @map("stale_minutes")
+  intervalMinutes    Int       @default(1440) @map("interval_minutes")
+  staleMinutes       Int       @default(1800) @map("stale_minutes")
   abnormalChangeRate Decimal   @default(0.1) @map("abnormal_change_rate") @db.Decimal(9, 8)
   nextRunAt          DateTime? @map("next_run_at") @db.DateTime(6)
   updatedByUserId    String?   @map("updated_by_user_id") @db.Char(36)
@@ -1626,10 +1627,10 @@ model IdBusinessV2PurchaseRateFetchRun {
   id                     String                                 @id @default(uuid()) @db.Char(36)
   status                 IdBusinessV2PurchaseRateFetchRunStatus @default(running)
   triggerType            IdBusinessV2ExchangeRateTriggerType    @map("trigger_type")
-  provider               IdBusinessV2PurchaseMarketRateSource   @default(currencyapi)
+  provider               IdBusinessV2PurchaseMarketRateSource   @default(exchange_rate_api)
   baseCurrency           String                                 @default("CNY") @map("base_currency") @db.VarChar(3)
-  requestedCurrencyCodes Json                               @default("[]") @map("requested_currency_codes")
-  abnormalCurrencyCodes  Json                               @default("[]") @map("abnormal_currency_codes")
+  requestedCurrencyCodes Json                                   @default("[]") @map("requested_currency_codes")
+  abnormalCurrencyCodes  Json                                   @default("[]") @map("abnormal_currency_codes")
   startedAt              DateTime                               @default(now()) @map("started_at") @db.DateTime(6)
   finishedAt             DateTime?                              @map("finished_at") @db.DateTime(6)
   providerUpdatedAt      DateTime?                              @map("provider_updated_at") @db.DateTime(6)
@@ -1827,7 +1828,7 @@ model IdBusinessV2ExchangeRateQuoteSample {
   minAmountRmb        Decimal? @map("min_amount_rmb") @db.Decimal(24, 8)
   maxAmountRmb        Decimal? @map("max_amount_rmb") @db.Decimal(24, 8)
   tradableAmountUsdt  Decimal  @map("tradable_amount_usdt") @db.Decimal(24, 8)
-  paymentMethods      Json @default("[]") @map("payment_methods")
+  paymentMethods      Json     @default("[]") @map("payment_methods")
   merchantType        String   @map("merchant_type") @db.VarChar(80)
   completedOrderCount Int      @map("completed_order_count")
   completionRate      Decimal  @map("completion_rate") @db.Decimal(9, 8)

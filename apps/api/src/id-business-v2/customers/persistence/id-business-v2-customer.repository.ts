@@ -6,7 +6,10 @@ import {
   verifySensitiveAccessApproval,
   type SensitiveAccessApprovalCheckInput
 } from '../../../common/sensitive-access-approval';
-import type { V2CommandTransaction } from '../../runtime/public-api';
+import {
+  buildV2StringArrayContainsFilter,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 
 export const CUSTOMER_INCLUDE = {
   sourceOption: {
@@ -178,16 +181,12 @@ export class IdBusinessV2CustomerRepository {
             { wechat: { contains: input.keyword } },
             { wechatHash: input.contactHash ?? undefined },
             {
-              wechatSearchTokens: input.wechatSearchTokens.length
-                ? { array_contains: input.wechatSearchTokens }
-                : undefined
+              wechatSearchTokens: buildV2StringArrayContainsFilter(input.wechatSearchTokens)
             },
             { qq: { contains: input.keyword } },
             { qqHash: input.contactHash ?? undefined },
             {
-              qqSearchTokens: input.qqSearchTokens.length
-                ? { array_contains: input.qqSearchTokens }
-                : undefined
+              qqSearchTokens: buildV2StringArrayContainsFilter(input.qqSearchTokens)
             },
             {
               phoneTail: {
@@ -196,9 +195,7 @@ export class IdBusinessV2CustomerRepository {
             },
             { phoneHash: input.contactHash ?? undefined },
             {
-              phoneSearchTokens: input.phoneSearchTokens.length
-                ? { array_contains: input.phoneSearchTokens }
-                : undefined
+              phoneSearchTokens: buildV2StringArrayContainsFilter(input.phoneSearchTokens)
             },
             {
               whatsappTail: {
@@ -207,9 +204,7 @@ export class IdBusinessV2CustomerRepository {
             },
             { whatsappHash: input.contactHash ?? undefined },
             {
-              whatsappSearchTokens: input.whatsappSearchTokens.length
-                ? { array_contains: input.whatsappSearchTokens }
-                : undefined
+              whatsappSearchTokens: buildV2StringArrayContainsFilter(input.whatsappSearchTokens)
             }
           ]
         : undefined

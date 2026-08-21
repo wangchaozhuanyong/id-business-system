@@ -255,7 +255,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
           },
           {
             appleIdSearchTokens: {
-              array_contains: ['apple-id-search-hash']
+              hasEvery: ['apple-id-search-hash']
             }
           },
           {

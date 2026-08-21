@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2BalanceLedger, IdBusinessV2Order, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import {
+  buildV2StringArrayContainsFilter,
   mapAmount4,
   mapOptionalAmount4,
   mapRate8,
@@ -231,7 +232,7 @@ export class IdBusinessV2OrdersRepository {
         ? this.prisma.idBusinessV2Account.findMany({
             where: {
               deletedAt: null,
-              appleIdSearchTokens: { array_contains: input.appleIdTokens }
+              appleIdSearchTokens: buildV2StringArrayContainsFilter(input.appleIdTokens)
             },
             select: { id: true, appleIdEncrypted: true }
           })
@@ -241,7 +242,9 @@ export class IdBusinessV2OrdersRepository {
             where: {
               deletedAt: null,
               websiteAccountEncrypted: { not: null },
-              websiteAccountSearchTokens: { array_contains: input.websiteAccountTokens }
+              websiteAccountSearchTokens: buildV2StringArrayContainsFilter(
+                input.websiteAccountTokens
+              )
             },
             select: { id: true, websiteAccountEncrypted: true }
           })
@@ -288,15 +291,11 @@ export class IdBusinessV2OrdersRepository {
                 { name: { contains: customerKeyword } },
                 { wechat: { contains: customerKeyword } },
                 {
-                  wechatSearchTokens: wechatSearchTokens.length
-                    ? { array_contains: wechatSearchTokens }
-                    : undefined
+                  wechatSearchTokens: buildV2StringArrayContainsFilter(wechatSearchTokens)
                 },
                 { qq: { contains: customerKeyword } },
                 {
-                  qqSearchTokens: qqSearchTokens.length
-                    ? { array_contains: qqSearchTokens }
-                    : undefined
+                  qqSearchTokens: buildV2StringArrayContainsFilter(qqSearchTokens)
                 },
                 {
                   phoneTail: {
@@ -305,9 +304,7 @@ export class IdBusinessV2OrdersRepository {
                 },
                 { phoneHash: contactHash ?? undefined },
                 {
-                  phoneSearchTokens: phoneSearchTokens.length
-                    ? { array_contains: phoneSearchTokens }
-                    : undefined
+                  phoneSearchTokens: buildV2StringArrayContainsFilter(phoneSearchTokens)
                 },
                 {
                   whatsappTail: {
@@ -316,9 +313,7 @@ export class IdBusinessV2OrdersRepository {
                 },
                 { whatsappHash: contactHash ?? undefined },
                 {
-                  whatsappSearchTokens: whatsappSearchTokens.length
-                    ? { array_contains: whatsappSearchTokens }
-                    : undefined
+                  whatsappSearchTokens: buildV2StringArrayContainsFilter(whatsappSearchTokens)
                 }
               ]
             : undefined
@@ -531,9 +526,7 @@ export class IdBusinessV2OrdersRepository {
             { appleIdMasked: { contains: criteria.keyword } },
             { appleIdHash: criteria.keywordHash ?? undefined },
             {
-              appleIdSearchTokens: criteria.keywordSearchTokens.length
-                ? { array_contains: criteria.keywordSearchTokens }
-                : undefined
+              appleIdSearchTokens: buildV2StringArrayContainsFilter(criteria.keywordSearchTokens)
             },
             {
               soldByOrder: {

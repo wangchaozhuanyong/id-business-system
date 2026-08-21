@@ -1,6 +1,6 @@
 # AWS 东京 MySQL 部署
 
-当前部署使用单台东京区 EC2，Docker Compose 同机运行 Caddy、管理端、NestJS API 和 MySQL 8.4。
+目标部署使用单台东京区 EC2，Docker Compose 同机运行 Caddy、管理端、NestJS API 和 MySQL 8.4。
 MySQL 只绑定宿主机 `127.0.0.1`，安全组不得开放 3306；公网仅开放 80/443，SSH 仅允许管理员
 当前公网 IP。
 
@@ -24,6 +24,9 @@ MySQL 只绑定宿主机 `127.0.0.1`，安全组不得开放 3306；公网仅开
 4. 执行 `scripts/migrate-postgres-to-mysql.mjs`，只复制当前系统 schema 中存在的表。
 5. 必须确认目标为空，并核对每张表和总行数后再启动 API。
 
+迁移脚本只在同一事务连接内设置 `@idv2_data_migration`，临时跳过会改写展示快照或校验业务流程的
+`BEFORE/AFTER INSERT` 触发器；事务结束前会恢复会话状态。不可将该变量写入服务器全局配置。
+
 ## 启停和检查
 
 ```bash
@@ -32,8 +35,10 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ps
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml logs --tail=200 api
 ```
 
-没有真实 `CURRENCY_API_KEY` 时，生产配置必须将自动采集和联网采集设为 `false`。现有收购价、
-手工维护和计算逻辑仍可使用，配置真实 Key 后再单独开启自动采集。
+收购汇率使用 ExchangeRate-API 的免 Key 开放接口，每天北京时间 09:05 自动采集一次；生产配置使用
+`CURRENCY_RATE_PROVIDER=exchange_rate_api`，无需申请或保存 `CURRENCY_API_KEY`。若供应商异常，可通过
+`ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED=false` 立即停用联网采集，现有收购价、手工维护和计算逻辑
+仍可继续使用。
 
 服务器启用 `id-business-v2-mysql-backup.timer`，每天将事务一致的逻辑备份写到
 `/opt/id-business-v2/backups/mysql`。配置 `MYSQL_BACKUP_S3_BUCKET` 后，同一份备份还会通过实例 IAM

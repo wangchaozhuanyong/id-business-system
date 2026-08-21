@@ -22,6 +22,7 @@ const destination = new PrismaClient({
   transactionOptions: { maxWait: 30_000, timeout: 60 * 60 * 1_000 }
 });
 let sourceClosed = false;
+let foreignKeyConstraintCount = 0;
 
 try {
   await source.connect();
@@ -53,7 +54,8 @@ try {
     dryRun,
     migrationTables,
     sourceCounts,
-    ignoredSourceTableCount: [...sourceTables].filter((table) => !destinationTables.has(table)).length
+    ignoredSourceTableCount: [...sourceTables].filter((table) => !destinationTables.has(table))
+      .length
   });
   if (dryRun) process.exitCode = 0;
   else {
@@ -75,11 +77,14 @@ try {
     await destination.$transaction(
       async (tx) => {
         await tx.$executeRawUnsafe('SET SESSION FOREIGN_KEY_CHECKS = 0');
+        await tx.$executeRawUnsafe('SET @idv2_data_migration = 1');
         try {
           for (const tableCopy of tableCopies) {
             await writeDestinationTable(tx, tableCopy);
           }
+          foreignKeyConstraintCount = await verifyDestinationForeignKeys(tx);
         } finally {
+          await tx.$executeRawUnsafe('SET @idv2_data_migration = NULL');
           await tx.$executeRawUnsafe('SET SESSION FOREIGN_KEY_CHECKS = 1');
         }
       },
@@ -102,7 +107,9 @@ try {
           dryRun: false,
           migratedTableCount: migrationTables.length,
           copiedRows,
-          rowCountsVerified: true
+          rowCountsVerified: true,
+          foreignKeysVerified: true,
+          foreignKeyConstraintCount
         },
         null,
         2
@@ -131,9 +138,7 @@ async function writeDestinationTable(destination, tableCopy) {
   for (let offset = 0; offset < rows.length; offset += INSERT_BATCH_SIZE) {
     const batch = rows.slice(offset, offset + INSERT_BATCH_SIZE);
     if (batch.length === 0) continue;
-    const placeholders = batch
-      .map(() => `(${columns.map(() => '?').join(', ')})`)
-      .join(', ');
+    const placeholders = batch.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
     const values = batch.flatMap((row) =>
       columns.map((column) => normalizeValue(row[column.name], column.dataType))
     );
@@ -183,13 +188,78 @@ async function listMysqlColumns(client, table) {
 }
 
 async function postgresCount(client, table) {
-  const result = await client.query(`SELECT COUNT(*)::bigint AS count FROM ${quotePostgres(table)}`);
+  const result = await client.query(
+    `SELECT COUNT(*)::bigint AS count FROM ${quotePostgres(table)}`
+  );
   return Number(result.rows[0]?.count ?? 0);
 }
 
 async function mysqlCount(client, table) {
   const rows = await client.$queryRawUnsafe(`SELECT COUNT(*) AS count FROM ${quoteMysql(table)}`);
   return Number(rows[0]?.count ?? 0);
+}
+
+async function verifyDestinationForeignKeys(destination) {
+  const rows = await destination.$queryRawUnsafe(
+    `SELECT
+       CONSTRAINT_NAME AS constraintName,
+       TABLE_NAME AS tableName,
+       COLUMN_NAME AS columnName,
+       REFERENCED_TABLE_NAME AS referencedTableName,
+       REFERENCED_COLUMN_NAME AS referencedColumnName
+     FROM information_schema.KEY_COLUMN_USAGE
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND REFERENCED_TABLE_NAME IS NOT NULL
+     ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION`
+  );
+  const constraints = new Map();
+  for (const row of rows) {
+    const key = `${row.tableName}:${row.constraintName}`;
+    const constraint = constraints.get(key) ?? {
+      name: row.constraintName,
+      table: row.tableName,
+      referencedTable: row.referencedTableName,
+      columns: []
+    };
+    if (constraint.referencedTable !== row.referencedTableName) {
+      throw new Error(`外键 ${row.constraintName} 的目标表定义不一致`);
+    }
+    constraint.columns.push({
+      column: row.columnName,
+      referencedColumn: row.referencedColumnName
+    });
+    constraints.set(key, constraint);
+  }
+
+  for (const constraint of constraints.values()) {
+    assertIdentifier(constraint.table);
+    assertIdentifier(constraint.referencedTable);
+    for (const column of constraint.columns) {
+      assertIdentifier(column.column);
+      assertIdentifier(column.referencedColumn);
+    }
+    const join = constraint.columns
+      .map(
+        ({ column, referencedColumn }) =>
+          `child.${quoteMysql(column)} = parent.${quoteMysql(referencedColumn)}`
+      )
+      .join(' AND ');
+    const present = constraint.columns
+      .map(({ column }) => `child.${quoteMysql(column)} IS NOT NULL`)
+      .join(' AND ');
+    const missing = `parent.${quoteMysql(constraint.columns[0].referencedColumn)} IS NULL`;
+    const result = await destination.$queryRawUnsafe(
+      `SELECT COUNT(*) AS count
+       FROM ${quoteMysql(constraint.table)} AS child
+       LEFT JOIN ${quoteMysql(constraint.referencedTable)} AS parent ON ${join}
+       WHERE ${present} AND ${missing}`
+    );
+    const orphanCount = Number(result[0]?.count ?? 0);
+    if (orphanCount !== 0) {
+      throw new Error(`外键 ${constraint.name} 存在 ${orphanCount} 条孤立记录，迁移已回滚`);
+    }
+  }
+  return constraints.size;
 }
 
 function normalizeValue(value, dataType) {

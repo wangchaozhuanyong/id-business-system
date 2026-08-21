@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { verifySensitiveAccessApproval } from '../../../common/sensitive-access-approval';
-import { mapAmount4, mapRate8, type V2CommandTransaction } from '../../runtime/public-api';
+import {
+  buildV2StringArrayContainsFilter,
+  mapAmount4,
+  mapRate8,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 import type {
   GiftCardCreditAccountRecord,
   GiftCardCreditLedgerRecord,
@@ -150,9 +155,7 @@ export class IdBusinessV2GiftCardsRepository {
             { codeMasked: { contains: criteria.keyword } },
             { codeTail: { contains: criteria.keyword.slice(-8) } },
             {
-              codeSearchTokens: criteria.codeSearchTokens.length
-                ? { array_contains: criteria.codeSearchTokens }
-                : undefined
+              codeSearchTokens: buildV2StringArrayContainsFilter(criteria.codeSearchTokens)
             },
             {
               account: {
@@ -211,9 +214,7 @@ export class IdBusinessV2GiftCardsRepository {
             {
               giftCard: {
                 is: {
-                  codeSearchTokens: criteria.codeSearchTokens.length
-                    ? { array_contains: criteria.codeSearchTokens }
-                    : undefined
+                  codeSearchTokens: buildV2StringArrayContainsFilter(criteria.codeSearchTokens)
                 }
               }
             },

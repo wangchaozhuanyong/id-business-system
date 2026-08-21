@@ -10,6 +10,7 @@ import {
   Amount4,
   Rate8,
   buildIdBusinessV2BlindQueryTokens,
+  buildV2StringArrayContainsFilter,
   mapAmount4,
   mapRate8,
   mapStringArray,
@@ -584,9 +585,7 @@ export class IdBusinessV2AccountsRepository {
             { appleIdMasked: { contains: keyword } },
             { appleIdHash: hash(normalizedAppleId) ?? undefined },
             {
-              appleIdSearchTokens: appleIdSearchTokens.length
-                ? { array_contains: appleIdSearchTokens }
-                : undefined
+              appleIdSearchTokens: buildV2StringArrayContainsFilter(appleIdSearchTokens)
             },
             {
               phoneTail: {
@@ -595,9 +594,7 @@ export class IdBusinessV2AccountsRepository {
             },
             { phoneHash: hash(normalizedPhone) ?? undefined },
             {
-              phoneSearchTokens: phoneSearchTokens.length
-                ? { array_contains: phoneSearchTokens }
-                : undefined
+              phoneSearchTokens: buildV2StringArrayContainsFilter(phoneSearchTokens)
             },
             { supplierOption: { name: { contains: keyword } } }
           ]

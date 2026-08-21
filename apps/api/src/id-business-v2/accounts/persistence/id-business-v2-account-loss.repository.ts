@@ -1,7 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
-import { Amount4, mapAmount4, type V2CommandTransaction } from '../../runtime/public-api';
+import {
+  Amount4,
+  buildV2StringArrayContainsFilter,
+  mapAmount4,
+  type V2CommandTransaction
+} from '../../runtime/public-api';
 
 const LOSS_USER_SELECT = {
   id: true,
@@ -101,9 +106,7 @@ export class IdBusinessV2AccountLossRepository {
             {
               account: {
                 is: {
-                  appleIdSearchTokens: input.appleIdSearchTokens.length
-                    ? { array_contains: input.appleIdSearchTokens }
-                    : undefined
+                  appleIdSearchTokens: buildV2StringArrayContainsFilter(input.appleIdSearchTokens)
                 }
               }
             },

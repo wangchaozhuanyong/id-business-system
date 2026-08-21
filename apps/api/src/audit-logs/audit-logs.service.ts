@@ -221,10 +221,7 @@ export class AuditLogsService {
       user: operator
         ? {
             is: {
-              OR: [
-                { username: { contains: operator } },
-                { displayName: { contains: operator } }
-              ]
+              OR: [{ username: { contains: operator } }, { displayName: { contains: operator } }]
             }
           }
         : undefined,
@@ -237,10 +234,7 @@ export class AuditLogsService {
             {
               user: {
                 is: {
-                  OR: [
-                    { username: { contains: keyword } },
-                    { displayName: { contains: keyword } }
-                  ]
+                  OR: [{ username: { contains: keyword } }, { displayName: { contains: keyword } }]
                 }
               }
             }
@@ -264,10 +258,7 @@ export class AuditLogsService {
       user: operator
         ? {
             is: {
-              OR: [
-                { username: { contains: operator } },
-                { displayName: { contains: operator } }
-              ]
+              OR: [{ username: { contains: operator } }, { displayName: { contains: operator } }]
             }
           }
         : undefined,
@@ -280,10 +271,7 @@ export class AuditLogsService {
             {
               user: {
                 is: {
-                  OR: [
-                    { username: { contains: keyword } },
-                    { displayName: { contains: keyword } }
-                  ]
+                  OR: [{ username: { contains: keyword } }, { displayName: { contains: keyword } }]
                 }
               }
             }

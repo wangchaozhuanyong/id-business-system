@@ -64,10 +64,7 @@ export class IdBusinessV2ManagedMailboxService {
       ...(query.status ? { status: query.status } : {}),
       ...(query.q
         ? {
-            OR: [
-              { email: { contains: query.q } },
-              { label: { contains: query.q } }
-            ]
+            OR: [{ email: { contains: query.q } }, { label: { contains: query.q } }]
           }
         : {})
     };

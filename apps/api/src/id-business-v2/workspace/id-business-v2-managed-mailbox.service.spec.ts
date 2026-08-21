@@ -95,10 +95,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       where: {
         provider: 'gmail',
         status: 'active',
-        OR: [
-          { email: { contains: 'member' } },
-          { label: { contains: 'member' } }
-        ]
+        OR: [{ email: { contains: 'member' } }, { label: { contains: 'member' } }]
       }
     });
     expect(result).toMatchObject({ page: 2, pageSize: 10, total: 1 });
