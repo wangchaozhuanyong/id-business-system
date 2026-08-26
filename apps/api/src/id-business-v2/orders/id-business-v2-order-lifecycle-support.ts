@@ -141,7 +141,8 @@ export class IdBusinessV2OrderLifecycleSupport {
     idempotencyKey: string,
     remark: string,
     operator?: AuthenticatedUser,
-    requestedBalanceAmount?: Amount4
+    requestedBalanceAmount?: Amount4,
+    requestedCostAmount?: Amount4
   ) {
     if (!order.accountId || consumption.accountId !== order.accountId) {
       throw new ConflictException('订单消费流水与绑定 ID 不一致，不能恢复余额');
@@ -180,9 +181,14 @@ export class IdBusinessV2OrderLifecycleSupport {
     if (balanceAmount.gt(consumption.balanceAmount)) {
       throw new BadRequestException('退回 ID 余额不能超过本单原消费余额');
     }
-    const costAmount = balanceAmount.equals(consumption.balanceAmount)
-      ? consumption.costAmount
-      : consumption.costAmount.ratio(consumption.balanceAmount).apply(balanceAmount);
+    const costAmount =
+      requestedCostAmount ??
+      (balanceAmount.equals(consumption.balanceAmount)
+        ? consumption.costAmount
+        : consumption.costAmount.ratio(consumption.balanceAmount).apply(balanceAmount));
+    if (costAmount.gt(consumption.costAmount)) {
+      throw new BadRequestException('恢复人民币成本不能超过本单原消费成本');
+    }
     const movement = this.balanceCalculator.calculateReversalCredit(
       {
         currentBalance: account.currentBalance,

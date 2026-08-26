@@ -142,7 +142,7 @@ describe('IdBusinessV2OrderLockService', () => {
       findFirst: vi.fn()
     },
     idBusinessV2BalanceLedger: {
-      findUnique: vi.fn()
+      findFirst: vi.fn()
     },
     idBusinessV2Activation: {
       findFirst: vi.fn()
@@ -186,7 +186,7 @@ describe('IdBusinessV2OrderLockService', () => {
       })
     );
     tx.idBusinessV2Order.findFirst.mockResolvedValue(null);
-    tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(null);
+    tx.idBusinessV2BalanceLedger.findFirst.mockResolvedValue(null);
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
@@ -574,7 +574,7 @@ describe('IdBusinessV2OrderLockService', () => {
         status: 'completed'
       })
     ]);
-    tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(makeConsumption());
+    tx.idBusinessV2BalanceLedger.findFirst.mockResolvedValue(makeConsumption());
 
     const result = await service.prepareOrderConsumptionInTransaction(tx as never, {
       orderId,
@@ -593,7 +593,7 @@ describe('IdBusinessV2OrderLockService', () => {
         accountId
       })
     ]);
-    tx.idBusinessV2BalanceLedger.findUnique.mockResolvedValue(makeConsumption());
+    tx.idBusinessV2BalanceLedger.findFirst.mockResolvedValue(makeConsumption());
 
     await expect(
       service.prepareOrderConsumptionInTransaction(tx as never, {

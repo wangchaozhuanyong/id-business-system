@@ -7,6 +7,8 @@ export type IdBusinessV2BalanceLedgerEntryType =
   | 'gift_card_withdrawal'
   | 'order_consumption'
   | 'order_consumption_reversal'
+  | 'order_upgrade_balance_return'
+  | 'order_upgrade_balance_return_reversal'
   | 'opening_balance'
   | 'manual_adjustment'
   | 'account_loss';

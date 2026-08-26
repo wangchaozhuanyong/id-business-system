@@ -6,6 +6,7 @@ import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2SensitiveAccessModule } from '../sensitive-access/public-api';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
+import { IdBusinessV2OrderBalanceReturnService } from './id-business-v2-order-balance-return.service';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
 import { IdBusinessV2OrderLifecycleService } from './id-business-v2-order-lifecycle.service';
@@ -32,6 +33,7 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
     IdBusinessV2OrderLockService,
     IdBusinessV2OrderEntryService,
     IdBusinessV2OrderConsumptionService,
+    IdBusinessV2OrderBalanceReturnService,
     IdBusinessV2OrderCompletionService,
     IdBusinessV2OrderLifecycleService
   ],
@@ -41,6 +43,7 @@ import { IdBusinessV2OrdersRepository } from './persistence/id-business-v2-order
     IdBusinessV2OrderLockService,
     IdBusinessV2OrderEntryService,
     IdBusinessV2OrderConsumptionService,
+    IdBusinessV2OrderBalanceReturnService,
     IdBusinessV2OrderCompletionService,
     IdBusinessV2OrderLifecycleService
   ]

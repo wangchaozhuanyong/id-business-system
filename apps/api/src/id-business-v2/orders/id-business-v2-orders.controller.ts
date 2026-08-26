@@ -11,6 +11,12 @@ import type { RecoverIdBusinessV2SoldAccountDto } from './dto/recover-id-busines
 import type { RefundIdBusinessV2OrderDto } from './dto/refund-id-business-v2-order.dto';
 import type { SearchIdBusinessV2OrderCandidatesDto } from './dto/search-id-business-v2-order-candidates.dto';
 import type { UpdateIdBusinessV2OrderDto } from './dto/update-id-business-v2-order.dto';
+import type {
+  PreviewUpgradeBalanceReturnIdBusinessV2OrderDto,
+  RecordUpgradeBalanceReturnIdBusinessV2OrderDto,
+  ReverseUpgradeBalanceReturnIdBusinessV2OrderDto
+} from './dto/upgrade-balance-return-id-business-v2-order.dto';
+import { IdBusinessV2OrderBalanceReturnService } from './id-business-v2-order-balance-return.service';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
 import { IdBusinessV2OrderConsumptionService } from './id-business-v2-order-consumption.service';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
@@ -26,6 +32,7 @@ export class IdBusinessV2OrdersController {
     private readonly orderEntryService: IdBusinessV2OrderEntryService,
     private readonly orderConsumptionService: IdBusinessV2OrderConsumptionService,
     private readonly orderCompletionService: IdBusinessV2OrderCompletionService,
+    private readonly orderBalanceReturnService: IdBusinessV2OrderBalanceReturnService,
     private readonly orderLifecycleService: IdBusinessV2OrderLifecycleService,
     private readonly optionsService: IdBusinessV2OptionsService
   ) {}
@@ -212,6 +219,35 @@ export class IdBusinessV2OrdersController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.orderLifecycleService.refund(id, dto, operator);
+  }
+
+  @Post(':id/upgrade-balance-return/preview')
+  @RequirePermissions('apple.order.update')
+  previewUpgradeBalanceReturn(
+    @Param('id') id: string,
+    @Body() dto: PreviewUpgradeBalanceReturnIdBusinessV2OrderDto
+  ) {
+    return this.orderBalanceReturnService.preview(id, dto);
+  }
+
+  @Post(':id/upgrade-balance-return')
+  @RequirePermissions('apple.order.update')
+  recordUpgradeBalanceReturn(
+    @Param('id') id: string,
+    @Body() dto: RecordUpgradeBalanceReturnIdBusinessV2OrderDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderBalanceReturnService.record(id, dto, operator);
+  }
+
+  @Post(':id/upgrade-balance-return/reverse')
+  @RequirePermissions('apple.order.update')
+  reverseUpgradeBalanceReturn(
+    @Param('id') id: string,
+    @Body() dto: ReverseUpgradeBalanceReturnIdBusinessV2OrderDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.orderBalanceReturnService.reverse(id, dto, operator);
   }
 
   @Post(':id/cancel')

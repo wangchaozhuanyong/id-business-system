@@ -16,6 +16,10 @@ const sensitiveSearchMigration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260814020000_sensitive_search_blind_indexes/migration.sql'),
   'utf8'
 );
+const upgradeBalanceReturnMigration = readFileSync(
+  resolve(apiRoot, 'prisma/migrations/20260826101000_order_upgrade_balance_return/migration.sql'),
+  'utf8'
+);
 
 function prismaModel(name: string) {
   const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
@@ -113,7 +117,10 @@ describe('V2501 order schema contract', () => {
     expect(schema).toContain('order_consumption');
     expect(schema).toContain('order_consumption_reversal');
     expect(ledger).toContain('orderId');
-    expect(ledger).toContain('@@unique([orderId, entryType])');
+    expect(ledger).toContain('@@index([orderId, entryType])');
+    expect(upgradeBalanceReturnMigration).toContain(
+      'id_business_v2_balance_ledger_single_order_entry_key'
+    );
     expect(ledger).not.toMatch(/\bupdatedAt\b|\bdeletedAt\b/);
     expect(migration).toContain('id_business_v2_balance_ledger_business_reference_check');
     expect(migration).toContain("'order_consumption'");
@@ -122,6 +129,24 @@ describe('V2501 order schema contract', () => {
     expect(migration).toContain("'credit'");
     expect(activation).toMatch(/orderId\s+String\s+@unique/);
     expect(migration).toContain('id_business_v2_activations_due_at_check');
+  });
+
+  it('stores upgrade returns as immutable original-currency evidence with reversible ledgers', () => {
+    const order = prismaModel('IdBusinessV2Order');
+    const balanceReturn = prismaModel('IdBusinessV2OrderBalanceReturn');
+
+    expect(order).toContain('balanceCurrencyCode');
+    expect(balanceReturn).toContain('returnedBalanceAmount');
+    expect(balanceReturn).toContain('restoredBalanceCostAmount');
+    expect(balanceReturn).toContain('originalProfitAmount');
+    expect(balanceReturn).toContain('adjustedProfitAmount');
+    expect(balanceReturn).toContain('reversalIdempotencyKey');
+    expect(schema).toContain('order_upgrade_balance_return');
+    expect(schema).toContain('order_upgrade_balance_return_reversal');
+    expect(upgradeBalanceReturnMigration).toContain(
+      'CREATE TABLE "id_business_v2_order_balance_returns"'
+    );
+    expect(upgradeBalanceReturnMigration).toContain('id_business_v2_order_balance_returns_guard');
   });
 
   it('adds the ID sale lifecycle in an incremental migration without rewriting history', () => {

@@ -132,7 +132,11 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     },
     idBusinessV2BalanceLedger: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn()
+    },
+    idBusinessV2OrderBalanceReturn: {
+      findFirst: vi.fn()
     },
     idBusinessV2Activation: {
       findUnique: vi.fn(),
@@ -226,12 +230,13 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       };
       return storedOrder;
     });
-    tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
-      const type = where.orderId_entryType?.entryType;
+    tx.idBusinessV2BalanceLedger.findFirst.mockImplementation(async ({ where }) => {
+      const type = where.entryType;
       if (type === 'order_consumption') return consumption;
       if (type === 'order_consumption_reversal') return reversal;
       return null;
     });
+    tx.idBusinessV2OrderBalanceReturn.findFirst.mockResolvedValue(null);
     tx.idBusinessV2BalanceLedger.create.mockImplementation(async ({ data }) => {
       reversal = makeReversal({
         ...data,
@@ -355,7 +360,8 @@ describe('IdBusinessV2OrderLifecycleService', () => {
       accountDisposition: 'retained',
       accountCostAmount: decimal('0'),
       balanceCostAmount: decimal('0'),
-      profitAmount: null
+      profitAmount: null,
+      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
     consumption = null;
     tx.$queryRaw.mockResolvedValueOnce([{ id: orderId }]).mockResolvedValueOnce([
@@ -988,6 +994,93 @@ describe('IdBusinessV2OrderLifecycleService', () => {
     );
   });
 
+  it('refunds only the balance and cost still remaining after an active upgrade return', async () => {
+    storedOrder = makeOrder({
+      status: 'completed',
+      balanceCostAmount: decimal('36'),
+      appliedBalanceCostAmount: decimal('36'),
+      profitAmount: decimal('61')
+    });
+    tx.idBusinessV2OrderBalanceReturn.findFirst.mockResolvedValue({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      orderId,
+      accountId,
+      activeKey: orderId,
+      status: 'active',
+      currencyCode: 'USD',
+      returnedBalanceAmount: decimal('8'),
+      restoredBalanceCostAmount: decimal('24'),
+      restoredAppliedBalanceCostAmount: decimal('24'),
+      originalProfitAmount: decimal('37'),
+      adjustedProfitAmount: decimal('61'),
+      balanceLedgerEntryId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      financeJournalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      idempotencyKey: 'upgrade-return-test-key',
+      reason: '升级 Pro 后平台实际退回',
+      createdByUserId: operator.id,
+      createdAt: updatedAt,
+      reversalBalanceLedgerEntryId: null,
+      reversalFinanceJournalId: null,
+      reversalIdempotencyKey: null,
+      reversalReason: null,
+      reversedByUserId: null,
+      reversedAt: null
+    });
+    tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = Array.from(strings).join('');
+      if (sql.includes('id_business_v2_accounts')) {
+        return [
+          {
+            id: accountId,
+            appleIdMasked: 'us***@example.com',
+            currentBalance: decimal('18'),
+            balanceCostAmount: decimal('54'),
+            purchaseCost: decimal('25'),
+            soldByOrderId: null,
+            ownershipTransferredAt: null,
+            lossReportedAt: null
+          }
+        ];
+      }
+      return [{ id: orderId }];
+    });
+
+    const result = await service.refund(
+      orderId,
+      {
+        refundCostAmount: '100',
+        reason: '客户整单退款',
+        balanceRefundMode: 'full',
+        idempotencyKey: 'lifecycle-key-1'
+      },
+      operator
+    );
+
+    expect(result.reversalLedger).toMatchObject({
+      balanceAmount: '12',
+      costAmount: '36'
+    });
+    expect(tx.idBusinessV2Account.update).toHaveBeenCalledWith({
+      where: { id: accountId },
+      data: {
+        currentBalance: '30',
+        balanceCostAmount: '90',
+        updatedByUserId: operator.id
+      }
+    });
+    expect(financePostingService.post).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          refundedBalanceAmount: '12',
+          restoredBalanceCostAmount: '36',
+          priorUpgradeReturnedBalanceAmount: '8',
+          priorUpgradeRestoredBalanceCostAmount: '24'
+        })
+      })
+    );
+  });
+
   it('returns restored after-sales balance cost to company inventory after the sale was corrected', async () => {
     storedOrder = makeOrder({
       status: 'completed',
@@ -1143,7 +1236,7 @@ describe('IdBusinessV2OrderLifecycleService', () => {
         },
         operator
       )
-    ).rejects.toThrow('退回 ID 余额不能超过本单原消费余额');
+    ).rejects.toThrow('退回 ID 余额不能超过本单尚未退回的余额');
 
     expect(tx.idBusinessV2BalanceLedger.create).not.toHaveBeenCalled();
     expect(financePostingService.post).not.toHaveBeenCalled();

@@ -62,6 +62,10 @@ export class IdBusinessV2OrderConsumptionService {
       if (!prepared.account || !prepared.activeLock) {
         throw new ConflictException('订单扣款前置证据不完整，请刷新后重试');
       }
+      const balanceCurrencyCode = prepared.account.currencyCode?.trim().toUpperCase();
+      if (!balanceCurrencyCode || !/^[A-Z]{3}$/.test(balanceCurrencyCode)) {
+        throw new ConflictException('订单绑定 ID 的余额币种缺失或无效，请先核对国家设置');
+      }
 
       const movement = this.balanceCalculator.calculateConsumption(
         {
@@ -131,6 +135,7 @@ export class IdBusinessV2OrderConsumptionService {
         accountCostAmount: accountCostAmount.toString(),
         appliedAccountCostAmount: appliedAccountCostAmount.toString(),
         balanceCostAmount: movement.costAmount.toString(),
+        balanceCurrencyCode,
         transferredBalanceCostAmount: '0',
         appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
         profitAmount: profitAmount.toString(),
@@ -156,6 +161,7 @@ export class IdBusinessV2OrderConsumptionService {
           refundCostAmount,
           profitAmount,
           movement,
+          balanceCurrencyCode,
           statusChangedAt
         },
         operator
@@ -264,6 +270,7 @@ export class IdBusinessV2OrderConsumptionService {
         averageCostBefore: V2DecimalInput;
         averageCostAfter: V2DecimalInput;
       };
+      balanceCurrencyCode: string;
       statusChangedAt: Date;
     },
     operator?: AuthenticatedUser
@@ -287,6 +294,7 @@ export class IdBusinessV2OrderConsumptionService {
         status: 'processing',
         statusChangedAt: input.statusChangedAt,
         consumedBalance: input.movement.balanceAmount.toString(),
+        balanceCurrencyCode: input.balanceCurrencyCode,
         balanceCostAmount: input.movement.costAmount.toString(),
         accountDisposition: input.accountDisposition,
         accountCostAmount: input.accountCostAmount.toString(),

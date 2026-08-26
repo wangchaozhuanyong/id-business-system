@@ -344,6 +344,8 @@ describe('IdBusinessV2OrdersService', () => {
         canEditCore,
         canEditPricing: ['pending', 'processing', 'failed'].includes(status),
         canRefund,
+        canRecordUpgradeBalanceReturn: status === 'completed',
+        canReverseUpgradeBalanceReturn: false,
         canCancel,
         canDelete
       });

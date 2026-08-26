@@ -145,7 +145,65 @@
             </div>
           </dl>
         </V2PanelSection>
-        <V2PanelSection heading-id="order-detail-timeline" title="时间与备注" step="03">
+        <V2PanelSection
+          v-if="page.detail.upgradeBalanceReturn"
+          heading-id="order-detail-upgrade-balance-return"
+          title="升级退币记录"
+          step="03"
+        >
+          <dl class="v2-order-detail__facts">
+            <div>
+              <dt>记录状态</dt>
+              <dd>
+                {{ page.detail.upgradeBalanceReturn.status === 'active' ? '已生效' : '已撤销' }}
+              </dd>
+            </div>
+            <div>
+              <dt>实际退回余额</dt>
+              <dd>
+                {{ page.formatDecimal(page.detail.upgradeBalanceReturn.returnedBalanceAmount) }}
+                {{ page.detail.upgradeBalanceReturn.currencyCode }}
+              </dd>
+            </div>
+            <div>
+              <dt>恢复余额成本</dt>
+              <dd>
+                ¥{{
+                  page.formatDecimal(page.detail.upgradeBalanceReturn.restoredBalanceCostAmount)
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>登记前利润</dt>
+              <dd>
+                ¥{{ page.formatDecimal(page.detail.upgradeBalanceReturn.originalProfitAmount) }}
+              </dd>
+            </div>
+            <div>
+              <dt>登记后利润</dt>
+              <dd>
+                ¥{{ page.formatDecimal(page.detail.upgradeBalanceReturn.adjustedProfitAmount) }}
+              </dd>
+            </div>
+            <div>
+              <dt>登记时间</dt>
+              <dd>{{ page.formatDate(page.detail.upgradeBalanceReturn.createdAt) }}</dd>
+            </div>
+            <div>
+              <dt>登记原因</dt>
+              <dd>{{ page.detail.upgradeBalanceReturn.reason }}</dd>
+            </div>
+            <div v-if="page.detail.upgradeBalanceReturn.reversedAt">
+              <dt>撤销时间</dt>
+              <dd>{{ page.formatDate(page.detail.upgradeBalanceReturn.reversedAt) }}</dd>
+            </div>
+            <div v-if="page.detail.upgradeBalanceReturn.reversalReason">
+              <dt>撤销原因</dt>
+              <dd>{{ page.detail.upgradeBalanceReturn.reversalReason }}</dd>
+            </div>
+          </dl>
+        </V2PanelSection>
+        <V2PanelSection heading-id="order-detail-timeline" title="时间与备注" step="04">
           <dl class="v2-order-detail__facts">
             <div>
               <dt>开通时间</dt>
@@ -177,7 +235,7 @@
           v-if="page.detail.activeLock"
           heading-id="order-detail-lock"
           title="ID 锁定证据"
-          step="04"
+          step="05"
         >
           <dl class="v2-order-detail__facts">
             <div>
@@ -226,6 +284,21 @@
             修改
           </AppButton>
           <AppButton
+            v-if="page.canUpdateOrders && page.detail.operations.canRecordUpgradeBalanceReturn"
+            variant="ghost"
+            @click="page.openUpgradeBalanceReturn(page.detail)"
+          >
+            登记升级退币
+          </AppButton>
+          <AppButton
+            v-if="page.canUpdateOrders && page.detail.operations.canReverseUpgradeBalanceReturn"
+            variant="ghost"
+            :loading="page.lifecycleBusyOrderId === page.detail.id"
+            @click="page.reverseUpgradeBalanceReturn(page.detail)"
+          >
+            撤销升级退币
+          </AppButton>
+          <AppButton
             v-if="page.canUpdateOrders && page.detail.operations.canRefund"
             variant="ghost"
             @click="page.openRefund(page.detail)"
@@ -266,6 +339,13 @@
     :saving="page.refundSaving"
     @submit="page.refundOrder"
   />
+
+  <V2OrderUpgradeBalanceReturnDialog
+    v-model="page.upgradeBalanceReturnVisible"
+    :order="page.upgradeBalanceReturnOrder"
+    :saving="page.upgradeBalanceReturnSaving"
+    @submit="page.recordUpgradeBalanceReturn"
+  />
 </template>
 
 <script setup lang="ts">
@@ -276,6 +356,7 @@ import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
 import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import V2OrderEditDrawer from './V2OrderEditDrawer.vue';
 import V2OrderRefundDialog from './V2OrderRefundDialog.vue';
+import V2OrderUpgradeBalanceReturnDialog from './V2OrderUpgradeBalanceReturnDialog.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { useOrdersPage } from '../useOrdersPage';
 
