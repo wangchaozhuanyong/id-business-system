@@ -22,7 +22,9 @@ describe('acquireMysqlTransactionLock', () => {
     await acquireMysqlTransactionLock(client as never, 'security:login:username:admin');
 
     expect(client.$queryRaw).toHaveBeenCalledOnce();
-    expect(client.$queryRaw.mock.calls[0]?.[0].join('')).toContain('pg_advisory_xact_lock');
+    const query = client.$queryRaw.mock.calls[0]?.[0].join('');
+    expect(query).toContain('SELECT 1::integer AS "locked"');
+    expect(query).toContain('pg_advisory_xact_lock');
     expect(client.$executeRaw).not.toHaveBeenCalled();
   });
 

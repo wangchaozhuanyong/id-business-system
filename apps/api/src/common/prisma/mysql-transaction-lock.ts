@@ -12,7 +12,10 @@ export function isMysqlRuntimeDatabase(
 export async function acquireMysqlTransactionLock(client: TransactionLockClient, lockKey: string) {
   if (!isMysqlRuntimeDatabase()) {
     await client.$queryRaw`
-      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) AS "locked"
+      SELECT 1::integer AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
+      ) AS "transaction_lock"
     `;
     return;
   }
