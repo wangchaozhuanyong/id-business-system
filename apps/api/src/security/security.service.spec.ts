@@ -366,7 +366,7 @@ describe('SecurityService', () => {
     expect(result.abnormal).toBe(true);
   });
 
-  it('reserves and finalizes a login attempt under MySQL transaction row locks', async () => {
+  it('reserves and finalizes a login attempt under PostgreSQL advisory locks', async () => {
     const { service, prisma } = createService();
     (prisma.loginLog.count as jest.Mock).mockResolvedValue(0);
 
@@ -380,9 +380,9 @@ describe('SecurityService', () => {
       allowed: true,
       reservationId: '77777777-7777-4777-8777-777777777777'
     });
-    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
-    for (const [query] of (prisma.$executeRaw as jest.Mock).mock.calls) {
-      expect(query.join('')).toContain('INSERT INTO "mysql_transaction_locks"');
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    for (const [query] of (prisma.$queryRaw as jest.Mock).mock.calls) {
+      expect(query.join('')).toContain('pg_advisory_xact_lock');
     }
     expect(prisma.loginLog.create).toHaveBeenCalledWith({
       data: {

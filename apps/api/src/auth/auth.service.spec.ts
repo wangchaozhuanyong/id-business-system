@@ -603,7 +603,8 @@ describe('AuthService', () => {
         })
       })
     });
-    expect(transaction.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.$queryRaw.mock.calls[0]?.[0].join('')).toContain('pg_advisory_xact_lock');
     const serializedAudit = JSON.stringify(
       jest.mocked(transaction.auditLog.create).mock.calls[0]?.[0]
     );

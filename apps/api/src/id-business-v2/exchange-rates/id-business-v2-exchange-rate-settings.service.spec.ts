@@ -163,7 +163,8 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
     expect(claimed?.targetAmountRmb.toString()).toBe('5000');
     expect(claimed?.intervalMinutes).toBe(15);
     const query = tx.$queryRaw.mock.calls[0]?.[0] as { strings?: string[] };
-    expect(query.strings?.join('')).toContain('UTC_TIMESTAMP(6)');
+    expect(query.strings?.join('')).toContain('"next_run_at" <=');
+    expect(query.strings?.join('')).not.toContain('UTC_TIMESTAMP(6)');
     expect(query.strings?.join('')).toContain('FOR UPDATE');
     expect(tx.idBusinessV2ExchangeRateSettings.update).toHaveBeenCalledWith({
       where: { id: 1 },

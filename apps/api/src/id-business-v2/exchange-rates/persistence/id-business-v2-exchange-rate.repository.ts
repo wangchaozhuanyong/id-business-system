@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import {
   isUnsupportedFinanceCurrencyEnumError,
+  isV2MysqlDatabase,
   mapAmount4,
   mapOptionalAmount4,
   mapOptionalRate8,
@@ -188,6 +189,7 @@ export class IdBusinessV2ExchangeRateRepository {
   }
 
   async claimDueSchedule(tx: V2CommandTransaction) {
+    const now = new Date();
     const rows = await tx.$queryRaw<
       Array<{ targetAmountRmb: Prisma.Decimal; intervalMinutes: number }>
     >(Prisma.sql`
@@ -197,7 +199,7 @@ export class IdBusinessV2ExchangeRateRepository {
       FROM "id_business_v2_exchange_rate_settings"
       WHERE "id" = 1
         AND "auto_enabled" = true
-        AND "next_run_at" <= UTC_TIMESTAMP(6)
+        AND "next_run_at" <= ${now}
       FOR UPDATE
     `);
     const row = rows[0];
@@ -505,6 +507,13 @@ export class IdBusinessV2ExchangeRateRepository {
   }
 
   async cleanupHistory(tx: V2CommandTransaction) {
+    if (!isV2MysqlDatabase()) {
+      const rows = await tx.$queryRaw<Array<{ result: Prisma.JsonValue }>>(
+        Prisma.sql`SELECT "cleanup_id_business_v2_exchange_rate_history"() AS "result"`
+      );
+      return rows[0]?.result;
+    }
+
     const settings = await tx.idBusinessV2ExchangeRateSettings.findUnique({
       where: { id: 1 },
       select: { retentionDays: true }
