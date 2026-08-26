@@ -19,6 +19,7 @@ const tables = [
   'id_business_v2_accounts',
   'id_business_v2_gift_cards',
   'id_business_v2_orders',
+  'id_business_v2_order_balance_returns',
   'id_business_v2_order_display_snapshots',
   'id_business_v2_activations',
   'id_business_v2_topup_supplier_accounts',
@@ -48,6 +49,10 @@ const expectedRuntimeDeleteTables = new Set([
   'id_business_v2_workspace_shortcuts'
 ]);
 const expectedRestrictedRuntimePrivileges = new Map([
+  [
+    'id_business_v2_order_balance_returns',
+    { select: true, insert: true, update: true, delete: false }
+  ],
   [
     'id_business_v2_order_display_snapshots',
     { select: true, insert: false, update: false, delete: false }

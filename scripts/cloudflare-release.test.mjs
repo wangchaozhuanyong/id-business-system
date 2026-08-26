@@ -457,6 +457,44 @@ test('keeps workspace and managed mailbox privileges aligned across release tool
   assert.match(verifiedDeleteTables ?? '', /'id_business_v2_workspace_shortcuts'/);
 });
 
+test('keeps upgrade balance return privileges aligned across release tooling', async () => {
+  const migration = await readFile(
+    new URL(
+      '../apps/api/prisma/migrations/20260826102000_order_upgrade_balance_return_runtime_access/migration.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  const provisioner = await readFile(
+    new URL('./provision-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+  const verifier = await readFile(
+    new URL('./verify-production-database-roles.mjs', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(
+    migration,
+    /GRANT SELECT, INSERT, UPDATE[\s\S]*id_business_v2_order_balance_returns[\s\S]*id_business_v2_runtime/
+  );
+  assert.match(
+    migration,
+    /REVOKE DELETE[\s\S]*id_business_v2_order_balance_returns[\s\S]*id_business_v2_runtime/
+  );
+  assert.match(
+    migration,
+    /GRANT SELECT[\s\S]*id_business_v2_order_balance_returns[\s\S]*id_business_v2_audit/
+  );
+  for (const source of [provisioner, verifier]) {
+    assert.match(source, /'id_business_v2_order_balance_returns'/);
+  }
+  assert.match(
+    verifier,
+    /'id_business_v2_order_balance_returns',[\s\S]*select: true, insert: true, update: true, delete: false/
+  );
+});
+
 test('keeps customer tag replacement compatible with the scoped runtime role', async () => {
   const migration = await readFile(
     new URL(
