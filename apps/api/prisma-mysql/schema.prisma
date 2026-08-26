@@ -101,9 +101,16 @@ enum IdBusinessV2BalanceLedgerEntryType {
   gift_card_withdrawal
   order_consumption
   order_consumption_reversal
+  order_upgrade_balance_return
+  order_upgrade_balance_return_reversal
   opening_balance
   manual_adjustment
   account_loss
+}
+
+enum IdBusinessV2OrderBalanceReturnStatus {
+  active
+  reversed
 }
 
 enum IdBusinessV2BalanceDirection {
@@ -158,6 +165,7 @@ enum IdBusinessV2FinanceJournalType {
   order_refund
   order_cancel
   order_recovery
+  order_upgrade_balance_return
   account_loss
   expense
   opening_balance
@@ -460,6 +468,8 @@ model User {
   idBusinessV2TopupFundEntries         IdBusinessV2TopupSupplierLedger[]    @relation("IdBusinessV2TopupSupplierLedgerCreatedBy")
   idBusinessV2OrdersCreated            IdBusinessV2Order[]                  @relation("IdBusinessV2OrderCreatedBy")
   idBusinessV2OrdersUpdated            IdBusinessV2Order[]                  @relation("IdBusinessV2OrderUpdatedBy")
+  idBusinessV2BalanceReturnsCreated    IdBusinessV2OrderBalanceReturn[]     @relation("IdBusinessV2OrderBalanceReturnCreatedBy")
+  idBusinessV2BalanceReturnsReversed   IdBusinessV2OrderBalanceReturn[]     @relation("IdBusinessV2OrderBalanceReturnReversedBy")
   idBusinessV2LocksCreated             IdBusinessV2AccountLock[]            @relation("IdBusinessV2AccountLockCreatedBy")
   idBusinessV2LocksEnded               IdBusinessV2AccountLock[]            @relation("IdBusinessV2AccountLockEndedBy")
   idBusinessV2ActivationsCreated       IdBusinessV2Activation[]             @relation("IdBusinessV2ActivationCreatedBy")
@@ -810,6 +820,7 @@ model IdBusinessV2Account {
   updatedBy               User?                              @relation("IdBusinessV2AccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   giftCards               IdBusinessV2GiftCard[]
   balanceLedger           IdBusinessV2BalanceLedger[]
+  orderBalanceReturns     IdBusinessV2OrderBalanceReturn[]
   orders                  IdBusinessV2Order[]                @relation("IdBusinessV2OrderAccount")
   soldByOrder             IdBusinessV2Order?                 @relation("IdBusinessV2AccountSoldByOrder", fields: [soldByOrderId], references: [id], onDelete: Restrict)
   locks                   IdBusinessV2AccountLock[]
@@ -1249,7 +1260,7 @@ model IdBusinessV2BalanceLedger {
   lossRecord      IdBusinessV2AccountLoss?
 
   @@unique([giftCardId, entryType])
-  @@unique([orderId, entryType])
+  @@index([orderId, entryType])
   @@index([accountId, createdAt])
   @@index([giftCardId])
   @@index([orderId])
@@ -1336,6 +1347,7 @@ model IdBusinessV2Order {
   sourceSoldOrderId            String?                             @map("source_sold_order_id") @db.Char(36)
   accountDisposition           IdBusinessV2OrderAccountDisposition @default(retained) @map("account_disposition")
   balanceAmount                Decimal                             @default(0) @map("balance_amount") @db.Decimal(18, 4)
+  balanceCurrencyCode          String?                             @map("balance_currency_code") @db.VarChar(3)
   balanceCostAmount            Decimal                             @default(0) @map("balance_cost_amount") @db.Decimal(18, 4)
   transferredBalanceCostAmount Decimal                             @default(0) @map("transferred_balance_cost_amount") @db.Decimal(18, 4)
   appliedBalanceCostAmount     Decimal                             @default(0) @map("applied_balance_cost_amount") @db.Decimal(18, 4)
@@ -1365,6 +1377,7 @@ model IdBusinessV2Order {
   activation             IdBusinessV2Activation?
   locks                  IdBusinessV2AccountLock[]
   balanceLedger          IdBusinessV2BalanceLedger[]
+  balanceReturns         IdBusinessV2OrderBalanceReturn[]
   receivedFxSnapshot     IdBusinessV2FinanceFxRateSnapshot? @relation("IdBusinessV2OrderReceivedFxSnapshot", fields: [receivedFxSnapshotId], references: [id], onDelete: Restrict)
   receivedFinanceAccount IdBusinessV2FinanceAccount?        @relation("IdBusinessV2OrderReceivedFinanceAccount", fields: [receivedFinanceAccountId], references: [id], onDelete: Restrict)
   displaySnapshot        IdBusinessV2OrderDisplaySnapshot?
@@ -1386,6 +1399,44 @@ model IdBusinessV2Order {
   @@index([createdByUserId])
   @@index([deletedAt])
   @@map("id_business_v2_orders")
+}
+
+model IdBusinessV2OrderBalanceReturn {
+  id                               String                               @id @default(uuid()) @db.Char(36)
+  orderId                          String                               @map("order_id") @db.Char(36)
+  accountId                        String                               @map("account_id") @db.Char(36)
+  activeKey                        String?                              @unique @map("active_key") @db.VarChar(80)
+  status                           IdBusinessV2OrderBalanceReturnStatus @default(active)
+  currencyCode                     String                               @map("currency_code") @db.VarChar(3)
+  returnedBalanceAmount            Decimal                              @map("returned_balance_amount") @db.Decimal(18, 4)
+  restoredBalanceCostAmount        Decimal                              @map("restored_balance_cost_amount") @db.Decimal(18, 4)
+  restoredAppliedBalanceCostAmount Decimal                              @map("restored_applied_balance_cost_amount") @db.Decimal(18, 4)
+  originalProfitAmount             Decimal                              @map("original_profit_amount") @db.Decimal(18, 4)
+  adjustedProfitAmount             Decimal                              @map("adjusted_profit_amount") @db.Decimal(18, 4)
+  balanceLedgerEntryId             String                               @unique @map("balance_ledger_entry_id") @db.Char(36)
+  financeJournalId                 String?                              @unique @map("finance_journal_id") @db.Char(36)
+  idempotencyKey                   String                               @unique @map("idempotency_key") @db.VarChar(160)
+  reason                           String                               @db.Text
+  createdByUserId                  String?                              @map("created_by_user_id") @db.Char(36)
+  createdAt                        DateTime                             @default(now()) @map("created_at") @db.DateTime(6)
+  reversalBalanceLedgerEntryId     String?                              @unique @map("reversal_balance_ledger_entry_id") @db.Char(36)
+  reversalFinanceJournalId         String?                              @unique @map("reversal_finance_journal_id") @db.Char(36)
+  reversalIdempotencyKey           String?                              @unique @map("reversal_idempotency_key") @db.VarChar(160)
+  reversalReason                   String?                              @map("reversal_reason") @db.Text
+  reversedByUserId                 String?                              @map("reversed_by_user_id") @db.Char(36)
+  reversedAt                       DateTime?                            @map("reversed_at") @db.DateTime(6)
+
+  order      IdBusinessV2Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  account    IdBusinessV2Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  createdBy  User?               @relation("IdBusinessV2OrderBalanceReturnCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  reversedBy User?               @relation("IdBusinessV2OrderBalanceReturnReversedBy", fields: [reversedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdByUserId])
+  @@index([reversedByUserId])
+  @@map("id_business_v2_order_balance_returns")
 }
 
 model IdBusinessV2OrderDisplaySnapshot {

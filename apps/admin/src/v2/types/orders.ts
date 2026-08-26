@@ -37,6 +37,23 @@ export interface V2OrderAccount {
   country: V2OrderOption;
 }
 
+export type V2OrderUpgradeBalanceReturnStatus = 'active' | 'reversed';
+
+export interface V2OrderUpgradeBalanceReturn {
+  id: string;
+  status: V2OrderUpgradeBalanceReturnStatus;
+  currencyCode: string;
+  returnedBalanceAmount: string;
+  restoredBalanceCostAmount: string;
+  restoredAppliedBalanceCostAmount: string;
+  originalProfitAmount: string;
+  adjustedProfitAmount: string;
+  reason: string;
+  createdAt: string;
+  reversalReason: string | null;
+  reversedAt: string | null;
+}
+
 export interface V2Order {
   id: string;
   orderNo: string;
@@ -70,6 +87,8 @@ export interface V2Order {
   accountCostAmount: string;
   appliedAccountCostAmount: string;
   balanceAmount: string;
+  balanceCurrencyCode: string | null;
+  remainingRefundableBalanceAmount: string;
   balanceCostAmount: string;
   refundCostAmount: string | null;
   profitAmount: string | null;
@@ -83,6 +102,7 @@ export interface V2Order {
   createdAt: string;
   updatedAt: string;
   activeLock: V2OrderLockSummary | null;
+  upgradeBalanceReturn: V2OrderUpgradeBalanceReturn | null;
   operations: {
     canConsume: boolean;
     canComplete: boolean;
@@ -90,6 +110,8 @@ export interface V2Order {
     canEditCore: boolean;
     canEditPricing: boolean;
     canRefund: boolean;
+    canRecordUpgradeBalanceReturn: boolean;
+    canReverseUpgradeBalanceReturn: boolean;
     canCancel: boolean;
     canDelete: boolean;
   };
@@ -323,6 +345,44 @@ export interface RefundV2OrderInput {
   balanceRefundMode: 'none' | 'full' | 'custom';
   customRefundBalanceAmount?: string;
   idempotencyKey: string;
+}
+
+export interface PreviewV2OrderUpgradeBalanceReturnInput {
+  returnedBalanceAmount: string;
+}
+
+export interface V2OrderUpgradeBalanceReturnPreview {
+  orderId: string;
+  orderNo: string;
+  currencyCode: string;
+  maximumReturnedBalanceAmount: string;
+  returnedBalanceAmount: string;
+  restoredBalanceCostAmount: string;
+  restoredAppliedBalanceCostAmount: string;
+  originalProfitAmount: string;
+  adjustedProfitAmount: string;
+  profitIncreaseAmount: string;
+  costReturnsToCompany: boolean;
+  revenueChanged: false;
+}
+
+export interface RecordV2OrderUpgradeBalanceReturnInput extends PreviewV2OrderUpgradeBalanceReturnInput {
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface ReverseV2OrderUpgradeBalanceReturnInput {
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface V2OrderUpgradeBalanceReturnResult {
+  order: V2Order;
+  balanceReturn: V2OrderUpgradeBalanceReturn & {
+    orderId: string;
+    accountId: string;
+  };
+  idempotentReplay: boolean;
 }
 
 export interface CancelV2OrderInput {

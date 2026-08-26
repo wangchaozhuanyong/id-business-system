@@ -24,6 +24,7 @@ export type V2FinanceJournalType =
   | 'account_purchase'
   | 'order_completed'
   | 'order_refund'
+  | 'order_upgrade_balance_return'
   | 'order_cancel'
   | 'order_recovery'
   | 'account_loss'

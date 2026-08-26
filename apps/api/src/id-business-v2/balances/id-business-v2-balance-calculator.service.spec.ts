@@ -152,6 +152,28 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
     ).toThrow(BadRequestException);
   });
 
+  it('removes the exact upgrade-return balance and cost when reversing the record', () => {
+    const result = service.calculateExactReversalDebit(
+      { currentBalance: '18', balanceCostAmount: '54' },
+      '8',
+      '24'
+    );
+
+    expect(result.balanceAfter.toString()).toBe('10');
+    expect(result.costAfter.toString()).toBe('30');
+    expect(result.averageCostAfter.toString()).toBe('3');
+  });
+
+  it('rejects upgrade-return reversal after the returned balance has been spent', () => {
+    expect(() =>
+      service.calculateExactReversalDebit(
+        { currentBalance: '5', balanceCostAmount: '15' },
+        '8',
+        '24'
+      )
+    ).toThrow(BadRequestException);
+  });
+
   it.each([
     [
       'zero face value',

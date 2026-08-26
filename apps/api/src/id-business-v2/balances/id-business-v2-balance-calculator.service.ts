@@ -149,6 +149,38 @@ export class IdBusinessV2BalanceCalculatorService {
     };
   }
 
+  calculateExactReversalDebit(
+    snapshot: IdBusinessV2BalanceSnapshotInput,
+    balanceAmountInput: V2DecimalInput,
+    costAmountInput: V2DecimalInput
+  ): IdBusinessV2BalanceMovementSnapshot {
+    const balanceBefore = this.normalizeAmount(snapshot.currentBalance, '当前余额');
+    const costBefore = this.normalizeAmount(snapshot.balanceCostAmount, '当前人民币总成本');
+    const balanceAmount = this.normalizePositiveAmount(balanceAmountInput, '撤销退回余额');
+    const costAmount = this.normalizeAmount(costAmountInput, '撤销人民币成本');
+    if (balanceAmount.gt(balanceBefore)) {
+      throw new BadRequestException('ID 当前余额不足，不能撤销升级退币');
+    }
+    if (costAmount.gt(costBefore)) {
+      throw new BadRequestException('ID 当前人民币成本不足，不能撤销升级退币');
+    }
+    const balanceAfter = balanceBefore.sub(balanceAmount);
+    const costAfter = costBefore.sub(costAmount);
+    if (balanceAfter.isZero() && !costAfter.isZero()) {
+      throw new BadRequestException('撤销后余额为 0 但仍有人民币成本，请先核对后续余额流水');
+    }
+    return {
+      balanceAmount,
+      costAmount,
+      balanceBefore,
+      balanceAfter,
+      costBefore,
+      costAfter,
+      averageCostBefore: this.calculateAverageCost(balanceBefore, costBefore),
+      averageCostAfter: this.calculateAverageCost(balanceAfter, costAfter)
+    };
+  }
+
   calculateAverageCost(
     currentBalanceInput: V2DecimalInput,
     balanceCostAmountInput: V2DecimalInput

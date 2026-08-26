@@ -22,6 +22,8 @@ export type IdBusinessV2BalanceLedgerEntryType =
   | 'gift_card_withdrawal'
   | 'order_consumption'
   | 'order_consumption_reversal'
+  | 'order_upgrade_balance_return'
+  | 'order_upgrade_balance_return_reversal'
   | 'opening_balance'
   | 'manual_adjustment'
   | 'account_loss';
@@ -53,6 +55,7 @@ export interface IdBusinessV2OrderRecord {
   sourceSoldOrderId: string | null;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: Amount4;
+  balanceCurrencyCode: string | null;
   balanceCostAmount: Amount4;
   transferredBalanceCostAmount: Amount4;
   appliedBalanceCostAmount: Amount4;
@@ -69,6 +72,34 @@ export interface IdBusinessV2OrderRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+}
+
+export type IdBusinessV2OrderBalanceReturnStatus = 'active' | 'reversed';
+
+export interface IdBusinessV2OrderBalanceReturnRecord {
+  id: string;
+  orderId: string;
+  accountId: string;
+  activeKey: string | null;
+  status: IdBusinessV2OrderBalanceReturnStatus;
+  currencyCode: string;
+  returnedBalanceAmount: Amount4;
+  restoredBalanceCostAmount: Amount4;
+  restoredAppliedBalanceCostAmount: Amount4;
+  originalProfitAmount: Amount4;
+  adjustedProfitAmount: Amount4;
+  balanceLedgerEntryId: string;
+  financeJournalId: string | null;
+  idempotencyKey: string;
+  reason: string;
+  createdByUserId: string | null;
+  createdAt: Date;
+  reversalBalanceLedgerEntryId: string | null;
+  reversalFinanceJournalId: string | null;
+  reversalIdempotencyKey: string | null;
+  reversalReason: string | null;
+  reversedByUserId: string | null;
+  reversedAt: Date | null;
 }
 
 export interface IdBusinessV2AccountLockRecord {
@@ -144,7 +175,7 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
     id: string;
     appleIdEncrypted: string;
     appleIdMasked: string;
-    countryOption: { id: string; code: string; name: string };
+    countryOption: { id: string; code: string; name: string; currencyCode: string | null };
   } | null;
   sourceSoldOrder: {
     id: string;
@@ -154,6 +185,7 @@ export interface IdBusinessV2OrderListRecord extends IdBusinessV2OrderRecord {
   settlementPlatform: { id: string; code: string; name: string } | null;
   createdBy: { id: string; username: string; displayName: string } | null;
   locks: IdBusinessV2AccountLockRecord[];
+  balanceReturns: IdBusinessV2OrderBalanceReturnRecord[];
 }
 
 export interface IdBusinessV2MatchingAccount {

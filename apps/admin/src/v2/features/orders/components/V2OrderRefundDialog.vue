@@ -33,6 +33,13 @@
       :closable="false"
       show-icon
     />
+    <el-alert
+      v-if="order?.upgradeBalanceReturn?.status === 'active'"
+      type="info"
+      :title="`该订单已登记升级退币 ${order.upgradeBalanceReturn.returnedBalanceAmount} ${order.upgradeBalanceReturn.currencyCode}；整单退款只会继续处理尚未退回的 ${order.remainingRefundableBalanceAmount} ${order.upgradeBalanceReturn.currencyCode}。`"
+      :closable="false"
+      show-icon
+    />
 
     <el-form
       ref="formRef"
@@ -93,12 +100,12 @@
             aria-label="ID 余额退款方式"
           >
             <el-radio-button value="none">余额不退回</el-radio-button>
-            <el-radio-button value="full">原消费余额全部退回</el-radio-button>
+            <el-radio-button value="full">尚未退回余额全部退回</el-radio-button>
             <el-radio-button value="custom">自定义退款到 ID 余额</el-radio-button>
           </el-radio-group>
           <p class="v2-order-refund-hint">
             请选择实际退回 ID
-            的余额。全部退回会按原消费流水恢复全部余额和人民币成本；自定义退回会按原流水单位成本同比例恢复人民币成本。
+            的余额。全部退回只处理尚未被升级退币恢复的部分；自定义退回会按剩余流水单位成本同比例恢复人民币成本。
           </p>
         </el-form-item>
 
@@ -111,11 +118,15 @@
             v-model="form.customRefundBalanceAmount"
             inputmode="decimal"
             maxlength="19"
-            :placeholder="`最多可退回 ${order?.balanceAmount ?? '0'}`"
-          />
+            :placeholder="`最多可退回 ${order?.remainingRefundableBalanceAmount ?? '0'}`"
+          >
+            <template #append>{{ order?.balanceCurrencyCode || '原币' }}</template>
+          </el-input>
           <p class="v2-order-refund-hint">
-            本单原消费余额为 {{ order?.balanceAmount ?? '0' }}，自定义退回金额必须大于 0
-            且不能超过该金额。
+            本单原消费余额为 {{ order?.balanceAmount ?? '0' }}，当前尚未退回
+            {{ order?.remainingRefundableBalanceAmount ?? '0' }}
+            {{ order?.balanceCurrencyCode || '原币' }}。自定义金额必须大于 0
+            且不能超过尚未退回金额。
           </p>
         </el-form-item>
 
@@ -187,12 +198,12 @@ const rules: FormRules = {
         if (!isV2UnsignedDecimal(value, { allowZero: false })) {
           return callback(new Error(`请输入最多 ${V2_DECIMAL_PLACES} 位小数且大于 0 的余额`));
         }
-        const maximum = props.order?.balanceAmount ?? '0';
+        const maximum = props.order?.remainingRefundableBalanceAmount ?? '0';
         const difference = addDecimalStrings(String(value).trim(), `-${maximum}`);
         callback(
           difference.startsWith('-') || difference === '0'
             ? undefined
-            : new Error(`退回 ID 余额不能超过本单原消费余额 ${maximum}`)
+            : new Error(`退回 ID 余额不能超过本单尚未退回余额 ${maximum}`)
         );
       },
       trigger: 'blur'

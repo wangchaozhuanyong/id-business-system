@@ -35,6 +35,7 @@ function makeOrder(overrides: Partial<IdBusinessV2Order> = {}): IdBusinessV2Orde
     customerId,
     serviceOptionId: serviceId,
     accountId,
+    balanceCurrencyCode: 'USD',
     settlementPlatformOptionId: null,
     platformOrderNo: null,
     websiteAccountEncrypted: 'encrypted',
@@ -133,7 +134,7 @@ describe('IdBusinessV2OrderCompletionService', () => {
       update: vi.fn()
     },
     idBusinessV2BalanceLedger: {
-      findUnique: vi.fn()
+      findFirst: vi.fn()
     },
     idBusinessV2Activation: {
       findUnique: vi.fn(),
@@ -199,8 +200,8 @@ describe('IdBusinessV2OrderCompletionService', () => {
       return [{ id: orderId }];
     });
     tx.idBusinessV2Order.findUnique.mockImplementation(async () => order);
-    tx.idBusinessV2BalanceLedger.findUnique.mockImplementation(async ({ where }) => {
-      return where.orderId_entryType.entryType === 'order_consumption' ? consumption : reversal;
+    tx.idBusinessV2BalanceLedger.findFirst.mockImplementation(async ({ where }) => {
+      return where.entryType === 'order_consumption' ? consumption : reversal;
     });
     tx.idBusinessV2Activation.findUnique.mockImplementation(async () => activation);
     tx.idBusinessV2Activation.create.mockImplementation(async ({ data }) => {

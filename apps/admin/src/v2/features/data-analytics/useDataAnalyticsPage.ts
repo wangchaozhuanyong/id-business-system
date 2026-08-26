@@ -17,6 +17,7 @@ const currencies = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 const journalTypeOptions: Array<{ value: V2FinanceJournalType; label: string }> = [
   { value: 'order_completed', label: '订单完成' },
   { value: 'order_refund', label: '订单退款' },
+  { value: 'order_upgrade_balance_return', label: '订单升级退币' },
   { value: 'gift_card_purchase', label: '礼品卡采购' },
   { value: 'gift_card_redemption_loss', label: '礼品卡赎回' },
   { value: 'account_purchase', label: 'ID 采购' },

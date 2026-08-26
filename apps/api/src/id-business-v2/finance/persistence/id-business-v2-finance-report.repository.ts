@@ -409,7 +409,14 @@ export class IdBusinessV2FinanceReportRepository {
               {
                 sourceType: 'order',
                 sourceId: { in: orderIds },
-                journalType: { in: ['order_completed', 'order_refund', 'historical_backfill'] }
+                journalType: {
+                  in: [
+                    'order_completed',
+                    'order_refund',
+                    'order_upgrade_balance_return',
+                    'historical_backfill'
+                  ]
+                }
               },
               {
                 journalType: 'reversal',
@@ -418,7 +425,12 @@ export class IdBusinessV2FinanceReportRepository {
                     sourceType: 'order',
                     sourceId: { in: orderIds },
                     journalType: {
-                      in: ['order_completed', 'order_refund', 'historical_backfill']
+                      in: [
+                        'order_completed',
+                        'order_refund',
+                        'order_upgrade_balance_return',
+                        'historical_backfill'
+                      ]
                     }
                   }
                 }

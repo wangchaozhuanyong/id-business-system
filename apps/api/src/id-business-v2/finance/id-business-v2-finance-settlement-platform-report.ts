@@ -92,6 +92,7 @@ export async function getIdBusinessV2SettlementPlatformReport(
       !orderId ||
       (originalJournalType !== 'order_completed' &&
         originalJournalType !== 'order_refund' &&
+        originalJournalType !== 'order_upgrade_balance_return' &&
         originalJournalType !== 'historical_backfill')
     ) {
       continue;

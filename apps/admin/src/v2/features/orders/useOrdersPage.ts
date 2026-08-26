@@ -15,7 +15,6 @@ import { navigateSafely } from '@/v2/router/navigateSafely';
 import { useV2LatestRequest } from '@/v2/composables/useV2LatestRequest';
 import { useAuthStore } from '@/stores/auth';
 import type {
-  RefundV2OrderInput,
   UpdateV2OrderInput,
   V2Order,
   V2OrderListQuery,
@@ -39,6 +38,8 @@ import {
   statusMeta,
   statusOptions
 } from './order-presentation';
+import { useOrderUpgradeBalanceReturn } from './useOrderUpgradeBalanceReturn';
+import { useOrderRefund } from './useOrderRefund';
 
 interface OrdersReferenceOptions {
   services: V2OptionSelector[];
@@ -67,15 +68,41 @@ export function useOrdersPage() {
   const editingOrder = ref<V2Order | null>(null);
   const editVisible = ref(false);
   const editSaving = ref(false);
-  const refundingOrder = ref<V2Order | null>(null);
-  const refundVisible = ref(false);
-  const refundSaving = ref(false);
   const lifecycleBusyOrderId = ref('');
   const detailRequest = useV2LatestRequest();
   const actionKeys = new Map<string, string>();
   const canConsumeOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.create'));
   const canUpdateOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.update'));
   const canDeleteOrders = computed(() => hasUserPermission(authStore.user, 'apple.order.delete'));
+  const {
+    order: refundingOrder,
+    visible: refundVisible,
+    saving: refundSaving,
+    open: openRefund,
+    refund: refundOrder
+  } = useOrderRefund({
+    canUpdateOrders,
+    detail,
+    actionKeys,
+    isOrderActionUnavailable,
+    loadOrders
+  });
+  const {
+    order: upgradeBalanceReturnOrder,
+    visible: upgradeBalanceReturnVisible,
+    saving: upgradeBalanceReturnSaving,
+    open: openUpgradeBalanceReturn,
+    record: recordUpgradeBalanceReturn,
+    reverse: reverseUpgradeBalanceReturn
+  } = useOrderUpgradeBalanceReturn({
+    canUpdateOrders,
+    detail,
+    lifecycleBusyOrderId,
+    actionKeys,
+    isOrderActionUnavailable,
+    loadOrders,
+    promptReason
+  });
 
   const query = reactive({
     page: 1,
@@ -299,76 +326,23 @@ export function useOrdersPage() {
     }
   }
 
-  function openRefund(order: V2Order) {
-    if (isOrderActionUnavailable(canUpdateOrders.value && order.operations.canRefund)) return;
-    refundingOrder.value = order;
-    refundVisible.value = true;
-  }
-
-  async function refundOrder(payload: Omit<RefundV2OrderInput, 'idempotencyKey'>) {
-    const order = refundingOrder.value;
-    if (!order || !canUpdateOrders.value) return;
-
-    if (payload.balanceRefundMode !== 'none') {
-      const refundBalanceDescription =
-        payload.balanceRefundMode === 'full'
-          ? `原消费余额 ${formatDecimal(order.balanceAmount)}`
-          : `自定义余额 ${formatDecimal(payload.customRefundBalanceAmount ?? '0')}`;
-      try {
-        await ElMessageBox.confirm(
-          `该操作会向 ID 退回${refundBalanceDescription}，并按原消费流水恢复对应人民币成本。请确认余额已实际退回。`,
-          `确认处理订单 ${order.orderNo} 的退款`,
-          {
-            type: 'warning',
-            confirmButtonText: '确认退款',
-            cancelButtonText: '返回核对'
-          }
-        );
-      } catch {
-        return;
-      }
-    }
-
-    refundSaving.value = true;
-    const keyName = `refund:${order.id}`;
-    try {
-      const result = await idBusinessV2OrdersApi.refund(order.id, {
-        ...payload,
-        idempotencyKey: getOrCreateOrderActionKey(actionKeys, 'refund', order.id)
-      });
-      actionKeys.delete(keyName);
-      refundVisible.value = false;
-      refundingOrder.value = result.order;
-      if (detail.value?.id === order.id) detail.value = result.order;
-      ElMessage.success(
-        result.idempotentReplay
-          ? '已恢复原退款处理结果'
-          : order.accountDisposition === 'sold'
-            ? result.balanceRestored
-              ? `订单已全额退款，ID 已恢复可用，已退回 ${formatDecimal(result.reversalLedger?.balanceAmount ?? '0')} ID 余额`
-              : '订单已全额退款，ID 已恢复可用，当前余额保持不变'
-            : result.balanceRestored
-              ? `订单已全额退款，已退回 ${formatDecimal(result.reversalLedger?.balanceAmount ?? '0')} ID 余额`
-              : '订单已全额退款，ID 当前余额保持不变'
-      );
-      await loadOrders();
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error));
-      await loadOrders();
-    } finally {
-      refundSaving.value = false;
-    }
-  }
-
   function hasLifecycleActions(order: V2Order) {
     return (
-      (canUpdateOrders.value && (order.operations.canRefund || order.operations.canCancel)) ||
+      (canUpdateOrders.value &&
+        (order.operations.canRecordUpgradeBalanceReturn ||
+          order.operations.canReverseUpgradeBalanceReturn ||
+          order.operations.canRefund ||
+          order.operations.canCancel)) ||
       (canDeleteOrders.value && order.operations.canDelete)
     );
   }
 
   function handleLifecycleCommand(command: unknown, order: V2Order) {
-    if (command === 'refund') {
+    if (command === 'upgrade-balance-return') {
+      openUpgradeBalanceReturn(order);
+    } else if (command === 'reverse-upgrade-balance-return') {
+      void reverseUpgradeBalanceReturn(order);
+    } else if (command === 'refund') {
       openRefund(order);
     } else if (command === 'cancel') {
       void cancelOrder(order);
@@ -557,6 +531,9 @@ export function useOrdersPage() {
     refundingOrder,
     refundVisible,
     refundSaving,
+    upgradeBalanceReturnOrder,
+    upgradeBalanceReturnVisible,
+    upgradeBalanceReturnSaving,
     lifecycleBusyOrderId,
     canConsumeOrders,
     canUpdateOrders,
@@ -578,6 +555,9 @@ export function useOrdersPage() {
     updateOrder,
     openRefund,
     refundOrder,
+    openUpgradeBalanceReturn,
+    recordUpgradeBalanceReturn,
+    reverseUpgradeBalanceReturn,
     hasLifecycleActions,
     handleLifecycleCommand,
     cancelOrder,

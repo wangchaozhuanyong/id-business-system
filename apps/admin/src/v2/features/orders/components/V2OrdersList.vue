@@ -224,6 +224,18 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item
+                    v-if="page.canUpdateOrders && row.operations.canRecordUpgradeBalanceReturn"
+                    command="upgrade-balance-return"
+                  >
+                    登记升级退币
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="page.canUpdateOrders && row.operations.canReverseUpgradeBalanceReturn"
+                    command="reverse-upgrade-balance-return"
+                  >
+                    撤销升级退币
+                  </el-dropdown-item>
+                  <el-dropdown-item
                     v-if="page.canUpdateOrders && row.operations.canRefund"
                     command="refund"
                   >
@@ -398,6 +410,18 @@
                 </AppButton>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-if="page.canUpdateOrders && item.operations.canRecordUpgradeBalanceReturn"
+                      command="upgrade-balance-return"
+                    >
+                      登记升级退币
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="page.canUpdateOrders && item.operations.canReverseUpgradeBalanceReturn"
+                      command="reverse-upgrade-balance-return"
+                    >
+                      撤销升级退币
+                    </el-dropdown-item>
                     <el-dropdown-item
                       v-if="page.canUpdateOrders && item.operations.canRefund"
                       command="refund"

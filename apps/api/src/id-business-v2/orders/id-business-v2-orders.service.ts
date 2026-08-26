@@ -289,6 +289,14 @@ export class IdBusinessV2OrdersService {
     const balanceCostAmount = order.balanceCostAmount;
     const refundCostAmount = order.refundCostAmount;
     const profitAmount = order.profitAmount;
+    const latestBalanceReturn = order.balanceReturns?.[0] ?? null;
+    const activeBalanceReturn =
+      latestBalanceReturn?.status === 'active' ? latestBalanceReturn : null;
+    const remainingRefundableBalanceAmount = activeBalanceReturn
+      ? activeBalanceReturn.returnedBalanceAmount.gt(balanceAmount)
+        ? Amount4.zero()
+        : balanceAmount.sub(activeBalanceReturn.returnedBalanceAmount)
+      : balanceAmount;
     const profitRate =
       profitAmount === null || receivedAmount.lte(0)
         ? null
@@ -331,6 +339,9 @@ export class IdBusinessV2OrdersService {
         (order.accountDisposition === 'sold' ? accountCostAmount : Amount4.zero())
       ).toString(),
       balanceAmount: balanceAmount.toString(),
+      balanceCurrencyCode:
+        order.balanceCurrencyCode ?? order.account?.countryOption.currencyCode ?? null,
+      remainingRefundableBalanceAmount: remainingRefundableBalanceAmount.toString(),
       balanceCostAmount: balanceCostAmount.toString(),
       refundCostAmount: refundCostAmount?.toString() ?? null,
       profitAmount: profitAmount?.toString() ?? null,
@@ -343,6 +354,23 @@ export class IdBusinessV2OrdersService {
       createdBy: order.createdBy,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+      upgradeBalanceReturn: latestBalanceReturn
+        ? {
+            id: latestBalanceReturn.id,
+            status: latestBalanceReturn.status,
+            currencyCode: latestBalanceReturn.currencyCode,
+            returnedBalanceAmount: latestBalanceReturn.returnedBalanceAmount.toString(),
+            restoredBalanceCostAmount: latestBalanceReturn.restoredBalanceCostAmount.toString(),
+            restoredAppliedBalanceCostAmount:
+              latestBalanceReturn.restoredAppliedBalanceCostAmount.toString(),
+            originalProfitAmount: latestBalanceReturn.originalProfitAmount.toString(),
+            adjustedProfitAmount: latestBalanceReturn.adjustedProfitAmount.toString(),
+            reason: latestBalanceReturn.reason,
+            createdAt: latestBalanceReturn.createdAt,
+            reversalReason: latestBalanceReturn.reversalReason,
+            reversedAt: latestBalanceReturn.reversedAt
+          }
+        : null,
       activeLock: activeLock
         ? {
             id: activeLock.id,
@@ -363,6 +391,13 @@ export class IdBusinessV2OrdersService {
         canEditCore: FULLY_EDITABLE_ORDER_STATUSES.has(order.status),
         canEditPricing: PRICING_EDITABLE_ORDER_STATUSES.has(order.status),
         canRefund: REFUNDABLE_ORDER_STATUSES.has(order.status),
+        canRecordUpgradeBalanceReturn:
+          order.status === 'completed' &&
+          Boolean(order.accountId) &&
+          balanceAmount.gt(0) &&
+          !activeBalanceReturn,
+        canReverseUpgradeBalanceReturn:
+          order.status === 'completed' && Boolean(activeBalanceReturn),
         canCancel: CANCELLABLE_ORDER_STATUSES.has(order.status),
         canDelete: DELETABLE_ORDER_STATUSES.has(order.status)
       }

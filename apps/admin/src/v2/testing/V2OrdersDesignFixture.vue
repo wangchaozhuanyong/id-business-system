@@ -240,6 +240,8 @@ function makeOrder(index: number): V2Order {
     accountCostAmount: cost,
     appliedAccountCostAmount: cost,
     balanceAmount: '20',
+    balanceCurrencyCode: 'USD',
+    remainingRefundableBalanceAmount: '20',
     balanceCostAmount: cost,
     refundCostAmount: status === 'refunded' ? '20' : null,
     profitAmount: completed ? profitAmounts[index % profitAmounts.length] : null,
@@ -253,6 +255,7 @@ function makeOrder(index: number): V2Order {
     createdAt: `2026-08-${day}T${hour}:05:00.000Z`,
     updatedAt: `2026-08-${day}T${hour}:30:00.000Z`,
     activeLock: null,
+    upgradeBalanceReturn: null,
     operations: {
       canConsume: status === 'pending',
       canComplete: status === 'processing' || status === 'waiting_external',
@@ -260,6 +263,8 @@ function makeOrder(index: number): V2Order {
       canEditCore: status === 'draft' || status === 'pending',
       canEditPricing: status !== 'refunded',
       canRefund: status === 'completed',
+      canRecordUpgradeBalanceReturn: status === 'completed',
+      canReverseUpgradeBalanceReturn: false,
       canCancel: status === 'draft' || status === 'pending',
       canDelete: status === 'draft'
     }

@@ -47,8 +47,16 @@ export async function refundIdBusinessV2Order(
     async (tx): Promise<LifecycleTransactionResult> => {
       const order = await support.lockOrder(tx, orderId);
       const existingReversal = await support.findReversal(tx, order.id);
+      const activeUpgradeBalanceReturn = await repository.findActiveBalanceReturn(tx, order.id);
+      const remainingRefundableBalanceAmount = resolveRemainingRefundableBalanceAmount(
+        order.balanceAmount,
+        activeUpgradeBalanceReturn?.returnedBalanceAmount ?? Amount4.zero()
+      );
       if (order.status === 'refunded') {
-        const requestedBalanceAmount = resolveReplayBalanceAmount(balanceRefundRequest, order);
+        const requestedBalanceAmount = resolveRequestedBalanceAmount(
+          balanceRefundRequest,
+          remainingRefundableBalanceAmount
+        );
         const restoreBalance = !requestedBalanceAmount.isZero();
         if (
           order.refundCostAmount === null ||
@@ -78,9 +86,25 @@ export async function refundIdBusinessV2Order(
       if (existingReversal) {
         throw new ConflictException('订单消费已经撤销，不能再次退款');
       }
+      if (
+        activeUpgradeBalanceReturn &&
+        (activeUpgradeBalanceReturn.accountId !== consumption.accountId ||
+          activeUpgradeBalanceReturn.returnedBalanceAmount.gt(consumption.balanceAmount) ||
+          activeUpgradeBalanceReturn.restoredBalanceCostAmount.gt(consumption.costAmount))
+      ) {
+        throw new ConflictException('升级退币记录与原消费流水不一致，请先核对财务记录');
+      }
+      const remainingRefundableBalanceCostAmount = consumption.costAmount.sub(
+        activeUpgradeBalanceReturn?.restoredBalanceCostAmount ?? Amount4.zero()
+      );
       const requestedBalanceAmount = resolveRequestedBalanceAmount(
         balanceRefundRequest,
-        consumption.balanceAmount
+        remainingRefundableBalanceAmount
+      );
+      const requestedBalanceCostAmount = resolveRequestedBalanceCostAmount(
+        requestedBalanceAmount,
+        remainingRefundableBalanceAmount,
+        remainingRefundableBalanceCostAmount
       );
       const restoreBalance = !requestedBalanceAmount.isZero();
       const activation = await repository.findActivationByOrder(tx, order.id);
@@ -101,7 +125,8 @@ export async function refundIdBusinessV2Order(
           idempotencyKey,
           `订单退款并恢复余额：${reason}`,
           operator,
-          requestedBalanceAmount
+          requestedBalanceAmount,
+          requestedBalanceCostAmount
         );
         reversalLedger = restoration.ledger;
         restoredBalanceCostAmount = restoration.ledger.costAmount;
@@ -229,6 +254,10 @@ export async function refundIdBusinessV2Order(
           balanceRefundMode: balanceRefundRequest.mode,
           refundedBalanceAmount: requestedBalanceAmount.toString(),
           restoredBalanceCostAmount: restoredBalanceCostAmount.toString(),
+          priorUpgradeReturnedBalanceAmount:
+            activeUpgradeBalanceReturn?.returnedBalanceAmount.toString() ?? '0',
+          priorUpgradeRestoredBalanceCostAmount:
+            activeUpgradeBalanceReturn?.restoredBalanceCostAmount.toString() ?? '0',
           restoredAppliedBalanceCostAmount: restoredAppliedBalanceCost.toString(),
           restoredCustomerOwnedBalanceCostAmount: restoredCustomerOwnedBalanceCost.toString(),
           restoredSourceOrderId: restoredSourceOrder?.id ?? null,
@@ -265,6 +294,10 @@ export async function refundIdBusinessV2Order(
           balanceRefundMode: balanceRefundRequest.mode,
           refundedBalanceAmount: requestedBalanceAmount.toString(),
           restoredBalanceCostAmount: restoredBalanceCostAmount.toString(),
+          priorUpgradeReturnedBalanceAmount:
+            activeUpgradeBalanceReturn?.returnedBalanceAmount.toString() ?? '0',
+          priorUpgradeRestoredBalanceCostAmount:
+            activeUpgradeBalanceReturn?.restoredBalanceCostAmount.toString() ?? '0',
           restoredAppliedBalanceCostAmount: restoredAppliedBalanceCost.toString(),
           restoredCustomerOwnedBalanceCostAmount: restoredCustomerOwnedBalanceCost.toString(),
           restoredSourceOrderId: restoredSourceOrder?.id ?? null,
@@ -413,16 +446,33 @@ function resolveRequestedBalanceAmount(
     throw new BadRequestException('自定义退回 ID 余额不能为空');
   }
   if (request.customAmount.gt(consumedBalanceAmount)) {
-    throw new BadRequestException('退回 ID 余额不能超过本单原消费余额');
+    throw new BadRequestException('退回 ID 余额不能超过本单尚未退回的余额');
   }
   return request.customAmount;
 }
 
-function resolveReplayBalanceAmount(
-  request: { mode: IdBusinessV2OrderBalanceRefundMode; customAmount: Amount4 | null },
-  order: IdBusinessV2OrderRecord
+function resolveRemainingRefundableBalanceAmount(
+  consumedBalanceAmount: Amount4,
+  priorReturnedBalanceAmount: Amount4
 ) {
-  return resolveRequestedBalanceAmount(request, order.balanceAmount);
+  if (priorReturnedBalanceAmount.gt(consumedBalanceAmount)) {
+    throw new ConflictException('升级退币金额超过订单原消费余额，请先核对财务记录');
+  }
+  return consumedBalanceAmount.sub(priorReturnedBalanceAmount);
+}
+
+function resolveRequestedBalanceCostAmount(
+  requestedBalanceAmount: Amount4,
+  remainingBalanceAmount: Amount4,
+  remainingCostAmount: Amount4
+) {
+  if (requestedBalanceAmount.isZero()) return Amount4.zero();
+  if (remainingBalanceAmount.isZero()) {
+    throw new ConflictException('订单没有尚未退回的 ID 余额');
+  }
+  return requestedBalanceAmount.equals(remainingBalanceAmount)
+    ? remainingCostAmount
+    : remainingCostAmount.ratio(remainingBalanceAmount).apply(requestedBalanceAmount);
 }
 
 function buildRefundFinanceLines(

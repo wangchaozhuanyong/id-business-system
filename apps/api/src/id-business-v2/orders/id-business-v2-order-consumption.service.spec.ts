@@ -49,6 +49,7 @@ function makeAccount(overrides: Record<string, unknown> = {}) {
     soldByOrderId: null,
     ownershipTransferredAt: null,
     countryOptionId: '77777777-7777-4777-8777-777777777777',
+    currencyCode: 'USD',
     statusCode: 'normal',
     ...overrides
   };
@@ -233,6 +234,7 @@ describe('IdBusinessV2OrderConsumptionService', () => {
         accountCostAmount: '0',
         appliedAccountCostAmount: '0',
         balanceCostAmount: '60',
+        balanceCurrencyCode: 'USD',
         transferredBalanceCostAmount: '0',
         appliedBalanceCostAmount: '60',
         profitAmount: '37',

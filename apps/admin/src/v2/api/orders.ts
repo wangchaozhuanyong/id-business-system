@@ -11,6 +11,9 @@ import type {
   DeleteV2OrderInput,
   DeleteV2OrderResult,
   RefundV2OrderInput,
+  PreviewV2OrderUpgradeBalanceReturnInput,
+  RecordV2OrderUpgradeBalanceReturnInput,
+  ReverseV2OrderUpgradeBalanceReturnInput,
   SearchV2OrderCandidatesInput,
   UpdateV2OrderInput,
   V2Order,
@@ -18,7 +21,9 @@ import type {
   V2OrderLifecycleResult,
   V2OrderListQuery,
   V2OrderListResult,
-  V2OrderMatchingResult
+  V2OrderMatchingResult,
+  V2OrderUpgradeBalanceReturnPreview,
+  V2OrderUpgradeBalanceReturnResult
 } from '@/v2/types/orders';
 import type { V2OptionSelector } from '@/v2/types/options';
 
@@ -115,6 +120,33 @@ export const idBusinessV2OrdersApi = {
   refund(id: string, payload: RefundV2OrderInput) {
     return withV2QueryInvalidation(
       request<V2OrderLifecycleResult>(http.post(`/id-business-v2/orders/${id}/refund`, payload)),
+      ORDER_MUTATION_SCOPES
+    );
+  },
+  previewUpgradeBalanceReturn(
+    id: string,
+    payload: PreviewV2OrderUpgradeBalanceReturnInput,
+    options: ApiRequestOptions = {}
+  ) {
+    return request<V2OrderUpgradeBalanceReturnPreview>(
+      http.post(`/id-business-v2/orders/${id}/upgrade-balance-return/preview`, payload, {
+        signal: options.signal
+      })
+    );
+  },
+  recordUpgradeBalanceReturn(id: string, payload: RecordV2OrderUpgradeBalanceReturnInput) {
+    return withV2QueryInvalidation(
+      request<V2OrderUpgradeBalanceReturnResult>(
+        http.post(`/id-business-v2/orders/${id}/upgrade-balance-return`, payload)
+      ),
+      ORDER_MUTATION_SCOPES
+    );
+  },
+  reverseUpgradeBalanceReturn(id: string, payload: ReverseV2OrderUpgradeBalanceReturnInput) {
+    return withV2QueryInvalidation(
+      request<V2OrderUpgradeBalanceReturnResult>(
+        http.post(`/id-business-v2/orders/${id}/upgrade-balance-return/reverse`, payload)
+      ),
       ORDER_MUTATION_SCOPES
     );
   },

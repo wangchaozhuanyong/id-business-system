@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import type { IdBusinessV2BalanceLedger, IdBusinessV2Order, Prisma } from '@prisma/client';
+import type {
+  IdBusinessV2BalanceLedger,
+  IdBusinessV2Order,
+  IdBusinessV2OrderBalanceReturn,
+  Prisma
+} from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import {
   buildV2StringArrayContainsFilter,
@@ -37,7 +42,7 @@ const ORDER_INCLUDE = {
       id: true,
       appleIdEncrypted: true,
       appleIdMasked: true,
-      countryOption: { select: { id: true, code: true, name: true } }
+      countryOption: { select: { id: true, code: true, name: true, currencyCode: true } }
     }
   },
   sourceSoldOrder: {
@@ -53,7 +58,8 @@ const ORDER_INCLUDE = {
     where: { status: 'active' as const },
     orderBy: { lockedAt: 'desc' as const },
     take: 1
-  }
+  },
+  balanceReturns: { orderBy: { createdAt: 'desc' as const }, take: 1 }
 } satisfies Prisma.IdBusinessV2OrderInclude;
 
 const MATCHING_ACCOUNT_SELECT = {
@@ -147,6 +153,7 @@ interface LockedOrderPersistenceRow {
   appliedAccountCostAmount: unknown;
   accountDisposition: IdBusinessV2OrderAccountDisposition;
   balanceAmount: unknown;
+  balanceCurrencyCode: string | null;
   balanceCostAmount: unknown;
   transferredBalanceCostAmount: unknown;
   appliedBalanceCostAmount: unknown;
@@ -166,6 +173,7 @@ interface LockedAccountPersistenceRow {
   ownershipTransferredAt: Date | null;
   lossReportedAt: Date | null;
   countryOptionId: string;
+  currencyCode: string | null;
   statusCode: string;
 }
 
@@ -974,12 +982,61 @@ export class IdBusinessV2OrdersRepository {
   async findLedgerByOrderAndType(
     tx: V2CommandTransaction,
     orderId: string,
-    entryType: 'order_consumption' | 'order_consumption_reversal'
+    entryType:
+      | 'order_consumption'
+      | 'order_consumption_reversal'
+      | 'order_upgrade_balance_return'
+      | 'order_upgrade_balance_return_reversal'
   ) {
-    const row = await tx.idBusinessV2BalanceLedger.findUnique({
-      where: { orderId_entryType: { orderId, entryType } }
+    const row = await tx.idBusinessV2BalanceLedger.findFirst({
+      where: { orderId, entryType },
+      orderBy: { createdAt: 'desc' }
     });
     return row ? mapBalanceLedgerRow(row) : null;
+  }
+
+  async findBalanceReturnById(tx: V2CommandTransaction, id: string) {
+    const row = await tx.idBusinessV2OrderBalanceReturn.findUnique({ where: { id } });
+    return row ? mapBalanceReturnRow(row) : null;
+  }
+
+  async findActiveBalanceReturn(tx: V2CommandTransaction, orderId: string) {
+    const row = await tx.idBusinessV2OrderBalanceReturn.findFirst({
+      where: { orderId, status: 'active' },
+      orderBy: { createdAt: 'desc' }
+    });
+    return row ? mapBalanceReturnRow(row) : null;
+  }
+
+  async findBalanceReturnReplay(tx: V2CommandTransaction, idempotencyKey: string) {
+    const row = await tx.idBusinessV2OrderBalanceReturn.findUnique({
+      where: { idempotencyKey }
+    });
+    return row ? mapBalanceReturnRow(row) : null;
+  }
+
+  async findBalanceReturnReversalReplay(tx: V2CommandTransaction, reversalIdempotencyKey: string) {
+    const row = await tx.idBusinessV2OrderBalanceReturn.findUnique({
+      where: { reversalIdempotencyKey }
+    });
+    return row ? mapBalanceReturnRow(row) : null;
+  }
+
+  createBalanceReturn(
+    tx: V2CommandTransaction,
+    data: Prisma.IdBusinessV2OrderBalanceReturnUncheckedCreateInput
+  ) {
+    return tx.idBusinessV2OrderBalanceReturn.create({ data }).then(mapBalanceReturnRow);
+  }
+
+  reverseBalanceReturn(
+    tx: V2CommandTransaction,
+    id: string,
+    data: Prisma.IdBusinessV2OrderBalanceReturnUncheckedUpdateInput
+  ) {
+    return tx.idBusinessV2OrderBalanceReturn
+      .update({ where: { id }, data })
+      .then(mapBalanceReturnRow);
   }
 
   createBalanceLedger(
@@ -1164,6 +1221,7 @@ export class IdBusinessV2OrdersRepository {
         "applied_account_cost_amount" AS "appliedAccountCostAmount",
         "account_disposition" AS "accountDisposition",
         "balance_amount" AS "balanceAmount",
+        "balance_currency_code" AS "balanceCurrencyCode",
         "balance_cost_amount" AS "balanceCostAmount",
         "transferred_balance_cost_amount" AS "transferredBalanceCostAmount",
         "applied_balance_cost_amount" AS "appliedBalanceCostAmount",
@@ -1192,6 +1250,7 @@ export class IdBusinessV2OrdersRepository {
         account."ownership_transferred_at" AS "ownershipTransferredAt",
         account."loss_reported_at" AS "lossReportedAt",
         account."country_option_id" AS "countryOptionId",
+        country."currency_code" AS "currencyCode",
         status."code" AS "statusCode"
       FROM "id_business_v2_accounts" account
       INNER JOIN "id_business_v2_options" country
@@ -1548,6 +1607,7 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
     settlementPlatform,
     createdBy,
     locks,
+    balanceReturns,
     ...order
   } = row;
   return {
@@ -1584,7 +1644,8 @@ function mapOrderListRow(row: OrderListPersistenceRow): IdBusinessV2OrderListRec
         }
       : null,
     createdBy,
-    locks
+    locks,
+    balanceReturns: (balanceReturns ?? []).map(mapBalanceReturnRow)
   };
 }
 
@@ -1617,6 +1678,32 @@ function mapBalanceLedgerRow(row: IdBusinessV2BalanceLedger) {
     averageCostAfter: mapRate8(
       row.averageCostAfter,
       'id_business_v2_balance_ledgers.average_cost_after'
+    )
+  };
+}
+
+function mapBalanceReturnRow(row: IdBusinessV2OrderBalanceReturn) {
+  return {
+    ...row,
+    returnedBalanceAmount: mapAmount4(
+      row.returnedBalanceAmount,
+      'id_business_v2_order_balance_returns.returned_balance_amount'
+    ),
+    restoredBalanceCostAmount: mapAmount4(
+      row.restoredBalanceCostAmount,
+      'id_business_v2_order_balance_returns.restored_balance_cost_amount'
+    ),
+    restoredAppliedBalanceCostAmount: mapAmount4(
+      row.restoredAppliedBalanceCostAmount,
+      'id_business_v2_order_balance_returns.restored_applied_balance_cost_amount'
+    ),
+    originalProfitAmount: mapAmount4(
+      row.originalProfitAmount,
+      'id_business_v2_order_balance_returns.original_profit_amount'
+    ),
+    adjustedProfitAmount: mapAmount4(
+      row.adjustedProfitAmount,
+      'id_business_v2_order_balance_returns.adjusted_profit_amount'
     )
   };
 }

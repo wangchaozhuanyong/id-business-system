@@ -87,6 +87,7 @@ export function journalTypeLabel(value: V2FinanceJournalType) {
     account_purchase: 'ID 采购',
     order_completed: '订单完成',
     order_refund: '订单退款',
+    order_upgrade_balance_return: '订单升级退币',
     order_cancel: '订单取消',
     order_recovery: '订单收回',
     account_loss: 'ID 报损',
