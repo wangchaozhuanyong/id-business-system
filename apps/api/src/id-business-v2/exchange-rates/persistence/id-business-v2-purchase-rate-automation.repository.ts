@@ -52,6 +52,7 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
   }
 
   async claimDueSettings(tx: V2CommandTransaction) {
+    const now = new Date();
     const rows = await tx.$queryRaw<
       Array<{
         autoEnabled: boolean;
@@ -77,13 +78,12 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
       WHERE "id" = 1
         AND "auto_enabled" = TRUE
         AND "next_run_at" IS NOT NULL
-        AND "next_run_at" <= UTC_TIMESTAMP(6)
+        AND "next_run_at" <= ${now}
       FOR UPDATE
     `);
     const row = rows[0];
     if (!row) return null;
 
-    const now = new Date();
     const nextRunAt = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 1, 5)
     );
