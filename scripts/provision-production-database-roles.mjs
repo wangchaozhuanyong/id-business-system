@@ -31,6 +31,7 @@ const ACCESS_CHECK_TABLES = [
   'id_business_v2_mail_query_attempts',
   'id_business_v2_accounts',
   'id_business_v2_orders',
+  'id_business_v2_order_balance_returns',
   'id_business_v2_finance_journals'
 ];
 
@@ -74,6 +75,7 @@ const RUNTIME_TABLES = [
   'id_business_v2_balance_ledger',
   'id_business_v2_account_losses',
   'id_business_v2_orders',
+  'id_business_v2_order_balance_returns',
   'id_business_v2_order_display_snapshots',
   'id_business_v2_account_locks',
   'id_business_v2_activations',
