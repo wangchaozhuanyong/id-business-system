@@ -76,6 +76,7 @@ function checkSourceContracts() {
   const orderEntryManifest = read('apps/admin/src/v2/features/order-entry/manifest.ts');
   const optionsApi = read('apps/admin/src/v2/api/options.ts');
   const optionsView = read('apps/admin/src/v2/features/options/V2OptionsView.vue');
+  const optionsList = read('apps/admin/src/v2/features/options/components/V2OptionsList.vue');
   const ordersApi = read('apps/admin/src/v2/api/orders.ts');
   const ordersPage = read('apps/admin/src/v2/features/orders/useOrdersPage.ts');
   const renewalsApi = read('apps/admin/src/v2/api/renewals.ts');
@@ -103,7 +104,7 @@ function checkSourceContracts() {
     ['订单', ordersPage],
     ['客户', read('apps/admin/src/v2/features/customers/useCustomersPage.ts')],
     ['加卡记录', read('apps/admin/src/v2/features/topup-records/useTopupRecordsPage.ts')],
-    ['开通记录', read('apps/admin/src/v2/features/activations/V2ActivationsView.vue')],
+    ['开通记录', read('apps/admin/src/v2/features/activations/useActivationsPage.ts')],
     ['汇率', read('apps/admin/src/v2/features/exchange-rates/useExchangeRatesPage.ts')],
     ['选项', read('apps/admin/src/v2/features/options/useOptionsPage.ts')]
   ];
@@ -243,7 +244,11 @@ function checkSourceContracts() {
   );
   assert.match(asyncRegion, /REFRESH_FEEDBACK_DELAY_MS = 120/, '统一区域反馈延迟不是 120ms');
   assert.match(asyncRegion, /showRefreshFeedback/, '统一区域缺少保留内容的刷新反馈');
-  assert.match(asyncRegionState, /return loading && resolved/, '刷新反馈没有限制为已有成功内容');
+  assert.match(
+    asyncRegionState,
+    /return phase === 'refreshing' \|\| phase === 'transitioning'/,
+    '刷新反馈没有限制为已有成功内容'
+  );
   assert.match(asyncRegion, /v2-async-region__progress/, '读取刷新没有使用统一顶部进度线');
   assert.doesNotMatch(
     asyncRegion,
@@ -266,7 +271,7 @@ function checkSourceContracts() {
   assert.match(contentSkeleton, /prefers-reduced-motion/, '骨架动画没有适配减少动态效果');
   assert.match(optionsApi, /listsByType/, '选项 bootstrap 没有预填九类列表缓存');
   assert.match(optionsApi, /force:\s*options\.force/, '选项列表缺少强制刷新能力');
-  assert.match(optionsView, /:key="renderedType"/, '选项表格仍在请求完成前按选择类型重建');
+  assert.match(optionsList, /:key="page\.renderedType"/, '选项表格仍在请求完成前按选择类型重建');
   assert.match(optionsView, /V2AsyncRegion/, '选项切换没有使用统一异步区域');
   for (const [label, source] of routedPageSources) {
     assert.match(source, /useV2ModuleQuery/, `${label}页面没有接入真实数据查询缓存`);
@@ -443,15 +448,15 @@ async function checkBrowserRuntime() {
     await page.locator('#v2-admin-login-form button[type="submit"]').click();
     await page.waitForURL('**/v2/**', { timeout: HTTP_TIMEOUT_MS });
     await waitForPageReady(page);
-    const authenticatedStorageState = await desktop.storageState();
-    await verifyDelayedAuthMount(browser, authenticatedStorageState);
-    await verifyInitialChunkRecovery(browser, authenticatedStorageState);
-    await verifyRepeatedInitialChunkFailure(browser, authenticatedStorageState);
+    const authenticatedState = await captureAuthenticatedBrowserState(desktop, page);
+    await verifyDelayedAuthMount(browser, authenticatedState);
+    await verifyInitialChunkRecovery(browser, authenticatedState);
+    await verifyRepeatedInitialChunkFailure(browser, authenticatedState);
 
     await verifyIntentPrefetch(page, '/v2/customers', 'V2CustomersView');
     await verifySpeculativeChunkFailureInFreshContext(
       browser,
-      authenticatedStorageState,
+      authenticatedState,
       '/v2/accounts',
       'V2AccountsView'
     );
@@ -486,7 +491,9 @@ async function checkBrowserRuntime() {
     assert.ok(firstNavigation.feedbackMs <= 100, `点击反馈耗时 ${firstNavigation.feedbackMs}ms`);
     assert.equal(firstNavigation.blankFrames, 0, '订单首次切换出现空白帧');
     assert.ok(firstNavigation.maxVisibleRoots <= 1, '订单切换期间旧、新页面同时可见');
-    await page.locator('input[placeholder="订单号、客户、平台订单号、账号"]').fill('保留条件');
+    await page
+      .locator('input[placeholder="订单号、客户、平台订单号、ID 账号、网站账号"]')
+      .fill('保留条件');
     const requestsAfterFirstVisit = orderRequests.length;
 
     await navigateAndMeasure(page, '/v2/customers');
@@ -509,7 +516,9 @@ async function checkBrowserRuntime() {
     );
     await page.evaluate(() => window.__v2AcceptanceRestoreDateNow?.());
     assert.equal(
-      await page.locator('input[placeholder="订单号、客户、平台订单号、账号"]').inputValue(),
+      await page
+        .locator('input[placeholder="订单号、客户、平台订单号、ID 账号、网站账号"]')
+        .inputValue(),
       '',
       '普通列表页仍依赖 KeepAlive 保留临时筛选'
     );
@@ -611,7 +620,7 @@ async function checkBrowserRuntime() {
         url.pathname.endsWith('/api/id-business-v2/options')
       );
     });
-    await page.getByLabel('刷新', { exact: true }).click();
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
     await refreshResponse;
     assert.equal(
       optionRequests.filter((path) => path.endsWith('/options')).length,
@@ -627,9 +636,9 @@ async function checkBrowserRuntime() {
     await page.getByText('ID状态', { exact: true }).first().click();
     await page.waitForFunction(
       () =>
-        document.querySelector('.v2-options-type-strip .is-active')?.textContent?.trim() ===
+        document.querySelector('.v2-options-category-nav .is-active')?.textContent?.trim() ===
           'ID状态' &&
-        document.querySelector('.v2-options-table')?.getAttribute('aria-busy') !== 'true'
+        document.querySelector('.v2-options-list [aria-busy]')?.getAttribute('aria-busy') !== 'true'
     );
     assert.equal(
       await page.getByRole('columnheader', { name: '默认货币', exact: true }).count(),
@@ -684,22 +693,35 @@ async function checkBrowserRuntime() {
 
     assert.deepEqual(errors, [], `浏览器运行错误：${errors.join('; ')}`);
 
-    const storageState = await desktop.storageState();
+    const mobileAuthenticatedState = await captureAuthenticatedBrowserState(desktop, page);
     await desktop.close();
-    await verifyMobile(browser, storageState);
+    await verifyMobile(browser, mobileAuthenticatedState);
   } finally {
     await browser.close();
   }
 }
 
-async function verifyDelayedAuthMount(browser, storageState) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    storageState
+async function verifyDelayedAuthMount(browser, authenticatedState) {
+  const context = await createAuthenticatedContext(browser, authenticatedState, {
+    viewport: { width: 1440, height: 900 }
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'BroadcastChannel', {
+      configurable: true,
+      value: undefined
+    });
   });
   const page = await context.newPage();
+  let releaseAuthRequest = () => undefined;
+  const authRequestRelease = new Promise((resolve) => {
+    releaseAuthRequest = resolve;
+  });
+  const authRequestObserved = page.waitForRequest(
+    (request) => new URL(request.url()).pathname.endsWith('/api/auth/me'),
+    { timeout: HTTP_TIMEOUT_MS }
+  );
   await page.route('**/api/auth/me', async (route) => {
-    await delay(API_DELAY_MS);
+    await authRequestRelease;
     await route.continue();
   });
 
@@ -712,7 +734,7 @@ async function verifyDelayedAuthMount(browser, storageState) {
       undefined,
       { timeout: HTTP_TIMEOUT_MS }
     );
-    await page.waitForTimeout(Math.min(150, Math.max(40, API_DELAY_MS / 3)));
+    await authRequestObserved;
 
     const duringAuth = await page.evaluate(() => ({
       authReady: performance.getEntriesByName('v2:auth-check-end').length > 0,
@@ -724,6 +746,7 @@ async function verifyDelayedAuthMount(browser, storageState) {
     assert.equal(duringAuth.businessShell, 0, '鉴权未确认时提前渲染业务工作区');
     assert.equal(duringAuth.bootGate, 1, '鉴权延迟期间缺少稳定 Boot Gate');
 
+    releaseAuthRequest();
     await navigation;
     await waitForPageReady(page);
     const timing = await page.evaluate(() => ({
@@ -755,14 +778,14 @@ async function verifyDelayedAuthMount(browser, storageState) {
     );
     assert.equal(timing.ambiguousRouteReadyMarks, 0, '仍在记录语义含糊的 route-ready 指标');
   } finally {
+    releaseAuthRequest();
     await context.close();
   }
 }
 
-async function verifyInitialChunkRecovery(browser, storageState) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    storageState
+async function verifyInitialChunkRecovery(browser, authenticatedState) {
+  const context = await createAuthenticatedContext(browser, authenticatedState, {
+    viewport: { width: 1440, height: 900 }
   });
   const page = await context.newPage();
   const targetPath = '/v2/records/topups';
@@ -806,7 +829,7 @@ async function verifyInitialChunkRecovery(browser, storageState) {
     } catch (error) {
       const diagnostics = await page.evaluate(() => ({
         body: document.body.innerText.slice(0, 2_000),
-        credentialPresent: Boolean(localStorage.getItem('apple_business_auth_v2')),
+        credentialPresent: Boolean(sessionStorage.getItem('apple_business_auth_v2')),
         path: location.pathname,
         reloadBuild: sessionStorage.getItem('apple-business:v2-preload-reload-build'),
         routeErrors: performance
@@ -832,10 +855,9 @@ async function verifyInitialChunkRecovery(browser, storageState) {
   }
 }
 
-async function verifyRepeatedInitialChunkFailure(browser, storageState) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    storageState
+async function verifyRepeatedInitialChunkFailure(browser, authenticatedState) {
+  const context = await createAuthenticatedContext(browser, authenticatedState, {
+    viewport: { width: 1440, height: 900 }
   });
   const page = await context.newPage();
   const targetPath = '/v2/workbench/topups';
@@ -937,13 +959,12 @@ async function verifyIntentPrefetch(page, targetPath, targetViewName) {
 
 async function verifySpeculativeChunkFailureInFreshContext(
   browser,
-  storageState,
+  authenticatedState,
   targetPath,
   targetViewName
 ) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    storageState
+  const context = await createAuthenticatedContext(browser, authenticatedState, {
+    viewport: { width: 1440, height: 900 }
   });
   const page = await context.newPage();
   await page.route('**/api/id-business-v2/**', async (route) => {
@@ -1082,7 +1103,29 @@ async function verifyRuntimeErrorFreeNavigationSequence(page, runtimeErrors) {
     const link = await ensureNavigationLinkVisible(page, path);
     await link.click();
     await page.waitForURL((url) => url.pathname === path, { timeout: HTTP_TIMEOUT_MS });
-    await waitForPageReady(page);
+    try {
+      await waitForPageReady(page);
+    } catch (error) {
+      const diagnostics = await page.evaluate(() => ({
+        loadingStates: [...document.querySelectorAll('#v2-main .v2-page-state--loading')].map(
+          (element) => element.textContent?.trim()
+        ),
+        path: location.pathname,
+        routeDataErrors: performance
+          .getEntriesByName('v2:route-data-error')
+          .map((entry) => entry.detail ?? null),
+        routeDataReady: performance
+          .getEntriesByName('v2:route-data-ready')
+          .map((entry) => entry.detail ?? null),
+        visibleErrors: [...document.querySelectorAll('#v2-main [role="alert"]')].map((element) =>
+          element.textContent?.trim()
+        )
+      }));
+      throw new Error(
+        `${path} 页面未就绪：${JSON.stringify({ diagnostics, runtimeErrors: runtimeErrors.slice(-3) })}`,
+        { cause: error }
+      );
+    }
     assert.equal(
       await page.locator('.app-route-error').count(),
       0,
@@ -1098,13 +1141,11 @@ async function verifyFreshOptionTypeSwitch(page, label, expectedColumns) {
     let blankFrames = 0;
     while (Date.now() - startedAt < 1_000) {
       const activeLabel = document
-        .querySelector('.v2-options-type-strip .is-active')
+        .querySelector('.v2-options-category-nav .is-active')
         ?.textContent?.trim();
       const list = document.querySelector('.v2-options-list');
       const hasStructure = Boolean(
-        list?.querySelector(
-          '.v2-options-table, .v2-options-mobile-list, .v2-options-empty, .v2-async-region'
-        )
+        list?.querySelector('.v2-records-table, .v2-records-empty, .v2-async-region')
       );
       if (activeLabel === targetLabel && feedbackMs === Number.POSITIVE_INFINITY) {
         feedbackMs = Date.now() - startedAt;
@@ -1112,7 +1153,7 @@ async function verifyFreshOptionTypeSwitch(page, label, expectedColumns) {
       if (!hasStructure) blankFrames += 1;
       if (
         activeLabel === targetLabel &&
-        document.querySelector('.v2-options-table')?.getAttribute('aria-busy') !== 'true'
+        document.querySelector('.v2-options-list [aria-busy]')?.getAttribute('aria-busy') !== 'true'
       ) {
         return {
           feedbackMs,
@@ -1150,10 +1191,9 @@ async function verifyFreshOptionTypeSwitch(page, label, expectedColumns) {
   }
 }
 
-async function verifyMobile(browser, storageState) {
-  const context = await browser.newContext({
+async function verifyMobile(browser, authenticatedState) {
+  const context = await createAuthenticatedContext(browser, authenticatedState, {
     viewport: { width: 390, height: 844 },
-    storageState,
     reducedMotion: 'reduce'
   });
   const page = await context.newPage();
@@ -1171,6 +1211,42 @@ async function verifyMobile(browser, storageState) {
   assert.equal(await page.locator('.v2-sidebar.is-mobile-open').count(), 0, '移动端导航未立即关闭');
   assert.equal(await page.locator('[aria-busy="true"] .v2-route-skeleton').count(), 0);
   await context.close();
+}
+
+async function captureAuthenticatedBrowserState(context, page) {
+  const sessionEntries = await page.evaluate(() =>
+    Object.fromEntries(
+      Object.entries(sessionStorage).filter(
+        ([key]) => key === 'apple_business_auth_v2' || /^sb-.+-auth-token(?:-.+)?$/.test(key)
+      )
+    )
+  );
+  assert.ok(sessionEntries.apple_business_auth_v2, '测试浏览器缺少 V2 会话凭据');
+  return {
+    sessionEntries,
+    storageState: await context.storageState()
+  };
+}
+
+async function createAuthenticatedContext(browser, authenticatedState, options) {
+  const context = await browser.newContext({
+    ...options,
+    storageState: authenticatedState.storageState
+  });
+  await context.addInitScript(
+    ({ origin, sessionEntries }) => {
+      if (location.origin === origin) {
+        for (const [key, value] of Object.entries(sessionEntries)) {
+          sessionStorage.setItem(key, value);
+        }
+      }
+    },
+    {
+      origin: new URL(ADMIN_BASE_URL).origin,
+      sessionEntries: authenticatedState.sessionEntries
+    }
+  );
+  return context;
 }
 
 async function navigateAndMeasure(page, path) {

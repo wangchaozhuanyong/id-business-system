@@ -410,7 +410,11 @@ function validateStartupArchitecture() {
   requirePatterns(files.app, sources.app, [
     [/authIdentityEpoch/, '应用根节点没有以身份代次隔离组件运行态'],
     [/await router\.isReady\(\)/, '应用根节点没有收敛首次路由就绪结果'],
-    [/navigateSafely/, 'Boot Gate 重试没有使用统一安全导航边界']
+    [/navigateSafely/, 'Boot Gate 重试没有使用统一安全导航边界'],
+    [
+      /<V2BootGate[\s\S]*\/>\s*<RouterView v-else/,
+      'Boot Gate 必须位于 RouterView 外层，避免首路由未解析时空白'
+    ]
   ]);
   requirePatterns(files.query, sources.query, [
     [
