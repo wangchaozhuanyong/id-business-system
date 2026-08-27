@@ -394,6 +394,83 @@ describe('IdBusinessV2OrderBalanceReturnService', () => {
       })
     );
   });
+
+  it('blocks reversal of a legacy return when the ID already has a later category activation', async () => {
+    const balanceReturn = {
+      id: balanceReturnId,
+      orderId,
+      accountId,
+      activeKey: orderId,
+      status: 'active',
+      currencyCode: 'USD',
+      returnedBalanceAmount: Amount4.from('35'),
+      restoredBalanceCostAmount: Amount4.from('35'),
+      restoredAppliedBalanceCostAmount: Amount4.from('35'),
+      originalProfitAmount: Amount4.from('10'),
+      adjustedProfitAmount: Amount4.from('45'),
+      balanceLedgerEntryId: 'ledger-return',
+      financeJournalId: 'journal-return',
+      idempotencyKey: `upgrade_return:${orderId}:legacy-record`,
+      reason: 'Plus 升级 Pro',
+      createdByUserId: null,
+      createdAt,
+      reversalBalanceLedgerEntryId: null,
+      reversalFinanceJournalId: null,
+      reversalIdempotencyKey: null,
+      reversalReason: null,
+      reversedByUserId: null,
+      reversedAt: null
+    };
+    const commandRepository = {
+      findBalanceReturnReversalReplay: vi.fn().mockResolvedValue(null),
+      lockOrder: vi.fn().mockResolvedValue(
+        makeOrder({
+          balanceCostAmount: Amount4.from('55'),
+          appliedBalanceCostAmount: Amount4.from('55'),
+          profitAmount: Amount4.from('45')
+        })
+      ),
+      findActiveBalanceReturn: vi.fn().mockResolvedValue(balanceReturn),
+      lockAccount: vi.fn().mockResolvedValue({
+        id: accountId,
+        currentBalance: Amount4.from('35'),
+        balanceCostAmount: Amount4.from('35'),
+        lossReportedAt: null
+      }),
+      findActivationByOrder: vi.fn().mockResolvedValue({
+        id: 'legacy-activation',
+        orderId,
+        accountId,
+        serviceOptionId: '44444444-4444-4444-8444-444444444444',
+        status: 'active',
+        statusChangedAt: createdAt,
+        remark: '修复发布前的原开通记录'
+      }),
+      findServiceCategory: vi.fn().mockResolvedValue({ parentId: 'category-chatgpt' }),
+      findActiveCategoryActivationForAccount: vi.fn().mockResolvedValue({ id: 'pro-activation' }),
+      findActiveCategoryOrderLockForAccount: vi.fn().mockResolvedValue(null),
+      createBalanceLedger: vi.fn()
+    };
+    const commandService = new IdBusinessV2OrderBalanceReturnService(
+      new IdBusinessV2BalanceCalculatorService(),
+      { reverse: vi.fn() } as never,
+      { get: vi.fn() } as never,
+      commandRepository as never,
+      {
+        execute: vi.fn(async (command: (tx: unknown, context: { businessTime: Date }) => unknown) =>
+          command({}, { businessTime: createdAt })
+        )
+      } as never
+    );
+
+    await expect(
+      commandService.reverse(orderId, {
+        reason: '登记有误',
+        idempotencyKey: 'reverse-legacy-upgrade-return'
+      })
+    ).rejects.toThrow('该 ID 已有后续同类业务订单或开通，不能撤销升级退币');
+    expect(commandRepository.createBalanceLedger).not.toHaveBeenCalled();
+  });
 });
 
 describe('upgrade balance return activation remark', () => {

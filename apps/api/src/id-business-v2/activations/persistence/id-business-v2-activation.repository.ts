@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { mapAmount4, mapOptionalAmount4 } from '../../runtime/public-api';
 import type { ActivationListCriteria, ActivationRecord } from '../activation.types';
+import {
+  buildIdBusinessV2EffectiveActivationWhere,
+  ID_BUSINESS_V2_ACTIVE_BALANCE_RETURN_SELECT
+} from './id-business-v2-effective-activation.query';
 import type { IdBusinessV2ActivationDueStatusFilter } from '../id-business-v2-activation-status.service';
 
 const ACTIVATION_INCLUDE = {
@@ -15,7 +19,8 @@ const ACTIVATION_INCLUDE = {
       websiteAccountEncrypted: true,
       receivedAmount: true,
       profitAmount: true,
-      displaySnapshot: true
+      displaySnapshot: true,
+      balanceReturns: ID_BUSINESS_V2_ACTIVE_BALANCE_RETURN_SELECT
     }
   },
   customer: { select: { id: true, name: true } },
@@ -73,6 +78,7 @@ export class IdBusinessV2ActivationRepository {
         where: {
           AND: [
             where,
+            buildIdBusinessV2EffectiveActivationWhere(),
             {
               renewedBy: { is: null },
               status: 'active',
@@ -100,33 +106,14 @@ export class IdBusinessV2ActivationRepository {
   }
 
   private buildWhere(criteria: ActivationListCriteria): Prisma.IdBusinessV2ActivationWhereInput {
-    return {
-      customerId: criteria.customerId ?? undefined,
-      serviceOptionId: criteria.serviceOptionId ?? undefined,
-      accountId: criteria.accountId ?? undefined,
-      status: criteria.status ?? undefined,
-      openedAt: criteria.openedAt,
-      dueAt: criteria.dueAt,
-      AND: criteria.dueFilter ? [this.mapDueFilter(criteria.dueFilter)] : undefined,
-      OR: criteria.keyword
-        ? [
+    const keywordWhere: Prisma.IdBusinessV2ActivationWhereInput | null = criteria.keyword
+      ? {
+          OR: [
             { order: { is: { orderNo: { contains: criteria.keyword } } } },
             { customer: { is: { name: { contains: criteria.keyword } } } },
-            {
-              serviceOption: { is: { name: { contains: criteria.keyword } } }
-            },
-            {
-              account: {
-                is: { appleIdMasked: { contains: criteria.keyword } }
-              }
-            },
-            {
-              order: {
-                is: {
-                  websiteAccountMasked: { contains: criteria.keyword }
-                }
-              }
-            },
+            { serviceOption: { is: { name: { contains: criteria.keyword } } } },
+            { account: { is: { appleIdMasked: { contains: criteria.keyword } } } },
+            { order: { is: { websiteAccountMasked: { contains: criteria.keyword } } } },
             {
               order: {
                 is: {
@@ -143,39 +130,74 @@ export class IdBusinessV2ActivationRepository {
               }
             }
           ]
-        : undefined
+        }
+      : null;
+    const filters = [
+      criteria.status ? this.mapStoredStatus(criteria.status) : null,
+      criteria.dueFilter ? this.mapDueFilter(criteria.dueFilter) : null,
+      keywordWhere
+    ].filter((item): item is Prisma.IdBusinessV2ActivationWhereInput => item !== null);
+    return {
+      customerId: criteria.customerId ?? undefined,
+      serviceOptionId: criteria.serviceOptionId ?? undefined,
+      accountId: criteria.accountId ?? undefined,
+      openedAt: criteria.openedAt,
+      dueAt: criteria.dueAt,
+      AND: filters.length ? filters : undefined
     };
   }
 
   private mapDueFilter(
     filter: IdBusinessV2ActivationDueStatusFilter
   ): Prisma.IdBusinessV2ActivationWhereInput {
-    if (filter.kind === 'stored_status') return { status: filter.status };
+    if (filter.kind === 'stored_status') return this.mapStoredStatus(filter.status);
     if (filter.kind === 'expired') {
       return {
+        AND: [buildIdBusinessV2EffectiveActivationWhere()],
         renewedBy: { is: null },
         OR: [{ status: 'expired' }, { status: 'active', dueAt: { lte: filter.evaluatedAt } }]
       };
     }
     if (filter.kind === 'active') {
       return {
+        AND: [buildIdBusinessV2EffectiveActivationWhere()],
         renewedBy: { is: null },
         status: 'active',
         OR: [{ dueAt: null }, { dueAt: { gt: filter.after } }]
       };
     }
     return {
+      AND: [buildIdBusinessV2EffectiveActivationWhere()],
       renewedBy: { is: null },
       status: 'active',
       dueAt: { gt: filter.after, lte: filter.atOrBefore }
     };
   }
+
+  private mapStoredStatus(
+    status: IdBusinessV2ActivationStatus | null
+  ): Prisma.IdBusinessV2ActivationWhereInput {
+    if (!status) return {};
+    if (status === 'cancelled') {
+      return {
+        OR: [
+          { status: 'cancelled' },
+          { order: { is: { balanceReturns: { some: { status: 'active' } } } } }
+        ]
+      };
+    }
+    return {
+      status,
+      AND: [buildIdBusinessV2EffectiveActivationWhere()]
+    };
+  }
 }
 
 function mapActivationRow(row: ActivationPersistenceRow): ActivationRecord {
-  const { displaySnapshot: snapshot, ...order } = row.order;
+  const { displaySnapshot: snapshot, balanceReturns, ...order } = row.order;
   return {
     ...row,
+    hasActiveUpgradeBalanceReturn: (balanceReturns?.length ?? 0) > 0,
     order: {
       ...order,
       receivedAmount: mapAmount4(order.receivedAmount, 'id_business_v2_orders.received_amount'),

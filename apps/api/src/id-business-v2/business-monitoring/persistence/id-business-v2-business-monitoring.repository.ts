@@ -127,6 +127,10 @@ export class IdBusinessV2BusinessMonitoringRepository {
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
       WHERE a."status" = 'active' AND a."due_at" < ${now}
         AND NOT EXISTS (
+          SELECT 1 FROM "id_business_v2_order_balance_returns" balance_return
+          WHERE balance_return."order_id" = a."order_id" AND balance_return."status" = 'active'
+        )
+        AND NOT EXISTS (
           SELECT 1
           FROM "id_business_v2_activations" replacement
           WHERE replacement."renewed_from_activation_id" = a."id"
@@ -144,6 +148,10 @@ export class IdBusinessV2BusinessMonitoringRepository {
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
       WHERE a."status" = 'active' AND a."due_at" >= ${now} AND a."due_at" < ${warningEnd}
         AND NOT EXISTS (
+          SELECT 1 FROM "id_business_v2_order_balance_returns" balance_return
+          WHERE balance_return."order_id" = a."order_id" AND balance_return."status" = 'active'
+        )
+        AND NOT EXISTS (
           SELECT 1
           FROM "id_business_v2_activations" replacement
           WHERE replacement."renewed_from_activation_id" = a."id"
@@ -160,6 +168,10 @@ export class IdBusinessV2BusinessMonitoringRepository {
       JOIN "id_business_v2_customers" c ON c."id" = a."customer_id"
       JOIN "id_business_v2_options" s ON s."id" = a."service_option_id"
       WHERE a."status" = 'abnormal'
+        AND NOT EXISTS (
+          SELECT 1 FROM "id_business_v2_order_balance_returns" balance_return
+          WHERE balance_return."order_id" = a."order_id" AND balance_return."status" = 'active'
+        )
 
       UNION ALL
 
@@ -198,6 +210,11 @@ export class IdBusinessV2BusinessMonitoringRepository {
                 FROM "id_business_v2_activations" activation
                 WHERE activation."order_id" = o."id"
                   AND activation."status" = 'active'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM "id_business_v2_order_balance_returns" balance_return
+                    WHERE balance_return."order_id" = activation."order_id"
+                      AND balance_return."status" = 'active'
+                  )
                   AND NOT EXISTS (
                     SELECT 1
                     FROM "id_business_v2_activations" renewed_activation

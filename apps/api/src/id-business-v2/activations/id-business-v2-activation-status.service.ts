@@ -104,8 +104,12 @@ export class IdBusinessV2ActivationStatusService {
     dueAt: Date | null,
     serviceOptionId: string,
     replacementServiceOptionId: string | null,
-    now = new Date()
+    now = new Date(),
+    invalidatedByUpgradeBalanceReturn = false
   ): IdBusinessV2ActivationStatusSnapshot {
+    if (invalidatedByUpgradeBalanceReturn) {
+      return this.snapshot('upgraded', '已升级失效', null);
+    }
     if (storedStatus === 'cancelled' || storedStatus === 'abnormal') {
       return this.resolve(storedStatus, dueAt, now);
     }

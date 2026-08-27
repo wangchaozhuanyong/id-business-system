@@ -697,6 +697,13 @@ describe('IdBusinessV2OptionsService', () => {
       ]
     });
     expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        serviceOptionId: { in: [serviceOption.id] },
+        status: 'active',
+        order: { is: { balanceReturns: { none: { status: 'active' } } } }
+      }
+    });
   });
 
   it('rejects a delete when dependencies changed after the preview', async () => {

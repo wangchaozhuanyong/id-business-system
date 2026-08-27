@@ -37,6 +37,7 @@ export interface ActivationRecord {
   statusChangedAt: Date;
   createdAt: Date;
   updatedAt: Date;
+  hasActiveUpgradeBalanceReturn: boolean;
   order: {
     id: string;
     orderNo: string;

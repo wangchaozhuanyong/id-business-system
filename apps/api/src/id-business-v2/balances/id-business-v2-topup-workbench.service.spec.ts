@@ -157,6 +157,39 @@ describe('IdBusinessV2TopupWorkbenchService', () => {
     expect(result.items[0]?.currentServices).toEqual([storageService]);
   });
 
+  it('keeps an upgrade-return source in history but removes it from current services', async () => {
+    prisma.idBusinessV2Account.findMany.mockResolvedValue([
+      makeAccount({
+        activations: [
+          {
+            id: 'activation-upgraded',
+            status: 'active',
+            openedAt: new Date('2026-07-25T08:00:00.000Z'),
+            dueAt: new Date('2026-08-25T08:00:00.000Z'),
+            order: { balanceReturns: [{ id: 'active-upgrade-return' }] },
+            serviceOption: streamingService
+          }
+        ]
+      })
+    ]);
+
+    const result = await service.list({});
+
+    expect(result.items[0]?.historicalServices).toEqual([streamingService]);
+    expect(result.items[0]?.currentServices).toEqual([]);
+    const activationInclude =
+      prisma.idBusinessV2Account.findMany.mock.calls[0]?.[0].include.activations;
+    expect(activationInclude.select.order).toEqual({
+      select: {
+        balanceReturns: {
+          where: { status: 'active' },
+          select: { id: true },
+          take: 1
+        }
+      }
+    });
+  });
+
   it('filters active non-deleted accounts by country, zero balance and normal system status', async () => {
     await service.list({
       countryOptionId: 'country-1',

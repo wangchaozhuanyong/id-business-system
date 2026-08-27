@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2BalanceLedger, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { buildIdBusinessV2EffectiveActivationWhere } from '../../activations/public-api';
 import {
   mapAmount4,
   mapOptionalAmount4,
@@ -189,19 +190,27 @@ export class IdBusinessV2RenewalsRepository {
     } satisfies Prisma.IdBusinessV2ActivationSelect;
     const [upcoming, expired, nextTimedActivation] = await Promise.all([
       this.prisma.idBusinessV2Activation.findMany({
-        where: this.buildWarningWhere(now, warningDays),
+        where: {
+          AND: [
+            buildIdBusinessV2EffectiveActivationWhere(),
+            this.buildWarningWhere(now, warningDays)
+          ]
+        },
         select: summarySelect,
         orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
         take: 5
       }),
       this.prisma.idBusinessV2Activation.findMany({
-        where: this.buildExpiredWhere(now),
+        where: {
+          AND: [buildIdBusinessV2EffectiveActivationWhere(), this.buildExpiredWhere(now)]
+        },
         select: summarySelect,
         orderBy: [{ dueAt: 'desc' }, { id: 'asc' }],
         take: 5
       }),
       this.prisma.idBusinessV2Activation.findFirst({
         where: {
+          ...buildIdBusinessV2EffectiveActivationWhere(),
           renewedBy: { is: null },
           status: 'active',
           dueAt: { gt: now },
@@ -255,7 +264,9 @@ export class IdBusinessV2RenewalsRepository {
   }
 
   async listFilterOptions() {
-    const actionableWhere = this.buildDueFilter({ kind: 'all_due' });
+    const actionableWhere: Prisma.IdBusinessV2ActivationWhereInput = {
+      AND: [buildIdBusinessV2EffectiveActivationWhere(), this.buildDueFilter({ kind: 'all_due' })]
+    };
     const [customers, accounts, services] = await Promise.all([
       this.prisma.idBusinessV2Customer.findMany({
         where: { activations: { some: actionableWhere } },
@@ -361,6 +372,7 @@ export class IdBusinessV2RenewalsRepository {
     return tx.idBusinessV2Activation.findFirst({
       where: {
         id: activationId,
+        ...buildIdBusinessV2EffectiveActivationWhere(),
         renewedBy: { is: null },
         OR: [
           { status: 'expired' },
@@ -415,6 +427,7 @@ export class IdBusinessV2RenewalsRepository {
       },
       select: {
         id: true,
+        parentId: true,
         countryOption: { select: { id: true, code: true, name: true } }
       }
     });
@@ -424,50 +437,66 @@ export class IdBusinessV2RenewalsRepository {
     tx: V2CommandTransaction,
     input: {
       sourceOrderId: string;
+      sourceActivationId: string;
       accountId: string;
       serviceOptionId: string;
+      categoryOptionId: string;
       openedAt: Date;
       dueAt: Date;
       evaluatedAt: Date;
     }
   ) {
-    const [activeOrderLock, duplicateRenewalOrder] = await Promise.all([
-      tx.idBusinessV2AccountLock.findFirst({
-        where: {
-          accountId: input.accountId,
-          status: 'active',
-          expiresAt: { gt: input.evaluatedAt },
-          order: {
-            is: {
-              status: { in: ['draft', 'pending', 'waiting_external', 'processing'] },
-              deletedAt: null
+    const [activeOrderLock, activeCategoryActivationCount, duplicateRenewalOrder] =
+      await Promise.all([
+        tx.idBusinessV2AccountLock.findFirst({
+          where: {
+            accountId: input.accountId,
+            status: 'active',
+            expiresAt: { gt: input.evaluatedAt },
+            order: {
+              is: {
+                status: { in: ['draft', 'pending', 'waiting_external', 'processing'] },
+                deletedAt: null
+              }
+            }
+          },
+          select: { id: true }
+        }),
+        tx.idBusinessV2Activation.count({
+          where: {
+            ...buildIdBusinessV2EffectiveActivationWhere(),
+            id: { not: input.sourceActivationId },
+            accountId: input.accountId,
+            renewedBy: { is: null },
+            status: 'active',
+            OR: [{ dueAt: null }, { dueAt: { gt: input.evaluatedAt } }],
+            serviceOption: {
+              is: { type: 'service', parentId: input.categoryOptionId }
             }
           }
-        },
-        select: { id: true }
-      }),
-      tx.idBusinessV2Order.findFirst({
-        where: {
-          id: { not: input.sourceOrderId },
-          accountId: input.accountId,
-          serviceOptionId: input.serviceOptionId,
-          openedAt: input.openedAt,
-          dueAt: input.dueAt,
-          status: 'completed',
-          deletedAt: null,
-          activation: {
-            is: {
-              accountId: input.accountId,
-              serviceOptionId: input.serviceOptionId,
-              openedAt: input.openedAt,
-              dueAt: input.dueAt
+        }),
+        tx.idBusinessV2Order.findFirst({
+          where: {
+            id: { not: input.sourceOrderId },
+            accountId: input.accountId,
+            serviceOptionId: input.serviceOptionId,
+            openedAt: input.openedAt,
+            dueAt: input.dueAt,
+            status: 'completed',
+            deletedAt: null,
+            activation: {
+              is: {
+                accountId: input.accountId,
+                serviceOptionId: input.serviceOptionId,
+                openedAt: input.openedAt,
+                dueAt: input.dueAt
+              }
             }
-          }
-        },
-        select: { id: true, orderNo: true }
-      })
-    ]);
-    return { activeOrderLock, duplicateRenewalOrder };
+          },
+          select: { id: true, orderNo: true }
+        })
+      ]);
+    return { activeOrderLock, activeCategoryActivationCount, duplicateRenewalOrder };
   }
 
   async lockActivation(tx: V2CommandTransaction, activationId: string) {
@@ -523,6 +552,7 @@ export class IdBusinessV2RenewalsRepository {
 
   private buildBaseWhere(criteria: RenewalBaseCriteria): Prisma.IdBusinessV2ActivationWhereInput {
     return {
+      AND: [buildIdBusinessV2EffectiveActivationWhere()],
       customerId: criteria.customerId ?? undefined,
       serviceOptionId: criteria.serviceOptionId ?? undefined,
       accountId: criteria.accountId ?? undefined,

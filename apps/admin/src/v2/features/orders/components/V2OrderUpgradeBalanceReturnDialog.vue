@@ -14,7 +14,7 @@
     <V2DetailSummary
       v-if="order"
       heading-id="order-upgrade-return-summary"
-      eyebrow="原 Plus 订单"
+      eyebrow="原套餐订单"
       :title="order.orderNo"
       :description="`${order.customer.name} · ${order.service.name}`"
       :metrics="[
@@ -64,7 +64,7 @@
             :rows="3"
             maxlength="500"
             show-word-limit
-            placeholder="例如：用户升级 Pro，Plus 剩余金额由平台退回原 ID"
+            placeholder="例如：用户升级新套餐，原套餐剩余金额由平台退回原 ID"
           />
         </el-form-item>
       </V2PanelSection>

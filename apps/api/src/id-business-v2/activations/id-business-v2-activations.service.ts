@@ -198,7 +198,8 @@ export class IdBusinessV2ActivationsService {
       activation.dueAt,
       activation.serviceOption.id,
       activation.renewedBy?.serviceOptionId ?? null,
-      evaluatedAt
+      evaluatedAt,
+      activation.hasActiveUpgradeBalanceReturn
     );
     return {
       id: activation.id,

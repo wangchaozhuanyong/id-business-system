@@ -403,6 +403,13 @@ describe('IdBusinessV2CustomersService', () => {
       },
       blockingReasons: ['仍有 2 个进行中订单，不能删除客户', '仍有 1 个活动开通记录，不能删除客户']
     });
+    expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        customerId: customer.id,
+        status: 'active',
+        order: { is: { balanceReturns: { none: { status: 'active' } } } }
+      }
+    });
   });
 
   it('rejects a customer delete when the preview fingerprint is stale', async () => {

@@ -398,7 +398,9 @@ export class IdBusinessV2OrderBalanceReturnService {
         );
         const activationShouldRestore =
           activation?.status === 'cancelled' && activationCancellation.matched;
-        if (activationShouldRestore && activation) {
+        const activationWillBeEffectiveAfterReversal =
+          activationShouldRestore || activation?.status === 'active';
+        if (activationWillBeEffectiveAfterReversal && activation) {
           const service = await this.repository.findServiceCategory(tx, activation.serviceOptionId);
           if (!service?.parentId) {
             throw new ConflictException('原开通业务分类不存在，不能安全撤销升级退币');

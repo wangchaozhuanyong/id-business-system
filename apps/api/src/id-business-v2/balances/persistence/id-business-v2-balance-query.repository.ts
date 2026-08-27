@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2ActivationStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { ID_BUSINESS_V2_ACTIVE_BALANCE_RETURN_SELECT } from '../../activations/public-api';
 import {
   buildV2StringArrayContainsFilter,
   mapAmount4,
@@ -55,6 +56,11 @@ const WORKBENCH_ACCOUNT_INCLUDE = {
       status: true,
       openedAt: true,
       dueAt: true,
+      order: {
+        select: {
+          balanceReturns: ID_BUSINESS_V2_ACTIVE_BALANCE_RETURN_SELECT
+        }
+      },
       serviceOption: {
         select: {
           id: true,
@@ -93,6 +99,7 @@ export interface WorkbenchAccountRow {
     status: IdBusinessV2ActivationStatus;
     openedAt: Date;
     dueAt: Date | null;
+    order: { balanceReturns: Array<{ id: string }> };
     serviceOption: {
       id: string;
       code: string;
