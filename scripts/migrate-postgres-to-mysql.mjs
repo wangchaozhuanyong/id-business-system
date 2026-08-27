@@ -10,7 +10,11 @@ const INSERT_BATCH_SIZE = 50;
 const sourceUrl = requiredUrl('SOURCE_DATABASE_URL', 'postgresql:');
 const destinationUrl = requiredUrl('DATABASE_URL', 'mysql:');
 const dryRun = process.env.MIGRATION_DRY_RUN === 'true';
-if (!dryRun && process.env.MIGRATION_CONFIRM !== CONFIRMATION) {
+const verifyOnly = process.env.MIGRATION_VERIFY_ONLY === 'true';
+if (dryRun && verifyOnly) {
+  throw new Error('MIGRATION_DRY_RUN 与 MIGRATION_VERIFY_ONLY 不能同时启用');
+}
+if (!dryRun && !verifyOnly && process.env.MIGRATION_CONFIRM !== CONFIRMATION) {
   throw new Error(`数据迁移必须显式设置 MIGRATION_CONFIRM=${CONFIRMATION}`);
 }
 if (sourceUrl.href === destinationUrl.href) {
@@ -27,6 +31,9 @@ let foreignKeyConstraintCount = 0;
 try {
   await source.connect();
   await destination.$connect();
+  if (!dryRun && !verifyOnly) {
+    await source.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+  }
 
   const sourceTables = await listPostgresTables(source);
   const destinationTables = await listMysqlTables(destination);
@@ -45,21 +52,39 @@ try {
     const sourceCount = await postgresCount(source, table);
     const destinationCount = await mysqlCount(destination, table);
     sourceCounts.set(table, sourceCount);
-    if (destinationCount !== 0) {
+    if (!verifyOnly && destinationCount !== 0) {
       throw new Error(`目标表 ${table} 不是空表（${destinationCount} 行），迁移已停止`);
     }
   }
 
   printPlan({
     dryRun,
+    verifyOnly,
     migrationTables,
     sourceCounts,
     ignoredSourceTableCount: [...sourceTables].filter((table) => !destinationTables.has(table))
       .length
   });
   if (dryRun) process.exitCode = 0;
-  else {
-    await source.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+  else if (verifyOnly) {
+    const copiedRows = await verifyDestinationRowCounts(destination, migrationTables, sourceCounts);
+    foreignKeyConstraintCount = await verifyDestinationForeignKeys(destination);
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          verifyOnly: true,
+          verifiedTableCount: migrationTables.length,
+          copiedRows,
+          rowCountsVerified: true,
+          foreignKeysVerified: true,
+          foreignKeyConstraintCount
+        },
+        null,
+        2
+      )
+    );
+  } else {
     let tableCopies;
     try {
       tableCopies = [];
@@ -91,15 +116,7 @@ try {
       { maxWait: 30_000, timeout: 60 * 60 * 1_000 }
     );
 
-    let copiedRows = 0;
-    for (const table of migrationTables) {
-      const expected = sourceCounts.get(table) ?? 0;
-      const actual = await mysqlCount(destination, table);
-      if (actual !== expected) {
-        throw new Error(`目标表 ${table} 行数校验失败：期望 ${expected}，实际 ${actual}`);
-      }
-      copiedRows += actual;
-    }
+    const copiedRows = await verifyDestinationRowCounts(destination, migrationTables, sourceCounts);
     console.log(
       JSON.stringify(
         {
@@ -197,6 +214,19 @@ async function postgresCount(client, table) {
 async function mysqlCount(client, table) {
   const rows = await client.$queryRawUnsafe(`SELECT COUNT(*) AS count FROM ${quoteMysql(table)}`);
   return Number(rows[0]?.count ?? 0);
+}
+
+async function verifyDestinationRowCounts(destination, migrationTables, sourceCounts) {
+  let copiedRows = 0;
+  for (const table of migrationTables) {
+    const expected = sourceCounts.get(table) ?? 0;
+    const actual = await mysqlCount(destination, table);
+    if (actual !== expected) {
+      throw new Error(`目标表 ${table} 行数校验失败：期望 ${expected}，实际 ${actual}`);
+    }
+    copiedRows += actual;
+  }
+  return copiedRows;
 }
 
 async function verifyDestinationForeignKeys(destination) {
@@ -303,16 +333,17 @@ function assertIdentifier(value) {
   if (!/^[a-z][a-z0-9_]*$/u.test(value)) throw new Error(`数据库标识符无效：${value}`);
 }
 
-function printPlan({ dryRun, migrationTables, sourceCounts, ignoredSourceTableCount }) {
+function printPlan({ dryRun, verifyOnly, migrationTables, sourceCounts, ignoredSourceTableCount }) {
   console.log(
     JSON.stringify(
       {
         ok: true,
         dryRun,
+        verifyOnly,
         migrationTableCount: migrationTables.length,
         sourceRows: [...sourceCounts.values()].reduce((sum, count) => sum + count, 0),
         ignoredLegacySourceTableCount: ignoredSourceTableCount,
-        targetEmptyVerified: true
+        targetEmptyVerified: verifyOnly ? null : true
       },
       null,
       2
