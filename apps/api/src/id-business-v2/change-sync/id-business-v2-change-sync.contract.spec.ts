@@ -12,6 +12,10 @@ const exactScopeMigration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260827102000_exact_scope_version_broadcast/migration.sql'),
   'utf8'
 );
+const completeScopeCatalogMigration = readFileSync(
+  resolve(apiRoot, 'prisma/migrations/20260827111500_complete_scope_version_catalog/migration.sql'),
+  'utf8'
+);
 const controller = readFileSync(
   resolve(apiRoot, 'src/id-business-v2/change-sync/id-business-v2-change-sync.controller.ts'),
   'utf8'
@@ -42,6 +46,14 @@ describe('V2 event-driven change sync contract', () => {
     expect(exactScopeMigration).not.toMatch(
       /apple_id|phone|password|gift_card|order_no|website_account|lock_token/
     );
+  });
+
+  it('adds later scope-version rows without overwriting any existing version', () => {
+    expect(completeScopeCatalogMigration).toContain("('audit-logs', 0)");
+    expect(completeScopeCatalogMigration).toContain("('branding', 0)");
+    expect(completeScopeCatalogMigration).toContain("('dashboard', 0)");
+    expect(completeScopeCatalogMigration).toContain('ON CONFLICT (scope) DO NOTHING');
+    expect(completeScopeCatalogMigration).not.toMatch(/DO UPDATE|UPDATE\s+public\./);
   });
 
   it('broadcasts only scope versions and never reads changed business rows', () => {
