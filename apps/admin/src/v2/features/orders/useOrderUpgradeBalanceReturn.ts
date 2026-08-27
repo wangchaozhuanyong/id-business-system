@@ -55,7 +55,7 @@ export function useOrderUpgradeBalanceReturn(input: UseOrderUpgradeBalanceReturn
       ElMessage.success(
         result.idempotentReplay
           ? '已恢复原升级退币登记结果'
-          : `已向原 ID 恢复 ${formatDecimal(result.balanceReturn.returnedBalanceAmount)} ${result.balanceReturn.currencyCode}，订单收入保持不变`
+          : `已向原 ID 恢复 ${formatDecimal(result.balanceReturn.returnedBalanceAmount)} ${result.balanceReturn.currencyCode} 并结束原开通记录，订单收入保持不变`
       );
       await input.loadOrders();
     } catch (error) {
@@ -77,7 +77,7 @@ export function useOrderUpgradeBalanceReturn(input: UseOrderUpgradeBalanceReturn
     const balanceReturn = target.upgradeBalanceReturn;
     if (!balanceReturn || balanceReturn.status !== 'active') return;
     const reason = await input.promptReason(
-      `将从原 ID 扣回 ${formatDecimal(balanceReturn.returnedBalanceAmount)} ${balanceReturn.currencyCode}，并精确恢复登记前的订单成本和利润。若该余额已被后续消费，系统会拒绝撤销。`,
+      `将从原 ID 扣回 ${formatDecimal(balanceReturn.returnedBalanceAmount)} ${balanceReturn.currencyCode}，并恢复登记前的订单成本、利润和原开通记录。若余额已被消费或已有后续同类订单，系统会拒绝撤销。`,
       `撤销订单 ${target.orderNo} 的升级退币`,
       '确认撤销'
     );
@@ -97,7 +97,9 @@ export function useOrderUpgradeBalanceReturn(input: UseOrderUpgradeBalanceReturn
       input.actionKeys.delete(keyName);
       if (input.detail.value?.id === target.id) input.detail.value = result.order;
       ElMessage.success(
-        result.idempotentReplay ? '已恢复原撤销结果' : '升级退币已撤销，订单成本和利润已恢复'
+        result.idempotentReplay
+          ? '已恢复原撤销结果'
+          : '升级退币已撤销，订单成本、利润和原开通记录已恢复'
       );
       await input.loadOrders();
     } catch (error) {

@@ -907,6 +907,45 @@ export class IdBusinessV2OrdersRepository {
     });
   }
 
+  findServiceCategory(tx: V2CommandTransaction, serviceOptionId: string) {
+    return tx.idBusinessV2Option.findFirst({
+      where: { id: serviceOptionId, type: 'service', deletedAt: null },
+      select: { parentId: true }
+    });
+  }
+
+  findActiveCategoryOrderLockForAccount(
+    tx: V2CommandTransaction,
+    input: {
+      accountId: string;
+      categoryOptionId: string;
+      evaluatedAt: Date;
+      excludedOrderId: string;
+    }
+  ) {
+    return tx.idBusinessV2AccountLock.findFirst({
+      where: {
+        accountId: input.accountId,
+        orderId: { not: input.excludedOrderId },
+        status: 'active',
+        expiresAt: { gt: input.evaluatedAt },
+        OR: [
+          { lockScope: 'global' },
+          {
+            order: {
+              is: {
+                serviceOption: {
+                  is: { type: 'service', parentId: input.categoryOptionId }
+                }
+              }
+            }
+          }
+        ]
+      },
+      select: { id: true, orderId: true }
+    });
+  }
+
   private buildActiveCategoryActivationWhere(input: {
     accountId?: string;
     categoryOptionId: string;
@@ -918,6 +957,11 @@ export class IdBusinessV2OrdersRepository {
       accountId: input.accountId,
       status: 'active',
       renewedBy: { is: null },
+      order: {
+        is: {
+          balanceReturns: { none: { status: 'active' } }
+        }
+      },
       orderId: input.editingOrderId ? { not: input.editingOrderId } : undefined,
       serviceOption: {
         is: {

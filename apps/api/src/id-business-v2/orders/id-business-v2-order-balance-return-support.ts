@@ -61,6 +61,34 @@ export function minAmount(left: Amount4, right: Amount4) {
   return left.lte(right) ? left : right;
 }
 
+export function appendUpgradeBalanceReturnActivationRemark(
+  existingRemark: string | null,
+  balanceReturnId: string,
+  reason: string
+) {
+  const normalizedReason = reason.replace(/\s+/g, ' ').trim();
+  const remark = `${upgradeBalanceReturnActivationMarker(balanceReturnId)}：${normalizedReason}`;
+  return existingRemark ? `${existingRemark}\n${remark}` : remark;
+}
+
+export function removeUpgradeBalanceReturnActivationRemark(
+  existingRemark: string | null,
+  balanceReturnId: string
+) {
+  if (!existingRemark) return { matched: false, remark: existingRemark };
+  const lines = existingRemark.split('\n');
+  const marker = upgradeBalanceReturnActivationMarker(balanceReturnId);
+  if (!lines.at(-1)?.startsWith(`${marker}：`)) {
+    return { matched: false, remark: existingRemark };
+  }
+  lines.pop();
+  return { matched: true, remark: lines.length > 0 ? lines.join('\n') : null };
+}
+
+function upgradeBalanceReturnActivationMarker(balanceReturnId: string) {
+  return `升级退币结束原开通（退币记录 ${balanceReturnId}）`;
+}
+
 export function buildUpgradeBalanceReturnPreview(
   order: IdBusinessV2OrderListRecord,
   returnedBalanceAmount: Amount4
