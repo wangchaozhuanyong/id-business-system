@@ -182,7 +182,7 @@ describe('JwtAuthGuard', () => {
       );
 
     await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
-    expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
+    expect(fixture.request.user).toBeUndefined();
   });
 
   it('classifies an unexpected active-session dependency failure as retryable 503', async () => {
@@ -196,7 +196,7 @@ describe('JwtAuthGuard', () => {
       503,
       'AUTH_DEPENDENCY_UNAVAILABLE'
     );
-    expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
+    expect(fixture.request.user).toBeUndefined();
   });
 
   it('fails closed when SecurityService reports an inactive session', async () => {
@@ -204,7 +204,32 @@ describe('JwtAuthGuard', () => {
     jest.mocked(fixture.securityService.ensureActiveSession).mockResolvedValue(false);
 
     await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
-    expect(fixture.identityService.getAuthenticatedUser).not.toHaveBeenCalled();
+    expect(fixture.request.user).toBeUndefined();
+  });
+
+  it('loads session, user and MFA checks concurrently while preserving the session result', async () => {
+    const fixture = createFixture();
+    let resolveActiveSession: ((active: boolean) => void) | undefined;
+    jest.mocked(fixture.securityService.ensureActiveSession).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveActiveSession = resolve;
+        })
+    );
+
+    const activation = fixture.guard.canActivate(fixture.context);
+    await expect
+      .poll(() => jest.mocked(fixture.identityService.getAuthenticatedUser).mock.calls.length)
+      .toBe(1);
+
+    expect(fixture.identityService.getAuthenticatedUser).toHaveBeenCalledWith(fixture.user.id);
+    expect(fixture.securityService.getMfaLoginRequirementForUser).toHaveBeenCalledWith(
+      fixture.user
+    );
+    expect(resolveActiveSession).toBeTypeOf('function');
+
+    resolveActiveSession?.(true);
+    await expect(activation).resolves.toBe(true);
   });
 });
 

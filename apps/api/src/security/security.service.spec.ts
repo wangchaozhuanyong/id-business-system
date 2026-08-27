@@ -934,7 +934,7 @@ describe('SecurityService', () => {
   });
 
   it('requires MFA for an administrator when the global admin policy is enabled', async () => {
-    const { service } = createService();
+    const { service, prisma } = createService();
 
     await service.updateMfaSettings(
       {
@@ -944,12 +944,26 @@ describe('SecurityService', () => {
       },
       authenticatedUser
     );
+    jest.clearAllMocks();
 
     await expect(service.getMfaLoginRequirementForUser(authenticatedUser)).resolves.toEqual({
       required: true,
       bound: false,
       reason: 'admin_required'
     });
+    expect(prisma.securitySetting.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.securitySetting.findMany).toHaveBeenCalledWith({
+      where: {
+        key: {
+          in: ['mfa_settings', `mfa_user_${userId}`]
+        }
+      },
+      select: {
+        key: true,
+        value: true
+      }
+    });
+    expect(prisma.securitySetting.findUnique).not.toHaveBeenCalled();
   });
 
   it('blocks the required-admin MFA policy until every active admin is bound', async () => {
