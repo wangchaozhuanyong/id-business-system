@@ -157,7 +157,8 @@ describe('IdBusinessV2OrderCompletionService', () => {
     get: vi.fn()
   };
   const financePostingService = {
-    post: vi.fn()
+    post: vi.fn(),
+    reserveOrderIncomeReferences: vi.fn()
   };
   const service = new IdBusinessV2OrderCompletionService(
     ordersService as never,
@@ -173,6 +174,7 @@ describe('IdBusinessV2OrderCompletionService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     financePostingService.post.mockResolvedValue({ id: 'finance-journal-1' });
+    financePostingService.reserveOrderIncomeReferences.mockResolvedValue(undefined);
     order = makeOrder();
     consumption = makeConsumption();
     reversal = null;
@@ -238,6 +240,10 @@ describe('IdBusinessV2OrderCompletionService', () => {
         dueAt,
         status: 'active'
       })
+    });
+    expect(financePostingService.reserveOrderIncomeReferences).toHaveBeenCalledWith(tx, {
+      orderId,
+      references: ['V220260726TEST001', null]
     });
     expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith({
       where: { id: orderId },
@@ -311,6 +317,17 @@ describe('IdBusinessV2OrderCompletionService', () => {
       new ConflictException('订单消费已经撤销，不能生成开通记录')
     );
     expect(tx.idBusinessV2Activation.create).not.toHaveBeenCalled();
+  });
+
+  it('does not complete an order whose income reference is occupied by manual income', async () => {
+    financePostingService.reserveOrderIncomeReferences.mockRejectedValue(
+      new ConflictException('订单收款标识已用于手工收入')
+    );
+
+    await expect(service.complete(orderId, operator)).rejects.toThrow('已用于手工收入');
+    expect(tx.idBusinessV2Activation.create).not.toHaveBeenCalled();
+    expect(tx.idBusinessV2Order.update).not.toHaveBeenCalled();
+    expect(financePostingService.post).not.toHaveBeenCalled();
   });
 
   it('returns the existing activation for a consistent completed-order retry', async () => {

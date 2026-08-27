@@ -67,7 +67,8 @@ export function useOptionsPage() {
     topup_supplier: markRaw(Wallet),
     gift_card_name: markRaw(CreditCard),
     settlement_platform: markRaw(CreditCard),
-    expense_category: markRaw(Wallet)
+    expense_category: markRaw(Wallet),
+    income_category: markRaw(Wallet)
   };
   const requestedType =
     typeof route.query.type === 'string' ? (route.query.type as V2OptionType) : 'id_status';

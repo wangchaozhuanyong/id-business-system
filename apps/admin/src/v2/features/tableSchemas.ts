@@ -229,7 +229,10 @@ export const v2TableSchemas = {
       rowKey: { kind: 'path', value: 'currency' },
       columns: [
         { key: '币种', label: '币种', kind: 'status', widthPreset: 'compact' },
-        { key: '收入', label: '收入', kind: 'numeric', widthPreset: 'standard' },
+        { key: '收入', label: '现金流入', kind: 'numeric', widthPreset: 'standard' },
+        { key: '经营收入', label: '手工经营收入', kind: 'numeric', widthPreset: 'standard' },
+        { key: '股东投入', label: '股东投入', kind: 'numeric', widthPreset: 'standard' },
+        { key: '借入资金', label: '借入资金', kind: 'numeric', widthPreset: 'standard' },
         { key: '支出', label: '支出', kind: 'numeric', widthPreset: 'standard' },
         { key: '净现金流', label: '净现金流', kind: 'numeric', widthPreset: 'standard' },
         { key: '最新汇率', label: '最新汇率', kind: 'numeric', widthPreset: 'standard' },
@@ -480,6 +483,28 @@ export const v2TableSchemas = {
         { key: '账面人民币', label: '账面人民币', kind: 'numeric', widthPreset: 'standard' },
         { key: '初始化时间', label: '初始化时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
+    }),
+    inflows: table({
+      id: 'finance-ledger.inflows',
+      feature: 'finance-ledger',
+      role: 'secondary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: '发生时间', label: '发生时间', kind: 'date', widthPreset: 'dateTime', pin: 'start' },
+        { key: '资金性质', label: '资金性质', kind: 'status', widthPreset: 'standard' },
+        { key: '收入分类', label: '收入分类', kind: 'text', widthPreset: 'identifier' },
+        { key: '收款账户', label: '收款账户', kind: 'text', widthPreset: 'wide' },
+        { key: '原币金额', label: '原币金额', kind: 'numeric', widthPreset: 'standard' },
+        { key: '交易汇率', label: '交易汇率', kind: 'numeric', widthPreset: 'standard' },
+        { key: '人民币金额', label: '人民币金额', kind: 'numeric', widthPreset: 'standard' },
+        { key: '付款方', label: '付款方／出资人', kind: 'text', widthPreset: 'wide' },
+        { key: '业务流水号', label: '业务流水号', kind: 'identifier', widthPreset: 'wide' },
+        { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
+        { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     }),
     expenses: table({
@@ -970,11 +995,12 @@ export const v2TablesByFeature = {
   'finance-ledger': [
     v2TableSchemas.financeLedger.accounts,
     v2TableSchemas.financeLedger.supplierWallets,
+    v2TableSchemas.financeLedger.inflows,
     v2TableSchemas.financeLedger.expenses,
     v2TableSchemas.financeLedger.journals,
     v2TableSchemas.financeLedger.periods
   ],
-  'finance-expenses': [v2TableSchemas.financeLedger.expenses],
+  'finance-expenses': [v2TableSchemas.financeLedger.inflows, v2TableSchemas.financeLedger.expenses],
   'data-governance': [
     v2TableSchemas.dataGovernance.recycle,
     v2TableSchemas.dataGovernance.jobs,

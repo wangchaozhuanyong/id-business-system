@@ -43,6 +43,18 @@
           <dd class="is-positive">{{ formatCny(overview.profitLoss.salesRevenueCny) }}</dd>
         </div>
         <div>
+          <dt>其他经营收入</dt>
+          <dd class="is-positive">
+            {{ formatCny(overview.profitLoss.otherOperatingRevenueCny) }}
+          </dd>
+        </div>
+        <div>
+          <dt>经营收入合计</dt>
+          <dd class="is-positive">
+            {{ formatCny(overview.profitLoss.totalOperatingRevenueCny) }}
+          </dd>
+        </div>
+        <div>
           <dt>余额、ID 与客户资产转移成本</dt>
           <dd>
             {{

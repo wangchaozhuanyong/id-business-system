@@ -29,7 +29,8 @@ const zeroOptionImpact = {
   activationReferenceCount: 0,
   activeActivationCount: 0,
   supplierWalletCount: 0,
-  financeExpenseCount: 0
+  financeExpenseCount: 0,
+  financeInflowCount: 0
 };
 
 function deleteFingerprint(option: ReturnType<typeof makeOption>, impact = zeroOptionImpact) {
@@ -50,7 +51,8 @@ function makeOption(
       | 'topup_supplier'
       | 'gift_card_name'
       | 'settlement_platform'
-      | 'expense_category';
+      | 'expense_category'
+      | 'income_category';
     code: string;
     name: string;
     uniqueKey: string;
@@ -132,6 +134,7 @@ describe('IdBusinessV2OptionsService', () => {
       updateMany: vi.fn()
     },
     idBusinessV2FinanceExpense: { count: vi.fn() },
+    idBusinessV2FinanceInflow: { count: vi.fn() },
     auditLog: {
       create: vi.fn()
     }
@@ -153,6 +156,7 @@ describe('IdBusinessV2OptionsService', () => {
     prisma.idBusinessV2Activation.count.mockResolvedValue(0);
     prisma.idBusinessV2TopupSupplierAccount.count.mockResolvedValue(0);
     prisma.idBusinessV2FinanceExpense.count.mockResolvedValue(0);
+    prisma.idBusinessV2FinanceInflow.count.mockResolvedValue(0);
     prisma.idBusinessV2Option.findMany.mockResolvedValue([]);
     prisma.idBusinessV2TopupSupplierAccount.updateMany.mockResolvedValue({ count: 0 });
     prisma.idBusinessV2Option.updateMany.mockResolvedValue({ count: 0 });
@@ -165,9 +169,10 @@ describe('IdBusinessV2OptionsService', () => {
   it('exposes all workbook option types and fixed status codes', () => {
     const result = service.listTypes();
 
-    expect(result.items).toHaveLength(11);
+    expect(result.items).toHaveLength(12);
     expect(result.items.some((item) => item.type === 'gift_card_name')).toBe(true);
     expect(result.items.some((item) => item.type === 'expense_category')).toBe(true);
+    expect(result.items.some((item) => item.type === 'income_category')).toBe(true);
     expect(result.items.some((item) => item.type === 'id_region')).toBe(false);
     expect(result.items.find((item) => item.type === 'service')).toMatchObject({
       parentType: 'business_category',
@@ -199,7 +204,7 @@ describe('IdBusinessV2OptionsService', () => {
     const result = await service.listDefaultPages();
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledTimes(11);
+    expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledTimes(12);
     expect(prisma.idBusinessV2Option.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -219,7 +224,7 @@ describe('IdBusinessV2OptionsService', () => {
         _all: true
       }
     });
-    expect(Object.keys(result)).toHaveLength(11);
+    expect(Object.keys(result)).toHaveLength(12);
     expect(result.id_status).toMatchObject({ total: 2, page: 1, pageSize: 20 });
     expect(result.customer_source).toMatchObject({ total: 3, page: 1, pageSize: 20 });
     expect(result.country.items[0]).toMatchObject({

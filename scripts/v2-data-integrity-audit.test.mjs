@@ -16,6 +16,9 @@ test('integrity audit covers lifecycle, ledger, finance, and audit invariants', 
     'soft_delete_audit_missing',
     'account_balance_latest_ledger_mismatch',
     'supplier_balance_latest_ledger_mismatch',
+    'finance_inflow_reference_integrity',
+    'finance_inflow_receipt_integrity',
+    'finance_inflow_posting_mismatch',
     'finance_journal_unbalanced',
     'finance_reversal_mismatch',
     'customer_service_aggregate_mismatch',
@@ -57,6 +60,28 @@ test('finance account reconciliation does not count opening balances twice', () 
     (check) => check.code === 'finance_account_balance_mismatch'
   );
   assert.match(financeAccountCheck?.sql ?? '', /journal\.journal_type::text <> 'opening_balance'/);
+});
+
+test('finance inflow integrity covers unique references, order overlap, receipts, and posting lines', () => {
+  const referenceSql =
+    V2_DATA_INTEGRITY_CHECKS.find((check) => check.code === 'finance_inflow_reference_integrity')
+      ?.sql ?? '';
+  const receiptSql =
+    V2_DATA_INTEGRITY_CHECKS.find((check) => check.code === 'finance_inflow_receipt_integrity')
+      ?.sql ?? '';
+  const postingSql =
+    V2_DATA_INTEGRITY_CHECKS.find((check) => check.code === 'finance_inflow_posting_mismatch')
+      ?.sql ?? '';
+
+  assert.match(referenceSql, /id_business_v2_finance_income_references/);
+  assert.match(referenceSql, /active_duplicate/);
+  assert.match(referenceSql, /id_business_v2_orders/);
+  assert.match(receiptSql, /content_encrypted IS NULL/);
+  assert.match(receiptSql, /content_sha256 !~/);
+  assert.match(postingSql, /manual_operating_income/);
+  assert.match(postingSql, /other_operating_revenue/);
+  assert.match(postingSql, /contributed_capital/);
+  assert.match(postingSql, /borrowed_funds_payable/);
 });
 
 test('after-sales integrity keeps recovered history while validating active ownership', () => {

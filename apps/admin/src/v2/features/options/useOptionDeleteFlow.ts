@@ -35,7 +35,8 @@ export function useOptionDeleteFlow(input: OptionDeleteFlowInput) {
       { label: '关联订单', value: impact.orderReferenceCount },
       { label: '关联开通', value: impact.activationReferenceCount },
       { label: '供应商钱包', value: impact.supplierWalletCount },
-      { label: '财务开支', value: impact.financeExpenseCount }
+      { label: '财务开支', value: impact.financeExpenseCount },
+      { label: '资金流入', value: impact.financeInflowCount }
     ].filter((item) => item.value > 0);
   });
 

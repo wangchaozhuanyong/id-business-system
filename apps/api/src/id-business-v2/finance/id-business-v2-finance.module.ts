@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AuditLogsModule } from '../../audit-logs/audit-logs.module';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2ExchangeRatesModule } from '../exchange-rates/public-api';
 import { IdBusinessV2OptionsModule } from '../options/public-api';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
@@ -10,6 +12,7 @@ import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-fina
 import { IdBusinessV2FinanceHistoryConfirmationService } from './id-business-v2-finance-history-confirmation.service';
 import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
+import { IdBusinessV2FinanceInflowsService } from './id-business-v2-finance-inflows.service';
 import { IdBusinessV2FinanceJournalsService } from './id-business-v2-finance-journals.service';
 import { IdBusinessV2FinancePeriodsService } from './id-business-v2-finance-periods.service';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
@@ -25,9 +28,15 @@ import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v
 import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-business-v2-finance-supplier-wallet.repository';
 
 @Module({
-  imports: [IdBusinessV2ExchangeRatesModule, IdBusinessV2OptionsModule, IdBusinessV2RuntimeModule],
+  imports: [
+    AuditLogsModule,
+    IdBusinessV2ExchangeRatesModule,
+    IdBusinessV2OptionsModule,
+    IdBusinessV2RuntimeModule
+  ],
   controllers: [IdBusinessV2FinanceController],
   providers: [
+    FieldEncryptionService,
     IdBusinessV2FinanceAccountsService,
     IdBusinessV2FinanceExpensesService,
     IdBusinessV2FinanceFxService,
@@ -35,6 +44,7 @@ import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-bu
     IdBusinessV2FinanceHistoryConfirmationService,
     IdBusinessV2FinanceHistoryPreviewService,
     IdBusinessV2FinanceHistoryService,
+    IdBusinessV2FinanceInflowsService,
     IdBusinessV2FinanceJournalsService,
     IdBusinessV2FinancePeriodsService,
     IdBusinessV2FinancePostingService,

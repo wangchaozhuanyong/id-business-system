@@ -57,6 +57,11 @@ export class IdBusinessV2OrderCompletionService {
         throw new ConflictException('只有已真实扣款、等待开通的订单可以确认完成');
       }
 
+      await this.financePostingService.reserveOrderIncomeReferences(tx, {
+        orderId: order.id,
+        references: [order.orderNo, order.platformOrderNo]
+      });
+
       const completedAt = context.businessTime;
       const account = await this.repository.lockAccountForSale(tx, order.accountId!);
       if (!account) {

@@ -23,7 +23,7 @@ describe('finance ledger scheme 3 redesign contract', () => {
 
   it('preserves the expense-only route, finance query and all permission boundaries', () => {
     expect(view).toContain('<template v-if="page.expenseOnly">');
-    expect(view).toContain('<V2FinanceExpensesTable :page="page" />');
+    expect(view).toContain('<V2FinanceExpensesTable v-else :page="page" />');
     expect(pageState).toContain('idBusinessV2FinanceApi.bootstrapLedger');
     expect(pageState).toContain('keepPreviousData: true');
     for (const permission of [

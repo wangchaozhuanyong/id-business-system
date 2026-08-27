@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { IdBusinessV2OptionsService } from '../options/public-api';
@@ -8,8 +20,10 @@ import type {
   CloseIdBusinessV2GiftCardRefundDto,
   ConfirmIdBusinessV2FinanceHistoryDto,
   CorrectIdBusinessV2FinanceExpenseDto,
+  CorrectIdBusinessV2FinanceInflowDto,
   CreateIdBusinessV2FinanceAccountDto,
   CreateIdBusinessV2FinanceExpenseDto,
+  CreateIdBusinessV2FinanceInflowDto,
   CreateIdBusinessV2SupplierDepositDto,
   CreateIdBusinessV2SupplierRefundDto,
   CreateIdBusinessV2SupplierWalletDto,
@@ -26,6 +40,11 @@ import { IdBusinessV2FinanceGiftCardRefundsService } from './id-business-v2-fina
 import { IdBusinessV2FinanceHistoryConfirmationService } from './id-business-v2-finance-history-confirmation.service';
 import { IdBusinessV2FinanceHistoryPreviewService } from './id-business-v2-finance-history-preview.service';
 import { IdBusinessV2FinanceHistoryService } from './id-business-v2-finance-history.service';
+import {
+  FINANCE_INFLOW_RECEIPT_MAX_BYTES,
+  type FinanceInflowReceiptUpload
+} from './id-business-v2-finance-inflow-receipt';
+import { IdBusinessV2FinanceInflowsService } from './id-business-v2-finance-inflows.service';
 import {
   normalizeFinanceCurrency,
   normalizeFinanceDate,
@@ -44,6 +63,7 @@ export class IdBusinessV2FinanceController {
     private readonly accountsService: IdBusinessV2FinanceAccountsService,
     private readonly supplierWalletsService: IdBusinessV2FinanceSupplierWalletsService,
     private readonly expensesService: IdBusinessV2FinanceExpensesService,
+    private readonly inflowsService: IdBusinessV2FinanceInflowsService,
     private readonly journalsService: IdBusinessV2FinanceJournalsService,
     private readonly reportsService: IdBusinessV2FinanceReportsService,
     private readonly periodsService: IdBusinessV2FinancePeriodsService,
@@ -97,38 +117,59 @@ export class IdBusinessV2FinanceController {
   @Get('ledger/bootstrap')
   async ledgerBootstrap(
     @Query('currency') currency?: string,
+    @Query('inflowNature') inflowNature?: string,
+    @Query('inflowPage') inflowPage?: string,
     @Query('expensePage') expensePage?: string,
     @Query('journalPage') journalPage?: string,
     @Query('pageSize') pageSize?: string,
     @Query('periodMonth') periodMonth?: string,
     @Query('journalType') journalType?: string
   ) {
-    const [accounts, wallets, expenses, journals, periods, settings, suppliers, categories] =
-      await Promise.all([
-        this.accountsService.list(currency),
-        this.supplierWalletsService.list(currency),
-        this.expensesService.list({ page: expensePage, pageSize, currency }),
-        this.journalsService.list({
-          page: journalPage,
-          pageSize,
-          currency,
-          periodMonth,
-          journalType
-        }),
-        this.periodsService.list(),
-        this.reportsService.getSettings(),
-        this.optionsService.listSelectors('topup_supplier'),
-        this.optionsService.listSelectors('expense_category')
-      ]);
+    const [
+      accounts,
+      wallets,
+      inflows,
+      expenses,
+      journals,
+      periods,
+      settings,
+      suppliers,
+      expenseCategories,
+      incomeCategories
+    ] = await Promise.all([
+      this.accountsService.list(currency),
+      this.supplierWalletsService.list(currency),
+      this.inflowsService.list({
+        page: inflowPage,
+        pageSize,
+        currency,
+        nature: inflowNature
+      }),
+      this.expensesService.list({ page: expensePage, pageSize, currency }),
+      this.journalsService.list({
+        page: journalPage,
+        pageSize,
+        currency,
+        periodMonth,
+        journalType
+      }),
+      this.periodsService.list(),
+      this.reportsService.getSettings(),
+      this.optionsService.listSelectors('topup_supplier'),
+      this.optionsService.listSelectors('expense_category'),
+      this.optionsService.listSelectors('income_category')
+    ]);
     return {
       accounts: accounts.items,
       wallets: wallets.items,
+      inflows: { items: inflows.items, total: inflows.total, summary: inflows.summary },
       expenses: { items: expenses.items, total: expenses.total },
       journals: { items: journals.items, total: journals.total },
       periods,
       settings,
       supplierOptions: suppliers.items,
-      expenseCategories: categories.items,
+      expenseCategories: expenseCategories.items,
+      incomeCategories: incomeCategories.items,
       generatedAt: new Date().toISOString()
     };
   }
@@ -251,6 +292,68 @@ export class IdBusinessV2FinanceController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.expensesService.correct(id, dto, operator);
+  }
+
+  @Get('inflows')
+  listInflows(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('nature') nature?: string,
+    @Query('categoryOptionId') categoryOptionId?: string,
+    @Query('financeAccountId') financeAccountId?: string,
+    @Query('currency') currency?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string
+  ) {
+    return this.inflowsService.list({
+      page,
+      pageSize,
+      nature,
+      categoryOptionId,
+      financeAccountId,
+      currency,
+      dateFrom,
+      dateTo
+    });
+  }
+
+  @Post('inflows')
+  @RequirePermissions('finance.view', 'finance.post')
+  @UseInterceptors(
+    FileInterceptor('receipt', { limits: { fileSize: FINANCE_INFLOW_RECEIPT_MAX_BYTES, files: 1 } })
+  )
+  createInflow(
+    @Body() dto: CreateIdBusinessV2FinanceInflowDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @UploadedFile() receipt?: FinanceInflowReceiptUpload
+  ) {
+    return this.inflowsService.create(dto, operator, receipt);
+  }
+
+  @Post('inflows/:id/corrections')
+  @RequirePermissions('finance.view', 'finance.post', 'finance.adjust')
+  @UseInterceptors(
+    FileInterceptor('receipt', { limits: { fileSize: FINANCE_INFLOW_RECEIPT_MAX_BYTES, files: 1 } })
+  )
+  correctInflow(
+    @Param('id') id: string,
+    @Body() dto: CorrectIdBusinessV2FinanceInflowDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @UploadedFile() receipt?: FinanceInflowReceiptUpload
+  ) {
+    return this.inflowsService.correct(id, dto, operator, receipt);
+  }
+
+  @Get('inflows/:id/receipt')
+  async downloadInflowReceipt(
+    @Param('id') id: string,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    const receipt = await this.inflowsService.downloadReceipt(id, operator);
+    return new StreamableFile(receipt.content, {
+      type: receipt.mimeType,
+      disposition: `inline; filename*=UTF-8''${encodeURIComponent(receipt.originalName)}`
+    });
   }
 
   @Get('journals')

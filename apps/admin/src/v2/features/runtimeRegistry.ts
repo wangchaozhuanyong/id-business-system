@@ -140,7 +140,7 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   }),
   defineV2RuntimeFeature({
     key: 'finance-expenses',
-    title: '开支记账',
+    title: '收支记账',
     group: '财务记账',
     route: '/v2/data/finance/expenses',
     permission: 'finance.view',

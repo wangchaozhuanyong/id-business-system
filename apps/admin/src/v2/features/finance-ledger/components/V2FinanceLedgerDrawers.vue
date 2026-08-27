@@ -82,9 +82,10 @@
       </V2PanelSection>
     </el-form>
   </V2FormDrawer>
+  <V2FinanceInflowDrawer :page="page" />
   <V2FormDrawer
     v-model="page.expenseDrawerVisible"
-    :title="page.editingExpense ? '更正经营开支' : '记录额外经营开支'"
+    :title="page.editingExpense ? '更正经营开支' : '开支记账'"
     eyebrow="经营开支"
     description="按业务证据记录付款、汇率与更正原因，原始流水不会被覆盖"
     :confirm-text="page.editingExpense ? '冲销并重记' : '确认入账'"
@@ -494,6 +495,7 @@ import { computed, type UnwrapNestedRefs } from 'vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2PanelSection from '@/v2/components/V2PanelSection.vue';
+import V2FinanceInflowDrawer from './V2FinanceInflowDrawer.vue';
 import V2FinanceWalletMutationDrawer from './V2FinanceWalletMutationDrawer.vue';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2FinanceCurrency } from '../contracts';

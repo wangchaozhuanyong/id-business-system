@@ -28,7 +28,7 @@
             </a>
             <a class="v2-navigation__item" href="#finance-expenses">
               <span class="v2-navigation__item-dot" aria-hidden="true" />
-              <span class="v2-navigation__item-label">开支记账</span>
+              <span class="v2-navigation__item-label">收支记账</span>
             </a>
             <a class="v2-navigation__item router-link-active" href="#analytics">
               <span class="v2-navigation__item-dot" aria-hidden="true" />
@@ -263,6 +263,8 @@ const overview: V2FinanceOverview = {
   },
   profitLoss: {
     salesRevenueCny: emptyState ? '0' : '126800.50',
+    otherOperatingRevenueCny: emptyState ? '0' : '5600.00',
+    totalOperatingRevenueCny: emptyState ? '0' : '132400.50',
     platformFeeCny: emptyState ? '0' : '3260.18',
     giftCardCostCny: emptyState ? '0' : '58620.42',
     idCostCny: emptyState ? '0' : '18260.00',
@@ -281,6 +283,9 @@ const overview: V2FinanceOverview = {
     : currencies.map((currency, index) => ({
         currency,
         income: String(16800 + index * 2180),
+        manualOperatingIncome: String(1800 + index * 180),
+        capitalContribution: String(2000 + index * 200),
+        borrowedFunds: String(1000 + index * 100),
         expense: String(9200 + index * 1360),
         netCashFlow: String(7600 + index * 820),
         latestRateToCny: ['1', '1.68', '7.18', '7.17'][index],
@@ -487,6 +492,7 @@ const accountCodeLabels: Record<V2FinanceAccountCode, string> = {
   gift_card_inventory: '礼品卡余额资产',
   id_inventory: 'ID 库存',
   sales_revenue: '销售收入',
+  other_operating_revenue: '其他经营收入',
   platform_fee: '平台手续费',
   gift_card_cost: '余额销售成本',
   id_cost: 'ID 销售成本',
@@ -496,6 +502,8 @@ const accountCodeLabels: Record<V2FinanceAccountCode, string> = {
   balance_loss: 'ID 余额报损',
   id_purchase_loss: 'ID 采购成本报损',
   operating_expense: '经营开支',
+  contributed_capital: '投入资本',
+  borrowed_funds_payable: '借入资金负债',
   realized_fx_gain_loss: '已实现汇兑损益',
   opening_equity: '期初权益',
   manual_adjustment: '手工调整'

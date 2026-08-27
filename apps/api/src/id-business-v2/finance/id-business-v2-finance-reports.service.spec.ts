@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { V2CommandTransactionManager } from '../runtime/public-api';
+import { Amount4, Rate8, V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-reports.service';
 import { IdBusinessV2FinanceReportRepository } from './persistence/id-business-v2-finance-report.repository';
 
@@ -399,6 +399,134 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
       pendingRevenueCny: '150',
       pendingProfitCny: '80'
     });
+  });
+});
+
+describe('IdBusinessV2FinanceReportsService manual inflow reporting', () => {
+  it('只将经营收入计入利润，股东投入和借入资金不进入损益', async () => {
+    const repository = {
+      groupProfitLoss: vi.fn().mockResolvedValue([
+        { accountCode: 'sales_revenue', direction: 'credit', amountCny: Amount4.from('100') },
+        {
+          accountCode: 'other_operating_revenue',
+          direction: 'credit',
+          amountCny: Amount4.from('20')
+        },
+        { accountCode: 'operating_expense', direction: 'debit', amountCny: Amount4.from('30') },
+        {
+          accountCode: 'contributed_capital',
+          direction: 'credit',
+          amountCny: Amount4.from('500')
+        },
+        {
+          accountCode: 'borrowed_funds_payable',
+          direction: 'credit',
+          amountCny: Amount4.from('200')
+        }
+      ]),
+      estimatedPendingProfit: vi.fn().mockResolvedValue(Amount4.from('5'))
+    };
+    const service = new IdBusinessV2FinanceReportsService({} as never, repository as never);
+
+    await expect(service.profitLoss({})).resolves.toMatchObject({
+      salesRevenueCny: '100',
+      otherOperatingRevenueCny: '20',
+      totalOperatingRevenueCny: '120',
+      operatingExpenseCny: '30',
+      netProfitCny: '90',
+      estimatedProfitCny: '5'
+    });
+  });
+
+  it('按币种拆分经营收入、股东投入和借入资金，同时保留总现金流', async () => {
+    const repository = {
+      groupCashFlow: vi.fn().mockResolvedValue([
+        { currency: 'CNY', direction: 'debit', amountOriginal: Amount4.from('180') },
+        { currency: 'CNY', direction: 'credit', amountOriginal: Amount4.from('30') }
+      ]),
+      groupManualInflows: vi.fn().mockResolvedValue([
+        {
+          accountCode: 'other_operating_revenue',
+          currency: 'CNY',
+          direction: 'debit',
+          amountOriginal: Amount4.from('50')
+        },
+        {
+          accountCode: 'contributed_capital',
+          currency: 'CNY',
+          direction: 'debit',
+          amountOriginal: Amount4.from('100')
+        },
+        {
+          accountCode: 'borrowed_funds_payable',
+          currency: 'CNY',
+          direction: 'debit',
+          amountOriginal: Amount4.from('30')
+        }
+      ]),
+      loadLatestRateRows: vi
+        .fn()
+        .mockResolvedValue(
+          new Map([['MYR', { id: 'myr-rate', rateToCny: Rate8.from('1.6'), expiresAt: null }]])
+        )
+    };
+    const service = new IdBusinessV2FinanceReportsService({} as never, repository as never);
+
+    const result = await service.currencyBreakdown({});
+
+    expect(result[0]).toEqual({
+      currency: 'CNY',
+      income: '180',
+      manualOperatingIncome: '50',
+      capitalContribution: '100',
+      borrowedFunds: '30',
+      expense: '30',
+      netCashFlow: '150',
+      latestRateToCny: '1',
+      netCashFlowCny: '150'
+    });
+  });
+});
+
+describe('IdBusinessV2FinanceReportRepository manual inflow mapping', () => {
+  it('根据原凭证类型识别正常流入和冲销流出', async () => {
+    const prisma = {
+      idBusinessV2FinanceJournalLine: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            currency: 'CNY',
+            direction: 'debit',
+            amountOriginal: decimal('100'),
+            journal: { journalType: 'capital_contribution', reversalOf: null }
+          },
+          {
+            currency: 'CNY',
+            direction: 'credit',
+            amountOriginal: decimal('100'),
+            journal: {
+              journalType: 'reversal',
+              reversalOf: { journalType: 'capital_contribution' }
+            }
+          }
+        ])
+      }
+    };
+    const repository = new IdBusinessV2FinanceReportRepository(prisma as never);
+
+    await expect(repository.groupManualInflows({})).resolves.toEqual([
+      {
+        accountCode: 'contributed_capital',
+        currency: 'CNY',
+        direction: 'debit',
+        amountOriginal: Amount4.from('100')
+      },
+      {
+        accountCode: 'contributed_capital',
+        currency: 'CNY',
+        direction: 'credit',
+        amountOriginal: Amount4.from('100')
+      }
+    ]);
   });
 });
 

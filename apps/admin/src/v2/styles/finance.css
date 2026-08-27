@@ -1145,7 +1145,7 @@
   }
 }
 
-/* 方案 3：开支记账独立工作台，不改变钱包账户、经营分析或共享抽屉。 */
+/* 收支记账独立工作台，不改变钱包账户、经营分析或共享抽屉。 */
 .v2-finance-expenses-page {
   display: grid;
   min-width: 0;
@@ -1256,6 +1256,74 @@
   --el-button-active-border-color: var(--v2-overview-control-active-border);
 }
 
+.v2-finance-cashbook-navigation {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface-soft);
+}
+
+.v2-finance-cashbook-navigation button {
+  display: grid;
+  min-width: 0;
+  min-height: 62px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 4px 14px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--v3-radius) - 4px);
+  background: transparent;
+  color: var(--v2-text-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.v2-finance-cashbook-navigation button > span {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.v2-finance-cashbook-navigation button > small {
+  overflow: hidden;
+  color: var(--v2-text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-finance-cashbook-navigation button > strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-finance-cashbook-navigation button:hover {
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+  color: var(--v2-text);
+}
+
+.v2-finance-cashbook-navigation button.is-active {
+  border-color: var(--v2-border);
+  background: var(--v2-surface);
+  color: var(--v2-accent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--v2-text) 10%, transparent);
+}
+
+.v2-finance-cashbook-navigation button:focus-visible {
+  outline: none;
+  box-shadow: var(--v2-focus);
+}
+
 .v2-finance-expenses-command-panel {
   display: grid;
   min-width: 0;
@@ -1283,7 +1351,7 @@
 .v2-finance-expenses-filter-grid {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(180px, 240px) auto minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(180px, 240px)) auto minmax(0, 1fr);
   align-items: center;
   gap: 9px;
   padding: 13px 18px;
@@ -1291,6 +1359,10 @@
 
 .v2-finance-expenses-filter-grid > .el-select {
   width: 100%;
+}
+
+.v2-finance-expenses-filter-grid > .app-button {
+  justify-self: start;
 }
 
 .v2-finance-expenses-command-panel > footer {
@@ -1342,7 +1414,7 @@
   font-weight: var(--v3-font-weight-semibold);
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1400px) {
   .v2-finance-expenses-overview {
     grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
   }
@@ -1400,6 +1472,10 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: stretch;
+  }
+
+  .v2-finance-cashbook-navigation {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
   }
 
   .v2-finance-expenses-overview__actions > span {
@@ -1940,6 +2016,56 @@
   padding: 15px 16px 13px;
 }
 
+.v2-finance-receipt-field {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.v2-finance-receipt-field__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 10px;
+  color: var(--v2-text);
+  font: inherit;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius-control);
+}
+
+.v2-finance-receipt-field__input::file-selector-button {
+  margin-right: 10px;
+  padding: 5px 10px;
+  color: var(--v2-accent);
+  font: inherit;
+  background: var(--v2-accent-soft);
+  border: 0;
+  border-radius: var(--v3-radius-control);
+  cursor: pointer;
+}
+
+.v2-finance-receipt-field__selection {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  color: var(--v2-text-soft);
+}
+
+.v2-finance-receipt-field__selection > span {
+  overflow-wrap: anywhere;
+}
+
+.v2-finance-receipt-field__help {
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 @media (max-width: 1180px) {
   .v2-analytics-overview {
     grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
@@ -2015,6 +2141,11 @@
 }
 
 @media (max-width: 560px) {
+  .v2-finance-receipt-field__selection {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .v2-analytics-overview__actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
