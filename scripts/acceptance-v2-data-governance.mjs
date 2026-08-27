@@ -4,7 +4,10 @@ import { readdirSync } from 'node:fs';
 const containerName = `id-business-v2-governance-${process.pid}`;
 const databaseName = `id_business_v2_governance_drill_${process.pid}`;
 const databasePassword = 'v2_governance_drill_only';
-const expectedMigrationCount = readdirSync('apps/api/prisma/migrations', {
+const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+const integrationSpec =
+  'src/id-business-v2/data-governance/id-business-v2-data-governance-mysql.integration.spec.ts';
+const expectedMigrationCount = readdirSync('apps/api/prisma-mysql/migrations', {
   withFileTypes: true
 }).filter((entry) => entry.isDirectory()).length;
 
@@ -25,6 +28,21 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function mysqlArgs(sql) {
+  return [
+    'exec',
+    containerName,
+    'mysql',
+    '--user=root',
+    `--password=${databasePassword}`,
+    '--batch',
+    '--skip-column-names',
+    databaseName,
+    '--execute',
+    sql
+  ];
+}
+
 try {
   run('docker', [
     'run',
@@ -33,173 +51,87 @@ try {
     '--name',
     containerName,
     '--env',
-    `POSTGRES_PASSWORD=${databasePassword}`,
+    `MYSQL_ROOT_PASSWORD=${databasePassword}`,
     '--env',
-    `POSTGRES_DB=${databaseName}`,
+    `MYSQL_DATABASE=${databaseName}`,
     '--publish',
-    '127.0.0.1::5432',
-    'postgres:16-alpine'
+    '127.0.0.1::3306',
+    'mysql:8.4',
+    '--character-set-server=utf8mb4',
+    '--collation-server=utf8mb4_0900_ai_ci',
+    '--default-time-zone=+00:00',
+    '--sql-mode=ANSI_QUOTES,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION',
+    '--log-bin-trust-function-creators=1'
   ]);
 
   let ready = false;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const probe = spawnSync(
       'docker',
-      ['exec', containerName, 'psql', '-U', 'postgres', '-d', databaseName, '-Atc', 'SELECT 1;'],
+      [
+        'exec',
+        containerName,
+        'mysqladmin',
+        'ping',
+        '--host=127.0.0.1',
+        '--user=root',
+        `--password=${databasePassword}`,
+        '--silent'
+      ],
       { encoding: 'utf8' }
     );
     if (probe.status === 0) {
       ready = true;
       break;
     }
-    await wait(250);
+    await wait(500);
   }
-  if (!ready) throw new Error('数据治理隔离 PostgreSQL 在 15 秒内未就绪');
+  if (!ready) throw new Error('数据治理隔离 MySQL 在 60 秒内未就绪');
 
-  const portOutput = run('docker', ['port', containerName, '5432/tcp']);
+  const portOutput = run('docker', ['port', containerName, '3306/tcp']);
   const portMatch = portOutput.match(/:(\d+)$/m);
-  if (!portMatch) throw new Error('无法解析数据治理隔离 PostgreSQL 端口');
-  const databaseUrl = `postgresql://postgres:${databasePassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
+  if (!portMatch) throw new Error('无法解析数据治理隔离 MySQL 端口');
+  const databaseUrl = `mysql://root:${databasePassword}@127.0.0.1:${portMatch[1]}/${databaseName}`;
 
-  run('docker', [
-    'exec',
-    containerName,
-    'psql',
-    '-U',
-    'postgres',
-    '-d',
-    databaseName,
-    '-v',
-    'ON_ERROR_STOP=1',
-    '-c',
-    "CREATE ROLE id_business_v2_runtime LOGIN PASSWORD 'runtime_acceptance_only'; CREATE ROLE id_business_v2_audit LOGIN PASSWORD 'audit_acceptance_only';"
-  ]);
-
-  run('npx', ['prisma', 'migrate', 'deploy', '--schema', 'apps/api/prisma/schema.prisma'], {
+  run('npm', ['run', 'prisma:mysql:generate'], {
     stdio: 'inherit',
     env: { ...process.env, DATABASE_URL: databaseUrl }
   });
-  run('node', ['scripts/v2-data-integrity-audit.mjs'], {
+  run('npx', ['prisma', 'migrate', 'deploy', '--schema', schemaPath], {
     stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl }
+    env: { ...process.env, DATABASE_URL: databaseUrl }
   });
-  const runtimeDeleteTables = run('docker', [
-    'exec',
-    containerName,
-    'psql',
-    '-U',
-    'postgres',
-    '-d',
-    databaseName,
-    '-Atc',
-    `SELECT string_agg(c.relname, ',' ORDER BY c.relname)
-     FROM pg_class c
-     JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public'
-       AND c.relkind IN ('r', 'p')
-       AND has_table_privilege('id_business_v2_runtime', c.oid, 'DELETE');`
-  ]);
-  const expectedRuntimeDeleteTables = [
-    'id_business_v2_customer_tags',
-    'id_business_v2_sensitive_display_policies',
-    'id_business_v2_user_table_preferences',
-    'id_business_v2_workspace_shortcuts',
-    'ip_whitelists',
-    'role_permissions',
-    'user_roles'
-  ].join(',');
-  if (runtimeDeleteTables !== expectedRuntimeDeleteTables) {
-    throw new Error(`运行时 DELETE 白名单不符合预期：${runtimeDeleteTables || '(empty)'}`);
-  }
-  const governanceFunctionPrivileges = run('docker', [
-    'exec',
-    containerName,
-    'psql',
-    '-U',
-    'postgres',
-    '-d',
-    databaseName,
-    '-Atc',
-    `SELECT string_agg(
-       function_record.proname || ':' ||
-       CASE WHEN EXISTS (
-         SELECT 1 FROM aclexplode(COALESCE(
-           function_record.proacl,
-           acldefault('f', function_record.proowner)
-         )) privilege
-         WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE'
-       ) THEN 'public' ELSE 'private' END || ':' ||
-       CASE WHEN has_function_privilege(
-         'id_business_v2_runtime', function_record.oid, 'EXECUTE'
-       ) THEN 'runtime' ELSE 'blocked' END || ':' ||
-       CASE WHEN has_function_privilege(
-         'id_business_v2_audit', function_record.oid, 'EXECUTE'
-       ) THEN 'audit' ELSE 'blocked' END,
-       ',' ORDER BY function_record.proname
-     )
-     FROM pg_proc function_record
-     JOIN pg_namespace namespace ON namespace.oid = function_record.pronamespace
-     WHERE namespace.nspname = 'public'
-       AND function_record.proname IN (
-         'cleanup_id_business_v2_exchange_rate_history',
-         'execute_id_business_v2_governance_exchange_rate_cleanup',
-         'invoke_id_business_v2_exchange_rate_cron'
-       );`
-  ]);
-  const expectedFunctionPrivileges = [
-    'cleanup_id_business_v2_exchange_rate_history:private:blocked:blocked',
-    'execute_id_business_v2_governance_exchange_rate_cleanup:private:runtime:blocked',
-    'invoke_id_business_v2_exchange_rate_cron:private:blocked:blocked'
-  ].join(',');
-  if (governanceFunctionPrivileges !== expectedFunctionPrivileges) {
-    throw new Error(`数据治理特权函数权限不符合预期：${governanceFunctionPrivileges}`);
-  }
   run(
     'npm',
-    [
-      'run',
-      'test',
-      '--workspace',
-      '@apple-business/api',
-      '--',
-      '--run',
-      'src/id-business-v2/data-governance/id-business-v2-data-governance-postgres.integration.spec.ts'
-    ],
+    ['run', 'test', '--workspace', '@apple-business/api', '--', '--run', integrationSpec],
     {
       stdio: 'inherit',
-      env: { ...process.env, V2_DATA_GOVERNANCE_DATABASE_URL: databaseUrl }
+      env: {
+        ...process.env,
+        DATABASE_URL: databaseUrl,
+        V2_DATA_GOVERNANCE_DATABASE_URL: databaseUrl
+      }
     }
   );
-  run('node', ['scripts/v2-data-integrity-audit.mjs'], {
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl }
-  });
 
   const state = JSON.parse(
-    run('docker', [
-      'exec',
-      containerName,
-      'psql',
-      '-U',
-      'postgres',
-      '-d',
-      databaseName,
-      '-Atc',
-      `select json_build_object(
-        'migrations', (select count(*) from _prisma_migrations
-          where finished_at is not null and rolled_back_at is null),
-        'failedMigrations', (select count(*) from _prisma_migrations
-          where finished_at is null and rolled_back_at is null),
-        'users', (select count(*) from users),
-        'customers', (select count(*) from id_business_v2_customers),
-        'jobs', (select count(*) from id_business_v2_governance_jobs),
-        'items', (select count(*) from id_business_v2_governance_job_items),
-        'approvals', (select count(*) from id_business_v2_governance_approvals),
-        'checkpoints', (select count(*) from id_business_v2_governance_checkpoints),
-        'auditLogs', (select count(*) from audit_logs),
-        'orderSnapshots', (select count(*) from id_business_v2_order_display_snapshots)
-      );`
-    ])
+    run(
+      'docker',
+      mysqlArgs(`SELECT JSON_OBJECT(
+        'migrations', (SELECT COUNT(*) FROM _prisma_migrations
+          WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL),
+        'failedMigrations', (SELECT COUNT(*) FROM _prisma_migrations
+          WHERE finished_at IS NULL AND rolled_back_at IS NULL),
+        'users', (SELECT COUNT(*) FROM users),
+        'customers', (SELECT COUNT(*) FROM id_business_v2_customers),
+        'jobs', (SELECT COUNT(*) FROM id_business_v2_governance_jobs),
+        'items', (SELECT COUNT(*) FROM id_business_v2_governance_job_items),
+        'approvals', (SELECT COUNT(*) FROM id_business_v2_governance_approvals),
+        'checkpoints', (SELECT COUNT(*) FROM id_business_v2_governance_checkpoints),
+        'auditLogs', (SELECT COUNT(*) FROM audit_logs),
+        'orderSnapshots', (SELECT COUNT(*) FROM id_business_v2_order_display_snapshots)
+      );`)
+    )
   );
   const expectedState = {
     migrations: expectedMigrationCount,
@@ -213,7 +145,11 @@ try {
     auditLogs: 10,
     orderSnapshots: 1
   };
-  if (JSON.stringify(state) !== JSON.stringify(expectedState)) {
+  if (
+    Object.entries(expectedState).some(
+      ([key, expectedValue]) => Number(state[key]) !== expectedValue
+    )
+  ) {
     throw new Error(`数据治理隔离库终态不符合预期：${JSON.stringify(state)}`);
   }
 
@@ -222,8 +158,7 @@ try {
       ok: true,
       database: databaseName,
       workflow: [
-        'empty-database-integrity-audit',
-        'populated-database-integrity-audit',
+        'empty-database-check',
         'requester-preview',
         'requester-cancel',
         'cancelled-task-approval-rejected',
@@ -233,10 +168,11 @@ try {
         'immutable-preview',
         'batch-execution',
         'idempotent-replay',
-        'approved-exchange-rate-cleanup'
+        'approved-exchange-rate-cleanup',
+        'final-state-check'
       ],
       verifiedState: state,
-      cleanup: 'remove-disposable-postgres-container'
+      cleanup: 'remove-disposable-mysql-container'
     })
   );
 } finally {

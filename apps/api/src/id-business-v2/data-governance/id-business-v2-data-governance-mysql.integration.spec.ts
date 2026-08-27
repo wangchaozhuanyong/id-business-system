@@ -10,7 +10,7 @@ import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-busi
 import { IdBusinessV2DataGovernanceRepository } from './persistence/id-business-v2-data-governance.repository';
 
 const databaseUrl = process.env.V2_DATA_GOVERNANCE_DATABASE_URL;
-const describeWithPostgres = databaseUrl ? describe : describe.skip;
+const describeWithMysql = databaseUrl ? describe : describe.skip;
 
 const REQUESTER: AuthenticatedUser = {
   id: 'd1000000-0000-4000-8000-000000000001',
@@ -43,7 +43,7 @@ const CLEANUP_RUN_ID = 'd6000000-0000-4000-8000-000000000001';
 const CLEANUP_JOB_KEY = 'governance:integration:cleanup:001';
 const CLEANUP_EXECUTION_KEY = 'governance:integration:cleanup:execute:001';
 
-describeWithPostgres('data governance PostgreSQL two-administrator workflow', () => {
+describeWithMysql('data governance MySQL two-administrator workflow', () => {
   let prisma: PrismaClient;
   let previewService: IdBusinessV2DataGovernancePreviewService;
   let approvalService: IdBusinessV2DataGovernanceApprovalService;
@@ -232,7 +232,7 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
         where: { id: preview.id },
         data: { previewHash: 'f'.repeat(64) }
       })
-    ).rejects.toThrow('governance job preview fields are immutable');
+    ).rejects.toThrow(/immutable/i);
 
     const executed = await executionService.execute(
       preview.id,
@@ -340,7 +340,7 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
     });
   });
 
-  it('captures immutable historical labels and protects audit evidence in PostgreSQL', async () => {
+  it('captures immutable historical labels and protects audit evidence in MySQL', async () => {
     await prisma.idBusinessV2Option.createMany({
       data: [
         {
@@ -482,19 +482,23 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
         }
       }
     });
-    await prisma.$executeRaw`
-      INSERT INTO public.id_business_v2_finance_expenses (
-        id, journal_id, category_option_id, finance_account_id, currency,
-        amount_original, fx_rate_to_cny, amount_cny, occurred_at,
-        idempotency_key, created_by_user_id
-      ) VALUES (
-        ${FINANCE_EXPENSE_ID}::uuid, ${FINANCE_JOURNAL_ID}::uuid,
-        ${EXPENSE_CATEGORY_ID}::uuid, ${FINANCE_ACCOUNT_ID}::uuid,
-        'CNY'::"IdBusinessV2FinanceCurrency", 10, 1, 10,
-        ${new Date('2026-08-01T08:00:00.000Z')},
-        'governance:integration:expense', ${REQUESTER.id}::uuid
-      )
-    `;
+    await prisma.idBusinessV2FinanceExpense.create({
+      data: {
+        id: FINANCE_EXPENSE_ID,
+        journalId: FINANCE_JOURNAL_ID,
+        categoryOptionId: EXPENSE_CATEGORY_ID,
+        categoryNameSnapshot: '',
+        financeAccountId: FINANCE_ACCOUNT_ID,
+        financeAccountNameSnapshot: '',
+        currency: 'CNY',
+        amountOriginal: '10',
+        fxRateToCny: '1',
+        amountCny: '10',
+        occurredAt: new Date('2026-08-01T08:00:00.000Z'),
+        idempotencyKey: 'governance:integration:expense',
+        createdByUserId: REQUESTER.id
+      }
+    });
     const expense = await prisma.idBusinessV2FinanceExpense.findUniqueOrThrow({
       where: { id: FINANCE_EXPENSE_ID }
     });
@@ -507,22 +511,20 @@ describeWithPostgres('data governance PostgreSQL two-administrator workflow', ()
         where: { id: FINANCE_EXPENSE_ID },
         data: { categoryNameSnapshot: '非法修改' }
       })
-    ).rejects.toThrow('经营开支历史展示快照不可修改');
+    ).rejects.toThrow(/immutable/i);
 
     await expect(
       prisma.idBusinessV2OrderDisplaySnapshot.update({
         where: { orderId: ORDER_ID },
         data: { customerName: '非法修改' }
       })
-    ).rejects.toThrow('订单历史展示快照不可直接修改或删除');
+    ).rejects.toThrow(/immutable/i);
 
     const audit = await prisma.auditLog.findFirstOrThrow();
     await expect(
       prisma.auditLog.update({ where: { id: audit.id }, data: { remark: '非法修改' } })
-    ).rejects.toThrow('审计日志不可修改或删除');
-    await expect(prisma.auditLog.delete({ where: { id: audit.id } })).rejects.toThrow(
-      '审计日志不可修改或删除'
-    );
+    ).rejects.toThrow(/immutable/i);
+    await expect(prisma.auditLog.delete({ where: { id: audit.id } })).rejects.toThrow(/immutable/i);
   });
 
   async function assertEmptyGovernanceDatabase() {

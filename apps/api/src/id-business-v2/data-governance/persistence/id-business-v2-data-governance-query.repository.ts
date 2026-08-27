@@ -309,7 +309,7 @@ export class IdBusinessV2DataGovernanceQueryRepository {
         SELECT 1
         FROM \`id_business_v2_finance_fx_rate_snapshots\` fx_snapshot
         WHERE fx_snapshot.\`source\` = 'combined_p2p'
-          AND fx_snapshot.\`source_reference\` = CAST(snapshot.\`id\` AS CHAR(36))
+          AND BINARY fx_snapshot.\`source_reference\` = BINARY snapshot.\`id\`
       )
     `;
     const [rows, totals] = await Promise.all([

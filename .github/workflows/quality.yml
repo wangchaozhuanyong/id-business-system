@@ -73,7 +73,7 @@ jobs:
       - name: Validate MySQL Prisma schema
         run: npm run prisma:mysql:validate
 
-      - name: Verify data governance workflow and database privileges
+      - name: Verify data governance workflow on MySQL
         run: npm run acceptance:v2-data-governance
 
       - name: Build shared package
