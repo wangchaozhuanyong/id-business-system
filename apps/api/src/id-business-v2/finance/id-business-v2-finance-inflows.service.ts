@@ -199,8 +199,10 @@ export class IdBusinessV2FinanceInflowsService {
           ? '出借人'
           : '付款方';
     const payer = normalizeFinanceText(dto.payer, payerLabel, 200, nature !== 'operating_income');
-    const externalReference = normalizeFinanceText(dto.externalReference, '收款流水号', 200, true)!;
-    const normalizedReference = normalizeInflowReference(externalReference);
+    const externalReference = normalizeFinanceText(dto.externalReference, '收款流水号', 200);
+    const normalizedReference = externalReference
+      ? normalizeInflowReference(externalReference)
+      : null;
     const remark = normalizeFinanceText(dto.remark, '备注', 2000);
     const requestedReceiptAttachmentId = normalizeOptionalFinanceUuid(
       dto.receiptAttachmentId,
@@ -209,9 +211,6 @@ export class IdBusinessV2FinanceInflowsService {
     const preparedReceipt = prepareFinanceInflowReceipt(receipt, this.encryption);
     if (!correctedInflowId && requestedReceiptAttachmentId && !preparedReceipt) {
       throw new BadRequestException('新收入请直接上传收款凭证');
-    }
-    if (!correctedInflowId && !preparedReceipt) {
-      throw new BadRequestException('请上传收款凭证');
     }
     const baseIdempotencyKey = normalizeFinanceIdempotencyKey(
       dto.idempotencyKey,
@@ -231,7 +230,7 @@ export class IdBusinessV2FinanceInflowsService {
         manualReason: dto.manualRateReason,
         operator
       }),
-      nature === 'operating_income'
+      nature === 'operating_income' && externalReference
         ? this.queryRepository.findOrderIncomeReferenceConflict(externalReference)
         : null
     ]);
@@ -272,10 +271,9 @@ export class IdBusinessV2FinanceInflowsService {
       const originalReference = original?.externalReference
         ? normalizeInflowReference(original.externalReference)
         : null;
-      const reservedReference = await this.commandRepository.findIncomeReference(
-        tx,
-        normalizedReference
-      );
+      const reservedReference = normalizedReference
+        ? await this.commandRepository.findIncomeReference(tx, normalizedReference)
+        : null;
       const correctionOwnsReference =
         originalReference === normalizedReference && reservedReference?.sourceType === 'inflow';
       if (reservedReference && !correctionOwnsReference) {
@@ -293,8 +291,6 @@ export class IdBusinessV2FinanceInflowsService {
         }
         receiptAttachmentId = preparedReceipt?.id ?? original.receiptAttachmentId;
       }
-      if (!receiptAttachmentId) throw new BadRequestException('请上传收款凭证');
-
       const inflowId = randomUUID();
       if (preparedReceipt) {
         await this.commandRepository.createAttachment(tx, {
@@ -380,7 +376,7 @@ export class IdBusinessV2FinanceInflowsService {
         idempotencyKey,
         createdByUserId: operator?.id
       });
-      if (!reservedReference) {
+      if (normalizedReference && !reservedReference) {
         await this.commandRepository.createInflowIncomeReference(
           tx,
           normalizedReference,
@@ -447,15 +443,15 @@ export class IdBusinessV2FinanceInflowsService {
     amountCny: string;
     occurredAt: Date;
     payer: string | null;
-    externalReference: string;
-    receiptAttachmentId: string;
+    externalReference: string | null;
+    receiptAttachmentId: string | null;
     receiptAttachment: {
       id: string;
       originalName: string;
       mimeType: string;
       sizeBytes: bigint;
       contentSha256: string | null;
-    };
+    } | null;
     remark: string | null;
     createdAt: Date;
     journal: { status: string };
@@ -506,7 +502,8 @@ export class IdBusinessV2FinanceInflowsService {
       changedScopes: ['finance-ledger'],
       requestId: randomUUID(),
       operator,
-      uniqueConflictMessage: '该收款流水号已被使用，或收入记录已被其他操作更正'
+      timeoutMs: 30_000,
+      uniqueConflictMessage: '收入记录已存在，或已被其他操作更正；请刷新后核对'
     } as const;
   }
 }

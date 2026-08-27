@@ -163,6 +163,8 @@ function makeInflow(index: number): V2FinanceInflow {
       : index % 3 === 1
         ? 'capital_contribution'
         : 'borrowed_funds';
+  const hasEvidence = index % 4 !== 3;
+  const receiptId = hasEvidence ? `inflow-receipt-${index + 1}` : null;
   return {
     id: `inflow-${index + 1}`,
     journalId: `inflow-journal-${index + 1}`,
@@ -182,15 +184,17 @@ function makeInflow(index: number): V2FinanceInflow {
         : nature === 'borrowed_funds'
           ? '合作方'
           : '客户',
-    externalReference: `INCOME-${String(index + 1).padStart(4, '0')}`,
-    receiptAttachmentId: `inflow-receipt-${index + 1}`,
-    receiptAttachment: {
-      id: `inflow-receipt-${index + 1}`,
-      originalName: `收款凭证-${String(index + 1).padStart(4, '0')}.pdf`,
-      mimeType: 'application/pdf',
-      sizeBytes: String(84_000 + index * 1_280),
-      contentSha256: 'a'.repeat(64)
-    },
+    externalReference: hasEvidence ? `INCOME-${String(index + 1).padStart(4, '0')}` : null,
+    receiptAttachmentId: receiptId,
+    receiptAttachment: receiptId
+      ? {
+          id: receiptId,
+          originalName: `收款凭证-${String(index + 1).padStart(4, '0')}.pdf`,
+          mimeType: 'application/pdf',
+          sizeBytes: String(84_000 + index * 1_280),
+          contentSha256: 'a'.repeat(64)
+        }
+      : null,
     remark: index % 2 === 0 ? '已核对收款凭证' : null,
     status: index % 9 === 8 ? 'reversed' : 'posted',
     createdBy: { id: 'admin-1', username: 'admin', displayName: '管理员' },

@@ -1247,8 +1247,8 @@ model IdBusinessV2FinanceInflow {
   amountCny                  Decimal                         @map("amount_cny") @db.Decimal(18, 4)
   occurredAt                 DateTime                        @map("occurred_at") @db.Timestamptz(6)
   payer                      String?                         @db.VarChar(200)
-  externalReference          String                          @map("external_reference") @db.VarChar(200)
-  receiptAttachmentId        String                          @map("receipt_attachment_id") @db.Uuid
+  externalReference          String?                         @map("external_reference") @db.VarChar(200)
+  receiptAttachmentId        String?                         @map("receipt_attachment_id") @db.Uuid
   remark                     String?                         @db.Text
   idempotencyKey             String                          @unique @map("idempotency_key") @db.VarChar(180)
   createdByUserId            String?                         @map("created_by_user_id") @db.Uuid
@@ -1258,7 +1258,7 @@ model IdBusinessV2FinanceInflow {
   categoryOption     IdBusinessV2Option?                  @relation("IdBusinessV2FinanceInflowCategory", fields: [categoryOptionId], references: [id], onDelete: Restrict)
   financeAccount     IdBusinessV2FinanceAccount           @relation(fields: [financeAccountId], references: [id], onDelete: Restrict)
   fxRateSnapshot     IdBusinessV2FinanceFxRateSnapshot?   @relation(fields: [fxRateSnapshotId], references: [id], onDelete: Restrict)
-  receiptAttachment  Attachment                           @relation("IdBusinessV2FinanceInflowReceipt", fields: [receiptAttachmentId], references: [id], onDelete: Restrict)
+  receiptAttachment  Attachment?                          @relation("IdBusinessV2FinanceInflowReceipt", fields: [receiptAttachmentId], references: [id], onDelete: Restrict)
   createdBy          User?                                @relation("IdBusinessV2FinanceInflowCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   reservedReferences IdBusinessV2FinanceIncomeReference[]
 

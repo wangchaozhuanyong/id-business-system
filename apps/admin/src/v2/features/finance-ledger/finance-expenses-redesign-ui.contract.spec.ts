@@ -33,12 +33,14 @@ describe('finance expenses scheme 3 redesign contract', () => {
     expect(inflows).toContain('v-if="page.canAdjust && page.canPost"');
   });
 
-  it('requires immutable income evidence, protects dirty close, and exposes audited receipt viewing', () => {
-    expect(inflowDrawer).toContain('label="收款流水号" required');
-    expect(inflowDrawer).toContain('label="收款凭证" required');
+  it('supports optional income evidence, protects dirty close, and exposes audited receipt viewing', () => {
+    expect(inflowDrawer).toContain('label="收款流水号"');
+    expect(inflowDrawer).not.toContain('label="收款流水号" required');
+    expect(inflowDrawer).toContain('label="收款凭证"');
+    expect(inflowDrawer).not.toContain('label="收款凭证" required');
     expect(inflowDrawer).toContain('type="file"');
     expect(inflowDrawer).toContain(':dirty="page.inflowDirty"');
-    expect(inflowState).toContain("return showWarning('请上传收款凭证')");
+    expect(inflowState).not.toContain("return showWarning('请上传收款凭证')");
     expect(inflowState).toContain('inflowSnapshot() !== inflowInitialSnapshot.value');
     expect(inflowState).toContain('idBusinessV2FinanceApi.downloadInflowReceipt');
     expect(financeApi).toContain("formData.append('receipt', receipt, receipt.name)");

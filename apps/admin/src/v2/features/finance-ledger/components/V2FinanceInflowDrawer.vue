@@ -18,7 +18,7 @@
     />
     <el-alert
       v-if="page.inflowForm.nature === 'operating_income'"
-      title="这里只记录订单之外的经营收入；系统会校验收款流水号，与订单收款冲突时将拒绝入账。"
+      title="这里只记录订单之外的经营收入；填写收款流水号时，系统会校验其是否与订单收款冲突。"
       type="info"
       :closable="false"
       show-icon
@@ -100,14 +100,14 @@
         <el-form-item :label="payerLabel" :required="page.inflowForm.nature !== 'operating_income'">
           <el-input v-model="page.inflowForm.payer" maxlength="200" />
         </el-form-item>
-        <el-form-item label="收款流水号" required>
+        <el-form-item label="收款流水号">
           <el-input
             v-model="page.inflowForm.externalReference"
             maxlength="200"
-            placeholder="填写银行、钱包或结算平台的唯一流水号"
+            placeholder="选填，填写银行、钱包或结算平台流水号"
           />
         </el-form-item>
-        <el-form-item label="收款凭证" required>
+        <el-form-item label="收款凭证">
           <div class="v2-finance-receipt-field">
             <input
               :key="page.inflowReceiptInputKey"
@@ -123,7 +123,7 @@
                 {{ formatReceiptSize(page.inflowReceiptFile.size) }}
               </span>
               <AppButton size="small" variant="ghost" @click="page.clearSelectedInflowReceipt">
-                重新选择
+                移除文件
               </AppButton>
             </div>
             <div
@@ -144,7 +144,7 @@
               </AppButton>
             </div>
             <p id="finance-inflow-receipt-help" class="v2-finance-receipt-field__help">
-              支持 PDF、JPG、PNG、WebP，最大 5 MB；文件随账务流水加密保存。
+              选填；支持 PDF、JPG、PNG、WebP，最大 5 MB，文件随账务流水加密保存。
             </p>
           </div>
         </el-form-item>

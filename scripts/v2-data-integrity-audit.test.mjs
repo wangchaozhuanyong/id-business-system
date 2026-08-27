@@ -76,8 +76,14 @@ test('finance inflow integrity covers unique references, order overlap, receipts
   assert.match(referenceSql, /id_business_v2_finance_income_references/);
   assert.match(referenceSql, /active_duplicate/);
   assert.match(referenceSql, /id_business_v2_orders/);
+  assert.doesNotMatch(
+    referenceSql,
+    /journal_status = 'posted'\s+AND normalized_inflow\.normalized_reference IS NULL/
+  );
+  assert.match(receiptSql, /inflow\.receipt_attachment_id IS NOT NULL/);
   assert.match(receiptSql, /content_encrypted IS NULL/);
   assert.match(receiptSql, /content_sha256 !~/);
+  assert.match(postingSql, /inflow\.external_reference IS NOT NULL/);
   assert.match(postingSql, /manual_operating_income/);
   assert.match(postingSql, /other_operating_revenue/);
   assert.match(postingSql, /contributed_capital/);

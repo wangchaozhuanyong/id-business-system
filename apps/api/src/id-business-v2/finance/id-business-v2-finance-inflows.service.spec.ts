@@ -25,6 +25,17 @@ function receiptUpload() {
   };
 }
 
+function pngReceiptUpload() {
+  const buffer = Buffer.alloc(1_500_000);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer);
+  return {
+    originalname: 'grok订阅.png',
+    mimetype: 'image/png',
+    size: buffer.length,
+    buffer
+  };
+}
+
 function inflowRow(status: 'posted' | 'reversed' = 'posted') {
   return {
     id: inflowId,
@@ -105,11 +116,15 @@ describe('IdBusinessV2FinanceInflowsService', () => {
     });
     postingService.post.mockResolvedValue({ id: '10000000-0000-4000-8000-000000000006' });
     commandRepository.createInflow.mockImplementation(
-      async (_transaction: unknown, input: Record<string, unknown>) => ({
-        ...inflowRow(),
-        ...input,
-        journal: { status: 'posted' }
-      })
+      async (_transaction: unknown, input: Record<string, unknown>) => {
+        const base = inflowRow();
+        return {
+          ...base,
+          ...input,
+          receiptAttachment: input.receiptAttachmentId ? base.receiptAttachment : null,
+          journal: { status: 'posted' }
+        };
+      }
     );
   });
 
@@ -201,6 +216,42 @@ describe('IdBusinessV2FinanceInflowsService', () => {
     );
   });
 
+  it('支持截图场景的大尺寸中文 PNG 凭证并延长写入事务时限', async () => {
+    queryRepository.findInflowPrerequisites.mockResolvedValue({
+      category: null,
+      account: { id: accountId, name: 'USDT账户', currency: 'USDT', status: 'active' }
+    });
+    fxService.resolve.mockResolvedValue({
+      id: '10000000-0000-4000-8000-000000000010',
+      rateToCny: '7.12000000'
+    });
+
+    await service.create(
+      {
+        nature: 'capital_contribution',
+        financeAccountId: accountId,
+        amount: '170',
+        currency: 'USDT',
+        occurredAt: '2026-08-27T19:28:00.000Z',
+        payer: '啊坤',
+        externalReference: '5646465465456',
+        remark: '2222',
+        idempotencyKey: 'inflow-screenshot-regression-test'
+      },
+      operator,
+      pngReceiptUpload()
+    );
+
+    expect(commandRepository.createAttachment).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ originalName: 'grok订阅.png', sizeBytes: BigInt(1_500_000) })
+    );
+    expect(commandTransactions.execute).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ timeoutMs: 30_000 })
+    );
+  });
+
   it('更正资金流入时原子冲销原凭证并生成替代记录', async () => {
     commandRepository.findIncomeReference.mockResolvedValue({
       normalizedReference: 'bank-20260827-001',
@@ -265,20 +316,25 @@ describe('IdBusinessV2FinanceInflowsService', () => {
     expect(postingService.post).not.toHaveBeenCalled();
   });
 
-  it('没有收款凭证时拒绝新增收入', async () => {
-    await expect(
-      service.create({
-        nature: 'operating_income',
-        categoryOptionId: categoryId,
-        financeAccountId: accountId,
-        amount: '100',
-        currency: 'CNY',
-        occurredAt: '2026-08-27T08:00:00.000Z',
-        externalReference: 'BANK-20260827-005',
-        idempotencyKey: 'inflow-no-receipt-test'
-      })
-    ).rejects.toThrow('请上传收款凭证');
-    expect(postingService.post).not.toHaveBeenCalled();
+  it('收款流水号和收款凭证都留空时允许新增收入', async () => {
+    await service.create({
+      nature: 'operating_income',
+      categoryOptionId: categoryId,
+      financeAccountId: accountId,
+      amount: '100',
+      currency: 'CNY',
+      occurredAt: '2026-08-27T08:00:00.000Z',
+      idempotencyKey: 'inflow-no-evidence-test'
+    });
+
+    expect(postingService.post).toHaveBeenCalled();
+    expect(commandRepository.createInflow).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ externalReference: null, receiptAttachmentId: null })
+    );
+    expect(commandRepository.createAttachment).not.toHaveBeenCalled();
+    expect(commandRepository.createInflowIncomeReference).not.toHaveBeenCalled();
+    expect(queryRepository.findOrderIncomeReferenceConflict).not.toHaveBeenCalled();
   });
 
   it('经营收入流水号与订单冲突时拒绝重复入账', async () => {
