@@ -343,10 +343,15 @@ describe('IdBusinessV2RenewalsService', () => {
       expect.objectContaining({
         type: 'service',
         activationsByService: {
-          some: expect.objectContaining({
-            renewedBy: { is: null },
-            OR: expect.any(Array)
-          })
+          some: {
+            AND: [
+              { order: { is: { balanceReturns: { none: { status: 'active' } } } } },
+              expect.objectContaining({
+                renewedBy: { is: null },
+                OR: expect.any(Array)
+              })
+            ]
+          }
         }
       })
     );

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { buildIdBusinessV2EffectiveActivationWhere } from '../../activations/public-api';
 import {
   Amount4,
   buildV2StringArrayContainsFilter,
@@ -379,7 +380,8 @@ export class IdBusinessV2AccountLossRepository {
     return tx.idBusinessV2Activation.updateMany({
       where: {
         accountId: input.accountId,
-        status: 'active'
+        status: 'active',
+        ...buildIdBusinessV2EffectiveActivationWhere()
       },
       data: {
         status: 'abnormal',

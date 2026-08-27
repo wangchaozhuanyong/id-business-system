@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2RecordStatus, Prisma } from '@prisma/client';
 import { getPagination, type PaginationQuery } from '../../../common/pagination';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { buildIdBusinessV2EffectiveActivationWhere } from '../../activations/public-api';
 import {
   verifySensitiveAccessApproval,
   type SensitiveAccessApprovalCheckInput
@@ -249,7 +250,13 @@ export class IdBusinessV2CustomerRepository {
           }
         }),
         client.idBusinessV2Activation.count({ where: { customerId: id } }),
-        client.idBusinessV2Activation.count({ where: { customerId: id, status: 'active' } })
+        client.idBusinessV2Activation.count({
+          where: {
+            customerId: id,
+            status: 'active',
+            ...buildIdBusinessV2EffectiveActivationWhere()
+          }
+        })
       ]);
     return { orderCount, activeOrderCount, activationCount, activeActivationCount };
   }

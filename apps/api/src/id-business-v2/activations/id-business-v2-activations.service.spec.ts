@@ -34,7 +34,8 @@ function makeActivation() {
       status: 'completed',
       websiteAccountMasked: 'cu***@example.com',
       receivedAmount: new Prisma.Decimal('100'),
-      profitAmount: new Prisma.Decimal('37')
+      profitAmount: new Prisma.Decimal('37'),
+      balanceReturns: []
     },
     customer: {
       id: customerId,
@@ -157,22 +158,46 @@ describe('IdBusinessV2ActivationsService', () => {
     });
   });
 
+  it('shows a legacy source activation with an active balance return as upgraded and ineffective', async () => {
+    const activation = makeActivation();
+    prisma.idBusinessV2Activation.findMany.mockResolvedValueOnce([
+      {
+        ...activation,
+        order: {
+          ...activation.order,
+          balanceReturns: [{ id: '99999999-9999-4999-8999-999999999999' }]
+        }
+      }
+    ]);
+
+    const result = await service.list({});
+
+    expect(result.items[0]?.storedStatus).toBe('active');
+    expect(result.items[0]?.status).toEqual({
+      code: 'upgraded',
+      label: '已升级失效',
+      hoursRemaining: null,
+      daysRemaining: null
+    });
+  });
+
   it('builds a non-overlapping due-window query matching the server-side status', async () => {
     const result = await service.list({
       dueStatus: 'due_within_23_hours'
     });
 
     const call = prisma.idBusinessV2Activation.findMany.mock.calls[0]?.[0];
-    expect(call.where.AND).toEqual([
-      {
+    expect(call.where.AND[0]).toEqual(
+      expect.objectContaining({
+        AND: [{ order: { is: { balanceReturns: { none: { status: 'active' } } } } }],
         renewedBy: { is: null },
         status: 'active',
         dueAt: {
           gt: expect.any(Date),
           lte: expect.any(Date)
         }
-      }
-    ]);
+      })
+    );
     const range = call.where.AND[0].dueAt;
     const evaluatedAt = new Date(result.evaluatedAt);
     expect(range.gt.getTime() - evaluatedAt.getTime()).toBe(60 * 60 * 1000);

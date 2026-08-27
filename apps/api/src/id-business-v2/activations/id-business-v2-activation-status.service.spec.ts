@@ -70,6 +70,15 @@ describe('IdBusinessV2ActivationStatusService', () => {
     );
   });
 
+  it('prioritizes an active upgrade balance return over the stored activation status', () => {
+    expect(service.resolveDisplay('cancelled', null, 'service-a', null, now, true)).toEqual({
+      code: 'upgraded',
+      label: '已升级失效',
+      hoursRemaining: null,
+      daysRemaining: null
+    });
+  });
+
   it('uses exact and non-overlapping boundaries for every calculated due state', () => {
     const dueAt = (offsetMs: number) => new Date(now.getTime() + offsetMs);
 

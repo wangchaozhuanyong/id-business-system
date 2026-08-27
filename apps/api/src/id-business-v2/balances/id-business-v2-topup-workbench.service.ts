@@ -187,6 +187,7 @@ export class IdBusinessV2TopupWorkbenchService {
       account.activations.filter(
         (activation) =>
           activation.status === 'active' &&
+          (activation.order?.balanceReturns.length ?? 0) === 0 &&
           (activation.dueAt === null || activation.dueAt.getTime() > evaluatedAt.getTime())
       )
     );

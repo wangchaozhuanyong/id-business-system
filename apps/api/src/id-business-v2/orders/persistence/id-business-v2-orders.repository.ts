@@ -1347,6 +1347,7 @@ export class IdBusinessV2OrdersRepository {
           orderId: { not: input.sourceOrderId },
           status: 'active',
           renewedBy: { is: null },
+          order: { is: { balanceReturns: { none: { status: 'active' } } } },
           OR: [{ dueAt: null }, { dueAt: { gt: input.evaluatedAt } }]
         }
       }),

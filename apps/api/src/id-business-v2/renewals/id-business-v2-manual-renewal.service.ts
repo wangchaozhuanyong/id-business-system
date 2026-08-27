@@ -123,7 +123,7 @@ export class IdBusinessV2ManualRenewalService {
           tx,
           input.serviceOptionId
         );
-        if (!selectedService) {
+        if (!selectedService || !selectedService.parentId) {
           throw new BadRequestException('续费业务不存在或已停用');
         }
         if (
@@ -149,17 +149,22 @@ export class IdBusinessV2ManualRenewalService {
         if (account.lossReportedAt) {
           throw new ConflictException('已报损冻结 ID 不能续费');
         }
-        const { activeOrderLock, duplicateRenewalOrder } =
+        const { activeOrderLock, activeCategoryActivationCount, duplicateRenewalOrder } =
           await this.renewalsRepository.findManualRenewalConflicts(tx, {
             sourceOrderId: sourceActivation.orderId,
+            sourceActivationId: sourceActivation.id,
             accountId: sourceActivation.accountId,
             serviceOptionId: input.serviceOptionId,
+            categoryOptionId: selectedService.parentId,
             openedAt: input.openedAt,
             dueAt: input.dueAt,
             evaluatedAt
           });
         if (activeOrderLock) {
           throw new ConflictException('该 ID 已被其他订单占用，请处理完成后再续费');
+        }
+        if (activeCategoryActivationCount > 0) {
+          throw new ConflictException('该 ID 已有后续同类业务开通，不能再从原记录续费');
         }
         if (duplicateRenewalOrder) {
           throw new ConflictException(

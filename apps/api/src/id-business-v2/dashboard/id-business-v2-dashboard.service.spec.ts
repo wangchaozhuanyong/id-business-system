@@ -159,6 +159,7 @@ describe('IdBusinessV2DashboardService', () => {
 
     expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(1, {
       where: {
+        order: { is: { balanceReturns: { none: { status: 'active' } } } },
         renewedBy: { is: null },
         status: 'active',
         dueAt: { lt: new Date('2026-08-12T16:00:00.000Z') }
@@ -166,6 +167,7 @@ describe('IdBusinessV2DashboardService', () => {
     });
     expect(prisma.idBusinessV2Activation.count).toHaveBeenNthCalledWith(2, {
       where: {
+        order: { is: { balanceReturns: { none: { status: 'active' } } } },
         renewedBy: { is: null },
         status: 'active',
         dueAt: {
@@ -177,6 +179,7 @@ describe('IdBusinessV2DashboardService', () => {
     expect(prisma.idBusinessV2Activation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          order: { is: { balanceReturns: { none: { status: 'active' } } } },
           renewedBy: { is: null },
           status: 'active',
           dueAt: { lt: new Date('2026-08-20T16:00:00.000Z') }

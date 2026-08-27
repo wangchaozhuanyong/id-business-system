@@ -273,7 +273,11 @@ describe('IdBusinessV2AccountLossesService', () => {
     expect(freezeInput.data).not.toHaveProperty('balanceCostAmount');
     expect(tx.idBusinessV2Activation.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { accountId, status: 'active' },
+        where: expect.objectContaining({
+          accountId,
+          status: 'active',
+          order: { is: { balanceReturns: { none: { status: 'active' } } } }
+        }),
         data: expect.objectContaining({ status: 'abnormal' })
       })
     );

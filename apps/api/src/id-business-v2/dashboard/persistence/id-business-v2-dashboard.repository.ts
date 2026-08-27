@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { buildIdBusinessV2EffectiveActivationWhere } from '../../activations/public-api';
 import { mapAmount4, mapOptionalAmount4 } from '../../runtime/public-api';
 import type { DashboardAccess } from '../dashboard.types';
 
@@ -99,6 +100,7 @@ export class IdBusinessV2DashboardRepository {
       access.renewals
         ? this.prisma.idBusinessV2Activation.count({
             where: {
+              ...buildIdBusinessV2EffectiveActivationWhere(),
               renewedBy: { is: null },
               status: 'active',
               dueAt: { lt: window.start }
@@ -108,6 +110,7 @@ export class IdBusinessV2DashboardRepository {
       access.renewals
         ? this.prisma.idBusinessV2Activation.count({
             where: {
+              ...buildIdBusinessV2EffectiveActivationWhere(),
               renewedBy: { is: null },
               status: 'active',
               dueAt: { gte: window.start, lt: renewalWarningEnd }
@@ -214,6 +217,7 @@ export class IdBusinessV2DashboardRepository {
   loadUpcomingRenewals(renewalWarningEnd: Date) {
     return this.prisma.idBusinessV2Activation.findMany({
       where: {
+        ...buildIdBusinessV2EffectiveActivationWhere(),
         renewedBy: { is: null },
         status: 'active',
         dueAt: { lt: renewalWarningEnd }

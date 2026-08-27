@@ -102,6 +102,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
     },
     idBusinessV2Activation: {
       findFirst: vi.fn(),
+      count: vi.fn(),
       create: vi.fn()
     },
     idBusinessV2Option: {
@@ -164,8 +165,10 @@ describe('IdBusinessV2ManualRenewalService', () => {
       }
     ]);
     tx.idBusinessV2Activation.findFirst.mockResolvedValue(makeSourceActivation());
+    tx.idBusinessV2Activation.count.mockResolvedValue(0);
     tx.idBusinessV2Option.findFirst.mockResolvedValue({
       id: serviceOptionId,
+      parentId: categoryOptionId,
       countryOption: {
         id: countryOptionId,
         code: 'us-country',
@@ -376,6 +379,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
   it('rejects a service from another country and an overlapping renewal period', async () => {
     tx.idBusinessV2Option.findFirst.mockResolvedValueOnce({
       id: serviceOptionId,
+      parentId: categoryOptionId,
       countryOption: {
         id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
         code: 'ca-country',
@@ -389,6 +393,7 @@ describe('IdBusinessV2ManualRenewalService', () => {
     tx.$queryRaw.mockReset().mockResolvedValueOnce([{ id: activationId }]);
     tx.idBusinessV2Option.findFirst.mockResolvedValueOnce({
       id: serviceOptionId,
+      parentId: categoryOptionId,
       countryOption: {
         id: countryOptionId,
         code: 'us-country',
@@ -419,12 +424,28 @@ describe('IdBusinessV2ManualRenewalService', () => {
 
     tx.idBusinessV2Activation.findFirst.mockResolvedValueOnce(null);
     await expect(service.create(activationId, makeDto())).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.idBusinessV2Activation.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          order: { is: { balanceReturns: { none: { status: 'active' } } } }
+        })
+      })
+    );
     expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects another active order lock', async () => {
     tx.idBusinessV2AccountLock.findFirst.mockResolvedValueOnce({ id: 'active-lock' });
     await expect(service.create(activationId, makeDto())).rejects.toThrow('该 ID 已被其他订单占用');
+  });
+
+  it('rejects renewal when the ID already has a later activation in the same category', async () => {
+    tx.idBusinessV2Activation.count.mockResolvedValueOnce(1);
+
+    await expect(service.create(activationId, makeDto())).rejects.toThrow(
+      '该 ID 已有后续同类业务开通，不能再从原记录续费'
+    );
+    expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
   });
 
   it('renews a sold ID for its owning customer with zero repeated ID cost', async () => {

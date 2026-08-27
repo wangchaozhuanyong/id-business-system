@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { buildIdBusinessV2EffectiveActivationWhere } from '../../activations/public-api';
 import {
   mapAmount4,
   mapOptionalAmount4,
@@ -494,7 +495,13 @@ export class IdBusinessV2OptionRepository {
         }
       }),
       client.idBusinessV2Activation.count({ where: activationWhere }),
-      client.idBusinessV2Activation.count({ where: { ...activationWhere, status: 'active' } }),
+      client.idBusinessV2Activation.count({
+        where: {
+          ...activationWhere,
+          status: 'active',
+          ...buildIdBusinessV2EffectiveActivationWhere()
+        }
+      }),
       client.idBusinessV2TopupSupplierAccount.count({
         where: { supplierOptionId: option.id }
       }),
