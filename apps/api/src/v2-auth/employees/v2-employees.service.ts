@@ -3,14 +3,12 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  NotFoundException,
-  ServiceUnavailableException
+  NotFoundException
 } from '@nestjs/common';
 import type { Prisma, UserStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { hashPassword } from '../../auth/password-hasher';
-import { SupabaseAuthService } from '../../auth/supabase-auth.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
@@ -76,8 +74,7 @@ export class V2EmployeesService {
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
     private readonly securityService: SecurityService,
-    private readonly identityService: V2IdentityService,
-    private readonly supabaseAuthService: SupabaseAuthService
+    private readonly identityService: V2IdentityService
   ) {}
 
   async list(query: ListV2EmployeesQuery) {
@@ -162,21 +159,8 @@ export class V2EmployeesService {
     await this.assertUsernameAvailable(username);
 
     const passwordHash = await hashPassword(initialPassword);
-    const localAuthUserId = randomUUID();
-    const authEmail = `employee.${localAuthUserId.replaceAll('-', '')}@v2-auth.invalid`;
-    let authUserId: string = localAuthUserId;
-    let providerUserCreated = false;
-
-    if (this.supabaseAuthService.isEnabled()) {
-      const providerUser = await this.supabaseAuthService.createManagedUser({
-        email: authEmail,
-        password: initialPassword,
-        username,
-        displayName
-      });
-      authUserId = providerUser.authUserId;
-      providerUserCreated = true;
-    }
+    const authUserId = randomUUID();
+    const authEmail = `employee.${authUserId.replaceAll('-', '')}@v2-auth.invalid`;
 
     try {
       const employee = await this.prisma.$transaction(async (transaction) => {
@@ -221,16 +205,6 @@ export class V2EmployeesService {
       });
       return this.toResponse(employee);
     } catch (error) {
-      if (providerUserCreated) {
-        try {
-          await this.supabaseAuthService.deleteManagedUser(authUserId);
-        } catch (compensationError) {
-          throw new ServiceUnavailableException(
-            '员工账号未完成开通，且 Supabase 临时账号清理失败，请联系管理员核对。',
-            { cause: compensationError }
-          );
-        }
-      }
       if (this.isUniqueConstraintError(error)) {
         throw new ConflictException('员工账号已存在。');
       }
@@ -332,7 +306,6 @@ export class V2EmployeesService {
 
     this.identityService.invalidateAuthenticatedUser(existing.id);
     this.securityService.invalidateActiveSessionCache();
-    this.supabaseAuthService.invalidateAccessTokenCache();
     return this.toResponse(employee);
   }
 

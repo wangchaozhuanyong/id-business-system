@@ -52,10 +52,6 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
   ) {}
 
   onModuleInit() {
-    if (process.env.CLOUDFLARE_WORKER === 'true' || process.env.SUPABASE_EDGE_FUNCTION === 'true') {
-      this.logger.warn('收购汇率进程内定时器在 Edge Runtime 中禁用，请使用数据库 Cron');
-      return;
-    }
     if (!this.isNetworkEnabled()) {
       this.logger.warn('收购汇率网络采集已被环境紧急开关关闭');
       return;

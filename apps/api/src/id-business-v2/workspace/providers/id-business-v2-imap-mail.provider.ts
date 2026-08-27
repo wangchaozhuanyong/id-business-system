@@ -40,7 +40,6 @@ export class IdBusinessV2ImapMailProvider {
   constructor(private readonly configService: ConfigService) {}
 
   async verify(input: ImapMailboxInput) {
-    this.assertNodeRuntime();
     const authUsers = this.getAuthUsers(input);
     for (const [index, authUser] of authUsers.entries()) {
       const client = this.createClient(input, true, authUser);
@@ -63,7 +62,6 @@ export class IdBusinessV2ImapMailProvider {
   }
 
   async query(input: ImapMailboxInput, limit: number): Promise<V2MailViewerMessage[]> {
-    this.assertNodeRuntime();
     const authUsers = this.getAuthUsers(input);
     for (const [index, authUser] of authUsers.entries()) {
       try {
@@ -223,12 +221,6 @@ export class IdBusinessV2ImapMailProvider {
   private toIsoDate(value: Date | string | undefined) {
     const date = value instanceof Date ? value : new Date(value ?? Date.now());
     return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
-  }
-
-  private assertNodeRuntime() {
-    if (this.configService.get<string>('SUPABASE_EDGE_FUNCTION') === 'true') {
-      throw new MailProviderUnavailableError('edge_runtime');
-    }
   }
 
   private mapProviderError(error: unknown) {

@@ -160,12 +160,8 @@ async function submit() {
   submitting.value = true;
   submitError.value = '';
   try {
-    const result = await authStore.changePassword(form.currentPassword, form.newPassword);
-    if (result.providerSignedOut === false) {
-      ElMessage.warning('密码已修改且业务会话已失效；远端会话注销需管理员复核。');
-    } else {
-      ElMessage.success('密码已修改，请使用新密码重新登录。');
-    }
+    await authStore.changePassword(form.currentPassword, form.newPassword);
+    ElMessage.success('密码已修改，请使用新密码重新登录。');
     await navigateSafely(
       router,
       {

@@ -10,21 +10,13 @@ export default [
     ignores: [
       'node_modules/**',
       'dist/**',
-      '**/dist-cloudflare/**',
       'coverage/**',
       'apps/*/dist/**',
       'packages/*/dist/**',
-      'apps/api/src/generated/prisma-cloudflare/**',
-      'apps/api/src/generated/prisma-supabase-edge/**',
       'design-prototypes/**',
       'qa-artifacts/**',
-      '.wrangler/**',
       '.deploy/**',
-      '.secrets/**',
-      'supabase/.branches/**',
-      'supabase/.temp/**',
-      'supabase/functions/.deno/**',
-      'supabase/functions/**/bundle.mjs'
+      '.secrets/**'
     ]
   },
   js.configs.recommended,
@@ -78,14 +70,6 @@ export default [
     languageOptions: {
       globals: {
         ...globals.browser
-      }
-    }
-  },
-  {
-    files: ['deploy/cloudflare-free/worker.mjs'],
-    languageOptions: {
-      globals: {
-        ...globals.worker
       }
     }
   },

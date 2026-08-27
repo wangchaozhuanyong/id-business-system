@@ -1,138 +1,71 @@
-#!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 
-const rootDir = process.cwd();
-const requireSupabase = process.argv.includes('--require-supabase');
+const root = process.cwd();
 const failures = [];
+const removedProviderPattern = /s[u]pabase/i;
+const removedEdgePattern = /c[l]oudflare/i;
 
-const packageFiles = ['package.json', 'apps/api/package.json', 'apps/admin/package.json'];
-const sourceRoots = ['apps/api/src', 'apps/admin/src', 'packages'];
-const infrastructureFiles = [
-  '.env.example',
-  '.env.production.example',
-  'docker-compose.prod.yml',
-  'scripts/deploy-pm2-api.sh'
-];
+const compose = read('docker-compose.aws-mysql.yml');
+const rootPackage = JSON.parse(read('package.json'));
+const apiPackage = JSON.parse(read('apps/api/package.json'));
+const adminPackage = JSON.parse(read('apps/admin/package.json'));
+const runtimeSources = ['apps/admin/src', 'apps/api/src'].flatMap((directory) =>
+  listSourceFiles(directory)
+);
 
-for (const file of packageFiles) {
-  const manifest = JSON.parse(readProjectFile(file));
-  const dependencies = {
-    ...(manifest.dependencies ?? {}),
-    ...(manifest.devDependencies ?? {}),
-    ...(manifest.optionalDependencies ?? {})
-  };
-  const cloudDependencies = Object.keys(dependencies).filter((name) =>
-    /^(?:@aws-sdk\/|aws-sdk$)|amazon|dynamodb|cloudfront|cognito/i.test(name)
-  );
-  if (cloudDependencies.length) {
-    failures.push(`${file} contains AWS runtime dependencies: ${cloudDependencies.join(', ')}`);
+if (!compose.includes('image: mysql:8.4')) failures.push('AWS Compose 未锁定 MySQL 8.4');
+if (!compose.includes('AUTH_PROVIDER: local')) failures.push('AWS Compose 未锁定本地认证');
+if (!compose.includes('DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}')) {
+  failures.push('AWS Compose 未强制使用 MySQL DATABASE_URL');
+}
+
+for (const [name, manifest] of [
+  ['root', rootPackage],
+  ['api', apiPackage],
+  ['admin', adminPackage]
+]) {
+  const serialized = JSON.stringify({
+    dependencies: manifest.dependencies,
+    devDependencies: manifest.devDependencies,
+    scripts: manifest.scripts
+  });
+  if (removedProviderPattern.test(serialized) || removedEdgePattern.test(serialized)) {
+    failures.push(`${name} package 仍包含已移除云运行时的依赖或脚本`);
   }
 }
 
-for (const file of walkFiles(sourceRoots)) {
-  const source = readProjectFile(file);
-  if (/(?:from\s+|require\()\s*['"](?:@aws-sdk\/|aws-sdk)|amazonaws\.com|s3:\/\//i.test(source)) {
-    failures.push(`${file} contains an AWS runtime integration`);
+for (const file of runtimeSources) {
+  const source = read(file);
+  if (removedProviderPattern.test(source) || removedEdgePattern.test(source)) {
+    failures.push(`${file} 仍引用已移除的云运行时`);
   }
-}
-
-for (const file of infrastructureFiles) {
-  const source = readProjectFile(file);
-  if (
-    /\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|REGION)\b|amazonaws\.com|s3:\/\//i.test(
-      source
-    )
-  ) {
-    failures.push(`${file} contains an active AWS credential or service target`);
-  }
-}
-
-const productionCompose = readProjectFile('docker-compose.prod.yml');
-if (/^\s{2}postgres:\s*$/m.test(productionCompose)) {
-  failures.push('docker-compose.prod.yml still provisions a production PostgreSQL container');
-}
-if (!/DATABASE_URL:\s*\$\{DATABASE_URL:\?set Supabase DATABASE_URL\}/.test(productionCompose)) {
-  failures.push('docker-compose.prod.yml does not require the external Supabase DATABASE_URL');
-}
-
-const localDatabase = inspectLocalDatabase();
-if (requireSupabase && localDatabase.status !== 'supabase') {
-  failures.push(`local DATABASE_URL is not confirmed Supabase (${localDatabase.status})`);
 }
 
 if (failures.length) {
-  console.error(`Cloud independence check failed (${failures.length}):`);
-  for (const failure of failures) console.error(`- ${failure}`);
+  for (const failure of failures) console.error(`[FAIL] ${failure}`);
   process.exit(1);
 }
 
-console.log('[PASS] no AWS SDK or AWS service integration in runtime dependencies and sources');
-console.log('[PASS] production Compose uses external Supabase PostgreSQL');
-console.log(
-  `[${localDatabase.status === 'supabase' ? 'PASS' : 'INFO'}] local database target: ${localDatabase.detail}`
-);
-console.log('[Cloud independence] PASSED');
+console.log('[PASS] 生产编排使用 AWS MySQL 和本地认证');
+console.log('[PASS] 前后端运行时已移除旧云服务依赖');
 
-function readProjectFile(file) {
-  const absolutePath = path.join(rootDir, file);
-  if (!existsSync(absolutePath)) {
-    failures.push(`${file}: missing file`);
-    return '';
-  }
-  return readFileSync(absolutePath, 'utf8');
+function read(relativePath) {
+  return readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-function walkFiles(roots) {
+function listSourceFiles(relativeDirectory) {
   const files = [];
-  const queue = roots.map((root) => path.join(rootDir, root));
-  while (queue.length) {
-    const current = queue.pop();
-    if (!existsSync(current)) continue;
-    const stat = statSync(current);
-    if (stat.isDirectory()) {
-      for (const entry of readdirSync(current)) queue.push(path.join(current, entry));
-      continue;
+  const walk = (directory) => {
+    for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
+      const relativePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(relativePath);
+      else if (/\.(?:ts|vue)$/u.test(entry.name) && !entry.name.endsWith('.spec.ts')) {
+        files.push(relativePath);
+      }
     }
-    if (!/\.(?:ts|tsx|js|mjs|vue)$/.test(current)) continue;
-    files.push(path.relative(rootDir, current));
-  }
+  };
+  walk(relativeDirectory);
   return files;
-}
-
-function inspectLocalDatabase() {
-  const runtimeDatabaseUrl = process.env.DATABASE_URL?.trim();
-  const envPath = path.join(rootDir, '.env');
-  const envDatabaseUrl = existsSync(envPath)
-    ? readFileSync(envPath, 'utf8')
-        .split(/\r?\n/)
-        .find((item) => item.startsWith('DATABASE_URL='))
-        ?.slice('DATABASE_URL='.length)
-        .trim()
-    : undefined;
-  const databaseUrl = runtimeDatabaseUrl || envDatabaseUrl;
-  if (!databaseUrl) return { status: 'missing', detail: 'DATABASE_URL is absent' };
-
-  try {
-    const url = new URL(databaseUrl);
-    const isSupabase =
-      url.hostname.endsWith('.supabase.co') || url.hostname.endsWith('.supabase.com');
-    const projectRef =
-      url.username.split('.')[1] ??
-      url.hostname.match(/^db\.([^.]+)\.supabase\.co$/i)?.[1] ??
-      'unknown';
-    return isSupabase
-      ? {
-          status: 'supabase',
-          detail: `source=${runtimeDatabaseUrl ? 'process' : '.env'} host=${
-            url.hostname
-          } project=${projectRef} password=${url.password ? 'set' : 'missing'}`
-        }
-      : {
-          status: 'other',
-          detail: `source=${runtimeDatabaseUrl ? 'process' : '.env'} host=${url.hostname}`
-        };
-  } catch {
-    return { status: 'invalid', detail: 'DATABASE_URL is invalid' };
-  }
 }

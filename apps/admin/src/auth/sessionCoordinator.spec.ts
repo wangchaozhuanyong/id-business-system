@@ -1,4 +1,3 @@
-import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/apiError';
 import {
@@ -16,20 +15,7 @@ const authApiMocks = vi.hoisted(() => ({
   me: vi.fn()
 }));
 
-const supabaseConfigMock = vi.hoisted(() => ({ configured: false }));
-
-const supabaseAuthMocks = vi.hoisted(() => ({
-  clearSupabaseSession: vi.fn(),
-  getSupabaseSession: vi.fn(),
-  setSupabaseSession: vi.fn(),
-  subscribeSupabaseSession: vi.fn()
-}));
-
 vi.mock('@/api/auth', () => ({ authApi: authApiMocks }));
-vi.mock('@/auth/supabase-config', () => ({
-  isSupabaseAuthConfigured: () => supabaseConfigMock.configured
-}));
-vi.mock('@/auth/supabase', () => supabaseAuthMocks);
 
 import {
   isSessionTransitionAllowed,
@@ -108,8 +94,6 @@ const replacementUser: CurrentUser = {
   displayName: '新操作员'
 };
 
-let providerListener: ((event: AuthChangeEvent, session: Session | null) => void) | null;
-
 function apiError(status: number, code: string) {
   return new ApiError(`request failed: ${code}`, {
     code,
@@ -131,13 +115,6 @@ function seedCredential(token = 'token-1', cachedUser: CurrentUser | null = null
   const credential = createStoredCredential(token, cachedUser);
   writeStoredCredential(credential);
   return credential;
-}
-
-function createSupabaseSession(token: string, authUserId = 'provider-user') {
-  return {
-    access_token: token,
-    user: { id: authUserId }
-  } as Session;
 }
 
 function dispatchCredentialStorageChange() {
@@ -174,17 +151,6 @@ describe('SessionCoordinator', () => {
     vi.stubGlobal('window', new EventTarget());
     vi.stubGlobal('navigator', {});
     vi.stubGlobal('BroadcastChannel', TestBroadcastChannel);
-    supabaseConfigMock.configured = false;
-    providerListener = null;
-    supabaseAuthMocks.clearSupabaseSession.mockResolvedValue(undefined);
-    supabaseAuthMocks.getSupabaseSession.mockResolvedValue(null);
-    supabaseAuthMocks.setSupabaseSession.mockResolvedValue(null);
-    supabaseAuthMocks.subscribeSupabaseSession.mockImplementation(
-      (listener: (event: AuthChangeEvent, session: Session | null) => void) => {
-        providerListener = listener;
-        return { unsubscribe: vi.fn() };
-      }
-    );
   });
 
   it.each([
@@ -370,43 +336,6 @@ describe('SessionCoordinator', () => {
       kind: 'ready',
       user: replacementUser
     });
-  });
-
-  it('recaptures a provider-refreshed token revision before calling auth/me', async () => {
-    supabaseConfigMock.configured = true;
-    seedCredential('stale-provider-token');
-    supabaseAuthMocks.getSupabaseSession.mockResolvedValueOnce(
-      createSupabaseSession('fresh-provider-token')
-    );
-    authApiMocks.me.mockResolvedValueOnce(user);
-
-    await expect(sessionCoordinator.ensureSession()).resolves.toBe('ready');
-
-    expect(authApiMocks.me).toHaveBeenCalledTimes(1);
-    expect(sessionCoordinator.credential.value).toMatchObject({
-      token: 'fresh-provider-token',
-      tokenRevision: 2
-    });
-  });
-
-  it('validates same-identity provider token refresh without bumping identity epoch', async () => {
-    supabaseConfigMock.configured = true;
-    seedCredential('provider-token-1');
-    supabaseAuthMocks.getSupabaseSession.mockResolvedValueOnce(
-      createSupabaseSession('provider-token-1')
-    );
-    authApiMocks.me.mockResolvedValue(user);
-    await sessionCoordinator.ensureSession();
-    const identityEpoch = sessionCoordinator.identityEpoch.value;
-
-    const refreshedSession = createSupabaseSession('provider-token-2');
-    supabaseAuthMocks.getSupabaseSession.mockResolvedValue(refreshedSession);
-    providerListener?.('TOKEN_REFRESHED', refreshedSession);
-    await vi.waitFor(() => expect(authApiMocks.me).toHaveBeenCalledTimes(2));
-
-    expect(sessionCoordinator.credential.value?.tokenRevision).toBe(2);
-    expect(sessionCoordinator.identityEpoch.value).toBe(identityEpoch);
-    expect(sessionCoordinator.state.value.kind).toBe('ready');
   });
 
   it('validates a same-credential storage revision without changing identity epoch', async () => {

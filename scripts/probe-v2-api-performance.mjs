@@ -1,25 +1,18 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const rootDir = new URL('..', import.meta.url);
 loadEnvFile(new URL('.env', rootDir));
 
 const apiBaseUrl = String(process.env.V2_PERF_API_BASE_URL ?? '').replace(/\/$/, '');
-const functionRegion = String(process.env.V2_PERF_FUNCTION_REGION ?? '').trim();
 const probeRounds = Number(process.env.V2_PERF_ROUNDS ?? 3);
 const username = process.env.V2_PERF_USERNAME ?? process.env.SEED_ADMIN_USERNAME;
 const password = process.env.V2_PERF_PASSWORD ?? process.env.SEED_ADMIN_PASSWORD;
-const trustedProxySecret = process.env.V2_TRUSTED_PROXY_SECRET?.trim() ?? '';
 assert.ok(apiBaseUrl, '缺少 V2_PERF_API_BASE_URL');
-const directSupabaseProbe = new URL(apiBaseUrl).hostname.endsWith('.supabase.co');
+new URL(apiBaseUrl);
 assert.ok(username && password, '缺少 V2 性能探测账号');
 assert.ok(Number.isInteger(probeRounds) && probeRounds > 0, 'V2_PERF_ROUNDS 必须是正整数');
-assert.ok(
-  !directSupabaseProbe || trustedProxySecret.length >= 32,
-  '直连 Supabase 性能探测缺少 V2_TRUSTED_PROXY_SECRET'
-);
 
 const probes = [
   '/auth/me',
@@ -52,8 +45,7 @@ try {
           path: path.split('?')[0],
           status: result.status,
           totalMs: result.totalMs,
-          serverTiming: result.serverTiming,
-          edgeRegion: result.edgeRegion
+          serverTiming: result.serverTiming
         })
       );
     }
@@ -83,14 +75,11 @@ function loadEnvFile(fileUrl) {
 
 async function request(path, options = {}) {
   const startedAt = performance.now();
-  const proxyHeaders = createTrustedProxyHeaders();
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? 'GET',
     headers: {
       ...(options.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {}),
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(functionRegion ? { 'x-region': functionRegion } : {}),
-      ...proxyHeaders
+      ...(options.body ? { 'Content-Type': 'application/json' } : {})
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
     signal: AbortSignal.timeout(30_000)
@@ -104,23 +93,6 @@ async function request(path, options = {}) {
     ...payload,
     status: response.status,
     totalMs,
-    serverTiming: response.headers.get('server-timing') ?? '',
-    edgeRegion: response.headers.get('x-sb-edge-region') ?? ''
-  };
-}
-
-function createTrustedProxyHeaders() {
-  if (!directSupabaseProbe) return {};
-  const clientIp = process.env.V2_PERF_CLIENT_IP?.trim() || '127.0.0.1';
-  const requestId = `performance-probe-${randomUUID()}`;
-  const timestamp = String(Date.now());
-  const signature = createHmac('sha256', trustedProxySecret)
-    .update(`${timestamp}\n${requestId}\n${clientIp}`)
-    .digest('hex');
-  return {
-    'x-request-id': requestId,
-    'x-v2-client-ip': clientIp,
-    'x-v2-proxy-signature': signature,
-    'x-v2-proxy-timestamp': timestamp
+    serverTiming: response.headers.get('server-timing') ?? ''
   };
 }

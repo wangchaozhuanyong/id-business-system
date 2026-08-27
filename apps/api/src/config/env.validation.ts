@@ -1,5 +1,4 @@
 type RuntimeEnv = 'development' | 'test' | 'production';
-type AuthProvider = 'local' | 'supabase';
 
 export interface RawEnv {
   NODE_ENV?: string;
@@ -13,12 +12,6 @@ export interface RawEnv {
   FIELD_ENCRYPTION_KEY?: string;
   HASH_SECRET?: string;
   AUTH_PROVIDER?: string;
-  SUPABASE_URL?: string;
-  SUPABASE_ANON_KEY?: string;
-  SUPABASE_PUBLISHABLE_KEY?: string;
-  SUPABASE_SERVICE_ROLE_KEY?: string;
-  SUPABASE_SECRET_KEY?: string;
-  SUPABASE_EDGE_FUNCTION?: string;
   V2_TRUSTED_PROXY_SECRET?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP?: string;
@@ -67,23 +60,7 @@ export function validateEnv(config: RawEnv) {
 
   validateUrls(config, nodeEnv);
   validateDatabase(config, nodeEnv);
-  validateSecrets(config, nodeEnv, authProvider);
-  parseOptionalBoolean('SUPABASE_EDGE_FUNCTION', config.SUPABASE_EDGE_FUNCTION);
-
-  if (authProvider === 'supabase') {
-    requireUrl('SUPABASE_URL', config.SUPABASE_URL);
-    requireOneOf(config, ['SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEY']);
-    requireOneOf(config, ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY']);
-  }
-
-  if (
-    nodeEnv === 'production' &&
-    config.SUPABASE_EDGE_FUNCTION === 'true' &&
-    autoCollect &&
-    !isStrongSecret(config.ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET)
-  ) {
-    throw new Error('ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET must contain at least 32 characters');
-  }
+  validateSecrets(config, nodeEnv);
 
   return {
     ...config,
@@ -105,12 +82,10 @@ function parseNodeEnv(value: string | undefined): RuntimeEnv {
   return checked;
 }
 
-function parseAuthProvider(value: string | undefined): AuthProvider {
+function parseAuthProvider(value: string | undefined): 'local' {
   const checked = value ?? 'local';
-  if (checked !== 'local' && checked !== 'supabase') {
-    throw new Error('AUTH_PROVIDER must be local or supabase');
-  }
-  return checked;
+  if (checked !== 'local') throw new Error('AUTH_PROVIDER must be local');
+  return 'local';
 }
 
 function parseBoolean(name: string, value: string | undefined, defaultValue: boolean): boolean {
@@ -119,10 +94,6 @@ function parseBoolean(name: string, value: string | undefined, defaultValue: boo
     throw new Error(`${name} must be true or false`);
   }
   return value === 'true';
-}
-
-function parseOptionalBoolean(name: string, value: string | undefined) {
-  if (value !== undefined && value !== '') parseBoolean(name, value, false);
 }
 
 function parseInteger(name: string, value: string, minimum: number, maximum: number): number {
@@ -157,9 +128,6 @@ function validatePublicUrl(name: string, value: string, nodeEnv: RuntimeEnv) {
 
 function validateDatabase(config: RawEnv, nodeEnv: RuntimeEnv) {
   if (!config.DATABASE_URL) {
-    if (config.SUPABASE_EDGE_FUNCTION === 'true' && config.V2_RUNTIME_DATABASE_URL) {
-      return;
-    }
     if (nodeEnv === 'production') throw new Error('DATABASE_URL is required in production');
     return;
   }
@@ -171,7 +139,7 @@ function validateDatabase(config: RawEnv, nodeEnv: RuntimeEnv) {
   }
 }
 
-function validateSecrets(config: RawEnv, nodeEnv: RuntimeEnv, authProvider: AuthProvider) {
+function validateSecrets(config: RawEnv, nodeEnv: RuntimeEnv) {
   if (nodeEnv !== 'production') return;
 
   for (const name of ['FIELD_ENCRYPTION_KEY', 'HASH_SECRET'] as const) {
@@ -180,11 +148,8 @@ function validateSecrets(config: RawEnv, nodeEnv: RuntimeEnv, authProvider: Auth
     }
   }
 
-  if (authProvider === 'local' && !isStrongSecret(config.JWT_SECRET)) {
+  if (!isStrongSecret(config.JWT_SECRET)) {
     throw new Error('JWT_SECRET must contain at least 32 non-placeholder characters');
-  }
-  if (config.SUPABASE_EDGE_FUNCTION === 'true' && !isStrongSecret(config.V2_TRUSTED_PROXY_SECRET)) {
-    throw new Error('V2_TRUSTED_PROXY_SECRET must contain at least 32 non-placeholder characters');
   }
 }
 
@@ -199,11 +164,6 @@ function requireUrl(name: string, value: string | undefined) {
   } catch {
     throw new Error(`${name} must be a valid URL`);
   }
-}
-
-function requireOneOf(config: RawEnv, names: string[]) {
-  if (names.some((name) => typeof config[name] === 'string' && config[name]!.trim())) return;
-  throw new Error(`${names.join(' or ')} is required`);
 }
 
 function assertNoRemovedRuntimeTarget(config: RawEnv) {

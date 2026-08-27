@@ -4,7 +4,6 @@ import {
   HttpStatus,
   Injectable,
   Logger,
-  Optional,
   ServiceUnavailableException,
   UnauthorizedException
 } from '@nestjs/common';
@@ -19,7 +18,6 @@ import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
 import { hashPassword, verifyPassword } from './password-hasher';
-import { SupabaseAuthService } from './supabase-auth.service';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 import type { LoginDto } from './dto/login.dto';
 
@@ -27,13 +25,6 @@ interface LoginRequestMeta {
   ip?: string | null;
   userAgent?: string | null;
 }
-
-type ProviderCompensationStatus =
-  | 'not_needed'
-  | 'succeeded'
-  | 'failed'
-  | 'local_committed'
-  | 'skipped_newer_change';
 
 @Injectable()
 export class AuthService {
@@ -44,8 +35,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly identityService: V2IdentityService,
     private readonly auditLogsService: AuditLogsService,
-    private readonly securityService: SecurityService,
-    @Optional() private readonly supabaseAuthService?: SupabaseAuthService
+    private readonly securityService: SecurityService
   ) {}
 
   async login(dto: LoginDto, requestMeta?: LoginRequestMeta) {
@@ -84,10 +74,6 @@ export class AuthService {
     }
 
     try {
-      if (this.supabaseAuthService?.isEnabled()) {
-        return await this.loginWithSupabase(input, requestMeta, reservation.reservationId);
-      }
-
       const user = await this.prisma.user.findFirst({
         where: {
           username: input.username,
@@ -203,51 +189,6 @@ export class AuthService {
   }
 
   async logout(accessToken?: string, user?: AuthenticatedUser) {
-    const supabaseAuthService = this.supabaseAuthService;
-    if (supabaseAuthService?.isEnabled()) {
-      const localRevocation = async () => {
-        if (!accessToken) return;
-        const identity = await supabaseAuthService.authenticateAccessToken(accessToken);
-        const strongIdentifier = this.getSupabaseSessionIdentifier(identity.sessionId, true);
-        const ordinaryIdentifier = this.getSupabaseSessionIdentifier(identity.sessionId, false);
-        const identifiers = identity.mfaVerified
-          ? [strongIdentifier, ordinaryIdentifier]
-          : [ordinaryIdentifier, strongIdentifier];
-        for (const identifier of identifiers) {
-          if (await this.securityService.revokeSessionIdentifier(identifier, user)) break;
-        }
-      };
-      const [localResult, providerResult] = await Promise.allSettled([
-        localRevocation(),
-        supabaseAuthService.logout(accessToken)
-      ]);
-      const failedStages = [
-        localResult.status === 'rejected' ? 'local_session' : null,
-        providerResult.status === 'rejected' ? 'supabase_session' : null
-      ].filter((stage): stage is string => Boolean(stage));
-
-      if (failedStages.length) {
-        await this.recordLogoutFailure(user, failedStages);
-        throw new ServiceUnavailableException(
-          '注销未完全完成，本机登录信息将被清除；请重新登录后在安全中心确认其他会话。'
-        );
-      }
-
-      if (user) {
-        await this.auditLogsService.create({
-          userId: user.id,
-          module: 'auth',
-          action: 'logout',
-          objectType: 'user',
-          objectId: user.id,
-          remark: 'User logged out through Supabase Auth'
-        });
-      }
-      return {
-        loggedOut: true
-      };
-    }
-
     if (accessToken) {
       await this.securityService.revokeAccessToken(accessToken, user);
     }
@@ -258,10 +199,6 @@ export class AuthService {
   }
 
   async refresh(user: AuthenticatedUser, requestMeta?: LoginRequestMeta) {
-    if (this.supabaseAuthService?.isEnabled()) {
-      throw new BadRequestException('Supabase 登录会话由客户端安全刷新。');
-    }
-
     const mfaRequired = await this.securityService.isMfaRequiredForUser(user);
     const response = this.createAuthResponse(user, mfaRequired);
     await this.securityService.createActiveSession({
@@ -277,7 +214,7 @@ export class AuthService {
 
   async changePassword(
     dto: ChangePasswordDto,
-    accessToken: string | undefined,
+    _accessToken: string | undefined,
     user: AuthenticatedUser
   ) {
     const currentPassword = this.normalizePassword(dto.currentPassword, '当前密码');
@@ -289,9 +226,6 @@ export class AuthService {
 
     const changeId = randomUUID();
     const passwordHash = await hashPassword(newPassword);
-    let supabaseAuthUserId: string | null = null;
-    let providerPasswordUpdated = false;
-    let providerCompensation: ProviderCompensationStatus = 'not_needed';
     try {
       await this.prisma.$transaction(
         async (transaction: Prisma.TransactionClient) => {
@@ -311,31 +245,11 @@ export class AuthService {
             throw new BadRequestException('当前密码不正确，请重新输入。');
           }
 
-          if (this.supabaseAuthService?.isEnabled()) {
-            const identity = await this.supabaseAuthService.verifyCurrentPassword(
-              user.id,
-              currentPassword
-            );
-            supabaseAuthUserId = identity.authUserId;
-            await this.supabaseAuthService.updatePassword(identity.authUserId, newPassword);
-            providerPasswordUpdated = true;
-          } else if (!(await verifyPassword(currentPassword, currentUser.passwordHash))) {
+          if (!(await verifyPassword(currentPassword, currentUser.passwordHash))) {
             throw new BadRequestException('当前密码不正确，请重新输入。');
           }
 
-          try {
-            await this.persistPasswordChange(transaction, user.id, passwordHash, changeId);
-          } catch (error) {
-            if (providerPasswordUpdated && supabaseAuthUserId && this.supabaseAuthService) {
-              try {
-                await this.supabaseAuthService.updatePassword(supabaseAuthUserId, currentPassword);
-                providerCompensation = 'succeeded';
-              } catch {
-                providerCompensation = 'failed';
-              }
-            }
-            throw error;
-          }
+          await this.persistPasswordChange(transaction, user.id, passwordHash, changeId);
         },
         {
           maxWait: 5_000,
@@ -347,32 +261,16 @@ export class AuthService {
         throw error;
       }
 
-      if (
-        providerPasswordUpdated &&
-        providerCompensation === 'not_needed' &&
-        supabaseAuthUserId &&
-        this.supabaseAuthService
-      ) {
-        providerCompensation = await this.reconcileProviderPasswordAfterTransactionFailure({
-          currentPassword,
-          newPassword,
-          supabaseAuthUserId,
-          userId: user.id
-        });
-      }
-
       await this.recordPasswordChangeFailure({
         changeId,
-        providerCompensation,
-        providerPasswordUpdated,
         userId: user.id
       });
-      if (error instanceof ServiceUnavailableException && !providerPasswordUpdated) {
+      if (error instanceof ServiceUnavailableException) {
         throw error;
       }
 
       throw new ServiceUnavailableException(
-        `密码更新未完成（参考编号 ${changeId}），请分别尝试当前密码和新密码重新登录；仍无法登录时请联系管理员。`,
+        `密码更新未完成（参考编号 ${changeId}），请重试；仍无法更新时请联系管理员。`,
         {
           cause: error
         }
@@ -381,21 +279,10 @@ export class AuthService {
 
     this.identityService.invalidateAuthenticatedUser(user.id);
     this.securityService.invalidateActiveSessionCache();
-    let providerSignedOut = true;
-    if (this.supabaseAuthService?.isEnabled()) {
-      providerSignedOut = await this.supabaseAuthService
-        .logout(accessToken, 'global')
-        .then(() => true)
-        .catch(() => false);
-      if (!providerSignedOut) {
-        await this.recordPasswordChangeProviderLogoutFailure(user.id, changeId);
-      }
-    }
 
     return {
       passwordChanged: true,
-      signedOut: true,
-      providerSignedOut
+      signedOut: true
     };
   }
 
@@ -444,59 +331,7 @@ export class AuthService {
     });
   }
 
-  private async reconcileProviderPasswordAfterTransactionFailure(input: {
-    currentPassword: string;
-    newPassword: string;
-    supabaseAuthUserId: string;
-    userId: string;
-  }): Promise<ProviderCompensationStatus> {
-    try {
-      return await this.prisma.$transaction(
-        async (transaction: Prisma.TransactionClient) => {
-          await acquireMysqlTransactionLock(transaction, `auth-password:${input.userId}`);
-          const currentUser = await transaction.user.findFirst({
-            where: {
-              id: input.userId,
-              deletedAt: null
-            },
-            select: {
-              passwordHash: true
-            }
-          });
-          if (!currentUser) return 'skipped_newer_change';
-          if (await verifyPassword(input.newPassword, currentUser.passwordHash)) {
-            return 'local_committed';
-          }
-          if (!(await verifyPassword(input.currentPassword, currentUser.passwordHash))) {
-            return 'skipped_newer_change';
-          }
-
-          try {
-            await this.supabaseAuthService!.updatePassword(
-              input.supabaseAuthUserId,
-              input.currentPassword
-            );
-            return 'succeeded';
-          } catch {
-            return 'failed';
-          }
-        },
-        {
-          maxWait: 5_000,
-          timeout: 20_000
-        }
-      );
-    } catch {
-      return 'failed';
-    }
-  }
-
-  private async recordPasswordChangeFailure(input: {
-    changeId: string;
-    providerCompensation: ProviderCompensationStatus;
-    providerPasswordUpdated: boolean;
-    userId: string;
-  }) {
+  private async recordPasswordChangeFailure(input: { changeId: string; userId: string }) {
     const recorded = await this.auditLogsService
       .create({
         userId: input.userId,
@@ -505,69 +340,16 @@ export class AuthService {
         objectType: 'user',
         objectId: input.userId,
         afterData: {
-          changeId: input.changeId,
-          providerCompensation: input.providerCompensation,
-          providerPasswordUpdated: input.providerPasswordUpdated
+          changeId: input.changeId
         },
         remark: 'Password change failed without logging password material'
       })
       .then(() => true)
       .catch(() => false);
 
-    if (
-      !recorded ||
-      input.providerCompensation === 'failed' ||
-      input.providerCompensation === 'skipped_newer_change'
-    ) {
-      this.logger.error(
-        `Password change failure requires review: changeId=${input.changeId} userId=${input.userId} compensation=${input.providerCompensation}`
-      );
-    }
-  }
-
-  private async recordLogoutFailure(user: AuthenticatedUser | undefined, failedStages: string[]) {
-    const recorded = await this.auditLogsService
-      .create({
-        userId: user?.id,
-        module: 'auth',
-        action: 'logout_failed',
-        objectType: user ? 'user' : undefined,
-        objectId: user?.id,
-        afterData: {
-          failedStages
-        },
-        remark: 'Logout did not revoke every session layer'
-      })
-      .then(() => true)
-      .catch(() => false);
-
     if (!recorded) {
       this.logger.error(
-        `Logout failure could not be audited: userId=${user?.id ?? 'unknown'} stages=${failedStages.join(',')}`
-      );
-    }
-  }
-
-  private async recordPasswordChangeProviderLogoutFailure(userId: string, changeId: string) {
-    const recorded = await this.auditLogsService
-      .create({
-        userId,
-        module: 'auth',
-        action: 'change_password_provider_logout_failed',
-        objectType: 'user',
-        objectId: userId,
-        afterData: {
-          changeId,
-          businessSessionsRevoked: true
-        },
-        remark: 'Password changed but Supabase global logout requires follow-up'
-      })
-      .then(() => true)
-      .catch(() => false);
-
-    if (!recorded) {
-      this.logger.error(
-        `Password changed but provider logout failure could not be audited: changeId=${changeId} userId=${userId}`
+        `Password change failure could not be audited: changeId=${input.changeId} userId=${input.userId}`
       );
     }
   }
@@ -586,110 +368,6 @@ export class AuthService {
     };
   }
 
-  private async loginWithSupabase(
-    dto: LoginDto,
-    requestMeta: LoginRequestMeta | undefined,
-    reservationId: string
-  ) {
-    try {
-      const session = await this.supabaseAuthService!.login(
-        dto.username,
-        dto.password,
-        dto.mfaCode ?? undefined
-      );
-      const authenticatedUser = await this.identityService.getAuthenticatedUser(session.userId);
-      const mfaRequirement =
-        await this.securityService.getMfaLoginRequirementForUser(authenticatedUser);
-      let mfaVerified = session.mfaVerified;
-      if (mfaRequirement.required) {
-        if (!mfaRequirement.bound) {
-          await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
-          throw new UnauthorizedException(
-            '管理员账号必须先绑定 MFA 后才能登录，请联系已登录管理员处理。'
-          );
-        }
-        if (!mfaVerified) {
-          const mfaCode = dto.mfaCode?.trim();
-          if (!mfaCode) {
-            await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
-            throw new UnauthorizedException('需要输入动态验证码或恢复码。');
-          }
-          try {
-            await this.securityService.verifyUserMfaCode(authenticatedUser.id, mfaCode);
-            mfaVerified = true;
-          } catch {
-            await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
-            throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
-          }
-        }
-      }
-      const sessionIdentifier = this.getSupabaseSessionIdentifier(session.sessionId, mfaVerified);
-      try {
-        await this.securityService.createProviderActiveSession({
-          userId: authenticatedUser.id,
-          sessionIdentifier,
-          expiresAt: new Date(session.expiresAt),
-          ip: requestMeta?.ip,
-          userAgent: requestMeta?.userAgent
-        });
-      } catch (error) {
-        await this.supabaseAuthService!.logout(session.accessToken).catch(() => undefined);
-        throw new ServiceUnavailableException('登录会话登记失败，请重新登录。', {
-          cause: error
-        });
-      }
-
-      const finalized = await this.securityService
-        .finalizeLoginAttempt(reservationId, {
-          userId: authenticatedUser.id,
-          status: 'success'
-        })
-        .catch(() => false);
-      if (!finalized) {
-        await Promise.allSettled([
-          this.supabaseAuthService!.logout(session.accessToken),
-          this.securityService.revokeSessionIdentifier(sessionIdentifier, authenticatedUser)
-        ]);
-        throw new ServiceUnavailableException('登录安全记录写入失败，请重新登录。');
-      }
-
-      await Promise.all([
-        this.prisma.user.update({
-          where: {
-            id: authenticatedUser.id
-          },
-          data: {
-            lastLoginAt: new Date()
-          }
-        }),
-        this.auditLogsService.create({
-          userId: authenticatedUser.id,
-          module: 'auth',
-          action: 'login',
-          objectType: 'user',
-          objectId: authenticatedUser.id,
-          remark: 'User logged in through Supabase Auth'
-        })
-      ]).catch(() => undefined);
-
-      return {
-        accessToken: session.accessToken,
-        refreshToken: session.refreshToken,
-        expiresAt: session.expiresAt,
-        user: authenticatedUser
-      };
-    } catch (error) {
-      const retryable = this.isRetryableLoginFailure(error);
-      await this.securityService
-        .finalizeLoginAttempt(reservationId, {
-          status: retryable ? 'blocked' : 'failed',
-          failureReason: retryable ? 'authentication_unavailable' : 'supabase_auth_failed'
-        })
-        .catch(() => undefined);
-      throw error;
-    }
-  }
-
   private getTokenExpiresAt(accessToken: string) {
     const payloadPart = accessToken.split('.')[1];
     if (!payloadPart) {
@@ -706,10 +384,6 @@ export class AuthService {
     } catch {
       return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     }
-  }
-
-  private getSupabaseSessionIdentifier(sessionId: string, mfaVerified = false) {
-    return `supabase:${mfaVerified ? 'mfa:' : ''}${sessionId}`;
   }
 
   private normalizeLoginInput(dto: LoginDto): LoginDto {

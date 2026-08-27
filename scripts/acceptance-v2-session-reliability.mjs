@@ -443,9 +443,6 @@ function startAdminServer() {
         ...process.env,
         NODE_ENV: 'development',
         VITE_API_BASE_URL: '/api',
-        VITE_SUPABASE_URL: '',
-        VITE_SUPABASE_ANON_KEY: '',
-        VITE_SUPABASE_PUBLISHABLE_KEY: '',
         VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
       },
       stdio: ['ignore', 'pipe', 'pipe']

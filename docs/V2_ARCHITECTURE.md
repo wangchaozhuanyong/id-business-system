@@ -6,7 +6,6 @@
 - 管理端与买家公开查询路由：`apps/admin/src/v2-router.ts`
 - API 入口：`apps/api/src/main.ts` → `apps/api/src/app.module.ts`
 - 业务 API 前缀：`/api/id-business-v2`
-- Cloudflare 入口：`apps/api/src/cloudflare-v2-bootstrap.ts`
 
 仓库不维护第二套前端入口、第二套 API 根模块或兼容路由。
 
@@ -54,7 +53,7 @@ raw SQL、Prisma runtime 错误识别和数据库 Decimal 行只能出现在 per
 ## 4. 数据边界
 
 业务表统一使用 `id_business_v2_*`。共享身份与审计只使用用户、角色、权限、审计、登录会话、
-Supabase 身份映射，以及续费预警设置所需的系统规则记录。
+本地身份映射，以及续费预警设置所需的系统规则记录。
 
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
@@ -63,14 +62,13 @@ Prisma migration 目录是现有数据库的执行历史，不属于运行模块
 公开查询尝试只记录邮箱/IP 哈希、受管邮箱标识、受控结果枚举和时间，不记录查询码、应用专用密码或
 邮件内容。邮件正文不入库，查询时由 Node 运行时直接读取 Gmail/iCloud INBOX，并在返回前转换为纯文本。
 
-原生 IMAP 依赖 Node TCP/TLS，不能在 Supabase Edge 进程内执行。前端仍可部署于 Cloudflare；邮件查询
-API 必须指向项目现有 Node/PM2/Docker API 运行方式。Edge 环境保留接口边界，但会返回邮件运行时未配置，
+原生 IMAP 依赖 Node TCP/TLS，只在 AWS Docker API 运行时内执行。未配置邮箱时返回明确不可用状态，
 不得访问任何第三方代查域名。具体运行要求见 `docs/V2_MANAGED_MAILBOX.md`。
 
 ## 5. 金额、事务与账务规则
 
 - 业务层金额统一使用 `Amount4`，汇率与平均成本统一使用 `Rate8`；两者基于共享 BigInt 小数算法，
-  不依赖 Node 或 Cloudflare 的 Prisma Decimal runtime。
+  不依赖特定运行时的 Prisma Decimal 实现。
 - API、DTO 和数据库边界统一使用规范十进制字符串。repository 从数据库读取金额后必须立即通过
   `mapAmount4`、`mapRate8` 或对应 optional mapper 转为领域值对象，禁止把 Prisma Decimal 行传入
   command/query service。
@@ -200,7 +198,7 @@ GET   /api/id-business-v2/renewals/warning-summary
 ## 8. 认证与权限
 
 - 当前只提供内部登录，不提供公开注册。
-- `AUTH_PROVIDER=local` 使用本地 JWT；`AUTH_PROVIDER=supabase` 使用 Supabase Auth。
+- 认证固定使用本地 JWT、活跃会话、MFA 和 IP 白名单。
 - `V2IdentityService` 只读取当前用户、角色与权限。
 - 前端隐藏无权限操作，后端守卫必须再次拒绝。
 - 敏感字段查看与所有写操作必须记录审计。
@@ -227,11 +225,9 @@ GET   /api/id-business-v2/renewals/warning-summary
 - 远程数据由 `useV2ModuleQuery` 以 `clean | dirty | pending` 状态缓存；时间流逝本身不会让
   event-driven 缓存过期。
 - `V2DataScope` 和依赖映射只在 `@apple-business/shared` 定义。业务事务显式递增精确的
-  scope version，数据库只从该版本更新的 transition table 通过私有 Supabase Broadcast
-  发送最小变化事件；业务表不再单独扩展 scope。
-- 管理端只建立一个 `id-business-v2:changes` 私有频道。当前页面变化立即后台刷新，非当前页面只
-  标 dirty；重连、恢复联网、隐藏超过 60 秒后恢复时通过
-  `GET /api/id-business-v2/change-versions` 补偿漏事件。
+  scope version，不得把一次写入扩大为全部 scope。
+- 管理端在页面可见时每 15 秒调用 `GET /api/id-business-v2/change-versions`，只对版本变化的
+  scope 标 dirty 并刷新当前查询；恢复联网或页面回到前台时立即补验。
 - 开通、续费、预警、汇率和订单匹配用 `revalidateAt` 表达没有数据库写入的时间语义变化。
 - 页面使用 `V2AsyncRegion` 统一首次加载、刷新、错误与空状态。
 - 路由指标区分 code ready 与 data ready。
@@ -244,23 +240,13 @@ GET   /api/id-business-v2/renewals/warning-summary
 
 详细规则见 `docs/V2_LOADING_STANDARD.md`。
 
-## 10. 实时授权与降级
+## 10. 变化同步与降级
 
-- Broadcast 主题固定为私有 `id-business-v2:changes`，载荷只包含 schemaVersion、eventId、
-  occurredAt 和 scope/version。
-- `realtime.messages` 只授予已绑定、enabled、内部用户 active 且未删除身份的 SELECT 权限；
-  客户端没有 Broadcast INSERT 权限。
-- Realtime 健康时每 5 分钟静默校验版本，断开时页面可见期间每 60 秒校验。连接异常不得阻塞导航。
-- 管理端可通过 `VITE_V2_REALTIME_CHANGES_ENABLED=false` 关闭 Broadcast 传输并保留版本校验；
-  不恢复导航触发的完整业务列表轮询。
-- Supabase 项目必须在发布前由环境管理员确认关闭公开频道访问；该控制台设置不由仓库 migration
-  代替。
-- migration 会尝试安装 `realtime.messages` 私有 SELECT policy；若托管表属于
-  `supabase_realtime_admin` 且发布角色不是其成员，migration 记录 Notice 后继续，环境管理员需由
-  表所有者补装 policy。补装前客户端自动降级为版本接口校验。
-- 发布顺序固定为：部署 migration/RLS → 发布版本接口 → 发布管理端协调器 → 启用
-  `VITE_V2_REALTIME_CHANGES_ENABLED`。回滚 Broadcast 时保留版本校验，不恢复导航 TTL 或完整列表
-  轮询。
+- 版本接口只返回 scope/version，不返回业务行或敏感字段。
+- 首次请求建立基线，不将所有 scope 误判为变化。
+- 已有内容刷新时保留最后成功内容，只显示区域进度。
+- 版本校验连续失败 3 次后显示一次降级提示，后台继续重试，不阻塞导航和当前操作。
+- 发布顺序为：部署 MySQL migration → 发布版本接口 → 发布管理端 → 执行登录与业务巡检。
 
 ## 11. 模块新增流程
 

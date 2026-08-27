@@ -2,7 +2,6 @@
 
 import process from 'node:process';
 import { Client } from 'pg';
-import { normalizeDatabaseConnection } from './lib/production-closure-audit.mjs';
 import {
   V2_DATA_INTEGRITY_CHECKS,
   assessV2DataIntegrity,
@@ -12,8 +11,15 @@ import {
 const databaseUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('缺少只读审计数据库地址（DATABASE_URL）');
 
+const url = new URL(databaseUrl);
+for (const option of ['schema', 'pgbouncer', 'connection_limit', 'pool_timeout', 'sslmode']) {
+  url.searchParams.delete(option);
+}
+const localHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+
 const client = new Client({
-  ...normalizeDatabaseConnection(databaseUrl),
+  connectionString: url.toString(),
+  ssl: localHosts.has(url.hostname) ? undefined : { rejectUnauthorized: false },
   application_name: 'id-v2-data-integrity-audit'
 });
 

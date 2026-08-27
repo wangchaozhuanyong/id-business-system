@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { V2_DATA_SCOPES, type V2DataScope } from '@apple-business/shared';
-import { shouldEnableV2RealtimeChanges } from './changeSyncConfig';
 import {
   establishV2VersionBaseline,
   getChangedV2Scopes,
@@ -12,13 +11,6 @@ import {
 } from './changeSyncPolicy';
 
 describe('V2 change sync runtime configuration', () => {
-  it('enables Realtime only when explicitly requested and Supabase is configured', () => {
-    expect(shouldEnableV2RealtimeChanges('true', true)).toBe(true);
-    expect(shouldEnableV2RealtimeChanges(undefined, true)).toBe(false);
-    expect(shouldEnableV2RealtimeChanges('false', true)).toBe(false);
-    expect(shouldEnableV2RealtimeChanges('true', false)).toBe(false);
-  });
-
   it('uses a short fallback interval and reconciles when a stale page returns to foreground', () => {
     expect(V2_DEGRADED_RECONCILE_INTERVAL_MS).toBe(15_000);
     expect(shouldReconcileV2OnForeground(null, 10_000)).toBe(true);
@@ -44,7 +36,7 @@ describe('V2 change sync payload validation', () => {
     });
   });
 
-  it('accepts and strips the transport id added by Supabase database Broadcast', () => {
+  it('accepts and strips an optional transport id', () => {
     expect(
       parseV2ChangeEvent({
         id: '11111111-1111-4111-8111-111111111111',

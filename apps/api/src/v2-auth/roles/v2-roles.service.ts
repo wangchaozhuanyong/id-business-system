@@ -12,7 +12,6 @@ import type {
 } from '@prisma/client';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { SupabaseAuthService } from '../../auth/supabase-auth.service';
 import { getPagination } from '../../common/pagination';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -125,8 +124,7 @@ export class V2RolesService {
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
     private readonly identityService: V2IdentityService,
-    private readonly securityService: SecurityService,
-    private readonly supabaseAuthService: SupabaseAuthService
+    private readonly securityService: SecurityService
   ) {}
 
   async list(query: ListV2RolesQuery) {
@@ -413,7 +411,6 @@ export class V2RolesService {
         this.identityService.invalidateAuthenticatedUser(assignment.userId);
       }
       this.securityService.invalidateActiveSessionCache();
-      this.supabaseAuthService.invalidateAccessTokenCache();
     }
     return this.toDetailResponse(role, []);
   }

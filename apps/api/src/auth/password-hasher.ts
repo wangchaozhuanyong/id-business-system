@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCallback);
 const keyLength = 64;
-// Cloudflare Workers Web Crypto currently caps PBKDF2 at 100,000 iterations.
+// Keep the iteration count stable so existing password hashes remain verifiable.
 const pbkdf2Iterations = 100_000;
 const pbkdf2Algorithm = 'pbkdf2-sha256';
 

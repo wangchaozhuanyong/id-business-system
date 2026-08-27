@@ -11,8 +11,6 @@ import {
 
 export { AUTH_CREDENTIAL_STORAGE_KEY } from '@/auth/credential';
 
-const supabaseFunctionRegion = String(import.meta.env.VITE_SUPABASE_FUNCTION_REGION ?? '').trim();
-
 export const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
   timeout: 15000
@@ -87,10 +85,6 @@ http.interceptors.request.use((config) => {
 
   if (credentialSnapshot?.token) {
     config.headers.Authorization = `Bearer ${credentialSnapshot.token}`;
-  }
-
-  if (supabaseFunctionRegion) {
-    config.headers['x-region'] = supabaseFunctionRegion;
   }
 
   return config;

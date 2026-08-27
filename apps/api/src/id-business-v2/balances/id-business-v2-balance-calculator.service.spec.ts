@@ -1,13 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { IdBusinessV2BalanceCalculatorService } from './id-business-v2-balance-calculator.service';
 
 describe('IdBusinessV2BalanceCalculatorService', () => {
   const service = new IdBusinessV2BalanceCalculatorService();
 
-  function cloudflareDecimal(value: Prisma.Decimal.Value) {
-    return new CloudflarePrisma.Decimal(String(value));
+  function databaseDecimal(value: Prisma.Decimal.Value) {
+    return new MysqlPrisma.Decimal(String(value));
   }
 
   it('calculates the first gift card credit from a zero balance', () => {
@@ -76,13 +76,13 @@ describe('IdBusinessV2BalanceCalculatorService', () => {
     expect(result.averageCostAfter.toFixed(3)).toBe('5.600');
   });
 
-  it('normalizes Cloudflare Prisma amounts before calculating balance consumption', () => {
+  it('normalizes MySQL Prisma amounts before calculating balance consumption', () => {
     const result = service.calculateConsumption(
       {
-        currentBalance: cloudflareDecimal('30') as unknown as Prisma.Decimal.Value,
-        balanceCostAmount: cloudflareDecimal('90') as unknown as Prisma.Decimal.Value
+        currentBalance: databaseDecimal('30') as unknown as Prisma.Decimal.Value,
+        balanceCostAmount: databaseDecimal('90') as unknown as Prisma.Decimal.Value
       },
-      cloudflareDecimal('20') as unknown as Prisma.Decimal.Value
+      databaseDecimal('20') as unknown as Prisma.Decimal.Value
     );
 
     expect(result.balanceAfter.toFixed(3)).toBe('10.000');

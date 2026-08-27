@@ -2,22 +2,6 @@ generator client {
   provider = "prisma-client-js"
 }
 
-generator cloudflareClient {
-  provider   = "prisma-client"
-  output     = "../src/generated/prisma-cloudflare"
-  runtime    = "cloudflare"
-  engineType = "client"
-}
-
-generator supabaseEdgeClient {
-  provider            = "prisma-client"
-  output              = "../src/generated/prisma-supabase-edge"
-  runtime             = "deno"
-  engineType          = "client"
-  moduleFormat        = "esm"
-  importFileExtension = "ts"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

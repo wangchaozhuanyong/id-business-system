@@ -30,24 +30,13 @@ describe('validateEnv', () => {
     ).toThrow('CORS_ORIGIN must be configured with a production-safe value');
   });
 
-  it('validates Supabase auth configuration', () => {
+  it('only accepts local authentication', () => {
     expect(() =>
       validateEnv({
         NODE_ENV: 'development',
-        AUTH_PROVIDER: 'supabase',
-        SUPABASE_URL: 'https://project.supabase.co'
+        AUTH_PROVIDER: 'external'
       })
-    ).toThrow('SUPABASE_ANON_KEY or SUPABASE_PUBLISHABLE_KEY is required');
-
-    expect(() =>
-      validateEnv({
-        NODE_ENV: 'development',
-        AUTH_PROVIDER: 'supabase',
-        SUPABASE_URL: 'https://project.supabase.co',
-        SUPABASE_PUBLISHABLE_KEY: 'publishable-key',
-        SUPABASE_SECRET_KEY: 'secret-key'
-      })
-    ).not.toThrow();
+    ).toThrow('AUTH_PROVIDER must be local');
   });
 
   it('accepts a MySQL production database', () => {
@@ -62,37 +51,6 @@ describe('validateEnv', () => {
         JWT_SECRET: 'j'.repeat(32)
       })
     ).not.toThrow();
-  });
-
-  it('requires a strong trusted proxy secret for the production Edge runtime', () => {
-    const productionEdgeEnv = {
-      NODE_ENV: 'production',
-      APP_PUBLIC_URL: 'https://admin.company.io',
-      CORS_ORIGIN: 'https://admin.company.io',
-      DATABASE_URL: 'postgresql://user:password@db.company.io/app',
-      AUTH_PROVIDER: 'local',
-      JWT_SECRET: 'j'.repeat(32),
-      FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
-      HASH_SECRET: 'h'.repeat(32),
-      SUPABASE_EDGE_FUNCTION: 'true',
-      ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: 'false'
-    };
-
-    expect(() => validateEnv(productionEdgeEnv)).toThrow(
-      'V2_TRUSTED_PROXY_SECRET must contain at least 32 non-placeholder characters'
-    );
-    expect(() =>
-      validateEnv({ ...productionEdgeEnv, V2_TRUSTED_PROXY_SECRET: 'p'.repeat(32) })
-    ).not.toThrow();
-  });
-
-  it('rejects removed runtime targets', () => {
-    expect(() =>
-      validateEnv({
-        NODE_ENV: 'development',
-        DATABASE_URL: 'postgresql://postgres:password@db.uperydhdwgzvakyskask.supabase.co/postgres'
-      })
-    ).toThrow('指向已删除的系统');
   });
 
   it('validates exchange-rate runtime settings', () => {

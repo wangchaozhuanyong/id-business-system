@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { ConflictException as NestConflictException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
@@ -401,29 +401,29 @@ describe('IdBusinessV2AccountLossesService', () => {
     expect(result.lossRecord.lossCostAmount).toBe('0');
   });
 
-  it('accepts Cloudflare Decimal rows without cross-runtime Decimal calls', async () => {
+  it('accepts database Decimal rows without cross-runtime Decimal calls', async () => {
     tx.$queryRaw.mockResolvedValue([
       makeLockedAccount({
-        purchaseCost: new CloudflarePrisma.Decimal('12.5'),
-        currentBalance: new CloudflarePrisma.Decimal('20'),
-        balanceCostAmount: new CloudflarePrisma.Decimal('70')
+        purchaseCost: new MysqlPrisma.Decimal('12.5'),
+        currentBalance: new MysqlPrisma.Decimal('20'),
+        balanceCostAmount: new MysqlPrisma.Decimal('70')
       })
     ]);
     tx.idBusinessV2AccountLoss.create.mockResolvedValue(
       makeLossRecord({
-        lossBalance: new CloudflarePrisma.Decimal('20'),
-        lossCostAmount: new CloudflarePrisma.Decimal('70'),
-        idPurchaseCostLossAmount: new CloudflarePrisma.Decimal('12.5')
+        lossBalance: new MysqlPrisma.Decimal('20'),
+        lossCostAmount: new MysqlPrisma.Decimal('70'),
+        idPurchaseCostLossAmount: new MysqlPrisma.Decimal('12.5')
       })
     );
 
     const result = await service.reportLoss(
       accountId,
       {
-        reason: 'Cloudflare 环境报损回归',
+        reason: 'MySQL 环境报损回归',
         expectedCurrentBalance: '20',
         expectedBalanceCostAmount: '70',
-        idempotencyKey: 'loss-cloudflare-0001'
+        idempotencyKey: 'loss-mysql-0001'
       },
       operator
     );

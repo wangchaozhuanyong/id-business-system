@@ -55,8 +55,6 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
         } as Response;
       })
     );
-    delete process.env.CLOUDFLARE_WORKER;
-    delete process.env.SUPABASE_EDGE_FUNCTION;
     delete process.env.ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP;
     process.env.DATABASE_URL = 'postgresql://local-test';
     settings.isNetworkEnabled.mockReturnValue(true);
@@ -88,29 +86,6 @@ describe('IdBusinessV2ExchangeRateWorker', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it('does not start a persistent timer inside Cloudflare Workers', () => {
-    process.env.CLOUDFLARE_WORKER = 'true';
-    const setIntervalSpy = vi.spyOn(global, 'setInterval');
-
-    worker.onModuleInit();
-
-    expect(setIntervalSpy).not.toHaveBeenCalled();
-    expect(settings.isNetworkEnabled).not.toHaveBeenCalled();
-    expect(persistence.collectAndPersist).not.toHaveBeenCalled();
-    setIntervalSpy.mockRestore();
-  });
-
-  it('does not start a persistent timer inside Supabase Edge Functions', () => {
-    process.env.SUPABASE_EDGE_FUNCTION = 'true';
-    const setIntervalSpy = vi.spyOn(global, 'setInterval');
-
-    worker.onModuleInit();
-
-    expect(setIntervalSpy).not.toHaveBeenCalled();
-    expect(settings.isNetworkEnabled).not.toHaveBeenCalled();
-    setIntervalSpy.mockRestore();
   });
 
   it('runs a claimed scheduled collection with the database target amount', async () => {

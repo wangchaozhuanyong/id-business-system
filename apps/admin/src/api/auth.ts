@@ -3,8 +3,6 @@ import type { CurrentUser } from '@/types/system';
 
 interface LoginResponse {
   accessToken: string;
-  refreshToken?: string;
-  expiresAt?: string;
   user: CurrentUser;
 }
 
@@ -22,7 +20,6 @@ export const authApi = {
     return request<{
       passwordChanged: boolean;
       signedOut: boolean;
-      providerSignedOut?: boolean;
     }>(
       http.post('/auth/change-password', {
         currentPassword,

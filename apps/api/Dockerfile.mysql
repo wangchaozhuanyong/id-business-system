@@ -14,10 +14,6 @@ COPY packages/shared/package.json packages/shared/package.json
 RUN npm ci
 
 COPY . .
-# 先生成现有 Cloudflare/Supabase 客户端，保证所有源码均可编译；最后再用 MySQL
-# schema 覆盖默认 @prisma/client，生产运行时只连接本机 MySQL。
-RUN DATABASE_URL=postgresql://prisma:prisma@127.0.0.1:5432/id_business_v2 \
-  npm run prisma:generate --workspace @apple-business/api
 RUN DATABASE_URL=mysql://prisma:prisma@127.0.0.1:3306/id_business_v2 \
   npx prisma generate --schema apps/api/prisma-mysql/schema.prisma
 RUN npm run build --workspace @apple-business/shared

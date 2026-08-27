@@ -190,7 +190,7 @@ describe('IdBusinessV2OrderMatchingService', () => {
     expect(JSON.stringify(result)).not.toContain('encrypted-apple-id');
   });
 
-  it('maps a Cloudflare runtime decimal before applying Amount4 subtraction', async () => {
+  it('maps a database runtime decimal before applying Amount4 subtraction', async () => {
     const runtimeCurrentBalance = {
       toString: () => '25',
       minus: vi.fn((value: unknown) => {

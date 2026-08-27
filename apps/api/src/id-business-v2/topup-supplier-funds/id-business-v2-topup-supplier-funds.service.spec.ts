@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2TopupSupplierFundsService } from './id-business-v2-topup-supplier-funds.service';
 import { IdBusinessV2TopupSupplierGiftCardFundsService } from './id-business-v2-topup-supplier-gift-card-funds.service';
@@ -22,8 +22,8 @@ const operator = {
 };
 const createdAt = new Date('2026-07-29T12:00:00.000Z');
 
-function cloudflareDecimal(value: Prisma.Decimal.Value) {
-  return new CloudflarePrisma.Decimal(String(value));
+function databaseDecimal(value: Prisma.Decimal.Value) {
+  return new MysqlPrisma.Decimal(String(value));
 }
 
 function lockedAccount(balance: Prisma.Decimal.Value) {
@@ -32,8 +32,8 @@ function lockedAccount(balance: Prisma.Decimal.Value) {
     supplierOptionId,
     supplierName: '供应商 A',
     currency: 'CNY',
-    currentBalance: cloudflareDecimal(balance),
-    currentBalanceCny: cloudflareDecimal(balance),
+    currentBalance: databaseDecimal(balance),
+    currentBalanceCny: databaseDecimal(balance),
     initializedAt: createdAt
   };
 }
@@ -250,19 +250,19 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     });
   });
 
-  it('replays a matching Cloudflare Decimal payment without creating duplicate entries', async () => {
+  it('replays a matching database Decimal payment without creating duplicate entries', async () => {
     tx.idBusinessV2TopupSupplierPayment.findUnique.mockResolvedValue({
       id: paymentId,
       supplierAccountId,
       supplierNameSnapshot: '供应商 A',
-      receivedUsdt: cloudflareDecimal('1000'),
-      networkFeeUsdt: cloudflareDecimal('1.5'),
-      settlementRateCnyUsdt: cloudflareDecimal('6.8'),
-      paidAmount: cloudflareDecimal('1000'),
-      networkFeeAmount: cloudflareDecimal('1.5'),
-      fxRateToCny: cloudflareDecimal('6.8'),
-      creditedAmount: cloudflareDecimal('1000'),
-      creditedCny: cloudflareDecimal('6800'),
+      receivedUsdt: databaseDecimal('1000'),
+      networkFeeUsdt: databaseDecimal('1.5'),
+      settlementRateCnyUsdt: databaseDecimal('6.8'),
+      paidAmount: databaseDecimal('1000'),
+      networkFeeAmount: databaseDecimal('1.5'),
+      fxRateToCny: databaseDecimal('6.8'),
+      creditedAmount: databaseDecimal('1000'),
+      creditedCny: databaseDecimal('6800'),
       paidAt: createdAt,
       createdAt,
       network: null,
@@ -277,12 +277,12 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       ledgerEntries: [
         {
           id: ledgerId,
-          amount: cloudflareDecimal('6800'),
-          balanceBefore: cloudflareDecimal('0'),
-          balanceAfter: cloudflareDecimal('6800'),
-          amountCny: cloudflareDecimal('6800'),
-          balanceBeforeCny: cloudflareDecimal('0'),
-          balanceAfterCny: cloudflareDecimal('6800'),
+          amount: databaseDecimal('6800'),
+          balanceBefore: databaseDecimal('0'),
+          balanceAfter: databaseDecimal('6800'),
+          amountCny: databaseDecimal('6800'),
+          balanceBeforeCny: databaseDecimal('0'),
+          balanceAfterCny: databaseDecimal('6800'),
           createdAt
         }
       ]
@@ -406,12 +406,12 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
       supplierAccountId,
       giftCardId,
       entryType: 'gift_card_debit',
-      amount: cloudflareDecimal('570'),
-      balanceBefore: cloudflareDecimal('6800'),
-      balanceAfter: cloudflareDecimal('6230'),
-      balanceBeforeCny: cloudflareDecimal('6800'),
-      balanceAfterCny: cloudflareDecimal('6230'),
-      amountCny: cloudflareDecimal('570')
+      amount: databaseDecimal('570'),
+      balanceBefore: databaseDecimal('6800'),
+      balanceAfter: databaseDecimal('6230'),
+      balanceBeforeCny: databaseDecimal('6800'),
+      balanceAfterCny: databaseDecimal('6230'),
+      amountCny: databaseDecimal('570')
     });
     tx.$queryRaw.mockResolvedValue([lockedAccount('6230')]);
     tx.idBusinessV2TopupSupplierLedger.create.mockImplementation(async ({ data }) => ({
@@ -439,18 +439,18 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
     });
   });
 
-  it('reverses a Cloudflare Decimal payment against the normalized supplier balance', async () => {
+  it('reverses a database Decimal payment against the normalized supplier balance', async () => {
     tx.idBusinessV2TopupSupplierPayment.findUnique.mockResolvedValue({
       id: paymentId,
       supplierAccountId,
-      paidAmount: cloudflareDecimal('1000'),
-      networkFeeAmount: cloudflareDecimal('1.5'),
-      fxRateToCny: cloudflareDecimal('6.8'),
-      creditedAmount: cloudflareDecimal('1000'),
-      receivedUsdt: cloudflareDecimal('1000'),
-      networkFeeUsdt: cloudflareDecimal('1.5'),
-      settlementRateCnyUsdt: cloudflareDecimal('6.8'),
-      creditedCny: cloudflareDecimal('6800'),
+      paidAmount: databaseDecimal('1000'),
+      networkFeeAmount: databaseDecimal('1.5'),
+      fxRateToCny: databaseDecimal('6.8'),
+      creditedAmount: databaseDecimal('1000'),
+      receivedUsdt: databaseDecimal('1000'),
+      networkFeeUsdt: databaseDecimal('1.5'),
+      settlementRateCnyUsdt: databaseDecimal('6.8'),
+      creditedCny: databaseDecimal('6800'),
       paidAt: createdAt,
       createdAt,
       supplierAccount: {
@@ -460,12 +460,12 @@ describe('IdBusinessV2TopupSupplierFundsService', () => {
         {
           id: ledgerId,
           entryType: 'payment_credit',
-          amount: cloudflareDecimal('6800'),
-          balanceBefore: cloudflareDecimal('0'),
-          balanceAfter: cloudflareDecimal('6800'),
-          amountCny: cloudflareDecimal('6800'),
-          balanceBeforeCny: cloudflareDecimal('0'),
-          balanceAfterCny: cloudflareDecimal('6800'),
+          amount: databaseDecimal('6800'),
+          balanceBefore: databaseDecimal('0'),
+          balanceAfter: databaseDecimal('6800'),
+          amountCny: databaseDecimal('6800'),
+          balanceBeforeCny: databaseDecimal('0'),
+          balanceAfterCny: databaseDecimal('6800'),
           reversedBy: null
         }
       ]

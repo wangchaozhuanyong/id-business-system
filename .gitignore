@@ -3,17 +3,6 @@ node_modules/
 
 # Build output
 dist/
-**/dist-cloudflare/
-apps/api/src/generated/prisma-cloudflare/
-apps/api/src/generated/prisma-supabase-edge/
-.wrangler/
-supabase/.branches/
-supabase/.temp/
-supabase/functions/.deno/
-supabase/functions/v2-api/bundle.mjs
-supabase/functions/v2-api/query_compiler_bg.js
-supabase/functions/v2-api/query_compiler_bg.wasm
-supabase/functions/v2-api-perf/
 coverage/
 
 # Local env files
@@ -21,9 +10,6 @@ coverage/
 .env.local
 .env.*.local
 .env.production
-supabase/.env
-supabase/.env.*
-!supabase/.env.example
 
 # Local deployment secrets and machine-specific credentials
 .deploy/

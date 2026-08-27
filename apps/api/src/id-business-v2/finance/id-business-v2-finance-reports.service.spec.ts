@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2FinanceReportsService } from './id-business-v2-finance-reports.service';
@@ -12,7 +12,7 @@ const pendingOrderId = '33333333-3333-4333-8333-333333333333';
 const historicalOrderId = '44444444-4444-4444-8444-444444444444';
 
 function decimal(value: Prisma.Decimal.Value) {
-  return new CloudflarePrisma.Decimal(String(value));
+  return new MysqlPrisma.Decimal(String(value));
 }
 
 function line(
@@ -259,7 +259,7 @@ describe('IdBusinessV2FinanceReportsService settlement platform report', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('normalizes Cloudflare Prisma decimals while calculating assets', async () => {
+  it('normalizes MySQL Prisma decimals while calculating assets', async () => {
     const assetPrisma = {
       idBusinessV2FinanceAccount: {
         findMany: vi.fn().mockResolvedValue([

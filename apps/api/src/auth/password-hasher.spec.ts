@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hashPassword, verifyPassword } from './password-hasher';
 
 describe('password-hasher', () => {
-  it('creates a Cloudflare-compatible PBKDF2 hash and verifies it', async () => {
+  it('creates a Web-Crypto-compatible PBKDF2 hash and verifies it', async () => {
     const passwordHash = await hashPassword('correct horse battery staple');
 
     expect(passwordHash).toMatch(/^pbkdf2-sha256\$100000\$[0-9a-f]{32}\$[0-9a-f]{128}$/);

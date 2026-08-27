@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { calculateFinanceHistoryAssetOpening } from './persistence/id-business-v2-finance-history-opening.repository';
 
 describe('calculateFinanceHistoryAssetOpening', () => {
-  it('normalizes Cloudflare-style aggregate decimals before calculating the opening difference', async () => {
+  it('normalizes database-driver aggregate decimals before calculating the opening difference', async () => {
     const client = createClient({
       giftCardInventory: edgeDecimal('1032.728'),
       idInventory: edgeDecimal('40'),

@@ -1,4 +1,4 @@
-import { createParamDecorator, ServiceUnavailableException } from '@nestjs/common';
+import { createParamDecorator } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
@@ -14,7 +14,6 @@ export interface RequestWithClientIp {
 }
 
 interface TrustedProxyEnvironment {
-  SUPABASE_EDGE_FUNCTION?: string;
   V2_TRUSTED_PROXY_SECRET?: string;
 }
 
@@ -27,9 +26,6 @@ export function resolveTrustedClientIp(
   if (secret) {
     const signedIp = verifySignedClientIp(request, secret, now);
     if (signedIp) return signedIp;
-    if (environment.SUPABASE_EDGE_FUNCTION === 'true') {
-      throw new ServiceUnavailableException('请求未经过可信代理，暂时无法处理。');
-    }
   }
 
   return normalizeIp(request?.ip);
