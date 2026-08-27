@@ -84,11 +84,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
     if (apiErrorBody?.fieldErrors) body.fieldErrors = apiErrorBody.fieldErrors;
 
-    this.logCloudflareError({ errorCode, exception, request, requestId, status });
+    this.logEdgeError({ errorCode, exception, request, requestId, status });
     response.status(status).json(body);
   }
 
-  private logCloudflareError(input: {
+  private logEdgeError(input: {
     errorCode: string;
     exception: unknown;
     request: HttpRequest;
@@ -96,23 +96,40 @@ export class HttpExceptionFilter implements ExceptionFilter {
     status: number;
   }) {
     const isSupabaseEdgeRuntime = process.env.SUPABASE_EDGE_FUNCTION === 'true';
-    const cloudflareEdgeOwnsCompletionLog =
-      process.env.CLOUDFLARE_WORKER === 'true' ||
-      Boolean(getRequestHeader(input.request, 'cf-ray'));
-    if (!isSupabaseEdgeRuntime || cloudflareEdgeOwnsCompletionLog || input.status < 500) return;
+    const isCloudflareWorker = process.env.CLOUDFLARE_WORKER === 'true';
+    if (!isSupabaseEdgeRuntime || isCloudflareWorker || input.status < 500) return;
+
+    const exceptionCodes = getSafeExceptionCodes(input.exception);
 
     console.error(
       JSON.stringify({
         cfRay: getRequestHeader(input.request, 'cf-ray'),
+        databaseErrorCode: exceptionCodes.databaseErrorCode,
         errorCode: input.errorCode,
         errorName:
           input.exception instanceof Error ? input.exception.name : 'UnknownServerException',
         method: input.request.method,
         pathname: (input.request.originalUrl ?? input.request.url ?? '').split('?', 1)[0],
+        providerErrorCode: exceptionCodes.providerErrorCode,
         requestId: input.requestId,
         status: input.status,
         type: 'api_error'
       })
     );
   }
+}
+
+function getSafeExceptionCodes(exception: unknown) {
+  if (!exception || typeof exception !== 'object') return {};
+  const value = exception as { code?: unknown; meta?: { code?: unknown } };
+  return {
+    databaseErrorCode: normalizeSafeErrorCode(value.meta?.code),
+    providerErrorCode: normalizeSafeErrorCode(value.code)
+  };
+}
+
+function normalizeSafeErrorCode(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return /^[A-Za-z0-9_-]{1,32}$/.test(normalized) ? normalized : undefined;
 }

@@ -444,7 +444,7 @@ export class IdBusinessV2TopupSupplierQueryRepository {
         MAX(CASE WHEN ledger."entry_type" = 'gift_card_debit' THEN ledger."created_at" END) AS "lastTopupAt"
       FROM "id_business_v2_topup_supplier_ledger" ledger
       WHERE ledger."supplier_account_id" IN (
-        ${Prisma.join(accountIds.map((id) => Prisma.sql`${id}`))}
+        ${Prisma.join(accountIds.map((id) => Prisma.sql`${id}::uuid`))}
       )
       GROUP BY ledger."supplier_account_id"
     `);
@@ -482,7 +482,7 @@ export class IdBusinessV2TopupSupplierQueryRepository {
       FROM "id_business_v2_topup_supplier_ledger" ledger
       INNER JOIN "id_business_v2_gift_cards" gift_card ON gift_card."id" = ledger."gift_card_id"
       LEFT JOIN "id_business_v2_topup_supplier_ledger" reversal ON reversal."reversal_of_entry_id" = ledger."id"
-      WHERE ledger."supplier_account_id" = ${accountId}
+      WHERE ledger."supplier_account_id" = ${accountId}::uuid
         AND ledger."entry_type" = 'gift_card_debit'
         AND reversal."id" IS NULL
       GROUP BY gift_card."country_option_id", gift_card."country_name_snapshot", gift_card."currency_code_snapshot"

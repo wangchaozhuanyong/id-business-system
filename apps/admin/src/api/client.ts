@@ -140,7 +140,11 @@ http.interceptors.response.use(
 );
 
 export function getApiErrorMessage(error: unknown) {
-  if (isApiError(error)) return error.message;
+  if (isApiError(error)) {
+    const shouldShowRequestId =
+      Boolean(error.requestId) && (error.kind === 'server' || error.kind === 'transient');
+    return shouldShowRequestId ? `${error.message} 请求编号：${error.requestId}` : error.message;
+  }
   if (error instanceof Error) {
     return normalizeServerMessage(error.message);
   }
