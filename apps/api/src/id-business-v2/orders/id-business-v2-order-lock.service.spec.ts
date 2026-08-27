@@ -372,6 +372,11 @@ describe('IdBusinessV2OrderLockService', () => {
         accountId,
         status: 'active',
         renewedBy: { is: null },
+        order: {
+          is: {
+            balanceReturns: { none: { status: 'active' } }
+          }
+        },
         orderId: { not: orderId },
         serviceOption: {
           is: {

@@ -236,6 +236,11 @@ describe('IdBusinessV2OrderMatchingService', () => {
           none: expect.objectContaining({
             status: 'active',
             renewedBy: { is: null },
+            order: {
+              is: {
+                balanceReturns: { none: { status: 'active' } }
+              }
+            },
             serviceOption: {
               is: {
                 type: 'service',
@@ -362,6 +367,11 @@ describe('IdBusinessV2OrderMatchingService', () => {
           none: {
             status: 'active',
             renewedBy: { is: null },
+            order: {
+              is: {
+                balanceReturns: { none: { status: 'active' } }
+              }
+            },
             serviceOption: {
               is: {
                 type: 'service',

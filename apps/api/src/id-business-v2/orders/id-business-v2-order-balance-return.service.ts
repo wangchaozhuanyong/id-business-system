@@ -22,11 +22,13 @@ import {
   assertOrderCanRecordUpgradeBalanceReturn,
   assertUpgradeBalanceReturnReplay,
   assertUpgradeBalanceReturnReversalReplay,
+  appendUpgradeBalanceReturnActivationRemark,
   buildUpgradeBalanceReturnPreview,
   calculateOrderProfit,
   calculateUpgradeBalanceReturnCost,
   minAmount,
   normalizeUpgradeBalanceReturnAmount,
+  removeUpgradeBalanceReturnActivationRemark,
   resolveOrderBalanceCurrencyCode,
   toUpgradeBalanceReturnResponse
 } from './id-business-v2-order-balance-return-support';
@@ -120,6 +122,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         const account = await this.repository.lockAccount(tx, order.accountId);
         if (!account) throw new NotFoundException('订单绑定的 ID 不存在或已停用');
         if (account.lossReportedAt) throw new ConflictException('已报损冻结 ID 不能登记升级退币');
+        const activation = await this.repository.findActivationByOrder(tx, order.id);
 
         const currencyCode = resolveOrderBalanceCurrencyCode(
           order.balanceCurrencyCode,
@@ -246,6 +249,42 @@ export class IdBusinessV2OrderBalanceReturnService {
           reason,
           createdByUserId: operator?.id
         });
+        const activationCancelled = activation?.status === 'active';
+        if (activationCancelled && activation) {
+          const activationRemark = appendUpgradeBalanceReturnActivationRemark(
+            activation.remark,
+            balanceReturn.id,
+            reason
+          );
+          await this.repository.updateActivation(tx, order.id, {
+            status: 'cancelled',
+            statusChangedAt: context.businessTime,
+            remark: activationRemark,
+            updatedByUserId: operator?.id
+          });
+          await this.repository.appendAudit(tx, {
+            userId: operator?.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.activation.cancel_by_upgrade_balance_return',
+            objectType: 'id_business_v2_activation',
+            objectId: activation.id,
+            beforeData: {
+              orderId: order.id,
+              status: activation.status,
+              statusChangedAt: activation.statusChangedAt,
+              remark: activation.remark
+            },
+            afterData: {
+              orderId: order.id,
+              balanceReturnId: balanceReturn.id,
+              status: 'cancelled',
+              statusChangedAt: context.businessTime,
+              remark: activationRemark,
+              reason
+            },
+            remark: `升级退币结束原开通：${order.orderNo}`
+          });
+        }
         await this.repository.appendAudit(tx, {
           userId: operator?.id,
           module: 'id_business_v2',
@@ -257,7 +296,9 @@ export class IdBusinessV2OrderBalanceReturnService {
             appliedBalanceCostAmount: order.appliedBalanceCostAmount.toString(),
             profitAmount: order.profitAmount.toString(),
             accountBalance: movement.balanceBefore.toString(),
-            accountBalanceCostAmount: movement.costBefore.toString()
+            accountBalanceCostAmount: movement.costBefore.toString(),
+            activationId: activation?.id ?? null,
+            activationStatus: activation?.status ?? null
           },
           afterData: {
             balanceReturnId: balanceReturn.id,
@@ -271,6 +312,8 @@ export class IdBusinessV2OrderBalanceReturnService {
             accountBalance: movement.balanceAfter.toString(),
             accountBalanceCostAmount: movement.costAfter.toString(),
             financeJournalId: financeJournal?.id ?? null,
+            activationCancelled,
+            activationId: activation?.id ?? null,
             revenueChanged: false,
             reason
           },
@@ -347,6 +390,38 @@ export class IdBusinessV2OrderBalanceReturnService {
         const account = await this.repository.lockAccount(tx, balanceReturn.accountId);
         if (!account) throw new NotFoundException('订单绑定的 ID 不存在或已停用');
         if (account.lossReportedAt) throw new ConflictException('已报损冻结 ID 不能撤销升级退币');
+
+        const activation = await this.repository.findActivationByOrder(tx, order.id);
+        const activationCancellation = removeUpgradeBalanceReturnActivationRemark(
+          activation?.remark ?? null,
+          balanceReturn.id
+        );
+        const activationShouldRestore =
+          activation?.status === 'cancelled' && activationCancellation.matched;
+        if (activationShouldRestore && activation) {
+          const service = await this.repository.findServiceCategory(tx, activation.serviceOptionId);
+          if (!service?.parentId) {
+            throw new ConflictException('原开通业务分类不存在，不能安全撤销升级退币');
+          }
+          const [conflictingActivation, conflictingOrderLock] = await Promise.all([
+            this.repository.findActiveCategoryActivationForAccount(tx, {
+              accountId: activation.accountId,
+              categoryOptionId: service.parentId,
+              evaluatedAt: context.businessTime,
+              editingOrderId: order.id
+            }),
+            this.repository.findActiveCategoryOrderLockForAccount(tx, {
+              accountId: activation.accountId,
+              categoryOptionId: service.parentId,
+              evaluatedAt: context.businessTime,
+              excludedOrderId: order.id
+            })
+          ]);
+          if (conflictingActivation || conflictingOrderLock) {
+            throw new ConflictException('该 ID 已有后续同类业务订单或开通，不能撤销升级退币');
+          }
+        }
+
         const movement = this.balanceCalculator.calculateExactReversalDebit(
           {
             currentBalance: account.currentBalance,
@@ -423,6 +498,37 @@ export class IdBusinessV2OrderBalanceReturnService {
           reversedByUserId: operator?.id,
           reversedAt
         });
+        if (activationShouldRestore && activation) {
+          await this.repository.updateActivation(tx, order.id, {
+            status: 'active',
+            statusChangedAt: reversedAt,
+            remark: activationCancellation.remark,
+            updatedByUserId: operator?.id
+          });
+          await this.repository.appendAudit(tx, {
+            userId: operator?.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.activation.restore_by_upgrade_balance_return_reversal',
+            objectType: 'id_business_v2_activation',
+            objectId: activation.id,
+            beforeData: {
+              orderId: order.id,
+              balanceReturnId: balanceReturn.id,
+              status: activation.status,
+              statusChangedAt: activation.statusChangedAt,
+              remark: activation.remark
+            },
+            afterData: {
+              orderId: order.id,
+              balanceReturnId: balanceReturn.id,
+              status: 'active',
+              statusChangedAt: reversedAt,
+              remark: activationCancellation.remark,
+              reason
+            },
+            remark: `撤销升级退币并恢复原开通：${order.orderNo}`
+          });
+        }
         await this.repository.appendAudit(tx, {
           userId: operator?.id,
           module: 'id_business_v2',
@@ -435,7 +541,9 @@ export class IdBusinessV2OrderBalanceReturnService {
             appliedBalanceCostAmount: order.appliedBalanceCostAmount.toString(),
             profitAmount: order.profitAmount.toString(),
             accountBalance: movement.balanceBefore.toString(),
-            accountBalanceCostAmount: movement.costBefore.toString()
+            accountBalanceCostAmount: movement.costBefore.toString(),
+            activationId: activation?.id ?? null,
+            activationStatus: activation?.status ?? null
           },
           afterData: {
             balanceReturnId: balanceReturn.id,
@@ -447,6 +555,8 @@ export class IdBusinessV2OrderBalanceReturnService {
             accountBalanceCostAmount: movement.costAfter.toString(),
             reversalLedgerId: reversalLedger.id,
             reversalFinanceJournalId: reversalFinanceJournal?.id ?? null,
+            activationRestored: activationShouldRestore,
+            activationId: activation?.id ?? null,
             revenueChanged: false,
             reason,
             reversedAt
