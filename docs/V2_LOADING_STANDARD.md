@@ -190,6 +190,5 @@ npm run acceptance:v2-realtime
 `acceptance:v2-navigation-performance` 需要本地 API 和测试账号；缺少运行条件时必须明确记录未执行，
 不能把静态检查或本地 mock 当成真实登录通过。
 
-`acceptance:v2-realtime` 还要求本地 Supabase Realtime、迁移后的本地数据库，以及
-`V2_REALTIME_USERNAME`、`V2_REALTIME_PASSWORD`。脚本默认拒绝远程地址，只递增本地 scope
-version，并验证版本表触发的私有事件，不修改业务行。
+变化同步由 `changeSync.spec.ts` 验证 scope/version 精度、BigInt 比较和首次基线行为；
+线上巡检只执行只读版本接口，不修改业务行。

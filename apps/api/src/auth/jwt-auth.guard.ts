@@ -1,7 +1,6 @@
 import {
   CanActivate,
   ExecutionContext,
-  HttpException,
   HttpStatus,
   Injectable,
   NotFoundException,
@@ -16,7 +15,6 @@ import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorators';
 import { AuthAvailabilityMonitor } from './auth-availability.monitor';
-import { SupabaseAuthService } from './supabase-auth.service';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 
 interface RequestWithAuthHeader {
@@ -37,7 +35,6 @@ export class JwtAuthGuard implements CanActivate {
     private readonly jwtService: JwtService,
     private readonly identityService: V2IdentityService,
     private readonly securityService: SecurityService,
-    private readonly supabaseAuthService: SupabaseAuthService,
     private readonly availabilityMonitor: AuthAvailabilityMonitor
   ) {}
 
@@ -61,11 +58,7 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      if (this.supabaseAuthService.isEnabled()) {
-        await this.activateSupabaseSession(request, token, allowDuringPasswordReset);
-      } else {
-        await this.activateLocalSession(request, token, allowDuringPasswordReset);
-      }
+      await this.activateLocalSession(request, token, allowDuringPasswordReset);
       this.availabilityMonitor.recordAvailable();
       return true;
     } catch (error) {
@@ -81,68 +74,6 @@ export class JwtAuthGuard implements CanActivate {
     } finally {
       recordServerAuthTiming(request, performance.now() - authStartedAt);
     }
-  }
-
-  private async activateSupabaseSession(
-    request: RequestWithAuthHeader,
-    token: string,
-    allowDuringPasswordReset: boolean | undefined
-  ) {
-    const clientIp = resolveTrustedClientIp(request);
-    const [identityResult, ipAllowedResult] = await Promise.allSettled([
-      this.authenticateSupabaseToken(token),
-      this.assertRequestIpAllowed(clientIp)
-    ]);
-    if (identityResult.status === 'rejected') throw identityResult.reason;
-    if (ipAllowedResult.status === 'rejected') throw ipAllowedResult.reason;
-
-    const identity = identityResult.value;
-    const strongSessionIdentifier = `supabase:mfa:${identity.sessionId}`;
-    const ordinarySessionIdentifier = `supabase:${identity.sessionId}`;
-    const candidates = identity.mfaVerified
-      ? [strongSessionIdentifier, ordinarySessionIdentifier]
-      : [ordinarySessionIdentifier, strongSessionIdentifier];
-    const activeSessionPromise = this.checkActiveSession(async () => {
-      for (const sessionIdentifier of candidates) {
-        if (
-          await this.securityService.ensureActiveSession({
-            userId: identity.userId,
-            sessionIdentifier,
-            expiresAt: identity.expiresAt,
-            ip: clientIp,
-            userAgent: request.headers['user-agent']
-          })
-        ) {
-          return sessionIdentifier;
-        }
-      }
-      return null;
-    });
-    const userPromise = this.loadAuthenticatedUser(identity.userId);
-    const mfaRequirementPromise = userPromise.then((user) =>
-      this.securityService.getMfaLoginRequirementForUser(user)
-    );
-    const [activeSessionResult, userResult, mfaRequirementResult] = await Promise.allSettled([
-      activeSessionPromise,
-      userPromise,
-      mfaRequirementPromise
-    ]);
-    if (activeSessionResult.status === 'rejected') throw activeSessionResult.reason;
-    if (!activeSessionResult.value) throw this.revokedSessionError();
-    if (userResult.status === 'rejected') throw userResult.reason;
-    if (mfaRequirementResult.status === 'rejected') throw mfaRequirementResult.reason;
-
-    const user = userResult.value;
-    const mfaRequirement = mfaRequirementResult.value;
-    if (mfaRequirement.required && activeSessionResult.value !== strongSessionIdentifier) {
-      throw authHttpError(
-        HttpStatus.UNAUTHORIZED,
-        'AUTH_MFA_REQUIRED',
-        '当前会话未完成 MFA 验证，请重新登录。'
-      );
-    }
-    request.user = user;
-    this.assertPasswordResetAccess(user, allowDuringPasswordReset);
   }
 
   private async activateLocalSession(
@@ -170,26 +101,6 @@ export class JwtAuthGuard implements CanActivate {
       );
     }
     this.assertPasswordResetAccess(request.user, allowDuringPasswordReset);
-  }
-
-  private async authenticateSupabaseToken(token: string) {
-    try {
-      return await this.supabaseAuthService.authenticateAccessToken(token);
-    } catch (error) {
-      if (error instanceof ApiHttpException) throw error;
-      if (error instanceof UnauthorizedException) {
-        throw authHttpError(
-          HttpStatus.UNAUTHORIZED,
-          'AUTH_INVALID',
-          '登录状态无效或已过期，请重新登录。',
-          error
-        );
-      }
-      if (error instanceof HttpException && error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE) {
-        throw this.authDependencyUnavailable(error);
-      }
-      throw this.authDependencyUnavailable(error);
-    }
   }
 
   private async verifyLocalToken(token: string) {

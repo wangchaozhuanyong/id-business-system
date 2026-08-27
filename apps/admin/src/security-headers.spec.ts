@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const headers = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
-const supabaseClient = readFileSync(new URL('./auth/supabase.ts', import.meta.url), 'utf8');
-const supabaseStorage = readFileSync(
-  new URL('./auth/supabase-storage.ts', import.meta.url),
-  'utf8'
-);
 
 describe('admin security headers', () => {
   it('loads the boot shell without inline script, style or event handlers', () => {
@@ -28,10 +23,9 @@ describe('admin security headers', () => {
     expect(headers).toContain('Strict-Transport-Security:');
   });
 
-  it('keeps Supabase bearer sessions out of persistent browser storage', () => {
-    expect(supabaseClient).toContain('storage: createSupabaseAuthStorage(supabaseConfig.url)');
-    expect(supabaseClient).toContain('storageKey: getSupabaseAuthStorageKey(supabaseConfig.url)');
-    expect(supabaseStorage).toContain('sessionStorage ?? createMemoryStorage()');
-    expect(supabaseStorage).not.toMatch(/return\s+persistentStorage/);
+  it('limits API connections to the same origin', () => {
+    expect(headers).toContain("connect-src 'self'");
+    expect(headers).not.toMatch(/connect-src[^;\n]*https?:\/\//);
+    expect(headers).not.toMatch(/connect-src[^;\n]*wss?:\/\//);
   });
 });

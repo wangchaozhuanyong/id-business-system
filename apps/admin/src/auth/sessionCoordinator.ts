@@ -1,6 +1,5 @@
 import { readonly, ref, shallowRef } from 'vue';
 import { ApiError, createSessionUnavailableError, isApiError } from '@/api/apiError';
-import { isSupabaseAuthConfigured } from '@/auth/supabase-config';
 import {
   AUTH_CREDENTIAL_STORAGE_KEY,
   clearStoredCredential,
@@ -154,11 +153,7 @@ let halfOpenProbeInFlight = false;
 let halfOpenProbeUsed = false;
 let browserListenersInstalled = false;
 let sessionChannel: BroadcastChannel | null = null;
-let providerSubscription: { unsubscribe(): void } | null = null;
-let providerSubscribed = false;
-let providerAuthUserId = '';
 let authApiModulePromise: Promise<typeof import('@/api/auth')> | null = null;
-let supabaseAuthModulePromise: Promise<typeof import('@/auth/supabase')> | null = null;
 let nowProvider = () => Date.now();
 const identityListeners = new Set<(reason: AuthIdentityChangeReason) => void>();
 const peerValidationWaiters = new Set<() => void>();
@@ -316,12 +311,6 @@ async function validateCurrentUser(
   }
 
   try {
-    await syncProviderSession();
-    const synchronizedSnapshot = getCredentialSnapshot();
-    if (!synchronizedSnapshot || synchronizedSnapshot.credentialId !== snapshot.credentialId) {
-      return getResolution();
-    }
-    snapshot = synchronizedSnapshot;
     const { authApi } = await loadAuthApiModule();
     const user = await authApi.me();
     if (!isSameCredentialSnapshot(mutableCredential.value, snapshot)) return getResolution();
@@ -373,19 +362,6 @@ async function login(username: string, password: string, mfaCode?: string) {
   try {
     const { authApi } = await loadAuthApiModule();
     const data = await authApi.login(username, password, mfaCode);
-    if (isSupabaseAuthConfigured()) {
-      if (!data.refreshToken) {
-        throw new ApiError('登录成功，但服务端没有返回可续期的登录会话。', {
-          code: 'AUTH_PROVIDER_SESSION_MISSING',
-          kind: 'server',
-          retryable: false,
-          status: 500
-        });
-      }
-      const supabaseAuth = await loadSupabaseAuthModule();
-      const session = await supabaseAuth.setSupabaseSession(data.accessToken, data.refreshToken);
-      providerAuthUserId = session?.user.id ?? '';
-    }
 
     replaceCredential(createStoredCredential(data.accessToken, data.user), 'login');
     verifiedCredentialId = mutableCredential.value?.credentialId ?? '';
@@ -418,10 +394,6 @@ async function logout(options: { remote?: boolean } = {}) {
   } catch (error) {
     remoteError = error;
   } finally {
-    if (isSupabaseAuthConfigured()) {
-      const supabaseAuth = await loadSupabaseAuthModule();
-      await supabaseAuth.clearSupabaseSession().catch(() => undefined);
-    }
     clearLocalSession({ expectedCredentialId: snapshot?.credentialId, reason: 'logout' });
   }
   if (remoteError) throw remoteError;
@@ -437,10 +409,6 @@ async function changePassword(currentPassword: string, newPassword: string) {
       retryable: false,
       status: 500
     });
-  }
-  if (isSupabaseAuthConfigured()) {
-    const supabaseAuth = await loadSupabaseAuthModule();
-    await supabaseAuth.clearSupabaseSession().catch(() => undefined);
   }
   clearLocalSession({ reason: 'logout' });
   return result;
@@ -513,7 +481,6 @@ function clearLocalSession(
   mutableUserLoadedAt.value = 0;
   verifiedCredentialId = '';
   verifiedUserId = '';
-  providerAuthUserId = '';
   abortIdentityRequests();
   emitIdentityChange(options.reason ?? 'session-cleared');
   const anonymousReason = mapAnonymousReason(options.reason);
@@ -708,54 +675,12 @@ function mapAnonymousReason(reason?: AuthIdentityChangeReason) {
   return 'session-cleared' as const;
 }
 
-async function syncProviderSession() {
-  if (!isSupabaseAuthConfigured()) return;
-  const supabaseAuth = await loadSupabaseAuthModule();
-  ensureProviderSubscription(supabaseAuth);
-  const session = await supabaseAuth.getSupabaseSession();
-  if (!session) {
-    clearLocalSession({ reason: 'session-cleared' });
-    return;
-  }
-  providerAuthUserId = session.user.id;
-  updateAccessToken(session.access_token);
-}
-
-function ensureProviderSubscription(supabaseAuth: typeof import('@/auth/supabase')) {
-  if (providerSubscribed) return;
-  providerSubscribed = true;
-  providerSubscription = supabaseAuth.subscribeSupabaseSession((event, session) => {
-    if (!session) {
-      if (event === 'SIGNED_OUT') clearLocalSession({ reason: 'session-cleared' });
-      return;
-    }
-    const changedUser = Boolean(providerAuthUserId) && providerAuthUserId !== session.user.id;
-    if (changedUser) clearLocalSession({ reason: 'identity-switched' });
-    providerAuthUserId = session.user.id;
-    updateAccessToken(session.access_token);
-    if (
-      (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') &&
-      mutableSessionState.value.kind !== 'validating'
-    ) {
-      void ensureSession({ force: true, source: 'background' });
-    }
-  });
-}
-
 function loadAuthApiModule() {
   authApiModulePromise ??= import('@/api/auth').catch((error) => {
     authApiModulePromise = null;
     throw error;
   });
   return authApiModulePromise;
-}
-
-function loadSupabaseAuthModule() {
-  supabaseAuthModulePromise ??= import('@/auth/supabase').catch((error) => {
-    supabaseAuthModulePromise = null;
-    throw error;
-  });
-  return supabaseAuthModulePromise;
 }
 
 async function withCrossTabValidationLock(
@@ -1080,10 +1005,6 @@ export function resetSessionCoordinatorForTests(initialState: SessionState = { k
   breakerLevel = 0;
   halfOpenProbeInFlight = false;
   halfOpenProbeUsed = false;
-  providerAuthUserId = '';
-  providerSubscribed = false;
-  providerSubscription?.unsubscribe();
-  providerSubscription = null;
   sessionChannel?.removeEventListener('message', handleSessionBroadcast);
   sessionChannel?.close();
   sessionChannel = null;

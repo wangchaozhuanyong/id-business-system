@@ -10,7 +10,6 @@ import { AuthService } from '../auth/auth.service';
 import { AuthAvailabilityMonitor } from '../auth/auth-availability.monitor';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
-import { SupabaseAuthService } from '../auth/supabase-auth.service';
 import { V2AuthController } from './v2-auth.controller';
 import { V2EmployeesController } from './employees/v2-employees.controller';
 import { V2EmployeesService } from './employees/v2-employees.service';
@@ -28,9 +27,8 @@ import { V2SecurityController } from './security/v2-security.controller';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
         const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
-        const authProvider = configService.get<string>('AUTH_PROVIDER') ?? 'local';
         const secret = configService.get<string>('JWT_SECRET');
-        if (!secret && nodeEnv === 'production' && authProvider !== 'supabase') {
+        if (!secret && nodeEnv === 'production') {
           throw new Error('JWT_SECRET is required in production');
         }
 
@@ -59,7 +57,6 @@ import { V2SecurityController } from './security/v2-security.controller';
     V2ProfileService,
     V2RolesService,
     AuthService,
-    SupabaseAuthService,
     AuthAvailabilityMonitor,
     JwtAuthGuard,
     PermissionsGuard,

@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@apple-business/shared": "0.1.0",
-    "@supabase/supabase-js": "^2.110.9",
     "axios": "^1.0.0",
     "element-plus": "^2.0.0",
     "otpauth": "^9.5.1",

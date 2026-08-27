@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import { PrismaClient } from '@prisma/client';
 import process from 'node:process';
-import { SMOKE_PERMISSIONS, SMOKE_ROLE_CODE } from './lib/cloudflare-release.mjs';
+
+const SMOKE_ROLE_CODE = 'production_smoke_readonly';
+const SMOKE_PERMISSIONS = [
+  'apple.order.view',
+  'apple.renewal_task.view',
+  'apple.account.view',
+  'customer.view',
+  'apple.activation.view',
+  'apple.balance.view',
+  'apple.exchange_rate.view'
+];
 
 const username = process.env.SMOKE_TEST_USERNAME?.trim();
 const password = process.env.SMOKE_TEST_PASSWORD;

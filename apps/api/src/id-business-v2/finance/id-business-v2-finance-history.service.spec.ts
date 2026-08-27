@@ -8,7 +8,7 @@ import { IdBusinessV2FinanceHistoryCommandRepository } from './persistence/id-bu
 import { IdBusinessV2FinanceHistoryConfirmationRepository } from './persistence/id-business-v2-finance-history-confirmation.repository';
 
 describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
-  it('previews Cloudflare-style decimals and stores the checked snapshot in audit data', async () => {
+  it('previews database-driver decimals and stores the checked snapshot in audit data', async () => {
     const completedAt = new Date('2026-07-30T01:00:00.000Z');
     const tx = {
       idBusinessV2FinanceSettings: {
@@ -33,8 +33,8 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
         aggregate: vi.fn().mockResolvedValue({
           _count: { _all: 2 },
           _sum: {
-            openingBalanceCny: cloudflareDecimal('120.25'),
-            currentBalanceCny: cloudflareDecimal('350.5')
+            openingBalanceCny: databaseDecimal('120.25'),
+            currentBalanceCny: databaseDecimal('350.5')
           }
         })
       },
@@ -42,8 +42,8 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
         aggregate: vi.fn().mockResolvedValue({
           _count: { _all: 1 },
           _sum: {
-            openingBalanceCny: cloudflareDecimal('1000'),
-            currentBalanceCny: cloudflareDecimal('18677')
+            openingBalanceCny: databaseDecimal('1000'),
+            currentBalanceCny: databaseDecimal('18677')
           }
         })
       },
@@ -193,8 +193,8 @@ describe('IdBusinessV2FinanceHistoryService confirmation audit', () => {
       .mockResolvedValueOnce({
         _count: { _all: 1 },
         _sum: {
-          openingBalanceCny: cloudflareDecimal('20'),
-          currentBalanceCny: cloudflareDecimal('20')
+          openingBalanceCny: databaseDecimal('20'),
+          currentBalanceCny: databaseDecimal('20')
         }
       });
     const tx = {
@@ -418,6 +418,6 @@ function createConfirmationService(prisma: object) {
   );
 }
 
-function cloudflareDecimal(value: string) {
+function databaseDecimal(value: string) {
   return { toString: () => value };
 }

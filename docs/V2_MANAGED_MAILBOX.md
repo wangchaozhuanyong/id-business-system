@@ -24,9 +24,8 @@ Google 账号需先开启两步验证后生成应用专用密码。部分组织�
 
 ## 部署约束
 
-邮箱读取依赖原生 IMAP TCP/TLS。当前 Node/PM2/Docker API 可以运行该连接器；`SUPABASE_EDGE_FUNCTION=true`
-时连接器会拒绝执行并返回“邮件查询服务尚未配置”。因此生产启用邮箱查询前，必须把相关 API 部署到
-项目现有 Node 运行时，并让前端 `VITE_API_BASE_URL` 指向该 API。未经单独设计和验收，不得把应用专用
+邮箱读取依赖原生 IMAP TCP/TLS，只在 AWS Docker 中的 Node API 运行。生产启用邮箱查询前，
+必须确认管理端同源 `/api` 指向该 Node API，且 EC2 安全组不额外开放 IMAP 入站端口。未经单独设计和验收，不得把应用专用
 密码转发给外部邮件代查服务。
 
 ## 安全边界

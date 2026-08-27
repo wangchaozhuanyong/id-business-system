@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
@@ -248,7 +248,7 @@ describe('IdBusinessV2AccountsService', () => {
     const supplierWalletId = '44444444-4444-4444-8444-444444444444';
     financeFxService.resolve.mockResolvedValueOnce({
       id: '55555555-5555-4555-8555-555555555555',
-      rateToCny: new CloudflarePrisma.Decimal('2'),
+      rateToCny: new MysqlPrisma.Decimal('2'),
       source: 'manual'
     });
     await expect(
@@ -407,14 +407,14 @@ describe('IdBusinessV2AccountsService', () => {
     );
   });
 
-  it('adjusts Cloudflare Decimal persisted balances without cross-runtime methods', async () => {
+  it('adjusts database Decimal persisted balances without cross-runtime methods', async () => {
     const existing = makeAccount({
-      currentBalance: new CloudflarePrisma.Decimal('20'),
-      balanceCostAmount: new CloudflarePrisma.Decimal('70')
+      currentBalance: new MysqlPrisma.Decimal('20'),
+      balanceCostAmount: new MysqlPrisma.Decimal('70')
     });
     const updated = makeAccount({
-      currentBalance: new CloudflarePrisma.Decimal('15'),
-      balanceCostAmount: new CloudflarePrisma.Decimal('45')
+      currentBalance: new MysqlPrisma.Decimal('15'),
+      balanceCostAmount: new MysqlPrisma.Decimal('45')
     });
     prisma.idBusinessV2Account.findFirst
       .mockResolvedValueOnce(existing)
@@ -423,8 +423,8 @@ describe('IdBusinessV2AccountsService', () => {
     prisma.$queryRaw.mockResolvedValue([
       {
         id: existing.id,
-        currentBalance: new CloudflarePrisma.Decimal('20'),
-        balanceCostAmount: new CloudflarePrisma.Decimal('70'),
+        currentBalance: new MysqlPrisma.Decimal('20'),
+        balanceCostAmount: new MysqlPrisma.Decimal('70'),
         soldByOrderId: null,
         lossReportedAt: null
       }
@@ -437,8 +437,8 @@ describe('IdBusinessV2AccountsService', () => {
         balanceCostAmount: '45',
         expectedCurrentBalance: '20',
         expectedBalanceCostAmount: '70',
-        balanceAdjustmentReason: 'Cloudflare 回归修正',
-        balanceAdjustmentIdempotencyKey: 'account-adjustment-cloudflare-0001'
+        balanceAdjustmentReason: 'MySQL 回归修正',
+        balanceAdjustmentIdempotencyKey: 'account-adjustment-mysql-0001'
       },
       operator
     );

@@ -456,7 +456,7 @@ describe('SecurityService', () => {
 
   it('reuses a registered provider session without replacing its original device metadata', async () => {
     const { service, prisma, activeSession } = createService();
-    const sessionIdentifier = 'supabase:55555555-5555-4555-8555-555555555555';
+    const sessionIdentifier = 'provider:55555555-5555-4555-8555-555555555555';
     const tokenHash = createHash('sha256').update(sessionIdentifier).digest('hex');
     (prisma.activeSession.findUnique as jest.Mock)
       .mockResolvedValueOnce({
@@ -529,7 +529,7 @@ describe('SecurityService', () => {
     await expect(
       service.ensureActiveSession({
         userId,
-        sessionIdentifier: 'supabase:touch-race',
+        sessionIdentifier: 'provider:touch-race',
         expiresAt: future
       })
     ).resolves.toBe(true);
@@ -557,7 +557,7 @@ describe('SecurityService', () => {
       await expect(
         service.ensureActiveSession({
           userId,
-          sessionIdentifier: 'supabase:66666666-6666-4666-8666-666666666666',
+          sessionIdentifier: 'provider:66666666-6666-4666-8666-666666666666',
           expiresAt: future,
           ip: '127.0.0.1',
           userAgent: 'unit-test'
@@ -574,7 +574,7 @@ describe('SecurityService', () => {
     await expect(
       service.ensureActiveSession({
         userId,
-        sessionIdentifier: 'supabase:66666666-6666-4666-8666-666666666667',
+        sessionIdentifier: 'provider:66666666-6666-4666-8666-666666666667',
         expiresAt: new Date(Date.now() - 1_000),
         ip: '127.0.0.1',
         userAgent: 'unit-test'
@@ -586,7 +586,7 @@ describe('SecurityService', () => {
 
   it('observes provider session revocation on the next request', async () => {
     const { service, prisma } = createService();
-    const sessionIdentifier = 'supabase:77777777-7777-4777-8777-777777777777';
+    const sessionIdentifier = 'provider:77777777-7777-4777-8777-777777777777';
     const tokenHash = createHash('sha256').update(sessionIdentifier).digest('hex');
     const registeredSession = {
       id: '77777777-7777-4777-8777-777777777777',

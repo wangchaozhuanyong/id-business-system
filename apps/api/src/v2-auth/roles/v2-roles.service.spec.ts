@@ -127,24 +127,18 @@ function createService() {
   const securityService = {
     invalidateActiveSessionCache: jest.fn()
   };
-  const supabaseAuthService = {
-    invalidateAccessTokenCache: jest.fn()
-  };
-
   return {
     service: new V2RolesService(
       prisma as never,
       auditLogsService as never,
       identityService as never,
-      securityService as never,
-      supabaseAuthService as never
+      securityService as never
     ),
     prisma,
     transaction,
     auditLogsService,
     identityService,
-    securityService,
-    supabaseAuthService
+    securityService
   };
 }
 
@@ -449,7 +443,6 @@ describe('V2RolesService', () => {
       '55555555-5555-4555-8555-555555555555'
     );
     expect(fixture.securityService.invalidateActiveSessionCache).toHaveBeenCalledTimes(1);
-    expect(fixture.supabaseAuthService.invalidateAccessTokenCache).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a stale role version before starting the update transaction', async () => {
@@ -511,7 +504,6 @@ describe('V2RolesService', () => {
     expect(fixture.transaction.activeSession.updateMany).not.toHaveBeenCalled();
     expect(fixture.identityService.invalidateAuthenticatedUser).not.toHaveBeenCalled();
     expect(fixture.securityService.invalidateActiveSessionCache).not.toHaveBeenCalled();
-    expect(fixture.supabaseAuthService.invalidateAccessTokenCache).not.toHaveBeenCalled();
     expect(fixture.auditLogsService.create).toHaveBeenCalledWith(
       expect.objectContaining({
         afterData: expect.objectContaining({

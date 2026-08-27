@@ -4,9 +4,9 @@
 
 ## 当前执行
 
-- [x] 安全审查修复：统一本地与 Supabase 登录的 MFA 强制语义和会话证明，修复 MFA 一次性凭据并发重放、
-      登录失败与公开邮箱查询非原子限流、Cloudflare/Supabase 代理链客户端 IP 信任、管理端 CSP 和开发工具链
-      高危依赖，并将浏览器 bearer 凭据和 Supabase 会话迁移到标签页级存储；补齐专项测试与全量质量门禁。
+- [x] 安全审查修复：统一 MFA 强制语义和会话证明，修复 MFA 一次性凭据并发重放、
+      登录失败与公开邮箱查询非原子限流、可信代理链客户端 IP 校验、管理端 CSP 和开发工具链
+      高危依赖，并将浏览器 bearer 凭据迁移到标签页级存储；补齐专项测试与全量质量门禁。
       `User.phone` 已改为密文与脱敏快照存储，新增 migration `20260815120000_encrypt_user_phone`、可重复历史
       回填和禁止明文约束，并纳入受备份门禁保护的生产 migration 固定流程。本地全量质量门禁和一次性
       PostgreSQL 历史数据演练已通过；生产状态以固定 migration、发布和巡检的实际结果为准。
@@ -129,7 +129,7 @@
       申请、批准、拒绝、15 分钟授权和实际查看均写审计，并通过 V2 通知入口提示管理员。
 - [x] 单一管理端与 API 入口
 - [x] 登录、角色权限与审计
-- [x] Supabase 稳定会话、首次强制改密、全设备会话撤销与前端刷新闭环
+- [x] 本地 JWT 稳定会话、首次强制改密、全设备会话撤销与前端刷新闭环
 - [x] ID 与客户资料
 - [x] 业务选项设置
 - [x] 加卡、移动加权平均成本与不可变余额流水
@@ -186,7 +186,7 @@
 
 本次可靠性重构不新增数据库表、字段或 migration，原有路由、DTO、幂等键和金额字符串响应保持兼容。
 表格数量由 `check:v2-table-standard` 每次从模板和 schema 动态计算，不在任务文档中固定数量。
-冷启动与已验证会话 503、Node/Cloudflare Decimal adapter、表格多视口稳定性分别由专用 acceptance
+冷启动与已验证会话 503、Decimal adapter、表格多视口稳定性分别由专用 acceptance
 命令验收；这些本地结果不代表已执行生产报损、部署或线上迁移。
 
 ID 销售闭环使用增量 migration
@@ -204,18 +204,18 @@ ID 余额和人民币成本、写入损耗财务日记并关联当前 active los
 礼品卡联动报损复用该表和流水类型；卡片损失与扣卡后剩余 ID 损失分别记账，并使用同一原因和确定性
 幂等关联。
 
-生产发布加固任务新增固定 Cloudflare 目标、干净且已同步的 `main`、必需 CI 和分支保护预检；
-Wrangler 版本写入 Git commit，部署后自动使用 `production_smoke_readonly` 独立账号检查公共健康端点、
+生产发布加固任务新增固定 AWS 目标、干净且已同步的 `main`、必需 CI 和分支保护预检；
+部署后自动使用 `production_smoke_readonly` 独立账号检查公共健康端点、
 最小权限集合和核心只读接口。只同步所需查看权限并新增角色和账号数据，不新增表、字段或 Prisma
 migration。
 
-Supabase 认证闭环复用现有 `V2AuthIdentity.mustResetPassword`、`lastAuthenticatedAt` 和
-`ActiveSession.tokenHash`，不新增表、字段或 migration。Provider session 只在登录成功时显式登记，
-历史未登记会话不会在请求阶段自动补建；切换到该版本后，已有 Supabase 登录用户需要重新登录一次。
+认证闭环复用现有 `V2AuthIdentity.mustResetPassword`、`lastAuthenticatedAt` 和
+`ActiveSession.tokenHash`，不新增表、字段或 migration。会话只在登录成功时显式登记，
+历史未登记会话不会在请求阶段自动补建。
 
 员工账号和角色权限代码及生产发布已经完成。角色编码创建后保持不可变，`admin` 系统角色只读，当前
 不提供角色硬删除或启停。生产已有 `admin`、`yuangong` 和 `production_smoke_readonly` 三个角色；真实
-员工仍需按职责逐账号复核 Supabase 身份、角色权限和会话撤销。多币种财务 migration、历史回填、业务
+员工仍需按职责逐账号复核本地身份、角色权限和会话撤销。多币种财务 migration、历史回填、业务
 期初数据和遗漏开支确认已经完成，生产聚合审计状态为 `completed`。
 
 数据治理闭环使用三个增量 migration：`20260731010000_data_governance_workflow` 建立任务、条目、
@@ -237,13 +237,13 @@ migration 已在本地开发库和生产环境应用。2026-08-12 已使用两�
 - [ ] 按真实生产账号复核当前 24 个真实模块的权限矩阵（当前管理员与只读巡检角色已完成数据库侧
       权限核对；管理员 MFA、真实菜单/写入/敏感字段交互仍待账号持有人验收）
 - [ ] 使用真实业务数据完成一次加卡、订单、退款和手工续费闭环
-- [ ] 对新增真实员工逐账号复核 Supabase 身份、强制改密标记并验证会话撤销
-- [x] 在 Supabase 兼容隔离环境完成全量恢复和备份后新数据对比
+- [ ] 对新增真实员工逐账号复核本地身份、强制改密标记并验证会话撤销
+- [x] 在隔离环境完成全量恢复和备份后新数据对比
 - [x] 使用两个独立生产身份完成数据治理预览、异人审批、分批执行和幂等重放演练
-- [x] 将生产 API 从 Cloudflare Free Worker 迁移到 Supabase Edge Function，并完成财务写入验收
+- [x] 将生产管理端、API、认证和数据库迁移到 AWS EC2/MySQL，并完成只读巡检与权限门禁验收
 
-生产闭环步骤、负责人输入和验收门禁见 `docs/V2_PRODUCTION_CLOSURE.md`。只读聚合审计命令为
-`npm run audit:v2-production-closure:production`。
+AWS 生产部署、备份、迁移和巡检见 `docs/DEPLOYMENT.md` 与
+`docs/V2_PRODUCTION_CLOSURE.md`。
 
 当前共有 24 个注册模块，均为真实模块。数据治理恢复接口只覆盖 ID 资料、客户、业务选项和订单的
 软删除记录；清理只覆盖超过保留期且未被礼品卡引用的汇率采集历史，通用硬删除保持关闭。产品边界

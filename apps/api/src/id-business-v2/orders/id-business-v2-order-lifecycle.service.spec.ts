@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { IdBusinessV2Order } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { Amount4, V2CommandTransactionManager } from '../runtime/public-api';
@@ -30,8 +30,8 @@ function decimal(value: Prisma.Decimal.Value) {
   return new Prisma.Decimal(value);
 }
 
-function cloudflareDecimal(value: Prisma.Decimal.Value) {
-  return new CloudflarePrisma.Decimal(String(value));
+function databaseDecimal(value: Prisma.Decimal.Value) {
+  return new MysqlPrisma.Decimal(String(value));
 }
 
 function makeOrder(overrides: Record<string, unknown> = {}): IdBusinessV2Order {
@@ -296,19 +296,19 @@ describe('IdBusinessV2OrderLifecycleService', () => {
   it('updates a pending order, recalculates fees, and atomically recreates its lock', async () => {
     storedOrder = makeOrder({
       status: 'pending',
-      receivedAmount: cloudflareDecimal('100'),
-      platformFeeAmount: cloudflareDecimal('3'),
-      accountCostAmount: cloudflareDecimal('0'),
-      balanceAmount: cloudflareDecimal('20'),
-      balanceCostAmount: cloudflareDecimal('0'),
+      receivedAmount: databaseDecimal('100'),
+      platformFeeAmount: databaseDecimal('3'),
+      accountCostAmount: databaseDecimal('0'),
+      balanceAmount: databaseDecimal('20'),
+      balanceCostAmount: databaseDecimal('0'),
       profitAmount: null
     });
     consumption = null;
     tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
       if (where.type === 'settlement_platform') {
         return {
-          fixedFee: cloudflareDecimal('1'),
-          percentageFee: cloudflareDecimal('2')
+          fixedFee: databaseDecimal('1'),
+          percentageFee: databaseDecimal('2')
         };
       }
       return { id: where.id };
@@ -407,19 +407,19 @@ describe('IdBusinessV2OrderLifecycleService', () => {
 
   it('recalculates processing order profit while protecting consumed core fields', async () => {
     storedOrder = makeOrder({
-      receivedAmount: cloudflareDecimal('100'),
-      platformFeeAmount: cloudflareDecimal('3'),
-      accountCostAmount: cloudflareDecimal('25'),
-      balanceAmount: cloudflareDecimal('20'),
-      balanceCostAmount: cloudflareDecimal('60'),
-      refundCostAmount: cloudflareDecimal('0'),
-      profitAmount: cloudflareDecimal('37')
+      receivedAmount: databaseDecimal('100'),
+      platformFeeAmount: databaseDecimal('3'),
+      accountCostAmount: databaseDecimal('25'),
+      balanceAmount: databaseDecimal('20'),
+      balanceCostAmount: databaseDecimal('60'),
+      refundCostAmount: databaseDecimal('0'),
+      profitAmount: databaseDecimal('37')
     });
     tx.idBusinessV2Option.findFirst.mockImplementation(async ({ where }) => {
       if (where.type === 'settlement_platform') {
         return {
-          fixedFee: cloudflareDecimal('1'),
-          percentageFee: cloudflareDecimal('2')
+          fixedFee: databaseDecimal('1'),
+          percentageFee: databaseDecimal('2')
         };
       }
       return { id: where.id };

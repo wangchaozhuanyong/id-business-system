@@ -28,9 +28,9 @@
 
 - 管理端：Vue 3、Vite、TypeScript、Element Plus、Pinia
 - API：NestJS、TypeScript、Prisma
-- 数据库：PostgreSQL / Supabase PostgreSQL
+- 数据库：MySQL 8.4
 - 包管理：npm workspaces
-- 部署：Docker Compose、Cloudflare Pages/Workers、Supabase Edge Function
+- 部署：AWS EC2、Docker Compose、Caddy、S3 备份
 
 ## 目录
 
@@ -53,9 +53,9 @@ Prisma migration 从当前系统纯净基线开始，不包含其他系统的历
 nvm use
 npm install
 npm run setup:env
-docker compose up -d
-npm run prisma:generate
-npm run prisma:migrate:deploy
+docker compose --env-file .env -f docker-compose.aws-mysql.yml up -d mysql
+npm run prisma:mysql:generate
+npm run prisma:mysql:migrate:deploy
 npm run prisma:seed
 npm run dev:api
 npm run dev:admin
@@ -93,32 +93,21 @@ npm run check
 
 ## 部署
 
-生产环境变量从 `.env.production.example` 创建，并先执行：
+生产环境变量从 `.env.aws.production.example` 创建，仅保存在 AWS 服务器的
+`/opt/id-business-v2/current/.env.aws.production`。先检查编排：
 
 ```bash
-PROD_ENV_FILE=.env.production npm run prod:env:check
+npm run aws:mysql:config
 ```
 
-部署命令：
+在 AWS 发布目录构建并启动：
 
 ```bash
-npm run deploy:api
-npm run deploy:admin
+docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml build
+docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up -d --no-build
+npm run prod:smoke
 ```
 
 实际发布前必须确认当前分支、提交、远端、生产账号和目标环境。详细说明见
-`docs/DEPLOYMENT.md`。
-
-当前生产发布（Supabase Edge Function 运行 API，Cloudflare 承载静态管理端和轻量同源转发）：
-
-```bash
-npm run deploy:production
-```
-
-该命令会强制检查干净且已同步的 `main`、GitHub 必需检查、主分支保护、固定 Cloudflare
-账号/Worker/域名和生产凭据。部署版本写入 Git commit，成功后自动使用独立只读账号执行线上巡检。
-首次配置或轮换巡检账号时执行：
-
-```bash
-npm run prod:smoke-user:provision
-```
+`docs/DEPLOYMENT.md`。生产备份由 EC2 systemd timer 执行 `scripts/backup-aws-mysql.sh`，
+并上传到私有 S3 存储桶。

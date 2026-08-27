@@ -12,7 +12,7 @@ const htmlEntry = fileURLToPath(new URL('./index.html', import.meta.url));
 const pagesHeaders = fileURLToPath(new URL('./dist/_headers', import.meta.url));
 const vueUseBundlePath = '/node_modules/@vueuse/core/dist/index.js';
 const securityResponseHeaders = [
-  "Content-Security-Policy: default-src 'self'; base-uri 'none'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:",
+  "Content-Security-Policy: default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; manifest-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:",
   'Cross-Origin-Opener-Policy: same-origin',
   'Cross-Origin-Resource-Policy: same-origin',
   'Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()',

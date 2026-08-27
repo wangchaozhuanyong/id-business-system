@@ -1,4 +1,3 @@
-import { ServiceUnavailableException } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
 import { resolveTrustedClientIp } from './trusted-client-ip';
 
@@ -13,7 +12,7 @@ describe('resolveTrustedClientIp', () => {
     return createHmac('sha256', secret).update(`${signedAt}\n${requestId}\n${ip}`).digest('hex');
   }
 
-  it('uses a fresh HMAC-signed client IP in edge mode', () => {
+  it('uses a fresh HMAC-signed client IP from a trusted proxy', () => {
     expect(
       resolveTrustedClientIp(
         {
@@ -25,7 +24,7 @@ describe('resolveTrustedClientIp', () => {
             'x-v2-proxy-signature': signature()
           }
         },
-        { SUPABASE_EDGE_FUNCTION: 'true', V2_TRUSTED_PROXY_SECRET: secret },
+        { V2_TRUSTED_PROXY_SECRET: secret },
         now
       )
     ).toBe(clientIp);
@@ -44,12 +43,11 @@ describe('resolveTrustedClientIp', () => {
     ).toBe('127.0.0.1');
   });
 
-  it('rejects invalid or expired proxy signatures in edge mode', () => {
+  it('falls back to the socket IP for invalid or expired proxy signatures', () => {
     const environment = {
-      SUPABASE_EDGE_FUNCTION: 'true',
       V2_TRUSTED_PROXY_SECRET: secret
     };
-    expect(() =>
+    expect(
       resolveTrustedClientIp(
         {
           ip: '10.0.0.8',
@@ -63,10 +61,11 @@ describe('resolveTrustedClientIp', () => {
         environment,
         now
       )
-    ).toThrow(ServiceUnavailableException);
-    expect(() =>
+    ).toBe('10.0.0.8');
+    expect(
       resolveTrustedClientIp(
         {
+          ip: '10.0.0.9',
           headers: {
             'x-request-id': requestId,
             'x-v2-client-ip': clientIp,
@@ -77,6 +76,6 @@ describe('resolveTrustedClientIp', () => {
         environment,
         now + 5 * 60 * 1000 + 1
       )
-    ).toThrow(ServiceUnavailableException);
+    ).toBe('10.0.0.9');
   });
 });

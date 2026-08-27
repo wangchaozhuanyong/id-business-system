@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { Amount4, Rate8 } from './id-business-v2-decimal';
 import { V2RowMappingError, mapAmount4, mapRate8 } from './id-business-v2-row-mapper';
 
@@ -27,14 +27,14 @@ describe('ID Business V2 runtime decimals', () => {
     expect(Rate8.from(input).toString()).toBe(expected);
   });
 
-  it('normalizes Node and Cloudflare Decimal instances without sharing their runtime', () => {
+  it('normalizes Node and database Decimal instances without sharing their runtime', () => {
     const nodeValue = new Prisma.Decimal('12.34565');
-    const cloudflareValue = new CloudflarePrisma.Decimal('12.34565');
+    const databaseValue = new MysqlPrisma.Decimal('12.34565');
 
     expect(Amount4.from(nodeValue).toString()).toBe('12.3457');
-    expect(Amount4.from(cloudflareValue).toString()).toBe('12.3457');
-    expect(Amount4.from(nodeValue).add(cloudflareValue).toString()).toBe('24.6914');
-    expect(Amount4.from(nodeValue).equals(cloudflareValue)).toBe(true);
+    expect(Amount4.from(databaseValue).toString()).toBe('12.3457');
+    expect(Amount4.from(nodeValue).add(databaseValue).toString()).toBe('24.6914');
+    expect(Amount4.from(nodeValue).equals(databaseValue)).toBe(true);
   });
 
   it('uses shared BigInt decimal math for amount and rate operations', () => {
@@ -66,7 +66,7 @@ describe('ID Business V2 runtime decimals', () => {
   });
 
   it('maps persisted decimals with a stable safe error', () => {
-    expect(mapAmount4(new CloudflarePrisma.Decimal('1.23456'), 'account.balance').toString()).toBe(
+    expect(mapAmount4(new MysqlPrisma.Decimal('1.23456'), 'account.balance').toString()).toBe(
       '1.2346'
     );
     expect(mapRate8(new Prisma.Decimal('5.643512345'), 'exchangeRate.raw').toString()).toBe(

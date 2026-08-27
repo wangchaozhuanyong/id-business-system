@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/id_business?schema=public
       JWT_SECRET: ci-jwt-secret
       FIELD_ENCRYPTION_KEY: ci-field-encryption-key
       HASH_SECRET: ci-hash-secret
@@ -73,7 +72,7 @@ jobs:
       - name: Validate MySQL Prisma schema
         run: npm run prisma:mysql:validate
 
-      - name: Verify data governance workflow and database privileges
+      - name: Verify data governance workflow on MySQL
         run: npm run acceptance:v2-data-governance
 
       - name: Build shared package
@@ -91,8 +90,8 @@ jobs:
       - name: Validate Prisma schema
         run: npm run prisma:validate
 
-      - name: Validate production Compose example
-        run: npm run prod:config:example
+      - name: Validate AWS MySQL Compose example
+        run: npm run aws:mysql:config:example
 
       - name: Audit high severity vulnerabilities
         run: npm run audit:high
@@ -106,20 +105,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Validate production Compose example
-        run: |
-          PROD_ENV_FILE=.env.production.example \
-            docker compose --env-file .env.production.example -f docker-compose.prod.yml config
-
       - name: Validate AWS MySQL Compose example
         run: docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml config
-
-      - name: Build production Docker images
-        env:
-          COMPOSE_BAKE: 'false'
-          DOCKER_BUILDKIT: '0'
-          PROD_ENV_FILE: .env.production.example
-        run: docker compose --env-file .env.production.example -f docker-compose.prod.yml build api admin
 
       - name: Build AWS MySQL production images
         env:

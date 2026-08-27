@@ -77,7 +77,7 @@ describe('V2 exchange-rate contracts', () => {
     expect(migration).not.toContain('DROP TABLE "id_business_v2_exchange_rate_entries"');
   });
 
-  it('schedules a 30-minute Supabase Cron and applies configurable FX retention', () => {
+  it('schedules a 30-minute database scheduler and applies configurable FX retention', () => {
     const migration = read(
       'prisma/migrations/20260729000000_current_system_baseline/migration.sql'
     );

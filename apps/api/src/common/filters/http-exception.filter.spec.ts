@@ -1,5 +1,5 @@
 import { HttpStatus, type ArgumentsHost } from '@nestjs/common';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiHttpException } from '../errors/api-http.exception';
 import { HttpExceptionFilter } from './http-exception.filter';
 
@@ -26,11 +26,6 @@ function createHost() {
 }
 
 describe('HttpExceptionFilter', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
   it('keeps stable error metadata and request correlation in the compatible envelope', () => {
     const fixture = createHost();
     const filter = new HttpExceptionFilter();
@@ -68,31 +63,5 @@ describe('HttpExceptionFilter', () => {
       retryable: false
     });
     expect(body).not.toHaveProperty('details');
-  });
-
-  it('logs sanitized provider codes in Supabase even when Cloudflare forwards the request', () => {
-    vi.stubEnv('SUPABASE_EDGE_FUNCTION', 'true');
-    vi.stubEnv('CLOUDFLARE_WORKER', 'false');
-    const fixture = createHost();
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const exception = Object.assign(new Error('database password=secret'), {
-      code: 'P2010',
-      meta: { code: '42883', message: 'database password=secret' }
-    });
-
-    new HttpExceptionFilter().catch(exception, fixture.host);
-
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    const logged = String(consoleError.mock.calls[0]?.[0]);
-    expect(JSON.parse(logged)).toMatchObject({
-      cfRay: 'ray-test',
-      databaseErrorCode: '42883',
-      errorCode: 'INTERNAL_SERVER_ERROR',
-      providerErrorCode: 'P2010',
-      requestId: 'request-test-1234',
-      status: 500,
-      type: 'api_error'
-    });
-    expect(logged).not.toContain('password=secret');
   });
 });

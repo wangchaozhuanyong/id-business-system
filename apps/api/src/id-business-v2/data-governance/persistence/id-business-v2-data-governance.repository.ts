@@ -517,49 +517,54 @@ export class IdBusinessV2DataGovernanceRepository {
       throw new Error('汇率治理清理审批证据无效');
     }
 
-    const snapshot = await tx.idBusinessV2ExchangeRateSnapshot.findUnique({
-      where: { runId: input.runId },
-      select: { id: true }
-    });
-    const providerSnapshots = snapshot
-      ? await tx.idBusinessV2ExchangeRateProviderSnapshot.findMany({
-          where: { snapshotId: snapshot.id },
-          select: { id: true }
-        })
-      : [];
-    const providerSnapshotIds = providerSnapshots.map((row) => row.id);
-    const deletedQuoteSamples = providerSnapshotIds.length
-      ? (
-          await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
-            where: { providerSnapshotId: { in: providerSnapshotIds } }
+    await tx.$executeRaw(Prisma.sql`SET @idv2_exchange_rate_retention_cleanup = 1`);
+    try {
+      const snapshot = await tx.idBusinessV2ExchangeRateSnapshot.findUnique({
+        where: { runId: input.runId },
+        select: { id: true }
+      });
+      const providerSnapshots = snapshot
+        ? await tx.idBusinessV2ExchangeRateProviderSnapshot.findMany({
+            where: { snapshotId: snapshot.id },
+            select: { id: true }
           })
-        ).count
-      : 0;
-    const deletedProviderSnapshots = snapshot
-      ? (
-          await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
-            where: { snapshotId: snapshot.id }
-          })
-        ).count
-      : 0;
-    const deletedSnapshots = snapshot
-      ? (
-          await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
-            where: { id: snapshot.id }
-          })
-        ).count
-      : 0;
-    const deletedRuns = (
-      await tx.idBusinessV2ExchangeRateRun.deleteMany({ where: { id: input.runId } })
-    ).count;
-    if (deletedRuns !== 1) {
-      throw new Error('汇率治理清理源数据已变化');
+        : [];
+      const providerSnapshotIds = providerSnapshots.map((row) => row.id);
+      const deletedQuoteSamples = providerSnapshotIds.length
+        ? (
+            await tx.idBusinessV2ExchangeRateQuoteSample.deleteMany({
+              where: { providerSnapshotId: { in: providerSnapshotIds } }
+            })
+          ).count
+        : 0;
+      const deletedProviderSnapshots = snapshot
+        ? (
+            await tx.idBusinessV2ExchangeRateProviderSnapshot.deleteMany({
+              where: { snapshotId: snapshot.id }
+            })
+          ).count
+        : 0;
+      const deletedSnapshots = snapshot
+        ? (
+            await tx.idBusinessV2ExchangeRateSnapshot.deleteMany({
+              where: { id: snapshot.id }
+            })
+          ).count
+        : 0;
+      const deletedRuns = (
+        await tx.idBusinessV2ExchangeRateRun.deleteMany({ where: { id: input.runId } })
+      ).count;
+      if (deletedRuns !== 1) {
+        throw new Error('汇率治理清理源数据已变化');
+      }
+      return {
+        deletedQuoteSamples,
+        deletedProviderSnapshots,
+        deletedSnapshots
+      };
+    } finally {
+      await tx.$executeRaw(Prisma.sql`SET @idv2_exchange_rate_retention_cleanup = NULL`);
     }
-    return {
-      deletedQuoteSamples,
-      deletedProviderSnapshots,
-      deletedSnapshots
-    };
   }
 
   private cleanupResultCount(result: Prisma.JsonObject, key: string) {

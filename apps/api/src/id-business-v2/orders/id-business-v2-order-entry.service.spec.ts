@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { IdBusinessV2AccountLockScope, Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2OrderEntryService } from './id-business-v2-order-entry.service';
@@ -26,8 +26,8 @@ function decimal(value: Prisma.Decimal.Value) {
   return new Prisma.Decimal(value);
 }
 
-function cloudflareDecimal(value: Prisma.Decimal.Value) {
-  return new CloudflarePrisma.Decimal(String(value));
+function databaseDecimal(value: Prisma.Decimal.Value) {
+  return new MysqlPrisma.Decimal(String(value));
 }
 
 function makeDto(overrides: Record<string, unknown> = {}) {
@@ -358,15 +358,15 @@ describe('IdBusinessV2OrderEntryService', () => {
     });
   });
 
-  it('normalizes Cloudflare Prisma fees before creating an order', async () => {
+  it('normalizes MySQL Prisma fees before creating an order', async () => {
     tx.idBusinessV2Option.findFirst.mockImplementation(
       async ({ where }: { where: { type: string } }) => {
         if (where.type === 'service') return { id: serviceOptionId };
         if (where.type === 'settlement_platform') {
           return {
             id: settlementPlatformOptionId,
-            fixedFee: cloudflareDecimal('1.25'),
-            percentageFee: cloudflareDecimal('4')
+            fixedFee: databaseDecimal('1.25'),
+            percentageFee: databaseDecimal('4')
           };
         }
         return null;
@@ -523,8 +523,8 @@ describe('IdBusinessV2OrderEntryService', () => {
   it('returns the original order for an exact idempotent replay without writing again', async () => {
     tx.idBusinessV2Order.findUnique.mockResolvedValue({
       ...makeStoredOrder({
-        receivedAmount: cloudflareDecimal('100'),
-        balanceAmount: cloudflareDecimal('20')
+        receivedAmount: databaseDecimal('100'),
+        balanceAmount: databaseDecimal('20')
       }),
       locks: [makeLock()]
     });

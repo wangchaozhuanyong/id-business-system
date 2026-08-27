@@ -98,27 +98,18 @@ function createService() {
   const identityService = {
     invalidateAuthenticatedUser: jest.fn()
   };
-  const supabaseAuthService = {
-    isEnabled: jest.fn().mockReturnValue(false),
-    createManagedUser: jest.fn(),
-    deleteManagedUser: jest.fn(),
-    invalidateAccessTokenCache: jest.fn()
-  };
-
   return {
     service: new V2EmployeesService(
       prisma as never,
       auditLogsService as never,
       securityService as never,
-      identityService as never,
-      supabaseAuthService as never
+      identityService as never
     ),
     prisma,
     transaction,
     auditLogsService,
     securityService,
-    identityService,
-    supabaseAuthService
+    identityService
   };
 }
 
@@ -180,15 +171,9 @@ describe('V2EmployeesService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('removes a newly created Supabase user when the local transaction conflicts', async () => {
+  it('maps a local account uniqueness conflict to a business conflict', async () => {
     const fixture = createService();
-    const providerUserId = '44444444-4444-4444-8444-444444444444';
     fixture.prisma.user.findFirst.mockResolvedValue(null);
-    fixture.supabaseAuthService.isEnabled.mockReturnValue(true);
-    fixture.supabaseAuthService.createManagedUser.mockResolvedValue({
-      authUserId: providerUserId
-    });
-    fixture.supabaseAuthService.deleteManagedUser.mockResolvedValue(undefined);
     fixture.transaction.user.create.mockRejectedValue({
       code: 'P2002'
     });
@@ -205,8 +190,7 @@ describe('V2EmployeesService', () => {
       )
     ).rejects.toBeInstanceOf(ConflictException);
 
-    expect(fixture.supabaseAuthService.createManagedUser).toHaveBeenCalledTimes(1);
-    expect(fixture.supabaseAuthService.deleteManagedUser).toHaveBeenCalledWith(providerUserId);
+    expect(fixture.transaction.user.create).toHaveBeenCalledTimes(1);
   });
 
   it('prevents an administrator from changing their own status', async () => {
@@ -273,7 +257,6 @@ describe('V2EmployeesService', () => {
     );
     expect(fixture.identityService.invalidateAuthenticatedUser).toHaveBeenCalledWith(existing.id);
     expect(fixture.securityService.invalidateActiveSessionCache).toHaveBeenCalledTimes(1);
-    expect(fixture.supabaseAuthService.invalidateAccessTokenCache).toHaveBeenCalledTimes(1);
   });
 
   it('revokes active sessions atomically when an administrator changes employee roles', async () => {

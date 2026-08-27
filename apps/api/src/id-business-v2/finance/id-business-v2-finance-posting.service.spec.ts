@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { Prisma as CloudflarePrisma } from '../../generated/prisma-cloudflare/client';
+import { Prisma as MysqlPrisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2FinancePostingService } from './id-business-v2-finance-posting.service';
 import { IdBusinessV2FinanceCommandRepository } from './persistence/id-business-v2-finance-command.repository';
@@ -118,13 +118,13 @@ describe('IdBusinessV2FinancePostingService', () => {
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
-  it('accepts Cloudflare Decimal inputs and persisted account balances', async () => {
-    const cloudflareInput = postingInput({
+  it('accepts database Decimal inputs and persisted account balances', async () => {
+    const databaseInput = postingInput({
       lines: postingInput().lines.map((line) => ({
         ...line,
-        amountOriginal: new CloudflarePrisma.Decimal('100'),
-        fxRateToCny: new CloudflarePrisma.Decimal('1'),
-        amountCny: new CloudflarePrisma.Decimal('100')
+        amountOriginal: new MysqlPrisma.Decimal('100'),
+        fxRateToCny: new MysqlPrisma.Decimal('1'),
+        amountCny: new MysqlPrisma.Decimal('100')
       }))
     });
     tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
@@ -134,12 +134,12 @@ describe('IdBusinessV2FinancePostingService', () => {
         {
           id: financeAccountId,
           status: 'active',
-          currentBalance: new CloudflarePrisma.Decimal('20')
+          currentBalance: new MysqlPrisma.Decimal('20')
         }
       ];
     });
 
-    await expect(service.post(tx as never, cloudflareInput)).resolves.toBeDefined();
+    await expect(service.post(tx as never, databaseInput)).resolves.toBeDefined();
     expect(tx.idBusinessV2FinanceAccount.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ currentBalance: { increment: '100' } })

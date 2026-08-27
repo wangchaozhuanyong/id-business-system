@@ -39,9 +39,9 @@ CREATE TABLE `id_business_v2_order_balance_returns` (
   UNIQUE INDEX `id_business_v2_order_balance_returns_balance_ledger_entry_id_key`(`balance_ledger_entry_id`),
   UNIQUE INDEX `id_business_v2_order_balance_returns_finance_journal_id_key`(`finance_journal_id`),
   UNIQUE INDEX `id_business_v2_order_balance_returns_idempotency_key_key`(`idempotency_key`),
-  UNIQUE INDEX `id_business_v2_order_balance_returns_reversal_balance_ledger_entry_id_key`(`reversal_balance_ledger_entry_id`),
-  UNIQUE INDEX `id_business_v2_order_balance_returns_reversal_finance_journal_id_key`(`reversal_finance_journal_id`),
-  UNIQUE INDEX `id_business_v2_order_balance_returns_reversal_idempotency_key_key`(`reversal_idempotency_key`),
+  UNIQUE INDEX `idv2_order_balance_returns_reversal_ledger_key`(`reversal_balance_ledger_entry_id`),
+  UNIQUE INDEX `idv2_order_balance_returns_reversal_journal_key`(`reversal_finance_journal_id`),
+  UNIQUE INDEX `idv2_order_balance_returns_reversal_idempotency_key`(`reversal_idempotency_key`),
   INDEX `id_business_v2_order_balance_returns_order_id_created_at_idx`(`order_id`, `created_at`),
   INDEX `id_business_v2_order_balance_returns_account_id_created_at_idx`(`account_id`, `created_at`),
   INDEX `id_business_v2_order_balance_returns_status_created_at_idx`(`status`, `created_at`),
@@ -71,7 +71,6 @@ CREATE TABLE `id_business_v2_order_balance_returns` (
         AND `reversal_finance_journal_id` IS NULL
         AND `reversal_idempotency_key` IS NULL
         AND `reversal_reason` IS NULL
-        AND `reversed_by_user_id` IS NULL
         AND `reversed_at` IS NULL
       )
       OR (
@@ -90,15 +89,26 @@ DROP INDEX `id_business_v2_balance_ledger_order_id_entry_type_key`,
 ADD INDEX `id_business_v2_balance_ledger_order_id_entry_type_idx`(`order_id`, `entry_type`);
 
 ALTER TABLE `id_business_v2_balance_ledger`
-ADD COLUMN `order_singleton_key` VARCHAR(90)
-GENERATED ALWAYS AS (
-  CASE
-    WHEN `entry_type` IN ('order_consumption', 'order_consumption_reversal')
-      THEN CONCAT(`order_id`, ':', `entry_type`)
-    ELSE NULL
-  END
-) STORED,
+ADD COLUMN `order_singleton_key` VARCHAR(90) NULL;
+
+UPDATE `id_business_v2_balance_ledger`
+SET `order_singleton_key` = CASE
+  WHEN `entry_type` IN ('order_consumption', 'order_consumption_reversal')
+    THEN CONCAT(`order_id`, ':', `entry_type`)
+  ELSE NULL
+END;
+
+ALTER TABLE `id_business_v2_balance_ledger`
 ADD UNIQUE INDEX `id_business_v2_balance_ledger_single_order_entry_key`(`order_singleton_key`);
+
+CREATE TRIGGER `idv2_balance_ledger_singleton_insert`
+BEFORE INSERT ON `id_business_v2_balance_ledger`
+FOR EACH ROW
+SET NEW.`order_singleton_key` = CASE
+  WHEN NEW.`entry_type` IN ('order_consumption', 'order_consumption_reversal')
+    THEN CONCAT(NEW.`order_id`, ':', NEW.`entry_type`)
+  ELSE NULL
+END;
 
 CREATE TRIGGER `idv2_order_balance_return_update_guard`
 BEFORE UPDATE ON `id_business_v2_order_balance_returns`
