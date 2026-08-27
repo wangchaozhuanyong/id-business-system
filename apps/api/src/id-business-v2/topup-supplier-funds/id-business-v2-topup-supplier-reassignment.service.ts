@@ -217,7 +217,7 @@ export class IdBusinessV2TopupSupplierReassignmentService extends IdBusinessV2To
           idempotentReplay: false
         };
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['supplier-funds'], requestId: randomUUID(), operator }
     );
   }
 }

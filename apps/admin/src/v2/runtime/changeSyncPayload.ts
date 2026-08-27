@@ -58,3 +58,17 @@ export function getChangedV2Scopes(
   }
   return changed;
 }
+
+export function establishV2VersionBaseline(
+  result: V2ChangeVersionsResult,
+  versions: Map<V2DataScope, bigint>
+) {
+  for (const scope of V2_DATA_SCOPES) {
+    const value = result.versions[scope];
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) continue;
+    const incomingVersion = BigInt(value);
+    if (incomingVersion > (versions.get(scope) ?? 0n)) {
+      versions.set(scope, incomingVersion);
+    }
+  }
+}

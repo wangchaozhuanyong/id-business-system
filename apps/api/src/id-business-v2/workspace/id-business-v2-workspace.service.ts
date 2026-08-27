@@ -72,7 +72,7 @@ export class IdBusinessV2WorkspaceService {
         });
         return created;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(row);
@@ -109,7 +109,7 @@ export class IdBusinessV2WorkspaceService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(row);
@@ -140,7 +140,7 @@ export class IdBusinessV2WorkspaceService {
         });
         return { id: before.id, deleted: true as const };
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
   }
 
@@ -175,7 +175,7 @@ export class IdBusinessV2WorkspaceService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return { items: rows.map((row) => this.toResponse(row)) };

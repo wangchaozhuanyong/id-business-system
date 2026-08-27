@@ -167,7 +167,7 @@ export class IdBusinessV2CustomersService {
         });
         return response;
       },
-      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+      this.commandOptions('customers', requestMeta, operator)
     );
   }
 
@@ -271,7 +271,7 @@ export class IdBusinessV2CustomersService {
         });
         return response;
       },
-      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+      this.commandOptions('customers', requestMeta, operator)
     );
   }
 
@@ -311,7 +311,7 @@ export class IdBusinessV2CustomersService {
         });
         return { deleted: true };
       },
-      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+      this.commandOptions('customers', requestMeta, operator)
     );
   }
 
@@ -584,7 +584,15 @@ export class IdBusinessV2CustomersService {
         });
         return { customerId: customer.id, value, revealedAt: context.businessTime.toISOString() };
       },
-      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+      this.commandOptions('security', requestMeta, operator)
     );
+  }
+
+  private commandOptions(
+    scope: 'customers' | 'security',
+    requestMeta: IdBusinessV2CustomerAuditRequestMeta,
+    operator?: AuthenticatedUser
+  ) {
+    return { changedScopes: [scope], requestId: requestMeta.requestId ?? randomUUID(), operator };
   }
 }

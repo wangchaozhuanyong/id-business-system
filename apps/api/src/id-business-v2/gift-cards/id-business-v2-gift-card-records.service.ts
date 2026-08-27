@@ -185,6 +185,7 @@ export class IdBusinessV2GiftCardRecordsService {
         return (await this.presentGiftCards([updated], operator))[0];
       },
       {
+        changedScopes: ['accounts'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none'

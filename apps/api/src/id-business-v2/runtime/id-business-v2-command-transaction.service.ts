@@ -1,5 +1,6 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import type { V2DataScope } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -22,6 +23,7 @@ export interface V2CommandContext {
 }
 
 interface V2CommandTransactionBaseOptions {
+  changedScopes: readonly V2DataScope[];
   requestId: string;
   operator?: AuthenticatedUser;
   businessTime?: Date;
@@ -58,6 +60,10 @@ export class V2CommandTransactionManager {
     work: (tx: V2CommandTransaction, context: V2CommandContext) => Promise<TResult>,
     options: V2CommandTransactionOptions<TResult>
   ) {
+    const changedScopes = [...new Set(options.changedScopes)];
+    if (!changedScopes.length) {
+      throw new Error('V2 command transaction requires at least one changed scope');
+    }
     const retryable =
       options.retryMode === 'stableIdempotency' || options.retryMode === 'fullReplay';
     const maxWriteConflictRetries = retryable ? (options.maxWriteConflictRetries ?? 2) : 0;
@@ -75,7 +81,7 @@ export class V2CommandTransactionManager {
         return await this.prisma.$transaction(
           async (tx) => {
             const result = await work(tx, context);
-            await bumpV2ScopeVersions(tx, undefined, context.businessTime);
+            await bumpV2ScopeVersions(tx, changedScopes, context.businessTime);
             return result;
           },
           {
@@ -95,7 +101,7 @@ export class V2CommandTransactionManager {
             return this.prisma.$transaction(
               async (tx) => {
                 const result = await options.replay(tx, replayContext);
-                await bumpV2ScopeVersions(tx, undefined, replayContext.businessTime);
+                await bumpV2ScopeVersions(tx, changedScopes, replayContext.businessTime);
                 return result;
               },
               {

@@ -189,6 +189,7 @@ export class IdBusinessV2OptionsService {
         return toOptionResponse(option);
       },
       {
+        changedScopes: ['options'],
         requestId: metadata.requestId ?? randomUUID(),
         operator,
         uniqueConflictMessage: '同一类型和上级下已存在同名选项'
@@ -272,6 +273,7 @@ export class IdBusinessV2OptionsService {
         return toOptionResponse(option);
       },
       {
+        changedScopes: ['options'],
         requestId: metadata.requestId ?? randomUUID(),
         operator,
         uniqueConflictMessage: '同一类型和上级下已存在同名选项'
@@ -353,7 +355,11 @@ export class IdBusinessV2OptionsService {
           disabledSupplierWalletCount: disabledWallets.count
         };
       },
-      { requestId: metadata.requestId ?? randomUUID(), operator }
+      {
+        changedScopes: ['options'],
+        requestId: metadata.requestId ?? randomUUID(),
+        operator
+      }
     );
   }
 

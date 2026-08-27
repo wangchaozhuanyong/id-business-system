@@ -143,7 +143,11 @@ export class IdBusinessV2AccountsService {
           exportedAt: context.businessTime.toISOString()
         };
       },
-      { requestId: metadata.requestId ?? randomUUID(), operator }
+      {
+        changedScopes: ['audit-logs'],
+        requestId: metadata.requestId ?? randomUUID(),
+        operator
+      }
     );
   }
 
@@ -178,7 +182,7 @@ export class IdBusinessV2AccountsService {
           remark: `导入 V2 ID：成功 ${result.successCount} 条，失败 ${result.failedCount} 条`
         });
       },
-      { requestId: `${requestId}:summary`, operator }
+      { changedScopes: ['audit-logs'], requestId: `${requestId}:summary`, operator }
     );
     return result;
   }
@@ -284,7 +288,12 @@ export class IdBusinessV2AccountsService {
         });
         return response;
       },
-      { requestId, operator, uniqueConflictMessage: '该 Apple ID 已存在' }
+      {
+        changedScopes: ['accounts'],
+        requestId,
+        operator,
+        uniqueConflictMessage: '该 Apple ID 已存在'
+      }
     );
   }
 
@@ -331,7 +340,11 @@ export class IdBusinessV2AccountsService {
         });
         return response;
       },
-      { requestId: metadata.requestId ?? randomUUID(), operator }
+      {
+        changedScopes: ['accounts'],
+        requestId: metadata.requestId ?? randomUUID(),
+        operator
+      }
     );
   }
 
@@ -396,7 +409,11 @@ export class IdBusinessV2AccountsService {
           revealedAt: context.businessTime.toISOString()
         };
       },
-      { requestId: requestMeta.requestId ?? randomUUID(), operator }
+      {
+        changedScopes: ['security'],
+        requestId: requestMeta.requestId ?? randomUUID(),
+        operator
+      }
     );
   }
 

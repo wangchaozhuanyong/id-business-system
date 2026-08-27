@@ -187,6 +187,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
         return account;
       },
       {
+        changedScopes: ['accounts'],
         requestId,
         operator,
         retryMode: 'fullReplay',

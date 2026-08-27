@@ -8,6 +8,10 @@ const migration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260729080000_event_driven_change_sync/migration.sql'),
   'utf8'
 );
+const exactScopeMigration = readFileSync(
+  resolve(apiRoot, 'prisma/migrations/20260827102000_exact_scope_version_broadcast/migration.sql'),
+  'utf8'
+);
 const controller = readFileSync(
   resolve(apiRoot, 'src/id-business-v2/change-sync/id-business-v2-change-sync.controller.ts'),
   'utf8'
@@ -20,12 +24,24 @@ describe('V2 event-driven change sync contract', () => {
     expect(migration).toContain('CREATE TABLE "id_business_v2_scope_versions"');
   });
 
-  it('bumps versions and publishes from statement triggers in the same transaction', () => {
+  it('establishes the original transactional version and broadcast infrastructure', () => {
     expect(migration).toContain('FOR EACH STATEMENT');
     expect(migration).toContain('current_version.version + 1');
     expect(migration).toContain('PERFORM realtime.send(');
     expect(migration).toContain("'id-business-v2:changes'");
     expect(migration).not.toMatch(/\bCOMMIT\b|\bBEGIN TRANSACTION\b/);
+  });
+
+  it('publishes only the exact scope-version rows updated by an application command', () => {
+    expect(exactScopeMigration).toContain("'public.id_business_v2_publish_change()'::regprocedure");
+    expect(exactScopeMigration).toContain('DROP TRIGGER %I ON %I.%I');
+    expect(exactScopeMigration).toContain('CREATE TRIGGER id_business_v2_scope_versions_broadcast');
+    expect(exactScopeMigration).toContain('REFERENCING NEW TABLE AS changed_scope_versions');
+    expect(exactScopeMigration).toContain('FROM changed_scope_versions AS changed_scope');
+    expect(exactScopeMigration).toContain('PERFORM realtime.send(');
+    expect(exactScopeMigration).not.toMatch(
+      /apple_id|phone|password|gift_card|order_no|website_account|lock_token/
+    );
   });
 
   it('broadcasts only scope versions and never reads changed business rows', () => {

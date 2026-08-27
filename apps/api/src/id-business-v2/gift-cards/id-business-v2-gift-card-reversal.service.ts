@@ -287,6 +287,7 @@ export class IdBusinessV2GiftCardReversalService {
       return result;
     };
     return this.transactionManager.execute(execute, {
+      changedScopes: ['accounts', 'supplier-funds'],
       requestId: randomUUID(),
       operator,
       retryMode: 'fullReplay',

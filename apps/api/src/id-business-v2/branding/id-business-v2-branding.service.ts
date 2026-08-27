@@ -56,7 +56,7 @@ export class IdBusinessV2BrandingService {
         });
         return row;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['branding'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(updated);
@@ -79,7 +79,11 @@ export class IdBusinessV2BrandingService {
           });
           return row;
         },
-        { requestId: 'branding-settings-initialize', retryMode: 'none' }
+        {
+          changedScopes: ['branding'],
+          requestId: 'branding-settings-initialize',
+          retryMode: 'none'
+        }
       );
     } catch {
       const raced = await this.repository.findSettings();

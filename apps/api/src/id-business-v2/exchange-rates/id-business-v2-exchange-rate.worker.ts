@@ -427,7 +427,11 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
         });
         return snapshot;
       },
-      { requestId: `${input.requestId}-${randomUUID()}`, retryMode: 'none' }
+      {
+        changedScopes: ['exchange-rates'],
+        requestId: `${input.requestId}-${randomUUID()}`,
+        retryMode: 'none'
+      }
     );
   }
 
@@ -538,7 +542,11 @@ export class IdBusinessV2ExchangeRateWorker implements OnModuleInit, OnModuleDes
             });
           }
         },
-        { requestId: `exchange-rate-stale-${run.id}`, retryMode: 'none' }
+        {
+          changedScopes: ['exchange-rates'],
+          requestId: `exchange-rate-stale-${run.id}`,
+          retryMode: 'none'
+        }
       );
     }
   }

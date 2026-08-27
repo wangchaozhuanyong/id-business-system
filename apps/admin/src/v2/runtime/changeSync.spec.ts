@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { V2_DATA_SCOPES, type V2DataScope } from '@apple-business/shared';
 import { shouldEnableV2RealtimeChanges } from './changeSyncConfig';
-import { getChangedV2Scopes, parseV2ChangeEvent } from './changeSyncPayload';
+import {
+  establishV2VersionBaseline,
+  getChangedV2Scopes,
+  parseV2ChangeEvent
+} from './changeSyncPayload';
 import {
   shouldReconcileV2OnForeground,
   V2_DEGRADED_RECONCILE_INTERVAL_MS
@@ -107,5 +111,36 @@ describe('V2 change sync payload validation', () => {
         versions
       )
     ).toEqual(['orders']);
+  });
+
+  it('establishes the first server snapshot as a baseline without reporting every scope as changed', () => {
+    const versions = new Map<V2DataScope, bigint>(V2_DATA_SCOPES.map((scope) => [scope, 0n]));
+    const result = {
+      generatedAt: '2026-08-27T00:00:00.000Z',
+      versions: {
+        ...Object.fromEntries(V2_DATA_SCOPES.map((scope) => [scope, '7'])),
+        orders: '12'
+      } as Record<V2DataScope, string>
+    };
+
+    establishV2VersionBaseline(result, versions);
+
+    expect(getChangedV2Scopes(result, versions)).toEqual([]);
+    expect(versions.get('orders')).toBe(12n);
+  });
+
+  it('does not lower a version received from realtime while the initial snapshot is in flight', () => {
+    const versions = new Map<V2DataScope, bigint>([['orders', 13n]]);
+    const result = {
+      generatedAt: '2026-08-27T00:00:00.000Z',
+      versions: {
+        ...Object.fromEntries(V2_DATA_SCOPES.map((scope) => [scope, '0'])),
+        orders: '12'
+      } as Record<V2DataScope, string>
+    };
+
+    establishV2VersionBaseline(result, versions);
+
+    expect(versions.get('orders')).toBe(13n);
   });
 });

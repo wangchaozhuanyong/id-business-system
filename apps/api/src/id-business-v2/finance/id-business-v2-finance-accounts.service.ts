@@ -177,6 +177,6 @@ export class IdBusinessV2FinanceAccountsService {
   }
 
   private commandOptions(operator?: AuthenticatedUser) {
-    return { requestId: randomUUID(), operator } as const;
+    return { changedScopes: ['finance-accounts'], requestId: randomUUID(), operator } as const;
   }
 }

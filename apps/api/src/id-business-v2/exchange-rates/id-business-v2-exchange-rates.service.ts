@@ -166,7 +166,7 @@ export class IdBusinessV2ExchangeRatesService {
         });
         return created;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(entry);
@@ -243,7 +243,7 @@ export class IdBusinessV2ExchangeRatesService {
         });
         return created;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
 
     return this.manualFxRateResponse(entry);

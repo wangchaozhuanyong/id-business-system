@@ -71,6 +71,7 @@ export class IdBusinessV2AccountLossCommandHandler {
     return this.transactionManager.execute(
       (tx, context) => this.execute(tx, command, context.businessTime, operator),
       {
+        changedScopes: ['account-losses'],
         requestId: invocation?.requestId ?? randomUUID(),
         operator,
         businessTime: invocation?.businessTime ?? new Date(),
@@ -92,6 +93,7 @@ export class IdBusinessV2AccountLossCommandHandler {
     return this.transactionManager.execute(
       (tx, context) => this.executeUnfreeze(tx, command, context.businessTime, operator),
       {
+        changedScopes: ['account-losses'],
         requestId: invocation?.requestId ?? randomUUID(),
         operator,
         businessTime: invocation?.businessTime ?? new Date(),

@@ -311,6 +311,7 @@ export class IdBusinessV2SensitiveAccessService {
         return this.toResponse(approval, descriptor, targetLabel);
       },
       {
+        changedScopes: ['security'],
         requestId: meta.requestId ?? randomUUID(),
         operator: requester,
         retryMode: 'none',
@@ -445,6 +446,7 @@ export class IdBusinessV2SensitiveAccessService {
         return this.toResponse(decided, descriptor, targetLabel);
       },
       {
+        changedScopes: ['security'],
         requestId: meta.requestId ?? randomUUID(),
         operator: admin,
         retryMode: 'none'

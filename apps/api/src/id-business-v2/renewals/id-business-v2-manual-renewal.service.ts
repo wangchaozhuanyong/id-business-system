@@ -323,6 +323,7 @@ export class IdBusinessV2ManualRenewalService {
         };
       },
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         businessTime,

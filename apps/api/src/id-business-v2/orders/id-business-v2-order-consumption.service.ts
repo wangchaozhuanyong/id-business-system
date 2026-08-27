@@ -174,6 +174,7 @@ export class IdBusinessV2OrderConsumptionService {
       };
     };
     const transactionResult = await this.transactionManager.execute(execute, {
+      changedScopes: ['orders'],
       requestId: randomUUID(),
       operator,
       retryMode: 'fullReplay',

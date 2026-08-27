@@ -434,6 +434,7 @@ export class IdBusinessV2DataGovernancePreviewService {
         return { jobId };
       },
       {
+        changedScopes: ['data-governance'],
         requestId: metadata.requestId ?? randomUUID(),
         operator,
         retryMode: 'fullReplay',

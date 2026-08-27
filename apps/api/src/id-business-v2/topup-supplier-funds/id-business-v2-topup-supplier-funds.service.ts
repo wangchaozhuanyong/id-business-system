@@ -465,5 +465,5 @@ export class IdBusinessV2TopupSupplierFundsService extends IdBusinessV2TopupSupp
 }
 
 function commandOptions(operator?: AuthenticatedUser) {
-  return { requestId: randomUUID(), operator } as const;
+  return { changedScopes: ['supplier-funds'], requestId: randomUUID(), operator } as const;
 }

@@ -101,6 +101,7 @@ export class IdBusinessV2OrderLifecycleSupport {
         };
       },
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none'
@@ -114,6 +115,7 @@ export class IdBusinessV2OrderLifecycleSupport {
     operator?: AuthenticatedUser
   ) {
     return this.transactionManager.execute(callback, {
+      changedScopes: ['orders'],
       requestId: randomUUID(),
       operator,
       retryMode: 'none',

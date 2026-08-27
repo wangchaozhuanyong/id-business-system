@@ -386,6 +386,7 @@ export class IdBusinessV2FinanceReportsService {
     const settings =
       existing ??
       (await this.commandTransactions.execute((tx) => this.repository.ensureSettings(tx), {
+        changedScopes: ['finance-reports'],
         requestId: randomUUID()
       }));
     return {

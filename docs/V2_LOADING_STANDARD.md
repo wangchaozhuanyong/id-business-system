@@ -95,6 +95,11 @@ refresh-error`；业务组件不得重新组合多个布尔值猜测主查询状
   `id-business-v2:changes` 广播 scope/version。事件不得包含订单、账号、手机号、卡号或其他业务行
   字段。重连、恢复联网、长时间隐藏后恢复及后台周期校验只读取
   `/api/id-business-v2/change-versions`，不得用完整列表轮询补偿漏事件。
+- 写命令必须显式声明实际变更的主 scope，禁止省略 scope 或默认递增全部数据域；衍生页面由
+  `V2_SCOPE_DEPENDENCIES` 在客户端精确展开。应用首次读取版本只建立本地基线，不得把服务端已有版本
+  误判为 35 个 scope 同时变更；仅后续差异才能标记相关查询为 dirty。
+- Broadcast 只允许由 `id_business_v2_scope_versions` 的精确更新语句发布；禁止业务表级
+  触发器另外展开一组 scope，避免同一事务重复递增和过度刷新。
 - 缓存 key 必须包含登录身份代际；失效必须中止旧读取并阻止旧响应回写，100ms 内合并同 scope
   事件。同 scope、同 key 的并发读取复用 Promise。最多保留 200 个非活跃查询条目，缓存仅在内存，
   退出登录或切换身份时清空并断开实时频道。
@@ -187,4 +192,4 @@ npm run acceptance:v2-realtime
 
 `acceptance:v2-realtime` 还要求本地 Supabase Realtime、迁移后的本地数据库，以及
 `V2_REALTIME_USERNAME`、`V2_REALTIME_PASSWORD`。脚本默认拒绝远程地址，只递增本地 scope
-version 并发送私有测试事件，不修改业务行。
+version，并验证版本表触发的私有事件，不修改业务行。

@@ -88,7 +88,7 @@ export class IdBusinessV2FinanceHistoryConfirmationService {
         });
         return financeSettingsResponse(updated);
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['finance-reports'], requestId: randomUUID(), operator }
     );
   }
 
@@ -127,7 +127,7 @@ export class IdBusinessV2FinanceHistoryConfirmationService {
         });
         return financeSettingsResponse(updated);
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['finance-reports'], requestId: randomUUID(), operator }
     );
   }
 
