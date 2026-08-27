@@ -542,7 +542,7 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   ),
   check(
     'finance_inflow_reference_integrity',
-    '收入流水号缺失、未永久预留、重复处于有效入账状态或与订单收款重复',
+    '已填写的收入流水号未永久预留、重复处于有效入账状态或与订单收款重复',
     `WITH normalized_inflow AS (
        SELECT inflow.id,
               inflow.nature::text AS nature,
@@ -567,18 +567,13 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
        ON reference_record.normalized_reference = normalized_inflow.normalized_reference
      LEFT JOIN public.id_business_v2_finance_inflows first_inflow
        ON first_inflow.id = reference_record.first_inflow_id
-     WHERE (
-       normalized_inflow.journal_status = 'posted'
-       AND normalized_inflow.normalized_reference IS NULL
-     ) OR (
-       normalized_inflow.normalized_reference IS NOT NULL
+     WHERE normalized_inflow.normalized_reference IS NOT NULL
        AND (
          reference_record.normalized_reference IS NULL
          OR reference_record.source_type::text <> 'inflow'
          OR lower(btrim(first_inflow.external_reference))
             IS DISTINCT FROM reference_record.normalized_reference
        )
-     )
      UNION ALL
      SELECT 'active-duplicate:' || active_duplicate.normalized_reference AS entity_id,
             jsonb_build_object('reference', active_duplicate.normalized_reference) AS detail
@@ -650,7 +645,7 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
   ),
   check(
     'finance_inflow_receipt_integrity',
-    '有效收入缺少可验证的加密收款凭证或凭证元数据不完整',
+    '已上传的收入凭证无法验证或凭证元数据不完整',
     `SELECT inflow.id::text AS entity_id,
             jsonb_build_object(
               'receiptAttachmentId', inflow.receipt_attachment_id,
@@ -661,6 +656,7 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      JOIN public.id_business_v2_finance_journals journal ON journal.id = inflow.journal_id
      LEFT JOIN public.attachments attachment ON attachment.id = inflow.receipt_attachment_id
      WHERE journal.status::text = 'posted'
+       AND inflow.receipt_attachment_id IS NOT NULL
        AND (
          attachment.id IS NULL
          OR attachment.business_module IS DISTINCT FROM 'id_business_v2_finance'
@@ -687,7 +683,10 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
      JOIN public.id_business_v2_finance_journals journal ON journal.id = inflow.journal_id
      WHERE journal.source_type::text <> 'inflow'
         OR journal.source_id IS DISTINCT FROM inflow.id::text
-        OR journal.source_reference IS DISTINCT FROM inflow.external_reference
+        OR (
+          inflow.external_reference IS NOT NULL
+          AND journal.source_reference IS DISTINCT FROM inflow.external_reference
+        )
         OR journal.journal_type::text <> CASE inflow.nature::text
              WHEN 'operating_income' THEN 'manual_operating_income'
              WHEN 'capital_contribution' THEN 'capital_contribution'

@@ -53,7 +53,7 @@ export interface CreateIdBusinessV2FinanceInflowDto {
   fxRateSnapshotId?: string | null;
   manualRateReason?: string | null;
   payer?: string | null;
-  externalReference: string;
+  externalReference?: string | null;
   receiptAttachmentId?: string | null;
   remark?: string | null;
   idempotencyKey: string;

@@ -189,7 +189,7 @@ export class IdBusinessV2FinanceCommandRepository {
   }
 
   createAttachment(tx: Transaction, data: Prisma.AttachmentUncheckedCreateInput) {
-    return tx.attachment.create({ data });
+    return tx.attachment.create({ data, select: { id: true } });
   }
 
   createFxSnapshot(

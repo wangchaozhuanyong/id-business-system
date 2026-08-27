@@ -106,12 +106,6 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
       return showWarning('收入金额必须大于 0');
     }
     if (!inflowForm.occurredAt) return showWarning('请选择发生时间');
-    if (inflowForm.externalReference.trim().length < 2) {
-      return showWarning('请填写至少 2 个字符的收款流水号');
-    }
-    if (!inflowReceiptFile.value && !inflowForm.receiptAttachmentId) {
-      return showWarning('请上传收款凭证');
-    }
     if (editingInflow.value && !inflowCorrectionReason.value.trim()) {
       return showWarning('请填写更正原因');
     }
@@ -135,7 +129,7 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
         fxRateToCny: inflowForm.fxRateToCny || undefined,
         manualRateReason: inflowForm.manualRateReason.trim() || undefined,
         payer: inflowForm.payer.trim() || undefined,
-        externalReference: inflowForm.externalReference.trim(),
+        externalReference: inflowForm.externalReference.trim() || undefined,
         receiptAttachmentId: inflowForm.receiptAttachmentId || undefined,
         remark: inflowForm.remark.trim() || undefined,
         idempotencyKey: globalThis.crypto.randomUUID()

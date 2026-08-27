@@ -189,15 +189,15 @@ export interface V2FinanceInflow {
   amountCny: DecimalString;
   occurredAt: IsoDateTimeString;
   payer: string | null;
-  externalReference: string;
-  receiptAttachmentId: string;
+  externalReference: string | null;
+  receiptAttachmentId: string | null;
   receiptAttachment: {
     id: string;
     originalName: string;
     mimeType: string;
     sizeBytes: string;
     contentSha256: string | null;
-  };
+  } | null;
   remark: string | null;
   status: V2FinanceJournalStatus;
   createdBy: { id: string; username: string; displayName: string } | null;

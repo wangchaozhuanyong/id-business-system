@@ -91,7 +91,7 @@ interface V2FinanceInflowWritePayload {
   fxRateToCny?: string;
   manualRateReason?: string;
   payer?: string;
-  externalReference: string;
+  externalReference?: string;
   receiptAttachmentId?: string;
   remark?: string;
   idempotencyKey: string;
