@@ -72,10 +72,9 @@ export async function prefetchV2Route(path: string, intent: V2RoutePrefetchInten
   const moduleKey = getModuleKeyByPath(path);
   if (!moduleKey) return;
   markV2RoutePrefetch(path, intent, 'start');
-  const moduleLoaders = Promise.all([layoutLoader(), getModuleView(moduleKey)()]);
-  markV2RoutePrefetch(path, intent, 'ready');
   try {
-    await moduleLoaders;
+    await Promise.all([layoutLoader(), getModuleView(moduleKey)()]);
+    markV2RoutePrefetch(path, intent, 'ready');
   } catch (error) {
     markV2RoutePrefetch(path, intent, 'error');
     throw error;

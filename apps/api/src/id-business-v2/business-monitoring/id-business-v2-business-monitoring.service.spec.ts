@@ -94,6 +94,10 @@ describe('IdBusinessV2BusinessMonitoringService', () => {
     expect(listSource).toContain('account_disposition');
     expect(listSource.match(/replacement\."renewed_from_activation_id"/g)).toHaveLength(2);
     expect(listSource.match(/id_business_v2_order_balance_returns/g)).toHaveLength(4);
+    expect(listSource.match(/CONCAT\('', [a-z]\."id"\)/g)).toHaveLength(11);
+    expect(listSource).not.toContain('<=>');
+    expect(listSource).toContain('customer_id" IS NULL');
+    expect(listSource).toContain('sold_by_order_id" IS NULL');
     expect(listSource).not.toContain('apple_id_encrypted');
     expect(listSource).not.toContain('error_message');
     expect(listSource).not.toContain('token');
@@ -114,5 +118,7 @@ describe('IdBusinessV2BusinessMonitoringService', () => {
     const secondListSql = prisma.$queryRaw.mock.calls[3]?.[0] as { values?: readonly unknown[] };
     expect(firstListSql.values).toContainEqual(new Date('2026-08-03T00:00:00.000Z'));
     expect(secondListSql.values).toContainEqual(new Date('2027-07-31T00:00:00.000Z'));
+    expect(firstListSql.values).not.toContain(null);
+    expect(secondListSql.values).not.toContain(null);
   });
 });

@@ -20,6 +20,7 @@ const inventories = {
   rawSql: new Set(),
   postgresUuidParameters: new Set(),
   joinedRowLocks: new Set(),
+  mysqlOnlyNullSafeOperator: new Set(),
   legacyDecimal: new Set(),
   rowMapperOutsidePersistence: new Set()
 };
@@ -41,6 +42,17 @@ for (const relativePath of listSourceFiles(v2Root)) {
   );
   const persistencePath = isPersistencePath(relativePath);
   const transactionInfrastructure = isTransactionInfrastructure(relativePath);
+
+  const mysqlOnlyNullSafeOperatorIndex = sourceText.indexOf('<=>');
+  if (mysqlOnlyNullSafeOperatorIndex >= 0) {
+    inventories.mysqlOnlyNullSafeOperator.add(relativePath);
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      mysqlOnlyNullSafeOperatorIndex
+    );
+    failures.push(
+      `${relativePath}:${line + 1}:${character + 1} 共享运行时 SQL 禁止使用 MySQL 专用 <=> 运算符`
+    );
+  }
 
   visit(sourceFile, (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -202,7 +214,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `V2 Prisma runtime 边界检查通过：业务层 Prisma Client 0，Prisma runtime import 0，Decimal runtime 0，SQL runtime 0，Prisma instanceof 0，直接事务 0，直接模型访问 0，raw SQL 0，未转型 UUID 参数 0，未限定 JOIN 行锁 0，旧 Decimal helper 0，persistence 外 row mapper 0。`
+  `V2 Prisma runtime 边界检查通过：业务层 Prisma Client 0，Prisma runtime import 0，Decimal runtime 0，SQL runtime 0，Prisma instanceof 0，直接事务 0，直接模型访问 0，raw SQL 0，未转型 UUID 参数 0，未限定 JOIN 行锁 0，MySQL 专用空值运算符 0，旧 Decimal helper 0，persistence 外 row mapper 0。`
 );
 
 if (showDetails) printInventories();

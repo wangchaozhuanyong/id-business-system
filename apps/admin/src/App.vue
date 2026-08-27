@@ -1,13 +1,13 @@
 <template>
   <ElConfigProvider :locale="elementLocale" :message="messageConfig">
-    <RouterView v-slot="{ Component: RouteComponent }">
-      <V2BootGate
-        v-if="bootStage !== 'ready'"
-        :state="bootStage"
-        :degraded-reason="hasBootRouteError ? 'route' : 'session'"
-        @retry="retryBoot"
-      />
-      <component :is="RouteComponent" v-else :key="runtimeEpoch" />
+    <V2BootGate
+      v-if="bootStage !== 'ready'"
+      :state="bootStage"
+      :degraded-reason="hasBootRouteError ? 'route' : 'session'"
+      @retry="retryBoot"
+    />
+    <RouterView v-else v-slot="{ Component: RouteComponent }">
+      <component :is="RouteComponent" :key="runtimeEpoch" />
     </RouterView>
     <Transition name="app-route-error">
       <div
