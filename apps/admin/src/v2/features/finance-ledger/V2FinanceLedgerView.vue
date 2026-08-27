@@ -6,9 +6,9 @@
         :phase="page.queryPhase"
         :previous-data="page.isParameterTransition"
         :error="page.error"
-        loading-title="正在加载经营开支"
-        refreshing-title="正在更新经营开支"
-        error-title="经营开支加载失败"
+        loading-title="正在加载收支记录"
+        refreshing-title="正在更新收支记录"
+        error-title="收支记录加载失败"
         @retry="page.refresh"
       >
         <div class="v2-finance-expenses-page">
@@ -23,8 +23,10 @@
             :closable="false"
           />
 
+          <V2FinanceCashbookNavigation :page="page" />
           <V2FinanceExpensesToolbar :page="page" />
-          <V2FinanceExpensesTable :page="page" />
+          <V2FinanceInflowsTable v-if="page.cashbookView === 'inflows'" :page="page" />
+          <V2FinanceExpensesTable v-else :page="page" />
         </div>
       </V2AsyncRegion>
     </template>
@@ -67,8 +69,10 @@ import { reactive } from 'vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import type { V2ModuleKey } from '@/v2/features/feature';
 import V2FinanceExpensesOverview from './components/V2FinanceExpensesOverview.vue';
+import V2FinanceCashbookNavigation from './components/V2FinanceCashbookNavigation.vue';
 import V2FinanceExpensesTable from './components/V2FinanceExpensesTable.vue';
 import V2FinanceExpensesToolbar from './components/V2FinanceExpensesToolbar.vue';
+import V2FinanceInflowsTable from './components/V2FinanceInflowsTable.vue';
 import V2FinanceLedgerDrawers from './components/V2FinanceLedgerDrawers.vue';
 import V2FinanceLedgerNavigation from './components/V2FinanceLedgerNavigation.vue';
 import V2FinanceLedgerOverview from './components/V2FinanceLedgerOverview.vue';

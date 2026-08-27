@@ -5,6 +5,7 @@ import type {
   V2FinanceAccountType,
   V2FinanceCurrency,
   V2FinanceHistoryStatus,
+  V2FinanceInflowNature,
   V2FinanceJournalType,
   V2FinancePeriodStatus
 } from './contracts';
@@ -92,6 +93,9 @@ export function journalTypeLabel(value: V2FinanceJournalType) {
     order_recovery: '订单收回',
     account_loss: 'ID 报损',
     expense: '经营开支',
+    manual_operating_income: '手工经营收入',
+    capital_contribution: '股东投入',
+    borrowed_funds_received: '借入资金',
     opening_balance: '期初余额',
     fx_gain_loss: '汇兑损益',
     manual_adjustment: '手工调整',
@@ -109,6 +113,7 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     gift_card_inventory: '礼品卡余额资产',
     id_inventory: 'ID 库存',
     sales_revenue: '销售收入',
+    other_operating_revenue: '其他经营收入',
     platform_fee: '平台手续费',
     gift_card_cost: '余额销售成本',
     id_cost: 'ID 销售成本',
@@ -118,11 +123,31 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     balance_loss: 'ID 余额报损',
     id_purchase_loss: 'ID 采购成本报损',
     operating_expense: '经营开支',
+    contributed_capital: '投入资本',
+    borrowed_funds_payable: '借入资金负债',
     realized_fx_gain_loss: '已实现汇兑损益',
     opening_equity: '期初权益',
     manual_adjustment: '手工调整'
   };
   return labels[value];
+}
+
+export function inflowNatureLabel(value: V2FinanceInflowNature) {
+  return (
+    {
+      operating_income: '经营收入',
+      capital_contribution: '股东投入',
+      borrowed_funds: '借入资金'
+    } as const
+  )[value];
+}
+
+export function inflowNatureTagType(value: V2FinanceInflowNature) {
+  return value === 'operating_income'
+    ? 'success'
+    : value === 'capital_contribution'
+      ? 'warning'
+      : 'info';
 }
 
 export function historyAssetOpeningAccountLabel(

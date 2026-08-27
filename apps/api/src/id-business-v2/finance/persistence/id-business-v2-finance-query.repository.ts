@@ -9,10 +9,19 @@ import {
 import {
   mapExpense,
   mapFinanceAccount,
-  mapFxSnapshot
+  mapFxSnapshot,
+  mapInflow
 } from './id-business-v2-finance-command.repository';
 
 export interface FinanceExpenseFilter {
+  categoryOptionId?: string;
+  financeAccountId?: string;
+  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
+  occurredAt?: { gte?: Date; lte?: Date };
+}
+
+export interface FinanceInflowFilter {
+  nature?: 'operating_income' | 'capital_contribution' | 'borrowed_funds';
   categoryOptionId?: string;
   financeAccountId?: string;
   currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
@@ -29,6 +38,14 @@ export interface FinanceJournalFilter {
   financeAccountId?: string;
   supplierOptionId?: string;
 }
+
+const inflowReceiptSummarySelect = {
+  id: true,
+  originalName: true,
+  mimeType: true,
+  sizeBytes: true,
+  contentSha256: true
+} satisfies Prisma.AttachmentSelect;
 
 @Injectable()
 export class IdBusinessV2FinanceQueryRepository {
@@ -60,6 +77,85 @@ export class IdBusinessV2FinanceQueryRepository {
       this.prisma.idBusinessV2FinanceExpense.count({ where: filter })
     ]);
     return { items: items.map(mapExpense), total };
+  }
+
+  async listInflows(filter: FinanceInflowFilter, skip: number, take: number) {
+    const [items, total, grouped] = await this.prisma.$transaction([
+      this.prisma.idBusinessV2FinanceInflow.findMany({
+        where: filter,
+        include: {
+          categoryOption: true,
+          financeAccount: true,
+          journal: true,
+          receiptAttachment: { select: inflowReceiptSummarySelect },
+          createdBy: { select: { id: true, username: true, displayName: true } }
+        },
+        skip,
+        take,
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }]
+      }),
+      this.prisma.idBusinessV2FinanceInflow.count({ where: filter }),
+      this.prisma.idBusinessV2FinanceInflow.groupBy({
+        by: ['nature'],
+        where: { ...filter, journal: { status: 'posted' } },
+        orderBy: { nature: 'asc' },
+        _sum: { amountCny: true }
+      })
+    ]);
+    return {
+      items: items.map(mapInflow),
+      total,
+      summary: grouped.map((row) => ({
+        nature: row.nature,
+        amountCny: mapAmount4(row._sum?.amountCny ?? 0, 'finance_inflows.sum_amount_cny').toString()
+      }))
+    };
+  }
+
+  async findInflowPrerequisites(categoryOptionId: string | null, financeAccountId: string) {
+    const [category, account] = await Promise.all([
+      categoryOptionId
+        ? this.prisma.idBusinessV2Option.findFirst({
+            where: {
+              id: categoryOptionId,
+              type: 'income_category',
+              status: 'active',
+              deletedAt: null
+            },
+            select: { id: true, name: true }
+          })
+        : null,
+      this.prisma.idBusinessV2FinanceAccount.findUnique({
+        where: { id: financeAccountId },
+        select: { id: true, name: true, currency: true, status: true }
+      })
+    ]);
+    return { category, account };
+  }
+
+  findOrderIncomeReferenceConflict(reference: string) {
+    return this.prisma.idBusinessV2Order.findFirst({
+      where: {
+        deletedAt: null,
+        OR: [{ orderNo: reference }, { platformOrderNo: reference }]
+      },
+      select: { id: true, orderNo: true, platformOrderNo: true }
+    });
+  }
+
+  findInflowReceipt(inflowId: string) {
+    return this.prisma.idBusinessV2FinanceInflow.findUnique({
+      where: { id: inflowId },
+      select: {
+        id: true,
+        receiptAttachment: {
+          select: {
+            ...inflowReceiptSummarySelect,
+            contentEncrypted: true
+          }
+        }
+      }
+    });
   }
 
   async findExpensePrerequisites(categoryOptionId: string, financeAccountId: string) {

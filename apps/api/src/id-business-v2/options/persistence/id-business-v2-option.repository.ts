@@ -113,6 +113,7 @@ export interface OptionDeleteImpact {
   activeActivationCount: number;
   supplierWalletCount: number;
   financeExpenseCount: number;
+  financeInflowCount: number;
 }
 
 export function mapOptionPersistenceRow(row: OptionPersistenceRow): OptionWithRelations {
@@ -481,7 +482,8 @@ export class IdBusinessV2OptionRepository {
       activationReferenceCount,
       activeActivationCount,
       supplierWalletCount,
-      financeExpenseCount
+      financeExpenseCount,
+      financeInflowCount
     ] = await Promise.all([
       client.idBusinessV2Account.count({ where: accountWhere }),
       client.idBusinessV2Account.count({ where: { ...accountWhere, recordStatus: 'active' } }),
@@ -505,7 +507,8 @@ export class IdBusinessV2OptionRepository {
       client.idBusinessV2TopupSupplierAccount.count({
         where: { supplierOptionId: option.id }
       }),
-      client.idBusinessV2FinanceExpense.count({ where: { categoryOptionId: option.id } })
+      client.idBusinessV2FinanceExpense.count({ where: { categoryOptionId: option.id } }),
+      client.idBusinessV2FinanceInflow.count({ where: { categoryOptionId: option.id } })
     ]);
     return {
       dependentServiceCount: dependentServices.length,
@@ -518,7 +521,8 @@ export class IdBusinessV2OptionRepository {
       activationReferenceCount,
       activeActivationCount,
       supplierWalletCount,
-      financeExpenseCount
+      financeExpenseCount,
+      financeInflowCount
     };
   }
 

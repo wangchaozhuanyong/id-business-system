@@ -1,7 +1,8 @@
 import type {
   IdBusinessV2FinanceAccountStatus,
   IdBusinessV2FinanceAccountType,
-  IdBusinessV2FinanceCurrency
+  IdBusinessV2FinanceCurrency,
+  IdBusinessV2FinanceInflowNature
 } from '@prisma/client';
 
 export interface CreateIdBusinessV2FinanceAccountDto {
@@ -38,6 +39,27 @@ export interface CreateIdBusinessV2FinanceExpenseDto {
 }
 
 export interface CorrectIdBusinessV2FinanceExpenseDto extends CreateIdBusinessV2FinanceExpenseDto {
+  reason: string;
+}
+
+export interface CreateIdBusinessV2FinanceInflowDto {
+  nature: IdBusinessV2FinanceInflowNature;
+  categoryOptionId?: string | null;
+  financeAccountId: string;
+  amount: string | number;
+  currency: IdBusinessV2FinanceCurrency;
+  occurredAt: string;
+  fxRateToCny?: string | number;
+  fxRateSnapshotId?: string | null;
+  manualRateReason?: string | null;
+  payer?: string | null;
+  externalReference: string;
+  receiptAttachmentId?: string | null;
+  remark?: string | null;
+  idempotencyKey: string;
+}
+
+export interface CorrectIdBusinessV2FinanceInflowDto extends CreateIdBusinessV2FinanceInflowDto {
   reason: string;
 }
 

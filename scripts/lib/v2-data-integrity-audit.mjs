@@ -541,6 +541,203 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
        AND supplier.status::text = 'active'`
   ),
   check(
+    'finance_inflow_reference_integrity',
+    '收入流水号缺失、未永久预留、重复处于有效入账状态或与订单收款重复',
+    `WITH normalized_inflow AS (
+       SELECT inflow.id,
+              inflow.nature::text AS nature,
+              lower(btrim(inflow.external_reference)) AS normalized_reference,
+              journal.status::text AS journal_status
+       FROM public.id_business_v2_finance_inflows inflow
+       JOIN public.id_business_v2_finance_journals journal ON journal.id = inflow.journal_id
+     ), active_duplicate AS (
+       SELECT normalized_reference
+       FROM normalized_inflow
+       WHERE journal_status = 'posted' AND normalized_reference IS NOT NULL
+       GROUP BY normalized_reference
+       HAVING count(*) > 1
+     )
+     SELECT normalized_inflow.id::text AS entity_id,
+            jsonb_build_object(
+              'reference', normalized_inflow.normalized_reference,
+              'status', normalized_inflow.journal_status
+            ) AS detail
+     FROM normalized_inflow
+     LEFT JOIN public.id_business_v2_finance_income_references reference_record
+       ON reference_record.normalized_reference = normalized_inflow.normalized_reference
+     LEFT JOIN public.id_business_v2_finance_inflows first_inflow
+       ON first_inflow.id = reference_record.first_inflow_id
+     WHERE (
+       normalized_inflow.journal_status = 'posted'
+       AND normalized_inflow.normalized_reference IS NULL
+     ) OR (
+       normalized_inflow.normalized_reference IS NOT NULL
+       AND (
+         reference_record.normalized_reference IS NULL
+         OR reference_record.source_type::text <> 'inflow'
+         OR lower(btrim(first_inflow.external_reference))
+            IS DISTINCT FROM reference_record.normalized_reference
+       )
+     )
+     UNION ALL
+     SELECT 'active-duplicate:' || active_duplicate.normalized_reference AS entity_id,
+            jsonb_build_object('reference', active_duplicate.normalized_reference) AS detail
+     FROM active_duplicate
+     UNION ALL
+     SELECT 'reservation:' || reference_record.normalized_reference AS entity_id,
+            jsonb_build_object(
+              'sourceType', reference_record.source_type::text,
+              'firstInflowId', reference_record.first_inflow_id,
+              'orderId', reference_record.order_id
+            ) AS detail
+     FROM public.id_business_v2_finance_income_references reference_record
+     WHERE NOT (
+       (
+         reference_record.source_type::text = 'inflow'
+         AND reference_record.first_inflow_id IS NOT NULL
+         AND reference_record.order_id IS NULL
+       )
+       OR (
+         reference_record.source_type::text = 'order'
+         AND reference_record.first_inflow_id IS NULL
+         AND reference_record.order_id IS NOT NULL
+       )
+     )
+     UNION ALL
+     SELECT order_record.id::text AS entity_id,
+            jsonb_build_object(
+              'orderNo', order_record.order_no,
+              'platformOrderNo', order_record.platform_order_no
+            ) AS detail
+     FROM public.id_business_v2_orders order_record
+     WHERE order_record.deleted_at IS NULL
+       AND order_record.status::text IN ('completed', 'refunded')
+       AND (
+         NOT EXISTS (
+           SELECT 1
+           FROM public.id_business_v2_finance_income_references order_reference
+           WHERE order_reference.normalized_reference = lower(btrim(order_record.order_no))
+             AND order_reference.source_type::text = 'order'
+             AND order_reference.order_id = order_record.id
+         )
+         OR (
+           order_record.platform_order_no IS NOT NULL
+           AND btrim(order_record.platform_order_no) <> ''
+           AND NOT EXISTS (
+             SELECT 1
+             FROM public.id_business_v2_finance_income_references platform_reference
+             WHERE platform_reference.normalized_reference = lower(btrim(order_record.platform_order_no))
+               AND platform_reference.source_type::text = 'order'
+               AND platform_reference.order_id = order_record.id
+           )
+         )
+       )
+     UNION ALL
+     SELECT normalized_inflow.id::text AS entity_id,
+            jsonb_build_object('reference', normalized_inflow.normalized_reference) AS detail
+     FROM normalized_inflow
+     WHERE normalized_inflow.journal_status = 'posted'
+       AND normalized_inflow.nature = 'operating_income'
+       AND EXISTS (
+         SELECT 1
+         FROM public.id_business_v2_orders order_record
+         WHERE order_record.deleted_at IS NULL
+           AND (
+             lower(btrim(order_record.order_no)) = normalized_inflow.normalized_reference
+             OR lower(btrim(order_record.platform_order_no)) = normalized_inflow.normalized_reference
+           )
+       )`
+  ),
+  check(
+    'finance_inflow_receipt_integrity',
+    '有效收入缺少可验证的加密收款凭证或凭证元数据不完整',
+    `SELECT inflow.id::text AS entity_id,
+            jsonb_build_object(
+              'receiptAttachmentId', inflow.receipt_attachment_id,
+              'mimeType', attachment.mime_type,
+              'sizeBytes', attachment.size_bytes
+            ) AS detail
+     FROM public.id_business_v2_finance_inflows inflow
+     JOIN public.id_business_v2_finance_journals journal ON journal.id = inflow.journal_id
+     LEFT JOIN public.attachments attachment ON attachment.id = inflow.receipt_attachment_id
+     WHERE journal.status::text = 'posted'
+       AND (
+         attachment.id IS NULL
+         OR attachment.business_module IS DISTINCT FROM 'id_business_v2_finance'
+         OR attachment.object_type IS DISTINCT FROM 'id_business_v2_finance_inflow'
+         OR attachment.purpose IS DISTINCT FROM 'finance_inflow_receipt'
+         OR attachment.mime_type NOT IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')
+         OR attachment.size_bytes <= 0
+         OR attachment.size_bytes > 5242880
+         OR attachment.content_encrypted IS NULL
+         OR attachment.content_sha256 IS NULL
+         OR attachment.content_sha256 !~ '^[0-9a-f]{64}$'
+       )`
+  ),
+  check(
+    'finance_inflow_posting_mismatch',
+    '收入业务记录与财务日记、账户、金额或会计科目不一致',
+    `SELECT inflow.id::text AS entity_id,
+            jsonb_build_object(
+              'journalId', inflow.journal_id,
+              'nature', inflow.nature::text,
+              'journalType', journal.journal_type::text
+            ) AS detail
+     FROM public.id_business_v2_finance_inflows inflow
+     JOIN public.id_business_v2_finance_journals journal ON journal.id = inflow.journal_id
+     WHERE journal.source_type::text <> 'inflow'
+        OR journal.source_id IS DISTINCT FROM inflow.id::text
+        OR journal.source_reference IS DISTINCT FROM inflow.external_reference
+        OR journal.journal_type::text <> CASE inflow.nature::text
+             WHEN 'operating_income' THEN 'manual_operating_income'
+             WHEN 'capital_contribution' THEN 'capital_contribution'
+             WHEN 'borrowed_funds' THEN 'borrowed_funds_received'
+           END
+        OR journal.metadata ->> 'receiptAttachmentId'
+           IS DISTINCT FROM inflow.receipt_attachment_id::text
+        OR (
+          inflow.nature::text = 'operating_income'
+          AND (
+            inflow.category_option_id IS NULL
+            OR NULLIF(btrim(inflow.category_name_snapshot), '') IS NULL
+          )
+        )
+        OR (
+          inflow.nature::text <> 'operating_income'
+          AND (inflow.category_option_id IS NOT NULL OR inflow.category_name_snapshot IS NOT NULL)
+        )
+        OR (SELECT count(*) FROM public.id_business_v2_finance_journal_lines line
+            WHERE line.journal_id = journal.id) <> 2
+        OR NOT EXISTS (
+          SELECT 1
+          FROM public.id_business_v2_finance_journal_lines debit_line
+          WHERE debit_line.journal_id = journal.id
+            AND debit_line.account_code::text = 'cash'
+            AND debit_line.direction::text = 'debit'
+            AND debit_line.finance_account_id = inflow.finance_account_id
+            AND debit_line.currency = inflow.currency
+            AND debit_line.amount_original = inflow.amount_original
+            AND debit_line.fx_rate_to_cny = inflow.fx_rate_to_cny
+            AND debit_line.amount_cny = inflow.amount_cny
+        )
+        OR NOT EXISTS (
+          SELECT 1
+          FROM public.id_business_v2_finance_journal_lines credit_line
+          WHERE credit_line.journal_id = journal.id
+            AND credit_line.account_code::text = CASE inflow.nature::text
+                  WHEN 'operating_income' THEN 'other_operating_revenue'
+                  WHEN 'capital_contribution' THEN 'contributed_capital'
+                  WHEN 'borrowed_funds' THEN 'borrowed_funds_payable'
+                END
+            AND credit_line.direction::text = 'credit'
+            AND credit_line.finance_account_id IS NULL
+            AND credit_line.currency = inflow.currency
+            AND credit_line.amount_original = inflow.amount_original
+            AND credit_line.fx_rate_to_cny = inflow.fx_rate_to_cny
+            AND credit_line.amount_cny = inflow.amount_cny
+        )`
+  ),
+  check(
     'finance_journal_unbalanced',
     '财务日记借贷不平',
     `SELECT journal.id::text AS entity_id,

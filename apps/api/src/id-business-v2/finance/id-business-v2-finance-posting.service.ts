@@ -92,6 +92,29 @@ interface FinanceJournalReplay {
 export class IdBusinessV2FinancePostingService {
   constructor(private readonly repository: IdBusinessV2FinanceCommandRepository) {}
 
+  async reserveOrderIncomeReferences(
+    tx: V2CommandTransaction,
+    input: { orderId: string; references: Array<string | null | undefined> }
+  ) {
+    const references = [
+      ...new Set(
+        input.references
+          .map((reference) => reference?.trim().toLowerCase())
+          .filter((reference): reference is string => Boolean(reference))
+      )
+    ].sort();
+    for (const reference of references) {
+      const reserved = await this.repository.findIncomeReference(tx, reference);
+      if (reserved) {
+        if (reserved.sourceType === 'order' && reserved.orderId === input.orderId) continue;
+        throw new ConflictException(
+          `订单收款标识 ${reference} 已用于手工收入或其他订单，不能重复确认收入`
+        );
+      }
+      await this.repository.createOrderIncomeReference(tx, reference, input.orderId);
+    }
+  }
+
   async post(tx: V2CommandTransaction, input: FinancePostingInput) {
     if (input.lines.length < 2) throw new BadRequestException('财务日记至少需要两条分录');
     const normalizedLines = input.lines.map((line, index) => this.normalizeLine(line, index));
@@ -169,6 +192,10 @@ export class IdBusinessV2FinancePostingService {
       throw new ConflictException('该财务日记已经冲销');
     }
     const now = new Date();
+    const claimed = await this.repository.claimJournalReversal(tx, original.id, now);
+    if (claimed.count !== 1) {
+      throw new ConflictException('该财务日记已被其他操作冲销，请刷新后核对');
+    }
     const reversal = await this.post(tx, {
       journalType: 'reversal',
       sourceType: original.sourceType,
@@ -193,7 +220,6 @@ export class IdBusinessV2FinancePostingService {
         memo: `冲销 ${original.journalNo}`
       }))
     });
-    await this.repository.markJournalReversed(tx, original.id, now);
     return this.repository.findJournalWithLinesOrThrow(tx, reversal.id);
   }
 

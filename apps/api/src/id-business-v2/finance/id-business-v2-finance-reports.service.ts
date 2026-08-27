@@ -83,6 +83,8 @@ export class IdBusinessV2FinanceReportsService {
       return naturalTotal.sub(oppositeTotal);
     };
     const salesRevenue = amount('sales_revenue', 'credit');
+    const otherOperatingRevenue = amount('other_operating_revenue', 'credit');
+    const totalOperatingRevenue = salesRevenue.add(otherOperatingRevenue);
     const values = new Map(EXPENSE_CODES.map((code) => [code, amount(code, 'debit')] as const));
     const realizedFx = amount('realized_fx_gain_loss', 'credit');
     const totalExpense = [...values.values()].reduce(
@@ -94,6 +96,8 @@ export class IdBusinessV2FinanceReportsService {
     );
     return {
       salesRevenueCny: salesRevenue.toString(),
+      otherOperatingRevenueCny: otherOperatingRevenue.toString(),
+      totalOperatingRevenueCny: totalOperatingRevenue.toString(),
       platformFeeCny: (values.get('platform_fee') ?? Amount4.zero()).toString(),
       giftCardCostCny: (values.get('gift_card_cost') ?? Amount4.zero()).toString(),
       idCostCny: (values.get('id_cost') ?? Amount4.zero()).toString(),
@@ -106,14 +110,18 @@ export class IdBusinessV2FinanceReportsService {
       idPurchaseLossCny: (values.get('id_purchase_loss') ?? Amount4.zero()).toString(),
       operatingExpenseCny: (values.get('operating_expense') ?? Amount4.zero()).toString(),
       realizedFxGainLossCny: realizedFx.toString(),
-      netProfitCny: salesRevenue.sub(totalExpense).add(realizedFx).toString(),
+      netProfitCny: totalOperatingRevenue.sub(totalExpense).add(realizedFx).toString(),
       estimatedProfitCny: estimated.toString()
     };
   }
 
   async currencyBreakdown(query: FinanceReportQuery) {
-    const grouped = await this.repository.groupCashFlow(this.buildLineWhere(query));
-    const latestRates = await this.loadLatestRates();
+    const where = this.buildLineWhere(query);
+    const [grouped, manualInflows, latestRates] = await Promise.all([
+      this.repository.groupCashFlow(where),
+      this.repository.groupManualInflows(where),
+      this.loadLatestRates()
+    ]);
     return (['CNY', 'MYR', 'USD', 'USDT'] as const).map((currency) => {
       const income = grouped
         .filter((item) => item.currency === currency && item.direction === 'debit')
@@ -121,11 +129,29 @@ export class IdBusinessV2FinanceReportsService {
       const expense = grouped
         .filter((item) => item.currency === currency && item.direction === 'credit')
         .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
+      const manualInflow = (code: IdBusinessV2FinanceAccountCode) => {
+        const debits = manualInflows
+          .filter(
+            (item) =>
+              item.currency === currency && item.accountCode === code && item.direction === 'debit'
+          )
+          .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
+        const credits = manualInflows
+          .filter(
+            (item) =>
+              item.currency === currency && item.accountCode === code && item.direction === 'credit'
+          )
+          .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
+        return debits.sub(credits);
+      };
       const net = income.sub(expense);
       const rate = latestRates.get(currency);
       return {
         currency,
         income: income.toString(),
+        manualOperatingIncome: manualInflow('other_operating_revenue').toString(),
+        capitalContribution: manualInflow('contributed_capital').toString(),
+        borrowedFunds: manualInflow('borrowed_funds_payable').toString(),
         expense: expense.toString(),
         netCashFlow: net.toString(),
         latestRateToCny: rate?.toString() ?? null,

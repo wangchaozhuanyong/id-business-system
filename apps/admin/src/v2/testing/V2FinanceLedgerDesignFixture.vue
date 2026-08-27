@@ -28,7 +28,7 @@
             </a>
             <a class="v2-navigation__item" href="#finance-expenses">
               <span class="v2-navigation__item-dot" aria-hidden="true" />
-              <span class="v2-navigation__item-label">开支记账</span>
+              <span class="v2-navigation__item-label">收支记账</span>
             </a>
             <a class="v2-navigation__item" href="#analytics">
               <span class="v2-navigation__item-dot" aria-hidden="true" />

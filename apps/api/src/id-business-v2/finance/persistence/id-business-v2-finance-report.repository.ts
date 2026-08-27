@@ -145,6 +145,82 @@ export class IdBusinessV2FinanceReportRepository {
     }));
   }
 
+  async groupManualInflows(filter: FinanceReportPersistenceFilter) {
+    const manualJournalTypes = [
+      'manual_operating_income',
+      'capital_contribution',
+      'borrowed_funds_received'
+    ] as const;
+    const rows = await this.prisma.idBusinessV2FinanceJournalLine.findMany({
+      where: {
+        currency: filter.currency,
+        financeAccountId: filter.financeAccountId,
+        supplierAccount: filter.supplierOptionId
+          ? { is: { supplierOptionId: filter.supplierOptionId } }
+          : undefined,
+        accountCode: 'cash',
+        journal: {
+          is: {
+            businessDate:
+              filter.dateFrom || filter.dateTo
+                ? { gte: filter.dateFrom, lte: filter.dateTo }
+                : undefined,
+            journalType: filter.journalType
+              ? (filter.journalType as Prisma.EnumIdBusinessV2FinanceJournalTypeFilter)
+              : undefined,
+            OR: filter.journalType
+              ? undefined
+              : [
+                  { journalType: { in: [...manualJournalTypes] } },
+                  {
+                    journalType: 'reversal',
+                    reversalOf: { is: { journalType: { in: [...manualJournalTypes] } } }
+                  }
+                ]
+          }
+        }
+      },
+      select: {
+        currency: true,
+        direction: true,
+        amountOriginal: true,
+        journal: {
+          select: {
+            journalType: true,
+            reversalOf: { select: { journalType: true } }
+          }
+        }
+      }
+    });
+    return rows.flatMap((row) => {
+      const journalType =
+        row.journal.journalType === 'reversal'
+          ? row.journal.reversalOf?.journalType
+          : row.journal.journalType;
+      const accountCode =
+        journalType === 'manual_operating_income'
+          ? 'other_operating_revenue'
+          : journalType === 'capital_contribution'
+            ? 'contributed_capital'
+            : journalType === 'borrowed_funds_received'
+              ? 'borrowed_funds_payable'
+              : null;
+      return accountCode
+        ? [
+            {
+              accountCode,
+              currency: row.currency,
+              direction: row.direction,
+              amountOriginal: mapAmount4(
+                row.amountOriginal,
+                'finance_journal_lines.manual_inflow_amount_original'
+              )
+            }
+          ]
+        : [];
+    });
+  }
+
   async loadAssets() {
     const [
       financeAccounts,

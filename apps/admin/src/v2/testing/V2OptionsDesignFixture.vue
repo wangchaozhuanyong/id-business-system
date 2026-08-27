@@ -122,7 +122,8 @@ const typeDefinitions: V2OptionTypeDefinition[] = [
   definition('topup_supplier', '加卡供应商'),
   definition('gift_card_name', '卡片名称'),
   definition('settlement_platform', '结算平台', { supportsFees: true }),
-  definition('expense_category', '开支分类')
+  definition('expense_category', '开支分类'),
+  definition('income_category', '收入分类')
 ];
 const optionTypeIcons: Record<V2OptionType, Component> = {
   id_status: markRaw(CircleCheck),
@@ -135,7 +136,8 @@ const optionTypeIcons: Record<V2OptionType, Component> = {
   topup_supplier: markRaw(Wallet),
   gift_card_name: markRaw(CreditCard),
   settlement_platform: markRaw(CreditCard),
-  expense_category: markRaw(Wallet)
+  expense_category: markRaw(Wallet),
+  income_category: markRaw(Wallet)
 };
 const selectedTypeState = ref<V2OptionType>('service');
 const renderedTypeState = ref<V2OptionType>('service');
@@ -265,7 +267,8 @@ function makeOption(definitionItem: V2OptionTypeDefinition, index: number): V2Op
     topup_supplier: ['礼品卡渠道 A', '礼品卡渠道 B', '人工采购渠道'],
     gift_card_name: ['Apple Gift Card', 'Google Play Gift Card', 'Steam Gift Card'],
     settlement_platform: ['公司开发', '微信收款', '支付宝收款', '银行转账'],
-    expense_category: ['采购成本', '平台服务费', '运营支出', '其他支出']
+    expense_category: ['采购成本', '平台服务费', '运营支出', '其他支出'],
+    income_category: ['额外服务收入', '佣金收入', '返利收入', '其他经营收入']
   };
   const type = definitionItem.type;
   const baseNames = type === 'service' ? serviceNames : genericNames[type];

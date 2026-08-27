@@ -63,6 +63,7 @@ enum IdBusinessV2OptionType {
   gift_card_name
   settlement_platform
   expense_category
+  income_category
 }
 
 enum IdBusinessV2OptionStatus {
@@ -159,6 +160,9 @@ enum IdBusinessV2FinanceJournalType {
   order_upgrade_balance_return
   account_loss
   expense
+  manual_operating_income
+  capital_contribution
+  borrowed_funds_received
   opening_balance
   fx_gain_loss
   manual_adjustment
@@ -174,6 +178,7 @@ enum IdBusinessV2FinanceSourceType {
   account_loss
   order
   expense
+  inflow
   opening_balance
   historical_backfill
   manual
@@ -196,6 +201,9 @@ enum IdBusinessV2FinanceAccountCode {
   gift_card_inventory
   id_inventory
   sales_revenue
+  other_operating_revenue
+  contributed_capital
+  borrowed_funds_payable
   platform_fee
   gift_card_cost
   id_cost
@@ -208,6 +216,17 @@ enum IdBusinessV2FinanceAccountCode {
   realized_fx_gain_loss
   opening_equity
   manual_adjustment
+}
+
+enum IdBusinessV2FinanceInflowNature {
+  operating_income
+  capital_contribution
+  borrowed_funds
+}
+
+enum IdBusinessV2FinanceIncomeReferenceSource {
+  inflow
+  order
 }
 
 enum IdBusinessV2FinanceFxRateSource {
@@ -485,6 +504,7 @@ model User {
   idBusinessV2FinanceFxRatesCreated    IdBusinessV2FinanceFxRateSnapshot[]  @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy")
   idBusinessV2FinanceJournalsCreated   IdBusinessV2FinanceJournal[]         @relation("IdBusinessV2FinanceJournalCreatedBy")
   idBusinessV2FinanceExpensesCreated   IdBusinessV2FinanceExpense[]         @relation("IdBusinessV2FinanceExpenseCreatedBy")
+  idBusinessV2FinanceInflowsCreated    IdBusinessV2FinanceInflow[]          @relation("IdBusinessV2FinanceInflowCreatedBy")
   idBusinessV2FinancePeriodsClosed     IdBusinessV2FinancePeriod[]          @relation("IdBusinessV2FinancePeriodClosedBy")
   idBusinessV2FinancePeriodsReopened   IdBusinessV2FinancePeriod[]          @relation("IdBusinessV2FinancePeriodReopenedBy")
   idBusinessV2GovernanceJobsRequested  IdBusinessV2GovernanceJob[]          @relation("IdBusinessV2GovernanceJobRequestedBy")
@@ -664,6 +684,7 @@ model IdBusinessV2Option {
   giftCardsByCardName  IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardName")
   topupFundAccounts    IdBusinessV2TopupSupplierAccount[]
   financeExpenses      IdBusinessV2FinanceExpense[]       @relation("IdBusinessV2FinanceExpenseCategory")
+  financeInflows       IdBusinessV2FinanceInflow[]        @relation("IdBusinessV2FinanceInflowCategory")
   ordersByService      IdBusinessV2Order[]                @relation("IdBusinessV2OrderService")
   ordersBySettlement   IdBusinessV2Order[]                @relation("IdBusinessV2OrderSettlementPlatform")
   locksByService       IdBusinessV2AccountLock[]          @relation("IdBusinessV2AccountLockService")
@@ -1068,6 +1089,7 @@ model IdBusinessV2FinanceAccount {
   updatedBy         User?                              @relation("IdBusinessV2FinanceAccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   journalLines      IdBusinessV2FinanceJournalLine[]
   expenses          IdBusinessV2FinanceExpense[]
+  inflows           IdBusinessV2FinanceInflow[]
   supplierPayments  IdBusinessV2TopupSupplierPayment[]
   accountPurchases  IdBusinessV2Account[]              @relation("IdBusinessV2AccountPurchaseFinanceAccount")
   giftCardPurchases IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardPurchaseFinanceAccount")
@@ -1097,6 +1119,7 @@ model IdBusinessV2FinanceFxRateSnapshot {
   createdBy         User?                              @relation("IdBusinessV2FinanceFxRateSnapshotCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull, map: "id_business_v2_finance_fx_rate_snapshots_created_by_user_id_fke")
   journalLines      IdBusinessV2FinanceJournalLine[]
   expenses          IdBusinessV2FinanceExpense[]
+  inflows           IdBusinessV2FinanceInflow[]
   supplierPayments  IdBusinessV2TopupSupplierPayment[]
   accountPurchases  IdBusinessV2Account[]              @relation("IdBusinessV2AccountPurchaseFxSnapshot")
   giftCardPurchases IdBusinessV2GiftCard[]             @relation("IdBusinessV2GiftCardPurchaseFxSnapshot")
@@ -1133,6 +1156,7 @@ model IdBusinessV2FinanceJournal {
   createdBy  User?                            @relation("IdBusinessV2FinanceJournalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   lines      IdBusinessV2FinanceJournalLine[]
   expense    IdBusinessV2FinanceExpense?
+  inflow     IdBusinessV2FinanceInflow?
 
   @@index([journalType, businessDate])
   @@index([sourceType, sourceId])
@@ -1206,6 +1230,62 @@ model IdBusinessV2FinanceExpense {
   @@index([receiptAttachmentId])
   @@index([createdByUserId])
   @@map("id_business_v2_finance_expenses")
+}
+
+model IdBusinessV2FinanceInflow {
+  id                         String                          @id @default(uuid()) @db.Uuid
+  journalId                  String                          @unique @map("journal_id") @db.Uuid
+  nature                     IdBusinessV2FinanceInflowNature
+  categoryOptionId           String?                         @map("category_option_id") @db.Uuid
+  categoryNameSnapshot       String?                         @map("category_name_snapshot") @db.VarChar(160)
+  financeAccountId           String                          @map("finance_account_id") @db.Uuid
+  financeAccountNameSnapshot String                          @map("finance_account_name_snapshot") @db.VarChar(160)
+  fxRateSnapshotId           String?                         @map("fx_rate_snapshot_id") @db.Uuid
+  currency                   IdBusinessV2FinanceCurrency
+  amountOriginal             Decimal                         @map("amount_original") @db.Decimal(18, 4)
+  fxRateToCny                Decimal                         @map("fx_rate_to_cny") @db.Decimal(18, 8)
+  amountCny                  Decimal                         @map("amount_cny") @db.Decimal(18, 4)
+  occurredAt                 DateTime                        @map("occurred_at") @db.Timestamptz(6)
+  payer                      String?                         @db.VarChar(200)
+  externalReference          String                          @map("external_reference") @db.VarChar(200)
+  receiptAttachmentId        String                          @map("receipt_attachment_id") @db.Uuid
+  remark                     String?                         @db.Text
+  idempotencyKey             String                          @unique @map("idempotency_key") @db.VarChar(180)
+  createdByUserId            String?                         @map("created_by_user_id") @db.Uuid
+  createdAt                  DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  journal            IdBusinessV2FinanceJournal           @relation(fields: [journalId], references: [id], onDelete: Restrict)
+  categoryOption     IdBusinessV2Option?                  @relation("IdBusinessV2FinanceInflowCategory", fields: [categoryOptionId], references: [id], onDelete: Restrict)
+  financeAccount     IdBusinessV2FinanceAccount           @relation(fields: [financeAccountId], references: [id], onDelete: Restrict)
+  fxRateSnapshot     IdBusinessV2FinanceFxRateSnapshot?   @relation(fields: [fxRateSnapshotId], references: [id], onDelete: Restrict)
+  receiptAttachment  Attachment                           @relation("IdBusinessV2FinanceInflowReceipt", fields: [receiptAttachmentId], references: [id], onDelete: Restrict)
+  createdBy          User?                                @relation("IdBusinessV2FinanceInflowCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  reservedReferences IdBusinessV2FinanceIncomeReference[]
+
+  @@index([nature, occurredAt])
+  @@index([categoryOptionId, occurredAt], map: "id_business_v2_finance_inflows_category_occurred_at_idx")
+  @@index([financeAccountId, occurredAt], map: "id_business_v2_finance_inflows_account_occurred_at_idx")
+  @@index([currency, occurredAt])
+  @@index([externalReference])
+  @@index([fxRateSnapshotId])
+  @@index([receiptAttachmentId])
+  @@index([createdByUserId])
+  @@map("id_business_v2_finance_inflows")
+}
+
+model IdBusinessV2FinanceIncomeReference {
+  normalizedReference String                                   @id @map("normalized_reference") @db.VarChar(200)
+  sourceType          IdBusinessV2FinanceIncomeReferenceSource @map("source_type")
+  firstInflowId       String?                                  @map("first_inflow_id") @db.Uuid
+  orderId             String?                                  @map("order_id") @db.Uuid
+  createdAt           DateTime                                 @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  firstInflow IdBusinessV2FinanceInflow? @relation(fields: [firstInflowId], references: [id], onDelete: Restrict)
+  order       IdBusinessV2Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([firstInflowId], map: "finance_income_refs_first_inflow_idx")
+  @@index([orderId], map: "finance_income_refs_order_idx")
+  @@map("id_business_v2_finance_income_references")
 }
 
 model IdBusinessV2FinancePeriod {
@@ -1363,22 +1443,23 @@ model IdBusinessV2Order {
   updatedAt                    DateTime                            @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt                    DateTime?                           @map("deleted_at") @db.Timestamptz(6)
 
-  customer               IdBusinessV2Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  serviceOption          IdBusinessV2Option                 @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
-  account                IdBusinessV2Account?               @relation("IdBusinessV2OrderAccount", fields: [accountId], references: [id], onDelete: Restrict)
-  soldAccount            IdBusinessV2Account?               @relation("IdBusinessV2AccountSoldByOrder")
-  sourceSoldOrder        IdBusinessV2Order?                 @relation("IdBusinessV2OrderAfterSalesSource", fields: [sourceSoldOrderId], references: [id], onDelete: Restrict)
-  afterSalesOrders       IdBusinessV2Order[]                @relation("IdBusinessV2OrderAfterSalesSource")
-  settlementPlatform     IdBusinessV2Option?                @relation("IdBusinessV2OrderSettlementPlatform", fields: [settlementPlatformOptionId], references: [id], onDelete: Restrict)
-  createdBy              User?                              @relation("IdBusinessV2OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  updatedBy              User?                              @relation("IdBusinessV2OrderUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
-  activation             IdBusinessV2Activation?
-  locks                  IdBusinessV2AccountLock[]
-  balanceLedger          IdBusinessV2BalanceLedger[]
-  balanceReturns         IdBusinessV2OrderBalanceReturn[]
-  receivedFxSnapshot     IdBusinessV2FinanceFxRateSnapshot? @relation("IdBusinessV2OrderReceivedFxSnapshot", fields: [receivedFxSnapshotId], references: [id], onDelete: Restrict)
-  receivedFinanceAccount IdBusinessV2FinanceAccount?        @relation("IdBusinessV2OrderReceivedFinanceAccount", fields: [receivedFinanceAccountId], references: [id], onDelete: Restrict)
-  displaySnapshot        IdBusinessV2OrderDisplaySnapshot?
+  customer                 IdBusinessV2Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  serviceOption            IdBusinessV2Option                   @relation("IdBusinessV2OrderService", fields: [serviceOptionId], references: [id], onDelete: Restrict)
+  account                  IdBusinessV2Account?                 @relation("IdBusinessV2OrderAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  soldAccount              IdBusinessV2Account?                 @relation("IdBusinessV2AccountSoldByOrder")
+  sourceSoldOrder          IdBusinessV2Order?                   @relation("IdBusinessV2OrderAfterSalesSource", fields: [sourceSoldOrderId], references: [id], onDelete: Restrict)
+  afterSalesOrders         IdBusinessV2Order[]                  @relation("IdBusinessV2OrderAfterSalesSource")
+  settlementPlatform       IdBusinessV2Option?                  @relation("IdBusinessV2OrderSettlementPlatform", fields: [settlementPlatformOptionId], references: [id], onDelete: Restrict)
+  createdBy                User?                                @relation("IdBusinessV2OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy                User?                                @relation("IdBusinessV2OrderUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  activation               IdBusinessV2Activation?
+  locks                    IdBusinessV2AccountLock[]
+  balanceLedger            IdBusinessV2BalanceLedger[]
+  balanceReturns           IdBusinessV2OrderBalanceReturn[]
+  receivedFxSnapshot       IdBusinessV2FinanceFxRateSnapshot?   @relation("IdBusinessV2OrderReceivedFxSnapshot", fields: [receivedFxSnapshotId], references: [id], onDelete: Restrict)
+  receivedFinanceAccount   IdBusinessV2FinanceAccount?          @relation("IdBusinessV2OrderReceivedFinanceAccount", fields: [receivedFinanceAccountId], references: [id], onDelete: Restrict)
+  displaySnapshot          IdBusinessV2OrderDisplaySnapshot?
+  reservedIncomeReferences IdBusinessV2FinanceIncomeReference[]
 
   @@unique([settlementPlatformOptionId, platformOrderNo], map: "id_business_v2_orders_platform_order_key")
   @@index([customerId])
@@ -2127,22 +2208,25 @@ model IdBusinessV2ScopeVersion {
 }
 
 model Attachment {
-  id              String   @id @default(uuid()) @db.Uuid
-  originalName    String   @map("original_name") @db.VarChar(255)
-  storageKey      String   @unique @map("storage_key") @db.VarChar(500)
-  mimeType        String   @map("mime_type") @db.VarChar(150)
-  sizeBytes       BigInt   @map("size_bytes")
-  businessModule  String?  @map("business_module") @db.VarChar(80)
-  objectType      String?  @map("object_type") @db.VarChar(120)
-  objectId        String?  @map("object_id") @db.Uuid
-  purpose         String?  @db.VarChar(120)
-  remark          String?  @db.Text
-  createdByUserId String?  @map("created_by_user_id") @db.Uuid
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id               String   @id @default(uuid()) @db.Uuid
+  originalName     String   @map("original_name") @db.VarChar(255)
+  storageKey       String   @unique @map("storage_key") @db.VarChar(500)
+  mimeType         String   @map("mime_type") @db.VarChar(150)
+  sizeBytes        BigInt   @map("size_bytes")
+  businessModule   String?  @map("business_module") @db.VarChar(80)
+  objectType       String?  @map("object_type") @db.VarChar(120)
+  objectId         String?  @map("object_id") @db.Uuid
+  purpose          String?  @db.VarChar(120)
+  remark           String?  @db.Text
+  contentEncrypted String?  @map("content_encrypted") @db.Text
+  contentSha256    String?  @map("content_sha256") @db.Char(64)
+  createdByUserId  String?  @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   createdBy                   User?                        @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   idBusinessV2GiftCards       IdBusinessV2GiftCard[]       @relation("IdBusinessV2GiftCardSourceAttachment")
   idBusinessV2FinanceExpenses IdBusinessV2FinanceExpense[] @relation("IdBusinessV2FinanceExpenseReceipt")
+  idBusinessV2FinanceInflows  IdBusinessV2FinanceInflow[]  @relation("IdBusinessV2FinanceInflowReceipt")
 
   @@index([createdByUserId])
   @@index([businessModule, objectType])

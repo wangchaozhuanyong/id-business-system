@@ -9,7 +9,8 @@ export type V2OptionType =
   | 'topup_supplier'
   | 'gift_card_name'
   | 'settlement_platform'
-  | 'expense_category';
+  | 'expense_category'
+  | 'income_category';
 
 export type V2OptionStatus = 'active' | 'disabled';
 
@@ -78,6 +79,7 @@ export interface V2OptionDeletePreview {
     activeActivationCount: number;
     supplierWalletCount: number;
     financeExpenseCount: number;
+    financeInflowCount: number;
   };
   fingerprint: string;
 }

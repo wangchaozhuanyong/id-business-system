@@ -11,6 +11,7 @@ export type V2FinancePeriodStatus = 'open' | 'closed' | 'reopened';
 export type V2FinanceJournalStatus = 'posted' | 'reversed';
 export type V2FinanceLineDirection = 'debit' | 'credit';
 export type V2FinanceHistoryStatus = 'not_started' | 'in_progress' | 'incomplete' | 'completed';
+export type V2FinanceInflowNature = 'operating_income' | 'capital_contribution' | 'borrowed_funds';
 
 export type V2FinanceJournalType =
   | 'supplier_deposit'
@@ -29,6 +30,9 @@ export type V2FinanceJournalType =
   | 'order_recovery'
   | 'account_loss'
   | 'expense'
+  | 'manual_operating_income'
+  | 'capital_contribution'
+  | 'borrowed_funds_received'
   | 'opening_balance'
   | 'fx_gain_loss'
   | 'manual_adjustment'
@@ -42,6 +46,9 @@ export type V2FinanceAccountCode =
   | 'gift_card_inventory'
   | 'id_inventory'
   | 'sales_revenue'
+  | 'other_operating_revenue'
+  | 'contributed_capital'
+  | 'borrowed_funds_payable'
   | 'platform_fee'
   | 'gift_card_cost'
   | 'id_cost'
@@ -168,6 +175,42 @@ export interface V2FinanceExpense {
   createdAt: IsoDateTimeString;
 }
 
+export interface V2FinanceInflow {
+  id: string;
+  journalId: string;
+  nature: V2FinanceInflowNature;
+  categoryOptionId: string | null;
+  categoryName: string | null;
+  financeAccountId: string;
+  financeAccountName: string;
+  currency: V2FinanceCurrency;
+  amountOriginal: DecimalString;
+  fxRateToCny: DecimalString;
+  amountCny: DecimalString;
+  occurredAt: IsoDateTimeString;
+  payer: string | null;
+  externalReference: string;
+  receiptAttachmentId: string;
+  receiptAttachment: {
+    id: string;
+    originalName: string;
+    mimeType: string;
+    sizeBytes: string;
+    contentSha256: string | null;
+  };
+  remark: string | null;
+  status: V2FinanceJournalStatus;
+  createdBy: { id: string; username: string; displayName: string } | null;
+  createdAt: IsoDateTimeString;
+}
+
+export interface V2FinanceInflowSummary {
+  operatingIncomeCny: DecimalString;
+  capitalContributionCny: DecimalString;
+  borrowedFundsCny: DecimalString;
+  totalInflowCny: DecimalString;
+}
+
 export interface V2FinanceSupplierWallet {
   id: string;
   supplierOptionId: string;
@@ -287,6 +330,9 @@ export interface V2FinanceHistoryConfirmationPreview {
 export interface V2FinanceCurrencyBreakdown {
   currency: V2FinanceCurrency;
   income: DecimalString;
+  manualOperatingIncome: DecimalString;
+  capitalContribution: DecimalString;
+  borrowedFunds: DecimalString;
   expense: DecimalString;
   netCashFlow: DecimalString;
   latestRateToCny: DecimalString | null;
@@ -295,6 +341,8 @@ export interface V2FinanceCurrencyBreakdown {
 
 export interface V2FinanceProfitLoss {
   salesRevenueCny: DecimalString;
+  otherOperatingRevenueCny: DecimalString;
+  totalOperatingRevenueCny: DecimalString;
   platformFeeCny: DecimalString;
   giftCardCostCny: DecimalString;
   idCostCny: DecimalString;
@@ -403,4 +451,7 @@ export interface V2FinanceOverview {
 
 export type V2FinanceJournalPage = PaginatedResult<V2FinanceJournal>;
 export type V2FinanceExpensePage = PaginatedResult<V2FinanceExpense>;
+export type V2FinanceInflowPage = PaginatedResult<V2FinanceInflow> & {
+  summary: V2FinanceInflowSummary;
+};
 export type V2FinanceSupplierLedgerPage = PaginatedResult<V2FinanceSupplierLedgerEntry>;

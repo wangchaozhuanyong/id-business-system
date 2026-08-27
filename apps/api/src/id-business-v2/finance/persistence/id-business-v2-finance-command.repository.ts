@@ -5,6 +5,15 @@ import { mapAmount4, mapRate8 } from '../../runtime/public-api';
 
 type Transaction = V2CommandTransaction;
 
+const inflowInclude = {
+  categoryOption: true,
+  financeAccount: true,
+  journal: true,
+  receiptAttachment: {
+    select: { id: true, originalName: true, mimeType: true, sizeBytes: true, contentSha256: true }
+  }
+} satisfies Prisma.IdBusinessV2FinanceInflowInclude;
+
 @Injectable()
 export class IdBusinessV2FinanceCommandRepository {
   findJournalReplay(tx: Transaction, idempotencyKey: string) {
@@ -34,9 +43,9 @@ export class IdBusinessV2FinanceCommandRepository {
       .then(mapJournal);
   }
 
-  markJournalReversed(tx: Transaction, id: string, reversedAt: Date) {
-    return tx.idBusinessV2FinanceJournal.update({
-      where: { id },
+  claimJournalReversal(tx: Transaction, id: string, reversedAt: Date) {
+    return tx.idBusinessV2FinanceJournal.updateMany({
+      where: { id, status: 'posted' },
       data: { status: 'reversed', reversedAt }
     });
   }
@@ -134,6 +143,55 @@ export class IdBusinessV2FinanceCommandRepository {
       .then(mapExpense);
   }
 
+  findInflowReplay(tx: Transaction, idempotencyKey: string) {
+    return tx.idBusinessV2FinanceInflow
+      .findUnique({
+        where: { idempotencyKey },
+        include: inflowInclude
+      })
+      .then((row) => (row ? mapInflow(row) : null));
+  }
+
+  findInflowForCorrection(tx: Transaction, id: string) {
+    return tx.idBusinessV2FinanceInflow
+      .findUnique({
+        where: { id },
+        include: inflowInclude
+      })
+      .then((row) => (row ? mapInflow(row) : null));
+  }
+
+  createInflow(tx: Transaction, data: Prisma.IdBusinessV2FinanceInflowUncheckedCreateInput) {
+    return tx.idBusinessV2FinanceInflow
+      .create({
+        data,
+        include: inflowInclude
+      })
+      .then(mapInflow);
+  }
+
+  findIncomeReference(tx: Transaction, normalizedReference: string) {
+    return tx.idBusinessV2FinanceIncomeReference.findUnique({
+      where: { normalizedReference }
+    });
+  }
+
+  createInflowIncomeReference(tx: Transaction, normalizedReference: string, firstInflowId: string) {
+    return tx.idBusinessV2FinanceIncomeReference.create({
+      data: { normalizedReference, sourceType: 'inflow', firstInflowId }
+    });
+  }
+
+  createOrderIncomeReference(tx: Transaction, normalizedReference: string, orderId: string) {
+    return tx.idBusinessV2FinanceIncomeReference.create({
+      data: { normalizedReference, sourceType: 'order', orderId }
+    });
+  }
+
+  createAttachment(tx: Transaction, data: Prisma.AttachmentUncheckedCreateInput) {
+    return tx.attachment.create({ data });
+  }
+
   createFxSnapshot(
     tx: Transaction,
     data: Prisma.IdBusinessV2FinanceFxRateSnapshotUncheckedCreateInput
@@ -204,6 +262,17 @@ export function mapExpense<
     amountOriginal: mapAmount4(row.amountOriginal, 'finance_expenses.amount_original').toString(),
     fxRateToCny: mapRate8(row.fxRateToCny, 'finance_expenses.fx_rate_to_cny').toString(),
     amountCny: mapAmount4(row.amountCny, 'finance_expenses.amount_cny').toString()
+  };
+}
+
+export function mapInflow<
+  T extends { amountOriginal: unknown; fxRateToCny: unknown; amountCny: unknown }
+>(row: T) {
+  return {
+    ...row,
+    amountOriginal: mapAmount4(row.amountOriginal, 'finance_inflows.amount_original').toString(),
+    fxRateToCny: mapRate8(row.fxRateToCny, 'finance_inflows.fx_rate_to_cny').toString(),
+    amountCny: mapAmount4(row.amountCny, 'finance_inflows.amount_cny').toString()
   };
 }
 

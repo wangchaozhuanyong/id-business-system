@@ -79,10 +79,15 @@ describe('IdBusinessV2FinancePostingService', () => {
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       findUniqueOrThrow: vi.fn()
     },
     idBusinessV2FinanceAccount: {
       update: vi.fn()
+    },
+    idBusinessV2FinanceIncomeReference: {
+      findUnique: vi.fn(),
+      create: vi.fn()
     }
   };
   const service = new IdBusinessV2FinancePostingService(new IdBusinessV2FinanceCommandRepository());
@@ -96,6 +101,9 @@ describe('IdBusinessV2FinancePostingService', () => {
       return [{ id: financeAccountId, status: 'active', currentBalance: decimal('20') }];
     });
     tx.idBusinessV2FinanceAccount.update.mockResolvedValue({});
+    tx.idBusinessV2FinanceIncomeReference.findUnique.mockResolvedValue(null);
+    tx.idBusinessV2FinanceIncomeReference.create.mockResolvedValue({});
+    tx.idBusinessV2FinanceJournal.updateMany.mockResolvedValue({ count: 1 });
     tx.idBusinessV2FinanceJournal.create.mockImplementation(async ({ data }) => ({
       id: data.id,
       ...data,
@@ -224,5 +232,56 @@ describe('IdBusinessV2FinancePostingService', () => {
 
     await expect(service.post(tx as never, input)).rejects.toBeInstanceOf(ConflictException);
     expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent second reversal after the first request claimed the journal', async () => {
+    const original = {
+      ...replayFor(),
+      journalNo: 'JV-20260827-001',
+      status: 'posted',
+      reversedBy: null
+    };
+    tx.idBusinessV2FinanceJournal.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(original);
+    tx.idBusinessV2FinanceJournal.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.reverse(tx as never, original.id, '并发更正测试', 'finance-reversal-concurrency-test')
+    ).rejects.toThrow('已被其他操作冲销');
+    expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+  });
+
+  it('reserves order and platform references before order revenue is posted', async () => {
+    await service.reserveOrderIncomeReferences(tx as never, {
+      orderId: '11111111-1111-4111-8111-111111111111',
+      references: ['ORDER-001', 'PLATFORM-001', 'order-001']
+    });
+
+    expect(tx.idBusinessV2FinanceIncomeReference.create).toHaveBeenCalledTimes(2);
+    expect(tx.idBusinessV2FinanceIncomeReference.create).toHaveBeenCalledWith({
+      data: {
+        normalizedReference: 'order-001',
+        sourceType: 'order',
+        orderId: '11111111-1111-4111-8111-111111111111'
+      }
+    });
+  });
+
+  it('rejects order revenue when a manual inflow already reserved the reference', async () => {
+    tx.idBusinessV2FinanceIncomeReference.findUnique.mockResolvedValue({
+      normalizedReference: 'platform-001',
+      sourceType: 'inflow',
+      firstInflowId: '22222222-2222-4222-8222-222222222222',
+      orderId: null
+    });
+
+    await expect(
+      service.reserveOrderIncomeReferences(tx as never, {
+        orderId: '11111111-1111-4111-8111-111111111111',
+        references: ['PLATFORM-001']
+      })
+    ).rejects.toThrow('不能重复确认收入');
+    expect(tx.idBusinessV2FinanceIncomeReference.create).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,10 @@ import type {
   V2FinanceHistoryBackfillPreview,
   V2FinanceHistoryBackfillResult,
   V2FinanceHistoryConfirmationPreview,
+  V2FinanceInflow,
+  V2FinanceInflowNature,
+  V2FinanceInflowPage,
+  V2FinanceInflowSummary,
   V2FinanceJournal,
   V2FinanceJournalPage,
   V2FinanceJournalType,
@@ -66,15 +70,60 @@ export interface V2FinanceExpenseQuery {
   dateTo?: string;
 }
 
+export interface V2FinanceInflowQuery {
+  page?: number;
+  pageSize?: number;
+  nature?: V2FinanceInflowNature | '';
+  categoryOptionId?: string;
+  financeAccountId?: string;
+  currency?: V2FinanceCurrency | '';
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+interface V2FinanceInflowWritePayload {
+  nature: V2FinanceInflowNature;
+  categoryOptionId?: string;
+  financeAccountId: string;
+  amount: string;
+  currency: V2FinanceCurrency;
+  occurredAt: string;
+  fxRateToCny?: string;
+  manualRateReason?: string;
+  payer?: string;
+  externalReference: string;
+  receiptAttachmentId?: string;
+  remark?: string;
+  idempotencyKey: string;
+}
+
+function buildInflowFormData(
+  payload: V2FinanceInflowWritePayload & { reason?: string },
+  receipt?: File | null
+) {
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined && value !== '') formData.append(key, value);
+  }
+  if (receipt) formData.append('receipt', receipt, receipt.name);
+  return formData;
+}
+
 export interface V2FinanceLedgerBootstrap {
   accounts: V2FinanceAccount[];
   wallets: V2FinanceSupplierWallet[];
+  inflows: {
+    items: V2FinanceInflow[];
+    total: number;
+    summary: V2FinanceInflowSummary;
+  };
   expenses: { items: V2FinanceExpense[]; total: number };
   journals: { items: V2FinanceJournal[]; total: number };
   periods: V2FinancePeriod[];
   settings: V2FinanceSettings;
   supplierOptions: V2OptionSelector[];
   expenseCategories: V2OptionSelector[];
+  incomeCategories: V2OptionSelector[];
   generatedAt: string;
 }
 
@@ -97,6 +146,8 @@ export const idBusinessV2FinanceApi = {
   bootstrapLedger(
     params: {
       currency?: V2FinanceCurrency | '';
+      inflowNature?: V2FinanceInflowNature | '';
+      inflowPage: number;
       expensePage: number;
       journalPage: number;
       pageSize: number;
@@ -248,6 +299,40 @@ export const idBusinessV2FinanceApi = {
     return request<V2FinanceExpensePage>(
       http.get('/id-business-v2/finance/expenses', { params, signal: options.signal })
     );
+  },
+  listInflows(params: V2FinanceInflowQuery, options: ApiRequestOptions = {}) {
+    return request<V2FinanceInflowPage>(
+      http.get('/id-business-v2/finance/inflows', { params, signal: options.signal })
+    );
+  },
+  createInflow(payload: V2FinanceInflowWritePayload, receipt?: File | null) {
+    return withV2QueryInvalidation(
+      request<V2FinanceInflow>(
+        http.post('/id-business-v2/finance/inflows', buildInflowFormData(payload, receipt))
+      ),
+      FINANCE_SCOPES
+    );
+  },
+  correctInflow(
+    id: string,
+    payload: V2FinanceInflowWritePayload & { reason: string },
+    receipt?: File | null
+  ) {
+    return withV2QueryInvalidation(
+      request<V2FinanceInflow>(
+        http.post(
+          `/id-business-v2/finance/inflows/${id}/corrections`,
+          buildInflowFormData(payload, receipt)
+        )
+      ),
+      FINANCE_SCOPES
+    );
+  },
+  async downloadInflowReceipt(id: string) {
+    const response = await http.get<Blob>(`/id-business-v2/finance/inflows/${id}/receipt`, {
+      responseType: 'blob'
+    });
+    return response.data;
   },
   createExpense(payload: {
     categoryOptionId: string;

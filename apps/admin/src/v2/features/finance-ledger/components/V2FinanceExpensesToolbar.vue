@@ -1,8 +1,8 @@
 <template>
-  <section class="v2-finance-expenses-command-panel" aria-label="经营开支筛选">
+  <section class="v2-finance-expenses-command-panel" aria-label="收支记录筛选">
     <V2SectionHeading
-      title="开支筛选"
-      help="筛选只改变当前开支记录视图，不会修改已经入账或冲销的财务数据。"
+      :title="page.cashbookView === 'inflows' ? '收入筛选' : '开支筛选'"
+      help="筛选只改变当前记录视图，不会修改已经入账或冲销的财务数据。"
     >
       <template #actions>
         <span>{{ page.filters.currency ? `已筛选 ${page.filters.currency}` : '当前未筛选' }}</span>
@@ -10,6 +10,18 @@
     </V2SectionHeading>
 
     <div class="v2-finance-expenses-filter-grid">
+      <el-select
+        v-if="page.cashbookView === 'inflows'"
+        v-model="page.filters.inflowNature"
+        clearable
+        placeholder="全部资金性质"
+        aria-label="筛选资金性质"
+        @change="page.applyFilters"
+      >
+        <el-option label="经营收入" value="operating_income" />
+        <el-option label="股东投入" value="capital_contribution" />
+        <el-option label="借入资金" value="borrowed_funds" />
+      </el-select>
       <el-select
         v-model="page.filters.currency"
         clearable
@@ -22,7 +34,11 @@
         <el-option label="USD" value="USD" />
         <el-option label="USDT" value="USDT" />
       </el-select>
-      <AppButton variant="ghost" :disabled="!page.filters.currency" @click="page.resetFilters">
+      <AppButton
+        variant="ghost"
+        :disabled="!page.filters.currency && !page.filters.inflowNature"
+        @click="page.resetFilters"
+      >
         <el-icon><RefreshLeft /></el-icon>
         清除筛选
       </AppButton>
@@ -31,9 +47,12 @@
     <footer>
       <p>
         <el-icon aria-hidden="true"><InfoFilled /></el-icon>
-        金额沿用后端 Decimal 字符串展示；更正会生成冲销与新记录，不覆盖原始账务。
+        金额沿用后端 Decimal 字符串展示；经营收入计入利润，股东投入和借入资金不计入利润。
       </p>
-      <span>当前显示 {{ page.expenses.length }} 条</span>
+      <span>
+        当前显示
+        {{ page.cashbookView === 'inflows' ? page.inflows.length : page.expenses.length }} 条
+      </span>
     </footer>
   </section>
 </template>

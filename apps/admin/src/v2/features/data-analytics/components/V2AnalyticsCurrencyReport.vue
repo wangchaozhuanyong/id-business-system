@@ -10,9 +10,14 @@
           {{ formatOriginal(row.netCashFlow, row.currency) }}
         </strong>
         <span>
-          收入 {{ formatOriginal(row.income, row.currency) }} · 支出
+          流入 {{ formatOriginal(row.income, row.currency) }} · 支出
           {{ formatOriginal(row.expense, row.currency) }}
         </span>
+        <small>
+          经营 {{ formatOriginal(row.manualOperatingIncome, row.currency) }} · 股东
+          {{ formatOriginal(row.capitalContribution, row.currency) }} · 借入
+          {{ formatOriginal(row.borrowedFunds, row.currency) }}
+        </small>
       </article>
     </div>
 
@@ -20,7 +25,7 @@
       <header class="v2-analytics-report-list__header">
         <V2SectionHeading
           title="原币资金收支"
-          help="按 CNY、MYR、USD、USDT 分别展示收入、支出、净现金流与最新人民币估值。"
+          help="按币种展示现金流入、支出和净现金流，并拆分手工经营收入、股东投入与借入资金。"
         >
           <template #actions>
             <V2TableColumnSettings inline :schema="v2TableSchemas.dataAnalytics.currencies" />
@@ -52,19 +57,34 @@
           <template #default="{ row }">{{ formatOriginal(row.income, row.currency) }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[2]">
-          <template #default="{ row }">{{ formatOriginal(row.expense, row.currency) }}</template>
+          <template #default="{ row }">{{
+            formatOriginal(row.manualOperatingIncome, row.currency)
+          }}</template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[3]">
+          <template #default="{ row }">{{
+            formatOriginal(row.capitalContribution, row.currency)
+          }}</template>
+        </V2TableColumn>
+        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[4]">
+          <template #default="{ row }">{{
+            formatOriginal(row.borrowedFunds, row.currency)
+          }}</template>
+        </V2TableColumn>
+        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[5]">
+          <template #default="{ row }">{{ formatOriginal(row.expense, row.currency) }}</template>
+        </V2TableColumn>
+        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[6]">
           <template #default="{ row }">
             <strong :class="amountTone(row.netCashFlow)">
               {{ formatOriginal(row.netCashFlow, row.currency) }}
             </strong>
           </template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[4]">
+        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[7]">
           <template #default="{ row }">{{ row.latestRateToCny ?? '缺失' }}</template>
         </V2TableColumn>
-        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[5]">
+        <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[8]">
           <template #default="{ row }">
             {{ row.netCashFlowCny === null ? '—' : formatCny(row.netCashFlowCny) }}
           </template>

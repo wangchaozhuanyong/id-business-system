@@ -10,7 +10,8 @@ export type IdBusinessV2OptionType =
   | 'topup_supplier'
   | 'gift_card_name'
   | 'settlement_platform'
-  | 'expense_category';
+  | 'expense_category'
+  | 'income_category';
 
 export type IdBusinessV2OptionStatus = 'active' | 'disabled';
 
@@ -118,6 +119,15 @@ export const ID_BUSINESS_V2_OPTION_TYPES: readonly IdBusinessV2OptionTypeDefinit
   {
     type: 'expense_category',
     label: '开支分类',
+    parentType: null,
+    supportsFees: false,
+    supportsCurrency: false,
+    requiresCountry: false,
+    supportsBusinessAmount: false
+  },
+  {
+    type: 'income_category',
+    label: '收入分类',
     parentType: null,
     supportsFees: false,
     supportsCurrency: false,

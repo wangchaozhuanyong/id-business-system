@@ -5,6 +5,9 @@ import type {
   V2FinanceAccountType,
   V2FinanceCurrency,
   V2FinanceExpense,
+  V2FinanceInflow,
+  V2FinanceInflowNature,
+  V2FinanceInflowSummary,
   V2FinanceJournal,
   V2FinanceJournalType,
   V2FinancePeriod,
@@ -32,15 +35,22 @@ import {
 } from '@/v2/utils/dateTime';
 import { idBusinessV2FinanceApi } from './api';
 import { useFinanceHistory } from './useFinanceHistory';
+import { useFinanceLedgerInflows } from './useFinanceLedgerInflows';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
 
 export type FinanceLedgerTab = 'accounts' | 'wallets' | 'expenses' | 'journals' | 'periods';
+export type FinanceCashbookView = 'inflows' | 'expenses';
 export type { WalletMutationMode } from './useFinanceLedgerWallets';
 export type PeriodMutationMode = 'close' | 'reopen';
 
 interface FinanceLedgerSnapshot {
   accounts: V2FinanceAccount[];
   wallets: V2FinanceSupplierWallet[];
+  inflows: {
+    items: V2FinanceInflow[];
+    total: number;
+    summary: V2FinanceInflowSummary;
+  };
   expenses: {
     items: V2FinanceExpense[];
     total: number;
@@ -53,7 +63,9 @@ interface FinanceLedgerSnapshot {
   settings: V2FinanceSettings;
   supplierOptions: V2OptionSelector[];
   expenseCategories: V2OptionSelector[];
+  incomeCategories: V2OptionSelector[];
   pagination: {
+    inflowPage: number;
     expensePage: number;
     journalPage: number;
     pageSize: number;
@@ -70,11 +82,14 @@ export function useFinanceLedgerPage(
   const canManage = computed(() => hasUserPermission(authStore.user, 'finance.manage'));
   const canClose = computed(() => hasUserPermission(authStore.user, 'finance.close'));
   const activeTab = ref<FinanceLedgerTab>(expenseOnly ? 'expenses' : 'accounts');
+  const cashbookView = ref<FinanceCashbookView>('inflows');
   const filters = reactive({
     currency: '' as V2FinanceCurrency | '',
+    inflowNature: '' as V2FinanceInflowNature | '',
     periodMonth: '',
     journalType: '' as V2FinanceJournalType | ''
   });
+  const inflowPage = ref(1);
   const expensePage = ref(1);
   const journalPage = ref(1);
   const pageSize = 50;
@@ -85,12 +100,14 @@ export function useFinanceLedgerPage(
     key: () =>
       createV2QueryKey({
         ...filters,
+        inflowPage: inflowPage.value,
         expensePage: expensePage.value,
         journalPage: journalPage.value
       }),
     keepPreviousData: true,
     query: async ({ signal }) => {
       const pagination = {
+        inflowPage: inflowPage.value,
         expensePage: expensePage.value,
         journalPage: journalPage.value,
         pageSize
@@ -98,6 +115,7 @@ export function useFinanceLedgerPage(
       const snapshot = await idBusinessV2FinanceApi.bootstrapLedger(
         {
           currency: filters.currency || undefined,
+          inflowNature: filters.inflowNature || undefined,
           ...pagination,
           periodMonth: filters.periodMonth || undefined,
           journalType: filters.journalType || undefined
@@ -111,6 +129,17 @@ export function useFinanceLedgerPage(
   const data = computed(() => ledgerQuery.data.value);
   const accounts = computed(() => data.value?.accounts ?? []);
   const wallets = computed(() => data.value?.wallets ?? []);
+  const inflows = computed(() => data.value?.inflows.items ?? []);
+  const inflowTotal = computed(() => data.value?.inflows.total ?? 0);
+  const inflowSummary = computed<V2FinanceInflowSummary>(
+    () =>
+      data.value?.inflows.summary ?? {
+        operatingIncomeCny: '0',
+        capitalContributionCny: '0',
+        borrowedFundsCny: '0',
+        totalInflowCny: '0'
+      }
+  );
   const expenses = computed(() => data.value?.expenses.items ?? []);
   const expenseTotal = computed(() => data.value?.expenses.total ?? 0);
   const journals = computed(() => data.value?.journals.items ?? []);
@@ -118,6 +147,7 @@ export function useFinanceLedgerPage(
   const displayedExpensePage = computed(
     () => data.value?.pagination.expensePage ?? expensePage.value
   );
+  const displayedInflowPage = computed(() => data.value?.pagination.inflowPage ?? inflowPage.value);
   const displayedJournalPage = computed(
     () => data.value?.pagination.journalPage ?? journalPage.value
   );
@@ -125,6 +155,7 @@ export function useFinanceLedgerPage(
   const settings = computed(() => data.value?.settings);
   const supplierOptions = computed(() => data.value?.supplierOptions ?? []);
   const expenseCategories = computed(() => data.value?.expenseCategories ?? []);
+  const incomeCategories = computed(() => data.value?.incomeCategories ?? []);
   const loading = computed(
     () => ledgerQuery.isInitialLoading.value || ledgerQuery.isRefreshing.value
   );
@@ -200,9 +231,11 @@ export function useFinanceLedgerPage(
     return ledgerQuery.refresh();
   }
   const walletActions = useFinanceLedgerWallets({ accounts, refresh });
+  const inflowActions = useFinanceLedgerInflows({ accounts });
   const historyActions = useFinanceHistory({ refresh });
 
   function applyFilters() {
+    inflowPage.value = 1;
     expensePage.value = 1;
     journalPage.value = 1;
     void refresh();
@@ -210,6 +243,7 @@ export function useFinanceLedgerPage(
 
   function resetFilters() {
     filters.currency = '';
+    filters.inflowNature = '';
     filters.periodMonth = '';
     filters.journalType = '';
     applyFilters();
@@ -408,6 +442,11 @@ export function useFinanceLedgerPage(
     void refresh();
   }
 
+  function setInflowPage(page: number) {
+    inflowPage.value = page;
+    void refresh();
+  }
+
   function setJournalPage(page: number) {
     journalPage.value = page;
     void refresh();
@@ -416,9 +455,12 @@ export function useFinanceLedgerPage(
   return {
     expenseOnly,
     activeTab,
+    cashbookView,
     filters,
+    inflowPage,
     expensePage,
     journalPage,
+    displayedInflowPage,
     displayedExpensePage,
     displayedJournalPage,
     pageSize,
@@ -428,6 +470,9 @@ export function useFinanceLedgerPage(
     canClose,
     accounts,
     wallets,
+    inflows,
+    inflowTotal,
+    inflowSummary,
     expenses,
     expenseTotal,
     journals,
@@ -436,6 +481,7 @@ export function useFinanceLedgerPage(
     settings,
     supplierOptions,
     expenseCategories,
+    incomeCategories,
     queryPhase: ledgerQuery.phase,
     isParameterTransition: ledgerQuery.isParameterTransition,
     loading,
@@ -453,6 +499,7 @@ export function useFinanceLedgerPage(
     expenseForm,
     selectedExpenseAccount,
     expenseDirty,
+    ...inflowActions,
     ...walletActions,
     reversalDrawerVisible,
     reversalSubmitting,
@@ -475,6 +522,7 @@ export function useFinanceLedgerPage(
     openPeriod,
     submitPeriod,
     setExpensePage,
+    setInflowPage,
     setJournalPage
   };
 }
