@@ -156,7 +156,7 @@ export class IdBusinessV2AccountsRepository {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "id_business_v2_accounts"
-      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId}::uuid AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     if (!rows[0]) throw new NotFoundException('ID 资料不存在');
@@ -271,7 +271,7 @@ export class IdBusinessV2AccountsRepository {
         "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
-      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId}::uuid AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     const row = rows[0];
@@ -305,8 +305,8 @@ export class IdBusinessV2AccountsRepository {
       FROM "id_business_v2_topup_supplier_accounts" wallet
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = wallet."supplier_option_id"
-      WHERE wallet."id" = ${walletId}
-      FOR UPDATE
+      WHERE wallet."id" = ${walletId}::uuid
+      FOR UPDATE OF wallet
     `;
     const row = rows[0];
     return row

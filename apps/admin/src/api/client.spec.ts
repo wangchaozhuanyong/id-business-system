@@ -3,7 +3,8 @@ import type { AxiosAdapter } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStoredCredential, writeStoredCredential } from '@/auth/credential';
 import { resetSessionCoordinatorForTests, sessionCoordinator } from '@/auth/sessionCoordinator';
-import { http, request } from './client';
+import { ApiError } from './apiError';
+import { getApiErrorMessage, http, request } from './client';
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -75,5 +76,27 @@ describe('HTTP identity boundary', () => {
     releaseResponse();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('shows the request id for server failures without changing validation messages', () => {
+    const serverError = new ApiError('服务器内部错误（500），请稍后重试。', {
+      code: 'INTERNAL_SERVER_ERROR',
+      kind: 'server',
+      requestId: 'request-server-1234',
+      retryable: false,
+      status: 500
+    });
+    const validationError = new ApiError('退回金额必须大于 0。', {
+      code: 'BAD_REQUEST',
+      kind: 'validation',
+      requestId: 'request-validation-1234',
+      retryable: false,
+      status: 400
+    });
+
+    expect(getApiErrorMessage(serverError)).toBe(
+      '服务器内部错误（500），请稍后重试。 请求编号：request-server-1234'
+    );
+    expect(getApiErrorMessage(validationError)).toBe('退回金额必须大于 0。');
   });
 });

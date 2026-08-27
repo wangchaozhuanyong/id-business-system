@@ -217,9 +217,9 @@ export class IdBusinessV2AccountLossRepository {
       LEFT JOIN "id_business_v2_orders" sold_order
         ON sold_order."id" = account."sold_by_order_id"
       WHERE
-        account."id" = ${accountId}
+        account."id" = ${accountId}::uuid
         AND account."deleted_at" IS NULL
-      FOR UPDATE
+      FOR UPDATE OF account
     `;
     const account = rows[0];
     if (!account) throw new NotFoundException('ID 不存在或已删除');
