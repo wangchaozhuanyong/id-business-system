@@ -1246,10 +1246,20 @@ export class SecurityService {
   }
 
   async getMfaLoginRequirementForUser(user: AuthenticatedUser): Promise<MfaLoginRequirement> {
-    const [settings, state] = await Promise.all([
-      this.getMfaSettings(),
-      this.getUserMfaState(user.id)
-    ]);
+    const userMfaSettingKey = this.getUserMfaSettingKey(user.id);
+    const settings = await this.prisma.securitySetting.findMany({
+      where: {
+        key: {
+          in: ['mfa_settings', userMfaSettingKey]
+        }
+      },
+      select: {
+        key: true,
+        value: true
+      }
+    });
+    const settingsByKey = new Map(settings.map((setting) => [setting.key, setting.value]));
+    const state = this.parseUserMfaState(settingsByKey.get(userMfaSettingKey));
     const userMfaBound = Boolean(state.enabled && state.secretEncrypted);
     if (userMfaBound) {
       return {
@@ -1259,7 +1269,8 @@ export class SecurityService {
       };
     }
 
-    const settingsValue = settings.value as Record<string, unknown>;
+    const settingsValue =
+      (settingsByKey.get('mfa_settings') as Record<string, unknown> | undefined) ?? {};
     const globalMfaEnabled = this.getSettingBoolean(settingsValue.enabled, false);
     const adminMfaRequired = this.getSettingBoolean(settingsValue.requiredForAdmins, false);
     if (globalMfaEnabled && adminMfaRequired && this.isAdminUser(user)) {

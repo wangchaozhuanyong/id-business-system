@@ -88,15 +88,21 @@ export class JwtAuthGuard implements CanActivate {
     token: string,
     allowDuringPasswordReset: boolean | undefined
   ) {
-    const identity = await this.authenticateSupabaseToken(token);
     const clientIp = resolveTrustedClientIp(request);
-    await this.assertRequestIpAllowed(clientIp);
+    const [identityResult, ipAllowedResult] = await Promise.allSettled([
+      this.authenticateSupabaseToken(token),
+      this.assertRequestIpAllowed(clientIp)
+    ]);
+    if (identityResult.status === 'rejected') throw identityResult.reason;
+    if (ipAllowedResult.status === 'rejected') throw ipAllowedResult.reason;
+
+    const identity = identityResult.value;
     const strongSessionIdentifier = `supabase:mfa:${identity.sessionId}`;
     const ordinarySessionIdentifier = `supabase:${identity.sessionId}`;
     const candidates = identity.mfaVerified
       ? [strongSessionIdentifier, ordinarySessionIdentifier]
       : [ordinarySessionIdentifier, strongSessionIdentifier];
-    const activeSessionIdentifier = await this.checkActiveSession(async () => {
+    const activeSessionPromise = this.checkActiveSession(async () => {
       for (const sessionIdentifier of candidates) {
         if (
           await this.securityService.ensureActiveSession({
@@ -112,11 +118,23 @@ export class JwtAuthGuard implements CanActivate {
       }
       return null;
     });
-    if (!activeSessionIdentifier) throw this.revokedSessionError();
+    const userPromise = this.loadAuthenticatedUser(identity.userId);
+    const mfaRequirementPromise = userPromise.then((user) =>
+      this.securityService.getMfaLoginRequirementForUser(user)
+    );
+    const [activeSessionResult, userResult, mfaRequirementResult] = await Promise.allSettled([
+      activeSessionPromise,
+      userPromise,
+      mfaRequirementPromise
+    ]);
+    if (activeSessionResult.status === 'rejected') throw activeSessionResult.reason;
+    if (!activeSessionResult.value) throw this.revokedSessionError();
+    if (userResult.status === 'rejected') throw userResult.reason;
+    if (mfaRequirementResult.status === 'rejected') throw mfaRequirementResult.reason;
 
-    const user = await this.loadAuthenticatedUser(identity.userId);
-    const mfaRequirement = await this.securityService.getMfaLoginRequirementForUser(user);
-    if (mfaRequirement.required && activeSessionIdentifier !== strongSessionIdentifier) {
+    const user = userResult.value;
+    const mfaRequirement = mfaRequirementResult.value;
+    if (mfaRequirement.required && activeSessionResult.value !== strongSessionIdentifier) {
       throw authHttpError(
         HttpStatus.UNAUTHORIZED,
         'AUTH_MFA_REQUIRED',

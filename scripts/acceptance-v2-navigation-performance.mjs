@@ -937,6 +937,14 @@ async function verifyIntentPrefetch(page, targetPath, targetViewName) {
       0,
       '意图预取错误显示成真实导航进度'
     );
+    await page.waitForFunction(
+      (path) =>
+        [...performance.getEntriesByName('v2:route-prefetch-ready')].some(
+          (entry) => entry.detail?.path === path && entry.detail?.intent === 'focus'
+        ),
+      targetPath,
+      { timeout: HTTP_TIMEOUT_MS }
+    );
     const prefetchMark = await page.evaluate((path) => {
       const marks = performance.getEntriesByName('v2:route-prefetch-ready');
       const mark = [...marks].reverse().find((entry) => entry.detail?.path === path);
