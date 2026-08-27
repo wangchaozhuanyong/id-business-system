@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
-      DATABASE_URL: mysql://prisma:prisma@127.0.0.1:3306/id_business_v2
       JWT_SECRET: ci-jwt-secret
       FIELD_ENCRYPTION_KEY: ci-field-encryption-key
       HASH_SECRET: ci-hash-secret
