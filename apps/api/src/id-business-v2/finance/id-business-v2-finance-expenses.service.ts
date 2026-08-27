@@ -404,6 +404,6 @@ export class IdBusinessV2FinanceExpensesService {
   }
 
   private commandOptions(operator?: AuthenticatedUser) {
-    return { requestId: randomUUID(), operator } as const;
+    return { changedScopes: ['finance-ledger'], requestId: randomUUID(), operator } as const;
   }
 }

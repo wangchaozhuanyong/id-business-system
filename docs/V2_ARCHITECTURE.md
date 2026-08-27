@@ -226,8 +226,9 @@ GET   /api/id-business-v2/renewals/warning-summary
 - 路由代码只由悬停、聚焦或点击等明确意图预取。
 - 远程数据由 `useV2ModuleQuery` 以 `clean | dirty | pending` 状态缓存；时间流逝本身不会让
   event-driven 缓存过期。
-- `V2DataScope` 和依赖映射只在 `@apple-business/shared` 定义。数据库 statement trigger 在业务
-  事务内递增 scope version，并通过私有 Supabase Broadcast 发送最小变化事件。
+- `V2DataScope` 和依赖映射只在 `@apple-business/shared` 定义。业务事务显式递增精确的
+  scope version，数据库只从该版本更新的 transition table 通过私有 Supabase Broadcast
+  发送最小变化事件；业务表不再单独扩展 scope。
 - 管理端只建立一个 `id-business-v2:changes` 私有频道。当前页面变化立即后台刷新，非当前页面只
   标 dirty；重连、恢复联网、隐藏超过 60 秒后恢复时通过
   `GET /api/id-business-v2/change-versions` 补偿漏事件。

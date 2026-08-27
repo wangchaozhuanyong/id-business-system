@@ -37,6 +37,7 @@ export class IdBusinessV2OrderLockService {
     return this.transactionManager.execute(
       (tx) => this.reserveAccountForOrderInTransaction(tx, normalized, operator),
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none',
@@ -119,6 +120,7 @@ export class IdBusinessV2OrderLockService {
     return this.transactionManager.execute(
       (tx) => this.releaseOrderLockInTransaction(tx, orderId, reason, operator),
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none'

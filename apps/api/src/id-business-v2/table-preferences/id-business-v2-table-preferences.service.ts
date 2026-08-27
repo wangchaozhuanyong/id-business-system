@@ -61,7 +61,7 @@ export class IdBusinessV2TablePreferencesService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(row);
@@ -95,7 +95,7 @@ export class IdBusinessV2TablePreferencesService {
         });
         return true;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return { tableId, hiddenColumnKeys: [], deleted };

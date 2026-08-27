@@ -173,6 +173,7 @@ export class IdBusinessV2OrderCompletionService {
       };
     };
     const result = await this.transactionManager.execute(execute, {
+      changedScopes: ['orders'],
       requestId: randomUUID(),
       operator,
       retryMode: 'fullReplay',

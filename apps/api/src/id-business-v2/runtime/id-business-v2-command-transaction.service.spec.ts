@@ -23,7 +23,10 @@ describe('V2CommandTransactionManager', () => {
     const manager = new V2CommandTransactionManager(prisma as never);
 
     await expect(
-      manager.execute(async () => 'created', { requestId: 'request-1' })
+      manager.execute(async () => 'created', {
+        changedScopes: ['orders'],
+        requestId: 'request-1'
+      })
     ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
@@ -31,7 +34,7 @@ describe('V2CommandTransactionManager', () => {
     });
   });
 
-  it('bumps all portable scope versions in the same successful transaction', async () => {
+  it('bumps only the declared portable scope versions in the same successful transaction', async () => {
     const tx = {
       idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 35 }) }
     };
@@ -39,12 +42,28 @@ describe('V2CommandTransactionManager', () => {
     const manager = new V2CommandTransactionManager(prisma as never);
 
     await expect(
-      manager.execute(async () => 'created', { requestId: 'request-scope' })
+      manager.execute(async () => 'created', {
+        changedScopes: ['orders', 'orders'],
+        requestId: 'request-scope'
+      })
     ).resolves.toBe('created');
     expect(tx.idBusinessV2ScopeVersion.updateMany).toHaveBeenCalledWith({
-      where: { scope: { in: expect.arrayContaining(['accounts', 'orders', 'exchange-rates']) } },
+      where: { scope: { in: ['orders'] } },
       data: { version: { increment: 1 }, updatedAt: expect.any(Date) }
     });
+  });
+
+  it('rejects a command without a changed scope before opening a transaction', async () => {
+    const prisma = { $transaction: vi.fn() };
+    const manager = new V2CommandTransactionManager(prisma as never);
+
+    await expect(
+      manager.execute(async () => 'created', {
+        changedScopes: [],
+        requestId: 'request-empty-scope'
+      })
+    ).rejects.toThrow('requires at least one changed scope');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('retries only an explicitly replayable command and preserves command context', async () => {
@@ -59,6 +78,7 @@ describe('V2CommandTransactionManager', () => {
     const work = vi.fn(async (_tx, context) => context);
 
     const result = await manager.execute(work, {
+      changedScopes: ['orders'],
       requestId: 'request-2',
       businessTime,
       retryMode: 'fullReplay',
@@ -89,6 +109,7 @@ describe('V2CommandTransactionManager', () => {
 
     await expect(
       manager.execute(async (_tx, context) => context.attempt, {
+        changedScopes: ['orders'],
         requestId: 'request-raw-conflict',
         retryMode: 'fullReplay',
         idempotencyKey: 'consume:raw-conflict',
@@ -114,6 +135,7 @@ describe('V2CommandTransactionManager', () => {
     const manager = new V2CommandTransactionManager(prisma as never);
 
     const result = await manager.execute(async () => ({ tx: initialTx, verified: false }), {
+      changedScopes: ['orders'],
       requestId: 'request-3',
       retryMode: 'fullReplay',
       idempotencyKey: 'loss:key-3',
@@ -139,6 +161,7 @@ describe('V2CommandTransactionManager', () => {
 
     await expect(
       manager.execute(async () => 'created', {
+        changedScopes: ['orders'],
         requestId: 'request-4',
         retryMode: 'fullReplay',
         idempotencyKey: 'loss:key-4',

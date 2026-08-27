@@ -216,7 +216,12 @@ export class IdBusinessV2FinanceHistoryService {
           summary
         };
       },
-      { requestId: randomUUID(), operator, timeoutMs: 120_000 }
+      {
+        changedScopes: ['finance-ledger'],
+        requestId: randomUUID(),
+        operator,
+        timeoutMs: 120_000
+      }
     );
   }
 

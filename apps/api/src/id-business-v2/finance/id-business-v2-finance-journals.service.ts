@@ -101,7 +101,7 @@ export class IdBusinessV2FinanceJournalsService {
         });
         return reversal;
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['finance-ledger'], requestId: randomUUID(), operator }
     );
   }
 }

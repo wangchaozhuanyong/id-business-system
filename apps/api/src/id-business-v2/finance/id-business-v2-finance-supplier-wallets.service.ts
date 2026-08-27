@@ -557,6 +557,6 @@ export class IdBusinessV2FinanceSupplierWalletsService {
   }
 
   private commandOptions(operator?: AuthenticatedUser) {
-    return { requestId: randomUUID(), operator } as const;
+    return { changedScopes: ['supplier-funds'], requestId: randomUUID(), operator } as const;
   }
 }

@@ -91,7 +91,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
 
     return this.toResponse(settings);
@@ -117,7 +117,7 @@ export class IdBusinessV2ExchangeRateSettingsService {
         });
         return row;
       },
-      { requestId, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, retryMode: 'none' }
     );
   }
 
@@ -142,7 +142,11 @@ export class IdBusinessV2ExchangeRateSettingsService {
           });
           return row;
         },
-        { requestId: 'exchange-rate-settings-initialize', retryMode: 'none' }
+        {
+          changedScopes: ['exchange-rates'],
+          requestId: 'exchange-rate-settings-initialize',
+          retryMode: 'none'
+        }
       );
       return created;
     } catch {

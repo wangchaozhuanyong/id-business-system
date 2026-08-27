@@ -128,7 +128,7 @@ export class IdBusinessV2ManagedMailboxService {
         });
         return created;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return {
@@ -169,7 +169,7 @@ export class IdBusinessV2ManagedMailboxService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
     return this.toResponse(row);
   }
@@ -210,7 +210,7 @@ export class IdBusinessV2ManagedMailboxService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
     return this.toResponse(row);
   }
@@ -247,7 +247,7 @@ export class IdBusinessV2ManagedMailboxService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
     return { mailbox: this.toResponse(row), buyerCredential: `${row.email}----${queryCode}` };

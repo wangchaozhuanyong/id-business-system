@@ -94,6 +94,7 @@ export class IdBusinessV2GiftCardSensitiveService {
         };
       },
       {
+        changedScopes: ['security'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none'

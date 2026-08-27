@@ -13,7 +13,11 @@ import { idBusinessV2ChangeSyncApi } from '@/v2/api/changeSync';
 import { invalidateV2Queries } from '@/v2/composables/useV2Query';
 import { showV2Warning } from '@/v2/services/feedback';
 import { shouldEnableV2RealtimeChanges } from '@/v2/runtime/changeSyncConfig';
-import { getChangedV2Scopes, parseV2ChangeEvent } from '@/v2/runtime/changeSyncPayload';
+import {
+  establishV2VersionBaseline,
+  getChangedV2Scopes,
+  parseV2ChangeEvent
+} from '@/v2/runtime/changeSyncPayload';
 import {
   shouldReconcileV2OnForeground,
   V2_DEGRADED_RECONCILE_INTERVAL_MS
@@ -49,6 +53,7 @@ let reconnectAttempt = 0;
 let consecutiveFailures = 0;
 let degradationNotified = false;
 let realtimeSubscribed = false;
+let versionBaselineEstablished = false;
 let unsubscribeIdentityChange: (() => void) | null = null;
 const localVersions = new Map<V2DataScope, bigint>(V2_DATA_SCOPES.map((scope) => [scope, 0n]));
 
@@ -77,13 +82,18 @@ async function reconcileVersions() {
     .getVersions()
     .then((result) => {
       if (!started || generation !== syncGeneration) return;
-      const changed = getChangedV2Scopes(result, localVersions);
-      applyVersions(
-        changed.map((scope) => ({
-          scope,
-          version: result.versions[scope]!
-        }))
-      );
+      if (!versionBaselineEstablished) {
+        establishV2VersionBaseline(result, localVersions);
+        versionBaselineEstablished = true;
+      } else {
+        const changed = getChangedV2Scopes(result, localVersions);
+        applyVersions(
+          changed.map((scope) => ({
+            scope,
+            version: result.versions[scope]!
+          }))
+        );
+      }
       mutableChangeSyncState.lastReconciledAt = Date.now();
       consecutiveFailures = 0;
       degradationNotified = false;
@@ -241,6 +251,7 @@ export function startV2ChangeSync() {
   consecutiveFailures = 0;
   degradationNotified = false;
   realtimeSubscribed = false;
+  versionBaselineEstablished = false;
   mutableChangeSyncState.status = REALTIME_ENABLED ? 'connecting' : 'degraded';
   window.addEventListener('online', handleOnline);
   window.addEventListener('focus', handleForeground);
@@ -262,6 +273,7 @@ export function stopV2ChangeSync() {
   connectPromise = null;
   degradationNotified = false;
   realtimeSubscribed = false;
+  versionBaselineEstablished = false;
   window.removeEventListener('online', handleOnline);
   window.removeEventListener('focus', handleForeground);
   unsubscribeIdentityChange?.();

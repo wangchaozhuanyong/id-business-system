@@ -77,6 +77,7 @@ export class IdBusinessV2DataGovernanceApprovalService {
         });
       },
       {
+        changedScopes: ['data-governance'],
         requestId: metadata.requestId ?? randomUUID(),
         operator: currentOperator,
         retryMode: 'none',
@@ -125,6 +126,7 @@ export class IdBusinessV2DataGovernanceApprovalService {
         });
       },
       {
+        changedScopes: ['data-governance'],
         requestId: metadata.requestId ?? randomUUID(),
         operator: currentOperator,
         retryMode: 'none',

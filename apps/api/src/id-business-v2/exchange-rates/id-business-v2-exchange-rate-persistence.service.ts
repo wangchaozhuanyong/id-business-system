@@ -84,6 +84,7 @@ export class IdBusinessV2ExchangeRatePersistenceService {
         return created;
       },
       {
+        changedScopes: ['exchange-rates'],
         requestId: input.requestId ?? `exchange-rate-run-start-${input.triggerType}`,
         retryMode: 'none',
         uniqueConflictMessage: '已有汇率采集正在运行，请稍后再试'
@@ -184,7 +185,11 @@ export class IdBusinessV2ExchangeRatePersistenceService {
           validSampleCount
         };
       },
-      { requestId: input.requestId ?? `exchange-rate-run-success-${runId}`, retryMode: 'none' }
+      {
+        changedScopes: ['exchange-rates'],
+        requestId: input.requestId ?? `exchange-rate-run-success-${runId}`,
+        retryMode: 'none'
+      }
     );
   }
 
@@ -288,7 +293,11 @@ export class IdBusinessV2ExchangeRatePersistenceService {
           remark: failure.message
         });
       },
-      { requestId: input.requestId ?? `exchange-rate-run-failure-${runId}`, retryMode: 'none' }
+      {
+        changedScopes: ['exchange-rates'],
+        requestId: input.requestId ?? `exchange-rate-run-failure-${runId}`,
+        retryMode: 'none'
+      }
     );
   }
 

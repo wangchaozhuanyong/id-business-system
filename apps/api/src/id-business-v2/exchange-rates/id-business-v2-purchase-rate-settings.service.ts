@@ -82,7 +82,7 @@ export class IdBusinessV2PurchaseRateSettingsService {
         });
         return updated;
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
     return this.toResponse({
       ...row,
@@ -115,7 +115,11 @@ export class IdBusinessV2PurchaseRateSettingsService {
           });
           return created;
         },
-        { requestId: 'purchase-rate-settings-initialize', retryMode: 'none' }
+        {
+          changedScopes: ['exchange-rates'],
+          requestId: 'purchase-rate-settings-initialize',
+          retryMode: 'none'
+        }
       );
       return {
         ...row,

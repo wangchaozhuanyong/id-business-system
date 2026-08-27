@@ -164,7 +164,7 @@ export class IdBusinessV2FinanceGiftCardRefundsService {
         });
         return journal;
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['accounts', 'supplier-funds'], requestId: randomUUID(), operator }
     );
   }
 }

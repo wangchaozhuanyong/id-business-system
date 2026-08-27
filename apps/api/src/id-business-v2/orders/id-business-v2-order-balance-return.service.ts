@@ -322,6 +322,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         return { orderId, balanceReturn, idempotentReplay: false };
       },
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         retryMode: 'fullReplay',
@@ -568,6 +569,7 @@ export class IdBusinessV2OrderBalanceReturnService {
         return { orderId, balanceReturn: reversed, idempotentReplay: false };
       },
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         retryMode: 'fullReplay',

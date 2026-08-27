@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /* global document, window */
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 
 const adminBaseUrl = String(
@@ -222,37 +221,18 @@ async function publishChange(scopes) {
   try {
     const result = await database.query(
       `
-        WITH requested(scope) AS (
-          SELECT DISTINCT unnest($1::text[])
-        ),
-        bumped AS (
-          INSERT INTO public.id_business_v2_scope_versions AS current_version (
-            scope,
-            version,
-            updated_at
-          )
-          SELECT requested.scope, 1, transaction_timestamp()
-          FROM requested
-          ON CONFLICT (scope) DO UPDATE
-            SET version = current_version.version + 1,
-                updated_at = transaction_timestamp()
-          RETURNING scope, version
-        )
-        SELECT scope, version::text AS version
-        FROM bumped
-        ORDER BY scope
+        UPDATE public.id_business_v2_scope_versions
+        SET version = version + 1,
+            updated_at = transaction_timestamp()
+        WHERE scope = ANY($1::text[])
+        RETURNING scope
       `,
       [scopes]
     );
-    const payload = {
-      schemaVersion: 1,
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      scopes: result.rows
-    };
-    await database.query(
-      `SELECT realtime.send($1::jsonb, 'change', 'id-business-v2:changes', true)`,
-      [JSON.stringify(payload)]
+    assert.deepEqual(
+      result.rows.map(({ scope }) => scope).sort(),
+      [...new Set(scopes)].sort(),
+      '本地 scope 版本表缺少验收目标'
     );
     await database.query('COMMIT');
   } catch (error) {

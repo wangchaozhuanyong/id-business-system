@@ -287,6 +287,7 @@ export async function createIdBusinessV2Account(
       return response;
     },
     {
+      changedScopes: ['accounts'],
       requestId,
       operator,
       uniqueConflictMessage: '该 Apple ID 已存在或采购记录已创建'

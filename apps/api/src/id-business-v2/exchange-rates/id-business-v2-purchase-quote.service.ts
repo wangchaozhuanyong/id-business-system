@@ -199,7 +199,7 @@ export class IdBusinessV2PurchaseQuoteService {
           latestSnapshot: snapshot ?? updated.latestSnapshot
         };
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
 
     const settings = await this.settingsService.getRecord();
@@ -276,7 +276,7 @@ export class IdBusinessV2PurchaseQuoteService {
           });
         }
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
 
     const result = await this.list();

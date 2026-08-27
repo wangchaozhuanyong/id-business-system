@@ -34,7 +34,7 @@ export class IdBusinessV2FinancePeriodsService {
         await this.writeAudit(tx, operator, 'close', month, null);
         return period;
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['finance-ledger'], requestId: randomUUID(), operator }
     );
   }
 
@@ -57,7 +57,7 @@ export class IdBusinessV2FinancePeriodsService {
         await this.writeAudit(tx, operator, 'reopen', month, reason);
         return period;
       },
-      { requestId: randomUUID(), operator }
+      { changedScopes: ['finance-ledger'], requestId: randomUUID(), operator }
     );
   }
 

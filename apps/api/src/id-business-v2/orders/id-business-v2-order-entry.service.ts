@@ -325,6 +325,7 @@ export class IdBusinessV2OrderEntryService {
         };
       },
       {
+        changedScopes: ['orders'],
         requestId: randomUUID(),
         operator,
         businessTime: orderTimestamp,

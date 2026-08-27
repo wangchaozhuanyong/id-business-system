@@ -424,6 +424,7 @@ export class IdBusinessV2GiftCardCreditService {
     };
 
     return this.transactionManager.execute(execute, {
+      changedScopes: ['accounts', 'supplier-funds'],
       requestId: randomUUID(),
       operator,
       businessTime: creditedAt,

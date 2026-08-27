@@ -84,7 +84,11 @@ export class IdBusinessV2FinanceFxService {
           });
           return this.normalizeResolvedRate(snapshot);
         },
-        { requestId: randomUUID(), operator: input.operator }
+        {
+          changedScopes: ['exchange-rates', 'finance-reports'],
+          requestId: randomUUID(),
+          operator: input.operator
+        }
       );
     }
     return this.normalizeResolvedRate(await this.ensureAutomaticRate(input));
@@ -152,7 +156,11 @@ export class IdBusinessV2FinanceFxService {
         });
         return snapshot;
       },
-      { requestId: randomUUID(), operator }
+      {
+        changedScopes: ['exchange-rates', 'finance-reports'],
+        requestId: randomUUID(),
+        operator
+      }
     );
   }
 
@@ -235,7 +243,11 @@ export class IdBusinessV2FinanceFxService {
           expiresAt: effective.expiresAt,
           createdByUserId: input.operator?.id
         }),
-      { requestId: randomUUID(), operator: input.operator }
+      {
+        changedScopes: ['exchange-rates', 'finance-reports'],
+        requestId: randomUUID(),
+        operator: input.operator
+      }
     );
   }
 
@@ -278,7 +290,11 @@ export class IdBusinessV2FinanceFxService {
           expiresAt: new Date(Date.now() + 36 * 60 * 60 * 1000),
           createdByUserId: input.operator?.id
         }),
-      { requestId: randomUUID(), operator: input.operator }
+      {
+        changedScopes: ['exchange-rates', 'finance-reports'],
+        requestId: randomUUID(),
+        operator: input.operator
+      }
     );
   }
 

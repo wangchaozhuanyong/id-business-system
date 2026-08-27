@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { V2DataScope } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -81,7 +82,13 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           });
           return outcome.status;
         },
-        { requestId, operator, retryMode: 'none', isolationLevel: 'Serializable' }
+        {
+          changedScopes: this.resolveChangedScopes(item.entityType),
+          requestId,
+          operator,
+          retryMode: 'none',
+          isolationLevel: 'Serializable'
+        }
       );
     } catch {
       await this.markFailed(item, job, operator, requestId);
@@ -377,8 +384,27 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           processedAt: context.businessTime
         });
       },
-      { requestId, operator, retryMode: 'none', isolationLevel: 'Serializable' }
+      {
+        changedScopes: ['data-governance'],
+        requestId,
+        operator,
+        retryMode: 'none',
+        isolationLevel: 'Serializable'
+      }
     );
+  }
+
+  private resolveChangedScopes(
+    entityType: GovernanceJobItem['entityType']
+  ): readonly V2DataScope[] {
+    const entityScope: Record<GovernanceJobItem['entityType'], V2DataScope> = {
+      account: 'accounts',
+      customer: 'customers',
+      option: 'options',
+      order: 'orders',
+      exchange_rate_run: 'exchange-rates'
+    };
+    return ['data-governance', entityScope[entityType]];
   }
 
   private parseEligibility(value: unknown): GovernanceEligibility {

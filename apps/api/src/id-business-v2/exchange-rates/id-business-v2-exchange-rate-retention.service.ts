@@ -56,7 +56,7 @@ export class IdBusinessV2ExchangeRateRetentionService {
 
         return result;
       },
-      { requestId: 'exchange-rate-retention', retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId: 'exchange-rate-retention', retryMode: 'none' }
     );
   }
 

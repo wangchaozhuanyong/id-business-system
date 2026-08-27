@@ -83,6 +83,7 @@ export class IdBusinessV2RenewalWarningService {
         return setting;
       },
       {
+        changedScopes: ['renewal-warning-settings'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none'

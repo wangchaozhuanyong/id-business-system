@@ -206,7 +206,12 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
           });
           return { status: 'started' as const, runId, settings, currencies };
         },
-        { requestId: `${input.requestId}-start`, operator: input.operator, retryMode: 'none' }
+        {
+          changedScopes: ['exchange-rates'],
+          requestId: `${input.requestId}-start`,
+          operator: input.operator,
+          retryMode: 'none'
+        }
       );
     } catch (error) {
       if (error instanceof IdBusinessV2PurchaseRateRunLockedError) {
@@ -311,7 +316,11 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
               remark: '收购汇率异常波动，整批暂停发布并等待管理员审核'
             });
           },
-          { requestId: `${input.requestId}-pending-review`, retryMode: 'none' }
+          {
+            changedScopes: ['exchange-rates'],
+            requestId: `${input.requestId}-pending-review`,
+            retryMode: 'none'
+          }
         );
         return {
           status: 'pending_review' as const,
@@ -367,7 +376,12 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
             remark: '收购汇率采集失败，继续保留上一批有效报价'
           });
         },
-        { requestId: `${input.requestId}-fail`, operator: input.operator, retryMode: 'none' }
+        {
+          changedScopes: ['exchange-rates'],
+          requestId: `${input.requestId}-fail`,
+          operator: input.operator,
+          retryMode: 'none'
+        }
       );
       return {
         status: 'failed' as const,
@@ -473,7 +487,7 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
         });
         return { status: 'success' as const, publishedCurrencyCount: candidates.length };
       },
-      { requestId, operator, retryMode: 'none' }
+      { changedScopes: ['exchange-rates'], requestId, operator, retryMode: 'none' }
     );
     return { run: await this.queryService.getRun(id), review: result };
   }
@@ -531,7 +545,12 @@ export class IdBusinessV2PurchaseRateWorker implements OnModuleInit, OnModuleDes
         });
         return published;
       },
-      { requestId: input.requestId, operator: input.operator, retryMode: 'none' }
+      {
+        changedScopes: ['exchange-rates'],
+        requestId: input.requestId,
+        operator: input.operator,
+        retryMode: 'none'
+      }
     );
   }
 

@@ -176,6 +176,7 @@ export class IdBusinessV2DataGovernanceExecutionService {
         };
       },
       {
+        changedScopes: ['data-governance'],
         requestId,
         operator,
         retryMode: 'none',
@@ -215,7 +216,13 @@ export class IdBusinessV2DataGovernanceExecutionService {
         });
         await this.writeBatchAudit(tx, job, checkpointId, batchCounts, operator, false);
       },
-      { requestId, operator, retryMode: 'none', isolationLevel: 'Serializable' }
+      {
+        changedScopes: ['data-governance'],
+        requestId,
+        operator,
+        retryMode: 'none',
+        isolationLevel: 'Serializable'
+      }
     );
   }
 
