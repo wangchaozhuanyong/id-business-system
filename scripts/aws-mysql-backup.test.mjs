@@ -37,10 +37,39 @@ test('restore verification downloads S3 data into an isolated MySQL 8.4 containe
   assert.match(source, /mysql_image="mysql:8\.4"/);
   assert.match(source, /--network none/);
   assert.match(source, /--checksum-mode ENABLED/);
-  assert.match(source, /mysqlcheck --check/);
+  assert.match(source, /normalize_mysql_dump_stream/);
+  assert.match(source, /CHECK TABLE/);
+  assert.doesNotMatch(source, /mysqlcheck --check/);
   assert.match(source, /_prisma_migrations/);
   assert.match(source, /id_business_v2_finance_journals/);
   assert.match(source, /trap cleanup EXIT INT TERM/);
+});
+
+test('restore normalizer fixes MySQL trigger terminators without rewriting normal SQL', () => {
+  const fixture = [
+    'CREATE TABLE `untouched` (`id` int); */;;',
+    'DELIMITER ;;',
+    "/*!50003 CREATE*/ /*!50003 TRIGGER `single` BEFORE UPDATE ON `x` FOR EACH ROW SIGNAL SQLSTATE '45000'; */;;",
+    '/*!50003 CREATE*/ /*!50003 TRIGGER `multi` BEFORE INSERT ON `x` FOR EACH ROW SET NEW.`v` = CASE',
+    '  WHEN NEW.`v` = 1 THEN 2',
+    '  ELSE NULL',
+    'END; */;;',
+    'DELIMITER ;',
+    ''
+  ].join('\n');
+  const result = spawnSync(
+    'sed',
+    ['-E', '-f', resolve(projectRoot, 'scripts/mysql-dump-restore-normalizer.sed')],
+    { encoding: 'utf8', input: fixture }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.stdout,
+    fixture
+      .replace("SIGNAL SQLSTATE '45000'; */;;", "SIGNAL SQLSTATE '45000' */;;")
+      .replace('END; */;;', 'END */;;')
+  );
 });
 
 test('systemd uses frequent backups and a weekly restore verification', () => {

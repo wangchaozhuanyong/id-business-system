@@ -5,6 +5,7 @@ umask 077
 
 deployment_directory="/opt/id-business-v2/current"
 environment_file="${deployment_directory}/.env.aws.production"
+normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
 mysql_image="mysql:8.4"
 restore_database="id_business_v2_restore"
 archive_file=""
@@ -46,6 +47,10 @@ for required_command in docker gzip openssl; do
     exit 1
   fi
 done
+if [[ ! -f "${normalizer_script}" ]]; then
+  echo "MySQL 备份恢复规范化规则不存在" >&2
+  exit 1
+fi
 
 cleanup() {
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
@@ -171,7 +176,11 @@ if [[ "${mysql_ready}" != "true" ]]; then
   exit 1
 fi
 
-gzip -dc "${archive_file}" | docker exec -i "${container_name}" sh -c \
+normalize_mysql_dump_stream() {
+  sed -E -f "${normalizer_script}"
+}
+
+gzip -dc "${archive_file}" | normalize_mysql_dump_stream | docker exec -i "${container_name}" sh -c \
   'exec mysql --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 
 read -r table_count required_table_count migration_count <<<"$(
@@ -197,11 +206,29 @@ if [[ ! "${migration_count}" =~ ^[0-9]+$ ]] || ((migration_count < 1)); then
   exit 1
 fi
 
-docker exec "${container_name}" sh -c \
-  'mysqlcheck --check --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' >/dev/null
+check_sql="$(
+  docker exec -i "${container_name}" sh -c \
+    'mysql --batch --skip-column-names --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' <<'SQL'
+SELECT CONCAT('CHECK TABLE `', REPLACE(TABLE_NAME, '`', '``'), '`;')
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_type = 'BASE TABLE'
+ORDER BY table_name;
+SQL
+)"
+check_results="$(
+  printf '%s\n' "${check_sql}" | docker exec -i "${container_name}" sh -c \
+    'mysql --batch --skip-column-names --host=127.0.0.1 --user=root --password="$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
+)"
+checked_table_count="$(printf '%s\n' "${check_results}" | awk -F '\t' '$2 == "check" && $3 == "status" && $4 == "OK" { count++ } END { print count + 0 }')"
+if [[ "${checked_table_count}" != "${table_count}" ]]; then
+  echo "恢复库 CHECK TABLE 未全部通过：${checked_table_count}/${table_count}" >&2
+  printf '%s\n' "${check_results}" | awk -F '\t' '$3 != "status" || $4 != "OK"' >&2
+  exit 1
+fi
 
 archive_checksum_hex="$(openssl dgst -sha256 "${archive_file}" | awk '{ print $NF }')"
-echo "MySQL isolated restore verified: tables=${table_count}, migrations=${migration_count}"
+echo "MySQL isolated restore verified: tables=${table_count}, checked=${checked_table_count}, migrations=${migration_count}"
 echo "MySQL restore archive SHA-256: ${archive_checksum_hex}"
 if [[ -n "${downloaded_object_key}" ]]; then
   echo "MySQL restore source: s3://${s3_bucket}/${downloaded_object_key}"
