@@ -119,6 +119,10 @@ test('finance inflow integrity covers unique references, order overlap, receipts
   assert.match(postingSql, /other_operating_revenue/);
   assert.match(postingSql, /contributed_capital/);
   assert.match(postingSql, /borrowed_funds_payable/);
+  assert.match(
+    postingSql,
+    /NULLIF\([\s\S]*JSON_UNQUOTE\(JSON_EXTRACT\(journal\.metadata,[\s\S]*'null'[\s\S]*\)/
+  );
 });
 
 test('after-sales integrity keeps recovered history while validating active ownership', () => {

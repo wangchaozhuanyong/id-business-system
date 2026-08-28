@@ -756,7 +756,10 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
              WHEN 'borrowed_funds' THEN 'borrowed_funds_received'
            END
         OR NOT (
-          JSON_UNQUOTE(JSON_EXTRACT(journal.metadata, '$.receiptAttachmentId'))
+          NULLIF(
+            JSON_UNQUOTE(JSON_EXTRACT(journal.metadata, '$.receiptAttachmentId')),
+            'null'
+          )
           <=> CAST(inflow.receipt_attachment_id AS CHAR)
         )
         OR (
