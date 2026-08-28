@@ -7,6 +7,10 @@ import { simpleParser } from 'mailparser';
 const IMAP_PORT = 993;
 const CONNECTION_TIMEOUT_MS = 10_000;
 const SOCKET_TIMEOUT_MS = 15_000;
+const CONNECTION_RETRY_DELAY_MS = 300;
+const MAX_PROVIDER_CONNECTIONS = 4;
+const MAX_PROVIDER_WAITERS = 24;
+const PROVIDER_QUEUE_TIMEOUT_MS = 12_000;
 const MAX_MESSAGE_SOURCE_BYTES = 1_000_000;
 const MAX_BODY_CHARACTERS = 120_000;
 
@@ -29,19 +33,62 @@ export class MailProviderAuthenticationError extends Error {
 }
 
 export class MailProviderUnavailableError extends Error {
-  constructor(public readonly code: 'edge_runtime' | 'connection_failed' | 'response_invalid') {
+  constructor(
+    public readonly code:
+      | 'edge_runtime'
+      | 'connection_failed'
+      | 'provider_busy'
+      | 'response_invalid'
+  ) {
     super('邮箱服务暂时不可用');
     this.name = 'MailProviderUnavailableError';
   }
 }
 
+interface ProviderConnectionWaiter {
+  reject: (error: MailProviderUnavailableError) => void;
+  resolve: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface ProviderConnectionState {
+  active: number;
+  waiters: ProviderConnectionWaiter[];
+}
+
 @Injectable()
 export class IdBusinessV2ImapMailProvider {
+  private readonly connectionStates = new Map<V2MailProvider, ProviderConnectionState>();
+
   constructor(private readonly configService: ConfigService) {}
 
   async verify(input: ImapMailboxInput) {
+    return this.withProviderConnection(input.provider, () => this.verifyWithConnection(input));
+  }
+
+  async query(input: ImapMailboxInput, limit: number): Promise<V2MailViewerMessage[]> {
+    return this.withProviderConnection(input.provider, () =>
+      this.queryWithConnection(input, limit)
+    );
+  }
+
+  private async verifyWithConnection(input: ImapMailboxInput) {
     const authUsers = this.getAuthUsers(input);
     for (const [index, authUser] of authUsers.entries()) {
+      try {
+        await this.verifyAuthUser(input, authUser);
+        return;
+      } catch (error) {
+        if (error instanceof MailProviderAuthenticationError && index < authUsers.length - 1) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async verifyAuthUser(input: ImapMailboxInput, authUser: string) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       const client = this.createClient(input, true, authUser);
       try {
         await client.connect();
@@ -49,9 +96,11 @@ export class IdBusinessV2ImapMailProvider {
       } catch (error) {
         const mappedError = this.mapProviderError(error);
         if (
-          mappedError instanceof MailProviderAuthenticationError &&
-          index < authUsers.length - 1
+          mappedError instanceof MailProviderUnavailableError &&
+          mappedError.code === 'connection_failed' &&
+          attempt === 0
         ) {
+          await this.delay(CONNECTION_RETRY_DELAY_MS);
           continue;
         }
         throw mappedError;
@@ -61,7 +110,10 @@ export class IdBusinessV2ImapMailProvider {
     }
   }
 
-  async query(input: ImapMailboxInput, limit: number): Promise<V2MailViewerMessage[]> {
+  private async queryWithConnection(
+    input: ImapMailboxInput,
+    limit: number
+  ): Promise<V2MailViewerMessage[]> {
     const authUsers = this.getAuthUsers(input);
     for (const [index, authUser] of authUsers.entries()) {
       try {
@@ -141,7 +193,7 @@ export class IdBusinessV2ImapMailProvider {
   private getAuthUsers(input: ImapMailboxInput) {
     if (input.provider !== 'icloud') return [input.email];
     const localPart = input.email.split('@', 1)[0]?.trim();
-    return localPart && localPart !== input.email ? [input.email, localPart] : [input.email];
+    return localPart && localPart !== input.email ? [localPart, input.email] : [input.email];
   }
 
   private async toMessage(message: FetchMessageObject, fallbackTo: string) {
@@ -227,11 +279,19 @@ export class IdBusinessV2ImapMailProvider {
     const code = this.readErrorField(error, 'code');
     const responseCode = this.readErrorField(error, 'responseCode');
     const serverResponseCode = this.readErrorField(error, 'serverResponseCode');
+    const providerResponse = [
+      this.readErrorField(error, 'message'),
+      this.readErrorField(error, 'response'),
+      this.readErrorField(error, 'text'),
+      this.readErrorField(error, 'statusText'),
+      this.readNestedErrorField(error, 'cause', 'code'),
+      this.readNestedErrorField(error, 'cause', 'message')
+    ].join(' ');
     const authenticationFailed =
       this.readErrorField(error, 'authenticationFailed') === 'true' ||
       /auth|credentials|login|password/i.test(`${code} ${responseCode} ${serverResponseCode}`) ||
-      /authentication failed|invalid credentials|login failed|app-specific password/i.test(
-        this.readErrorField(error, 'message')
+      /authentication failed|authorization failed|invalid credentials|login failed|app(?:lication)?-specific password/i.test(
+        providerResponse
       );
     return authenticationFailed
       ? new MailProviderAuthenticationError()
@@ -241,6 +301,66 @@ export class IdBusinessV2ImapMailProvider {
   private readErrorField(error: unknown, field: string) {
     if (!error || typeof error !== 'object' || !(field in error)) return '';
     return String((error as Record<string, unknown>)[field] ?? '');
+  }
+
+  private readNestedErrorField(error: unknown, parent: string, field: string) {
+    if (!error || typeof error !== 'object' || !(parent in error)) return '';
+    const nested = (error as Record<string, unknown>)[parent];
+    return this.readErrorField(nested, field);
+  }
+
+  private async withProviderConnection<T>(provider: V2MailProvider, work: () => Promise<T>) {
+    await this.acquireProviderConnection(provider);
+    try {
+      return await work();
+    } finally {
+      this.releaseProviderConnection(provider);
+    }
+  }
+
+  private acquireProviderConnection(provider: V2MailProvider) {
+    const state = this.getConnectionState(provider);
+    if (state.active < MAX_PROVIDER_CONNECTIONS) {
+      state.active += 1;
+      return Promise.resolve();
+    }
+    if (state.waiters.length >= MAX_PROVIDER_WAITERS) {
+      return Promise.reject(new MailProviderUnavailableError('provider_busy'));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter: ProviderConnectionWaiter = {
+        reject,
+        resolve,
+        timer: setTimeout(() => {
+          const index = state.waiters.indexOf(waiter);
+          if (index >= 0) state.waiters.splice(index, 1);
+          reject(new MailProviderUnavailableError('provider_busy'));
+        }, PROVIDER_QUEUE_TIMEOUT_MS)
+      };
+      state.waiters.push(waiter);
+    });
+  }
+
+  private releaseProviderConnection(provider: V2MailProvider) {
+    const state = this.getConnectionState(provider);
+    state.active = Math.max(0, state.active - 1);
+    const waiter = state.waiters.shift();
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    state.active += 1;
+    waiter.resolve();
+  }
+
+  private getConnectionState(provider: V2MailProvider) {
+    const existing = this.connectionStates.get(provider);
+    if (existing) return existing;
+    const state: ProviderConnectionState = { active: 0, waiters: [] };
+    this.connectionStates.set(provider, state);
+    return state;
+  }
+
+  private delay(milliseconds: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
   }
 
   private async disconnect(client: ImapFlow) {

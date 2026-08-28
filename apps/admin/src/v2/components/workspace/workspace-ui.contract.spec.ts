@@ -99,6 +99,8 @@ describe('personal workspace UI contract', () => {
     expect(mailQueryPanel).toContain('label="邮件查询码"');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
+    expect(managedMailboxPanel).toContain('Google 生成的 16 位应用专用密码');
+    expect(managedMailboxPanel).toContain('Apple 生成的应用专用密码');
     expect(managedMailboxPanel).toContain('查询码有效期');
     expect(managedMailboxPanel).toContain('有效期 30 天');
     expect(managedMailboxPanel).toContain('<V2AsyncRegion');

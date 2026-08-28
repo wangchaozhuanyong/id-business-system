@@ -1,6 +1,15 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  ServiceUnavailableException
+} from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
+import {
+  MailProviderAuthenticationError,
+  MailProviderUnavailableError
+} from './providers/id-business-v2-imap-mail.provider';
 
 const admin = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -140,6 +149,41 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       )
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(provider.verify).not.toHaveBeenCalled();
+  });
+
+  it('returns actionable Gmail authorization guidance', async () => {
+    provider.verify.mockRejectedValueOnce(new MailProviderAuthenticationError());
+    await expect(
+      service.create(
+        {
+          email: 'member@gmail.com',
+          provider: 'gmail',
+          appPassword: 'invalid-app-password'
+        },
+        admin,
+        'request-auth-failed'
+      )
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Gmail 授权失败，请确认已开启两步验证并使用 16 位应用专用密码'
+      }
+    });
+  });
+
+  it('reports provider saturation without storing mailbox credentials', async () => {
+    provider.verify.mockRejectedValueOnce(new MailProviderUnavailableError('provider_busy'));
+    await expect(
+      service.create(
+        {
+          email: 'member@gmail.com',
+          provider: 'gmail',
+          appPassword: 'app-password'
+        },
+        admin,
+        'request-provider-busy'
+      )
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(repository.create).not.toHaveBeenCalled();
   });
 
   it('does not reactivate an authorization-failed mailbox without a new app password', async () => {
