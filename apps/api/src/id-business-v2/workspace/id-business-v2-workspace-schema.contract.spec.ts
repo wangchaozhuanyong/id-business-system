@@ -29,10 +29,14 @@ describe('personal workspace schema contract', () => {
     expect(migration).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
   });
 
-  it('does not register managed mailbox routes before the Node IMAP runtime is deployed', () => {
-    expect(workspaceModule).toContain('controllers: [IdBusinessV2WorkspaceController]');
-    expect(workspaceModule).not.toContain('IdBusinessV2ManagedMailboxController');
-    expect(workspaceModule).not.toContain('IdBusinessV2PublicMailboxController');
-    expect(workspaceModule).not.toContain('IdBusinessV2ImapMailProvider');
+  it('registers managed mailbox routes and the Node IMAP provider', () => {
+    expect(workspaceModule).toContain('IdBusinessV2WorkspaceController');
+    expect(workspaceModule).toContain('IdBusinessV2ManagedMailboxController');
+    expect(workspaceModule).toContain('IdBusinessV2PublicMailboxController');
+    expect(workspaceModule).toContain('IdBusinessV2ImapMailProvider');
+    expect(workspaceModule).toContain('FieldEncryptionService');
+    expect(workspaceModule).toContain('IdBusinessV2ManagedMailboxService');
+    expect(workspaceModule).toContain('IdBusinessV2MailViewerService');
+    expect(workspaceModule).toContain('IdBusinessV2ManagedMailboxRepository');
   });
 });

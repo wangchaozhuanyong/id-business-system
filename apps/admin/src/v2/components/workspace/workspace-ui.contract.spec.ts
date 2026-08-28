@@ -39,9 +39,10 @@ describe('personal workspace UI contract', () => {
   it('keeps tools and shortcut management in right-side drawers', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
-    expect(launcher).not.toContain('<V2MailViewerDrawer');
+    expect(launcher).toContain('<V2MailViewerDrawer');
     expect(launcher).toContain('邮箱查询与邮箱池');
-    expect(launcher).toMatch(/class="v2-workspace-panel__tool is-mail-viewer"[^>]*disabled/s);
+    expect(launcher).toContain('openMailViewerTool');
+    expect(launcher).not.toMatch(/class="v2-workspace-panel__tool is-mail-viewer"[^>]*disabled/s);
     expect(shortcutDrawer).toContain('<el-drawer');
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
@@ -89,7 +90,7 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).not.toContain('v2-totp-result__timer');
   });
 
-  it('keeps a disabled mailbox placeholder until its runtime is deployed', () => {
+  it('keeps mailbox query as a production-ready module in workspace tools', () => {
     expect(mailViewerDrawer).toContain('查询由本系统验证');
     expect(mailViewerDrawer).toContain('@closed="clearAll"');
     expect(mailViewerDrawer).toContain('label="邮件查询"');
@@ -107,10 +108,10 @@ describe('personal workspace UI contract', () => {
     ).not.toMatch(/v-html|localStorage|sessionStorage/);
     expect(workspaceApi).toContain('/public/mailbox/query');
     expect(workspaceApi).not.toContain('icloud.thefindnet.xyz');
-    expect(launcher).toContain('邮件服务部署后启用');
-    expect(launcher).not.toContain('<V2MailViewerDrawer');
-    expect(router).not.toContain('V2PublicMailboxView');
-    expect(router).not.toContain("path: '/mailbox'");
+    expect(launcher).not.toContain('邮件服务部署后启用');
+    expect(router).toContain('V2PublicMailboxView');
+    expect(router).toContain("path: '/mailbox'");
+    expect(router).toContain('publicStandalone');
   });
 
   it('seeds the workspace fixture admin session before mounting child tools', () => {
