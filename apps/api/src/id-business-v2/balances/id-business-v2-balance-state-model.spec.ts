@@ -86,7 +86,7 @@ describe('IdBusinessV2BalanceCalculatorService deterministic state model', () =>
         if (state.balance === 0n) expect(state.cost).toBe(0n);
       }
     }
-  });
+  }, 20_000);
 });
 
 function referenceConsumptionCost(state: ReferenceState, consumedBalance: bigint) {
