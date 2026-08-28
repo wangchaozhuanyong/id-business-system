@@ -6,9 +6,10 @@ After=docker.service network-online.target
 
 [Service]
 Type=oneshot
-User=ec2-user
-Group=ec2-user
-SupplementaryGroups=docker
+# 生产环境文件保持 root:root 0600，避免为自动备份放宽数据库与 S3 密钥权限。
+User=root
+Group=root
+UMask=0077
 ExecStart=/opt/id-business-v2/current/scripts/backup-aws-mysql.sh
 
 [Install]
