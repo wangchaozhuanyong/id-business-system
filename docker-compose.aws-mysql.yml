@@ -8,13 +8,15 @@ x-default-logging: &default-logging
 
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
     restart: unless-stopped
     logging: *default-logging
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:?set MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER:?set MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:?set MYSQL_BACKUP_USER}
+      MYSQL_BACKUP_PASSWORD: ${MYSQL_BACKUP_PASSWORD:?set MYSQL_BACKUP_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
       TZ: UTC
     command:
@@ -42,11 +44,20 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile.mysql
+      target: migration
     restart: 'no'
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     logging: *default-logging
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?set MySQL MIGRATION_DATABASE_URL}
     command:
       ['npx', 'prisma', 'migrate', 'deploy', '--schema', 'apps/api/prisma-mysql/schema.prisma']
     depends_on:
@@ -57,7 +68,16 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile.mysql
+      target: runtime
     restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     logging: *default-logging
     environment:
       NODE_ENV: production
@@ -108,7 +128,7 @@ services:
         condition: service_healthy
 
   caddy:
-    image: caddy:2.10-alpine
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     restart: unless-stopped
     logging: *default-logging
     environment:

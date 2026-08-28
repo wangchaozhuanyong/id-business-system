@@ -1,4 +1,4 @@
-import { exportRowsToCsv } from '@/utils/exportCsv';
+import { decodeCsvTextSafetyPrefix, exportRowsToCsv } from '@/utils/exportCsv';
 import { resolveAccountCountryCsvHeader } from '@/v2/utils/csv';
 import { V2_DECIMAL_PLACES, isV2UnsignedDecimal } from '@/v2/utils/decimal';
 import {
@@ -83,7 +83,8 @@ export function prepareAccountImport(csvRows: string[][], options: AccountImport
 
   sourceRows.forEach((row, index) => {
     const rowNumber = index + 2;
-    const value = (header: string) => row[headers.indexOf(header)]?.trim() ?? '';
+    const value = (header: string) =>
+      decodeCsvTextSafetyPrefix(row[headers.indexOf(header)] ?? '').trim();
 
     try {
       const appleId = value('ID账号').toLocaleLowerCase('en-US');

@@ -42,6 +42,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const QUERY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 const QUERY_CODE_LENGTH = 20;
+const QUERY_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class IdBusinessV2ManagedMailboxService {
@@ -110,6 +111,7 @@ export class IdBusinessV2ManagedMailboxService {
           label: input.label,
           provider: input.provider,
           providerCredentialEncrypted: encrypted,
+          queryCodeExpiresAt: this.queryCodeExpiresAt(context.businessTime),
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
           status: 'active',
@@ -227,10 +229,11 @@ export class IdBusinessV2ManagedMailboxService {
     if (!queryCodeHash) throw new ServiceUnavailableException('查询码生成失败');
 
     const row = await this.transactionManager.execute(
-      async (tx) => {
+      async (tx, context) => {
         const before = await this.repository.findById(mailboxId, tx);
         if (!before) throw new NotFoundException('邮箱不存在');
         const updated = await this.repository.updateQueryCode(tx, before.id, {
+          queryCodeExpiresAt: this.queryCodeExpiresAt(context.businessTime),
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
           updatedByUserId: userId
@@ -387,8 +390,22 @@ export class IdBusinessV2ManagedMailboxService {
     );
   }
 
-  private toAuditData(row: { email: string; provider: string; status: string }) {
-    return { email: row.email, provider: row.provider, status: row.status };
+  private queryCodeExpiresAt(issuedAt: Date) {
+    return new Date(issuedAt.getTime() + QUERY_CODE_TTL_MS);
+  }
+
+  private toAuditData(row: {
+    email: string;
+    provider: string;
+    queryCodeExpiresAt: Date;
+    status: string;
+  }) {
+    return {
+      email: row.email,
+      provider: row.provider,
+      queryCodeExpiresAt: row.queryCodeExpiresAt.toISOString(),
+      status: row.status
+    };
   }
 
   private toResponse(row: {
@@ -397,6 +414,7 @@ export class IdBusinessV2ManagedMailboxService {
     label: string | null;
     provider: V2MailProvider;
     status: V2ManagedMailboxStatus;
+    queryCodeExpiresAt: Date;
     queryCodeHint: string;
     lastVerifiedAt: Date | null;
     lastQueriedAt: Date | null;
@@ -412,6 +430,7 @@ export class IdBusinessV2ManagedMailboxService {
       label: row.label,
       provider: row.provider,
       status: row.status,
+      queryCodeExpiresAt: row.queryCodeExpiresAt.toISOString(),
       queryCodeHint: row.queryCodeHint,
       lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,
       lastQueriedAt: row.lastQueriedAt?.toISOString() ?? null,

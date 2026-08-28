@@ -18,6 +18,12 @@
 - API 镜像：`apps/api/Dockerfile.mysql`
 - 前端镜像：`apps/admin/Dockerfile`
 - HTTPS 入口：`deploy/caddy/Caddyfile.aws`
+
+API Dockerfile 提供两个独立目标：`runtime` 只保留生产依赖、Prisma Client 和编译产物，`migration`
+保留 Prisma CLI 与 MySQL migration。生产 Compose 必须显式选择对应目标；两个容器均以非 root、
+只读根文件系统、无额外 capabilities 的方式运行。生产基础镜像与 CI Actions 均固定到不可变 SHA，
+升级时需同步更新版本标签、digest 和相关门禁测试。
+
 - 环境变量模板：`.env.aws.production.example`
 - 备份脚本：`scripts/backup-aws-mysql.sh`
 - 备份定时器：`deploy/systemd/id-business-v2-mysql-backup.*`
@@ -73,22 +79,30 @@ sudo systemctl show id-business-v2-mysql-backup.service --property=Result --valu
 
 `Result` 必须返回 `success`。备份失败时不得继续 migration。
 
-6. 使用 Prisma MySQL migration 容器执行向前迁移，并确认退出码为 0：
+6. 数据库固定使用四个独立身份：`id_business_migrator` 只执行 migration，`id_business_app`
+   只运行 API，`id_business_audit` 只执行完整性巡检，`id_business_backup` 只生成备份。首次切换到
+   独立账号或迁移账号密码轮换后，先用本机 root 连接可重复供应账号，再执行向前 migration；migration
+   后必须再次供应权限，使新表得到精确的运行权限：
 
 ```bash
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up -d mysql
+npm run provision:v2-production-database-access:production
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml run --rm migrate
+npm run provision:v2-production-database-access:production
 ```
 
-7. 首次部署或审计密码轮换后先执行 `npm run provision:v2-data-integrity-auditor:production`，然后在
-   更新应用容器前执行财务完整性阻断门禁：
+`id_business_app` 不得拥有 DDL、GRANT OPTION、全库 DELETE、Prisma migration 写入或审计日志更新
+权限。供应命令不得输出 root 密码、业务数据库 URL 或账号密码。
+
+7. 首次部署或审计密码轮换后执行 `npm run provision:v2-data-integrity-auditor:production`，然后在
+   更新应用容器前执行数据库身份及财务完整性阻断门禁：
 
 ```bash
 npm run gate:v2-financial-integrity:production
 ```
 
-必须得到 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
-`id_business_audit` 本机只读连接；脚本检测到任何写权限会主动拒绝运行。
+必须得到数据库四身份 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
+本机门禁连接；脚本检测到运行账号 DDL、越界 DELETE、审计写权限或账号复用时会主动拒绝运行。
 
 8. 门禁通过后更新应用容器，等待 `mysql`、`api`、`admin` 健康，并执行整站巡检：
 
@@ -109,7 +123,10 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 
 ## 5. 数据库规则
 
-- 生产 `DATABASE_URL` 必须是 `mysql://` 且目标为 Compose `mysql` 服务。
+- 生产 `DATABASE_URL` 必须使用 `id_business_app` 且目标为 Compose `mysql` 服务；本机门禁使用同一
+  账号的 `V2_RUNTIME_DATABASE_URL`。
+- `MIGRATION_DATABASE_URL` 只能使用 `id_business_migrator`；API 容器不得接收该变量。
+- 备份只能使用 `id_business_backup`，完整性巡检只能使用 `id_business_audit`。
 - 只允许通过 `apps/api/prisma-mysql/migrations` 向前变更结构。
 - 禁止修改已应用 migration；新变更必须新增 migration。
 - 不得使用旧数据库覆盖当前生产库。数据迁移必须先备份，导入全新空库，完成行数和外键校验后才切换。

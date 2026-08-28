@@ -133,7 +133,7 @@ backup_file="${backup_directory}/id-business-v2-${stamp}.sql.gz"
 
 cd "${deployment_directory}"
 docker compose --env-file "${environment_file}" -f "${compose_file}" exec -T mysql \
-  sh -c 'exec mysqldump --host=127.0.0.1 --user="$MYSQL_USER" --password="$MYSQL_PASSWORD" --single-transaction --quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"' \
+  sh -c 'if [ "$MYSQL_BACKUP_USER" != "id_business_backup" ] || [ -z "$MYSQL_BACKUP_PASSWORD" ]; then echo "备份账号配置无效" >&2; exit 1; fi; exec mysqldump --host=127.0.0.1 --user="$MYSQL_BACKUP_USER" --password="$MYSQL_BACKUP_PASSWORD" --single-transaction --quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"' \
   | sed -E -f "${normalizer_script}" \
   | gzip -9 >"${partial_file}"
 

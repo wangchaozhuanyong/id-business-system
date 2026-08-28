@@ -1,76 +1,33 @@
 import { createParamDecorator } from '@nestjs/common';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
-const CLIENT_IP_HEADER = 'x-v2-client-ip';
-const PROXY_TIMESTAMP_HEADER = 'x-v2-proxy-timestamp';
-const PROXY_SIGNATURE_HEADER = 'x-v2-proxy-signature';
-const REQUEST_ID_HEADER = 'x-request-id';
-const MAX_SIGNATURE_AGE_MS = 5 * 60 * 1000;
-
 export interface RequestWithClientIp {
-  headers?: Record<string, string | string[] | undefined>;
   ip?: string | null;
 }
 
-interface TrustedProxyEnvironment {
-  V2_TRUSTED_PROXY_SECRET?: string;
+interface TrustedProxyApplication {
+  set(setting: 'trust proxy', value: number): unknown;
 }
 
-export function resolveTrustedClientIp(
-  request: RequestWithClientIp | undefined,
-  environment: TrustedProxyEnvironment = process.env,
-  now = Date.now()
+export function configureProductionTrustedProxy(
+  app: TrustedProxyApplication,
+  nodeEnv = process.env.NODE_ENV
 ) {
-  const secret = environment.V2_TRUSTED_PROXY_SECRET?.trim();
-  if (secret) {
-    const signedIp = verifySignedClientIp(request, secret, now);
-    if (signedIp) return signedIp;
+  if (nodeEnv === 'production') {
+    // AWS production has exactly one proxy hop between Nginx and the API.
+    // Caddy overwrites the public forwarding header and Nginx forwards that
+    // single value without appending its own address.
+    app.set('trust proxy', 1);
   }
+}
 
+export function resolveTrustedClientIp(request: RequestWithClientIp | undefined) {
   return normalizeIp(request?.ip);
 }
 
 export const TrustedClientIp = createParamDecorator((_data, context) =>
   resolveTrustedClientIp(context.switchToHttp().getRequest<RequestWithClientIp>())
 );
-
-function verifySignedClientIp(
-  request: RequestWithClientIp | undefined,
-  secret: string,
-  now: number
-) {
-  if (secret.length < 32) return undefined;
-  const clientIp = normalizeIp(readHeader(request, CLIENT_IP_HEADER));
-  const timestampValue = readHeader(request, PROXY_TIMESTAMP_HEADER)?.trim();
-  const signature = readHeader(request, PROXY_SIGNATURE_HEADER)?.trim().toLowerCase();
-  const requestId = readHeader(request, REQUEST_ID_HEADER)?.trim();
-  if (!clientIp || !timestampValue || !signature || !requestId) return undefined;
-  if (!/^\d{13}$/.test(timestampValue) || !/^[a-f0-9]{64}$/.test(signature)) return undefined;
-  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(requestId)) return undefined;
-
-  const timestamp = Number(timestampValue);
-  if (!Number.isSafeInteger(timestamp) || Math.abs(now - timestamp) > MAX_SIGNATURE_AGE_MS) {
-    return undefined;
-  }
-
-  const expected = createHmac('sha256', secret)
-    .update(createSignaturePayload(timestampValue, requestId, clientIp))
-    .digest();
-  const received = Buffer.from(signature, 'hex');
-  return received.length === expected.length && timingSafeEqual(received, expected)
-    ? clientIp
-    : undefined;
-}
-
-function createSignaturePayload(timestamp: string, requestId: string, clientIp: string) {
-  return `${timestamp}\n${requestId}\n${clientIp}`;
-}
-
-function readHeader(request: RequestWithClientIp | undefined, name: string) {
-  const value = request?.headers?.[name];
-  return Array.isArray(value) ? value[0] : value;
-}
 
 function normalizeIp(value: string | null | undefined) {
   const normalized = value?.trim();

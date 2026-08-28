@@ -97,6 +97,8 @@ describe('personal workspace UI contract', () => {
     expect(mailQueryPanel).toContain('placeholder="邮箱----邮件查询码"');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
+    expect(managedMailboxPanel).toContain('查询码有效期');
+    expect(managedMailboxPanel).toContain('有效期 30 天');
     expect(managedMailboxPanel).toContain('<V2AsyncRegion');
     expect(publicMailboxView).toContain('<V2MailQueryPanel');
     expect(mailMessageList).toContain('mailBodyToPlainText(item.body)');

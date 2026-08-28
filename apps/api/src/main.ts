@@ -1,10 +1,13 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { configureProductionTrustedProxy } from './common/http/trusted-client-ip';
 import { ApiResponseInterceptor } from './common/interceptors/api-response.interceptor';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  configureProductionTrustedProxy(app);
   const allowedOrigins = process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);

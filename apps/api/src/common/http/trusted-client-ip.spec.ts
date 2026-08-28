@@ -1,81 +1,30 @@
-import { createHmac } from 'node:crypto';
-import { resolveTrustedClientIp } from './trusted-client-ip';
+import { configureProductionTrustedProxy, resolveTrustedClientIp } from './trusted-client-ip';
 
 describe('resolveTrustedClientIp', () => {
-  const secret = 'trusted-proxy-secret-for-unit-tests-123456';
-  const now = 1_786_816_800_000;
-  const timestamp = String(now);
-  const requestId = 'request-unit-test-1234';
-  const clientIp = '203.0.113.25';
-
-  function signature(ip = clientIp, signedAt = timestamp) {
-    return createHmac('sha256', secret).update(`${signedAt}\n${requestId}\n${ip}`).digest('hex');
-  }
-
-  it('uses a fresh HMAC-signed client IP from a trusted proxy', () => {
-    expect(
-      resolveTrustedClientIp(
-        {
-          ip: '10.0.0.8',
-          headers: {
-            'x-request-id': requestId,
-            'x-v2-client-ip': clientIp,
-            'x-v2-proxy-timestamp': timestamp,
-            'x-v2-proxy-signature': signature()
-          }
-        },
-        { V2_TRUSTED_PROXY_SECRET: secret },
-        now
-      )
-    ).toBe(clientIp);
+  it('uses the IP already resolved by the trusted Express proxy chain', () => {
+    expect(resolveTrustedClientIp({ ip: '203.0.113.25' })).toBe('203.0.113.25');
+    expect(resolveTrustedClientIp({ ip: '2001:db8::25' })).toBe('2001:db8::25');
   });
 
-  it('ignores caller-controlled forwarding headers outside the signed proxy chain', () => {
-    expect(
-      resolveTrustedClientIp({
-        ip: '127.0.0.1',
-        headers: {
-          'cf-connecting-ip': '198.51.100.10',
-          'x-forwarded-for': '198.51.100.11',
-          'x-real-ip': '198.51.100.12'
-        }
-      })
-    ).toBe('127.0.0.1');
+  it('rejects missing or malformed resolved addresses', () => {
+    expect(resolveTrustedClientIp(undefined)).toBeUndefined();
+    expect(resolveTrustedClientIp({ ip: null })).toBeUndefined();
+    expect(resolveTrustedClientIp({ ip: '203.0.113.25, 10.0.0.8' })).toBeUndefined();
+    expect(resolveTrustedClientIp({ ip: 'not-an-ip' })).toBeUndefined();
+  });
+});
+
+describe('configureProductionTrustedProxy', () => {
+  it('trusts exactly the adjacent Nginx hop in production', () => {
+    const app = { set: vi.fn() };
+    configureProductionTrustedProxy(app, 'production');
+    expect(app.set).toHaveBeenCalledWith('trust proxy', 1);
   });
 
-  it('falls back to the socket IP for invalid or expired proxy signatures', () => {
-    const environment = {
-      V2_TRUSTED_PROXY_SECRET: secret
-    };
-    expect(
-      resolveTrustedClientIp(
-        {
-          ip: '10.0.0.8',
-          headers: {
-            'x-request-id': requestId,
-            'x-v2-client-ip': clientIp,
-            'x-v2-proxy-timestamp': timestamp,
-            'x-v2-proxy-signature': '0'.repeat(64)
-          }
-        },
-        environment,
-        now
-      )
-    ).toBe('10.0.0.8');
-    expect(
-      resolveTrustedClientIp(
-        {
-          ip: '10.0.0.9',
-          headers: {
-            'x-request-id': requestId,
-            'x-v2-client-ip': clientIp,
-            'x-v2-proxy-timestamp': timestamp,
-            'x-v2-proxy-signature': signature()
-          }
-        },
-        environment,
-        now + 5 * 60 * 1000 + 1
-      )
-    ).toBe('10.0.0.9');
+  it('keeps direct socket IP handling outside production', () => {
+    const app = { set: vi.fn() };
+    configureProductionTrustedProxy(app, 'development');
+    configureProductionTrustedProxy(app, 'test');
+    expect(app.set).not.toHaveBeenCalled();
   });
 });

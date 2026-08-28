@@ -6,17 +6,55 @@ export interface CsvColumn<TItem> {
   value: (item: TItem) => string | number | boolean | null | undefined;
 }
 
-function formatCsvValue(value: string | number | boolean | null | undefined) {
+const CSV_TEXT_SAFETY_PREFIX = "'";
+const CSV_FORMULA_MARKERS = new Set(['=', '+', '-', '@']);
+const PLAIN_NEGATIVE_NUMBER = /^-(?:0|[1-9]\d*)(?:\.\d+)?$/u;
+
+export function formatCsvValue(value: string | number | boolean | null | undefined) {
   if (value === null || value === undefined) {
     return '';
   }
 
-  const text = String(value);
+  const rawText = String(value);
+  const text =
+    typeof value === 'string' && shouldPrefixCsvText(value)
+      ? CSV_TEXT_SAFETY_PREFIX + value
+      : rawText;
   if (/[",\n\r]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }
 
   return text;
+}
+
+export function decodeCsvTextSafetyPrefix(value: string) {
+  if (!value.startsWith(CSV_TEXT_SAFETY_PREFIX)) return value;
+  const candidate = value.slice(CSV_TEXT_SAFETY_PREFIX.length);
+  return shouldPrefixCsvText(candidate) ? candidate : value;
+}
+
+function shouldPrefixCsvText(value: string) {
+  let candidate = value;
+  while (candidate.startsWith(CSV_TEXT_SAFETY_PREFIX)) {
+    candidate = candidate.slice(CSV_TEXT_SAFETY_PREFIX.length);
+  }
+  return requiresCsvTextSafetyPrefix(candidate);
+}
+
+function requiresCsvTextSafetyPrefix(value: string) {
+  if (PLAIN_NEGATIVE_NUMBER.test(value)) return false;
+  let sawLeadingControl = false;
+  for (const character of value) {
+    if (CSV_FORMULA_MARKERS.has(character)) return true;
+    if (character === ' ') continue;
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || codePoint === 0xfeff || character.trim() === '') {
+      sawLeadingControl = true;
+      continue;
+    }
+    return sawLeadingControl;
+  }
+  return sawLeadingControl;
 }
 
 function buildTimestamp() {

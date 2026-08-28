@@ -6,7 +6,7 @@ umask 077
 deployment_directory="/opt/id-business-v2/current"
 environment_file="${deployment_directory}/.env.aws.production"
 normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
-mysql_image="mysql:8.4"
+mysql_image="mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb"
 restore_database="id_business_v2_restore"
 archive_file=""
 downloaded_object_key=""
