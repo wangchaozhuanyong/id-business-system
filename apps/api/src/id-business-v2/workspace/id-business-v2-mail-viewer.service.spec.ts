@@ -17,6 +17,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
     providerCredentialEncrypted: 'encrypted-app-password',
     queryCodeHash: 'hash:buyer-code',
     queryCodeHint: 'code',
+    queryCodeExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     status: 'active' as const,
     lastVerifiedAt: now,
     lastQueriedAt: null,
@@ -88,13 +89,20 @@ describe('IdBusinessV2MailViewerService', () => {
     );
   });
 
-  it('returns the same generic failure for an unknown mailbox, disabled mailbox or wrong code', async () => {
+  it('returns the same generic failure for an unknown, disabled, expired or invalid mailbox', async () => {
     repository.findByEmail.mockResolvedValueOnce(null);
     await expect(
       service.query({ credential: 'missing@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
     ).rejects.toThrow('邮箱或邮件查询码不正确');
 
     repository.findByEmail.mockResolvedValueOnce(mailbox({ status: 'disabled' }));
+    await expect(
+      service.query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
+    ).rejects.toThrow('邮箱或邮件查询码不正确');
+
+    repository.findByEmail.mockResolvedValueOnce(
+      mailbox({ queryCodeExpiresAt: new Date(Date.now() - 1) })
+    );
     await expect(
       service.query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
     ).rejects.toThrow('邮箱或邮件查询码不正确');

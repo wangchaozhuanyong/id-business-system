@@ -1,4 +1,4 @@
-FROM node:24-alpine AS build
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ ENV VITE_APP_TITLE=${VITE_APP_TITLE}
 RUN npm run build --workspace @apple-business/shared
 RUN npm exec --workspace @apple-business/admin -- vite build
 
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS runtime
 
 COPY deploy/nginx/admin.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/admin/dist /usr/share/nginx/html

@@ -73,4 +73,20 @@ describe('account CSV import', () => {
       disabledReason: '暂不投入使用'
     });
   });
+
+  it('restores the text safety prefix from an application-generated export', () => {
+    const result = prepareAccountImport(
+      [
+        ['ID账号', '手机号码', '国家', 'ID状态', '备注'],
+        ['user@example.com', "'+8613800000000", '美国', '正常', "'=HYPERLINK(...)"]
+      ],
+      { countries: [country], statuses: [status], suppliers: [] }
+    );
+
+    expect(result.failures).toEqual([]);
+    expect(result.rows[0]).toMatchObject({
+      phone: '+8613800000000',
+      remark: '=HYPERLINK(...)'
+    });
+  });
 });

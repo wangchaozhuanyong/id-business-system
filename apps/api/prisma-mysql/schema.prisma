@@ -1882,6 +1882,7 @@ model IdBusinessV2ManagedMailbox {
   providerCredentialEncrypted String                           @map("provider_credential_encrypted") @db.Text
   queryCodeHash               String                           @map("query_code_hash") @db.VarChar(64)
   queryCodeHint               String                           @map("query_code_hint") @db.VarChar(4)
+  queryCodeExpiresAt          DateTime                         @map("query_code_expires_at") @db.DateTime(6)
   status                      IdBusinessV2ManagedMailboxStatus @default(active)
   lastVerifiedAt              DateTime?                        @map("last_verified_at") @db.DateTime(6)
   lastQueriedAt               DateTime?                        @map("last_queried_at") @db.DateTime(6)
@@ -1896,6 +1897,7 @@ model IdBusinessV2ManagedMailbox {
   queryAttempts IdBusinessV2MailQueryAttempt[]
 
   @@index([status, updatedAt])
+  @@index([status, queryCodeExpiresAt])
   @@index([createdByUserId])
   @@index([updatedByUserId])
   @@map("id_business_v2_managed_mailboxes")

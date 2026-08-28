@@ -65,7 +65,7 @@
     <section v-if="issuedCredential" class="v2-managed-mailbox-panel__issued" aria-live="polite">
       <div>
         <strong>买家查询凭据已生成</strong>
-        <span>此查询码只显示这一次，请立即交付并妥善保存。</span>
+        <span>此查询码只显示这一次，有效期 30 天，请立即交付并妥善保存。</span>
       </div>
       <code>{{ issuedCredential }}</code>
       <AppButton variant="soft" @click="copyText(issuedCredential, '查询凭据已复制')">
@@ -144,6 +144,18 @@
               <div>
                 <dt>查询码</dt>
                 <dd>末四位 {{ item.queryCodeHint }}</dd>
+              </div>
+              <div>
+                <dt>查询码有效期</dt>
+                <dd>
+                  <el-tag
+                    :type="queryCodeExpiryMeta(item.queryCodeExpiresAt).type"
+                    effect="plain"
+                    size="small"
+                  >
+                    {{ queryCodeExpiryMeta(item.queryCodeExpiresAt).label }}
+                  </el-tag>
+                </dd>
               </div>
               <div>
                 <dt>最近查询</dt>
@@ -227,6 +239,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 
@@ -358,11 +371,15 @@ async function updateCredential(item: V2ManagedMailbox) {
 
 async function rotateQueryCode(item: V2ManagedMailbox) {
   try {
-    await ElMessageBox.confirm('重置后旧查询码立即失效，需要把新凭据重新交给买家。', '重置查询码', {
-      confirmButtonText: '确认重置',
-      cancelButtonText: '取消',
-      type: 'warning'
-    });
+    await ElMessageBox.confirm(
+      '重置后旧查询码立即失效，新查询码有效期 30 天，需要把新凭据重新交给买家。',
+      '重置查询码',
+      {
+        confirmButtonText: '确认重置',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    );
   } catch {
     return;
   }
@@ -401,6 +418,18 @@ function statusMeta(status: V2ManagedMailboxStatus): { label: string; type: TagP
 
 function formatDate(value: string | null) {
   return formatV2DateTime(value, {}, '尚未查询');
+}
+
+function queryCodeExpiryMeta(value: string): { label: string; type: TagProps['type'] } {
+  const expiresAt = Date.parse(value);
+  const now = getV2BusinessNowMs();
+  const formatted = formatV2DateTime(value, {}, '时间异常');
+  if (!Number.isFinite(expiresAt)) return { label: '时间异常', type: 'danger' };
+  if (now !== null && expiresAt <= now) return { label: `已过期 · ${formatted}`, type: 'danger' };
+  if (now !== null && expiresAt - now <= 3 * 24 * 60 * 60 * 1000) {
+    return { label: `即将到期 · ${formatted}`, type: 'warning' };
+  }
+  return { label: `有效至 ${formatted}`, type: 'success' };
 }
 
 async function copyText(value: string, message: string) {

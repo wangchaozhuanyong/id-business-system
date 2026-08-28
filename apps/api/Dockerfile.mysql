@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS build
 
 WORKDIR /app
 ENV NODE_OPTIONS=--max-old-space-size=1536
@@ -19,7 +19,43 @@ RUN DATABASE_URL=mysql://prisma:prisma@127.0.0.1:3306/id_business_v2 \
 RUN npm run build --workspace @apple-business/shared
 RUN npm run build --workspace @apple-business/api
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS production-dependencies
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/admin/package.json apps/admin/package.json
+COPY packages/shared/package.json packages/shared/package.json
+RUN npm pkg delete devDependencies --workspaces --include-workspace-root \
+  && npm install --package-lock-only --ignore-scripts --omit=dev --omit=peer \
+    --workspace @apple-business/api \
+    --workspace @apple-business/shared \
+    --include-workspace-root \
+  && npm ci --ignore-scripts --omit=dev --omit=peer \
+    --workspace @apple-business/api \
+    --workspace @apple-business/shared \
+    --include-workspace-root
+
+FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS migration
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NPM_CONFIG_CACHE=/tmp/npm-cache
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
+
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build --chown=node:node /app/apps/api/prisma-mysql ./apps/api/prisma-mysql
+
+USER node
+
+FROM node:24-bookworm-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -28,7 +64,14 @@ RUN apt-get update -y \
   && apt-get install -y --no-install-recommends ca-certificates openssl \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /app /app
+COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
+
+USER node
 
 EXPOSE 3000
 

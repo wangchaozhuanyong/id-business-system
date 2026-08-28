@@ -77,6 +77,7 @@ export interface V2ManagedMailbox {
   provider: V2MailProvider;
   status: V2ManagedMailboxStatus;
   queryCodeHint: string;
+  queryCodeExpiresAt: IsoDateTimeString;
   lastVerifiedAt: IsoDateTimeString | null;
   lastQueriedAt: IsoDateTimeString | null;
   createdAt: IsoDateTimeString;

@@ -84,7 +84,12 @@ export class IdBusinessV2ManagedMailboxRepository {
   updateQueryCode(
     tx: V2CommandTransaction,
     id: string,
-    input: { queryCodeHash: string; queryCodeHint: string; updatedByUserId: string }
+    input: {
+      queryCodeExpiresAt: Date;
+      queryCodeHash: string;
+      queryCodeHint: string;
+      updatedByUserId: string;
+    }
   ) {
     return tx.idBusinessV2ManagedMailbox.update({ where: { id }, data: input });
   }

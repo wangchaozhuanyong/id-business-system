@@ -11,6 +11,7 @@ const admin = {
 };
 const member = { ...admin, id: '33333333-3333-4333-8333-333333333333', roles: ['member'] };
 const now = new Date('2026-08-15T16:00:00.000Z');
+const queryCodeExpiresAt = new Date('2026-09-14T16:00:00.000Z');
 
 function mailbox(overrides: Record<string, unknown> = {}) {
   return {
@@ -21,6 +22,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
     providerCredentialEncrypted: 'encrypted',
     queryCodeHash: 'hashed-code',
     queryCodeHint: 'Ab23',
+    queryCodeExpiresAt,
     status: 'active' as const,
     lastVerifiedAt: now,
     lastQueriedAt: null,
@@ -118,6 +120,11 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       appPassword: 'abcdefghijklmnop'
     });
     expect(encryption.encrypt).toHaveBeenCalledWith('abcdefghijklmnop');
+    expect(repository.create).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ queryCodeExpiresAt })
+    );
+    expect(result.mailbox.queryCodeExpiresAt).toBe(queryCodeExpiresAt.toISOString());
     expect(result.buyerCredential).toMatch(/^member@gmail\.com----[A-Za-z2-9]{20}$/);
     expect(JSON.stringify(audit.append.mock.calls)).not.toMatch(
       /abcdefghijklmnop|----[A-Za-z2-9]{20}/
@@ -151,5 +158,16 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       appPassword: 'newapppassword'
     });
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('newapppassword');
+  });
+
+  it('rotates the buyer code with a fresh 30-day expiry and audits no plaintext code', async () => {
+    const result = await service.rotateQueryCode(mailbox().id, admin);
+    expect(repository.updateQueryCode).toHaveBeenCalledWith(
+      tx,
+      mailbox().id,
+      expect.objectContaining({ queryCodeExpiresAt })
+    );
+    expect(result.mailbox.queryCodeExpiresAt).toBe(queryCodeExpiresAt.toISOString());
+    expect(JSON.stringify(audit.append.mock.calls)).not.toMatch(/----[A-Za-z2-9]{20}/);
   });
 });

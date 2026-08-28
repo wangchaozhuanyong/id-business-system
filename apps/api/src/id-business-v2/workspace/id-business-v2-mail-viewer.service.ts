@@ -53,7 +53,9 @@ export class IdBusinessV2MailViewerService {
 
     const mailbox = await this.repository.findByEmail(email);
     const valid =
-      mailbox?.status === 'active' && this.matchesQueryCode(mailbox.queryCodeHash, queryCode);
+      mailbox?.status === 'active' &&
+      mailbox.queryCodeExpiresAt.getTime() > Date.now() &&
+      this.matchesQueryCode(mailbox.queryCodeHash, queryCode);
     if (!valid) {
       if (mailbox) {
         await this.repository.updateQueryAttempt(reservation.attemptId, {

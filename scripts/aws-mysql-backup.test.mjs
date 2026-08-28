@@ -31,12 +31,15 @@ test('production backup requires S3 and verifies the remote SHA-256 checksum', (
   assert.match(source, /prune_local_backups/);
   assert.match(source, /mysql-dump-restore-normalizer\.sed/);
   assert.match(source, /sed -E -f "\$\{normalizer_script\}"/);
+  assert.match(source, /MYSQL_BACKUP_USER/);
+  assert.match(source, /MYSQL_BACKUP_PASSWORD/);
+  assert.doesNotMatch(source, /--user="\$MYSQL_USER"/);
 });
 
 test('restore verification downloads S3 data into an isolated MySQL 8.4 container', () => {
   const source = readProjectFile('scripts/verify-aws-mysql-backup.sh');
 
-  assert.match(source, /mysql_image="mysql:8\.4"/);
+  assert.match(source, /mysql_image="mysql:8\.4@sha256:[a-f0-9]{64}"/);
   assert.match(source, /--network none/);
   assert.match(source, /--checksum-mode ENABLED/);
   assert.match(source, /normalize_mysql_dump_stream/);
