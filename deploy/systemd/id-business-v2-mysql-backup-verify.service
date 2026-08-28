@@ -1,0 +1,17 @@
+[Unit]
+Description=Verify the latest ID Business V2 MySQL S3 backup by isolated restore
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+# 与自动备份一致，以 root 读取 root:root 0600 的生产环境文件和备份。
+User=root
+Group=root
+UMask=0077
+TimeoutStartSec=30m
+ExecStart=/opt/id-business-v2/current/scripts/verify-aws-mysql-backup.sh
+
+[Install]
+WantedBy=multi-user.target

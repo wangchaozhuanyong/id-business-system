@@ -40,7 +40,9 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml lo
 `ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED=false` 立即停用联网采集，现有收购价、手工维护和计算逻辑
 仍可继续使用。
 
-服务器启用 `id-business-v2-mysql-backup.timer`，每天将事务一致的逻辑备份写到
-`/opt/id-business-v2/backups/mysql`。配置 `MYSQL_BACKUP_S3_BUCKET` 后，同一份备份还会通过实例 IAM
-角色上传到私有 S3，强制 TLS 和 AES-256 服务端加密，并在上传后核对对象大小。S3 桶应启用全部公共访问
-阻止、版本控制和生命周期保留策略；实例角色只授予指定备份前缀的上传、读取和列举权限。
+服务器启用 `id-business-v2-mysql-backup.timer`，每 30 分钟将事务一致的逻辑备份写到
+`/opt/id-business-v2/backups/mysql`。`MYSQL_BACKUP_S3_BUCKET` 为强制配置，同一份备份必须通过实例 IAM
+角色上传到私有 S3，强制 TLS 和 AES-256 服务端加密，并在上传后核对对象大小和 SHA-256。
+本机默认最多保留 48 份且总量不超过 1 GiB；S3 当前保留 90 天并由生命周期自动过期。
+`id-business-v2-mysql-backup-verify.timer` 每周从 S3 下载最新备份并恢复到临时 MySQL 8.4 容器。
+详细配置和安装命令见 `docs/V2_PRODUCTION_BACKUP.md`。

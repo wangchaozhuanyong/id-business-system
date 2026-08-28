@@ -109,5 +109,6 @@ npm run prod:smoke
 ```
 
 实际发布前必须确认当前分支、提交、远端、生产账号和目标环境。详细说明见
-`docs/DEPLOYMENT.md`。生产备份由 EC2 systemd timer 执行 `scripts/backup-aws-mysql.sh`，
-并上传到私有 S3 存储桶。
+`docs/DEPLOYMENT.md`。生产备份由 EC2 systemd timer 每 30 分钟执行
+`scripts/backup-aws-mysql.sh`，强制上传到私有 S3 存储桶；每周执行
+`scripts/verify-aws-mysql-backup.sh` 完成隔离恢复验证。
