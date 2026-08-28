@@ -124,6 +124,17 @@ describe('IdBusinessV2FinancePostingService', () => {
       }
     });
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+
+    const periodLockSql = Array.from(tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray).join(
+      '?'
+    );
+    const accountLockSql = Array.from(tx.$queryRaw.mock.calls[1]?.[0] as TemplateStringsArray).join(
+      '?'
+    );
+    expect(periodLockSql).toContain('FROM `id_business_v2_finance_periods`');
+    expect(accountLockSql).toContain('FROM `id_business_v2_finance_accounts`');
+    expect(accountLockSql).not.toContain('::uuid');
+    expect(tx.$queryRaw.mock.calls[1]?.[1]).toBe(financeAccountId);
   });
 
   it('accepts database Decimal inputs and persisted account balances', async () => {

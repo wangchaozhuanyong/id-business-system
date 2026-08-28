@@ -289,6 +289,7 @@ function inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile }) {
     ...template.templateSpans.map((span) => span.literal.text)
   ];
   const sqlText = fragments.join(' ? ');
+  const usesMysqlQuotedIdentifiers = sqlText.includes('`');
 
   for (const [index, span] of template.templateSpans.entries()) {
     const parameterName = getSqlParameterName(span.expression);
@@ -300,7 +301,7 @@ function inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile }) {
       /^\s*::\s*uuid\b/i.test(nextFragment) ||
       (/\bCAST\s*\(\s*$/i.test(previousFragment) && /^\s+AS\s+uuid\s*\)/i.test(nextFragment));
 
-    if (!usesUuidCast) {
+    if (!usesMysqlQuotedIdentifiers && !usesUuidCast) {
       inventories.postgresUuidParameters.add(relativePath);
       fail(
         relativePath,
