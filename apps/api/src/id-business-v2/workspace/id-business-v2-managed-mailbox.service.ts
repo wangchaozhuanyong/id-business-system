@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException
 } from '@nestjs/common';
@@ -46,6 +47,8 @@ const QUERY_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class IdBusinessV2ManagedMailboxService {
+  private readonly logger = new Logger(IdBusinessV2ManagedMailboxService.name);
+
   constructor(
     private readonly repository: IdBusinessV2ManagedMailboxRepository,
     private readonly transactionManager: V2CommandTransactionManager,
@@ -90,11 +93,14 @@ export class IdBusinessV2ManagedMailboxService {
     if (await this.repository.findByEmail(input.email)) {
       throw new ConflictException('该邮箱已经加入邮箱池');
     }
-    await this.verifyProvider({
-      email: input.email,
-      provider: input.provider,
-      appPassword: input.appPassword
-    });
+    await this.verifyProvider(
+      {
+        email: input.email,
+        provider: input.provider,
+        appPassword: input.appPassword
+      },
+      requestId
+    );
 
     const queryCode = this.generateQueryCode();
     const encrypted = this.encryption.encrypt(input.appPassword);
@@ -187,7 +193,10 @@ export class IdBusinessV2ManagedMailboxService {
     const before = await this.repository.findById(mailboxId);
     if (!before) throw new NotFoundException('邮箱不存在');
     const appPassword = this.normalizeAppPassword(dto.appPassword);
-    await this.verifyProvider({ email: before.email, provider: before.provider, appPassword });
+    await this.verifyProvider(
+      { email: before.email, provider: before.provider, appPassword },
+      requestId
+    );
     const encrypted = this.encryption.encrypt(appPassword);
     if (!encrypted) throw new ServiceUnavailableException('敏感信息加密失败');
 
@@ -256,20 +265,43 @@ export class IdBusinessV2ManagedMailboxService {
     return { mailbox: this.toResponse(row), buyerCredential: queryCode };
   }
 
-  private async verifyProvider(input: {
-    appPassword: string;
-    email: string;
-    provider: V2MailProvider;
-  }) {
+  private async verifyProvider(
+    input: {
+      appPassword: string;
+      email: string;
+      provider: V2MailProvider;
+    },
+    requestId: string
+  ) {
     try {
       await this.mailProvider.verify(input);
     } catch (error) {
+      const safeRequestId = requestId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 64) || 'unknown';
       if (error instanceof MailProviderAuthenticationError) {
-        throw new BadRequestException('邮箱或应用专用密码不正确');
+        this.logger.warn(
+          `Managed mailbox verification failed provider=${input.provider} reason=authentication requestId=${safeRequestId}`
+        );
+        throw new BadRequestException(
+          input.provider === 'gmail'
+            ? 'Gmail 授权失败，请确认已开启两步验证并使用 16 位应用专用密码'
+            : 'iCloud 授权失败，请确认已开启双重认证并使用应用专用密码'
+        );
       }
       if (error instanceof MailProviderUnavailableError && error.code === 'edge_runtime') {
+        this.logger.error(
+          `Managed mailbox verification failed provider=${input.provider} reason=edge_runtime requestId=${safeRequestId}`
+        );
         throw new ServiceUnavailableException('当前后端不支持 IMAP，请使用 Node 邮件运行时');
       }
+      if (error instanceof MailProviderUnavailableError && error.code === 'provider_busy') {
+        this.logger.warn(
+          `Managed mailbox verification delayed provider=${input.provider} reason=provider_busy requestId=${safeRequestId}`
+        );
+        throw new ServiceUnavailableException('邮箱服务当前连接较多，请稍后重试');
+      }
+      this.logger.warn(
+        `Managed mailbox verification failed provider=${input.provider} reason=connection requestId=${safeRequestId}`
+      );
       throw new ServiceUnavailableException('暂时无法连接邮箱服务，请稍后重试');
     }
   }

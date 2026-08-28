@@ -34,17 +34,20 @@
           />
         </el-form-item>
         <el-form-item label="应用专用密码" prop="appPassword" required>
-          <el-input
-            v-model="form.appPassword"
-            type="password"
-            show-password
-            :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
-            autocomplete="new-password"
-            data-1p-ignore="true"
-            data-lpignore="true"
-            :spellcheck="false"
-            placeholder="不是邮箱普通登录密码"
-          />
+          <div class="v2-managed-mailbox-panel__password-field">
+            <el-input
+              v-model="form.appPassword"
+              type="password"
+              show-password
+              :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
+              autocomplete="new-password"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              :spellcheck="false"
+              :placeholder="appPasswordPlaceholder"
+            />
+            <small>{{ appPasswordHelp }}</small>
+          </div>
         </el-form-item>
         <el-form-item label="备注" prop="label">
           <el-input
@@ -269,6 +272,16 @@ const rules: FormRules<CreateV2ManagedMailboxInput> = {
   ],
   appPassword: [{ required: true, message: '请输入应用专用密码', trigger: 'blur' }]
 };
+const appPasswordPlaceholder = computed(() =>
+  form.provider === 'gmail'
+    ? '输入 Google 生成的 16 位应用专用密码'
+    : '输入 Apple 生成的应用专用密码'
+);
+const appPasswordHelp = computed(() =>
+  form.provider === 'gmail'
+    ? '需要先开启 Google 两步验证；不要填写 Gmail 普通登录密码。'
+    : '需要先开启 Apple 双重认证；系统会优先使用邮箱名称部分登录 iCloud IMAP。'
+);
 
 const mailboxesQuery = useV2ModuleQuery<V2ManagedMailboxList>({
   moduleKey: 'profile',
@@ -501,6 +514,18 @@ defineExpose({
 
 .v2-managed-mailbox-panel__form :deep(.el-form-item) {
   margin-bottom: 0;
+}
+
+.v2-managed-mailbox-panel__password-field {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+}
+
+.v2-managed-mailbox-panel__password-field small {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .v2-managed-mailbox-panel__form-actions {
