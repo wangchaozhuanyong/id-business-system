@@ -65,10 +65,23 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 EC2 通过 systemd timer 调用：
 
 ```bash
-sudo /opt/id-business-v2/current/scripts/backup-aws-mysql.sh
+sudo systemctl start id-business-v2-mysql-backup.service
+sudo journalctl -u id-business-v2-mysql-backup.service -n 100 --no-pager
 ```
 
-脚本使用 `mysqldump --single-transaction`，先在本机生成 gzip 文件并校验，再上传 S3，最后对比远端对象大小。
+脚本使用 `mysqldump --single-transaction`，先在本机生成 gzip 文件并校验，再强制上传
+S3，最后对比远端对象大小和 SHA-256。定时器每 30 分钟执行，本机默认最多保留 48 份且
+总量不超过 1 GiB；S3 保留 90 天后自动过期。
+
+每周恢复验证由 `id-business-v2-mysql-backup-verify.timer` 执行：
+
+```bash
+sudo systemctl start id-business-v2-mysql-backup-verify.service
+sudo journalctl -u id-business-v2-mysql-backup-verify.service -n 100 --no-pager
+```
+
+该脚本从 S3 下载最新备份，在无宿主机端口的临时 MySQL 8.4 容器内完成恢复和核心表检查。
+完整安装和验收流程见 `docs/V2_PRODUCTION_BACKUP.md`。
 
 ## 6. 回滚
 
