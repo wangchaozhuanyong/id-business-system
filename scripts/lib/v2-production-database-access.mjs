@@ -166,10 +166,14 @@ export function assertV2ProductionDatabaseGrants(input) {
 
 function assertMigrationGrants(rows, databaseName) {
   const grants = grantTexts(rows).filter((grant) => !isUsageGrant(grant));
-  const pattern = new RegExp(
-    `^GRANT ALL PRIVILEGES ON ${escapeRegExp(quoteIdentifier(databaseName))}\\.\\* TO `
-  );
-  if (grants.length !== 1 || !pattern.test(grants[0]) || /WITH GRANT OPTION/i.test(grants[0])) {
+  const parsed = grants.length === 1 ? parseDatabaseGrant(grants[0]) : null;
+  if (
+    !parsed ||
+    parsed.databaseName !== databaseName ||
+    parsed.tableName !== '*' ||
+    !sameSet(parsed.privileges, ['ALL PRIVILEGES']) ||
+    /WITH GRANT OPTION/i.test(grants[0])
+  ) {
     throw new Error('迁移账号必须仅具备当前数据库 ALL PRIVILEGES，且不得拥有 GRANT OPTION');
   }
 }
@@ -221,7 +225,7 @@ function assertRuntimeGrants(rows, databaseName, tableNames) {
 }
 
 function parseDatabaseGrant(grant) {
-  const matched = grant.match(/^GRANT (.+) ON `([^`]+)`\.(\*|`([^`]+)`) TO /i);
+  const matched = grant.match(/^GRANT (.+) ON [`"]([^`"]+)[`"]\.(\*|[`"]([^`"]+)[`"]) TO /i);
   if (!matched) return null;
   return {
     databaseName: matched[2],
@@ -306,8 +310,4 @@ function mysqlStringLiteral(value) {
 
 function sameSet(left, right) {
   return left.length === right.length && left.every((value) => right.includes(value));
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
