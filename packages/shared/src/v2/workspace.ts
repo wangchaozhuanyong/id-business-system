@@ -51,7 +51,7 @@ export interface ReorderV2WorkspaceShortcutsInput {
 }
 
 export interface V2MailViewerQueryInput {
-  credential: string;
+  queryCode: string;
   limit: number;
 }
 

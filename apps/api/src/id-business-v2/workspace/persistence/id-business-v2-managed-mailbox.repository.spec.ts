@@ -5,7 +5,7 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
   it('serializes concurrent public query reservations before enforcing the limit', async () => {
     const attempts: Array<{
       id: string;
-      emailHash: string;
+      queryCodeHash: string;
       ipHash: string | null;
       outcome: string;
       createdAt: Date;
@@ -28,7 +28,8 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
             attempts.filter(
               (attempt) =>
                 attempt.createdAt >= where.createdAt.gte &&
-                (where.emailHash === undefined || attempt.emailHash === where.emailHash) &&
+                (where.queryCodeHash === undefined ||
+                  attempt.queryCodeHash === where.queryCodeHash) &&
                 (where.ipHash === undefined || attempt.ipHash === where.ipHash)
             ).length
           )
@@ -47,10 +48,10 @@ describe('IdBusinessV2ManagedMailboxRepository', () => {
     };
     const repository = new IdBusinessV2ManagedMailboxRepository(prisma as never);
     const input = {
-      emailHash: 'e'.repeat(64),
+      queryCodeHash: 'q'.repeat(64),
       ipHash: 'i'.repeat(64),
       since: new Date(Date.now() - 5 * 60 * 1000),
-      maxEmailAttempts: 1,
+      maxQueryCodeAttempts: 1,
       maxIpAttempts: 40
     };
 

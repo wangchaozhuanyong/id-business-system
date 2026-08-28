@@ -7,31 +7,28 @@ const REMOVED_ELEMENTS =
 const BLOCK_ELEMENTS =
   'p, div, section, article, header, footer, li, tr, table, h1, h2, h3, h4, h5, h6';
 
-export interface ParsedMailCredential {
-  credential: string;
-  email: string;
+export interface ParsedMailQueryCode {
   queryCode: string;
 }
 
-export interface MailCredentialLineError {
+export interface MailQueryCodeLineError {
   lineNumber: number;
   message: string;
 }
 
-export function parseMailCredential(value: string): ParsedMailCredential {
-  const credential = value.trim();
-  if (!credential) throw new Error('请输入邮箱和邮件查询码');
-  if (credential.length > V2_MAIL_VIEWER_LIMITS.credential) {
-    throw new Error('邮箱和邮件查询码过长');
+export function parseMailQueryCode(value: string): ParsedMailQueryCode {
+  const input = value.trim();
+  if (!input) throw new Error('请输入邮件查询码');
+  if (input.length > V2_MAIL_VIEWER_LIMITS.credential) {
+    throw new Error('邮件查询码过长');
   }
-  const separatorIndex = credential.indexOf(CREDENTIAL_SEPARATOR);
-  if (separatorIndex < 1) throw new Error('格式不正确，请输入 邮箱----邮件查询码');
 
-  const email = credential.slice(0, separatorIndex).trim().toLowerCase();
-  const queryCode = credential.slice(separatorIndex + CREDENTIAL_SEPARATOR.length).trim();
-  if (!email || email.length > V2_MAIL_VIEWER_LIMITS.email || !EMAIL_PATTERN.test(email)) {
-    throw new Error('请输入有效的邮箱地址');
-  }
+  const separatorIndex = input.indexOf(CREDENTIAL_SEPARATOR);
+  const legacyEmail = separatorIndex > 0 ? input.slice(0, separatorIndex).trim() : '';
+  const queryCode =
+    legacyEmail && EMAIL_PATTERN.test(legacyEmail)
+      ? input.slice(separatorIndex + CREDENTIAL_SEPARATOR.length).trim()
+      : input;
   if (!queryCode) throw new Error('请输入邮件查询码');
   if (
     queryCode.length > V2_MAIL_VIEWER_LIMITS.queryCode ||
@@ -42,30 +39,26 @@ export function parseMailCredential(value: string): ParsedMailCredential {
   ) {
     throw new Error('邮件查询码格式不正确');
   }
-  return {
-    credential: `${email}${CREDENTIAL_SEPARATOR}${queryCode}`,
-    email,
-    queryCode
-  };
+  return { queryCode };
 }
 
-export function parseMailCredentialLines(value: string) {
+export function parseMailQueryCodeLines(value: string) {
   if (value.length > V2_MAIL_VIEWER_LIMITS.batchLength) {
     return {
-      items: [] as ParsedMailCredential[],
-      errors: [{ lineNumber: 0, message: '批量内容过长' }] as MailCredentialLineError[]
+      items: [] as ParsedMailQueryCode[],
+      errors: [{ lineNumber: 0, message: '批量内容过长' }] as MailQueryCodeLineError[]
     };
   }
 
-  const items: ParsedMailCredential[] = [];
-  const errors: MailCredentialLineError[] = [];
+  const items: ParsedMailQueryCode[] = [];
+  const errors: MailQueryCodeLineError[] = [];
   const seen = new Set<string>();
   const lines = value.split(/\r?\n/);
   if (lines.length > V2_MAIL_VIEWER_LIMITS.batchLines) {
     return {
       items,
       errors: [
-        { lineNumber: 0, message: `每次最多处理 ${V2_MAIL_VIEWER_LIMITS.batchLines} 个邮箱` }
+        { lineNumber: 0, message: `每次最多处理 ${V2_MAIL_VIEWER_LIMITS.batchLines} 个查询码` }
       ]
     };
   }
@@ -73,12 +66,12 @@ export function parseMailCredentialLines(value: string) {
   lines.forEach((line, index) => {
     if (!line.trim()) return;
     try {
-      const item = parseMailCredential(line);
-      if (seen.has(item.email)) {
-        errors.push({ lineNumber: index + 1, message: '邮箱重复' });
+      const item = parseMailQueryCode(line);
+      if (seen.has(item.queryCode)) {
+        errors.push({ lineNumber: index + 1, message: '邮件查询码重复' });
         return;
       }
-      seen.add(item.email);
+      seen.add(item.queryCode);
       items.push(item);
     } catch (error) {
       errors.push({

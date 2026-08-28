@@ -125,7 +125,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       expect.objectContaining({ queryCodeExpiresAt })
     );
     expect(result.mailbox.queryCodeExpiresAt).toBe(queryCodeExpiresAt.toISOString());
-    expect(result.buyerCredential).toMatch(/^member@gmail\.com----[A-Za-z2-9]{20}$/);
+    expect(result.buyerCredential).toMatch(/^[A-Za-z2-9]{20}$/);
     expect(JSON.stringify(audit.append.mock.calls)).not.toMatch(
       /abcdefghijklmnop|----[A-Za-z2-9]{20}/
     );

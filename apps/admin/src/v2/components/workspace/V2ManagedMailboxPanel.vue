@@ -62,15 +62,15 @@
       </div>
     </section>
 
-    <section v-if="issuedCredential" class="v2-managed-mailbox-panel__issued" aria-live="polite">
+    <section v-if="issuedQueryCode" class="v2-managed-mailbox-panel__issued" aria-live="polite">
       <div>
-        <strong>买家查询凭据已生成</strong>
+        <strong>买家查询码已生成</strong>
         <span>此查询码只显示这一次，有效期 30 天，请立即交付并妥善保存。</span>
       </div>
-      <code>{{ issuedCredential }}</code>
-      <AppButton variant="soft" @click="copyText(issuedCredential, '查询凭据已复制')">
+      <code>{{ issuedQueryCode }}</code>
+      <AppButton variant="soft" @click="copyText(issuedQueryCode, '查询码已复制')">
         <el-icon><CopyDocument /></el-icon>
-        复制查询凭据
+        复制查询码
       </AppButton>
     </section>
 
@@ -258,7 +258,7 @@ const filters = reactive<{
 }>({ q: '', provider: '', status: '', page: 1 });
 const creating = ref(false);
 const updatingId = ref('');
-const issuedCredential = ref('');
+const issuedQueryCode = ref('');
 const credentialMailboxId = ref('');
 const replacementPassword = ref('');
 const rules: FormRules<CreateV2ManagedMailboxInput> = {
@@ -309,7 +309,7 @@ async function createMailbox() {
       appPassword: form.appPassword,
       label: form.label?.trim() || undefined
     });
-    issuedCredential.value = result.buyerCredential;
+    issuedQueryCode.value = result.buyerCredential;
     form.email = '';
     form.appPassword = '';
     form.label = '';
@@ -372,7 +372,7 @@ async function updateCredential(item: V2ManagedMailbox) {
 async function rotateQueryCode(item: V2ManagedMailbox) {
   try {
     await ElMessageBox.confirm(
-      '重置后旧查询码立即失效，新查询码有效期 30 天，需要把新凭据重新交给买家。',
+      '重置后旧查询码立即失效，新查询码有效期 30 天，需要把新查询码重新交给买家。',
       '重置查询码',
       {
         confirmButtonText: '确认重置',
@@ -386,7 +386,7 @@ async function rotateQueryCode(item: V2ManagedMailbox) {
   updatingId.value = item.id;
   try {
     const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
-    issuedCredential.value = result.buyerCredential;
+    issuedQueryCode.value = result.buyerCredential;
     await mailboxesQuery.refresh();
     ElMessage.success('查询码已重置');
   } catch (error) {
@@ -445,12 +445,12 @@ function clearAll() {
   form.appPassword = '';
   replacementPassword.value = '';
   credentialMailboxId.value = '';
-  issuedCredential.value = '';
+  issuedQueryCode.value = '';
 }
 
 defineExpose({
   clearAll,
-  hasContent: () => Boolean(form.appPassword || replacementPassword.value || issuedCredential.value)
+  hasContent: () => Boolean(form.appPassword || replacementPassword.value || issuedQueryCode.value)
 });
 </script>
 

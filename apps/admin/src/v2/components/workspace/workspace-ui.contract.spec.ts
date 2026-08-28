@@ -95,7 +95,8 @@ describe('personal workspace UI contract', () => {
     expect(mailViewerDrawer).toContain('@closed="clearAll"');
     expect(mailViewerDrawer).toContain('label="邮件查询"');
     expect(mailViewerDrawer).toContain('label="邮箱池管理"');
-    expect(mailQueryPanel).toContain('placeholder="邮箱----邮件查询码"');
+    expect(mailQueryPanel).toContain('placeholder="请输入邮件查询码"');
+    expect(mailQueryPanel).toContain('label="邮件查询码"');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
     expect(managedMailboxPanel).toContain('查询码有效期');

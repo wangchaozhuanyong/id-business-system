@@ -19,7 +19,7 @@ import {
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CREDENTIAL_SEPARATOR = '----';
 const RATE_WINDOW_MS = 5 * 60 * 1000;
-const MAX_EMAIL_ATTEMPTS = 15;
+const MAX_QUERY_CODE_ATTEMPTS = 15;
 const MAX_IP_ATTEMPTS = 40;
 
 @Injectable()
@@ -34,24 +34,24 @@ export class IdBusinessV2MailViewerService {
     dto: QueryIdBusinessV2MailViewerDto,
     requestIp?: string | null
   ): Promise<V2MailViewerQueryResult> {
-    const { email, queryCode } = this.normalizeCredential(dto.credential);
+    const queryCode = this.normalizeQueryCode(dto.queryCode ?? dto.credential);
     const limit = this.normalizeLimit(dto.limit);
-    const emailHash = this.encryption.hash(email);
+    const queryCodeHash = this.encryption.hash(queryCode);
     const ipHash = this.encryption.hash(this.normalizeIp(requestIp));
-    if (!emailHash) throw new ServiceUnavailableException('查询校验服务不可用');
+    if (!queryCodeHash) throw new ServiceUnavailableException('查询校验服务不可用');
 
     const reservation = await this.repository.reserveQueryAttempt({
-      emailHash,
+      queryCodeHash,
       ipHash,
       since: new Date(Date.now() - RATE_WINDOW_MS),
-      maxEmailAttempts: MAX_EMAIL_ATTEMPTS,
+      maxQueryCodeAttempts: MAX_QUERY_CODE_ATTEMPTS,
       maxIpAttempts: MAX_IP_ATTEMPTS
     });
     if (!reservation.allowed) {
       throw new HttpException('查询过于频繁，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    const mailbox = await this.repository.findByEmail(email);
+    const mailbox = await this.repository.findByQueryCodeHash(queryCodeHash);
     const valid =
       mailbox?.status === 'active' &&
       mailbox.queryCodeExpiresAt.getTime() > Date.now() &&
@@ -63,7 +63,7 @@ export class IdBusinessV2MailViewerService {
           outcome: 'invalid'
         });
       }
-      throw new BadRequestException('邮箱或邮件查询码不正确');
+      throw new BadRequestException('邮件查询码不正确');
     }
 
     const appPassword = this.encryption.decrypt(mailbox.providerCredentialEncrypted);
@@ -124,21 +124,20 @@ export class IdBusinessV2MailViewerService {
     return timingSafeEqual(Buffer.from(storedHash, 'utf8'), Buffer.from(candidate, 'utf8'));
   }
 
-  private normalizeCredential(value: unknown) {
-    if (typeof value !== 'string') throw new BadRequestException('请输入邮箱和邮件查询码');
-    const credential = value.trim();
-    if (!credential || credential.length > V2_MAIL_VIEWER_LIMITS.credential) {
-      throw new BadRequestException('邮箱和邮件查询码格式不正确');
+  private normalizeQueryCode(value: unknown) {
+    if (typeof value !== 'string') throw new BadRequestException('请输入邮件查询码');
+    const input = value.trim();
+    if (!input) throw new BadRequestException('请输入邮件查询码');
+    if (input.length > V2_MAIL_VIEWER_LIMITS.credential) {
+      throw new BadRequestException('邮件查询码格式不正确');
     }
-    const separatorIndex = credential.indexOf(CREDENTIAL_SEPARATOR);
-    if (separatorIndex < 1) {
-      throw new BadRequestException('格式不正确，请输入 邮箱----邮件查询码');
-    }
-    const email = credential.slice(0, separatorIndex).trim().toLowerCase();
-    const queryCode = credential.slice(separatorIndex + CREDENTIAL_SEPARATOR.length).trim();
-    if (!email || email.length > V2_MAIL_VIEWER_LIMITS.email || !EMAIL_PATTERN.test(email)) {
-      throw new BadRequestException('请输入有效的邮箱地址');
-    }
+
+    const separatorIndex = input.indexOf(CREDENTIAL_SEPARATOR);
+    const legacyEmail = separatorIndex > 0 ? input.slice(0, separatorIndex).trim() : '';
+    const queryCode =
+      legacyEmail && EMAIL_PATTERN.test(legacyEmail)
+        ? input.slice(separatorIndex + CREDENTIAL_SEPARATOR.length).trim()
+        : input;
     if (
       !queryCode ||
       queryCode.length > V2_MAIL_VIEWER_LIMITS.queryCode ||
@@ -146,7 +145,7 @@ export class IdBusinessV2MailViewerService {
     ) {
       throw new BadRequestException('邮件查询码格式不正确');
     }
-    return { email, queryCode };
+    return queryCode;
   }
 
   private normalizeLimit(value: unknown) {

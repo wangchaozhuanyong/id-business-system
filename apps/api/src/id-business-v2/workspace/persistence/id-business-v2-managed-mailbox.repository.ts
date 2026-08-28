@@ -40,6 +40,10 @@ export class IdBusinessV2ManagedMailboxRepository {
     return client.idBusinessV2ManagedMailbox.findUnique({ where: { email } });
   }
 
+  findByQueryCodeHash(queryCodeHash: string, client: MailboxPersistenceClient = this.prisma) {
+    return client.idBusinessV2ManagedMailbox.findUnique({ where: { queryCodeHash } });
+  }
+
   findById(id: string, client: MailboxPersistenceClient = this.prisma) {
     return client.idBusinessV2ManagedMailbox.findUnique({ where: { id } });
   }
@@ -107,14 +111,14 @@ export class IdBusinessV2ManagedMailboxRepository {
   }
 
   reserveQueryAttempt(input: {
-    emailHash: string;
+    queryCodeHash: string;
     ipHash: string | null;
     since: Date;
-    maxEmailAttempts: number;
+    maxQueryCodeAttempts: number;
     maxIpAttempts: number;
   }) {
     return this.prisma.$transaction(async (client) => {
-      const lockKeys = [`mail-viewer:email:${input.emailHash}`];
+      const lockKeys = [`mail-viewer:query-code:${input.queryCodeHash}`];
       if (input.ipHash) lockKeys.push(`mail-viewer:ip:${input.ipHash}`);
       for (const key of lockKeys.sort()) {
         await acquireMysqlTransactionLock(client, key);
@@ -122,7 +126,7 @@ export class IdBusinessV2ManagedMailboxRepository {
 
       const counts = [
         client.idBusinessV2MailQueryAttempt.count({
-          where: { emailHash: input.emailHash, createdAt: { gte: input.since } }
+          where: { queryCodeHash: input.queryCodeHash, createdAt: { gte: input.since } }
         })
       ];
       if (input.ipHash) {
@@ -132,11 +136,12 @@ export class IdBusinessV2ManagedMailboxRepository {
           })
         );
       }
-      const [emailAttempts = 0, ipAttempts = 0] = await Promise.all(counts);
-      const allowed = emailAttempts < input.maxEmailAttempts && ipAttempts < input.maxIpAttempts;
+      const [queryCodeAttempts = 0, ipAttempts = 0] = await Promise.all(counts);
+      const allowed =
+        queryCodeAttempts < input.maxQueryCodeAttempts && ipAttempts < input.maxIpAttempts;
       const attempt = await client.idBusinessV2MailQueryAttempt.create({
         data: {
-          emailHash: input.emailHash,
+          queryCodeHash: input.queryCodeHash,
           ipHash: input.ipHash,
           mailboxId: null,
           outcome: allowed ? 'invalid' : 'rate_limited'
