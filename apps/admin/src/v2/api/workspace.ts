@@ -1,16 +1,20 @@
 import type {
+  CreateV2SavedTotpAccountInput,
   CreateV2WorkspaceShortcutInput,
   CreateV2ManagedMailboxInput,
   CreateV2ManagedMailboxResult,
   ReorderV2WorkspaceShortcutsInput,
   UpdateV2ManagedMailboxCredentialInput,
   UpdateV2ManagedMailboxStatusInput,
+  UpdateV2SavedTotpAccountInput,
   UpdateV2WorkspaceShortcutInput,
   V2MailViewerQueryInput,
   V2MailViewerQueryResult,
   V2ManagedMailbox,
   V2ManagedMailboxList,
   V2ManagedMailboxListQuery,
+  V2SavedTotpAccount,
+  V2SavedTotpAccountList,
   V2WorkspaceShortcut,
   V2WorkspaceShortcutList
 } from '@apple-business/shared';
@@ -38,6 +42,24 @@ export const idBusinessV2WorkspaceApi = {
   reorder(input: ReorderV2WorkspaceShortcutsInput) {
     return request<V2WorkspaceShortcutList>(
       http.put('/id-business-v2/workspace-shortcuts/order', input)
+    );
+  },
+  listTotpAccounts(options: ApiRequestOptions = {}) {
+    return request<V2SavedTotpAccountList>(
+      http.get('/id-business-v2/workspace-totp-accounts', { signal: options.signal })
+    );
+  },
+  createTotpAccount(input: CreateV2SavedTotpAccountInput) {
+    return request<V2SavedTotpAccount>(http.post('/id-business-v2/workspace-totp-accounts', input));
+  },
+  updateTotpAccount(accountId: string, input: UpdateV2SavedTotpAccountInput) {
+    return request<V2SavedTotpAccount>(
+      http.put(`/id-business-v2/workspace-totp-accounts/${encodeURIComponent(accountId)}`, input)
+    );
+  },
+  removeTotpAccount(accountId: string) {
+    return request<{ id: string; deleted: true }>(
+      http.delete(`/id-business-v2/workspace-totp-accounts/${encodeURIComponent(accountId)}`)
     );
   },
   listManagedMailboxes(query: V2ManagedMailboxListQuery, options: ApiRequestOptions = {}) {

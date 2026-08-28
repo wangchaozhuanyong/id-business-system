@@ -38,5 +38,8 @@ describe('personal workspace schema contract', () => {
     expect(workspaceModule).toContain('IdBusinessV2ManagedMailboxService');
     expect(workspaceModule).toContain('IdBusinessV2MailViewerService');
     expect(workspaceModule).toContain('IdBusinessV2ManagedMailboxRepository');
+    expect(workspaceModule).toContain('IdBusinessV2TotpAccountController');
+    expect(workspaceModule).toContain('IdBusinessV2TotpAccountService');
+    expect(workspaceModule).toContain('IdBusinessV2TotpAccountRepository');
   });
 });

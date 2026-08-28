@@ -11,6 +11,7 @@ describe('personal workspace UI contract', () => {
   const launcher = read('./V2WorkspaceLauncher.vue');
   const shortcutDrawer = read('./V2WorkspaceShortcutDrawer.vue');
   const totpDrawer = read('./V2TotpToolDrawer.vue');
+  const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
@@ -49,13 +50,41 @@ describe('personal workspace UI contract', () => {
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
-    expect(totpDrawer).toContain('size="min(620px, 100%)"');
+    expect(totpDrawer).toContain('size="min(640px, 100%)"');
   });
 
-  it('does not persist or transmit TOTP input', () => {
+  it('keeps temporary TOTP input in browser memory only', () => {
     expect(totpDrawer).not.toMatch(/localStorage|sessionStorage|idBusinessV2WorkspaceApi|http\./);
     expect(totpDrawer).toContain('getV2BusinessNowMs() ?? Date.now()');
     expect(totpDrawer).toContain('@closed="clearAll"');
+  });
+
+  it('manages encrypted personal TOTP accounts without returning saved secrets', () => {
+    expect(totpDrawer).toContain('<V2SavedTotpAccounts');
+    expect(totpDrawer).toContain('v-if="syncServerTime"');
+    expect(savedTotpAccounts).toContain('<V2AsyncRegion');
+    expect(savedTotpAccounts).toContain('label-position="left"');
+    expect(savedTotpAccounts).toContain('require-asterisk-position="right"');
+    expect(savedTotpAccounts).toContain('idBusinessV2WorkspaceApi.listTotpAccounts');
+    expect(savedTotpAccounts).toContain('idBusinessV2WorkspaceApi.createTotpAccount');
+    expect(savedTotpAccounts).toContain('idBusinessV2WorkspaceApi.updateTotpAccount');
+    expect(savedTotpAccounts).toContain('idBusinessV2WorkspaceApi.removeTotpAccount');
+    expect(savedTotpAccounts).toContain('搜索账号名称或签发方');
+    expect(savedTotpAccounts).toContain('V2_SAVED_TOTP_ACCOUNT_LIMITS.count');
+    expect(savedTotpAccounts).toContain('<el-pagination');
+    expect(savedTotpAccounts).toContain('SAVED_TOTP_PAGE_SIZE = 8');
+    expect(savedTotpAccounts).toContain('v-for="item in paginatedItems"');
+    expect(savedTotpAccounts).toContain('v2-saved-totp-card__details');
+    expect(savedTotpAccounts).toContain('variant="success"');
+    expect(savedTotpAccounts).toContain('密钥加密保存在服务器');
+    expect(savedTotpAccounts).not.toMatch(/secretEncrypted|secretHash|localStorage|sessionStorage/);
+  });
+
+  it('keeps the time calibration state in the drawer header without a security panel', () => {
+    expect(totpDrawer).toContain('<template #header>');
+    expect(totpDrawer).toContain('v2-totp-drawer__header');
+    expect(totpDrawer).toContain('v2-totp-time-status');
+    expect(totpDrawer).not.toContain('v2-totp-security-panel');
   });
 
   it('exposes the local TOTP tool on the public login page', () => {
@@ -68,10 +97,17 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).toContain('if (!props.syncServerTime)');
   });
 
-  it('aligns the TOTP input frame with the full drawer content width', () => {
+  it('keeps TOTP labels on the left and separates single from batch queries', () => {
     expect(totpDrawer).toContain('label-position="left"');
-    expect(totpDrawer).toContain('class="v2-totp-input__field"');
-    expect(totpDrawer).toMatch(/\.v2-totp-input__field\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/s);
+    expect(totpDrawer).toContain('value="single"');
+    expect(totpDrawer).toContain('value="batch"');
+    expect(totpDrawer).toContain('v2-totp-quick-query');
+    expect(totpDrawer).toContain('v2-totp-batch-input');
+    expect(totpDrawer).toContain('一键粘贴');
+    expect(totpDrawer).toContain('@paste="handleSinglePaste"');
+    expect(totpDrawer).toContain('applyPastedInput(clipboardText)');
+    expect(totpDrawer).toContain('粘贴后自动生成');
+    expect(totpDrawer).not.toContain('class="v2-totp-query-button"');
   });
 
   it('keeps teleported workspace drawers on an opaque themed surface', () => {
@@ -80,14 +116,16 @@ describe('personal workspace UI contract', () => {
     expect(baseCss).toMatch(/:root\s*\{[^}]*--v2-border:\s*var\(--v3-border\)/s);
   });
 
-  it('keeps each TOTP result in one row without exposing a secret summary', () => {
-    expect(totpDrawer).toContain('v2-totp-result__line');
+  it('shows readable TOTP result cards without exposing a secret summary', () => {
+    expect(totpDrawer).toContain('v2-totp-result-card');
     expect(totpDrawer).toContain('v2-totp-result__countdown');
     expect(totpDrawer).toContain('v2-totp-result__token');
     expect(totpDrawer).toContain('v2-totp-result__copy');
+    expect(totpDrawer).toContain('v2-totp-result__progress');
+    expect(totpDrawer).toContain('临时查询验证码');
+    expect(totpDrawer).toContain('role="progressbar"');
     expect(totpDrawer).toContain('account.lineNumber');
     expect(totpDrawer).not.toContain('account.maskedSecret');
-    expect(totpDrawer).not.toContain('v2-totp-result__timer');
   });
 
   it('keeps mailbox query as a production-ready module in workspace tools', () => {

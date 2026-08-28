@@ -87,7 +87,7 @@
             <el-icon><Key /></el-icon>
             <span>
               <strong>计算 2FA 验证码</strong>
-              <small>仅校验格式并在本地计算</small>
+              <small>临时查询或管理已保存账号</small>
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
