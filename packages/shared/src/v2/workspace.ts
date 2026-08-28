@@ -6,6 +6,17 @@ export const V2_WORKSPACE_SHORTCUT_LIMITS = {
   url: 2048
 } as const;
 
+export const V2_SAVED_TOTP_ACCOUNT_LIMITS = {
+  count: 100,
+  issuer: 120,
+  name: 60,
+  secret: 4096
+} as const;
+
+export const V2_TOTP_ALGORITHMS = ['SHA1', 'SHA256', 'SHA512'] as const;
+
+export type V2TotpAlgorithm = (typeof V2_TOTP_ALGORITHMS)[number];
+
 export const V2_MAIL_VIEWER_LIMITS = {
   batchLength: 12_000,
   batchLines: 20,
@@ -48,6 +59,33 @@ export interface UpdateV2WorkspaceShortcutInput {
 
 export interface ReorderV2WorkspaceShortcutsInput {
   shortcutIds: string[];
+}
+
+export interface V2SavedTotpAccount {
+  id: string;
+  name: string;
+  issuer: string | null;
+  algorithm: V2TotpAlgorithm;
+  digits: number;
+  period: number;
+  token: string;
+  expiresAt: IsoDateTimeString;
+  createdAt: IsoDateTimeString;
+  updatedAt: IsoDateTimeString;
+}
+
+export interface V2SavedTotpAccountList {
+  items: V2SavedTotpAccount[];
+}
+
+export interface CreateV2SavedTotpAccountInput {
+  name: string;
+  secret: string;
+}
+
+export interface UpdateV2SavedTotpAccountInput {
+  name: string;
+  secret?: string;
 }
 
 export interface V2MailViewerQueryInput {

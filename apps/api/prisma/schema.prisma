@@ -431,6 +431,12 @@ enum IdBusinessV2MailQueryOutcome {
   provider_error
 }
 
+enum IdBusinessV2TotpAlgorithm {
+  sha1
+  sha256
+  sha512
+}
+
 model User {
   id              String     @id @default(uuid()) @db.Uuid
   username        String     @unique @db.VarChar(100)
@@ -496,6 +502,7 @@ model User {
   idBusinessV2BrandingSettings         IdBusinessV2BrandingSettings[]       @relation("IdBusinessV2BrandingSettingsUpdatedBy")
   idBusinessV2TablePreferences         IdBusinessV2UserTablePreference[]
   idBusinessV2WorkspaceShortcuts       IdBusinessV2WorkspaceShortcut[]
+  idBusinessV2TotpAccounts             IdBusinessV2TotpAccount[]
   idBusinessV2ManagedMailboxesCreated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxCreatedBy")
   idBusinessV2ManagedMailboxesUpdated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxUpdatedBy")
   idBusinessV2FinanceSettings          IdBusinessV2FinanceSettings[]        @relation("IdBusinessV2FinanceSettingsUpdatedBy")
@@ -1871,6 +1878,27 @@ model IdBusinessV2WorkspaceShortcut {
   @@unique([userId, url])
   @@index([userId, sortOrder])
   @@map("id_business_v2_workspace_shortcuts")
+}
+
+model IdBusinessV2TotpAccount {
+  id              String                    @id @default(uuid()) @db.Uuid
+  userId          String                    @map("user_id") @db.Uuid
+  name            String                    @db.VarChar(60)
+  issuer          String?                   @db.VarChar(120)
+  secretEncrypted String                    @map("secret_encrypted") @db.Text
+  secretHash      String                    @map("secret_hash") @db.VarChar(64)
+  algorithm       IdBusinessV2TotpAlgorithm @default(sha1)
+  digits          Int                       @default(6)
+  period          Int                       @default(30)
+  createdAt       DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@unique([userId, secretHash])
+  @@index([userId, updatedAt])
+  @@map("id_business_v2_totp_accounts")
 }
 
 model IdBusinessV2ManagedMailbox {
