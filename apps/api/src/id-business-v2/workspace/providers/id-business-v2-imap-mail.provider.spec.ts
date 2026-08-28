@@ -17,7 +17,11 @@ vi.mock('imapflow', () => ({
     async connect() {
       if (!this.options.auth.user.includes('@')) return;
       const error = new Error('Authentication failed');
-      Object.assign(error, { responseCode: 'AUTHENTICATIONFAILED' });
+      Object.assign(error, {
+        authenticationFailed: true,
+        message: 'Command failed',
+        serverResponseCode: 'AUTHENTICATIONFAILED'
+      });
       throw error;
     }
 

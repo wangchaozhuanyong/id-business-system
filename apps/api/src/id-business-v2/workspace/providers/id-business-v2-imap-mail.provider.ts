@@ -226,8 +226,10 @@ export class IdBusinessV2ImapMailProvider {
   private mapProviderError(error: unknown) {
     const code = this.readErrorField(error, 'code');
     const responseCode = this.readErrorField(error, 'responseCode');
+    const serverResponseCode = this.readErrorField(error, 'serverResponseCode');
     const authenticationFailed =
-      /auth|credentials|login|password/i.test(`${code} ${responseCode}`) ||
+      this.readErrorField(error, 'authenticationFailed') === 'true' ||
+      /auth|credentials|login|password/i.test(`${code} ${responseCode} ${serverResponseCode}`) ||
       /authentication failed|invalid credentials|login failed|app-specific password/i.test(
         this.readErrorField(error, 'message')
       );
