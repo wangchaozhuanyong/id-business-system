@@ -7,9 +7,14 @@ deployment_directory="/opt/id-business-v2/current"
 backup_directory="/opt/id-business-v2/backups/mysql"
 environment_file="${deployment_directory}/.env.aws.production"
 compose_file="${deployment_directory}/docker-compose.aws-mysql.yml"
+normalizer_script="${deployment_directory}/scripts/mysql-dump-restore-normalizer.sed"
 
 if [[ ! -f "${environment_file}" || ! -f "${compose_file}" ]]; then
   echo "AWS MySQL 生产部署文件不存在" >&2
+  exit 1
+fi
+if [[ ! -f "${normalizer_script}" ]]; then
+  echo "MySQL 备份规范化规则不存在" >&2
   exit 1
 fi
 
@@ -117,13 +122,11 @@ prune_local_backups() {
 # 先清理既有超额备份，再检查空间，避免旧文件占满磁盘后任务无法自愈。
 prune_local_backups
 find "${backup_directory}" -maxdepth 1 -type f -name '.id-business-v2-*.sql.gz.partial' -mmin +180 -delete
-
 available_bytes="$(df -PB1 "${backup_directory}" | awk 'NR == 2 { print $4 }')"
 if [[ ! "${available_bytes}" =~ ^[0-9]+$ ]] || ((available_bytes < minimum_free_bytes)); then
   echo "备份目录可用空间不足：${available_bytes:-unknown} bytes" >&2
   exit 1
 fi
-
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 partial_file="${backup_directory}/.id-business-v2-${stamp}.sql.gz.partial"
 backup_file="${backup_directory}/id-business-v2-${stamp}.sql.gz"
@@ -131,6 +134,7 @@ backup_file="${backup_directory}/id-business-v2-${stamp}.sql.gz"
 cd "${deployment_directory}"
 docker compose --env-file "${environment_file}" -f "${compose_file}" exec -T mysql \
   sh -c 'exec mysqldump --host=127.0.0.1 --user="$MYSQL_USER" --password="$MYSQL_PASSWORD" --single-transaction --quick --hex-blob --no-tablespaces --triggers "$MYSQL_DATABASE"' \
+  | sed -E -f "${normalizer_script}" \
   | gzip -9 >"${partial_file}"
 
 gzip -t "${partial_file}"

@@ -362,6 +362,8 @@ const overview: V2FinanceOverview = {
   reconciliation: {
     isComplete: emptyState,
     issueCount: emptyState ? 0 : 2,
+    returnedIssueCount: emptyState ? 0 : 2,
+    hasMoreIssues: false,
     issues: emptyState
       ? []
       : [

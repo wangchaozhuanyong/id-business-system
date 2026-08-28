@@ -40,6 +40,7 @@
     "acceptance:v2-table-layout": "node scripts/acceptance-v2-table-layout.mjs",
     "acceptance:v2-session-reliability": "node scripts/acceptance-v2-session-reliability.mjs",
     "acceptance:v2-data-governance": "node scripts/acceptance-v2-data-governance.mjs",
+    "acceptance:v2-financial-integrity": "node scripts/acceptance-v2-financial-integrity.mjs",
     "acceptance:v2-stage4": "node scripts/acceptance-v2-stage4.mjs",
     "acceptance:v2-stage6": "node scripts/acceptance-v2-stage6.mjs",
     "acceptance:v2-stage7": "node scripts/acceptance-v2-stage7.mjs",
@@ -72,6 +73,9 @@
     "git:readiness": "node scripts/git-readiness.mjs",
     "git:readiness:verbose": "node scripts/git-readiness.mjs --verbose",
     "audit:v2-data-integrity": "node scripts/v2-data-integrity-audit.mjs",
+    "provision:v2-data-integrity-auditor:production": "node --env-file=.env.aws.production scripts/provision-v2-data-integrity-auditor.mjs",
+    "audit:v2-data-integrity:production": "node --env-file=.env.aws.production scripts/v2-data-integrity-audit.mjs",
+    "gate:v2-financial-integrity:production": "npm run check:cloud-independence && npm run audit:v2-data-integrity:production",
     "prod:smoke-user:provision:with-env": "npm run prisma:generate --workspace @apple-business/api && npm run build --workspace @apple-business/api && node scripts/provision-production-smoke-user.mjs",
     "deploy:pm2-api": "bash scripts/deploy-pm2-api.sh"
   },

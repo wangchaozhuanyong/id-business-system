@@ -530,6 +530,167 @@ describe('IdBusinessV2FinanceReportRepository manual inflow mapping', () => {
   });
 });
 
+describe('IdBusinessV2FinanceReportsService full reconciliation scan', () => {
+  const completeSettings = {
+    id: 1,
+    baseCurrency: 'CNY',
+    timezone: 'Asia/Shanghai',
+    enabledAt: null,
+    historyStatus: 'completed',
+    historyCompletedAt: new Date('2026-08-28T00:00:00.000Z'),
+    historyNote: null
+  };
+  const healthyRates = new Map([
+    ['MYR', { id: 'myr-rate', rateToCny: Rate8.from('1.5'), expiresAt: null }],
+    ['USD', { id: 'usd-rate', rateToCny: Rate8.from('7'), expiresAt: null }],
+    ['USDT', { id: 'usdt-rate', rateToCny: Rate8.from('7'), expiresAt: null }]
+  ]);
+
+  it('scans every cursor page, reports the exact issue count, and bounds response details', async () => {
+    const missingAccounts = (start: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `account-${start + index}`,
+        appleIdMasked: `masked-${start + index}`,
+        purchaseCost: Amount4.from('1')
+      }));
+    const repository = {
+      findSettings: vi.fn().mockResolvedValue(completeSettings),
+      loadCompletedOrderReconciliationPage: vi
+        .fn()
+        .mockResolvedValue({ rows: [], orderLines: [], nextCursor: null }),
+      loadMissingPurchaseEvidencePage: vi
+        .fn()
+        .mockResolvedValueOnce({
+          rows: missingAccounts(0, 150),
+          nextCursor: 'account-149'
+        })
+        .mockResolvedValueOnce({ rows: missingAccounts(150, 70), nextCursor: null }),
+      loadPendingSupplierRefundPage: vi.fn().mockResolvedValue({ rows: [], nextCursor: null }),
+      loadSupplierWalletReconciliationPage: vi
+        .fn()
+        .mockResolvedValue({ rows: [], nextCursor: null }),
+      loadLatestRateRows: vi.fn().mockResolvedValue(healthyRates)
+    };
+    const service = new IdBusinessV2FinanceReportsService({} as never, repository as never);
+
+    await expect(service.reconciliation({})).resolves.toMatchObject({
+      isComplete: false,
+      issueCount: 220,
+      returnedIssueCount: 200,
+      hasMoreIssues: true
+    });
+    expect(repository.loadMissingPurchaseEvidencePage).toHaveBeenNthCalledWith(1, undefined);
+    expect(repository.loadMissingPurchaseEvidencePage).toHaveBeenNthCalledWith(2, 'account-149');
+  });
+
+  it('recalculates exact four-decimal order profit and detects after-sales ID cost', async () => {
+    const repository = {
+      findSettings: vi.fn().mockResolvedValue(completeSettings),
+      loadCompletedOrderReconciliationPage: vi.fn().mockResolvedValue({
+        rows: [
+          {
+            id: 'order-healthy',
+            orderNo: 'O-HEALTHY',
+            profitAmount: Amount4.from('57'),
+            accountSource: 'inventory',
+            appliedAccountCostAmount: Amount4.from('40')
+          },
+          {
+            id: 'order-after-sales',
+            orderNo: 'O-AFTER-SALES',
+            profitAmount: Amount4.from('0'),
+            accountSource: 'customer_owned',
+            appliedAccountCostAmount: Amount4.zero()
+          },
+          {
+            id: 'order-four-decimal-difference',
+            orderNo: 'O-FOUR-DECIMAL',
+            profitAmount: Amount4.from('0.0001'),
+            accountSource: 'inventory',
+            appliedAccountCostAmount: Amount4.zero()
+          }
+        ],
+        orderLines: [
+          {
+            accountCode: 'sales_revenue',
+            direction: 'credit',
+            amountCny: Amount4.from('100'),
+            journal: { sourceId: 'order-healthy', journalType: 'order_completed' }
+          },
+          {
+            accountCode: 'platform_fee',
+            direction: 'debit',
+            amountCny: Amount4.from('3'),
+            journal: { sourceId: 'order-healthy', journalType: 'order_completed' }
+          },
+          {
+            accountCode: 'id_cost',
+            direction: 'debit',
+            amountCny: Amount4.from('40'),
+            journal: { sourceId: 'order-healthy', journalType: 'order_completed' }
+          },
+          {
+            accountCode: 'sales_revenue',
+            direction: 'credit',
+            amountCny: Amount4.from('20'),
+            journal: { sourceId: 'order-after-sales', journalType: 'order_completed' }
+          },
+          {
+            accountCode: 'sales_revenue',
+            direction: 'credit',
+            amountCny: Amount4.from('1'),
+            journal: {
+              sourceId: 'order-four-decimal-difference',
+              journalType: 'order_completed'
+            }
+          },
+          {
+            accountCode: 'operating_expense',
+            direction: 'debit',
+            amountCny: Amount4.from('1'),
+            journal: {
+              sourceId: 'order-four-decimal-difference',
+              journalType: 'order_completed'
+            }
+          },
+          {
+            accountCode: 'id_cost',
+            direction: 'debit',
+            amountCny: Amount4.from('20'),
+            journal: { sourceId: 'order-after-sales', journalType: 'order_completed' }
+          }
+        ],
+        nextCursor: null
+      }),
+      loadMissingPurchaseEvidencePage: vi.fn().mockResolvedValue({ rows: [], nextCursor: null }),
+      loadPendingSupplierRefundPage: vi.fn().mockResolvedValue({ rows: [], nextCursor: null }),
+      loadSupplierWalletReconciliationPage: vi
+        .fn()
+        .mockResolvedValue({ rows: [], nextCursor: null }),
+      loadLatestRateRows: vi.fn().mockResolvedValue(healthyRates)
+    };
+    const service = new IdBusinessV2FinanceReportsService({} as never, repository as never);
+
+    const result = await service.reconciliation({});
+
+    expect(result.issueCount).toBe(2);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'after_sales_id_cost_nonzero',
+          sourceId: 'order-after-sales',
+          amountCny: '20'
+        }),
+        expect.objectContaining({
+          code: 'order_profit_difference',
+          sourceId: 'order-four-decimal-difference',
+          amountCny: '0.0001'
+        })
+      ])
+    );
+  });
+});
+
 function createReportsService(prisma: object) {
   return new IdBusinessV2FinanceReportsService(
     new V2CommandTransactionManager(prisma as never),

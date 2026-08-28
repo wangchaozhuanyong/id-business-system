@@ -15,6 +15,36 @@
 Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使用的模型；migration 目录只允许保留
 当前系统纯净基线和此后新增的当前系统迁移，不得导入其他仓库的历史迁移。
 
+## 生产基础设施边界
+
+- 生产环境只允许部署在 AWS：EC2 运行前端、API 和 MySQL，S3 保存备份。
+- 禁止重新引入、配置或部署 Supabase 和 Cloudflare 运行时，包括 Supabase Auth、
+  Supabase Database/Realtime/Edge Functions、Cloudflare Worker/Pages 及其密钥、环境变量和发布脚本。
+- 认证固定使用本地 JWT 会话，业务数据库固定使用 AWS EC2 内的 MySQL。
+- 部署前必须运行 `npm run check:cloud-independence`；检查失败时禁止发布。
+- 历史 PostgreSQL 基线中已存在的文字仅作为不可修改的迁移记录，不得恢复为运行时配置。
+- 本机生产连接信息固定保存在被 Git 忽略的 `.deploy/aws-production.local.env`；执行生产检查或部署时必须先读取并复用，
+  仅当文件缺失或连接已失效时再向用户确认。
+- `.deploy/aws-production.local.env` 和其中引用的私钥必须保持仅本机可读，禁止在日志、回复、提交或部署包中输出、复制或上传。
+
+## Git 与生产发布强制流程
+
+- `origin/main` 是唯一生产代码来源，不设“线上最新分支”，不得从本地未提交文件、功能分支或服务器临时补丁发布。
+- 每次发布先同步 `origin/main`，再从其创建 `codex/<scope>-release-<date>` 发布分支；禁止直接向 `main` 推送和强制推送。
+- 提交前必须运行相关专项检查、`npm run check`、`npm run acceptance:v2-financial-integrity` 和
+  `npm run git:readiness`。任何失败都必须阻断提交或发布。
+- 发布分支推送后必须创建 PR；只有 GitHub CI 全部通过并完成审查，才允许合并到 `main`。
+- 生产部署必须使用合并后的 `origin/main` 精确 commit SHA。部署前工作区必须干净，且本地 `HEAD`、
+  `origin/main` 和待部署 SHA 必须一致；禁止在服务器发布目录直接修改代码。
+- 每次部署创建 `/opt/id-business-v2/releases/<UTC>-<short-sha>` 不可变目录，保留上一版；禁止覆盖旧发布目录。
+- 发布期间必须持有生产部署锁，并确认没有其他 Compose、迁移、同步或部署进程并发执行。
+- 数据库变更只允许向前 migration。更新应用容器前必须完成 S3 备份及校验、镜像构建、migration 和 38 项只读财务完整性门禁；
+  任一失败都不得更新应用容器。
+- 应用容器更新后必须通过健康检查和整站冒烟，才允许原子切换 `current`；切换后必须再次执行整站冒烟、
+  38 项财务完整性门禁，并核验备份与恢复验证定时器。
+- 应用异常优先将 `current` 回切上一已验证版本；数据库 migration 不自动回滚，数据恢复必须先在隔离实例验证。
+- 紧急修复也必须走“发布分支 → PR/CI → `main` → 精确 SHA 部署”流程，不得绕过门禁。
+
 ## 开发规则
 
 - 默认使用简体中文。

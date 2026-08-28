@@ -39,9 +39,10 @@ sudo journalctl -u id-business-v2-mysql-backup.service -n 100 --no-pager
 
 1. 从当前发布的 `.env.aws.production` 读取 MySQL 和 S3 配置。
 2. 使用 `mysqldump --single-transaction --quick --hex-blob --triggers` 导出当前库。
-3. 先写入 `.partial`，通过 `gzip -t` 且确认非空后再原子改名。
-4. 上传到 S3 并校验远端大小和 SHA-256。
-5. 只有 S3 验证成功后才轮换本机旧备份，并始终保留最新一份。
+3. 精确规范化历史触发器末尾会导致 MySQL 8.4 无法恢复的转储结束符。
+4. 先写入 `.partial`，通过 `gzip -t` 且确认非空后再原子改名。
+5. 上传到 S3 并校验远端大小和 SHA-256。
+6. 只有 S3 验证成功后才轮换本机旧备份，并始终保留最新一份。
 
 systemd 配置位于：
 
@@ -81,7 +82,16 @@ sudo /opt/id-business-v2/current/scripts/verify-aws-mysql-backup.sh \
 ```
 
 脚本会下载并校验 S3 SHA-256，在不发布任何宿主机端口的临时 MySQL 8.4
-容器中完成导入，检查核心表、Prisma migration 和 `mysqlcheck`，结束后自动删除临时容器及下载文件。
+容器中完成导入，检查核心表、Prisma migration，并对全部业务表执行 `CHECK TABLE`；结束后自动删除
+临时容器及下载文件。
+
+## 2026-08-28 生产恢复证据
+
+- 最新已验证对象：`mysql/daily/id-business-v2-20260828T071922Z.sql.gz`。
+- S3 对象大小和 SHA-256 与 EC2 本地文件一致。
+- 隔离 MySQL 8.4 成功恢复 63 张表，63/63 张表通过 `CHECK TABLE`，10 个 migration 有效。
+- 恢复任务退出码为 0，临时恢复容器数量回到 0；每周定时器已启用并处于 `active`。
+- 早于该对象的备份继续保留，但未取得同等级的原始转储恢复证据，不作为本次已验证恢复点。
 
 真实事故恢复仍必须：
 

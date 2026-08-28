@@ -1,48 +1,58 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
-import { Client } from 'pg';
+import { PrismaClient } from '@prisma/client';
 import {
   V2_DATA_INTEGRITY_CHECKS,
   assessV2DataIntegrity,
-  buildV2DataIntegrityCheckQuery
+  assertV2AuditConnectionReadOnly,
+  buildV2DataIntegrityCheckQueries,
+  normalizeV2DataIntegritySamples
 } from './lib/v2-data-integrity-audit.mjs';
 
-const databaseUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error('缺少只读审计数据库地址（DATABASE_URL）');
-
-const url = new URL(databaseUrl);
-for (const option of ['schema', 'pgbouncer', 'connection_limit', 'pool_timeout', 'sslmode']) {
-  url.searchParams.delete(option);
+const databaseUrl = process.env.V2_DATA_INTEGRITY_DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error('缺少 MySQL 只读巡检地址（V2_DATA_INTEGRITY_DATABASE_URL）');
 }
-const localHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+if (!/^mysql:\/\//i.test(databaseUrl.trim())) {
+  throw new Error('数据一致性巡检只支持当前 MySQL 运行时');
+}
 
-const client = new Client({
-  connectionString: url.toString(),
-  ssl: localHosts.has(url.hostname) ? undefined : { rejectUnauthorized: false },
-  application_name: 'id-v2-data-integrity-audit'
-});
+const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
 try {
-  await client.connect();
-  await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-  const identity = (
-    await client.query(
-      `SELECT current_user AS "currentUser",
-              current_setting('transaction_read_only') AS "transactionReadOnly"`
-    )
-  ).rows[0];
-  const checks = [];
-  for (const check of V2_DATA_INTEGRITY_CHECKS) {
-    const result = (await client.query(buildV2DataIntegrityCheckQuery(check.sql))).rows[0];
-    checks.push({
-      code: check.code,
-      description: check.description,
-      count: Number(result.count),
-      samples: result.samples
-    });
-  }
-  await client.query('COMMIT');
+  await client.$connect();
+  const grants = await client.$queryRawUnsafe('SHOW GRANTS');
+  assertV2AuditConnectionReadOnly(grants);
+
+  const { identity, checks } = await client.$transaction(
+    async (tx) => {
+      const identityRows = await tx.$queryRawUnsafe(
+        `SELECT CURRENT_USER() AS currentUser,
+                @@transaction_isolation AS transactionIsolation,
+                @@session.foreign_key_checks AS foreignKeyChecks`
+      );
+      const results = [];
+      for (const check of V2_DATA_INTEGRITY_CHECKS) {
+        try {
+          const queries = buildV2DataIntegrityCheckQueries(check.sql);
+          const countRows = await tx.$queryRawUnsafe(queries.count);
+          const count = Number(countRows[0]?.count ?? 0);
+          const sampleRows = count > 0 ? await tx.$queryRawUnsafe(queries.samples) : [];
+          results.push({
+            code: check.code,
+            description: check.description,
+            count,
+            samples: normalizeV2DataIntegritySamples(sampleRows)
+          });
+        } catch (error) {
+          throw new Error(`MySQL 数据一致性巡检 ${check.code} 执行失败`, { cause: error });
+        }
+      }
+      return { identity: identityRows[0], checks: results };
+    },
+    { isolationLevel: 'RepeatableRead', timeout: 120_000 }
+  );
 
   const assessment = assessV2DataIntegrity(checks);
   console.log(
@@ -53,14 +63,11 @@ try {
         identity,
         checks
       },
-      null,
+      (_key, value) => (typeof value === 'bigint' ? value.toString() : value),
       2
     )
   );
   if (!assessment.ok) process.exitCode = 1;
-} catch (error) {
-  await client.query('ROLLBACK').catch(() => undefined);
-  throw error;
 } finally {
-  await client.end().catch(() => undefined);
+  await client.$disconnect().catch(() => undefined);
 }

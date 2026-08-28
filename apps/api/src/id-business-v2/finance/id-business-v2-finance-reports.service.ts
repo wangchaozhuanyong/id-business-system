@@ -33,6 +33,18 @@ const EXPENSE_CODES = [
   'id_purchase_loss',
   'operating_expense'
 ] as const;
+
+const RECONCILIATION_ISSUE_DETAIL_LIMIT = 200;
+
+export interface FinanceReconciliationIssue {
+  code: string;
+  severity: 'info' | 'warning' | 'error';
+  sourceType: string | null;
+  sourceId: string | null;
+  message: string;
+  amountCny: string | null;
+}
+
 @Injectable()
 export class IdBusinessV2FinanceReportsService {
   constructor(
@@ -264,16 +276,16 @@ export class IdBusinessV2FinanceReportsService {
 
   async reconciliation(query: FinanceReportQuery) {
     const settings = await this.getSettings();
-    const issues: Array<{
-      code: string;
-      severity: 'info' | 'warning' | 'error';
-      sourceType: string | null;
-      sourceId: string | null;
-      message: string;
-      amountCny: string | null;
-    }> = [];
+    const issues: FinanceReconciliationIssue[] = [];
+    let issueCount = 0;
+    let hasError = false;
+    const addIssue = (issue: FinanceReconciliationIssue) => {
+      issueCount += 1;
+      hasError ||= issue.severity === 'error';
+      if (issues.length < RECONCILIATION_ISSUE_DETAIL_LIMIT) issues.push(issue);
+    };
     if (settings.historyStatus !== 'completed') {
-      issues.push({
+      addIssue({
         code: 'history_incomplete',
         severity: 'warning',
         sourceType: null,
@@ -282,104 +294,138 @@ export class IdBusinessV2FinanceReportsService {
         amountCny: null
       });
     }
-    const { completedOrders, missingPurchaseEvidence, pendingRefunds, wallets, orderLines } =
-      await this.repository.loadReconciliation(this.parseOccurredAt(query.dateFrom, query.dateTo));
-    for (const order of completedOrders) {
-      if (order.accountSource === 'customer_owned' && !order.appliedAccountCostAmount.isZero()) {
-        issues.push({
-          code: 'after_sales_id_cost_nonzero',
-          severity: 'error',
-          sourceType: 'order',
-          sourceId: order.id,
-          message: `售后订单 ${order.orderNo} 出现了不应计入的 ID 成本`,
-          amountCny: order.appliedAccountCostAmount.toString()
-        });
+
+    let cursor: string | undefined;
+    const occurredAt = this.parseOccurredAt(query.dateFrom, query.dateTo);
+    do {
+      const page = await this.repository.loadCompletedOrderReconciliationPage(occurredAt, cursor);
+      const linesByOrder = new Map<string, typeof page.orderLines>();
+      for (const line of page.orderLines) {
+        const sourceId = line.journal.sourceId;
+        if (!sourceId) continue;
+        const lines = linesByOrder.get(sourceId) ?? [];
+        lines.push(line);
+        linesByOrder.set(sourceId, lines);
       }
-      const lines = orderLines.filter((line) => line.journal.sourceId === order.id);
-      if (lines.length === 0) {
-        issues.push({
-          code: 'missing_finance_journal',
-          severity: 'error',
-          sourceType: 'order',
-          sourceId: order.id,
-          message: `订单 ${order.orderNo} 尚未生成财务日记`,
-          amountCny: order.profitAmount?.toString() ?? null
-        });
-        continue;
-      }
-      const net = lines.reduce((total, line) => {
-        const amountCny = line.amountCny;
-        const naturalCredit =
-          line.accountCode === 'sales_revenue' || line.accountCode === 'realized_fx_gain_loss';
-        const positive =
-          (naturalCredit && line.direction === 'credit') ||
-          (!naturalCredit && line.direction === 'credit');
-        if (line.accountCode === 'sales_revenue' || line.accountCode === 'realized_fx_gain_loss') {
-          return positive ? total.add(amountCny) : total.sub(amountCny);
+      for (const order of page.rows) {
+        const lines = linesByOrder.get(order.id) ?? [];
+        const idCostFromJournals = lines
+          .filter((line) => line.accountCode === 'id_cost')
+          .reduce(
+            (total, line) =>
+              line.direction === 'debit' ? total.add(line.amountCny) : total.sub(line.amountCny),
+            Amount4.zero()
+          );
+        if (
+          order.accountSource === 'customer_owned' &&
+          (!order.appliedAccountCostAmount.isZero() || !idCostFromJournals.isZero())
+        ) {
+          addIssue({
+            code: 'after_sales_id_cost_nonzero',
+            severity: 'error',
+            sourceType: 'order',
+            sourceId: order.id,
+            message: `售后订单 ${order.orderNo} 出现了不应计入的 ID 成本`,
+            amountCny: (order.appliedAccountCostAmount.isZero()
+              ? idCostFromJournals.abs()
+              : order.appliedAccountCostAmount.abs()
+            ).toString()
+          });
         }
-        return line.direction === 'debit' ? total.sub(amountCny) : total.add(amountCny);
-      }, Amount4.zero());
-      const difference = net.sub(order.profitAmount ?? 0).abs();
-      if (difference.gt('0.01')) {
-        issues.push({
-          code: 'order_profit_difference',
+        if (!lines.some((line) => line.journal.journalType === 'order_completed')) {
+          addIssue({
+            code: 'missing_finance_journal',
+            severity: 'error',
+            sourceType: 'order',
+            sourceId: order.id,
+            message: `订单 ${order.orderNo} 尚未生成完成财务日记`,
+            amountCny: order.profitAmount?.toString() ?? null
+          });
+          continue;
+        }
+        const net = lines.reduce(
+          (total, line) =>
+            line.direction === 'credit' ? total.add(line.amountCny) : total.sub(line.amountCny),
+          Amount4.zero()
+        );
+        const difference = net.sub(order.profitAmount ?? 0).abs();
+        if (!difference.isZero()) {
+          addIssue({
+            code: 'order_profit_difference',
+            severity: 'error',
+            sourceType: 'order',
+            sourceId: order.id,
+            message: `订单 ${order.orderNo} 的逐单利润与财务分解不一致`,
+            amountCny: difference.toString()
+          });
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    cursor = undefined;
+    do {
+      const page = await this.repository.loadMissingPurchaseEvidencePage(cursor);
+      for (const account of page.rows) {
+        addIssue({
+          code: 'missing_fx_rate',
           severity: 'error',
-          sourceType: 'order',
-          sourceId: order.id,
-          message: `订单 ${order.orderNo} 的逐单利润与财务分解不一致`,
-          amountCny: difference.toString()
+          sourceType: 'account',
+          sourceId: account.id,
+          message: `${account.appleIdMasked} 缺少采购汇率快照`,
+          amountCny: account.purchaseCost.toString()
         });
       }
-    }
-    const afterSales = await this.afterSales(query);
-    if (Amount4.from(afterSales.idCostCny).gt(0)) {
-      issues.push({
-        code: 'after_sales_id_cost_nonzero',
-        severity: 'error',
-        sourceType: 'order',
-        sourceId: null,
-        message: '售后业务财务凭证出现了不应计入的 ID 成本',
-        amountCny: afterSales.idCostCny
-      });
-    }
-    for (const account of missingPurchaseEvidence) {
-      issues.push({
-        code: 'missing_fx_rate',
-        severity: 'error',
-        sourceType: 'account',
-        sourceId: account.id,
-        message: `${account.appleIdMasked} 缺少采购汇率快照`,
-        amountCny: account.purchaseCost.toString()
-      });
-    }
-    for (const card of pendingRefunds) {
-      issues.push({
-        code: 'open_supplier_refund',
-        severity: 'warning',
-        sourceType: 'gift_card',
-        sourceId: card.id,
-        message: `礼品卡 ${card.codeMasked} 的卡商退款尚未闭环`,
-        amountCny: card.supplierRefundAmountCny.toString()
-      });
-    }
-    for (const wallet of wallets) {
-      const latest = wallet.ledgerEntries[0];
-      if (latest && !latest.balanceAfter.equals(wallet.currentBalance)) {
-        issues.push({
-          code: 'supplier_balance_difference',
-          severity: 'error',
-          sourceType: 'supplier_wallet',
-          sourceId: wallet.id,
-          message: '供应商钱包余额与最后一条流水不一致',
-          amountCny: wallet.currentBalanceCny.sub(latest.balanceAfterCny).abs().toString()
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    cursor = undefined;
+    do {
+      const page = await this.repository.loadPendingSupplierRefundPage(cursor);
+      for (const card of page.rows) {
+        addIssue({
+          code: 'open_supplier_refund',
+          severity: 'warning',
+          sourceType: 'gift_card',
+          sourceId: card.id,
+          message: `礼品卡 ${card.codeMasked} 的卡商退款尚未闭环`,
+          amountCny: card.supplierRefundAmountCny.toString()
         });
       }
-    }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
+    cursor = undefined;
+    do {
+      const page = await this.repository.loadSupplierWalletReconciliationPage(cursor);
+      for (const wallet of page.rows) {
+        const latest = wallet.ledgerEntries[0];
+        const expectedBalance = latest?.balanceAfter ?? wallet.openingBalance;
+        const expectedBalanceCny = latest?.balanceAfterCny ?? wallet.openingBalanceCny;
+        if (
+          !expectedBalance.equals(wallet.currentBalance) ||
+          !expectedBalanceCny.equals(wallet.currentBalanceCny)
+        ) {
+          addIssue({
+            code: 'supplier_balance_difference',
+            severity: 'error',
+            sourceType: 'supplier_wallet',
+            sourceId: wallet.id,
+            message: latest
+              ? '供应商钱包余额与最后一条流水不一致'
+              : '供应商钱包无流水时余额应与期初余额一致',
+            amountCny: wallet.currentBalanceCny.sub(expectedBalanceCny).abs().toString()
+          });
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+
     const latestRates = await this.loadLatestRateRows();
     for (const currency of ['MYR', 'USD', 'USDT'] as const) {
       const latest = latestRates.get(currency);
       if (!latest) {
-        issues.push({
+        addIssue({
           code: 'missing_fx_rate',
           severity: 'error',
           sourceType: 'fx_rate',
@@ -388,7 +434,7 @@ export class IdBusinessV2FinanceReportsService {
           amountCny: null
         });
       } else if (latest.expiresAt && latest.expiresAt.getTime() < Date.now()) {
-        issues.push({
+        addIssue({
           code: 'stale_fx_rate',
           severity: 'warning',
           sourceType: 'fx_rate',
@@ -399,10 +445,10 @@ export class IdBusinessV2FinanceReportsService {
       }
     }
     return {
-      isComplete:
-        issues.every((issue) => issue.severity !== 'error') &&
-        settings.historyStatus === 'completed',
-      issueCount: issues.length,
+      isComplete: !hasError && settings.historyStatus === 'completed',
+      issueCount,
+      returnedIssueCount: issues.length,
+      hasMoreIssues: issueCount > issues.length,
       issues
     };
   }

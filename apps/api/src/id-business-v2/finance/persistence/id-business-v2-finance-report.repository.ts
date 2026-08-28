@@ -291,53 +291,32 @@ export class IdBusinessV2FinanceReportRepository {
     };
   }
 
-  async loadReconciliation(occurredAt?: { gte?: Date; lte?: Date }) {
-    const [completedOrders, missingPurchaseEvidence, pendingRefunds, wallets] = await Promise.all([
-      this.prisma.idBusinessV2Order.findMany({
-        where: {
-          status: 'completed',
-          profitAmount: { not: null },
-          deletedAt: null,
-          openedAt: occurredAt
-        },
-        select: {
-          id: true,
-          orderNo: true,
-          profitAmount: true,
-          accountSource: true,
-          appliedAccountCostAmount: true
-        },
-        orderBy: [{ statusChangedAt: 'desc' }, { id: 'desc' }],
-        take: 50
-      }),
-      this.prisma.idBusinessV2Account.findMany({
-        where: {
-          purchaseCurrency: { not: 'CNY' },
-          purchaseCost: { gt: 0 },
-          purchaseFxSnapshotId: null,
-          deletedAt: null
-        },
-        select: { id: true, appleIdMasked: true, purchaseCost: true },
-        take: 50
-      }),
-      this.prisma.idBusinessV2GiftCard.findMany({
-        where: { supplierRefundStatus: 'pending' },
-        select: { id: true, codeMasked: true, supplierRefundAmountCny: true },
-        take: 50
-      }),
-      this.prisma.idBusinessV2TopupSupplierAccount.findMany({
-        select: {
-          id: true,
-          currentBalance: true,
-          currentBalanceCny: true,
-          ledgerEntries: {
-            select: { balanceAfter: true, balanceAfterCny: true },
-            orderBy: { createdAt: 'desc' },
-            take: 1
-          }
-        }
-      })
-    ]);
+  async loadCompletedOrderReconciliationPage(
+    occurredAt?: { gte?: Date; lte?: Date },
+    cursor?: string,
+    pageSize = 200
+  ) {
+    const rows = await this.prisma.idBusinessV2Order.findMany({
+      where: {
+        status: 'completed',
+        profitAmount: { not: null },
+        deletedAt: null,
+        openedAt: occurredAt
+      },
+      select: {
+        id: true,
+        orderNo: true,
+        profitAmount: true,
+        accountSource: true,
+        appliedAccountCostAmount: true
+      },
+      orderBy: { id: 'asc' },
+      cursor: cursor ? { id: cursor } : undefined,
+      skip: cursor ? 1 : undefined,
+      take: pageSize + 1
+    });
+    const hasMore = rows.length > pageSize;
+    const completedOrders = rows.slice(0, pageSize);
     const orderIds = completedOrders.map((order) => order.id);
     const orderLines = orderIds.length
       ? await this.prisma.idBusinessV2FinanceJournalLine.findMany({
@@ -363,12 +342,12 @@ export class IdBusinessV2FinanceReportRepository {
             accountCode: true,
             direction: true,
             amountCny: true,
-            journal: { select: { sourceId: true } }
+            journal: { select: { sourceId: true, journalType: true } }
           }
         })
       : [];
     return {
-      completedOrders: completedOrders.map((row) => ({
+      rows: completedOrders.map((row) => ({
         ...row,
         profitAmount: row.profitAmount
           ? mapAmount4(row.profitAmount, 'orders.profit_amount')
@@ -378,20 +357,92 @@ export class IdBusinessV2FinanceReportRepository {
           'orders.applied_account_cost_amount'
         )
       })),
-      missingPurchaseEvidence: missingPurchaseEvidence.map((row) => ({
+      orderLines: orderLines.map((row) => ({
+        ...row,
+        amountCny: mapAmount4(row.amountCny, 'finance_journal_lines.amount_cny')
+      })),
+      nextCursor: hasMore ? (completedOrders.at(-1)?.id ?? null) : null
+    };
+  }
+
+  async loadMissingPurchaseEvidencePage(cursor?: string, pageSize = 200) {
+    const rows = await this.prisma.idBusinessV2Account.findMany({
+      where: {
+        purchaseCurrency: { not: 'CNY' },
+        purchaseCost: { gt: 0 },
+        purchaseFxSnapshotId: null,
+        deletedAt: null
+      },
+      select: { id: true, appleIdMasked: true, purchaseCost: true },
+      orderBy: { id: 'asc' },
+      cursor: cursor ? { id: cursor } : undefined,
+      skip: cursor ? 1 : undefined,
+      take: pageSize + 1
+    });
+    const hasMore = rows.length > pageSize;
+    const pageRows = rows.slice(0, pageSize);
+    return {
+      rows: pageRows.map((row) => ({
         ...row,
         purchaseCost: mapAmount4(row.purchaseCost, 'accounts.purchase_cost')
       })),
-      pendingRefunds: pendingRefunds.map((row) => ({
+      nextCursor: hasMore ? (pageRows.at(-1)?.id ?? null) : null
+    };
+  }
+
+  async loadPendingSupplierRefundPage(cursor?: string, pageSize = 200) {
+    const rows = await this.prisma.idBusinessV2GiftCard.findMany({
+      where: { supplierRefundStatus: 'pending' },
+      select: { id: true, codeMasked: true, supplierRefundAmountCny: true },
+      orderBy: { id: 'asc' },
+      cursor: cursor ? { id: cursor } : undefined,
+      skip: cursor ? 1 : undefined,
+      take: pageSize + 1
+    });
+    const hasMore = rows.length > pageSize;
+    const pageRows = rows.slice(0, pageSize);
+    return {
+      rows: pageRows.map((row) => ({
         ...row,
         supplierRefundAmountCny: mapAmount4(
           row.supplierRefundAmountCny,
           'gift_cards.supplier_refund_amount_cny'
         )
       })),
-      wallets: wallets.map((row) => ({
+      nextCursor: hasMore ? (pageRows.at(-1)?.id ?? null) : null
+    };
+  }
+
+  async loadSupplierWalletReconciliationPage(cursor?: string, pageSize = 200) {
+    const rows = await this.prisma.idBusinessV2TopupSupplierAccount.findMany({
+      select: {
+        id: true,
+        openingBalance: true,
+        currentBalance: true,
+        openingBalanceCny: true,
+        currentBalanceCny: true,
+        ledgerEntries: {
+          select: { balanceAfter: true, balanceAfterCny: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 1
+        }
+      },
+      orderBy: { id: 'asc' },
+      cursor: cursor ? { id: cursor } : undefined,
+      skip: cursor ? 1 : undefined,
+      take: pageSize + 1
+    });
+    const hasMore = rows.length > pageSize;
+    const pageRows = rows.slice(0, pageSize);
+    return {
+      rows: pageRows.map((row) => ({
         id: row.id,
+        openingBalance: mapAmount4(row.openingBalance, 'supplier_accounts.opening_balance'),
         currentBalance: mapAmount4(row.currentBalance, 'supplier_accounts.current_balance'),
+        openingBalanceCny: mapAmount4(
+          row.openingBalanceCny,
+          'supplier_accounts.opening_balance_cny'
+        ),
         currentBalanceCny: mapAmount4(
           row.currentBalanceCny,
           'supplier_accounts.current_balance_cny'
@@ -401,10 +452,7 @@ export class IdBusinessV2FinanceReportRepository {
           balanceAfterCny: mapAmount4(entry.balanceAfterCny, 'supplier_ledgers.balance_after_cny')
         }))
       })),
-      orderLines: orderLines.map((row) => ({
-        ...row,
-        amountCny: mapAmount4(row.amountCny, 'finance_journal_lines.amount_cny')
-      }))
+      nextCursor: hasMore ? (pageRows.at(-1)?.id ?? null) : null
     };
   }
 

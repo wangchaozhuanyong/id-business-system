@@ -66,6 +66,18 @@ jobs:
       - name: Check module architecture
         run: npm run check:v2-module-architecture
 
+      - name: Check Decimal standard
+        run: npm run check:v2-decimal-standard
+
+      - name: Check timezone standard
+        run: npm run check:v2-timezone-standard
+
+      - name: Check Prisma runtime boundary
+        run: npm run check:v2-prisma-runtime-boundary
+
+      - name: Check cloud independence
+        run: npm run check:cloud-independence
+
       - name: Generate Prisma client
         run: npm run prisma:generate
 
@@ -74,6 +86,9 @@ jobs:
 
       - name: Verify data governance workflow on MySQL
         run: npm run acceptance:v2-data-governance
+
+      - name: Verify financial integrity on disposable MySQL
+        run: npm run acceptance:v2-financial-integrity
 
       - name: Build shared package
         run: npm run build --workspace @apple-business/shared
