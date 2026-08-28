@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   V2_RUNTIME_DELETE_TABLES,
+  assertV2IntegrityFunctionDefiner,
   assertV2ProductionDatabaseGrants,
   buildV2ProductionDatabaseAccountProvisioning,
   buildV2RuntimeTableGrantStatements
@@ -184,4 +185,25 @@ test('AWS Compose and backup scripts use their dedicated database identities', (
   assert.match(compose, /MYSQL_BACKUP_USER: \$\{MYSQL_BACKUP_USER:\?set MYSQL_BACKUP_USER\}/);
   assert.match(backup, /--user="\$MYSQL_BACKUP_USER"/);
   assert.match(backup, /--password="\$MYSQL_BACKUP_PASSWORD"/);
+});
+
+test('integrity function remains owned by the dedicated migration identity', () => {
+  assert.doesNotThrow(() =>
+    assertV2IntegrityFunctionDefiner([
+      { definer: 'id_business_migrator@%', securityType: 'DEFINER' }
+    ])
+  );
+  assert.throws(
+    () =>
+      assertV2IntegrityFunctionDefiner([{ definer: 'id_business_app@%', securityType: 'DEFINER' }]),
+    /id_business_migrator/
+  );
+
+  const migration = readFileSync(
+    'apps/api/prisma-mysql/migrations/20260828140000_integrity_function_service_definer/migration.sql',
+    'utf8'
+  );
+  assert.match(migration, /DROP FUNCTION IF EXISTS `idv2_integrity_trigger_exists`/);
+  assert.match(migration, /CREATE FUNCTION `idv2_integrity_trigger_exists`/);
+  assert.match(migration, /SQL SECURITY DEFINER/);
 });

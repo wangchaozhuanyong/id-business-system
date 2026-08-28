@@ -49,6 +49,7 @@ try {
     V2_RUNTIME_DATABASE_URL: `mysql://id_business_app:${runtimePassword}@127.0.0.1:${port}/${databaseName}`
   };
   runNodeScript('scripts/provision-v2-production-database-access.mjs', environment);
+  createAcceptanceIntegrityFunction();
   runNodeScript('scripts/provision-v2-data-integrity-auditor.mjs', environment);
   runNodeScript('scripts/gate-v2-production-database-access.mjs', environment);
   await verifyRuntimeEnforcement(environment.V2_RUNTIME_DATABASE_URL);
@@ -87,7 +88,6 @@ function createAcceptanceSchema() {
     CREATE TABLE \`sensitive_access_logs\` (id INT PRIMARY KEY, payload VARCHAR(80) NOT NULL);
     CREATE TABLE \`ip_whitelists\` (id INT PRIMARY KEY, cidr VARCHAR(40) NOT NULL);
     CREATE TABLE \`id_business_v2_orders\` (id INT PRIMARY KEY, status VARCHAR(20) NOT NULL);
-    CREATE FUNCTION \`idv2_integrity_trigger_exists\`() RETURNS INTEGER DETERMINISTIC NO SQL RETURN 1;
   `;
   const result = spawnSync(
     'docker',
@@ -102,6 +102,28 @@ function createAcceptanceSchema() {
       databaseName
     ],
     { encoding: 'utf8', input: sql }
+  );
+  assert.equal(result.status, 0, result.stderr);
+}
+
+function createAcceptanceIntegrityFunction() {
+  const result = spawnSync(
+    'docker',
+    [
+      'exec',
+      '--interactive',
+      containerName,
+      'mysql',
+      '--host=127.0.0.1',
+      '--user=id_business_migrator',
+      `--password=${migrationPassword}`,
+      databaseName
+    ],
+    {
+      encoding: 'utf8',
+      input:
+        'CREATE FUNCTION `idv2_integrity_trigger_exists`() RETURNS INTEGER DETERMINISTIC NO SQL SQL SECURITY DEFINER RETURN 1;'
+    }
   );
   assert.equal(result.status, 0, result.stderr);
 }

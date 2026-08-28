@@ -164,6 +164,17 @@ export function assertV2ProductionDatabaseGrants(input) {
   assertRuntimeGrants(input.runtimeGrants, input.databaseName, input.tableNames);
 }
 
+export function assertV2IntegrityFunctionDefiner(rows) {
+  const routine = rows.length === 1 ? rows[0] : null;
+  if (
+    !routine ||
+    String(routine.definer ?? '') !== `${MIGRATION_USERNAME}@%` ||
+    String(routine.securityType ?? '').toUpperCase() !== 'DEFINER'
+  ) {
+    throw new Error(`完整性巡检函数必须由 ${MIGRATION_USERNAME}@% 以 DEFINER 模式执行`);
+  }
+}
+
 function assertMigrationGrants(rows, databaseName) {
   const grants = grantTexts(rows).filter((grant) => !isUsageGrant(grant));
   const parsed = grants.length === 1 ? parseDatabaseGrant(grants[0]) : null;
