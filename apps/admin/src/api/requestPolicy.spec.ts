@@ -57,8 +57,8 @@ describe('API request policy registry', () => {
     expect(getApiEndpointPolicy('/auth/change-password').bypassSessionGate).toBe(true);
     expect(getApiEndpointPolicy('/id-business-v2/branding/public').key).toBe('public-branding');
     expect(getApiEndpointPolicy('/id-business-v2/branding/public').bypassSessionGate).toBe(true);
-    expect(getApiEndpointPolicy('/public/mailbox/query').key).toBe('ordinary');
-    expect(getApiEndpointPolicy('/public/mailbox/query').bypassSessionGate).toBe(false);
+    expect(getApiEndpointPolicy('/public/mailbox/query').key).toBe('public-mailbox');
+    expect(getApiEndpointPolicy('/public/mailbox/query').bypassSessionGate).toBe(true);
     expect(getApiEndpointPolicy('/id-business-v2/branding').bypassSessionGate).toBe(false);
     expect(getApiEndpointPolicy('/id-business-v2/auth/logout').bypassSessionGate).toBe(false);
   });
