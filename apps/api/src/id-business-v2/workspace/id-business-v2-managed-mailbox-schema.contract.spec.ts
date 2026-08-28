@@ -22,6 +22,13 @@ const mysqlExpiryMigration = readFileSync(
   ),
   'utf8'
 );
+const mysqlCodeOnlyMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma-mysql/migrations/20260828164500_managed_mailbox_code_only_lookup/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('managed mailbox schema contract', () => {
   it('stores provider authorization encrypted and the buyer query code as a hash only', () => {
@@ -52,5 +59,20 @@ describe('managed mailbox schema contract', () => {
     expect([expiryMigration, mysqlExpiryMigration].join('\n')).not.toMatch(
       /DROP TABLE|TRUNCATE|DELETE FROM/
     );
+  });
+
+  it('uses a unique query-code hash for mailbox lookup and attempt throttling', () => {
+    expect(mysqlSchema).toMatch(/queryCodeHash\s+String\s+@unique/);
+    expect(mysqlSchema).toContain(
+      'queryCodeHash String                       @map("query_code_hash")'
+    );
+    expect(mysqlCodeOnlyMigration).toContain(
+      'id_business_v2_managed_mailboxes_query_code_hash_key'
+    );
+    expect(mysqlCodeOnlyMigration).toContain(
+      'CHANGE COLUMN `email_hash` `query_code_hash` VARCHAR(64) NOT NULL'
+    );
+    expect(mysqlCodeOnlyMigration).toContain('idbiz_mail_query_attempts_code_created_idx');
+    expect(mysqlCodeOnlyMigration).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
   });
 });

@@ -1879,7 +1879,7 @@ model IdBusinessV2ManagedMailbox {
   label                       String?                          @db.VarChar(60)
   provider                    IdBusinessV2MailProvider
   providerCredentialEncrypted String                           @map("provider_credential_encrypted") @db.Text
-  queryCodeHash               String                           @map("query_code_hash") @db.VarChar(64)
+  queryCodeHash               String                           @unique @map("query_code_hash") @db.VarChar(64)
   queryCodeHint               String                           @map("query_code_hint") @db.VarChar(4)
   queryCodeExpiresAt          DateTime                         @map("query_code_expires_at") @db.Timestamptz(6)
   status                      IdBusinessV2ManagedMailboxStatus @default(active)
@@ -1903,16 +1903,16 @@ model IdBusinessV2ManagedMailbox {
 }
 
 model IdBusinessV2MailQueryAttempt {
-  id        String                       @id @default(uuid()) @db.Uuid
-  mailboxId String?                      @map("mailbox_id") @db.Uuid
-  emailHash String                       @map("email_hash") @db.VarChar(64)
-  ipHash    String?                      @map("ip_hash") @db.VarChar(64)
-  outcome   IdBusinessV2MailQueryOutcome
-  createdAt DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  id            String                       @id @default(uuid()) @db.Uuid
+  mailboxId     String?                      @map("mailbox_id") @db.Uuid
+  queryCodeHash String                       @map("query_code_hash") @db.VarChar(64)
+  ipHash        String?                      @map("ip_hash") @db.VarChar(64)
+  outcome       IdBusinessV2MailQueryOutcome
+  createdAt     DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   mailbox IdBusinessV2ManagedMailbox? @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
 
-  @@index([emailHash, createdAt])
+  @@index([queryCodeHash, createdAt], map: "idbiz_mail_query_attempts_code_created_idx")
   @@index([ipHash, createdAt])
   @@index([mailboxId, createdAt])
   @@map("id_business_v2_mail_query_attempts")

@@ -10,20 +10,20 @@
       class="v2-horizontal-form v2-mail-query-panel__form"
       @submit.prevent="queryMail"
     >
-      <el-form-item label="邮箱凭据" prop="credential" required>
+      <el-form-item label="邮件查询码" prop="queryCode" required>
         <el-input
-          v-model="form.credential"
+          v-model="form.queryCode"
           type="password"
           show-password
           :maxlength="V2_MAIL_VIEWER_LIMITS.credential"
-          name="workspace-mail-credential"
+          name="workspace-mail-query-code"
           autocomplete="new-password"
           autocapitalize="off"
           autocorrect="off"
           data-1p-ignore="true"
           data-lpignore="true"
           :spellcheck="false"
-          placeholder="邮箱----邮件查询码"
+          placeholder="请输入邮件查询码"
         />
       </el-form-item>
       <el-form-item label="返回封数" prop="limit" required>
@@ -67,22 +67,22 @@ import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage, isRequestCanceled } from '@/api/client';
 import { idBusinessV2PublicMailboxApi } from '@/v2/api/workspace';
 import V2MailMessageList from './V2MailMessageList.vue';
-import { parseMailCredential } from './mail-viewer';
+import { parseMailQueryCode } from './mail-viewer';
 
 const formRef = ref<FormInstance>();
-const form = reactive<V2MailViewerQueryInput>({ credential: '', limit: 5 });
+const form = reactive<V2MailViewerQueryInput>({ queryCode: '', limit: 5 });
 const result = ref<V2MailViewerQueryResult>();
 const errorMessage = ref('');
 const loading = ref(false);
 const rules: FormRules<V2MailViewerQueryInput> = {
-  credential: [
+  queryCode: [
     {
       validator: (_rule, value, callback) => {
         try {
-          parseMailCredential(String(value ?? ''));
+          parseMailQueryCode(String(value ?? ''));
           callback();
         } catch (error) {
-          callback(error instanceof Error ? error : new Error('邮箱凭据格式不正确'));
+          callback(error instanceof Error ? error : new Error('邮件查询码格式不正确'));
         }
       },
       trigger: 'blur'
@@ -104,7 +104,7 @@ const rules: FormRules<V2MailViewerQueryInput> = {
 let activeRequest: AbortController | undefined;
 
 watch(
-  () => [form.credential, form.limit],
+  () => [form.queryCode, form.limit],
   () => {
     if (!result.value && !errorMessage.value && !activeRequest) return;
     abortActiveRequest();
@@ -120,7 +120,7 @@ async function queryMail() {
     return;
   }
 
-  const parsed = parseMailCredential(form.credential);
+  const parsed = parseMailQueryCode(form.queryCode);
   abortActiveRequest();
   const controller = new AbortController();
   activeRequest = controller;
@@ -130,7 +130,7 @@ async function queryMail() {
 
   try {
     const response = await idBusinessV2PublicMailboxApi.query(
-      { credential: parsed.credential, limit: form.limit },
+      { queryCode: parsed.queryCode, limit: form.limit },
       { signal: controller.signal }
     );
     if (activeRequest !== controller) return;
@@ -154,7 +154,7 @@ function abortActiveRequest() {
 
 function clearAll() {
   abortActiveRequest();
-  form.credential = '';
+  form.queryCode = '';
   form.limit = 5;
   result.value = undefined;
   errorMessage.value = '';
@@ -164,7 +164,7 @@ function clearAll() {
 defineExpose({
   abortActiveRequest,
   clearAll,
-  hasContent: () => Boolean(form.credential || result.value || loading.value)
+  hasContent: () => Boolean(form.queryCode || result.value || loading.value)
 });
 </script>
 

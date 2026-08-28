@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mailBodyToPlainText, parseMailCredential, parseMailCredentialLines } from './mail-viewer';
+import { mailBodyToPlainText, parseMailQueryCode, parseMailQueryCodeLines } from './mail-viewer';
 
 describe('mailBodyToPlainText', () => {
   it('keeps readable content while removing executable and tracking markup', () => {
@@ -20,25 +20,22 @@ describe('mailBodyToPlainText', () => {
     expect(mailBodyToPlainText('<div>A&nbsp;&amp;&nbsp;B<br>C</div>')).toBe('A & B\nC');
   });
 
-  it('parses generic email credentials and keeps separators inside the query code', () => {
-    expect(parseMailCredential(' User.Name+tag@GMAIL.com----code----part ')).toEqual({
-      credential: 'user.name+tag@gmail.com----code----part',
-      email: 'user.name+tag@gmail.com',
+  it('accepts query-code-only input and normalizes legacy combined credentials', () => {
+    expect(parseMailQueryCode(' buyer-code ')).toEqual({ queryCode: 'buyer-code' });
+    expect(parseMailQueryCode(' User.Name+tag@GMAIL.com----code----part ')).toEqual({
       queryCode: 'code----part'
     });
-    expect(() => parseMailCredential('user@gmail.com')).toThrow(
-      '格式不正确，请输入 邮箱----邮件查询码'
-    );
+    expect(() => parseMailQueryCode('')).toThrow('请输入邮件查询码');
   });
 
-  it('reports invalid and duplicate batch lines without echoing query codes', () => {
-    const result = parseMailCredentialLines(
-      ['first@gmail.com----private-one', 'bad-line', 'first@gmail.com----private-two'].join('\n')
+  it('reports invalid and duplicate batch query codes without echoing them', () => {
+    const result = parseMailQueryCodeLines(
+      ['private-one', 'a'.repeat(65), 'private-one'].join('\n')
     );
     expect(result.items).toHaveLength(1);
     expect(result.errors).toEqual([
-      { lineNumber: 2, message: '格式不正确，请输入 邮箱----邮件查询码' },
-      { lineNumber: 3, message: '邮箱重复' }
+      { lineNumber: 2, message: '邮件查询码格式不正确' },
+      { lineNumber: 3, message: '邮件查询码重复' }
     ]);
     expect(JSON.stringify(result.errors)).not.toContain('private');
   });

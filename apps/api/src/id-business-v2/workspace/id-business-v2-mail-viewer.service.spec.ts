@@ -32,7 +32,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2MailViewerService', () => {
   const repository = {
-    findByEmail: vi.fn(),
+    findByQueryCodeHash: vi.fn(),
     reserveQueryAttempt: vi.fn(),
     updateQueryAttempt: vi.fn(),
     updateQueryState: vi.fn()
@@ -51,7 +51,7 @@ describe('IdBusinessV2MailViewerService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repository.reserveQueryAttempt.mockResolvedValue({ allowed: true, attemptId: 'attempt-1' });
-    repository.findByEmail.mockResolvedValue(mailbox());
+    repository.findByQueryCodeHash.mockResolvedValue(mailbox());
     repository.updateQueryAttempt.mockResolvedValue({ id: 'attempt-1' });
     repository.updateQueryState.mockResolvedValue(mailbox());
     encryption.decrypt.mockReturnValue('provider-app-password');
@@ -67,10 +67,7 @@ describe('IdBusinessV2MailViewerService', () => {
   });
 
   it('verifies the buyer code locally and reads the managed mailbox without exposing secrets', async () => {
-    const result = await service.query(
-      { credential: 'Member@GMAIL.COM----buyer-code', limit: 5 },
-      '203.0.113.20'
-    );
+    const result = await service.query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20');
 
     expect(provider.query).toHaveBeenCalledWith(
       {
@@ -83,6 +80,10 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(result).toMatchObject({ email: 'member@gmail.com', provider: 'gmail' });
     expect(JSON.stringify(result)).not.toContain('buyer-code');
     expect(JSON.stringify(result)).not.toContain('provider-app-password');
+    expect(repository.findByQueryCodeHash).toHaveBeenCalledWith('hash:buyer-code');
+    expect(repository.reserveQueryAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ queryCodeHash: 'hash:buyer-code' })
+    );
     expect(repository.updateQueryAttempt).toHaveBeenCalledWith(
       'attempt-1',
       expect.objectContaining({ outcome: 'success', mailboxId: mailbox().id })
@@ -90,45 +91,45 @@ describe('IdBusinessV2MailViewerService', () => {
   });
 
   it('returns the same generic failure for an unknown, disabled, expired or invalid mailbox', async () => {
-    repository.findByEmail.mockResolvedValueOnce(null);
+    repository.findByQueryCodeHash.mockResolvedValueOnce(null);
     await expect(
-      service.query({ credential: 'missing@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
-    ).rejects.toThrow('邮箱或邮件查询码不正确');
+      service.query({ queryCode: 'missing-code', limit: 5 }, '203.0.113.20')
+    ).rejects.toThrow('邮件查询码不正确');
 
-    repository.findByEmail.mockResolvedValueOnce(mailbox({ status: 'disabled' }));
+    repository.findByQueryCodeHash.mockResolvedValueOnce(mailbox({ status: 'disabled' }));
     await expect(
-      service.query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
-    ).rejects.toThrow('邮箱或邮件查询码不正确');
+      service.query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
+    ).rejects.toThrow('邮件查询码不正确');
 
-    repository.findByEmail.mockResolvedValueOnce(
+    repository.findByQueryCodeHash.mockResolvedValueOnce(
       mailbox({ queryCodeExpiresAt: new Date(Date.now() - 1) })
     );
     await expect(
-      service.query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
-    ).rejects.toThrow('邮箱或邮件查询码不正确');
+      service.query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
+    ).rejects.toThrow('邮件查询码不正确');
 
-    repository.findByEmail.mockResolvedValueOnce(mailbox());
+    repository.findByQueryCodeHash.mockResolvedValueOnce(mailbox());
     await expect(
-      service.query({ credential: 'member@gmail.com----wrong-code', limit: 5 }, '203.0.113.20')
+      service.query({ queryCode: 'wrong-code', limit: 5 }, '203.0.113.20')
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(provider.query).not.toHaveBeenCalled();
   });
 
-  it('rate limits by email or IP before reading provider credentials', async () => {
+  it('rate limits by query code or IP before reading provider credentials', async () => {
     repository.reserveQueryAttempt.mockResolvedValueOnce({ allowed: false });
     const error = await service
-      .query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
+      .query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HttpException);
     expect((error as HttpException).getStatus()).toBe(429);
-    expect(repository.findByEmail).not.toHaveBeenCalled();
+    expect(repository.findByQueryCodeHash).not.toHaveBeenCalled();
     expect(repository.updateQueryAttempt).not.toHaveBeenCalled();
   });
 
   it('marks revoked provider authorization without leaking the provider password', async () => {
     provider.query.mockRejectedValueOnce(new MailProviderAuthenticationError());
     const error = await service
-      .query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
+      .query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect(String((error as Error).message)).not.toContain('provider-app-password');
@@ -141,20 +142,23 @@ describe('IdBusinessV2MailViewerService', () => {
   it('reports an unconfigured Edge mail runtime clearly', async () => {
     provider.query.mockRejectedValueOnce(new MailProviderUnavailableError('edge_runtime'));
     await expect(
-      service.query({ credential: 'member@gmail.com----buyer-code', limit: 5 }, '203.0.113.20')
+      service.query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
     ).rejects.toThrow('邮件查询服务尚未配置，请联系卖家');
   });
 
-  it('validates combined credential and result limit before database access', async () => {
-    await expect(service.query({ credential: 'member@gmail.com', limit: 5 })).rejects.toThrow(
-      '格式不正确，请输入 邮箱----邮件查询码'
+  it('accepts legacy combined credentials while returning only the query-code lookup', async () => {
+    await service.query({ credential: 'Member@GMAIL.COM----buyer-code', limit: 5 }, '203.0.113.20');
+    expect(repository.findByQueryCodeHash).toHaveBeenCalledWith('hash:buyer-code');
+  });
+
+  it('validates the query code and result limit before database access', async () => {
+    await expect(service.query({ queryCode: '', limit: 5 })).rejects.toThrow('请输入邮件查询码');
+    await expect(service.query({ queryCode: 'a'.repeat(65), limit: 5 })).rejects.toThrow(
+      '邮件查询码格式不正确'
     );
-    await expect(service.query({ credential: 'not-an-email----code', limit: 5 })).rejects.toThrow(
-      '请输入有效的邮箱地址'
+    await expect(service.query({ queryCode: 'buyer-code', limit: 21 })).rejects.toThrow(
+      '返回封数必须为 1 至 20 的整数'
     );
-    await expect(
-      service.query({ credential: 'member@gmail.com----buyer-code', limit: 21 })
-    ).rejects.toThrow('返回封数必须为 1 至 20 的整数');
     expect(repository.reserveQueryAttempt).not.toHaveBeenCalled();
   });
 });

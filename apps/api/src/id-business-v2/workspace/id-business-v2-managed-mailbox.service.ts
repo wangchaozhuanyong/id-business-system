@@ -135,7 +135,7 @@ export class IdBusinessV2ManagedMailboxService {
 
     return {
       mailbox: this.toResponse(row),
-      buyerCredential: `${row.email}----${queryCode}`
+      buyerCredential: queryCode
     };
   }
 
@@ -253,7 +253,7 @@ export class IdBusinessV2ManagedMailboxService {
       { changedScopes: ['workspace'], requestId, operator, retryMode: 'none' }
     );
 
-    return { mailbox: this.toResponse(row), buyerCredential: `${row.email}----${queryCode}` };
+    return { mailbox: this.toResponse(row), buyerCredential: queryCode };
   }
 
   private async verifyProvider(input: {
