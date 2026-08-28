@@ -132,6 +132,20 @@ test('production grant gate rejects DDL, broad runtime access and unexpected del
     tableNames
   };
   assert.doesNotThrow(() => assertV2ProductionDatabaseGrants(validInput));
+  assert.doesNotThrow(() =>
+    assertV2ProductionDatabaseGrants({
+      ...validInput,
+      backupGrants: validInput.backupGrants.map(({ grant }) => ({
+        grant: grant.replaceAll('`', '"')
+      })),
+      migrationGrants: validInput.migrationGrants.map(({ grant }) => ({
+        grant: grant.replaceAll('`', '"')
+      })),
+      runtimeGrants: validInput.runtimeGrants.map(({ grant }) => ({
+        grant: grant.replaceAll('`', '"')
+      }))
+    })
+  );
   assert.throws(
     () =>
       assertV2ProductionDatabaseGrants({
