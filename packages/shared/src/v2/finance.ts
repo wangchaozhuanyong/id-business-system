@@ -445,6 +445,8 @@ export interface V2FinanceOverview {
   reconciliation: {
     isComplete: boolean;
     issueCount: number;
+    returnedIssueCount: number;
+    hasMoreIssues: boolean;
     issues: V2FinanceReconciliationIssue[];
   };
 }

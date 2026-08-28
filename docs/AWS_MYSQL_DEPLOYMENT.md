@@ -15,6 +15,14 @@ MySQL 只绑定宿主机 `127.0.0.1`，安全组不得开放 3306；公网仅开
 `COMPOSE_PROJECT_NAME` 上线后不得随发布目录变化，否则 Docker 会创建新的空数据库卷。现有环境升级时
 必须继续使用首次部署时的项目名。
 
+`.env.aws.production` 中还必须配置独立的只读审计连接：
+
+```dotenv
+V2_DATA_INTEGRITY_DATABASE_URL=mysql://id_business_audit:URL编码后的随机密码@127.0.0.1:3306/id_business_v2
+```
+
+该连接只供 EC2 本机发布门禁使用，不得改成业务账号，也不得授予写权限。
+
 ## 数据迁移
 
 1. 先生成并验证最新加密 PostgreSQL 备份。
@@ -34,6 +42,23 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ps
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml logs --tail=200 api
 ```
+
+首次部署以及审计密码轮换后，在 migration 成功后执行：
+
+```bash
+npm run provision:v2-data-integrity-auditor:production
+```
+
+该命令只允许维护固定账号 `id_business_audit`，会先撤销其全部旧权限，再仅授予当前数据库的
+`SELECT`、`SHOW VIEW`，以及安全触发器存在性函数的 `EXECUTE`。随后每次发布切换流量前执行：
+
+```bash
+npm run gate:v2-financial-integrity:production
+```
+
+门禁会先检查 AWS 单一云边界，再以只读账号在同一个可重复读快照中全量执行 38 项数据不变量检查。
+任一检查非零、审计账号存在写权限、连接目标不是 MySQL 或检查执行失败，都必须阻断发布；禁止通过
+修改审计 SQL、删除异常记录或改用 root 账号绕过。
 
 收购汇率使用 ExchangeRate-API 的免 Key 开放接口，每天北京时间 09:05 自动采集一次；生产配置使用
 `CURRENCY_RATE_PROVIDER=exchange_rate_api`，无需申请或保存 `CURRENCY_API_KEY`。若供应商异常，可通过

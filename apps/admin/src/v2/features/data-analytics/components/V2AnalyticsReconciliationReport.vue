@@ -90,6 +90,13 @@
           </template>
         </V2SectionHeading>
       </header>
+      <el-alert
+        v-if="overview.reconciliation.hasMoreIssues"
+        :title="`已完成全量检查；问题共 ${overview.reconciliation.issueCount} 项，当前展示前 ${overview.reconciliation.returnedIssueCount} 项。`"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
       <div v-if="overview.reconciliation.issues.length" class="v2-finance-issues">
         <article
           v-for="issue in overview.reconciliation.issues"

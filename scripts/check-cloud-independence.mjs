@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -6,6 +6,13 @@ const root = process.cwd();
 const failures = [];
 const removedProviderPattern = /s[u]pabase/i;
 const removedEdgePattern = /c[l]oudflare/i;
+const retiredDeploymentPaths = [
+  'supabase',
+  'deploy/cloudflare-free',
+  'wrangler.cloudflare-free.jsonc',
+  'scripts/build-supabase-v2-api.mjs',
+  'scripts/deploy-cloudflare-free.mjs'
+];
 
 const compose = read('docker-compose.aws-mysql.yml');
 const rootPackage = JSON.parse(read('package.json'));
@@ -19,6 +26,12 @@ if (!compose.includes('image: mysql:8.4')) failures.push('AWS Compose 未锁定 
 if (!compose.includes('AUTH_PROVIDER: local')) failures.push('AWS Compose 未锁定本地认证');
 if (!compose.includes('DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}')) {
   failures.push('AWS Compose 未强制使用 MySQL DATABASE_URL');
+}
+
+for (const retiredPath of retiredDeploymentPaths) {
+  if (existsSync(path.join(root, retiredPath))) {
+    failures.push(`已退役的云部署路径被重新引入: ${retiredPath}`);
+  }
 }
 
 for (const [name, manifest] of [

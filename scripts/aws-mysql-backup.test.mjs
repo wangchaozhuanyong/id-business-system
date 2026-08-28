@@ -29,6 +29,8 @@ test('production backup requires S3 and verifies the remote SHA-256 checksum', (
   assert.match(source, /MYSQL_BACKUP_LOCAL_MAX_BYTES/);
   assert.match(source, /MYSQL_BACKUP_MIN_FREE_BYTES/);
   assert.match(source, /prune_local_backups/);
+  assert.match(source, /mysql-dump-restore-normalizer\.sed/);
+  assert.match(source, /sed -E -f "\$\{normalizer_script\}"/);
 });
 
 test('restore verification downloads S3 data into an isolated MySQL 8.4 container', () => {
@@ -40,6 +42,7 @@ test('restore verification downloads S3 data into an isolated MySQL 8.4 containe
   assert.match(source, /normalize_mysql_dump_stream/);
   assert.match(source, /CHECK TABLE/);
   assert.doesNotMatch(source, /mysqlcheck --check/);
+  assert.match(source, /checked_table_count/);
   assert.match(source, /_prisma_migrations/);
   assert.match(source, /id_business_v2_finance_journals/);
   assert.match(source, /trap cleanup EXIT INT TERM/);
@@ -95,7 +98,6 @@ test('S3 lifecycle expires backup objects instead of retaining them forever', ()
   assert.match(template, /ExpirationInDays: 90/);
   assert.match(template, /NoncurrentVersionExpiration:\s+NoncurrentDays: 30/);
 });
-
 test('obsolete PostgreSQL production backup workflow is absent', () => {
   assert.equal(existsSync(resolve(projectRoot, '.github/workflows/production-backup.yml')), false);
 });
