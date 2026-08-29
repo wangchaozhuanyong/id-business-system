@@ -46,13 +46,19 @@ npm run git:readiness
 3. 推送发布分支并创建以 `main` 为目标的 PR；禁止直接推送或强制推送 `main`。
 4. GitHub CI 全部通过并完成审查后合并 PR。
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
-6. 从该 SHA 导出代码并创建不可变发布目录；禁止把 `.git`、`.deploy`、本机环境文件或未跟踪文件上传到服务器。
+6. 创建不可移动的带说明正式标签 `v2-production-<UTC>` 并推送。标签必须指向当前
+   `origin/main` 完整 SHA，且不得重用或强制移动。
+7. 标签 CI 只构建一次 API、管理端、migration 和发布门禁镜像，导出单一不可变制品，
+   上传 `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、
+   制品 SHA-256 及四个镜像 digest。
+8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
 
 正式顺序固定为：
 
 ```text
 origin/main → 发布分支 → 本地完整检查 → commit → push → PR/CI → 合并 main
-→ 部署合并后的精确 SHA → 备份/迁移/门禁 → 原子切换 → 发布后复核
+→ 锁定正式标签与完整 SHA → CI 单次构建不可变制品 → 备份/迁移/门禁
+→ 加载同一制品 → 原子切换 → 发布后复核 → 删除已合并远程分支
 ```
 
 紧急修复不得绕过该流程。生产部署过程必须持有 `/opt/id-business-v2/.deploy.lock`，发现其他部署、
@@ -60,15 +66,23 @@ Compose、迁移或同步进程时立即停止，避免两个版本同时操作�
 
 ## 4. 服务器发布流程
 
-1. 确认待发布 commit 等于最新 `origin/main`，不把未审核的工作区改动混入发布目录。
-2. 在 `/opt/id-business-v2/releases/<UTC>-<short-sha>` 创建新发布目录，并在整个部署期间持有部署锁。
-3. 复制上一版 `.env.aws.production`，不修改旧发布目录。
-4. 检查编排并构建镜像：
+1. 本机读取 Git 忽略且权限为 `0600` 的 `.deploy/aws-production.local.env`，执行：
 
 ```bash
-docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml config
-docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml build
+bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
 ```
+
+入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于 `origin/main` 的 SHA、
+失败的 CI 或缺少 digest 的制品。
+
+2. 制品在本机与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
+
+3. EC2 在整个安装期间持有 `/opt/id-business-v2/.deploy.lock`，并拒绝并发备份、恢复验证、
+   Compose、migration 或同步进程。新源码进入 `/opt/id-business-v2/releases/<UTC>-<short-sha>`，
+   CI 制品与清单进入 `/opt/id-business-v2/artifacts/<tag>-<full-sha>`。
+
+4. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
+   `docker load` 加载 CI 镜像。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
 
 5. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
 
@@ -82,29 +96,26 @@ sudo systemctl show id-business-v2-mysql-backup.service --property=Result --valu
 6. 数据库固定使用四个独立身份：`id_business_migrator` 只执行 migration，`id_business_app`
    只运行 API，`id_business_audit` 只执行完整性巡检，`id_business_backup` 只生成备份。首次切换到
    独立账号或迁移账号密码轮换后，先用本机 root 连接可重复供应账号，再执行向前 migration；migration
-   后必须再次供应权限，使新表得到精确的运行权限：
+   后必须再次供应权限，使新表得到精确的运行权限。这些步骤均由不可变制品中的安装器执行：
 
 ```bash
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up -d mysql
-npm run provision:v2-production-database-access:production
+# 在 CI 门禁镜像中供应四身份
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml run --rm migrate
-npm run provision:v2-production-database-access:production
+# 在同一 CI 门禁镜像中重新供应并校验权限
 ```
 
 `id_business_app` 不得拥有 DDL、GRANT OPTION、全库 DELETE、Prisma migration 写入或审计日志更新
 权限。供应命令不得输出 root 密码、业务数据库 URL 或账号密码。
 
-7. 首次部署或审计密码轮换后执行 `npm run provision:v2-data-integrity-auditor:production`，然后在
-   更新应用容器前执行数据库身份及财务完整性阻断门禁：
-
-```bash
-npm run gate:v2-financial-integrity:production
-```
+7. 首次部署或审计密码轮换后，安装器会在同一 CI 门禁镜像内供应只读审计账号，
+   然后在更新应用容器前执行数据库身份及财务完整性阻断门禁。
 
 必须得到数据库四身份 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
 本机门禁连接；脚本检测到运行账号 DDL、越界 DELETE、审计写权限或账号复用时会主动拒绝运行。
 
-8. 门禁通过后更新应用容器，等待 `mysql`、`api`、`admin` 健康，并执行整站巡检：
+8. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`api`、`admin`、
+   `caddy` 健康，并执行整站巡检：
 
 ```bash
 docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up -d --no-build
@@ -117,9 +128,12 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 
 巡检至少包括首页、静态资源 MIME、live/ready、登录、`auth/me`、核心业务只读接口、越权写入 403 和登出。
 
-9. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。
+9. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
+   完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
+   制品名称与 SHA-256、四个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
 10. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，并核验备份服务、自动备份定时器和
-    每周恢复验证定时器均处于预期状态。任一检查失败，立即回切并重启上一已验证应用版本，同时保留现场日志。
+    每周恢复验证定时器均处于预期状态。任一检查失败，立即回切并重启上一已验证不可变制品。
+11. 生产验证成功后删除已合并且不再使用的远程发布分支。
 
 ## 5. 数据库规则
 

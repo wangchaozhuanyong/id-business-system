@@ -6,8 +6,18 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tagSuffix = `${process.pid}-${Date.now()}`;
-const runtimeImage = `id-business-v2-api-runtime-acceptance:${tagSuffix}`;
-const migrationImage = `id-business-v2-api-migration-acceptance:${tagSuffix}`;
+const providedRuntimeImage = process.env.V2_RUNTIME_IMAGE?.trim();
+const providedMigrationImage = process.env.V2_MIGRATION_IMAGE?.trim();
+const runtimeImage = providedRuntimeImage || `id-business-v2-api-runtime-acceptance:${tagSuffix}`;
+const migrationImage =
+  providedMigrationImage || `id-business-v2-api-migration-acceptance:${tagSuffix}`;
+const removeImagesAfterAcceptance = !providedRuntimeImage && !providedMigrationImage;
+
+assert.equal(
+  Boolean(providedRuntimeImage),
+  Boolean(providedMigrationImage),
+  '复用制品验收时必须同时提供 V2_RUNTIME_IMAGE 与 V2_MIGRATION_IMAGE'
+);
 
 const runtimeProbe = String.raw`
 const assert = require('node:assert/strict');
@@ -41,8 +51,8 @@ console.log('migration-boundary-ok');
 
 try {
   run('docker', ['info'], { stdio: 'ignore' });
-  buildImage('runtime', runtimeImage);
-  buildImage('migration', migrationImage);
+  if (!providedRuntimeImage) buildImage('runtime', runtimeImage);
+  if (!providedMigrationImage) buildImage('migration', migrationImage);
 
   const runtimeInspect = inspectImage(runtimeImage);
   const migrationInspect = inspectImage(migrationImage);
@@ -67,10 +77,12 @@ try {
     })
   );
 } finally {
-  spawnSync('docker', ['image', 'rm', '--force', runtimeImage, migrationImage], {
-    cwd: projectRoot,
-    stdio: 'ignore'
-  });
+  if (removeImagesAfterAcceptance) {
+    spawnSync('docker', ['image', 'rm', '--force', runtimeImage, migrationImage], {
+      cwd: projectRoot,
+      stdio: 'ignore'
+    });
+  }
 }
 
 function buildImage(target, tag) {
