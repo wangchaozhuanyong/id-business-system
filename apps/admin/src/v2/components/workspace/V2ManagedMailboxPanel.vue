@@ -13,7 +13,7 @@
         :model="form"
         :rules="rules"
         label-position="left"
-        label-width="96px"
+        label-width="112px"
         require-asterisk-position="right"
         class="v2-horizontal-form v2-managed-mailbox-panel__form"
         @submit.prevent="submitMailbox"
@@ -56,10 +56,12 @@
             <small>{{ appPasswordHelp }}</small>
           </div>
         </el-form-item>
-        <div v-else class="v2-managed-mailbox-panel__oauth-note" role="note">
-          <strong>Microsoft 安全授权</strong>
-          <span>将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。</span>
-        </div>
+        <el-form-item v-else label="授权方式">
+          <div class="v2-managed-mailbox-panel__oauth-note" role="note">
+            <strong>Microsoft 安全授权</strong>
+            <span>将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。</span>
+          </div>
+        </el-form-item>
         <el-form-item label="备注" prop="label">
           <el-input
             v-model="form.label"
@@ -84,6 +86,10 @@
           <span>邮箱和查询码完整显示；邮件内容、买家 IP 和查询明细不持久化。</span>
         </div>
         <div class="v2-managed-mailbox-panel__header-actions">
+          <AppButton size="small" variant="ghost" @click="openQueryCodeSettings">
+            <el-icon><Setting /></el-icon>
+            有效期设置
+          </AppButton>
           <AppButton size="small" variant="soft" @click="batchDrawerOpen = true">
             <el-icon><Upload /></el-icon>
             批量导入
@@ -179,30 +185,46 @@
           <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[3]">
             <template #default="{ row }">
               <div class="v2-managed-mailbox-panel__query-code">
-                <code>{{ row.queryCode || `旧码末四位 ${row.queryCodeHint}` }}</code>
+                <code v-if="row.queryCode">{{ row.queryCode }}</code>
+                <span v-else class="v2-managed-mailbox-panel__legacy-code">
+                  历史查询码无法还原
+                </span>
                 <AppButton
                   v-if="row.queryCode"
                   size="small"
-                  variant="ghost"
+                  variant="soft"
                   :title="`复制 ${row.email} 的买家查询码`"
-                  @click="copyText(row.queryCode, '查询码已复制')"
+                  @click="copyQueryCode(row)"
                 >
                   <el-icon><CopyDocument /></el-icon>
-                  复制
+                  复制查询码
                 </AppButton>
-                <small v-else>重置后可复制完整查询码</small>
+                <AppButton
+                  v-else
+                  size="small"
+                  variant="soft"
+                  :loading="updatingId === row.id"
+                  :title="`为 ${row.email} 生成并复制新的买家查询码`"
+                  @click="generateAndCopyLegacyCode(row)"
+                >
+                  <el-icon><CopyDocument /></el-icon>
+                  生成并复制
+                </AppButton>
               </div>
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[4]">
             <template #default="{ row }">
-              <el-tag
-                :type="queryCodeExpiryMeta(row.queryCodeExpiresAt).type"
-                effect="plain"
-                size="small"
-              >
-                {{ queryCodeExpiryMeta(row.queryCodeExpiresAt).label }}
-              </el-tag>
+              <div class="v2-managed-mailbox-panel__expiry">
+                <el-tag
+                  :type="queryCodeExpiryMeta(row.queryCodeExpiresAt).type"
+                  effect="plain"
+                  size="small"
+                >
+                  {{ queryCodeExpiryMeta(row.queryCodeExpiresAt).label }}
+                </el-tag>
+                <small>{{ queryCodeExpiryMeta(row.queryCodeExpiresAt).detail }}</small>
+              </div>
             </template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[5]">
@@ -253,6 +275,86 @@
     </section>
 
     <V2ManagedMailboxBatchDrawer v-model="batchDrawerOpen" @imported="handleBatchImported" />
+
+    <el-drawer
+      class="v2-mailbox-query-code-settings-drawer"
+      :model-value="queryCodeSettingsOpen"
+      title="查询码有效期设置"
+      size="min(480px, 100vw)"
+      append-to-body
+      destroy-on-close
+      :before-close="handleQueryCodeSettingsClose"
+      @close="queryCodeSettingsOpen = false"
+    >
+      <div class="v2-mailbox-query-code-settings-drawer__body">
+        <div class="v2-mailbox-query-code-settings-drawer__notice" role="note">
+          <strong>查询码到期后不会自动更换</strong>
+          <span>到期会标红并停止查询，需要管理员手动生成新码并重新交付买家。</span>
+        </div>
+
+        <V2AsyncRegion
+          :phase="queryCodeSettingsQuery.phase.value"
+          :previous-data="queryCodeSettingsQuery.isParameterTransition.value"
+          :empty="false"
+          :error="queryCodeSettingsError"
+          variant="section"
+          skeleton="form"
+          loading-title="正在读取查询码设置"
+          refreshing-title="正在更新查询码设置"
+          error-title="查询码设置加载失败"
+          @retry="queryCodeSettingsQuery.refresh"
+        >
+          <el-form
+            :model="queryCodeSettingsForm"
+            label-position="left"
+            label-width="144px"
+            require-asterisk-position="right"
+            class="v2-horizontal-form"
+            @submit.prevent="saveQueryCodeSettings"
+          >
+            <el-form-item label="查询码有效天数" required>
+              <div class="v2-mailbox-query-code-settings-drawer__field">
+                <el-input-number
+                  v-model="queryCodeSettingsForm.validityDays"
+                  :min="queryCodeSettings.minValidityDays"
+                  :max="queryCodeSettings.maxValidityDays"
+                  :step="1"
+                  step-strictly
+                  controls-position="right"
+                />
+                <small> 新建邮箱和手动生成新码时，统一使用这个有效天数。 </small>
+              </div>
+            </el-form-item>
+            <el-form-item label="到期处理方式">
+              <div class="v2-mailbox-query-code-settings-drawer__field">
+                <el-tag effect="plain" type="info">手动生成新码</el-tag>
+                <small>系统不会静默换码，避免买家持有的查询码突然失效。</small>
+              </div>
+            </el-form-item>
+            <el-form-item label="同步现有查询码">
+              <div class="v2-mailbox-query-code-settings-drawer__field">
+                <el-checkbox v-model="queryCodeSettingsForm.applyToExisting">
+                  保存时统一重算现有查询码到期时间
+                </el-checkbox>
+                <small>勾选后，所有现有查询码从保存时刻重新计算有效期，但查询码本身不变。</small>
+              </div>
+            </el-form-item>
+          </el-form>
+        </V2AsyncRegion>
+
+        <footer>
+          <AppButton variant="ghost" @click="closeQueryCodeSettings">取消</AppButton>
+          <AppButton
+            variant="primary"
+            :loading="savingQueryCodeSettings"
+            :disabled="Boolean(queryCodeSettingsError)"
+            @click="saveQueryCodeSettings"
+          >
+            保存设置
+          </AppButton>
+        </footer>
+      </div>
+    </el-drawer>
 
     <el-drawer
       class="v2-mailbox-credential-drawer"
@@ -306,17 +408,29 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules, TagProps } from 'element-plus';
 import type {
   CreateV2ManagedMailboxInput,
   V2MailProvider,
   V2ManagedMailbox,
   V2ManagedMailboxList,
+  V2ManagedMailboxQueryCodeSettings,
   V2ManagedMailboxStatus
 } from '@apple-business/shared';
-import { V2_MAIL_VIEWER_LIMITS } from '@apple-business/shared';
-import { Connection, CopyDocument, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue';
+import {
+  V2_MAIL_VIEWER_LIMITS,
+  V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY
+} from '@apple-business/shared';
+import {
+  Connection,
+  CopyDocument,
+  Plus,
+  Refresh,
+  Search,
+  Setting,
+  Upload
+} from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -331,6 +445,7 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2ManagedMailboxBatchDrawer from './V2ManagedMailboxBatchDrawer.vue';
+import { resolveV2ManagedMailboxQueryCodeExpiry } from './managedMailboxExpiry';
 
 interface ManagedMailboxForm {
   appPassword: string;
@@ -356,11 +471,17 @@ const filters = reactive<{
 const creating = ref(false);
 const updatingId = ref('');
 const batchDrawerOpen = ref(false);
+const queryCodeSettingsOpen = ref(false);
+const savingQueryCodeSettings = ref(false);
 const credentialDrawerOpen = ref(false);
 const credentialMailbox = ref<V2ManagedMailbox | null>(null);
 const replacementPassword = ref('');
+const clockTick = ref(getV2BusinessNowMs() ?? Date.now());
+const queryCodeSettingsForm = reactive({ applyToExisting: false, validityDays: 30 });
+const queryCodeSettingsSnapshot = ref('');
 let microsoftAuthorizationGeneration = 0;
 let microsoftAuthorizationPopup: Window | null = null;
+let expiryTickTimer: ReturnType<typeof setInterval> | undefined;
 
 const rules: FormRules<ManagedMailboxForm> = {
   provider: [{ required: true, message: '请选择邮箱类型', trigger: 'change' }],
@@ -405,6 +526,13 @@ const mailboxesQuery = useV2ModuleQuery<V2ManagedMailboxList>({
       { signal }
     )
 });
+const queryCodeSettingsQuery = useV2ModuleQuery<V2ManagedMailboxQueryCodeSettings>({
+  moduleKey: 'profile',
+  scope: 'workspace',
+  key: 'managed-mailbox-query-code-settings',
+  trackRouteData: false,
+  query: ({ signal }) => idBusinessV2WorkspaceApi.getManagedMailboxQueryCodeSettings({ signal })
+});
 const mailboxResult = computed<V2ManagedMailboxList>(
   () =>
     mailboxesQuery.data.value ?? {
@@ -415,9 +543,41 @@ const mailboxResult = computed<V2ManagedMailboxList>(
     }
 );
 const mailboxes = computed(() => mailboxResult.value.items);
+const queryCodeSettings = computed<V2ManagedMailboxQueryCodeSettings>(
+  () =>
+    queryCodeSettingsQuery.data.value ?? {
+      validityDays: V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY.defaultDays,
+      defaultValidityDays: V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY.defaultDays,
+      minValidityDays: V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY.minDays,
+      maxValidityDays: V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY.maxDays,
+      rotationMode: 'manual',
+      updatedAt: null
+    }
+);
 const listError = computed(() =>
   mailboxesQuery.error.value ? getApiErrorMessage(mailboxesQuery.error.value) : ''
 );
+const queryCodeSettingsError = computed(() =>
+  queryCodeSettingsQuery.error.value ? getApiErrorMessage(queryCodeSettingsQuery.error.value) : ''
+);
+
+watch(
+  () => queryCodeSettingsQuery.data.value,
+  (settings) => {
+    if (!settings || !queryCodeSettingsOpen.value || queryCodeSettingsDirty()) return;
+    resetQueryCodeSettingsForm(settings.validityDays);
+  }
+);
+
+onMounted(() => {
+  expiryTickTimer = setInterval(() => {
+    clockTick.value = getV2BusinessNowMs() ?? Date.now();
+  }, 60_000);
+});
+
+onBeforeUnmount(() => {
+  if (expiryTickTimer) clearInterval(expiryTickTimer);
+});
 
 async function submitMailbox() {
   try {
@@ -584,7 +744,7 @@ async function updateCredential() {
 async function rotateQueryCode(item: V2ManagedMailbox) {
   try {
     await ElMessageBox.confirm(
-      '重置后旧查询码立即失效，新查询码有效期 30 天，需要把新查询码重新交给买家。',
+      `重置后旧查询码立即失效，新查询码有效期 ${queryCodeSettings.value.validityDays} 天。生成后系统会自动复制，请把新码重新交给买家。`,
       '重置查询码',
       {
         confirmButtonText: '确认重置',
@@ -597,14 +757,26 @@ async function rotateQueryCode(item: V2ManagedMailbox) {
   }
   updatingId.value = item.id;
   try {
-    await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
+    const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
+    const copied = await writeClipboardText(result.buyerCredential);
     await mailboxesQuery.refresh();
-    ElMessage.success('查询码已重置，可在当前行直接复制');
+    ElMessage.success(copied ? '新查询码已生成并复制' : '新查询码已生成，请在当前行复制');
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error));
   } finally {
     updatingId.value = '';
   }
+}
+
+async function generateAndCopyLegacyCode(item: V2ManagedMailbox) {
+  await rotateQueryCode(item);
+}
+
+async function copyQueryCode(item: V2ManagedMailbox) {
+  if (!item.queryCode) return;
+  const copied = await writeClipboardText(item.queryCode);
+  if (copied) ElMessage.success('查询码已复制');
+  else ElMessage.error('无法自动复制，请手动选择查询码复制');
 }
 
 function applyFilters() {
@@ -626,6 +798,91 @@ function changePageSize(pageSize: number) {
 function handleBatchImported() {
   filters.page = 1;
   void mailboxesQuery.refresh();
+}
+
+function openQueryCodeSettings() {
+  resetQueryCodeSettingsForm(queryCodeSettings.value.validityDays);
+  queryCodeSettingsOpen.value = true;
+  if (!queryCodeSettingsQuery.data.value) void queryCodeSettingsQuery.refresh();
+}
+
+function resetQueryCodeSettingsForm(validityDays: number) {
+  queryCodeSettingsForm.validityDays = validityDays;
+  queryCodeSettingsForm.applyToExisting = false;
+  queryCodeSettingsSnapshot.value = JSON.stringify(queryCodeSettingsForm);
+}
+
+function queryCodeSettingsDirty() {
+  return JSON.stringify(queryCodeSettingsForm) !== queryCodeSettingsSnapshot.value;
+}
+
+async function saveQueryCodeSettings() {
+  const validityDays = Number(queryCodeSettingsForm.validityDays);
+  if (
+    !Number.isInteger(validityDays) ||
+    validityDays < queryCodeSettings.value.minValidityDays ||
+    validityDays > queryCodeSettings.value.maxValidityDays
+  ) {
+    ElMessage.warning(
+      `请输入 ${queryCodeSettings.value.minValidityDays} 至 ${queryCodeSettings.value.maxValidityDays} 天的整数`
+    );
+    return;
+  }
+
+  savingQueryCodeSettings.value = true;
+  try {
+    const result = await idBusinessV2WorkspaceApi.updateManagedMailboxQueryCodeSettings({
+      validityDays,
+      applyToExisting: queryCodeSettingsForm.applyToExisting
+    });
+    resetQueryCodeSettingsForm(result.validityDays);
+    await queryCodeSettingsQuery.refresh();
+    if (result.updatedExistingCount > 0) await mailboxesQuery.refresh();
+    queryCodeSettingsOpen.value = false;
+    ElMessage.success(
+      result.updatedExistingCount > 0
+        ? `设置已保存，已同步 ${result.updatedExistingCount} 个现有查询码`
+        : '查询码有效期设置已保存'
+    );
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error));
+  } finally {
+    savingQueryCodeSettings.value = false;
+  }
+}
+
+async function handleQueryCodeSettingsClose(done: () => void) {
+  if (!queryCodeSettingsDirty()) {
+    done();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('关闭后会放弃尚未保存的有效期设置。', '放弃修改', {
+      confirmButtonText: '放弃修改',
+      cancelButtonText: '继续设置',
+      type: 'warning'
+    });
+    done();
+  } catch {
+    // 用户选择继续设置。
+  }
+}
+
+async function closeQueryCodeSettings() {
+  if (!queryCodeSettingsDirty()) {
+    queryCodeSettingsOpen.value = false;
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('关闭后会放弃尚未保存的有效期设置。', '放弃修改', {
+      confirmButtonText: '放弃修改',
+      cancelButtonText: '继续设置',
+      type: 'warning'
+    });
+    queryCodeSettingsOpen.value = false;
+  } catch {
+    // 用户选择继续设置。
+  }
 }
 
 function providerLabel(provider: V2MailProvider) {
@@ -650,24 +907,42 @@ function formatDate(value: string | null) {
   return formatV2DateTime(value, {}, '尚未查询');
 }
 
-function queryCodeExpiryMeta(value: string): { label: string; type: TagProps['type'] } {
-  const expiresAt = Date.parse(value);
-  const now = getV2BusinessNowMs();
+function queryCodeExpiryMeta(value: string): {
+  detail: string;
+  label: string;
+  type: TagProps['type'];
+} {
   const formatted = formatV2DateTime(value, {}, '时间异常');
-  if (!Number.isFinite(expiresAt)) return { label: '时间异常', type: 'danger' };
-  if (now !== null && expiresAt <= now) return { label: `已过期 · ${formatted}`, type: 'danger' };
-  if (now !== null && expiresAt - now <= 3 * 24 * 60 * 60 * 1000) {
-    return { label: `即将到期 · ${formatted}`, type: 'warning' };
-  }
-  return { label: formatted, type: 'success' };
+  const meta = resolveV2ManagedMailboxQueryCodeExpiry(value, clockTick.value, formatted);
+  return {
+    detail: meta.detail,
+    label: meta.label,
+    type: meta.state === 'valid' ? 'success' : meta.state === 'warning' ? 'warning' : 'danger'
+  };
 }
 
-async function copyText(value: string, message: string) {
+async function writeClipboardText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // 继续使用兼容旧浏览器和非安全上下文的复制方式。
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.inset = '-9999px auto auto -9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
   try {
-    await navigator.clipboard.writeText(value);
-    ElMessage.success(message);
+    return document.execCommand('copy');
   } catch {
-    ElMessage.error('无法复制，请手动选择复制');
+    return false;
+  } finally {
+    textarea.remove();
   }
 }
 
@@ -702,12 +977,20 @@ function clearAll() {
   resetForm();
   cancelCredentialUpdate();
   batchDrawerOpen.value = false;
+  queryCodeSettingsOpen.value = false;
+  resetQueryCodeSettingsForm(queryCodeSettings.value.validityDays);
 }
 
 defineExpose({
   clearAll,
   hasContent: () =>
-    Boolean(form.email || form.label || form.appPassword || replacementPassword.value)
+    Boolean(
+      form.email ||
+      form.label ||
+      form.appPassword ||
+      replacementPassword.value ||
+      queryCodeSettingsDirty()
+    )
 });
 </script>
 
@@ -754,12 +1037,23 @@ defineExpose({
 .v2-managed-mailbox-panel__form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 10px 16px;
 }
 
 .v2-managed-mailbox-panel__form :deep(.el-form-item) {
   min-width: 0;
   margin-bottom: 0;
+}
+
+.v2-managed-mailbox-panel__form :deep(.el-form-item__label) {
+  min-height: 32px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.v2-managed-mailbox-panel__form :deep(.el-form-item__content) {
+  min-width: 0;
 }
 
 .v2-managed-mailbox-panel__password-field {
@@ -777,11 +1071,9 @@ defineExpose({
 
 .v2-managed-mailbox-panel__oauth-note {
   display: grid;
+  width: 100%;
   min-width: 0;
-  grid-template-columns: 96px minmax(0, 1fr);
-  align-content: center;
-  gap: 4px;
-  padding: 7px 0;
+  gap: 1px;
 }
 
 .v2-managed-mailbox-panel__oauth-note strong,
@@ -801,6 +1093,7 @@ defineExpose({
 .v2-managed-mailbox-panel__form-actions,
 .v2-managed-mailbox-panel__header-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -843,7 +1136,8 @@ defineExpose({
 }
 
 .v2-managed-mailbox-panel__identity,
-.v2-managed-mailbox-panel__query-code {
+.v2-managed-mailbox-panel__query-code,
+.v2-managed-mailbox-panel__expiry {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -867,22 +1161,35 @@ defineExpose({
 }
 
 .v2-managed-mailbox-panel__query-code {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 3px 6px;
+  justify-items: start;
+  gap: 4px;
 }
 
 .v2-managed-mailbox-panel__query-code code {
-  overflow: hidden;
+  max-width: 100%;
+  overflow-x: auto;
   color: var(--v2-text);
   font-family: var(--v3-font-mono);
   font-size: 11px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.v2-managed-mailbox-panel__query-code small {
-  grid-column: 1 / -1;
+.v2-managed-mailbox-panel__legacy-code {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.v2-managed-mailbox-panel__expiry {
+  justify-items: start;
+  gap: 3px;
+}
+
+.v2-managed-mailbox-panel__expiry small {
+  color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
 }
 
 .v2-managed-mailbox-panel :deep(.el-pagination) {
@@ -890,15 +1197,24 @@ defineExpose({
   margin-top: 12px;
 }
 
-@media (max-width: 720px) {
-  .v2-managed-mailbox-panel__form,
-  .v2-managed-mailbox-panel__filters {
+@media (max-width: 900px) {
+  .v2-managed-mailbox-panel__form {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .v2-managed-mailbox-panel__add > header,
   .v2-managed-mailbox-panel__list > header {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-managed-mailbox-panel__header-actions {
+    width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .v2-managed-mailbox-panel__filters {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .v2-managed-mailbox-panel :deep(.el-pagination) {
@@ -911,6 +1227,55 @@ defineExpose({
 <style>
 .v2-mailbox-credential-drawer .el-drawer__body {
   padding: 0;
+}
+
+.v2-mailbox-query-code-settings-drawer .el-drawer__body {
+  padding: 0;
+}
+
+.v2-mailbox-query-code-settings-drawer__body {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.v2-mailbox-query-code-settings-drawer__notice {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--v2-surface-muted);
+}
+
+.v2-mailbox-query-code-settings-drawer__notice strong {
+  color: var(--v2-text);
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.v2-mailbox-query-code-settings-drawer__notice span,
+.v2-mailbox-query-code-settings-drawer__field small {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.v2-mailbox-query-code-settings-drawer__field {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  justify-items: start;
+  gap: 4px;
+}
+
+.v2-mailbox-query-code-settings-drawer__field .el-input-number {
+  width: 160px;
+}
+
+.v2-mailbox-query-code-settings-drawer__body > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .v2-mailbox-credential-drawer__body {

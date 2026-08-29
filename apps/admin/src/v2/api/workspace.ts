@@ -9,6 +9,8 @@ import type {
   StartV2MicrosoftMailboxAuthorizationInput,
   StartV2MicrosoftMailboxAuthorizationResult,
   UpdateV2ManagedMailboxCredentialInput,
+  UpdateV2ManagedMailboxQueryCodeSettingsInput,
+  UpdateV2ManagedMailboxQueryCodeSettingsResult,
   UpdateV2ManagedMailboxStatusInput,
   UpdateV2SavedTotpAccountInput,
   UpdateV2WorkspaceShortcutInput,
@@ -17,6 +19,7 @@ import type {
   V2ManagedMailbox,
   V2ManagedMailboxList,
   V2ManagedMailboxListQuery,
+  V2ManagedMailboxQueryCodeSettings,
   V2MicrosoftMailboxAuthorizationStatus,
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
@@ -92,6 +95,18 @@ export const idBusinessV2WorkspaceApi = {
       http.get(
         `/id-business-v2/workspace-mailboxes/microsoft/authorizations/${encodeURIComponent(authorizationId)}`
       )
+    );
+  },
+  getManagedMailboxQueryCodeSettings(options: ApiRequestOptions = {}) {
+    return request<V2ManagedMailboxQueryCodeSettings>(
+      http.get('/id-business-v2/workspace-mailboxes/query-code-settings', {
+        signal: options.signal
+      })
+    );
+  },
+  updateManagedMailboxQueryCodeSettings(input: UpdateV2ManagedMailboxQueryCodeSettingsInput) {
+    return request<UpdateV2ManagedMailboxQueryCodeSettingsResult>(
+      http.patch('/id-business-v2/workspace-mailboxes/query-code-settings', input)
     );
   },
   updateManagedMailboxStatus(mailboxId: string, input: UpdateV2ManagedMailboxStatusInput) {

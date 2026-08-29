@@ -28,6 +28,13 @@ export const V2_MAIL_VIEWER_LIMITS = {
   messages: 20
 } as const;
 
+export const V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY = {
+  defaultDays: 30,
+  minDays: 1,
+  maxDays: 365,
+  warningHours: 72
+} as const;
+
 export const V2_MAIL_PROVIDERS = ['gmail', 'icloud', 'microsoft'] as const;
 export const V2_PASSWORD_MAIL_PROVIDERS = ['gmail', 'icloud'] as const;
 export const V2_MANAGED_MAILBOX_STATUSES = ['active', 'disabled', 'auth_failed'] as const;
@@ -140,6 +147,24 @@ export interface V2ManagedMailboxListQuery {
   provider?: V2MailProvider;
   q?: string;
   status?: V2ManagedMailboxStatus;
+}
+
+export interface V2ManagedMailboxQueryCodeSettings {
+  validityDays: number;
+  defaultValidityDays: number;
+  minValidityDays: number;
+  maxValidityDays: number;
+  rotationMode: 'manual';
+  updatedAt: IsoDateTimeString | null;
+}
+
+export interface UpdateV2ManagedMailboxQueryCodeSettingsInput {
+  validityDays: number;
+  applyToExisting: boolean;
+}
+
+export interface UpdateV2ManagedMailboxQueryCodeSettingsResult extends V2ManagedMailboxQueryCodeSettings {
+  updatedExistingCount: number;
 }
 
 export interface CreateV2ManagedMailboxInput {

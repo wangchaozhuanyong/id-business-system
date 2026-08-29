@@ -13,7 +13,7 @@
     <div class="v2-mailbox-batch-drawer__body">
       <div class="v2-mailbox-batch-drawer__notice" role="note">
         <strong>每行录入一个邮箱</strong>
-        <span>格式：邮箱地址----应用专用密码----备注（备注可省略），每次最多 20 个。</span>
+        <span>{{ formatHelp }}</span>
       </div>
 
       <el-form
@@ -24,9 +24,10 @@
         @submit.prevent="submit"
       >
         <el-form-item label="邮箱类型" required>
-          <el-radio-group v-model="provider">
+          <el-radio-group v-model="provider" :disabled="submitting">
             <el-radio-button value="gmail">谷歌邮箱</el-radio-button>
             <el-radio-button value="icloud">苹果邮箱</el-radio-button>
+            <el-radio-button value="microsoft">微软邮箱</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="邮箱数据" required>
@@ -39,7 +40,8 @@
             resize="vertical"
             autocomplete="off"
             :spellcheck="false"
-            placeholder="seller01@gmail.com----应用专用密码----客户 A&#10;seller02@gmail.com----应用专用密码----客户 B"
+            :disabled="submitting"
+            :placeholder="batchPlaceholder"
           />
         </el-form-item>
       </el-form>
@@ -55,11 +57,17 @@
       </div>
 
       <footer>
-        <span>已识别 {{ parsedRows.length }} 行</span>
+        <span>
+          {{
+            provider === 'microsoft' && activeMicrosoftIndex > 0
+              ? `正在授权第 ${activeMicrosoftIndex} / ${parsedRows.length} 个`
+              : `已识别 ${parsedRows.length} 行`
+          }}
+        </span>
         <div>
-          <AppButton variant="ghost" @click="$emit('update:modelValue', false)">取消</AppButton>
+          <AppButton variant="ghost" @click="requestClose">取消</AppButton>
           <AppButton variant="primary" :loading="submitting" @click="submit">
-            导入邮箱池
+            {{ provider === 'microsoft' ? '逐个授权并导入' : '导入邮箱池' }}
           </AppButton>
         </div>
       </footer>
@@ -69,11 +77,12 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import type {
   CreateV2ManagedMailboxBatchResult,
+  V2MailProvider,
   V2ManagedMailboxBatchResultItem,
-  V2PasswordMailProvider
+  V2MicrosoftMailboxAuthorizationStatus
 } from '@apple-business/shared';
 import { V2_MAIL_VIEWER_LIMITS } from '@apple-business/shared';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
@@ -88,10 +97,13 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean];
 }>();
 
-const provider = ref<V2PasswordMailProvider>('gmail');
+const provider = ref<V2MailProvider>('gmail');
 const batchText = ref('');
 const submitting = ref(false);
+const activeMicrosoftIndex = ref(0);
 const result = ref<CreateV2ManagedMailboxBatchResult | null>(null);
+let microsoftAuthorizationGeneration = 0;
+let microsoftAuthorizationPopup: Window | null = null;
 const parsedRows = computed(() =>
   batchText.value
     .split(/\r?\n/)
@@ -101,6 +113,21 @@ const parsedRows = computed(() =>
 const failedItems = computed<V2ManagedMailboxBatchResultItem[]>(
   () => result.value?.items.filter((item) => item.status === 'failed') ?? []
 );
+const formatHelp = computed(() =>
+  provider.value === 'microsoft'
+    ? '格式：邮箱地址----备注（备注可省略）。系统会复用同一个 Microsoft 窗口逐个完成 OAuth2 授权，每次最多 20 个。'
+    : '格式：邮箱地址----应用专用密码----备注（备注可省略），每次最多 20 个。'
+);
+const batchPlaceholder = computed(() =>
+  provider.value === 'microsoft'
+    ? 'seller01@outlook.com----客户 A\nseller02@hotmail.com----客户 B'
+    : 'seller01@gmail.com----应用专用密码----客户 A\nseller02@gmail.com----应用专用密码----客户 B'
+);
+
+onBeforeUnmount(() => {
+  microsoftAuthorizationGeneration += 1;
+  microsoftAuthorizationPopup?.close();
+});
 
 async function submit() {
   if (!parsedRows.value.length) {
@@ -109,6 +136,11 @@ async function submit() {
   }
   if (parsedRows.value.length > V2_MAIL_VIEWER_LIMITS.batchLines) {
     ElMessage.warning(`每次最多导入 ${V2_MAIL_VIEWER_LIMITS.batchLines} 个邮箱`);
+    return;
+  }
+
+  if (provider.value === 'microsoft') {
+    await submitMicrosoftMailboxes();
     return;
   }
 
@@ -134,7 +166,7 @@ async function submit() {
       result.value.items.filter((item) => item.status === 'failed').map((item) => item.index)
     );
     batchText.value = parsedRows.value
-      .filter((_, index) => failedIndexes.has(index))
+      .filter((row) => failedIndexes.has(row.index))
       .map((row) => row.source)
       .join('\n');
     emit('imported');
@@ -147,27 +179,166 @@ async function submit() {
   }
 }
 
+async function submitMicrosoftMailboxes() {
+  const inputs = [];
+  for (const row of parsedRows.value) {
+    const [email = '', ...labelParts] = row.source.split('----');
+    if (!email.trim()) {
+      ElMessage.warning(`第 ${row.index + 1} 行缺少邮箱地址`);
+      return;
+    }
+    inputs.push({
+      email: email.trim(),
+      index: row.index,
+      label: labelParts.join('----').trim() || undefined,
+      source: row.source
+    });
+  }
+
+  const popup = window.open('about:blank', '_blank', 'popup,width=560,height=760');
+  if (!popup) {
+    ElMessage.error('浏览器阻止了授权窗口，请允许弹窗后重试');
+    return;
+  }
+  popup.opener = null;
+  microsoftAuthorizationPopup = popup;
+  const generation = ++microsoftAuthorizationGeneration;
+  const results: V2ManagedMailboxBatchResultItem[] = [];
+  submitting.value = true;
+
+  try {
+    for (const [position, input] of inputs.entries()) {
+      if (generation !== microsoftAuthorizationGeneration || popup.closed) break;
+      activeMicrosoftIndex.value = position + 1;
+      try {
+        const authorization = await idBusinessV2WorkspaceApi.startMicrosoftMailboxAuthorization({
+          email: input.email,
+          label: input.label
+        });
+        popup.location.assign(authorization.authorizationUrl);
+        const status = await pollMicrosoftAuthorization(
+          authorization.authorizationId,
+          Date.parse(authorization.expiresAt),
+          generation,
+          popup
+        );
+        if (!status || status.status !== 'succeeded') {
+          results.push({
+            email: input.email,
+            index: input.index,
+            message: status?.failureMessage || '未完成 Microsoft 授权',
+            status: 'failed'
+          });
+        } else {
+          results.push({ email: input.email, index: input.index, status: 'succeeded' });
+        }
+      } catch (error) {
+        results.push({
+          email: input.email,
+          index: input.index,
+          message: getApiErrorMessage(error),
+          status: 'failed'
+        });
+      }
+      result.value = summarizeResults(results, results.length);
+    }
+
+    const attemptedIndexes = new Set(results.map((item) => item.index));
+    for (const input of inputs) {
+      if (!attemptedIndexes.has(input.index)) {
+        results.push({
+          email: input.email,
+          index: input.index,
+          message: '授权流程已取消',
+          status: 'failed'
+        });
+      }
+    }
+    result.value = summarizeResults(results, inputs.length);
+    const failedIndexes = new Set(
+      results.filter((item) => item.status === 'failed').map((item) => item.index)
+    );
+    batchText.value = inputs
+      .filter((input) => failedIndexes.has(input.index))
+      .map((input) => input.source)
+      .join('\n');
+    if (result.value.succeeded > 0) emit('imported');
+    if (result.value.failed) ElMessage.warning('部分 Microsoft 邮箱未完成授权，请重试保留行');
+    else ElMessage.success('Microsoft 邮箱已逐个授权并导入');
+  } finally {
+    submitting.value = false;
+    activeMicrosoftIndex.value = 0;
+    if (!popup.closed) popup.close();
+    if (microsoftAuthorizationPopup === popup) microsoftAuthorizationPopup = null;
+  }
+}
+
+async function pollMicrosoftAuthorization(
+  authorizationId: string,
+  expiresAt: number,
+  generation: number,
+  popup: Window
+): Promise<V2MicrosoftMailboxAuthorizationStatus | null> {
+  while (
+    generation === microsoftAuthorizationGeneration &&
+    !popup.closed &&
+    Date.now() < expiresAt + 2_000
+  ) {
+    const status =
+      await idBusinessV2WorkspaceApi.getMicrosoftMailboxAuthorizationStatus(authorizationId);
+    if (status.status !== 'pending') return status;
+    await new Promise((resolve) => window.setTimeout(resolve, 1_200));
+  }
+  return null;
+}
+
+function summarizeResults(items: V2ManagedMailboxBatchResultItem[], total: number) {
+  const succeeded = items.filter((item) => item.status === 'succeeded').length;
+  return {
+    failed: total - succeeded,
+    items: [...items],
+    succeeded,
+    total
+  } satisfies CreateV2ManagedMailboxBatchResult;
+}
+
 async function handleBeforeClose(done: () => void) {
-  if (!batchText.value.trim()) {
+  if (!batchText.value.trim() && !submitting.value) {
     done();
     return;
   }
   try {
-    await ElMessageBox.confirm('关闭后会清空尚未导入的邮箱数据。', '清空并关闭', {
-      confirmButtonText: '清空并关闭',
-      cancelButtonText: '继续录入',
-      type: 'warning'
-    });
+    await ElMessageBox.confirm(
+      submitting.value
+        ? '关闭后会终止当前 Microsoft 批量授权，并清空尚未导入的数据。'
+        : '关闭后会清空尚未导入的邮箱数据。',
+      '清空并关闭',
+      {
+        confirmButtonText: submitting.value ? '终止并关闭' : '清空并关闭',
+        cancelButtonText: '继续录入',
+        type: 'warning'
+      }
+    );
+    microsoftAuthorizationGeneration += 1;
+    microsoftAuthorizationPopup?.close();
     done();
   } catch {
     // 用户选择继续录入。
   }
 }
 
+function requestClose() {
+  void handleBeforeClose(() => emit('update:modelValue', false));
+}
+
 function clearAll() {
   provider.value = 'gmail';
   batchText.value = '';
   result.value = null;
+  activeMicrosoftIndex.value = 0;
+  microsoftAuthorizationGeneration += 1;
+  microsoftAuthorizationPopup?.close();
+  microsoftAuthorizationPopup = null;
 }
 </script>
 

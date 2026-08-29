@@ -7,8 +7,10 @@ import type {
   ListIdBusinessV2ManagedMailboxesDto,
   StartIdBusinessV2MicrosoftMailboxAuthorizationDto,
   UpdateIdBusinessV2ManagedMailboxCredentialDto,
+  UpdateIdBusinessV2ManagedMailboxQueryCodeSettingsDto,
   UpdateIdBusinessV2ManagedMailboxStatusDto
 } from './dto/id-business-v2-managed-mailbox.dto';
+import { IdBusinessV2ManagedMailboxSettingsService } from './id-business-v2-managed-mailbox-settings.service';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
 import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
 
@@ -17,6 +19,7 @@ import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-
 export class IdBusinessV2ManagedMailboxController {
   constructor(
     private readonly service: IdBusinessV2ManagedMailboxService,
+    private readonly settings: IdBusinessV2ManagedMailboxSettingsService,
     private readonly microsoftAuthorization: IdBusinessV2MicrosoftMailboxAuthorizationService
   ) {}
 
@@ -65,6 +68,22 @@ export class IdBusinessV2ManagedMailboxController {
     @CurrentUser() operator?: AuthenticatedUser
   ) {
     return this.microsoftAuthorization.getStatus(authorizationId, operator);
+  }
+
+  @Get('query-code-settings')
+  @Header('Cache-Control', 'private, no-store')
+  getQueryCodeSettings(@CurrentUser() operator?: AuthenticatedUser) {
+    return this.settings.getSettings(operator);
+  }
+
+  @Patch('query-code-settings')
+  @Header('Cache-Control', 'private, no-store')
+  updateQueryCodeSettings(
+    @Body() dto: UpdateIdBusinessV2ManagedMailboxQueryCodeSettingsDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.settings.updateSettings(dto, operator, request?.requestId);
   }
 
   @Patch(':mailboxId/status')

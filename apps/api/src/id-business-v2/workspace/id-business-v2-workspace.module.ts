@@ -4,6 +4,7 @@ import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2MailViewerService } from './id-business-v2-mail-viewer.service';
 import { IdBusinessV2MailboxTransientStateService } from './id-business-v2-mailbox-transient-state.service';
 import { IdBusinessV2ManagedMailboxController } from './id-business-v2-managed-mailbox.controller';
+import { IdBusinessV2ManagedMailboxSettingsService } from './id-business-v2-managed-mailbox-settings.service';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
 import { IdBusinessV2MicrosoftMailboxOAuthController } from './id-business-v2-microsoft-mailbox-oauth.controller';
 import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
@@ -35,6 +36,7 @@ import { IdBusinessV2MicrosoftMailOAuthClient } from './providers/id-business-v2
     FieldEncryptionService,
     IdBusinessV2MailboxTransientStateService,
     IdBusinessV2ManagedMailboxService,
+    IdBusinessV2ManagedMailboxSettingsService,
     IdBusinessV2ManagedMailboxRepository,
     IdBusinessV2MailViewerService,
     IdBusinessV2ImapMailProvider,

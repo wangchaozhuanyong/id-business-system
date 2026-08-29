@@ -25,6 +25,7 @@ import {
   IdBusinessV2MailboxTransientStateService,
   type TransientMailboxAuthorization
 } from './id-business-v2-mailbox-transient-state.service';
+import { IdBusinessV2ManagedMailboxSettingsService } from './id-business-v2-managed-mailbox-settings.service';
 import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-v2-managed-mailbox.repository';
 import {
   IdBusinessV2ImapMailProvider,
@@ -42,7 +43,6 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const QUERY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 const QUERY_CODE_LENGTH = 20;
-const QUERY_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MICROSOFT_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 @Injectable()
@@ -54,7 +54,8 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     private readonly encryption: FieldEncryptionService,
     private readonly transientState: IdBusinessV2MailboxTransientStateService,
     private readonly mailProvider: IdBusinessV2ImapMailProvider,
-    private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient
+    private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient,
+    private readonly settings: IdBusinessV2ManagedMailboxSettingsService
   ) {}
 
   async start(
@@ -145,7 +146,12 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
       });
       const credentialEncrypted = this.encryption.encrypt(tokens.refreshToken);
       if (!credentialEncrypted) throw new ServiceUnavailableException('Microsoft 授权加密失败');
-      const mailboxId = await this.persistAuthorization(authorization, credentialEncrypted);
+      const validityDays = await this.settings.getValidityDays();
+      const mailboxId = await this.persistAuthorization(
+        authorization,
+        credentialEncrypted,
+        validityDays
+      );
       this.transientState.succeedAuthorization(authorization.id, mailboxId);
       return { succeeded: true as const };
     } catch (error) {
@@ -156,7 +162,8 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
 
   private persistAuthorization(
     authorization: TransientMailboxAuthorization,
-    credentialEncrypted: string
+    credentialEncrypted: string,
+    validityDays: number
   ) {
     return this.transactionManager.execute(
       async (tx, context) => {
@@ -167,7 +174,13 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
               credentialEncrypted,
               context.businessTime
             )
-          : await this.createMailbox(tx, authorization, credentialEncrypted, context.businessTime);
+          : await this.createMailbox(
+              tx,
+              authorization,
+              credentialEncrypted,
+              context.businessTime,
+              validityDays
+            );
         return mailbox.id;
       },
       {
@@ -211,7 +224,8 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     tx: V2CommandTransaction,
     authorization: Pick<TransientMailboxAuthorization, 'createdByUserId' | 'email' | 'label'>,
     credentialEncrypted: string,
-    issuedAt: Date
+    issuedAt: Date,
+    validityDays: number
   ) {
     if (await this.repository.findByEmail(authorization.email, tx)) {
       throw new ConflictException('该邮箱已经加入邮箱池');
@@ -227,7 +241,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
       label: authorization.label,
       provider: 'microsoft',
       providerCredentialEncrypted: credentialEncrypted,
-      queryCodeExpiresAt: new Date(issuedAt.getTime() + QUERY_CODE_TTL_MS),
+      queryCodeExpiresAt: this.settings.expiresAt(issuedAt, validityDays),
       queryCodeEncrypted,
       queryCodeHash,
       queryCodeHint: queryCode.slice(-4),

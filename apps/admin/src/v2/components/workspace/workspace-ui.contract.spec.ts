@@ -16,6 +16,7 @@ describe('personal workspace UI contract', () => {
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
   const managedMailboxBatchDrawer = read('./V2ManagedMailboxBatchDrawer.vue');
+  const managedMailboxExpiry = read('./managedMailboxExpiry.ts');
   const mailMessageList = read('./V2MailMessageList.vue');
   const publicMailboxView = read('../../views/V2PublicMailboxView.vue');
   const router = read('../../../v2-router.ts');
@@ -141,7 +142,13 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxPanel).toContain('Google 生成的 16 位应用专用密码');
     expect(managedMailboxPanel).toContain('Apple 生成的应用专用密码');
     expect(managedMailboxPanel).toContain('查询码有效期');
-    expect(managedMailboxPanel).toContain('有效期 30 天');
+    expect(managedMailboxPanel).toContain('有效期设置');
+    expect(managedMailboxExpiry).toContain('剩余 ${hours}小时');
+    expect(managedMailboxPanel).toContain('查询码到期后不会自动更换');
+    expect(managedMailboxPanel).toContain('生成并复制');
+    expect(managedMailboxPanel).toContain('复制查询码');
+    expect(managedMailboxPanel).toContain("document.execCommand('copy')");
+    expect(managedMailboxPanel).not.toContain('旧码末四位');
     expect(managedMailboxPanel).toContain('<V2AsyncRegion');
     expect(managedMailboxPanel).toContain('<V2Table');
     expect(managedMailboxPanel).toContain('<V2TableActionColumn');
@@ -151,6 +158,9 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxPanel).toContain('<V2ManagedMailboxBatchDrawer');
     expect(managedMailboxBatchDrawer).toContain('批量导入邮箱池');
     expect(managedMailboxBatchDrawer).toContain('每行录入一个邮箱');
+    expect(managedMailboxBatchDrawer).toContain('value="microsoft"');
+    expect(managedMailboxBatchDrawer).toContain('逐个授权并导入');
+    expect(managedMailboxBatchDrawer).toContain('startMicrosoftMailboxAuthorization');
     expect(publicMailboxView).toContain('<V2MailQueryPanel');
     expect(mailMessageList).toContain('mailBodyToPlainText(item.body)');
     expect(
