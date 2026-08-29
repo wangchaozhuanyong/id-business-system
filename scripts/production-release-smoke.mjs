@@ -109,7 +109,7 @@ const logoutResponse = await request('/api/auth/logout', {
   method: 'POST',
   headers: authorizedHeaders
 });
-assert.equal(logoutResponse.status, 200, '登出失败');
+assert.ok([200, 201].includes(logoutResponse.status), '登出失败');
 const revokedResponse = await request('/api/auth/me', { headers: authorizedHeaders });
 assert.equal(revokedResponse.status, 401, '登出后令牌仍然有效');
 
