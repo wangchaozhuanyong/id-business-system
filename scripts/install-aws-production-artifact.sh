@@ -109,8 +109,10 @@ for service in id-business-v2-mysql-backup.service id-business-v2-mysql-backup-v
     exit 1
   fi
 done
-if ps -eo pid=,args= | awk -v current_pid="$$" '
+if ps -eo pid=,comm=,args= | awk -v current_pid="$$" '
   $1 != current_pid &&
+  $2 != "awk" &&
+  $2 != "ps" &&
   ($0 ~ /docker compose .*id-business-v2/ ||
    $0 ~ /prisma .*migrate .*deploy/ ||
    $0 ~ /rsync .*id-business-v2/) { found = 1 }
