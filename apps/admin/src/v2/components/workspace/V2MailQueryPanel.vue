@@ -13,8 +13,7 @@
       <el-form-item label="邮件查询码" prop="queryCode" required>
         <el-input
           v-model="form.queryCode"
-          type="password"
-          show-password
+          type="text"
           :maxlength="V2_MAIL_VIEWER_LIMITS.credential"
           name="workspace-mail-query-code"
           autocomplete="new-password"
@@ -36,6 +35,10 @@
         />
       </el-form-item>
     </el-form>
+
+    <p class="v2-mail-query-panel__privacy" role="note">
+      邮件内容仅在本次查询时实时读取，不写入服务器数据库或浏览器持久缓存。
+    </p>
 
     <div class="v2-mail-query-panel__actions">
       <AppButton variant="ghost" @click="clearAll">清空</AppButton>
@@ -192,6 +195,13 @@ defineExpose({
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.v2-mail-query-panel__privacy {
+  margin: 0;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .v2-mail-query-panel__error {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2MailViewerService } from './id-business-v2-mail-viewer.service';
+import { IdBusinessV2MailboxTransientStateService } from './id-business-v2-mailbox-transient-state.service';
 import { IdBusinessV2ManagedMailboxController } from './id-business-v2-managed-mailbox.controller';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
 import { IdBusinessV2MicrosoftMailboxOAuthController } from './id-business-v2-microsoft-mailbox-oauth.controller';
@@ -32,6 +33,7 @@ import { IdBusinessV2MicrosoftMailOAuthClient } from './providers/id-business-v2
     IdBusinessV2TotpAccountService,
     IdBusinessV2TotpAccountRepository,
     FieldEncryptionService,
+    IdBusinessV2MailboxTransientStateService,
     IdBusinessV2ManagedMailboxService,
     IdBusinessV2ManagedMailboxRepository,
     IdBusinessV2MailViewerService,
