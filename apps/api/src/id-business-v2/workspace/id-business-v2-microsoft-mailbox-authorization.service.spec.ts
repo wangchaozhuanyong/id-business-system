@@ -56,14 +56,9 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
   const tx = {};
   const repository = {
     findByEmail: vi.fn(),
-    createOAuthState: vi.fn(),
-    findOAuthStateById: vi.fn(),
-    findOAuthStateByHash: vi.fn(),
-    failOAuthState: vi.fn(),
     findById: vi.fn(),
     updateCredential: vi.fn(),
-    create: vi.fn(),
-    completeOAuthState: vi.fn()
+    create: vi.fn()
   };
   const transactionManager = {
     execute: vi.fn(async (work: (client: unknown, context: { businessTime: Date }) => unknown) =>
@@ -75,6 +70,13 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     encrypt: vi.fn((value: string) => `encrypted:${value}`),
     hash: vi.fn((value: string) => `hashed:${value}`)
   };
+  const transientState = {
+    createAuthorization: vi.fn(),
+    findAuthorizationById: vi.fn(),
+    claimPendingAuthorization: vi.fn(),
+    failAuthorization: vi.fn(),
+    succeedAuthorization: vi.fn()
+  };
   const provider = { verify: vi.fn() };
   const microsoftOAuth = {
     createAuthorizationUrl: vi.fn(),
@@ -85,6 +87,7 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     transactionManager as never,
     audit as never,
     encryption as never,
+    transientState as never,
     provider as never,
     microsoftOAuth as never
   );
@@ -92,11 +95,14 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repository.findByEmail.mockResolvedValue(null);
-    repository.createOAuthState.mockImplementation(async (input) => authorization(input));
-    repository.findOAuthStateByHash.mockResolvedValue(authorization());
-    repository.findOAuthStateById.mockResolvedValue(authorization());
+    transientState.createAuthorization.mockImplementation((input) => authorization(input));
+    transientState.findAuthorizationById.mockReturnValue(authorization());
+    transientState.claimPendingAuthorization.mockReturnValue(
+      authorization({ status: 'processing', processingStartedAt: new Date() })
+    );
+    transientState.failAuthorization.mockReturnValue(true);
+    transientState.succeedAuthorization.mockReturnValue(true);
     repository.create.mockImplementation(async (_tx, input) => mailbox(input));
-    repository.completeOAuthState.mockResolvedValue(authorization({ status: 'succeeded' }));
     audit.append.mockResolvedValue({ id: 'audit-1' });
     provider.verify.mockResolvedValue(undefined);
     microsoftOAuth.createAuthorizationUrl.mockReturnValue('https://login.microsoftonline.com/auth');
@@ -112,16 +118,17 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
       expect.any(String),
       'member@outlook.com'
     );
-    expect(repository.createOAuthState).toHaveBeenCalledWith(
+    expect(transientState.createAuthorization).toHaveBeenCalledWith(
       expect.objectContaining({
         email: 'member@outlook.com',
         label: '客户 M',
-        status: 'pending',
         createdByUserId: admin.id
       })
     );
     expect(result.authorizationUrl).toBe('https://login.microsoftonline.com/auth');
-    expect(JSON.stringify(repository.createOAuthState.mock.calls)).not.toMatch(/password|token/i);
+    expect(JSON.stringify(transientState.createAuthorization.mock.calls)).not.toMatch(
+      /password|token/i
+    );
   });
 
   it('exchanges OAuth2, verifies Outlook IMAP and stores only encrypted credentials', async () => {
@@ -143,5 +150,6 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     );
     expect(JSON.stringify(repository.create.mock.calls)).not.toContain('access-token');
     expect(audit.append).toHaveBeenCalled();
+    expect(transientState.succeedAuthorization).toHaveBeenCalledWith(authorizationId, mailbox().id);
   });
 });

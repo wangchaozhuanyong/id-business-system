@@ -68,6 +68,7 @@ export class IdBusinessV2ManagedMailboxController {
   }
 
   @Patch(':mailboxId/status')
+  @Header('Cache-Control', 'private, no-store')
   updateStatus(
     @Param('mailboxId') mailboxId: string,
     @Body() dto: UpdateIdBusinessV2ManagedMailboxStatusDto,
@@ -78,6 +79,7 @@ export class IdBusinessV2ManagedMailboxController {
   }
 
   @Put(':mailboxId/credential')
+  @Header('Cache-Control', 'private, no-store')
   updateCredential(
     @Param('mailboxId') mailboxId: string,
     @Body() dto: UpdateIdBusinessV2ManagedMailboxCredentialDto,

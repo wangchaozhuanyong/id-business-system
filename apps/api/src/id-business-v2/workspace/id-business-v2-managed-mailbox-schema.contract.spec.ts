@@ -43,6 +43,20 @@ const mysqlMicrosoftMigration = readFileSync(
   ),
   'utf8'
 );
+const privacyMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma/migrations/20260828213000_mailbox_transient_privacy/migration.sql'
+  ),
+  'utf8'
+);
+const mysqlPrivacyMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma-mysql/migrations/20260828213000_mailbox_transient_privacy/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('managed mailbox schema contract', () => {
   it('stores provider authorization and admin-copyable query codes encrypted', () => {
@@ -53,23 +67,28 @@ describe('managed mailbox schema contract', () => {
     expect(schema).not.toMatch(/appPassword\s+String/);
   });
 
-  it('adds Microsoft OAuth state and encrypted query-code storage without destructive migration', () => {
+  it('keeps encrypted query codes while removing temporary OAuth state from persistent schemas', () => {
     for (const source of [microsoftMigration, mysqlMicrosoftMigration]) {
       expect(source).toContain('query_code_encrypted');
       expect(source).toContain('id_business_v2_mailbox_oauth_states');
       expect(source).toContain('microsoft');
       expect(source).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
     }
-    expect(schema).toContain('model IdBusinessV2MailboxOAuthState {');
-    expect(mysqlSchema).toContain('model IdBusinessV2MailboxOAuthState {');
+    expect(schema).not.toContain('model IdBusinessV2MailboxOAuthState {');
+    expect(mysqlSchema).not.toContain('model IdBusinessV2MailboxOAuthState {');
+    for (const source of [privacyMigration, mysqlPrivacyMigration]) {
+      expect(source).toContain('DROP TABLE IF EXISTS');
+      expect(source).toContain('id_business_v2_mailbox_oauth_states');
+    }
   });
 
-  it('adds an append-only public query attempt log with bounded lookup indexes', () => {
+  it('retires historical public query logs so buyer IP and attempt hashes are not persisted', () => {
     expect(migration).toContain('CREATE TABLE "id_business_v2_mail_query_attempts"');
-    expect(migration).toContain('"email_hash" VARCHAR(64) NOT NULL');
-    expect(migration).toContain('"ip_hash" VARCHAR(64)');
-    expect(migration).toContain('id_business_v2_mail_query_attempts_email_hash_created_at_idx');
-    expect(migration).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
+    expect(schema).not.toContain('model IdBusinessV2MailQueryAttempt {');
+    expect(mysqlSchema).not.toContain('model IdBusinessV2MailQueryAttempt {');
+    for (const source of [privacyMigration, mysqlPrivacyMigration]) {
+      expect(source).toContain('id_business_v2_mail_query_attempts');
+    }
   });
 
   it('expires buyer query codes after a bounded compatibility window in both schemas', () => {
@@ -86,18 +105,14 @@ describe('managed mailbox schema contract', () => {
     );
   });
 
-  it('uses a unique query-code hash for mailbox lookup and attempt throttling', () => {
+  it('uses a unique query-code hash for mailbox lookup without a persistent attempt model', () => {
     expect(mysqlSchema).toMatch(/queryCodeHash\s+String\s+@unique/);
-    expect(mysqlSchema).toContain(
-      'queryCodeHash String                       @map("query_code_hash")'
-    );
     expect(mysqlCodeOnlyMigration).toContain(
       'id_business_v2_managed_mailboxes_query_code_hash_key'
     );
     expect(mysqlCodeOnlyMigration).toContain(
       'CHANGE COLUMN `email_hash` `query_code_hash` VARCHAR(64) NOT NULL'
     );
-    expect(mysqlCodeOnlyMigration).toContain('idbiz_mail_query_attempts_code_created_idx');
     expect(mysqlCodeOnlyMigration).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
   });
 });

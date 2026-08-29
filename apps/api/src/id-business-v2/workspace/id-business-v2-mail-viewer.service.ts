@@ -9,6 +9,7 @@ import { V2_MAIL_VIEWER_LIMITS, type V2MailViewerQueryResult } from '@apple-busi
 import { timingSafeEqual } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import type { QueryIdBusinessV2MailViewerDto } from './dto/id-business-v2-mail-viewer.dto';
+import { IdBusinessV2MailboxTransientStateService } from './id-business-v2-mailbox-transient-state.service';
 import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-v2-managed-mailbox.repository';
 import {
   IdBusinessV2ImapMailProvider,
@@ -32,6 +33,7 @@ const MAX_IP_ATTEMPTS = 40;
 export class IdBusinessV2MailViewerService {
   constructor(
     private readonly repository: IdBusinessV2ManagedMailboxRepository,
+    private readonly transientState: IdBusinessV2MailboxTransientStateService,
     private readonly encryption: FieldEncryptionService,
     private readonly mailProvider: IdBusinessV2ImapMailProvider,
     private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient
@@ -47,14 +49,14 @@ export class IdBusinessV2MailViewerService {
     const ipHash = this.encryption.hash(this.normalizeIp(requestIp));
     if (!queryCodeHash) throw new ServiceUnavailableException('查询校验服务不可用');
 
-    const reservation = await this.repository.reserveQueryAttempt({
+    const allowed = this.transientState.reservePublicQuery({
       queryCodeHash,
       ipHash,
-      since: new Date(Date.now() - RATE_WINDOW_MS),
+      windowMs: RATE_WINDOW_MS,
       maxQueryCodeAttempts: MAX_QUERY_CODE_ATTEMPTS,
       maxIpAttempts: MAX_IP_ATTEMPTS
     });
-    if (!reservation.allowed) {
+    if (!allowed) {
       throw new HttpException('查询过于频繁，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
     }
 
@@ -64,21 +66,11 @@ export class IdBusinessV2MailViewerService {
       mailbox.queryCodeExpiresAt.getTime() > Date.now() &&
       this.matchesQueryCode(mailbox.queryCodeHash, queryCode);
     if (!valid) {
-      if (mailbox) {
-        await this.repository.updateQueryAttempt(reservation.attemptId, {
-          mailboxId: mailbox.id,
-          outcome: 'invalid'
-        });
-      }
       throw new BadRequestException('邮件查询码不正确');
     }
 
     const providerCredential = this.encryption.decrypt(mailbox.providerCredentialEncrypted);
     if (!providerCredential) {
-      await this.repository.updateQueryAttempt(reservation.attemptId, {
-        mailboxId: mailbox.id,
-        outcome: 'provider_error'
-      });
       throw new ServiceUnavailableException('邮箱授权数据不可用，请联系卖家');
     }
 
@@ -86,18 +78,12 @@ export class IdBusinessV2MailViewerService {
       const providerInput = await this.resolveProviderInput(mailbox, providerCredential);
       const items = await this.mailProvider.query(providerInput, limit);
       const queriedAt = new Date();
-      await Promise.all([
-        this.repository.updateQueryAttempt(reservation.attemptId, {
-          mailboxId: mailbox.id,
-          outcome: 'success'
-        }),
-        this.repository.updateQueryState(mailbox.id, {
-          lastErrorCode: null,
-          lastQueriedAt: queriedAt,
-          lastVerifiedAt: queriedAt,
-          status: 'active'
-        })
-      ]);
+      await this.repository.updateQueryState(mailbox.id, {
+        lastErrorCode: null,
+        lastQueriedAt: queriedAt,
+        lastVerifiedAt: queriedAt,
+        status: 'active'
+      });
       return {
         email: mailbox.email,
         items,
@@ -105,10 +91,6 @@ export class IdBusinessV2MailViewerService {
         queriedAt: queriedAt.toISOString()
       };
     } catch (error) {
-      await this.repository.updateQueryAttempt(reservation.attemptId, {
-        mailboxId: mailbox.id,
-        outcome: 'provider_error'
-      });
       if (
         error instanceof MailProviderAuthenticationError ||
         error instanceof MicrosoftMailOAuthAuthenticationError

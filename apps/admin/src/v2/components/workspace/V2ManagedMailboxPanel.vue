@@ -81,7 +81,7 @@
       <header>
         <div>
           <strong id="managed-mailbox-list-title">邮箱池管理</strong>
-          <span>每行一个邮箱；查询码可直接复制，应用专用密码和 OAuth 令牌不会回显。</span>
+          <span>邮箱和查询码完整显示；邮件内容、买家 IP 和查询明细不持久化。</span>
         </div>
         <div class="v2-managed-mailbox-panel__header-actions">
           <AppButton size="small" variant="soft" @click="batchDrawerOpen = true">

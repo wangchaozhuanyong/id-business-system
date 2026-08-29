@@ -34,11 +34,10 @@ function mailbox(overrides: Record<string, unknown> = {}) {
 describe('IdBusinessV2MailViewerService', () => {
   const repository = {
     findByQueryCodeHash: vi.fn(),
-    reserveQueryAttempt: vi.fn(),
-    updateQueryAttempt: vi.fn(),
     updateQueryState: vi.fn(),
     updateProviderCredential: vi.fn()
   };
+  const transientState = { reservePublicQuery: vi.fn() };
   const encryption = {
     decrypt: vi.fn(),
     encrypt: vi.fn(() => 'encrypted-refresh-token'),
@@ -48,6 +47,7 @@ describe('IdBusinessV2MailViewerService', () => {
   const microsoftOAuth = { refreshAccessToken: vi.fn() };
   const service = new IdBusinessV2MailViewerService(
     repository as never,
+    transientState as never,
     encryption as never,
     provider as never,
     microsoftOAuth as never
@@ -55,9 +55,8 @@ describe('IdBusinessV2MailViewerService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    repository.reserveQueryAttempt.mockResolvedValue({ allowed: true, attemptId: 'attempt-1' });
+    transientState.reservePublicQuery.mockReturnValue(true);
     repository.findByQueryCodeHash.mockResolvedValue(mailbox());
-    repository.updateQueryAttempt.mockResolvedValue({ id: 'attempt-1' });
     repository.updateQueryState.mockResolvedValue(mailbox());
     encryption.decrypt.mockReturnValue('provider-app-password');
     provider.query.mockResolvedValue([
@@ -86,12 +85,12 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(JSON.stringify(result)).not.toContain('buyer-code');
     expect(JSON.stringify(result)).not.toContain('provider-app-password');
     expect(repository.findByQueryCodeHash).toHaveBeenCalledWith('hash:buyer-code');
-    expect(repository.reserveQueryAttempt).toHaveBeenCalledWith(
+    expect(transientState.reservePublicQuery).toHaveBeenCalledWith(
       expect.objectContaining({ queryCodeHash: 'hash:buyer-code' })
     );
-    expect(repository.updateQueryAttempt).toHaveBeenCalledWith(
-      'attempt-1',
-      expect.objectContaining({ outcome: 'success', mailboxId: mailbox().id })
+    expect(repository.updateQueryState).toHaveBeenCalledWith(
+      mailbox().id,
+      expect.objectContaining({ status: 'active' })
     );
   });
 
@@ -148,14 +147,13 @@ describe('IdBusinessV2MailViewerService', () => {
   });
 
   it('rate limits by query code or IP before reading provider credentials', async () => {
-    repository.reserveQueryAttempt.mockResolvedValueOnce({ allowed: false });
+    transientState.reservePublicQuery.mockReturnValueOnce(false);
     const error = await service
       .query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20')
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HttpException);
     expect((error as HttpException).getStatus()).toBe(429);
     expect(repository.findByQueryCodeHash).not.toHaveBeenCalled();
-    expect(repository.updateQueryAttempt).not.toHaveBeenCalled();
   });
 
   it('marks revoked provider authorization without leaking the provider password', async () => {
@@ -191,6 +189,6 @@ describe('IdBusinessV2MailViewerService', () => {
     await expect(service.query({ queryCode: 'buyer-code', limit: 21 })).rejects.toThrow(
       '返回封数必须为 1 至 20 的整数'
     );
-    expect(repository.reserveQueryAttempt).not.toHaveBeenCalled();
+    expect(transientState.reservePublicQuery).not.toHaveBeenCalled();
   });
 });

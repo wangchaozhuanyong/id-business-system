@@ -21,6 +21,10 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import type { StartIdBusinessV2MicrosoftMailboxAuthorizationDto } from './dto/id-business-v2-managed-mailbox.dto';
+import {
+  IdBusinessV2MailboxTransientStateService,
+  type TransientMailboxAuthorization
+} from './id-business-v2-mailbox-transient-state.service';
 import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-v2-managed-mailbox.repository';
 import {
   IdBusinessV2ImapMailProvider,
@@ -48,6 +52,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     private readonly transactionManager: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
     private readonly encryption: FieldEncryptionService,
+    private readonly transientState: IdBusinessV2MailboxTransientStateService,
     private readonly mailProvider: IdBusinessV2ImapMailProvider,
     private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient
   ) {}
@@ -84,15 +89,17 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     }
 
     const expiresAt = new Date(Date.now() + MICROSOFT_OAUTH_STATE_TTL_MS);
-    const authorization = await this.repository.createOAuthState({
+    const authorization = this.transientState.createAuthorization({
       stateHash,
       email,
       label,
       mailboxId,
       createdByUserId: userId,
-      expiresAt,
-      status: 'pending'
+      expiresAt
     });
+    if (!authorization) {
+      throw new ServiceUnavailableException('Microsoft 授权任务较多，请稍后重试');
+    }
     return {
       authorizationId: authorization.id,
       authorizationUrl,
@@ -106,31 +113,26 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
   ): Promise<V2MicrosoftMailboxAuthorizationStatus> {
     const userId = this.requireAdmin(operator);
     const authorizationId = this.normalizeId(authorizationIdInput);
-    const authorization = await this.repository.findOAuthStateById(authorizationId);
+    const authorization = this.transientState.findAuthorizationById(authorizationId);
     if (!authorization || authorization.createdByUserId !== userId) {
       throw new NotFoundException('Microsoft 邮箱授权任务不存在');
-    }
-    if (authorization.status === 'pending' && authorization.expiresAt.getTime() <= Date.now()) {
-      await this.repository.failOAuthState(authorization.id, 'expired');
-      authorization.status = 'failed';
-      authorization.failureCode = 'expired';
     }
     return {
       authorizationId: authorization.id,
       failureMessage: this.failureMessage(authorization.failureCode),
       mailboxId: authorization.mailboxId,
-      status: authorization.status
+      status: authorization.status === 'processing' ? 'pending' : authorization.status
     };
   }
 
   async complete(input: { code?: unknown; error?: unknown; state?: unknown }) {
-    const authorization = await this.resolvePendingAuthorization(input.state);
+    const authorization = this.resolvePendingAuthorization(input.state);
     if (typeof input.error === 'string' && input.error) {
-      await this.repository.failOAuthState(authorization.id, 'consent_denied');
+      this.transientState.failAuthorization(authorization.id, 'consent_denied');
       return { succeeded: false as const };
     }
     if (typeof input.code !== 'string' || input.code.length < 10 || input.code.length > 4096) {
-      await this.repository.failOAuthState(authorization.id, 'authorization_failed');
+      this.transientState.failAuthorization(authorization.id, 'authorization_failed');
       return { succeeded: false as const };
     }
 
@@ -143,22 +145,21 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
       });
       const credentialEncrypted = this.encryption.encrypt(tokens.refreshToken);
       if (!credentialEncrypted) throw new ServiceUnavailableException('Microsoft 授权加密失败');
-      await this.persistAuthorization(authorization.id, credentialEncrypted);
+      const mailboxId = await this.persistAuthorization(authorization, credentialEncrypted);
+      this.transientState.succeedAuthorization(authorization.id, mailboxId);
       return { succeeded: true as const };
     } catch (error) {
-      await this.repository.failOAuthState(authorization.id, this.failureCode(error));
+      this.transientState.failAuthorization(authorization.id, this.failureCode(error));
       return { succeeded: false as const };
     }
   }
 
-  private async persistAuthorization(authorizationId: string, credentialEncrypted: string) {
-    await this.transactionManager.execute(
+  private persistAuthorization(
+    authorization: TransientMailboxAuthorization,
+    credentialEncrypted: string
+  ) {
+    return this.transactionManager.execute(
       async (tx, context) => {
-        const authorization = await this.repository.findOAuthStateById(authorizationId, tx);
-        if (!authorization || authorization.status !== 'pending') {
-          throw new ConflictException('Microsoft 授权任务已处理');
-        }
-
         const mailbox = authorization.mailboxId
           ? await this.reauthorizeMailbox(
               tx,
@@ -167,10 +168,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
               context.businessTime
             )
           : await this.createMailbox(tx, authorization, credentialEncrypted, context.businessTime);
-        await this.repository.completeOAuthState(tx, authorization.id, {
-          mailboxId: mailbox.id,
-          completedAt: context.businessTime
-        });
+        return mailbox.id;
       },
       {
         changedScopes: ['workspace'],
@@ -182,10 +180,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
 
   private async reauthorizeMailbox(
     tx: V2CommandTransaction,
-    authorization: {
-      createdByUserId: string;
-      mailboxId: string | null;
-    },
+    authorization: Pick<TransientMailboxAuthorization, 'createdByUserId' | 'mailboxId'>,
     credentialEncrypted: string,
     verifiedAt: Date
   ) {
@@ -214,11 +209,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
 
   private async createMailbox(
     tx: V2CommandTransaction,
-    authorization: {
-      createdByUserId: string;
-      email: string;
-      label: string | null;
-    },
+    authorization: Pick<TransientMailboxAuthorization, 'createdByUserId' | 'email' | 'label'>,
     credentialEncrypted: string,
     issuedAt: Date
   ) {
@@ -257,19 +248,15 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     return mailbox;
   }
 
-  private async resolvePendingAuthorization(stateInput: unknown) {
+  private resolvePendingAuthorization(stateInput: unknown) {
     if (typeof stateInput !== 'string' || stateInput.length < 20 || stateInput.length > 200) {
       throw new BadRequestException('Microsoft 授权状态无效');
     }
     const stateHash = this.encryption.hash(stateInput);
     if (!stateHash) throw new BadRequestException('Microsoft 授权状态无效');
-    const authorization = await this.repository.findOAuthStateByHash(stateHash);
-    if (!authorization || authorization.status !== 'pending') {
+    const authorization = this.transientState.claimPendingAuthorization(stateHash);
+    if (!authorization) {
       throw new BadRequestException('Microsoft 授权任务无效或已完成');
-    }
-    if (authorization.expiresAt.getTime() <= Date.now()) {
-      await this.repository.failOAuthState(authorization.id, 'expired');
-      throw new BadRequestException('Microsoft 授权已过期');
     }
     return authorization;
   }
