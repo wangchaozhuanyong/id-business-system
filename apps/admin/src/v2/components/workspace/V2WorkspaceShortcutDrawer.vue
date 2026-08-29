@@ -20,6 +20,7 @@
           <span>{{ items.length }} / {{ V2_WORKSPACE_SHORTCUT_LIMITS.count }}</span>
         </div>
         <AppButton
+          class="v2-workspace-shortcut-drawer__add"
           variant="primary"
           size="small"
           :disabled="!writesAllowed || shortcutLimitReached"
@@ -395,11 +396,16 @@ async function handleBeforeClose(done: () => void) {
   line-height: 22px;
 }
 
-.v2-workspace-shortcut-drawer__toolbar span,
-.v2-workspace-shortcut-editor > header span {
+.v2-workspace-shortcut-drawer__toolbar > div > span,
+.v2-workspace-shortcut-editor > header > span {
   color: var(--v2-text-soft);
   font-size: 12px;
   line-height: 18px;
+}
+
+.v2-workspace-shortcut-drawer__add.app-button.el-button {
+  min-width: 104px;
+  flex: 0 0 auto;
 }
 
 .v2-workspace-shortcut-drawer__readonly,

@@ -5,10 +5,9 @@
     title="邮箱查询与管理"
     size="min(1220px, 100vw)"
     append-to-body
-    destroy-on-close
-    :before-close="handleBeforeClose"
+    close-on-click-modal
+    close-on-press-escape
     @close="$emit('update:modelValue', false)"
-    @closed="clearAll"
   >
     <div class="v2-mail-viewer-drawer__body">
       <div class="v2-mail-viewer-disclosure" role="note">
@@ -29,10 +28,10 @@
 
       <el-tabs v-model="activeTab" class="v2-mail-viewer-tabs">
         <el-tab-pane label="邮件查询" name="query">
-          <V2MailQueryPanel ref="queryPanelRef" />
+          <V2MailQueryPanel />
         </el-tab-pane>
         <el-tab-pane v-if="isAdmin" label="邮箱池管理" name="manage">
-          <V2ManagedMailboxPanel ref="managedMailboxPanelRef" />
+          <V2ManagedMailboxPanel />
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -40,8 +39,6 @@
 </template>
 
 <script setup lang="ts">
-import 'element-plus/es/components/message-box/style/css.mjs';
-import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, ref } from 'vue';
 import { Lock, TopRight } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -49,57 +46,16 @@ import { useAuthStore } from '@/stores/auth';
 import V2ManagedMailboxPanel from './V2ManagedMailboxPanel.vue';
 import V2MailQueryPanel from './V2MailQueryPanel.vue';
 
-interface MailToolPanel {
-  abortActiveRequest?: () => void;
-  clearAll: () => void;
-  hasContent: () => boolean;
-}
-
 defineProps<{ modelValue: boolean }>();
 defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const activeTab = ref<'query' | 'manage'>('query');
-const queryPanelRef = ref<MailToolPanel>();
-const managedMailboxPanelRef = ref<MailToolPanel>();
-
-function panels() {
-  return [queryPanelRef.value, managedMailboxPanelRef.value].filter(
-    (panel): panel is MailToolPanel => Boolean(panel)
-  );
-}
 
 function openPublicMailbox() {
   const opened = window.open('/mailbox', '_blank', 'noopener,noreferrer');
   if (opened) opened.opener = null;
-}
-
-function clearAll() {
-  panels().forEach((panel) => panel.clearAll());
-  activeTab.value = 'query';
-}
-
-async function handleBeforeClose(done: () => void) {
-  if (!panels().some((panel) => panel.hasContent())) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      '关闭后会立即清空当前输入、查询结果和本次生成的查询码。',
-      '清空并关闭',
-      {
-        confirmButtonText: '清空并关闭',
-        cancelButtonText: '继续使用',
-        type: 'warning'
-      }
-    );
-    panels().forEach((panel) => panel.abortActiveRequest?.());
-    done();
-  } catch {
-    // 用户选择继续使用。
-  }
 }
 </script>
 
