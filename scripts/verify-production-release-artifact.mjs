@@ -67,7 +67,7 @@ try {
     assert.ok(!/^\.git(?:\/|$)/u.test(entry), '源码归档不得包含 .git');
     assert.ok(!/^\.deploy(?:\/|$)/u.test(entry), '源码归档不得包含 .deploy');
     assert.ok(
-      !/^\.env(?:$|\.(?:local|production|aws\.production))/u.test(entry),
+      !/^\.env(?:$|\.local$|\.production$|\.aws\.production$|.*\.local$)/u.test(entry),
       '源码归档包含真实环境文件'
     );
   }

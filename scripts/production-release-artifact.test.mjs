@@ -19,6 +19,10 @@ test('release artifact verifier accepts a complete immutable bundle and rejects 
   mkdirSync(payloadDirectory);
   mkdirSync(sourceDirectory);
   writeFileSync(join(sourceDirectory, 'package.json'), '{"private":true}\n');
+  writeFileSync(
+    join(sourceDirectory, '.env.aws.production.example'),
+    'MYSQL_PASSWORD=replace_with_placeholder\n'
+  );
   writeFileSync(join(payloadDirectory, 'images.tar'), 'immutable-image-archive');
   run('tar', ['-czf', join(payloadDirectory, 'source.tar.gz'), '-C', sourceDirectory, '.']);
 
