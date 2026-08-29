@@ -15,6 +15,12 @@ import {
   MailProviderAuthenticationError,
   MailProviderUnavailableError
 } from './providers/id-business-v2-imap-mail.provider';
+import {
+  IdBusinessV2MicrosoftMailOAuthClient,
+  MicrosoftMailOAuthAuthenticationError,
+  MicrosoftMailOAuthConfigurationError,
+  MicrosoftMailOAuthUnavailableError
+} from './providers/id-business-v2-microsoft-mail-oauth.client';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CREDENTIAL_SEPARATOR = '----';
@@ -27,7 +33,8 @@ export class IdBusinessV2MailViewerService {
   constructor(
     private readonly repository: IdBusinessV2ManagedMailboxRepository,
     private readonly encryption: FieldEncryptionService,
-    private readonly mailProvider: IdBusinessV2ImapMailProvider
+    private readonly mailProvider: IdBusinessV2ImapMailProvider,
+    private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient
   ) {}
 
   async query(
@@ -66,8 +73,8 @@ export class IdBusinessV2MailViewerService {
       throw new BadRequestException('邮件查询码不正确');
     }
 
-    const appPassword = this.encryption.decrypt(mailbox.providerCredentialEncrypted);
-    if (!appPassword) {
+    const providerCredential = this.encryption.decrypt(mailbox.providerCredentialEncrypted);
+    if (!providerCredential) {
       await this.repository.updateQueryAttempt(reservation.attemptId, {
         mailboxId: mailbox.id,
         outcome: 'provider_error'
@@ -76,10 +83,8 @@ export class IdBusinessV2MailViewerService {
     }
 
     try {
-      const items = await this.mailProvider.query(
-        { appPassword, email: mailbox.email, provider: mailbox.provider },
-        limit
-      );
+      const providerInput = await this.resolveProviderInput(mailbox, providerCredential);
+      const items = await this.mailProvider.query(providerInput, limit);
       const queriedAt = new Date();
       await Promise.all([
         this.repository.updateQueryAttempt(reservation.attemptId, {
@@ -104,7 +109,10 @@ export class IdBusinessV2MailViewerService {
         mailboxId: mailbox.id,
         outcome: 'provider_error'
       });
-      if (error instanceof MailProviderAuthenticationError) {
+      if (
+        error instanceof MailProviderAuthenticationError ||
+        error instanceof MicrosoftMailOAuthAuthenticationError
+      ) {
         await this.repository.updateQueryState(mailbox.id, {
           lastErrorCode: 'provider_auth_failed',
           status: 'auth_failed'
@@ -114,8 +122,37 @@ export class IdBusinessV2MailViewerService {
       if (error instanceof MailProviderUnavailableError && error.code === 'edge_runtime') {
         throw new ServiceUnavailableException('邮件查询服务尚未配置，请联系卖家');
       }
+      if (error instanceof MicrosoftMailOAuthConfigurationError) {
+        throw new ServiceUnavailableException('Microsoft 邮箱查询服务尚未配置，请联系卖家');
+      }
+      if (error instanceof MicrosoftMailOAuthUnavailableError) {
+        throw new ServiceUnavailableException('Microsoft 授权服务暂时不可用，请稍后重试');
+      }
       throw new ServiceUnavailableException('暂时无法连接邮箱服务，请稍后重试');
     }
+  }
+
+  private async resolveProviderInput(
+    mailbox: { id: string; email: string; provider: 'gmail' | 'icloud' | 'microsoft' },
+    providerCredential: string
+  ) {
+    if (mailbox.provider !== 'microsoft') {
+      return {
+        appPassword: providerCredential,
+        email: mailbox.email,
+        provider: mailbox.provider
+      } as const;
+    }
+    const tokens = await this.microsoftOAuth.refreshAccessToken(providerCredential);
+    if (tokens.refreshToken !== providerCredential) {
+      const encrypted = this.encryption.encrypt(tokens.refreshToken);
+      if (encrypted) await this.repository.updateProviderCredential(mailbox.id, encrypted);
+    }
+    return {
+      accessToken: tokens.accessToken,
+      email: mailbox.email,
+      provider: mailbox.provider
+    } as const;
   }
 
   private matchesQueryCode(storedHash: string, queryCode: string) {

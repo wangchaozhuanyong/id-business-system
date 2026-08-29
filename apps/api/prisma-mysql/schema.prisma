@@ -425,12 +425,19 @@ enum IdBusinessV2GovernanceCheckpointStatus {
 enum IdBusinessV2MailProvider {
   gmail
   icloud
+  microsoft
 }
 
 enum IdBusinessV2ManagedMailboxStatus {
   active
   disabled
   auth_failed
+}
+
+enum IdBusinessV2MailboxOAuthStatus {
+  pending
+  succeeded
+  failed
 }
 
 enum IdBusinessV2MailQueryOutcome {
@@ -514,6 +521,7 @@ model User {
   idBusinessV2TotpAccounts             IdBusinessV2TotpAccount[]
   idBusinessV2ManagedMailboxesCreated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxCreatedBy")
   idBusinessV2ManagedMailboxesUpdated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxUpdatedBy")
+  idBusinessV2MailboxOAuthStates       IdBusinessV2MailboxOAuthState[]
   idBusinessV2FinanceSettings          IdBusinessV2FinanceSettings[]        @relation("IdBusinessV2FinanceSettingsUpdatedBy")
   idBusinessV2FinanceAccountsCreated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountCreatedBy")
   idBusinessV2FinanceAccountsUpdated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountUpdatedBy")
@@ -1909,6 +1917,7 @@ model IdBusinessV2ManagedMailbox {
   provider                    IdBusinessV2MailProvider
   providerCredentialEncrypted String                           @map("provider_credential_encrypted") @db.Text
   queryCodeHash               String                           @unique @map("query_code_hash") @db.VarChar(64)
+  queryCodeEncrypted          String?                          @map("query_code_encrypted") @db.Text
   queryCodeHint               String                           @map("query_code_hint") @db.VarChar(4)
   queryCodeExpiresAt          DateTime                         @map("query_code_expires_at") @db.DateTime(6)
   status                      IdBusinessV2ManagedMailboxStatus @default(active)
@@ -1920,15 +1929,39 @@ model IdBusinessV2ManagedMailbox {
   createdAt                   DateTime                         @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt                   DateTime                         @updatedAt @map("updated_at") @db.DateTime(6)
 
-  createdBy     User                           @relation("IdBusinessV2ManagedMailboxCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  updatedBy     User                           @relation("IdBusinessV2ManagedMailboxUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  createdBy     User                            @relation("IdBusinessV2ManagedMailboxCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedBy     User                            @relation("IdBusinessV2ManagedMailboxUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
   queryAttempts IdBusinessV2MailQueryAttempt[]
+  oauthStates   IdBusinessV2MailboxOAuthState[]
 
   @@index([status, updatedAt])
   @@index([status, queryCodeExpiresAt])
   @@index([createdByUserId])
   @@index([updatedByUserId])
   @@map("id_business_v2_managed_mailboxes")
+}
+
+model IdBusinessV2MailboxOAuthState {
+  id              String                         @id @default(uuid()) @db.Char(36)
+  stateHash       String                         @unique @map("state_hash") @db.VarChar(64)
+  email           String                         @db.VarChar(254)
+  label           String?                        @db.VarChar(60)
+  status          IdBusinessV2MailboxOAuthStatus @default(pending)
+  failureCode     String?                        @map("failure_code") @db.VarChar(80)
+  mailboxId       String?                        @map("mailbox_id") @db.Char(36)
+  createdByUserId String                         @map("created_by_user_id") @db.Char(36)
+  expiresAt       DateTime                       @map("expires_at") @db.DateTime(6)
+  completedAt     DateTime?                      @map("completed_at") @db.DateTime(6)
+  createdAt       DateTime                       @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime                       @updatedAt @map("updated_at") @db.DateTime(6)
+
+  mailbox   IdBusinessV2ManagedMailbox? @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  createdBy User                        @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([createdByUserId, createdAt])
+  @@index([status, expiresAt])
+  @@index([mailboxId])
+  @@map("id_business_v2_mailbox_oauth_states")
 }
 
 model IdBusinessV2MailQueryAttempt {

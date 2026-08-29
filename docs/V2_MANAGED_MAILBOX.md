@@ -4,26 +4,33 @@
 
 - Gmail：`imap.gmail.com:993`，TLS。
 - iCloud、me.com、mac.com：`imap.mail.me.com:993`，TLS。
-- 每个邮箱必须使用平台生成的应用专用密码，不能填写普通登录密码。
+- Microsoft Outlook/Hotmail：`outlook.office365.com:993`，TLS，使用官方 OAuth2。
+- Gmail/iCloud 必须使用平台生成的应用专用密码，不能填写普通登录密码；Microsoft 不接收邮箱密码。
 - 买家直接使用系统另行生成的查询码，该查询码不是邮箱密码，新建或重置后有效期为 30 天。
 
 Google 账号需先开启两步验证后生成应用专用密码。部分组织账号、仅安全密钥两步验证或高级保护账号
 可能不提供应用专用密码，此类账号后续应接入 Google OAuth，不能使用普通密码替代。Apple 账号需开启
 双重认证并生成应用专用密码。
 
+Microsoft 邮箱需先在 Outlook 网页设置的“邮件 → 转发和 IMAP”中允许 IMAP，然后由管理员在邮箱池
+点击“连接 Microsoft 并添加”完成授权。Microsoft 365 工作或学校账号还会受所在组织的应用同意策略约束。
+
 iCloud IMAP 按 Apple 官方顺序优先使用邮箱名称部分作为用户名，授权失败时再尝试完整邮箱地址。Gmail 始终使用完整
 邮箱地址。管理员添加邮箱或更新凭据时，瞬时网络连接失败只重试一次，授权失败不做网络重试。
 
 ## 本地运行
 
-1. 配置项目现有 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_SECRET`。
+1. 配置项目现有 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_SECRET`。Microsoft 邮箱还需在
+   Microsoft Entra 应用中登记回调地址，并配置 `MICROSOFT_MAIL_OAUTH_CLIENT_ID`、
+   `MICROSOFT_MAIL_OAUTH_CLIENT_SECRET`、`MICROSOFT_MAIL_OAUTH_REDIRECT_URI`。
 2. 执行 `npm run prisma:migrate:deploy --workspace @apple-business/api`。
 3. 使用 `npm run dev:api` 启动 Node API，再使用 `npm run dev:admin` 启动管理端。
 4. 管理员从个人工作区打开“邮件查看器”，在“邮箱池管理”中验证并添加邮箱。
-5. 把创建结果中只显示一次的买家查询凭据交付给买家；买家访问 `/mailbox` 查询。
+5. 从邮箱池表格复制买家查询码并交付给买家；买家访问 `/mailbox` 查询。
 
-应用专用密码、买家查询码和邮件内容不得写入命令行、工单、日志或源码。创建与重置结果的完整查询码
-只返回一次；遗失后必须重置，系统不能恢复原值。
+应用专用密码、Microsoft OAuth2 令牌、买家查询码和邮件内容不得写入命令行、工单、日志或源码。
+买家查询码使用字段级加密保存，只允许管理员通过禁止缓存的邮箱池接口查看和复制；公开查询仍只按
+查询码 HMAC 定位邮箱。迁移前只保存 HMAC 的历史查询码无法恢复，必须重置后才能显示完整值。
 现有查询码在有效期 migration 执行时获得 30 天过渡期；到期后公开查询统一提示邮箱或查询码不正确，
 管理员必须在邮箱池重置查询码并重新交付。
 
@@ -40,8 +47,8 @@ iCloud IMAP 按 Apple 官方顺序优先使用邮箱名称部分作为用户名�
 
 ## 安全边界
 
-- 应用专用密码使用 AES-256-GCM 字段加密保存。
-- 买家查询码只保存带服务端密钥的 HMAC 和末四位提示。
+- 应用专用密码和 Microsoft OAuth2 刷新令牌使用 AES-256-GCM 字段加密保存。
+- 买家查询码保存带服务端密钥的 HMAC，并以 AES-256-GCM 加密保存管理员可复制值。
 - 查询码到期时间单独保存；过期、停用、邮箱不存在和查询码错误使用相同公开响应。
 - 公开查询按查询码哈希和来源 IP 哈希进行五分钟窗口限流。
 - 邮件只读打开 INBOX，每次最多返回 20 封；单封原始内容最多读取 1 MB，正文最多返回 120,000 字符。

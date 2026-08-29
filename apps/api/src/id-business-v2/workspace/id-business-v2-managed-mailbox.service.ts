@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,12 +12,15 @@ import {
   V2_MAIL_PROVIDERS,
   V2_MAIL_VIEWER_LIMITS,
   V2_MANAGED_MAILBOX_STATUSES,
+  V2_PASSWORD_MAIL_PROVIDERS,
+  type CreateV2ManagedMailboxBatchResult,
   type CreateV2ManagedMailboxResult,
   type V2MailProvider,
   type V2ManagedMailbox,
   type V2ManagedMailboxList,
   type V2ManagedMailboxListQuery,
-  type V2ManagedMailboxStatus
+  type V2ManagedMailboxStatus,
+  type V2PasswordMailProvider
 } from '@apple-business/shared';
 import { randomBytes } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -28,6 +32,7 @@ import {
 } from '../runtime/public-api';
 import type {
   CreateIdBusinessV2ManagedMailboxDto,
+  CreateIdBusinessV2ManagedMailboxBatchDto,
   ListIdBusinessV2ManagedMailboxesDto,
   UpdateIdBusinessV2ManagedMailboxCredentialDto,
   UpdateIdBusinessV2ManagedMailboxStatusDto
@@ -44,6 +49,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const QUERY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 const QUERY_CODE_LENGTH = 20;
 const QUERY_CODE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_BATCH_MAILBOXES = 20;
 
 @Injectable()
 export class IdBusinessV2ManagedMailboxService {
@@ -104,8 +110,11 @@ export class IdBusinessV2ManagedMailboxService {
 
     const queryCode = this.generateQueryCode();
     const encrypted = this.encryption.encrypt(input.appPassword);
+    const queryCodeEncrypted = this.encryption.encrypt(queryCode);
     const queryCodeHash = this.encryption.hash(queryCode);
-    if (!encrypted || !queryCodeHash) throw new ServiceUnavailableException('敏感信息加密失败');
+    if (!encrypted || !queryCodeEncrypted || !queryCodeHash) {
+      throw new ServiceUnavailableException('敏感信息加密失败');
+    }
 
     const row = await this.transactionManager.execute(
       async (tx, context) => {
@@ -118,6 +127,7 @@ export class IdBusinessV2ManagedMailboxService {
           provider: input.provider,
           providerCredentialEncrypted: encrypted,
           queryCodeExpiresAt: this.queryCodeExpiresAt(context.businessTime),
+          queryCodeEncrypted,
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
           status: 'active',
@@ -142,6 +152,57 @@ export class IdBusinessV2ManagedMailboxService {
     return {
       mailbox: this.toResponse(row),
       buyerCredential: queryCode
+    };
+  }
+
+  async createBatch(
+    dto: CreateIdBusinessV2ManagedMailboxBatchDto,
+    operator?: AuthenticatedUser,
+    requestId = 'managed-mailbox-batch-create'
+  ): Promise<CreateV2ManagedMailboxBatchResult> {
+    this.requireAdmin(operator);
+    if (
+      !Array.isArray(dto.items) ||
+      dto.items.length < 1 ||
+      dto.items.length > MAX_BATCH_MAILBOXES
+    ) {
+      throw new BadRequestException(`每次批量导入 1 至 ${MAX_BATCH_MAILBOXES} 个邮箱`);
+    }
+
+    const results: CreateV2ManagedMailboxBatchResult['items'] = [];
+    for (const [index, rawItem] of dto.items.entries()) {
+      const email =
+        rawItem && typeof rawItem === 'object' && typeof rawItem.email === 'string'
+          ? rawItem.email.trim().toLowerCase().slice(0, V2_MAIL_VIEWER_LIMITS.email)
+          : `第 ${index + 1} 行`;
+      try {
+        const result = await this.create(
+          rawItem as CreateIdBusinessV2ManagedMailboxDto,
+          operator,
+          `${requestId}-${index + 1}`
+        );
+        results.push({
+          email: result.mailbox.email,
+          index,
+          mailbox: result.mailbox,
+          status: 'succeeded'
+        });
+      } catch (error) {
+        results.push({
+          email,
+          index,
+          message: this.batchErrorMessage(error),
+          status: 'failed'
+        });
+      }
+    }
+
+    const succeeded = results.filter((item) => item.status === 'succeeded').length;
+    return {
+      failed: results.length - succeeded,
+      items: results,
+      succeeded,
+      total: results.length
     };
   }
 
@@ -192,6 +253,9 @@ export class IdBusinessV2ManagedMailboxService {
     const mailboxId = this.normalizeId(mailboxIdInput);
     const before = await this.repository.findById(mailboxId);
     if (!before) throw new NotFoundException('邮箱不存在');
+    if (before.provider === 'microsoft') {
+      throw new BadRequestException('Microsoft 邮箱需要重新完成 OAuth2 授权');
+    }
     const appPassword = this.normalizeAppPassword(dto.appPassword);
     await this.verifyProvider(
       { email: before.email, provider: before.provider, appPassword },
@@ -234,8 +298,11 @@ export class IdBusinessV2ManagedMailboxService {
     const userId = this.requireAdmin(operator);
     const mailboxId = this.normalizeId(mailboxIdInput);
     const queryCode = this.generateQueryCode();
+    const queryCodeEncrypted = this.encryption.encrypt(queryCode);
     const queryCodeHash = this.encryption.hash(queryCode);
-    if (!queryCodeHash) throw new ServiceUnavailableException('查询码生成失败');
+    if (!queryCodeEncrypted || !queryCodeHash) {
+      throw new ServiceUnavailableException('查询码生成失败');
+    }
 
     const row = await this.transactionManager.execute(
       async (tx, context) => {
@@ -243,6 +310,7 @@ export class IdBusinessV2ManagedMailboxService {
         if (!before) throw new NotFoundException('邮箱不存在');
         const updated = await this.repository.updateQueryCode(tx, before.id, {
           queryCodeExpiresAt: this.queryCodeExpiresAt(context.businessTime),
+          queryCodeEncrypted,
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
           updatedByUserId: userId
@@ -269,7 +337,7 @@ export class IdBusinessV2ManagedMailboxService {
     input: {
       appPassword: string;
       email: string;
-      provider: V2MailProvider;
+      provider: V2PasswordMailProvider;
     },
     requestId: string
   ) {
@@ -308,7 +376,7 @@ export class IdBusinessV2ManagedMailboxService {
 
   private normalizeCreate(dto: CreateIdBusinessV2ManagedMailboxDto) {
     const email = this.normalizeEmail(dto.email);
-    const provider = this.normalizeProvider(dto.provider);
+    const provider = this.normalizePasswordProvider(dto.provider);
     if (provider === 'icloud' && !/@(icloud\.com|me\.com|mac\.com)$/i.test(email)) {
       throw new BadRequestException('iCloud 类型只支持 iCloud、me.com 或 mac.com 邮箱');
     }
@@ -370,7 +438,17 @@ export class IdBusinessV2ManagedMailboxService {
     if (typeof value === 'string' && V2_MAIL_PROVIDERS.includes(value as V2MailProvider)) {
       return value as V2MailProvider;
     }
-    throw new BadRequestException('请选择 Gmail 或 iCloud');
+    throw new BadRequestException('请选择谷歌邮箱、苹果邮箱或 Microsoft 邮箱');
+  }
+
+  private normalizePasswordProvider(value: unknown): V2PasswordMailProvider {
+    if (
+      typeof value === 'string' &&
+      V2_PASSWORD_MAIL_PROVIDERS.includes(value as V2PasswordMailProvider)
+    ) {
+      return value as V2PasswordMailProvider;
+    }
+    throw new BadRequestException('批量导入和应用专用密码录入仅支持 Gmail 或 iCloud');
   }
 
   private normalizeAppPassword(value: unknown) {
@@ -426,6 +504,19 @@ export class IdBusinessV2ManagedMailboxService {
     return new Date(issuedAt.getTime() + QUERY_CODE_TTL_MS);
   }
 
+  private batchErrorMessage(error: unknown) {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (typeof response === 'string') return response;
+      if (response && typeof response === 'object' && 'message' in response) {
+        const message = (response as { message?: unknown }).message;
+        if (typeof message === 'string') return message;
+        if (Array.isArray(message) && typeof message[0] === 'string') return message[0];
+      }
+    }
+    return '导入失败，请稍后重试';
+  }
+
   private toAuditData(row: {
     email: string;
     provider: string;
@@ -446,6 +537,7 @@ export class IdBusinessV2ManagedMailboxService {
     label: string | null;
     provider: V2MailProvider;
     status: V2ManagedMailboxStatus;
+    queryCodeEncrypted: string | null;
     queryCodeExpiresAt: Date;
     queryCodeHint: string;
     lastVerifiedAt: Date | null;
@@ -462,6 +554,7 @@ export class IdBusinessV2ManagedMailboxService {
       label: row.label,
       provider: row.provider,
       status: row.status,
+      queryCode: this.decryptQueryCode(row.queryCodeEncrypted),
       queryCodeExpiresAt: row.queryCodeExpiresAt.toISOString(),
       queryCodeHint: row.queryCodeHint,
       lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,
@@ -469,5 +562,14 @@ export class IdBusinessV2ManagedMailboxService {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
     };
+  }
+
+  private decryptQueryCode(value: string | null) {
+    if (!value) return null;
+    try {
+      return this.encryption.decrypt(value);
+    } catch {
+      return null;
+    }
   }
 }

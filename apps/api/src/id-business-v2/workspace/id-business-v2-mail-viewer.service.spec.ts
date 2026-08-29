@@ -16,6 +16,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
     provider: 'gmail' as const,
     providerCredentialEncrypted: 'encrypted-app-password',
     queryCodeHash: 'hash:buyer-code',
+    queryCodeEncrypted: 'encrypted-query-code',
     queryCodeHint: 'code',
     queryCodeExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     status: 'active' as const,
@@ -35,17 +36,21 @@ describe('IdBusinessV2MailViewerService', () => {
     findByQueryCodeHash: vi.fn(),
     reserveQueryAttempt: vi.fn(),
     updateQueryAttempt: vi.fn(),
-    updateQueryState: vi.fn()
+    updateQueryState: vi.fn(),
+    updateProviderCredential: vi.fn()
   };
   const encryption = {
     decrypt: vi.fn(),
+    encrypt: vi.fn(() => 'encrypted-refresh-token'),
     hash: vi.fn((value: string | null | undefined) => (value ? `hash:${value}` : null))
   };
   const provider = { query: vi.fn() };
+  const microsoftOAuth = { refreshAccessToken: vi.fn() };
   const service = new IdBusinessV2MailViewerService(
     repository as never,
     encryption as never,
-    provider as never
+    provider as never,
+    microsoftOAuth as never
   );
 
   beforeEach(() => {
@@ -87,6 +92,33 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(repository.updateQueryAttempt).toHaveBeenCalledWith(
       'attempt-1',
       expect.objectContaining({ outcome: 'success', mailboxId: mailbox().id })
+    );
+  });
+
+  it('refreshes Microsoft OAuth2 and queries Outlook without a mailbox password', async () => {
+    repository.findByQueryCodeHash.mockResolvedValueOnce(
+      mailbox({ email: 'member@outlook.com', provider: 'microsoft' })
+    );
+    encryption.decrypt.mockReturnValueOnce('stored-refresh-token');
+    microsoftOAuth.refreshAccessToken.mockResolvedValueOnce({
+      accessToken: 'current-access-token',
+      refreshToken: 'rotated-refresh-token'
+    });
+
+    await service.query({ queryCode: 'buyer-code', limit: 5 }, '203.0.113.20');
+
+    expect(provider.query).toHaveBeenCalledWith(
+      {
+        accessToken: 'current-access-token',
+        email: 'member@outlook.com',
+        provider: 'microsoft'
+      },
+      5
+    );
+    expect(encryption.encrypt).toHaveBeenCalledWith('rotated-refresh-token');
+    expect(repository.updateProviderCredential).toHaveBeenCalledWith(
+      mailbox().id,
+      'encrypted-refresh-token'
     );
   });
 

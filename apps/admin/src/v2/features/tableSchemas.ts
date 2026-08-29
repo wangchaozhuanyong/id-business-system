@@ -959,6 +959,48 @@ export const v2TableSchemas = {
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     })
+  },
+  workspace: {
+    managedMailboxes: table({
+      id: 'workspace.managed-mailboxes',
+      feature: 'profile',
+      role: 'embedded',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'provider', label: '类型', kind: 'status', widthPreset: 'compact', hideable: false },
+        {
+          key: 'email',
+          label: '邮箱',
+          kind: 'identifier',
+          widthPreset: 'longText',
+          hideable: false
+        },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact', hideable: false },
+        {
+          key: 'queryCode',
+          label: '买家查询码',
+          kind: 'identifier',
+          widthPreset: 'longText',
+          hideable: false
+        },
+        {
+          key: 'queryCodeExpiresAt',
+          label: '查询码有效期',
+          kind: 'date',
+          widthPreset: 'dateTime',
+          hideable: false
+        },
+        {
+          key: 'lastQueriedAt',
+          label: '最近查询',
+          kind: 'date',
+          widthPreset: 'dateTime',
+          hideable: false
+        },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
   }
 } as const;
 
@@ -1019,7 +1061,7 @@ export const v2TablesByFeature = {
     v2TableSchemas.security.mfaUsers,
     v2TableSchemas.security.whitelist
   ],
-  profile: [v2TableSchemas.profile.sessions]
+  profile: [v2TableSchemas.profile.sessions, v2TableSchemas.workspace.managedMailboxes]
 } as const;
 
 export const allV2TableSchemas = Object.values(v2TablesByFeature).flat();

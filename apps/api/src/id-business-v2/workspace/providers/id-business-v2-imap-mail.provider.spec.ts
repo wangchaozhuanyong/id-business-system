@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const imapFlowState = vi.hoisted(() => ({
   authUsers: [] as string[],
+  options: [] as Array<{
+    auth: { accessToken?: string; pass?: string; user: string };
+    host: string;
+  }>,
   connect: undefined as undefined | ((user: string) => Promise<void>)
 }));
 
@@ -11,8 +15,14 @@ vi.mock('imapflow', () => ({
     mailbox = { exists: 0 };
     usable = true;
 
-    constructor(private readonly options: { auth: { user: string } }) {
+    constructor(
+      private readonly options: {
+        auth: { accessToken?: string; pass?: string; user: string };
+        host: string;
+      }
+    ) {
       imapFlowState.authUsers.push(options.auth.user);
+      imapFlowState.options.push(options);
     }
 
     async connect() {
@@ -45,6 +55,7 @@ describe('IdBusinessV2ImapMailProvider', () => {
 
   beforeEach(() => {
     imapFlowState.authUsers.length = 0;
+    imapFlowState.options.length = 0;
     imapFlowState.connect = async (user) => {
       if (!user.includes('@')) return;
       const error = new Error('Authentication failed');
@@ -111,6 +122,22 @@ describe('IdBusinessV2ImapMailProvider', () => {
       })
     ).rejects.toBeInstanceOf(MailProviderAuthenticationError);
     expect(imapFlowState.authUsers).toEqual(['buyer@gmail.com']);
+  });
+
+  it('uses Outlook IMAP with a Microsoft OAuth2 access token', async () => {
+    imapFlowState.connect = async () => undefined;
+    await expect(
+      provider.verify({
+        accessToken: 'oauth-access-token',
+        email: 'buyer@outlook.com',
+        provider: 'microsoft'
+      })
+    ).resolves.toBeUndefined();
+    expect(imapFlowState.options[0]).toMatchObject({
+      host: 'outlook.office365.com',
+      auth: { user: 'buyer@outlook.com', accessToken: 'oauth-access-token' }
+    });
+    expect(imapFlowState.options[0]?.auth.pass).toBeUndefined();
   });
 
   it('retries one transient connection failure before accepting the mailbox', async () => {

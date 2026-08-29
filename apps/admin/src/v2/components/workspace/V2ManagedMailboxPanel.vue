@@ -4,23 +4,25 @@
       <header>
         <div>
           <strong id="managed-mailbox-add-title">添加邮箱</strong>
-          <span>保存前会连接邮箱服务验证授权。</span>
+          <span>保存前会验证邮箱授权，Microsoft 邮箱使用官方 OAuth2。</span>
         </div>
       </header>
+
       <el-form
         ref="formRef"
         :model="form"
         :rules="rules"
         label-position="left"
-        label-width="112px"
+        label-width="96px"
         require-asterisk-position="right"
         class="v2-horizontal-form v2-managed-mailbox-panel__form"
-        @submit.prevent="createMailbox"
+        @submit.prevent="submitMailbox"
       >
         <el-form-item label="邮箱类型" prop="provider" required>
           <el-radio-group v-model="form.provider">
             <el-radio-button value="gmail">谷歌邮箱</el-radio-button>
             <el-radio-button value="icloud">苹果邮箱</el-radio-button>
+            <el-radio-button value="microsoft">微软邮箱</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="邮箱地址" prop="email" required>
@@ -30,10 +32,15 @@
             autocomplete="off"
             autocapitalize="off"
             :spellcheck="false"
-            placeholder="name@gmail.com"
+            :placeholder="emailPlaceholder"
           />
         </el-form-item>
-        <el-form-item label="应用专用密码" prop="appPassword" required>
+        <el-form-item
+          v-if="form.provider !== 'microsoft'"
+          label="应用专用密码"
+          prop="appPassword"
+          required
+        >
           <div class="v2-managed-mailbox-panel__password-field">
             <el-input
               v-model="form.appPassword"
@@ -49,6 +56,10 @@
             <small>{{ appPasswordHelp }}</small>
           </div>
         </el-form-item>
+        <div v-else class="v2-managed-mailbox-panel__oauth-note" role="note">
+          <strong>Microsoft 安全授权</strong>
+          <span>将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。</span>
+        </div>
         <el-form-item label="备注" prop="label">
           <el-input
             v-model="form.label"
@@ -57,35 +68,36 @@
           />
         </el-form-item>
       </el-form>
+
       <div class="v2-managed-mailbox-panel__form-actions">
-        <AppButton variant="primary" :loading="creating" @click="createMailbox">
-          <el-icon><Plus /></el-icon>
-          验证并添加
+        <AppButton variant="primary" :loading="creating" @click="submitMailbox">
+          <el-icon><Connection v-if="form.provider === 'microsoft'" /><Plus v-else /></el-icon>
+          {{ form.provider === 'microsoft' ? '连接 Microsoft 并添加' : '验证并添加' }}
         </AppButton>
       </div>
-    </section>
-
-    <section v-if="issuedQueryCode" class="v2-managed-mailbox-panel__issued" aria-live="polite">
-      <div>
-        <strong>买家查询码已生成</strong>
-        <span>此查询码只显示这一次，有效期 30 天，请立即交付并妥善保存。</span>
-      </div>
-      <code>{{ issuedQueryCode }}</code>
-      <AppButton variant="soft" @click="copyText(issuedQueryCode, '查询码已复制')">
-        <el-icon><CopyDocument /></el-icon>
-        复制查询码
-      </AppButton>
     </section>
 
     <section class="v2-managed-mailbox-panel__list" aria-labelledby="managed-mailbox-list-title">
       <header>
         <div>
-          <strong id="managed-mailbox-list-title">邮箱池</strong>
-          <span>应用专用密码不可查看；失效后只能重新填写。</span>
+          <strong id="managed-mailbox-list-title">邮箱池管理</strong>
+          <span>每行一个邮箱；查询码可直接复制，应用专用密码和 OAuth 令牌不会回显。</span>
         </div>
-        <AppButton variant="ghost" icon-only title="刷新邮箱列表" @click="mailboxesQuery.refresh">
-          <el-icon><Refresh /></el-icon>
-        </AppButton>
+        <div class="v2-managed-mailbox-panel__header-actions">
+          <AppButton size="small" variant="soft" @click="batchDrawerOpen = true">
+            <el-icon><Upload /></el-icon>
+            批量导入
+          </AppButton>
+          <AppButton
+            variant="ghost"
+            icon-only
+            title="刷新邮箱列表"
+            :disabled="mailboxesQuery.isRefreshing.value"
+            @click="mailboxesQuery.refresh"
+          >
+            <el-icon><Refresh /></el-icon>
+          </AppButton>
+        </div>
       </header>
 
       <div class="v2-managed-mailbox-panel__filters">
@@ -105,6 +117,7 @@
         >
           <el-option label="谷歌邮箱" value="gmail" />
           <el-option label="苹果邮箱" value="icloud" />
+          <el-option label="微软邮箱" value="microsoft" />
         </el-select>
         <el-select v-model="filters.status" clearable placeholder="全部状态" @change="applyFilters">
           <el-option label="可查询" value="active" />
@@ -115,10 +128,11 @@
 
       <V2AsyncRegion
         :phase="mailboxesQuery.phase.value"
+        :previous-data="mailboxesQuery.isParameterTransition.value"
         :empty="mailboxes.length === 0"
         :error="listError"
         variant="section"
-        skeleton="cards"
+        skeleton="table"
         loading-title="正在读取邮箱池"
         refreshing-title="正在更新邮箱池"
         empty-title="暂无邮箱"
@@ -126,100 +140,167 @@
         error-title="邮箱池加载失败"
         @retry="mailboxesQuery.refresh"
       >
-        <ol class="v2-managed-mailbox-panel__items">
-          <li v-for="item in mailboxes" :key="item.id">
-            <div class="v2-managed-mailbox-panel__identity">
-              <span :class="`is-${item.provider}`">{{ providerLabel(item.provider) }}</span>
-              <div>
-                <strong>{{ item.email }}</strong>
-                <small>{{ item.label || '未填写备注' }}</small>
+        <V2Table
+          :schema="v2TableSchemas.workspace.managedMailboxes"
+          :show-column-settings="false"
+          :data="mailboxes"
+          :view-key="`${mailboxResult.page}-${mailboxResult.pageSize}`"
+          :aria-busy="mailboxesQuery.isRefreshing.value"
+          class="v2-managed-mailbox-panel__table"
+        >
+          <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[0]">
+            <template #default="{ row }">
+              <span :class="['v2-managed-mailbox-panel__provider', `is-${row.provider}`]">
+                {{ providerShortLabel(row.provider) }}
+              </span>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            :definition="v2TableSchemas.workspace.managedMailboxes.columns[1]"
+            prop="email"
+          >
+            <template #default="{ row }">
+              <div class="v2-managed-mailbox-panel__identity">
+                <strong>{{ row.email }}</strong>
+                <small>{{ row.label || '未填写备注' }}</small>
               </div>
-            </div>
-            <dl>
-              <div>
-                <dt>状态</dt>
-                <dd>
-                  <el-tag :type="statusMeta(item.status).type" effect="plain" size="small">
-                    {{ statusMeta(item.status).label }}
-                  </el-tag>
-                </dd>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            :definition="v2TableSchemas.workspace.managedMailboxes.columns[2]"
+            prop="status"
+          >
+            <template #default="{ row }">
+              <el-tag :type="statusMeta(row.status).type" effect="plain" size="small">
+                {{ statusMeta(row.status).label }}
+              </el-tag>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[3]">
+            <template #default="{ row }">
+              <div class="v2-managed-mailbox-panel__query-code">
+                <code>{{ row.queryCode || `旧码末四位 ${row.queryCodeHint}` }}</code>
+                <AppButton
+                  v-if="row.queryCode"
+                  size="small"
+                  variant="ghost"
+                  :title="`复制 ${row.email} 的买家查询码`"
+                  @click="copyText(row.queryCode, '查询码已复制')"
+                >
+                  <el-icon><CopyDocument /></el-icon>
+                  复制
+                </AppButton>
+                <small v-else>重置后可复制完整查询码</small>
               </div>
-              <div>
-                <dt>查询码</dt>
-                <dd>末四位 {{ item.queryCodeHint }}</dd>
-              </div>
-              <div>
-                <dt>查询码有效期</dt>
-                <dd>
-                  <el-tag
-                    :type="queryCodeExpiryMeta(item.queryCodeExpiresAt).type"
-                    effect="plain"
-                    size="small"
-                  >
-                    {{ queryCodeExpiryMeta(item.queryCodeExpiresAt).label }}
-                  </el-tag>
-                </dd>
-              </div>
-              <div>
-                <dt>最近查询</dt>
-                <dd>{{ formatDate(item.lastQueriedAt) }}</dd>
-              </div>
-            </dl>
-            <div class="v2-managed-mailbox-panel__actions">
-              <span>允许买家查询</span>
-              <el-switch
-                :model-value="item.status === 'active'"
-                :disabled="updatingId === item.id || item.status === 'auth_failed'"
-                :loading="updatingId === item.id"
-                :aria-label="`${item.email} 允许买家查询`"
-                @change="(value: string | number | boolean) => updateStatus(item, Boolean(value))"
-              />
-              <AppButton size="small" variant="ghost" @click="startCredentialUpdate(item)">
-                更新授权
-              </AppButton>
-              <AppButton size="small" variant="ghost" @click="rotateQueryCode(item)">
-                重置查询码
-              </AppButton>
-            </div>
-            <form
-              v-if="credentialMailboxId === item.id"
-              class="v2-managed-mailbox-panel__credential-form"
-              @submit.prevent="updateCredential(item)"
-            >
-              <el-input
-                v-model="replacementPassword"
-                type="password"
-                show-password
-                :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
-                autocomplete="new-password"
-                data-1p-ignore="true"
-                placeholder="输入新的应用专用密码"
-              />
-              <AppButton
+            </template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[4]">
+            <template #default="{ row }">
+              <el-tag
+                :type="queryCodeExpiryMeta(row.queryCodeExpiresAt).type"
+                effect="plain"
                 size="small"
-                variant="primary"
-                :loading="updatingId === item.id"
-                @click="updateCredential(item)"
               >
-                验证并保存
-              </AppButton>
-              <AppButton size="small" variant="ghost" @click="cancelCredentialUpdate"
-                >取消</AppButton
+                {{ queryCodeExpiryMeta(row.queryCodeExpiresAt).label }}
+              </el-tag>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[5]">
+            <template #default="{ row }">{{ formatDate(row.lastQueriedAt) }}</template>
+          </V2TableColumn>
+          <V2TableActionColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[6]">
+            <template #default="{ row }">
+              <el-switch
+                :model-value="row.status === 'active'"
+                :disabled="updatingId === row.id || row.status === 'auth_failed'"
+                :loading="updatingId === row.id"
+                :aria-label="`${row.email} 允许买家查询`"
+                @change="(value: string | number | boolean) => updateStatus(row, Boolean(value))"
+              />
+              <el-dropdown
+                trigger="click"
+                :disabled="updatingId === row.id"
+                @command="handleMailboxAction(row, $event)"
               >
-            </form>
-          </li>
-        </ol>
+                <AppButton size="small" variant="ghost" :disabled="updatingId === row.id">
+                  更多操作
+                </AppButton>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="credential">
+                      {{ row.provider === 'microsoft' ? '重新授权' : '更新授权' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item command="query-code" divided>重置查询码</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+          </V2TableActionColumn>
+        </V2Table>
+
         <el-pagination
-          v-if="mailboxResult.total > mailboxResult.pageSize"
           background
-          layout="prev, pager, next, total"
+          layout="total, sizes, prev, pager, next"
           :current-page="mailboxResult.page"
           :page-size="mailboxResult.pageSize"
+          :page-sizes="[10, 20, 50]"
+          :pager-count="5"
           :total="mailboxResult.total"
           @current-change="changePage"
+          @size-change="changePageSize"
         />
       </V2AsyncRegion>
     </section>
+
+    <V2ManagedMailboxBatchDrawer v-model="batchDrawerOpen" @imported="handleBatchImported" />
+
+    <el-drawer
+      class="v2-mailbox-credential-drawer"
+      :model-value="credentialDrawerOpen"
+      title="更新邮箱授权"
+      size="min(460px, 100vw)"
+      append-to-body
+      destroy-on-close
+      :before-close="handleCredentialDrawerClose"
+      @close="credentialDrawerOpen = false"
+      @closed="cancelCredentialUpdate"
+    >
+      <div v-if="credentialMailbox" class="v2-mailbox-credential-drawer__body">
+        <div>
+          <strong>{{ credentialMailbox.email }}</strong>
+          <span>{{ providerLabel(credentialMailbox.provider) }}</span>
+        </div>
+        <el-form
+          label-position="left"
+          label-width="112px"
+          require-asterisk-position="right"
+          class="v2-horizontal-form"
+          @submit.prevent="updateCredential"
+        >
+          <el-form-item label="应用专用密码" required>
+            <el-input
+              v-model="replacementPassword"
+              type="password"
+              show-password
+              :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
+              autocomplete="new-password"
+              data-1p-ignore="true"
+              placeholder="输入新的应用专用密码"
+            />
+          </el-form-item>
+        </el-form>
+        <footer>
+          <AppButton variant="ghost" @click="credentialDrawerOpen = false">取消</AppButton>
+          <AppButton
+            variant="primary"
+            :loading="updatingId === credentialMailbox.id"
+            @click="updateCredential"
+          >
+            验证并保存
+          </AppButton>
+        </footer>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -235,19 +316,31 @@ import type {
   V2ManagedMailboxStatus
 } from '@apple-business/shared';
 import { V2_MAIL_VIEWER_LIMITS } from '@apple-business/shared';
-import { CopyDocument, Plus, Refresh, Search } from '@element-plus/icons-vue';
+import { Connection, CopyDocument, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2Table from '@/v2/components/V2Table.vue';
+import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
+import V2TableColumn from '@/v2/components/V2TableColumn.vue';
+import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+import V2ManagedMailboxBatchDrawer from './V2ManagedMailboxBatchDrawer.vue';
+
+interface ManagedMailboxForm {
+  appPassword: string;
+  email: string;
+  label: string;
+  provider: V2MailProvider;
+}
 
 const formRef = ref<FormInstance>();
-const form = reactive<CreateV2ManagedMailboxInput>({
+const form = reactive<ManagedMailboxForm>({
   email: '',
   provider: 'gmail',
   appPassword: '',
@@ -258,13 +351,18 @@ const filters = reactive<{
   provider: V2MailProvider | '';
   status: V2ManagedMailboxStatus | '';
   page: number;
-}>({ q: '', provider: '', status: '', page: 1 });
+  pageSize: number;
+}>({ q: '', provider: '', status: '', page: 1, pageSize: 10 });
 const creating = ref(false);
 const updatingId = ref('');
-const issuedQueryCode = ref('');
-const credentialMailboxId = ref('');
+const batchDrawerOpen = ref(false);
+const credentialDrawerOpen = ref(false);
+const credentialMailbox = ref<V2ManagedMailbox | null>(null);
 const replacementPassword = ref('');
-const rules: FormRules<CreateV2ManagedMailboxInput> = {
+let microsoftAuthorizationGeneration = 0;
+let microsoftAuthorizationPopup: Window | null = null;
+
+const rules: FormRules<ManagedMailboxForm> = {
   provider: [{ required: true, message: '请选择邮箱类型', trigger: 'change' }],
   email: [
     { required: true, message: '请输入邮箱地址', trigger: 'blur' },
@@ -272,6 +370,13 @@ const rules: FormRules<CreateV2ManagedMailboxInput> = {
   ],
   appPassword: [{ required: true, message: '请输入应用专用密码', trigger: 'blur' }]
 };
+const emailPlaceholder = computed(() =>
+  form.provider === 'gmail'
+    ? 'name@gmail.com'
+    : form.provider === 'icloud'
+      ? 'name@icloud.com'
+      : 'name@outlook.com'
+);
 const appPasswordPlaceholder = computed(() =>
   form.provider === 'gmail'
     ? '输入 Google 生成的 16 位应用专用密码'
@@ -292,7 +397,7 @@ const mailboxesQuery = useV2ModuleQuery<V2ManagedMailboxList>({
     idBusinessV2WorkspaceApi.listManagedMailboxes(
       {
         page: filters.page,
-        pageSize: 20,
+        pageSize: filters.pageSize,
         provider: filters.provider || undefined,
         q: filters.q || undefined,
         status: filters.status || undefined
@@ -301,32 +406,44 @@ const mailboxesQuery = useV2ModuleQuery<V2ManagedMailboxList>({
     )
 });
 const mailboxResult = computed<V2ManagedMailboxList>(
-  () => mailboxesQuery.data.value ?? { items: [], page: 1, pageSize: 20, total: 0 }
+  () =>
+    mailboxesQuery.data.value ?? {
+      items: [],
+      page: 1,
+      pageSize: filters.pageSize,
+      total: 0
+    }
 );
 const mailboxes = computed(() => mailboxResult.value.items);
 const listError = computed(() =>
   mailboxesQuery.error.value ? getApiErrorMessage(mailboxesQuery.error.value) : ''
 );
 
-async function createMailbox() {
+async function submitMailbox() {
   try {
     await formRef.value?.validate();
   } catch {
     return;
   }
+  if (form.provider === 'microsoft') {
+    await authorizeMicrosoftMailbox({ email: form.email, label: form.label || undefined });
+    return;
+  }
+  await createPasswordMailbox();
+}
+
+async function createPasswordMailbox() {
+  if (form.provider === 'microsoft') return;
   creating.value = true;
   try {
-    const result = await idBusinessV2WorkspaceApi.createManagedMailbox({
+    const input: CreateV2ManagedMailboxInput = {
       email: form.email.trim(),
       provider: form.provider,
       appPassword: form.appPassword,
-      label: form.label?.trim() || undefined
-    });
-    issuedQueryCode.value = result.buyerCredential;
-    form.email = '';
-    form.appPassword = '';
-    form.label = '';
-    formRef.value?.clearValidate();
+      label: form.label.trim() || undefined
+    };
+    await idBusinessV2WorkspaceApi.createManagedMailbox(input);
+    resetForm();
     filters.page = 1;
     await mailboxesQuery.refresh();
     ElMessage.success('邮箱已验证并加入邮箱池');
@@ -335,6 +452,68 @@ async function createMailbox() {
   } finally {
     creating.value = false;
   }
+}
+
+async function authorizeMicrosoftMailbox(input: {
+  email: string;
+  label?: string;
+  mailboxId?: string;
+}) {
+  const popup = window.open('about:blank', '_blank', 'popup,width=560,height=760');
+  if (!popup) {
+    ElMessage.error('浏览器阻止了授权窗口，请允许弹窗后重试');
+    return;
+  }
+  popup.opener = null;
+  microsoftAuthorizationPopup = popup;
+  const generation = ++microsoftAuthorizationGeneration;
+  creating.value = !input.mailboxId;
+  if (input.mailboxId) updatingId.value = input.mailboxId;
+  try {
+    const authorization = await idBusinessV2WorkspaceApi.startMicrosoftMailboxAuthorization({
+      email: input.email.trim(),
+      label: input.label?.trim() || undefined,
+      mailboxId: input.mailboxId
+    });
+    popup.location.assign(authorization.authorizationUrl);
+    const status = await pollMicrosoftAuthorization(
+      authorization.authorizationId,
+      Date.parse(authorization.expiresAt),
+      generation
+    );
+    if (generation !== microsoftAuthorizationGeneration || !status) return;
+    if (status.status === 'failed') {
+      ElMessage.error(status.failureMessage || 'Microsoft 邮箱授权失败');
+      return;
+    }
+    if (!input.mailboxId) resetForm();
+    filters.page = 1;
+    await mailboxesQuery.refresh();
+    ElMessage.success(input.mailboxId ? 'Microsoft 邮箱已重新授权' : 'Microsoft 邮箱已加入邮箱池');
+  } catch (error) {
+    if (generation === microsoftAuthorizationGeneration) ElMessage.error(getApiErrorMessage(error));
+  } finally {
+    if (generation === microsoftAuthorizationGeneration) {
+      creating.value = false;
+      updatingId.value = '';
+    }
+    if (!popup.closed) popup.close();
+    if (microsoftAuthorizationPopup === popup) microsoftAuthorizationPopup = null;
+  }
+}
+
+async function pollMicrosoftAuthorization(
+  authorizationId: string,
+  expiresAt: number,
+  generation: number
+) {
+  while (generation === microsoftAuthorizationGeneration && Date.now() < expiresAt + 2_000) {
+    const status =
+      await idBusinessV2WorkspaceApi.getMicrosoftMailboxAuthorizationStatus(authorizationId);
+    if (status.status !== 'pending') return status;
+    await new Promise((resolve) => window.setTimeout(resolve, 1_200));
+  }
+  return null;
 }
 
 async function updateStatus(item: V2ManagedMailbox, enabled: boolean) {
@@ -352,17 +531,37 @@ async function updateStatus(item: V2ManagedMailbox, enabled: boolean) {
   }
 }
 
+function handleMailboxAction(item: V2ManagedMailbox, command: unknown) {
+  if (command === 'credential') {
+    startCredentialUpdate(item);
+    return;
+  }
+  if (command === 'query-code') void rotateQueryCode(item);
+}
+
 function startCredentialUpdate(item: V2ManagedMailbox) {
-  credentialMailboxId.value = item.id;
+  if (item.provider === 'microsoft') {
+    void authorizeMicrosoftMailbox({
+      email: item.email,
+      label: item.label || undefined,
+      mailboxId: item.id
+    });
+    return;
+  }
+  credentialMailbox.value = item;
   replacementPassword.value = '';
+  credentialDrawerOpen.value = true;
 }
 
 function cancelCredentialUpdate() {
-  credentialMailboxId.value = '';
+  credentialDrawerOpen.value = false;
+  credentialMailbox.value = null;
   replacementPassword.value = '';
 }
 
-async function updateCredential(item: V2ManagedMailbox) {
+async function updateCredential() {
+  const item = credentialMailbox.value;
+  if (!item) return;
   if (!replacementPassword.value.trim()) {
     ElMessage.warning('请输入新的应用专用密码');
     return;
@@ -398,10 +597,9 @@ async function rotateQueryCode(item: V2ManagedMailbox) {
   }
   updatingId.value = item.id;
   try {
-    const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
-    issuedQueryCode.value = result.buyerCredential;
+    await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
     await mailboxesQuery.refresh();
-    ElMessage.success('查询码已重置');
+    ElMessage.success('查询码已重置，可在当前行直接复制');
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error));
   } finally {
@@ -419,8 +617,27 @@ function changePage(page: number) {
   void mailboxesQuery.refresh();
 }
 
+function changePageSize(pageSize: number) {
+  filters.page = 1;
+  filters.pageSize = pageSize;
+  void mailboxesQuery.refresh();
+}
+
+function handleBatchImported() {
+  filters.page = 1;
+  void mailboxesQuery.refresh();
+}
+
 function providerLabel(provider: V2MailProvider) {
-  return provider === 'gmail' ? '谷' : '苹';
+  if (provider === 'gmail') return '谷歌邮箱';
+  if (provider === 'icloud') return '苹果邮箱';
+  return '微软邮箱';
+}
+
+function providerShortLabel(provider: V2MailProvider) {
+  if (provider === 'gmail') return '谷歌';
+  if (provider === 'icloud') return '苹果';
+  return '微软';
 }
 
 function statusMeta(status: V2ManagedMailboxStatus): { label: string; type: TagProps['type'] } {
@@ -442,7 +659,7 @@ function queryCodeExpiryMeta(value: string): { label: string; type: TagProps['ty
   if (now !== null && expiresAt - now <= 3 * 24 * 60 * 60 * 1000) {
     return { label: `即将到期 · ${formatted}`, type: 'warning' };
   }
-  return { label: `有效至 ${formatted}`, type: 'success' };
+  return { label: formatted, type: 'success' };
 }
 
 async function copyText(value: string, message: string) {
@@ -454,16 +671,43 @@ async function copyText(value: string, message: string) {
   }
 }
 
-function clearAll() {
+async function handleCredentialDrawerClose(done: () => void) {
+  if (!replacementPassword.value) {
+    done();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('关闭后会清空尚未保存的应用专用密码。', '清空并关闭', {
+      confirmButtonText: '清空并关闭',
+      cancelButtonText: '继续填写',
+      type: 'warning'
+    });
+    done();
+  } catch {
+    // 用户选择继续填写。
+  }
+}
+
+function resetForm() {
+  form.email = '';
   form.appPassword = '';
-  replacementPassword.value = '';
-  credentialMailboxId.value = '';
-  issuedQueryCode.value = '';
+  form.label = '';
+  formRef.value?.clearValidate();
+}
+
+function clearAll() {
+  microsoftAuthorizationGeneration += 1;
+  microsoftAuthorizationPopup?.close();
+  microsoftAuthorizationPopup = null;
+  resetForm();
+  cancelCredentialUpdate();
+  batchDrawerOpen.value = false;
 }
 
 defineExpose({
   clearAll,
-  hasContent: () => Boolean(form.appPassword || replacementPassword.value || issuedQueryCode.value)
+  hasContent: () =>
+    Boolean(form.email || form.label || form.appPassword || replacementPassword.value)
 });
 </script>
 
@@ -471,14 +715,14 @@ defineExpose({
 .v2-managed-mailbox-panel {
   display: grid;
   min-width: 0;
-  gap: 24px;
+  gap: 18px;
 }
 
 .v2-managed-mailbox-panel__add,
 .v2-managed-mailbox-panel__list {
   display: grid;
   min-width: 0;
-  gap: 16px;
+  gap: 12px;
 }
 
 .v2-managed-mailbox-panel__add > header,
@@ -492,88 +736,73 @@ defineExpose({
 .v2-managed-mailbox-panel__add > header > div,
 .v2-managed-mailbox-panel__list > header > div {
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .v2-managed-mailbox-panel header strong {
   color: var(--v2-text);
-  font-size: 15px;
-  line-height: 22px;
+  font-size: 14px;
+  line-height: 21px;
 }
 
 .v2-managed-mailbox-panel header span {
   color: var(--v2-text-soft);
   font-size: 12px;
-  line-height: 19px;
+  line-height: 18px;
 }
 
 .v2-managed-mailbox-panel__form {
   display: grid;
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
 }
 
 .v2-managed-mailbox-panel__form :deep(.el-form-item) {
+  min-width: 0;
   margin-bottom: 0;
 }
 
 .v2-managed-mailbox-panel__password-field {
   display: grid;
   width: 100%;
-  gap: 4px;
+  gap: 2px;
 }
 
-.v2-managed-mailbox-panel__password-field small {
+.v2-managed-mailbox-panel__password-field small,
+.v2-managed-mailbox-panel__query-code small {
   color: var(--v2-text-soft);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.v2-managed-mailbox-panel__oauth-note {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-content: center;
+  gap: 4px;
+  padding: 7px 0;
+}
+
+.v2-managed-mailbox-panel__oauth-note strong,
+.v2-managed-mailbox-panel__oauth-note span {
   font-size: 12px;
   line-height: 18px;
 }
 
-.v2-managed-mailbox-panel__form-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.v2-managed-mailbox-panel__issued {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px 14px;
-  padding: 14px;
-  border: 1px solid var(--v3-success-border-soft);
-  border-radius: 7px;
-  background: var(--v3-success-soft);
-}
-
-.v2-managed-mailbox-panel__issued > div {
-  display: grid;
-  gap: 2px;
-}
-
-.v2-managed-mailbox-panel__issued strong,
-.v2-managed-mailbox-panel__issued span {
-  font-size: 12px;
-  line-height: 19px;
-}
-
-.v2-managed-mailbox-panel__issued strong {
+.v2-managed-mailbox-panel__oauth-note strong {
   color: var(--v2-text);
 }
 
-.v2-managed-mailbox-panel__issued span {
+.v2-managed-mailbox-panel__oauth-note span {
   color: var(--v2-text-soft);
 }
 
-.v2-managed-mailbox-panel__issued code {
-  grid-column: 1 / -1;
-  min-width: 0;
-  padding: 10px;
-  overflow-wrap: anywhere;
-  border-radius: 5px;
-  background: var(--v2-surface);
-  color: var(--v2-text);
-  font-family: var(--v3-font-mono);
-  font-size: 12px;
-  line-height: 20px;
+.v2-managed-mailbox-panel__form-actions,
+.v2-managed-mailbox-panel__header-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .v2-managed-mailbox-panel__filters {
@@ -582,56 +811,39 @@ defineExpose({
   gap: 8px;
 }
 
-.v2-managed-mailbox-panel__items {
-  display: grid;
+.v2-managed-mailbox-panel__table {
   min-width: 0;
-  gap: 8px;
-  margin: 0 0 14px;
-  padding: 0;
-  list-style: none;
 }
 
-.v2-managed-mailbox-panel__items > li {
-  display: grid;
-  min-width: 0;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--v2-border);
-  border-radius: 7px;
-  background: var(--v2-surface);
-}
-
-.v2-managed-mailbox-panel__identity {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.v2-managed-mailbox-panel__identity > span {
-  display: grid;
-  width: 34px;
-  height: 34px;
+.v2-managed-mailbox-panel__provider {
+  display: inline-grid;
+  min-width: 46px;
   place-items: center;
-  border-radius: 6px;
-  background: var(--v2-surface-muted);
-  color: var(--v2-text);
-  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--v2-border);
+  border-radius: 5px;
+  color: var(--v2-text-soft);
+  font-size: 11px;
   font-weight: var(--v3-font-weight-semibold);
 }
 
-.v2-managed-mailbox-panel__identity > span.is-gmail {
-  border: 1px solid var(--v3-danger-border-soft);
+.v2-managed-mailbox-panel__provider.is-gmail {
+  border-color: var(--v3-danger-border-soft);
   color: var(--v2-danger);
 }
 
-.v2-managed-mailbox-panel__identity > span.is-icloud {
-  border: 1px solid var(--v3-info-border-soft);
+.v2-managed-mailbox-panel__provider.is-icloud {
+  border-color: var(--v3-info-border-soft);
   color: var(--v3-info);
 }
 
-.v2-managed-mailbox-panel__identity > div {
+.v2-managed-mailbox-panel__provider.is-microsoft {
+  border-color: var(--v3-success-border-soft);
+  color: var(--v3-success);
+}
+
+.v2-managed-mailbox-panel__identity,
+.v2-managed-mailbox-panel__query-code {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -646,7 +858,7 @@ defineExpose({
 
 .v2-managed-mailbox-panel__identity strong {
   color: var(--v2-text);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .v2-managed-mailbox-panel__identity small {
@@ -654,80 +866,77 @@ defineExpose({
   font-size: 11px;
 }
 
-.v2-managed-mailbox-panel__items dl {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 10px 0;
-  border-block: 1px solid var(--v2-border-soft);
-}
-
-.v2-managed-mailbox-panel__items dl > div {
-  display: grid;
-  gap: 3px;
-}
-
-.v2-managed-mailbox-panel__items dt,
-.v2-managed-mailbox-panel__items dd {
-  margin: 0;
-  font-size: 11px;
-  line-height: 18px;
-}
-
-.v2-managed-mailbox-panel__items dt {
-  color: var(--v2-text-soft);
-}
-
-.v2-managed-mailbox-panel__items dd {
-  color: var(--v2-text);
-}
-
-.v2-managed-mailbox-panel__actions {
-  display: flex;
-  min-width: 0;
+.v2-managed-mailbox-panel__query-code {
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
+  gap: 3px 6px;
 }
 
-.v2-managed-mailbox-panel__actions > span {
-  margin-right: auto;
-  color: var(--v2-text-soft);
-  font-size: 12px;
+.v2-managed-mailbox-panel__query-code code {
+  overflow: hidden;
+  color: var(--v2-text);
+  font-family: var(--v3-font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.v2-managed-mailbox-panel__credential-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  padding-top: 2px;
+.v2-managed-mailbox-panel__query-code small {
+  grid-column: 1 / -1;
 }
 
 .v2-managed-mailbox-panel :deep(.el-pagination) {
   justify-content: flex-end;
-  min-height: 32px;
+  margin-top: 12px;
 }
 
-@media (max-width: 680px) {
-  .v2-managed-mailbox-panel__filters,
-  .v2-managed-mailbox-panel__items dl,
-  .v2-managed-mailbox-panel__credential-form {
-    grid-template-columns: 1fr;
+@media (max-width: 720px) {
+  .v2-managed-mailbox-panel__form,
+  .v2-managed-mailbox-panel__filters {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .v2-managed-mailbox-panel__actions {
+  .v2-managed-mailbox-panel__add > header,
+  .v2-managed-mailbox-panel__list > header {
     align-items: flex-start;
-    flex-wrap: wrap;
+  }
+
+  .v2-managed-mailbox-panel :deep(.el-pagination) {
     justify-content: flex-start;
+    overflow-x: auto;
   }
+}
+</style>
 
-  .v2-managed-mailbox-panel__actions > span {
-    flex: 1 0 calc(100% - 48px);
-  }
+<style>
+.v2-mailbox-credential-drawer .el-drawer__body {
+  padding: 0;
+}
 
-  .v2-managed-mailbox-panel__issued {
-    grid-template-columns: 1fr;
-  }
+.v2-mailbox-credential-drawer__body {
+  display: grid;
+  gap: 20px;
+  padding: 18px;
+}
+
+.v2-mailbox-credential-drawer__body > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.v2-mailbox-credential-drawer__body > div:first-child strong {
+  color: var(--v2-text);
+  font-size: 14px;
+}
+
+.v2-mailbox-credential-drawer__body > div:first-child span {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.v2-mailbox-credential-drawer__body > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>

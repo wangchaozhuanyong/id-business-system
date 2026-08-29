@@ -3,16 +3,22 @@ import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type {
   CreateIdBusinessV2ManagedMailboxDto,
+  CreateIdBusinessV2ManagedMailboxBatchDto,
   ListIdBusinessV2ManagedMailboxesDto,
+  StartIdBusinessV2MicrosoftMailboxAuthorizationDto,
   UpdateIdBusinessV2ManagedMailboxCredentialDto,
   UpdateIdBusinessV2ManagedMailboxStatusDto
 } from './dto/id-business-v2-managed-mailbox.dto';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
+import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
 
 @RequireRoles('admin')
 @Controller('id-business-v2/workspace-mailboxes')
 export class IdBusinessV2ManagedMailboxController {
-  constructor(private readonly service: IdBusinessV2ManagedMailboxService) {}
+  constructor(
+    private readonly service: IdBusinessV2ManagedMailboxService,
+    private readonly microsoftAuthorization: IdBusinessV2MicrosoftMailboxAuthorizationService
+  ) {}
 
   @Get()
   @Header('Cache-Control', 'private, no-store')
@@ -31,6 +37,34 @@ export class IdBusinessV2ManagedMailboxController {
     @Req() request?: { requestId?: string }
   ) {
     return this.service.create(dto, operator, request?.requestId);
+  }
+
+  @Post('batch')
+  @Header('Cache-Control', 'private, no-store')
+  createBatch(
+    @Body() dto: CreateIdBusinessV2ManagedMailboxBatchDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.service.createBatch(dto, operator, request?.requestId);
+  }
+
+  @Post('microsoft/authorizations')
+  @Header('Cache-Control', 'private, no-store')
+  startMicrosoftAuthorization(
+    @Body() dto: StartIdBusinessV2MicrosoftMailboxAuthorizationDto,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.microsoftAuthorization.start(dto, operator);
+  }
+
+  @Get('microsoft/authorizations/:authorizationId')
+  @Header('Cache-Control', 'private, no-store')
+  getMicrosoftAuthorizationStatus(
+    @Param('authorizationId') authorizationId: string,
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.microsoftAuthorization.getStatus(authorizationId, operator);
   }
 
   @Patch(':mailboxId/status')

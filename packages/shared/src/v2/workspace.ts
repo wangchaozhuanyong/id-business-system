@@ -28,11 +28,15 @@ export const V2_MAIL_VIEWER_LIMITS = {
   messages: 20
 } as const;
 
-export const V2_MAIL_PROVIDERS = ['gmail', 'icloud'] as const;
+export const V2_MAIL_PROVIDERS = ['gmail', 'icloud', 'microsoft'] as const;
+export const V2_PASSWORD_MAIL_PROVIDERS = ['gmail', 'icloud'] as const;
 export const V2_MANAGED_MAILBOX_STATUSES = ['active', 'disabled', 'auth_failed'] as const;
+export const V2_MAILBOX_OAUTH_STATUSES = ['pending', 'succeeded', 'failed'] as const;
 
 export type V2MailProvider = (typeof V2_MAIL_PROVIDERS)[number];
+export type V2PasswordMailProvider = (typeof V2_PASSWORD_MAIL_PROVIDERS)[number];
 export type V2ManagedMailboxStatus = (typeof V2_MANAGED_MAILBOX_STATUSES)[number];
+export type V2MailboxOAuthStatus = (typeof V2_MAILBOX_OAUTH_STATUSES)[number];
 
 export interface V2WorkspaceShortcut {
   id: string;
@@ -114,6 +118,7 @@ export interface V2ManagedMailbox {
   label: string | null;
   provider: V2MailProvider;
   status: V2ManagedMailboxStatus;
+  queryCode: string | null;
   queryCodeHint: string;
   queryCodeExpiresAt: IsoDateTimeString;
   lastVerifiedAt: IsoDateTimeString | null;
@@ -139,7 +144,7 @@ export interface V2ManagedMailboxListQuery {
 
 export interface CreateV2ManagedMailboxInput {
   email: string;
-  provider: V2MailProvider;
+  provider: V2PasswordMailProvider;
   appPassword: string;
   label?: string;
 }
@@ -160,4 +165,42 @@ export interface UpdateV2ManagedMailboxCredentialInput {
 export interface RotateV2ManagedMailboxQueryCodeResult {
   mailbox: V2ManagedMailbox;
   buyerCredential: string;
+}
+
+export interface CreateV2ManagedMailboxBatchInput {
+  items: CreateV2ManagedMailboxInput[];
+}
+
+export interface V2ManagedMailboxBatchResultItem {
+  email: string;
+  index: number;
+  mailbox?: V2ManagedMailbox;
+  message?: string;
+  status: 'succeeded' | 'failed';
+}
+
+export interface CreateV2ManagedMailboxBatchResult {
+  failed: number;
+  items: V2ManagedMailboxBatchResultItem[];
+  succeeded: number;
+  total: number;
+}
+
+export interface StartV2MicrosoftMailboxAuthorizationInput {
+  email: string;
+  label?: string;
+  mailboxId?: string;
+}
+
+export interface StartV2MicrosoftMailboxAuthorizationResult {
+  authorizationId: string;
+  authorizationUrl: string;
+  expiresAt: IsoDateTimeString;
+}
+
+export interface V2MicrosoftMailboxAuthorizationStatus {
+  authorizationId: string;
+  failureMessage: string | null;
+  mailboxId: string | null;
+  status: V2MailboxOAuthStatus;
 }

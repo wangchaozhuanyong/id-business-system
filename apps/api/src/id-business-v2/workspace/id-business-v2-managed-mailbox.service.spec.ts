@@ -30,6 +30,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
     provider: 'gmail' as const,
     providerCredentialEncrypted: 'encrypted',
     queryCodeHash: 'hashed-code',
+    queryCodeEncrypted: 'encrypted-query-code',
     queryCodeHint: 'Ab23',
     queryCodeExpiresAt,
     status: 'active' as const,
@@ -51,6 +52,11 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     count: vi.fn(),
     findByEmail: vi.fn(),
     findById: vi.fn(),
+    createOAuthState: vi.fn(),
+    findOAuthStateById: vi.fn(),
+    findOAuthStateByHash: vi.fn(),
+    completeOAuthState: vi.fn(),
+    failOAuthState: vi.fn(),
     create: vi.fn(),
     updateStatus: vi.fn(),
     updateCredential: vi.fn(),
@@ -63,6 +69,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
   };
   const audit = { append: vi.fn() };
   const encryption = {
+    decrypt: vi.fn(() => 'buyer-query-code'),
     encrypt: vi.fn(() => 'encrypted'),
     hash: vi.fn(() => 'hashed-code')
   };
@@ -82,6 +89,10 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     repository.findByEmail.mockResolvedValue(null);
     repository.findById.mockResolvedValue(mailbox());
     repository.create.mockImplementation(async (_tx, input) => mailbox(input));
+    repository.createOAuthState.mockImplementation(async (input) => ({
+      id: '44444444-4444-4444-8444-444444444444',
+      ...input
+    }));
     repository.updateStatus.mockImplementation(async (_tx, id, status, updatedByUserId) =>
       mailbox({ id, status, updatedByUserId })
     );

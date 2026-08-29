@@ -4,6 +4,8 @@ import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2MailViewerService } from './id-business-v2-mail-viewer.service';
 import { IdBusinessV2ManagedMailboxController } from './id-business-v2-managed-mailbox.controller';
 import { IdBusinessV2ManagedMailboxService } from './id-business-v2-managed-mailbox.service';
+import { IdBusinessV2MicrosoftMailboxOAuthController } from './id-business-v2-microsoft-mailbox-oauth.controller';
+import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
 import { IdBusinessV2PublicMailboxController } from './id-business-v2-public-mailbox.controller';
 import { IdBusinessV2TotpAccountController } from './id-business-v2-totp-account.controller';
 import { IdBusinessV2TotpAccountService } from './id-business-v2-totp-account.service';
@@ -13,6 +15,7 @@ import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-
 import { IdBusinessV2TotpAccountRepository } from './persistence/id-business-v2-totp-account.repository';
 import { IdBusinessV2WorkspaceRepository } from './persistence/id-business-v2-workspace.repository';
 import { IdBusinessV2ImapMailProvider } from './providers/id-business-v2-imap-mail.provider';
+import { IdBusinessV2MicrosoftMailOAuthClient } from './providers/id-business-v2-microsoft-mail-oauth.client';
 
 @Module({
   imports: [IdBusinessV2RuntimeModule],
@@ -20,6 +23,7 @@ import { IdBusinessV2ImapMailProvider } from './providers/id-business-v2-imap-ma
     IdBusinessV2WorkspaceController,
     IdBusinessV2TotpAccountController,
     IdBusinessV2ManagedMailboxController,
+    IdBusinessV2MicrosoftMailboxOAuthController,
     IdBusinessV2PublicMailboxController
   ],
   providers: [
@@ -31,7 +35,9 @@ import { IdBusinessV2ImapMailProvider } from './providers/id-business-v2-imap-ma
     IdBusinessV2ManagedMailboxService,
     IdBusinessV2ManagedMailboxRepository,
     IdBusinessV2MailViewerService,
-    IdBusinessV2ImapMailProvider
+    IdBusinessV2ImapMailProvider,
+    IdBusinessV2MicrosoftMailOAuthClient,
+    IdBusinessV2MicrosoftMailboxAuthorizationService
   ]
 })
 export class IdBusinessV2WorkspaceModule {}

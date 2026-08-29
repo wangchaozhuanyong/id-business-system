@@ -29,14 +29,39 @@ const mysqlCodeOnlyMigration = readFileSync(
   ),
   'utf8'
 );
+const microsoftMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma/migrations/20260828200000_managed_mailbox_microsoft_oauth/migration.sql'
+  ),
+  'utf8'
+);
+const mysqlMicrosoftMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma-mysql/migrations/20260828200000_managed_mailbox_microsoft_oauth/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('managed mailbox schema contract', () => {
-  it('stores provider authorization encrypted and the buyer query code as a hash only', () => {
+  it('stores provider authorization and admin-copyable query codes encrypted', () => {
     expect(schema).toContain('model IdBusinessV2ManagedMailbox {');
     expect(schema).toContain('providerCredentialEncrypted String');
     expect(schema).toContain('queryCodeHash');
-    expect(schema).not.toMatch(/queryCode\s+String/);
+    expect(schema).toContain('queryCodeEncrypted');
     expect(schema).not.toMatch(/appPassword\s+String/);
+  });
+
+  it('adds Microsoft OAuth state and encrypted query-code storage without destructive migration', () => {
+    for (const source of [microsoftMigration, mysqlMicrosoftMigration]) {
+      expect(source).toContain('query_code_encrypted');
+      expect(source).toContain('id_business_v2_mailbox_oauth_states');
+      expect(source).toContain('microsoft');
+      expect(source).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
+    }
+    expect(schema).toContain('model IdBusinessV2MailboxOAuthState {');
+    expect(mysqlSchema).toContain('model IdBusinessV2MailboxOAuthState {');
   });
 
   it('adds an append-only public query attempt log with bounded lookup indexes', () => {

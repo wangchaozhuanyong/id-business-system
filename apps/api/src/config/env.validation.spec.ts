@@ -48,9 +48,22 @@ describe('validateEnv', () => {
         DATABASE_URL: 'mysql://user:password@mysql.company.io/id_business',
         FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
         HASH_SECRET: 'h'.repeat(32),
-        JWT_SECRET: 'j'.repeat(32)
+        JWT_SECRET: 'j'.repeat(32),
+        MICROSOFT_MAIL_OAUTH_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+        MICROSOFT_MAIL_OAUTH_CLIENT_SECRET: 'm'.repeat(32),
+        MICROSOFT_MAIL_OAUTH_REDIRECT_URI:
+          'https://admin.company.io/api/public/mailbox/microsoft-oauth/callback'
       })
     ).not.toThrow();
+  });
+
+  it('requires Microsoft mail OAuth settings as a complete set', () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: 'development',
+        MICROSOFT_MAIL_OAUTH_CLIENT_ID: 'client-id'
+      })
+    ).toThrow('Microsoft mail OAuth configuration must be provided as a complete set');
   });
 
   it('validates exchange-rate runtime settings', () => {
