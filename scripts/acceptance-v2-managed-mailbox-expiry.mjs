@@ -21,6 +21,9 @@ try {
   ]);
   await waitForMysql();
   executeSql(`
+    CREATE TABLE \`users\` (
+      \`id\` CHAR(36) NOT NULL PRIMARY KEY
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     CREATE TABLE \`id_business_v2_managed_mailboxes\` (
       \`id\` CHAR(36) NOT NULL PRIMARY KEY,
       \`status\` VARCHAR(20) NOT NULL
@@ -34,8 +37,18 @@ try {
       'utf8'
     )
   );
+  executeSql(
+    readFileSync(
+      'apps/api/prisma-mysql/migrations/20260829100000_managed_mailbox_query_code_settings/migration.sql',
+      'utf8'
+    )
+  );
+  executeSql(`
+    INSERT INTO \`id_business_v2_managed_mailbox_settings\` (\`id\`, \`scope\`)
+    VALUES ('33333333-3333-4333-8333-333333333333', 'global');
+  `);
 
-  const [isNullable, remainingSeconds, indexCount] = querySql(`
+  const [isNullable, remainingSeconds, indexCount, defaultValidityDays] = querySql(`
     SELECT
       (SELECT IS_NULLABLE
          FROM information_schema.columns
@@ -53,7 +66,10 @@ try {
          FROM information_schema.statistics
         WHERE table_schema = DATABASE()
           AND table_name = 'id_business_v2_managed_mailboxes'
-          AND index_name = 'idv2_mailboxes_status_query_code_expires_at_idx');
+          AND index_name = 'idv2_mailboxes_status_query_code_expires_at_idx'),
+      (SELECT query_code_validity_days
+         FROM id_business_v2_managed_mailbox_settings
+        WHERE scope = 'global');
   `)
     .trim()
     .split('\t');
@@ -62,6 +78,7 @@ try {
   assert.ok(Number(remainingSeconds) >= 30 * 24 * 60 * 60 - 10);
   assert.ok(Number(remainingSeconds) <= 30 * 24 * 60 * 60);
   assert.equal(indexCount, '1');
+  assert.equal(defaultValidityDays, '30');
   assert.throws(
     () =>
       executeSql(`

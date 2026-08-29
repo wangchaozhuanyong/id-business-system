@@ -69,12 +69,20 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     hash: vi.fn(() => 'hashed-code')
   };
   const provider = { verify: vi.fn() };
+  const settings = {
+    getValidityDays: vi.fn(async () => 30),
+    expiresAt: vi.fn(
+      (issuedAt: Date, validityDays: number) =>
+        new Date(issuedAt.getTime() + validityDays * 24 * 60 * 60 * 1000)
+    )
+  };
   const service = new IdBusinessV2ManagedMailboxService(
     repository as never,
     transactionManager as never,
     audit as never,
     encryption as never,
-    provider as never
+    provider as never,
+    settings as never
   );
 
   beforeEach(() => {
@@ -94,6 +102,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       mailbox({ id, ...input })
     );
     provider.verify.mockResolvedValue(undefined);
+    settings.getValidityDays.mockResolvedValue(30);
     audit.append.mockResolvedValue({ id: 'audit-1' });
   });
 
@@ -206,8 +215,10 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('newapppassword');
   });
 
-  it('rotates the buyer code with a fresh 30-day expiry and audits no plaintext code', async () => {
+  it('rotates the buyer code with the global expiry and audits no plaintext code', async () => {
     const result = await service.rotateQueryCode(mailbox().id, admin);
+    expect(settings.getValidityDays).toHaveBeenCalled();
+    expect(settings.expiresAt).toHaveBeenCalledWith(now, 30);
     expect(repository.updateQueryCode).toHaveBeenCalledWith(
       tx,
       mailbox().id,

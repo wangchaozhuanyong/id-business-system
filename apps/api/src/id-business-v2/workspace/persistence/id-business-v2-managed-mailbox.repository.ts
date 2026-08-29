@@ -3,7 +3,10 @@ import type { IdBusinessV2ManagedMailboxStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 
-type MailboxPersistenceClient = Pick<V2CommandTransaction, 'idBusinessV2ManagedMailbox'>;
+type MailboxPersistenceClient = Pick<
+  V2CommandTransaction,
+  'idBusinessV2ManagedMailbox' | 'idBusinessV2ManagedMailboxSetting'
+>;
 
 @Injectable()
 export class IdBusinessV2ManagedMailboxRepository {
@@ -38,6 +41,37 @@ export class IdBusinessV2ManagedMailboxRepository {
 
   findById(id: string, client: MailboxPersistenceClient = this.prisma) {
     return client.idBusinessV2ManagedMailbox.findUnique({ where: { id } });
+  }
+
+  getQueryCodeSettings(scope: string, client: MailboxPersistenceClient = this.prisma) {
+    return client.idBusinessV2ManagedMailboxSetting.findUnique({
+      where: { scope },
+      select: { id: true, queryCodeValidityDays: true, updatedAt: true }
+    });
+  }
+
+  upsertQueryCodeSettings(
+    tx: V2CommandTransaction,
+    input: { queryCodeValidityDays: number; scope: string; updatedByUserId: string }
+  ) {
+    return tx.idBusinessV2ManagedMailboxSetting.upsert({
+      where: { scope: input.scope },
+      create: input,
+      update: {
+        queryCodeValidityDays: input.queryCodeValidityDays,
+        updatedByUserId: input.updatedByUserId
+      }
+    });
+  }
+
+  updateAllQueryCodeExpirations(
+    tx: V2CommandTransaction,
+    queryCodeExpiresAt: Date,
+    updatedByUserId: string
+  ) {
+    return tx.idBusinessV2ManagedMailbox.updateMany({
+      data: { queryCodeExpiresAt, updatedByUserId }
+    });
   }
 
   create(tx: V2CommandTransaction, data: Prisma.IdBusinessV2ManagedMailboxUncheckedCreateInput) {

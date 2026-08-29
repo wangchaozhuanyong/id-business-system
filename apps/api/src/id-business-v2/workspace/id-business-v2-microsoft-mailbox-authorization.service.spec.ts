@@ -82,6 +82,13 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     createAuthorizationUrl: vi.fn(),
     exchangeAuthorizationCode: vi.fn()
   };
+  const settings = {
+    getValidityDays: vi.fn(async () => 30),
+    expiresAt: vi.fn(
+      (issuedAt: Date, validityDays: number) =>
+        new Date(issuedAt.getTime() + validityDays * 24 * 60 * 60 * 1000)
+    )
+  };
   const service = new IdBusinessV2MicrosoftMailboxAuthorizationService(
     repository as never,
     transactionManager as never,
@@ -89,7 +96,8 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     encryption as never,
     transientState as never,
     provider as never,
-    microsoftOAuth as never
+    microsoftOAuth as never,
+    settings as never
   );
 
   beforeEach(() => {
@@ -110,6 +118,7 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
       accessToken: 'access-token',
       refreshToken: 'refresh-token'
     });
+    settings.getValidityDays.mockResolvedValue(30);
   });
 
   it('starts a bounded authorization without storing mailbox passwords or OAuth tokens', async () => {
@@ -148,6 +157,7 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
         queryCodeEncrypted: expect.stringMatching(/^encrypted:/)
       })
     );
+    expect(settings.expiresAt).toHaveBeenCalledWith(now, 30);
     expect(JSON.stringify(repository.create.mock.calls)).not.toContain('access-token');
     expect(audit.append).toHaveBeenCalled();
     expect(transientState.succeedAuthorization).toHaveBeenCalledWith(authorizationId, mailbox().id);

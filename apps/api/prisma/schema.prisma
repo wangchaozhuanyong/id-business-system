@@ -499,6 +499,7 @@ model User {
   idBusinessV2TotpAccounts             IdBusinessV2TotpAccount[]
   idBusinessV2ManagedMailboxesCreated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxCreatedBy")
   idBusinessV2ManagedMailboxesUpdated  IdBusinessV2ManagedMailbox[]         @relation("IdBusinessV2ManagedMailboxUpdatedBy")
+  idBusinessV2ManagedMailboxSettings   IdBusinessV2ManagedMailboxSetting[]  @relation("IdBusinessV2ManagedMailboxSettingUpdatedBy")
   idBusinessV2FinanceSettings          IdBusinessV2FinanceSettings[]        @relation("IdBusinessV2FinanceSettingsUpdatedBy")
   idBusinessV2FinanceAccountsCreated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountCreatedBy")
   idBusinessV2FinanceAccountsUpdated   IdBusinessV2FinanceAccount[]         @relation("IdBusinessV2FinanceAccountUpdatedBy")
@@ -1922,6 +1923,20 @@ model IdBusinessV2ManagedMailbox {
   @@index([createdByUserId])
   @@index([updatedByUserId])
   @@map("id_business_v2_managed_mailboxes")
+}
+
+model IdBusinessV2ManagedMailboxSetting {
+  id                    String   @id @default(uuid()) @db.Uuid
+  scope                 String   @unique @default("global") @db.VarChar(32)
+  queryCodeValidityDays Int      @default(30) @map("query_code_validity_days")
+  updatedByUserId       String?  @map("updated_by_user_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("IdBusinessV2ManagedMailboxSettingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([updatedByUserId])
+  @@map("id_business_v2_managed_mailbox_settings")
 }
 
 model IdBusinessV2ExchangeRateProviderSnapshot {

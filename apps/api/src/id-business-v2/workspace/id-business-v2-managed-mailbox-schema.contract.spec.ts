@@ -57,6 +57,20 @@ const mysqlPrivacyMigration = readFileSync(
   ),
   'utf8'
 );
+const queryCodeSettingsMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma/migrations/20260829100000_managed_mailbox_query_code_settings/migration.sql'
+  ),
+  'utf8'
+);
+const mysqlQueryCodeSettingsMigration = readFileSync(
+  resolve(
+    process.cwd(),
+    'prisma-mysql/migrations/20260829100000_managed_mailbox_query_code_settings/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('managed mailbox schema contract', () => {
   it('stores provider authorization and admin-copyable query codes encrypted', () => {
@@ -114,5 +128,20 @@ describe('managed mailbox schema contract', () => {
       'CHANGE COLUMN `email_hash` `query_code_hash` VARCHAR(64) NOT NULL'
     );
     expect(mysqlCodeOnlyMigration).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
+  });
+
+  it('stores one auditable global query-code validity setting in both database schemas', () => {
+    for (const source of [schema, mysqlSchema]) {
+      expect(source).toContain('model IdBusinessV2ManagedMailboxSetting {');
+      expect(source).toContain('queryCodeValidityDays');
+      expect(source).toContain('@default("global")');
+    }
+    for (const source of [queryCodeSettingsMigration, mysqlQueryCodeSettingsMigration]) {
+      expect(source).toContain('id_business_v2_managed_mailbox_settings');
+      expect(source).toContain('query_code_validity_days');
+      expect(source).not.toMatch(/DROP TABLE|TRUNCATE|DELETE FROM/);
+    }
+    expect(mysqlQueryCodeSettingsMigration).toContain('COLLATE utf8mb4_unicode_ci');
+    expect(mysqlQueryCodeSettingsMigration).not.toContain('COLLATE utf8mb4_0900_ai_ci');
   });
 });

@@ -25,6 +25,11 @@ export interface UpdateIdBusinessV2ManagedMailboxCredentialDto {
   appPassword?: unknown;
 }
 
+export interface UpdateIdBusinessV2ManagedMailboxQueryCodeSettingsDto {
+  applyToExisting?: unknown;
+  validityDays?: unknown;
+}
+
 export interface StartIdBusinessV2MicrosoftMailboxAuthorizationDto {
   email?: unknown;
   label?: unknown;
