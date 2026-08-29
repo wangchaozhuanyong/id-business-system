@@ -1,9 +1,13 @@
 import type {
   CreateV2SavedTotpAccountInput,
+  CreateV2ManagedMailboxBatchInput,
+  CreateV2ManagedMailboxBatchResult,
   CreateV2WorkspaceShortcutInput,
   CreateV2ManagedMailboxInput,
   CreateV2ManagedMailboxResult,
   ReorderV2WorkspaceShortcutsInput,
+  StartV2MicrosoftMailboxAuthorizationInput,
+  StartV2MicrosoftMailboxAuthorizationResult,
   UpdateV2ManagedMailboxCredentialInput,
   UpdateV2ManagedMailboxStatusInput,
   UpdateV2SavedTotpAccountInput,
@@ -13,6 +17,7 @@ import type {
   V2ManagedMailbox,
   V2ManagedMailboxList,
   V2ManagedMailboxListQuery,
+  V2MicrosoftMailboxAuthorizationStatus,
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
   V2WorkspaceShortcut,
@@ -70,6 +75,23 @@ export const idBusinessV2WorkspaceApi = {
   createManagedMailbox(input: CreateV2ManagedMailboxInput) {
     return request<CreateV2ManagedMailboxResult>(
       http.post('/id-business-v2/workspace-mailboxes', input)
+    );
+  },
+  createManagedMailboxBatch(input: CreateV2ManagedMailboxBatchInput) {
+    return request<CreateV2ManagedMailboxBatchResult>(
+      http.post('/id-business-v2/workspace-mailboxes/batch', input)
+    );
+  },
+  startMicrosoftMailboxAuthorization(input: StartV2MicrosoftMailboxAuthorizationInput) {
+    return request<StartV2MicrosoftMailboxAuthorizationResult>(
+      http.post('/id-business-v2/workspace-mailboxes/microsoft/authorizations', input)
+    );
+  },
+  getMicrosoftMailboxAuthorizationStatus(authorizationId: string) {
+    return request<V2MicrosoftMailboxAuthorizationStatus>(
+      http.get(
+        `/id-business-v2/workspace-mailboxes/microsoft/authorizations/${encodeURIComponent(authorizationId)}`
+      )
     );
   },
   updateManagedMailboxStatus(mailboxId: string, input: UpdateV2ManagedMailboxStatusInput) {

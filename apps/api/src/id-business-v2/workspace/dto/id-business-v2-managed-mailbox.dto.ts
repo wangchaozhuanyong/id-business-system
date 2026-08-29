@@ -5,6 +5,10 @@ export interface CreateIdBusinessV2ManagedMailboxDto {
   provider?: unknown;
 }
 
+export interface CreateIdBusinessV2ManagedMailboxBatchDto {
+  items?: unknown;
+}
+
 export interface ListIdBusinessV2ManagedMailboxesDto {
   page?: unknown;
   pageSize?: unknown;
@@ -19,4 +23,10 @@ export interface UpdateIdBusinessV2ManagedMailboxStatusDto {
 
 export interface UpdateIdBusinessV2ManagedMailboxCredentialDto {
   appPassword?: unknown;
+}
+
+export interface StartIdBusinessV2MicrosoftMailboxAuthorizationDto {
+  email?: unknown;
+  label?: unknown;
+  mailboxId?: unknown;
 }

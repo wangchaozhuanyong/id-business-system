@@ -1,0 +1,147 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
+
+const admin = {
+  id: '11111111-1111-4111-8111-111111111111',
+  username: 'admin',
+  displayName: '管理员',
+  roles: ['admin'],
+  permissions: []
+};
+const authorizationId = '44444444-4444-4444-8444-444444444444';
+const now = new Date('2026-08-28T18:00:00.000Z');
+
+function authorization(overrides: Record<string, unknown> = {}) {
+  return {
+    id: authorizationId,
+    stateHash: 'hashed-state',
+    email: 'member@outlook.com',
+    label: '客户 M',
+    status: 'pending' as const,
+    failureCode: null,
+    mailboxId: null,
+    createdByUserId: admin.id,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    completedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides
+  };
+}
+
+function mailbox(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '22222222-2222-4222-8222-222222222222',
+    email: 'member@outlook.com',
+    label: '客户 M',
+    provider: 'microsoft' as const,
+    providerCredentialEncrypted: 'encrypted-refresh-token',
+    queryCodeHash: 'hashed-query-code',
+    queryCodeEncrypted: 'encrypted-query-code',
+    queryCodeHint: 'Ab23',
+    queryCodeExpiresAt: new Date('2026-09-27T18:00:00.000Z'),
+    status: 'active' as const,
+    lastVerifiedAt: now,
+    lastQueriedAt: null,
+    lastErrorCode: null,
+    createdByUserId: admin.id,
+    updatedByUserId: admin.id,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides
+  };
+}
+
+describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
+  const tx = {};
+  const repository = {
+    findByEmail: vi.fn(),
+    createOAuthState: vi.fn(),
+    findOAuthStateById: vi.fn(),
+    findOAuthStateByHash: vi.fn(),
+    failOAuthState: vi.fn(),
+    findById: vi.fn(),
+    updateCredential: vi.fn(),
+    create: vi.fn(),
+    completeOAuthState: vi.fn()
+  };
+  const transactionManager = {
+    execute: vi.fn(async (work: (client: unknown, context: { businessTime: Date }) => unknown) =>
+      work(tx, { businessTime: now })
+    )
+  };
+  const audit = { append: vi.fn() };
+  const encryption = {
+    encrypt: vi.fn((value: string) => `encrypted:${value}`),
+    hash: vi.fn((value: string) => `hashed:${value}`)
+  };
+  const provider = { verify: vi.fn() };
+  const microsoftOAuth = {
+    createAuthorizationUrl: vi.fn(),
+    exchangeAuthorizationCode: vi.fn()
+  };
+  const service = new IdBusinessV2MicrosoftMailboxAuthorizationService(
+    repository as never,
+    transactionManager as never,
+    audit as never,
+    encryption as never,
+    provider as never,
+    microsoftOAuth as never
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repository.findByEmail.mockResolvedValue(null);
+    repository.createOAuthState.mockImplementation(async (input) => authorization(input));
+    repository.findOAuthStateByHash.mockResolvedValue(authorization());
+    repository.findOAuthStateById.mockResolvedValue(authorization());
+    repository.create.mockImplementation(async (_tx, input) => mailbox(input));
+    repository.completeOAuthState.mockResolvedValue(authorization({ status: 'succeeded' }));
+    audit.append.mockResolvedValue({ id: 'audit-1' });
+    provider.verify.mockResolvedValue(undefined);
+    microsoftOAuth.createAuthorizationUrl.mockReturnValue('https://login.microsoftonline.com/auth');
+    microsoftOAuth.exchangeAuthorizationCode.mockResolvedValue({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token'
+    });
+  });
+
+  it('starts a bounded authorization without storing mailbox passwords or OAuth tokens', async () => {
+    const result = await service.start({ email: ' Member@Outlook.com ', label: ' 客户 M ' }, admin);
+    expect(microsoftOAuth.createAuthorizationUrl).toHaveBeenCalledWith(
+      expect.any(String),
+      'member@outlook.com'
+    );
+    expect(repository.createOAuthState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'member@outlook.com',
+        label: '客户 M',
+        status: 'pending',
+        createdByUserId: admin.id
+      })
+    );
+    expect(result.authorizationUrl).toBe('https://login.microsoftonline.com/auth');
+    expect(JSON.stringify(repository.createOAuthState.mock.calls)).not.toMatch(/password|token/i);
+  });
+
+  it('exchanges OAuth2, verifies Outlook IMAP and stores only encrypted credentials', async () => {
+    await expect(
+      service.complete({ code: 'microsoft-authorization-code', state: 'valid-oauth-state-value' })
+    ).resolves.toEqual({ succeeded: true });
+    expect(provider.verify).toHaveBeenCalledWith({
+      accessToken: 'access-token',
+      email: 'member@outlook.com',
+      provider: 'microsoft'
+    });
+    expect(repository.create).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        provider: 'microsoft',
+        providerCredentialEncrypted: 'encrypted:refresh-token',
+        queryCodeEncrypted: expect.stringMatching(/^encrypted:/)
+      })
+    );
+    expect(JSON.stringify(repository.create.mock.calls)).not.toContain('access-token');
+    expect(audit.append).toHaveBeenCalled();
+  });
+});

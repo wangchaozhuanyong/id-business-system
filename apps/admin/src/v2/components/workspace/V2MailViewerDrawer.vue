@@ -3,7 +3,7 @@
     class="v2-mail-viewer-drawer"
     :model-value="modelValue"
     title="邮箱查询与管理"
-    size="min(820px, 100vw)"
+    size="min(1220px, 100vw)"
     append-to-body
     destroy-on-close
     :before-close="handleBeforeClose"
@@ -14,7 +14,7 @@
       <div class="v2-mail-viewer-disclosure" role="note">
         <el-icon><Lock /></el-icon>
         <span>
-          <strong>查询由本系统验证，并直接读取已授权的谷歌邮箱或苹果邮箱</strong>
+          <strong>查询由本系统验证，并直接读取已授权的谷歌、苹果或微软邮箱</strong>
           <small>买家查询码与邮箱应用专用密码相互独立；邮件正文只在本次请求中返回。</small>
         </span>
       </div>
@@ -108,11 +108,17 @@ async function handleBeforeClose(done: () => void) {
   padding: 0;
 }
 
+.v2-mail-viewer-drawer .el-drawer__header {
+  margin-bottom: 0;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--v2-border);
+}
+
 .v2-mail-viewer-drawer__body {
   display: grid;
   min-width: 0;
-  gap: 16px;
-  padding: 20px;
+  gap: 10px;
+  padding: 14px 20px 18px;
 }
 
 .v2-mail-viewer-disclosure {
@@ -121,7 +127,7 @@ async function handleBeforeClose(done: () => void) {
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: start;
   gap: 9px;
-  padding: 11px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--v3-warning-border-soft);
   border-radius: 6px;
   background: var(--v3-warning-soft);
@@ -163,13 +169,13 @@ async function handleBeforeClose(done: () => void) {
 
 .v2-mail-viewer-tabs > .el-tabs__content {
   overflow: visible;
-  padding-top: 4px;
+  padding-top: 0;
 }
 
 @media (max-width: 560px) {
   .v2-mail-viewer-drawer__body {
-    gap: 14px;
-    padding: 16px;
+    gap: 10px;
+    padding: 12px 14px 16px;
   }
 
   .v2-mail-viewer-tabs > .el-tabs__header .el-tabs__item {

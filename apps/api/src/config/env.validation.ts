@@ -11,6 +11,9 @@ export interface RawEnv {
   JWT_EXPIRES_IN?: string;
   FIELD_ENCRYPTION_KEY?: string;
   HASH_SECRET?: string;
+  MICROSOFT_MAIL_OAUTH_CLIENT_ID?: string;
+  MICROSOFT_MAIL_OAUTH_CLIENT_SECRET?: string;
+  MICROSOFT_MAIL_OAUTH_REDIRECT_URI?: string;
   AUTH_PROVIDER?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP?: string;
@@ -60,6 +63,7 @@ export function validateEnv(config: RawEnv) {
   validateUrls(config, nodeEnv);
   validateDatabase(config, nodeEnv);
   validateSecrets(config, nodeEnv);
+  validateMicrosoftMailOAuth(config, nodeEnv);
 
   return {
     ...config,
@@ -149,6 +153,28 @@ function validateSecrets(config: RawEnv, nodeEnv: RuntimeEnv) {
 
   if (!isStrongSecret(config.JWT_SECRET)) {
     throw new Error('JWT_SECRET must contain at least 32 non-placeholder characters');
+  }
+}
+
+function validateMicrosoftMailOAuth(config: RawEnv, nodeEnv: RuntimeEnv) {
+  const values = [
+    config.MICROSOFT_MAIL_OAUTH_CLIENT_ID,
+    config.MICROSOFT_MAIL_OAUTH_CLIENT_SECRET,
+    config.MICROSOFT_MAIL_OAUTH_REDIRECT_URI
+  ];
+  if (nodeEnv !== 'production' && values.every((value) => !value?.trim())) return;
+  if (values.some((value) => !value?.trim())) {
+    throw new Error('Microsoft mail OAuth configuration must be provided as a complete set');
+  }
+  validatePublicUrl(
+    'MICROSOFT_MAIL_OAUTH_REDIRECT_URI',
+    config.MICROSOFT_MAIL_OAUTH_REDIRECT_URI as string,
+    nodeEnv
+  );
+  if (nodeEnv === 'production' && !isStrongSecret(config.MICROSOFT_MAIL_OAUTH_CLIENT_SECRET)) {
+    throw new Error(
+      'MICROSOFT_MAIL_OAUTH_CLIENT_SECRET must contain at least 32 non-placeholder characters'
+    );
   }
 }
 

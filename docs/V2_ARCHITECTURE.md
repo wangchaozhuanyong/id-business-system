@@ -37,7 +37,7 @@ contracts 和模块样式。跨模块能力优先放在 `components`、`composab
 - `business-monitoring`
 - `system-monitoring`
 - `data-governance`
-- `workspace`（当前用户快捷网址、前端本地 2FA 计算、受管 Gmail/iCloud 邮箱与公开买家查询）
+- `workspace`（当前用户快捷网址、前端本地 2FA 计算、受管 Gmail/iCloud/Microsoft 邮箱与公开买家查询）
 
 公共运行能力包括 `v2-auth`、`auth`、`audit-logs`、`common` 和 `security`。模块通过
 `public-api.ts` 暴露稳定边界，禁止跨模块引用内部 service 文件。
@@ -58,9 +58,10 @@ raw SQL、Prisma runtime 错误识别和数据库 Decimal 行只能出现在 per
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
 
-受管邮箱应用专用密码通过 `FieldEncryptionService` 加密保存，买家查询码只保存 HMAC 和末四位提示。
+受管邮箱应用专用密码和 Microsoft OAuth2 刷新令牌通过 `FieldEncryptionService` 加密保存；买家查询码
+保留 HMAC 作为公开查询索引，同时加密保存供管理员在邮箱池直接复制。
 公开查询尝试只记录邮箱/IP 哈希、受管邮箱标识、受控结果枚举和时间，不记录查询码、应用专用密码或
-邮件内容。邮件正文不入库，查询时由 Node 运行时直接读取 Gmail/iCloud INBOX，并在返回前转换为纯文本。
+邮件内容。邮件正文不入库，查询时由 Node 运行时直接读取 Gmail/iCloud/Microsoft INBOX，并在返回前转换为纯文本。
 
 原生 IMAP 依赖 Node TCP/TLS，只在 AWS Docker API 运行时内执行。未配置邮箱时返回明确不可用状态，
 不得访问任何第三方代查域名。具体运行要求见 `docs/V2_MANAGED_MAILBOX.md`。

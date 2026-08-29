@@ -15,6 +15,7 @@ describe('personal workspace UI contract', () => {
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
+  const managedMailboxBatchDrawer = read('./V2ManagedMailboxBatchDrawer.vue');
   const mailMessageList = read('./V2MailMessageList.vue');
   const publicMailboxView = read('../../views/V2PublicMailboxView.vue');
   const router = read('../../../v2-router.ts');
@@ -142,12 +143,21 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxPanel).toContain('查询码有效期');
     expect(managedMailboxPanel).toContain('有效期 30 天');
     expect(managedMailboxPanel).toContain('<V2AsyncRegion');
+    expect(managedMailboxPanel).toContain('<V2Table');
+    expect(managedMailboxPanel).toContain('<V2TableActionColumn');
+    expect(managedMailboxPanel).toContain('<el-pagination');
+    expect(managedMailboxPanel).toContain('复制 ${row.email} 的买家查询码');
+    expect(managedMailboxPanel).toContain('连接 Microsoft 并添加');
+    expect(managedMailboxPanel).toContain('<V2ManagedMailboxBatchDrawer');
+    expect(managedMailboxBatchDrawer).toContain('批量导入邮箱池');
+    expect(managedMailboxBatchDrawer).toContain('每行录入一个邮箱');
     expect(publicMailboxView).toContain('<V2MailQueryPanel');
     expect(mailMessageList).toContain('mailBodyToPlainText(item.body)');
     expect(
       [mailViewerDrawer, mailQueryPanel, managedMailboxPanel, mailMessageList].join('\n')
     ).not.toMatch(/v-html|localStorage|sessionStorage/);
     expect(workspaceApi).toContain('/public/mailbox/query');
+    expect(workspaceApi).toContain('/microsoft/authorizations');
     expect(workspaceApi).not.toContain('icloud.thefindnet.xyz');
     expect(launcher).not.toContain('邮件服务部署后启用');
     expect(router).toContain('V2PublicMailboxView');

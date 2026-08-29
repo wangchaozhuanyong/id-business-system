@@ -16,11 +16,13 @@ const MAX_BODY_CHARACTERS = 120_000;
 
 const PROVIDER_HOSTS: Record<V2MailProvider, string> = {
   gmail: 'imap.gmail.com',
-  icloud: 'imap.mail.me.com'
+  icloud: 'imap.mail.me.com',
+  microsoft: 'outlook.office365.com'
 };
 
 export interface ImapMailboxInput {
-  appPassword: string;
+  accessToken?: string;
+  appPassword?: string;
   email: string;
   provider: V2MailProvider;
 }
@@ -166,14 +168,14 @@ export class IdBusinessV2ImapMailProvider {
   }
 
   private createClient(input: ImapMailboxInput, verifyOnly: boolean, authUser: string) {
+    const auth = input.accessToken
+      ? { user: authUser, accessToken: input.accessToken }
+      : { user: authUser, pass: input.appPassword ?? '' };
     return new ImapFlow({
       host: PROVIDER_HOSTS[input.provider],
       port: IMAP_PORT,
       secure: true,
-      auth: {
-        user: authUser,
-        pass: input.appPassword
-      },
+      auth,
       clientInfo: {
         name: 'ID Business Mail Viewer',
         version: '1.0'

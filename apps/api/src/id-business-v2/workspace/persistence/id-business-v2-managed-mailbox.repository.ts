@@ -10,7 +10,7 @@ import type { V2CommandTransaction } from '../../runtime/public-api';
 
 type MailboxPersistenceClient = Pick<
   V2CommandTransaction,
-  'idBusinessV2ManagedMailbox' | 'idBusinessV2MailQueryAttempt'
+  'idBusinessV2ManagedMailbox' | 'idBusinessV2MailQueryAttempt' | 'idBusinessV2MailboxOAuthState'
 >;
 
 @Injectable()
@@ -90,12 +90,58 @@ export class IdBusinessV2ManagedMailboxRepository {
     id: string,
     input: {
       queryCodeExpiresAt: Date;
+      queryCodeEncrypted: string;
       queryCodeHash: string;
       queryCodeHint: string;
       updatedByUserId: string;
     }
   ) {
     return tx.idBusinessV2ManagedMailbox.update({ where: { id }, data: input });
+  }
+
+  updateProviderCredential(id: string, providerCredentialEncrypted: string) {
+    return this.prisma.idBusinessV2ManagedMailbox.update({
+      where: { id },
+      data: { providerCredentialEncrypted }
+    });
+  }
+
+  createOAuthState(
+    data: Prisma.IdBusinessV2MailboxOAuthStateUncheckedCreateInput,
+    client: MailboxPersistenceClient = this.prisma
+  ) {
+    return client.idBusinessV2MailboxOAuthState.create({ data });
+  }
+
+  findOAuthStateById(id: string, client: MailboxPersistenceClient = this.prisma) {
+    return client.idBusinessV2MailboxOAuthState.findUnique({ where: { id } });
+  }
+
+  findOAuthStateByHash(stateHash: string, client: MailboxPersistenceClient = this.prisma) {
+    return client.idBusinessV2MailboxOAuthState.findUnique({ where: { stateHash } });
+  }
+
+  completeOAuthState(
+    tx: V2CommandTransaction,
+    id: string,
+    input: { mailboxId: string; completedAt: Date }
+  ) {
+    return tx.idBusinessV2MailboxOAuthState.update({
+      where: { id },
+      data: {
+        status: 'succeeded',
+        failureCode: null,
+        mailboxId: input.mailboxId,
+        completedAt: input.completedAt
+      }
+    });
+  }
+
+  failOAuthState(id: string, failureCode: string, completedAt = new Date()) {
+    return this.prisma.idBusinessV2MailboxOAuthState.updateMany({
+      where: { id, status: 'pending' },
+      data: { status: 'failed', failureCode, completedAt }
+    });
   }
 
   updateQueryState(
