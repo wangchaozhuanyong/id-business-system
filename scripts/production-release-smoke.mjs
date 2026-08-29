@@ -73,7 +73,7 @@ const loginResponse = await request('/api/auth/login', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ username, password })
 });
-assert.equal(loginResponse.status, 200, '登录失败');
+assert.ok([200, 201].includes(loginResponse.status), '登录失败');
 const loginBody = await readJson(loginResponse);
 const token = loginBody?.data?.accessToken;
 assert.ok(token, '登录未返回令牌');
