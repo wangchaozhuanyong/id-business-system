@@ -5,10 +5,9 @@
     title="2FA 动态验证码"
     size="min(640px, 100%)"
     append-to-body
-    destroy-on-close
-    :before-close="handleBeforeClose"
+    close-on-click-modal
+    close-on-press-escape
     @close="$emit('update:modelValue', false)"
-    @closed="clearAll"
   >
     <template #header>
       <div class="v2-totp-drawer__header">
@@ -204,8 +203,6 @@
 </template>
 
 <script setup lang="ts">
-import 'element-plus/es/components/message-box/style/css.mjs';
-import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { CopyDocument, Delete, Hide, InfoFilled, Key, Timer, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -398,28 +395,6 @@ function clearAll() {
   inputVisible.value = false;
   inputMode.value = 'single';
   savedAccountsRef.value?.clearAll();
-}
-
-async function handleBeforeClose(done: () => void) {
-  const savedDraftDirty = savedAccountsRef.value?.hasUnsavedChanges() ?? false;
-  if (!secretInput.value && !savedDraftDirty) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(
-      '关闭后会清空临时密钥和未保存内容，已保存账号不受影响。',
-      '清空并关闭',
-      {
-        confirmButtonText: '清空并关闭',
-        cancelButtonText: '继续使用',
-        type: 'warning'
-      }
-    );
-    done();
-  } catch {
-    // 用户选择继续使用。
-  }
 }
 </script>
 

@@ -39,6 +39,15 @@ describe('personal workspace UI contract', () => {
     expect(launcher).not.toContain('router.push');
   });
 
+  it('shows a tall two-column shortcut grid without redundant headings', () => {
+    expect(launcher).toContain('height: min(720px, calc(100dvh - 92px))');
+    expect(launcher).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
+    expect(launcher).not.toContain('常用入口与在线工具');
+    expect(launcher).not.toContain('<span>快捷网址</span>');
+    expect(shortcutDrawer).toContain('.v2-workspace-shortcut-drawer__toolbar > div > span');
+    expect(shortcutDrawer).not.toContain('.v2-workspace-shortcut-drawer__toolbar span,');
+  });
+
   it('keeps tools and shortcut management in right-side drawers', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
@@ -55,10 +64,13 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).toContain('size="min(640px, 100%)"');
   });
 
-  it('keeps temporary TOTP input in browser memory only', () => {
+  it('keeps temporary TOTP input in component memory until the user clears it', () => {
     expect(totpDrawer).not.toMatch(/localStorage|sessionStorage|idBusinessV2WorkspaceApi|http\./);
     expect(totpDrawer).toContain('getV2BusinessNowMs() ?? Date.now()');
-    expect(totpDrawer).toContain('@closed="clearAll"');
+    expect(totpDrawer).toContain('close-on-click-modal');
+    expect(totpDrawer).toContain('@click="clearAll"');
+    expect(totpDrawer).not.toContain('destroy-on-close');
+    expect(totpDrawer).not.toContain('ElMessageBox.confirm');
   });
 
   it('manages encrypted personal TOTP accounts without returning saved secrets', () => {
@@ -79,6 +91,7 @@ describe('personal workspace UI contract', () => {
     expect(savedTotpAccounts).toContain('v2-saved-totp-card__details');
     expect(savedTotpAccounts).toContain('variant="success"');
     expect(savedTotpAccounts).toContain('密钥加密保存在服务器');
+    expect(savedTotpAccounts).toContain('同一账号换电脑仍可使用');
     expect(savedTotpAccounts).not.toMatch(/secretEncrypted|secretHash|localStorage|sessionStorage/);
   });
 
@@ -132,13 +145,16 @@ describe('personal workspace UI contract', () => {
 
   it('keeps mailbox query as a production-ready module in workspace tools', () => {
     expect(mailViewerDrawer).toContain('查询由本系统验证');
-    expect(mailViewerDrawer).toContain('@closed="clearAll"');
+    expect(mailViewerDrawer).toContain('close-on-click-modal');
+    expect(mailViewerDrawer).not.toContain('destroy-on-close');
+    expect(mailViewerDrawer).not.toContain('ElMessageBox.confirm');
     expect(mailViewerDrawer).toContain('label="邮件查询"');
     expect(mailViewerDrawer).toContain('label="邮箱池管理"');
     expect(mailQueryPanel).toContain('placeholder="请输入邮件查询码"');
     expect(mailQueryPanel).toContain('label="邮件查询码"');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
+    expect(managedMailboxPanel).toContain('保存后加密存入服务器，换电脑仍可使用');
     expect(managedMailboxPanel).toContain('Google 生成的 16 位应用专用密码');
     expect(managedMailboxPanel).toContain('Apple 生成的应用专用密码');
     expect(managedMailboxPanel).toContain('查询码有效期');
@@ -173,6 +189,21 @@ describe('personal workspace UI contract', () => {
     expect(router).toContain('V2PublicMailboxView');
     expect(router).toContain("path: '/mailbox'");
     expect(router).toContain('publicStandalone');
+  });
+
+  it('keeps the three mailbox pool actions aligned in one compact row', () => {
+    const actionsStart = managedMailboxPanel.indexOf(
+      '<div class="v2-managed-mailbox-panel__header-actions"'
+    );
+    const actionsEnd = managedMailboxPanel.indexOf('</div>', actionsStart);
+    const actions = managedMailboxPanel.slice(actionsStart, actionsEnd);
+    expect(actions.match(/<AppButton/g)).toHaveLength(3);
+    expect(actions).toContain('有效期设置');
+    expect(actions).toContain('批量导入');
+    expect(actions).toContain('刷新');
+    expect(actions).not.toContain('icon-only');
+    expect(managedMailboxPanel).toContain('grid-template-columns: repeat(3, 116px)');
+    expect(managedMailboxPanel).not.toContain('v2-managed-mailbox-panel__form-actions');
   });
 
   it('seeds the workspace fixture admin session before mounting child tools', () => {

@@ -28,7 +28,6 @@
       <header class="v2-workspace-panel__header">
         <div>
           <strong>个人工作区</strong>
-          <span>常用入口与在线工具</span>
         </div>
         <AppButton
           variant="ghost"
@@ -41,20 +40,7 @@
         </AppButton>
       </header>
 
-      <div class="v2-workspace-panel__section">
-        <div class="v2-workspace-panel__section-title">
-          <span>快捷网址</span>
-          <AppButton
-            v-if="shortcuts.length === 0 && authStore.writesAllowed"
-            variant="ghost"
-            icon-only
-            size="small"
-            title="添加快捷网址"
-            @click="openSettings"
-          >
-            <el-icon><Plus /></el-icon>
-          </AppButton>
-        </div>
+      <div class="v2-workspace-panel__section v2-workspace-panel__section--shortcuts">
         <V2AsyncRegion
           :phase="shortcutsQuery.phase.value"
           :empty="shortcuts.length === 0"
@@ -124,15 +110,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
-import {
-  ArrowRight,
-  Briefcase,
-  Key,
-  Message,
-  Plus,
-  Setting,
-  TopRight
-} from '@element-plus/icons-vue';
+import { ArrowRight, Briefcase, Key, Message, Setting, TopRight } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
@@ -285,10 +263,11 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   z-index: 34;
   bottom: calc(100% + 8px);
   left: 8px;
-  display: grid;
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(620px, calc(100dvh - 92px));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 24px));
+  height: min(720px, calc(100dvh - 92px));
+  overflow: hidden;
   border: 1px solid var(--v2-border);
   border-radius: 8px;
   background: var(--v2-surface);
@@ -308,7 +287,6 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 .v2-workspace-panel__header > div {
   display: grid;
   min-width: 0;
-  gap: 1px;
 }
 
 .v2-workspace-panel__header strong {
@@ -316,17 +294,28 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   line-height: 22px;
 }
 
-.v2-workspace-panel__header span {
-  color: var(--v2-text-soft);
-  font-size: 11px;
-  line-height: 18px;
-}
-
 .v2-workspace-panel__section {
   display: grid;
+  min-width: 0;
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--v2-border-soft);
+}
+
+.v2-workspace-panel__section--shortcuts {
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.v2-workspace-panel__section--shortcuts > .v2-async-region {
+  display: grid;
+  min-height: 0;
+}
+
+.v2-workspace-panel__section--shortcuts :deep(.v2-async-region__content) {
+  min-height: 0;
+  height: 100%;
 }
 
 .v2-workspace-panel__section:last-child {
@@ -345,12 +334,18 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 
 .v2-workspace-panel__links {
   display: grid;
-  gap: 3px;
-  max-height: 240px;
+  height: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 1px;
   overflow-y: auto;
   list-style: none;
+}
+
+.v2-workspace-panel__links > li {
+  min-width: 0;
 }
 
 .v2-workspace-panel__tools {
@@ -377,9 +372,21 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   text-align: left;
 }
 
+.v2-workspace-panel__links button {
+  min-height: 46px;
+  grid-template-columns: 28px minmax(0, 1fr) 16px;
+  gap: 7px;
+  border: 1px solid var(--v2-border);
+  background: var(--v2-surface-muted);
+}
+
 .v2-workspace-panel__links button:hover,
 .v2-workspace-panel__tool:hover {
   background: var(--v2-surface-hover);
+}
+
+.v2-workspace-panel__links button:active {
+  transform: translateY(1px);
 }
 
 .v2-workspace-panel__tool:disabled {
@@ -398,8 +405,8 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 
 .v2-workspace-panel__links button > span {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border-radius: 5px;
   background: var(--v2-accent-soft);

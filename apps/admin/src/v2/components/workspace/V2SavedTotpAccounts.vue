@@ -6,7 +6,7 @@
           已保存账号
           <span>{{ items.length }} / {{ V2_SAVED_TOTP_ACCOUNT_LIMITS.count }}</span>
         </strong>
-        <span>密钥加密保存在服务器，页面只接收当前验证码。</span>
+        <span>密钥加密保存在服务器，同一账号换电脑仍可使用。</span>
       </div>
       <AppButton
         variant="primary"

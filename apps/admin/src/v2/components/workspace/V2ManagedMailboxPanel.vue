@@ -4,8 +4,18 @@
       <header>
         <div>
           <strong id="managed-mailbox-add-title">添加邮箱</strong>
-          <span>保存前会验证邮箱授权，Microsoft 邮箱使用官方 OAuth2。</span>
+          <span>保存后加密存入服务器，换电脑仍可使用；Microsoft 邮箱使用官方 OAuth2。</span>
         </div>
+        <AppButton
+          class="v2-managed-mailbox-panel__submit"
+          variant="primary"
+          size="small"
+          :loading="creating"
+          @click="submitMailbox"
+        >
+          <el-icon><Connection v-if="form.provider === 'microsoft'" /><Plus v-else /></el-icon>
+          {{ form.provider === 'microsoft' ? '连接 Microsoft 并添加' : '验证并添加' }}
+        </AppButton>
       </header>
 
       <el-form
@@ -70,22 +80,15 @@
           />
         </el-form-item>
       </el-form>
-
-      <div class="v2-managed-mailbox-panel__form-actions">
-        <AppButton variant="primary" :loading="creating" @click="submitMailbox">
-          <el-icon><Connection v-if="form.provider === 'microsoft'" /><Plus v-else /></el-icon>
-          {{ form.provider === 'microsoft' ? '连接 Microsoft 并添加' : '验证并添加' }}
-        </AppButton>
-      </div>
     </section>
 
     <section class="v2-managed-mailbox-panel__list" aria-labelledby="managed-mailbox-list-title">
       <header>
         <div>
           <strong id="managed-mailbox-list-title">邮箱池管理</strong>
-          <span>邮箱和查询码完整显示；邮件内容、买家 IP 和查询明细不持久化。</span>
+          <span>邮箱、授权状态和查询码保存在服务器；邮件正文和查询明细不持久化。</span>
         </div>
-        <div class="v2-managed-mailbox-panel__header-actions">
+        <div class="v2-managed-mailbox-panel__header-actions" aria-label="邮箱池管理操作">
           <AppButton size="small" variant="ghost" @click="openQueryCodeSettings">
             <el-icon><Setting /></el-icon>
             有效期设置
@@ -95,13 +98,14 @@
             批量导入
           </AppButton>
           <AppButton
+            size="small"
             variant="ghost"
-            icon-only
             title="刷新邮箱列表"
             :disabled="mailboxesQuery.isRefreshing.value"
             @click="mailboxesQuery.refresh"
           >
             <el-icon><Refresh /></el-icon>
+            刷新
           </AppButton>
         </div>
       </header>
@@ -998,27 +1002,29 @@ defineExpose({
 .v2-managed-mailbox-panel {
   display: grid;
   min-width: 0;
-  gap: 18px;
+  gap: 14px;
 }
 
 .v2-managed-mailbox-panel__add,
 .v2-managed-mailbox-panel__list {
   display: grid;
   min-width: 0;
-  gap: 12px;
+  gap: 10px;
 }
 
 .v2-managed-mailbox-panel__add > header,
 .v2-managed-mailbox-panel__list > header {
-  display: flex;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
 }
 
 .v2-managed-mailbox-panel__add > header > div,
 .v2-managed-mailbox-panel__list > header > div {
   display: grid;
+  min-width: 0;
   gap: 1px;
 }
 
@@ -1090,12 +1096,20 @@ defineExpose({
   color: var(--v2-text-soft);
 }
 
-.v2-managed-mailbox-panel__form-actions,
 .v2-managed-mailbox-panel__header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(3, 116px);
   gap: 8px;
+}
+
+.v2-managed-mailbox-panel__header-actions > .app-button.el-button {
+  width: 100%;
+  min-width: 116px;
+}
+
+.v2-managed-mailbox-panel__submit.app-button.el-button {
+  min-width: 116px;
+  white-space: nowrap;
 }
 
 .v2-managed-mailbox-panel__filters {
@@ -1201,18 +1215,25 @@ defineExpose({
   .v2-managed-mailbox-panel__form {
     grid-template-columns: minmax(0, 1fr);
   }
+}
 
+@media (max-width: 720px) {
+  .v2-managed-mailbox-panel__add > header,
   .v2-managed-mailbox-panel__list > header {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 
   .v2-managed-mailbox-panel__header-actions {
     width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-}
 
-@media (max-width: 720px) {
+  .v2-managed-mailbox-panel__header-actions > .app-button.el-button,
+  .v2-managed-mailbox-panel__submit.app-button.el-button {
+    min-width: 0;
+  }
+
   .v2-managed-mailbox-panel__filters {
     grid-template-columns: minmax(0, 1fr);
   }
