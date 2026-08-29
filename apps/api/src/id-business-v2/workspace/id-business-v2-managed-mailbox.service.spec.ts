@@ -121,6 +121,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
       }
     });
     expect(result).toMatchObject({ page: 2, pageSize: 10, total: 1 });
+    expect(result.items[0]?.queryCode).toBe('buyer-query-code');
     expect(JSON.stringify(result)).not.toMatch(/encrypted|hashed-code/);
   });
 
