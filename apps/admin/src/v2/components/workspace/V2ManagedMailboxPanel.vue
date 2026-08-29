@@ -189,12 +189,12 @@
           <V2TableColumn :definition="v2TableSchemas.workspace.managedMailboxes.columns[3]">
             <template #default="{ row }">
               <div class="v2-managed-mailbox-panel__query-code">
-                <code v-if="row.queryCode">{{ row.queryCode }}</code>
+                <code v-if="queryCodeFor(row)">{{ queryCodeFor(row) }}</code>
                 <span v-else class="v2-managed-mailbox-panel__legacy-code">
                   历史查询码无法还原
                 </span>
                 <AppButton
-                  v-if="row.queryCode"
+                  v-if="queryCodeFor(row)"
                   size="small"
                   variant="soft"
                   :title="`复制 ${row.email} 的买家查询码`"
@@ -483,6 +483,7 @@ const replacementPassword = ref('');
 const clockTick = ref(getV2BusinessNowMs() ?? Date.now());
 const queryCodeSettingsForm = reactive({ applyToExisting: false, validityDays: 30 });
 const queryCodeSettingsSnapshot = ref('');
+const queryCodeOverrides = reactive(new Map<string, string>());
 let microsoftAuthorizationGeneration = 0;
 let microsoftAuthorizationPopup: Window | null = null;
 let expiryTickTimer: ReturnType<typeof setInterval> | undefined;
@@ -606,11 +607,12 @@ async function createPasswordMailbox() {
       appPassword: form.appPassword,
       label: form.label.trim() || undefined
     };
-    await idBusinessV2WorkspaceApi.createManagedMailbox(input);
+    const result = await idBusinessV2WorkspaceApi.createManagedMailbox(input);
+    queryCodeOverrides.set(result.mailbox.id, result.buyerCredential);
     resetForm();
     filters.page = 1;
     await mailboxesQuery.refresh();
-    ElMessage.success('邮箱已验证并加入邮箱池');
+    ElMessage.success('邮箱已验证并加入邮箱池，买家查询码已显示');
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error));
   } finally {
@@ -762,6 +764,7 @@ async function rotateQueryCode(item: V2ManagedMailbox) {
   updatingId.value = item.id;
   try {
     const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
+    queryCodeOverrides.set(item.id, result.buyerCredential);
     const copied = await writeClipboardText(result.buyerCredential);
     await mailboxesQuery.refresh();
     ElMessage.success(copied ? '新查询码已生成并复制' : '新查询码已生成，请在当前行复制');
@@ -777,10 +780,15 @@ async function generateAndCopyLegacyCode(item: V2ManagedMailbox) {
 }
 
 async function copyQueryCode(item: V2ManagedMailbox) {
-  if (!item.queryCode) return;
-  const copied = await writeClipboardText(item.queryCode);
+  const queryCode = queryCodeFor(item);
+  if (!queryCode) return;
+  const copied = await writeClipboardText(queryCode);
   if (copied) ElMessage.success('查询码已复制');
   else ElMessage.error('无法自动复制，请手动选择查询码复制');
+}
+
+function queryCodeFor(item: V2ManagedMailbox) {
+  return item.queryCode ?? queryCodeOverrides.get(item.id) ?? null;
 }
 
 function applyFilters() {
