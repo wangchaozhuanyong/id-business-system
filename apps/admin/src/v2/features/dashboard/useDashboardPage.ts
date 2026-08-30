@@ -61,16 +61,6 @@ export function useDashboardPage() {
         tone: 'primary'
       },
       {
-        key: 'completed',
-        label: '今日完成',
-        value: data.business.todayCompletedOrders,
-        suffix: '单',
-        description: '今日进入且仍为完成状态',
-        actionLabel: '查看今日完成订单',
-        route: data.access.orders ? '/v2/orders' : undefined,
-        tone: 'success'
-      },
-      {
         key: 'activations',
         label: '今日开通',
         value: data.business.todayActivations,
@@ -101,16 +91,6 @@ export function useDashboardPage() {
         actionLabel: '查看今日收入分析',
         route: data.access.finance ? '/v2/data/analytics' : undefined,
         tone: 'primary',
-        money: true
-      },
-      {
-        key: 'profit',
-        label: '今日利润',
-        value: data.business.todayProfitCny,
-        description: '仅展示已确认的订单利润',
-        actionLabel: '查看今日利润分析',
-        route: data.access.finance ? '/v2/data/analytics' : undefined,
-        tone: 'success',
         money: true
       }
     ];

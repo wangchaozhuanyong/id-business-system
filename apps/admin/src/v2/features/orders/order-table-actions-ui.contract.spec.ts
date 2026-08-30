@@ -23,6 +23,8 @@ describe('order and gift-card table action UI contract', () => {
     expect(ordersSchema).toContain("label: '状态/下一步'");
     expect(ordersSchema).toContain("widthPreset: 'wide'");
     expect(ordersSchema).toContain('hideable: false');
+    expect(ordersSchema).toContain('defaultHiddenColumnKeys');
+    expect(ordersSchema).toContain("'利润率'");
     expect(tableColumn).toContain('props.definition.hideable !== false');
     expect(tableColumnSettings).toContain('column.hideable !== false');
     expect(ordersSchema).toContain("layout: 'double'");

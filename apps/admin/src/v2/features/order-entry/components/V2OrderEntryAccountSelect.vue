@@ -9,6 +9,7 @@
       :loading="matchingLoading"
       :disabled="!canMatch"
       :placeholder="placeholder"
+      :title="selectedCandidateLabel"
     >
       <el-option
         v-for="candidate in candidates"
@@ -44,5 +45,10 @@ const placeholder = computed(() => {
     return props.customerId ? '输入 Apple ID 或原销售订单号' : '请先选择客户';
   }
   return props.idSelectionMode === 'manual' ? '输入 Apple ID 搜索' : '等待自动匹配';
+});
+const selectedCandidateLabel = computed(() => {
+  const candidate = props.candidates.find((item) => item.id === accountId.value);
+  if (!candidate) return undefined;
+  return `${candidate.displayAppleId || '不显示'} / 余额 ${props.formatDecimal(candidate.currentBalance)}`;
 });
 </script>

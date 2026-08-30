@@ -49,6 +49,19 @@ describe('useV2TablePreferences', () => {
     expect(isV2TableColumnVisible('orders.main', '业务')).toBe(true);
   });
 
+  it('uses system defaults only when a user has no saved preference', async () => {
+    expect(isV2TableColumnVisible('orders.main', '利润率', ['利润率'])).toBe(false);
+
+    tablePreferencesApi.list.mockResolvedValue({
+      items: [
+        { tableId: 'orders.main', hiddenColumnKeys: [], updatedAt: '2026-08-08T00:00:00.000Z' }
+      ]
+    });
+    await ensureV2TablePreferences('user-1');
+
+    expect(isV2TableColumnVisible('orders.main', '利润率', ['利润率'])).toBe(true);
+  });
+
   it('suppresses repeated requests after a server failure and retries after the cooldown', async () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     const serverError = new ApiError('服务器内部错误（500）', {

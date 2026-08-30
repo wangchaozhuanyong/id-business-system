@@ -1,6 +1,7 @@
 <template>
   <el-select
     :model-value="modelValue"
+    :title="selectedCustomerLabel"
     filterable
     remote
     reserve-keyword
@@ -52,6 +53,10 @@ const props = withDefaults(
 );
 
 const emptyText = computed(() => (props.searching ? '正在搜索客户…' : '未找到匹配客户'));
+const selectedCustomerLabel = computed(() => {
+  const selectedCustomer = props.customers.find((customer) => customer.id === props.modelValue);
+  return selectedCustomer ? formatV2CustomerSearchLabel(selectedCustomer) : undefined;
+});
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];

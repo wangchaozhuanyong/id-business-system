@@ -2,6 +2,7 @@ import { computed, readonly, ref } from 'vue';
 import type { V2TablePreference } from '@apple-business/shared';
 import { isApiError } from '@/api/apiError';
 import { idBusinessV2TablePreferencesApi } from '@/v2/api/tablePreferences';
+import { getV2TableDefaultHiddenColumnKeys } from '@/v2/components/tableSystem';
 
 const SERVER_FAILURE_COOLDOWN_MS = 30_000;
 
@@ -98,12 +99,23 @@ export async function resetV2TablePreference(userId: string, tableId: string) {
   return result;
 }
 
-export function isV2TableColumnVisible(tableId: string, columnKey: string) {
-  return !(preferencesByTable.value[tableId] ?? []).includes(columnKey);
+export function isV2TableColumnVisible(
+  tableId: string,
+  columnKey: string,
+  defaultHiddenColumnKeys = getV2TableDefaultHiddenColumnKeys(tableId)
+) {
+  return !(preferencesByTable.value[tableId] ?? defaultHiddenColumnKeys).includes(columnKey);
 }
 
-export function getV2TableHiddenColumnKeys(tableId: string) {
-  return [...(preferencesByTable.value[tableId] ?? [])];
+export function getV2TableHiddenColumnKeys(
+  tableId: string,
+  defaultHiddenColumnKeys = getV2TableDefaultHiddenColumnKeys(tableId)
+) {
+  return [...(preferencesByTable.value[tableId] ?? defaultHiddenColumnKeys)];
+}
+
+export function hasV2TablePreference(tableId: string) {
+  return Object.prototype.hasOwnProperty.call(preferencesByTable.value, tableId);
 }
 
 export function clearV2TablePreferences() {

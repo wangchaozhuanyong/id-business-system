@@ -53,6 +53,8 @@ export type V2TableRowKeyDefinition =
   | { readonly kind: 'binding'; readonly value: string }
   | null;
 
+const defaultHiddenColumnKeysByTable = new Map<string, readonly string[]>();
+
 export interface V2TableSchema<
   TId extends string = string,
   TFeature extends string = string,
@@ -63,6 +65,8 @@ export interface V2TableSchema<
   readonly role: V2TableRole;
   readonly mobileMode: V2TableMobileMode;
   readonly rowKey: V2TableRowKeyDefinition;
+  /** Hidden only when the user has no saved preference for this table. */
+  readonly defaultHiddenColumnKeys?: readonly string[];
   readonly columns: TColumns;
 }
 
@@ -71,5 +75,12 @@ export function defineV2TableSchema<
   const TFeature extends string,
   const TColumns extends readonly V2TableColumnDefinition[]
 >(schema: V2TableSchema<TId, TFeature, TColumns>) {
+  if (schema.defaultHiddenColumnKeys) {
+    defaultHiddenColumnKeysByTable.set(schema.id, schema.defaultHiddenColumnKeys);
+  }
   return Object.freeze(schema);
+}
+
+export function getV2TableDefaultHiddenColumnKeys(tableId: string) {
+  return defaultHiddenColumnKeysByTable.get(tableId) ?? [];
 }

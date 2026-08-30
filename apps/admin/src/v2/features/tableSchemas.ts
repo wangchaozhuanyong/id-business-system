@@ -598,6 +598,17 @@ export const v2TableSchemas = {
       role: 'primary',
       mobileMode: 'cards',
       rowKey: { kind: 'path', value: 'id' },
+      defaultHiddenColumnKeys: [
+        '操作人',
+        '分类',
+        '使用 ID',
+        'accountDisposition',
+        'accountCostAmount',
+        '客户网站账号',
+        '利润率',
+        'openedAt',
+        'dueAt'
+      ],
       columns: [
         {
           key: 'orderNo',

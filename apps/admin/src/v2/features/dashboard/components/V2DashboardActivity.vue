@@ -18,6 +18,15 @@
         <template #empty>
           <div class="v2-dashboard-empty">
             <strong>{{ page.overview.access.orders ? '暂无订单' : '无订单查看权限' }}</strong>
+            <span v-if="page.overview.access.orders">订单创建后会显示在这里。</span>
+            <AppButton
+              v-if="page.overview.access.orders"
+              size="small"
+              variant="ghost"
+              @click="page.openRoute('/v2/orders')"
+            >
+              查看订单
+            </AppButton>
           </div>
         </template>
         <V2TableColumn :definition="v2TableSchemas.dashboard.activity.columns[0]" prop="orderNo" />
@@ -88,6 +97,15 @@
         </div>
         <div v-else class="v2-dashboard-empty">
           <strong>{{ page.overview.access.renewals ? '当前无到期待办' : '无续费查看权限' }}</strong>
+          <span v-if="page.overview.access.renewals">出现临近到期记录后会显示在这里。</span>
+          <AppButton
+            v-if="page.overview.access.renewals"
+            size="small"
+            variant="ghost"
+            @click="page.openRoute('/v2/workbench/renewals')"
+          >
+            查看续费工作台
+          </AppButton>
         </div>
       </div>
     </article>
@@ -120,6 +138,15 @@
         </ol>
         <div v-else class="v2-dashboard-empty">
           <strong>{{ page.overview.access.audit ? '暂无审计动态' : '无审计日志权限' }}</strong>
+          <span v-if="page.overview.access.audit">有新的业务操作后会显示在这里。</span>
+          <AppButton
+            v-if="page.overview.access.audit"
+            size="small"
+            variant="ghost"
+            @click="page.openRoute('/v2/system/audit-logs')"
+          >
+            查看审计日志
+          </AppButton>
         </div>
       </div>
     </article>
@@ -211,9 +238,23 @@ defineProps<{ page: DashboardPage }>();
   display: grid;
   width: 100%;
   min-height: inherit;
+  justify-items: center;
+  gap: 8px;
   place-content: center;
   color: var(--v2-text-soft);
   font-size: 13px;
+}
+
+.v2-dashboard-empty span {
+  max-width: 28em;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.v2-dashboard-empty .app-button {
+  justify-self: center;
 }
 
 .v2-dashboard-renewals,
