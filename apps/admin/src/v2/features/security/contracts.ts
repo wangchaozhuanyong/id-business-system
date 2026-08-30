@@ -106,6 +106,7 @@ export interface V2IpWhitelistRecord {
 }
 
 export interface V2SaveIpWhitelistInput {
+  expectedUpdatedAt?: string;
   ipOrCidr: string;
   scope: 'admin' | 'api';
   enabled: boolean;

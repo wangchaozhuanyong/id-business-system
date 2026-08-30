@@ -27,7 +27,7 @@
         </div>
         <div>
           <dt>判定规则</dt>
-          <dd>{{ page.selectedFinding.ruleKey }}</dd>
+          <dd>{{ page.businessMonitoringRuleLabel(page.selectedFinding.ruleKey) }}</dd>
         </div>
         <div>
           <dt>退出条件</dt>

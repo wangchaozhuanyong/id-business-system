@@ -42,6 +42,7 @@ describe('employees scheme 3 redesign contract', () => {
     expect(pageState).toContain('所有在线会话会立即失效');
     expect(pageState).toContain('确认修改员工权限');
     expect(pageState).toContain('重新登录后新权限才会生效');
+    expect(pageState).toContain('expectedUpdatedAt: current.updatedAt');
     expect(drawer).toContain(':title="page.securitySensitiveChangeMessage"');
     expect(pageState).toContain('validateV2Form(formInstance)');
   });

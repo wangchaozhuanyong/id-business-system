@@ -39,7 +39,7 @@ describe('acquireMysqlTransactionLock', () => {
 
     expect(client.$executeRaw).toHaveBeenCalledOnce();
     expect(client.$executeRaw.mock.calls[0]?.[0].join('')).toContain(
-      'INSERT INTO "mysql_transaction_locks"'
+      'INSERT INTO mysql_transaction_locks'
     );
     expect(client.$queryRaw).not.toHaveBeenCalled();
   });

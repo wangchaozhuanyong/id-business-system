@@ -20,6 +20,10 @@ const controller = readFileSync(
   resolve(apiRoot, 'src/id-business-v2/change-sync/id-business-v2-change-sync.controller.ts'),
   'utf8'
 );
+const realtimeController = readFileSync(
+  resolve(apiRoot, 'src/id-business-v2/change-sync/id-business-v2-realtime.controller.ts'),
+  'utf8'
+);
 
 describe('V2 event-driven change sync contract', () => {
   it('adds a separate scope version model without changing the clean baseline', () => {
@@ -87,5 +91,13 @@ describe('V2 event-driven change sync contract', () => {
     expect(controller).toContain("@Controller('id-business-v2/change-versions')");
     expect(controller).not.toContain('@Public');
     expect(controller).not.toMatch(/Body|Post|Patch|Delete/);
+  });
+
+  it('exposes an authenticated, unbuffered SSE endpoint without API envelope wrapping', () => {
+    expect(realtimeController).toContain("@Controller('realtime')");
+    expect(realtimeController).toContain("@Sse('events')");
+    expect(realtimeController).toContain('@SkipApiResponse()');
+    expect(realtimeController).toContain("@Header('X-Accel-Buffering', 'no')");
+    expect(realtimeController).not.toContain('@Public');
   });
 });

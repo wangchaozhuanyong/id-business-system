@@ -328,7 +328,10 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
     };
     try {
       if (editingWhitelist.value) {
-        await v2SecurityApi.updateIpWhitelist(editingWhitelist.value.id, input);
+        await v2SecurityApi.updateIpWhitelist(editingWhitelist.value.id, {
+          ...input,
+          expectedUpdatedAt: editingWhitelist.value.updatedAt
+        });
       } else {
         await v2SecurityApi.createIpWhitelist(input);
       }
@@ -359,7 +362,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
 
     removingWhitelistId.value = item.id;
     try {
-      await v2SecurityApi.removeIpWhitelist(item.id);
+      await v2SecurityApi.removeIpWhitelist(item.id, item.updatedAt);
       ElMessage.success('IP 白名单已删除，并写入操作审计。');
       await refresh();
     } catch (error) {

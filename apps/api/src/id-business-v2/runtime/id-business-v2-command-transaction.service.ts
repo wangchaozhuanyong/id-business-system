@@ -4,6 +4,7 @@ import type { V2DataScope } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2ChangeEventPublisher } from '../../common/prisma/v2-change-event.publisher';
 import { isUniqueConstraintError, isWriteConflictError } from './id-business-v2-prisma-error';
 
 export type V2CommandTransaction = Prisma.TransactionClient;
@@ -54,7 +55,10 @@ export type V2CommandTransactionOptions<TResult> =
 
 @Injectable()
 export class V2CommandTransactionManager {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly changeEventPublisher?: V2ChangeEventPublisher
+  ) {}
 
   async execute<TResult>(
     work: (tx: V2CommandTransaction, context: V2CommandContext) => Promise<TResult>,
@@ -78,11 +82,11 @@ export class V2CommandTransactionManager {
     for (let attempt = 1; attempt <= maxWriteConflictRetries + 1; attempt += 1) {
       const context: V2CommandContext = { ...baseContext, attempt };
       try {
-        return await this.prisma.$transaction(
+        const result = await this.prisma.$transaction(
           async (tx) => {
-            const result = await work(tx, context);
+            const transactionResult = await work(tx, context);
             await bumpV2ScopeVersions(tx, changedScopes, context.businessTime);
-            return result;
+            return transactionResult;
           },
           {
             isolationLevel,
@@ -90,6 +94,8 @@ export class V2CommandTransactionManager {
             timeout: options.timeoutMs
           }
         );
+        this.changeEventPublisher?.publishCommittedChangeBestEffort(changedScopes);
+        return result;
       } catch (error) {
         if (isWriteConflictError(error) && retryable && attempt <= maxWriteConflictRetries) {
           continue;
@@ -98,11 +104,11 @@ export class V2CommandTransactionManager {
         if (isUniqueConstraintError(error)) {
           if (retryable) {
             const replayContext: V2CommandContext = { ...baseContext, attempt: attempt + 1 };
-            return this.prisma.$transaction(
+            const result = await this.prisma.$transaction(
               async (tx) => {
-                const result = await options.replay(tx, replayContext);
+                const replayResult = await options.replay(tx, replayContext);
                 await bumpV2ScopeVersions(tx, changedScopes, replayContext.businessTime);
-                return result;
+                return replayResult;
               },
               {
                 isolationLevel,
@@ -110,6 +116,8 @@ export class V2CommandTransactionManager {
                 timeout: options.timeoutMs
               }
             );
+            this.changeEventPublisher?.publishCommittedChangeBestEffort(changedScopes);
+            return result;
           }
           throw new ConflictException(
             options.uniqueConflictMessage ?? '数据已被其他操作创建，请刷新后核对'

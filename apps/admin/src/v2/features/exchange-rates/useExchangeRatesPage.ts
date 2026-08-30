@@ -465,7 +465,7 @@ export function useExchangeRatesPage() {
     refresh: () => exchangeRateQuery.refresh()
   });
   const purchaseAutomation = usePurchaseRateAutomation({
-    enabled: () => activeTab.value === 'purchase',
+    enabled: () => activeTab.value === 'purchase' && purchaseResolved.value,
     quotes: () => purchaseQuotes.value,
     refreshQuotes: () => exchangeRateQuery.refresh()
   });

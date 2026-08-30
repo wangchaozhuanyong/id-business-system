@@ -91,15 +91,17 @@ refresh-error`；业务组件不得重新组合多个布尔值猜测主查询状
 - 时间过去不等于缓存失效。`event-driven` 查询在没有 scope 版本变化时永久保持 clean；
   `event-with-deadline` 只允许在服务端返回的 `revalidateAt` 到达时失效。clean 缓存回访不得读取
   业务列表；dirty 的活跃查询保留旧内容并立即后台刷新，dirty 的非活跃查询只在进入页面时刷新。
-- 数据库写入必须原子递增 `id_business_v2_scope_versions` 并向私有主题
-  `id-business-v2:changes` 广播 scope/version。事件不得包含订单、账号、手机号、卡号或其他业务行
-  字段。重连、恢复联网、长时间隐藏后恢复及后台周期校验只读取
-  `/api/id-business-v2/change-versions`，不得用完整列表轮询补偿漏事件。
+- 数据库写入必须在业务事务内原子递增 `id_business_v2_scope_versions`；事务成功提交后，由 Node API
+  通过受 JWT 保护的 `/api/realtime/events` SSE 通道广播精确 scope/version。事件不得包含订单、账号、
+  手机号、卡号或其他业务行字段；没有浏览器订阅时不得额外读取版本表。
+- SSE 正常连接时禁止固定读取版本接口或业务列表；服务端只允许发送不查询业务数据的连接心跳。
+  实时连接断开后才允许每 15 秒读取 `/api/id-business-v2/change-versions` 补偿漏事件；重连、恢复联网、
+  长时间隐藏后恢复时必须立即核对一次版本，SSE 恢复后停止降级轮询。
 - 写命令必须显式声明实际变更的主 scope，禁止省略 scope 或默认递增全部数据域；衍生页面由
   `V2_SCOPE_DEPENDENCIES` 在客户端精确展开。应用首次读取版本只建立本地基线，不得把服务端已有版本
   误判为 35 个 scope 同时变更；仅后续差异才能标记相关查询为 dirty。
-- Broadcast 只允许由 `id_business_v2_scope_versions` 的精确更新语句发布；禁止业务表级
-  触发器另外展开一组 scope，避免同一事务重复递增和过度刷新。
+- 实时发布只允许使用写命令声明并已提交的 scope；禁止业务表级触发器或客户端自行扩大 scope，避免
+  同一事务重复递增和过度刷新。推送失败不得回滚已经提交的业务事务，客户端通过版本快照完成补偿。
 - 缓存 key 必须包含登录身份代际；失效必须中止旧读取并阻止旧响应回写，100ms 内合并同 scope
   事件。同 scope、同 key 的并发读取复用 Promise。最多保留 200 个非活跃查询条目，缓存仅在内存，
   退出登录或切换身份时清空并断开实时频道。

@@ -30,7 +30,7 @@
     </div>
 
     <div class="v2-security-overview__actions">
-      <el-tag effect="plain" type="info">管理员专用</el-tag>
+      <el-tag class="v2-overview-access-tag" effect="plain" type="info">管理员专用</el-tag>
       <AppButton variant="ghost" :disabled="page.loading" @click="page.refresh">
         <el-icon><Refresh /></el-icon>
         刷新

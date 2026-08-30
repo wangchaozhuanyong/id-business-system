@@ -57,12 +57,20 @@
       <dl class="v2-purchase-summary" aria-label="收购报价运行摘要">
         <div>
           <dt>最新数据</dt>
-          <dd>{{ page.formatDate(page.purchaseAutomation.latestRun?.providerUpdatedAt) }}</dd>
+          <dd>
+            {{
+              page.purchaseAutomation.automationQuery.isInitialLoading
+                ? '读取中'
+                : page.formatDate(page.purchaseAutomation.latestRun?.providerUpdatedAt)
+            }}
+          </dd>
           <small>
             {{
-              page.purchaseAutomation.runtime?.provider.configured
-                ? 'ExchangeRate-API'
-                : '供应商待配置'
+              page.purchaseAutomation.automationQuery.isInitialLoading
+                ? '正在读取采集状态'
+                : page.purchaseAutomation.runtime?.provider.configured
+                  ? 'ExchangeRate-API'
+                  : '供应商待配置'
             }}
           </small>
         </div>
@@ -210,9 +218,11 @@
         <p>各币种独立计算，不使用美元中转。</p>
         <span>
           {{
-            page.purchaseAutomation.runtime?.settings.autoEnabled
-              ? `下次自动更新：${page.formatDate(page.purchaseAutomation.runtime?.settings.nextRunAt)}`
-              : '自动更新已关闭'
+            page.purchaseAutomation.automationQuery.isInitialLoading
+              ? '正在读取自动更新计划'
+              : page.purchaseAutomation.runtime?.settings.autoEnabled
+                ? `下次自动更新：${page.formatDate(page.purchaseAutomation.runtime?.settings.nextRunAt)}`
+                : '自动更新已关闭'
           }}
           ·
           <a href="https://www.exchangerate-api.com" target="_blank" rel="noreferrer">

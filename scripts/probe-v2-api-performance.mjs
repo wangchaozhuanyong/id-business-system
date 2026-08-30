@@ -19,10 +19,12 @@ const probes = [
   '/id-business-v2/orders/bootstrap?page=1&pageSize=20&sortBy=openedAt&sortOrder=desc',
   '/id-business-v2/customers/bootstrap?page=1&pageSize=20&sortBy=sortOrder&sortOrder=asc',
   '/id-business-v2/accounts/bootstrap?page=1&pageSize=20&sortBy=sortOrder&sortOrder=asc',
-  '/id-business-v2/renewals/workbench/bootstrap?page=1&pageSize=20&sortBy=dueAt&sortOrder=asc'
+  '/id-business-v2/renewals/workbench/bootstrap?page=1&pageSize=20&sortBy=dueAt&sortOrder=asc',
+  '/id-business-v2/exchange-rates/bootstrap?runPage=1&runPageSize=10&recordPage=1&recordPageSize=20&manualPage=1&manualPageSize=20'
 ];
 
 let accessToken;
+const samplesByPath = new Map();
 try {
   const login = await request('/auth/login', {
     method: 'POST',
@@ -39,16 +41,32 @@ try {
       const result = await request(path, {
         accessToken
       });
+      const normalizedPath = path.split('?')[0];
+      const samples = samplesByPath.get(normalizedPath) ?? [];
+      samples.push(result.totalMs);
+      samplesByPath.set(normalizedPath, samples);
       console.log(
         JSON.stringify({
           round,
-          path: path.split('?')[0],
+          path: normalizedPath,
           status: result.status,
           totalMs: result.totalMs,
           serverTiming: result.serverTiming
         })
       );
     }
+  }
+  for (const [path, samples] of samplesByPath) {
+    console.log(
+      `[V2 API performance summary] ${JSON.stringify({
+        path,
+        samples: samples.length,
+        p50Ms: percentile(samples, 50),
+        p95Ms: percentile(samples, 95),
+        p99Ms: percentile(samples, 99),
+        maxMs: Math.max(...samples)
+      })}`
+    );
   }
 } finally {
   if (accessToken) {
@@ -57,6 +75,12 @@ try {
       accessToken
     }).catch(() => undefined);
   }
+}
+
+function percentile(samples, target) {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.max(0, Math.ceil((target / 100) * sorted.length) - 1);
+  return sorted[index];
 }
 
 function loadEnvFile(fileUrl) {

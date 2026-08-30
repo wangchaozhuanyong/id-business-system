@@ -22,6 +22,7 @@ function createController() {
     listMfaUsers: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
     listIpWhitelists: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 }),
     createIpWhitelistSafely: vi.fn().mockResolvedValue({ id: 'ip-whitelist-id' }),
+    removeIpWhitelistSafely: vi.fn().mockResolvedValue({ deleted: true }),
     revokeSession: vi.fn().mockResolvedValue({ id: 'session-id', revokedAt: new Date() })
   } as unknown as SecurityService;
 
@@ -87,12 +88,24 @@ describe('V2SecurityController', () => {
 
     await controller.updateMfaSettings(settings, operator);
     await controller.createIpWhitelist(whitelist, operator, '10.0.0.25');
+    await controller.removeIpWhitelist(
+      '44444444-4444-4444-8444-444444444444',
+      operator,
+      '10.0.0.25',
+      '2026-08-30T00:00:00.000Z'
+    );
 
     expect(securityService.updateMfaSettingsSafely).toHaveBeenCalledWith(settings, operator);
     expect(securityService.createIpWhitelistSafely).toHaveBeenCalledWith(
       whitelist,
       operator,
       '10.0.0.25'
+    );
+    expect(securityService.removeIpWhitelistSafely).toHaveBeenCalledWith(
+      '44444444-4444-4444-8444-444444444444',
+      operator,
+      '10.0.0.25',
+      '2026-08-30T00:00:00.000Z'
     );
   });
 });

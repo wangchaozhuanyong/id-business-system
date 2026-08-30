@@ -127,18 +127,23 @@ function createService() {
   const securityService = {
     invalidateActiveSessionCache: jest.fn()
   };
+  const changeEventPublisher = {
+    publishCommittedChangeBestEffort: jest.fn()
+  };
   return {
     service: new V2RolesService(
       prisma as never,
       auditLogsService as never,
       identityService as never,
-      securityService as never
+      securityService as never,
+      changeEventPublisher as never
     ),
     prisma,
     transaction,
     auditLogsService,
     identityService,
-    securityService
+    securityService,
+    changeEventPublisher
   };
 }
 
@@ -191,6 +196,10 @@ describe('V2RolesService', () => {
       }),
       fixture.transaction
     );
+    expect(fixture.changeEventPublisher.publishCommittedChangeBestEffort).toHaveBeenCalledWith([
+      'employees',
+      'security'
+    ]);
   });
 
   it('rejects a role without any permission', async () => {

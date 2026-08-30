@@ -187,6 +187,7 @@ application_updated=0
 current_switched=0
 deployment_succeeded=0
 retention_timer_changed=0
+performance_timer_changed=0
 
 restore_timers() {
   systemctl start id-business-v2-mysql-backup.timer >/dev/null 2>&1 || true
@@ -210,6 +211,26 @@ install_retention_timer() {
     /etc/systemd/system/id-business-v2-production-retention.timer
   systemctl daemon-reload
   systemctl enable --now id-business-v2-production-retention.timer
+}
+
+install_performance_timer() {
+  local service_source="${RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.service"
+  local timer_source="${RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.timer"
+  if [[ ! -f "$service_source" || ! -f "$timer_source" ||
+        ! -x "${RELEASE_DIRECTORY}/scripts/audit-aws-mysql-performance.sh" ]]; then
+    echo '发布制品缺少 MySQL 性能巡检脚本或 systemd 单元' >&2
+    return 1
+  fi
+  performance_timer_changed=1
+  install -m 0644 -o root -g root \
+    "$service_source" \
+    /etc/systemd/system/id-business-v2-mysql-performance.service
+  install -m 0644 -o root -g root \
+    "$timer_source" \
+    /etc/systemd/system/id-business-v2-mysql-performance.timer
+  systemctl daemon-reload
+  systemctl enable --now id-business-v2-mysql-performance.timer
+  systemctl start id-business-v2-mysql-performance.service
 }
 
 atomic_current_switch() {
@@ -265,6 +286,28 @@ cleanup() {
       rm -f -- \
         /etc/systemd/system/id-business-v2-production-retention.service \
         /etc/systemd/system/id-business-v2-production-retention.timer
+      systemctl daemon-reload >/dev/null 2>&1
+    fi
+    set -e
+  fi
+  if ((status != 0 && performance_timer_changed == 1)); then
+    set +e
+    if [[ -f "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.service" &&
+          -f "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.timer" &&
+          -x "${PREVIOUS_RELEASE_DIRECTORY}/scripts/audit-aws-mysql-performance.sh" ]]; then
+      install -m 0644 -o root -g root \
+        "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.service" \
+        /etc/systemd/system/id-business-v2-mysql-performance.service
+      install -m 0644 -o root -g root \
+        "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-mysql-performance.timer" \
+        /etc/systemd/system/id-business-v2-mysql-performance.timer
+      systemctl daemon-reload >/dev/null 2>&1
+      systemctl enable --now id-business-v2-mysql-performance.timer >/dev/null 2>&1
+    else
+      systemctl disable --now id-business-v2-mysql-performance.timer >/dev/null 2>&1
+      rm -f -- \
+        /etc/systemd/system/id-business-v2-mysql-performance.service \
+        /etc/systemd/system/id-business-v2-mysql-performance.timer
       systemctl daemon-reload >/dev/null 2>&1
     fi
     set -e
@@ -394,6 +437,14 @@ install_retention_timer
 if ! systemctl is-enabled --quiet id-business-v2-production-retention.timer ||
    ! systemctl is-active --quiet id-business-v2-production-retention.timer; then
   echo '生产保留策略定时器状态异常' >&2
+  exit 1
+fi
+
+install_performance_timer
+if ! systemctl is-enabled --quiet id-business-v2-mysql-performance.timer ||
+   ! systemctl is-active --quiet id-business-v2-mysql-performance.timer ||
+   [[ "$(systemctl show id-business-v2-mysql-performance.service --property=Result --value)" != success ]]; then
+  echo 'MySQL 性能巡检定时器或首次巡检状态异常' >&2
   exit 1
 fi
 

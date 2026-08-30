@@ -6,8 +6,10 @@ import {
   parseV2ChangeEvent
 } from './changeSyncPayload';
 import {
+  getV2StreamReconnectDelay,
   shouldReconcileV2OnForeground,
-  V2_DEGRADED_RECONCILE_INTERVAL_MS
+  V2_DEGRADED_RECONCILE_INTERVAL_MS,
+  V2_STREAM_STALE_TIMEOUT_MS
 } from './changeSyncPolicy';
 
 describe('V2 change sync runtime configuration', () => {
@@ -16,6 +18,10 @@ describe('V2 change sync runtime configuration', () => {
     expect(shouldReconcileV2OnForeground(null, 10_000)).toBe(true);
     expect(shouldReconcileV2OnForeground(6_000, 10_000)).toBe(false);
     expect(shouldReconcileV2OnForeground(5_000, 10_000)).toBe(true);
+    expect(V2_STREAM_STALE_TIMEOUT_MS).toBe(60_000);
+    expect([0, 1, 2, 3, 4, 99].map(getV2StreamReconnectDelay)).toEqual([
+      1_000, 2_000, 5_000, 10_000, 30_000, 30_000
+    ]);
   });
 });
 

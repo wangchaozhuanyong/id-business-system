@@ -5,6 +5,11 @@ import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query'
 import { navigateSafely } from '@/v2/router/navigateSafely';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
+  auditAccessReasonLabel,
+  auditActionLabel,
+  auditFieldLabel,
+  auditModuleLabel,
+  auditRemarkLabel,
   auditUserLabel,
   buildOperationAuditRestoreRouteQuery,
   exportOperationAuditRows,
@@ -320,6 +325,11 @@ export function useAuditLogsPage() {
     openSensitiveDetails,
     openRestoreFromOperationAudit,
     exportCurrent,
+    auditAccessReasonLabel,
+    auditActionLabel,
+    auditFieldLabel,
+    auditModuleLabel,
+    auditRemarkLabel,
     auditUserLabel,
     formatAuditDate,
     formatAuditJson,

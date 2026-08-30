@@ -73,6 +73,16 @@ export function useAccountLossesPage() {
   const listError = computed(() =>
     accountLossesQuery.error.value ? getApiErrorMessage(accountLossesQuery.error.value) : ''
   );
+  const activeFilterCount = computed(
+    () =>
+      [
+        query.keyword.trim(),
+        query.countryOptionId,
+        query.saleState,
+        query.status !== 'active' ? query.status || '全部记录' : '',
+        reportedRange.value.length ? '日期' : ''
+      ].filter(Boolean).length
+  );
   const { hasLoadedOnce, isInitialLoading } = accountLossesQuery;
   const accountLossRecovery = useAccountLossRecovery({
     refreshRecords: loadAccountLosses
@@ -146,6 +156,7 @@ export function useAccountLossesPage() {
     queryPhase: accountLossesQuery.phase,
     isParameterTransition: accountLossesQuery.isParameterTransition,
     countryOptions,
+    activeFilterCount,
     loading,
     listError,
     hasLoadedOnce,

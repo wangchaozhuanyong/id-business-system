@@ -1,5 +1,6 @@
 import type {
   V2BusinessMonitoringCategory,
+  V2BusinessMonitoringRule,
   V2BusinessMonitoringSeverity,
   V2BusinessMonitoringSummary
 } from './contracts';
@@ -32,6 +33,11 @@ export function businessMonitoringCategoryLabel(category: V2BusinessMonitoringCa
     finance: '财务基线'
   };
   return labels[category];
+}
+
+export function businessMonitoringRuleLabel(ruleKey: string, rules: V2BusinessMonitoringRule[]) {
+  const matchedRule = rules.find((rule) => rule.key === ruleKey);
+  return matchedRule?.title.trim() || '未配置的监控规则';
 }
 
 export function businessMonitoringCategoryBreakdown(summary: V2BusinessMonitoringSummary) {

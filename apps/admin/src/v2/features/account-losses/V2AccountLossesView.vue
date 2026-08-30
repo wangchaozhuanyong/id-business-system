@@ -1,71 +1,88 @@
 <template>
   <section class="v2-records-page v2-account-losses">
-    <section class="v2-records-toolbar v2-records-toolbar--accounts" aria-label="ID报损记录筛选">
-      <el-input
-        v-model="page.query.keyword"
-        clearable
-        placeholder="ID、订单、原因、操作人"
-        aria-label="搜索ID报损记录"
-        @keyup.enter="page.handleSearch"
-        @clear="page.handleSearch"
-      />
-      <el-select
-        v-model="page.query.countryOptionId"
-        clearable
-        placeholder="全部国家"
-        aria-label="筛选报损ID国家"
-        @change="page.handleFilterChange"
+    <section class="v2-account-loss-command-panel" aria-label="ID 报损记录筛选">
+      <V2SectionHeading
+        class="v2-account-loss-command-panel__heading"
+        title="报损档案筛选"
+        help="按账号、销售状态、记录状态和报损日期查找不可修改的损失快照。"
       >
-        <el-option
-          v-for="option in page.countryOptions"
-          :key="option.id"
-          :label="option.name"
-          :value="option.id"
+        <template #actions>
+          <span>当前共 {{ page.total }} 条</span>
+        </template>
+      </V2SectionHeading>
+
+      <div class="v2-account-loss-filter-grid">
+        <el-input
+          v-model="page.query.keyword"
+          class="v2-account-loss-filter-grid__search"
+          clearable
+          placeholder="ID、订单、原因、操作人"
+          aria-label="搜索 ID 报损记录"
+          @keyup.enter="page.handleSearch"
+          @clear="page.handleSearch"
         />
-      </el-select>
-      <el-select
-        v-model="page.query.saleState"
-        clearable
-        placeholder="全部销售状态"
-        aria-label="筛选报损ID销售状态"
-        @change="page.handleFilterChange"
-      >
-        <el-option label="报损时可用" value="available" />
-        <el-option label="报损时已卖出" value="sold" />
-      </el-select>
-      <el-select
-        v-model="page.query.status"
-        placeholder="记录状态"
-        aria-label="筛选报损记录状态"
-        @change="page.handleFilterChange"
-      >
-        <el-option label="待恢复" value="active" />
-        <el-option label="已恢复" value="reversed" />
-        <el-option label="全部记录" value="" />
-      </el-select>
-      <V2FilterDisclosure>
-        <el-date-picker
-          v-model="page.reportedRange"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="至"
-          start-placeholder="报损开始"
-          end-placeholder="报损结束"
-          aria-label="筛选报损日期"
+        <el-select
+          v-model="page.query.countryOptionId"
+          clearable
+          placeholder="全部国家"
+          aria-label="筛选报损 ID 国家"
           @change="page.handleFilterChange"
-        />
-      </V2FilterDisclosure>
-      <div class="v2-records-toolbar__actions">
-        <AppButton icon-only title="搜索" @click="page.handleSearch">
+        >
+          <el-option
+            v-for="option in page.countryOptions"
+            :key="option.id"
+            :label="option.name"
+            :value="option.id"
+          />
+        </el-select>
+        <el-select
+          v-model="page.query.saleState"
+          clearable
+          placeholder="全部销售状态"
+          aria-label="筛选报损 ID 销售状态"
+          @change="page.handleFilterChange"
+        >
+          <el-option label="报损时可用" value="available" />
+          <el-option label="报损时已卖出" value="sold" />
+        </el-select>
+        <el-select
+          v-model="page.query.status"
+          placeholder="记录状态"
+          aria-label="筛选报损记录状态"
+          @change="page.handleFilterChange"
+        >
+          <el-option label="待恢复" value="active" />
+          <el-option label="已恢复" value="reversed" />
+          <el-option label="全部记录" value="" />
+        </el-select>
+        <V2FilterDisclosure>
+          <el-date-picker
+            v-model="page.reportedRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="报损开始"
+            end-placeholder="报损结束"
+            aria-label="筛选报损日期"
+            @change="page.handleFilterChange"
+          />
+        </V2FilterDisclosure>
+        <AppButton variant="primary" @click="page.handleSearch">
           <el-icon><Search /></el-icon>
+          查询记录
         </AppButton>
-        <AppButton icon-only title="重置筛选" @click="page.resetFilters">
-          <el-icon><RefreshLeft /></el-icon>
-        </AppButton>
-        <AppButton icon-only title="刷新" :disabled="page.loading" @click="page.loadAccountLosses">
-          <el-icon><Refresh /></el-icon>
+        <AppButton v-if="page.activeFilterCount" variant="ghost" @click="page.resetFilters">
+          重置筛选
         </AppButton>
       </div>
+
+      <footer class="v2-account-loss-command-panel__footer">
+        <span>报损快照不可修改；恢复会保留原记录并写入审计。</span>
+        <AppButton variant="ghost" :disabled="page.loading" @click="page.loadAccountLosses">
+          <el-icon><Refresh /></el-icon>
+          刷新记录
+        </AppButton>
+      </footer>
     </section>
 
     <V2AsyncRegion
@@ -296,14 +313,16 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { reactive } from 'vue';
-import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
+import { Refresh, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FilterDisclosure from '@/v2/components/V2FilterDisclosure.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { operatorUsername } from '@/v2/utils/operator';
 import { useAccountLossesPage } from './useAccountLossesPage';
 import V2AccountLossRecoveryDialog from './V2AccountLossRecoveryDialog.vue';
 import '@/v2/styles/records.css';
+import '@/v2/styles/account-losses.css';
 
 const page = reactive(useAccountLossesPage());
 </script>

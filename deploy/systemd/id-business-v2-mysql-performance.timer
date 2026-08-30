@@ -1,0 +1,12 @@
+[Unit]
+Description=Frequent ID Business V2 MySQL connection and slow query audit
+
+[Timer]
+OnCalendar=*-*-* *:00/5:00
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=30s
+Unit=id-business-v2-mysql-performance.service
+
+[Install]
+WantedBy=timers.target

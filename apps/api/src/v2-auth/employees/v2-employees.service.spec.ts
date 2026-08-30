@@ -48,7 +48,8 @@ function createService() {
   const transaction = {
     user: {
       create: jest.fn(),
-      update: jest.fn()
+      update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 })
     },
     userRole: {
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -98,18 +99,23 @@ function createService() {
   const identityService = {
     invalidateAuthenticatedUser: jest.fn()
   };
+  const changeEventPublisher = {
+    publishCommittedChangeBestEffort: jest.fn()
+  };
   return {
     service: new V2EmployeesService(
       prisma as never,
       auditLogsService as never,
       securityService as never,
-      identityService as never
+      identityService as never,
+      changeEventPublisher as never
     ),
     prisma,
     transaction,
     auditLogsService,
     securityService,
-    identityService
+    identityService,
+    changeEventPublisher
   };
 }
 
@@ -153,6 +159,10 @@ describe('V2EmployeesService', () => {
     expect(JSON.stringify(auditInput)).not.toContain('encrypted-user-phone');
     expect(JSON.stringify(result)).not.toContain('password');
     expect(JSON.stringify(result)).not.toContain('encrypted-user-phone');
+    expect(fixture.changeEventPublisher.publishCommittedChangeBestEffort).toHaveBeenCalledWith([
+      'employees',
+      'security'
+    ]);
   });
 
   it('rejects creating an employee without a role', async () => {
@@ -204,8 +214,57 @@ describe('V2EmployeesService', () => {
     );
 
     await expect(
-      fixture.service.update(operator.id, { status: 'disabled' }, operator)
+      fixture.service.update(
+        operator.id,
+        {
+          expectedUpdatedAt: '2026-07-30T08:00:00.000Z',
+          status: 'disabled'
+        },
+        operator
+      )
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rejects a stale employee version before opening a write transaction', async () => {
+    const fixture = createService();
+    const existing = createEmployee();
+    fixture.prisma.user.findFirst.mockResolvedValue(existing);
+
+    await expect(
+      fixture.service.update(
+        existing.id,
+        {
+          expectedUpdatedAt: '2026-07-30T07:59:59.000Z',
+          displayName: '新的姓名'
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(fixture.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('claims the employee version before mutating sessions or role assignments', async () => {
+    const fixture = createService();
+    const existing = createEmployee();
+    fixture.prisma.user.findFirst.mockResolvedValue(existing);
+    fixture.transaction.user.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      fixture.service.update(
+        existing.id,
+        {
+          expectedUpdatedAt: existing.updatedAt.toISOString(),
+          displayName: '新的姓名'
+        },
+        operator
+      )
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(fixture.transaction.activeSession.updateMany).not.toHaveBeenCalled();
+    expect(fixture.transaction.userRole.deleteMany).not.toHaveBeenCalled();
+    expect(fixture.transaction.userRole.createMany).not.toHaveBeenCalled();
+    expect(fixture.auditLogsService.create).not.toHaveBeenCalled();
   });
 
   it('revokes sessions, disables the identity and writes an atomic audit record', async () => {
@@ -225,12 +284,24 @@ describe('V2EmployeesService', () => {
     const result = await fixture.service.update(
       existing.id,
       {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
         status: 'disabled'
       },
       operator
     );
 
     expect(result.status).toBe('disabled');
+    expect(fixture.transaction.user.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: existing.id,
+          updatedAt: existing.updatedAt
+        })
+      })
+    );
+    expect(fixture.transaction.user.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      fixture.transaction.activeSession.updateMany.mock.invocationCallOrder[0]!
+    );
     expect(fixture.transaction.activeSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -280,7 +351,14 @@ describe('V2EmployeesService', () => {
     fixture.prisma.role.findMany.mockResolvedValue([adminRole]);
     fixture.transaction.user.update.mockResolvedValue(updated);
 
-    await fixture.service.update(existing.id, { roleIds: [adminRole.id] }, operator);
+    await fixture.service.update(
+      existing.id,
+      {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
+        roleIds: [adminRole.id]
+      },
+      operator
+    );
 
     expect(fixture.transaction.activeSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -312,7 +390,10 @@ describe('V2EmployeesService', () => {
 
     await fixture.service.update(
       existing.id,
-      { roleIds: existing.userRoles.map((userRole) => userRole.roleId) },
+      {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
+        roleIds: existing.userRoles.map((userRole) => userRole.roleId)
+      },
       operator
     );
 

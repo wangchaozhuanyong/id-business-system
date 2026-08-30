@@ -8,6 +8,7 @@ describe('SecurityService', () => {
   const now = new Date('2026-06-18T00:00:00.000Z');
   const future = new Date('2099-06-25T00:00:00.000Z');
   const userId = '33333333-3333-4333-8333-333333333333';
+  const ipWhitelistId = '44444444-4444-4444-8444-444444444444';
   const mfaBase32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   const authenticatedUser = {
     id: userId,
@@ -83,7 +84,7 @@ describe('SecurityService', () => {
       }
     };
     const ipWhitelist = {
-      id: 'ip-whitelist-id',
+      id: ipWhitelistId,
       ipOrCidr: '127.0.0.1',
       scope: 'admin',
       enabled: true,
@@ -262,11 +263,20 @@ describe('SecurityService', () => {
         value ? createHash('sha256').update(value).digest('hex') : null
       )
     } as unknown as FieldEncryptionService;
+    const changeEventPublisher = {
+      publishCommittedChangeBestEffort: jest.fn()
+    };
 
     return {
-      service: new SecurityService(prisma, auditLogsService, fieldEncryptionService),
+      service: new SecurityService(
+        prisma,
+        auditLogsService,
+        fieldEncryptionService,
+        changeEventPublisher as never
+      ),
       prisma,
       auditLogsService,
+      changeEventPublisher,
       activeSession
     };
   }
@@ -1157,7 +1167,7 @@ describe('SecurityService', () => {
   });
 
   it('allows an IP whitelist mutation when the current request IP remains included', async () => {
-    const { service, prisma } = createService();
+    const { service, prisma, auditLogsService, changeEventPublisher } = createService();
 
     await service.createIpWhitelistSafely(
       {
@@ -1178,5 +1188,70 @@ describe('SecurityService', () => {
         })
       })
     );
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'security.ip_whitelist.create' }),
+      prisma
+    );
+    expect(changeEventPublisher.publishCommittedChangeBestEffort).toHaveBeenCalledWith([
+      'security'
+    ]);
+  });
+
+  it('rejects a stale IP whitelist edit before writing any changes', async () => {
+    const { service, prisma, auditLogsService, changeEventPublisher } = createService();
+
+    await expect(
+      service.updateIpWhitelistSafely(
+        ipWhitelistId,
+        {
+          expectedUpdatedAt: '2026-06-17T23:59:59.000Z',
+          ipOrCidr: '127.0.0.1',
+          scope: 'admin',
+          enabled: true,
+          remark: 'stale edit'
+        },
+        authenticatedUser,
+        '127.0.0.1'
+      )
+    ).rejects.toThrow('IP 白名单已被其他管理员更新，请刷新后重试。');
+
+    expect(prisma.ipWhitelist.update).not.toHaveBeenCalled();
+    expect(auditLogsService.create).not.toHaveBeenCalled();
+    expect(changeEventPublisher.publishCommittedChangeBestEffort).not.toHaveBeenCalled();
+  });
+
+  it('serializes and version-checks IP whitelist edits before committing audit and events', async () => {
+    const { service, prisma, auditLogsService, changeEventPublisher } = createService();
+
+    await service.updateIpWhitelistSafely(
+      ipWhitelistId,
+      {
+        expectedUpdatedAt: now.toISOString(),
+        ipOrCidr: '127.0.0.1',
+        scope: 'admin',
+        enabled: true,
+        remark: 'updated safely'
+      },
+      authenticatedUser,
+      '127.0.0.1'
+    );
+
+    expect(prisma.ipWhitelist.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: ipWhitelistId, updatedAt: now }
+      })
+    );
+    const transactionLockCalls =
+      (prisma.$queryRaw as jest.Mock).mock.calls.length +
+      (prisma.$executeRaw as jest.Mock).mock.calls.length;
+    expect(transactionLockCalls).toBeGreaterThan(0);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(auditLogsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'security.ip_whitelist.update' }),
+      prisma
+    );
+    expect(changeEventPublisher.publishCommittedChangeBestEffort).toHaveBeenCalledWith([
+      'security'
+    ]);
   });
 });

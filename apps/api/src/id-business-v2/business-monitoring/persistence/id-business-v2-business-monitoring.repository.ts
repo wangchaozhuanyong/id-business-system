@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { isMysqlRuntimeDatabase } from '../../../common/prisma/mysql-transaction-lock';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -60,7 +61,8 @@ export class IdBusinessV2BusinessMonitoringRepository {
     const filters = Prisma.sql`WHERE 1 = 1 ${severityFilter} ${categoryFilter}`;
 
     return Promise.all([
-      this.prisma.$queryRaw<BusinessMonitoringFindingRow[]>(Prisma.sql`
+      this.prisma.$queryRaw<BusinessMonitoringFindingRow[]>(
+        toRuntimeMonitoringSql(Prisma.sql`
         WITH "findings" AS (${findings})
         SELECT "id", "ruleKey", "category", "severity", "subject", "description",
           "detectedAt", "sourceType", "sourceId", "route"
@@ -68,17 +70,22 @@ export class IdBusinessV2BusinessMonitoringRepository {
         ${filters}
         ORDER BY "severityRank" ASC, "detectedAt" DESC, "id" ASC
         LIMIT ${input.take} OFFSET ${input.skip}
-      `),
-      this.prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+      `)
+      ),
+      this.prisma.$queryRaw<Array<{ count: bigint }>>(
+        toRuntimeMonitoringSql(Prisma.sql`
         WITH "findings" AS (${findings})
         SELECT COUNT(*) AS "count" FROM "findings" ${filters}
-      `),
-      this.prisma.$queryRaw<BusinessMonitoringSummaryRow[]>(Prisma.sql`
+      `)
+      ),
+      this.prisma.$queryRaw<BusinessMonitoringSummaryRow[]>(
+        toRuntimeMonitoringSql(Prisma.sql`
         WITH "findings" AS (${findings})
         SELECT "severity", "category", COUNT(*) AS "count"
         FROM "findings"
         GROUP BY "severity", "category"
       `)
+      )
     ]).then(([items, filteredCountRows, summaryRows]) => ({
       items,
       filteredCountRows,
@@ -292,4 +299,24 @@ export class IdBusinessV2BusinessMonitoringRepository {
       WHERE f."history_status" <> 'completed'
     `;
   }
+}
+
+export function toRuntimeMonitoringSql(query: Prisma.Sql): Prisma.Sql {
+  if (!isMysqlRuntimeDatabase()) return query;
+  const strings = query.strings.map((fragment) =>
+    fragment.replace(/"([A-Za-z_][A-Za-z0-9_]*)"/g, '$1')
+  ) as unknown as TemplateStringsArray;
+  const values = query.values.map((value) =>
+    isPrismaSql(value) ? toRuntimeMonitoringSql(value) : value
+  );
+  return Prisma.sql(strings, ...values);
+}
+
+function isPrismaSql(value: unknown): value is Prisma.Sql {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as Prisma.Sql).strings) &&
+    Array.isArray((value as Prisma.Sql).values)
+  );
 }

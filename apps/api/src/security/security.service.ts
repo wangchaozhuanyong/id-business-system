@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException
+} from '@nestjs/common';
 import type {
   ActiveSession,
   IpWhitelist,
@@ -20,6 +25,8 @@ import { FieldEncryptionService } from '../common/crypto/field-encryption.servic
 import { getPagination, type PaginationQuery } from '../common/pagination';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../common/prisma/mysql-transaction-lock';
+import { bumpV2ScopeVersions } from '../common/prisma/bump-v2-scope-versions';
+import { V2ChangeEventPublisher } from '../common/prisma/v2-change-event.publisher';
 
 const ACTIVE_SESSION_TOUCH_INTERVAL_MS = 60_000;
 const ACTIVE_TOKEN_CACHE_TTL_MS = 15_000;
@@ -111,6 +118,7 @@ export interface EnsureActiveSessionInput extends RequestMeta {
 }
 
 export interface SaveIpWhitelistInput {
+  expectedUpdatedAt?: string;
   ipOrCidr?: string;
   scope?: string;
   enabled?: boolean;
@@ -269,7 +277,8 @@ export class SecurityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
-    private readonly fieldEncryptionService: FieldEncryptionService
+    private readonly fieldEncryptionService: FieldEncryptionService,
+    private readonly changeEventPublisher: V2ChangeEventPublisher
   ) {}
 
   async overview() {
@@ -1419,11 +1428,43 @@ export class SecurityService {
       ipOrCidr: this.normalizeIpOrCidr(dto.ipOrCidr),
       enabled: dto.enabled ?? true
     };
-    const records = await this.prisma.ipWhitelist.findMany({
-      select: { id: true, ipOrCidr: true, enabled: true }
+    const scope = this.parseIpScope(dto.scope ?? 'admin', true);
+    const response = await this.prisma.$transaction(async (client) => {
+      await acquireMysqlTransactionLock(client, 'security:ip-whitelists');
+      const records = await client.ipWhitelist.findMany({
+        select: { id: true, ipOrCidr: true, enabled: true }
+      });
+      this.assertWhitelistMutationKeepsRequestIpAllowed([...records, candidate], requestIp);
+      const record = await client.ipWhitelist.create({
+        data: {
+          ipOrCidr: candidate.ipOrCidr,
+          scope,
+          enabled: candidate.enabled,
+          remark: this.normalizeNullableString(dto.remark),
+          createdByUserId: operator.id
+        },
+        include: this.getIpWhitelistInclude()
+      });
+      await this.auditLogsService.create(
+        {
+          userId: operator.id,
+          module: 'security',
+          action: 'security.ip_whitelist.create',
+          objectType: 'ip_whitelist',
+          objectId: record.id,
+          afterData: this.toAuditJson(this.toIpWhitelistResponse(record)),
+          remark: `Created IP whitelist ${record.ipOrCidr}`
+        },
+        client
+      );
+      await bumpV2ScopeVersions(client, ['security']);
+      return this.toIpWhitelistResponse(record);
     });
-    this.assertWhitelistMutationKeepsRequestIpAllowed([...records, candidate], requestIp);
-    return this.createIpWhitelist(dto, operator);
+
+    this.ipWhitelistCache.clear();
+    this.overviewCache.clear();
+    this.changeEventPublisher.publishCommittedChangeBestEffort(['security']);
+    return response;
   }
 
   private buildIpWhitelistOrderBy(
@@ -1479,22 +1520,68 @@ export class SecurityService {
     operator: AuthenticatedUser,
     requestIp?: string | null
   ) {
-    const record = await this.findIpWhitelistOrThrow(id);
-    const records = await this.prisma.ipWhitelist.findMany({
-      select: { id: true, ipOrCidr: true, enabled: true }
-    });
-    const nextRecords = records.map((item) =>
-      item.id === record.id
-        ? {
-            ...item,
-            ipOrCidr:
-              dto.ipOrCidr === undefined ? item.ipOrCidr : this.normalizeIpOrCidr(dto.ipOrCidr),
-            enabled: dto.enabled === undefined ? item.enabled : dto.enabled
-          }
-        : item
-    );
-    this.assertWhitelistMutationKeepsRequestIpAllowed(nextRecords, requestIp);
-    return this.updateIpWhitelist(record.id, dto, operator);
+    const normalizedId = this.normalizeRequiredUuid(id, 'id');
+    const expectedUpdatedAt = this.normalizeExpectedUpdatedAt(dto.expectedUpdatedAt, 'IP 白名单');
+    let response;
+    try {
+      response = await this.prisma.$transaction(async (client) => {
+        await acquireMysqlTransactionLock(client, 'security:ip-whitelists');
+        const record = await this.findIpWhitelistOrThrow(normalizedId, client);
+        if (record.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+          throw new ConflictException('IP 白名单已被其他管理员更新，请刷新后重试。');
+        }
+        const records = await client.ipWhitelist.findMany({
+          select: { id: true, ipOrCidr: true, enabled: true }
+        });
+        const nextRecords = records.map((item) =>
+          item.id === record.id
+            ? {
+                ...item,
+                ipOrCidr:
+                  dto.ipOrCidr === undefined ? item.ipOrCidr : this.normalizeIpOrCidr(dto.ipOrCidr),
+                enabled: dto.enabled === undefined ? item.enabled : dto.enabled
+              }
+            : item
+        );
+        this.assertWhitelistMutationKeepsRequestIpAllowed(nextRecords, requestIp);
+
+        const data: Prisma.IpWhitelistUpdateInput = {};
+        if (dto.ipOrCidr !== undefined) data.ipOrCidr = this.normalizeIpOrCidr(dto.ipOrCidr);
+        if (dto.scope !== undefined) data.scope = this.parseIpScope(dto.scope, true);
+        if (dto.enabled !== undefined) data.enabled = Boolean(dto.enabled);
+        if (dto.remark !== undefined) data.remark = this.normalizeNullableString(dto.remark);
+        const updated = await client.ipWhitelist.update({
+          where: { id: record.id, updatedAt: expectedUpdatedAt },
+          data,
+          include: this.getIpWhitelistInclude()
+        });
+        await this.auditLogsService.create(
+          {
+            userId: operator.id,
+            module: 'security',
+            action: 'security.ip_whitelist.update',
+            objectType: 'ip_whitelist',
+            objectId: record.id,
+            beforeData: this.toAuditJson(this.toIpWhitelistResponse(record)),
+            afterData: this.toAuditJson(this.toIpWhitelistResponse(updated)),
+            remark: `Updated IP whitelist ${updated.ipOrCidr}`
+          },
+          client
+        );
+        await bumpV2ScopeVersions(client, ['security']);
+        return this.toIpWhitelistResponse(updated);
+      });
+    } catch (error) {
+      if (this.isRecordNotFoundError(error)) {
+        throw new ConflictException('IP 白名单已被其他管理员更新，请刷新后重试。');
+      }
+      throw error;
+    }
+
+    this.ipWhitelistCache.clear();
+    this.overviewCache.clear();
+    this.changeEventPublisher.publishCommittedChangeBestEffort(['security']);
+    return response;
   }
 
   async removeIpWhitelist(id: string, operator?: AuthenticatedUser) {
@@ -1519,17 +1606,53 @@ export class SecurityService {
   async removeIpWhitelistSafely(
     id: string,
     operator: AuthenticatedUser,
-    requestIp?: string | null
+    requestIp?: string | null,
+    expectedUpdatedAtInput?: string
   ) {
-    const record = await this.findIpWhitelistOrThrow(id);
-    const records = await this.prisma.ipWhitelist.findMany({
-      select: { id: true, ipOrCidr: true, enabled: true }
-    });
-    this.assertWhitelistMutationKeepsRequestIpAllowed(
-      records.filter((item) => item.id !== record.id),
-      requestIp
-    );
-    return this.removeIpWhitelist(record.id, operator);
+    const normalizedId = this.normalizeRequiredUuid(id, 'id');
+    const expectedUpdatedAt = this.normalizeExpectedUpdatedAt(expectedUpdatedAtInput, 'IP 白名单');
+    try {
+      await this.prisma.$transaction(async (client) => {
+        await acquireMysqlTransactionLock(client, 'security:ip-whitelists');
+        const record = await this.findIpWhitelistOrThrow(normalizedId, client);
+        if (record.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+          throw new ConflictException('IP 白名单已被其他管理员更新，请刷新后重试。');
+        }
+        const records = await client.ipWhitelist.findMany({
+          select: { id: true, ipOrCidr: true, enabled: true }
+        });
+        this.assertWhitelistMutationKeepsRequestIpAllowed(
+          records.filter((item) => item.id !== record.id),
+          requestIp
+        );
+        await client.ipWhitelist.delete({
+          where: { id: record.id, updatedAt: expectedUpdatedAt }
+        });
+        await this.auditLogsService.create(
+          {
+            userId: operator.id,
+            module: 'security',
+            action: 'security.ip_whitelist.delete',
+            objectType: 'ip_whitelist',
+            objectId: record.id,
+            beforeData: this.toAuditJson(this.toIpWhitelistResponse(record)),
+            remark: `Deleted IP whitelist ${record.ipOrCidr}`
+          },
+          client
+        );
+        await bumpV2ScopeVersions(client, ['security']);
+      });
+    } catch (error) {
+      if (this.isRecordNotFoundError(error)) {
+        throw new ConflictException('IP 白名单已被其他管理员更新，请刷新后重试。');
+      }
+      throw error;
+    }
+
+    this.ipWhitelistCache.clear();
+    this.overviewCache.clear();
+    this.changeEventPublisher.publishCommittedChangeBestEffort(['security']);
+    return { deleted: true as const };
   }
 
   async listSensitiveAccessLogs(query: ListSensitiveAccessLogsQuery) {
@@ -2117,13 +2240,34 @@ export class SecurityService {
     };
   }
 
-  private async findIpWhitelistOrThrow(id: string) {
-    const record = await this.prisma.ipWhitelist.findUnique({
+  private async findIpWhitelistOrThrow(
+    id: string,
+    client: Pick<Prisma.TransactionClient, 'ipWhitelist'> = this.prisma
+  ) {
+    const record = await client.ipWhitelist.findUnique({
       where: { id: this.normalizeRequiredUuid(id, 'id') },
       include: this.getIpWhitelistInclude()
     });
     if (!record) throw new NotFoundException('IP whitelist not found');
     return record;
+  }
+
+  private normalizeExpectedUpdatedAt(value: string | undefined, label: string) {
+    const normalized = (value ?? '').trim();
+    const parsed = new Date(normalized);
+    if (!normalized || Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`${label}版本不正确，请刷新后重试。`);
+    }
+    return parsed;
+  }
+
+  private isRecordNotFoundError(error: unknown) {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'P2025'
+    );
   }
 
   private async findSensitiveApprovalOrThrow(id: string) {
