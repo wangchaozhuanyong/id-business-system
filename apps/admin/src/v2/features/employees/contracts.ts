@@ -59,6 +59,7 @@ export interface CreateV2EmployeeInput {
 }
 
 export interface UpdateV2EmployeeInput {
+  expectedUpdatedAt: string;
   displayName: string;
   status?: V2EmployeeStatus;
   roleIds?: string[];

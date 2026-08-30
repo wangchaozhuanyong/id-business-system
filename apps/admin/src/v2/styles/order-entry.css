@@ -465,9 +465,7 @@
 }
 
 .v2-order-entry-actions {
-  position: sticky;
-  z-index: 8;
-  bottom: 0;
+  position: static;
   display: grid;
   min-width: 0;
   grid-column: 1 / -1;
@@ -478,7 +476,7 @@
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
   background: var(--v2-surface);
-  box-shadow: 0 -10px 24px rgba(18, 32, 52, 0.1);
+  box-shadow: 0 14px 30px rgba(18, 32, 52, 0.08);
 }
 
 .v2-order-entry-action-status {
@@ -1166,12 +1164,10 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
   }
 
   .v2-order-entry-actions {
-    position: sticky;
-    bottom: 0;
-    z-index: 12;
+    position: static;
     grid-template-columns: 1fr;
     margin-inline: -1px;
-    box-shadow: 0 -10px 24px rgba(18, 32, 52, 0.14);
+    box-shadow: 0 14px 30px rgba(18, 32, 52, 0.1);
   }
 
   .v2-order-entry-action-metrics,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   businessMonitoringCategoryBreakdown,
   businessMonitoringCategoryLabel,
+  businessMonitoringRuleLabel,
   businessMonitoringSeverityMeta,
   formatBusinessMonitoringDate
 } from './business-monitoring-presentation';
@@ -20,6 +21,21 @@ describe('business monitoring presentation', () => {
     expect(formatBusinessMonitoringDate()).toBe('—');
     expect(formatBusinessMonitoringDate('invalid')).toBe('—');
     expect(formatBusinessMonitoringDate('2026-07-31T16:00:00.000Z')).not.toBe('—');
+  });
+
+  it('uses the configured Chinese rule title without exposing an unknown internal key', () => {
+    const rules = [
+      {
+        key: 'negative-balance',
+        category: 'balance' as const,
+        severity: 'critical' as const,
+        title: '负数余额检查',
+        description: '检查余额是否小于零'
+      }
+    ];
+
+    expect(businessMonitoringRuleLabel('negative-balance', rules)).toBe('负数余额检查');
+    expect(businessMonitoringRuleLabel('internal-rule-key', rules)).toBe('未配置的监控规则');
   });
 
   it('builds a stable, truthful category distribution', () => {

@@ -200,9 +200,10 @@ export class V2SecurityController {
   removeIpWhitelist(
     @Param('id') id: string,
     @CurrentUser() operator: AuthenticatedUser,
-    @TrustedClientIp() requestIp?: string
+    @TrustedClientIp() requestIp?: string,
+    @Query('expectedUpdatedAt') expectedUpdatedAt?: string
   ) {
-    return this.securityService.removeIpWhitelistSafely(id, operator, requestIp);
+    return this.securityService.removeIpWhitelistSafely(id, operator, requestIp, expectedUpdatedAt);
   }
 
   private getBearerToken(authorization?: string) {

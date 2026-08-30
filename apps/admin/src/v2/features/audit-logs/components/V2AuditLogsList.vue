@@ -60,12 +60,16 @@
           :definition="v2TableSchemas.auditLogs.operations.columns[1]"
           prop="module"
           sortable="custom"
-        />
+        >
+          <template #default="{ row }">{{ page.auditModuleLabel(row.module) }}</template>
+        </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.operations.columns[2]"
           prop="action"
           sortable="custom"
-        />
+        >
+          <template #default="{ row }">{{ page.auditActionLabel(row.action) }}</template>
+        </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.auditLogs.operations.columns[3]">
           <template #default="{ row }">{{ page.operationObjectLabel(row) }}</template>
         </V2TableColumn>
@@ -74,7 +78,9 @@
           prop="remark"
           show-overflow-tooltip
         >
-          <template #default="{ row }">{{ row.remark || '—' }}</template>
+          <template #default="{ row }">{{
+            page.auditRemarkLabel(row.remark, row.action)
+          }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.operations.columns[5]"
@@ -118,12 +124,16 @@
           :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[1]"
           prop="module"
           sortable="custom"
-        />
+        >
+          <template #default="{ row }">{{ page.auditModuleLabel(row.module) }}</template>
+        </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[2]"
           prop="fieldName"
           sortable="custom"
-        />
+        >
+          <template #default="{ row }">{{ page.auditFieldLabel(row.fieldName) }}</template>
+        </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[3]">
           <template #default="{ row }">{{ page.sensitiveObjectLabel(row) }}</template>
         </V2TableColumn>
@@ -143,7 +153,9 @@
           prop="accessReason"
           show-overflow-tooltip
         >
-          <template #default="{ row }">{{ row.accessReason || '—' }}</template>
+          <template #default="{ row }">{{
+            page.auditAccessReasonLabel(row.accessReason)
+          }}</template>
         </V2TableColumn>
         <V2TableColumn
           :definition="v2TableSchemas.auditLogs.sensitiveAccess.columns[6]"
@@ -171,7 +183,7 @@
           <header>
             <div>
               <strong>{{ page.auditUserLabel(item.user) }}</strong>
-              <span>{{ item.module }}</span>
+              <span>{{ page.auditModuleLabel(item.module) }}</span>
               <span>{{ page.formatAuditDate(item.createdAt) }}</span>
             </div>
             <el-tag
@@ -187,7 +199,7 @@
           <dl v-if="'action' in item">
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, 'action']">
               <dt>动作</dt>
-              <dd>{{ item.action }}</dd>
+              <dd>{{ page.auditActionLabel(item.action) }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.operations.id, '对象']">
               <dt>对象</dt>
@@ -198,7 +210,7 @@
               class="v2-audit-mobile-wide"
             >
               <dt>说明</dt>
-              <dd>{{ item.remark || '—' }}</dd>
+              <dd>{{ page.auditRemarkLabel(item.remark, item.action) }}</dd>
             </div>
           </dl>
           <dl v-else>
@@ -206,7 +218,7 @@
               v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, 'fieldName']"
             >
               <dt>敏感字段</dt>
-              <dd>{{ item.fieldName }}</dd>
+              <dd>{{ page.auditFieldLabel(item.fieldName) }}</dd>
             </div>
             <div v-v2-column-visibility="[v2TableSchemas.auditLogs.sensitiveAccess.id, '对象']">
               <dt>对象</dt>
@@ -217,7 +229,7 @@
               class="v2-audit-mobile-wide"
             >
               <dt>访问原因</dt>
-              <dd>{{ item.accessReason || '—' }}</dd>
+              <dd>{{ page.auditAccessReasonLabel(item.accessReason) }}</dd>
             </div>
           </dl>
           <AppButton

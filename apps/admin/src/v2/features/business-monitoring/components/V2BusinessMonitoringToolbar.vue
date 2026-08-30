@@ -59,7 +59,7 @@
         <el-icon aria-hidden="true"><InfoFilled /></el-icon>
         本页只展示当前异常；请进入源业务页面修正真实数据。
       </p>
-      <span>吉隆坡时区 · 30 秒再验证</span>
+      <span>中国标准时间 · 30 秒再验证</span>
     </footer>
   </section>
 </template>

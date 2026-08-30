@@ -7,6 +7,7 @@ import { v2BusinessMonitoringApi } from './api';
 import {
   businessMonitoringCategoryBreakdown,
   businessMonitoringCategoryLabel,
+  businessMonitoringRuleLabel,
   businessMonitoringSeverityMeta,
   formatBusinessMonitoringDate
 } from './business-monitoring-presentation';
@@ -140,6 +141,8 @@ export function useBusinessMonitoringPage() {
     applyCategory,
     selectFinding,
     businessMonitoringRowClassName,
+    businessMonitoringRuleLabel: (ruleKey: string) =>
+      businessMonitoringRuleLabel(ruleKey, rules.value),
     resetFilters,
     handlePageChange,
     handlePageSizeChange,

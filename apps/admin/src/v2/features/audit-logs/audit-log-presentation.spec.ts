@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  auditAccessReasonLabel,
+  auditActionLabel,
+  auditFieldLabel,
+  auditModuleLabel,
+  auditRemarkLabel,
   auditUserLabel,
   buildOperationAuditRestoreRouteQuery,
   formatAuditJson,
@@ -30,7 +35,27 @@ describe('audit log presentation', () => {
         objectId: 'order-1',
         createdAt: '2026-07-30T00:00:00.000Z'
       })
-    ).toBe('order / order-1');
+    ).toBe('订单 / order-1');
+  });
+
+  it('maps internal audit values to Chinese presentation labels', () => {
+    expect(auditModuleLabel('auth')).toBe('认证与登录');
+    expect(auditModuleLabel('unknown_internal_module')).toBe('其他业务模块');
+    expect(auditActionLabel('change_password_failed')).toBe('修改密码失败');
+    expect(auditActionLabel('id_business_v2.order.update')).toBe('订单 · 更新');
+    expect(auditActionLabel('unknown.action_value')).toBe('其他业务操作');
+    expect(auditFieldLabel('password')).toBe('密码');
+    expect(auditFieldLabel('internal_secret')).toBe('受保护字段');
+  });
+
+  it('translates known English notes and hides uncontrolled English-only values', () => {
+    expect(auditRemarkLabel('User logged in', 'login')).toBe('用户登录成功');
+    expect(auditRemarkLabel('Unknown internal message', 'employee.update')).toBe(
+      '已记录“更新员工账户”'
+    );
+    expect(auditRemarkLabel('人工核对完成', 'employee.update')).toBe('人工核对完成');
+    expect(auditAccessReasonLabel('customer verification')).toBe('已登记访问原因');
+    expect(auditAccessReasonLabel('客户核对')).toBe('客户核对');
   });
 
   it('only exposes restore entry points for supported soft-delete audit rows', () => {

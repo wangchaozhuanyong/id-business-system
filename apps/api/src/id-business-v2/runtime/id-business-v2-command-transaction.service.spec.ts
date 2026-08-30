@@ -6,6 +6,13 @@ import {
   isWriteConflictError
 } from './id-business-v2-prisma-error';
 
+function createManager(prisma: unknown) {
+  return new V2CommandTransactionManager(
+    prisma as never,
+    { publishCommittedChangeBestEffort: vi.fn() } as never
+  );
+}
+
 describe('V2CommandTransactionManager', () => {
   it('classifies Prisma errors structurally across runtimes', () => {
     const foreignRuntimeError = { name: 'PrismaClientKnownRequestError', code: 'P2002' };
@@ -20,7 +27,7 @@ describe('V2CommandTransactionManager', () => {
 
   it('does not retry a command by default and uses explicit serializable isolation', async () => {
     const prisma = { $transaction: vi.fn().mockRejectedValue({ code: 'P2034' }) };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     await expect(
       manager.execute(async () => 'created', {
@@ -39,7 +46,7 @@ describe('V2CommandTransactionManager', () => {
       idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 35 }) }
     };
     const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     await expect(
       manager.execute(async () => 'created', {
@@ -53,9 +60,49 @@ describe('V2CommandTransactionManager', () => {
     });
   });
 
+  it('publishes exact scopes only after the transaction commits', async () => {
+    const tx = {
+      idBusinessV2ScopeVersion: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) }
+    };
+    const publishCommittedChangeBestEffort = vi.fn();
+    const prisma = { $transaction: vi.fn(async (work) => work(tx)) };
+    const manager = new V2CommandTransactionManager(
+      prisma as never,
+      {
+        publishCommittedChangeBestEffort
+      } as never
+    );
+
+    await manager.execute(async () => 'saved', {
+      changedScopes: ['orders', 'orders'],
+      requestId: 'request-realtime'
+    });
+
+    expect(publishCommittedChangeBestEffort).toHaveBeenCalledWith(['orders']);
+  });
+
+  it('does not publish a change event when the transaction fails', async () => {
+    const publishCommittedChangeBestEffort = vi.fn();
+    const prisma = { $transaction: vi.fn().mockRejectedValue(new Error('transaction failed')) };
+    const manager = new V2CommandTransactionManager(
+      prisma as never,
+      {
+        publishCommittedChangeBestEffort
+      } as never
+    );
+
+    await expect(
+      manager.execute(async () => 'saved', {
+        changedScopes: ['orders'],
+        requestId: 'request-failed'
+      })
+    ).rejects.toThrow('transaction failed');
+    expect(publishCommittedChangeBestEffort).not.toHaveBeenCalled();
+  });
+
   it('rejects a command without a changed scope before opening a transaction', async () => {
     const prisma = { $transaction: vi.fn() };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     await expect(
       manager.execute(async () => 'created', {
@@ -74,7 +121,7 @@ describe('V2CommandTransactionManager', () => {
         .mockRejectedValueOnce({ code: 'P2034' })
         .mockImplementationOnce(async (work) => work({ marker: 'tx-2' }))
     };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
     const work = vi.fn(async (_tx, context) => context);
 
     const result = await manager.execute(work, {
@@ -105,7 +152,7 @@ describe('V2CommandTransactionManager', () => {
         .mockRejectedValueOnce({ code: 'P2010', meta: { code: '40001' } })
         .mockImplementationOnce(async (work) => work({ marker: 'tx-2' }))
     };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     await expect(
       manager.execute(async (_tx, context) => context.attempt, {
@@ -132,7 +179,7 @@ describe('V2CommandTransactionManager', () => {
         .mockImplementationOnce(async (work) => work(replayTx))
     };
     const replay = vi.fn(async (tx) => ({ tx, verified: true }));
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     const result = await manager.execute(async () => ({ tx: initialTx, verified: false }), {
       changedScopes: ['orders'],
@@ -157,7 +204,7 @@ describe('V2CommandTransactionManager', () => {
         .mockRejectedValueOnce({ code: 'P2002' })
         .mockImplementationOnce(async (work) => work({ marker: 'replay' }))
     };
-    const manager = new V2CommandTransactionManager(prisma as never);
+    const manager = createManager(prisma);
 
     await expect(
       manager.execute(async () => 'created', {

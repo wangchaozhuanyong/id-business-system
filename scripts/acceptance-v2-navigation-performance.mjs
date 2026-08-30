@@ -11,6 +11,7 @@ const RESOURCE_DELAY_MS = Number(process.env.V2_PERF_RESOURCE_DELAY_MS ?? 400);
 const API_DELAY_MS = Number(process.env.V2_PERF_API_DELAY_MS ?? 600);
 const ALLOW_REMOTE_PREVIEW = process.env.V2_PERF_ALLOW_REMOTE === 'true';
 const REPORT_METRICS = process.env.V2_PERF_REPORT_METRICS === 'true';
+const STATIC_ONLY = process.argv.includes('--static-only');
 const navigationMetrics = [];
 const ALL_V2_PATHS = [
   '/v2/workbench/renewals',
@@ -31,10 +32,12 @@ loadEnvFile(new URL('apps/api/.env', rootDir));
 
 checkSourceContracts();
 checkBuildBudgets();
-await checkBrowserRuntime();
+if (!STATIC_ONLY) await checkBrowserRuntime();
 
 console.log(
-  '[V2 navigation performance] PASSED: 同步外壳、意图预取、分阶段性能指标、Chunk 恢复、内容形状骨架、单一读取反馈、回访缓存、失败保留、状态连续性、桌面与移动端均符合验收要求'
+  STATIC_ONLY
+    ? '[V2 navigation performance] STATIC PASSED: 加载架构、查询缓存、实时失效和生产 bundle 预算符合验收要求'
+    : '[V2 navigation performance] PASSED: 同步外壳、意图预取、分阶段性能指标、Chunk 恢复、内容形状骨架、单一读取反馈、回访缓存、失败保留、状态连续性、桌面与移动端均符合验收要求'
 );
 
 function loadEnvFile(fileUrl) {
@@ -176,6 +179,8 @@ function checkSourceContracts() {
   ]) {
     assert.ok(app.includes(`'${stage}'`), `V2 Boot Gate 缺少 ${stage} 状态`);
   }
+  assert.doesNotMatch(app, /<ElConfigProvider/, '首屏仍同步加载 Element Plus 重型全局配置组件');
+  assert.match(app, /provide\(localeContextKey, elementLocale\)/, '轻量中文语言上下文缺失');
   assert.doesNotMatch(app, /currentRouteLoadError/, '路由错误仍触发 V2App 全屏遮罩');
   assert.match(appRuntimeError, /isApiError/, '应用错误边界没有识别结构化 API 错误');
   assert.match(appRuntimeError, /isNavigationFailure/, '应用错误边界没有识别结构化路由失败');
@@ -239,6 +244,14 @@ function checkSourceContracts() {
     /V2_DEGRADED_RECONCILE_INTERVAL_MS = 15_000/,
     '降级校验不是 15 秒'
   );
+  assert.match(changeSync, /\.streamEvents\(/, '实时数据没有使用服务端事件流');
+  assert.match(
+    changeSync,
+    /if \(!started \|\| streamConnected \|\| document\.visibilityState === 'hidden'\) return/,
+    '实时连接正常时仍会固定读取版本接口'
+  );
+  assert.match(changeSync, /scheduleStreamReconnect/, '实时连接缺少断线重连');
+  assert.doesNotMatch(changeSync, /setInterval\(/, '管理端不得固定轮询业务数据');
   assert.match(changeSync, /document\.visibilityState/, '版本补偿缺少标签页可见性处理');
   assert.match(changeSync, /window\.addEventListener\('online'/, '版本补偿缺少恢复联网处理');
   assert.doesNotMatch(
@@ -1403,6 +1416,27 @@ async function navigateAndMeasure(page, path) {
     codeToDataMs: settledSnapshot?.codeToDataMs ?? null,
     dataSource: settledSnapshot?.dataSource ?? null
   };
+  if (REPORT_METRICS && path === '/v2/exchange-rates') {
+    result.resourceTimings = await page.evaluate((targetPath) => {
+      const routeStart = [...performance.getEntriesByName('v2:route-start')]
+        .reverse()
+        .find((entry) => entry.detail?.path === targetPath);
+      if (!routeStart) return [];
+      return performance
+        .getEntriesByType('resource')
+        .filter(
+          (entry) =>
+            entry.startTime >= routeStart.startTime &&
+            (entry.name.includes('/assets/') || entry.name.includes('/api/'))
+        )
+        .map((entry) => ({
+          name: new URL(entry.name).pathname,
+          startMs: Math.round(entry.startTime - routeStart.startTime),
+          durationMs: Math.round(entry.duration),
+          endMs: Math.round(entry.responseEnd - routeStart.startTime)
+        }));
+    }, path);
+  }
   assert.ok(result.codeReadyMs !== null, `${path} 缺少路由代码就绪指标`);
   assert.ok(result.dataReadyMs !== null, `${path} 缺少业务数据就绪指标`);
   assert.ok(result.codeToDataMs !== null, `${path} 缺少代码到数据耗时指标`);

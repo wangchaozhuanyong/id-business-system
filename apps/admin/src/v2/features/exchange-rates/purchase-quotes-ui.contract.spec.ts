@@ -5,6 +5,7 @@ import drawer from './components/V2PurchaseQuoteDrawer.vue?raw';
 import editorState from './usePurchaseQuoteEditor.ts?raw';
 import automationDrawers from './components/V2PurchaseRateAutomationDrawers.vue?raw';
 import automationState from './usePurchaseRateAutomation.ts?raw';
+import pageState from './useExchangeRatesPage.ts?raw';
 
 describe('purchase quote UI contract', () => {
   it('adds a real purchase quote tab with separate market and purchase prices', () => {
@@ -18,6 +19,7 @@ describe('purchase quote UI contract', () => {
     expect(panel).toContain('报价状态');
     expect(panel).toContain('Rates By Exchange Rate API');
     expect(panel).toContain('下次自动更新');
+    expect(panel).toContain('正在读取自动更新计划');
     expect(panel).toContain('暂无收购报价');
     expect(panel).toContain('useV2StableListFrame');
     expect(panel).toContain("title: '部分收购报价已超过有效时限'");
@@ -57,5 +59,6 @@ describe('purchase quote UI contract', () => {
     expect(automationState).toContain('请至少选择一个币种');
     expect(automationState).toContain('navigator.clipboard.writeText');
     expect(automationState).toContain("document.execCommand('copy')");
+    expect(pageState).toContain("activeTab.value === 'purchase' && purchaseResolved.value");
   });
 });

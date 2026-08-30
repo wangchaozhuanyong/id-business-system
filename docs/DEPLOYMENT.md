@@ -29,6 +29,8 @@ API Dockerfile 提供两个独立目标：`runtime` 只保留生产依赖、Pris
 - 备份定时器：`deploy/systemd/id-business-v2-mysql-backup.*`
 - 发布制品与镜像保留脚本：`scripts/cleanup-aws-production-retention.sh`
 - 生产保留定时器：`deploy/systemd/id-business-v2-production-retention.*`
+- MySQL 性能巡检脚本：`scripts/audit-aws-mysql-performance.sh`
+- MySQL 性能巡检定时器：`deploy/systemd/id-business-v2-mysql-performance.*`
 
 真实 `.env.aws.production` 只能存放在服务器发布目录，禁止提交密码、Token、加密密钥或数据库 URL。
 
@@ -139,8 +141,9 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
     完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
     制品名称与 SHA-256、四个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
 11. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，执行一次发布后保留清理，并安装、启用
-    `id-business-v2-production-retention.timer`。同时核验备份服务、自动备份、每周恢复验证和每日
-    保留策略定时器均处于预期状态。任一检查失败，立即回切并重启上一已验证不可变制品。
+    `id-business-v2-production-retention.timer` 和每 5 分钟执行的
+    `id-business-v2-mysql-performance.timer`。同时核验备份服务、自动备份、每周恢复验证、每日
+    保留策略与首次性能巡检均处于预期状态。任一检查失败，立即回切并重启上一已验证不可变制品。
 12. 生产验证成功后删除已合并且不再使用的远程发布分支。
 
 ## 5. 数据库规则
@@ -188,6 +191,30 @@ sudo journalctl -u id-business-v2-production-retention.service -n 100 --no-pager
 
 任务与发布共用 `/opt/id-business-v2/.deploy.lock`；发布、备份或恢复验证正在执行时安全跳过或阻断。
 固定保留最近 5 个受控发布目录和 3 份不可变制品，同时无条件保护当前与上一已验证提交。
+
+## 8. MySQL 连接池与慢查询观测
+
+生产服务器每 5 分钟执行一次只读 `performance_schema` 摘要：
+
+```bash
+sudo systemctl start id-business-v2-mysql-performance.service
+sudo systemctl show id-business-v2-mysql-performance.service --property=Result --value
+sudo journalctl -u id-business-v2-mysql-performance.service -n 100 --no-pager
+```
+
+巡检记录当前连接数、历史连接峰值、运行线程、异常客户端增量，以及最近 10 分钟最慢在线业务 SQL
+的 digest、次数、平均/最大耗时、扫描行数和未使用索引次数。输出禁止包含 SQL 正文、业务参数、密码
+或数据库连接串；备份使用的 `SELECT SQL_NO_CACHE` 和 migration/系统查询不计入在线慢查询告警。
+
+默认停止阈值为连接使用率 70%、最近业务 SQL 最大 500 ms、5 分钟 `Aborted_clients` 增量 25。
+阈值可通过 `.env.aws.production` 中的以下可选变量收紧，但不得超过脚本的安全边界：
+
+```text
+MYSQL_PERFORMANCE_MAX_CONNECTION_USAGE_PCT=70
+MYSQL_PERFORMANCE_MAX_QUERY_MS=500
+MYSQL_PERFORMANCE_MAX_ABORTED_CLIENTS_DELTA=25
+```
+
 数据库 Docker volume、MySQL 备份、非本项目镜像及运行容器镜像不在清理范围。清理后可用空间低于
 8 GiB 时任务返回失败，下一次生产发布也会在上传前被阻断。
 

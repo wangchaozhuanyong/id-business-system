@@ -95,6 +95,13 @@
   white-space: nowrap;
 }
 
+.v2-employees-overview__actions .v2-overview-access-tag.el-tag {
+  --el-tag-bg-color: var(--v2-overview-surface);
+  --el-tag-border-color: var(--v2-overview-control-border);
+  --el-tag-text-color: var(--v2-overview-text);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
 .v2-employees-overview__actions .app-button--ghost.el-button {
   --el-button-text-color: var(--v2-overview-text);
   --el-button-border-color: var(--v2-overview-control-border);

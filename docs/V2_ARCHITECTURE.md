@@ -233,8 +233,9 @@ GET   /api/id-business-v2/renewals/warning-summary
   event-driven 缓存过期。
 - `V2DataScope` 和依赖映射只在 `@apple-business/shared` 定义。业务事务显式递增精确的
   scope version，不得把一次写入扩大为全部 scope。
-- 管理端在页面可见时每 15 秒调用 `GET /api/id-business-v2/change-versions`，只对版本变化的
-  scope 标 dirty 并刷新当前查询；恢复联网或页面回到前台时立即补验。
+- 管理端通过受 JWT 保护的 `GET /api/realtime/events` SSE 接收已提交的 scope/version，只对版本变化的
+  scope 标 dirty 并刷新当前查询；连接正常时不执行固定轮询。SSE 断开后才每 15 秒调用
+  `GET /api/id-business-v2/change-versions` 降级补偿，恢复联网或页面回到前台时立即补验。
 - 开通、续费、预警、汇率和订单匹配用 `revalidateAt` 表达没有数据库写入的时间语义变化。
 - 页面使用 `V2AsyncRegion` 统一首次加载、刷新、错误与空状态。
 - 路由指标区分 code ready 与 data ready。
@@ -250,10 +251,11 @@ GET   /api/id-business-v2/renewals/warning-summary
 ## 10. 变化同步与降级
 
 - 版本接口只返回 scope/version，不返回业务行或敏感字段。
+- SSE 事件同样只返回 scope/version；服务端心跳不读取业务表，JWT 不进入 URL。
 - 首次请求建立基线，不将所有 scope 误判为变化。
 - 已有内容刷新时保留最后成功内容，只显示区域进度。
-- 版本校验连续失败 3 次后显示一次降级提示，后台继续重试，不阻塞导航和当前操作。
-- 发布顺序为：部署 MySQL migration → 发布版本接口 → 发布管理端 → 执行登录与业务巡检。
+- SSE 断开后自动重连并启用版本补偿；连续失败 3 次后只显示一次降级提示，不阻塞导航和当前操作。
+- 发布顺序为：发布 API SSE → 发布管理端 → 执行登录、跨浏览器推送与断线恢复巡检。
 
 ## 11. 模块新增流程
 

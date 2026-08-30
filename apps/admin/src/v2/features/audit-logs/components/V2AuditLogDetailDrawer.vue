@@ -10,7 +10,7 @@
         heading-id="audit-operation-summary"
         eyebrow="审计对象"
         :title="operationObjectLabel(selectedOperation)"
-        :description="`${selectedOperation.module} / ${selectedOperation.action}`"
+        :description="`${auditModuleLabel(selectedOperation.module)} / ${auditActionLabel(selectedOperation.action)}`"
         :metrics="[
           { label: '操作人', value: auditUserLabel(selectedOperation.user) },
           { label: '记录时间', value: formatAuditDate(selectedOperation.createdAt) }
@@ -18,7 +18,10 @@
         :facts="[
           { label: '来源 IP', value: selectedOperation.ip || '—' },
           { label: '客户端', value: selectedOperation.userAgent || '—' },
-          { label: '操作说明', value: selectedOperation.remark || '—' }
+          {
+            label: '操作说明',
+            value: auditRemarkLabel(selectedOperation.remark, selectedOperation.action)
+          }
         ]"
       />
       <V2PanelSection heading-id="audit-operation-changes" title="变更内容" step="01">
@@ -39,7 +42,7 @@
       heading-id="audit-sensitive-summary"
       eyebrow="敏感访问对象"
       :title="sensitiveObjectLabel(selectedSensitiveAccess)"
-      :description="`${selectedSensitiveAccess.module} / ${selectedSensitiveAccess.fieldName}`"
+      :description="`${auditModuleLabel(selectedSensitiveAccess.module)} / ${auditFieldLabel(selectedSensitiveAccess.fieldName)}`"
       :metrics="[
         { label: '访问人', value: auditUserLabel(selectedSensitiveAccess.user) },
         { label: '审批状态', value: selectedSensitiveAccess.approved ? '已批准' : '未批准' }
@@ -47,7 +50,7 @@
       :facts="[
         { label: '访问时间', value: formatAuditDate(selectedSensitiveAccess.createdAt) },
         { label: '来源 IP', value: selectedSensitiveAccess.ip || '—' },
-        { label: '访问原因', value: selectedSensitiveAccess.accessReason || '—' },
+        { label: '访问原因', value: auditAccessReasonLabel(selectedSensitiveAccess.accessReason) },
         { label: '客户端', value: selectedSensitiveAccess.userAgent || '—' }
       ]"
     />
@@ -74,6 +77,11 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2DetailSummary from '@/v2/components/V2DetailSummary.vue';
 import V2PanelSection from '@/v2/components/V2PanelSection.vue';
 import {
+  auditAccessReasonLabel,
+  auditActionLabel,
+  auditFieldLabel,
+  auditModuleLabel,
+  auditRemarkLabel,
   auditUserLabel,
   formatAuditDate,
   formatAuditJson,

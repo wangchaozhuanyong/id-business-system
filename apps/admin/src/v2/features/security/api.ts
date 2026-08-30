@@ -83,7 +83,9 @@ export const v2SecurityApi = {
   updateIpWhitelist(id: string, input: V2SaveIpWhitelistInput) {
     return request<V2IpWhitelistRecord>(http.patch(`/v2/security/ip-whitelists/${id}`, input));
   },
-  removeIpWhitelist(id: string) {
-    return request<{ deleted: true }>(http.delete(`/v2/security/ip-whitelists/${id}`));
+  removeIpWhitelist(id: string, expectedUpdatedAt: string) {
+    return request<{ deleted: true }>(
+      http.delete(`/v2/security/ip-whitelists/${id}`, { params: { expectedUpdatedAt } })
+    );
   }
 };

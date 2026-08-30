@@ -1,0 +1,19 @@
+[Unit]
+Description=ID Business V2 MySQL connection and slow query audit
+Requires=docker.service
+After=docker.service
+ConditionPathIsSymbolicLink=/opt/id-business-v2/current
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+StateDirectory=id-business-v2-mysql-performance
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/opt/id-business-v2/current/scripts/audit-aws-mysql-performance.sh
+
+[Install]
+WantedBy=multi-user.target

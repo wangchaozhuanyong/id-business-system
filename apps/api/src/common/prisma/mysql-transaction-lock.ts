@@ -22,8 +22,8 @@ export async function acquireMysqlTransactionLock(client: TransactionLockClient,
 
   const normalizedKey = createHash('sha256').update(lockKey).digest('hex');
   await client.$executeRaw`
-    INSERT INTO "mysql_transaction_locks" ("lock_key", "updated_at")
+    INSERT INTO mysql_transaction_locks (lock_key, updated_at)
     VALUES (${normalizedKey}, UTC_TIMESTAMP(6))
-    ON DUPLICATE KEY UPDATE "updated_at" = VALUES("updated_at")
+    ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)
   `;
 }

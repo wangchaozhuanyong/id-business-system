@@ -24,7 +24,7 @@
           <V2DashboardMetricGrid
             variant="business"
             title="今日业务"
-            help="今日按马来西亚时区计算；完成数、收入和利润只包含当前仍为已完成状态的订单。"
+            help="今日按中国标准时间计算；完成数、收入和利润只包含当前仍为已完成状态的订单。"
             :items="page.businessMetrics"
             :page="page"
           />

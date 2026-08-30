@@ -1,49 +1,48 @@
 <template>
-  <ElConfigProvider :locale="elementLocale" :message="messageConfig">
-    <V2BootGate
-      v-if="bootStage !== 'ready'"
-      :state="bootStage"
-      :degraded-reason="hasBootRouteError ? 'route' : 'session'"
-      @retry="retryBoot"
-    />
-    <RouterView v-else v-slot="{ Component: RouteComponent }">
-      <component :is="RouteComponent" :key="runtimeEpoch" />
-    </RouterView>
-    <Transition name="app-route-error">
-      <div
-        v-if="currentRuntimeError && bootStage !== 'fatal'"
-        class="app-route-error"
-        role="alert"
-        aria-live="assertive"
-      >
-        <section class="app-route-error__panel">
-          <div class="app-route-error__copy">
-            <strong>页面运行时遇到问题</strong>
-            <p>{{ currentRuntimeError.message }}</p>
-            <small>参考编号：{{ currentRuntimeError.referenceId }}</small>
-          </div>
-          <div class="app-route-error__actions">
-            <button
-              class="app-route-error__button app-route-error__button--primary"
-              type="button"
-              @click="reloadApp"
-            >
-              重新加载
-            </button>
-            <button class="app-route-error__button" type="button" @click="dismissRuntimeError">
-              继续查看
-            </button>
-          </div>
-        </section>
-      </div>
-    </Transition>
-  </ElConfigProvider>
+  <V2BootGate
+    v-if="bootStage !== 'ready'"
+    :state="bootStage"
+    :degraded-reason="hasBootRouteError ? 'route' : 'session'"
+    @retry="retryBoot"
+  />
+  <RouterView v-else v-slot="{ Component: RouteComponent }">
+    <component :is="RouteComponent" :key="runtimeEpoch" />
+  </RouterView>
+  <Transition name="app-route-error">
+    <div
+      v-if="currentRuntimeError && bootStage !== 'fatal'"
+      class="app-route-error"
+      role="alert"
+      aria-live="assertive"
+    >
+      <section class="app-route-error__panel">
+        <div class="app-route-error__copy">
+          <strong>页面运行时遇到问题</strong>
+          <p>{{ currentRuntimeError.message }}</p>
+          <small>参考编号：{{ currentRuntimeError.referenceId }}</small>
+        </div>
+        <div class="app-route-error__actions">
+          <button
+            class="app-route-error__button app-route-error__button--primary"
+            type="button"
+            @click="reloadApp"
+          >
+            重新加载
+          </button>
+          <button class="app-route-error__button" type="button" @click="dismissRuntimeError">
+            继续查看
+          </button>
+        </div>
+      </section>
+    </div>
+  </Transition>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, shallowRef } from 'vue';
+import { computed, provide, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 import type { Language } from 'element-plus/es/locale/index.mjs';
+import { localeContextKey } from 'element-plus/es/hooks/use-locale/index.mjs';
 import { authIdentityEpoch } from '@/auth/sessionCoordinator';
 import { appRuntimeError, clearAppRuntimeError } from '@/runtime/appRuntimeError';
 import { useAuthStore } from '@/stores/auth';
@@ -54,6 +53,7 @@ import { setV2RouteNavigationState, v2RouteNavigationState } from '@/v2/router/r
 const router = useRouter();
 const authStore = useAuthStore();
 const elementLocale = shallowRef<Language>();
+provide(localeContextKey, elementLocale);
 const routerSettled = ref(false);
 const runtimeEpoch = authIdentityEpoch;
 const currentRuntimeError = computed(() => appRuntimeError.value);
@@ -91,15 +91,6 @@ const bootStage = computed<BootStage>(() => {
   }
   return 'ready';
 });
-const messageConfig = {
-  duration: 2600,
-  grouping: true,
-  max: 2,
-  offset: 16,
-  placement: 'top-right',
-  showClose: true
-};
-
 void import('element-plus/es/locale/lang/zh-cn.mjs').then(({ default: locale }) => {
   elementLocale.value = locale;
 });

@@ -239,6 +239,7 @@ export function useEmployeesPage() {
     try {
       if (current) {
         const input: UpdateV2EmployeeInput = {
+          expectedUpdatedAt: current.updatedAt,
           displayName: form.displayName.trim()
         };
         if (!isEditingSelf.value) {

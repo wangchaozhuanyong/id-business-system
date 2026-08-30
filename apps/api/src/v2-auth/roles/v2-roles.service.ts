@@ -15,6 +15,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2ChangeEventPublisher } from '../../common/prisma/v2-change-event.publisher';
 import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
 import {
@@ -124,7 +125,8 @@ export class V2RolesService {
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
     private readonly identityService: V2IdentityService,
-    private readonly securityService: SecurityService
+    private readonly securityService: SecurityService,
+    private readonly changeEventPublisher: V2ChangeEventPublisher
   ) {}
 
   async list(query: ListV2RolesQuery) {
@@ -247,6 +249,7 @@ export class V2RolesService {
         await bumpV2ScopeVersions(transaction, ['employees', 'security']);
         return created;
       });
+      this.changeEventPublisher.publishCommittedChangeBestEffort(['employees', 'security']);
       return this.toDetailResponse(role, []);
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -406,6 +409,7 @@ export class V2RolesService {
       throw error;
     }
 
+    this.changeEventPublisher.publishCommittedChangeBestEffort(['employees', 'security']);
     if (accessChanged) {
       for (const assignment of existing.userRoles) {
         this.identityService.invalidateAuthenticatedUser(assignment.userId);

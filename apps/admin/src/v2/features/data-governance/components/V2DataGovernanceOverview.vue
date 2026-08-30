@@ -30,7 +30,7 @@
     </div>
 
     <div class="v2-governance-overview-hero__actions">
-      <span>吉隆坡时区</span>
+      <span>中国标准时间</span>
       <el-tag :type="page.overview?.approvalReadiness.ready ? 'success' : 'warning'" effect="plain">
         {{ page.overview?.approvalReadiness.ready ? '审批条件就绪' : '审批条件待核验' }}
       </el-tag>

@@ -40,6 +40,8 @@ describe('security scheme 3 redesign contract', () => {
     expect(api).toContain('http.post(`/v2/security/sessions/${id}/revoke`)');
     expect(api).toContain("http.patch('/v2/security/mfa/settings', input)");
     expect(api).toContain("http.post('/v2/security/ip-whitelists', input)");
+    expect(policyState).toContain('expectedUpdatedAt: editingWhitelist.value.updatedAt');
+    expect(policyState).toContain('removeIpWhitelist(item.id, item.updatedAt)');
     expect(records).toContain('当前会话不能在此处强制下线');
     expect(policyState).toContain('仍包含当前请求 IP');
     expect(dialogs).toContain('恢复码只显示这一次');

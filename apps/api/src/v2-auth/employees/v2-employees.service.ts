@@ -13,6 +13,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { getPagination } from '../../common/pagination';
 import { bumpV2ScopeVersions } from '../../common/prisma/bump-v2-scope-versions';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { V2ChangeEventPublisher } from '../../common/prisma/v2-change-event.publisher';
 import { SecurityService } from '../../security/security.service';
 import { V2IdentityService } from '../v2-identity.service';
 import type {
@@ -74,7 +75,8 @@ export class V2EmployeesService {
     private readonly prisma: PrismaService,
     private readonly auditLogsService: AuditLogsService,
     private readonly securityService: SecurityService,
-    private readonly identityService: V2IdentityService
+    private readonly identityService: V2IdentityService,
+    private readonly changeEventPublisher: V2ChangeEventPublisher
   ) {}
 
   async list(query: ListV2EmployeesQuery) {
@@ -203,6 +205,7 @@ export class V2EmployeesService {
         await bumpV2ScopeVersions(transaction, ['employees', 'security']);
         return created;
       });
+      this.changeEventPublisher.publishCommittedChangeBestEffort(['employees', 'security']);
       return this.toResponse(employee);
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -215,6 +218,10 @@ export class V2EmployeesService {
   async update(idInput: string, dto: UpdateV2EmployeeDto, operator: AuthenticatedUser) {
     const id = this.normalizeUuid(idInput, '员工');
     const existing = await this.findEmployeeOrThrow(id);
+    const expectedUpdatedAt = this.normalizeExpectedUpdatedAt(dto.expectedUpdatedAt);
+    if (existing.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+      throw new ConflictException('员工资料已被其他管理员更新，请刷新列表后重试。');
+    }
     const displayName =
       dto.displayName === undefined
         ? undefined
@@ -235,75 +242,99 @@ export class V2EmployeesService {
       throw new ForbiddenException('不能修改自己的状态或角色。');
     }
 
-    const employee = await this.prisma.$transaction(async (transaction) => {
-      const revokedAt = new Date();
-      let revokedSessionCount = 0;
-      if (status === 'disabled' || rolesChanged) {
-        const revoked = await transaction.activeSession.updateMany({
+    let employee: EmployeeRecord;
+    try {
+      employee = await this.prisma.$transaction(async (transaction) => {
+        const claimedAt = new Date();
+        const claimed = await transaction.user.updateMany({
           where: {
-            userId: existing.id,
-            revokedAt: null
+            id: existing.id,
+            deletedAt: null,
+            updatedAt: expectedUpdatedAt
           },
           data: {
-            revokedAt
+            updatedAt: claimedAt
           }
         });
-        revokedSessionCount = revoked.count;
-      }
-      if (rolesChanged) {
-        await transaction.userRole.deleteMany({
-          where: {
-            userId: existing.id
-          }
-        });
-        await transaction.userRole.createMany({
-          data: roles.map((role) => ({
-            userId: existing.id,
-            roleId: role.id
-          }))
-        });
-      }
-      if (status !== undefined) {
-        await transaction.v2AuthIdentity.updateMany({
-          where: {
-            userId: existing.id
-          },
-          data: {
-            enabled: status === 'active'
-          }
-        });
-      }
-      const updated = await transaction.user.update({
-        where: {
-          id: existing.id
-        },
-        data: {
-          displayName,
-          status
-        },
-        include: EMPLOYEE_INCLUDE
-      });
-      await this.auditLogsService.create(
-        {
-          userId: operator.id,
-          module: 'employees',
-          action: 'employee.update',
-          objectType: 'user',
-          objectId: updated.id,
-          beforeData: this.toAuditData(existing),
-          afterData: {
-            ...this.toAuditData(updated),
-            rolesChanged,
-            revokedSessionCount
-          },
-          remark: `管理员更新员工账号：${updated.username}`
-        },
-        transaction
-      );
-      await bumpV2ScopeVersions(transaction, ['employees', 'security']);
-      return updated;
-    });
+        if (claimed.count !== 1) {
+          throw new ConflictException('员工资料已被其他管理员更新，请刷新列表后重试。');
+        }
 
+        const revokedAt = new Date();
+        let revokedSessionCount = 0;
+        if (status === 'disabled' || rolesChanged) {
+          const revoked = await transaction.activeSession.updateMany({
+            where: {
+              userId: existing.id,
+              revokedAt: null
+            },
+            data: {
+              revokedAt
+            }
+          });
+          revokedSessionCount = revoked.count;
+        }
+        if (rolesChanged) {
+          await transaction.userRole.deleteMany({
+            where: {
+              userId: existing.id
+            }
+          });
+          await transaction.userRole.createMany({
+            data: roles.map((role) => ({
+              userId: existing.id,
+              roleId: role.id
+            }))
+          });
+        }
+        if (status !== undefined) {
+          await transaction.v2AuthIdentity.updateMany({
+            where: {
+              userId: existing.id
+            },
+            data: {
+              enabled: status === 'active'
+            }
+          });
+        }
+        const updated = await transaction.user.update({
+          where: {
+            id: existing.id
+          },
+          data: {
+            displayName,
+            status
+          },
+          include: EMPLOYEE_INCLUDE
+        });
+        await this.auditLogsService.create(
+          {
+            userId: operator.id,
+            module: 'employees',
+            action: 'employee.update',
+            objectType: 'user',
+            objectId: updated.id,
+            beforeData: this.toAuditData(existing),
+            afterData: {
+              ...this.toAuditData(updated),
+              rolesChanged,
+              revokedSessionCount
+            },
+            remark: `管理员更新员工账号：${updated.username}`
+          },
+          transaction
+        );
+        await bumpV2ScopeVersions(transaction, ['employees', 'security']);
+        return updated;
+      });
+    } catch (error) {
+      if (this.isTransactionConflict(error)) {
+        throw new ConflictException('员工资料已被其他管理员更新，请刷新列表后重试。');
+      }
+      throw error;
+    }
+
+    this.changeEventPublisher.publishCommittedChangeBestEffort(['employees', 'security']);
     this.identityService.invalidateAuthenticatedUser(existing.id);
     this.securityService.invalidateActiveSessionCache();
     return this.toResponse(employee);
@@ -406,6 +437,15 @@ export class V2EmployeesService {
     return normalized || undefined;
   }
 
+  private normalizeExpectedUpdatedAt(value: string | undefined) {
+    const normalized = (value ?? '').trim();
+    const parsed = new Date(normalized);
+    if (!normalized || Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('员工资料版本不正确，请刷新列表后重试。');
+    }
+    return parsed;
+  }
+
   private normalizeUuid(value: string, label: string) {
     const normalized = value.trim();
     if (
@@ -469,6 +509,17 @@ export class V2EmployeesService {
       error !== null &&
       'code' in error &&
       (error as { code?: string }).code === 'P2002'
+    );
+  }
+
+  private isTransactionConflict(error: unknown) {
+    if (error instanceof ConflictException) return true;
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      ((error as { code?: string }).code === 'P2025' ||
+        (error as { code?: string }).code === 'P2034')
     );
   }
 }

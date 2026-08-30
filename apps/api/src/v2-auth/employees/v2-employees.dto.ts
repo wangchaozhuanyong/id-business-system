@@ -16,6 +16,7 @@ export interface CreateV2EmployeeDto {
 }
 
 export interface UpdateV2EmployeeDto {
+  expectedUpdatedAt?: string;
   displayName?: string;
   status?: string;
   roleIds?: string[];

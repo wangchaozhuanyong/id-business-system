@@ -9,7 +9,7 @@
       <span class="v2-dashboard-overview__eyebrow">经营控制台</span>
       <h2>经营状态总览</h2>
       <p>
-        业务日 {{ page.overview.businessDate }} · 吉隆坡时区<br />
+        业务日 {{ page.overview.businessDate }} · 中国标准时间<br />
         权限外数据明确显示为“无权限”，不使用 0 代替。
       </p>
     </div>

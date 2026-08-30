@@ -1,7 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2BusinessMonitoringService } from './id-business-v2-business-monitoring.service';
 import { IdBusinessV2BusinessMonitoringRepository } from './persistence/id-business-v2-business-monitoring.repository';
+
+const originalDatabaseUrl = process.env.DATABASE_URL;
+
+beforeEach(() => {
+  process.env.DATABASE_URL = 'postgresql://app:password@postgres:5432/id_business_v2';
+});
+
+afterEach(() => {
+  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = originalDatabaseUrl;
+});
 
 function createPrismaMock() {
   return {
@@ -120,5 +131,20 @@ describe('IdBusinessV2BusinessMonitoringService', () => {
     expect(secondListSql.values).toContainEqual(new Date('2027-07-31T00:00:00.000Z'));
     expect(firstListSql.values).not.toContain(null);
     expect(secondListSql.values).not.toContain(null);
+  });
+
+  it('removes PostgreSQL identifier quotes for the MySQL runtime', async () => {
+    process.env.DATABASE_URL = 'mysql://app:password@mysql:3306/id_business_v2';
+    const prisma = createPrismaMock();
+    prisma.$queryRaw.mockResolvedValue([]);
+    const service = createService(prisma);
+
+    await service.list({}, new Date('2026-07-31T00:00:00.000Z'));
+
+    const listSql = prisma.$queryRaw.mock.calls[0]?.[0] as { strings?: readonly string[] };
+    const listSource = listSql.strings?.join(' ') ?? '';
+    expect(listSource).toContain('WITH findings AS');
+    expect(listSource).toContain('FROM id_business_v2_orders');
+    expect(listSource).not.toContain('"');
   });
 });
