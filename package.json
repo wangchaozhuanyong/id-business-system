@@ -55,7 +55,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test:release-scripts && npm run test --workspaces --if-present",
-    "test:release-scripts": "node --test scripts/aws-mysql-backup.test.mjs scripts/container-hardening.test.mjs scripts/development-data-cleanup.test.mjs scripts/production-database-access.test.mjs scripts/production-release-artifact.test.mjs scripts/trusted-proxy-config.test.mjs scripts/user-phone-encryption.test.mjs scripts/v2-data-integrity-audit.test.mjs",
+    "test:release-scripts": "node --test scripts/aws-mysql-backup.test.mjs scripts/container-hardening.test.mjs scripts/development-data-cleanup.test.mjs scripts/production-database-access.test.mjs scripts/production-release-artifact.test.mjs scripts/production-retention.test.mjs scripts/trusted-proxy-config.test.mjs scripts/user-phone-encryption.test.mjs scripts/v2-data-integrity-audit.test.mjs",
     "audit:high": "npm audit --omit=dev --audit-level=high",
     "audit:all": "npm audit --audit-level=high",
     "prisma:generate": "npm run prisma:generate --workspace @apple-business/api",

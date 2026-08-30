@@ -103,7 +103,10 @@ if [[ "${DEPLOY_LOCK_HELD:-0}" != 1 ]] && ! flock -n 9; then
   exit 1
 fi
 
-for service in id-business-v2-mysql-backup.service id-business-v2-mysql-backup-verify.service; do
+for service in \
+  id-business-v2-mysql-backup.service \
+  id-business-v2-mysql-backup-verify.service \
+  id-business-v2-production-retention.service; do
   if systemctl is-active --quiet "$service"; then
     echo "生产维护任务正在执行：${service}" >&2
     exit 1
@@ -183,10 +186,30 @@ timers_stopped=0
 application_updated=0
 current_switched=0
 deployment_succeeded=0
+retention_timer_changed=0
 
 restore_timers() {
   systemctl start id-business-v2-mysql-backup.timer >/dev/null 2>&1 || true
   systemctl start id-business-v2-mysql-backup-verify.timer >/dev/null 2>&1 || true
+}
+
+install_retention_timer() {
+  local service_source="${RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.service"
+  local timer_source="${RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.timer"
+  if [[ ! -f "$service_source" || ! -f "$timer_source" ||
+        ! -x "${RELEASE_DIRECTORY}/scripts/cleanup-aws-production-retention.sh" ]]; then
+    echo '发布制品缺少生产保留策略或 systemd 单元' >&2
+    return 1
+  fi
+  retention_timer_changed=1
+  install -m 0644 -o root -g root \
+    "$service_source" \
+    /etc/systemd/system/id-business-v2-production-retention.service
+  install -m 0644 -o root -g root \
+    "$timer_source" \
+    /etc/systemd/system/id-business-v2-production-retention.timer
+  systemctl daemon-reload
+  systemctl enable --now id-business-v2-production-retention.timer
 }
 
 atomic_current_switch() {
@@ -223,6 +246,28 @@ cleanup() {
   fi
   if ((timers_stopped == 1)); then
     restore_timers
+  fi
+  if ((status != 0 && retention_timer_changed == 1)); then
+    set +e
+    if [[ -x "${PREVIOUS_RELEASE_DIRECTORY}/scripts/cleanup-aws-production-retention.sh" &&
+          -f "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.service" &&
+          -f "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.timer" ]]; then
+      install -m 0644 -o root -g root \
+        "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.service" \
+        /etc/systemd/system/id-business-v2-production-retention.service
+      install -m 0644 -o root -g root \
+        "${PREVIOUS_RELEASE_DIRECTORY}/deploy/systemd/id-business-v2-production-retention.timer" \
+        /etc/systemd/system/id-business-v2-production-retention.timer
+      systemctl daemon-reload >/dev/null 2>&1
+      systemctl enable --now id-business-v2-production-retention.timer >/dev/null 2>&1
+    else
+      systemctl disable --now id-business-v2-production-retention.timer >/dev/null 2>&1
+      rm -f -- \
+        /etc/systemd/system/id-business-v2-production-retention.service \
+        /etc/systemd/system/id-business-v2-production-retention.timer
+      systemctl daemon-reload >/dev/null 2>&1
+    fi
+    set -e
   fi
   if ((deployment_succeeded == 1)); then
     echo "生产发布完成：${RELEASE_TAG} ${RELEASE_COMMIT}"
@@ -340,6 +385,17 @@ fi
 for service in mysql api admin caddy; do
   wait_for_service "$service"
 done
+
+echo '执行发布后制品与镜像保留策略'
+DEPLOY_LOCK_HELD=1 \
+  bash "${RELEASE_DIRECTORY}/scripts/cleanup-aws-production-retention.sh" --post-deploy
+
+install_retention_timer
+if ! systemctl is-enabled --quiet id-business-v2-production-retention.timer ||
+   ! systemctl is-active --quiet id-business-v2-production-retention.timer; then
+  echo '生产保留策略定时器状态异常' >&2
+  exit 1
+fi
 
 chmod -R go-w "$RELEASE_DIRECTORY"
 chmod 600 "$environment_file" "${RELEASE_DIRECTORY}/release-manifest.json"
