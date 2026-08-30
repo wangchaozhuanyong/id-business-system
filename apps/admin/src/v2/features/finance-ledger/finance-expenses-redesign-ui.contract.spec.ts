@@ -8,6 +8,7 @@ import expenses from './components/V2FinanceExpensesTable.vue?raw';
 import inflows from './components/V2FinanceInflowsTable.vue?raw';
 import overview from './components/V2FinanceExpensesOverview.vue?raw';
 import toolbar from './components/V2FinanceExpensesToolbar.vue?raw';
+import cashbookNavigation from './components/V2FinanceCashbookNavigation.vue?raw';
 
 describe('finance expenses scheme 3 redesign contract', () => {
   it('composes the income and expense overview, switch, filters, stable lists and drawers', () => {
@@ -58,6 +59,15 @@ describe('finance expenses scheme 3 redesign contract', () => {
     expect(expenses).toContain('共 {{ page.expenseTotal }} 条');
     expect(inflows).toContain('useV2StableListFrame');
     expect(inflows).toContain('共 {{ page.inflowTotal }} 条');
+  });
+
+  it('keeps income and expense navigation visibly distinct and exposes its selected state', () => {
+    expect(cashbookNavigation).toContain('class="v2-finance-cashbook-navigation__icon"');
+    expect(cashbookNavigation).toContain('<BottomLeft />');
+    expect(cashbookNavigation).toContain('<TopRight />');
+    expect(cashbookNavigation).toContain(':aria-pressed="page.cashbookView === \'inflows\'"');
+    expect(cashbookNavigation).toContain(':aria-pressed="page.cashbookView === \'expenses\'"');
+    expect(cashbookNavigation).toContain('class="v2-finance-cashbook-navigation__count"');
   });
 
   it('does not convert business amounts to floating-point values in the redesign layer', () => {
