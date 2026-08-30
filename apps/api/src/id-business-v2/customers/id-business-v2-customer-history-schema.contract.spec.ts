@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const schema = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+const schema = readFileSync(resolve(process.cwd(), 'prisma-mysql/schema.prisma'), 'utf8');
 const migration = readFileSync(
   resolve(
     process.cwd(),

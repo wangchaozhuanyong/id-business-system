@@ -69,13 +69,13 @@
                       />
                     </el-select>
                   </el-form-item>
-
                   <el-form-item label="业务名称" prop="serviceOptionId">
                     <el-select
                       v-model="form.serviceOptionId"
                       filterable
                       :disabled="!form.categoryId"
                       placeholder="选择业务"
+                      :title="selectedService?.name || undefined"
                     >
                       <el-option
                         v-for="service in availableServices"
@@ -107,7 +107,6 @@
                     </div>
                   </el-form-item>
                 </div>
-
                 <div class="v2-order-entry-form-column">
                   <el-form-item label="业务分类" prop="categoryId">
                     <el-select
@@ -195,6 +194,7 @@
                       maxlength="255"
                       autocomplete="off"
                       placeholder="选填"
+                      :title="form.websiteAccount || undefined"
                     />
                   </el-form-item>
 

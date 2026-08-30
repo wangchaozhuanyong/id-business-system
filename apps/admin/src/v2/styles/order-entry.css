@@ -721,12 +721,11 @@
 .v2-order-entry-selected-id p {
   min-width: 0;
   margin: 0;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--v2-order-summary-text);
   font-size: 13px;
   font-weight: var(--v3-font-weight-bold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
 }
 
 .v2-order-entry-live-summary > div {
@@ -1167,8 +1166,12 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
   }
 
   .v2-order-entry-actions {
-    position: static;
+    position: sticky;
+    bottom: 0;
+    z-index: 12;
     grid-template-columns: 1fr;
+    margin-inline: -1px;
+    box-shadow: 0 -10px 24px rgba(18, 32, 52, 0.14);
   }
 
   .v2-order-entry-action-metrics,
@@ -1246,21 +1249,47 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
 
   .v2-order-entry-actions {
     display: grid;
-    padding: 12px 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(132px, auto);
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   }
 
   .v2-order-entry-action-metrics {
+    grid-column: 1;
+    grid-row: 1;
     grid-template-columns: 1fr;
-    gap: 7px;
+    gap: 0;
   }
 
   .v2-order-entry-action-metrics > div {
-    grid-template-columns: 96px minmax(0, 1fr);
+    display: none;
+  }
+
+  .v2-order-entry-action-metrics > div.is-profit {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .v2-order-entry-action-metrics .is-profit dd {
+    min-width: 0;
+    font-size: 16px;
+    text-align: right;
   }
 
   .v2-order-entry-action-buttons {
+    grid-column: 2;
+    grid-row: 1;
+    display: grid;
+    min-width: 0;
+    gap: 4px;
     align-items: stretch;
-    flex-direction: column;
+  }
+
+  .v2-order-entry-draft-state {
+    display: none;
   }
 
   .v2-submit-disabled-reason {
@@ -1271,6 +1300,10 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
   .v2-order-entry-actions .app-button,
   .v2-order-entry-result .app-button {
     width: 100%;
+  }
+
+  .v2-order-entry-actions .app-button {
+    min-width: 0;
   }
 
   .v2-order-entry-candidate .el-radio__label {

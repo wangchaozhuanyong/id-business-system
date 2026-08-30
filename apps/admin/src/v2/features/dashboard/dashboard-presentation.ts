@@ -65,7 +65,30 @@ export function financeHistoryLabel(
   return '无财务查看权限';
 }
 
+const AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = {
+  order_update: '更新订单',
+  'id_business_v2.order.update': '更新订单',
+  order_complete: '确认开通',
+  'id_business_v2.order.complete': '确认开通',
+  order_create_pending: '创建订单',
+  'id_business_v2.order.create_pending': '创建订单',
+  order_consume_balance: '扣减余额',
+  'id_business_v2.order.consume_balance': '扣减余额',
+  renewal_confirm: '确认续费',
+  'id_business_v2.renewal.manual.complete': '确认续费',
+  account_update: '更新 ID',
+  'id_business_v2.account.update': '更新 ID',
+  customer_create: '创建客户',
+  'id_business_v2.customer.create': '创建客户',
+  customer_update: '更新客户',
+  'id_business_v2.customer.update': '更新客户',
+  exchange_rate_update: '更新汇率',
+  'id_business_v2.exchange_rate.manual.create': '录入汇率',
+  'id_business_v2.exchange_rate.manual.fx_rate.create': '录入汇率',
+  'id_business_v2.exchange_rate.settings.update': '更新汇率设置'
+};
+
 export function auditActionLabel(action: string) {
-  const normalized = action.trim().replaceAll('_', ' ');
-  return normalized || '未知操作';
+  const normalized = action.trim();
+  return AUDIT_ACTION_LABELS[normalized] || '其他操作';
 }

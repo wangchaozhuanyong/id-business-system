@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const apiRoot = resolve(process.cwd());
-const schema = readFileSync(resolve(apiRoot, 'prisma/schema.prisma'), 'utf8');
+const schema = readFileSync(resolve(apiRoot, 'prisma-mysql/schema.prisma'), 'utf8');
 const migration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260729080000_event_driven_change_sync/migration.sql'),
   'utf8'

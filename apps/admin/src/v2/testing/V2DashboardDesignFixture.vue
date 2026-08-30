@@ -258,15 +258,6 @@ const riskMetrics: DashboardMetricItem[] = [
 ];
 const businessMetrics: DashboardMetricItem[] = [
   metric('orders', '今日订单', 18, '单', '今日新建订单', '查看今日订单', 'primary'),
-  metric(
-    'completed',
-    '今日完成',
-    14,
-    '单',
-    '今日进入且仍为完成状态',
-    '查看今日完成订单',
-    'success'
-  ),
   metric('activations', '今日开通', 11, '条', '今日生成开通记录', '查看今日开通记录', 'success'),
   metric('topups', '今日加卡', 7, '张', '成本 ¥3,860.00', '查看今日加卡记录', 'primary'),
   {
@@ -278,18 +269,6 @@ const businessMetrics: DashboardMetricItem[] = [
       '只计当前仍为已完成的订单',
       '查看今日收入分析',
       'primary'
-    ),
-    money: true
-  },
-  {
-    ...metric(
-      'profit',
-      '今日利润',
-      '1846.20',
-      '',
-      '仅展示已确认的订单利润',
-      '查看今日利润分析',
-      'success'
     ),
     money: true
   }

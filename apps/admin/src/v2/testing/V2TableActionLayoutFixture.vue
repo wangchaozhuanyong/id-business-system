@@ -147,7 +147,12 @@
           :data-schema-fixture="schema.id"
           :data-schema-columns="schema.columns.length"
         >
-          <V2Table :schema="schema" :data="registryRows">
+          <V2Table
+            :schema="schema"
+            :data="registryRows"
+            :show-column-settings="false"
+            :apply-default-column-visibility="false"
+          >
             <template v-for="definition in schema.columns" :key="definition.key">
               <V2TableActionColumn v-if="definition.kind === 'actions'" :definition="definition">
                 <AppButton size="small" variant="ghost">操作</AppButton>

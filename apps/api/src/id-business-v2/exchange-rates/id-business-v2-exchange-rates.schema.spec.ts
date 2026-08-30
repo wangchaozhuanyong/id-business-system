@@ -11,7 +11,7 @@ describe('V2 exchange-rate contracts', () => {
     const migration = read(
       'prisma/migrations/20260729000000_current_system_baseline/migration.sql'
     );
-    const seed = read('prisma/seed.ts');
+    const seed = read('prisma-mysql/seed.ts');
 
     expect(migration).toContain('id_business_v2_exchange_rate_entries_rates_check');
     expect(migration).toContain('combined_merchant_buy_average_rate_to_rmb');
@@ -64,7 +64,7 @@ describe('V2 exchange-rate contracts', () => {
     const migration = read(
       'prisma/migrations/20260729000000_current_system_baseline/migration.sql'
     );
-    const seed = read('prisma/seed.ts');
+    const seed = read('prisma-mysql/seed.ts');
 
     expect(migration).toContain('id_business_v2_exchange_rate_settings');
     expect(migration).toContain('id_business_v2_exchange_rate_settings_interval_check');

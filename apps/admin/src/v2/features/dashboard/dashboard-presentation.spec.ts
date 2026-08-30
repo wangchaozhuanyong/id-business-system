@@ -34,8 +34,11 @@ describe('dashboard presentation', () => {
     expect(financeHistoryLabel('incomplete')).toBe('历史数据待确认');
   });
 
-  it('normalizes audit action labels without inventing translations', () => {
-    expect(auditActionLabel('order_update')).toBe('order update');
-    expect(auditActionLabel('')).toBe('未知操作');
+  it('maps known audit actions to customer-facing Chinese labels', () => {
+    expect(auditActionLabel('order_update')).toBe('更新订单');
+    expect(auditActionLabel('id_business_v2.renewal.manual.complete')).toBe('确认续费');
+    expect(auditActionLabel('id_business_v2.account.update')).toBe('更新 ID');
+    expect(auditActionLabel('')).toBe('其他操作');
+    expect(auditActionLabel('id_business_v2.unknown.action')).toBe('其他操作');
   });
 });

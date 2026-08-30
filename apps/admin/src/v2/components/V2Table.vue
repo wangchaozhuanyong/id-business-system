@@ -41,6 +41,10 @@ export default defineComponent({
     showColumnSettings: {
       type: Boolean,
       default: true
+    },
+    applyDefaultColumnVisibility: {
+      type: Boolean,
+      default: true
     }
   },
   setup(props, { attrs, expose, slots }) {
@@ -48,7 +52,12 @@ export default defineComponent({
     const tableRef = ref<ElementTableExpose>();
 
     provide(V2_TABLE_VISIBILITY_CONTEXT, {
-      isColumnVisible: (columnKey) => isV2TableColumnVisible(props.schema.id, columnKey)
+      isColumnVisible: (columnKey) =>
+        isV2TableColumnVisible(
+          props.schema.id,
+          columnKey,
+          props.applyDefaultColumnVisibility ? props.schema.defaultHiddenColumnKeys : []
+        )
     });
 
     function setScrollLeft(left: number) {

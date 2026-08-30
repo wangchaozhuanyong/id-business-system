@@ -11,7 +11,7 @@ MySQL 只绑定宿主机 `127.0.0.1`，安全组不得开放 3306；公网仅开
   和迁移文件的 `migration` 镜像。
 - `deploy/caddy/Caddyfile.aws`：HTTPS 证书和同源反向代理。
 - `.env.aws.production`：服务器私有配置，权限必须为 `600`，不得提交。
-- `apps/api/prisma-mysql/migrations`：MySQL 独立迁移基线；原 PostgreSQL 迁移保持不变以便回退。
+- `apps/api/prisma-mysql/migrations`：当前生产唯一可部署的 MySQL 迁移基线；原 PostgreSQL 迁移仅作为历史迁移源和兼容验收依据，不能用于生产回退。
 
 `COMPOSE_PROJECT_NAME` 上线后不得随发布目录变化，否则 Docker 会创建新的空数据库卷。现有环境升级时
 必须继续使用首次部署时的项目名。

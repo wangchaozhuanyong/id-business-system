@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const apiRoot = resolve(process.cwd());
-const schema = readFileSync(resolve(apiRoot, 'prisma/schema.prisma'), 'utf8');
+const schema = readFileSync(resolve(apiRoot, 'prisma-mysql/schema.prisma'), 'utf8');
 const policyMigration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260814030000_sensitive_display_policies/migration.sql'),
   'utf8'
@@ -71,14 +71,16 @@ describe('敏感资料展示与搜索数据库契约', () => {
     }
   });
 
-  it('indexes account phones and gift card codes without storing searchable plaintext', () => {
+  it('keeps MySQL lookup indexes and historical blind-index migration separate', () => {
     const account = prismaModel('IdBusinessV2Account');
     const giftCard = prismaModel('IdBusinessV2GiftCard');
 
     expect(account).toContain('phoneSearchTokens');
-    expect(account).toContain('@@index([phoneSearchTokens], type: Gin)');
+    expect(account).toContain('@@index([phoneHash])');
+    expect(account).toContain('@@index([phoneTail])');
     expect(giftCard).toContain('codeSearchTokens');
-    expect(giftCard).toContain('@@index([codeSearchTokens], type: Gin)');
+    expect(giftCard).toMatch(/codeHash\s+String\s+@unique/);
+    expect(schema).not.toContain('type: Gin');
     expect(contactMigration).toContain('USING GIN ("phone_search_tokens")');
     expect(contactMigration).toContain('USING GIN ("code_search_tokens")');
     expect(contactMigration).not.toContain('phone_encrypted" =');

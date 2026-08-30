@@ -70,6 +70,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import { useAuthStore } from '@/stores/auth';
 import {
   getV2TableHiddenColumnKeys,
+  hasV2TablePreference,
   ensureV2TablePreferences,
   resetV2TablePreference,
   saveV2TablePreference,
@@ -94,8 +95,11 @@ const dataColumns = computed(() =>
 );
 const currentHiddenKeys = computed(() => {
   const dataColumnKeys = new Set(dataColumns.value.map((column) => column.key));
-  return getV2TableHiddenColumnKeys(props.schema.id).filter((key) => dataColumnKeys.has(key));
+  return getV2TableHiddenColumnKeys(props.schema.id, props.schema.defaultHiddenColumnKeys).filter(
+    (key) => dataColumnKeys.has(key)
+  );
 });
+const hasCustomPreference = computed(() => hasV2TablePreference(props.schema.id));
 const currentVisibleKeys = computed(() =>
   dataColumns.value
     .filter((column) => !currentHiddenKeys.value.includes(column.key))
@@ -163,12 +167,12 @@ async function saveSettings() {
 
 async function resetToDefault() {
   if (!userId.value || saving.value) return;
-  if (!currentHiddenKeys.value.length) {
+  if (!hasCustomPreference.value) {
     ElMessage.info('当前已经是默认列设置');
     return;
   }
   try {
-    await ElMessageBox.confirm('恢复后，这张表将重新显示全部数据列。', '恢复默认列设置', {
+    await ElMessageBox.confirm('恢复后，这张表将按系统默认列显示。', '恢复默认列设置', {
       confirmButtonText: '确认恢复',
       cancelButtonText: '取消',
       type: 'warning'
@@ -181,7 +185,9 @@ async function resetToDefault() {
   saveError.value = '';
   try {
     await resetV2TablePreference(userId.value, props.schema.id);
-    showAllDraftColumns();
+    draftVisibleKeys.value = dataColumns.value
+      .filter((column) => !props.schema.defaultHiddenColumnKeys?.includes(column.key))
+      .map((column) => column.key);
     drawerVisible.value = false;
     ElMessage.success('已恢复默认列设置');
   } catch (error) {

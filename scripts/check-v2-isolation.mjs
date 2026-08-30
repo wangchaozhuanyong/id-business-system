@@ -26,8 +26,10 @@ const forbiddenPaths = [
   'apps/api/src/code-orders',
   'apps/api/src/apple-automation-tasks'
 ];
-const baselineMigration = '20260729000000_current_system_baseline';
-const migrationsPath = path.join(rootDir, 'apps/api/prisma/migrations');
+const mysqlBaselineMigration = '20260821000000_mysql_current_system_baseline';
+const postgresHistoryBaseline = '20260729000000_current_system_baseline';
+const mysqlMigrationsPath = path.join(rootDir, 'apps/api/prisma-mysql/migrations');
+const postgresHistoryPath = path.join(rootDir, 'apps/api/prisma/migrations');
 const runtimeRoots = ['apps/admin/src', 'apps/api/src'];
 const forbiddenRuntimeSnippets = [
   'TelegramConfig',
@@ -52,21 +54,55 @@ for (const projectPath of forbiddenPaths) {
   if (existsSync(path.join(rootDir, projectPath))) failures.push(`遗留路径仍存在 ${projectPath}`);
 }
 
-if (!existsSync(migrationsPath)) {
-  failures.push('缺少当前系统 migration 目录');
-} else {
-  const migrations = readdirSync(migrationsPath, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  if (migrations[0] !== baselineMigration) {
-    failures.push(`当前系统必须以纯净基线 ${baselineMigration} 开始`);
-  }
-  const invalidIncrementalMigrations = migrations
-    .slice(1)
-    .filter((migration) => !/^\d{14}_[a-z0-9_]+$/.test(migration));
-  if (invalidIncrementalMigrations.length) {
-    failures.push(`增量 migration 命名无效：${invalidIncrementalMigrations.join(', ')}`);
+checkMigrationDirectory(
+  mysqlMigrationsPath,
+  mysqlBaselineMigration,
+  '当前 MySQL migration 目录',
+  '当前系统必须以 MySQL 纯净基线'
+);
+checkMigrationDirectory(
+  postgresHistoryPath,
+  postgresHistoryBaseline,
+  'PostgreSQL 历史迁移目录',
+  'PostgreSQL 历史迁移必须保留原始基线'
+);
+
+requireSnippets('apps/api/prisma-mysql/schema.prisma', ['model MysqlTransactionLock']);
+requireSnippets('apps/api/prisma/schema.prisma', ['datasource db', 'provider = "postgresql"']);
+forbidSnippets('apps/api/prisma-mysql/schema.prisma', [
+  'model TelegramConfig',
+  'model RedeemCode',
+  'model CodeService',
+  'model AppleOrder',
+  'model AutomationTask',
+  'enum TelegramTestStatus'
+]);
+forbidSnippets('apps/api/prisma/schema.prisma', [
+  'model TelegramConfig',
+  'model RedeemCode',
+  'model CodeService',
+  'model AppleOrder',
+  'model AutomationTask',
+  'enum TelegramTestStatus'
+]);
+
+function checkMigrationDirectory(migrationsPath, baselineMigration, label, baselineMessage) {
+  if (!existsSync(migrationsPath)) {
+    failures.push(`缺少${label}`);
+  } else {
+    const migrations = readdirSync(migrationsPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    if (migrations[0] !== baselineMigration) {
+      failures.push(`${baselineMessage} ${baselineMigration}`);
+    }
+    const invalidIncrementalMigrations = migrations
+      .slice(1)
+      .filter((migration) => !/^\d{14}_[a-z0-9_]+$/.test(migration));
+    if (invalidIncrementalMigrations.length) {
+      failures.push(`${label}命名无效：${invalidIncrementalMigrations.join(', ')}`);
+    }
   }
 }
 
@@ -83,17 +119,13 @@ forbidSnippets('apps/api/src/app.module.ts', [
 requireSnippets('apps/admin/src/main.ts', ["import App from './App.vue'"]);
 requireSnippets('apps/admin/index.html', ['src="/src/main.ts"']);
 forbidSnippets('package.json', ['"build:v2"', '"dev:v2']);
-forbidSnippets('apps/api/prisma/seed.ts', ['external_message', 'code.inventory', 'code.order']);
-forbidSnippets('apps/api/prisma/schema.prisma', [
-  'model TelegramConfig',
-  'model RedeemCode',
-  'model CodeService',
-  'model AppleOrder',
-  'model AutomationTask',
-  'enum TelegramTestStatus'
+forbidSnippets('apps/api/prisma-mysql/seed.ts', [
+  'external_message',
+  'code.inventory',
+  'code.order'
 ]);
 forbidSnippets(
-  `apps/api/prisma/migrations/${baselineMigration}/migration.sql`,
+  `apps/api/prisma-mysql/migrations/${mysqlBaselineMigration}/migration.sql`,
   forbiddenRuntimeSnippets
 );
 

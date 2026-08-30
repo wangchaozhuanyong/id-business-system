@@ -7,7 +7,7 @@ function read(relativePath: string) {
 
 describe('V2 permission catalog contracts', () => {
   it('names the order-create permission as the order-entry switch', () => {
-    const seed = read('prisma/seed.ts');
+    const seed = read('prisma-mysql/seed.ts');
     const migration = read(
       'prisma/migrations/20260806090000_admin_permission_catalog_sync/migration.sql'
     );
@@ -31,7 +31,7 @@ describe('V2 permission catalog contracts', () => {
   });
 
   it('keeps removed ID deletion outside the assignable permission catalog', () => {
-    const seed = read('prisma/seed.ts');
+    const seed = read('prisma-mysql/seed.ts');
     const rolesService = read('src/v2-auth/roles/v2-roles.service.ts');
     const cleanupMigration = read(
       'prisma/migrations/20260814110000_remove_retired_account_delete_permission/migration.sql'

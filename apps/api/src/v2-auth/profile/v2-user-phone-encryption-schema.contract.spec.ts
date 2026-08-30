@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const apiRoot = process.cwd();
 const projectRoot = resolve(apiRoot, '../..');
-const schema = readFileSync(resolve(apiRoot, 'prisma/schema.prisma'), 'utf8');
+const schema = readFileSync(resolve(apiRoot, 'prisma-mysql/schema.prisma'), 'utf8');
 const migration = readFileSync(
   resolve(apiRoot, 'prisma/migrations/20260815120000_encrypt_user_phone/migration.sql'),
   'utf8'
