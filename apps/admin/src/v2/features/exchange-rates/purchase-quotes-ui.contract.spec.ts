@@ -10,17 +10,18 @@ describe('purchase quote UI contract', () => {
   it('adds a real purchase quote tab with separate market and purchase prices', () => {
     expect(tabs).toContain('label="收购报价"');
     expect(tabs).toContain('<V2PurchaseQuotePanel :page="page" />');
-    expect(panel).toContain('国际人民币汇率');
-    expect(panel).toContain('今日收购价');
-    expect(panel).toContain('美元与其他币种完全独立');
-    expect(panel).toContain('最新汇率更新时间');
-    expect(panel).toContain('已启用币种');
-    expect(panel).toContain('下一次更新时间');
-    expect(panel).toContain('汇率接口状态');
+    expect(panel).toContain('marketRateCnyPerUnit');
+    expect(panel).toContain('purchaseRateFormatted');
+    expect(panel).toContain('各币种独立计算，不使用美元中转');
+    expect(panel).toContain('最新数据');
+    expect(panel).toContain('启用币种');
+    expect(panel).toContain('报价状态');
     expect(panel).toContain('Rates By Exchange Rate API');
-    expect(panel).toContain('每天北京时间 09:05 执行');
-    expect(panel).toContain("? '部分收购报价已超过有效时限'");
-    expect(panel).toContain("? 'error'");
+    expect(panel).toContain('下次自动更新');
+    expect(panel).toContain('暂无收购报价');
+    expect(panel).toContain('useV2StableListFrame');
+    expect(panel).toContain("title: '部分收购报价已超过有效时限'");
+    expect(panel).toContain("type: 'error' as const");
     expect(panel).toContain('V2TableActionColumn');
   });
 
@@ -38,8 +39,10 @@ describe('purchase quote UI contract', () => {
   });
 
   it('exposes automatic refresh, review, history, bulk ratio and copy workflows', () => {
-    expect(panel).toContain('立即刷新');
-    expect(panel).toContain('生成报价文本');
+    expect(panel).toContain('更新汇率');
+    expect(panel).toContain('生成报价');
+    expect(panel).toContain('更多操作');
+    expect(panel).toContain('查看历史');
     expect(panel).toContain('批量设置比例');
     expect(automationDrawers).toContain('确认并发布候选报价');
     expect(automationDrawers).toContain('每天北京时间 09:05');
