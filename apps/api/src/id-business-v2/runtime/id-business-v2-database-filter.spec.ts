@@ -5,15 +5,19 @@ import {
 } from './id-business-v2-database-filter';
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalRuntimeDatabaseUrl = process.env.V2_RUNTIME_DATABASE_URL;
 
 afterEach(() => {
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalRuntimeDatabaseUrl === undefined) delete process.env.V2_RUNTIME_DATABASE_URL;
+  else process.env.V2_RUNTIME_DATABASE_URL = originalRuntimeDatabaseUrl;
 });
 
 describe('buildV2StringArrayContainsFilter', () => {
   it('uses the PostgreSQL scalar-list filter by default', () => {
     delete process.env.DATABASE_URL;
+    delete process.env.V2_RUNTIME_DATABASE_URL;
     expect(buildV2StringArrayContainsFilter<Record<string, string[]>>(['token'])).toEqual({
       hasEvery: ['token']
     });
@@ -38,6 +42,8 @@ describe('isV2MysqlDatabase', () => {
 
   it('treats PostgreSQL and missing URLs as non-MySQL runtimes', () => {
     expect(isV2MysqlDatabase('postgresql://app:password@postgres:5432/id_business_v2')).toBe(false);
-    expect(isV2MysqlDatabase(undefined)).toBe(false);
+    delete process.env.DATABASE_URL;
+    delete process.env.V2_RUNTIME_DATABASE_URL;
+    expect(isV2MysqlDatabase()).toBe(false);
   });
 });
