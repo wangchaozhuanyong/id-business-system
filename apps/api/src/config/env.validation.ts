@@ -134,11 +134,12 @@ function validateDatabase(config: RawEnv, nodeEnv: RuntimeEnv) {
     if (nodeEnv === 'production') throw new Error('DATABASE_URL is required in production');
     return;
   }
-  if (
-    !config.DATABASE_URL.startsWith('postgresql://') &&
-    !config.DATABASE_URL.startsWith('mysql://')
-  ) {
-    throw new Error('DATABASE_URL must use postgresql:// or mysql://');
+  if (!config.DATABASE_URL.startsWith('mysql://')) {
+    throw new Error(
+      nodeEnv === 'production'
+        ? 'DATABASE_URL must use mysql:// in production'
+        : 'DATABASE_URL must use mysql:// for the current runtime'
+    );
   }
 }
 

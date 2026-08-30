@@ -451,7 +451,7 @@ function validateSharedImplementation() {
 }
 
 function validateBusinessSortRules() {
-  const prismaPath = 'apps/api/prisma/schema.prisma';
+  const prismaPath = 'apps/api/prisma-mysql/schema.prisma';
   const prismaSource = read(prismaPath);
   for (const modelName of [
     'IdBusinessV2Customer',

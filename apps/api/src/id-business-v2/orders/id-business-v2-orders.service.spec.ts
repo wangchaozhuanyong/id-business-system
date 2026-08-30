@@ -223,7 +223,7 @@ describe('IdBusinessV2OrdersService', () => {
       Boolean(input?.include)
     )?.[0];
 
-    expect(accountCandidateCall.where.appleIdSearchTokens.hasEvery).toHaveLength(1);
+    expect(accountCandidateCall.where.appleIdSearchTokens.array_contains).toHaveLength(1);
     expect(listCall.where.OR).toContainEqual({ accountId: { in: [accountId] } });
     expect(listCall.where.OR).toContainEqual({ id: { in: [orderId] } });
     expect(result.items[0]?.account?.appleIdMasked).toBe('us***@example.com');

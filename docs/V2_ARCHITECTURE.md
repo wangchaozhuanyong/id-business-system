@@ -55,6 +55,12 @@ raw SQL、Prisma runtime 错误识别和数据库 Decimal 行只能出现在 per
 业务表统一使用 `id_business_v2_*`。共享身份与审计只使用用户、角色、权限、审计、登录会话、
 本地身份映射，以及续费预警设置所需的系统规则记录。
 
+当前运行时数据库唯一使用 MySQL：`apps/api/prisma-mysql/schema.prisma` 是运行时 schema，
+`apps/api/prisma-mysql/migrations` 是唯一可部署的 migration 目录。`apps/api/prisma` 及其
+`migrations` 仅作为 PostgreSQL 历史迁移源、数据迁移和兼容验收依据，不得被 API 运行时、当前
+业务架构检查或生产部署命令默认引用。所有新增数据库契约必须优先验证 MySQL schema；确需保留
+PostgreSQL 兼容断言时，测试名称和变量必须明确标识 PostgreSQL history。
+
 Prisma migration 目录是现有数据库的执行历史，不属于运行模块。业务代码不得读取当前模块未声明的
 数据表。
 

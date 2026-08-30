@@ -22,7 +22,7 @@ describe('validateEnv', () => {
       validateEnv({
         NODE_ENV: 'production',
         CORS_ORIGIN: 'https://admin.example.test',
-        DATABASE_URL: 'postgresql://user:password@db.example.test/app',
+        DATABASE_URL: 'mysql://user:password@mysql.example.test/app',
         FIELD_ENCRYPTION_KEY: 'a'.repeat(32),
         HASH_SECRET: 'b'.repeat(32),
         JWT_SECRET: 'c'.repeat(32)
@@ -55,6 +55,24 @@ describe('validateEnv', () => {
           'https://admin.company.io/api/public/mailbox/microsoft-oauth/callback'
       })
     ).not.toThrow();
+  });
+
+  it('rejects a PostgreSQL production database for the current runtime', () => {
+    expect(() =>
+      validateEnv({
+        NODE_ENV: 'production',
+        APP_PUBLIC_URL: 'https://admin.company.io',
+        CORS_ORIGIN: 'https://admin.company.io',
+        DATABASE_URL: 'postgresql://user:password@postgres.company.io/id_business',
+        FIELD_ENCRYPTION_KEY: 'f'.repeat(32),
+        HASH_SECRET: 'h'.repeat(32),
+        JWT_SECRET: 'j'.repeat(32),
+        MICROSOFT_MAIL_OAUTH_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+        MICROSOFT_MAIL_OAUTH_CLIENT_SECRET: 'm'.repeat(32),
+        MICROSOFT_MAIL_OAUTH_REDIRECT_URI:
+          'https://admin.company.io/api/public/mailbox/microsoft-oauth/callback'
+      })
+    ).toThrow('DATABASE_URL must use mysql:// in production');
   });
 
   it('requires Microsoft mail OAuth settings as a complete set', () => {

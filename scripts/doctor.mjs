@@ -59,9 +59,9 @@ for (const workspaceEnv of ['apps/api/.env', 'apps/admin/.env']) {
 }
 
 if (envContent) {
-  const hasDatabaseUrl = /^DATABASE_URL=postgresql:\/\//m.test(envContent);
+  const hasDatabaseUrl = /^DATABASE_URL=mysql:\/\//m.test(envContent);
   addCheck(
-    'DATABASE_URL uses PostgreSQL',
+    'DATABASE_URL uses MySQL',
     hasDatabaseUrl,
     hasDatabaseUrl ? 'configured' : 'missing or invalid'
   );

@@ -12,7 +12,7 @@
 - 客户记录
 - 加卡记录与余额流水
 - 开通记录
-- 汇率记录、Binance / OKX 公开报价采集，以及 CurrencyAPI 多币种人民币收购价自动计算、异常审核与报价文本复制
+- 汇率记录、Binance / OKX 公开报价采集，以及 ExchangeRate-API 多币种人民币收购价自动计算、异常审核与报价文本复制
 - 业务选项设置
 - 操作审计、敏感访问查询与导出留痕
 - 员工账号、角色权限与操作审计
@@ -45,7 +45,9 @@
 - `docs/V2_TASKS.md`：当前任务清单
 - `docs/DEPLOYMENT.md`：部署说明
 
-Prisma migration 从当前系统纯净基线开始，不包含其他系统的历史表、枚举或任务。
+当前运行时 Prisma 以 `apps/api/prisma-mysql/schema.prisma` 和其 migration 为唯一权威，
+不包含其他系统的历史表、枚举或任务。`apps/api/prisma` 仅保留 PostgreSQL 历史迁移源和兼容验收文件，
+不参与当前 API、管理端或生产部署。
 
 ## 本地开发
 

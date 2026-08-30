@@ -224,11 +224,15 @@ function checkSourceContracts() {
     /localStorage|sessionStorage|indexedDB/i,
     '敏感业务查询缓存被写入浏览器持久化存储'
   );
-  assert.match(changeSync, /id-business-v2:changes/, '缺少 V2 私有实时主题');
   assert.match(
     changeSync,
-    /HEALTHY_RECONCILE_INTERVAL_MS = 5 \* 60 \* 1000/,
-    '健康校验不是 5 分钟'
+    /idBusinessV2ChangeSyncApi[\s\S]*getVersions\(\)/,
+    '缺少 V2 版本补偿读取'
+  );
+  assert.match(
+    changeSyncPolicy,
+    /V2_FOREGROUND_RECONCILE_MIN_INTERVAL_MS = 5_000/,
+    '前台最短版本校验间隔不是 5 秒'
   );
   assert.match(
     changeSyncPolicy,
