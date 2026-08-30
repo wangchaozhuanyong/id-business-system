@@ -64,6 +64,11 @@ assert.match(changeSyncApi, /text\/event-stream/, '前端未验证 SSE 响应类
 assert.match(changeSyncRuntime, /\.streamEvents\(/, '前端未建立事件驱动连接');
 assert.match(
   changeSyncRuntime,
+  /VITE_V2_REALTIME_CHANGES_ENABLED !== 'false'/,
+  '实时同步在生产默认值下必须启用，并允许隔离 UI 验收显式关闭网络连接'
+);
+assert.match(
+  changeSyncRuntime,
   /if \(!started \|\| streamConnected \|\| document\.visibilityState === 'hidden'\) return/,
   '实时连接正常时没有阻止15秒版本轮询'
 );

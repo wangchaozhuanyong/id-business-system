@@ -19,6 +19,8 @@ import {
 
 type ChangeSyncStatus = 'idle' | 'connecting' | 'connected' | 'degraded';
 
+const realtimeChangesEnabled = import.meta.env.VITE_V2_REALTIME_CHANGES_ENABLED !== 'false';
+
 interface ActiveStream {
   controller: AbortController;
   expectedAbort: boolean;
@@ -284,7 +286,7 @@ function handleAuthIdentityChanged() {
 }
 
 export function startV2ChangeSync() {
-  if (started) return;
+  if (started || !realtimeChangesEnabled) return;
   started = true;
   syncGeneration += 1;
   consecutiveFailures = 0;
