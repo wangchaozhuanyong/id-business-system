@@ -66,6 +66,11 @@ for command in gh git node scp ssh; do
     exit 1
   fi
 done
+retention_script="${project_root}/scripts/cleanup-aws-production-retention.sh"
+if [[ ! -x "$retention_script" ]]; then
+  echo '缺少可执行生产保留策略脚本' >&2
+  exit 1
+fi
 
 cd "$project_root"
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -204,6 +209,9 @@ if [[ ! "$previous_commit" =~ ^[a-f0-9]{40}$ ]]; then
   exit 1
 fi
 
+echo '执行生产发布磁盘与保留策略预检'
+ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- --preflight <"$retention_script"
+
 release_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 short_commit="${release_commit:0:12}"
 deployment_run="aws-${release_stamp}-${short_commit}"
@@ -326,6 +334,11 @@ cleanup_incoming() {
 trap cleanup_incoming EXIT INT TERM
 if [[ -e "$release_directory" ]]; then
   echo '目标不可变发布目录已存在' >&2
+  exit 1
+fi
+available_kib="$(df -Pk "$deployment_root" | awk 'NR == 2 { print $4 }')"
+if [[ ! "$available_kib" =~ ^[0-9]+$ ]] || ((available_kib < 8388608)); then
+  echo '远程制品上传后可用空间低于 8 GiB，停止解包和镜像加载' >&2
   exit 1
 fi
 if [[ "$(sha256sum "$artifact_path" | awk '{print $1}')" != "$artifact_sha256" ]]; then

@@ -27,6 +27,8 @@ API Dockerfile 提供两个独立目标：`runtime` 只保留生产依赖、Pris
 - 环境变量模板：`.env.aws.production.example`
 - 备份脚本：`scripts/backup-aws-mysql.sh`
 - 备份定时器：`deploy/systemd/id-business-v2-mysql-backup.*`
+- 发布制品与镜像保留脚本：`scripts/cleanup-aws-production-retention.sh`
+- 生产保留定时器：`deploy/systemd/id-business-v2-production-retention.*`
 
 真实 `.env.aws.production` 只能存放在服务器发布目录，禁止提交密码、Token、加密密钥或数据库 URL。
 
@@ -77,14 +79,19 @@ bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
 
 2. 制品在本机与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
 
-3. EC2 在整个安装期间持有 `/opt/id-business-v2/.deploy.lock`，并拒绝并发备份、恢复验证、
+3. 上传制品前先在 EC2 使用同一个部署锁执行生产保留预检：发布目录保留最近 5 份，不可变制品
+   保留最近 3 份，并始终额外保护 `current` 和发布清单中的上一生产 commit。Docker 只移除
+   `id-business-v2-*` 受控旧标签及没有容器引用的悬空层，禁止运行 `docker image prune -a`、
+   `docker volume prune` 或 `docker system prune`。预检后少于 8 GiB 可用空间时禁止上传和安装。
+
+4. EC2 在整个安装期间持有 `/opt/id-business-v2/.deploy.lock`，并拒绝并发备份、恢复验证、
    Compose、migration 或同步进程。新源码进入 `/opt/id-business-v2/releases/<UTC>-<short-sha>`，
    CI 制品与清单进入 `/opt/id-business-v2/artifacts/<tag>-<full-sha>`。
 
-4. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
+5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
    `docker load` 加载 CI 镜像。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
 
-5. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
+6. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
 
 ```bash
 sudo systemctl start id-business-v2-mysql-backup.service
@@ -93,7 +100,7 @@ sudo systemctl show id-business-v2-mysql-backup.service --property=Result --valu
 
 `Result` 必须返回 `success`。备份失败时不得继续 migration。
 
-6. 数据库固定使用四个独立身份：`id_business_migrator` 只执行 migration，`id_business_app`
+7. 数据库固定使用四个独立身份：`id_business_migrator` 只执行 migration，`id_business_app`
    只运行 API，`id_business_audit` 只执行完整性巡检，`id_business_backup` 只生成备份。首次切换到
    独立账号或迁移账号密码轮换后，先用本机 root 连接可重复供应账号，再执行向前 migration；migration
    后必须再次供应权限，使新表得到精确的运行权限。这些步骤均由不可变制品中的安装器执行：
@@ -108,13 +115,13 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ru
 `id_business_app` 不得拥有 DDL、GRANT OPTION、全库 DELETE、Prisma migration 写入或审计日志更新
 权限。供应命令不得输出 root 密码、业务数据库 URL 或账号密码。
 
-7. 首次部署或审计密码轮换后，安装器会在同一 CI 门禁镜像内供应只读审计账号，
+8. 首次部署或审计密码轮换后，安装器会在同一 CI 门禁镜像内供应只读审计账号，
    然后在更新应用容器前执行数据库身份及财务完整性阻断门禁。
 
 必须得到数据库四身份 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
 本机门禁连接；脚本检测到运行账号 DDL、越界 DELETE、审计写权限或账号复用时会主动拒绝运行。
 
-8. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`api`、`admin`、
+9. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`api`、`admin`、
    `caddy` 健康，并执行整站巡检：
 
 ```bash
@@ -128,12 +135,13 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 
 巡检至少包括首页、静态资源 MIME、live/ready、登录、`auth/me`、核心业务只读接口、越权写入 403 和登出。
 
-9. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
-   完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
-   制品名称与 SHA-256、四个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
-10. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，并核验备份服务、自动备份定时器和
-    每周恢复验证定时器均处于预期状态。任一检查失败，立即回切并重启上一已验证不可变制品。
-11. 生产验证成功后删除已合并且不再使用的远程发布分支。
+10. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
+    完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
+    制品名称与 SHA-256、四个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
+11. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，执行一次发布后保留清理，并安装、启用
+    `id-business-v2-production-retention.timer`。同时核验备份服务、自动备份、每周恢复验证和每日
+    保留策略定时器均处于预期状态。任一检查失败，立即回切并重启上一已验证不可变制品。
+12. 生产验证成功后删除已合并且不再使用的远程发布分支。
 
 ## 5. 数据库规则
 
@@ -168,7 +176,22 @@ sudo journalctl -u id-business-v2-mysql-backup-verify.service -n 100 --no-pager
 该脚本从 S3 下载最新备份，在无宿主机端口的临时 MySQL 8.4 容器内完成恢复和核心表检查。
 完整安装和验收流程见 `docs/V2_PRODUCTION_BACKUP.md`。
 
-## 7. 回滚
+## 7. 发布制品与镜像保留
+
+生产服务器每天 UTC 03:15 后在 15 分钟随机窗口内执行：
+
+```bash
+sudo systemctl start id-business-v2-production-retention.service
+sudo systemctl show id-business-v2-production-retention.service --property=Result --value
+sudo journalctl -u id-business-v2-production-retention.service -n 100 --no-pager
+```
+
+任务与发布共用 `/opt/id-business-v2/.deploy.lock`；发布、备份或恢复验证正在执行时安全跳过或阻断。
+固定保留最近 5 个受控发布目录和 3 份不可变制品，同时无条件保护当前与上一已验证提交。
+数据库 Docker volume、MySQL 备份、非本项目镜像及运行容器镜像不在清理范围。清理后可用空间低于
+8 GiB 时任务返回失败，下一次生产发布也会在上传前被阻断。
+
+## 8. 回滚
 
 - 应用回滚：将 `current` 重新指向上一个已验证发布目录，然后启动该版 Compose。
 - 数据库 migration 默认不逆向回滚。如果新应用不兼容旧结构，必须在发布前准备专用方案。

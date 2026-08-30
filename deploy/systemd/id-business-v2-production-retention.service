@@ -1,0 +1,18 @@
+[Unit]
+Description=ID Business V2 production release and image retention
+Requires=docker.service
+After=docker.service
+ConditionPathIsSymbolicLink=/opt/id-business-v2/current
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart=/opt/id-business-v2/current/scripts/cleanup-aws-production-retention.sh --scheduled
+
+[Install]
+WantedBy=multi-user.target

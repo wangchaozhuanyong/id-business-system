@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily ID Business V2 production release and image retention
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+AccuracySec=5m
+RandomizedDelaySec=15m
+Unit=id-business-v2-production-retention.service
+
+[Install]
+WantedBy=timers.target

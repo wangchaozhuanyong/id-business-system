@@ -105,3 +105,8 @@ npm run gate:v2-financial-integrity:production
 本机默认最多保留 48 份且总量不超过 1 GiB；S3 当前保留 90 天并由生命周期自动过期。
 `id-business-v2-mysql-backup-verify.timer` 每周从 S3 下载最新备份并恢复到临时 MySQL 8.4 容器。
 详细配置和安装命令见 `docs/V2_PRODUCTION_BACKUP.md`。
+
+发布目录、不可变制品和项目镜像由 `id-business-v2-production-retention.timer` 每日维护，并在每次
+正式发布上传前及切换成功后执行同一套受锁策略。固定保留最近 5 个发布目录、最近 3 份不可变制品，
+且始终保护当前及上一已验证 commit；只删除本项目过期镜像标签和无容器引用的悬空层，不得清理
+MySQL volume 或备份。清理后可用空间低于 8 GiB 时必须阻断下一次发布。

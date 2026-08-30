@@ -77,7 +77,8 @@ test('release scripts pass shell syntax and production installation never builds
   for (const script of [
     'scripts/package-production-release.sh',
     'scripts/deploy-aws-production-artifact.sh',
-    'scripts/install-aws-production-artifact.sh'
+    'scripts/install-aws-production-artifact.sh',
+    'scripts/cleanup-aws-production-retention.sh'
   ]) {
     const result = spawnSync('bash', ['-n', resolve(projectRoot, script)], { encoding: 'utf8' });
     assert.equal(result.status, 0, `${script}: ${result.stderr}`);
