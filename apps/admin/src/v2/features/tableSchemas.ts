@@ -393,10 +393,7 @@ export const v2TableSchemas = {
         { key: '币种', label: '货币', kind: 'identifier', widthPreset: 'identifier', pin: 'start' },
         { key: '市场汇率', label: '国际人民币汇率', kind: 'numeric', widthPreset: 'standard' },
         { key: '收购比例', label: '收购比例', kind: 'numeric', widthPreset: 'compact' },
-        { key: '显示单位', label: '显示单位', kind: 'numeric', widthPreset: 'compact' },
         { key: '今日收购价', label: '今日收购价', kind: 'numeric', widthPreset: 'standard' },
-        { key: '小数规则', label: '小数规则', kind: 'text', widthPreset: 'standard' },
-        { key: '汇率时间', label: '汇率时间', kind: 'date', widthPreset: 'dateTime' },
         { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
@@ -413,10 +410,7 @@ export const v2TableSchemas = {
         { key: '汇率', label: '兑人民币汇率', kind: 'numeric', widthPreset: 'standard' },
         { key: '来源', label: '来源', kind: 'text', widthPreset: 'wide' },
         { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: '业务日期', label: '业务日期', kind: 'date', widthPreset: 'standard' },
-        { key: '过期时间', label: '过期时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: '证据', label: '证据', kind: 'text', widthPreset: 'identifier' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'icon', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     }),
     manualChanges: table({
@@ -429,10 +423,9 @@ export const v2TableSchemas = {
         { key: '记录时间', label: '记录时间', kind: 'date', widthPreset: 'dateTime', pin: 'start' },
         { key: '币种', label: '币种', kind: 'status', widthPreset: 'compact' },
         { key: '汇率', label: '兑人民币汇率', kind: 'numeric', widthPreset: 'standard' },
-        { key: '来源', label: '来源说明', kind: 'text', widthPreset: 'identifier' },
         { key: '原因', label: '原因', kind: 'text', widthPreset: 'longText' },
         { key: '操作人', label: '操作人', kind: 'text', widthPreset: 'standard' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'icon', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
       ]
     }),
     offers: table({

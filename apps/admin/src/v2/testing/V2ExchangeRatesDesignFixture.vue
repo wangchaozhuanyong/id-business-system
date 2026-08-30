@@ -81,9 +81,14 @@ import {
   recordStatusLabel,
   recordStatusType,
   trackedCurrencies,
-  currencyLabel
+  currencyLabel,
+  formatRate
 } from '@/v2/features/exchange-rates/exchangeRatePresentation';
-import type { V2ExchangeRateRecord, V2ManualFxRate } from '@/v2/features/exchange-rates/contracts';
+import type {
+  V2ExchangeRateRecord,
+  V2ManualFxRate,
+  V2PurchaseQuote
+} from '@/v2/features/exchange-rates/contracts';
 
 type ExchangeRatesPage = UnwrapNestedRefs<ReturnType<typeof useExchangeRatesPage>>;
 
@@ -142,16 +147,83 @@ function makeManualEntry(index: number): V2ManualFxRate {
   };
 }
 
-const emptyState = new URLSearchParams(window.location.search).get('state') === 'empty';
+function makePurchaseQuote(index: number): V2PurchaseQuote {
+  const currencies = [
+    ['USD', '美元'],
+    ['EUR', '欧元'],
+    ['GBP', '英镑'],
+    ['MYR', '马来西亚林吉特'],
+    ['SGD', '新加坡元'],
+    ['JPY', '日元'],
+    ['AUD', '澳大利亚元'],
+    ['CAD', '加拿大元'],
+    ['HKD', '港币'],
+    ['TWD', '新台币'],
+    ['THB', '泰铢'],
+    ['KRW', '韩元']
+  ] as const;
+  const [code, nameCn] = currencies[index % currencies.length];
+  const marketRate = code === 'MYR' ? '1.6218' : (7.1842 + index * 0.137).toFixed(4);
+  const quoteUnit = code === 'JPY' || code === 'KRW' ? '100' : '1';
+  const purchaseRate = (Number(marketRate) * Number(quoteUnit) * 0.7).toFixed(2);
+  return {
+    code,
+    nameCn,
+    displayName: nameCn,
+    purchaseRatio: '0.70000000',
+    purchaseRatioPercent: '70',
+    quoteUnit,
+    decimalPlaces: 2,
+    roundingMode: 'ROUND_DOWN',
+    enabled: true,
+    sortOrder: index + 1,
+    updatedBy: operator,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-10T09:20:00.000Z',
+    latestSnapshot: {
+      id: `purchase-snapshot-${index + 1}`,
+      currencyCode: code,
+      marketRateCnyPerUnit: marketRate,
+      purchaseRatio: '0.70000000',
+      quoteUnit,
+      purchaseRateRaw: purchaseRate,
+      purchaseRateDisplay: purchaseRate,
+      purchaseRateFormatted: purchaseRate,
+      decimalPlaces: 2,
+      roundingMode: 'ROUND_DOWN',
+      marketRateSource: 'exchange_rate_api',
+      marketRateSourceReference: 'ExchangeRate-API',
+      marketRateCapturedAt: '2026-08-10T09:05:00.000Z',
+      fetchRunId: 'purchase-run-1',
+      changeRate: '0.0012',
+      validationStatus: 'normal',
+      staleAt: '2026-08-11T09:05:00.000Z',
+      stale: false,
+      createdBy: operator,
+      createdAt: '2026-08-10T09:05:00.000Z'
+    }
+  };
+}
+
+const fixtureParams = new URLSearchParams(window.location.search);
+const fixtureTab = fixtureParams.get('tab');
+const activeFixtureTab =
+  fixtureTab === 'purchase' || fixtureTab === 'manual' ? fixtureTab : 'automatic';
+const emptyState = fixtureParams.get('state') === 'empty';
 const allRecords: V2ExchangeRateRecord[] = emptyState
   ? []
   : Array.from({ length: 23 }, (_, index) => makeRecord(index));
 const allManualEntries: V2ManualFxRate[] = emptyState
   ? []
   : Array.from({ length: 16 }, (_, index) => makeManualEntry(index));
+const allPurchaseQuotes: V2PurchaseQuote[] = emptyState
+  ? []
+  : Array.from({ length: 12 }, (_, index) => makePurchaseQuote(index));
 
 const page = reactive({
-  activeTab: 'automatic' as 'automatic' | 'manual',
+  activeTab: activeFixtureTab as 'purchase' | 'automatic' | 'manual',
+  queryPhase: 'ready' as const,
+  isParameterTransition: false,
   overview: {
     latestRun: {
       id: 'run-00000001',
@@ -214,6 +286,15 @@ const page = reactive({
         capturedAt: '2026-08-10T09:20:08.000Z',
         expiresAt: '2026-08-11T09:20:08.000Z',
         status: 'available'
+      },
+      {
+        currency: 'USDT',
+        snapshotId: 'snapshot-usdt',
+        rateToCny: '7.18650000',
+        source: 'combined_p2p',
+        capturedAt: '2026-08-10T09:20:08.000Z',
+        expiresAt: '2026-08-10T09:35:08.000Z',
+        status: 'available'
       }
     ],
     calculationRule: 'latest_available'
@@ -259,16 +340,105 @@ const page = reactive({
   headerLoading: false,
   records: [] as V2ExchangeRateRecord[],
   recordTotal: 0,
+  recordDisplayedPage: 1,
+  recordDisplayedPageSize: 10,
   recordLoading: false,
   recordError: '',
   recordResolved: true,
   recordDateRange: [] as [string, string] | [],
   manualEntries: [] as V2ManualFxRate[],
   manualTotal: 0,
+  manualDisplayedPage: 1,
+  manualDisplayedPageSize: 10,
   manualLoading: false,
   manualError: '',
   manualResolved: true,
   manualDateRange: [] as [string, string] | [],
+  purchaseQuotes: allPurchaseQuotes,
+  purchaseQuoteMeta: {
+    calculationRule: '每个币种按自身人民币市场汇率 × 收购比例 × 显示单位计算。',
+    marketRateMode: 'automatic_with_manual_fallback' as const,
+    marketRateNotice: '自动更新失败时保留最后有效报价，不会使用零值或默认值。'
+  },
+  purchaseResolved: true,
+  purchaseLoading: false,
+  purchaseError: '',
+  purchaseAutomation: {
+    runtime: {
+      settings: {
+        autoEnabled: true,
+        intervalMinutes: 1440 as const,
+        staleMinutes: 1500,
+        abnormalChangeRate: '0.10000000',
+        abnormalChangePercent: '10',
+        nextRunAt: '2026-08-11T01:05:00.000Z',
+        updatedByUserId: null,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-10T09:05:00.000Z',
+        allowedStaleMinutes: { min: 60, max: 10080 }
+      },
+      scheduler: {
+        schedule: '5 1 * * *' as const,
+        localTickIntervalMs: 60000,
+        localRunning: true,
+        lastTickAt: '2026-08-10T09:05:00.000Z',
+        databaseRunning: null
+      },
+      provider: {
+        code: 'exchange_rate_api' as const,
+        configured: true,
+        source: 'ExchangeRate-API',
+        contract: 'free-open-endpoint'
+      },
+      latestRun: null,
+      successBoundary: 'all_enabled_currencies_available',
+      networkEnabled: true
+    },
+    latestRun: {
+      id: 'purchase-run-1',
+      status: 'success' as const,
+      triggerType: 'scheduled' as const,
+      provider: 'exchange_rate_api' as const,
+      baseCurrency: 'CNY' as const,
+      requestedCurrencyCodes: allPurchaseQuotes.map((quote) => quote.code),
+      abnormalCurrencyCodes: [],
+      startedAt: '2026-08-10T09:05:00.000Z',
+      finishedAt: '2026-08-10T09:05:03.000Z',
+      providerUpdatedAt: '2026-08-10T09:05:00.000Z',
+      publishedAt: '2026-08-10T09:05:03.000Z',
+      attemptCount: 1,
+      sourceContract: 'free-open-endpoint',
+      sourceReference: 'ExchangeRate-API',
+      maximumChangeRate: '0.0012',
+      error: null,
+      triggeredBy: null,
+      reviewedBy: null,
+      reviewedAt: null,
+      reviewRemark: null,
+      snapshotCount: allPurchaseQuotes.length,
+      candidateQuotes: null,
+      createdAt: '2026-08-10T09:05:00.000Z'
+    },
+    pendingReviewRun: null,
+    staleQuoteCount: 0,
+    missingQuoteCount: 0,
+    refreshing: false,
+    openText: () => {
+      notice.value = '预览操作：已打开报价生成工具。';
+    },
+    openHistory: () => {
+      notice.value = '预览操作：已打开报价历史。';
+    },
+    openBulk: () => {
+      notice.value = '预览操作：已打开批量比例设置。';
+    },
+    openSettings: () => {
+      notice.value = '预览操作：已打开自动采集设置。';
+    },
+    refreshNow: () => {
+      notice.value = '预览操作：已触发收购汇率更新。';
+    }
+  },
   trackedCurrencies,
   recordQuery: {
     page: 1,
@@ -292,23 +462,38 @@ const page = reactive({
   openManualCreate: () => {
     notice.value = '预览操作：已打开人工汇率录入。';
   },
-  loadAll: () => {
-    notice.value = '汇率概览和当前列表已刷新。';
+  loadPurchaseQuotes: () => undefined,
+  openPurchaseQuote: (quote: V2PurchaseQuote) => {
+    notice.value = `预览操作：正在编辑 ${quote.code} 收购报价。`;
   },
+  purchaseRoundingLabel: () => '向下截断',
   searchRecords: () => applyRecordFilters(true),
   loadRecords: () => applyRecordFilters(),
-  resetRecordPage: () => applyRecordFilters(true),
+  handleRecordPageChange: (nextPage: number) => {
+    page.recordQuery.page = nextPage;
+    applyRecordFilters();
+  },
+  resetRecordPage: (nextPageSize: number) => {
+    page.recordQuery.pageSize = nextPageSize;
+    applyRecordFilters(true);
+  },
   searchManual: () => applyManualFilters(true),
   loadManualEntries: () => applyManualFilters(),
-  resetManualPage: () => applyManualFilters(true),
+  handleManualPageChange: (nextPage: number) => {
+    page.manualQuery.page = nextPage;
+    applyManualFilters();
+  },
+  resetManualPage: (nextPageSize: number) => {
+    page.manualQuery.pageSize = nextPageSize;
+    applyManualFilters(true);
+  },
   openRecordEvidence: (record: V2ExchangeRateRecord) => {
     notice.value = `预览操作：正在查看 ${record.currency} 的采集证据。`;
   },
   openManualDetail: (entry: V2ManualFxRate) => {
     notice.value = `预览操作：正在查看 ${entry.currency} 人工汇率记录。`;
   },
-  formatRate: (value: string | null | undefined) =>
-    value?.replace(/0+$/, '').replace(/\.$/, '') || '—',
+  formatRate,
   formatAmount: (value: string | null | undefined) => value ?? '—',
   formatDate: (value: string | null | undefined) =>
     value
@@ -329,12 +514,13 @@ const page = reactive({
   receiptFxStatusLabel,
   receiptFxStatusType,
   receiptFxSourceLabel,
-  receiptFxCapturedLabel: (rate: { capturedAt: string | null }) =>
-    rate.capturedAt ? '刚刚采集' : '固定汇率',
   operatorName: (entry: V2ManualFxRate) => entry.createdBy?.username || '—'
 }) as unknown as ExchangeRatesPage;
 
-page.receiptFxRates = page.overview?.latestReceiptFxRates ?? [];
+page.receiptFxRates =
+  page.overview?.latestReceiptFxRates.filter(
+    (rate) => rate.currency !== 'CNY' && rate.currency !== 'USDT'
+  ) ?? [];
 
 function applyRecordFilters(resetPage = false) {
   if (resetPage) page.recordQuery.page = 1;
@@ -345,6 +531,8 @@ function applyRecordFilters(resetPage = false) {
       (!page.recordQuery.status || record.status === page.recordQuery.status)
   );
   page.recordTotal = filtered.length;
+  page.recordDisplayedPage = page.recordQuery.page;
+  page.recordDisplayedPageSize = page.recordQuery.pageSize;
   const start = (page.recordQuery.page - 1) * page.recordQuery.pageSize;
   page.records = filtered.slice(start, start + page.recordQuery.pageSize);
 }
@@ -361,6 +549,8 @@ function applyManualFilters(resetPage = false) {
           .some((value) => value?.toLowerCase().includes(keyword)))
   );
   page.manualTotal = filtered.length;
+  page.manualDisplayedPage = page.manualQuery.page;
+  page.manualDisplayedPageSize = page.manualQuery.pageSize;
   const start = (page.manualQuery.page - 1) * page.manualQuery.pageSize;
   page.manualEntries = filtered.slice(start, start + page.manualQuery.pageSize);
 }

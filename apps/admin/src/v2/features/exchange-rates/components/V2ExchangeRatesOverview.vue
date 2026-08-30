@@ -25,138 +25,91 @@
       :closable="false"
     />
 
-    <section class="v2-exchange-overview" aria-label="自动采集汇率概览">
-      <div class="v2-exchange-overview__intro">
-        <span class="v2-exchange-overview__eyebrow">汇率管理</span>
-        <div class="v2-exchange-overview__title-row">
-          <h2>实时汇率总览</h2>
-          <el-tag
-            :type="page.runtime?.settings.autoEnabled ? 'success' : 'info'"
-            size="small"
-            effect="plain"
-          >
-            自动采集{{ page.runtime?.settings.autoEnabled ? '已开启' : '已关闭' }}
-          </el-tag>
-        </div>
-        <p>
-          以 ¥{{
-            page.formatAmount(page.runtime?.settings.targetAmountRmb)
-          }}
-          成交档采集，数据保留最近 {{ page.runtime?.retention.days ?? 30 }} 天。
-        </p>
-      </div>
-
-      <div
-        class="v2-exchange-overview__primary"
-        :class="{ 'is-stale': page.overview?.lastSuccess?.stale }"
-      >
-        <span>联网采集中间价</span>
-        <strong>{{ page.formatRate(page.overview?.lastSuccess?.snapshot?.midRateToRmb) }}</strong>
-        <small>
-          CNY / USDT
-          <el-tag
-            v-if="page.overview?.lastSuccess"
-            :type="page.overview.lastSuccess.stale ? 'warning' : 'success'"
-            size="small"
-            effect="plain"
-          >
-            {{ page.overview.lastSuccess.stale ? '已过期' : '有效' }}
-          </el-tag>
-        </small>
-      </div>
-
-      <div class="v2-exchange-overview__actions" aria-label="汇率操作">
-        <AppButton v-if="page.canCollect" :loading="page.collecting" @click="page.collectNow">
-          <el-icon><VideoPlay /></el-icon>
-          立即采集
-        </AppButton>
-        <AppButton v-if="page.canManage" variant="ghost" @click="page.openSettings">
-          <el-icon><Setting /></el-icon>
-          采集设置
-        </AppButton>
-        <AppButton v-if="page.canCreate" variant="ghost" @click="page.openManualCreate">
-          <el-icon><Plus /></el-icon>
-          人工汇率
-        </AppButton>
-        <AppButton variant="ghost" :disabled="page.headerLoading" @click="page.loadAll">
-          <el-icon><Refresh /></el-icon>
-          刷新
-        </AppButton>
-      </div>
-
-      <dl class="v2-exchange-overview__metrics" aria-label="汇率采集指标">
-        <div>
-          <dt>综合买入</dt>
-          <dd>
-            {{
-              page.formatRate(
-                page.overview?.lastSuccess?.snapshot?.combinedMerchantBuyAverageRateToRmb
-              )
-            }}
-          </dd>
-          <small>商家买入均价</small>
-        </div>
-        <div>
-          <dt>综合卖出</dt>
-          <dd>
-            {{
-              page.formatRate(
-                page.overview?.lastSuccess?.snapshot?.combinedMerchantSellAverageRateToRmb
-              )
-            }}
-          </dd>
-          <small>商家卖出均价</small>
-        </div>
-        <div>
-          <dt>有效样本</dt>
-          <dd>{{ page.overview?.lastSuccess?.snapshot?.validSampleCount ?? 0 }} 条</dd>
-          <small>{{ page.formatDate(page.overview?.lastSuccess?.snapshot?.averagedAt) }}</small>
-        </div>
-        <div>
-          <dt>采集周期</dt>
-          <dd>{{ page.intervalLabel(page.runtime?.settings.intervalMinutes) }}</dd>
-          <small>下次 {{ page.formatDate(page.runtime?.settings.nextRunAt) }}</small>
-        </div>
-      </dl>
-    </section>
-
-    <section class="v2-exchange-receipt-rates" aria-label="订单收款汇率状态">
-      <V2SectionHeading
-        class="v2-exchange-receipt-rates__heading"
-        title="订单收款汇率"
-        help="展示订单录入当前可采用的最新汇率；过期或缺失状态不会被自动带入。"
-      >
-        <template #actions>
-          <span>最新可用状态</span>
-        </template>
-      </V2SectionHeading>
-      <dl>
-        <div
-          v-for="rate in page.receiptFxRates"
-          :key="rate.currency"
-          :class="{ 'is-muted': rate.status === 'missing' }"
-        >
-          <dt>
-            <span>{{ rate.currency }}</span>
-            <el-tag :type="page.receiptFxStatusType(rate.status)" size="small" effect="plain">
-              {{ page.receiptFxStatusLabel(rate.status) }}
+    <section class="v2-exchange-overview" aria-label="当前可用汇率">
+      <header class="v2-exchange-overview__header">
+        <div class="v2-exchange-overview__intro">
+          <span class="v2-exchange-overview__eyebrow">汇率状态</span>
+          <div class="v2-exchange-overview__title-row">
+            <h2>当前可用汇率</h2>
+            <el-tag
+              :type="page.runtime?.settings.autoEnabled ? 'success' : 'info'"
+              size="small"
+              effect="plain"
+            >
+              自动采集{{ page.runtime?.settings.autoEnabled ? '已开启' : '已关闭' }}
             </el-tag>
-          </dt>
-          <dd>{{ rate.rateToCny ? page.formatRate(rate.rateToCny) : '—' }}</dd>
-          <small>
-            {{ page.receiptFxSourceLabel(rate.source) }} · {{ page.receiptFxCapturedLabel(rate) }}
-          </small>
+          </div>
+          <p>集中查看当前业务可用值；采集证据与历史变动在下方记录中查询。</p>
         </div>
-      </dl>
+
+        <div class="v2-exchange-overview__actions" aria-label="自动汇率操作">
+          <AppButton v-if="page.canCollect" :loading="page.collecting" @click="page.collectNow">
+            <el-icon><VideoPlay /></el-icon>
+            立即采集
+          </AppButton>
+          <AppButton v-if="page.canManage" variant="ghost" @click="page.openSettings">
+            <el-icon><Setting /></el-icon>
+            采集设置
+          </AppButton>
+        </div>
+      </header>
+
+      <div class="v2-exchange-overview__body">
+        <section
+          class="v2-exchange-overview__primary"
+          :class="{ 'is-stale': page.overview?.lastSuccess?.stale }"
+          aria-label="USDT 当前汇率"
+        >
+          <span>USDT 兑人民币</span>
+          <strong>
+            <small>¥</small
+            >{{ page.formatRate(page.overview?.lastSuccess?.snapshot?.midRateToRmb) }}
+          </strong>
+          <p>
+            {{ page.overview?.lastSuccess?.snapshot?.validSampleCount ?? 0 }} 条有效样本
+            <span aria-hidden="true">·</span>
+            {{ page.formatDate(page.overview?.lastSuccess?.snapshot?.averagedAt) }}
+          </p>
+          <div class="v2-exchange-overview__schedule">
+            <span>每 {{ page.intervalLabel(page.runtime?.settings.intervalMinutes) }}采集</span>
+            <span>下次 {{ page.formatDate(page.runtime?.settings.nextRunAt) }}</span>
+          </div>
+        </section>
+
+        <section class="v2-exchange-receipt-rates" aria-label="其他订单收款汇率">
+          <header>
+            <div>
+              <h3>其他收款汇率</h3>
+              <p>CNY 固定为 1；仅有效外币汇率会自动带入订单。</p>
+            </div>
+            <span>1 单位外币兑人民币</span>
+          </header>
+          <dl>
+            <div
+              v-for="rate in page.receiptFxRates"
+              :key="rate.currency"
+              :class="{ 'is-muted': rate.status === 'missing' }"
+            >
+              <dt>
+                <span>{{ rate.currency }}</span>
+                <el-tag :type="page.receiptFxStatusType(rate.status)" size="small" effect="plain">
+                  {{ page.receiptFxStatusLabel(rate.status) }}
+                </el-tag>
+              </dt>
+              <dd>{{ rate.rateToCny ? page.formatRate(rate.rateToCny) : '—' }}</dd>
+              <small>{{ page.receiptFxSourceLabel(rate.source) }}</small>
+            </div>
+          </dl>
+        </section>
+      </div>
     </section>
   </section>
 </template>
 
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
-import { Plus, Refresh, Setting, VideoPlay } from '@element-plus/icons-vue';
+import { Setting, VideoPlay } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
-import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { useExchangeRatesPage } from '../useExchangeRatesPage';
 
 type ExchangeRatesPage = UnwrapNestedRefs<ReturnType<typeof useExchangeRatesPage>>;

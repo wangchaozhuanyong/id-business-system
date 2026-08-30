@@ -23,7 +23,6 @@ import {
   operatorName,
   parseExchangeRateInput,
   providerLabel,
-  receiptFxCapturedLabel,
   receiptFxSourceLabel,
   receiptFxStatusLabel,
   receiptFxStatusType,
@@ -296,7 +295,11 @@ export function useExchangeRatesPage() {
   const recordError = computed(() => (activeTab.value === 'automatic' ? headerError.value : ''));
   const manualError = computed(() => (activeTab.value === 'manual' ? headerError.value : ''));
   const purchaseError = computed(() => (activeTab.value === 'purchase' ? headerError.value : ''));
-  const receiptFxRates = computed(() => overview.value?.latestReceiptFxRates ?? []);
+  const receiptFxRates = computed(() =>
+    (overview.value?.latestReceiptFxRates ?? []).filter(
+      (rate) => rate.currency !== 'CNY' && rate.currency !== 'USDT'
+    )
+  );
 
   function loadHeader() {
     return exchangeRateQuery.refresh();
@@ -316,10 +319,6 @@ export function useExchangeRatesPage() {
     return activeTab.value === 'purchase'
       ? exchangeRateQuery.refresh()
       : Promise.resolve(undefined);
-  }
-
-  function loadAll() {
-    return exchangeRateQuery.refresh();
   }
 
   async function collectNow() {
@@ -540,7 +539,6 @@ export function useExchangeRatesPage() {
     loadRecords,
     loadManualEntries,
     loadPurchaseQuotes,
-    loadAll,
     collectNow,
     openSettings,
     saveSettings,
@@ -569,7 +567,6 @@ export function useExchangeRatesPage() {
     recordStatusType,
     receiptFxStatusLabel,
     receiptFxStatusType,
-    receiptFxSourceLabel,
-    receiptFxCapturedLabel
+    receiptFxSourceLabel
   };
 }
