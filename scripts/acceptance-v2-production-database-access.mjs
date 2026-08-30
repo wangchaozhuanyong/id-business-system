@@ -49,7 +49,7 @@ try {
     V2_RUNTIME_DATABASE_URL: `mysql://id_business_app:${runtimePassword}@127.0.0.1:${port}/${databaseName}`
   };
   runNodeScript('scripts/provision-v2-production-database-access.mjs', environment);
-  createAcceptanceIntegrityFunction();
+  createAcceptanceIntegrityObjects();
   runNodeScript('scripts/provision-v2-data-integrity-auditor.mjs', environment);
   runNodeScript('scripts/gate-v2-production-database-access.mjs', environment);
   await verifyRuntimeEnforcement(environment.V2_RUNTIME_DATABASE_URL);
@@ -106,7 +106,7 @@ function createAcceptanceSchema() {
   assert.equal(result.status, 0, result.stderr);
 }
 
-function createAcceptanceIntegrityFunction() {
+function createAcceptanceIntegrityObjects() {
   const result = spawnSync(
     'docker',
     [
@@ -121,8 +121,13 @@ function createAcceptanceIntegrityFunction() {
     ],
     {
       encoding: 'utf8',
-      input:
-        'CREATE FUNCTION `idv2_integrity_trigger_exists`() RETURNS INTEGER DETERMINISTIC NO SQL SQL SECURITY DEFINER RETURN 1;'
+      input: `
+        CREATE FUNCTION \`idv2_integrity_trigger_exists\`()
+        RETURNS INTEGER DETERMINISTIC NO SQL SQL SECURITY DEFINER RETURN 1;
+        CREATE TRIGGER \`idv2_acceptance_user_update_guard\`
+        BEFORE UPDATE ON \`users\`
+        FOR EACH ROW SET NEW.\`name\` = NEW.\`name\`;
+      `
     }
   );
   assert.equal(result.status, 0, result.stderr);
