@@ -39,6 +39,7 @@ database_name="$(read_environment_value MYSQL_DATABASE)"
 max_connection_usage_pct="$(read_environment_value MYSQL_PERFORMANCE_MAX_CONNECTION_USAGE_PCT)"
 max_query_ms="$(read_environment_value MYSQL_PERFORMANCE_MAX_QUERY_MS)"
 max_aborted_clients_delta="$(read_environment_value MYSQL_PERFORMANCE_MAX_ABORTED_CLIENTS_DELTA)"
+baseline_only="${MYSQL_PERFORMANCE_BASELINE_ONLY:-false}"
 max_connection_usage_pct="${max_connection_usage_pct:-70}"
 max_query_ms="${max_query_ms:-500}"
 max_aborted_clients_delta="${max_aborted_clients_delta:-25}"
@@ -63,6 +64,10 @@ fi
 if [[ ! "$max_aborted_clients_delta" =~ ^[0-9]+$ ]] ||
    ((max_aborted_clients_delta < 1 || max_aborted_clients_delta > 10000)); then
   echo 'MYSQL_PERFORMANCE_MAX_ABORTED_CLIENTS_DELTA 必须是 1 到 10000 之间的整数' >&2
+  exit 1
+fi
+if [[ "$baseline_only" != true && "$baseline_only" != false ]]; then
+  echo 'MYSQL_PERFORMANCE_BASELINE_ONLY 只能是 true 或 false' >&2
   exit 1
 fi
 
@@ -225,7 +230,10 @@ slow_query_alert=false
 aborted_clients_alert=false
 if ((connection_usage_pct >= max_connection_usage_pct)); then connection_alert=true; fi
 if ((slow_max_ms >= max_query_ms)); then slow_query_alert=true; fi
-if ((aborted_clients_delta >= max_aborted_clients_delta)); then aborted_clients_alert=true; fi
+if [[ "$baseline_only" != true ]] &&
+   ((aborted_clients_delta >= max_aborted_clients_delta)); then
+  aborted_clients_alert=true
+fi
 
 ok=true
 exit_status=0
@@ -235,9 +243,10 @@ if [[ "$connection_alert" == true || "$slow_query_alert" == true ||
   exit_status=1
 fi
 
-printf '{"ok":%s,"observedAt":"%s","connections":{"current":%s,"historicalMax":%s,"limit":%s,"usagePct":%s,"running":%s,"alert":%s},"aborted":{"clients":%s,"clientsDelta":%s,"connects":%s,"alert":%s},"slowestRecentDigest":{"digest":"%s","count":%s,"avgMs":%s,"maxMs":%s,"rowsExaminedPerCall":%s,"noIndexCount":%s,"alert":%s}}\n' \
+printf '{"ok":%s,"observedAt":"%s","baselineOnly":%s,"connections":{"current":%s,"historicalMax":%s,"limit":%s,"usagePct":%s,"running":%s,"alert":%s},"aborted":{"clients":%s,"clientsDelta":%s,"connects":%s,"alert":%s},"slowestRecentDigest":{"digest":"%s","count":%s,"avgMs":%s,"maxMs":%s,"rowsExaminedPerCall":%s,"noIndexCount":%s,"alert":%s}}\n' \
   "$ok" \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$baseline_only" \
   "$threads_connected" \
   "$max_used_connections" \
   "$max_connections" \

@@ -229,6 +229,8 @@ install_performance_timer() {
     "$timer_source" \
     /etc/systemd/system/id-business-v2-mysql-performance.timer
   systemctl daemon-reload
+  MYSQL_PERFORMANCE_BASELINE_ONLY=true \
+    "${RELEASE_DIRECTORY}/scripts/audit-aws-mysql-performance.sh"
   systemctl enable --now id-business-v2-mysql-performance.timer
   systemctl start id-business-v2-mysql-performance.service
 }

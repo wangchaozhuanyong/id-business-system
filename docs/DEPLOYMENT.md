@@ -194,7 +194,8 @@ sudo journalctl -u id-business-v2-production-retention.service -n 100 --no-pager
 
 ## 8. MySQL 连接池与慢查询观测
 
-生产服务器每 5 分钟执行一次只读 `performance_schema` 摘要：
+生产服务器每 5 分钟执行一次只读 `performance_schema` 摘要。发布安装器会先建立一次维护窗口基线，
+避免容器切换产生的预期断连被误判为日常 5 分钟异常增量；随后立即执行一次正常阈值巡检：
 
 ```bash
 sudo systemctl start id-business-v2-mysql-performance.service
