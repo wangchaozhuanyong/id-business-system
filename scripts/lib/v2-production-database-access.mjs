@@ -175,6 +175,23 @@ export function assertV2IntegrityFunctionDefiner(rows) {
   }
 }
 
+export function assertV2TriggerDefiners(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('生产数据库必须存在完整性触发器');
+  }
+
+  const invalidTriggers = rows.filter(
+    (row) => String(row.definer ?? '') !== `${MIGRATION_USERNAME}@%`
+  );
+  if (invalidTriggers.length > 0) {
+    const names = invalidTriggers
+      .map((row) => String(row.triggerName ?? 'unknown'))
+      .sort()
+      .join(', ');
+    throw new Error(`完整性触发器必须由 ${MIGRATION_USERNAME}@% 持有：${names}`);
+  }
+}
+
 function assertMigrationGrants(rows, databaseName) {
   const grants = grantTexts(rows).filter((grant) => !isUsageGrant(grant));
   const parsed = grants.length === 1 ? parseDatabaseGrant(grants[0]) : null;

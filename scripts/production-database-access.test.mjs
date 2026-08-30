@@ -5,6 +5,7 @@ import {
   V2_RUNTIME_DELETE_TABLES,
   assertV2IntegrityFunctionDefiner,
   assertV2ProductionDatabaseGrants,
+  assertV2TriggerDefiners,
   buildV2ProductionDatabaseAccountProvisioning,
   buildV2RuntimeTableGrantStatements
 } from './lib/v2-production-database-access.mjs';
@@ -206,4 +207,32 @@ test('integrity function remains owned by the dedicated migration identity', () 
   assert.match(migration, /DROP FUNCTION IF EXISTS `idv2_integrity_trigger_exists`/);
   assert.match(migration, /CREATE FUNCTION `idv2_integrity_trigger_exists`/);
   assert.match(migration, /SQL SECURITY DEFINER/);
+});
+
+test('integrity triggers remain owned by the dedicated migration identity', () => {
+  assert.doesNotThrow(() =>
+    assertV2TriggerDefiners([
+      { triggerName: 'idv2_exchange_run_update_guard', definer: 'id_business_migrator@%' },
+      { triggerName: 'idv2_order_snapshot_insert_capture', definer: 'id_business_migrator@%' }
+    ])
+  );
+  assert.throws(
+    () =>
+      assertV2TriggerDefiners([
+        { triggerName: 'idv2_exchange_run_update_guard', definer: 'id_business_app@%' }
+      ]),
+    /idv2_exchange_run_update_guard/
+  );
+  assert.throws(() => assertV2TriggerDefiners([]), /必须存在完整性触发器/);
+
+  const migration = readFileSync(
+    'apps/api/prisma-mysql/migrations/20260830182500_mysql_trigger_service_definers/migration.sql',
+    'utf8'
+  );
+  assert.equal([...migration.matchAll(/^DROP TRIGGER IF EXISTS /gm)].length, 48);
+  assert.equal([...migration.matchAll(/^CREATE TRIGGER /gm)].length, 48);
+  assert.doesNotMatch(migration, /CREATE\s+DEFINER/i);
+  assert.doesNotMatch(migration, /id_business_app/);
+  assert.match(migration, /CREATE TRIGGER `idv2_exchange_run_update_guard`/);
+  assert.match(migration, /CREATE TRIGGER `idv2_order_snapshot_insert_capture`/);
 });
