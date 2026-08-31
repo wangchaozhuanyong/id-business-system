@@ -1,6 +1,7 @@
 import type { V2PurchaseRateRoundingMode } from '@apple-business/shared';
 
 export interface UpdateIdBusinessV2PurchaseQuoteDto {
+  expectedUpdatedAt?: string;
   nameCn: string;
   displayName?: string | null;
   purchaseRatioPercent: string;

@@ -8,7 +8,10 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   Rate8,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
 } from '../runtime/public-api';
 import type { UpdateIdBusinessV2PurchaseRateSettingsDto } from './dto/update-id-business-v2-purchase-rate-settings.dto';
 import { IdBusinessV2PurchaseRateAutomationRepository } from './persistence/id-business-v2-purchase-rate-automation.repository';
@@ -53,24 +56,39 @@ export class IdBusinessV2PurchaseRateSettingsService {
       );
     }
     const abnormalChangeRate = this.parseAbnormalPercent(dto.abnormalChangePercent);
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '收购汇率设置');
     const now = new Date();
 
     const row = await this.transactionManager.execute(
       async (tx) => {
-        const updated = await this.repository.updateSettings(tx, {
-          autoEnabled: dto.autoEnabled,
-          intervalMinutes: DAILY_INTERVAL_MINUTES,
-          staleMinutes,
-          abnormalChangeRate: abnormalChangeRate.toString(),
-          nextRunAt: dto.autoEnabled ? this.nextDailyRun(now) : null,
-          updatedBy: { connect: { id: operator.id } }
-        });
+        const before = await this.repository.findSettingsInTransaction(tx);
+        if (!before) {
+          throw new ServiceUnavailableException('收购汇率设置尚未初始化，请刷新后重试');
+        }
+        assertV2ExpectedUpdatedAt(before.updatedAt, expectedUpdatedAt, '收购汇率设置');
+        const updated = await runV2OptimisticUpdate('收购汇率设置', () =>
+          this.repository.updateSettings(tx, expectedUpdatedAt, {
+            autoEnabled: dto.autoEnabled,
+            intervalMinutes: DAILY_INTERVAL_MINUTES,
+            staleMinutes,
+            abnormalChangeRate: abnormalChangeRate.toString(),
+            nextRunAt: dto.autoEnabled ? this.nextDailyRun(now) : null,
+            updatedBy: { connect: { id: operator.id } }
+          })
+        );
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.purchase_rate.settings.update',
           objectType: 'id_business_v2_purchase_rate_settings',
           objectId: '1',
+          beforeData: {
+            autoEnabled: before.autoEnabled,
+            intervalMinutes: before.intervalMinutes,
+            staleMinutes: before.staleMinutes,
+            abnormalChangeRate: before.abnormalChangeRate.toString(),
+            nextRunAt: before.nextRunAt?.toISOString() ?? null
+          },
           afterData: {
             autoEnabled: updated.autoEnabled,
             intervalMinutes: updated.intervalMinutes,

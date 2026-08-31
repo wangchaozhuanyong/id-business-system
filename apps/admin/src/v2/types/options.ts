@@ -137,5 +137,7 @@ export interface CreateV2OptionInput {
   remark?: string | null;
 }
 
-export type UpdateV2OptionInput = Omit<CreateV2OptionInput, 'type'>;
+export type UpdateV2OptionInput = Omit<CreateV2OptionInput, 'type'> & {
+  expectedUpdatedAt: string;
+};
 import type { PaginatedResult, V2PageQuery } from '@apple-business/shared';

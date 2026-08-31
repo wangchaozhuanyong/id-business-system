@@ -30,7 +30,7 @@ describe('IdBusinessV2BrandingService', () => {
     idBusinessV2BrandingSettings: {
       create: vi.fn(),
       findUnique: vi.fn(),
-      upsert: vi.fn()
+      update: vi.fn()
     },
     auditLog: { create: vi.fn() }
   };
@@ -52,9 +52,9 @@ describe('IdBusinessV2BrandingService', () => {
     prisma.idBusinessV2BrandingSettings.findUnique.mockResolvedValue(null);
     tx.idBusinessV2BrandingSettings.create.mockResolvedValue(brandingRecord());
     tx.idBusinessV2BrandingSettings.findUnique.mockResolvedValue(brandingRecord());
-    tx.idBusinessV2BrandingSettings.upsert.mockImplementation(async ({ update }) =>
+    tx.idBusinessV2BrandingSettings.update.mockImplementation(async ({ data }) =>
       brandingRecord({
-        ...update,
+        ...data,
         updatedByUserId: operator.id
       })
     );
@@ -87,6 +87,7 @@ describe('IdBusinessV2BrandingService', () => {
     await expect(
       service.update(
         {
+          expectedUpdatedAt: now.toISOString(),
           appName: '会员业务后台',
           logoText: 'VIP',
           logoUrl: '/brand/member-logo.svg',
@@ -106,9 +107,10 @@ describe('IdBusinessV2BrandingService', () => {
       updatedByUserId: operator.id
     });
 
-    expect(tx.idBusinessV2BrandingSettings.upsert).toHaveBeenCalledWith(
+    expect(tx.idBusinessV2BrandingSettings.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.objectContaining({
+        where: { id: 1, updatedAt: now },
+        data: expect.objectContaining({
           appName: '会员业务后台',
           logoText: 'VIP',
           logoUrl: '/brand/member-logo.svg',

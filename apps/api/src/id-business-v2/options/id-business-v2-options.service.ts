@@ -17,8 +17,11 @@ import {
   Amount4,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
   createV2DeletePreviewFingerprint,
+  normalizeV2ExpectedUpdatedAt,
   normalizeV2DeletePreviewFingerprint,
+  runV2OptimisticUpdate,
   type V2CommandTransaction
 } from '../runtime/public-api';
 import {
@@ -203,9 +206,11 @@ export class IdBusinessV2OptionsService {
     operator?: AuthenticatedUser,
     metadata: OptionCommandMetadata = {}
   ) {
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '业务选项');
     return this.transactionManager.execute(
       async (tx) => {
         const existing = await this.findOptionOrThrowInTransaction(tx, id);
+        assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, '业务选项');
         this.assertMutable(existing);
 
         const name = dto.name === undefined ? existing.name : normalizeOptionName(dto.name);
@@ -259,7 +264,9 @@ export class IdBusinessV2OptionsService {
           uniqueKey,
           operatorId: operator?.id
         };
-        const option = await this.repository.update(tx, existing.id, input);
+        const option = await runV2OptimisticUpdate('业务选项', () =>
+          this.repository.update(tx, existing.id, expectedUpdatedAt, input)
+        );
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
           module: 'id_business_v2_options',

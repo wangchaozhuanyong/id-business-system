@@ -57,10 +57,11 @@ export class IdBusinessV2PurchaseQuoteRepository {
   async updateCurrency(
     tx: V2CommandTransaction,
     code: string,
+    expectedUpdatedAt: Date,
     data: Prisma.IdBusinessV2PurchaseCurrencyUpdateInput
   ) {
     const row = await tx.idBusinessV2PurchaseCurrency.update({
-      where: { code },
+      where: { code, updatedAt: expectedUpdatedAt },
       data,
       include: PURCHASE_CURRENCY_INCLUDE
     });

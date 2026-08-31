@@ -1,8 +1,13 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { V2CommandTransactionManager } from '../runtime/public-api';
+import {
+  V2CommandTransactionManager,
+  assertV2ExpectedUpdatedAt,
+  normalizeOptionalV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
+} from '../runtime/public-api';
 import { IdBusinessV2SensitiveAccessService } from '../sensitive-access/public-api';
 import type { UpdateIdBusinessV2RenewalWarningSettingsDto } from './dto/update-id-business-v2-renewal-warning-settings.dto';
 import type {
@@ -50,6 +55,10 @@ export class IdBusinessV2RenewalWarningService {
       throw new BadRequestException('无法识别当前操作人');
     }
     const warningDays = this.validateWarningDays(dto.warningDays);
+    const expectedUpdatedAt = normalizeOptionalV2ExpectedUpdatedAt(
+      dto.expectedUpdatedAt,
+      '续费预警设置'
+    );
 
     const updated = await this.transactionManager.execute(
       async (tx) => {
@@ -60,11 +69,22 @@ export class IdBusinessV2RenewalWarningService {
         const previousWarningDays = existing
           ? this.parseStoredWarningDays(existing.warningDays)
           : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
-        const setting = await this.repository.upsertWarningSetting(tx, {
-          scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE,
-          warningDays,
-          updatedByUserId: operator.id
-        });
+        if (existing && expectedUpdatedAt === null) {
+          throw new ConflictException('续费预警设置已被其他人初始化，请刷新后重试。');
+        }
+        if (!existing && expectedUpdatedAt !== null) {
+          throw new ConflictException('续费预警设置已发生变化，请刷新后重试。');
+        }
+        if (existing && expectedUpdatedAt) {
+          assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, '续费预警设置');
+        }
+        const setting = await runV2OptimisticUpdate('续费预警设置', () =>
+          this.repository.saveWarningSetting(tx, expectedUpdatedAt, {
+            scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE,
+            warningDays,
+            updatedByUserId: operator.id
+          })
+        );
 
         await this.repository.appendAudit(tx, {
           userId: operator.id,
@@ -86,7 +106,8 @@ export class IdBusinessV2RenewalWarningService {
         changedScopes: ['renewal-warning-settings'],
         requestId: randomUUID(),
         operator,
-        retryMode: 'none'
+        retryMode: 'none',
+        uniqueConflictMessage: '续费预警设置已被其他人初始化，请刷新后重试'
       }
     );
 

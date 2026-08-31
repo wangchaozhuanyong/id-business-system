@@ -42,6 +42,12 @@ export {
   isUnsupportedFinanceCurrencyEnumError
 } from './id-business-v2-prisma-error';
 export {
+  assertV2ExpectedUpdatedAt,
+  normalizeOptionalV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
+} from './id-business-v2-optimistic-concurrency';
+export {
   V2RowMappingError,
   mapAmount4,
   mapOptionalAmount4,

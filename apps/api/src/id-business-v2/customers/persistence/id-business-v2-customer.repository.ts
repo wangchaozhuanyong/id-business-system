@@ -298,9 +298,14 @@ export class IdBusinessV2CustomerRepository {
     });
   }
 
-  update(tx: V2CommandTransaction, id: string, input: UpdateCustomerPersistenceInput) {
+  update(
+    tx: V2CommandTransaction,
+    id: string,
+    expectedUpdatedAt: Date,
+    input: UpdateCustomerPersistenceInput
+  ) {
     return tx.idBusinessV2Customer.update({
-      where: { id },
+      where: { id, updatedAt: expectedUpdatedAt },
       data: {
         name: input.name,
         phoneEncrypted: input.phoneEncrypted,

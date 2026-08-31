@@ -426,7 +426,10 @@ export function useOptionsPage() {
     saving.value = true;
     try {
       if (editingItem.value) {
-        await idBusinessV2OptionsApi.update(editingItem.value.id, payload);
+        await idBusinessV2OptionsApi.update(editingItem.value.id, {
+          ...payload,
+          expectedUpdatedAt: editingItem.value.updatedAt
+        });
         ElMessage.success('选项已更新');
       } else {
         await idBusinessV2OptionsApi.create({

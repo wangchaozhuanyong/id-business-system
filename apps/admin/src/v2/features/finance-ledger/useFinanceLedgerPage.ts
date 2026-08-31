@@ -281,6 +281,7 @@ export function useFinanceLedgerPage(
     try {
       if (editingAccount.value) {
         await idBusinessV2FinanceApi.updateAccount(editingAccount.value.id, {
+          expectedUpdatedAt: editingAccount.value.updatedAt,
           name: accountForm.name.trim(),
           status: accountForm.status,
           remark: accountForm.remark.trim()

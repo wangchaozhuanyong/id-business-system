@@ -109,9 +109,13 @@ export class IdBusinessV2PurchaseRateAutomationRepository {
 
   updateSettings(
     tx: V2CommandTransaction,
+    expectedUpdatedAt: Date,
     data: Prisma.IdBusinessV2PurchaseRateSettingsUpdateInput
   ) {
-    return tx.idBusinessV2PurchaseRateSettings.update({ where: { id: 1 }, data });
+    return tx.idBusinessV2PurchaseRateSettings.update({
+      where: { id: 1, updatedAt: expectedUpdatedAt },
+      data
+    });
   }
 
   listEnabledCurrencies(tx: V2CommandTransaction) {

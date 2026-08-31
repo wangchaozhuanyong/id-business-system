@@ -1,4 +1,5 @@
 export interface UpdateIdBusinessV2AccountDto {
+  expectedUpdatedAt?: string;
   appleId?: string;
   password?: string | null;
   phone?: string | null;

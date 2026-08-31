@@ -149,6 +149,7 @@ export const idBusinessV2ExchangeRatesApi = {
     );
   },
   updatePurchaseRateSettings(input: {
+    expectedUpdatedAt: string;
     autoEnabled: boolean;
     staleMinutes: number;
     abnormalChangePercent: string;
@@ -220,7 +221,11 @@ export const idBusinessV2ExchangeRatesApi = {
       })
     );
   },
-  bulkUpdatePurchaseQuotes(input: { currencyCodes: string[]; purchaseRatioPercent: string }) {
+  bulkUpdatePurchaseQuotes(input: {
+    currencyCodes: string[];
+    expectedUpdatedAtByCode: Record<string, string>;
+    purchaseRatioPercent: string;
+  }) {
     return withV2QueryInvalidation(
       request<V2PurchaseQuoteList>(
         http.patch('/id-business-v2/exchange-rates/purchase-quotes/bulk', input)

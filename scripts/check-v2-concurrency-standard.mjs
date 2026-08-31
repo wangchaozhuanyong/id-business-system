@@ -139,6 +139,117 @@ requireText(
   'IP 白名单删除必须提交列表快照版本'
 );
 
+const optimisticHelperPath =
+  'apps/api/src/id-business-v2/runtime/id-business-v2-optimistic-concurrency.ts';
+const optimisticHelper = read(optimisticHelperPath);
+requireText(
+  optimisticHelperPath,
+  optimisticHelper,
+  "isPrismaErrorCode(error, 'P2025')",
+  '条件写入丢失时必须统一转换为 409 冲突'
+);
+
+const sharedEditBackendContracts = [
+  [
+    'apps/api/src/id-business-v2/accounts/id-business-v2-accounts.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, 'ID 资料')"
+  ],
+  [
+    'apps/api/src/id-business-v2/customers/id-business-v2-customers.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '客户资料')"
+  ],
+  [
+    'apps/api/src/id-business-v2/options/id-business-v2-options.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '业务选项')"
+  ],
+  [
+    'apps/api/src/id-business-v2/branding/id-business-v2-branding.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '品牌设置')"
+  ],
+  [
+    'apps/api/src/id-business-v2/finance/id-business-v2-finance-accounts.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '资金账户')"
+  ],
+  [
+    'apps/api/src/id-business-v2/exchange-rates/id-business-v2-exchange-rate-settings.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '汇率设置')"
+  ],
+  [
+    'apps/api/src/id-business-v2/exchange-rates/id-business-v2-purchase-rate-settings.service.ts',
+    "normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '收购汇率设置')"
+  ],
+  [
+    'apps/api/src/id-business-v2/exchange-rates/id-business-v2-purchase-quote.service.ts',
+    'expectedUpdatedAtByCode'
+  ],
+  [
+    'apps/api/src/id-business-v2/renewals/id-business-v2-renewal-warning.service.ts',
+    'normalizeOptionalV2ExpectedUpdatedAt('
+  ]
+];
+for (const [path, fragment] of sharedEditBackendContracts) {
+  requireText(path, read(path), fragment, '共享编辑必须校验客户端读取版本');
+}
+
+const sharedEditPersistenceContracts = [
+  'apps/api/src/id-business-v2/accounts/persistence/id-business-v2-accounts.repository.ts',
+  'apps/api/src/id-business-v2/customers/persistence/id-business-v2-customer.repository.ts',
+  'apps/api/src/id-business-v2/options/persistence/id-business-v2-option.repository.ts',
+  'apps/api/src/id-business-v2/branding/persistence/id-business-v2-branding.repository.ts',
+  'apps/api/src/id-business-v2/finance/persistence/id-business-v2-finance-command.repository.ts',
+  'apps/api/src/id-business-v2/exchange-rates/persistence/id-business-v2-exchange-rate.repository.ts',
+  'apps/api/src/id-business-v2/exchange-rates/persistence/id-business-v2-purchase-rate-automation.repository.ts',
+  'apps/api/src/id-business-v2/exchange-rates/persistence/id-business-v2-purchase-quote.repository.ts',
+  'apps/api/src/id-business-v2/renewals/persistence/id-business-v2-renewals.repository.ts'
+];
+for (const path of sharedEditPersistenceContracts) {
+  requireText(path, read(path), 'updatedAt: expectedUpdatedAt', '最终写入必须携带版本条件');
+}
+
+const sharedEditUiContracts = [
+  ['apps/admin/src/v2/features/accounts/useAccountsPage.ts', 'editingItem.value.updatedAt'],
+  [
+    'apps/admin/src/v2/features/accounts/useAccountRecordStatus.ts',
+    'expectedUpdatedAt: target.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/customers/useCustomersPage.ts',
+    'expectedUpdatedAt: editingItem.value.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/options/useOptionsPage.ts',
+    'expectedUpdatedAt: editingItem.value.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/branding/V2BrandingSettingsView.vue',
+    'expectedUpdatedAt.value = settings.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/finance-ledger/useFinanceLedgerPage.ts',
+    'expectedUpdatedAt: editingAccount.value.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/exchange-rates/useExchangeRatesPage.ts',
+    'expectedUpdatedAt: current.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/exchange-rates/usePurchaseQuoteEditor.ts',
+    'expectedUpdatedAt: entry.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/exchange-rates/usePurchaseRateAutomation.ts',
+    'expectedUpdatedAt: settings.updatedAt'
+  ],
+  [
+    'apps/admin/src/v2/features/exchange-rates/usePurchaseRateAutomation.ts',
+    'expectedUpdatedAtByCode: Object.fromEntries('
+  ],
+  ['apps/admin/src/v2/features/renewals/useRenewalWarningSettings.ts', 'warningSettings.updatedAt']
+];
+for (const [path, fragment] of sharedEditUiContracts) {
+  requireText(path, read(path), fragment, '前端共享编辑必须提交当前快照版本');
+}
+
 const financialIntegrationPath =
   'apps/api/src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts';
 const financialIntegration = read(financialIntegrationPath);
@@ -170,5 +281,5 @@ if (failures.length) {
 }
 
 console.log(
-  `V2 并发标准检查通过：Serializable 事务、幂等重放、提交后事件、员工/角色乐观并发、白名单全局锁与版本校验、财务并发门禁均已锁定；Prisma 唯一幂等键 ${uniqueIdempotencyFields} 个。`
+  `V2 并发标准检查通过：Serializable 事务、幂等重放、提交后事件、全业务共享编辑乐观并发、白名单全局锁与版本校验、财务并发门禁均已锁定；Prisma 唯一幂等键 ${uniqueIdempotencyFields} 个。`
 );

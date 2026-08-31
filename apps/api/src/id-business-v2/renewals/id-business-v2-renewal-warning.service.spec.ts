@@ -46,7 +46,8 @@ describe('IdBusinessV2RenewalWarningService', () => {
   const tx = {
     idBusinessV2RenewalWarningSetting: {
       findUnique: vi.fn(),
-      upsert: vi.fn()
+      create: vi.fn(),
+      update: vi.fn()
     },
     auditLog: {
       create: vi.fn()
@@ -88,7 +89,7 @@ describe('IdBusinessV2RenewalWarningService', () => {
     prisma.idBusinessV2Activation.findFirst.mockResolvedValue(null);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.idBusinessV2RenewalWarningSetting.findUnique.mockResolvedValue(null);
-    tx.idBusinessV2RenewalWarningSetting.upsert.mockResolvedValue({
+    tx.idBusinessV2RenewalWarningSetting.create.mockResolvedValue({
       id: '77777777-7777-4777-8777-777777777777',
       updatedAt: now
     });
@@ -127,23 +128,13 @@ describe('IdBusinessV2RenewalWarningService', () => {
   });
 
   it('saves a validated global warning rule and writes an audit record atomically', async () => {
-    await expect(service.updateSettings({ warningDays: 5 }, operator)).resolves.toMatchObject({
-      warningDays: 5,
-      updatedAt: now
-    });
+    await expect(
+      service.updateSettings({ expectedUpdatedAt: null, warningDays: 5 }, operator)
+    ).resolves.toMatchObject({ warningDays: 5, updatedAt: now });
 
-    expect(tx.idBusinessV2RenewalWarningSetting.upsert).toHaveBeenCalledWith({
-      where: {
+    expect(tx.idBusinessV2RenewalWarningSetting.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
         scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
-      },
-      create: expect.objectContaining({
-        scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE,
-        warningDays: 5,
-        updatedByUserId: operator.id
-      }),
-      update: expect.objectContaining({
-        warningDays: 5,
-        updatedByUserId: operator.id
       })
     });
     expect(tx.auditLog.create).toHaveBeenCalledWith({

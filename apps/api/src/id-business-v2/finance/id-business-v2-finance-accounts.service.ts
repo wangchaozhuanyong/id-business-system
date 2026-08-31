@@ -4,7 +4,10 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   Rate8,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
 } from '../runtime/public-api';
 import type {
   CreateIdBusinessV2FinanceAccountDto,
@@ -143,9 +146,11 @@ export class IdBusinessV2FinanceAccountsService {
   }
 
   async update(id: string, dto: UpdateIdBusinessV2FinanceAccountDto, operator?: AuthenticatedUser) {
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '资金账户');
     return this.commandTransactions.execute(async (tx) => {
       const existing = await this.commandRepository.findFinanceAccount(tx, id);
       if (!existing) throw new NotFoundException('资金账户不存在');
+      assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, '资金账户');
       const name =
         dto.name === undefined
           ? existing.name
@@ -156,12 +161,14 @@ export class IdBusinessV2FinanceAccountsService {
       }
       const remark =
         dto.remark === undefined ? existing.remark : normalizeFinanceText(dto.remark, '备注', 2000);
-      const updated = await this.commandRepository.updateFinanceAccount(tx, id, {
-        name,
-        status,
-        remark,
-        updatedByUserId: operator?.id
-      });
+      const updated = await runV2OptimisticUpdate('资金账户', () =>
+        this.commandRepository.updateFinanceAccount(tx, id, expectedUpdatedAt, {
+          name,
+          status,
+          remark,
+          updatedByUserId: operator?.id
+        })
+      );
       await this.audit.append(tx, {
         userId: operator?.id,
         module: 'id_business_v2_finance',

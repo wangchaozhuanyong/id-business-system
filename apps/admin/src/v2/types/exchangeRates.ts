@@ -258,6 +258,7 @@ export interface CreateV2ExchangeRateEntryInput {
 }
 
 export interface UpdateV2ExchangeRateSettingsInput {
+  expectedUpdatedAt: string;
   autoEnabled: boolean;
   intervalMinutes: number;
   targetAmountRmb: string;
@@ -321,6 +322,7 @@ export interface V2PurchaseQuoteList {
 }
 
 export interface UpdateV2PurchaseQuoteInput {
+  expectedUpdatedAt: string;
   nameCn: string;
   displayName?: string | null;
   purchaseRatioPercent: string;

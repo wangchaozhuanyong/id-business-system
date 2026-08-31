@@ -13,7 +13,7 @@ export const idBusinessV2BrandingApi = {
       http.get('/id-business-v2/branding', { signal: options.signal })
     );
   },
-  async update(input: UpdateV2BrandingSettingsInput) {
+  async update(input: UpdateV2BrandingSettingsInput & { expectedUpdatedAt: string }) {
     const result = await request<V2BrandingSettings>(http.patch('/id-business-v2/branding', input));
     invalidateV2Queries('branding');
     return result;

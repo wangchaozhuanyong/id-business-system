@@ -105,6 +105,7 @@ export function useExchangeRatesPage() {
   });
   const { recordQuery, manualQuery, recordDateRange, manualDateRange } = filters;
   const settingsForm = reactive({
+    expectedUpdatedAt: '',
     autoEnabled: true,
     intervalMinutes: 15,
     targetAmountRmb: '5000',
@@ -346,6 +347,7 @@ export function useExchangeRatesPage() {
     const current = runtime.value?.settings;
     if (current) {
       Object.assign(settingsForm, {
+        expectedUpdatedAt: current.updatedAt,
         autoEnabled: current.autoEnabled,
         intervalMinutes: current.intervalMinutes,
         targetAmountRmb: current.targetAmountRmb,
@@ -358,6 +360,7 @@ export function useExchangeRatesPage() {
   async function saveSettings() {
     const amount = Number(settingsForm.targetAmountRmb);
     if (
+      !settingsForm.expectedUpdatedAt ||
       !isV2UnsignedDecimal(settingsForm.targetAmountRmb, { allowZero: false }) ||
       !Number.isFinite(amount) ||
       amount > 1_000_000 ||
@@ -370,6 +373,7 @@ export function useExchangeRatesPage() {
     settingsSaving.value = true;
     try {
       await idBusinessV2ExchangeRatesApi.updateSettings({
+        expectedUpdatedAt: settingsForm.expectedUpdatedAt,
         autoEnabled: settingsForm.autoEnabled,
         intervalMinutes: settingsForm.intervalMinutes,
         targetAmountRmb: settingsForm.targetAmountRmb.trim(),

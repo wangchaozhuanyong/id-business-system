@@ -105,18 +105,21 @@ export class IdBusinessV2RenewalsRepository {
   getWarningSettingInTransaction(tx: V2CommandTransaction, scope: string) {
     return tx.idBusinessV2RenewalWarningSetting.findUnique({
       where: { scope },
-      select: { id: true, warningDays: true }
+      select: { id: true, warningDays: true, updatedAt: true }
     });
   }
 
-  upsertWarningSetting(
+  saveWarningSetting(
     tx: V2CommandTransaction,
+    expectedUpdatedAt: Date | null,
     input: { scope: string; warningDays: number; updatedByUserId: string }
   ) {
-    return tx.idBusinessV2RenewalWarningSetting.upsert({
-      where: { scope: input.scope },
-      create: input,
-      update: {
+    if (expectedUpdatedAt === null) {
+      return tx.idBusinessV2RenewalWarningSetting.create({ data: input });
+    }
+    return tx.idBusinessV2RenewalWarningSetting.update({
+      where: { scope: input.scope, updatedAt: expectedUpdatedAt },
+      data: {
         warningDays: input.warningDays,
         updatedByUserId: input.updatedByUserId
       }
