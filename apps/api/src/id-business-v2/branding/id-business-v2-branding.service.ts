@@ -8,6 +8,9 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate,
   toV2JsonDocument
 } from '../runtime/public-api';
 import type { UpdateIdBusinessV2BrandingSettingsDto } from './dto/update-id-business-v2-branding-settings.dto';
@@ -38,13 +41,20 @@ export class IdBusinessV2BrandingService {
     }
 
     const input = this.normalizeUpdateInput(dto);
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '品牌设置');
     const updated = await this.transactionManager.execute(
       async (tx) => {
         const before = await this.repository.findSettings(tx);
-        const row = await this.repository.upsertSettings(tx, {
-          ...input,
-          updatedByUserId: operator.id
-        });
+        if (!before) {
+          throw new ServiceUnavailableException('品牌设置尚未初始化，请刷新后重试');
+        }
+        assertV2ExpectedUpdatedAt(before.updatedAt, expectedUpdatedAt, '品牌设置');
+        const row = await runV2OptimisticUpdate('品牌设置', () =>
+          this.repository.updateSettings(tx, expectedUpdatedAt, {
+            ...input,
+            updatedByUserId: operator.id
+          })
+        );
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',

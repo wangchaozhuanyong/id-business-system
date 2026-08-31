@@ -12,10 +12,13 @@ import { IdBusinessV2OptionsService } from '../options/public-api';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
   buildIdBusinessV2BlindIndexTokens,
   buildIdBusinessV2BlindQueryTokens,
   createV2DeletePreviewFingerprint,
+  normalizeV2ExpectedUpdatedAt,
   normalizeV2DeletePreviewFingerprint,
+  runV2OptimisticUpdate,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
@@ -28,7 +31,7 @@ import {
 } from './id-business-v2-customer-presentation';
 import type {
   IdBusinessV2CustomerAuditRequestMeta,
-  IdBusinessV2CustomerRecordStatus,
+  IdBusinessV2CustomerRecordStatus as CustomerRecordStatus,
   ListIdBusinessV2CustomersQuery
 } from './id-business-v2-customers.types';
 import type { CreateIdBusinessV2CustomerDto } from './dto/create-id-business-v2-customer.dto';
@@ -177,9 +180,11 @@ export class IdBusinessV2CustomersService {
     operator?: AuthenticatedUser,
     requestMeta: IdBusinessV2CustomerAuditRequestMeta = {}
   ) {
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '客户资料');
     return this.transactionManager.execute(
       async (tx) => {
         const existing = await this.findCustomerOrThrowInTransaction(tx, id);
+        assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, '客户资料');
         const phone =
           dto.phone === undefined ? undefined : this.normalizePhone(dto.phone, '手机号');
         const whatsapp =
@@ -255,7 +260,9 @@ export class IdBusinessV2CustomersService {
           tagOptionIds: tags?.map((tag) => tag.id),
           operatorId: operator?.id
         };
-        const customer = await this.repository.update(tx, existing.id, updateInput);
+        const customer = await runV2OptimisticUpdate('客户资料', () =>
+          this.repository.update(tx, existing.id, expectedUpdatedAt, updateInput)
+        );
         const response = toIdBusinessV2CustomerResponse(customer);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
@@ -393,10 +400,7 @@ export class IdBusinessV2CustomersService {
     return customer;
   }
 
-  private parseRecordStatus(
-    value: unknown,
-    required: boolean
-  ): IdBusinessV2CustomerRecordStatus | null {
+  private parseRecordStatus(value: unknown, required: boolean): CustomerRecordStatus | null {
     if (value === undefined || value === null || value === '') {
       if (required) throw new BadRequestException('资料状态不能为空');
       return null;
@@ -408,10 +412,8 @@ export class IdBusinessV2CustomersService {
   }
 
   private normalizeRequiredString(value: unknown, label: string) {
-    if (typeof value !== 'string' || !value.trim()) {
-      throw new BadRequestException(`${label}不能为空`);
-    }
-    const normalized = value.trim();
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) throw new BadRequestException(`${label}不能为空`);
     if (normalized.length > 120) throw new BadRequestException(`${label}过长`);
     return normalized;
   }

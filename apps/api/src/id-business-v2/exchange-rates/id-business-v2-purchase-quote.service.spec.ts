@@ -72,6 +72,7 @@ describe('IdBusinessV2PurchaseQuoteService', () => {
     const result = await service.update(
       'eur',
       {
+        expectedUpdatedAt: before.updatedAt.toISOString(),
         nameCn: '欧元',
         displayName: '欧元',
         purchaseRatioPercent: '60',
@@ -143,7 +144,11 @@ describe('IdBusinessV2PurchaseQuoteService', () => {
 
     await expect(
       service.bulkUpdate(
-        { currencyCodes: ['EUR'], purchaseRatioPercent: '100' },
+        {
+          currencyCodes: ['EUR'],
+          expectedUpdatedAtByCode: { EUR: before.updatedAt.toISOString() },
+          purchaseRatioPercent: '100'
+        },
         operator,
         'request-2'
       )
@@ -164,6 +169,7 @@ describe('IdBusinessV2PurchaseQuoteService', () => {
       service.update(
         'EUR',
         {
+          expectedUpdatedAt: currencyRecord().updatedAt.toISOString(),
           nameCn: '欧元',
           displayName: '欧元',
           purchaseRatioPercent: '60',

@@ -1,6 +1,7 @@
 import type { IdBusinessV2OptionStatus } from '@prisma/client';
 
 export interface UpdateIdBusinessV2OptionDto {
+  expectedUpdatedAt?: string;
   name?: string;
   parentId?: string | null;
   countryOptionId?: string | null;

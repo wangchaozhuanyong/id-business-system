@@ -150,8 +150,8 @@ export class IdBusinessV2ExchangeRateRepository {
     return mapExchangeRateEntry(row);
   }
 
-  async findSettings() {
-    const row = await this.prisma.idBusinessV2ExchangeRateSettings.findUnique({ where: { id: 1 } });
+  async findSettings(client: V2CommandTransaction | PrismaService = this.prisma) {
+    const row = await client.idBusinessV2ExchangeRateSettings.findUnique({ where: { id: 1 } });
     return row ? mapExchangeRateSettings(row) : null;
   }
 
@@ -169,8 +169,9 @@ export class IdBusinessV2ExchangeRateRepository {
     return mapExchangeRateSettings(row);
   }
 
-  async upsertSettings(
+  async updateSettings(
     tx: V2CommandTransaction,
+    expectedUpdatedAt: Date,
     input: {
       autoEnabled: boolean;
       intervalMinutes: number;
@@ -180,10 +181,9 @@ export class IdBusinessV2ExchangeRateRepository {
       updatedByUserId: string;
     }
   ) {
-    const row = await tx.idBusinessV2ExchangeRateSettings.upsert({
-      where: { id: 1 },
-      create: { id: 1, ...input },
-      update: input
+    const row = await tx.idBusinessV2ExchangeRateSettings.update({
+      where: { id: 1, updatedAt: expectedUpdatedAt },
+      data: input
     });
     return mapExchangeRateSettings(row);
   }

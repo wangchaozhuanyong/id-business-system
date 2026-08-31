@@ -111,9 +111,12 @@ export class IdBusinessV2FinanceCommandRepository {
   updateFinanceAccount(
     tx: Transaction,
     id: string,
+    expectedUpdatedAt: Date,
     data: Prisma.IdBusinessV2FinanceAccountUncheckedUpdateInput
   ) {
-    return tx.idBusinessV2FinanceAccount.update({ where: { id }, data }).then(mapFinanceAccount);
+    return tx.idBusinessV2FinanceAccount
+      .update({ where: { id, updatedAt: expectedUpdatedAt }, data })
+      .then(mapFinanceAccount);
   }
 
   findExpenseReplay(tx: Transaction, idempotencyKey: string) {

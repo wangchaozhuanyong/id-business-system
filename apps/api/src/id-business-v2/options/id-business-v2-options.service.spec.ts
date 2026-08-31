@@ -567,9 +567,13 @@ describe('IdBusinessV2OptionsService', () => {
       })
     );
 
-    await expect(service.update('system-normal', { name: '可用' }, operator)).rejects.toThrow(
-      '系统固定选项不能修改或删除'
-    );
+    await expect(
+      service.update(
+        'system-normal',
+        { expectedUpdatedAt: makeOption().updatedAt.toISOString(), name: '可用' },
+        operator
+      )
+    ).rejects.toThrow('系统固定选项不能修改或删除');
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 
@@ -586,7 +590,11 @@ describe('IdBusinessV2OptionsService', () => {
     prisma.idBusinessV2Option.count.mockResolvedValue(1);
 
     await expect(
-      service.update('country-us', { status: 'disabled' }, operator)
+      service.update(
+        'country-us',
+        { expectedUpdatedAt: makeOption().updatedAt.toISOString(), status: 'disabled' },
+        operator
+      )
     ).rejects.toBeInstanceOf(ConflictException);
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
@@ -647,9 +655,13 @@ describe('IdBusinessV2OptionsService', () => {
     prisma.idBusinessV2Option.count.mockResolvedValue(0);
     prisma.idBusinessV2Account.count.mockResolvedValue(1);
 
-    await expect(service.update('country-us', { status: 'disabled' }, operator)).rejects.toThrow(
-      '该国家仍有 ID 资料使用，不能停用'
-    );
+    await expect(
+      service.update(
+        'country-us',
+        { expectedUpdatedAt: makeOption().updatedAt.toISOString(), status: 'disabled' },
+        operator
+      )
+    ).rejects.toThrow('该国家仍有 ID 资料使用，不能停用');
     expect(prisma.idBusinessV2Option.update).not.toHaveBeenCalled();
   });
 

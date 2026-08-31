@@ -241,7 +241,8 @@ describe('IdBusinessV2CustomersService', () => {
   });
 
   it('keeps WhatsApp when omitted and clears every stored derivative when explicitly null', async () => {
-    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
+    const existing = makeCustomer();
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(existing);
     prisma.idBusinessV2Customer.update
       .mockResolvedValueOnce(makeCustomer({ qq: '20002' }))
       .mockResolvedValueOnce(
@@ -253,7 +254,11 @@ describe('IdBusinessV2CustomersService', () => {
         })
       );
 
-    await service.update('customer-1', { qq: '20002' }, operator);
+    await service.update(
+      'customer-1',
+      { expectedUpdatedAt: existing.updatedAt.toISOString(), qq: '20002' },
+      operator
+    );
     expect(prisma.idBusinessV2Customer.update.mock.calls[0]?.[0]?.data).toEqual(
       expect.objectContaining({
         qq: null,
@@ -266,7 +271,11 @@ describe('IdBusinessV2CustomersService', () => {
       })
     );
 
-    await service.update('customer-1', { whatsapp: null }, operator);
+    await service.update(
+      'customer-1',
+      { expectedUpdatedAt: existing.updatedAt.toISOString(), whatsapp: null },
+      operator
+    );
     expect(prisma.idBusinessV2Customer.update.mock.calls[1]?.[0]?.data).toEqual(
       expect.objectContaining({
         whatsappEncrypted: null,

@@ -196,6 +196,8 @@ import '@/v2/styles/branding.css';
 const formRef = ref<FormInstance>();
 const saving = ref(false);
 const form = reactive<UpdateV2BrandingSettingsInput>({ ...V2_BRANDING_DEFAULTS });
+const syncedForm = ref<UpdateV2BrandingSettingsInput>({ ...V2_BRANDING_DEFAULTS });
+const expectedUpdatedAt = ref('');
 const brandingQuery = useV2ModuleQuery<V2BrandingSettings>({
   moduleKey: 'branding',
   scope: 'branding',
@@ -210,15 +212,12 @@ const errorMessage = computed(() =>
 );
 const updatedAtText = computed(() => formatDate(brandingQuery.data.value?.updatedAt));
 const previewHeroLines = computed(() => splitV2BrandingHeroTitle(form.loginHeroTitle));
-const hasUnsavedChanges = computed(() => {
-  const settings = brandingQuery.data.value;
-  if (!settings) return false;
-  const savedForm = toFormInput(settings);
-  return Object.keys(savedForm).some((key) => {
+const hasUnsavedChanges = computed(() =>
+  Object.keys(syncedForm.value).some((key) => {
     const field = key as keyof UpdateV2BrandingSettingsInput;
-    return form[field] !== savedForm[field];
-  });
-});
+    return form[field] !== syncedForm.value[field];
+  })
+);
 const rules: FormRules<typeof form> = {
   appName: [requiredRule('请填写软件名称'), maxRule(V2_BRANDING_LIMITS.appName)],
   logoText: [requiredRule('请填写 Logo 文字'), maxRule(V2_BRANDING_LIMITS.logoText)],
@@ -265,18 +264,32 @@ watch(
   () => brandingQuery.data.value,
   (settings) => {
     if (!settings) return;
-    Object.assign(form, toFormInput(settings));
     setV2Branding(settings);
+    if (hasUnsavedChanges.value) return;
+    const nextForm = toFormInput(settings);
+    Object.assign(form, nextForm);
+    syncedForm.value = nextForm;
+    expectedUpdatedAt.value = settings.updatedAt;
   },
   { immediate: true }
 );
 
 async function submit() {
   if (saving.value || !(await validateV2Form(formRef.value))) return;
+  if (!expectedUpdatedAt.value) {
+    ElMessage.error('品牌设置尚未加载完成，请刷新后重试');
+    return;
+  }
   saving.value = true;
   try {
-    const settings = await idBusinessV2BrandingApi.update({ ...form });
-    Object.assign(form, toFormInput(settings));
+    const settings = await idBusinessV2BrandingApi.update({
+      ...form,
+      expectedUpdatedAt: expectedUpdatedAt.value
+    });
+    const nextForm = toFormInput(settings);
+    Object.assign(form, nextForm);
+    syncedForm.value = nextForm;
+    expectedUpdatedAt.value = settings.updatedAt;
     setV2Branding(settings);
     ElMessage.success('品牌与登录页设置已保存');
     void brandingQuery.refresh();

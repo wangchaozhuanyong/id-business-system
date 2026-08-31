@@ -21,6 +21,7 @@ function setup() {
     updatedAt: new Date('2026-08-20T10:03:00.000Z')
   };
   const repository = {
+    findSettingsInTransaction: vi.fn().mockResolvedValue(row),
     updateSettings: vi.fn().mockResolvedValue(row)
   };
   const transactionManager = {
@@ -44,11 +45,16 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
   afterEach(() => vi.useRealTimers());
 
   it('stores a percentage as a decimal ratio and schedules the next daily run', async () => {
-    const { service, repository, audit } = setup();
+    const { service, repository, audit, row } = setup();
 
     await expect(
       service.update(
-        { autoEnabled: true, staleMinutes: 1800, abnormalChangePercent: '10' },
+        {
+          expectedUpdatedAt: row.updatedAt.toISOString(),
+          autoEnabled: true,
+          staleMinutes: 1800,
+          abnormalChangePercent: '10'
+        },
         operator,
         'settings-1'
       )
@@ -60,6 +66,7 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
     });
     expect(repository.updateSettings).toHaveBeenCalledWith(
       expect.anything(),
+      row.updatedAt,
       expect.objectContaining({
         intervalMinutes: 1440,
         abnormalChangeRate: '0.1',
@@ -96,12 +103,18 @@ describe('IdBusinessV2PurchaseRateSettingsService', () => {
     });
 
     await service.update(
-      { autoEnabled: false, staleMinutes: 1800, abnormalChangePercent: '10' },
+      {
+        expectedUpdatedAt: row.updatedAt.toISOString(),
+        autoEnabled: false,
+        staleMinutes: 1800,
+        abnormalChangePercent: '10'
+      },
       operator,
       'settings-2'
     );
     expect(repository.updateSettings).toHaveBeenCalledWith(
       expect.anything(),
+      row.updatedAt,
       expect.objectContaining({ autoEnabled: false, nextRunAt: null })
     );
   });

@@ -550,9 +550,14 @@ export class IdBusinessV2OptionRepository {
     return mapOptionPersistenceRow(row);
   }
 
-  async update(tx: V2CommandTransaction, id: string, input: PersistOptionInput) {
+  async update(
+    tx: V2CommandTransaction,
+    id: string,
+    expectedUpdatedAt: Date,
+    input: PersistOptionInput
+  ) {
     const row = await tx.idBusinessV2Option.update({
-      where: { id },
+      where: { id, updatedAt: expectedUpdatedAt },
       data: {
         name: input.name,
         uniqueKey: input.uniqueKey,

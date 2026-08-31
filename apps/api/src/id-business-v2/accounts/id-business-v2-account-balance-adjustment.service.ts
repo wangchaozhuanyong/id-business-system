@@ -8,6 +8,8 @@ import {
   Rate8,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
@@ -46,6 +48,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
     requestId: string = randomUUID()
   ) {
     assertBalanceAdjustmentPermission(operator);
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, 'ID 资料');
     const normalizedExpected = this.balanceCalculator.normalizeSnapshot(
       String(requireBalanceSnapshotValue(dto.expectedCurrentBalance, '修改前余额')),
       String(requireBalanceSnapshotValue(dto.expectedBalanceCostAmount, '修改前人民币成本'))
@@ -107,6 +110,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
         }
 
         const existingAccount = await this.repository.findByIdOrThrow(accountId, tx);
+        assertV2ExpectedUpdatedAt(existingAccount.updatedAt, expectedUpdatedAt, 'ID 资料');
         const updateData = await buildUpdateData(tx, existingAccount);
 
         const balanceDelta = target.currentBalance.sub(locked.currentBalance);
@@ -169,7 +173,7 @@ export class IdBusinessV2AccountBalanceAdjustmentService {
           });
         }
 
-        const account = await this.repository.updateActive(tx, accountId, {
+        const account = await this.repository.updateActive(tx, accountId, expectedUpdatedAt, {
           ...updateData,
           currentBalance: target.currentBalance.toString(),
           balanceCostAmount: target.balanceCostAmount.toString()

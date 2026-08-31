@@ -86,7 +86,9 @@ export interface CreateV2CustomerInput {
   remark?: string | null;
 }
 
-export type UpdateV2CustomerInput = Partial<CreateV2CustomerInput>;
+export type UpdateV2CustomerInput = Partial<CreateV2CustomerInput> & {
+  expectedUpdatedAt: string;
+};
 
 export interface V2Account {
   id: string;
@@ -220,6 +222,7 @@ export interface V2AccountPurchaseSources {
 }
 
 export interface UpdateV2AccountInput extends Partial<CreateV2AccountInput> {
+  expectedUpdatedAt: string;
   expectedCurrentBalance?: string | number;
   expectedBalanceCostAmount?: string | number;
   balanceAdjustmentReason?: string;
@@ -227,6 +230,7 @@ export interface UpdateV2AccountInput extends Partial<CreateV2AccountInput> {
 }
 
 export interface ChangeV2AccountStatusInput {
+  expectedUpdatedAt: string;
   recordStatus: V2RecordStatus;
   reason: string;
 }

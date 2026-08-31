@@ -52,11 +52,12 @@ export const idBusinessV2RenewalsApi = {
       })
     );
   },
-  updateWarningSettings(warningDays: number) {
+  updateWarningSettings(warningDays: number, expectedUpdatedAt: string | null) {
     return withV2QueryInvalidation(
       request<V2RenewalWarningSettings>(
         http.patch('/id-business-v2/renewals/warning-settings', {
-          warningDays
+          warningDays,
+          expectedUpdatedAt
         })
       ),
       ['renewals', 'renewal-warning-settings', 'renewal-warning-summary']

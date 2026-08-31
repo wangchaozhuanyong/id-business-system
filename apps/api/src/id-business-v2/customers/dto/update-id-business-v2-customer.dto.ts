@@ -1,6 +1,7 @@
 import type { IdBusinessV2RecordStatus } from '@prisma/client';
 
 export interface UpdateIdBusinessV2CustomerDto {
+  expectedUpdatedAt?: string;
   name?: string;
   phone?: string | null;
   wechat?: string | null;

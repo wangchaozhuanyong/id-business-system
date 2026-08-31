@@ -380,6 +380,7 @@ describe('IdBusinessV2AccountsService', () => {
     const result = await service.update(
       existing.id,
       {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
         currentBalance: '15',
         balanceCostAmount: '45',
         expectedCurrentBalance: '20',
@@ -433,6 +434,7 @@ describe('IdBusinessV2AccountsService', () => {
     const result = await service.update(
       existing.id,
       {
+        expectedUpdatedAt: existing.updatedAt.toISOString(),
         currentBalance: '15',
         balanceCostAmount: '45',
         expectedCurrentBalance: '20',
@@ -484,6 +486,7 @@ describe('IdBusinessV2AccountsService', () => {
       service.update(
         existing.id,
         {
+          expectedUpdatedAt: existing.updatedAt.toISOString(),
           currentBalance: '15',
           balanceCostAmount: '45',
           expectedCurrentBalance: '20',
@@ -605,7 +608,11 @@ describe('IdBusinessV2AccountsService', () => {
     await expect(
       service.changeRecordStatus(
         'account-1',
-        { recordStatus: 'disabled', reason: '暂不投入使用' },
+        {
+          expectedUpdatedAt: makeAccount().updatedAt.toISOString(),
+          recordStatus: 'disabled',
+          reason: '暂不投入使用'
+        },
         operator
       )
     ).resolves.toMatchObject({
@@ -650,7 +657,11 @@ describe('IdBusinessV2AccountsService', () => {
     await expect(
       service.changeRecordStatus(
         'account-1',
-        { recordStatus: 'disabled', reason: '售后暂停' },
+        {
+          expectedUpdatedAt: soldAccount.updatedAt.toISOString(),
+          recordStatus: 'disabled',
+          reason: '售后暂停'
+        },
         operator
       )
     ).resolves.toMatchObject({

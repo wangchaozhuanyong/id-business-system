@@ -182,19 +182,21 @@ export class IdBusinessV2AccountsRepository {
   async updateActive(
     tx: V2CommandTransaction,
     accountId: string,
+    expectedUpdatedAt: Date,
     data: AccountUpdateData & { currentBalance?: string; balanceCostAmount?: string }
   ) {
     const result = await tx.idBusinessV2Account.updateMany({
-      where: { id: accountId, deletedAt: null, lossReportedAt: null },
+      where: { id: accountId, updatedAt: expectedUpdatedAt, deletedAt: null, lossReportedAt: null },
       data
     });
-    if (result.count !== 1) throw new ConflictException('该 ID 已报损，不能修改');
+    if (result.count !== 1) throw new ConflictException('ID 资料已发生变化，请刷新后重试');
     return this.findByIdOrThrow(accountId, tx);
   }
 
   async updateRecordStatus(
     tx: V2CommandTransaction,
     accountId: string,
+    expectedUpdatedAt: Date,
     input: {
       recordStatus: 'active' | 'disabled';
       disabledReason: string | null;
@@ -205,6 +207,7 @@ export class IdBusinessV2AccountsRepository {
     const result = await tx.idBusinessV2Account.updateMany({
       where: {
         id: accountId,
+        updatedAt: expectedUpdatedAt,
         deletedAt: null,
         lossReportedAt: null
       },

@@ -307,7 +307,10 @@ export function useCustomersPage() {
     saving.value = true;
     try {
       if (editingItem.value) {
-        await idBusinessV2CustomersApi.update(editingItem.value.id, payload);
+        await idBusinessV2CustomersApi.update(editingItem.value.id, {
+          ...payload,
+          expectedUpdatedAt: editingItem.value.updatedAt
+        });
         ElMessage.success('客户资料已更新');
       } else {
         await idBusinessV2CustomersApi.create(payload);
@@ -326,6 +329,7 @@ export function useCustomersPage() {
     if (customersQuery.isParameterTransition.value) return;
     try {
       await idBusinessV2CustomersApi.update(item.id, {
+        expectedUpdatedAt: item.updatedAt,
         recordStatus: item.recordStatus === 'active' ? 'disabled' : 'active'
       });
       ElMessage.success(item.recordStatus === 'active' ? '客户已停用' : '客户已启用');

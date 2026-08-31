@@ -21,7 +21,10 @@ import type { UpdateIdBusinessV2PurchaseQuoteDto } from './dto/update-id-busines
 import {
   Rate8,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
 } from '../runtime/public-api';
 import {
   IdBusinessV2PurchaseQuoteRepository,
@@ -84,6 +87,7 @@ export class IdBusinessV2PurchaseQuoteService {
     if (!operator?.id) throw new BadRequestException('无法识别当前操作人');
 
     const code = this.normalizeCode(codeValue);
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '收购报价');
     const nameCn = this.normalizeRequiredText(dto.nameCn, '币种名称', 50);
     const displayName = this.normalizeOptionalText(dto.displayName, '客户显示名称', 100);
     const purchaseRatio = this.parsePurchaseRatio(dto.purchaseRatioPercent);
@@ -109,18 +113,21 @@ export class IdBusinessV2PurchaseQuoteService {
       async (tx) => {
         const before = await this.repository.findCurrencyInTransaction(tx, code);
         if (!before) throw new NotFoundException('收购报价币种不存在');
+        assertV2ExpectedUpdatedAt(before.updatedAt, expectedUpdatedAt, '收购报价');
 
-        const updated = await this.repository.updateCurrency(tx, code, {
-          nameCn,
-          displayName,
-          purchaseRatio: purchaseRatio.toString(),
-          quoteUnit: quoteUnit.toString(),
-          decimalPlaces,
-          roundingMode,
-          enabled,
-          sortOrder,
-          updatedBy: { connect: { id: operator.id } }
-        });
+        const updated = await runV2OptimisticUpdate('收购报价', () =>
+          this.repository.updateCurrency(tx, code, expectedUpdatedAt, {
+            nameCn,
+            displayName,
+            purchaseRatio: purchaseRatio.toString(),
+            quoteUnit: quoteUnit.toString(),
+            decimalPlaces,
+            roundingMode,
+            enabled,
+            sortOrder,
+            updatedBy: { connect: { id: operator.id } }
+          })
+        );
 
         const marketRate = inputMarketRate ?? before.latestSnapshot?.marketRateCnyPerUnit ?? null;
         const marketRateCapturedAt =
@@ -218,16 +225,26 @@ export class IdBusinessV2PurchaseQuoteService {
     const codes = [...new Set(dto.currencyCodes.map((code) => this.normalizeCode(code)))];
     if (codes.length > 50) throw new BadRequestException('单次最多批量设置 50 个币种');
     const purchaseRatio = this.parsePurchaseRatio(dto.purchaseRatioPercent);
+    const expectedUpdatedAtByCode = new Map(
+      codes.map((code) => [
+        code,
+        normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAtByCode?.[code], `${code} 收购报价`)
+      ])
+    );
 
     await this.transactionManager.execute(
       async (tx) => {
         for (const code of codes) {
           const before = await this.repository.findCurrencyInTransaction(tx, code);
           if (!before) throw new NotFoundException(`收购报价币种 ${code} 不存在`);
-          await this.repository.updateCurrency(tx, code, {
-            purchaseRatio: purchaseRatio.toString(),
-            updatedBy: { connect: { id: operator.id } }
-          });
+          const expectedUpdatedAt = expectedUpdatedAtByCode.get(code)!;
+          assertV2ExpectedUpdatedAt(before.updatedAt, expectedUpdatedAt, `${code} 收购报价`);
+          await runV2OptimisticUpdate(`${code} 收购报价`, () =>
+            this.repository.updateCurrency(tx, code, expectedUpdatedAt, {
+              purchaseRatio: purchaseRatio.toString(),
+              updatedBy: { connect: { id: operator.id } }
+            })
+          );
           let snapshotId: string | null = null;
           if (before.latestSnapshot) {
             let calculation: ReturnType<typeof calculateV2PurchaseRate>;

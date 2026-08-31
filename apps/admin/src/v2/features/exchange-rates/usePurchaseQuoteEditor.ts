@@ -18,6 +18,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
   const purchaseSaving = ref(false);
   const purchaseForm = reactive({
     code: '',
+    expectedUpdatedAt: '',
     nameCn: '',
     displayName: '',
     purchaseRatioPercent: '',
@@ -69,6 +70,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
     }
     Object.assign(purchaseForm, {
       code: entry.code,
+      expectedUpdatedAt: entry.updatedAt,
       nameCn: entry.nameCn,
       displayName: entry.displayName || '',
       purchaseRatioPercent: entry.purchaseRatioPercent,
@@ -89,6 +91,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
     purchaseSaving.value = true;
     try {
       await idBusinessV2ExchangeRatesApi.updatePurchaseQuote(purchaseForm.code, {
+        expectedUpdatedAt: purchaseForm.expectedUpdatedAt,
         nameCn: purchaseForm.nameCn.trim(),
         displayName: purchaseForm.displayName.trim() || null,
         purchaseRatioPercent: purchaseForm.purchaseRatioPercent.trim(),

@@ -31,7 +31,7 @@ function settingsRecord(overrides: Record<string, unknown> = {}) {
 
 describe('IdBusinessV2ExchangeRateSettingsService', () => {
   const tx = {
-    idBusinessV2ExchangeRateSettings: { create: vi.fn(), upsert: vi.fn(), update: vi.fn() },
+    idBusinessV2ExchangeRateSettings: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     $queryRaw: vi.fn(),
     auditLog: { create: vi.fn() }
   };
@@ -56,13 +56,10 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
     prisma.$queryRaw.mockResolvedValueOnce([{ exists: true }]).mockResolvedValueOnce([]);
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
     tx.idBusinessV2ExchangeRateSettings.create.mockResolvedValue(settingsRecord());
-    tx.idBusinessV2ExchangeRateSettings.upsert.mockImplementation(async ({ update }) =>
-      settingsRecord({
-        ...update,
-        updatedByUserId: operator.id
-      })
+    tx.idBusinessV2ExchangeRateSettings.findUnique.mockResolvedValue(settingsRecord());
+    tx.idBusinessV2ExchangeRateSettings.update.mockImplementation(async ({ data }) =>
+      settingsRecord({ ...data, updatedByUserId: operator.id })
     );
-    tx.idBusinessV2ExchangeRateSettings.update.mockResolvedValue(settingsRecord());
     tx.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   });
 
@@ -95,7 +92,12 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
   it('saves an allowed interval and schedules an immediate collection with an audit record', async () => {
     await expect(
       service.update(
-        { autoEnabled: true, intervalMinutes: 30, targetAmountRmb: '8000.126' },
+        {
+          expectedUpdatedAt: now.toISOString(),
+          autoEnabled: true,
+          intervalMinutes: 30,
+          targetAmountRmb: '8000.126'
+        },
         operator
       )
     ).resolves.toMatchObject({
@@ -104,9 +106,10 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
       targetAmountRmb: '8000.13',
       nextRunAt: now
     });
-    expect(tx.idBusinessV2ExchangeRateSettings.upsert).toHaveBeenCalledWith(
+    expect(tx.idBusinessV2ExchangeRateSettings.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.objectContaining({
+        where: { id: 1, updatedAt: now },
+        data: expect.objectContaining({
           autoEnabled: true,
           intervalMinutes: 30,
           targetAmountRmb: '8000.13',
@@ -125,12 +128,17 @@ describe('IdBusinessV2ExchangeRateSettingsService', () => {
 
   it('closes scheduling by clearing nextRunAt and rejects unsupported settings', async () => {
     await service.update(
-      { autoEnabled: false, intervalMinutes: 15, targetAmountRmb: '5000' },
+      {
+        expectedUpdatedAt: now.toISOString(),
+        autoEnabled: false,
+        intervalMinutes: 15,
+        targetAmountRmb: '5000'
+      },
       operator
     );
-    expect(tx.idBusinessV2ExchangeRateSettings.upsert).toHaveBeenCalledWith(
+    expect(tx.idBusinessV2ExchangeRateSettings.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.objectContaining({ autoEnabled: false, nextRunAt: null })
+        data: expect.objectContaining({ autoEnabled: false, nextRunAt: null })
       })
     );
 

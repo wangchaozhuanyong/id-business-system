@@ -17,7 +17,9 @@ import {
   Amount4,
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
   buildIdBusinessV2BlindIndexTokens,
+  normalizeV2ExpectedUpdatedAt,
   toV2JsonDocument,
   type V2CommandTransaction
 } from '../runtime/public-api';
@@ -255,6 +257,7 @@ export class IdBusinessV2AccountsService {
       throw new BadRequestException('资料状态请使用专用的停用或启用操作');
     }
     const requestId = metadata.requestId ?? randomUUID();
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, 'ID 资料');
     const adjustsBalance = dto.currentBalance !== undefined || dto.balanceCostAmount !== undefined;
     const buildUpdateData = (tx: V2CommandTransaction, existing: AccountWithRelations) =>
       this.buildUpdateData(tx, existing, dto, operator);
@@ -273,8 +276,9 @@ export class IdBusinessV2AccountsService {
     return this.transactionManager.execute(
       async (tx) => {
         const existing = await this.repository.lockAccount(tx, id);
+        assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, 'ID 资料');
         const updateData = await buildUpdateData(tx, existing);
-        const account = await this.repository.updateActive(tx, id, updateData);
+        const account = await this.repository.updateActive(tx, id, expectedUpdatedAt, updateData);
         const response = toAccountResponse(account);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,
@@ -303,6 +307,7 @@ export class IdBusinessV2AccountsService {
     operator?: AuthenticatedUser,
     metadata: AccountCommandMeta = {}
   ) {
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, 'ID 资料');
     const targetStatus = parseRecordStatus(dto.recordStatus, true)!;
     const reason = normalizeAccountStatusReason(
       dto.reason,
@@ -311,16 +316,22 @@ export class IdBusinessV2AccountsService {
     return this.transactionManager.execute(
       async (tx, context) => {
         const existing = await this.repository.lockAccount(tx, id);
+        assertV2ExpectedUpdatedAt(existing.updatedAt, expectedUpdatedAt, 'ID 资料');
         assertAccountLossNotReported(existing.lossReportedAt, '已报损冻结 ID 不能启用或停用');
         if (existing.recordStatus === targetStatus) {
           return toAccountResponse(existing);
         }
-        const account = await this.repository.updateRecordStatus(tx, existing.id, {
-          recordStatus: targetStatus,
-          disabledReason: targetStatus === 'disabled' ? reason : null,
-          disabledAt: targetStatus === 'disabled' ? context.businessTime : null,
-          operatorId: operator?.id
-        });
+        const account = await this.repository.updateRecordStatus(
+          tx,
+          existing.id,
+          expectedUpdatedAt,
+          {
+            recordStatus: targetStatus,
+            disabledReason: targetStatus === 'disabled' ? reason : null,
+            disabledAt: targetStatus === 'disabled' ? context.businessTime : null,
+            operatorId: operator?.id
+          }
+        );
         const response = toAccountResponse(account);
         await this.transactionalAudit.append(tx, {
           userId: operator?.id,

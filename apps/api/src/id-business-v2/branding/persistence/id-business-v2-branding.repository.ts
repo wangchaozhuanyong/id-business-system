@@ -26,17 +26,14 @@ export class IdBusinessV2BrandingRepository {
     });
   }
 
-  upsertSettings(
+  updateSettings(
     tx: V2CommandTransaction,
+    expectedUpdatedAt: Date,
     input: UpdateV2BrandingSettingsInput & { updatedByUserId: string }
   ) {
-    return tx.idBusinessV2BrandingSettings.upsert({
-      where: { id: BRANDING_SETTINGS_ID },
-      create: {
-        id: BRANDING_SETTINGS_ID,
-        ...input
-      },
-      update: input
+    return tx.idBusinessV2BrandingSettings.update({
+      where: { id: BRANDING_SETTINGS_ID, updatedAt: expectedUpdatedAt },
+      data: input
     });
   }
 }

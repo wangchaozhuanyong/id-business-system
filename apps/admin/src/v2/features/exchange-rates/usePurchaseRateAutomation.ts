@@ -29,11 +29,16 @@ export function usePurchaseRateAutomation(options: {
   const settingsForm = reactive({
     autoEnabled: true,
     staleMinutes: 1800,
-    abnormalChangePercent: '10'
+    abnormalChangePercent: '10',
+    expectedUpdatedAt: ''
   });
   const bulkVisible = ref(false);
   const bulkSaving = ref(false);
-  const bulkForm = reactive({ currencyCodes: [] as string[], purchaseRatioPercent: '' });
+  const bulkForm = reactive({
+    currencyCodes: [] as string[],
+    purchaseRatioPercent: '',
+    expectedUpdatedAtByCode: {} as Record<string, string>
+  });
   const historyVisible = ref(false);
   const runPage = ref(1);
   const runPageSize = ref(20);
@@ -134,7 +139,8 @@ export function usePurchaseRateAutomation(options: {
       Object.assign(settingsForm, {
         autoEnabled: settings.autoEnabled,
         staleMinutes: settings.staleMinutes,
-        abnormalChangePercent: settings.abnormalChangePercent
+        abnormalChangePercent: settings.abnormalChangePercent,
+        expectedUpdatedAt: settings.updatedAt
       });
     }
     settingsVisible.value = true;
@@ -156,7 +162,13 @@ export function usePurchaseRateAutomation(options: {
     }
     settingsSaving.value = true;
     try {
+      const expectedUpdatedAt = settingsForm.expectedUpdatedAt;
+      if (!expectedUpdatedAt) {
+        ElMessage.error('收购汇率设置尚未加载完成，请刷新后重试');
+        return;
+      }
       await idBusinessV2ExchangeRatesApi.updatePurchaseRateSettings({
+        expectedUpdatedAt,
         autoEnabled: settingsForm.autoEnabled,
         staleMinutes: settingsForm.staleMinutes,
         abnormalChangePercent: settingsForm.abnormalChangePercent.trim()
@@ -190,12 +202,13 @@ export function usePurchaseRateAutomation(options: {
   }
 
   function openBulk() {
+    const enabledQuotes = options.quotes().filter((quote) => quote.enabled);
     Object.assign(bulkForm, {
-      currencyCodes: options
-        .quotes()
-        .filter((quote) => quote.enabled)
-        .map((quote) => quote.code),
-      purchaseRatioPercent: ''
+      currencyCodes: enabledQuotes.map((quote) => quote.code),
+      purchaseRatioPercent: '',
+      expectedUpdatedAtByCode: Object.fromEntries(
+        enabledQuotes.map((quote) => [quote.code, quote.updatedAt])
+      )
     });
     bulkVisible.value = true;
   }
@@ -219,6 +232,9 @@ export function usePurchaseRateAutomation(options: {
     try {
       await idBusinessV2ExchangeRatesApi.bulkUpdatePurchaseQuotes({
         currencyCodes: bulkForm.currencyCodes,
+        expectedUpdatedAtByCode: Object.fromEntries(
+          bulkForm.currencyCodes.map((code) => [code, bulkForm.expectedUpdatedAtByCode[code] ?? ''])
+        ),
         purchaseRatioPercent: bulkForm.purchaseRatioPercent.trim()
       });
       bulkVisible.value = false;

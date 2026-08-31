@@ -18,6 +18,7 @@ export interface CreateIdBusinessV2FinanceAccountDto {
 }
 
 export interface UpdateIdBusinessV2FinanceAccountDto {
+  expectedUpdatedAt?: string;
   name?: string;
   status?: IdBusinessV2FinanceAccountStatus;
   remark?: string | null;

@@ -5,7 +5,10 @@ import {
   V2_DECIMAL_PATTERN,
   V2_DECIMAL_PLACES,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  assertV2ExpectedUpdatedAt,
+  normalizeV2ExpectedUpdatedAt,
+  runV2OptimisticUpdate
 } from '../runtime/public-api';
 import type { UpdateIdBusinessV2ExchangeRateSettingsDto } from './dto/update-id-business-v2-exchange-rate-settings.dto';
 import { IdBusinessV2ExchangeRateRepository } from './persistence/id-business-v2-exchange-rate.repository';
@@ -61,23 +64,38 @@ export class IdBusinessV2ExchangeRateSettingsService {
     }
     const targetAmountRmb = this.parseTargetAmount(dto.targetAmountRmb);
     const retentionDays = this.parseRetentionDays(dto.retentionDays);
+    const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(dto.expectedUpdatedAt, '汇率设置');
     const now = new Date();
 
     const settings = await this.transactionManager.execute(
       async (tx) => {
-        const updated = await this.repository.upsertSettings(tx, {
-          autoEnabled: dto.autoEnabled,
-          intervalMinutes: dto.intervalMinutes,
-          targetAmountRmb: targetAmountRmb.toString(),
-          retentionDays,
-          nextRunAt: dto.autoEnabled ? now : null,
-          updatedByUserId: operator.id
-        });
+        const before = await this.repository.findSettings(tx);
+        if (!before) {
+          throw new ServiceUnavailableException('汇率设置尚未初始化，请刷新后重试');
+        }
+        assertV2ExpectedUpdatedAt(before.updatedAt, expectedUpdatedAt, '汇率设置');
+        const updated = await runV2OptimisticUpdate('汇率设置', () =>
+          this.repository.updateSettings(tx, expectedUpdatedAt, {
+            autoEnabled: dto.autoEnabled,
+            intervalMinutes: dto.intervalMinutes,
+            targetAmountRmb: targetAmountRmb.toString(),
+            retentionDays,
+            nextRunAt: dto.autoEnabled ? now : null,
+            updatedByUserId: operator.id
+          })
+        );
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
           action: 'id_business_v2.exchange_rate.settings.update',
           objectType: 'id_business_v2_exchange_rate_settings',
+          beforeData: {
+            autoEnabled: before.autoEnabled,
+            intervalMinutes: before.intervalMinutes,
+            targetAmountRmb: before.targetAmountRmb.toString(),
+            retentionDays: before.retentionDays,
+            nextRunAt: before.nextRunAt?.toISOString() ?? null
+          },
           afterData: {
             autoEnabled: updated.autoEnabled,
             intervalMinutes: updated.intervalMinutes,

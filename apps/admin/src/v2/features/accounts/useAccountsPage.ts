@@ -442,6 +442,7 @@ export function useAccountsPage() {
       if (editingItem.value) {
         const payload: UpdateV2AccountInput = {
           ...commonPayload,
+          expectedUpdatedAt: editingItem.value.updatedAt,
           purchaseCost: form.purchaseCost
         };
         if (form.appleId.trim()) payload.appleId = form.appleId.trim();

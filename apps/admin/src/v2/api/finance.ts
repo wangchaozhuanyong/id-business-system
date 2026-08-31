@@ -196,7 +196,12 @@ export const idBusinessV2FinanceApi = {
   },
   updateAccount(
     id: string,
-    payload: { name?: string; status?: V2FinanceAccountStatus; remark?: string }
+    payload: {
+      expectedUpdatedAt: string;
+      name?: string;
+      status?: V2FinanceAccountStatus;
+      remark?: string;
+    }
   ) {
     return withV2QueryInvalidation(
       request<V2FinanceAccount>(http.patch(`/id-business-v2/finance/accounts/${id}`, payload)),

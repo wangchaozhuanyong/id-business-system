@@ -55,6 +55,7 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
     recordStatusSubmitting.value = true;
     try {
       await idBusinessV2AccountsApi.changeRecordStatus(target.id, {
+        expectedUpdatedAt: target.updatedAt,
         recordStatus: targetRecordStatus.value,
         reason: recordStatusReason.value.trim()
       });

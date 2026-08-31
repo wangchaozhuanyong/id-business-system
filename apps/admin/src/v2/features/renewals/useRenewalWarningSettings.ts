@@ -60,7 +60,10 @@ export function useRenewalWarningSettings(options: {
     warningSettingsSaving.value = true;
     warningSettingsError.value = '';
     try {
-      const result = await idBusinessV2RenewalsApi.updateWarningSettings(warningDaysInput.value);
+      const result = await idBusinessV2RenewalsApi.updateWarningSettings(
+        warningDaysInput.value,
+        warningSettings.updatedAt
+      );
       Object.assign(warningSettings, result);
       await options.onSaved(result);
       window.dispatchEvent(new Event(RENEWAL_WARNING_REFRESH_EVENT));
