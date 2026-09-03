@@ -17,6 +17,8 @@ import { IdBusinessV2TotpAccountController } from './id-business-v2-totp-account
 import { IdBusinessV2TotpAccountService } from './id-business-v2-totp-account.service';
 import { IdBusinessV2WorkspaceController } from './id-business-v2-workspace.controller';
 import { IdBusinessV2WorkspaceService } from './id-business-v2-workspace.service';
+import { IdBusinessV2WebsiteMonitorController } from './id-business-v2-website-monitor.controller';
+import { IdBusinessV2WebsiteMonitorService } from './id-business-v2-website-monitor.service';
 import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-v2-managed-mailbox.repository';
 import { IdBusinessV2RelayScriptRepository } from './persistence/id-business-v2-relay-script.repository';
 import { IdBusinessV2TotpAccountRepository } from './persistence/id-business-v2-totp-account.repository';
@@ -31,6 +33,7 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
   imports: [IdBusinessV2RuntimeModule],
   controllers: [
     IdBusinessV2WorkspaceController,
+    IdBusinessV2WebsiteMonitorController,
     IdBusinessV2TotpAccountController,
     IdBusinessV2ManagedMailboxController,
     IdBusinessV2MicrosoftMailboxOAuthController,
@@ -40,6 +43,7 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
   ],
   providers: [
     IdBusinessV2WorkspaceService,
+    IdBusinessV2WebsiteMonitorService,
     IdBusinessV2WorkspaceRepository,
     IdBusinessV2TotpAccountService,
     IdBusinessV2TotpAccountRepository,

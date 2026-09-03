@@ -1,4 +1,5 @@
 import type {
+  CheckV2WebsiteInput,
   CreateV2SavedTotpAccountInput,
   CreateV2ManagedMailboxBatchInput,
   CreateV2ManagedMailboxBatchResult,
@@ -32,6 +33,7 @@ import type {
   V2RelayJobList,
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
+  V2WebsiteMonitorResult,
   V2WorkspaceShortcut,
   V2WorkspaceShortcutList
 } from '@apple-business/shared';
@@ -59,6 +61,14 @@ export const idBusinessV2WorkspaceApi = {
   reorder(input: ReorderV2WorkspaceShortcutsInput) {
     return request<V2WorkspaceShortcutList>(
       http.put('/id-business-v2/workspace-shortcuts/order', input)
+    );
+  },
+  checkWebsite(input: CheckV2WebsiteInput, options: ApiRequestOptions = {}) {
+    return request<V2WebsiteMonitorResult>(
+      http.post('/id-business-v2/workspace-website-monitor/check', input, {
+        signal: options.signal,
+        timeout: 85_000
+      })
     );
   },
   listTotpAccounts(options: ApiRequestOptions = {}) {

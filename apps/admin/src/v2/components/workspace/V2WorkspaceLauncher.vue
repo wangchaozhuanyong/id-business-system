@@ -78,6 +78,19 @@
             <el-icon><ArrowRight /></el-icon>
           </button>
           <button
+            class="v2-workspace-panel__tool is-website-monitor"
+            type="button"
+            title="网站监控"
+            @click="openWebsiteMonitor"
+          >
+            <el-icon><Monitor /></el-icon>
+            <span>
+              <strong>网站监控</strong>
+              <small>检测网站状态、速度和证书</small>
+            </span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button
             class="v2-workspace-panel__tool is-mail-viewer"
             type="button"
             title="邮箱查询与邮箱池"
@@ -119,6 +132,7 @@
     <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
     <V2RelayScriptDrawer v-model="relayScriptDrawerOpen" />
     <V2TotpToolDrawer v-model="totpToolOpen" />
+    <V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />
   </div>
 </template>
 
@@ -131,6 +145,7 @@ import {
   Connection,
   Key,
   Message,
+  Monitor,
   Setting,
   TopRight
 } from '@element-plus/icons-vue';
@@ -143,6 +158,7 @@ import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
 import V2RelayScriptDrawer from './V2RelayScriptDrawer.vue';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
+import V2WebsiteMonitorDrawer from './V2WebsiteMonitorDrawer.vue';
 import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
 
 defineProps<{ sidebarCollapsed: boolean }>();
@@ -157,6 +173,7 @@ const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
 const mailViewerDrawerOpen = ref(false);
 const relayScriptDrawerOpen = ref(false);
+const websiteMonitorOpen = ref(false);
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',
@@ -200,6 +217,12 @@ function openTotpTool() {
 function openMailViewerTool() {
   panelOpen.value = false;
   mailViewerDrawerOpen.value = true;
+  emit('requestCloseNavigation');
+}
+
+function openWebsiteMonitor() {
+  panelOpen.value = false;
+  websiteMonitorOpen.value = true;
   emit('requestCloseNavigation');
 }
 
@@ -470,6 +493,11 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 .v2-workspace-panel__tool.is-mail-viewer > .el-icon:first-child {
   background: var(--v3-info-soft);
   color: var(--v3-info);
+}
+
+.v2-workspace-panel__tool.is-website-monitor > .el-icon:first-child {
+  background: var(--v3-success-soft);
+  color: var(--v3-success);
 }
 
 .v2-workspace-panel__tool.is-mail-viewer > .el-icon:last-child {
