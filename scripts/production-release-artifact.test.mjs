@@ -111,6 +111,21 @@ test('release scripts pass shell syntax and production installation never builds
   assert.ok(discardArchiveIndex < postDeployRetentionIndex);
 });
 
+test('AWS deploy forwards all five immutable image references to the remote installer', () => {
+  const deployer = readFileSync(
+    resolve(projectRoot, 'scripts/deploy-aws-production-artifact.sh'),
+    'utf8'
+  );
+  assert.match(
+    deployer,
+    /"\$migration_digest" \\\n\s+"\$media_resolver_reference" \\\n\s+"\$media_resolver_digest" \\\n\s+"\$gate_reference" \\\n\s+"\$gate_digest" \\\n\s+"\$PRODUCTION_BASE_URL" \\\n\s+"\$PRODUCTION_COMPOSE_PROJECT" <<'REMOTE_DEPLOY'/u
+  );
+  assert.match(
+    deployer,
+    /migration_digest="\$6"\nmedia_resolver_reference="\$7"\nmedia_resolver_digest="\$8"\ngate_reference="\$9"\ngate_digest="\$\{10\}"\nproduction_base_url="\$\{11\}"\nproduction_compose_project="\$\{12\}"/u
+  );
+});
+
 test('tag workflow uploads one SHA-pinned immutable artifact', () => {
   const workflow = readFileSync(resolve(projectRoot, '.github/workflows/quality.yml'), 'utf8');
   assert.match(workflow, /tags:\s*\n\s*- 'v2-production-\*'/u);

@@ -278,6 +278,8 @@ ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- \
   "$admin_digest" \
   "$migration_reference" \
   "$migration_digest" \
+  "$media_resolver_reference" \
+  "$media_resolver_digest" \
   "$gate_reference" \
   "$gate_digest" \
   "$PRODUCTION_BASE_URL" \
@@ -301,10 +303,12 @@ admin_reference="$3"
 admin_digest="$4"
 migration_reference="$5"
 migration_digest="$6"
-gate_reference="$7"
-gate_digest="$8"
-production_base_url="$9"
-production_compose_project="${10}"
+media_resolver_reference="$7"
+media_resolver_digest="$8"
+gate_reference="$9"
+gate_digest="${10}"
+production_base_url="${11}"
+production_compose_project="${12}"
 
 deployment_root='/opt/id-business-v2'
 artifact_path="${incoming_directory}/${artifact_file}"
