@@ -45,7 +45,7 @@ test('release artifact verifier accepts a complete immutable bundle and rejects 
       sourceArchiveSha256: sha256File(join(payloadDirectory, 'source.tar.gz'))
     },
     images: Object.fromEntries(
-      ['api', 'admin', 'migration', 'gate'].map((name) => [
+      ['api', 'admin', 'migration', 'mediaResolver', 'gate'].map((name) => [
         name,
         { reference: `id-business-v2-${name}:${commit}`, digest: `sha256:${'b'.repeat(64)}` }
       ])

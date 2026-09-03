@@ -38,6 +38,20 @@ describe('API request policy registry', () => {
     );
   });
 
+  it('allows one long media download without automatically replaying it', () => {
+    expect(
+      getApiRequestPolicy('GET', '/id-business-v2/workspace-media/download?token=opaque')
+    ).toEqual({ retryDelaysMs: [], timeoutMs: 390_000 });
+    expect(
+      getApiRequestRetryDelay({
+        isNetworkError: true,
+        method: 'GET',
+        retryCount: 0,
+        url: '/id-business-v2/workspace-media/download?token=opaque'
+      })
+    ).toBeNull();
+  });
+
   it('does not retry writes, unrelated APIs or canceled requests', () => {
     const input = {
       isNetworkError: false,

@@ -215,7 +215,8 @@ while IFS= read -r image_reference; do
   [[ -n "$image_reference" && "$image_reference" != *':<none>' ]] || continue
   case "$image_reference" in
     id-business-v2-release-api:*|id-business-v2-release-admin:*|\
-    id-business-v2-release-migration:*|id-business-v2-release-gate:*)
+    id-business-v2-release-migration:*|id-business-v2-release-media-resolver:*|\
+    id-business-v2-release-gate:*)
       image_tag="${image_reference##*:}"
       if [[ "$image_tag" == "$current_commit" || "$image_tag" == "$previous_commit" ]]; then
         continue

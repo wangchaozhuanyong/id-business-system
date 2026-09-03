@@ -14,6 +14,7 @@ describe('personal workspace UI contract', () => {
   const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
   const websiteMonitorDrawer = read('./V2WebsiteMonitorDrawer.vue');
+  const mediaResolverDrawer = read('./V2MediaResolverDrawer.vue');
   const relayScriptDrawer = read('./V2RelayScriptDrawer.vue');
   const relayConnectionPanel = read('./V2RelayConnectionPanel.vue');
   const relayDeploymentPanel = read('./V2RelayDeploymentPanel.vue');
@@ -59,6 +60,20 @@ describe('personal workspace UI contract', () => {
     expect(websiteMonitorDrawer).not.toMatch(/localStorage|sessionStorage/);
   });
 
+  it('mounts the authenticated multi-platform resolver as a workspace drawer', () => {
+    expect(launcher).toContain('<strong>抖音解析</strong>');
+    expect(launcher).toContain('<V2MediaResolverDrawer v-model="mediaResolverDrawerOpen" />');
+    expect(mediaResolverDrawer).toContain('只解析可公开访问的单个作品');
+    expect(mediaResolverDrawer).toContain('不读取浏览器登录信息');
+    expect(mediaResolverDrawer).toContain('label-position="left"');
+    expect(mediaResolverDrawer).toContain('require-asterisk-position="right"');
+    expect(mediaResolverDrawer).toContain('min-height: 246px');
+    expect(workspaceApi).toContain("http.post('/id-business-v2/workspace-media/resolve'");
+    expect(workspaceApi).toContain("responseType: 'blob'");
+    expect(mediaResolverDrawer).not.toContain('localStorage');
+    expect(mediaResolverDrawer).not.toContain('sessionStorage');
+  });
+
   it('shows a tall two-column shortcut grid without redundant headings', () => {
     expect(launcher).toContain('height: min(720px, calc(100dvh - 92px))');
     expect(launcher).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
@@ -73,6 +88,7 @@ describe('personal workspace UI contract', () => {
     expect(launcher).toContain('<V2TotpToolDrawer');
     expect(launcher).toContain('<V2MailViewerDrawer');
     expect(launcher).toContain('<V2WebsiteMonitorDrawer');
+    expect(launcher).toContain('<V2MediaResolverDrawer');
     expect(launcher).toContain('<V2RelayScriptDrawer');
     expect(launcher).toContain('<strong>中转脚本</strong>');
     expect(launcher).toContain('v-if="isAdmin"');
@@ -83,11 +99,13 @@ describe('personal workspace UI contract', () => {
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
     expect(websiteMonitorDrawer).toContain('<el-drawer');
+    expect(mediaResolverDrawer).toContain('<el-drawer');
     expect(relayScriptDrawer).toContain('<el-drawer');
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
     expect(websiteMonitorDrawer).toContain('append-to-body');
+    expect(mediaResolverDrawer).toContain('append-to-body');
     expect(relayScriptDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('size="min(640px, 100%)"');
   });

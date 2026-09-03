@@ -91,6 +91,19 @@
             <el-icon><ArrowRight /></el-icon>
           </button>
           <button
+            class="v2-workspace-panel__tool is-media-resolver"
+            type="button"
+            title="抖音解析"
+            @click="openMediaResolver"
+          >
+            <el-icon><VideoPlay /></el-icon>
+            <span>
+              <strong>抖音解析</strong>
+              <small>支持国内抖音及多个主流平台</small>
+            </span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button
             class="v2-workspace-panel__tool is-mail-viewer"
             type="button"
             title="邮箱查询与邮箱池"
@@ -130,6 +143,7 @@
       :refresh="shortcutsQuery.refresh"
     />
     <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
+    <V2MediaResolverDrawer v-model="mediaResolverDrawerOpen" />
     <V2RelayScriptDrawer v-model="relayScriptDrawerOpen" />
     <V2TotpToolDrawer v-model="totpToolOpen" />
     <V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />
@@ -147,7 +161,8 @@ import {
   Message,
   Monitor,
   Setting,
-  TopRight
+  TopRight,
+  VideoPlay
 } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -156,6 +171,7 @@ import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
+import V2MediaResolverDrawer from './V2MediaResolverDrawer.vue';
 import V2RelayScriptDrawer from './V2RelayScriptDrawer.vue';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
 import V2WebsiteMonitorDrawer from './V2WebsiteMonitorDrawer.vue';
@@ -172,6 +188,7 @@ const workspaceActivated = ref(false);
 const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
 const mailViewerDrawerOpen = ref(false);
+const mediaResolverDrawerOpen = ref(false);
 const relayScriptDrawerOpen = ref(false);
 const websiteMonitorOpen = ref(false);
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
@@ -223,6 +240,12 @@ function openMailViewerTool() {
 function openWebsiteMonitor() {
   panelOpen.value = false;
   websiteMonitorOpen.value = true;
+  emit('requestCloseNavigation');
+}
+
+function openMediaResolver() {
+  panelOpen.value = false;
+  mediaResolverDrawerOpen.value = true;
   emit('requestCloseNavigation');
 }
 
@@ -488,6 +511,11 @@ function handleDocumentKeydown(event: KeyboardEvent) {
   border-radius: 5px;
   background: var(--v3-success-soft);
   color: var(--v2-success);
+}
+
+.v2-workspace-panel__tool.is-media-resolver > .el-icon:first-child {
+  background: var(--v2-accent-soft);
+  color: var(--v2-accent);
 }
 
 .v2-workspace-panel__tool.is-mail-viewer > .el-icon:first-child {

@@ -25,6 +25,8 @@ for variable in \
   RELEASE_ADMIN_DIGEST \
   RELEASE_MIGRATION_IMAGE \
   RELEASE_MIGRATION_DIGEST \
+  RELEASE_MEDIA_RESOLVER_IMAGE \
+  RELEASE_MEDIA_RESOLVER_DIGEST \
   RELEASE_GATE_IMAGE \
   RELEASE_GATE_DIGEST \
   PRODUCTION_BASE_URL \
@@ -64,6 +66,7 @@ for digest in \
   "$RELEASE_API_DIGEST" \
   "$RELEASE_ADMIN_DIGEST" \
   "$RELEASE_MIGRATION_DIGEST" \
+  "$RELEASE_MEDIA_RESOLVER_DIGEST" \
   "$RELEASE_GATE_DIGEST"; do
   if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
     echo '发布镜像 digest 无效' >&2
@@ -162,6 +165,9 @@ fi
 old_api_image="$(docker image inspect "${compose_project}-api:latest" --format '{{.Id}}')"
 old_admin_image="$(docker image inspect "${compose_project}-admin:latest" --format '{{.Id}}')"
 old_migration_image="$(docker image inspect "${compose_project}-migrate:latest" --format '{{.Id}}')"
+old_media_resolver_image="$(
+  docker image inspect "${compose_project}-media-resolver:latest" --format '{{.Id}}' 2>/dev/null || true
+)"
 
 echo '加载 CI 不可变生产镜像制品'
 docker load --input "$RELEASE_IMAGE_ARCHIVE" >/dev/null
@@ -180,6 +186,7 @@ verify_image_digest() {
 verify_image_digest "$RELEASE_API_IMAGE" "$RELEASE_API_DIGEST"
 verify_image_digest "$RELEASE_ADMIN_IMAGE" "$RELEASE_ADMIN_DIGEST"
 verify_image_digest "$RELEASE_MIGRATION_IMAGE" "$RELEASE_MIGRATION_DIGEST"
+verify_image_digest "$RELEASE_MEDIA_RESOLVER_IMAGE" "$RELEASE_MEDIA_RESOLVER_DIGEST"
 verify_image_digest "$RELEASE_GATE_IMAGE" "$RELEASE_GATE_DIGEST"
 
 timers_stopped=0
@@ -247,12 +254,21 @@ rollback_application() {
   docker tag "$old_api_image" "${compose_project}-api:latest" || true
   docker tag "$old_admin_image" "${compose_project}-admin:latest" || true
   docker tag "$old_migration_image" "${compose_project}-migrate:latest" || true
+  if [[ -n "$old_media_resolver_image" ]]; then
+    docker tag "$old_media_resolver_image" "${compose_project}-media-resolver:latest" || true
+  else
+    cd "$RELEASE_DIRECTORY" || return
+    docker compose --env-file "$environment_file" -f "$compose_file" stop media-resolver || true
+  fi
   atomic_current_switch "$PREVIOUS_RELEASE_DIRECTORY" || true
   cd "$PREVIOUS_RELEASE_DIRECTORY" || return
-  docker compose \
-    --env-file "$previous_environment_file" \
-    -f "$previous_compose_file" \
-    up -d --no-build --force-recreate migrate api admin caddy || true
+  previous_services=(migrate api admin caddy)
+  if docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" \
+    config --services | grep -qx media-resolver; then
+    previous_services=(migrate media-resolver api admin caddy)
+  fi
+  docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" \
+    up -d --no-build --force-recreate "${previous_services[@]}" || true
 }
 
 cleanup() {
@@ -368,11 +384,12 @@ docker run --rm --network host \
 
 docker tag "$RELEASE_API_IMAGE" "${compose_project}-api:latest"
 docker tag "$RELEASE_ADMIN_IMAGE" "${compose_project}-admin:latest"
+docker tag "$RELEASE_MEDIA_RESOLVER_IMAGE" "${compose_project}-media-resolver:latest"
 
 echo '使用已校验制品更新应用容器'
 application_updated=1
 docker compose --env-file "$environment_file" -f "$compose_file" \
-  up -d --no-build --force-recreate migrate api admin caddy
+  up -d --no-build --force-recreate migrate media-resolver api admin caddy
 
 wait_for_service() {
   local service="$1"
@@ -394,7 +411,7 @@ wait_for_service() {
   return 1
 }
 
-for service in mysql api admin caddy; do
+for service in mysql media-resolver api admin caddy; do
   wait_for_service "$service"
 done
 
@@ -427,7 +444,7 @@ if [[ "$(systemctl show id-business-v2-mysql-backup.service --property=Result --
   exit 1
 fi
 
-for service in mysql api admin caddy; do
+for service in mysql media-resolver api admin caddy; do
   wait_for_service "$service"
 done
 
