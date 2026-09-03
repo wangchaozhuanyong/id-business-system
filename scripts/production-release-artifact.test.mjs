@@ -73,6 +73,13 @@ test('release artifact verifier accepts a complete immutable bundle and rejects 
   }
 });
 
+test('release artifact verifier uses streaming IO for release file hashes', () => {
+  const source = readFileSync(verifier, 'utf8');
+  assert.match(source, /createReadStream\(path\)/u);
+  assert.match(source, /for await \(const chunk of stream\)/u);
+  assert.doesNotMatch(source, /createHash\('sha256'\)\.update\(readFileSync\(path\)\)/u);
+});
+
 test('release scripts pass shell syntax and production installation never builds images', () => {
   for (const script of [
     'scripts/package-production-release.sh',

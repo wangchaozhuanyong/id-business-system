@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,7 +38,7 @@ for (const name of ['api', 'admin', 'migration', 'mediaResolver', 'gate']) {
 
 const artifactPath = resolve(directory, artifactFile);
 assert.ok(statSync(artifactPath).isFile(), '发布制品文件不存在');
-assert.equal(sha256File(artifactPath), manifest.artifact.sha256, '发布制品 SHA-256 不一致');
+assert.equal(await sha256File(artifactPath), manifest.artifact.sha256, '发布制品 SHA-256 不一致');
 
 const entries = listTar(artifactPath);
 assert.deepEqual(entries.sort(), ['images.tar', 'source.tar.gz'], '发布制品内容不符合约定');
@@ -49,12 +49,12 @@ try {
   const imageArchive = join(extractionDirectory, 'images.tar');
   const sourceArchive = join(extractionDirectory, 'source.tar.gz');
   assert.equal(
-    sha256File(imageArchive),
+    await sha256File(imageArchive),
     manifest.artifact.imageArchiveSha256,
     '镜像归档 SHA-256 不一致'
   );
   assert.equal(
-    sha256File(sourceArchive),
+    await sha256File(sourceArchive),
     manifest.artifact.sourceArchiveSha256,
     '源码归档 SHA-256 不一致'
   );
@@ -102,8 +102,13 @@ function parseArguments(argumentsList) {
   return parsed;
 }
 
-function sha256File(path) {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
+async function sha256File(path) {
+  const hash = createHash('sha256');
+  const stream = createReadStream(path);
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+  return hash.digest('hex');
 }
 
 function listTar(path) {
