@@ -91,6 +91,17 @@ test('release scripts pass shell syntax and production installation never builds
   assert.doesNotMatch(installer, /--build(?:\s|$)/u);
   assert.match(installer, /docker load/u);
   assert.match(installer, /flock -n/u);
+  assert.match(
+    installer,
+    /"\$\{deployment_root\}\/incoming\/"\*\/extracted\/images\.tar/u,
+    '临时镜像归档只能从受控 incoming 路径删除'
+  );
+  const discardArchiveIndex = installer.indexOf('rm -f -- "$RELEASE_IMAGE_ARCHIVE"');
+  const postDeployRetentionIndex = installer.indexOf(
+    'cleanup-aws-production-retention.sh" --post-deploy'
+  );
+  assert.ok(discardArchiveIndex > installer.indexOf('docker load'));
+  assert.ok(discardArchiveIndex < postDeployRetentionIndex);
 });
 
 test('tag workflow uploads one SHA-pinned immutable artifact', () => {
