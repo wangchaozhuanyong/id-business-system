@@ -4,7 +4,7 @@
 
 生产环境只使用 AWS：
 
-- EC2 运行 Caddy、Vue 管理端、NestJS API 和 MySQL 8.4。
+- EC2 运行 Caddy、Vue 管理端、NestJS API、内网媒体解析器和 MySQL 8.4。
 - Docker Compose 负责服务编排和健康检查。
 - EBS Docker volume 保存 MySQL 数据。
 - 私有 S3 存储桶保存服务端加密的异地备份。
@@ -17,6 +17,7 @@
 - 编排：`docker-compose.aws-mysql.yml`
 - API 镜像：`apps/api/Dockerfile.mysql`
 - 前端镜像：`apps/admin/Dockerfile`
+- 媒体解析镜像：`apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile`
 - HTTPS 入口：`deploy/caddy/Caddyfile.aws`
 
 API Dockerfile 提供两个独立目标：`runtime` 只保留生产依赖、Prisma Client 和编译产物，`migration`
@@ -52,9 +53,9 @@ npm run git:readiness
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
 6. 创建不可移动的带说明正式标签 `v2-production-<UTC>` 并推送。标签必须指向当前
    `origin/main` 完整 SHA，且不得重用或强制移动。
-7. 标签 CI 只构建一次 API、管理端、migration 和发布门禁镜像，导出单一不可变制品，
+7. 标签 CI 只构建一次 API、管理端、migration、媒体解析和发布门禁镜像，导出单一不可变制品，
    上传 `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、
-   制品 SHA-256 及四个镜像 digest。
+   制品 SHA-256 及五个镜像 digest。
 8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
 
 正式顺序固定为：
@@ -123,7 +124,7 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ru
 必须得到数据库四身份 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
 本机门禁连接；脚本检测到运行账号 DDL、越界 DELETE、审计写权限或账号复用时会主动拒绝运行。
 
-9. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`api`、`admin`、
+9. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`media-resolver`、`api`、`admin`、
    `caddy` 健康，并执行整站巡检：
 
 ```bash
@@ -139,7 +140,7 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 
 10. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
     完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
-    制品名称与 SHA-256、四个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
+    制品名称与 SHA-256、五个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
 11. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，执行一次发布后保留清理，并安装、启用
     `id-business-v2-production-retention.timer` 和每 5 分钟执行的
     `id-business-v2-mysql-performance.timer`。同时核验备份服务、自动备份、每周恢复验证、每日

@@ -20,6 +20,7 @@ for variable in \
   RELEASE_API_IMAGE \
   RELEASE_ADMIN_IMAGE \
   RELEASE_MIGRATION_IMAGE \
+  RELEASE_MEDIA_RESOLVER_IMAGE \
   RELEASE_GATE_IMAGE; do
   require_variable "$variable"
 done
@@ -66,6 +67,7 @@ docker save \
   "$RELEASE_API_IMAGE" \
   "$RELEASE_ADMIN_IMAGE" \
   "$RELEASE_MIGRATION_IMAGE" \
+  "$RELEASE_MEDIA_RESOLVER_IMAGE" \
   "$RELEASE_GATE_IMAGE"
 git archive --format=tar.gz --output="$source_archive" "$RELEASE_COMMIT"
 
@@ -77,10 +79,11 @@ artifact_sha256="$(sha256sum "$artifact_path" | awk '{print $1}')"
 api_digest="$(docker image inspect "$RELEASE_API_IMAGE" --format '{{.Id}}')"
 admin_digest="$(docker image inspect "$RELEASE_ADMIN_IMAGE" --format '{{.Id}}')"
 migration_digest="$(docker image inspect "$RELEASE_MIGRATION_IMAGE" --format '{{.Id}}')"
+media_resolver_digest="$(docker image inspect "$RELEASE_MEDIA_RESOLVER_IMAGE" --format '{{.Id}}')"
 gate_digest="$(docker image inspect "$RELEASE_GATE_IMAGE" --format '{{.Id}}')"
 
 export artifact_file artifact_sha256 image_archive_sha256 source_archive_sha256
-export api_digest admin_digest migration_digest gate_digest
+export api_digest admin_digest migration_digest media_resolver_digest gate_digest
 node --input-type=module >"$manifest_path" <<'NODE'
 const required = [
   'RELEASE_SOURCE_BRANCH',
@@ -92,6 +95,7 @@ const required = [
   'RELEASE_API_IMAGE',
   'RELEASE_ADMIN_IMAGE',
   'RELEASE_MIGRATION_IMAGE',
+  'RELEASE_MEDIA_RESOLVER_IMAGE',
   'RELEASE_GATE_IMAGE',
   'artifact_file',
   'artifact_sha256',
@@ -100,6 +104,7 @@ const required = [
   'api_digest',
   'admin_digest',
   'migration_digest',
+  'media_resolver_digest',
   'gate_digest'
 ];
 for (const name of required) {
@@ -126,6 +131,10 @@ const manifest = {
     api: image(process.env.RELEASE_API_IMAGE, process.env.api_digest),
     admin: image(process.env.RELEASE_ADMIN_IMAGE, process.env.admin_digest),
     migration: image(process.env.RELEASE_MIGRATION_IMAGE, process.env.migration_digest),
+    mediaResolver: image(
+      process.env.RELEASE_MEDIA_RESOLVER_IMAGE,
+      process.env.media_resolver_digest
+    ),
     gate: image(process.env.RELEASE_GATE_IMAGE, process.env.gate_digest)
   },
   environment: 'production',

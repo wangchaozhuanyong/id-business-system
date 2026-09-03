@@ -64,6 +64,25 @@ services:
       mysql:
         condition: service_healthy
 
+  media-resolver:
+    build:
+      context: .
+      dockerfile: apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=640m
+    pids_limit: 128
+    mem_limit: 768m
+    logging: *default-logging
+    networks:
+      - media-egress
+
   api:
     build:
       context: .
@@ -100,6 +119,7 @@ services:
       ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED: ${ID_BUSINESS_V2_EXCHANGE_RATE_NETWORK_ENABLED:-true}
       CURRENCY_RATE_PROVIDER: ${CURRENCY_RATE_PROVIDER:-exchange_rate_api}
       CURRENCY_RATE_REQUEST_TIMEOUT_MS: ${CURRENCY_RATE_REQUEST_TIMEOUT_MS:-10000}
+      ID_BUSINESS_V2_MEDIA_RESOLVER_URL: http://media-resolver:8787
     healthcheck:
       test:
         [
@@ -115,6 +135,11 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      media-resolver:
+        condition: service_healthy
+    networks:
+      - default
+      - media-egress
 
   admin:
     build:
@@ -152,3 +177,6 @@ volumes:
   mysql_data:
   caddy_data:
   caddy_config:
+
+networks:
+  media-egress:

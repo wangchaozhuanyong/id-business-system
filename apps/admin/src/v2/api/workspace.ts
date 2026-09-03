@@ -11,6 +11,7 @@ import type {
   LoginV2RelayCloudBridgeInput,
   LoginV2RelayCloudBridgeResult,
   SaveV2RelayGoogleOAuthInput,
+  ResolveV2MediaInput,
   StartV2MicrosoftMailboxAuthorizationInput,
   StartV2MicrosoftMailboxAuthorizationResult,
   StartV2RelayGoogleAuthorizationResult,
@@ -27,6 +28,7 @@ import type {
   V2ManagedMailboxListQuery,
   V2ManagedMailboxQueryCodeSettings,
   V2MicrosoftMailboxAuthorizationStatus,
+  V2MediaResolveResult,
   V2RelayConnectionStatus,
   V2RelayDeploymentOptions,
   V2RelayJob,
@@ -70,6 +72,29 @@ export const idBusinessV2WorkspaceApi = {
         timeout: 85_000
       })
     );
+  },
+  resolveMedia(input: ResolveV2MediaInput, options: ApiRequestOptions = {}) {
+    return request<V2MediaResolveResult>(
+      http.post('/id-business-v2/workspace-media/resolve', input, {
+        signal: options.signal,
+        timeout: 45_000
+      })
+    );
+  },
+  async downloadMedia(
+    downloadToken: string,
+    options: ApiRequestOptions & {
+      onDownloadProgress?: (loaded: number, total?: number) => void;
+    } = {}
+  ) {
+    const response = await http.get<Blob>('/id-business-v2/workspace-media/download', {
+      params: { token: downloadToken },
+      responseType: 'blob',
+      signal: options.signal,
+      onDownloadProgress: (event) => options.onDownloadProgress?.(event.loaded, event.total),
+      timeout: 390_000
+    });
+    return response.data;
   },
   listTotpAccounts(options: ApiRequestOptions = {}) {
     return request<V2SavedTotpAccountList>(

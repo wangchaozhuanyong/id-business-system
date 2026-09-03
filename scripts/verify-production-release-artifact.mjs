@@ -31,7 +31,7 @@ assert.match(manifest.artifact.sha256, shaPattern, '制品 SHA-256 无效');
 assert.match(manifest.artifact.imageArchiveSha256, shaPattern, '镜像归档 SHA-256 无效');
 assert.match(manifest.artifact.sourceArchiveSha256, shaPattern, '源码归档 SHA-256 无效');
 
-for (const name of ['api', 'admin', 'migration', 'gate']) {
+for (const name of ['api', 'admin', 'migration', 'mediaResolver', 'gate']) {
   assert.equal(typeof manifest.images?.[name]?.reference, 'string', `缺少 ${name} 镜像引用`);
   assert.match(manifest.images[name].digest, digestPattern, `${name} 镜像 digest 无效`);
 }

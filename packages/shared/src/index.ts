@@ -73,6 +73,8 @@ export {
   type V2TablePreferenceList
 } from './v2/table-preferences.js';
 export {
+  V2_MEDIA_PLATFORMS,
+  V2_MEDIA_RESOLVER_LIMITS,
   V2_MAIL_VIEWER_LIMITS,
   V2_MAILBOX_OAUTH_STATUSES,
   V2_MAIL_PROVIDERS,
@@ -94,6 +96,7 @@ export {
   type CreateV2ManagedMailboxResult,
   type CreateV2SavedTotpAccountInput,
   type CreateV2WorkspaceShortcutInput,
+  type ResolveV2MediaInput,
   type RotateV2ManagedMailboxQueryCodeResult,
   type CreateV2RelayJobInput,
   type LoginV2RelayCloudBridgeInput,
@@ -111,6 +114,10 @@ export {
   type UpdateV2WorkspaceShortcutInput,
   type V2MailProvider,
   type V2MailboxOAuthStatus,
+  type V2MediaDownloadOption,
+  type V2MediaPlatform,
+  type V2MediaResolveResult,
+  type V2MediaType,
   type V2MailViewerMessage,
   type V2MailViewerQueryInput,
   type V2MailViewerQueryResult,

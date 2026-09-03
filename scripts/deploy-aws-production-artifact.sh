@@ -158,6 +158,8 @@ IFS=$'\t' read -r \
   admin_digest \
   migration_reference \
   migration_digest \
+  media_resolver_reference \
+  media_resolver_digest \
   gate_reference \
   gate_digest \
   <<<"$(node --input-type=module - "$manifest_path" <<'NODE'
@@ -173,6 +175,8 @@ process.stdout.write([
   manifest.images.admin.digest,
   manifest.images.migration.reference,
   manifest.images.migration.digest,
+  manifest.images.mediaResolver.reference,
+  manifest.images.mediaResolver.digest,
   manifest.images.gate.reference,
   manifest.images.gate.digest
 ].join('\t'));
@@ -413,6 +417,8 @@ RELEASE_ADMIN_IMAGE="$admin_reference" \
 RELEASE_ADMIN_DIGEST="$admin_digest" \
 RELEASE_MIGRATION_IMAGE="$migration_reference" \
 RELEASE_MIGRATION_DIGEST="$migration_digest" \
+RELEASE_MEDIA_RESOLVER_IMAGE="$media_resolver_reference" \
+RELEASE_MEDIA_RESOLVER_DIGEST="$media_resolver_digest" \
 RELEASE_GATE_IMAGE="$gate_reference" \
 RELEASE_GATE_DIGEST="$gate_digest" \
 PRODUCTION_BASE_URL="$production_base_url" \

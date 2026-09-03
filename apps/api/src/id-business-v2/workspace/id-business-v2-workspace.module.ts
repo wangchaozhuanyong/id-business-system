@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { IdBusinessV2MailViewerService } from './id-business-v2-mail-viewer.service';
+import { IdBusinessV2MediaResolverController } from './id-business-v2-media-resolver.controller';
+import { IdBusinessV2MediaResolverService } from './id-business-v2-media-resolver.service';
 import { IdBusinessV2MailboxTransientStateService } from './id-business-v2-mailbox-transient-state.service';
 import { IdBusinessV2ManagedMailboxController } from './id-business-v2-managed-mailbox.controller';
 import { IdBusinessV2ManagedMailboxSettingsService } from './id-business-v2-managed-mailbox-settings.service';
@@ -34,6 +36,7 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
   controllers: [
     IdBusinessV2WorkspaceController,
     IdBusinessV2WebsiteMonitorController,
+    IdBusinessV2MediaResolverController,
     IdBusinessV2TotpAccountController,
     IdBusinessV2ManagedMailboxController,
     IdBusinessV2MicrosoftMailboxOAuthController,
@@ -44,6 +47,7 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
   providers: [
     IdBusinessV2WorkspaceService,
     IdBusinessV2WebsiteMonitorService,
+    IdBusinessV2MediaResolverService,
     IdBusinessV2WorkspaceRepository,
     IdBusinessV2TotpAccountService,
     IdBusinessV2TotpAccountRepository,

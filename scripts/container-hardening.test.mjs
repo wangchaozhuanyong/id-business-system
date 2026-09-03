@@ -13,6 +13,9 @@ function readProjectFile(path) {
 
 test('production base images and GitHub Actions are immutable', () => {
   const apiDockerfile = readProjectFile('apps/api/Dockerfile.mysql');
+  const mediaResolverDockerfile = readProjectFile(
+    'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile'
+  );
   const adminDockerfile = readProjectFile('apps/admin/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
   const workflow = readProjectFile('.github/workflows/quality.yml');
@@ -22,6 +25,10 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.match(
     apiDockerfile,
     new RegExp(`^FROM node:24-bookworm-slim@${sha256DigestPattern}`, 'mu')
+  );
+  assert.match(
+    mediaResolverDockerfile,
+    new RegExp(`^FROM python:3\\.11-slim-bookworm@${sha256DigestPattern}`, 'mu')
   );
   assert.match(adminDockerfile, new RegExp(`^FROM node:24-alpine@${sha256DigestPattern}`, 'mu'));
   assert.match(
@@ -72,4 +79,38 @@ test('production Compose enforces the API and migration container boundaries', (
     assert.match(service, /cap_drop:\s+- ALL/u, `${name} drops all capabilities`);
     assert.match(service, /\/tmp:rw,noexec,nosuid,nodev,size=64m/u, `${name} bounded tmpfs`);
   }
+});
+
+test('media resolver is an isolated, bounded and non-root sidecar', () => {
+  const dockerfile = readProjectFile(
+    'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile'
+  );
+  const compose = readProjectFile('docker-compose.aws-mysql.yml');
+  const resolver = compose.split(/\n {2}media-resolver:\n/u)[1].split(/\n {2}api:\n/u)[0];
+  const api = compose.split(/\n {2}api:\n/u)[1].split(/\n {2}admin:\n/u)[0];
+
+  assert.match(dockerfile, /\nUSER resolver\n/u);
+  assert.match(dockerfile, /YT_DLP_VERSION=2026\.08\.19/u);
+  assert.match(dockerfile, /YT_DLP_COMMIT=[a-f0-9]{40}/u);
+  assert.match(dockerfile, /F2_COMMIT=[a-f0-9]{40}/u);
+  assert.match(dockerfile, /curl-cffi,pin-curl-cffi/u);
+  assert.match(dockerfile, /deno,pin-deno/u);
+  const worker = readProjectFile('apps/api/src/id-business-v2/workspace/media-resolver/server.py');
+  assert.match(worker, /WORKER_TICKET_TTL_SECONDS = 10 \* 60/u);
+  assert.match(worker, /MAX_WORKER_TICKETS = 128/u);
+  assert.match(worker, /MAX_WORKER_TICKET_BYTES = 2 \* 1024 \* 1024/u);
+  const cachedDownload = worker
+    .split(/def download_with_ytdlp\(/u)[1]
+    .split(/\ndef ytdlp_options\(/u)[0];
+  assert.match(cachedDownload, /ydl\.process_ie_result\(info, download=True\)/u);
+  assert.doesNotMatch(cachedDownload, /extract_info/u);
+  assert.match(resolver, /read_only: true/u);
+  assert.match(resolver, /no-new-privileges:true/u);
+  assert.match(resolver, /cap_drop:\s+- ALL/u);
+  assert.match(resolver, /\/tmp:rw,noexec,nosuid,nodev,size=640m/u);
+  assert.match(resolver, /pids_limit: 128/u);
+  assert.match(resolver, /mem_limit: 768m/u);
+  assert.match(resolver, /networks:\s+- media-egress/u);
+  assert.doesNotMatch(resolver, /ports:/u);
+  assert.match(api, /ID_BUSINESS_V2_MEDIA_RESOLVER_URL: http:\/\/media-resolver:8787/u);
 });

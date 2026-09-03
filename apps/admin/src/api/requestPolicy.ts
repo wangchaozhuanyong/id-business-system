@@ -39,6 +39,11 @@ const BUSINESS_READ_POLICY: ApiRequestPolicy = {
   timeoutMs: 15_000
 };
 
+const MEDIA_DOWNLOAD_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [],
+  timeoutMs: 390_000
+};
+
 const RELAY_REMOTE_WRITE_POLICY: ApiRequestPolicy = {
   retryDelaysMs: [],
   timeoutMs: 115_000
@@ -76,6 +81,7 @@ export function getApiRequestPolicy(method?: string, url?: string): ApiRequestPo
   }
   if (method?.toLowerCase() !== 'get') return null;
   if (pathname === '/auth/me') return AUTH_ME_POLICY;
+  if (pathname === '/id-business-v2/workspace-media/download') return MEDIA_DOWNLOAD_POLICY;
   if (
     pathname.startsWith('/id-business-v2/') ||
     pathname.startsWith('/v2/') ||

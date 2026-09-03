@@ -20,6 +20,7 @@ export interface RawEnv {
   ID_BUSINESS_V2_FREE_MANUAL_MODE?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS?: string;
   ID_BUSINESS_V2_EXCHANGE_RATE_CRON_SECRET?: string;
+  ID_BUSINESS_V2_MEDIA_RESOLVER_URL?: string;
   [key: string]: unknown;
 }
 
@@ -59,6 +60,10 @@ export function validateEnv(config: RawEnv) {
     60000,
     3600000
   );
+  const mediaResolverUrl = validateMediaResolverUrl(
+    config.ID_BUSINESS_V2_MEDIA_RESOLVER_URL,
+    nodeEnv
+  );
 
   validateUrls(config, nodeEnv);
   validateDatabase(config, nodeEnv);
@@ -73,8 +78,25 @@ export function validateEnv(config: RawEnv) {
     ID_BUSINESS_V2_EXCHANGE_RATE_AUTO_ENABLED: String(autoCollect),
     ID_BUSINESS_V2_EXCHANGE_RATE_RUN_ON_STARTUP: String(runOnStartup),
     ID_BUSINESS_V2_FREE_MANUAL_MODE: String(freeManualMode),
-    ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS: String(staleMs)
+    ID_BUSINESS_V2_EXCHANGE_RATE_STALE_MS: String(staleMs),
+    ID_BUSINESS_V2_MEDIA_RESOLVER_URL: mediaResolverUrl
   };
+}
+
+function validateMediaResolverUrl(value: string | undefined, nodeEnv: RuntimeEnv) {
+  const checked =
+    value?.trim() ||
+    (nodeEnv === 'production' ? 'http://media-resolver:8787' : 'http://127.0.0.1:8787');
+  const url = requireUrl('ID_BUSINESS_V2_MEDIA_RESOLVER_URL', checked);
+  if (nodeEnv === 'production' && checked !== 'http://media-resolver:8787') {
+    throw new Error(
+      'ID_BUSINESS_V2_MEDIA_RESOLVER_URL must use the internal media-resolver service in production'
+    );
+  }
+  if (nodeEnv !== 'production' && !['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('ID_BUSINESS_V2_MEDIA_RESOLVER_URL must use http:// or https://');
+  }
+  return checked.replace(/\/+$/u, '');
 }
 
 function parseNodeEnv(value: string | undefined): RuntimeEnv {

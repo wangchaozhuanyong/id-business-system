@@ -144,16 +144,18 @@ jobs:
           COMPOSE_BAKE: 'false'
           DOCKER_BUILDKIT: '0'
         run: |
-          docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml build migrate api admin
+          docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml build migrate media-resolver api admin
           docker tag id-business-v2-prod-api:latest "id-business-v2-release-api:${GITHUB_SHA}"
           docker tag id-business-v2-prod-admin:latest "id-business-v2-release-admin:${GITHUB_SHA}"
           docker tag id-business-v2-prod-migrate:latest "id-business-v2-release-migration:${GITHUB_SHA}"
+          docker tag id-business-v2-prod-media-resolver:latest "id-business-v2-release-media-resolver:${GITHUB_SHA}"
           docker build --target build --tag "id-business-v2-release-gate:${GITHUB_SHA}" --file apps/api/Dockerfile.mysql .
 
       - name: Verify built production image boundaries
         env:
           V2_RUNTIME_IMAGE: id-business-v2-prod-api:latest
           V2_MIGRATION_IMAGE: id-business-v2-prod-migrate:latest
+          V2_MEDIA_RESOLVER_IMAGE: id-business-v2-prod-media-resolver:latest
         run: node scripts/acceptance-v2-container-hardening.mjs
 
       - name: Package immutable production artifact
@@ -170,6 +172,7 @@ jobs:
           RELEASE_API_IMAGE: id-business-v2-release-api:${{ github.sha }}
           RELEASE_ADMIN_IMAGE: id-business-v2-release-admin:${{ github.sha }}
           RELEASE_MIGRATION_IMAGE: id-business-v2-release-migration:${{ github.sha }}
+          RELEASE_MEDIA_RESOLVER_IMAGE: id-business-v2-release-media-resolver:${{ github.sha }}
           RELEASE_GATE_IMAGE: id-business-v2-release-gate:${{ github.sha }}
         run: bash scripts/package-production-release.sh
 

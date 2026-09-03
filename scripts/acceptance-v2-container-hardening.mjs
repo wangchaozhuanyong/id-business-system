@@ -8,15 +8,18 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tagSuffix = `${process.pid}-${Date.now()}`;
 const providedRuntimeImage = process.env.V2_RUNTIME_IMAGE?.trim();
 const providedMigrationImage = process.env.V2_MIGRATION_IMAGE?.trim();
+const providedMediaResolverImage = process.env.V2_MEDIA_RESOLVER_IMAGE?.trim();
 const runtimeImage = providedRuntimeImage || `id-business-v2-api-runtime-acceptance:${tagSuffix}`;
 const migrationImage =
   providedMigrationImage || `id-business-v2-api-migration-acceptance:${tagSuffix}`;
+const mediaResolverImage =
+  providedMediaResolverImage || `id-business-v2-media-resolver-acceptance:${tagSuffix}`;
 const removeImagesAfterAcceptance = !providedRuntimeImage && !providedMigrationImage;
 
 assert.equal(
   Boolean(providedRuntimeImage),
-  Boolean(providedMigrationImage),
-  '复用制品验收时必须同时提供 V2_RUNTIME_IMAGE 与 V2_MIGRATION_IMAGE'
+  Boolean(providedMigrationImage) && Boolean(providedMediaResolverImage),
+  '复用制品验收时必须同时提供 API、migration 与媒体解析镜像'
 );
 
 const runtimeProbe = String.raw`
@@ -53,11 +56,14 @@ try {
   run('docker', ['info'], { stdio: 'ignore' });
   if (!providedRuntimeImage) buildImage('runtime', runtimeImage);
   if (!providedMigrationImage) buildImage('migration', migrationImage);
+  if (!providedMediaResolverImage) buildMediaResolverImage(mediaResolverImage);
 
   const runtimeInspect = inspectImage(runtimeImage);
   const migrationInspect = inspectImage(migrationImage);
+  const mediaResolverInspect = inspectImage(mediaResolverImage);
   assert.equal(runtimeInspect.Config.User, 'node');
   assert.equal(migrationInspect.Config.User, 'node');
+  assert.equal(mediaResolverInspect.Config.User, 'resolver');
   assert.ok(
     runtimeInspect.Size < migrationInspect.Size,
     `runtime image (${runtimeInspect.Size}) must be smaller than migration image (${migrationInspect.Size})`
@@ -66,22 +72,47 @@ try {
   runHardened(runtimeImage, ['node', '-e', runtimeProbe]);
   runHardened(migrationImage, ['node', '-e', migrationProbe]);
   runHardened(migrationImage, ['/app/node_modules/.bin/prisma', '--version']);
+  runHardened(mediaResolverImage, ['python', '/app/server.py', '--self-test'], '640m');
+  runHardened(
+    mediaResolverImage,
+    [
+      'python',
+      '-c',
+      "import os, pathlib, yt_dlp; assert os.getuid() != 0; assert pathlib.Path('/app/server.py').is_file(); " +
+        "assert pathlib.Path('/app/f2_bridge.py').is_file(); " +
+        "pathlib.Path('/tmp/resolver-write-probe').write_text('allowed'); " +
+        "status=pathlib.Path('/proc/self/status').read_text(); assert 'NoNewPrivs:\\t1' in status; " +
+        "print('media-runtime-ok')"
+    ],
+    '640m'
+  );
+  runHardened(
+    mediaResolverImage,
+    ['/opt/f2/bin/python', '-c', "import f2; print('f2-runtime-ok')"],
+    '640m'
+  );
 
   console.log(
     JSON.stringify({
       status: 'passed',
       runtimeImageBytes: runtimeInspect.Size,
       migrationImageBytes: migrationInspect.Size,
+      mediaResolverImageBytes: mediaResolverInspect.Size,
       runtimeUser: runtimeInspect.Config.User,
-      migrationUser: migrationInspect.Config.User
+      migrationUser: migrationInspect.Config.User,
+      mediaResolverUser: mediaResolverInspect.Config.User
     })
   );
 } finally {
   if (removeImagesAfterAcceptance) {
-    spawnSync('docker', ['image', 'rm', '--force', runtimeImage, migrationImage], {
-      cwd: projectRoot,
-      stdio: 'ignore'
-    });
+    spawnSync(
+      'docker',
+      ['image', 'rm', '--force', runtimeImage, migrationImage, mediaResolverImage],
+      {
+        cwd: projectRoot,
+        stdio: 'ignore'
+      }
+    );
   }
 }
 
@@ -98,11 +129,22 @@ function buildImage(target, tag) {
   ]);
 }
 
+function buildMediaResolverImage(tag) {
+  run('docker', [
+    'build',
+    '--file',
+    'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile',
+    '--tag',
+    tag,
+    '.'
+  ]);
+}
+
 function inspectImage(tag) {
   return JSON.parse(run('docker', ['image', 'inspect', tag], { capture: true }))[0];
 }
 
-function runHardened(image, command) {
+function runHardened(image, command, tmpfsSize = '64m') {
   run('docker', [
     'run',
     '--rm',
@@ -112,7 +154,7 @@ function runHardened(image, command) {
     '--security-opt',
     'no-new-privileges',
     '--tmpfs',
-    '/tmp:rw,noexec,nosuid,nodev,size=64m',
+    `/tmp:rw,noexec,nosuid,nodev,size=${tmpfsSize}`,
     image,
     ...command
   ]);

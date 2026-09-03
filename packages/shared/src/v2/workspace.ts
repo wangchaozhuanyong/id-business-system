@@ -75,6 +75,57 @@ export interface V2WebsiteMonitorResult {
   tls: V2WebsiteMonitorTls | null;
 }
 
+export const V2_MEDIA_RESOLVER_LIMITS = {
+  inputLength: 4096,
+  downloadBytes: 256 * 1024 * 1024,
+  downloadOptions: 6,
+  ticketMinutes: 10
+} as const;
+
+export const V2_MEDIA_PLATFORMS = [
+  'douyin',
+  'tiktok',
+  'youtube',
+  'instagram',
+  'x',
+  'bilibili',
+  'facebook',
+  'vimeo',
+  'reddit',
+  'soundcloud',
+  'twitch',
+  'pinterest',
+  'dailymotion',
+  'weibo'
+] as const;
+
+export type V2MediaPlatform = (typeof V2_MEDIA_PLATFORMS)[number];
+export type V2MediaType = 'video' | 'audio' | 'image';
+
+export interface ResolveV2MediaInput {
+  url: string;
+}
+
+export interface V2MediaDownloadOption {
+  downloadToken: string;
+  estimatedBytes: number | null;
+  extension: string;
+  height: number | null;
+  label: string;
+  width: number | null;
+}
+
+export interface V2MediaResolveResult {
+  author: string | null;
+  durationSeconds: number | null;
+  engine: 'f2' | 'yt-dlp';
+  expiresAt: IsoDateTimeString;
+  mediaType: V2MediaType;
+  options: V2MediaDownloadOption[];
+  platform: V2MediaPlatform;
+  title: string;
+}
+
 export const V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY = {
   defaultDays: 30,
   minDays: 1,
