@@ -39,6 +39,11 @@ const BUSINESS_READ_POLICY: ApiRequestPolicy = {
   timeoutMs: 15_000
 };
 
+const RELAY_REMOTE_WRITE_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [],
+  timeoutMs: 115_000
+};
+
 const ENDPOINT_POLICIES = new Map<string, ApiEndpointPolicy>([
   ['/auth/login', { bypassSessionGate: true, key: 'auth-login' }],
   ['/auth/logout', { bypassSessionGate: true, key: 'auth-logout' }],
@@ -65,8 +70,11 @@ export function getApiEndpointPolicy(url?: string): ApiEndpointPolicy {
 }
 
 export function getApiRequestPolicy(method?: string, url?: string): ApiRequestPolicy | null {
-  if (method?.toLowerCase() !== 'get') return null;
   const pathname = normalizePathname(url);
+  if (method?.toLowerCase() !== 'get' && pathname.startsWith('/id-business-v2/workspace-relay/')) {
+    return RELAY_REMOTE_WRITE_POLICY;
+  }
+  if (method?.toLowerCase() !== 'get') return null;
   if (pathname === '/auth/me') return AUTH_ME_POLICY;
   if (
     pathname.startsWith('/id-business-v2/') ||

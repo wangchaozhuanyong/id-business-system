@@ -229,3 +229,107 @@ export interface V2MicrosoftMailboxAuthorizationStatus {
   mailboxId: string | null;
   status: V2MailboxOAuthStatus;
 }
+
+export const V2_RELAY_JOB_STATUSES = [
+  'draft',
+  'running',
+  'action_required',
+  'completed',
+  'failed'
+] as const;
+
+export const V2_RELAY_JOB_STEPS = [
+  'create_project',
+  'link_billing',
+  'enable_services',
+  'create_service_account',
+  'grant_permissions',
+  'create_service_account_key',
+  'create_cloudbridge_account',
+  'test_models',
+  'attach_group'
+] as const;
+
+export type V2RelayJobStatus = (typeof V2_RELAY_JOB_STATUSES)[number];
+export type V2RelayJobStep = (typeof V2_RELAY_JOB_STEPS)[number];
+
+export interface V2RelayConnectionStatus {
+  callbackUrl: string;
+  cloudBridgeConnected: boolean;
+  cloudBridgeEmail: string | null;
+  cloudBridgeOrigin: string;
+  googleAuthorized: boolean;
+  googleEmail: string | null;
+  googleOAuthConfigured: boolean;
+}
+
+export interface SaveV2RelayGoogleOAuthInput {
+  clientId: string;
+  clientSecret?: string;
+}
+
+export interface StartV2RelayGoogleAuthorizationResult {
+  authorizationUrl: string;
+  expiresAt: IsoDateTimeString;
+}
+
+export interface LoginV2RelayCloudBridgeInput {
+  email: string;
+  password?: string;
+  tempToken?: string;
+  totpCode?: string;
+}
+
+export interface LoginV2RelayCloudBridgeResult {
+  connected: boolean;
+  email: string | null;
+  tempToken?: string;
+  twoFactorRequired: boolean;
+}
+
+export interface V2RelaySelectOption {
+  id: number | string;
+  label: string;
+}
+
+export interface V2RelayReferenceAccount extends V2RelaySelectOption {
+  id: number;
+  models: string[];
+}
+
+export interface V2RelayDeploymentOptions {
+  billingAccounts: V2RelaySelectOption[];
+  groups: V2RelaySelectOption[];
+  proxies: V2RelaySelectOption[];
+  referenceAccounts: V2RelayReferenceAccount[];
+}
+
+export interface CreateV2RelayJobInput {
+  accountLabel: string;
+  billingAccount: string;
+  creditExpiresAt?: string;
+  location?: string;
+  projectDisplayName: string;
+  projectId: string;
+  proxyId?: number | null;
+  referenceAccountId: number;
+  targetGroupId: number;
+}
+
+export interface V2RelayJob {
+  accountLabel: string;
+  cloudBridgeAccountId: number | null;
+  completedSteps: V2RelayJobStep[];
+  createdAt: IsoDateTimeString;
+  currentStep: V2RelayJobStep | null;
+  id: string;
+  lastErrorMessage: string | null;
+  projectDisplayName: string;
+  projectId: string;
+  status: V2RelayJobStatus;
+  updatedAt: IsoDateTimeString;
+}
+
+export interface V2RelayJobList {
+  items: V2RelayJob[];
+}

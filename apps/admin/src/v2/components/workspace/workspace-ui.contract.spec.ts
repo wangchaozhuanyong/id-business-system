@@ -13,6 +13,9 @@ describe('personal workspace UI contract', () => {
   const totpDrawer = read('./V2TotpToolDrawer.vue');
   const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
+  const relayScriptDrawer = read('./V2RelayScriptDrawer.vue');
+  const relayConnectionPanel = read('./V2RelayConnectionPanel.vue');
+  const relayDeploymentPanel = read('./V2RelayDeploymentPanel.vue');
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
   const managedMailboxBatchDrawer = read('./V2ManagedMailboxBatchDrawer.vue');
@@ -52,16 +55,34 @@ describe('personal workspace UI contract', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
     expect(launcher).toContain('<V2MailViewerDrawer');
+    expect(launcher).toContain('<V2RelayScriptDrawer');
+    expect(launcher).toContain('<strong>中转脚本</strong>');
+    expect(launcher).toContain('v-if="isAdmin"');
     expect(launcher).toContain('邮箱查询与邮箱池');
     expect(launcher).toContain('openMailViewerTool');
     expect(launcher).not.toMatch(/class="v2-workspace-panel__tool is-mail-viewer"[^>]*disabled/s);
     expect(shortcutDrawer).toContain('<el-drawer');
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
+    expect(relayScriptDrawer).toContain('<el-drawer');
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
+    expect(relayScriptDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('size="min(640px, 100%)"');
+  });
+
+  it('keeps the online relay workflow encrypted, resumable, and admin-only', () => {
+    const relayUi = [relayScriptDrawer, relayConnectionPanel, relayDeploymentPanel].join('\n');
+    expect(relayScriptDrawer).toContain('在线自动部署 Google Cloud Vertex 账号到中转站');
+    expect(relayUi).toContain('label-position="left"');
+    expect(relayUi).toContain('require-asterisk-position="right"');
+    expect(relayUi).toContain('<V2AsyncRegion');
+    expect(relayUi).toContain('创建并自动执行');
+    expect(relayUi).toContain('继续自动执行');
+    expect(relayScriptDrawer).toContain(':before-close="beforeClose"');
+    expect(relayUi).not.toMatch(/localStorage|sessionStorage|v-loading|el-skeleton/);
+    expect(workspaceApi).toContain('/id-business-v2/workspace-relay');
   });
 
   it('keeps temporary TOTP input in component memory until the user clears it', () => {
