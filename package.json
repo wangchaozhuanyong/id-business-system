@@ -14,7 +14,7 @@
     "dev:api": "npm run dev --workspace @apple-business/api",
     "dev:admin": "npm run dev --workspace @apple-business/admin",
     "build": "npm run build --workspaces --if-present",
-    "check": "npm run format:check && npm run lint && npm run check:element-plus && npm run check:admin-ui && npm run check:v2-ui-language && npm run check:v2-color-contrast && npm run check:v2-loading-standard && npm run check:v2-table-standard && npm run check:v2-module-architecture && npm run check:v2-isolation && npm run check:v2-decimal-standard && npm run check:v2-timezone-standard && npm run check:v2-concurrency-standard && npm run check:v2-prisma-runtime-boundary && npm run check:cloud-independence && npm run typecheck && npm run test && npm run build && npm run acceptance:v2-navigation-performance:static && npm run prisma:validate && npm run audit:high",
+    "check": "npm run format:check && npm run lint && npm run check:element-plus && npm run check:admin-ui && npm run check:v2-ui-language && npm run check:v2-color-contrast && npm run check:v2-loading-standard && npm run check:v2-table-standard && npm run check:v2-module-architecture && npm run check:v2-isolation && npm run check:v2-decimal-standard && npm run check:v2-timezone-standard && npm run check:v2-concurrency-standard && npm run check:v2-prisma-runtime-boundary && npm run check:cloud-independence && npm run prisma:generate && npm run typecheck && npm run test && npm run build && npm run acceptance:v2-navigation-performance:static && npm run prisma:validate && npm run audit:high",
     "typecheck": "npm run build --workspace @apple-business/shared && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "check:element-plus": "node scripts/check-element-plus-components.mjs",
