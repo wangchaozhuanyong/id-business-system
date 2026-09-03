@@ -83,7 +83,11 @@ export {
   V2_RELAY_JOB_STATUSES,
   V2_RELAY_JOB_STEPS,
   V2_TOTP_ALGORITHMS,
+  V2_WEBSITE_MONITOR_ERROR_CATEGORIES,
+  V2_WEBSITE_MONITOR_LIMITS,
+  V2_WEBSITE_MONITOR_STATUSES,
   V2_WORKSPACE_SHORTCUT_LIMITS,
+  type CheckV2WebsiteInput,
   type CreateV2ManagedMailboxBatchInput,
   type CreateV2ManagedMailboxBatchResult,
   type CreateV2ManagedMailboxInput,
@@ -129,6 +133,11 @@ export {
   type V2SavedTotpAccount,
   type V2SavedTotpAccountList,
   type V2TotpAlgorithm,
+  type V2WebsiteMonitorErrorCategory,
+  type V2WebsiteMonitorHop,
+  type V2WebsiteMonitorResult,
+  type V2WebsiteMonitorStatus,
+  type V2WebsiteMonitorTls,
   type V2WorkspaceShortcut,
   type V2WorkspaceShortcutList
 } from './v2/workspace.js';

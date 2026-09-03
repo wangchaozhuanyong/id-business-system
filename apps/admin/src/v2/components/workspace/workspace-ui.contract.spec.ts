@@ -13,6 +13,7 @@ describe('personal workspace UI contract', () => {
   const totpDrawer = read('./V2TotpToolDrawer.vue');
   const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
+  const websiteMonitorDrawer = read('./V2WebsiteMonitorDrawer.vue');
   const relayScriptDrawer = read('./V2RelayScriptDrawer.vue');
   const relayConnectionPanel = read('./V2RelayConnectionPanel.vue');
   const relayDeploymentPanel = read('./V2RelayDeploymentPanel.vue');
@@ -42,6 +43,22 @@ describe('personal workspace UI contract', () => {
     expect(launcher).not.toContain('router.push');
   });
 
+  it('mounts website monitoring with the saved FLASH CAST target in the personal workspace', () => {
+    expect(launcher).toContain('<strong>网站监控</strong>');
+    expect(launcher).toContain('<V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />');
+    expect(websiteMonitorDrawer).toContain('只检测可公开访问的网站');
+    expect(websiteMonitorDrawer).toContain('label-position="left"');
+    expect(websiteMonitorDrawer).toContain('require-asterisk-position="right"');
+    expect(websiteMonitorDrawer).toContain('min-height: 326px');
+    expect(websiteMonitorDrawer).toContain('HTTPS 证书');
+    expect(websiteMonitorDrawer).toContain(
+      "const DEFAULT_WEBSITE_MONITOR_URL = 'https://flashcast.com.my'"
+    );
+    expect(websiteMonitorDrawer).toContain('websiteUrl.value = DEFAULT_WEBSITE_MONITOR_URL');
+    expect(workspaceApi).toContain("http.post('/id-business-v2/workspace-website-monitor/check'");
+    expect(websiteMonitorDrawer).not.toMatch(/localStorage|sessionStorage/);
+  });
+
   it('shows a tall two-column shortcut grid without redundant headings', () => {
     expect(launcher).toContain('height: min(720px, calc(100dvh - 92px))');
     expect(launcher).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))');
@@ -55,6 +72,7 @@ describe('personal workspace UI contract', () => {
     expect(launcher).toContain('<V2WorkspaceShortcutDrawer');
     expect(launcher).toContain('<V2TotpToolDrawer');
     expect(launcher).toContain('<V2MailViewerDrawer');
+    expect(launcher).toContain('<V2WebsiteMonitorDrawer');
     expect(launcher).toContain('<V2RelayScriptDrawer');
     expect(launcher).toContain('<strong>中转脚本</strong>');
     expect(launcher).toContain('v-if="isAdmin"');
@@ -64,10 +82,12 @@ describe('personal workspace UI contract', () => {
     expect(shortcutDrawer).toContain('<el-drawer');
     expect(totpDrawer).toContain('<el-drawer');
     expect(mailViewerDrawer).toContain('<el-drawer');
+    expect(websiteMonitorDrawer).toContain('<el-drawer');
     expect(relayScriptDrawer).toContain('<el-drawer');
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
+    expect(websiteMonitorDrawer).toContain('append-to-body');
     expect(relayScriptDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('size="min(640px, 100%)"');
   });

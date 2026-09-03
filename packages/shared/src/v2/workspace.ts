@@ -28,6 +28,53 @@ export const V2_MAIL_VIEWER_LIMITS = {
   messages: 20
 } as const;
 
+export const V2_WEBSITE_MONITOR_LIMITS = {
+  redirects: 5,
+  requestTimeoutMs: 10_000,
+  url: 2048
+} as const;
+
+export const V2_WEBSITE_MONITOR_STATUSES = ['healthy', 'warning', 'down'] as const;
+export const V2_WEBSITE_MONITOR_ERROR_CATEGORIES = [
+  'connection',
+  'dns',
+  'redirect',
+  'timeout',
+  'tls'
+] as const;
+
+export type V2WebsiteMonitorStatus = (typeof V2_WEBSITE_MONITOR_STATUSES)[number];
+export type V2WebsiteMonitorErrorCategory = (typeof V2_WEBSITE_MONITOR_ERROR_CATEGORIES)[number];
+
+export interface CheckV2WebsiteInput {
+  url: string;
+}
+
+export interface V2WebsiteMonitorHop {
+  durationMs: number;
+  statusCode: number;
+  url: string;
+}
+
+export interface V2WebsiteMonitorTls {
+  authorized: boolean;
+  daysRemaining: number | null;
+  expiresAt: IsoDateTimeString | null;
+  protocol: string | null;
+}
+
+export interface V2WebsiteMonitorResult {
+  checkedAt: IsoDateTimeString;
+  errorCategory: V2WebsiteMonitorErrorCategory | null;
+  finalUrl: string;
+  hops: V2WebsiteMonitorHop[];
+  message: string;
+  responseTimeMs: number | null;
+  status: V2WebsiteMonitorStatus;
+  statusCode: number | null;
+  tls: V2WebsiteMonitorTls | null;
+}
+
 export const V2_MANAGED_MAILBOX_QUERY_CODE_VALIDITY = {
   defaultDays: 30,
   minDays: 1,
