@@ -431,6 +431,16 @@ for service in mysql api admin caddy; do
   wait_for_service "$service"
 done
 
+case "$RELEASE_IMAGE_ARCHIVE" in
+  "${deployment_root}/incoming/"*/extracted/images.tar) ;;
+  *)
+    echo '临时镜像归档不在受控 incoming 路径中' >&2
+    exit 1
+    ;;
+esac
+echo '清理已加载并校验的临时镜像归档副本'
+rm -f -- "$RELEASE_IMAGE_ARCHIVE"
+
 echo '执行发布后制品与镜像保留策略'
 DEPLOY_LOCK_HELD=1 \
   bash "${RELEASE_DIRECTORY}/scripts/cleanup-aws-production-retention.sh" --post-deploy
