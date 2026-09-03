@@ -5,9 +5,14 @@ import type {
   CreateV2WorkspaceShortcutInput,
   CreateV2ManagedMailboxInput,
   CreateV2ManagedMailboxResult,
+  CreateV2RelayJobInput,
   ReorderV2WorkspaceShortcutsInput,
+  LoginV2RelayCloudBridgeInput,
+  LoginV2RelayCloudBridgeResult,
+  SaveV2RelayGoogleOAuthInput,
   StartV2MicrosoftMailboxAuthorizationInput,
   StartV2MicrosoftMailboxAuthorizationResult,
+  StartV2RelayGoogleAuthorizationResult,
   UpdateV2ManagedMailboxCredentialInput,
   UpdateV2ManagedMailboxQueryCodeSettingsInput,
   UpdateV2ManagedMailboxQueryCodeSettingsResult,
@@ -21,6 +26,10 @@ import type {
   V2ManagedMailboxListQuery,
   V2ManagedMailboxQueryCodeSettings,
   V2MicrosoftMailboxAuthorizationStatus,
+  V2RelayConnectionStatus,
+  V2RelayDeploymentOptions,
+  V2RelayJob,
+  V2RelayJobList,
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
   V2WorkspaceShortcut,
@@ -128,6 +137,44 @@ export const idBusinessV2WorkspaceApi = {
   rotateManagedMailboxQueryCode(mailboxId: string) {
     return request<CreateV2ManagedMailboxResult>(
       http.post(`/id-business-v2/workspace-mailboxes/${encodeURIComponent(mailboxId)}/query-code`)
+    );
+  },
+  getRelayConnection(options: ApiRequestOptions = {}) {
+    return request<V2RelayConnectionStatus>(
+      http.get('/id-business-v2/workspace-relay/connection', { signal: options.signal })
+    );
+  },
+  saveRelayGoogleOAuth(input: SaveV2RelayGoogleOAuthInput) {
+    return request<V2RelayConnectionStatus>(
+      http.put('/id-business-v2/workspace-relay/google-oauth', input)
+    );
+  },
+  startRelayGoogleAuthorization() {
+    return request<StartV2RelayGoogleAuthorizationResult>(
+      http.post('/id-business-v2/workspace-relay/google-oauth/authorizations')
+    );
+  },
+  loginRelayCloudBridge(input: LoginV2RelayCloudBridgeInput) {
+    return request<LoginV2RelayCloudBridgeResult>(
+      http.post('/id-business-v2/workspace-relay/cloudbridge/sessions', input)
+    );
+  },
+  getRelayDeploymentOptions(options: ApiRequestOptions = {}) {
+    return request<V2RelayDeploymentOptions>(
+      http.get('/id-business-v2/workspace-relay/options', { signal: options.signal })
+    );
+  },
+  listRelayJobs(options: ApiRequestOptions = {}) {
+    return request<V2RelayJobList>(
+      http.get('/id-business-v2/workspace-relay/jobs', { signal: options.signal })
+    );
+  },
+  createRelayJob(input: CreateV2RelayJobInput) {
+    return request<V2RelayJob>(http.post('/id-business-v2/workspace-relay/jobs', input));
+  },
+  runRelayJob(jobId: string) {
+    return request<V2RelayJob>(
+      http.post(`/id-business-v2/workspace-relay/jobs/${encodeURIComponent(jobId)}/run`)
     );
   }
 };

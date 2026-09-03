@@ -52,6 +52,22 @@ describe('API request policy registry', () => {
     expect(getApiRequestRetryDelay({ ...input, aborted: true })).toBeNull();
   });
 
+  it('allows relay writes to finish one bounded remote operation without retrying them', () => {
+    const url = '/id-business-v2/workspace-relay/jobs/e400eb2b-6d10-4d9b-85a9-28310bc7ebea/run';
+    expect(getApiRequestPolicy('POST', url)).toEqual({
+      retryDelaysMs: [],
+      timeoutMs: 115_000
+    });
+    expect(
+      getApiRequestRetryDelay({
+        isNetworkError: true,
+        method: 'POST',
+        retryCount: 0,
+        url
+      })
+    ).toBeNull();
+  });
+
   it('declares auth lifecycle exceptions by exact endpoint policy', () => {
     expect(getApiEndpointPolicy('/auth/logout').key).toBe('auth-logout');
     expect(getApiEndpointPolicy('/auth/change-password').bypassSessionGate).toBe(true);

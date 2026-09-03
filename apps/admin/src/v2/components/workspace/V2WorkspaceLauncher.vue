@@ -90,6 +90,20 @@
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
+          <button
+            v-if="isAdmin"
+            class="v2-workspace-panel__tool is-relay-script"
+            type="button"
+            title="中转脚本"
+            @click="openRelayScript"
+          >
+            <el-icon><Connection /></el-icon>
+            <span>
+              <strong>中转脚本</strong>
+              <small>在线部署 Google Cloud Vertex 账号</small>
+            </span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
         </div>
       </div>
     </section>
@@ -103,6 +117,7 @@
       :refresh="shortcutsQuery.refresh"
     />
     <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
+    <V2RelayScriptDrawer v-model="relayScriptDrawerOpen" />
     <V2TotpToolDrawer v-model="totpToolOpen" />
   </div>
 </template>
@@ -110,7 +125,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
-import { ArrowRight, Briefcase, Key, Message, Setting, TopRight } from '@element-plus/icons-vue';
+import {
+  ArrowRight,
+  Briefcase,
+  Connection,
+  Key,
+  Message,
+  Setting,
+  TopRight
+} from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
@@ -118,6 +141,7 @@ import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
+import V2RelayScriptDrawer from './V2RelayScriptDrawer.vue';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
 import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
 
@@ -132,6 +156,8 @@ const workspaceActivated = ref(false);
 const settingsOpen = ref(false);
 const totpToolOpen = ref(false);
 const mailViewerDrawerOpen = ref(false);
+const relayScriptDrawerOpen = ref(false);
+const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',
   scope: 'workspace',
@@ -174,6 +200,12 @@ function openTotpTool() {
 function openMailViewerTool() {
   panelOpen.value = false;
   mailViewerDrawerOpen.value = true;
+  emit('requestCloseNavigation');
+}
+
+function openRelayScript() {
+  panelOpen.value = false;
+  relayScriptDrawerOpen.value = true;
   emit('requestCloseNavigation');
 }
 
