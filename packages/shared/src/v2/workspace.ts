@@ -507,3 +507,40 @@ export interface V2RelayJob {
 export interface V2RelayJobList {
   items: V2RelayJob[];
 }
+
+export const V2_GOOGLE_SHEETS_REPORT_NAMES = ['订单', '加卡', '续费', '财务汇总'] as const;
+
+export interface V2GoogleSheetsSyncStatus {
+  authorized: boolean;
+  callbackUrl: string;
+  clientId: string | null;
+  configured: boolean;
+  enabled: boolean;
+  excludedData: string[];
+  lastAttemptAt: IsoDateTimeString | null;
+  lastErrorMessage: string | null;
+  lastSucceededAt: IsoDateTimeString | null;
+  reportNames: string[];
+  spreadsheetUrl: string | null;
+  syncIntervalSeconds: number;
+  syncing: boolean;
+}
+
+export interface SaveV2GoogleSheetsSyncConfigInput {
+  clientId: string;
+  clientSecret?: string;
+}
+
+export interface StartV2GoogleSheetsAuthorizationResult {
+  authorizationUrl: string;
+  expiresAt: IsoDateTimeString;
+}
+
+export interface UpdateV2GoogleSheetsSyncStateInput {
+  enabled: boolean;
+}
+
+export interface RunV2GoogleSheetsSyncResult {
+  skipped: boolean;
+  status: V2GoogleSheetsSyncStatus;
+}

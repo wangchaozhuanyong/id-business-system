@@ -1973,6 +1973,32 @@ model IdBusinessV2RelayJob {
   @@map("id_business_v2_relay_jobs")
 }
 
+model IdBusinessV2GoogleSheetsSync {
+  id                     Int       @id @default(1)
+  enabled                Boolean   @default(false)
+  googleOAuthClientId    String?   @map("google_oauth_client_id") @db.VarChar(255)
+  clientSecretEncrypted  String?   @map("client_secret_encrypted") @db.Text
+  refreshTokenEncrypted  String?   @map("refresh_token_encrypted") @db.Text
+  spreadsheetIdEncrypted String?   @map("spreadsheet_id_encrypted") @db.Text
+  oauthStateHash         String?   @unique @map("oauth_state_hash") @db.VarChar(64)
+  oauthVerifierEncrypted String?   @map("oauth_verifier_encrypted") @db.Text
+  oauthStateExpiresAt    DateTime? @map("oauth_state_expires_at") @db.Timestamptz(6)
+  sourceVersions         Json      @default("{}") @map("source_versions")
+  lastAttemptAt          DateTime? @map("last_attempt_at") @db.Timestamptz(6)
+  lastSucceededAt        DateTime? @map("last_succeeded_at") @db.Timestamptz(6)
+  lastErrorCode          String?   @map("last_error_code") @db.VarChar(80)
+  lastErrorMessage       String?   @map("last_error_message") @db.VarChar(500)
+  runLeaseId             String?   @map("run_lease_id") @db.Uuid
+  runLeaseExpiresAt      DateTime? @map("run_lease_expires_at") @db.Timestamptz(6)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([enabled, lastAttemptAt])
+  @@index([oauthStateExpiresAt])
+  @@index([runLeaseExpiresAt])
+  @@map("id_business_v2_google_sheets_sync")
+}
+
 model IdBusinessV2ManagedMailbox {
   id                          String                           @id @default(uuid()) @db.Uuid
   email                       String                           @unique @db.VarChar(254)
