@@ -13,8 +13,11 @@ import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-
 import { IdBusinessV2PublicMailboxController } from './id-business-v2-public-mailbox.controller';
 import { IdBusinessV2RelayScriptController } from './id-business-v2-relay-script.controller';
 import { IdBusinessV2RelayJobRunnerService } from './id-business-v2-relay-job-runner.service';
+import { IdBusinessV2RelayAlternativeRunnerService } from './id-business-v2-relay-alternative-runner.service';
+import { IdBusinessV2RelayJobCreationService } from './id-business-v2-relay-job-creation.service';
 import { IdBusinessV2RelayScriptOAuthController } from './id-business-v2-relay-script-oauth.controller';
 import { IdBusinessV2RelayScriptService } from './id-business-v2-relay-script.service';
+import { IdBusinessV2RelaySubscriptionAuthService } from './id-business-v2-relay-subscription-auth.service';
 import { IdBusinessV2TotpAccountController } from './id-business-v2-totp-account.controller';
 import { IdBusinessV2TotpAccountService } from './id-business-v2-totp-account.service';
 import { IdBusinessV2WorkspaceController } from './id-business-v2-workspace.controller';
@@ -29,6 +32,7 @@ import { IdBusinessV2ImapMailProvider } from './providers/id-business-v2-imap-ma
 import { IdBusinessV2MicrosoftMailOAuthClient } from './providers/id-business-v2-microsoft-mail-oauth.client';
 import { IdBusinessV2RelayCloudBridgeClient } from './providers/id-business-v2-relay-cloudbridge.client';
 import { IdBusinessV2RelayGoogleCloudClient } from './providers/id-business-v2-relay-google-cloud.client';
+import { IdBusinessV2RelayGeminiClient } from './providers/id-business-v2-relay-gemini.client';
 import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-relay-google-oauth.client';
 
 @Module({
@@ -62,9 +66,13 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
     IdBusinessV2MicrosoftMailboxAuthorizationService,
     IdBusinessV2RelayScriptService,
     IdBusinessV2RelayJobRunnerService,
+    IdBusinessV2RelayAlternativeRunnerService,
+    IdBusinessV2RelayJobCreationService,
+    IdBusinessV2RelaySubscriptionAuthService,
     IdBusinessV2RelayScriptRepository,
     IdBusinessV2RelayCloudBridgeClient,
     IdBusinessV2RelayGoogleCloudClient,
+    IdBusinessV2RelayGeminiClient,
     IdBusinessV2RelayGoogleOAuthClient
   ]
 })

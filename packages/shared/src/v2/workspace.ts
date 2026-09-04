@@ -336,7 +336,50 @@ export const V2_RELAY_JOB_STATUSES = [
   'failed'
 ] as const;
 
+export const V2_RELAY_DEPLOYMENT_MODES = [
+  'antigravity_subscription',
+  'gemini_api',
+  'vertex'
+] as const;
+
+export const V2_RELAY_JOB_STEPS_BY_MODE = {
+  antigravity_subscription: [
+    'authorize_account',
+    'set_privacy',
+    'sync_models',
+    'configure_models',
+    'test_models',
+    'attach_group'
+  ],
+  gemini_api: [
+    'verify_provider_models',
+    'test_provider_text',
+    'test_provider_tts',
+    'create_cloudbridge_account',
+    'test_models',
+    'attach_group'
+  ],
+  vertex: [
+    'create_project',
+    'link_billing',
+    'enable_services',
+    'create_service_account',
+    'grant_permissions',
+    'create_service_account_key',
+    'create_cloudbridge_account',
+    'test_models',
+    'attach_group'
+  ]
+} as const;
+
 export const V2_RELAY_JOB_STEPS = [
+  'authorize_account',
+  'set_privacy',
+  'sync_models',
+  'configure_models',
+  'verify_provider_models',
+  'test_provider_text',
+  'test_provider_tts',
   'create_project',
   'link_billing',
   'enable_services',
@@ -348,6 +391,7 @@ export const V2_RELAY_JOB_STEPS = [
   'attach_group'
 ] as const;
 
+export type V2RelayDeploymentMode = (typeof V2_RELAY_DEPLOYMENT_MODES)[number];
 export type V2RelayJobStatus = (typeof V2_RELAY_JOB_STATUSES)[number];
 export type V2RelayJobStep = (typeof V2_RELAY_JOB_STEPS)[number];
 
@@ -391,27 +435,55 @@ export interface V2RelaySelectOption {
 }
 
 export interface V2RelayReferenceAccount extends V2RelaySelectOption {
+  allowOverages?: boolean;
+  concurrency?: number;
   id: number;
+  loadFactor?: number;
+  mixedScheduling?: boolean;
   models: string[];
+  priority?: number;
+  rateMultiplier?: number;
 }
 
 export interface V2RelayDeploymentOptions {
   billingAccounts: V2RelaySelectOption[];
-  groups: V2RelaySelectOption[];
+  geminiGroups: V2RelaySelectOption[];
   proxies: V2RelaySelectOption[];
-  referenceAccounts: V2RelayReferenceAccount[];
+  subscriptionReferenceAccounts: V2RelayReferenceAccount[];
+  vertexReferenceAccounts: V2RelayReferenceAccount[];
+  antigravityGroups: V2RelaySelectOption[];
 }
 
 export interface CreateV2RelayJobInput {
+  accountConcurrency?: number;
   accountLabel: string;
-  billingAccount: string;
+  accountLoadFactor?: number;
+  accountPriority?: number;
+  accountRateMultiplier?: number;
+  allowOverages?: boolean;
+  apiKey?: string;
+  billingAccount?: string;
   creditExpiresAt?: string;
+  deploymentKey: string;
+  googleEmail?: string;
   location?: string;
-  projectDisplayName: string;
-  projectId: string;
+  mode: V2RelayDeploymentMode;
+  mixedScheduling?: boolean;
+  projectDisplayName?: string;
+  projectId?: string;
   proxyId?: number | null;
-  referenceAccountId: number;
+  referenceAccountId?: number;
+  selectedModels?: string[];
   targetGroupId: number;
+}
+
+export interface StartV2RelaySubscriptionAuthorizationResult {
+  authorizationUrl: string;
+  expiresAt: IsoDateTimeString;
+}
+
+export interface CompleteV2RelaySubscriptionAuthorizationInput {
+  callbackUrl: string;
 }
 
 export interface V2RelayJob {
@@ -420,11 +492,15 @@ export interface V2RelayJob {
   completedSteps: V2RelayJobStep[];
   createdAt: IsoDateTimeString;
   currentStep: V2RelayJobStep | null;
+  deploymentKey: string;
   id: string;
   lastErrorMessage: string | null;
-  projectDisplayName: string;
-  projectId: string;
+  mode: V2RelayDeploymentMode;
+  models: string[];
+  projectDisplayName: string | null;
+  projectId: string | null;
   status: V2RelayJobStatus;
+  totalSteps: number;
   updatedAt: IsoDateTimeString;
 }
 

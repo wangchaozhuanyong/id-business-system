@@ -439,6 +439,12 @@ enum IdBusinessV2RelayJobStatus {
   failed
 }
 
+enum IdBusinessV2RelayDeploymentMode {
+  antigravity_subscription
+  gemini_api
+  vertex
+}
+
 model User {
   id              String     @id @default(uuid()) @db.Uuid
   username        String     @unique @db.VarChar(100)
@@ -1929,33 +1935,38 @@ model IdBusinessV2RelayConnection {
 }
 
 model IdBusinessV2RelayJob {
-  id                         String                     @id @default(uuid()) @db.Uuid
-  userId                     String                     @map("user_id") @db.Uuid
-  status                     IdBusinessV2RelayJobStatus @default(draft)
-  accountLabel               String                     @map("account_label") @db.VarChar(80)
-  projectId                  String                     @map("project_id") @db.VarChar(30)
-  projectDisplayName         String                     @map("project_display_name") @db.VarChar(80)
-  billingAccount             String                     @map("billing_account") @db.VarChar(80)
-  location                   String                     @default("global") @db.VarChar(40)
-  targetGroupId              Int                        @map("target_group_id")
-  proxyId                    Int?                       @map("proxy_id")
-  referenceAccountId         Int                        @map("reference_account_id")
-  creditExpiresAt            DateTime?                  @map("credit_expires_at") @db.Timestamptz(6)
-  modelMapping               Json                       @default("{}") @map("model_mapping")
-  progress                   Json                       @default("{}")
-  completedSteps             Json                       @default("[]") @map("completed_steps")
-  serviceAccountKeyEncrypted String?                    @map("service_account_key_encrypted") @db.Text
-  cloudBridgeAccountId       Int?                       @map("cloud_bridge_account_id")
-  runLeaseId                 String?                    @map("run_lease_id") @db.Uuid
-  runLeaseExpiresAt          DateTime?                  @map("run_lease_expires_at") @db.Timestamptz(6)
-  lastErrorCode              String?                    @map("last_error_code") @db.VarChar(80)
-  lastErrorMessage           String?                    @map("last_error_message") @db.VarChar(500)
-  createdAt                  DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                  DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                         String                          @id @default(uuid()) @db.Uuid
+  userId                     String                          @map("user_id") @db.Uuid
+  status                     IdBusinessV2RelayJobStatus      @default(draft)
+  mode                       IdBusinessV2RelayDeploymentMode @default(vertex)
+  deploymentKey              String                          @map("deployment_key") @db.VarChar(80)
+  accountLabel               String                          @map("account_label") @db.VarChar(80)
+  googleEmail                String?                         @map("google_email") @db.VarChar(254)
+  projectId                  String?                         @map("project_id") @db.VarChar(30)
+  projectDisplayName         String?                         @map("project_display_name") @db.VarChar(80)
+  billingAccount             String?                         @map("billing_account") @db.VarChar(80)
+  location                   String?                         @default("global") @db.VarChar(40)
+  targetGroupId              Int                             @map("target_group_id")
+  proxyId                    Int?                            @map("proxy_id")
+  referenceAccountId         Int?                            @map("reference_account_id")
+  creditExpiresAt            DateTime?                       @map("credit_expires_at") @db.Timestamptz(6)
+  modelMapping               Json                            @default("{}") @map("model_mapping")
+  settings                   Json                            @default("{}")
+  progress                   Json                            @default("{}")
+  completedSteps             Json                            @default("[]") @map("completed_steps")
+  serviceAccountKeyEncrypted String?                         @map("service_account_key_encrypted") @db.Text
+  modeSecretEncrypted        String?                         @map("mode_secret_encrypted") @db.Text
+  cloudBridgeAccountId       Int?                            @map("cloud_bridge_account_id")
+  runLeaseId                 String?                         @map("run_lease_id") @db.Uuid
+  runLeaseExpiresAt          DateTime?                       @map("run_lease_expires_at") @db.Timestamptz(6)
+  lastErrorCode              String?                         @map("last_error_code") @db.VarChar(80)
+  lastErrorMessage           String?                         @map("last_error_message") @db.VarChar(500)
+  createdAt                  DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, projectId])
+  @@unique([userId, deploymentKey])
   @@index([userId, updatedAt])
   @@index([status, updatedAt])
   @@index([runLeaseExpiresAt])

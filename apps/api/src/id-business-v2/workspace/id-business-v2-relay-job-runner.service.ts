@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException
 } from '@nestjs/common';
 import type { IdBusinessV2RelayJob } from '@prisma/client';
-import { V2_RELAY_JOB_STEPS, type V2RelayJob, type V2RelayJobStep } from '@apple-business/shared';
+import type { V2RelayJob, V2RelayJobStatus, V2RelayJobStep } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { randomUUID } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -17,9 +17,17 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { IdBusinessV2RelayScriptService } from './id-business-v2-relay-script.service';
+import { IdBusinessV2RelayAlternativeRunnerService } from './id-business-v2-relay-alternative-runner.service';
 import {
   type IdBusinessV2RelayProgress,
   idBusinessV2RelayCompletedSteps,
+  idBusinessV2RelayJobSteps,
+  idBusinessV2RelayModelMapping,
+  idBusinessV2RelayProgress,
+  idBusinessV2RelayProjectNumber,
+  idBusinessV2RelayPositiveNumber,
+  idBusinessV2RelaySafeErrorMessage,
+  idBusinessV2RelaySettings,
   toIdBusinessV2RelayJob
 } from './id-business-v2-relay-script.support';
 import {
@@ -41,6 +49,7 @@ export class IdBusinessV2RelayJobRunnerService {
     private readonly audit: V2TransactionalAuditService,
     private readonly encryption: FieldEncryptionService,
     private readonly relay: IdBusinessV2RelayScriptService,
+    private readonly alternativeRunner: IdBusinessV2RelayAlternativeRunnerService,
     private readonly googleCloud: IdBusinessV2RelayGoogleCloudClient,
     private readonly cloudBridge: IdBusinessV2RelayCloudBridgeClient
   ) {}
@@ -67,9 +76,14 @@ export class IdBusinessV2RelayJobRunnerService {
     if (!acquired) throw new ConflictException('该部署任务正在执行，请勿重复提交');
     try {
       job = (await this.repository.findJobByIdAndUser(jobId, userId)) ?? job;
-      const connection = await this.relay.requireConnection(userId);
+      const connection =
+        job.mode === 'vertex'
+          ? await this.relay.requireVertexConnection(userId)
+          : await this.relay.requireCloudBridgeConnection(userId);
       const completed = idBusinessV2RelayCompletedSteps(job.completedSteps);
-      const step = V2_RELAY_JOB_STEPS.find((candidate) => !completed.includes(candidate));
+      const step = idBusinessV2RelayJobSteps(job.mode).find(
+        (candidate) => !completed.includes(candidate)
+      );
       if (!step) return this.markCompleted(job, operator, requestId);
       try {
         job = await this.executeStep(job, connection, step, operator, requestId);
@@ -99,14 +113,21 @@ export class IdBusinessV2RelayJobRunnerService {
     operator: AuthenticatedUser | undefined,
     requestId: string
   ) {
-    const progress = this.progress(job.progress);
+    const progress = idBusinessV2RelayProgress(job.progress);
+    if (job.mode !== 'vertex') {
+      const result = await this.alternativeRunner.execute(job, connection, step, progress);
+      if (result.completed) {
+        return this.completeStep(job, step, result.progress, operator, requestId, result.extra);
+      }
+      return this.updateProgress(job, result.progress, operator, requestId, step, result.status);
+    }
     if (step === 'create_project') {
       return this.createProject(job, connection, progress, operator, requestId);
     }
     if (step === 'link_billing') {
       await this.googleCloud.linkBilling(
-        job.projectId,
-        job.billingAccount,
+        job.projectId as string,
+        job.billingAccount as string,
         await this.relay.googleAccessToken(connection)
       );
       return this.completeStep(job, step, progress, operator, requestId);
@@ -154,7 +175,7 @@ export class IdBusinessV2RelayJobRunnerService {
         {
           ...progress,
           projectOperation: undefined,
-          projectNumber: this.projectNumber(response)
+          projectNumber: idBusinessV2RelayProjectNumber(response)
         },
         operator,
         requestId
@@ -162,8 +183,8 @@ export class IdBusinessV2RelayJobRunnerService {
     }
     try {
       const operation = await this.googleCloud.createProject(
-        job.projectId,
-        job.projectDisplayName,
+        job.projectId as string,
+        job.projectDisplayName as string,
         token
       );
       if (operation.done) {
@@ -173,7 +194,7 @@ export class IdBusinessV2RelayJobRunnerService {
           'create_project',
           {
             ...progress,
-            projectNumber: this.projectNumber(response)
+            projectNumber: idBusinessV2RelayProjectNumber(response)
           },
           operator,
           requestId
@@ -189,7 +210,7 @@ export class IdBusinessV2RelayJobRunnerService {
       );
     } catch (error) {
       if (!(error instanceof IdBusinessV2RelayRemoteError) || error.status !== 409) throw error;
-      const existing = await this.googleCloud.getProject(job.projectId, token);
+      const existing = await this.googleCloud.getProject(job.projectId as string, token);
       if (existing.state !== 'ACTIVE') {
         throw new Error('同名 Google 项目存在，但当前不是可用状态', { cause: error });
       }
@@ -198,7 +219,7 @@ export class IdBusinessV2RelayJobRunnerService {
         'create_project',
         {
           ...progress,
-          projectNumber: this.projectNumber(existing)
+          projectNumber: idBusinessV2RelayProjectNumber(existing)
         },
         operator,
         requestId
@@ -259,10 +280,10 @@ export class IdBusinessV2RelayJobRunnerService {
     const token = await this.relay.googleAccessToken(connection);
     let account: Record<string, unknown>;
     try {
-      account = await this.googleCloud.createServiceAccount(job.projectId, token);
+      account = await this.googleCloud.createServiceAccount(job.projectId as string, token);
     } catch (error) {
       if (!(error instanceof IdBusinessV2RelayRemoteError) || error.status !== 409) throw error;
-      account = await this.googleCloud.getServiceAccount(job.projectId, token);
+      account = await this.googleCloud.getServiceAccount(job.projectId as string, token);
     }
     const email = typeof account.email === 'string' ? account.email : '';
     if (!email.endsWith(`@${job.projectId}.iam.gserviceaccount.com`)) {
@@ -294,7 +315,7 @@ export class IdBusinessV2RelayJobRunnerService {
     const role = grantedRoles.includes('roles/aiplatform.user')
       ? 'roles/serviceusage.serviceUsageConsumer'
       : 'roles/aiplatform.user';
-    await this.googleCloud.grantProjectRole(job.projectId, member, role, token);
+    await this.googleCloud.grantProjectRole(job.projectId as string, member, role, token);
     const nextProgress = { ...progress, grantedRoles: [...grantedRoles, role] };
     return role === 'roles/serviceusage.serviceUsageConsumer'
       ? this.completeStep(job, 'grant_permissions', nextProgress, operator, requestId)
@@ -339,11 +360,12 @@ export class IdBusinessV2RelayJobRunnerService {
         accountLabel: job.accountLabel,
         clientEmail: progress.serviceAccountEmail as string,
         creditExpiresAt: job.creditExpiresAt,
-        location: job.location,
-        modelMapping: this.modelMapping(job.modelMapping),
-        projectId: job.projectId,
+        location: job.location ?? 'global',
+        modelMapping: idBusinessV2RelayModelMapping(job.modelMapping),
+        projectId: job.projectId as string,
         proxyId: job.proxyId,
-        serviceAccountJson: serviceAccount
+        serviceAccountJson: serviceAccount,
+        settings: idBusinessV2RelaySettings(job.settings)
       })
     );
     const accountId = Number(account.id);
@@ -361,7 +383,7 @@ export class IdBusinessV2RelayJobRunnerService {
     requestId: string
   ) {
     if (!job.cloudBridgeAccountId) throw new Error('任务缺少中转站账号');
-    const models = Object.keys(this.modelMapping(job.modelMapping));
+    const models = Object.keys(idBusinessV2RelayModelMapping(job.modelMapping));
     const testedModels = Array.from(new Set(progress.testedModels ?? [])).filter((model) =>
       models.includes(model)
     );
@@ -395,7 +417,8 @@ export class IdBusinessV2RelayJobRunnerService {
       this.cloudBridge.attachGroup(
         job.cloudBridgeAccountId as number,
         job.targetGroupId,
-        accessToken
+        accessToken,
+        idBusinessV2RelayPositiveNumber(idBusinessV2RelaySettings(job.settings).priority, 99)
       )
     );
     return this.completeStep(job, 'attach_group', progress, operator, requestId, {
@@ -428,7 +451,7 @@ export class IdBusinessV2RelayJobRunnerService {
     requestId: string
   ) {
     const code = error instanceof IdBusinessV2RelayRemoteError ? error.code : 'RELAY_STEP_FAILED';
-    const message = this.safeErrorMessage(error);
+    const message = idBusinessV2RelaySafeErrorMessage(error);
     const failed = await this.transactionManager.execute(
       async (tx) => {
         const updated = await this.repository.updateJob(
@@ -495,7 +518,8 @@ export class IdBusinessV2RelayJobRunnerService {
     progress: IdBusinessV2RelayProgress,
     operator: AuthenticatedUser | undefined,
     requestId: string,
-    step: V2RelayJobStep
+    step: V2RelayJobStep,
+    status: V2RelayJobStatus = 'running'
   ) {
     return this.transactionManager.execute(
       async (tx) => {
@@ -505,7 +529,7 @@ export class IdBusinessV2RelayJobRunnerService {
             lastErrorCode: null,
             lastErrorMessage: null,
             progress: progress as IdBusinessV2RelayJsonInput,
-            status: 'running'
+            status
           },
           tx
         );
@@ -535,36 +559,15 @@ export class IdBusinessV2RelayJobRunnerService {
       action: `id_business_v2.workspace_relay.${action}`,
       objectType: 'id_business_v2_relay_job',
       objectId: job.id,
-      afterData: toV2JsonDocument({ code, projectId: job.projectId, status: job.status, step }),
-      remark: step ? `${remark}：${step}` : `${remark}：${job.projectId}`
+      afterData: toV2JsonDocument({
+        code,
+        deploymentKey: job.deploymentKey,
+        mode: job.mode,
+        status: job.status,
+        step
+      }),
+      remark: step ? `${remark}：${step}` : `${remark}：${job.deploymentKey}`
     });
-  }
-
-  private progress(value: unknown): IdBusinessV2RelayProgress {
-    return value && typeof value === 'object' && !Array.isArray(value)
-      ? (value as IdBusinessV2RelayProgress)
-      : {};
-  }
-
-  private modelMapping(value: unknown) {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-      throw new Error('任务缺少模型映射');
-    const mapping = Object.fromEntries(
-      Object.keys(value)
-        .filter((model) => model.startsWith('gemini-'))
-        .map((model) => [model, model])
-    );
-    if (!Object.keys(mapping).length) throw new Error('任务缺少模型映射');
-    return mapping;
-  }
-
-  private projectNumber(value: Record<string, unknown>) {
-    const number =
-      String(value.name ?? '')
-        .split('/')
-        .pop() ?? '';
-    if (!/^\d+$/.test(number)) throw new Error('无法取得 Google Project Number');
-    return number;
   }
 
   private decrypt(value: string, field: string) {
@@ -575,14 +578,6 @@ export class IdBusinessV2RelayJobRunnerService {
     } catch {
       throw new ServiceUnavailableException(`${field}暂时无法解密`);
     }
-  }
-
-  private safeErrorMessage(error: unknown) {
-    const message = error instanceof Error ? error.message : '中转脚本执行失败';
-    return message
-      .replace(/[\r\n\t]+/g, ' ')
-      .replace(/[A-Za-z0-9_-]{32,}/g, '[已隐藏]')
-      .slice(0, 500);
   }
 
   private requireAdmin(operator?: AuthenticatedUser) {

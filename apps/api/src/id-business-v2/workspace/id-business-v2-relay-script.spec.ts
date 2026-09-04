@@ -4,7 +4,10 @@ import { IdBusinessV2RelayScriptOAuthController } from './id-business-v2-relay-s
 import { IdBusinessV2RelayCloudBridgeClient } from './providers/id-business-v2-relay-cloudbridge.client';
 import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-relay-google-oauth.client';
 import { idBusinessV2RelayFetchJson } from './providers/id-business-v2-relay-http';
-import { toIdBusinessV2RelayJob } from './id-business-v2-relay-script.support';
+import {
+  idBusinessV2RelayJobSteps,
+  toIdBusinessV2RelayJob
+} from './id-business-v2-relay-script.support';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -71,11 +74,13 @@ describe('online relay script safety contract', () => {
         const body = init?.body ? JSON.parse(String(init.body)) : null;
         requests.push({ body, method, pathname: url.pathname });
         const data =
-          method === 'POST' && url.pathname === '/api/v1/admin/accounts'
-            ? { id: 91, platform: 'gemini', type: 'service_account' }
-            : url.pathname.endsWith('/admin/accounts')
-              ? { items: [] }
-              : {};
+          method === 'GET' && url.pathname === '/api/v1/admin/accounts/91'
+            ? { id: 91, schedulable: true, groups: [{ id: 12 }] }
+            : method === 'POST' && url.pathname === '/api/v1/admin/accounts'
+              ? { id: 91, platform: 'gemini', type: 'service_account' }
+              : url.pathname.endsWith('/admin/accounts')
+                ? { items: [] }
+                : {};
         return new Response(JSON.stringify({ code: 0, data }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }
@@ -130,10 +135,14 @@ describe('online relay script safety contract', () => {
       completedSteps: ['create_project'],
       createdAt: new Date('2026-09-03T00:00:00.000Z'),
       creditExpiresAt: null,
+      deploymentKey: 'vertex-customer-a',
+      googleEmail: null,
       id: 'e400eb2b-6d10-4d9b-85a9-28310bc7ebea',
       lastErrorCode: null,
       lastErrorMessage: null,
       location: 'global',
+      mode: 'vertex',
+      modeSecretEncrypted: null,
       modelMapping: { 'gemini-test': 'gemini-test' },
       progress: { projectNumber: '123' },
       projectDisplayName: '客户 A Vertex',
@@ -143,6 +152,7 @@ describe('online relay script safety contract', () => {
       runLeaseExpiresAt: null,
       runLeaseId: null,
       serviceAccountKeyEncrypted: 'must-not-be-returned',
+      settings: {},
       status: 'running',
       targetGroupId: 2,
       updatedAt: new Date('2026-09-03T00:00:01.000Z'),
@@ -153,5 +163,67 @@ describe('online relay script safety contract', () => {
     expect(result).not.toHaveProperty('serviceAccountKeyEncrypted');
     expect(result).not.toHaveProperty('modelMapping');
     expect(result).not.toHaveProperty('progress');
+    expect(result).not.toHaveProperty('modeSecretEncrypted');
+    expect(result.totalSteps).toBe(9);
+  });
+
+  it('keeps distinct resumable steps for all three deployment modes', () => {
+    expect(idBusinessV2RelayJobSteps('antigravity_subscription')).toEqual([
+      'authorize_account',
+      'set_privacy',
+      'sync_models',
+      'configure_models',
+      'test_models',
+      'attach_group'
+    ]);
+    expect(idBusinessV2RelayJobSteps('gemini_api')).toEqual([
+      'verify_provider_models',
+      'test_provider_text',
+      'test_provider_tts',
+      'create_cloudbridge_account',
+      'test_models',
+      'attach_group'
+    ]);
+    expect(idBusinessV2RelayJobSteps('vertex')).toHaveLength(9);
+  });
+
+  it('creates an unschedulable AI Studio account with the fixed text and TTS models', async () => {
+    const requests: Array<{ body: Record<string, unknown>; pathname: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === 'string' ? input : input.toString());
+        requests.push({
+          body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {},
+          pathname: url.pathname
+        });
+        return new Response(JSON.stringify({ code: 0, data: { id: 92 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      })
+    );
+    const client = new IdBusinessV2RelayCloudBridgeClient();
+    await client.createGeminiApiKeyAccount({
+      accessToken: 'cloudbridge-access-token',
+      accountLabel: '客户 B',
+      apiKey: 'gemini-api-key-value',
+      deploymentKey: 'gemini-api-customer-b',
+      modelMapping: {
+        'gemini-3.1-flash-tts-preview': 'gemini-3.1-flash-tts-preview',
+        'gemini-3.7-flash': 'gemini-3.7-flash'
+      },
+      proxyId: null
+    });
+    const credentials = requests[0]?.body.credentials as Record<string, unknown>;
+    expect(requests[0]?.body).toMatchObject({
+      platform: 'gemini',
+      schedulable: false,
+      type: 'apikey'
+    });
+    expect(credentials.model_mapping).toEqual({
+      'gemini-3.1-flash-tts-preview': 'gemini-3.1-flash-tts-preview',
+      'gemini-3.7-flash': 'gemini-3.7-flash'
+    });
   });
 });

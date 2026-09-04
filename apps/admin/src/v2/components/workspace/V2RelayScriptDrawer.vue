@@ -13,7 +13,7 @@
       <div class="v2-relay-script-disclosure" role="note">
         <el-icon><Lock /></el-icon>
         <span>
-          <strong>在线自动部署 Google Cloud Vertex 账号到中转站</strong>
+          <strong>在线部署 Gemini 订阅号、AI Studio API Key 和 Vertex AI 到中转站</strong>
           <small
             >OAuth、服务账号密钥和中转站会话加密保存；密码与 2FA 验证码仅用于当前登录请求。</small
           >
@@ -38,10 +38,11 @@
               @refresh="refreshConnection"
             />
           </el-tab-pane>
-          <el-tab-pane label="Vertex 部署" name="deploy">
+          <el-tab-pane label="账号部署" name="deploy">
             <V2RelayDeploymentPanel
               ref="deploymentPanel"
               :active="modelValue && readyForDeployment"
+              :google-ready="connection.googleAuthorized"
               :ready="readyForDeployment"
               :writes-allowed="writesAllowed"
               @open-settings="activeTab = 'connection'"
@@ -83,10 +84,7 @@ const connectionQuery = useV2ModuleQuery<V2RelayConnectionStatus>({
   query: ({ signal }) => idBusinessV2WorkspaceApi.getRelayConnection({ signal })
 });
 const connection = computed(() => connectionQuery.data.value);
-const readyForDeployment = computed(
-  () =>
-    connection.value?.googleAuthorized === true && connection.value.cloudBridgeConnected === true
-);
+const readyForDeployment = computed(() => connection.value?.cloudBridgeConnected === true);
 const writesAllowed = computed(() => authStore.writesAllowed);
 const connectionError = computed(() =>
   connectionQuery.error.value ? getApiErrorMessage(connectionQuery.error.value) : ''
@@ -244,6 +242,34 @@ async function beforeClose(done: () => void) {
 .v2-relay-form-grid .el-date-editor {
   width: 100%;
 }
+.v2-relay-mode-picker {
+  margin-bottom: 18px;
+}
+.v2-relay-form-grid__wide {
+  grid-column: 1 / -1;
+}
+.v2-relay-fixed-models,
+.v2-relay-authorization {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+.v2-relay-authorization {
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+}
+.v2-relay-authorization .el-input {
+  min-width: 300px;
+  flex: 1;
+}
+.v2-relay-authorization a {
+  color: var(--el-color-primary);
+  font-size: 14px;
+}
 .v2-relay-jobs-region {
   margin-top: 14px;
 }
@@ -272,6 +298,12 @@ async function beforeClose(done: () => void) {
   .v2-relay-connection-grid,
   .v2-relay-form-grid {
     grid-template-columns: 1fr;
+  }
+  .v2-relay-mode-picker {
+    display: grid;
+  }
+  .v2-relay-authorization .el-input {
+    min-width: 100%;
   }
 }
 @media (max-width: 560px) {
