@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isTransientNpmAuditFailure, runAuditWithRetry } from './npm-audit-high.mjs';
+import {
+  hasHighSeverityNpmAuditFinding,
+  isTransientNpmAuditFailure,
+  runAuditWithRetry
+} from './npm-audit-high.mjs';
 
 test('recognizes only known npm audit infrastructure failures as transient', () => {
   assert.equal(isTransientNpmAuditFailure('npm warn audit 503 Service Unavailable'), true);
@@ -10,6 +14,14 @@ test('recognizes only known npm audit infrastructure failures as transient', () 
     true
   );
   assert.equal(isTransientNpmAuditFailure('found 1 high severity vulnerability'), false);
+  assert.equal(
+    isTransientNpmAuditFailure(
+      'npm error audit endpoint returned an error\nfound 1 critical severity vulnerability'
+    ),
+    false
+  );
+  assert.equal(hasHighSeverityNpmAuditFinding('found 0 vulnerabilities'), false);
+  assert.equal(hasHighSeverityNpmAuditFinding('found 2 high severity vulnerabilities'), true);
 });
 
 test('returns immediately when npm audit succeeds', async () => {
@@ -58,8 +70,43 @@ test('retries transient failures and preserves the final failure', async () => {
 
   assert.equal(code, 1);
   assert.equal(attempts, 2);
-  assert.deepEqual(waits, [15_000]);
+  assert.deepEqual(waits, [5_000]);
   assert.equal(warnings.length, 1);
+});
+
+test('explicit warning policy tolerates only exhausted infrastructure failures', async () => {
+  const warnings = [];
+  let attempts = 0;
+  const code = await runAuditWithRetry({
+    runAttempt: async () => {
+      attempts += 1;
+      return {
+        code: 1,
+        output: 'npm error audit endpoint returned an error'
+      };
+    },
+    waitForRetry: async () => {},
+    allowInfrastructureFailure: true,
+    warn: (message) => warnings.push(message)
+  });
+
+  assert.equal(code, 0);
+  assert.equal(attempts, 2);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings.at(-1), /explicit infrastructure warning policy/u);
+});
+
+test('warning policy still blocks reported vulnerabilities', async () => {
+  const code = await runAuditWithRetry({
+    runAttempt: async () => ({
+      code: 1,
+      output: 'found 1 high severity vulnerability'
+    }),
+    waitForRetry: async () => assert.fail('vulnerability failure must not retry'),
+    allowInfrastructureFailure: true
+  });
+
+  assert.equal(code, 1);
 });
 
 test('passes when a transient failure recovers', async () => {

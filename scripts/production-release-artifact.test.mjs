@@ -236,10 +236,15 @@ test('quality workflow avoids duplicate branch pushes and scopes expensive jobs'
   assert.match(workflow, /needs\.change-scope\.outputs\.dependency_audit == 'true'/u);
   assert.match(
     workflow,
+    /NPM_AUDIT_INFRASTRUCTURE_POLICY: \$\{\{ github\.event_name == 'pull_request' && 'warn' \|\| 'fail' \}\}/u
+  );
+  assert.match(
+    workflow,
     /Package immutable production artifact\s*\n\s+if: \$\{\{ github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v2-production-'\) \}\}/u
   );
   assert.match(scheduledAudit, /schedule:\s*\n\s+- cron:/u);
   assert.match(scheduledAudit, /npm run audit:high/u);
+  assert.doesNotMatch(scheduledAudit, /NPM_AUDIT_INFRASTRUCTURE_POLICY/u);
 });
 
 function runVerifier(directory) {

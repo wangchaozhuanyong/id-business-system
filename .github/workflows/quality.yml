@@ -162,7 +162,9 @@ jobs:
 
       - name: Audit high severity vulnerabilities
         if: ${{ needs.change-scope.outputs.dependency_audit == 'true' }}
-        timeout-minutes: 20
+        timeout-minutes: 3
+        env:
+          NPM_AUDIT_INFRASTRUCTURE_POLICY: ${{ github.event_name == 'pull_request' && 'warn' || 'fail' }}
         run: npm run audit:high
 
       - name: Check Git readiness
@@ -212,7 +214,7 @@ jobs:
 
       - name: Audit high severity vulnerabilities before release build
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        timeout-minutes: 20
+        timeout-minutes: 3
         run: npm run audit:high
 
       - name: Validate AWS MySQL Compose example

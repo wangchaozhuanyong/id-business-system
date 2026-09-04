@@ -54,8 +54,9 @@ npm run git:readiness
    Compose、依赖锁文件等容器边界变化时才在 PR 构建镜像，`production-images` required check 仍必须成功。
    CI 和生产镜像的依赖安装统一关闭 npm 隐式审计，只由下述显式门禁执行一次，避免每个安装层重复等待
    advisory 接口。
-   依赖审计遇到 registry 网络故障时最多尝试两次，每次 60 秒并间隔 15 秒；网络故障和真实高危漏洞
-   都会阻断对应门禁，但不会再因三次 5 分钟等待拖住整条发布链。
+   依赖审计遇到 registry 网络故障时最多尝试两次，每次 15 秒并间隔 5 秒。PR 在两次已识别的审计
+   服务故障后记录警告并继续，但真实 high/critical 漏洞仍立即阻断；每日定时审计、`main` 质量门禁
+   和正式生产标签保持失败即阻断。
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
 6. 确认该 SHA 的 `main` Quality Gate 已成功，且尚无成功生产制品，再创建不可移动的带说明正式标签
    `v2-production-<UTC>` 并推送。标签必须指向当前 `origin/main` 完整 SHA，且不得重用、强制移动，
