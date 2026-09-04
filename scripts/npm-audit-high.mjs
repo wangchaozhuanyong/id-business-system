@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_MAX_ATTEMPTS = 3;
-const DEFAULT_BACKOFF_MS = 15_000;
+const DEFAULT_MAX_ATTEMPTS = 2;
+const DEFAULT_BACKOFF_MS = 5_000;
+const DEFAULT_FETCH_TIMEOUT_MS = '15000';
 
 const TRANSIENT_FAILURE_PATTERNS = [
   /network timeout/i,
@@ -15,8 +16,20 @@ const TRANSIENT_FAILURE_PATTERNS = [
   /socket hang up/i
 ];
 
+const HIGH_SEVERITY_FINDING_PATTERNS = [
+  /\b[1-9]\d* high severity vulnerabilit(?:y|ies)\b/i,
+  /\b[1-9]\d* critical severity vulnerabilit(?:y|ies)\b/i
+];
+
+export function hasHighSeverityNpmAuditFinding(output) {
+  return HIGH_SEVERITY_FINDING_PATTERNS.some((pattern) => pattern.test(output));
+}
+
 export function isTransientNpmAuditFailure(output) {
-  return TRANSIENT_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+  return (
+    !hasHighSeverityNpmAuditFinding(output) &&
+    TRANSIENT_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
+  );
 }
 
 function runNpmAudit() {
@@ -24,7 +37,7 @@ function runNpmAudit() {
   const child = spawn(command, ['audit', '--omit=dev', '--audit-level=high'], {
     env: {
       ...process.env,
-      NPM_CONFIG_FETCH_TIMEOUT: process.env.NPM_CONFIG_FETCH_TIMEOUT ?? '300000',
+      NPM_CONFIG_FETCH_TIMEOUT: process.env.NPM_CONFIG_FETCH_TIMEOUT ?? DEFAULT_FETCH_TIMEOUT_MS,
       NPM_CONFIG_FETCH_RETRIES: process.env.NPM_CONFIG_FETCH_RETRIES ?? '0'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -60,6 +73,7 @@ export async function runAuditWithRetry({
   waitForRetry = wait,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   backoffMs = DEFAULT_BACKOFF_MS,
+  allowInfrastructureFailure = false,
   warn = (message) => console.warn(message)
 } = {}) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -69,12 +83,20 @@ export async function runAuditWithRetry({
       return 0;
     }
 
-    if (
-      result.spawnError ||
-      result.signal ||
-      !isTransientNpmAuditFailure(result.output) ||
-      attempt === maxAttempts
-    ) {
+    const isInfrastructureFailure =
+      !result.spawnError && !result.signal && isTransientNpmAuditFailure(result.output);
+
+    if (!isInfrastructureFailure) {
+      return result.code || 1;
+    }
+
+    if (attempt === maxAttempts) {
+      if (allowInfrastructureFailure) {
+        warn(
+          `npm audit infrastructure remained unavailable after ${maxAttempts} attempts; continuing under the explicit infrastructure warning policy`
+        );
+        return 0;
+      }
       return result.code || 1;
     }
 
@@ -87,7 +109,16 @@ export async function runAuditWithRetry({
 }
 
 async function main() {
-  process.exitCode = await runAuditWithRetry();
+  const infrastructurePolicy = process.env.NPM_AUDIT_INFRASTRUCTURE_POLICY ?? 'fail';
+  if (!['fail', 'warn'].includes(infrastructurePolicy)) {
+    throw new Error(
+      `Unsupported NPM_AUDIT_INFRASTRUCTURE_POLICY: ${infrastructurePolicy}; expected fail or warn`
+    );
+  }
+
+  process.exitCode = await runAuditWithRetry({
+    allowInfrastructureFailure: infrastructurePolicy === 'warn'
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

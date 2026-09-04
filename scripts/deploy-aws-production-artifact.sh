@@ -60,7 +60,7 @@ if [[ "$key_mode" != 400 && "$key_mode" != 600 ]]; then
   echo '生产 SSH 私钥权限必须为 0400 或 0600' >&2
   exit 1
 fi
-for command in gh git node scp ssh; do
+for command in curl gh git node scp ssh; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "本机发布依赖命令不存在：${command}" >&2
     exit 1
@@ -94,6 +94,63 @@ if [[ "$(git rev-parse HEAD)" != "$release_commit" ||
   exit 1
 fi
 git merge-base --is-ancestor "$release_commit" origin/main
+
+ssh_options=(
+  -i "$SERVER_SSH_KEY"
+  -p "$SERVER_SSH_PORT"
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=accept-new
+)
+scp_options=(
+  -i "$SERVER_SSH_KEY"
+  -P "$SERVER_SSH_PORT"
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=accept-new
+)
+ssh_target="${SERVER_SSH_USER}@${SERVER_SSH_HOST}"
+
+current_release_record="$(
+  ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- "$SERVER_APP_DIR" <<'REMOTE_CURRENT'
+set -Eeuo pipefail
+deployment_root="$1"
+current_release_directory="$(readlink -f "${deployment_root}/current")"
+case "$current_release_directory" in
+  "${deployment_root}/releases/"*) ;;
+  *) echo '生产 current 未指向受控的不可变发布目录' >&2; exit 1 ;;
+esac
+current_manifest="${current_release_directory}/release-manifest.json"
+if [[ ! -f "$current_manifest" ]]; then
+  echo '当前生产发布缺少发布清单' >&2
+  exit 1
+fi
+current_commit="$(
+  sed -nE 's/^[[:space:]]*"commit":[[:space:]]*"([a-f0-9]{40})"[,]?[[:space:]]*$/\1/p' \
+    "$current_manifest" | head -n 1
+)"
+current_release_tag="$(
+  sed -nE 's/^[[:space:]]*"releaseTag":[[:space:]]*"(v2-production-[0-9]{8}T[0-9]{6}Z)"[,]?[[:space:]]*$/\1/p' \
+    "$current_manifest" | head -n 1
+)"
+if [[ ! "$current_commit" =~ ^[a-f0-9]{40}$ ||
+      ! "$current_release_tag" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]; then
+  echo '当前生产发布清单缺少有效 commit 或正式标签' >&2
+  exit 1
+fi
+printf '%s\t%s\t%s\n' "$current_release_directory" "$current_commit" "$current_release_tag"
+REMOTE_CURRENT
+)"
+IFS=$'\t' read -r previous_release_directory previous_commit current_release_tag \
+  <<<"$current_release_record"
+
+if [[ "$previous_commit" == "$release_commit" ]]; then
+  echo '生产环境已运行该 commit，执行轻量语义健康确认'
+  BASE_URL="$PRODUCTION_BASE_URL" bash scripts/deploy-smoke.sh
+  echo "production_release=${current_release_tag}"
+  echo "requested_release=${release_tag}"
+  echo "production_commit=${release_commit}"
+  echo 'deployment_status=already_deployed'
+  exit 0
+fi
 
 artifact_name="id-business-v2-${release_tag}-${release_commit}"
 run_record="$({
@@ -183,35 +240,6 @@ process.stdout.write([
 NODE
 )"
 artifact_path="${download_directory}/${artifact_file}"
-
-ssh_options=(
-  -i "$SERVER_SSH_KEY"
-  -p "$SERVER_SSH_PORT"
-  -o IdentitiesOnly=yes
-  -o StrictHostKeyChecking=accept-new
-)
-scp_options=(
-  -i "$SERVER_SSH_KEY"
-  -P "$SERVER_SSH_PORT"
-  -o IdentitiesOnly=yes
-  -o StrictHostKeyChecking=accept-new
-)
-ssh_target="${SERVER_SSH_USER}@${SERVER_SSH_HOST}"
-
-previous_release_directory="$(
-  ssh "${ssh_options[@]}" "$ssh_target" \
-    "sudo readlink -f '${SERVER_APP_DIR}/current'"
-)"
-case "$previous_release_directory" in
-  "${SERVER_APP_DIR}/releases/"*) ;;
-  *) echo '生产 current 未指向受控的不可变发布目录' >&2; exit 1 ;;
-esac
-previous_short_sha="${previous_release_directory##*-}"
-previous_commit="$(git rev-parse "${previous_short_sha}^{commit}")"
-if [[ ! "$previous_commit" =~ ^[a-f0-9]{40}$ ]]; then
-  echo '无法将上一生产版本解析为完整 commit' >&2
-  exit 1
-fi
 
 echo '执行生产发布磁盘与保留策略预检'
 ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- --preflight <"$retention_script"

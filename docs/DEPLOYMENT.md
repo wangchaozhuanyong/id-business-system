@@ -48,14 +48,23 @@ npm run acceptance:v2-financial-integrity
 npm run git:readiness
 ```
 
-3. 推送发布分支并创建以 `main` 为目标的 PR；禁止直接推送或强制推送 `main`。
-4. GitHub CI 全部通过并完成审查后合并 PR。
+3. 推送发布分支并创建以 `main` 为目标的 PR；禁止直接推送或强制推送 `main`。发布分支 push
+   本身不重复触发质量门禁，PR 只保留一组 required checks；同一 PR 的旧提交由 concurrency 自动取消。
+4. GitHub CI 全部通过并完成审查后合并 PR。普通业务改动不重复构建生产镜像；只有 Dockerfile、
+   Compose、依赖锁文件等容器边界变化时才在 PR 构建镜像，`production-images` required check 仍必须成功。
+   CI 和生产镜像的依赖安装统一关闭 npm 隐式审计，只由下述显式门禁执行一次，避免每个安装层重复等待
+   advisory 接口。
+   依赖审计遇到 registry 网络故障时最多尝试两次，每次 15 秒并间隔 5 秒。PR 在两次已识别的审计
+   服务故障后记录警告并继续，但真实 high/critical 漏洞仍立即阻断；每日定时审计、`main` 质量门禁
+   和正式生产标签保持失败即阻断。
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
-6. 创建不可移动的带说明正式标签 `v2-production-<UTC>` 并推送。标签必须指向当前
-   `origin/main` 完整 SHA，且不得重用或强制移动。
-7. 标签 CI 只构建一次 API、管理端、migration、媒体解析和发布门禁镜像，导出单一不可变制品，
-   上传 `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、
-   制品 SHA-256 及五个镜像 digest。
+6. 确认该 SHA 的 `main` Quality Gate 已成功，且尚无成功生产制品，再创建不可移动的带说明正式标签
+   `v2-production-<UTC>` 并推送。标签必须指向当前 `origin/main` 完整 SHA，且不得重用、强制移动，
+   同一个 SHA 也不得通过第二个正式标签重复构建制品。
+7. 标签 CI 复用同 SHA 已成功的 `main` 质量结论，只在构建前执行一次生产依赖审计，然后构建一次 API、
+   管理端、migration、媒体解析和发布门禁镜像，导出单一不可变制品，上传
+   `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、制品 SHA-256
+   及五个镜像 digest；标签阶段不再重复执行整套 lint、unit test、浏览器验收和本地数据库验收。
 8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
 
 正式顺序固定为：
@@ -78,7 +87,9 @@ bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
 ```
 
 入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于 `origin/main` 的 SHA、
-失败的 CI 或缺少 digest 的制品。
+失败的 CI 或缺少 digest 的制品。检查 GitHub 制品和下载大文件前会先读取生产 `current` 的完整清单；
+若同一 commit 已经上线，则只执行公共页面、静态资源 MIME 和 live/ready 语义健康检查，返回
+`deployment_status=already_deployed`，不重复下载、上传、备份、migration、容器重启或回切。
 
 2. 制品在本机与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
 
