@@ -112,7 +112,13 @@ describe('personal workspace UI contract', () => {
 
   it('keeps the online relay workflow encrypted, resumable, and admin-only', () => {
     const relayUi = [relayScriptDrawer, relayConnectionPanel, relayDeploymentPanel].join('\n');
-    expect(relayScriptDrawer).toContain('在线自动部署 Google Cloud Vertex 账号到中转站');
+    expect(relayScriptDrawer).toContain(
+      '在线部署 Gemini 订阅号、AI Studio API Key 和 Vertex AI 到中转站'
+    );
+    expect(relayDeploymentPanel).toContain('value="antigravity_subscription"');
+    expect(relayDeploymentPanel).toContain('value="gemini_api"');
+    expect(relayDeploymentPanel).toContain('value="vertex"');
+    expect(relayDeploymentPanel).toContain('提交回调并继续');
     expect(relayUi).toContain('label-position="left"');
     expect(relayUi).toContain('require-asterisk-position="right"');
     expect(relayUi).toContain('<V2AsyncRegion');

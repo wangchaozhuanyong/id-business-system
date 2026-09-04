@@ -52,8 +52,11 @@ export class IdBusinessV2RelayCloudBridgeClient {
     });
   }
 
-  async listGroups(accessToken: string) {
-    const value = await this.request<unknown>('/admin/groups/all?platform=gemini', accessToken);
+  async listGroups(accessToken: string, platform: 'antigravity' | 'gemini' = 'gemini') {
+    const value = await this.request<unknown>(
+      `/admin/groups/all?platform=${encodeURIComponent(platform)}`,
+      accessToken
+    );
     return items(value);
   }
 
@@ -77,6 +80,21 @@ export class IdBusinessV2RelayCloudBridgeClient {
     );
   }
 
+  async listSubscriptionAccounts(accessToken: string) {
+    const value = await this.request<unknown>(
+      '/admin/accounts?page=1&page_size=1000&platform=antigravity',
+      accessToken
+    );
+    const summaries = items(value).filter(
+      (account) => account.platform === 'antigravity' && account.type === 'oauth'
+    );
+    return Promise.all(
+      summaries.map((account) =>
+        account.credentials ? account : this.getAccount(Number(account.id), accessToken)
+      )
+    );
+  }
+
   async getAccount(accountId: number, accessToken: string) {
     return this.request<Record<string, unknown>>(`/admin/accounts/${accountId}`, accessToken);
   }
@@ -84,10 +102,14 @@ export class IdBusinessV2RelayCloudBridgeClient {
   async listVertexReferences(accessToken: string) {
     const accounts = await this.listVertexAccounts(accessToken);
     const references: Array<{
+      concurrency: number;
       id: number;
       label: string;
+      loadFactor: number;
       models: string[];
       modelMapping: Record<string, string>;
+      priority: number;
+      rateMultiplier: number;
     }> = [];
     for (const summary of accounts) {
       const account = summary;
@@ -105,13 +127,259 @@ export class IdBusinessV2RelayCloudBridgeClient {
         .sort();
       if (!models.length) continue;
       references.push({
+        concurrency: this.positiveNumber(account.concurrency, 1),
         id: Number(account.id),
         label: String(account.name || `账号 #${account.id}`),
+        loadFactor: this.positiveNumber(account.load_factor, 20),
         models,
-        modelMapping: Object.fromEntries(models.map((model) => [model, model]))
+        modelMapping: Object.fromEntries(models.map((model) => [model, model])),
+        priority: this.positiveNumber(account.priority, 99),
+        rateMultiplier: this.positiveNumber(account.rate_multiplier, 1)
       });
     }
     return references.sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+  }
+
+  async listSubscriptionReferences(accessToken: string) {
+    const accounts = await this.listSubscriptionAccounts(accessToken);
+    return accounts
+      .filter((account) => account.status === 'active')
+      .map((account) => {
+        const credentials = this.record(account.credentials);
+        const rawMapping = this.record(credentials.model_mapping);
+        const modelMapping = Object.fromEntries(
+          Object.entries(rawMapping)
+            .map(([model, target]) => [model.trim(), String(target ?? '').trim()])
+            .filter(
+              ([model, target]) =>
+                model.startsWith('gemini-') &&
+                target.startsWith('gemini-') &&
+                !/(?:tts|audio|video)/i.test(target)
+            )
+        );
+        const extra = this.record(account.extra);
+        return {
+          id: Number(account.id),
+          label: String(account.name || `账号 #${account.id}`),
+          models: Object.keys(modelMapping).sort(),
+          modelMapping,
+          concurrency: this.positiveNumber(account.concurrency, 1),
+          loadFactor: this.positiveNumber(account.load_factor, 1),
+          priority: this.positiveNumber(account.priority, 1),
+          rateMultiplier: this.positiveNumber(account.rate_multiplier, 1),
+          allowOverages: extra.allow_overages === true,
+          mixedScheduling: extra.mixed_scheduling === true
+        };
+      })
+      .filter((account) => account.models.length > 0)
+      .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+  }
+
+  generateAntigravityAuthUrl(proxyId: number | null, accessToken: string) {
+    return this.request<Record<string, unknown>>('/admin/antigravity/oauth/auth-url', accessToken, {
+      method: 'POST',
+      body: JSON.stringify(proxyId ? { proxy_id: proxyId } : {})
+    });
+  }
+
+  exchangeAntigravityCode(
+    input: { code: string; proxyId: number | null; sessionId: string; state: string },
+    accessToken: string
+  ) {
+    return this.request<Record<string, unknown>>(
+      '/admin/antigravity/oauth/exchange-code',
+      accessToken,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          code: input.code,
+          session_id: input.sessionId,
+          state: input.state,
+          ...(input.proxyId ? { proxy_id: input.proxyId } : {})
+        })
+      }
+    );
+  }
+
+  async createAntigravityAccount(input: {
+    accessToken: string;
+    accountLabel: string;
+    deploymentKey: string;
+    googleEmail: string;
+    modelMapping: Record<string, string>;
+    proxyId: number | null;
+    settings: Record<string, unknown>;
+    targetGroupId: number;
+    tokenInfo: Record<string, unknown>;
+  }) {
+    const email = String(input.tokenInfo.email || input.googleEmail)
+      .trim()
+      .toLowerCase();
+    if (
+      !input.tokenInfo.access_token ||
+      !input.tokenInfo.refresh_token ||
+      !input.tokenInfo.project_id
+    )
+      throw new Error('Antigravity OAuth 没有返回完整凭据');
+    const name = `Gemini-pro-${email.split('@')[0] || input.accountLabel}`;
+    const credentials = {
+      access_token: input.tokenInfo.access_token,
+      refresh_token: input.tokenInfo.refresh_token,
+      token_type: input.tokenInfo.token_type || 'Bearer',
+      expires_at: String(input.tokenInfo.expires_at || ''),
+      project_id: input.tokenInfo.project_id,
+      email,
+      ...(input.tokenInfo.plan_type ? { plan_type: String(input.tokenInfo.plan_type) } : {}),
+      ...(input.tokenInfo._token_version
+        ? { _token_version: String(input.tokenInfo._token_version) }
+        : {}),
+      model_mapping: input.modelMapping
+    };
+    const accounts = await this.listSubscriptionAccounts(input.accessToken);
+    const matches = accounts.filter((account) => {
+      const current = this.record(account.credentials);
+      return (
+        String(current.email || '')
+          .trim()
+          .toLowerCase() === email || account.name === name
+      );
+    });
+    if (matches.length > 1) throw new Error(`线上存在多个同邮箱或同名订阅账号：${email}`);
+    const body = {
+      name,
+      notes: `Gemini 订阅号；运营标记 ${input.accountLabel}`,
+      platform: 'antigravity',
+      type: 'oauth',
+      credentials,
+      extra: {
+        allow_overages: input.settings.allowOverages === true,
+        mixed_scheduling: input.settings.mixedScheduling === true
+      },
+      proxy_id: input.proxyId,
+      concurrency: this.positiveNumber(input.settings.concurrency, 1),
+      load_factor: this.positiveNumber(input.settings.loadFactor, 1),
+      priority: this.positiveNumber(input.settings.priority, 1),
+      rate_multiplier: this.positiveNumber(input.settings.rateMultiplier, 1),
+      schedulable: false,
+      status: 'active',
+      group_ids: [input.targetGroupId]
+    };
+    const existing = matches[0];
+    if (existing) {
+      const id = Number(existing.id);
+      await this.setSchedulable(id, false, input.accessToken);
+      const current = await this.getAccount(id, input.accessToken);
+      const currentCredentials = this.record(current.credentials);
+      const updated = await this.updateAccount(
+        id,
+        {
+          ...body,
+          credentials: {
+            ...this.nonSecretCredentials(currentCredentials),
+            ...credentials
+          }
+        },
+        input.accessToken
+      );
+      return { ...existing, ...updated, id };
+    }
+    const digest = createHash('sha256')
+      .update(`${input.deploymentKey}:${email}`)
+      .digest('hex')
+      .slice(0, 32);
+    const created = await this.request<Record<string, unknown>>(
+      '/admin/accounts',
+      input.accessToken,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `onboarding-antigravity-${digest}` },
+        body: JSON.stringify(body)
+      }
+    );
+    const id = Number(created.id);
+    if (!Number.isInteger(id) || id <= 0) throw new Error('中转站没有返回账号 ID');
+    await this.setSchedulable(id, false, input.accessToken);
+    return created;
+  }
+
+  createGeminiApiKeyAccount(input: {
+    accessToken: string;
+    accountLabel: string;
+    apiKey: string;
+    deploymentKey: string;
+    modelMapping: Record<string, string>;
+    proxyId: number | null;
+    settings?: Record<string, unknown>;
+  }) {
+    const body = {
+      name: `Gemini API 3.7+TTS-${input.accountLabel}`,
+      notes: 'Google AI Studio 预付费 3.7 + TTS 账号',
+      platform: 'gemini',
+      type: 'apikey',
+      credentials: {
+        api_key: input.apiKey,
+        base_url: 'https://generativelanguage.googleapis.com',
+        model_mapping: input.modelMapping
+      },
+      proxy_id: input.proxyId,
+      concurrency: this.positiveNumber(input.settings?.concurrency, 1),
+      load_factor: this.positiveNumber(input.settings?.loadFactor, 20),
+      priority: this.positiveNumber(input.settings?.priority, 99),
+      rate_multiplier: this.positiveNumber(input.settings?.rateMultiplier, 1),
+      group_ids: [],
+      schedulable: false
+    };
+    const digest = createHash('sha256')
+      .update(`${input.deploymentKey}:${input.accountLabel}`)
+      .digest('hex')
+      .slice(0, 32);
+    return this.request<Record<string, unknown>>('/admin/accounts', input.accessToken, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `onboarding-gemini-api-${digest}` },
+      body: JSON.stringify(body)
+    });
+  }
+
+  setAntigravityPrivacy(accountId: number, accessToken: string) {
+    return this.request<Record<string, unknown>>(
+      `/admin/accounts/${accountId}/set-privacy`,
+      accessToken,
+      { method: 'POST', body: '{}' }
+    );
+  }
+
+  syncAntigravityModels(accountId: number, accessToken: string) {
+    return this.request<Record<string, unknown>>(
+      `/admin/accounts/${accountId}/models/sync-upstream`,
+      accessToken,
+      { method: 'POST', body: '{}' }
+    );
+  }
+
+  async configureAntigravityAccount(
+    accountId: number,
+    modelMapping: Record<string, string>,
+    settings: Record<string, unknown>,
+    accessToken: string
+  ) {
+    const current = await this.getAccount(accountId, accessToken);
+    const credentials = this.nonSecretCredentials(this.record(current.credentials));
+    return this.updateAccount(
+      accountId,
+      {
+        credentials: { ...credentials, model_mapping: modelMapping },
+        extra: {
+          ...this.record(current.extra),
+          allow_overages: settings.allowOverages === true,
+          mixed_scheduling: settings.mixedScheduling === true
+        },
+        concurrency: this.positiveNumber(settings.concurrency, 1),
+        load_factor: this.positiveNumber(settings.loadFactor, 1),
+        priority: this.positiveNumber(settings.priority, 1),
+        rate_multiplier: this.positiveNumber(settings.rateMultiplier, 1)
+      },
+      accessToken
+    );
   }
 
   async createVertexAccount(input: {
@@ -124,6 +392,7 @@ export class IdBusinessV2RelayCloudBridgeClient {
     creditExpiresAt: Date | null;
     modelMapping: Record<string, string>;
     proxyId: number | null;
+    settings?: Record<string, unknown>;
   }) {
     const existing = (await this.listVertexAccounts(input.accessToken)).find((account) => {
       const credentials =
@@ -150,10 +419,10 @@ export class IdBusinessV2RelayCloudBridgeClient {
         tier_id: 'vertex'
       },
       proxy_id: input.proxyId,
-      concurrency: 1,
-      load_factor: 20,
-      priority: 99,
-      rate_multiplier: 1,
+      concurrency: this.positiveNumber(input.settings?.concurrency, 1),
+      load_factor: this.positiveNumber(input.settings?.loadFactor, 20),
+      priority: this.positiveNumber(input.settings?.priority, 99),
+      rate_multiplier: this.positiveNumber(input.settings?.rateMultiplier, 1),
       ...(existing ? {} : { group_ids: [] }),
       expires_at: input.creditExpiresAt ? Math.floor(input.creditExpiresAt.getTime() / 1000) : null,
       auto_pause_on_expired: Boolean(input.creditExpiresAt)
@@ -245,16 +514,25 @@ export class IdBusinessV2RelayCloudBridgeClient {
     });
   }
 
-  async attachGroup(accountId: number, groupId: number, accessToken: string) {
+  async attachGroup(accountId: number, groupId: number, accessToken: string, priority = 99) {
     await this.request(`/admin/accounts/${accountId}`, accessToken, {
       method: 'PUT',
       body: JSON.stringify({
         group_ids: [groupId],
-        priority: 99,
+        priority,
         status: 'active'
       })
     });
-    return this.setSchedulable(accountId, true, accessToken);
+    await this.setSchedulable(accountId, true, accessToken);
+    const current = await this.getAccount(accountId, accessToken);
+    const groupIds = Array.isArray(current.group_ids)
+      ? current.group_ids.map(Number)
+      : Array.isArray(current.groups)
+        ? current.groups.map((group) => Number(this.record(group).id))
+        : [];
+    if (current.schedulable !== true || !groupIds.includes(groupId))
+      throw new Error('中转站账号未成功加入目标分组或启用调度');
+    return current;
   }
 
   validateAdminSession(session: IdBusinessV2CloudBridgeSession) {
@@ -263,6 +541,31 @@ export class IdBusinessV2RelayCloudBridgeClient {
     }
     if (session.user?.role !== 'admin') throw new Error('该中转站账号不是管理员');
     return session;
+  }
+
+  private updateAccount(accountId: number, updates: Record<string, unknown>, accessToken: string) {
+    return this.request<Record<string, unknown>>(`/admin/accounts/${accountId}`, accessToken, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+  }
+
+  private record(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private nonSecretCredentials(credentials: Record<string, unknown>) {
+    const preserved = { ...credentials };
+    delete preserved.access_token;
+    delete preserved.refresh_token;
+    return preserved;
+  }
+
+  private positiveNumber(value: unknown, fallback: number) {
+    const normalized = Number(value);
+    return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback;
   }
 
   private async unauthenticated<T>(path: string, options: RequestInit) {

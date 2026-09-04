@@ -7,6 +7,7 @@ import type {
   CreateV2ManagedMailboxInput,
   CreateV2ManagedMailboxResult,
   CreateV2RelayJobInput,
+  CompleteV2RelaySubscriptionAuthorizationInput,
   ReorderV2WorkspaceShortcutsInput,
   LoginV2RelayCloudBridgeInput,
   LoginV2RelayCloudBridgeResult,
@@ -15,6 +16,7 @@ import type {
   StartV2MicrosoftMailboxAuthorizationInput,
   StartV2MicrosoftMailboxAuthorizationResult,
   StartV2RelayGoogleAuthorizationResult,
+  StartV2RelaySubscriptionAuthorizationResult,
   UpdateV2ManagedMailboxCredentialInput,
   UpdateV2ManagedMailboxQueryCodeSettingsInput,
   UpdateV2ManagedMailboxQueryCodeSettingsResult,
@@ -210,6 +212,24 @@ export const idBusinessV2WorkspaceApi = {
   runRelayJob(jobId: string) {
     return request<V2RelayJob>(
       http.post(`/id-business-v2/workspace-relay/jobs/${encodeURIComponent(jobId)}/run`)
+    );
+  },
+  startRelaySubscriptionAuthorization(jobId: string) {
+    return request<StartV2RelaySubscriptionAuthorizationResult>(
+      http.post(
+        `/id-business-v2/workspace-relay/jobs/${encodeURIComponent(jobId)}/subscription-authorization`
+      )
+    );
+  },
+  completeRelaySubscriptionAuthorization(
+    jobId: string,
+    input: CompleteV2RelaySubscriptionAuthorizationInput
+  ) {
+    return request<V2RelayJob>(
+      http.post(
+        `/id-business-v2/workspace-relay/jobs/${encodeURIComponent(jobId)}/subscription-authorization/callback`,
+        input
+      )
     );
   }
 };

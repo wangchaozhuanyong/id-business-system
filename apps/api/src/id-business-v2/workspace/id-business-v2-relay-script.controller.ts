@@ -2,19 +2,24 @@ import { Body, Controller, Get, Header, Param, Post, Put, Req } from '@nestjs/co
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type {
+  CompleteIdBusinessV2RelaySubscriptionAuthorizationDto,
   CreateIdBusinessV2RelayJobDto,
   LoginIdBusinessV2RelayCloudBridgeDto,
   SaveIdBusinessV2RelayGoogleOAuthDto
 } from './dto/id-business-v2-relay-script.dto';
 import { IdBusinessV2RelayScriptService } from './id-business-v2-relay-script.service';
 import { IdBusinessV2RelayJobRunnerService } from './id-business-v2-relay-job-runner.service';
+import { IdBusinessV2RelayJobCreationService } from './id-business-v2-relay-job-creation.service';
+import { IdBusinessV2RelaySubscriptionAuthService } from './id-business-v2-relay-subscription-auth.service';
 
 @RequireRoles('admin')
 @Controller('id-business-v2/workspace-relay')
 export class IdBusinessV2RelayScriptController {
   constructor(
     private readonly service: IdBusinessV2RelayScriptService,
-    private readonly jobRunner: IdBusinessV2RelayJobRunnerService
+    private readonly jobRunner: IdBusinessV2RelayJobRunnerService,
+    private readonly jobCreation: IdBusinessV2RelayJobCreationService,
+    private readonly subscriptionAuth: IdBusinessV2RelaySubscriptionAuthService
   ) {}
 
   @Get('connection')
@@ -68,7 +73,28 @@ export class IdBusinessV2RelayScriptController {
     @CurrentUser() operator?: AuthenticatedUser,
     @Req() request?: { requestId?: string }
   ) {
-    return this.service.createJob(dto, operator, request?.requestId);
+    return this.jobCreation.createJob(dto, operator, request?.requestId);
+  }
+
+  @Post('jobs/:jobId/subscription-authorization')
+  @Header('Cache-Control', 'private, no-store')
+  startSubscriptionAuthorization(
+    @Param('jobId') jobId: string,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.subscriptionAuth.start(jobId, operator, request?.requestId);
+  }
+
+  @Post('jobs/:jobId/subscription-authorization/callback')
+  @Header('Cache-Control', 'private, no-store')
+  completeSubscriptionAuthorization(
+    @Param('jobId') jobId: string,
+    @Body() dto: CompleteIdBusinessV2RelaySubscriptionAuthorizationDto,
+    @CurrentUser() operator?: AuthenticatedUser,
+    @Req() request?: { requestId?: string }
+  ) {
+    return this.subscriptionAuth.complete(jobId, dto, operator, request?.requestId);
   }
 
   @Post('jobs/:jobId/run')

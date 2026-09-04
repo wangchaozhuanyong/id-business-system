@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   ServiceUnavailableException
@@ -11,7 +10,6 @@ import {
   type StartV2RelayGoogleAuthorizationResult,
   type V2RelayConnectionStatus,
   type V2RelayDeploymentOptions,
-  type V2RelayJob,
   type V2RelayJobList
 } from '@apple-business/shared';
 import { randomBytes } from 'node:crypto';
@@ -23,7 +21,6 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import type {
-  CreateIdBusinessV2RelayJobDto,
   LoginIdBusinessV2RelayCloudBridgeDto,
   SaveIdBusinessV2RelayGoogleOAuthDto
 } from './dto/id-business-v2-relay-script.dto';
@@ -41,10 +38,7 @@ import {
 } from './providers/id-business-v2-relay-google-oauth.client';
 import { IdBusinessV2RelayRemoteError } from './providers/id-business-v2-relay-http';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const GOOGLE_CLIENT_ID_PATTERN = /^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/;
-const BILLING_ACCOUNT_PATTERN = /^billingAccounts\/[A-Z0-9-]{6,60}$/i;
 const GOOGLE_STATE_TTL_MS = 15 * 60 * 1000;
 
 @Injectable()
@@ -298,15 +292,28 @@ export class IdBusinessV2RelayScriptService {
 
   async getDeploymentOptions(operator?: AuthenticatedUser): Promise<V2RelayDeploymentOptions> {
     const userId = this.requireAdmin(operator);
-    const connection = await this.requireConnection(userId);
-    const googleAccessToken = await this.googleAccessToken(connection);
+    const connection = await this.requireCloudBridgeConnection(userId);
+    const billingAccounts = connection.googleOAuthTokenEncrypted
+      ? await this.googleAccessToken(connection)
+          .then((token) => this.googleCloud.listBillingAccounts(token))
+          .catch(() => [])
+      : [];
     return this.withCloudBridgeSession(connection, async (accessToken) => {
-      const [billingAccounts, groups, proxies, references] = await Promise.all([
-        this.googleCloud.listBillingAccounts(googleAccessToken),
-        this.cloudBridge.listGroups(accessToken),
-        this.cloudBridge.listProxies(accessToken),
-        this.cloudBridge.listVertexReferences(accessToken)
-      ]);
+      const [geminiGroups, antigravityGroups, proxies, vertexReferences, subscriptionReferences] =
+        await Promise.all([
+          this.cloudBridge.listGroups(accessToken, 'gemini'),
+          this.cloudBridge.listGroups(accessToken, 'antigravity'),
+          this.cloudBridge.listProxies(accessToken),
+          this.cloudBridge.listVertexReferences(accessToken),
+          this.cloudBridge.listSubscriptionReferences(accessToken)
+        ]);
+      const toGroups = (groups: Array<Record<string, unknown>>) =>
+        groups
+          .filter((group) => group.status === 'active')
+          .map((group) => ({
+            id: Number(group.id),
+            label: String(group.name || `分组 #${group.id}`)
+          }));
       return {
         billingAccounts: billingAccounts
           .map((account) => ({
@@ -314,22 +321,33 @@ export class IdBusinessV2RelayScriptService {
             label: String(account.displayName || account.name || '未命名结算账号')
           }))
           .filter((account) => Boolean(account.id)),
-        groups: groups
-          .filter((group) => group.status === 'active')
-          .map((group) => ({
-            id: Number(group.id),
-            label: String(group.name || `分组 #${group.id}`)
-          })),
+        geminiGroups: toGroups(geminiGroups),
+        antigravityGroups: toGroups(antigravityGroups),
         proxies: proxies
           .filter((proxy) => proxy.status === 'active')
           .map((proxy) => ({
             id: Number(proxy.id),
             label: String(proxy.name || `代理 #${proxy.id}`)
           })),
-        referenceAccounts: references.map((reference) => ({
+        vertexReferenceAccounts: vertexReferences.map((reference) => ({
+          concurrency: reference.concurrency,
           id: reference.id,
           label: reference.label,
-          models: reference.models
+          loadFactor: reference.loadFactor,
+          models: reference.models,
+          priority: reference.priority,
+          rateMultiplier: reference.rateMultiplier
+        })),
+        subscriptionReferenceAccounts: subscriptionReferences.map((reference) => ({
+          allowOverages: reference.allowOverages,
+          concurrency: reference.concurrency,
+          id: reference.id,
+          label: reference.label,
+          loadFactor: reference.loadFactor,
+          mixedScheduling: reference.mixedScheduling,
+          models: reference.models,
+          priority: reference.priority,
+          rateMultiplier: reference.rateMultiplier
         }))
       };
     });
@@ -341,123 +359,17 @@ export class IdBusinessV2RelayScriptService {
     return { items: rows.map(toIdBusinessV2RelayJob) };
   }
 
-  async createJob(
-    dto: CreateIdBusinessV2RelayJobDto,
-    operator?: AuthenticatedUser,
-    requestId = 'workspace-relay-job-create'
-  ): Promise<V2RelayJob> {
-    const userId = this.requireAdmin(operator);
-    const accountLabel = this.normalizeString(dto.accountLabel, '请输入账号标记', 80);
-    const projectId = this.normalizeString(
-      dto.projectId,
-      '请输入 Google Project ID',
-      30
-    ).toLowerCase();
-    if (!PROJECT_ID_PATTERN.test(projectId))
-      throw new BadRequestException('Google Project ID 格式不正确');
-    const projectDisplayName = this.normalizeString(
-      dto.projectDisplayName,
-      '请输入项目显示名称',
-      80
-    );
-    const billingAccount = this.normalizeString(dto.billingAccount, '请选择结算账号', 80);
-    if (!BILLING_ACCOUNT_PATTERN.test(billingAccount))
-      throw new BadRequestException('结算账号格式不正确');
-    const targetGroupId = this.normalizePositiveInteger(dto.targetGroupId, '请选择目标分组');
-    const referenceAccountId = this.normalizePositiveInteger(
-      dto.referenceAccountId,
-      '请选择参考账号'
-    );
-    const proxyId =
-      dto.proxyId === undefined || dto.proxyId === null || dto.proxyId === ''
-        ? null
-        : this.normalizePositiveInteger(dto.proxyId, '代理节点不正确');
-    const location =
-      dto.location === undefined
-        ? 'global'
-        : this.normalizeString(dto.location, '请输入 Vertex 区域', 40);
-    if (!/^[a-z0-9-]{2,40}$/.test(location)) throw new BadRequestException('Vertex 区域格式不正确');
-    const creditExpiresAt = this.normalizeOptionalDate(dto.creditExpiresAt);
-
-    const connection = await this.requireConnection(userId);
-    const googleAccessToken = await this.googleAccessToken(connection);
-    const billingAccounts = await this.googleCloud.listBillingAccounts(googleAccessToken);
-    if (!billingAccounts.some((account) => account.name === billingAccount)) {
-      throw new BadRequestException('结算账号不存在或当前不可用');
-    }
-    const selection = await this.withCloudBridgeSession(connection, async (accessToken) => {
-      const [groups, proxies, references] = await Promise.all([
-        this.cloudBridge.listGroups(accessToken),
-        this.cloudBridge.listProxies(accessToken),
-        this.cloudBridge.listVertexReferences(accessToken)
-      ]);
-      const group = groups.find(
-        (item) => Number(item.id) === targetGroupId && item.status === 'active'
-      );
-      if (!group) throw new BadRequestException('目标分组不存在或未启用');
-      if (
-        proxyId &&
-        !proxies.some((item) => Number(item.id) === proxyId && item.status === 'active')
-      ) {
-        throw new BadRequestException('代理节点不存在或未启用');
-      }
-      const reference = references.find((item) => item.id === referenceAccountId);
-      if (!reference) throw new BadRequestException('参考账号不存在或没有模型映射');
-      return reference;
-    });
-
-    try {
-      const row = await this.transactionManager.execute(
-        async (tx) => {
-          const created = await this.repository.createJob(tx, {
-            accountLabel,
-            billingAccount,
-            completedSteps: [],
-            creditExpiresAt,
-            location,
-            modelMapping: selection.modelMapping,
-            progress: {},
-            projectDisplayName,
-            projectId,
-            proxyId,
-            referenceAccountId,
-            status: 'draft',
-            targetGroupId,
-            userId
-          });
-          await this.audit.append(tx, {
-            userId,
-            module: 'id_business_v2',
-            action: 'id_business_v2.workspace_relay.job_create',
-            objectType: 'id_business_v2_relay_job',
-            objectId: created.id,
-            afterData: toV2JsonDocument({
-              accountLabel,
-              models: Object.keys(selection.modelMapping),
-              projectId,
-              targetGroupId
-            }),
-            remark: `已创建中转脚本任务：${projectId}`
-          });
-          return created;
-        },
-        { changedScopes: ['workspace'], operator, requestId, retryMode: 'none' }
-      );
-      return toIdBusinessV2RelayJob(row);
-    } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'P2002') {
-        throw new ConflictException('该 Google Project ID 已经存在部署任务');
-      }
-      throw error;
-    }
+  async requireCloudBridgeConnection(userId: string) {
+    const connection = await this.repository.findConnectionByUser(userId);
+    if (!connection?.cloudBridgeSessionEncrypted)
+      throw new BadRequestException('请先连接中转站管理员账号');
+    return connection;
   }
 
-  async requireConnection(userId: string) {
-    const connection = await this.repository.findConnectionByUser(userId);
-    if (!connection?.googleOAuthTokenEncrypted)
+  async requireVertexConnection(userId: string) {
+    const connection = await this.requireCloudBridgeConnection(userId);
+    if (!connection.googleOAuthTokenEncrypted)
       throw new BadRequestException('请先完成 Google Cloud 授权');
-    if (!connection.cloudBridgeSessionEncrypted)
-      throw new BadRequestException('请先连接中转站管理员账号');
     return connection;
   }
 
@@ -535,12 +447,6 @@ export class IdBusinessV2RelayScriptService {
     return operator.id;
   }
 
-  private normalizeId(value: unknown) {
-    if (typeof value !== 'string' || !UUID_PATTERN.test(value))
-      throw new BadRequestException('任务标识无效');
-    return value;
-  }
-
   private normalizeString(value: unknown, message: string, maxLength: number) {
     if (typeof value !== 'string') throw new BadRequestException(message);
     const normalized = value.trim();
@@ -560,22 +466,6 @@ export class IdBusinessV2RelayScriptService {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       throw new BadRequestException('中转站管理员邮箱格式不正确');
     return email;
-  }
-
-  private normalizePositiveInteger(value: unknown, message: string) {
-    const number = typeof value === 'number' ? value : Number(value);
-    if (!Number.isInteger(number) || number <= 0) throw new BadRequestException(message);
-    return number;
-  }
-
-  private normalizeOptionalDate(value: unknown) {
-    if (value === undefined || value === null || value === '') return null;
-    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      throw new BadRequestException('赠金到期日格式不正确');
-    }
-    const date = new Date(`${value}T23:59:59.000Z`);
-    if (Number.isNaN(date.getTime())) throw new BadRequestException('赠金到期日格式不正确');
-    return date;
   }
 
   private decrypt(value: string, field: string) {
