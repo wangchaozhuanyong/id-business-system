@@ -112,9 +112,6 @@ jobs:
 
       - name: Audit high severity vulnerabilities
         timeout-minutes: 20
-        env:
-          NPM_CONFIG_FETCH_TIMEOUT: '900000'
-          NPM_CONFIG_FETCH_RETRIES: '2'
         run: npm run audit:high
 
       - name: Check Git readiness
