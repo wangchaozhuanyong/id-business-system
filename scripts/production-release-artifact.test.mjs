@@ -178,13 +178,68 @@ test('AWS deploy forwards all five immutable image references to the remote inst
   );
 });
 
+test('AWS deploy returns early when the exact production commit is already current', () => {
+  const deployer = readFileSync(
+    resolve(projectRoot, 'scripts/deploy-aws-production-artifact.sh'),
+    'utf8'
+  );
+  const currentCommitCheckIndex = deployer.indexOf(
+    'if [[ "$previous_commit" == "$release_commit" ]]'
+  );
+  const artifactLookupIndex = deployer.indexOf('gh run list', currentCommitCheckIndex);
+  const artifactDownloadIndex = deployer.indexOf('gh run download "$ci_run_id"');
+  const retentionPreflightIndex = deployer.indexOf(
+    'sudo bash -s -- --preflight <"$retention_script"'
+  );
+
+  assert.ok(currentCommitCheckIndex > 0);
+  assert.match(deployer, /BASE_URL="\$PRODUCTION_BASE_URL" bash scripts\/deploy-smoke\.sh/u);
+  assert.match(deployer, /deployment_status=already_deployed/u);
+  assert.ok(artifactLookupIndex > currentCommitCheckIndex);
+  assert.ok(artifactDownloadIndex > currentCommitCheckIndex);
+  assert.ok(retentionPreflightIndex > currentCommitCheckIndex);
+});
+
 test('tag workflow uploads one SHA-pinned immutable artifact', () => {
   const workflow = readFileSync(resolve(projectRoot, '.github/workflows/quality.yml'), 'utf8');
   assert.match(workflow, /tags:\s*\n\s*- 'v2-production-\*'/u);
   assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/u);
+  assert.match(workflow, /headBranch == \\"main\\" and \.headSha == \\"\$\{GITHUB_SHA\}\\"/u);
+  assert.match(workflow, /该 commit 已由成功运行/u);
   assert.match(workflow, /uses:\s+actions\/upload-artifact@[a-f0-9]{40}\s+# v4/u);
   assert.match(workflow, /scripts\/package-production-release\.sh/u);
   assert.match(workflow, /scripts\/verify-production-release-artifact\.mjs/u);
+});
+
+test('quality workflow avoids duplicate branch pushes and scopes expensive jobs', () => {
+  const workflow = readFileSync(resolve(projectRoot, '.github/workflows/quality.yml'), 'utf8');
+  const scheduledAudit = readFileSync(
+    resolve(projectRoot, '.github/workflows/dependency-audit.yml'),
+    'utf8'
+  );
+
+  assert.doesNotMatch(workflow, /codex\/\*\*-release-\*/u);
+  assert.match(workflow, /concurrency:\s*\n\s+group:/u);
+  assert.match(workflow, /cancel-in-progress:/u);
+  assert.match(
+    workflow,
+    /quality:\s*\n\s+needs: change-scope\s*\n\s+if: \$\{\{ github\.event_name != 'push' \|\| !startsWith\(github\.ref, 'refs\/tags\/v2-production-'\) \}\}/u
+  );
+  assert.match(
+    workflow,
+    /Skip unchanged production image boundary[\s\S]*needs\.change-scope\.outputs\.production_images != 'true'/u
+  );
+  assert.match(
+    workflow,
+    /Build AWS MySQL production images[\s\S]*needs\.change-scope\.outputs\.production_images == 'true'/u
+  );
+  assert.match(workflow, /needs\.change-scope\.outputs\.dependency_audit == 'true'/u);
+  assert.match(
+    workflow,
+    /Package immutable production artifact\s*\n\s+if: \$\{\{ github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v2-production-'\) \}\}/u
+  );
+  assert.match(scheduledAudit, /schedule:\s*\n\s+- cron:/u);
+  assert.match(scheduledAudit, /npm run audit:high/u);
 });
 
 function runVerifier(directory) {

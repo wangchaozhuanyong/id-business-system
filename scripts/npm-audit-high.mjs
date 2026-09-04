@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_ATTEMPTS = 2;
 const DEFAULT_BACKOFF_MS = 15_000;
+const DEFAULT_FETCH_TIMEOUT_MS = '60000';
 
 const TRANSIENT_FAILURE_PATTERNS = [
   /network timeout/i,
@@ -24,7 +25,7 @@ function runNpmAudit() {
   const child = spawn(command, ['audit', '--omit=dev', '--audit-level=high'], {
     env: {
       ...process.env,
-      NPM_CONFIG_FETCH_TIMEOUT: process.env.NPM_CONFIG_FETCH_TIMEOUT ?? '300000',
+      NPM_CONFIG_FETCH_TIMEOUT: process.env.NPM_CONFIG_FETCH_TIMEOUT ?? DEFAULT_FETCH_TIMEOUT_MS,
       NPM_CONFIG_FETCH_RETRIES: process.env.NPM_CONFIG_FETCH_RETRIES ?? '0'
     },
     stdio: ['ignore', 'pipe', 'pipe']

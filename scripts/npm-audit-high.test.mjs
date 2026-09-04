@@ -57,9 +57,9 @@ test('retries transient failures and preserves the final failure', async () => {
   });
 
   assert.equal(code, 1);
-  assert.equal(attempts, 3);
-  assert.deepEqual(waits, [15_000, 30_000]);
-  assert.equal(warnings.length, 2);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [15_000]);
+  assert.equal(warnings.length, 1);
 });
 
 test('passes when a transient failure recovers', async () => {
