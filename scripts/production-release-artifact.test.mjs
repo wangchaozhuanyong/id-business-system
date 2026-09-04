@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -84,6 +93,7 @@ test('release scripts pass shell syntax and production installation never builds
   for (const script of [
     'scripts/package-production-release.sh',
     'scripts/deploy-aws-production-artifact.sh',
+    'scripts/read-current-production-release.sh',
     'scripts/install-aws-production-artifact.sh',
     'scripts/cleanup-aws-production-retention.sh'
   ]) {
@@ -109,6 +119,32 @@ test('release scripts pass shell syntax and production installation never builds
   );
   assert.ok(discardArchiveIndex > installer.indexOf('docker load'));
   assert.ok(discardArchiveIndex < postDeployRetentionIndex);
+});
+
+test('current production release reader validates and returns the immutable target', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'idv2-current-release-test.'));
+  const releaseDirectory = join(directory, 'releases', '20260904T120000Z-aaaaaaaaaaaa');
+  mkdirSync(releaseDirectory, { recursive: true });
+  writeFileSync(
+    join(releaseDirectory, 'release-manifest.json'),
+    `${JSON.stringify({ commit, releaseTag }, null, 2)}\n`
+  );
+  symlinkSync(releaseDirectory, join(directory, 'current'));
+
+  try {
+    const result = spawnSync(
+      'bash',
+      [resolve(projectRoot, 'scripts/read-current-production-release.sh'), directory],
+      { encoding: 'utf8' }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      result.stdout.trim(),
+      `${realpathSync(releaseDirectory)}\t${commit}\t${releaseTag}`
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('production installer isolates the scheduled performance audit from deployment', () => {
@@ -195,6 +231,8 @@ test('AWS deploy returns early when the exact production commit is already curre
   assert.ok(currentCommitCheckIndex > 0);
   assert.match(deployer, /BASE_URL="\$PRODUCTION_BASE_URL" bash scripts\/deploy-smoke\.sh/u);
   assert.match(deployer, /deployment_status=already_deployed/u);
+  assert.match(deployer, /<"\$current_release_reader"/u);
+  assert.doesNotMatch(deployer, /<<'REMOTE_CURRENT'/u);
   assert.ok(artifactLookupIndex > currentCommitCheckIndex);
   assert.ok(artifactDownloadIndex > currentCommitCheckIndex);
   assert.ok(retentionPreflightIndex > currentCommitCheckIndex);

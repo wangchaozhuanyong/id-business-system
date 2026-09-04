@@ -71,6 +71,11 @@ if [[ ! -x "$retention_script" ]]; then
   echo '缺少可执行生产保留策略脚本' >&2
   exit 1
 fi
+current_release_reader="${project_root}/scripts/read-current-production-release.sh"
+if [[ ! -f "$current_release_reader" ]]; then
+  echo '缺少当前生产发布读取脚本' >&2
+  exit 1
+fi
 
 cd "$project_root"
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -109,36 +114,13 @@ scp_options=(
 )
 ssh_target="${SERVER_SSH_USER}@${SERVER_SSH_HOST}"
 
-current_release_record="$(
-  ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- "$SERVER_APP_DIR" <<'REMOTE_CURRENT'
-set -Eeuo pipefail
-deployment_root="$1"
-current_release_directory="$(readlink -f "${deployment_root}/current")"
-case "$current_release_directory" in
-  "${deployment_root}/releases/"*) ;;
-  *) echo '生产 current 未指向受控的不可变发布目录' >&2; exit 1 ;;
-esac
-current_manifest="${current_release_directory}/release-manifest.json"
-if [[ ! -f "$current_manifest" ]]; then
-  echo '当前生产发布缺少发布清单' >&2
+if ! current_release_record="$(
+  ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- "$SERVER_APP_DIR" \
+    <"$current_release_reader"
+)"; then
+  echo '读取当前生产发布清单失败' >&2
   exit 1
 fi
-current_commit="$(
-  sed -nE 's/^[[:space:]]*"commit":[[:space:]]*"([a-f0-9]{40})"[,]?[[:space:]]*$/\1/p' \
-    "$current_manifest" | head -n 1
-)"
-current_release_tag="$(
-  sed -nE 's/^[[:space:]]*"releaseTag":[[:space:]]*"(v2-production-[0-9]{8}T[0-9]{6}Z)"[,]?[[:space:]]*$/\1/p' \
-    "$current_manifest" | head -n 1
-)"
-if [[ ! "$current_commit" =~ ^[a-f0-9]{40}$ ||
-      ! "$current_release_tag" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]; then
-  echo '当前生产发布清单缺少有效 commit 或正式标签' >&2
-  exit 1
-fi
-printf '%s\t%s\t%s\n' "$current_release_directory" "$current_commit" "$current_release_tag"
-REMOTE_CURRENT
-)"
 IFS=$'\t' read -r previous_release_directory previous_commit current_release_tag \
   <<<"$current_release_record"
 
