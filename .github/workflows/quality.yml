@@ -111,6 +111,7 @@ jobs:
         run: npm run aws:mysql:config:example
 
       - name: Audit high severity vulnerabilities
+        timeout-minutes: 20
         run: npm run audit:high
 
       - name: Check Git readiness
