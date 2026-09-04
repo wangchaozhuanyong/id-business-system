@@ -44,6 +44,18 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.match(workflow, /uses:\s+actions\/upload-artifact@[a-f0-9]{40}\s+# v4/u);
 });
 
+test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {
+  const apiDockerfile = readProjectFile('apps/api/Dockerfile.mysql');
+  const adminDockerfile = readProjectFile('apps/admin/Dockerfile');
+  const workflow = readProjectFile('.github/workflows/quality.yml');
+
+  assert.match(workflow, /run: npm ci --no-audit/u);
+  assert.match(adminDockerfile, /RUN npm ci --no-audit/u);
+  assert.match(apiDockerfile, /RUN npm ci --no-audit/u);
+  assert.match(apiDockerfile, /npm install --no-audit --package-lock-only/u);
+  assert.match(apiDockerfile, /npm ci --no-audit --ignore-scripts/u);
+});
+
 test('API runtime image excludes build workspace and runs as node', () => {
   const dockerfile = readProjectFile('apps/api/Dockerfile.mysql');
   const runtime = dockerfile.split(/ AS runtime\s*\n/u).at(-1);

@@ -52,6 +52,8 @@ npm run git:readiness
    本身不重复触发质量门禁，PR 只保留一组 required checks；同一 PR 的旧提交由 concurrency 自动取消。
 4. GitHub CI 全部通过并完成审查后合并 PR。普通业务改动不重复构建生产镜像；只有 Dockerfile、
    Compose、依赖锁文件等容器边界变化时才在 PR 构建镜像，`production-images` required check 仍必须成功。
+   CI 和生产镜像的依赖安装统一关闭 npm 隐式审计，只由下述显式门禁执行一次，避免每个安装层重复等待
+   advisory 接口。
    依赖审计遇到 registry 网络故障时最多尝试两次，每次 60 秒并间隔 15 秒；网络故障和真实高危漏洞
    都会阻断对应门禁，但不会再因三次 5 分钟等待拖住整条发布链。
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
