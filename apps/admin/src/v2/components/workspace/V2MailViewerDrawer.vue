@@ -9,17 +9,20 @@
     close-on-press-escape
     @close="$emit('update:modelValue', false)"
   >
-    <div class="v2-mail-viewer-drawer__body">
-      <div class="v2-mail-viewer-disclosure" role="note">
-        <el-icon><Lock /></el-icon>
-        <span>
-          <strong>查询由本系统验证，并直接读取已授权的谷歌、苹果或微软邮箱</strong>
-          <small>买家查询码与邮箱应用专用密码相互独立；邮件正文只在本次请求中返回。</small>
-        </span>
+    <template #header="{ titleId, titleClass }">
+      <div class="v2-mail-viewer-drawer__heading">
+        <span :id="titleId" :class="titleClass">邮箱查询与管理</span>
+        <FeatureHelp
+          title="邮箱查询与管理说明"
+          :text="mailViewerHelp"
+          placement="bottom"
+          :width="380"
+        />
       </div>
-
+    </template>
+    <div class="v2-mail-viewer-drawer__body">
       <div class="v2-mail-viewer-drawer__public-link">
-        <span>买家公开查询入口</span>
+        <span>买家查询页</span>
         <AppButton size="small" variant="soft" @click="openPublicMailbox">
           <el-icon><TopRight /></el-icon>
           打开查询页
@@ -40,8 +43,9 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Lock, TopRight } from '@element-plus/icons-vue';
+import { TopRight } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import { useAuthStore } from '@/stores/auth';
 import V2ManagedMailboxPanel from './V2ManagedMailboxPanel.vue';
 import V2MailQueryPanel from './V2MailQueryPanel.vue';
@@ -52,6 +56,11 @@ defineEmits<{ 'update:modelValue': [value: boolean] }>();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const activeTab = ref<'query' | 'manage'>('query');
+const mailViewerHelp = [
+  '查询由本系统验证，并直接读取已授权的谷歌、苹果或微软邮箱。',
+  '买家查询码与邮箱应用专用密码相互独立。',
+  '邮件正文只在本次请求中返回，不写入服务器数据库或浏览器持久缓存。'
+];
 
 function openPublicMailbox() {
   const opened = window.open('/mailbox', '_blank', 'noopener,noreferrer');
@@ -73,40 +82,15 @@ function openPublicMailbox() {
 .v2-mail-viewer-drawer__body {
   display: grid;
   min-width: 0;
-  gap: 10px;
-  padding: 14px 20px 18px;
+  gap: 0;
+  padding: 8px 20px 18px;
 }
 
-.v2-mail-viewer-disclosure {
-  display: grid;
+.v2-mail-viewer-drawer__heading {
+  display: inline-flex;
   min-width: 0;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: start;
-  gap: 9px;
-  padding: 8px 10px;
-  border: 1px solid var(--v3-warning-border-soft);
-  border-radius: 6px;
-  background: var(--v3-warning-soft);
-  color: var(--v3-warning);
-}
-
-.v2-mail-viewer-disclosure > span {
-  display: grid;
-  min-width: 0;
+  align-items: center;
   gap: 2px;
-}
-
-.v2-mail-viewer-disclosure strong {
-  overflow-wrap: anywhere;
-  color: var(--v2-text);
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.v2-mail-viewer-disclosure small {
-  color: var(--v2-text-soft);
-  font-size: 12px;
-  line-height: 19px;
 }
 
 .v2-mail-viewer-tabs {
@@ -119,6 +103,7 @@ function openPublicMailbox() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 2px 0 8px;
   color: var(--v2-text-soft);
   font-size: 12px;
 }
@@ -130,8 +115,7 @@ function openPublicMailbox() {
 
 @media (max-width: 560px) {
   .v2-mail-viewer-drawer__body {
-    gap: 10px;
-    padding: 12px 14px 16px;
+    padding: 8px 14px 16px;
   }
 
   .v2-mail-viewer-tabs > .el-tabs__header .el-tabs__item {

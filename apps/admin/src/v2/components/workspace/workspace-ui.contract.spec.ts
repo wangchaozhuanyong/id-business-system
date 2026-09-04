@@ -21,6 +21,8 @@ describe('personal workspace UI contract', () => {
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
   const managedMailboxBatchDrawer = read('./V2ManagedMailboxBatchDrawer.vue');
+  const managedMailboxAppPasswordGuide = read('./managedMailboxAppPasswordGuide.ts');
+  const featureHelp = read('../../../components/ui/FeatureHelp.vue');
   const managedMailboxExpiry = read('./managedMailboxExpiry.ts');
   const mailMessageList = read('./V2MailMessageList.vue');
   const publicMailboxView = read('../../views/V2PublicMailboxView.vue');
@@ -210,6 +212,8 @@ describe('personal workspace UI contract', () => {
 
   it('keeps mailbox query as a production-ready module in workspace tools', () => {
     expect(mailViewerDrawer).toContain('查询由本系统验证');
+    expect(mailViewerDrawer).toContain('title="邮箱查询与管理说明"');
+    expect(mailViewerDrawer).not.toContain('v2-mail-viewer-disclosure');
     expect(mailViewerDrawer).toContain('close-on-click-modal');
     expect(mailViewerDrawer).not.toContain('destroy-on-close');
     expect(mailViewerDrawer).not.toContain('ElMessageBox.confirm');
@@ -219,9 +223,28 @@ describe('personal workspace UI contract', () => {
     expect(mailQueryPanel).toContain('label="邮件查询码"');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
-    expect(managedMailboxPanel).toContain('保存后加密存入服务器，换电脑仍可使用');
+    expect(managedMailboxPanel).toContain('验证成功后，应用专用密码会加密存入服务器');
     expect(managedMailboxPanel).toContain('Google 生成的 16 位应用专用密码');
     expect(managedMailboxPanel).toContain('Apple 生成的应用专用密码');
+    expect(managedMailboxPanel).toContain('title="添加邮箱说明"');
+    expect(managedMailboxPanel).toContain('title="邮箱池管理说明"');
+    expect(managedMailboxPanel).toContain(':links="appPasswordHelpLinks"');
+    expect(managedMailboxPanel).not.toContain('v2-managed-mailbox-panel__password-links');
+    expect(managedMailboxBatchDrawer).toContain('title="批量导入说明"');
+    expect(managedMailboxBatchDrawer).toContain(':links="appPasswordHelpLinks"');
+    expect(managedMailboxBatchDrawer).not.toContain('v2-mailbox-batch-drawer__notice');
+    expect(featureHelp).toContain('feature-help-popper__links');
+    expect(featureHelp).toContain('rel="noopener noreferrer"');
+    expect(featureHelp).toContain(':z-index="popperZIndex"');
+    expect(featureHelp).toContain('@mouseenter="show"');
+    expect(featureHelp).toContain('@mouseleave="scheduleHide"');
+    expect(featureHelp).toContain('@focusin="show"');
+    expect(managedMailboxAppPasswordGuide).toContain('https://myaccount.google.com/apppasswords');
+    expect(managedMailboxAppPasswordGuide).toContain(
+      'https://support.google.com/accounts/answer/185833?hl=zh-Hans'
+    );
+    expect(managedMailboxAppPasswordGuide).toContain('https://account.apple.com/');
+    expect(managedMailboxAppPasswordGuide).toContain('https://support.apple.com/zh-cn/102654');
     expect(managedMailboxPanel).toContain('查询码有效期');
     expect(managedMailboxPanel).toContain('有效期设置');
     expect(managedMailboxExpiry).toContain('剩余 ${hours}小时');
@@ -238,7 +261,7 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxPanel).toContain('连接 Microsoft 并添加');
     expect(managedMailboxPanel).toContain('<V2ManagedMailboxBatchDrawer');
     expect(managedMailboxBatchDrawer).toContain('批量导入邮箱池');
-    expect(managedMailboxBatchDrawer).toContain('每行录入一个邮箱');
+    expect(managedMailboxBatchDrawer).toContain('每次最多 20 个');
     expect(managedMailboxBatchDrawer).toContain('value="microsoft"');
     expect(managedMailboxBatchDrawer).toContain('逐个授权并导入');
     expect(managedMailboxBatchDrawer).toContain('startMicrosoftMailboxAuthorization');
