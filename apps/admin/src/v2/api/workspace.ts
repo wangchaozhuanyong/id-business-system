@@ -7,6 +7,8 @@ import type {
   CreateV2ManagedMailboxInput,
   CreateV2ManagedMailboxResult,
   CreateV2RelayJobInput,
+  RunV2GoogleSheetsSyncResult,
+  SaveV2GoogleSheetsSyncConfigInput,
   CompleteV2RelaySubscriptionAuthorizationInput,
   ReorderV2WorkspaceShortcutsInput,
   LoginV2RelayCloudBridgeInput,
@@ -16,11 +18,13 @@ import type {
   StartV2MicrosoftMailboxAuthorizationInput,
   StartV2MicrosoftMailboxAuthorizationResult,
   StartV2RelayGoogleAuthorizationResult,
+  StartV2GoogleSheetsAuthorizationResult,
   StartV2RelaySubscriptionAuthorizationResult,
   UpdateV2ManagedMailboxCredentialInput,
   UpdateV2ManagedMailboxQueryCodeSettingsInput,
   UpdateV2ManagedMailboxQueryCodeSettingsResult,
   UpdateV2ManagedMailboxStatusInput,
+  UpdateV2GoogleSheetsSyncStateInput,
   UpdateV2SavedTotpAccountInput,
   UpdateV2WorkspaceShortcutInput,
   V2MailViewerQueryInput,
@@ -35,6 +39,7 @@ import type {
   V2RelayDeploymentOptions,
   V2RelayJob,
   V2RelayJobList,
+  V2GoogleSheetsSyncStatus,
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
   V2WebsiteMonitorResult,
@@ -212,6 +217,36 @@ export const idBusinessV2WorkspaceApi = {
   runRelayJob(jobId: string) {
     return request<V2RelayJob>(
       http.post(`/id-business-v2/workspace-relay/jobs/${encodeURIComponent(jobId)}/run`)
+    );
+  },
+  getGoogleSheetsSyncStatus(options: ApiRequestOptions = {}) {
+    return request<V2GoogleSheetsSyncStatus>(
+      http.get('/id-business-v2/google-sheets-sync', { signal: options.signal })
+    );
+  },
+  saveGoogleSheetsSyncConfig(input: SaveV2GoogleSheetsSyncConfigInput) {
+    return request<V2GoogleSheetsSyncStatus>(
+      http.put('/id-business-v2/google-sheets-sync/config', input)
+    );
+  },
+  startGoogleSheetsAuthorization() {
+    return request<StartV2GoogleSheetsAuthorizationResult>(
+      http.post('/id-business-v2/google-sheets-sync/authorizations')
+    );
+  },
+  updateGoogleSheetsSyncState(input: UpdateV2GoogleSheetsSyncStateInput) {
+    return request<V2GoogleSheetsSyncStatus>(
+      http.patch('/id-business-v2/google-sheets-sync/state', input)
+    );
+  },
+  runGoogleSheetsSync() {
+    return request<RunV2GoogleSheetsSyncResult>(
+      http.post('/id-business-v2/google-sheets-sync/runs')
+    );
+  },
+  disconnectGoogleSheetsSync() {
+    return request<V2GoogleSheetsSyncStatus>(
+      http.delete('/id-business-v2/google-sheets-sync/connection')
     );
   },
   startRelaySubscriptionAuthorization(jobId: string) {

@@ -118,6 +118,20 @@
           </button>
           <button
             v-if="isAdmin"
+            class="v2-workspace-panel__tool is-google-sheets-sync"
+            type="button"
+            title="Google 表格同步"
+            @click="openGoogleSheetsSync"
+          >
+            <el-icon><DataAnalysis /></el-icon>
+            <span>
+              <strong>Google 表格同步</strong>
+              <small>业务报表约 30 秒自动更新</small>
+            </span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
+          <button
+            v-if="isAdmin"
             class="v2-workspace-panel__tool is-relay-script"
             type="button"
             title="中转脚本"
@@ -144,6 +158,7 @@
     />
     <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
     <V2MediaResolverDrawer v-model="mediaResolverDrawerOpen" />
+    <V2GoogleSheetsSyncDrawer v-model="googleSheetsSyncDrawerOpen" />
     <V2RelayScriptDrawer v-model="relayScriptDrawerOpen" />
     <V2TotpToolDrawer v-model="totpToolOpen" />
     <V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />
@@ -157,6 +172,7 @@ import {
   ArrowRight,
   Briefcase,
   Connection,
+  DataAnalysis,
   Key,
   Message,
   Monitor,
@@ -171,6 +187,7 @@ import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
+import V2GoogleSheetsSyncDrawer from './V2GoogleSheetsSyncDrawer.vue';
 import V2MediaResolverDrawer from './V2MediaResolverDrawer.vue';
 import V2RelayScriptDrawer from './V2RelayScriptDrawer.vue';
 import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
@@ -190,6 +207,7 @@ const totpToolOpen = ref(false);
 const mailViewerDrawerOpen = ref(false);
 const mediaResolverDrawerOpen = ref(false);
 const relayScriptDrawerOpen = ref(false);
+const googleSheetsSyncDrawerOpen = ref(false);
 const websiteMonitorOpen = ref(false);
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
@@ -252,6 +270,12 @@ function openMediaResolver() {
 function openRelayScript() {
   panelOpen.value = false;
   relayScriptDrawerOpen.value = true;
+  emit('requestCloseNavigation');
+}
+
+function openGoogleSheetsSync() {
+  panelOpen.value = false;
+  googleSheetsSyncDrawerOpen.value = true;
   emit('requestCloseNavigation');
 }
 

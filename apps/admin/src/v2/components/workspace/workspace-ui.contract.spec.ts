@@ -18,6 +18,7 @@ describe('personal workspace UI contract', () => {
   const relayScriptDrawer = read('./V2RelayScriptDrawer.vue');
   const relayConnectionPanel = read('./V2RelayConnectionPanel.vue');
   const relayDeploymentPanel = read('./V2RelayDeploymentPanel.vue');
+  const googleSheetsSyncDrawer = read('./V2GoogleSheetsSyncDrawer.vue');
   const mailQueryPanel = read('./V2MailQueryPanel.vue');
   const managedMailboxPanel = read('./V2ManagedMailboxPanel.vue');
   const managedMailboxBatchDrawer = read('./V2ManagedMailboxBatchDrawer.vue');
@@ -92,7 +93,9 @@ describe('personal workspace UI contract', () => {
     expect(launcher).toContain('<V2WebsiteMonitorDrawer');
     expect(launcher).toContain('<V2MediaResolverDrawer');
     expect(launcher).toContain('<V2RelayScriptDrawer');
+    expect(launcher).toContain('<V2GoogleSheetsSyncDrawer');
     expect(launcher).toContain('<strong>中转脚本</strong>');
+    expect(launcher).toContain('<strong>Google 表格同步</strong>');
     expect(launcher).toContain('v-if="isAdmin"');
     expect(launcher).toContain('邮箱查询与邮箱池');
     expect(launcher).toContain('openMailViewerTool');
@@ -103,13 +106,29 @@ describe('personal workspace UI contract', () => {
     expect(websiteMonitorDrawer).toContain('<el-drawer');
     expect(mediaResolverDrawer).toContain('<el-drawer');
     expect(relayScriptDrawer).toContain('<el-drawer');
+    expect(googleSheetsSyncDrawer).toContain('<el-drawer');
     expect(shortcutDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('append-to-body');
     expect(mailViewerDrawer).toContain('append-to-body');
     expect(websiteMonitorDrawer).toContain('append-to-body');
     expect(mediaResolverDrawer).toContain('append-to-body');
     expect(relayScriptDrawer).toContain('append-to-body');
+    expect(googleSheetsSyncDrawer).toContain('append-to-body');
     expect(totpDrawer).toContain('size="min(640px, 100%)"');
+  });
+
+  it('keeps Google Sheets sync admin-only, minimal-scope and visibly bounded', () => {
+    expect(launcher).toContain('is-google-sheets-sync');
+    expect(launcher).toContain('v-if="isAdmin"');
+    expect(googleSheetsSyncDrawer).toContain('title="Google 表格同步说明"');
+    expect(googleSheetsSyncDrawer).toContain('label-position="left"');
+    expect(googleSheetsSyncDrawer).toContain('require-asterisk-position="right"');
+    expect(googleSheetsSyncDrawer).toContain('<V2AsyncRegion');
+    expect(googleSheetsSyncDrawer).toContain('drive.file');
+    expect(googleSheetsSyncDrawer).toContain('最近 10,000 条记录');
+    expect(googleSheetsSyncDrawer).toContain('不会删除 Google 网盘中已经生成的报表');
+    expect(googleSheetsSyncDrawer).not.toMatch(/localStorage|sessionStorage|v-loading|el-skeleton/);
+    expect(workspaceApi).toContain('/id-business-v2/google-sheets-sync');
   });
 
   it('keeps the online relay workflow encrypted, resumable, and admin-only', () => {

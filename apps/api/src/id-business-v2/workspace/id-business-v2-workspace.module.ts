@@ -34,6 +34,13 @@ import { IdBusinessV2RelayCloudBridgeClient } from './providers/id-business-v2-r
 import { IdBusinessV2RelayGoogleCloudClient } from './providers/id-business-v2-relay-google-cloud.client';
 import { IdBusinessV2RelayGeminiClient } from './providers/id-business-v2-relay-gemini.client';
 import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-relay-google-oauth.client';
+import { IdBusinessV2GoogleSheetsSyncController } from './id-business-v2-google-sheets-sync.controller';
+import { IdBusinessV2GoogleSheetsOAuthController } from './id-business-v2-google-sheets-oauth.controller';
+import { IdBusinessV2GoogleSheetsSyncService } from './id-business-v2-google-sheets-sync.service';
+import { IdBusinessV2GoogleSheetsSyncWorker } from './id-business-v2-google-sheets-sync.worker';
+import { IdBusinessV2GoogleSheetsSyncRepository } from './persistence/id-business-v2-google-sheets-sync.repository';
+import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
+import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
 
 @Module({
   imports: [IdBusinessV2RuntimeModule],
@@ -46,7 +53,9 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
     IdBusinessV2MicrosoftMailboxOAuthController,
     IdBusinessV2PublicMailboxController,
     IdBusinessV2RelayScriptController,
-    IdBusinessV2RelayScriptOAuthController
+    IdBusinessV2RelayScriptOAuthController,
+    IdBusinessV2GoogleSheetsSyncController,
+    IdBusinessV2GoogleSheetsOAuthController
   ],
   providers: [
     IdBusinessV2WorkspaceService,
@@ -73,7 +82,12 @@ import { IdBusinessV2RelayGoogleOAuthClient } from './providers/id-business-v2-r
     IdBusinessV2RelayCloudBridgeClient,
     IdBusinessV2RelayGoogleCloudClient,
     IdBusinessV2RelayGeminiClient,
-    IdBusinessV2RelayGoogleOAuthClient
+    IdBusinessV2RelayGoogleOAuthClient,
+    IdBusinessV2GoogleSheetsSyncService,
+    IdBusinessV2GoogleSheetsSyncWorker,
+    IdBusinessV2GoogleSheetsSyncRepository,
+    IdBusinessV2GoogleSheetsClient,
+    IdBusinessV2GoogleSheetsOAuthClient
   ]
 })
 export class IdBusinessV2WorkspaceModule {}
