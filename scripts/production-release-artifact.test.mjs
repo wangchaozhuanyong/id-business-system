@@ -111,6 +111,58 @@ test('release scripts pass shell syntax and production installation never builds
   assert.ok(discardArchiveIndex < postDeployRetentionIndex);
 });
 
+test('production installer isolates the scheduled performance audit from deployment', () => {
+  const installer = readFileSync(
+    resolve(projectRoot, 'scripts/install-aws-production-artifact.sh'),
+    'utf8'
+  );
+  assert.match(
+    installer,
+    /id-business-v2-production-retention\.service \\\n\s+id-business-v2-mysql-performance\.service; do/u,
+    '部署开始前必须拒绝仍在运行的性能巡检'
+  );
+  assert.match(
+    installer,
+    /systemctl stop \\\n\s+id-business-v2-mysql-backup\.timer \\\n\s+id-business-v2-mysql-backup-verify\.timer \\\n\s+id-business-v2-mysql-performance\.timer \\\n\s+id-business-v2-mysql-performance\.service/u,
+    '部署窗口必须同时停止性能定时器和服务'
+  );
+
+  const backupRestore = installer.match(/restore_backup_timers\(\) \{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(backupRestore);
+  assert.doesNotMatch(backupRestore, /mysql-performance/u);
+
+  const failureRestore = installer.match(/restore_timers\(\) \{([\s\S]*?)\n\}/u)?.[1];
+  assert.ok(failureRestore);
+  assert.match(failureRestore, /restore_backup_timers/u);
+  assert.match(failureRestore, /systemctl start id-business-v2-mysql-performance\.timer/u);
+
+  const postDeployRestoreIndex = installer.indexOf(
+    'restore_backup_timers\nif ! systemctl is-enabled'
+  );
+  const performanceInstall = installer.match(
+    /install_performance_timer\(\) \{([\s\S]*?)\n\}/u
+  )?.[1];
+  assert.ok(performanceInstall);
+  const performanceBaselineIndex = performanceInstall.indexOf(
+    'MYSQL_PERFORMANCE_BASELINE_ONLY=true'
+  );
+  const performanceEnableIndex = performanceInstall.indexOf(
+    'systemctl enable id-business-v2-mysql-performance.timer'
+  );
+  const performanceCheckIndex = performanceInstall.indexOf(
+    'systemctl start id-business-v2-mysql-performance.service'
+  );
+  const performanceTimerStartIndex = performanceInstall.indexOf(
+    'systemctl start id-business-v2-mysql-performance.timer'
+  );
+  const installPerformanceCallIndex = installer.lastIndexOf('\ninstall_performance_timer\n');
+  assert.ok(postDeployRestoreIndex > 0);
+  assert.ok(performanceEnableIndex > performanceBaselineIndex);
+  assert.ok(performanceCheckIndex > performanceEnableIndex);
+  assert.ok(performanceTimerStartIndex > performanceCheckIndex);
+  assert.ok(installPerformanceCallIndex > postDeployRestoreIndex);
+});
+
 test('AWS deploy forwards all five immutable image references to the remote installer', () => {
   const deployer = readFileSync(
     resolve(projectRoot, 'scripts/deploy-aws-production-artifact.sh'),

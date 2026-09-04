@@ -109,7 +109,8 @@ fi
 for service in \
   id-business-v2-mysql-backup.service \
   id-business-v2-mysql-backup-verify.service \
-  id-business-v2-production-retention.service; do
+  id-business-v2-production-retention.service \
+  id-business-v2-mysql-performance.service; do
   if systemctl is-active --quiet "$service"; then
     echo "生产维护任务正在执行：${service}" >&2
     exit 1
@@ -196,9 +197,14 @@ deployment_succeeded=0
 retention_timer_changed=0
 performance_timer_changed=0
 
-restore_timers() {
+restore_backup_timers() {
   systemctl start id-business-v2-mysql-backup.timer >/dev/null 2>&1 || true
   systemctl start id-business-v2-mysql-backup-verify.timer >/dev/null 2>&1 || true
+}
+
+restore_timers() {
+  restore_backup_timers
+  systemctl start id-business-v2-mysql-performance.timer >/dev/null 2>&1 || true
 }
 
 install_retention_timer() {
@@ -238,8 +244,9 @@ install_performance_timer() {
   systemctl daemon-reload
   MYSQL_PERFORMANCE_BASELINE_ONLY=true \
     "${RELEASE_DIRECTORY}/scripts/audit-aws-mysql-performance.sh"
-  systemctl enable --now id-business-v2-mysql-performance.timer
+  systemctl enable id-business-v2-mysql-performance.timer
   systemctl start id-business-v2-mysql-performance.service
+  systemctl start id-business-v2-mysql-performance.timer
 }
 
 atomic_current_switch() {
@@ -337,9 +344,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-systemctl stop id-business-v2-mysql-backup.timer
-systemctl stop id-business-v2-mysql-backup-verify.timer
 timers_stopped=1
+systemctl stop \
+  id-business-v2-mysql-backup.timer \
+  id-business-v2-mysql-backup-verify.timer \
+  id-business-v2-mysql-performance.timer \
+  id-business-v2-mysql-performance.service
 
 echo '执行并校验更新前 S3 备份'
 systemctl start id-business-v2-mysql-backup.service
@@ -431,7 +441,7 @@ run_release_smoke
 run_gate_script scripts/gate-v2-production-database-access.mjs
 run_gate_script scripts/v2-data-integrity-audit.mjs
 
-restore_timers
+restore_backup_timers
 if ! systemctl is-enabled --quiet id-business-v2-mysql-backup.timer ||
    ! systemctl is-active --quiet id-business-v2-mysql-backup.timer ||
    ! systemctl is-enabled --quiet id-business-v2-mysql-backup-verify.timer ||
