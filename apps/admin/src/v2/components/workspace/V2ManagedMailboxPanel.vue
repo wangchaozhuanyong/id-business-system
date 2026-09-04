@@ -2,9 +2,15 @@
   <div class="v2-managed-mailbox-panel">
     <section class="v2-managed-mailbox-panel__add" aria-labelledby="managed-mailbox-add-title">
       <header>
-        <div>
+        <div class="v2-managed-mailbox-panel__section-title">
           <strong id="managed-mailbox-add-title">添加邮箱</strong>
-          <span>保存后加密存入服务器，换电脑仍可使用；Microsoft 邮箱使用官方 OAuth2。</span>
+          <FeatureHelp
+            title="添加邮箱说明"
+            :text="addMailboxHelp"
+            :links="appPasswordHelpLinks"
+            placement="bottom"
+            :width="380"
+          />
         </div>
         <AppButton
           class="v2-managed-mailbox-panel__submit"
@@ -51,25 +57,21 @@
           prop="appPassword"
           required
         >
-          <div class="v2-managed-mailbox-panel__password-field">
-            <el-input
-              v-model="form.appPassword"
-              type="password"
-              show-password
-              :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
-              autocomplete="new-password"
-              data-1p-ignore="true"
-              data-lpignore="true"
-              :spellcheck="false"
-              :placeholder="appPasswordPlaceholder"
-            />
-            <small>{{ appPasswordHelp }}</small>
-          </div>
+          <el-input
+            v-model="form.appPassword"
+            type="password"
+            show-password
+            :maxlength="V2_MAIL_VIEWER_LIMITS.providerCredential"
+            autocomplete="new-password"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            :spellcheck="false"
+            :placeholder="appPasswordPlaceholder"
+          />
         </el-form-item>
         <el-form-item v-else label="授权方式">
           <div class="v2-managed-mailbox-panel__oauth-note" role="note">
-            <strong>Microsoft 安全授权</strong>
-            <span>将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。</span>
+            <el-tag type="info" effect="plain">Microsoft OAuth2（只读）</el-tag>
           </div>
         </el-form-item>
         <el-form-item label="备注" prop="label">
@@ -84,9 +86,14 @@
 
     <section class="v2-managed-mailbox-panel__list" aria-labelledby="managed-mailbox-list-title">
       <header>
-        <div>
+        <div class="v2-managed-mailbox-panel__section-title">
           <strong id="managed-mailbox-list-title">邮箱池管理</strong>
-          <span>邮箱、授权状态和查询码保存在服务器；邮件正文和查询明细不持久化。</span>
+          <FeatureHelp
+            title="邮箱池管理说明"
+            :text="mailboxPoolHelp"
+            placement="bottom"
+            :width="360"
+          />
         </div>
         <div class="v2-managed-mailbox-panel__header-actions" aria-label="邮箱池管理操作">
           <AppButton size="small" variant="ghost" @click="openQueryCodeSettings">
@@ -372,9 +379,22 @@
       @closed="cancelCredentialUpdate"
     >
       <div v-if="credentialMailbox" class="v2-mailbox-credential-drawer__body">
-        <div>
-          <strong>{{ credentialMailbox.email }}</strong>
-          <span>{{ providerLabel(credentialMailbox.provider) }}</span>
+        <div class="v2-mailbox-credential-drawer__identity">
+          <div>
+            <strong>{{ credentialMailbox.email }}</strong>
+            <span>{{ providerLabel(credentialMailbox.provider) }}</span>
+          </div>
+          <FeatureHelp
+            v-if="credentialAppPasswordGuide"
+            title="更新邮箱授权说明"
+            :text="[
+              credentialAppPasswordGuide.help,
+              '验证成功后，新的授权信息会加密保存并替换旧凭据。'
+            ]"
+            :links="credentialAppPasswordHelpLinks"
+            placement="bottom"
+            :width="360"
+          />
         </div>
         <el-form
           label-position="left"
@@ -437,6 +457,7 @@ import {
 } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -449,6 +470,10 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2ManagedMailboxBatchDrawer from './V2ManagedMailboxBatchDrawer.vue';
+import {
+  resolveManagedMailboxAppPasswordGuide,
+  resolveManagedMailboxAppPasswordGuideLinks
+} from './managedMailboxAppPasswordGuide';
 import { resolveV2ManagedMailboxQueryCodeExpiry } from './managedMailboxExpiry';
 
 interface ManagedMailboxForm {
@@ -508,11 +533,39 @@ const appPasswordPlaceholder = computed(() =>
     ? '输入 Google 生成的 16 位应用专用密码'
     : '输入 Apple 生成的应用专用密码'
 );
-const appPasswordHelp = computed(() =>
-  form.provider === 'gmail'
-    ? '需要先开启 Google 两步验证；不要填写 Gmail 普通登录密码。'
-    : '需要先开启 Apple 双重认证；系统会优先使用邮箱名称部分登录 iCloud IMAP。'
+const addMailboxHelp = computed(() => {
+  if (form.provider === 'microsoft') {
+    return [
+      '将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。',
+      '验证成功后，授权信息会加密存入服务器，换电脑仍可使用。'
+    ];
+  }
+  const guide = resolveManagedMailboxAppPasswordGuide(form.provider);
+  return [
+    guide?.help ?? '',
+    form.provider === 'icloud'
+      ? '系统会优先使用邮箱名称部分登录 iCloud IMAP。'
+      : '系统使用完整 Gmail 地址登录 IMAP。',
+    '验证成功后，应用专用密码会加密存入服务器，换电脑仍可使用。'
+  ];
+});
+const appPasswordHelpLinks = computed(() =>
+  resolveManagedMailboxAppPasswordGuideLinks(form.provider)
 );
+const credentialAppPasswordGuide = computed(() =>
+  credentialMailbox.value
+    ? resolveManagedMailboxAppPasswordGuide(credentialMailbox.value.provider)
+    : null
+);
+const credentialAppPasswordHelpLinks = computed(() =>
+  credentialMailbox.value
+    ? resolveManagedMailboxAppPasswordGuideLinks(credentialMailbox.value.provider)
+    : []
+);
+const mailboxPoolHelp = [
+  '邮箱、授权状态和买家查询码保存在服务器。',
+  '邮件正文和查询明细不持久化；查询码到期后需手动重新生成。'
+];
 
 const mailboxesQuery = useV2ModuleQuery<V2ManagedMailboxList>({
   moduleKey: 'profile',
@@ -1010,14 +1063,18 @@ defineExpose({
 .v2-managed-mailbox-panel {
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: 12px;
 }
 
 .v2-managed-mailbox-panel__add,
 .v2-managed-mailbox-panel__list {
   display: grid;
   min-width: 0;
-  gap: 10px;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--v2-border);
+  border-radius: 8px;
+  background: var(--v2-surface);
 }
 
 .v2-managed-mailbox-panel__add > header,
@@ -1029,11 +1086,11 @@ defineExpose({
   gap: 12px;
 }
 
-.v2-managed-mailbox-panel__add > header > div,
-.v2-managed-mailbox-panel__list > header > div {
-  display: grid;
+.v2-managed-mailbox-panel__section-title {
+  display: inline-flex;
   min-width: 0;
-  gap: 1px;
+  align-items: center;
+  gap: 2px;
 }
 
 .v2-managed-mailbox-panel header strong {
@@ -1042,17 +1099,11 @@ defineExpose({
   line-height: 21px;
 }
 
-.v2-managed-mailbox-panel header span {
-  color: var(--v2-text-soft);
-  font-size: 12px;
-  line-height: 18px;
-}
-
 .v2-managed-mailbox-panel__form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
-  gap: 10px 16px;
+  gap: 12px 24px;
 }
 
 .v2-managed-mailbox-panel__form :deep(.el-form-item) {
@@ -1070,13 +1121,6 @@ defineExpose({
   min-width: 0;
 }
 
-.v2-managed-mailbox-panel__password-field {
-  display: grid;
-  width: 100%;
-  gap: 2px;
-}
-
-.v2-managed-mailbox-panel__password-field small,
 .v2-managed-mailbox-panel__query-code small {
   color: var(--v2-text-soft);
   font-size: 11px;
@@ -1084,24 +1128,10 @@ defineExpose({
 }
 
 .v2-managed-mailbox-panel__oauth-note {
-  display: grid;
+  display: flex;
   width: 100%;
   min-width: 0;
-  gap: 1px;
-}
-
-.v2-managed-mailbox-panel__oauth-note strong,
-.v2-managed-mailbox-panel__oauth-note span {
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.v2-managed-mailbox-panel__oauth-note strong {
-  color: var(--v2-text);
-}
-
-.v2-managed-mailbox-panel__oauth-note span {
-  color: var(--v2-text-soft);
+  align-items: center;
 }
 
 .v2-managed-mailbox-panel__header-actions {
@@ -1226,6 +1256,11 @@ defineExpose({
 }
 
 @media (max-width: 720px) {
+  .v2-managed-mailbox-panel__add,
+  .v2-managed-mailbox-panel__list {
+    padding: 12px;
+  }
+
   .v2-managed-mailbox-panel__add > header,
   .v2-managed-mailbox-panel__list > header {
     grid-template-columns: minmax(0, 1fr);
@@ -1240,6 +1275,10 @@ defineExpose({
   .v2-managed-mailbox-panel__header-actions > .app-button.el-button,
   .v2-managed-mailbox-panel__submit.app-button.el-button {
     min-width: 0;
+  }
+
+  .v2-managed-mailbox-panel__submit.app-button.el-button {
+    width: 100%;
   }
 
   .v2-managed-mailbox-panel__filters {
@@ -1313,17 +1352,25 @@ defineExpose({
   padding: 18px;
 }
 
-.v2-mailbox-credential-drawer__body > div:first-child {
+.v2-mailbox-credential-drawer__identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-mailbox-credential-drawer__identity > div {
   display: grid;
+  min-width: 0;
   gap: 2px;
 }
 
-.v2-mailbox-credential-drawer__body > div:first-child strong {
+.v2-mailbox-credential-drawer__identity strong {
   color: var(--v2-text);
   font-size: 14px;
 }
 
-.v2-mailbox-credential-drawer__body > div:first-child span {
+.v2-mailbox-credential-drawer__identity span {
   color: var(--v2-text-soft);
   font-size: 12px;
 }

@@ -10,12 +10,19 @@
     @close="$emit('update:modelValue', false)"
     @closed="clearAll"
   >
-    <div class="v2-mailbox-batch-drawer__body">
-      <div class="v2-mailbox-batch-drawer__notice" role="note">
-        <strong>每行录入一个邮箱</strong>
-        <span>{{ formatHelp }}</span>
+    <template #header="{ titleId, titleClass }">
+      <div class="v2-mailbox-batch-drawer__heading">
+        <span :id="titleId" :class="titleClass">批量导入邮箱池</span>
+        <FeatureHelp
+          title="批量导入说明"
+          :text="batchHelp"
+          :links="appPasswordHelpLinks"
+          placement="bottom"
+          :width="380"
+        />
       </div>
-
+    </template>
+    <div class="v2-mailbox-batch-drawer__body">
       <el-form
         label-position="left"
         label-width="88px"
@@ -87,9 +94,14 @@ import type {
 import { V2_MAIL_VIEWER_LIMITS } from '@apple-business/shared';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
+import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
+import {
+  resolveManagedMailboxAppPasswordGuide,
+  resolveManagedMailboxAppPasswordGuideLinks
+} from './managedMailboxAppPasswordGuide';
 
 defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{
@@ -117,6 +129,16 @@ const formatHelp = computed(() =>
   provider.value === 'microsoft'
     ? '格式：邮箱地址----备注（备注可省略）。系统会复用同一个 Microsoft 窗口逐个完成 OAuth2 授权，每次最多 20 个。'
     : '格式：邮箱地址----应用专用密码----备注（备注可省略），每次最多 20 个。'
+);
+const batchHelp = computed(() => {
+  if (provider.value === 'microsoft') {
+    return [formatHelp.value, '每个邮箱仍需管理员在 Microsoft 登录窗口选择对应账号并确认授权。'];
+  }
+  const guide = resolveManagedMailboxAppPasswordGuide(provider.value);
+  return [formatHelp.value, guide?.help ?? ''];
+});
+const appPasswordHelpLinks = computed(() =>
+  resolveManagedMailboxAppPasswordGuideLinks(provider.value)
 );
 const batchPlaceholder = computed(() =>
   provider.value === 'microsoft'
@@ -349,11 +371,17 @@ function clearAll() {
 
 .v2-mailbox-batch-drawer__body {
   display: grid;
-  gap: 18px;
+  gap: 16px;
   padding: 18px;
 }
 
-.v2-mailbox-batch-drawer__notice,
+.v2-mailbox-batch-drawer__heading {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
 .v2-mailbox-batch-drawer__result {
   display: grid;
   gap: 3px;
@@ -362,13 +390,11 @@ function clearAll() {
   background: var(--v2-surface-muted);
 }
 
-.v2-mailbox-batch-drawer__notice strong,
 .v2-mailbox-batch-drawer__result strong {
   color: var(--v2-text);
   font-size: 13px;
 }
 
-.v2-mailbox-batch-drawer__notice span,
 .v2-mailbox-batch-drawer__result span,
 .v2-mailbox-batch-drawer__result small {
   color: var(--v2-text-soft);

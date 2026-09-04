@@ -12,6 +12,13 @@ Google 账号需先开启两步验证后生成应用专用密码。部分组织�
 可能不提供应用专用密码，此类账号后续应接入 Google OAuth，不能使用普通密码替代。Apple 账号需开启
 双重认证并生成应用专用密码。
 
+- Google 生成入口：<https://myaccount.google.com/apppasswords>
+- Google 官方步骤：<https://support.google.com/accounts/answer/185833?hl=zh-Hans>
+- Apple 账户入口：<https://account.apple.com/>（登录后进入“登录和安全 → App 专用密码”）
+- Apple 官方步骤：<https://support.apple.com/zh-cn/102654>
+
+应用专用密码通常只在生成时显示一次；已遗忘时应撤销旧密码并重新生成，不得改用邮箱普通登录密码。
+
 Microsoft 邮箱需先在 Outlook 网页设置的“邮件 → 转发和 IMAP”中允许 IMAP，然后由管理员在邮箱池
 点击“连接 Microsoft 并添加”完成授权。Microsoft 365 工作或学校账号还会受所在组织的应用同意策略约束。
 批量导入 Microsoft 邮箱时不接收密码，系统复用一个授权窗口按录入顺序逐个完成 OAuth2；每个邮箱仍需

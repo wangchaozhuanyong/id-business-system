@@ -1058,6 +1058,39 @@ p {
   font-weight: var(--v3-font-weight-semibold);
 }
 
+.feature-help-popper__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.feature-help-popper__links a {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  padding: 4px 9px;
+  border: 1px solid var(--v3-primary-border-soft);
+  border-radius: 5px;
+  background: var(--v3-primary-soft);
+  color: var(--v3-primary);
+  font-weight: var(--v3-font-weight-medium);
+  text-decoration: none;
+  transition:
+    border-color 180ms var(--v3-ease),
+    color 180ms var(--v3-ease);
+}
+
+.feature-help-popper__links a:hover {
+  border-color: var(--v3-primary);
+  color: var(--v3-primary-2);
+}
+
+.feature-help-popper__links a:focus-visible {
+  outline: none;
+  box-shadow: var(--v3-focus-ring);
+}
+
 .app-button.el-button {
   --el-button-text-color: var(--v3-text);
   --el-button-bg-color: var(--v3-surface);
