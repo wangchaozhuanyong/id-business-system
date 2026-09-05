@@ -88,7 +88,47 @@ describe('Microsoft mailbox OAuth callback HTTP boundary', () => {
     const html = await controller.callback({});
 
     expect(html).toContain('Microsoft 邮箱授权失败');
+    expect(html).toContain('不要刷新或重复打开旧的回调链接');
     expect(html).not.toContain('invalid-test-state');
     expect(authorization.complete).toHaveBeenCalledWith({});
   });
+
+  it('explains IMAP rejection and links to the actual Outlook verification settings', async () => {
+    const authorization = {
+      complete: vi.fn().mockResolvedValue({ succeeded: false, failureCode: 'mailbox_auth_failed' })
+    };
+    const controller = new IdBusinessV2MicrosoftMailboxOAuthController(authorization as never);
+
+    const html = await controller.callback({ code: 'private-code', state: 'private-state' });
+
+    expect(html).toContain('Microsoft 邮箱连接失败');
+    expect(html).toContain('Microsoft 已返回授权，但邮箱服务器拒绝了连接');
+    expect(html).toContain('https://outlook.live.com/mail/0/options/mail/forwarding');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('在该页面点击“登录”完成验证');
+    expect(html).not.toContain('请关闭窗口后重新发起授权');
+    expect(html).not.toMatch(/private-code|private-state/);
+  });
+
+  it.each([
+    ['consent_denied', '尚未完成 Microsoft 授权'],
+    ['provider_unavailable', '服务暂时不可用'],
+    ['email_exists', '该邮箱已经加入邮箱池'],
+    ['<script>private-provider-detail</script>', '保存邮箱授权未能完成']
+  ])(
+    'uses safe guidance for %s without incorrectly suggesting an IMAP change',
+    async (failureCode, detail) => {
+      const authorization = {
+        complete: vi.fn().mockResolvedValue({ succeeded: false, failureCode })
+      };
+      const controller = new IdBusinessV2MicrosoftMailboxOAuthController(authorization as never);
+
+      const html = await controller.callback({});
+
+      expect(html).toContain(detail);
+      expect(html).not.toContain('outlook.live.com');
+      expect(html).not.toContain('<script>');
+      expect(html).not.toContain('private-provider-detail');
+    }
+  );
 });

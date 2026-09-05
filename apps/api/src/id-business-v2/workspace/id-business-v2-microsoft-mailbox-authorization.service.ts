@@ -130,11 +130,11 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     const authorization = this.resolvePendingAuthorization(input.state);
     if (typeof input.error === 'string' && input.error) {
       this.transientState.failAuthorization(authorization.id, 'consent_denied');
-      return { succeeded: false as const };
+      return { succeeded: false as const, failureCode: 'consent_denied' as const };
     }
     if (typeof input.code !== 'string' || input.code.length < 10 || input.code.length > 4096) {
       this.transientState.failAuthorization(authorization.id, 'authorization_failed');
-      return { succeeded: false as const };
+      return { succeeded: false as const, failureCode: 'authorization_failed' as const };
     }
 
     try {
@@ -155,8 +155,9 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
       this.transientState.succeedAuthorization(authorization.id, mailboxId);
       return { succeeded: true as const };
     } catch (error) {
-      this.transientState.failAuthorization(authorization.id, this.failureCode(error));
-      return { succeeded: false as const };
+      const failureCode = this.failureCode(error);
+      this.transientState.failAuthorization(authorization.id, failureCode);
+      return { succeeded: false as const, failureCode };
     }
   }
 
