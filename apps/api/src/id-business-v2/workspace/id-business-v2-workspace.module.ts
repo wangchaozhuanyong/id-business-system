@@ -44,9 +44,16 @@ import { IdBusinessV2GoogleSheetsSyncRepository } from './persistence/id-busines
 import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
 import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
 
+import { IdBusinessV2WebsiteVisitController } from './id-business-v2-website-visit.controller';
+import { IdBusinessV2WebsiteVisitService } from './id-business-v2-website-visit.service';
+import { IdBusinessV2WebsiteVisitSignatureGuard } from './id-business-v2-website-visit-signature.guard';
+import { IdBusinessV2WebsiteVisitRetentionWorker } from './id-business-v2-website-visit-retention.worker';
+import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2-website-visit.repository';
+
 @Module({
   imports: [IdBusinessV2RuntimeModule],
   controllers: [
+    IdBusinessV2WebsiteVisitController,
     IdBusinessV2WorkspaceController,
     IdBusinessV2WebsiteMonitorController,
     IdBusinessV2MediaResolverController,
@@ -60,6 +67,10 @@ import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-
     IdBusinessV2GoogleSheetsOAuthController
   ],
   providers: [
+    IdBusinessV2WebsiteVisitService,
+    IdBusinessV2WebsiteVisitSignatureGuard,
+    IdBusinessV2WebsiteVisitRetentionWorker,
+    IdBusinessV2WebsiteVisitRepository,
     IdBusinessV2WorkspaceService,
     IdBusinessV2WebsiteMonitorService,
     IdBusinessV2WebsiteAnalyticsService,

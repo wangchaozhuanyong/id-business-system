@@ -112,14 +112,16 @@ try {
       '--workspace=@apple-business/api',
       '--',
       '--run',
-      'src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts'
+      'src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts',
+      'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts'
     ],
     {
       stdio: 'inherit',
       env: {
         ...process.env,
         DATABASE_URL: rootUrl,
-        V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl
+        V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl,
+        V2_WEBSITE_VISIT_DATABASE_URL: rootUrl
       }
     }
   );
@@ -234,6 +236,7 @@ try {
       checkCount: healthy.checkCount,
       verified: [
         'real-mysql-post-rollback-idempotency-concurrency',
+        'real-mysql-website-visit-idempotency-reporting-retention',
         'dedicated-readonly-auditor-provisioning',
         'clean-mysql-full-scan',
         'readonly-account-enforcement',
