@@ -15,7 +15,8 @@ export interface V2TableDataColumnDefinition {
     | 'wide'
     | 'dateTime'
     | 'identifier'
-    | 'longText';
+    | 'longText'
+    | 'inlineContent';
   readonly pin?: V2TableColumnPin;
   readonly hideable?: boolean;
 }

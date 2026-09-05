@@ -73,6 +73,45 @@ idBusinessV2WorkspaceApi.getGoogleSheetsSyncStatus = async () => ({
   syncIntervalSeconds: 30,
   syncing: false
 });
+const mailboxFixture = new URLSearchParams(window.location.search).get('mailbox');
+if (mailboxFixture) {
+  const now = Date.now();
+  const providers = ['microsoft', 'icloud', 'gmail'] as const;
+  const domains = ['outlook.com', 'icloud.com', 'gmail.com'];
+  const rows = Array.from({ length: 12 }, (_, index) => ({
+    id: `mailbox-fixture-${index + 1}`,
+    email: `mailbox${String(index + 1).padStart(2, '0')}@${domains[index % 3]}`,
+    label: index === 0 ? '邮箱备注保留在第二行' : null,
+    provider: providers[index % 3],
+    status: index === 2 ? ('auth_failed' as const) : ('active' as const),
+    queryCode: index === 3 ? null : `FixtureQueryCode${String(index + 1).padStart(5, '0')}`,
+    queryCodeHint: String(index + 1).padStart(4, '0'),
+    queryCodeExpiresAt: new Date(
+      now + (index === 1 ? 47.5 : index === 2 ? -1 : 30 * 24) * 3_600_000
+    ).toISOString(),
+    lastVerifiedAt: new Date(now).toISOString(),
+    lastQueriedAt: index === 0 ? null : new Date(now).toISOString(),
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString()
+  }));
+  idBusinessV2WorkspaceApi.listManagedMailboxes = async (query) => {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 10;
+    const filtered = rows.filter(
+      (row) =>
+        mailboxFixture !== 'empty' &&
+        (!query.q || `${row.email} ${row.label ?? ''}`.includes(query.q)) &&
+        (!query.provider || row.provider === query.provider) &&
+        (!query.status || row.status === query.status)
+    );
+    return {
+      items: filtered.slice((page - 1) * pageSize, page * pageSize),
+      page,
+      pageSize,
+      total: filtered.length
+    };
+  };
+}
 sessionCoordinator.hydrate();
 transitionSessionState({
   kind: 'ready',

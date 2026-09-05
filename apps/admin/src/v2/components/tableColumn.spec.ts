@@ -26,7 +26,8 @@ describe('V2 table column semantics', () => {
       wide: 160,
       dateTime: 165,
       identifier: 192,
-      longText: 224
+      longText: 224,
+      inlineContent: 320
     });
   });
 

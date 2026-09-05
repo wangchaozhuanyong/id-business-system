@@ -26,7 +26,8 @@ const validPresets = new Set([
   'wide',
   'dateTime',
   'identifier',
-  'longText'
+  'longText',
+  'inlineContent'
 ]);
 const validActionLayouts = new Set(['icon', 'single', 'double', 'triple', 'wide']);
 const positionalKeyPattern = /^(?:text|identifier|index|numeric|date|status|control)-\d+$/;
@@ -423,7 +424,8 @@ function validateSharedImplementation() {
     wide: 160,
     dateTime: 165,
     identifier: 192,
-    longText: 224
+    longText: 224,
+    inlineContent: 320
   })) {
     if (
       !new RegExp(`\\b${preset}:\\s*${width}\\b`).test(

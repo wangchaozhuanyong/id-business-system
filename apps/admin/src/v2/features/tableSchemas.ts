@@ -1016,14 +1016,14 @@ export const v2TableSchemas = {
           key: 'queryCode',
           label: '买家查询码',
           kind: 'identifier',
-          widthPreset: 'longText',
+          widthPreset: 'inlineContent',
           hideable: false
         },
         {
           key: 'queryCodeExpiresAt',
           label: '查询码有效期',
           kind: 'date',
-          widthPreset: 'dateTime',
+          widthPreset: 'inlineContent',
           hideable: false
         },
         {
