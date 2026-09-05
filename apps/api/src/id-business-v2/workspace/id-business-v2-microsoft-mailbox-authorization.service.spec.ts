@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
+import { MailProviderAuthenticationError } from './providers/id-business-v2-imap-mail.provider';
 
 const admin = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -173,6 +174,32 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
       expect(repository.create).not.toHaveBeenCalled();
     }
   );
+
+  it('distinguishes rejected IMAP access from OAuth consent without persisting credentials', async () => {
+    provider.verify.mockRejectedValueOnce(new MailProviderAuthenticationError());
+
+    await expect(
+      service.complete({ code: 'microsoft-authorization-code', state: 'valid-oauth-state-value' })
+    ).resolves.toEqual({ succeeded: false, failureCode: 'mailbox_auth_failed' });
+
+    expect(microsoftOAuth.exchangeAuthorizationCode).toHaveBeenCalled();
+    expect(transientState.failAuthorization).toHaveBeenCalledWith(
+      authorizationId,
+      'mailbox_auth_failed'
+    );
+    expect(encryption.encrypt).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
+  it('returns only a controlled failure code when an unexpected completion error occurs', async () => {
+    settings.getValidityDays.mockRejectedValueOnce(new Error('private-provider-error-detail'));
+
+    await expect(
+      service.complete({ code: 'microsoft-authorization-code', state: 'valid-oauth-state-value' })
+    ).resolves.toEqual({ succeeded: false, failureCode: 'completion_failed' });
+    expect(repository.create).not.toHaveBeenCalled();
+  });
 
   it('rejects unknown, expired or consumed state before exchanging tokens', async () => {
     transientState.claimPendingAuthorization.mockReturnValueOnce(null);
