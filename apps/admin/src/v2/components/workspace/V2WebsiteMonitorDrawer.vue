@@ -12,10 +12,11 @@
     @close="$emit('update:modelValue', false)"
   >
     <div class="v2-website-monitor-drawer__body">
+      <V2WebsiteAnalyticsPanel :active="modelValue" />
       <div class="v2-website-monitor-disclosure" role="note">
         <el-icon><Lock /></el-icon>
         <span>
-          <strong>只检测可公开访问的网站</strong>
+          <strong>网站健康检测 · 只检测可公开访问的网站</strong>
           <small>
             已保存 FLASH CAST 装修网站；检测 HTTP 状态、响应时间、跳转链和 HTTPS
             证书，不访问内网地址或保存检测历史。
@@ -152,6 +153,7 @@ import {
 } from '@apple-business/shared';
 import { ElMessageBox } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
+import V2WebsiteAnalyticsPanel from './V2WebsiteAnalyticsPanel.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { formatV2DateTime } from '@/v2/utils/dateTime';

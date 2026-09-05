@@ -24,6 +24,8 @@ import { IdBusinessV2WorkspaceController } from './id-business-v2-workspace.cont
 import { IdBusinessV2WorkspaceService } from './id-business-v2-workspace.service';
 import { IdBusinessV2WebsiteMonitorController } from './id-business-v2-website-monitor.controller';
 import { IdBusinessV2WebsiteMonitorService } from './id-business-v2-website-monitor.service';
+import { IdBusinessV2WebsiteAnalyticsService } from './id-business-v2-website-analytics.service';
+import { IdBusinessV2WebsiteAnalyticsClient } from './providers/id-business-v2-website-analytics.client';
 import { IdBusinessV2ManagedMailboxRepository } from './persistence/id-business-v2-managed-mailbox.repository';
 import { IdBusinessV2RelayScriptRepository } from './persistence/id-business-v2-relay-script.repository';
 import { IdBusinessV2TotpAccountRepository } from './persistence/id-business-v2-totp-account.repository';
@@ -60,6 +62,8 @@ import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-
   providers: [
     IdBusinessV2WorkspaceService,
     IdBusinessV2WebsiteMonitorService,
+    IdBusinessV2WebsiteAnalyticsService,
+    IdBusinessV2WebsiteAnalyticsClient,
     IdBusinessV2MediaResolverService,
     IdBusinessV2WorkspaceRepository,
     IdBusinessV2TotpAccountService,

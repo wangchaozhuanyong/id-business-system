@@ -43,6 +43,8 @@ import type {
   V2SavedTotpAccount,
   V2SavedTotpAccountList,
   V2WebsiteMonitorResult,
+  V2WebsiteAnalyticsDays,
+  V2WebsiteAnalyticsReport,
   V2WorkspaceShortcut,
   V2WorkspaceShortcutList
 } from '@apple-business/shared';
@@ -77,6 +79,15 @@ export const idBusinessV2WorkspaceApi = {
       http.post('/id-business-v2/workspace-website-monitor/check', input, {
         signal: options.signal,
         timeout: 85_000
+      })
+    );
+  },
+  getWebsiteAnalytics(days: V2WebsiteAnalyticsDays, options: ApiRequestOptions = {}) {
+    return request<V2WebsiteAnalyticsReport>(
+      http.get('/id-business-v2/workspace-website-monitor/analytics', {
+        params: { days },
+        signal: options.signal,
+        timeout: 30_000
       })
     );
   },
