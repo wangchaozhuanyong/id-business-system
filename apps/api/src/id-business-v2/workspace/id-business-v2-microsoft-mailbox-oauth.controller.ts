@@ -1,4 +1,6 @@
 import { Controller, Get, Header, Query } from '@nestjs/common';
+import { Public } from '../../auth/auth.decorators';
+import { SkipApiResponse } from '../../common/interceptors/skip-api-response.decorator';
 import { IdBusinessV2MicrosoftMailboxAuthorizationService } from './id-business-v2-microsoft-mailbox-authorization.service';
 
 @Controller('public/mailbox/microsoft-oauth')
@@ -6,8 +8,10 @@ export class IdBusinessV2MicrosoftMailboxOAuthController {
   constructor(private readonly authorization: IdBusinessV2MicrosoftMailboxAuthorizationService) {}
 
   @Get('callback')
+  @Public()
   @Header('Cache-Control', 'no-store')
   @Header('Content-Type', 'text/html; charset=utf-8')
+  @SkipApiResponse()
   async callback(@Query() query: { code?: unknown; error?: unknown; state?: unknown }) {
     const succeeded = await this.authorization
       .complete(query)

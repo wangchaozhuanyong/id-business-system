@@ -162,4 +162,25 @@ describe('IdBusinessV2MicrosoftMailboxAuthorizationService', () => {
     expect(audit.append).toHaveBeenCalled();
     expect(transientState.succeedAuthorization).toHaveBeenCalledWith(authorizationId, mailbox().id);
   });
+
+  it.each([undefined, '', 'short'])(
+    'rejects malformed state %s before exchanging tokens',
+    async (state) => {
+      await expect(
+        service.complete({ code: 'microsoft-authorization-code', state })
+      ).rejects.toThrow('Microsoft 授权状态无效');
+      expect(microsoftOAuth.exchangeAuthorizationCode).not.toHaveBeenCalled();
+      expect(repository.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects unknown, expired or consumed state before exchanging tokens', async () => {
+    transientState.claimPendingAuthorization.mockReturnValueOnce(null);
+
+    await expect(
+      service.complete({ code: 'microsoft-authorization-code', state: 'invalid-oauth-state-value' })
+    ).rejects.toThrow('Microsoft 授权任务无效或已完成');
+    expect(microsoftOAuth.exchangeAuthorizationCode).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
+  });
 });
