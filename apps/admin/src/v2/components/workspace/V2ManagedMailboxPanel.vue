@@ -1187,9 +1187,7 @@ defineExpose({
   color: var(--v3-success);
 }
 
-.v2-managed-mailbox-panel__identity,
-.v2-managed-mailbox-panel__query-code,
-.v2-managed-mailbox-panel__expiry {
+.v2-managed-mailbox-panel__identity {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -1212,14 +1210,21 @@ defineExpose({
   font-size: 11px;
 }
 
-.v2-managed-mailbox-panel__query-code {
-  justify-items: start;
-  gap: 4px;
+.v2-managed-mailbox-panel__query-code,
+.v2-managed-mailbox-panel__expiry {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.v2-managed-mailbox-panel__query-code > *,
+.v2-managed-mailbox-panel__expiry > * {
+  flex: 0 0 auto;
 }
 
 .v2-managed-mailbox-panel__query-code code {
-  max-width: 100%;
-  overflow-x: auto;
   color: var(--v2-text);
   font-family: var(--v3-font-mono);
   font-size: 11px;
@@ -1230,11 +1235,6 @@ defineExpose({
   color: var(--v2-text-soft);
   font-size: 11px;
   line-height: 17px;
-}
-
-.v2-managed-mailbox-panel__expiry {
-  justify-items: start;
-  gap: 3px;
 }
 
 .v2-managed-mailbox-panel__expiry small {

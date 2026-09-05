@@ -3,7 +3,7 @@
     class="v2-mail-viewer-drawer"
     :model-value="modelValue"
     title="邮箱查询与管理"
-    size="min(1220px, 100vw)"
+    size="min(1560px, 100vw)"
     append-to-body
     close-on-click-modal
     close-on-press-escape

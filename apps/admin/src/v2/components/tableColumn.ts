@@ -5,7 +5,8 @@ export const V2_TABLE_COLUMN_WIDTH = {
   wide: 160,
   dateTime: 165,
   identifier: 192,
-  longText: 224
+  longText: 224,
+  inlineContent: 320
 } as const;
 
 export type V2TableColumnWidthPreset = keyof typeof V2_TABLE_COLUMN_WIDTH;
