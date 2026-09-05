@@ -61,6 +61,7 @@ describe('personal workspace UI contract', () => {
     expect(websiteMonitorDrawer).toContain('websiteUrl.value = DEFAULT_WEBSITE_MONITOR_URL');
     expect(workspaceApi).toContain("http.post('/id-business-v2/workspace-website-monitor/check'");
     expect(websiteMonitorDrawer).not.toMatch(/localStorage|sessionStorage/);
+    expect(websiteMonitorDrawer).toContain('<V2WebsiteAnalyticsPanel :active="modelValue" />');
   });
 
   it('mounts the authenticated multi-platform resolver as a workspace drawer', () => {

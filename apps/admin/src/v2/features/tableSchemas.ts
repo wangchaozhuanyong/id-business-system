@@ -965,6 +965,37 @@ export const v2TableSchemas = {
     })
   },
   workspace: {
+    websiteAnalytics: table({
+      id: 'workspace.website-analytics',
+      feature: 'profile',
+      role: 'embedded',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'date' },
+      columns: [
+        { key: 'date', label: '日期', kind: 'date', widthPreset: 'compact', hideable: false },
+        {
+          key: 'pageViews',
+          label: '浏览量',
+          kind: 'numeric',
+          widthPreset: 'compact',
+          hideable: false
+        },
+        {
+          key: 'visitors',
+          label: '访客数',
+          kind: 'numeric',
+          widthPreset: 'compact',
+          hideable: false
+        },
+        {
+          key: 'sessions',
+          label: '访问次数',
+          kind: 'numeric',
+          widthPreset: 'compact',
+          hideable: false
+        }
+      ]
+    }),
     managedMailboxes: table({
       id: 'workspace.managed-mailboxes',
       feature: 'profile',
@@ -1065,7 +1096,11 @@ export const v2TablesByFeature = {
     v2TableSchemas.security.mfaUsers,
     v2TableSchemas.security.whitelist
   ],
-  profile: [v2TableSchemas.profile.sessions, v2TableSchemas.workspace.managedMailboxes]
+  profile: [
+    v2TableSchemas.profile.sessions,
+    v2TableSchemas.workspace.managedMailboxes,
+    v2TableSchemas.workspace.websiteAnalytics
+  ]
 } as const;
 
 export const allV2TableSchemas = Object.values(v2TablesByFeature).flat();

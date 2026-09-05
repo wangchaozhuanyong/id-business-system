@@ -86,7 +86,7 @@
             <el-icon><Monitor /></el-icon>
             <span>
               <strong>网站监控</strong>
-              <small>检测网站状态、速度和证书</small>
+              <small>查看访问统计、网站状态和证书</small>
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
