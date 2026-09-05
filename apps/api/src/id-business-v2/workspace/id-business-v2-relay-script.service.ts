@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   ServiceUnavailableException
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,7 +25,10 @@ import type {
   LoginIdBusinessV2RelayCloudBridgeDto,
   SaveIdBusinessV2RelayGoogleOAuthDto
 } from './dto/id-business-v2-relay-script.dto';
-import { toIdBusinessV2RelayJob } from './id-business-v2-relay-script.support';
+import {
+  idBusinessV2RelayOptionsError,
+  toIdBusinessV2RelayJob
+} from './id-business-v2-relay-script.support';
 import { IdBusinessV2RelayScriptRepository } from './persistence/id-business-v2-relay-script.repository';
 import {
   ID_BUSINESS_V2_CLOUDBRIDGE_ORIGIN,
@@ -43,6 +47,8 @@ const GOOGLE_STATE_TTL_MS = 15 * 60 * 1000;
 
 @Injectable()
 export class IdBusinessV2RelayScriptService {
+  private readonly logger = new Logger(IdBusinessV2RelayScriptService.name);
+
   constructor(
     private readonly repository: IdBusinessV2RelayScriptRepository,
     private readonly transactionManager: V2CommandTransactionManager,
@@ -290,7 +296,10 @@ export class IdBusinessV2RelayScriptService {
     return { connected: true, email, twoFactorRequired: false };
   }
 
-  async getDeploymentOptions(operator?: AuthenticatedUser): Promise<V2RelayDeploymentOptions> {
+  async getDeploymentOptions(
+    operator?: AuthenticatedUser,
+    requestId = 'workspace-relay-options'
+  ): Promise<V2RelayDeploymentOptions> {
     const userId = this.requireAdmin(operator);
     const connection = await this.requireCloudBridgeConnection(userId);
     const billingAccounts = connection.googleOAuthTokenEncrypted
@@ -350,6 +359,15 @@ export class IdBusinessV2RelayScriptService {
           rateMultiplier: reference.rateMultiplier
         }))
       };
+    }).catch((error: unknown) => {
+      if (!(error instanceof IdBusinessV2RelayRemoteError)) throw error;
+      this.logger.warn({
+        event: 'workspace_relay_options_failed',
+        requestId,
+        upstreamStatus: error.status ?? null,
+        errorCode: /^[A-Z][A-Z0-9_]{1,31}$/.test(error.code) ? error.code : 'REMOTE_ERROR'
+      });
+      throw idBusinessV2RelayOptionsError(error);
     });
   }
 

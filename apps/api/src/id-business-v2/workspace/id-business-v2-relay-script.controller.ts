@@ -56,8 +56,8 @@ export class IdBusinessV2RelayScriptController {
 
   @Get('options')
   @Header('Cache-Control', 'private, no-store')
-  options(@CurrentUser() operator?: AuthenticatedUser) {
-    return this.service.getDeploymentOptions(operator);
+  options(@CurrentUser() operator?: AuthenticatedUser, @Req() request?: { requestId?: string }) {
+    return this.service.getDeploymentOptions(operator, request?.requestId);
   }
 
   @Get('jobs')

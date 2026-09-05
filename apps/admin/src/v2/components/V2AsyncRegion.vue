@@ -32,7 +32,9 @@
       :title="errorTitle"
       :message="error"
     >
-      <AppButton variant="primary" @click="$emit('retry')">重新加载</AppButton>
+      <slot name="error-action">
+        <AppButton variant="primary" @click="$emit('retry')">重新加载</AppButton>
+      </slot>
     </V2PageState>
 
     <template v-else>
@@ -43,9 +45,11 @@
       >
         <strong>{{ isPreviousData ? '新条件加载失败' : '更新失败' }}</strong>
         <span> {{ error }}{{ isPreviousData ? '，以下仍为上次成功结果。' : '' }} </span>
-        <AppButton size="small" variant="soft" allow-when-stale @click="$emit('retry')">
-          重试
-        </AppButton>
+        <slot name="error-action">
+          <AppButton size="small" variant="soft" allow-when-stale @click="$emit('retry')">
+            重试
+          </AppButton>
+        </slot>
       </div>
 
       <V2PageState
