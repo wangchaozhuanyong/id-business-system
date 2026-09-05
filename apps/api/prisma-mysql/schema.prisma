@@ -2029,6 +2029,20 @@ model IdBusinessV2ManagedMailbox {
   @@map("id_business_v2_managed_mailboxes")
 }
 
+model IdBusinessV2WebsiteVisit {
+  id          String   @id @db.VarChar(36)
+  host        String   @db.VarChar(253)
+  occurredAt  DateTime @map("occurred_at") @db.DateTime(3)
+  receivedAt  DateTime @default(now()) @map("received_at") @db.DateTime(3)
+  path        String   @db.VarChar(1024)
+  ipEncrypted String   @map("ip_encrypted") @db.Text
+  ipHash      String   @map("ip_hash") @db.Char(64)
+
+  @@index([occurredAt, id], map: "idbiz_website_visit_time_idx")
+  @@index([ipHash, occurredAt], map: "idbiz_website_visit_ip_time_idx")
+  @@map("id_business_v2_website_visits")
+}
+
 model IdBusinessV2ManagedMailboxSetting {
   id                    String   @id @default(uuid()) @db.Char(36)
   scope                 String   @unique @default("global") @db.VarChar(32)

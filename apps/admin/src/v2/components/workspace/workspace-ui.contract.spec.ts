@@ -14,6 +14,7 @@ describe('personal workspace UI contract', () => {
   const savedTotpAccounts = read('./V2SavedTotpAccounts.vue');
   const mailViewerDrawer = read('./V2MailViewerDrawer.vue');
   const websiteMonitorDrawer = read('./V2WebsiteMonitorDrawer.vue');
+  const websiteVisitsPanel = read('./V2WebsiteVisitsPanel.vue');
   const mediaResolverDrawer = read('./V2MediaResolverDrawer.vue');
   const relayScriptDrawer = read('./V2RelayScriptDrawer.vue');
   const relayConnectionPanel = read('./V2RelayConnectionPanel.vue');
@@ -62,6 +63,20 @@ describe('personal workspace UI contract', () => {
     expect(workspaceApi).toContain("http.post('/id-business-v2/workspace-website-monitor/check'");
     expect(websiteMonitorDrawer).not.toMatch(/localStorage|sessionStorage/);
     expect(websiteMonitorDrawer).toContain('<V2WebsiteAnalyticsPanel :active="modelValue" />');
+    expect(websiteMonitorDrawer).toContain('<V2WebsiteVisitsPanel :active="modelValue" />');
+    expect(websiteVisitsPanel).toContain('访问记录与访客 IP');
+    expect(websiteVisitsPanel).toContain('label-position="left"');
+    expect(websiteVisitsPanel).toContain('require-asterisk-position="right"');
+    expect(websiteVisitsPanel).toContain('<V2AsyncRegion');
+    expect(websiteVisitsPanel).toContain('<V2TableActionColumn');
+    expect(websiteVisitsPanel).toContain('30 秒后隐藏');
+    expect(websiteVisitsPanel).not.toMatch(/localStorage|sessionStorage|v-loading|el-skeleton/);
+    expect(workspaceApi).toContain(
+      "http.post('/id-business-v2/workspace-website-monitor/visits/search'"
+    );
+    expect(workspaceApi).toContain(
+      '/workspace-website-monitor/visits/${encodeURIComponent(id)}/reveal'
+    );
   });
 
   it('mounts the authenticated multi-platform resolver as a workspace drawer', () => {

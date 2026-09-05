@@ -13,6 +13,7 @@
   >
     <div class="v2-website-monitor-drawer__body">
       <V2WebsiteAnalyticsPanel :active="modelValue" />
+      <V2WebsiteVisitsPanel :active="modelValue" />
       <div class="v2-website-monitor-disclosure" role="note">
         <el-icon><Lock /></el-icon>
         <span>
@@ -154,6 +155,7 @@ import {
 import { ElMessageBox } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2WebsiteAnalyticsPanel from './V2WebsiteAnalyticsPanel.vue';
+import V2WebsiteVisitsPanel from './V2WebsiteVisitsPanel.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { formatV2DateTime } from '@/v2/utils/dateTime';

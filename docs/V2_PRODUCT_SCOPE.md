@@ -186,7 +186,11 @@
 - 同一抽屉内的装修网站访问统计仅管理员可读取，固定查询 FLASH CAST 自有统计资源和数据流，
   不随健康检测输入的网址切换。近 7／30 天的浏览量、去重访客数、访问次数和每日明细来自 Google
   Analytics 只读报表接口；日期按媒体资源实际时区标明，刷新失败保留最后成功内容。无授权和
-  未返回记录必须明确显示，不得视为零访问；原始 IP 不在当前数据源中，尚未接入。
+  未返回记录必须明确显示，不得视为零访问。原始 IP 不从 GA4 获取；装修网站公开页面另经
+  Cloudflare Pages Function 采集访问时间、路径和可信来源 IP，并以 HMAC 签名发送到固定 AWS API。
+  浏览器请求不得包含 IP、查询字符串或 referrer。ID 系统使用独立表字段级加密保存 IP，使用 HMAC
+  盲索引完成独立 IP 统计和精确搜索，在线记录最多保留 30 天。访问记录、精确 IP 搜索和完整 IP
+  查看仅管理员可用；列表默认脱敏，完整值查看必须写审计且不得把 IP 写入审计内容。
 - “中转脚本”支持 Gemini 订阅号、AI Studio API Key 和 Google Cloud Vertex AI 三种部署模式。
   订阅号模式完成 Antigravity OAuth、隐私设置、实时模型同步、参考映射复制和逐模型验收；
   API Key 模式固定验证 `gemini-3.7-flash` 与 `gemini-3.1-flash-tts-preview`，先直连 Google 官方接口测试，

@@ -77,6 +77,7 @@ test('runtime grants protect migration and audit records while limiting physical
     'sensitive_access_logs',
     'users',
     'ip_whitelists',
+    'id_business_v2_website_visits',
     'id_business_v2_orders'
   ];
   const grants = buildV2RuntimeTableGrantStatements(databaseName, tableNames);
@@ -98,6 +99,11 @@ test('runtime grants protect migration and audit records while limiting physical
   assert.ok(
     grants.includes(
       "GRANT SELECT, INSERT, UPDATE ON `id_business_v2`.`id_business_v2_orders` TO 'id_business_app'@'%'"
+    )
+  );
+  assert.ok(
+    grants.includes(
+      "GRANT SELECT, INSERT, UPDATE, DELETE ON `id_business_v2`.`id_business_v2_website_visits` TO 'id_business_app'@'%'"
     )
   );
   assert.equal(V2_RUNTIME_DELETE_TABLES.includes('id_business_v2_orders'), false);

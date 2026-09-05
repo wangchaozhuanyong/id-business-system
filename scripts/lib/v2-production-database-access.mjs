@@ -12,6 +12,7 @@ export const V2_RUNTIME_DELETE_TABLES = Object.freeze([
   'id_business_v2_finance_fx_rate_snapshots',
   'id_business_v2_sensitive_display_policies',
   'id_business_v2_user_table_preferences',
+  'id_business_v2_website_visits',
   'id_business_v2_workspace_shortcuts',
   'ip_whitelists',
   'role_permissions',

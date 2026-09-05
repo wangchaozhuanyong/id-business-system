@@ -45,6 +45,8 @@ import type {
   V2WebsiteMonitorResult,
   V2WebsiteAnalyticsDays,
   V2WebsiteAnalyticsReport,
+  V2WebsiteVisitReport,
+  V2WebsiteVisitSearch,
   V2WorkspaceShortcut,
   V2WorkspaceShortcutList
 } from '@apple-business/shared';
@@ -89,6 +91,19 @@ export const idBusinessV2WorkspaceApi = {
         signal: options.signal,
         timeout: 30_000
       })
+    );
+  },
+  searchWebsiteVisits(input: V2WebsiteVisitSearch, options: ApiRequestOptions = {}) {
+    return request<V2WebsiteVisitReport>(
+      http.post('/id-business-v2/workspace-website-monitor/visits/search', input, {
+        signal: options.signal,
+        timeout: 30_000
+      })
+    );
+  },
+  revealWebsiteVisitIp(id: string) {
+    return request<{ ip: string }>(
+      http.post(`/id-business-v2/workspace-website-monitor/visits/${encodeURIComponent(id)}/reveal`)
     );
   },
   resolveMedia(input: ResolveV2MediaInput, options: ApiRequestOptions = {}) {

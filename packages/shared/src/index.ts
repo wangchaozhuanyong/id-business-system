@@ -204,3 +204,9 @@ export {
   type V2SettlementPlatformReportRow
 } from './v2/finance.js';
 export * from './v2/website-analytics.js';
+
+export type {
+  V2WebsiteVisitSearch,
+  V2WebsiteVisitReport,
+  V2WebsiteVisitMetrics
+} from './v2/website-visits.js';

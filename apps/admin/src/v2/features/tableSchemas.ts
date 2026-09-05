@@ -965,6 +965,55 @@ export const v2TableSchemas = {
     })
   },
   workspace: {
+    websiteVisitDaily: table({
+      id: 'workspace.website-visit-daily',
+      feature: 'profile',
+      role: 'embedded',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'date' },
+      columns: [
+        { key: 'date', label: '日期', kind: 'date', widthPreset: 'compact', hideable: false },
+        {
+          key: 'pageViews',
+          label: '已采集浏览量',
+          kind: 'numeric',
+          widthPreset: 'compact',
+          hideable: false
+        },
+        {
+          key: 'uniqueIps',
+          label: '独立 IP 数',
+          kind: 'numeric',
+          widthPreset: 'compact',
+          hideable: false
+        }
+      ] as const
+    }),
+    websiteVisits: table({
+      id: 'workspace.website-visits',
+      feature: 'profile',
+      role: 'embedded',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'occurredAt',
+          label: '访问时间',
+          kind: 'date',
+          widthPreset: 'dateTime',
+          hideable: false
+        },
+        { key: 'path', label: '访问页面', kind: 'text', widthPreset: 'wide', hideable: false },
+        {
+          key: 'ipMasked',
+          label: '访客 IP',
+          kind: 'identifier',
+          widthPreset: 'standard',
+          hideable: false
+        },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ] as const
+    }),
     websiteAnalytics: table({
       id: 'workspace.website-analytics',
       feature: 'profile',
@@ -1099,7 +1148,9 @@ export const v2TablesByFeature = {
   profile: [
     v2TableSchemas.profile.sessions,
     v2TableSchemas.workspace.managedMailboxes,
-    v2TableSchemas.workspace.websiteAnalytics
+    v2TableSchemas.workspace.websiteAnalytics,
+    v2TableSchemas.workspace.websiteVisitDaily,
+    v2TableSchemas.workspace.websiteVisits
   ]
 } as const;
 
