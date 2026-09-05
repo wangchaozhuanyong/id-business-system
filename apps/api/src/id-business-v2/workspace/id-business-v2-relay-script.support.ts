@@ -1,4 +1,7 @@
 import type { IdBusinessV2RelayJob } from '@prisma/client';
+import { HttpStatus } from '@nestjs/common';
+import { ApiHttpException } from '../../common/errors/api-http.exception';
+import { IdBusinessV2RelayRemoteError } from './providers/id-business-v2-relay-http';
 import {
   V2_RELAY_JOB_STEPS,
   V2_RELAY_JOB_STEPS_BY_MODE,
@@ -15,6 +18,50 @@ export interface IdBusinessV2RelayProgress {
   serviceAccountEmail?: string;
   serviceOperation?: string;
   testedModels?: string[];
+}
+
+export function idBusinessV2RelayOptionsError(error: IdBusinessV2RelayRemoteError) {
+  // 中转站会话失效不代表当前 ID 系统会话失效，不能返回本地认证的 401/403。
+  if (error.status === 401) {
+    return new ApiHttpException(
+      HttpStatus.BAD_GATEWAY,
+      'RELAY_CLOUDBRIDGE_RECONNECT_REQUIRED',
+      '中转站登录已失效，自动续期未成功。请到“连接设置”重新连接中转站管理员账号。',
+      { retryable: false }
+    );
+  }
+  if (error.status === 403) {
+    return new ApiHttpException(
+      HttpStatus.BAD_GATEWAY,
+      'RELAY_CLOUDBRIDGE_PERMISSION_DENIED',
+      '中转站拒绝访问部署选项。请到“连接设置”重新连接有管理权限的中转站账号。',
+      { retryable: false }
+    );
+  }
+  if (error.status === 429) {
+    return new ApiHttpException(
+      HttpStatus.TOO_MANY_REQUESTS,
+      'RELAY_CLOUDBRIDGE_RATE_LIMITED',
+      '中转站请求过于频繁，请稍后重新加载部署选项。'
+    );
+  }
+  if (error.code === 'REMOTE_TIMEOUT') {
+    return new ApiHttpException(
+      HttpStatus.GATEWAY_TIMEOUT,
+      'RELAY_CLOUDBRIDGE_TIMEOUT',
+      '读取中转站部署选项超时，请稍后重新加载。'
+    );
+  }
+  const retryable =
+    error.code === 'REMOTE_UNAVAILABLE' || (error.status !== undefined && error.status >= 500);
+  return new ApiHttpException(
+    HttpStatus.BAD_GATEWAY,
+    'RELAY_CLOUDBRIDGE_OPTIONS_UNAVAILABLE',
+    retryable
+      ? '暂时无法读取中转站部署选项，请稍后重新加载。'
+      : '中转站部署选项接口返回异常，请联系管理员检查中转站接口。',
+    { retryable }
+  );
 }
 
 export function idBusinessV2RelayJobSteps(mode: V2RelayDeploymentMode): V2RelayJobStep[] {

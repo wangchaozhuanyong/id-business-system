@@ -99,6 +99,7 @@ watch(
 
 async function refreshConnection() {
   await connectionQuery.refresh();
+  if (readyForDeployment.value) await deploymentPanel.value?.refreshOptions();
 }
 
 async function beforeClose(done: () => void) {

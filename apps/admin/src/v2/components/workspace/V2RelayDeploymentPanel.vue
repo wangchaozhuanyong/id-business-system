@@ -16,6 +16,11 @@
       error-title="部署选项加载失败"
       @retry="optionsQuery.refresh"
     >
+      <template #error-action>
+        <AppButton variant="primary" allow-when-stale @click="recoverOptions">
+          {{ requiresReconnect ? '重新连接中转站' : '重新加载' }}
+        </AppButton>
+      </template>
       <section v-if="options" class="v2-relay-deploy-form">
         <header>
           <div>
@@ -217,7 +222,7 @@
           <AppButton
             variant="primary"
             :loading="creatingJob"
-            :disabled="!writesAllowed"
+            :disabled="!writesAllowed || requiresReconnect"
             @click="createAndRunJob"
             >创建并自动执行</AppButton
           >
@@ -328,6 +333,7 @@ import { Warning } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
+import { isApiError } from '@/api/apiError';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -406,6 +412,21 @@ const modeDescription = computed(() => V2_RELAY_MODE_DESCRIPTIONS[form.mode]);
 const optionsError = computed(() =>
   optionsQuery.error.value ? getApiErrorMessage(optionsQuery.error.value) : ''
 );
+const requiresReconnect = computed(() => {
+  const error = optionsQuery.error.value;
+  return (
+    isApiError(error) &&
+    ['RELAY_CLOUDBRIDGE_RECONNECT_REQUIRED', 'RELAY_CLOUDBRIDGE_PERMISSION_DENIED'].includes(
+      error.code
+    )
+  );
+});
+
+function recoverOptions() {
+  if (requiresReconnect.value) emit('openSettings');
+  else void optionsQuery.refresh();
+}
+
 const jobsError = computed(() =>
   jobsQuery.error.value ? getApiErrorMessage(jobsQuery.error.value) : ''
 );
@@ -586,5 +607,5 @@ function jobStatusType(status: V2RelayJobStatus) {
   return 'info';
 }
 
-defineExpose({ stop });
+defineExpose({ stop, refreshOptions: optionsQuery.refresh });
 </script>
