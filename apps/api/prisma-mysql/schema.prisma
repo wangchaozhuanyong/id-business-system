@@ -2376,3 +2376,34 @@ model Attachment {
   @@index([createdAt])
   @@map("attachments")
 }
+
+// 单笔服务器订阅；只存脱敏结果与不可重复的请求标记。
+model IdBusinessV2RechargeJob {
+  id          String   @id @db.VarChar(36)
+  ownerId     String   @map("owner_id") @db.VarChar(191)
+  accountKey  String?  @map("account_key") @db.Char(64)
+  plan        String   @db.VarChar(16)
+  action      String   @db.VarChar(16)
+  state       String   @db.VarChar(32)
+  result      Json
+  nonceHash   String?  @map("nonce_hash") @db.Char(64)
+  leaseUntil  DateTime @map("lease_until") @db.DateTime(6)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@index([ownerId, createdAt])
+  @@index([state, leaseUntil])
+  @@map("id_business_v2_recharge_jobs")
+}
+
+model IdBusinessV2RechargeRecord {
+  accountKey String   @map("account_key") @db.Char(64)
+  fileKey    String   @map("file_key") @db.VarChar(100)
+  ownerId    String   @map("owner_id") @db.VarChar(191)
+  revision   Int
+  document   Json
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@id([accountKey, fileKey])
+  @@map("id_business_v2_recharge_records")
+}

@@ -14,6 +14,13 @@ test('ordinary application changes do not rebuild production images or repeat de
 });
 
 test('container and dependency boundary changes select the required expensive checks', () => {
+  assert.deepEqual(
+    classifyChangedPaths(['apps/api/src/id-business-v2/auto-recharge/worker/pay.py']),
+    {
+      dependencyAudit: false,
+      productionImages: true
+    }
+  );
   assert.deepEqual(classifyChangedPaths(['apps/api/Dockerfile.mysql']), {
     dependencyAudit: false,
     productionImages: true

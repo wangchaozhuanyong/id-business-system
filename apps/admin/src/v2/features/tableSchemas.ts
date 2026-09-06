@@ -1089,6 +1089,7 @@ export const v2TableSchemas = {
 } as const;
 
 export const v2TablesByFeature = {
+  'auto-recharge': [],
   'renewal-workbench': [v2TableSchemas.renewals.main],
   'order-entry': [],
   'topup-workbench': [v2TableSchemas.topups.available, v2TableSchemas.topups.sold],

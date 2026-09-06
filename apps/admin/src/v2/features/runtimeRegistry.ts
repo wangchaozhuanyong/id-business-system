@@ -7,6 +7,16 @@ import {
 
 export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
   defineV2RuntimeFeature({
+    key: 'auto-recharge',
+    title: '自动充值',
+    group: '自动充值',
+    route: '/v2/auto-recharge',
+    requiredRoles: ['admin'],
+    kind: 'form',
+    freshnessPolicy: 'event-with-deadline',
+    loadView: () => import('./auto-recharge/V2AutoRechargeView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'renewal-workbench',
     title: '续费操作',
     group: '工作台',
@@ -275,6 +285,7 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
     items: navigationItems('总览')
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
+  { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   {
     key: 'business',
     title: '业务中心',

@@ -45,6 +45,7 @@
     "acceptance:v2-session-reliability": "node scripts/acceptance-v2-session-reliability.mjs",
     "acceptance:v2-data-governance": "node scripts/acceptance-v2-data-governance.mjs",
     "acceptance:v2-financial-integrity": "node scripts/acceptance-v2-financial-integrity.mjs",
+    "acceptance:v2-auto-recharge": "node scripts/acceptance-v2-auto-recharge.mjs",
     "acceptance:v2-production-database-access": "node scripts/acceptance-v2-production-database-access.mjs",
     "acceptance:v2-managed-mailbox-expiry": "node scripts/acceptance-v2-managed-mailbox-expiry.mjs",
     "acceptance:v2-container-hardening": "node scripts/acceptance-v2-container-hardening.mjs",

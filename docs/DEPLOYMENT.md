@@ -62,9 +62,9 @@ npm run git:readiness
    `v2-production-<UTC>` 并推送。标签必须指向当前 `origin/main` 完整 SHA，且不得重用、强制移动，
    同一个 SHA 也不得通过第二个正式标签重复构建制品。
 7. 标签 CI 复用同 SHA 已成功的 `main` 质量结论，只在构建前执行一次生产依赖审计，然后构建一次 API、
-   管理端、migration、媒体解析和发布门禁镜像，导出单一不可变制品，上传
+   管理端、migration、媒体解析、自动充值执行器和发布门禁镜像，导出单一不可变制品，上传
    `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、制品 SHA-256
-   及五个镜像 digest；标签阶段不再重复执行整套 lint、unit test、浏览器验收和本地数据库验收。
+   及六个镜像 digest；标签阶段不再重复执行整套 lint、unit test、浏览器验收和本地数据库验收。
 8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
 
 正式顺序固定为：
@@ -151,7 +151,7 @@ BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 
 10. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
     完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、
-    制品名称与 SHA-256、五个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
+    制品名称与 SHA-256、六个镜像 digest、环境、UTC 时间、操作人和上一生产 SHA。
 11. 原子切换后重复执行整站巡检和 38 项财务完整性门禁，执行一次发布后保留清理，并安装、启用
     `id-business-v2-production-retention.timer` 和每 5 分钟执行的
     `id-business-v2-mysql-performance.timer`。同时核验备份服务、自动备份、每周恢复验证、每日

@@ -2,6 +2,7 @@ import type { Component } from 'vue';
 import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export type V2ModuleKey =
+  | 'auto-recharge'
   | 'renewal-workbench'
   | 'order-entry'
   | 'topup-workbench'
