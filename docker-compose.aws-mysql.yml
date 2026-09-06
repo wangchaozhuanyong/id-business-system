@@ -83,6 +83,31 @@ services:
     networks:
       - media-egress
 
+  auto-recharge:
+    build:
+      context: .
+      dockerfile: apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+    shm_size: 256m
+    pids_limit: 512
+    mem_limit: 640m
+    memswap_limit: 640m
+    logging: *default-logging
+    environment:
+      AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}
+      AUTO_RECHARGE_CALLBACK_URL: http://api:3000/api/id-business-v2/auto-recharge/internal
+    networks:
+      - recharge-control
+      - recharge-egress
+
   api:
     build:
       context: .
@@ -101,6 +126,8 @@ services:
     environment:
       NODE_ENV: production
       APP_PORT: 3000
+      AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}
+      AUTO_RECHARGE_WORKER_URL: http://auto-recharge:8051
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:?set APP_PUBLIC_URL}
       CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
       DATABASE_URL: ${DATABASE_URL:?set MySQL DATABASE_URL}
@@ -142,6 +169,7 @@ services:
     networks:
       - default
       - media-egress
+      - recharge-control
 
   admin:
     build:
@@ -181,4 +209,7 @@ volumes:
   caddy_config:
 
 networks:
+  recharge-control:
+    internal: true
+  recharge-egress:
   media-egress:

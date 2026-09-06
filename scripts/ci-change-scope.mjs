@@ -18,6 +18,7 @@ const productionImagePatterns = [
   /^apps\/admin\/Dockerfile$/u,
   /^apps\/api\/Dockerfile\.mysql$/u,
   /^apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/Dockerfile$/u,
+  /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//u,
   /^deploy\/caddy\//u,
   /^docker-compose\.aws-mysql\.yml$/u,
   /^scripts\/acceptance-v2-container-hardening\.mjs$/u,

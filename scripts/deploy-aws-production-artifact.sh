@@ -199,6 +199,8 @@ IFS=$'\t' read -r \
   migration_digest \
   media_resolver_reference \
   media_resolver_digest \
+  recharge_reference \
+  recharge_digest \
   gate_reference \
   gate_digest \
   <<<"$(node --input-type=module - "$manifest_path" <<'NODE'
@@ -216,6 +218,8 @@ process.stdout.write([
   manifest.images.migration.digest,
   manifest.images.mediaResolver.reference,
   manifest.images.mediaResolver.digest,
+  manifest.images.recharge.reference,
+  manifest.images.recharge.digest,
   manifest.images.gate.reference,
   manifest.images.gate.digest
 ].join('\t'));
@@ -290,6 +294,8 @@ ssh "${ssh_options[@]}" "$ssh_target" sudo bash -s -- \
   "$migration_digest" \
   "$media_resolver_reference" \
   "$media_resolver_digest" \
+  "$recharge_reference" \
+  "$recharge_digest" \
   "$gate_reference" \
   "$gate_digest" \
   "$PRODUCTION_BASE_URL" \
@@ -315,10 +321,12 @@ migration_reference="$5"
 migration_digest="$6"
 media_resolver_reference="$7"
 media_resolver_digest="$8"
-gate_reference="$9"
-gate_digest="${10}"
-production_base_url="${11}"
-production_compose_project="${12}"
+recharge_reference="$9"
+recharge_digest="${10}"
+gate_reference="${11}"
+gate_digest="${12}"
+production_base_url="${13}"
+production_compose_project="${14}"
 
 deployment_root='/opt/id-business-v2'
 artifact_path="${incoming_directory}/${artifact_file}"
@@ -433,6 +441,8 @@ RELEASE_MIGRATION_IMAGE="$migration_reference" \
 RELEASE_MIGRATION_DIGEST="$migration_digest" \
 RELEASE_MEDIA_RESOLVER_IMAGE="$media_resolver_reference" \
 RELEASE_MEDIA_RESOLVER_DIGEST="$media_resolver_digest" \
+RELEASE_RECHARGE_IMAGE="$recharge_reference" \
+RELEASE_RECHARGE_DIGEST="$recharge_digest" \
 RELEASE_GATE_IMAGE="$gate_reference" \
 RELEASE_GATE_DIGEST="$gate_digest" \
 PRODUCTION_BASE_URL="$production_base_url" \

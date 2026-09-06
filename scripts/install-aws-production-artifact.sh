@@ -27,6 +27,8 @@ for variable in \
   RELEASE_MIGRATION_DIGEST \
   RELEASE_MEDIA_RESOLVER_IMAGE \
   RELEASE_MEDIA_RESOLVER_DIGEST \
+  RELEASE_RECHARGE_IMAGE \
+  RELEASE_RECHARGE_DIGEST \
   RELEASE_GATE_IMAGE \
   RELEASE_GATE_DIGEST \
   PRODUCTION_BASE_URL \
@@ -67,6 +69,7 @@ for digest in \
   "$RELEASE_ADMIN_DIGEST" \
   "$RELEASE_MIGRATION_DIGEST" \
   "$RELEASE_MEDIA_RESOLVER_DIGEST" \
+  "$RELEASE_RECHARGE_DIGEST" \
   "$RELEASE_GATE_DIGEST"; do
   if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
     echo '发布镜像 digest 无效' >&2
@@ -129,7 +132,17 @@ if ps -eo pid=,comm=,args= | awk -v current_pid="$$" '
   exit 1
 fi
 
+# 已有付款任务运行时不切换版本，也不终止它。
+if docker ps --format '{{.Names}}' | grep -q 'auto-recharge'; then
+  previous_worker_id="$(docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" ps -q auto-recharge)"
+  docker exec "$previous_worker_id" python -c "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8051/health',timeout=3))['busy'] is False" || {
+    echo '订阅执行器正在处理任务或无法核实，停止发布' >&2; exit 1;
+  }
+fi
 install -m 600 -o root -g root "$previous_environment_file" "$environment_file"
+if ! grep -q '^AUTO_RECHARGE_WORKER_TOKEN=.' "$environment_file"; then
+  printf '\nAUTO_RECHARGE_WORKER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> "$environment_file"
+fi
 
 read_environment_value() {
   local key="$1"
@@ -163,6 +176,7 @@ if [[ ! "$expected_image_archive_sha256" =~ ^[a-f0-9]{64}$ ]] ||
   exit 1
 fi
 
+old_recharge_image="$(docker image inspect "${compose_project}-auto-recharge:latest" --format '{{.Id}}' 2>/dev/null || true)"
 old_api_image="$(docker image inspect "${compose_project}-api:latest" --format '{{.Id}}')"
 old_admin_image="$(docker image inspect "${compose_project}-admin:latest" --format '{{.Id}}')"
 old_migration_image="$(docker image inspect "${compose_project}-migrate:latest" --format '{{.Id}}')"
@@ -188,6 +202,7 @@ verify_image_digest "$RELEASE_API_IMAGE" "$RELEASE_API_DIGEST"
 verify_image_digest "$RELEASE_ADMIN_IMAGE" "$RELEASE_ADMIN_DIGEST"
 verify_image_digest "$RELEASE_MIGRATION_IMAGE" "$RELEASE_MIGRATION_DIGEST"
 verify_image_digest "$RELEASE_MEDIA_RESOLVER_IMAGE" "$RELEASE_MEDIA_RESOLVER_DIGEST"
+verify_image_digest "$RELEASE_RECHARGE_IMAGE" "$RELEASE_RECHARGE_DIGEST"
 verify_image_digest "$RELEASE_GATE_IMAGE" "$RELEASE_GATE_DIGEST"
 
 timers_stopped=0
@@ -267,12 +282,20 @@ rollback_application() {
     cd "$RELEASE_DIRECTORY" || return
     docker compose --env-file "$environment_file" -f "$compose_file" stop media-resolver || true
   fi
+  if [[ -n "$old_recharge_image" ]]; then
+    docker tag "$old_recharge_image" "${compose_project}-auto-recharge:latest" || true
+  else
+    docker compose --env-file "$environment_file" -f "$compose_file" stop auto-recharge || true
+  fi
   atomic_current_switch "$PREVIOUS_RELEASE_DIRECTORY" || true
   cd "$PREVIOUS_RELEASE_DIRECTORY" || return
   previous_services=(migrate api admin caddy)
   if docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" \
     config --services | grep -qx media-resolver; then
     previous_services=(migrate media-resolver api admin caddy)
+  fi
+  if docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" config --services | grep -qx auto-recharge; then
+    previous_services+=(auto-recharge)
   fi
   docker compose --env-file "$previous_environment_file" -f "$previous_compose_file" \
     up -d --no-build --force-recreate "${previous_services[@]}" || true
@@ -395,11 +418,12 @@ docker run --rm --network host \
 docker tag "$RELEASE_API_IMAGE" "${compose_project}-api:latest"
 docker tag "$RELEASE_ADMIN_IMAGE" "${compose_project}-admin:latest"
 docker tag "$RELEASE_MEDIA_RESOLVER_IMAGE" "${compose_project}-media-resolver:latest"
+docker tag "$RELEASE_RECHARGE_IMAGE" "${compose_project}-auto-recharge:latest"
 
 echo '使用已校验制品更新应用容器'
 application_updated=1
 docker compose --env-file "$environment_file" -f "$compose_file" \
-  up -d --no-build --force-recreate migrate media-resolver api admin caddy
+  up -d --no-build --force-recreate migrate media-resolver auto-recharge api admin caddy
 
 wait_for_service() {
   local service="$1"
@@ -421,7 +445,7 @@ wait_for_service() {
   return 1
 }
 
-for service in mysql media-resolver api admin caddy; do
+for service in mysql media-resolver auto-recharge api admin caddy; do
   wait_for_service "$service"
 done
 
@@ -454,7 +478,7 @@ if [[ "$(systemctl show id-business-v2-mysql-backup.service --property=Result --
   exit 1
 fi
 
-for service in mysql media-resolver api admin caddy; do
+for service in mysql media-resolver auto-recharge api admin caddy; do
   wait_for_service "$service"
 done
 

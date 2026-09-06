@@ -113,7 +113,8 @@ try {
       '--',
       '--run',
       'src/id-business-v2/finance/id-business-v2-financial-integrity-mysql.integration.spec.ts',
-      'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts'
+      'src/id-business-v2/workspace/id-business-v2-website-visit-mysql.integration.spec.ts',
+      'src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts'
     ],
     {
       stdio: 'inherit',
@@ -121,7 +122,8 @@ try {
         ...process.env,
         DATABASE_URL: rootUrl,
         V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl,
-        V2_WEBSITE_VISIT_DATABASE_URL: rootUrl
+        V2_WEBSITE_VISIT_DATABASE_URL: rootUrl,
+        V2_RECHARGE_TEST_DATABASE_URL: rootUrl
       }
     }
   );

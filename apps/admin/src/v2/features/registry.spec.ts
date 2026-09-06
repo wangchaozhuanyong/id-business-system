@@ -8,7 +8,19 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(24);
+    expect(v2FeatureRegistry).toHaveLength(25);
+  });
+
+  it('registers recharge as an administrator-only form under its own navigation group', () => {
+    expect(v2FeatureRegistry.find((feature) => feature.key === 'auto-recharge')).toMatchObject({
+      route: '/v2/auto-recharge',
+      group: '自动充值',
+      kind: 'form',
+      requiredRoles: ['admin']
+    });
+    expect(
+      v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
+    ).toHaveLength(1);
   });
 
   it('keeps routing, access and loading behavior in each feature manifest', () => {

@@ -1,0 +1,244 @@
+"""私网单笔执行器。业务标记先由 API 提交 MySQL，再允许官网写请求。"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import tempfile
+import threading
+import time
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+import attempt_ledger
+import browser_checkout
+import pay
+import payment_state
+import payment_network
+from checkout_core import Stop, parse_browser_credential, unique_object, write_json
+from payment_form import PaymentDetails, validate_details
+from payment_recovery import recheck_payment
+from plans import PLANS
+
+MAX_BODY = 96000
+TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
+API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
+JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
+RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$")
+PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+
+
+def public_result(value):
+    return {k: v for k, v in value.items() if k in PUBLIC_KEYS}
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def callback(job_id, body):
+    request = Request(API + "/" + job_id, data=json.dumps(body).encode(),
+                      headers={"Content-Type": "application/json", "X-Recharge-Worker": TOKEN}, method="POST")
+    try:
+        with build_opener(NoRedirect).open(request, timeout=8) as response:
+            result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
+        if result.get("success") is not True:
+            raise ValueError()
+        return result["data"]
+    except Exception:
+        # 不打印携带业务数据的 HTTP 异常正文。
+        raise Stop("durable_state_unavailable") from None
+
+
+class Job:
+    def __init__(self, job_id, payload):
+        self.id, self.payload = job_id, payload
+        self.root = None
+        self.account_key = None
+        self.revisions = {}
+        self.nonce = None
+        self.confirmed = False
+        self.confirm_event = threading.Event()
+        self.cancelled = False
+        self.done = False
+
+    def persist(self, path, document):
+        name = str(path.relative_to(self.root))
+        if not RECORD_PATH.fullmatch(name):
+            raise Stop("unsupported_state_record")
+        result = callback(self.id, {"type": "ledger", "accountKey": self.account_key,
+                                   "fileKey": name, "revision": self.revisions.get(name, 0),
+                                   "document": document})
+        self.revisions[name] = result["revision"]
+
+    def progress(self, stage, **details):
+        if self.cancelled:
+            raise Stop("operation_cancelled")
+        callback(self.id, {"type": "progress", "result": public_result({"stage": stage, **details})})
+
+    def confirm(self, quote, last4):
+        self.nonce = secrets.token_hex(32)
+        callback(self.id, {"type": "confirmation", "result": {
+            "status": "awaiting_confirmation", "stage": "payment_ready", "quote": quote,
+            "nonce": self.nonce, "card_last4": last4}})
+        self.confirm_event.wait(300)
+        return self.confirmed and not self.cancelled
+
+    def signal(self, nonce=None, cancel=False):
+        if cancel:
+            self.cancelled = True
+            self.confirm_event.set()
+            return
+        if self.nonce is None or not isinstance(nonce, str) or not hmac.compare_digest(self.nonce, nonce):
+            raise Stop("confirmation_mismatch")
+        if self.confirm_event.is_set():
+            raise Stop("confirmation_already_consumed")
+        self.confirmed = True
+        self.confirm_event.set()
+
+    def details(self):
+        value = self.payload.pop("details", {})
+        try:
+            return validate_details(PaymentDetails(**value))
+        except (TypeError, ValueError):
+            raise Stop("invalid_payment_details") from None
+        finally:
+            value.clear()
+
+    async def execute(self):
+        raw = self.payload.pop("sessionJson", "")
+        try:
+            target = parse_browser_credential(raw.encode())
+        finally:
+            raw = None
+        self.account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
+        initial = callback(self.id, {"type": "restore", "accountKey": self.account_key})
+        for record in initial["records"]:
+            name = record["fileKey"]
+            if not RECORD_PATH.fullmatch(name):
+                raise Stop("invalid_checkout_record")
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, record["document"], exclusive=True)
+            self.revisions[name] = record["revision"]
+        plan, action = self.payload["plan"], self.payload["action"]
+        if action == "check":
+            return await browser_checkout.run_browser(target, state_dir=self.root, target_plan=plan)
+        if action == "quote":
+            path = attempt_ledger.checkout_record_path(self.root, target.account_id, plan)
+            return await browser_checkout.run_browser(target, create=not path.exists(),
+                inspect_existing=path.exists(), state_dir=self.root, target_plan=plan)
+        with payment_state.PaymentLedger(self.root, target.account_id, target_plan=plan) as ledger:
+            if action == "recheck":
+                if not ledger.record:
+                    raise Stop("no_original_payment_attempt")
+                result = await recheck_payment(target, ledger)
+            else:
+                result = await pay.run_payment(target, ledger, pay=True, details_reader=self.details,
+                                               confirmer=self.confirm, wait_seconds=120)
+            return pay.include_payment_record(result, ledger)
+
+    def run(self):
+        # 硬超时终止本执行器，MySQL 的原单标记保留；不会重发任务。
+        watchdog = threading.Timer(900, lambda: os._exit(70))
+        watchdog.daemon = True
+        watchdog.start()
+        original_atomic = attempt_ledger.atomic_json
+        original_progress = browser_checkout.progress
+        def durable(path, document):
+            try:
+                self.persist(path, document)
+            except Stop:
+                raise OSError("durable_state_unavailable") from None
+            original_atomic(path, document)
+        try:
+            with tempfile.TemporaryDirectory(prefix="recharge-") as folder:
+                self.root = Path(folder)
+                attempt_ledger.atomic_json = payment_state.atomic_json = durable
+                browser_checkout.progress = pay.progress = payment_network.progress = self.progress
+                result = asyncio.run(self.execute())
+        except Stop as exc:
+            result = exc.report
+        except Exception:
+            result = {"status": "blocked", "reason": "worker_operation_failed"}
+        finally:
+            attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
+            browser_checkout.progress = pay.progress = payment_network.progress = original_progress
+            self.payload.clear()
+            self.nonce = None
+            self.done = True
+            watchdog.cancel()
+        try:
+            callback(self.id, {"type": "finished", "result": public_result(result)})
+        except Stop:
+            pass  # API 保留未核验任务；绝不因回传失败重复执行。
+
+
+class Handler(BaseHTTPRequestHandler):
+    job = None
+    lock = threading.Lock()
+
+    def log_message(self, *args):
+        pass
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(8)
+
+    def reply(self, status, value):
+        data = json.dumps(value).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path != "/health":
+            self.reply(404, {"ok": False})
+            return
+        self.reply(200, {"ok": True, "busy": bool(self.job and not self.job.done)})
+
+    def do_POST(self):
+        if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
+            self.reply(403, {"ok": False})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                raise ValueError()
+            body = json.loads(self.rfile.read(length), object_pairs_hook=unique_object)
+            parts = self.path.strip("/").split("/")
+            if len(parts) < 2 or parts[0] != "jobs" or not JOB_ID.fullmatch(parts[1]):
+                raise ValueError()
+            with self.lock:
+                if len(parts) == 2:
+                    if self.job and not self.job.done:
+                        self.reply(409, {"ok": False})
+                        return
+                    if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck"}:
+                        raise ValueError()
+                    Handler.job = Job(parts[1], body)
+                    threading.Thread(target=Handler.job.run, daemon=True).start()
+                elif len(parts) == 3 and parts[2] in {"confirm", "cancel"}:
+                    if not self.job or self.job.id != parts[1] or self.job.done:
+                        raise ValueError()
+                    self.job.signal(nonce=body.get("nonce"), cancel=parts[2] == "cancel")
+                else:
+                    raise ValueError()
+            self.reply(202, {"ok": True})
+        except Exception:
+            self.reply(400, {"ok": False})
+
+
+if __name__ == "__main__":
+    if len(TOKEN) < 32:
+        raise SystemExit("执行器凭据未配置")
+    ThreadingHTTPServer(("0.0.0.0", 8051), Handler).serve_forever()

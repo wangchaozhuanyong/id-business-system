@@ -8,6 +8,7 @@ const backendRoot = 'apps/api/src/id-business-v2';
 const issues = [];
 
 const expectedFeatures = [
+  'auto-recharge',
   'account-losses',
   'accounts',
   'activations',
@@ -35,6 +36,7 @@ const expectedFeatures = [
 ];
 const plannedFeatures = new Set();
 const expectedBackendDomains = [
+  'auto-recharge',
   'accounts',
   'activations',
   'balances',

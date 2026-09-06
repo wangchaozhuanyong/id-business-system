@@ -210,3 +210,5 @@ export type {
   V2WebsiteVisitReport,
   V2WebsiteVisitMetrics
 } from './v2/website-visits.js';
+
+export * from './v2/auto-recharge.js';

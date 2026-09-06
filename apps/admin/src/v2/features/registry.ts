@@ -1,3 +1,4 @@
+import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
 import { accountsFeature } from '@/v2/features/accounts/manifest';
 import { accountLossesFeature } from '@/v2/features/account-losses/manifest';
 import { activationsFeature } from '@/v2/features/activations/manifest';
@@ -25,6 +26,7 @@ import { topupRecordsFeature } from '@/v2/features/topup-records/manifest';
 import { topupWorkbenchFeature } from '@/v2/features/topups/manifest';
 
 export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
+  autoRechargeFeature,
   renewalWorkbenchFeature,
   orderEntryFeature,
   topupWorkbenchFeature,
@@ -73,6 +75,7 @@ export const v2NavigationSections: readonly V2NavigationSection[] = [
     items: navigationItems('总览')
   },
   { key: 'workspace', title: '工作台', items: v2WorkbenchModules },
+  { key: 'auto-recharge', title: '自动充值', items: navigationItems('自动充值') },
   {
     key: 'business',
     title: '业务中心',
