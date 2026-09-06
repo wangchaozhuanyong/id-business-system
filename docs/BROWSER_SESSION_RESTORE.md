@@ -46,6 +46,7 @@ JWT 会话编号和退出状态，不含令牌或用户资料。延迟恢复响�
 
 - `scripts/acceptance-v2-browser-session.mjs`（新增）：真实浏览器与编译后认证控制器、JWT 守卫的本地验收。
 - `scripts/acceptance-v2-session-reliability.mjs`：给无 Cookie 的登录预热补充恢复端点 401 测试响应。
+- `scripts/acceptance-v2-table-layout.mjs`：登录页滚动验收同步模拟无 Cookie 时的恢复端点 401 响应。
 - `docs/V2_ARCHITECTURE.md`、`docs/V2_TASKS.md`、本文档。
 
 工作区已有的网站统计和 Microsoft 邮箱回调等修改未纳入本次修复。

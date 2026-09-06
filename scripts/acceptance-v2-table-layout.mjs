@@ -319,7 +319,8 @@ async function verifyPrimaryVerticalScroll(page, label) {
 async function verifyPublicPageScroll(browserInstance) {
   const context = await browserInstance.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
-  const runtimeErrors = collectRuntimeErrors(page);
+  const runtimeErrors = collectRuntimeErrors(page, new URL('/api/auth/session', adminUrl).href);
+  let sessionRestoreRequests = 0;
   await page.addInitScript(() => {
     localStorage.removeItem('apple_business_auth_v2');
     localStorage.removeItem('apple_business_access_token');
@@ -339,7 +340,8 @@ async function verifyPublicPageScroll(browserInstance) {
       await fulfillSuccess(route, createDefaultBrandingSettings());
       return;
     }
-    if (pathname.endsWith('/api/auth/me')) {
+    if (pathname === '/api/auth/me' || pathname === '/api/auth/session') {
+      if (pathname === '/api/auth/session') sessionRestoreRequests += 1;
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
@@ -382,6 +384,7 @@ async function verifyPublicPageScroll(browserInstance) {
         cause: error
       });
     }
+    assert.equal(sessionRestoreRequests, 1, '无 Cookie 的登录页必须完成一次会话恢复检查');
     const before = await page.evaluate(() => {
       const root = document.scrollingElement ?? document.documentElement;
       return {
@@ -1444,10 +1447,18 @@ function createOption(id, type, code, name) {
   };
 }
 
-function collectRuntimeErrors(page) {
+function collectRuntimeErrors(page, expectedUnauthorizedUrl = null) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(`pageerror:${error.message}`));
   page.on('console', (message) => {
+    // An anonymous restore deliberately returns 401; keep all other console errors fatal.
+    if (
+      expectedUnauthorizedUrl &&
+      message.location().url === expectedUnauthorizedUrl &&
+      message.text() ===
+        'Failed to load resource: the server responded with a status of 401 (Unauthorized)'
+    )
+      return;
     if (message.type() === 'error') errors.push(`console:${message.text()}`);
   });
   return errors;
