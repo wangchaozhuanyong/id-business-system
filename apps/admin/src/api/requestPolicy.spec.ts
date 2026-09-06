@@ -6,6 +6,16 @@ import {
 } from './requestPolicy';
 
 describe('API request policy registry', () => {
+  it('allows only the exact restore endpoint through the gate with bounded read retries', () => {
+    expect(getApiEndpointPolicy('/auth/session')).toEqual({
+      bypassSessionGate: true,
+      key: 'auth-session'
+    });
+    expect(getApiEndpointPolicy('/auth/session/other').bypassSessionGate).toBe(false);
+    expect(getApiRequestPolicy('GET', '/auth/session')).toEqual(
+      getApiRequestPolicy('GET', '/auth/me')
+    );
+  });
   it('gives auth/me a bounded timeout and two jittered transient retries', () => {
     expect(getApiRequestPolicy('GET', '/auth/me')?.timeoutMs).toBe(8_000);
     const input = {

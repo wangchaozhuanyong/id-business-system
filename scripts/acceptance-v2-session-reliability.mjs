@@ -145,6 +145,19 @@ async function warmAdminRuntime(browserInstance) {
       await route.continue();
       return;
     }
+    if (pathname === '/api/auth/session') {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: false,
+          errorCode: 'AUTH_MISSING',
+          message: '请先登录后再操作。',
+          retryable: false
+        })
+      });
+      return;
+    }
     if (pathname.endsWith('/api/health/ready')) {
       await fulfillSuccess(route, { status: 'ready', database: 'ok' });
       return;

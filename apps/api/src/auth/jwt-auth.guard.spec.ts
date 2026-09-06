@@ -9,6 +9,7 @@ import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorator
 import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 import type { AuthenticatedUser } from './auth.types';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { BROWSER_SESSION_COOKIE_NAME } from './browser-session-cookie';
 
 interface FixtureOptions {
   allowDuringPasswordReset?: boolean;
@@ -27,8 +28,11 @@ function createFixture(options: FixtureOptions = {}) {
     mustResetPassword: false
   };
   const request = {
+    method: 'GET',
     headers: {
       authorization: 'Bearer local-access-token',
+      cookie: `${BROWSER_SESSION_COOKIE_NAME}=cookie-access-token`,
+      'sec-fetch-site': 'same-origin',
       'user-agent': 'jwt-auth-guard-unit-test'
     },
     ip: '127.0.0.1',
@@ -82,6 +86,54 @@ function createFixture(options: FixtureOptions = {}) {
 }
 
 describe('JwtAuthGuard', () => {
+  it('validates the cookie through all existing checks only on the restore read', async () => {
+    const fixture = createFixture({ mfaRequired: true, tokenMfaVerified: true });
+    fixture.request.headers.authorization = '';
+    fixture.request.originalUrl = '/api/auth/session';
+    await expect(fixture.guard.canActivate(fixture.context)).resolves.toBe(true);
+    expect(fixture.jwtService.verifyAsync).toHaveBeenCalledWith('cookie-access-token');
+    expect(fixture.securityService.isAccessTokenActive).toHaveBeenCalledWith('cookie-access-token');
+    expect(fixture.securityService.isRequestIpAllowed).toHaveBeenCalled();
+    expect(fixture.identityService.getAuthenticatedUser).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['POST', '/api/auth/session', 'same-origin'],
+    ['GET', '/api/auth/me', 'same-origin'],
+    ['POST', '/api/id-business-v2/orders', 'same-origin'],
+    ['GET', '/api/auth/session/other', 'same-origin'],
+    ['GET', '/api/auth/session', 'cross-site'],
+    ['GET', '/api/auth/session', 'same-site'],
+    ['GET', '/api/auth/session', 'none'],
+    ['GET', '/api/auth/session', '']
+  ])('does not authorize cookie-only %s %s from %s', async (method, url, site) => {
+    const fixture = createFixture();
+    fixture.request.headers.authorization = '';
+    fixture.request.method = method;
+    fixture.request.originalUrl = url;
+    fixture.request.headers['sec-fetch-site'] = site;
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_MISSING');
+    expect(fixture.jwtService.verifyAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects revoked cookie sessions', async () => {
+    const fixture = createFixture();
+    fixture.request.headers.authorization = '';
+    fixture.request.originalUrl = '/api/auth/session';
+    jest.mocked(fixture.securityService.isAccessTokenActive).mockResolvedValueOnce(false);
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_REVOKED');
+  });
+
+  it('rejects expired cookie tokens before consulting active sessions', async () => {
+    const fixture = createFixture();
+    fixture.request.headers.authorization = '';
+    fixture.request.originalUrl = '/api/auth/session';
+    jest
+      .mocked(fixture.jwtService.verifyAsync)
+      .mockRejectedValueOnce(Object.assign(new Error('expired'), { name: 'TokenExpiredError' }));
+    await expectApiError(fixture.guard.canActivate(fixture.context), 401, 'AUTH_EXPIRED');
+    expect(fixture.securityService.isAccessTokenActive).not.toHaveBeenCalled();
+  });
   it('verifies a local JWT, active session and request IP', async () => {
     const fixture = createFixture();
 

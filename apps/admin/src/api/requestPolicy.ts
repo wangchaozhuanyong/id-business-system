@@ -12,6 +12,7 @@ export interface ApiEndpointPolicy {
     | 'auth-logout'
     | 'auth-change-password'
     | 'auth-refresh'
+    | 'auth-session'
     | 'health'
     | 'public-branding'
     | 'public-mailbox'
@@ -54,6 +55,7 @@ const ENDPOINT_POLICIES = new Map<string, ApiEndpointPolicy>([
   ['/auth/logout', { bypassSessionGate: true, key: 'auth-logout' }],
   ['/auth/change-password', { bypassSessionGate: true, key: 'auth-change-password' }],
   ['/auth/refresh', { bypassSessionGate: true, key: 'auth-refresh' }],
+  ['/auth/session', { bypassSessionGate: true, key: 'auth-session' }],
   ['/health/ready', { bypassSessionGate: true, key: 'health' }],
   ['/health/live', { bypassSessionGate: true, key: 'health' }],
   ['/id-business-v2/branding/public', { bypassSessionGate: true, key: 'public-branding' }],
@@ -81,6 +83,7 @@ export function getApiRequestPolicy(method?: string, url?: string): ApiRequestPo
   }
   if (method?.toLowerCase() !== 'get') return null;
   if (pathname === '/auth/me') return AUTH_ME_POLICY;
+  if (pathname === '/auth/session') return AUTH_ME_POLICY;
   if (pathname === '/id-business-v2/workspace-media/download') return MEDIA_DOWNLOAD_POLICY;
   if (
     pathname.startsWith('/id-business-v2/') ||

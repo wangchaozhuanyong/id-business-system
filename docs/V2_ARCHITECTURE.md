@@ -214,9 +214,15 @@ GET   /api/id-business-v2/renewals/warning-summary
 
 - `SessionCoordinator` 是凭据、会话状态、请求取消、恢复和跨标签同步的唯一写入者。状态固定为
   `cold | anonymous | validating | ready | refreshing | degraded | blocked`。
-- 浏览器只持久化一个带 schema version、`credentialId`、`tokenRevision`、Token 和用户缓存的原子
-  凭据对象；跨标签消息不携带 Token。每个响应提交前必须匹配当前 credential ID 与 revision。
-- 冷启动必须先完成 `/auth/me`，缓存用户不得解锁业务数据。冷启动认证不可用进入
+- 标签页只在 `sessionStorage` 保存带 schema version、`credentialId`、`tokenRevision`、Token 和
+  用户缓存的原子凭据；`localStorage` 只保存不含 Token 或用户资料的浏览器会话标记。跨标签消息
+  不携带 Token。每个响应提交前必须匹配当前 credential ID、revision 与浏览器身份代际。
+- 登录与 `/auth/me` 校验成功后建立 HttpOnly、SameSite=Strict、生产 Secure 的 host-only 会话
+  Cookie，仅发送至 `/api/auth/session`。没有标签页凭据时调用同源 `GET /auth/session`，继续经过
+  JWT 有效期、在线会话撤销、MFA、IP 和用户权限检查；其他接口仍须 Bearer，Cookie 不授权业务写入。
+  退出与改密清除 Cookie；本地退出标记即使远端断连也阻止自动恢复。旧页面升级后须先刷新或重新登录
+  一次建立 Cookie。浏览器关闭后的 Cookie 保留由浏览器会话恢复设置决定，服务端过期时间不延长。
+- 冷启动必须先完成 `/auth/me` 或 `/auth/session` 服务端验证，缓存用户不得解锁业务数据。冷启动认证不可用进入
   `/session-unavailable`；已验证会话短暂 503 时保留最后内容并统一切为只读，恢复后重新验证权限和
   失效查询，禁止重放写请求。
 - 401 才清凭据；403 进入明确阻断状态；502/503/504 只按 `/auth/me` 的有界策略重试。所有程序化
