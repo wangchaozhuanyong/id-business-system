@@ -292,8 +292,15 @@ const trackSessionRecovery = createSessionRecoveryTracker(() => {
 
 watch(
   sessionState,
-  (state) => {
+  (state, previous) => {
     trackSessionRecovery(state.kind);
+    if (
+      state.kind === 'ready' &&
+      previous?.kind === 'validating' &&
+      v2Router.currentRoute.value.path === '/login'
+    ) {
+      void reconcileRouteAfterSessionRecovery();
+    }
     if (state.kind === 'degraded') {
       if (!state.verifiedInRuntime) void routeUnverifiedSessionToBoundary();
       return;

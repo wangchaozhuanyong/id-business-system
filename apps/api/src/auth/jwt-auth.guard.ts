@@ -16,8 +16,10 @@ import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorators';
 import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
+import { readBrowserSessionToken } from './browser-session-cookie';
 
 interface RequestWithAuthHeader {
+  method?: string;
   headers: Record<string, string | string[] | undefined> & {
     authorization?: string;
     'user-agent'?: string;
@@ -162,6 +164,8 @@ export class JwtAuthGuard implements CanActivate {
   private extractToken(request: RequestWithAuthHeader) {
     const [type, token] = request.headers.authorization?.split(' ') ?? [];
     if (type === 'Bearer' && token) return token;
+    const browserSessionToken = readBrowserSessionToken(request);
+    if (browserSessionToken) return browserSessionToken;
     if (!request.originalUrl?.startsWith('/api/realtime/events')) return undefined;
 
     const queryToken = request.query?.accessToken;

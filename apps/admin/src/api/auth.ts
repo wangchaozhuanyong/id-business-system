@@ -13,6 +13,9 @@ export const authApi = {
   me() {
     return request<CurrentUser>(http.get('/auth/me'));
   },
+  restoreSession() {
+    return request<LoginResponse>(http.get('/auth/session'));
+  },
   logout() {
     return request<{ loggedOut: boolean }>(http.post('/auth/logout'));
   },

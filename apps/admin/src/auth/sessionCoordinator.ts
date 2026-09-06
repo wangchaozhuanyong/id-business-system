@@ -4,6 +4,7 @@ import {
   AUTH_CREDENTIAL_STORAGE_KEY,
   clearStoredCredential,
   createStoredCredential,
+  isCurrentUser,
   isSameCredentialSnapshot,
   readStoredCredential,
   toCredentialSnapshot,
@@ -13,6 +14,13 @@ import {
 } from '@/auth/credential';
 import { markAppPerformance, measureAppPerformance } from '@/runtime/performance';
 import type { CurrentUser } from '@/types/system';
+import {
+  BROWSER_SESSION_MARKER_KEY,
+  readBrowserSessionMarker,
+  readTokenSessionId,
+  writeBrowserSessionMarker,
+  type BrowserSessionMarker
+} from './browserSessionMarker';
 
 const CURRENT_USER_REFRESH_INTERVAL_MS = 60_000;
 const VALIDATION_FAILURE_WINDOW_MS = 30_000;
@@ -142,6 +150,8 @@ export function transitionSessionState(next: SessionState) {
 }
 
 let hydrated = false;
+let browserRestoreAttempted = false;
+let browserSessionMarker: BrowserSessionMarker | null = null;
 let validationPromise: Promise<SessionResolution> | null = null;
 let authAbortController = new AbortController();
 let verifiedCredentialId = '';
@@ -194,6 +204,18 @@ function hydrate() {
   if (hydrated) return;
   hydrated = true;
   mutableCredential.value = readStoredCredential();
+  browserSessionMarker = readBrowserSessionMarker();
+  if (
+    browserSessionMarker &&
+    (browserSessionMarker.signedOut ||
+      (mutableCredential.value &&
+        (browserSessionMarker.credentialId !== mutableCredential.value.credentialId ||
+          (browserSessionMarker.sessionId &&
+            browserSessionMarker.sessionId !== readTokenSessionId(mutableCredential.value.token)))))
+  ) {
+    clearStoredCredential();
+    mutableCredential.value = null;
+  }
   transitionSessionState(
     mutableCredential.value ? { kind: 'cold' } : { kind: 'anonymous', reason: 'none' }
   );
@@ -235,8 +257,14 @@ async function ensureSession(
 ): Promise<SessionResolution> {
   hydrate();
   const source = options.source ?? 'boot';
-  if (!mutableCredential.value) return 'anonymous';
   if (validationPromise) return validationPromise;
+  if (
+    !mutableCredential.value &&
+    (typeof window === 'undefined' ||
+      browserSessionMarker?.signedOut ||
+      (browserRestoreAttempted && mutableSessionState.value.kind === 'anonymous'))
+  )
+    return 'anonymous';
 
   const state = mutableSessionState.value;
   if (!options.force) {
@@ -261,7 +289,13 @@ async function ensureSession(
   }
 
   const snapshot = getCredentialSnapshot();
-  if (!snapshot) return 'anonymous';
+  if (!snapshot) {
+    validationPromise = restoreBrowserSession(source, halfOpenProbe).finally(() => {
+      validationPromise = null;
+      if (halfOpenProbe) halfOpenProbeInFlight = false;
+    });
+    return validationPromise;
+  }
   const validationStartedAt = nowMs();
   const credentialUpdatedAt = mutableCredential.value?.updatedAt ?? 0;
   const verified = isVerifiedInRuntime(snapshot.credentialId);
@@ -288,6 +322,79 @@ async function ensureSession(
     measureAppPerformance('v2:auth-check-duration', 'v2:auth-check-start', 'v2:auth-check-end');
   });
   return validationPromise;
+}
+
+async function restoreBrowserSession(
+  source: SessionValidationSource,
+  halfOpenProbe: boolean
+): Promise<SessionResolution> {
+  const epoch = mutableIdentityEpoch.value;
+  const marker = browserSessionMarker;
+  browserRestoreAttempted = true;
+  transitionSessionState({ kind: 'validating', source, cachedUser: null });
+  try {
+    const { authApi } = await loadAuthApiModule();
+    const data = await authApi.restoreSession();
+    if (epoch !== mutableIdentityEpoch.value || !isBrowserMarkerCurrent(marker)) {
+      applyBrowserSessionMarker();
+      return getResolution();
+    }
+    if (
+      !data ||
+      typeof data.accessToken !== 'string' ||
+      !data.accessToken.trim() ||
+      !isCurrentUser(data.user)
+    ) {
+      throw new ApiError('登录状态恢复结果不完整，请重试。', {
+        code: 'AUTH_SESSION_RESTORE_INCOMPLETE',
+        kind: 'server',
+        retryable: false,
+        status: 500
+      });
+    }
+    if (marker?.sessionId && marker.sessionId !== readTokenSessionId(data.accessToken)) {
+      transitionSessionState({ kind: 'anonymous', reason: 'session-cleared' });
+      return 'anonymous';
+    }
+    const credential = createStoredCredential(data.accessToken, data.user);
+    if (marker) credential.credentialId = marker.credentialId;
+    replaceCredential(credential, 'login');
+    commitVerifiedUser(toCredentialSnapshot(credential)!, data.user);
+    resetBreaker();
+    return getResolution();
+  } catch (rawError) {
+    if (epoch !== mutableIdentityEpoch.value || !isBrowserMarkerCurrent(marker)) {
+      applyBrowserSessionMarker();
+      return getResolution();
+    }
+    const error = normalizeSessionError(rawError);
+    if (error.status === 401) {
+      if (marker && error.code !== 'AUTH_MISSING') {
+        clearLocalSession({ reason: 'session-expired' });
+      } else {
+        transitionSessionState({ kind: 'anonymous', reason: 'none' });
+      }
+      return 'anonymous';
+    }
+    if (error.status === 403) {
+      transitionSessionState({
+        kind: 'blocked',
+        reason: error.code === 'AUTH_IP_BLOCKED' ? 'ip' : 'permission',
+        user: null
+      });
+      return 'blocked';
+    }
+    const failureCount = registerValidationFailure(error, halfOpenProbe);
+    transitionSessionState({
+      kind: 'degraded',
+      error,
+      failureCount,
+      retryAt: Math.max(nowMs() + (error.retryAfterMs ?? 0), breakerOpenUntil),
+      user: null,
+      verifiedInRuntime: false
+    });
+    return 'unavailable';
+  }
 }
 
 function refreshCurrentUser(source: SessionValidationSource = 'background') {
@@ -363,7 +470,10 @@ async function login(username: string, password: string, mfaCode?: string) {
     const { authApi } = await loadAuthApiModule();
     const data = await authApi.login(username, password, mfaCode);
 
-    replaceCredential(createStoredCredential(data.accessToken, data.user), 'login');
+    const credential = createStoredCredential(data.accessToken, data.user);
+    publishBrowserSessionMarker(credential, false);
+    browserRestoreAttempted = false;
+    replaceCredential(credential, 'login');
     verifiedCredentialId = mutableCredential.value?.credentialId ?? '';
     verifiedUserId = data.user.id;
     mutableUserLoadedAt.value = nowMs();
@@ -434,6 +544,7 @@ function updateAccessToken(accessToken: string) {
   };
   mutableCredential.value = next;
   writeStoredCredential(next);
+  publishBrowserSessionMarker(next, false);
   broadcastSession({
     credentialId: next.credentialId,
     tokenRevision: next.tokenRevision,
@@ -446,10 +557,24 @@ function clearLocalSession(
     expected?: CredentialSnapshot | null;
     expectedCredentialId?: string;
     reason?: AuthIdentityChangeReason;
+    broadcast?: boolean;
   } = {}
 ) {
   hydrate();
   const current = mutableCredential.value;
+  const sharedMarker = readBrowserSessionMarker();
+  if (
+    options.expected &&
+    sharedMarker &&
+    !sharedMarker.signedOut &&
+    (sharedMarker.credentialId !== current?.credentialId ||
+      (sharedMarker.sessionId &&
+        current &&
+        sharedMarker.sessionId !== readTokenSessionId(current.token)))
+  ) {
+    applyBrowserSessionMarker();
+    return false;
+  }
   const expected = options.expected;
   if (expected && !isSameCredentialSnapshot(current, expected)) return false;
   if (options.expectedCredentialId && current?.credentialId !== options.expectedCredentialId) {
@@ -486,7 +611,11 @@ function clearLocalSession(
   const anonymousReason = mapAnonymousReason(options.reason);
   transitionSessionState({ kind: 'anonymous', reason: anonymousReason });
   resetBreaker();
-  broadcastSession({ credentialId: clearedCredentialId, type: 'anonymous' });
+  browserRestoreAttempted = true;
+  if (options.broadcast !== false) {
+    publishBrowserSessionMarker(current, true);
+    broadcastSession({ credentialId: clearedCredentialId, type: 'anonymous' });
+  }
   return true;
 }
 
@@ -554,11 +683,16 @@ function subscribeIdentityChange(listener: (reason: AuthIdentityChangeReason) =>
 function commitVerifiedUser(snapshot: CredentialSnapshot, user: CurrentUser) {
   const current = mutableCredential.value;
   if (!isSameCredentialSnapshot(current, snapshot) || !current) return;
+  if (!isBrowserMarkerCurrent(browserSessionMarker)) {
+    applyBrowserSessionMarker();
+    return;
+  }
   const identitySwitched = Boolean(verifiedUserId) && verifiedUserId !== user.id;
   const next = identitySwitched
     ? createStoredCredential(current.token, user)
     : { ...current, userCache: user, updatedAt: Math.max(nowMs(), current.updatedAt + 1) };
   if (identitySwitched) {
+    publishBrowserSessionMarker(next, false);
     replaceCredential(next, 'identity-switched');
   } else {
     mutableCredential.value = next;
@@ -567,6 +701,7 @@ function commitVerifiedUser(snapshot: CredentialSnapshot, user: CurrentUser) {
   verifiedCredentialId = next.credentialId;
   verifiedUserId = user.id;
   mutableUserLoadedAt.value = nowMs();
+  if (!browserSessionMarker) publishBrowserSessionMarker(next, false);
   transitionSessionState({
     kind: 'ready',
     user,
@@ -851,7 +986,46 @@ function installBrowserCoordination() {
 }
 
 function handleCredentialStorageChange(event: StorageEvent) {
+  if (event.key === BROWSER_SESSION_MARKER_KEY || event.key === null) applyBrowserSessionMarker();
   if (event.key === AUTH_CREDENTIAL_STORAGE_KEY || event.key === null) applyStoredCredential();
+}
+
+function isBrowserMarkerCurrent(marker: BrowserSessionMarker | null) {
+  return JSON.stringify(marker) === JSON.stringify(readBrowserSessionMarker());
+}
+
+function publishBrowserSessionMarker(credential: StoredCredentialV2 | null, signedOut: boolean) {
+  const marker: BrowserSessionMarker = {
+    credentialId: credential?.credentialId ?? browserSessionMarker?.credentialId ?? createTabId(),
+    signedOut,
+    ...(credential && readTokenSessionId(credential.token)
+      ? { sessionId: readTokenSessionId(credential.token) }
+      : {})
+  };
+  writeBrowserSessionMarker(marker);
+  browserSessionMarker = readBrowserSessionMarker();
+}
+
+function applyBrowserSessionMarker() {
+  const marker = readBrowserSessionMarker();
+  if (JSON.stringify(marker) === JSON.stringify(browserSessionMarker)) return;
+  browserSessionMarker = marker;
+  if (!marker) return;
+  const current = mutableCredential.value;
+  if (
+    !marker.signedOut &&
+    current?.credentialId === marker.credentialId &&
+    (!marker.sessionId || marker.sessionId === readTokenSessionId(current.token))
+  )
+    return;
+  clearLocalSession({
+    reason: marker.signedOut ? 'logout' : 'identity-switched',
+    broadcast: false
+  });
+  if (marker.signedOut) return;
+  browserRestoreAttempted = false;
+  const pending = validationPromise;
+  void (pending ?? Promise.resolve()).then(() => ensureSession({ source: 'recovery' }));
 }
 
 function applyStoredCredential() {
@@ -904,6 +1078,7 @@ function handleSessionBroadcast(event: MessageEvent<SessionBroadcastMessage>) {
   const credential = mutableCredential.value;
   if (!message || typeof message !== 'object') return;
   if (message.type === 'credential-changed' || message.type === 'anonymous') {
+    applyBrowserSessionMarker();
     applyStoredCredential();
   } else if (message.type === 'verified') {
     const stored = readStoredCredential();
@@ -972,7 +1147,10 @@ function handleRecoverySignal() {
 }
 
 function handleVisibilityRecovery() {
-  if (document.visibilityState === 'visible') handleRecoverySignal();
+  if (document.visibilityState === 'visible') {
+    applyBrowserSessionMarker();
+    handleRecoverySignal();
+  }
 }
 
 function createTabId() {
@@ -993,6 +1171,8 @@ export function setSessionCoordinatorClockForTests(provider?: () => number) {
 export function resetSessionCoordinatorForTests(initialState: SessionState = { kind: 'cold' }) {
   validationPromise = null;
   hydrated = false;
+  browserRestoreAttempted = false;
+  browserSessionMarker = null;
   mutableCredential.value = null;
   // Tests may seed any source node directly; production transitions must use transitionSessionState.
   mutableSessionState.value = initialState;

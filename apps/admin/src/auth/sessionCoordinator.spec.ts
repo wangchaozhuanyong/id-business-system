@@ -7,11 +7,17 @@ import {
   writeStoredCredential
 } from '@/auth/credential';
 import type { CurrentUser } from '@/types/system';
+import {
+  BROWSER_SESSION_MARKER_KEY,
+  readBrowserSessionMarker,
+  writeBrowserSessionMarker
+} from './browserSessionMarker';
 
 const authApiMocks = vi.hoisted(() => ({
   changePassword: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  restoreSession: vi.fn(),
   me: vi.fn()
 }));
 
@@ -151,6 +157,138 @@ describe('SessionCoordinator', () => {
     vi.stubGlobal('window', new EventTarget());
     vi.stubGlobal('navigator', {});
     vi.stubGlobal('BroadcastChannel', TestBroadcastChannel);
+    authApiMocks.restoreSession.mockRejectedValue(apiError(401, 'AUTH_MISSING'));
+  });
+
+  it('restores a new tab through one server request without persisting its token', async () => {
+    writeBrowserSessionMarker({ credentialId: 'browser-session-1', signedOut: false });
+    const deferred = createDeferred<{ accessToken: string; user: CurrentUser }>();
+    authApiMocks.restoreSession.mockReturnValueOnce(deferred.promise);
+    const first = sessionCoordinator.ensureSession();
+    const second = sessionCoordinator.ensureSession();
+    await vi.waitFor(() => expect(authApiMocks.restoreSession).toHaveBeenCalledTimes(1));
+    expect(sessionCoordinator.state.value.kind).toBe('validating');
+    expect(sessionCoordinator.credential.value).toBeNull();
+    deferred.resolve({ accessToken: 'restored-token', user });
+    await expect(Promise.all([first, second])).resolves.toEqual(['ready', 'ready']);
+    expect(readStoredCredential()).toMatchObject({
+      credentialId: 'browser-session-1',
+      token: 'restored-token'
+    });
+    expect(localStorage.getItem(AUTH_CREDENTIAL_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(BROWSER_SESSION_MARKER_KEY)).not.toContain('restored-token');
+    expect(authApiMocks.me).not.toHaveBeenCalled();
+  });
+
+  it('does not repeatedly probe a browser without a session cookie', async () => {
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(authApiMocks.restoreSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes a signed-out marker when the restore cookie has been revoked', async () => {
+    writeBrowserSessionMarker({ credentialId: 'revoked-session', signedOut: false });
+    authApiMocks.restoreSession.mockRejectedValueOnce(apiError(401, 'AUTH_REVOKED'));
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(readBrowserSessionMarker()).toMatchObject({
+      credentialId: 'revoked-session',
+      signedOut: true
+    });
+  });
+
+  it('keeps an incomplete restore response behind the unavailable boundary', async () => {
+    authApiMocks.restoreSession.mockResolvedValueOnce({ user });
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('unavailable');
+    expect(sessionCoordinator.credential.value).toBeNull();
+    expect(sessionCoordinator.state.value).toMatchObject({
+      kind: 'degraded',
+      error: { code: 'AUTH_SESSION_RESTORE_INCOMPLETE' }
+    });
+  });
+
+  it.each([
+    [401, 'anonymous'],
+    [403, 'blocked'],
+    [503, 'unavailable']
+  ] as const)(
+    'keeps server restore failure %s behind its session boundary',
+    async (status, resolution) => {
+      authApiMocks.restoreSession.mockRejectedValueOnce(
+        apiError(status, status === 403 ? 'AUTH_IP_BLOCKED' : 'AUTH_DEPENDENCY_UNAVAILABLE')
+      );
+      await expect(sessionCoordinator.ensureSession()).resolves.toBe(resolution);
+      expect(sessionCoordinator.credential.value).toBeNull();
+      expect(() => sessionCoordinator.assertWriteAllowed()).toThrow();
+      if (status === 503) {
+        authApiMocks.restoreSession.mockResolvedValueOnce({ accessToken: 'recovered-token', user });
+        await expect(sessionCoordinator.ensureSession({ source: 'manual-retry' })).resolves.toBe(
+          'ready'
+        );
+      }
+    }
+  );
+
+  it('does not restore a response that arrives after local logout', async () => {
+    const deferred = createDeferred<{ accessToken: string; user: CurrentUser }>();
+    authApiMocks.restoreSession.mockReturnValueOnce(deferred.promise);
+    const pending = sessionCoordinator.ensureSession();
+    await vi.waitFor(() => expect(authApiMocks.restoreSession).toHaveBeenCalledTimes(1));
+    await sessionCoordinator.logout({ remote: false });
+    deferred.resolve({ accessToken: 'late-token', user });
+    await expect(pending).resolves.toBe('anonymous');
+    expect(readStoredCredential()).toBeNull();
+    resetSessionCoordinatorForTests();
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(authApiMocks.restoreSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overwrite a newer login with an older restore response', async () => {
+    const deferred = createDeferred<{ accessToken: string; user: CurrentUser }>();
+    authApiMocks.restoreSession.mockReturnValueOnce(deferred.promise);
+    const pending = sessionCoordinator.ensureSession();
+    await vi.waitFor(() => expect(authApiMocks.restoreSession).toHaveBeenCalledTimes(1));
+    authApiMocks.login.mockResolvedValueOnce({ accessToken: 'new-token', user: replacementUser });
+    await sessionCoordinator.login('operator', 'password');
+    deferred.resolve({ accessToken: 'old-token', user });
+    await expect(pending).resolves.toBe('ready');
+    expect(sessionCoordinator.credential.value?.token).toBe('new-token');
+  });
+
+  it('rejects a cookie from an older browser login generation', async () => {
+    writeBrowserSessionMarker({ credentialId: 'new-id', signedOut: false, sessionId: 'new-jti' });
+    authApiMocks.restoreSession.mockResolvedValueOnce({
+      accessToken: `header.${btoa(JSON.stringify({ jti: 'old-jti' }))}.signature`,
+      user
+    });
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(readStoredCredential()).toBeNull();
+  });
+
+  it('clears a peer tab on logout using storage events without BroadcastChannel', async () => {
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const credential = seedCredential('existing-token');
+    authApiMocks.me.mockResolvedValueOnce(user);
+    await sessionCoordinator.ensureSession();
+    writeBrowserSessionMarker({ credentialId: credential.credentialId, signedOut: true });
+    const event = new Event('storage');
+    Object.defineProperty(event, 'key', { value: BROWSER_SESSION_MARKER_KEY });
+    window.dispatchEvent(event);
+    expect(sessionCoordinator.state.value.kind).toBe('anonymous');
+    expect(readStoredCredential()).toBeNull();
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(authApiMocks.restoreSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed remote logout signed out after a reload', async () => {
+    seedCredential();
+    authApiMocks.me.mockResolvedValueOnce(user);
+    await sessionCoordinator.ensureSession();
+    authApiMocks.logout.mockRejectedValueOnce(new Error('offline'));
+    await expect(sessionCoordinator.logout()).rejects.toThrow('offline');
+    expect(readBrowserSessionMarker()?.signedOut).toBe(true);
+    resetSessionCoordinatorForTests();
+    await expect(sessionCoordinator.ensureSession()).resolves.toBe('anonymous');
+    expect(authApiMocks.restoreSession).not.toHaveBeenCalled();
   });
 
   it.each([
