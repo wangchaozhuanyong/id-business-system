@@ -23,9 +23,9 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 - 认证固定使用本地 JWT 会话，业务数据库固定使用 AWS EC2 内的 MySQL。
 - 部署前必须运行 `npm run check:cloud-independence`；检查失败时禁止发布。
 - 历史 PostgreSQL 基线中已存在的文字仅作为不可修改的迁移记录，不得恢复为运行时配置。
-- 本机生产连接信息固定保存在被 Git 忽略的 `.deploy/aws-production.local.env`；执行生产检查或部署时必须先读取并复用，
-  仅当文件缺失或连接已失效时再向用户确认。
-- `.deploy/aws-production.local.env` 和其中引用的私钥必须保持仅本机可读，禁止在日志、回复、提交或部署包中输出、复制或上传。
+- GitHub Actions 只允许通过 OIDC 获取短期 AWS 身份；不得保存或使用长期 AWS Key、生产 SSH 私钥或 Cookie。
+- 生产 EC2 只通过受限 SSM Document 接收部署命令，并通过 instance role 从 ECR 按 digest 拉取镜像。
+- 禁止恢复本地打包 Docker 镜像、SSH/SCP 上传、服务器解包或服务器现场构建的旧发布链路。
 
 ## Git 与生产发布强制流程
 
@@ -35,10 +35,13 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 - 提交前必须运行相关专项检查、`npm run check`、`npm run acceptance:v2-financial-integrity` 和
   `npm run git:readiness`。任何失败都必须阻断提交或发布。
 - 发布分支推送后必须创建 PR；只有 GitHub CI 全部通过并完成审查，才允许合并到 `main`。
-- 生产只允许部署合并后的 `origin/main` 当前完整 40 位 commit SHA，或指向 `main` 中某个 commit 的不可变正式标签。使用标签时必须先解析并记录完整 SHA，并验证该 SHA 属于 `origin/main`；标签不得移动或复用。
-- 锁定 SHA 后只允许由对应 CI 构建一次不可变制品；测试、验证和生产必须复用同一制品，禁止在生产服务器、历史发布目录或其他工作区重新构建。
-- 部署前工作区必须干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 必须一致；禁止从未提交文件、脏工作区、历史副本、旧发布目录或服务器临时补丁提交或部署生产代码，也禁止在服务器发布目录直接修改代码。
-- 每次部署必须保存不可变发布清单，至少记录：来源分支、完整 commit SHA、正式版本标签、CI 工作流运行编号、部署运行编号、制品名称、制品 SHA-256、部署环境、部署时间、操作人和上一个已验证生产 SHA。使用 Docker 时还必须记录镜像 digest，不能只记录可变镜像名或版本 tag。
+- 生产只允许部署指向 `origin/main` commit 的不可移动正式标签；标签不得移动或复用。
+- 标签 CI 只构建一次 `linux/amd64` 镜像并以完整 commit SHA 推送到私有 ECR；生产必须使用清单中的
+  `repository@sha256:...`，禁止使用可变镜像标签、历史本地包或服务器现场构建。
+- 日常发布只允许从 GitHub Actions 的 `Deploy Production` 工作流启动。工作流通过 OIDC、S3 小型源码包和
+  受限 SSM Document 完成部署；禁止人工打包、下载或上传 Docker 镜像归档。
+- 每次部署必须保存不可变发布清单，至少记录：完整 commit SHA、正式版本标签、CI 运行编号、部署运行编号、
+  六个 ECR 镜像 digest、源码包 SHA-256、部署时间、操作人和上一个已验证生产 SHA。
 - 每次部署创建 `/opt/id-business-v2/releases/<UTC>-<short-sha>` 不可变目录，保留上一版；禁止覆盖旧发布目录。
 - 发布期间必须持有生产部署锁，并确认没有其他 Compose、迁移、同步或部署进程并发执行。
 - 数据库变更只允许向前 migration。更新应用容器前必须完成 S3 备份及校验、镜像构建、migration 和 38 项只读财务完整性门禁；
@@ -57,10 +60,9 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 → 审查差异
 → PR + 自动测试
 → 合并 main
-→ 锁定完整 SHA
-→ 构建不可变制品
-→ 记录制品校验值
-→ 部署生产
+→ 创建不可移动正式标签
+→ CI 构建并推送 ECR 不可变镜像
+→ Deploy Production 通过 SSM 部署
 → 健康及业务验证
 → 删除已合并分支
 ```
@@ -68,14 +70,12 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 发布清单示例：
 
 ```yaml
-source_branch: main
 commit: <完整 40 位 SHA>
 release_tag: <不可变正式版本标签>
 ci_workflow_run: <CI 工作流运行编号>
 deployment_run: <部署运行编号>
-artifact: <运行时制品名称>
-artifact_sha256: <制品 SHA-256>
-image_digest: <Docker 镜像 digest，如适用>
+source_artifact_sha256: <源码小包 SHA-256>
+image_digests: <六个 ECR 镜像 digest>
 environment: production
 deployed_at: <UTC 时间>
 operator: <操作人>

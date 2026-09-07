@@ -232,6 +232,7 @@ test('production workflow uses OIDC, immutable ECR and a protected manual deploy
   const quality = readProjectFile('.github/workflows/quality.yml');
   const deploy = readProjectFile('.github/workflows/deploy-production.yml');
   const infrastructure = readProjectFile('deploy/aws/id-business-v2-ecr-release.yaml');
+  const repositoryRules = readProjectFile('AGENTS.md');
   assert.match(quality, /id-token:\s+write/u);
   assert.match(quality, /aws-actions\/configure-aws-credentials@[a-f0-9]{40}/u);
   assert.match(quality, /aws-actions\/amazon-ecr-login@[a-f0-9]{40}/u);
@@ -243,6 +244,8 @@ test('production workflow uses OIDC, immutable ECR and a protected manual deploy
   assert.equal((infrastructure.match(/ImageTagMutability: IMMUTABLE/gu) ?? []).length, 6);
   assert.match(infrastructure, /repo:\$\{GitHubRepository\}:environment:production/u);
   assert.doesNotMatch(infrastructure, /AWS-RunShellScript/u);
+  assert.match(repositoryRules, /禁止恢复本地打包 Docker 镜像、SSH\/SCP 上传/u);
+  assert.match(repositoryRules, /日常发布只允许从 GitHub Actions/u);
 });
 
 test('current production release reader validates and returns the immutable target', () => {
