@@ -35,7 +35,6 @@ test('production performance audit is read-only, bounded and secret-safe', () =>
 test('production performance audit runs every five minutes under systemd', () => {
   const service = readProjectFile('deploy/systemd/id-business-v2-mysql-performance.service');
   const timer = readProjectFile('deploy/systemd/id-business-v2-mysql-performance.timer');
-  const installer = readProjectFile('scripts/install-aws-production-artifact.sh');
 
   assert.match(service, /User=root/u);
   assert.match(service, /UMask=0077/u);
@@ -43,19 +42,6 @@ test('production performance audit runs every five minutes under systemd', () =>
   assert.match(service, /audit-aws-mysql-performance\.sh/u);
   assert.match(timer, /OnCalendar=\*-\*-\* \*:00\/5:00/u);
   assert.match(timer, /Persistent=true/u);
-  assert.match(installer, /install_performance_timer/u);
-  assert.match(
-    installer,
-    /MYSQL_PERFORMANCE_BASELINE_ONLY=true[\s\\]+"\$\{RELEASE_DIRECTORY\}\/scripts\/audit-aws-mysql-performance\.sh"/u
-  );
-  assert.ok(
-    installer.indexOf('MYSQL_PERFORMANCE_BASELINE_ONLY=true') <
-      installer.indexOf('systemctl enable --now id-business-v2-mysql-performance.timer'),
-    '首次发布巡检必须先建立维护窗口基线，再启用定时器'
-  );
-  assert.match(installer, /systemctl start id-business-v2-mysql-performance\.service/u);
-  assert.match(installer, /performance_timer_changed/u);
-  assert.match(installer, /systemctl disable --now id-business-v2-mysql-performance\.timer/u);
 });
 
 test('production runtime probe is read-only, bounded and has stop thresholds', () => {

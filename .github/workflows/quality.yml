@@ -4,31 +4,22 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v2-production-*'
   pull_request:
   workflow_dispatch:
-    inputs:
-      build_production_images:
-        description: Build and validate production images during this manual run
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') && github.sha || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v2-production-') }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   change-scope:
     runs-on: ubuntu-latest
     outputs:
       dependency_audit: ${{ steps.scope.outputs.dependency_audit }}
-      production_images: ${{ steps.scope.outputs.production_images }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -44,10 +35,9 @@ jobs:
         id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          MANUAL_BUILD_PRODUCTION_IMAGES: ${{ inputs.build_production_images || 'false' }}
         run: |
           set -Eeuo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$GITHUB_REF" == refs/tags/v2-production-* ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             printf '' | node scripts/ci-change-scope.mjs
             exit 0
           fi
@@ -64,7 +54,6 @@ jobs:
 
   quality:
     needs: change-scope
-    if: ${{ github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v2-production-') }}
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -160,9 +149,6 @@ jobs:
       - name: Validate Prisma schema
         run: npm run prisma:validate
 
-      - name: Validate AWS MySQL Compose example
-        run: npm run aws:mysql:config:example
-
       - name: Audit high severity vulnerabilities
         if: ${{ needs.change-scope.outputs.dependency_audit == 'true' }}
         timeout-minutes: 3
@@ -172,117 +158,3 @@ jobs:
 
       - name: Check Git readiness
         run: npm run git:readiness
-
-  production-images:
-    needs: change-scope
-    runs-on: ubuntu-latest
-    steps:
-      - name: Skip unchanged production image boundary
-        if: ${{ needs.change-scope.outputs.production_images != 'true' }}
-        run: echo 'Production image inputs are unchanged; immutable images will be built once at release tag.'
-
-      - name: Checkout
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-
-      - name: Validate immutable production tag and prior quality result
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -Eeuo pipefail
-          git fetch origin main --no-tags
-          test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-
-          main_run_id="$(gh run list --workflow quality.yml --commit "$GITHUB_SHA" --event push --status success --limit 50 --json databaseId,headBranch,headSha --jq ".[] | select(.headBranch == \"main\" and .headSha == \"${GITHUB_SHA}\") | .databaseId" | head -n 1)"
-          if [[ -z "$main_run_id" ]]; then
-            echo '正式标签对应的 main Quality Gate 尚未成功，拒绝构建生产制品' >&2
-            exit 1
-          fi
-
-          previous_release_run_id="$(gh run list --workflow quality.yml --commit "$GITHUB_SHA" --event push --status success --limit 50 --json databaseId,headBranch,headSha --jq ".[] | select(.headBranch != \"${GITHUB_REF_NAME}\" and (.headBranch | startswith(\"v2-production-\")) and .headSha == \"${GITHUB_SHA}\") | .databaseId" | head -n 1)"
-          if [[ -n "$previous_release_run_id" ]]; then
-            echo "该 commit 已由成功运行 ${previous_release_run_id} 构建过生产制品，拒绝重复构建" >&2
-            exit 1
-          fi
-
-      - name: Audit high severity vulnerabilities before release build
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        timeout-minutes: 3
-        run: npm run audit:high
-
-      - name: Validate AWS MySQL Compose example
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
-        run: docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml config
-
-      - name: Build AWS MySQL production images
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
-        env:
-          COMPOSE_BAKE: 'false'
-          DOCKER_BUILDKIT: '0'
-        run: |
-          docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml build migrate media-resolver auto-recharge api admin
-          docker tag id-business-v2-prod-api:latest "id-business-v2-release-api:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-admin:latest "id-business-v2-release-admin:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-migrate:latest "id-business-v2-release-migration:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-media-resolver:latest "id-business-v2-release-media-resolver:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-auto-recharge:latest "id-business-v2-release-recharge:${GITHUB_SHA}"
-          docker run --rm --init --entrypoint xvfb-run id-business-v2-prod-auto-recharge:latest -a python -B -m unittest -q test_subscribe.py test_browser.py test_payment.py test_pro.py test_server.py
-          docker build --target build --tag "id-business-v2-release-gate:${GITHUB_SHA}" --file apps/api/Dockerfile.mysql .
-
-      - name: Verify built production image boundaries
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
-        env:
-          V2_RUNTIME_IMAGE: id-business-v2-prod-api:latest
-          V2_MIGRATION_IMAGE: id-business-v2-prod-migrate:latest
-          V2_MEDIA_RESOLVER_IMAGE: id-business-v2-prod-media-resolver:latest
-        run: node scripts/acceptance-v2-container-hardening.mjs
-
-      - name: Package immutable production artifact
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        id: package-release
-        env:
-          RELEASE_SOURCE_BRANCH: main
-          RELEASE_COMMIT: ${{ github.sha }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_CI_RUN_ID: ${{ github.run_id }}
-          RELEASE_CI_RUN_NUMBER: ${{ github.run_number }}
-          RELEASE_OPERATOR: github-actions
-          RELEASE_OUTPUT_DIR: release-artifacts
-          RELEASE_API_IMAGE: id-business-v2-release-api:${{ github.sha }}
-          RELEASE_ADMIN_IMAGE: id-business-v2-release-admin:${{ github.sha }}
-          RELEASE_MIGRATION_IMAGE: id-business-v2-release-migration:${{ github.sha }}
-          RELEASE_MEDIA_RESOLVER_IMAGE: id-business-v2-release-media-resolver:${{ github.sha }}
-          RELEASE_RECHARGE_IMAGE: id-business-v2-release-recharge:${{ github.sha }}
-          RELEASE_GATE_IMAGE: id-business-v2-release-gate:${{ github.sha }}
-        run: bash scripts/package-production-release.sh
-
-      - name: Verify immutable production artifact
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        run: >-
-          node scripts/verify-production-release-artifact.mjs
-          --directory release-artifacts
-          --expected-commit "$GITHUB_SHA"
-          --expected-tag "$GITHUB_REF_NAME"
-
-      - name: Upload immutable production artifact
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ steps.package-release.outputs.github_artifact_name }}
-          path: |
-            ${{ steps.package-release.outputs.artifact_path }}
-            ${{ steps.package-release.outputs.manifest_path }}
-            ${{ steps.package-release.outputs.checksum_path }}
-          compression-level: 0
-          retention-days: 30
-          if-no-files-found: error

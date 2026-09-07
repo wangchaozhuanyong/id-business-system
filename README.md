@@ -43,11 +43,10 @@
 - `docs/UI_DESIGN.md`：界面强制规则
 - `docs/V2_LOADING_STANDARD.md`：加载与路由规则
 - `docs/V2_TASKS.md`：当前任务清单
-- `docs/DEPLOYMENT.md`：部署说明
 
 当前运行时 Prisma 以 `apps/api/prisma-mysql/schema.prisma` 和其 migration 为唯一权威，
 不包含其他系统的历史表、枚举或任务。`apps/api/prisma` 仅保留 PostgreSQL 历史迁移源和兼容验收文件，
-不参与当前 API、管理端或生产部署。
+不参与当前 API 或管理端运行。
 
 ## 本地开发
 
@@ -92,25 +91,3 @@ npm run prisma:validate
 ```bash
 npm run check
 ```
-
-## 部署
-
-生产环境变量从 `.env.aws.production.example` 创建，仅保存在 AWS 服务器的
-`/opt/id-business-v2/current/.env.aws.production`。先检查编排：
-
-```bash
-npm run aws:mysql:config
-```
-
-在 AWS 发布目录构建并启动：
-
-```bash
-docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml build
-docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml up -d --no-build
-npm run prod:smoke
-```
-
-实际发布前必须确认当前分支、提交、远端、生产账号和目标环境。详细说明见
-`docs/DEPLOYMENT.md`。生产备份由 EC2 systemd timer 每 30 分钟执行
-`scripts/backup-aws-mysql.sh`，强制上传到私有 S3 存储桶；每周执行
-`scripts/verify-aws-mysql-backup.sh` 完成隔离恢复验证。
