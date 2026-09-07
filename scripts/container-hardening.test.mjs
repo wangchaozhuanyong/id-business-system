@@ -18,7 +18,10 @@ test('production base images and GitHub Actions are immutable', () => {
   );
   const adminDockerfile = readProjectFile('apps/admin/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
-  const workflow = readProjectFile('.github/workflows/quality.yml');
+  const workflow = [
+    readProjectFile('.github/workflows/quality.yml'),
+    readProjectFile('.github/workflows/production-release.yml')
+  ].join('\n');
   const restoreScript = readProjectFile('scripts/verify-aws-mysql-backup.sh');
 
   assert.doesNotMatch(apiDockerfile, /^FROM node:24-bookworm-slim AS /mu);

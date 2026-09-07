@@ -127,13 +127,45 @@ if [[ -z "$previous_release_name" ]]; then
   echo '找不到上一已验证生产发布目录' >&2
   exit 1
 fi
+previous_manifest="${releases_root}/${previous_release_name}/release-manifest.json"
+if [[ ! -f "$previous_manifest" ]]; then
+  echo '上一已验证生产发布缺少发布清单' >&2
+  exit 1
+fi
+protected_image_references="$(
+  sed -nE 's/^[[:space:]]*"reference":[[:space:]]*"([^"]+)"[,]?[[:space:]]*$/\1/p' \
+    "$current_manifest" "$previous_manifest" | LC_ALL=C sort -u
+)"
+protected_artifact_commits="$(
+  {
+    printf '%s\n%s\n' "$current_commit" "$previous_commit"
+    sed -nE 's/^[[:space:]]*"sourceCommit":[[:space:]]*"([a-f0-9]{40})"[,]?[[:space:]]*$/\1/p' \
+      "$current_manifest" "$previous_manifest"
+  } | LC_ALL=C sort -u
+)"
 
 is_protected_release() {
   [[ "$1" == "$current_release_name" || "$1" == *"-${previous_short_commit}" ]]
 }
 
 is_protected_artifact() {
-  [[ "$1" == *"-${current_commit}" || "$1" == *"-${previous_commit}" ]]
+  local commit
+  while IFS= read -r commit; do
+    if [[ -n "$commit" && "$1" == *"-${commit}" ]]; then
+      return 0
+    fi
+  done <<<"$protected_artifact_commits"
+  return 1
+}
+
+is_protected_image_reference() {
+  local protected
+  while IFS= read -r protected; do
+    if [[ -n "$protected" && "$1" == "$protected" ]]; then
+      return 0
+    fi
+  done <<<"$protected_image_references"
+  return 1
 }
 
 available_bytes() {
@@ -217,6 +249,9 @@ while IFS= read -r image_reference; do
     id-business-v2-release-api:*|id-business-v2-release-admin:*|\
     id-business-v2-release-migration:*|id-business-v2-release-media-resolver:*|\
     id-business-v2-release-recharge:*|id-business-v2-release-gate:*)
+      if is_protected_image_reference "$image_reference"; then
+        continue
+      fi
       image_tag="${image_reference##*:}"
       if [[ "$image_tag" == "$current_commit" || "$image_tag" == "$previous_commit" ]]; then
         continue

@@ -14,6 +14,7 @@ require_variable() {
 for variable in \
   RELEASE_DIRECTORY \
   PREVIOUS_RELEASE_DIRECTORY \
+  RELEASE_MANIFEST_SCHEMA \
   RELEASE_ARTIFACT_ARCHIVE \
   RELEASE_IMAGE_ARCHIVE_SHA256 \
   RELEASE_ARTIFACT_SHA256 \
@@ -32,6 +33,28 @@ for variable in \
   RELEASE_RECHARGE_DIGEST \
   RELEASE_GATE_IMAGE \
   RELEASE_GATE_DIGEST \
+  RELEASE_API_ARCHIVE \
+  RELEASE_API_ARCHIVE_SHA256 \
+  RELEASE_API_SIZE_BYTES \
+  RELEASE_ADMIN_ARCHIVE \
+  RELEASE_ADMIN_ARCHIVE_SHA256 \
+  RELEASE_ADMIN_SIZE_BYTES \
+  RELEASE_MIGRATION_ARCHIVE \
+  RELEASE_MIGRATION_ARCHIVE_SHA256 \
+  RELEASE_MIGRATION_SIZE_BYTES \
+  RELEASE_MEDIA_RESOLVER_ARCHIVE \
+  RELEASE_MEDIA_RESOLVER_ARCHIVE_SHA256 \
+  RELEASE_MEDIA_RESOLVER_SIZE_BYTES \
+  RELEASE_RECHARGE_ARCHIVE \
+  RELEASE_RECHARGE_ARCHIVE_SHA256 \
+  RELEASE_RECHARGE_SIZE_BYTES \
+  RELEASE_GATE_ARCHIVE \
+  RELEASE_GATE_ARCHIVE_SHA256 \
+  RELEASE_GATE_SIZE_BYTES \
+  RELEASE_BACKUP_POLICY \
+  RELEASE_MIGRATION_REQUIRED \
+  RELEASE_ACCEPTANCE_SCOPES \
+  RELEASE_CHANGED_IMAGES \
   PRODUCTION_BASE_URL \
   PRODUCTION_COMPOSE_PROJECT; do
   require_variable "$variable"
@@ -65,6 +88,34 @@ if [[ ! "$RELEASE_ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
   echo '发布制品 SHA-256 无效' >&2
   exit 1
 fi
+if [[ "$RELEASE_MANIFEST_SCHEMA" != 1 && "$RELEASE_MANIFEST_SCHEMA" != 2 ]]; then
+  echo '发布清单版本无效' >&2
+  exit 1
+fi
+if [[ "$RELEASE_BACKUP_POLICY" != fresh && "$RELEASE_BACKUP_POLICY" != recent ]]; then
+  echo '发布备份策略无效' >&2
+  exit 1
+fi
+if [[ "$RELEASE_MIGRATION_REQUIRED" != true && "$RELEASE_MIGRATION_REQUIRED" != false ]]; then
+  echo '发布 migration 标记无效' >&2
+  exit 1
+fi
+for image_name in ${RELEASE_CHANGED_IMAGES//,/ }; do
+  case "$image_name" in none|api|admin|migration|mediaResolver|recharge|gate) ;; *)
+    echo "发布受影响镜像无效：${image_name}" >&2
+    exit 1
+  esac
+done
+for scope in ${RELEASE_ACCEPTANCE_SCOPES//,/ }; do
+  case "$scope" in
+    base|admin|api|auth|auto-recharge|database|finance|gateway|media-resolver|workspace|runtime-config) ;;
+    *) echo "发布验收范围无效：${scope}" >&2; exit 1 ;;
+  esac
+done
+if [[ ",${RELEASE_ACCEPTANCE_SCOPES}," != *',base,'* ]]; then
+  echo '发布验收范围必须包含全店基础检查' >&2
+  exit 1
+fi
 for digest in \
   "$RELEASE_API_DIGEST" \
   "$RELEASE_ADMIN_DIGEST" \
@@ -81,7 +132,11 @@ if [[ ! -d "$RELEASE_DIRECTORY" || ! -d "$PREVIOUS_RELEASE_DIRECTORY" ]]; then
   echo '发布目录不存在' >&2
   exit 1
 fi
-if [[ "$RELEASE_ARTIFACT_ARCHIVE" != "${deployment_root}/artifacts/${RELEASE_TAG}-${RELEASE_COMMIT}/id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz" ]]; then
+expected_artifact_file="id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz"
+if [[ "$RELEASE_MANIFEST_SCHEMA" == 2 ]]; then
+  expected_artifact_file="id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}-source.tar.gz"
+fi
+if [[ "$RELEASE_ARTIFACT_ARCHIVE" != "${deployment_root}/artifacts/${RELEASE_TAG}-${RELEASE_COMMIT}/${expected_artifact_file}" ]]; then
   echo '正式制品不在当前标签对应的受控 artifacts 路径中' >&2
   exit 1
 fi
@@ -94,7 +149,7 @@ if [[ ! -f "$previous_environment_file" || ! -f "$previous_compose_file" ]]; the
   exit 1
 fi
 
-for command in docker flock openssl sha256sum systemctl; do
+for command in date docker flock openssl sha256sum systemctl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "生产安装依赖命令不存在：${command}" >&2
     exit 1
@@ -182,10 +237,6 @@ old_media_resolver_image="$(
   docker image inspect "${compose_project}-media-resolver:latest" --format '{{.Id}}' 2>/dev/null || true
 )"
 
-echo '加载 CI 不可变生产镜像制品'
-bash "${RELEASE_DIRECTORY}/scripts/load-production-release-images.sh" \
-  "$RELEASE_ARTIFACT_ARCHIVE" "$RELEASE_ARTIFACT_SHA256" "$RELEASE_IMAGE_ARCHIVE_SHA256" >/dev/null
-
 verify_image_digest() {
   local reference="$1"
   local expected="$2"
@@ -196,6 +247,52 @@ verify_image_digest() {
     exit 1
   fi
 }
+
+load_incremental_image() {
+  local name="$1"
+  local reference="$2"
+  local expected_digest="$3"
+  local archive="$4"
+  local archive_sha256="$5"
+  local size_bytes="$6"
+  local actual
+  actual="$(docker image inspect "$reference" --format '{{.Id}}' 2>/dev/null || true)"
+  if [[ "$actual" == "$expected_digest" ]]; then
+    echo "复用已验证生产镜像：${name} ${reference}"
+    return 0
+  fi
+  if [[ "$archive" == '-' || ! -f "$archive" ]]; then
+    echo "缺少待导入的 ${name} 增量镜像归档" >&2
+    return 1
+  fi
+  echo "导入受影响生产镜像：${name}"
+  bash "${RELEASE_DIRECTORY}/scripts/load-production-release-images.sh" \
+    --image "$archive" "$archive_sha256" "$size_bytes" >/dev/null
+  verify_image_digest "$reference" "$expected_digest"
+}
+
+echo '加载或复用 CI 不可变生产镜像制品'
+if [[ "$RELEASE_MANIFEST_SCHEMA" == 1 ]]; then
+  bash "${RELEASE_DIRECTORY}/scripts/load-production-release-images.sh" \
+    "$RELEASE_ARTIFACT_ARCHIVE" "$RELEASE_ARTIFACT_SHA256" "$RELEASE_IMAGE_ARCHIVE_SHA256" >/dev/null
+else
+  load_incremental_image api "$RELEASE_API_IMAGE" "$RELEASE_API_DIGEST" \
+    "$RELEASE_API_ARCHIVE" "$RELEASE_API_ARCHIVE_SHA256" "$RELEASE_API_SIZE_BYTES"
+  load_incremental_image admin "$RELEASE_ADMIN_IMAGE" "$RELEASE_ADMIN_DIGEST" \
+    "$RELEASE_ADMIN_ARCHIVE" "$RELEASE_ADMIN_ARCHIVE_SHA256" "$RELEASE_ADMIN_SIZE_BYTES"
+  load_incremental_image migration "$RELEASE_MIGRATION_IMAGE" "$RELEASE_MIGRATION_DIGEST" \
+    "$RELEASE_MIGRATION_ARCHIVE" "$RELEASE_MIGRATION_ARCHIVE_SHA256" \
+    "$RELEASE_MIGRATION_SIZE_BYTES"
+  load_incremental_image media-resolver \
+    "$RELEASE_MEDIA_RESOLVER_IMAGE" "$RELEASE_MEDIA_RESOLVER_DIGEST" \
+    "$RELEASE_MEDIA_RESOLVER_ARCHIVE" "$RELEASE_MEDIA_RESOLVER_ARCHIVE_SHA256" \
+    "$RELEASE_MEDIA_RESOLVER_SIZE_BYTES"
+  load_incremental_image recharge "$RELEASE_RECHARGE_IMAGE" "$RELEASE_RECHARGE_DIGEST" \
+    "$RELEASE_RECHARGE_ARCHIVE" "$RELEASE_RECHARGE_ARCHIVE_SHA256" \
+    "$RELEASE_RECHARGE_SIZE_BYTES"
+  load_incremental_image gate "$RELEASE_GATE_IMAGE" "$RELEASE_GATE_DIGEST" \
+    "$RELEASE_GATE_ARCHIVE" "$RELEASE_GATE_ARCHIVE_SHA256" "$RELEASE_GATE_SIZE_BYTES"
+fi
 
 verify_image_digest "$RELEASE_API_IMAGE" "$RELEASE_API_DIGEST"
 verify_image_digest "$RELEASE_ADMIN_IMAGE" "$RELEASE_ADMIN_DIGEST"
@@ -373,9 +470,24 @@ systemctl stop \
   id-business-v2-mysql-performance.timer \
   id-business-v2-mysql-performance.service
 
-echo '执行并校验更新前 S3 备份'
-systemctl start id-business-v2-mysql-backup.service
-if [[ "$(systemctl show id-business-v2-mysql-backup.service --property=Result --value)" != success ]]; then
+backup_service='id-business-v2-mysql-backup.service'
+backup_reused=0
+if [[ "$RELEASE_BACKUP_POLICY" == recent ]]; then
+  backup_result="$(systemctl show "$backup_service" --property=Result --value)"
+  backup_timestamp="$(systemctl show "$backup_service" --property=ExecMainExitTimestamp --value)"
+  backup_epoch="$(date -d "$backup_timestamp" +%s 2>/dev/null || true)"
+  current_epoch="$(date +%s)"
+  if [[ "$backup_result" == success && "$backup_epoch" =~ ^[0-9]+$ ]] &&
+     ((current_epoch >= backup_epoch && current_epoch - backup_epoch <= 2700)); then
+    backup_reused=1
+    echo '复用 45 分钟内已验证的 S3 备份'
+  fi
+fi
+if ((backup_reused == 0)); then
+  echo '执行并校验更新前 S3 备份'
+  systemctl start "$backup_service"
+fi
+if [[ "$(systemctl show "$backup_service" --property=Result --value)" != success ]]; then
   echo '更新前 S3 备份未成功' >&2
   exit 1
 fi
@@ -389,11 +501,15 @@ run_gate_script() {
     node "$script"
 }
 
-echo '执行生产数据库账号供应与向前 migration'
-run_gate_script scripts/provision-v2-production-database-access.mjs
-docker compose --env-file "$environment_file" -f "$compose_file" run --rm migrate
-run_gate_script scripts/provision-v2-production-database-access.mjs
-run_gate_script scripts/provision-v2-data-integrity-auditor.mjs
+if [[ "$RELEASE_MIGRATION_REQUIRED" == true ]]; then
+  echo '执行生产数据库账号供应与向前 migration'
+  run_gate_script scripts/provision-v2-production-database-access.mjs
+  docker compose --env-file "$environment_file" -f "$compose_file" run --rm migrate
+  run_gate_script scripts/provision-v2-production-database-access.mjs
+  run_gate_script scripts/provision-v2-data-integrity-auditor.mjs
+else
+  echo '变更不含数据库 migration，复用现有数据库身份并执行完整性门禁'
+fi
 
 echo '执行更新前数据库身份与 38 项财务完整性门禁'
 run_gate_script scripts/gate-v2-production-database-access.mjs
@@ -419,10 +535,27 @@ docker tag "$RELEASE_ADMIN_IMAGE" "${compose_project}-admin:latest"
 docker tag "$RELEASE_MEDIA_RESOLVER_IMAGE" "${compose_project}-media-resolver:latest"
 docker tag "$RELEASE_RECHARGE_IMAGE" "${compose_project}-auto-recharge:latest"
 
-echo '使用已校验制品更新应用容器'
-application_updated=1
-docker compose --env-file "$environment_file" -f "$compose_file" \
-  up -d --no-build --force-recreate migrate media-resolver auto-recharge api admin caddy
+echo '使用已校验制品更新受影响应用容器'
+selected_images=",${RELEASE_CHANGED_IMAGES},"
+selected_scopes=",${RELEASE_ACCEPTANCE_SCOPES},"
+runtime_services=()
+[[ "$selected_images" != *',mediaResolver,'* ]] || runtime_services+=(media-resolver)
+[[ "$selected_images" != *',recharge,'* ]] || runtime_services+=(auto-recharge)
+[[ "$selected_images" != *',api,'* ]] || runtime_services+=(api)
+[[ "$selected_images" != *',admin,'* ]] || runtime_services+=(admin)
+[[ "$selected_scopes" != *',gateway,'* ]] || runtime_services+=(caddy)
+if [[ "$selected_scopes" == *',runtime-config,'* ]]; then
+  runtime_services=(media-resolver auto-recharge api admin caddy)
+fi
+if ((${#runtime_services[@]} > 0)); then
+  application_updated=1
+  for service in "${runtime_services[@]}"; do
+    docker compose --env-file "$environment_file" -f "$compose_file" \
+      up -d --no-build --no-deps --force-recreate "$service"
+  done
+else
+  echo '本版本无运行时镜像或网关配置变化，不重启应用容器'
+fi
 
 wait_for_service() {
   local service="$1"
@@ -449,8 +582,35 @@ for service in mysql media-resolver auto-recharge api admin caddy; do
 done
 
 run_release_smoke() {
-  docker run --rm --network host --env-file "$smoke_environment_file" "$RELEASE_GATE_IMAGE" \
+  docker run --rm --network host --env-file "$smoke_environment_file" \
+    --env "RELEASE_ACCEPTANCE_SCOPES=$RELEASE_ACCEPTANCE_SCOPES" "$RELEASE_GATE_IMAGE" \
     node scripts/production-release-smoke.mjs
+}
+
+run_affected_service_acceptance() {
+  local scope
+  local container_id
+  IFS=',' read -r -a release_scopes <<<"$RELEASE_ACCEPTANCE_SCOPES"
+  for scope in "${release_scopes[@]}"; do
+    case "$scope" in
+      base|admin|api|auth|database|finance|gateway|runtime-config) ;;
+      auto-recharge)
+        container_id="$(docker compose --env-file "$environment_file" -f "$compose_file" ps -q auto-recharge)"
+        docker exec "$container_id" python -c \
+          "import json,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8051/health',timeout=3)); assert data.get('busy') is False"
+        ;;
+      media-resolver|workspace)
+        container_id="$(docker compose --env-file "$environment_file" -f "$compose_file" ps -q media-resolver)"
+        docker exec "$container_id" python -c \
+          "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=3).status == 200"
+        ;;
+      *)
+        echo "发布清单包含未知验收范围：${scope}" >&2
+        return 1
+        ;;
+    esac
+  done
+  printf '受影响服务验收通过：%s\n' "$RELEASE_ACCEPTANCE_SCOPES"
 }
 
 echo '执行切换前整站巡检'
@@ -461,6 +621,7 @@ current_switched=1
 
 echo '执行原子切换后整站巡检与财务门禁'
 run_release_smoke
+run_affected_service_acceptance
 run_gate_script scripts/gate-v2-production-database-access.mjs
 run_gate_script scripts/v2-data-integrity-audit.mjs
 

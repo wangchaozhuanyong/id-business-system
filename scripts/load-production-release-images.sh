@@ -3,8 +3,36 @@ set -Eeuo pipefail
 
 umask 077
 
+if (($# == 4)) && [[ "$1" == --image ]]; then
+  image_archive="$2"
+  image_archive_sha256="$3"
+  image_size_bytes="$4"
+  if [[ ! -f "$image_archive" || -L "$image_archive" ]] ||
+     [[ ! "$image_archive_sha256" =~ ^[a-f0-9]{64}$ ]] ||
+     [[ ! "$image_size_bytes" =~ ^[0-9]+$ ]] || ((image_size_bytes < 1)); then
+    echo '增量镜像导入参数无效' >&2
+    exit 1
+  fi
+  if [[ "$(sha256sum "$image_archive" | awk '{print $1}')" != "$image_archive_sha256" ]]; then
+    echo '增量镜像归档 SHA-256 校验失败' >&2
+    exit 1
+  fi
+  if ! gzip -t "$image_archive"; then
+    echo '增量镜像归档压缩结构无效' >&2
+    exit 1
+  fi
+  available_kib="$(df -Pk "$image_archive" | awk 'NR == 2 { print $4 }')"
+  required_kib=$(((image_size_bytes + 1073741824 + 1023) / 1024))
+  if [[ ! "$available_kib" =~ ^[0-9]+$ ]] || ((available_kib < required_kib)); then
+    echo "单镜像导入空间不足：${available_kib} KiB，需要 ${required_kib} KiB" >&2
+    exit 1
+  fi
+  gzip -dc "$image_archive" | docker load
+  exit 0
+fi
+
 if (($# != 3)); then
-  echo 'Usage: load-production-release-images.sh <artifact> <artifact-sha256> <images-sha256>' >&2
+  echo 'Usage: load-production-release-images.sh <artifact> <artifact-sha256> <images-sha256> | --image <archive> <sha256> <image-size-bytes>' >&2
   exit 1
 fi
 artifact_path="$1"

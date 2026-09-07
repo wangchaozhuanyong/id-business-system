@@ -70,7 +70,41 @@ test('production retention removes only stale controlled fixtures', () => {
   for (const artifactName of artifactNames) mkdirSync(join(artifactsRoot, artifactName));
   writeFileSync(
     join(releasesRoot, releaseNames[0], 'release-manifest.json'),
-    `${JSON.stringify({ commit: currentCommit, previousCommit }, null, 2)}\n`
+    `${JSON.stringify(
+      {
+        commit: currentCommit,
+        previousCommit,
+        images: {
+          api: {
+            reference: `id-business-v2-release-api:${currentCommit}`,
+            archive: { sourceCommit: currentCommit }
+          },
+          admin: {
+            reference: `id-business-v2-release-api:${previousCommit}`,
+            archive: { sourceCommit: previousCommit }
+          }
+        }
+      },
+      null,
+      2
+    )}\n`
+  );
+  writeFileSync(
+    join(releasesRoot, releaseNames[1], 'release-manifest.json'),
+    `${JSON.stringify(
+      {
+        commit: previousCommit,
+        previousCommit: staleCommit,
+        images: {
+          api: {
+            reference: `id-business-v2-release-api:${previousCommit}`,
+            archive: { sourceCommit: previousCommit }
+          }
+        }
+      },
+      null,
+      2
+    )}\n`
   );
   symlinkSync(join(releasesRoot, releaseNames[0]), join(deploymentRoot, 'current'));
   const fixtureSource = readFileSync(retentionScript, 'utf8')

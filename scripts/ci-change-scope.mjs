@@ -1,8 +1,6 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const productionTagPattern = /^refs\/tags\/v2-production-[0-9]{8}T[0-9]{6}Z$/u;
-
 const dependencyManifestPatterns = [
   /^\.npmrc$/u,
   /^(?:package-lock|npm-shrinkwrap)\.json$/u,
@@ -44,14 +42,6 @@ export function decideCiScope({
   manualBuildProductionImages = false,
   changedPaths = []
 }) {
-  if (eventName === 'push' && productionTagPattern.test(ref)) {
-    return {
-      dependencyAudit: true,
-      productionImages: true,
-      reason: 'production_tag'
-    };
-  }
-
   if (eventName === 'workflow_dispatch') {
     return {
       dependencyAudit: true,

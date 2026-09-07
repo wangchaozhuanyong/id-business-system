@@ -1,0 +1,270 @@
+name: Production Release Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Exact origin/main commit to package
+        required: true
+        type: string
+      previous_commit:
+        description: Exact commit currently running in production
+        required: true
+        type: string
+      previous_release_tag:
+        description: Immutable tag currently running in production
+        required: true
+        type: string
+      previous_schema_version:
+        description: Current production manifest schema version
+        required: true
+        type: string
+      previous_ci_run_id:
+        description: CI run that owns the current production control artifact
+        required: true
+        type: string
+      previous_artifact_name:
+        description: Current production control artifact name
+        required: true
+        type: string
+      quality_run_id:
+        description: Successful main Quality Gate run for release_commit
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release-${{ inputs.release_commit }}
+  cancel-in-progress: false
+
+jobs:
+  build-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact immutable tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Validate exact version and successful main gate
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          PREVIOUS_COMMIT: ${{ inputs.previous_commit }}
+          PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag }}
+          PREVIOUS_SCHEMA_VERSION: ${{ inputs.previous_schema_version }}
+          QUALITY_RUN_ID: ${{ inputs.quality_run_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PREVIOUS_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PREVIOUS_COMMIT" != "$RELEASE_COMMIT" ]]
+          [[ "$PREVIOUS_RELEASE_TAG" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]
+          [[ "$PREVIOUS_SCHEMA_VERSION" =~ ^[12]$ ]]
+          [[ "$QUALITY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$GITHUB_REF" == refs/tags/v2-production-* ]]
+          [[ "$(git cat-file -t "$GITHUB_REF_NAME")" == tag ]]
+          [[ "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" == "$RELEASE_COMMIT" ]]
+          [[ "$GITHUB_SHA" == "$RELEASE_COMMIT" ]]
+          git fetch origin main --no-tags
+          [[ "$(git rev-parse origin/main)" == "$RELEASE_COMMIT" ]]
+          git merge-base --is-ancestor "$PREVIOUS_COMMIT" "$RELEASE_COMMIT"
+
+          quality_run="$(gh api "repos/{owner}/{repo}/actions/runs/${QUALITY_RUN_ID}")"
+          QUALITY_RUN="$quality_run" node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const run = JSON.parse(process.env.QUALITY_RUN);
+          assert.equal(run.name, 'Quality Gate');
+          assert.equal(run.event, 'push');
+          assert.equal(run.head_branch, 'main');
+          assert.equal(run.head_sha, process.env.RELEASE_COMMIT);
+          assert.equal(run.status, 'completed');
+          assert.equal(run.conclusion, 'success');
+          NODE
+
+          previous_success="$(gh run list --workflow production-release.yml --commit "$RELEASE_COMMIT" --event workflow_dispatch --status success --limit 20 --json databaseId --jq ".[] | select(.databaseId != ${GITHUB_RUN_ID}) | .databaseId" | head -n 1)"
+          if [[ -n "$previous_success" ]]; then
+            echo "同一 commit 已有成功不可变制品运行：${previous_success}" >&2
+            exit 1
+          fi
+
+      - name: Download current production manifest for inheritance
+        if: ${{ inputs.previous_schema_version == '2' }}
+        env:
+          PREVIOUS_CI_RUN_ID: ${{ inputs.previous_ci_run_id }}
+          PREVIOUS_ARTIFACT_NAME: ${{ inputs.previous_artifact_name }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PREVIOUS_CI_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$PREVIOUS_ARTIFACT_NAME" != */* ]]
+          gh run download "$PREVIOUS_CI_RUN_ID" --name "$PREVIOUS_ARTIFACT_NAME" --dir previous-release
+          node scripts/verify-production-release-artifact.mjs \
+            --directory previous-release \
+            --expected-commit "${{ inputs.previous_commit }}" \
+            --expected-tag "${{ inputs.previous_release_tag }}" \
+            --metadata-only true
+
+      - name: Plan changed images, backup and acceptance
+        id: plan
+        env:
+          PREVIOUS_SCHEMA_VERSION: ${{ inputs.previous_schema_version }}
+        run: |
+          set -Eeuo pipefail
+          git diff --name-only "${{ inputs.previous_commit }}" "${{ inputs.release_commit }}" |
+            node scripts/production-release-plan.mjs --base-schema-version "$PREVIOUS_SCHEMA_VERSION" |
+            tee release-plan.json
+
+      - name: Validate production Compose
+        run: docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml config
+
+      - name: Build only changed production images
+        env:
+          CHANGED_IMAGES: ${{ steps.plan.outputs.changed_images }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          COMPOSE_BAKE: 'false'
+          DOCKER_BUILDKIT: '0'
+        run: |
+          set -Eeuo pipefail
+          selected=",${CHANGED_IMAGES},"
+          compose_services=()
+          [[ "$selected" == *',api,'* ]] && compose_services+=(api)
+          [[ "$selected" == *',admin,'* ]] && compose_services+=(admin)
+          [[ "$selected" == *',migration,'* ]] && compose_services+=(migrate)
+          [[ "$selected" == *',mediaResolver,'* ]] && compose_services+=(media-resolver)
+          [[ "$selected" == *',recharge,'* ]] && compose_services+=(auto-recharge)
+          if ((${#compose_services[@]} > 0)); then
+            docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml build "${compose_services[@]}"
+          fi
+          [[ "$selected" != *',api,'* ]] || docker tag id-business-v2-prod-api:latest "id-business-v2-release-api:${RELEASE_COMMIT}"
+          [[ "$selected" != *',admin,'* ]] || docker tag id-business-v2-prod-admin:latest "id-business-v2-release-admin:${RELEASE_COMMIT}"
+          [[ "$selected" != *',migration,'* ]] || docker tag id-business-v2-prod-migrate:latest "id-business-v2-release-migration:${RELEASE_COMMIT}"
+          [[ "$selected" != *',mediaResolver,'* ]] || docker tag id-business-v2-prod-media-resolver:latest "id-business-v2-release-media-resolver:${RELEASE_COMMIT}"
+          [[ "$selected" != *',recharge,'* ]] || docker tag id-business-v2-prod-auto-recharge:latest "id-business-v2-release-recharge:${RELEASE_COMMIT}"
+          if [[ "$selected" == *',recharge,'* ]]; then
+            docker run --rm --init --entrypoint xvfb-run id-business-v2-prod-auto-recharge:latest -a python -B -m unittest -q test_subscribe.py test_browser.py test_payment.py test_pro.py test_server.py
+          fi
+          if [[ "$selected" == *',gate,'* ]]; then
+            docker build --target build --tag "id-business-v2-release-gate:${RELEASE_COMMIT}" --file apps/api/Dockerfile.mysql .
+          fi
+
+      - name: Verify rebuilt container boundaries
+        if: ${{ contains(steps.plan.outputs.changed_images, 'api') && contains(steps.plan.outputs.changed_images, 'migration') && contains(steps.plan.outputs.changed_images, 'mediaResolver') }}
+        env:
+          V2_RUNTIME_IMAGE: id-business-v2-release-api:${{ inputs.release_commit }}
+          V2_MIGRATION_IMAGE: id-business-v2-release-migration:${{ inputs.release_commit }}
+          V2_MEDIA_RESOLVER_IMAGE: id-business-v2-release-media-resolver:${{ inputs.release_commit }}
+        run: node scripts/acceptance-v2-container-hardening.mjs
+
+      - name: Package incremental immutable artifacts
+        id: package
+        env:
+          RELEASE_SOURCE_BRANCH: main
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_CI_RUN_ID: ${{ github.run_id }}
+          RELEASE_CI_RUN_NUMBER: ${{ github.run_number }}
+          RELEASE_OPERATOR: github-actions
+          RELEASE_OUTPUT_DIR: release-artifacts
+          RELEASE_IMAGE_NAMES: ${{ steps.plan.outputs.changed_images }}
+          RELEASE_PREVIOUS_COMMIT: ${{ inputs.previous_commit }}
+          RELEASE_BACKUP_POLICY: ${{ steps.plan.outputs.backup_policy }}
+          RELEASE_MIGRATION_REQUIRED: ${{ steps.plan.outputs.migration_required }}
+          RELEASE_ACCEPTANCE_SCOPES: ${{ steps.plan.outputs.acceptance_scopes }}
+          RELEASE_BASE_MANIFEST: ${{ inputs.previous_schema_version == '2' && 'previous-release/release-manifest.json' || '' }}
+          RELEASE_API_IMAGE: id-business-v2-release-api:${{ inputs.release_commit }}
+          RELEASE_ADMIN_IMAGE: id-business-v2-release-admin:${{ inputs.release_commit }}
+          RELEASE_MIGRATION_IMAGE: id-business-v2-release-migration:${{ inputs.release_commit }}
+          RELEASE_MEDIA_RESOLVER_IMAGE: id-business-v2-release-media-resolver:${{ inputs.release_commit }}
+          RELEASE_RECHARGE_IMAGE: id-business-v2-release-recharge:${{ inputs.release_commit }}
+          RELEASE_GATE_IMAGE: id-business-v2-release-gate:${{ inputs.release_commit }}
+        run: bash scripts/package-production-release.sh
+
+      - name: Verify incremental immutable artifacts
+        run: >-
+          node scripts/verify-production-release-artifact.mjs
+          --directory release-artifacts
+          --expected-commit "${{ inputs.release_commit }}"
+          --expected-tag "$GITHUB_REF_NAME"
+
+      - name: Upload release control artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.github_artifact_name }}
+          path: |
+            ${{ steps.package.outputs.artifact_path }}
+            ${{ steps.package.outputs.manifest_path }}
+            ${{ steps.package.outputs.checksum_path }}
+            release-plan.json
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload API image artifact
+        if: ${{ steps.package.outputs.api_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.api_github_artifact_name }}
+          path: ${{ steps.package.outputs.api_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload admin image artifact
+        if: ${{ steps.package.outputs.admin_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.admin_github_artifact_name }}
+          path: ${{ steps.package.outputs.admin_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload migration image artifact
+        if: ${{ steps.package.outputs.migration_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.migration_github_artifact_name }}
+          path: ${{ steps.package.outputs.migration_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload media resolver image artifact
+        if: ${{ steps.package.outputs.media_resolver_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.media_resolver_github_artifact_name }}
+          path: ${{ steps.package.outputs.media_resolver_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload auto-recharge image artifact
+        if: ${{ steps.package.outputs.recharge_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.recharge_github_artifact_name }}
+          path: ${{ steps.package.outputs.recharge_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload release gate image artifact
+        if: ${{ steps.package.outputs.gate_archive_path != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.gate_github_artifact_name }}
+          path: ${{ steps.package.outputs.gate_archive_path }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error

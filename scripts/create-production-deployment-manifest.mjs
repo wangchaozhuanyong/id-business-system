@@ -25,7 +25,7 @@ const manifest = JSON.parse(readFileSync(inputPath, 'utf8'));
 const commitPattern = /^[a-f0-9]{40}$/u;
 const sha256Pattern = /^(?:sha256:)?[a-f0-9]{64}$/u;
 
-assert.equal(manifest.schemaVersion, 1, '不支持的 CI 发布清单版本');
+assert.ok([1, 2].includes(manifest.schemaVersion), '不支持的 CI 发布清单版本');
 assert.match(manifest.commit, commitPattern, 'CI 发布清单 commit 无效');
 assert.match(options.previousCommit, commitPattern, '上一生产 commit 无效');
 assert.match(options.githubArtifactDigest, sha256Pattern, 'GitHub 制品 digest 无效');
@@ -37,7 +37,15 @@ assert.equal(
 assert.equal(manifest.environment, 'production', '发布环境必须为 production');
 assert.equal(manifest.deploymentRun, null, 'CI 发布清单已被部署信息污染');
 assert.equal(manifest.deployedAt, null, 'CI 发布清单已包含部署时间');
-assert.equal(manifest.previousCommit, null, 'CI 发布清单已包含上一版本');
+if (manifest.schemaVersion === 1) {
+  assert.equal(manifest.previousCommit, null, 'schema v1 CI 发布清单已包含上一版本');
+} else {
+  assert.equal(
+    manifest.previousCommit,
+    options.previousCommit,
+    'schema v2 CI 发布清单的上一版本与生产 current 不一致'
+  );
+}
 
 const deploymentManifest = {
   ...manifest,

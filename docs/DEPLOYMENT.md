@@ -58,21 +58,24 @@ npm run git:readiness
    服务故障后记录警告并继续，但真实 high/critical 漏洞仍立即阻断；每日定时审计、`main` 质量门禁
    和正式生产标签保持失败即阻断。
 5. 重新拉取 `origin/main`，确认工作区干净，且本地 `HEAD`、`origin/main` 和待部署 SHA 完全一致。
-6. 确认该 SHA 的 `main` Quality Gate 已成功，且尚无成功生产制品，再创建不可移动的带说明正式标签
-   `v2-production-<UTC>` 并推送。标签必须指向当前 `origin/main` 完整 SHA，且不得重用、强制移动，
-   同一个 SHA 也不得通过第二个正式标签重复构建制品。
-7. 标签 CI 复用同 SHA 已成功的 `main` 质量结论，只在构建前执行一次生产依赖审计，然后构建一次 API、
-   管理端、migration、媒体解析、自动充值执行器和发布门禁镜像，导出单一不可变制品，上传
-   `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、制品 SHA-256
-   及六个镜像 digest；标签阶段不再重复执行整套 lint、unit test、浏览器验收和本地数据库验收。
-8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
+6. 合并后的固定入口为 `npm run release:production`。入口一次性锁定当前 `origin/main` 完整 SHA、该 SHA
+   成功的 main Quality Gate、当前生产基线和唯一带说明标签 `v2-production-<UTC>`；不得移动或复用标签，
+   也不得为同一 SHA 创建第二份成功制品。
+7. 入口派发独立 `Production Release Artifact` 工作流。首个 schema v2 发布从旧清单引导六个镜像；
+   后续按当前生产 commit 到目标 commit 的真实路径差异，只构建受影响的 API、管理端、migration、
+   媒体解析、自动充值执行器或门禁镜像。未变化镜像直接继承当前生产已验证的 reference、digest 和来源
+   制品；源码控制包与各镜像归档分开上传，避免每次生成和传输约 2 GB 的整包。
+8. 同一 SHA 已有成功制品时直接复用；工作流临时失败时只允许 `rerun --failed` 一次，不重新运行 main
+   Quality Gate。失败任务再次失败时停止，必须通过修复 PR 产生新 SHA 后重新验证。生产部署只下载服务端
+   尚无正确 digest/归档的镜像，禁止本地或服务器重新构建。
 
 正式顺序固定为：
 
 ```text
 origin/main → 发布分支 → 本地完整检查 → commit → push → PR/CI → 合并 main
-→ 锁定正式标签与完整 SHA → CI 单次构建不可变制品 → 备份/迁移/门禁
-→ 加载同一制品 → 原子切换 → 发布后复核 → 删除已合并远程分支
+→ 固定入口锁定 SHA/标签/main CI/生产基线 → 独立 CI 构建受影响的不可变制品
+→ 按数据风险备份/按 schema 变化 migration/完整门禁 → 复用或加载缺失制品
+→ 原子切换 → 整站与受影响功能复核 → 删除已合并远程分支
 ```
 
 紧急修复不得绕过该流程。生产部署过程必须持有 `/opt/id-business-v2/.deploy.lock`，发现其他部署、
@@ -80,18 +83,20 @@ Compose、迁移或同步进程时立即停止，避免两个版本同时操作�
 
 ## 4. 服务器发布流程
 
-1. 本机读取 Git 忽略且权限为 `0600` 的 `.deploy/aws-production.local.env`，执行：
+1. 本机读取 Git 忽略且权限为 `0600` 的 `.deploy/aws-production.local.env`。正常发布只使用固定入口：
 
 ```bash
-bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
+npm run release:production
 ```
 
-入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于 `origin/main` 的 SHA、
-失败的 CI 或缺少 digest 的制品。检查 GitHub 制品和下载大文件前会先读取生产 `current` 的完整清单；
-若同一 commit 已经上线，则只执行公共页面、静态资源 MIME 和 live/ready 语义健康检查，返回
-`deployment_status=already_deployed`，不重复下载、上传、备份、migration、容器重启或回切。
+入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于当前 `origin/main` 的 SHA、失败的 main CI
+或缺少 digest 的制品。它先读取生产 `current` 清单，再决定复用成功制品、等待现有运行或只重跑失败任务
+一次。若同一 commit 已上线，只执行语义健康检查并返回 `deployment_status=already_deployed`，不重复下载、
+上传、备份、migration、容器重启或回切。底层 `deploy-aws-incremental-release.sh` 仅供该固定入口调用。
 
-2. 制品在本机与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
+2. 小型源码控制包和每个受影响镜像归档均在本机与 EC2 校验 SHA-256；源码归档禁止包含 `.git`、
+   `.deploy` 和真实环境文件。服务端已有相同 reference/digest 时不下载、不上传、不重新导入镜像；同一
+   标签与 SHA 的失败候选目录保留并续跑，不再创建重复发布目录。
 
 3. 上传制品前先在 EC2 使用同一个部署锁执行生产保留预检：发布目录保留最近 5 份，不可变制品
    保留最近 3 份，并始终额外保护 `current` 和发布清单中的上一生产 commit。Docker 只移除
@@ -102,14 +107,15 @@ bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
    Compose、migration 或同步进程。新源码进入 `/opt/id-business-v2/releases/<UTC>-<short-sha>`，
    CI 制品与清单进入 `/opt/id-business-v2/artifacts/<tag>-<full-sha>`。
 
-5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
-   `docker load` 加载 CI 镜像。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
-   上传归档校验后移入正式制品目录，不保留第二份上传副本；源码单独解压，镜像先流式校验
-   SHA-256，再直接从正式压缩包输送给 Docker，不落盘 `images.tar`。导入前另按两倍镜像归档大小
-   加 1 GiB 余量检查可用空间；原有 8 GiB 门禁与当前／上一版本保留规则不变。解压或 Docker
-   任一失败都阻断安装；正式压缩包继续保留用于核验和回滚。
+5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与全部镜像 digest，只对缺失的受影响
+   镜像执行 `docker load`。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
+   各镜像归档独立流式解压给 Docker，单次空间门禁按该镜像未压缩大小加 1 GiB 计算，避免整包导入的
+   双倍峰值。只重启受影响的运行服务；网关或运行时配置变化才扩大到对应容器。任何失败均保留已校验
+   归档和同版本候选目录，供下一次固定入口续跑。
 
-6. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
+6. 写路径或 schema/migration 变化时，更新容器前强制触发并校验一次新 S3 备份；数据中性的界面、
+   网关或发布脚本变化可复用 45 分钟内最近一次结果为 `success` 的已验证备份，若不存在或过期则自动
+   触发新备份。备份结果仍必须成功：
 
 ```bash
 sudo systemctl start id-business-v2-mysql-backup.service
@@ -118,7 +124,9 @@ sudo systemctl show id-business-v2-mysql-backup.service --property=Result --valu
 
 `Result` 必须返回 `success`。备份失败时不得继续 migration。
 
-7. 数据库固定使用四个独立身份：`id_business_migrator` 只执行 migration，`id_business_app`
+7. 只有 Prisma schema 或 migration 路径变化时才执行向前 migration；其他发布跳过重复 migration，
+   但更新前后的数据库身份门禁和 38 项财务完整性检查不跳过。数据库固定使用四个独立身份：
+   `id_business_migrator` 只执行 migration，`id_business_app`
    只运行 API，`id_business_audit` 只执行完整性巡检，`id_business_backup` 只生成备份。首次切换到
    独立账号或迁移账号密码轮换后，先用本机 root 连接可重复供应账号，再执行向前 migration；migration
    后必须再次供应权限，使新表得到精确的运行权限。这些步骤均由不可变制品中的安装器执行：
@@ -139,7 +147,7 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ru
 必须得到数据库四身份 `ok: true`、38 项检查和 0 条违规。门禁只能使用 `.env.aws.production` 中的
 本机门禁连接；脚本检测到运行账号 DDL、越界 DELETE、审计写权限或账号复用时会主动拒绝运行。
 
-9. 门禁通过后使用已加载镜像更新应用容器，等待 `mysql`、`media-resolver`、`api`、`admin`、
+9. 门禁通过后使用已加载镜像更新受影响容器，等待 `mysql`、`media-resolver`、`auto-recharge`、`api`、`admin`、
    `caddy` 健康，并执行整站巡检：
 
 ```bash
@@ -151,7 +159,8 @@ docker compose --env-file .env.aws.production -f docker-compose.aws-mysql.yml ps
 BASE_URL=https://your-domain.example bash scripts/deploy-smoke.sh
 ```
 
-巡检至少包括首页、静态资源 MIME、live/ready、登录、`auth/me`、核心业务只读接口、越权写入 403 和登出。
+巡检至少包括首页、静态资源 MIME、live/ready、登录、`auth/me`、核心业务只读接口、越权写入 403 和登出；
+发布清单同时记录受影响验收范围，自动充值或媒体解析变化还必须通过对应容器健康与空闲状态验收。
 
 10. 健康检查和巡检均通过后，原子更新 `/opt/id-business-v2/current` 软链接。每次发布目录保存
     完整发布清单，记录来源分支、完整 SHA、正式标签、CI 与部署运行号、

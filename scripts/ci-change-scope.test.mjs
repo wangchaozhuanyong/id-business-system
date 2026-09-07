@@ -35,21 +35,6 @@ test('container and dependency boundary changes select the required expensive ch
   });
 });
 
-test('production tags always run audit and build the one immutable artifact', () => {
-  assert.deepEqual(
-    decideCiScope({
-      eventName: 'push',
-      ref: 'refs/tags/v2-production-20260904T120000Z',
-      changedPaths: []
-    }),
-    {
-      dependencyAudit: true,
-      productionImages: true,
-      reason: 'production_tag'
-    }
-  );
-});
-
 test('main validates dependency changes without rebuilding disposable production images', () => {
   assert.deepEqual(
     decideCiScope({

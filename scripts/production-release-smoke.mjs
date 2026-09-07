@@ -8,6 +8,27 @@ const baseUrl = new URL(
 const username = process.env.SMOKE_TEST_USERNAME;
 const password = process.env.SMOKE_TEST_PASSWORD;
 assert.ok(username && password, '缺少生产巡检账号');
+const acceptanceScopes = String(process.env.RELEASE_ACCEPTANCE_SCOPES ?? 'base')
+  .split(',')
+  .map((scope) => scope.trim())
+  .filter(Boolean);
+const allowedScopes = new Set([
+  'base',
+  'admin',
+  'api',
+  'auth',
+  'auto-recharge',
+  'database',
+  'finance',
+  'gateway',
+  'media-resolver',
+  'workspace',
+  'runtime-config'
+]);
+assert.ok(acceptanceScopes.includes('base'), '发布验收必须包含全店基础检查');
+for (const scope of acceptanceScopes) {
+  assert.ok(allowedScopes.has(scope), `未知发布验收范围：${scope}`);
+}
 
 async function request(path, options = {}) {
   return fetch(new URL(path, baseUrl), {
@@ -119,6 +140,7 @@ console.log(
     assets: checkedAssets.size,
     readonlyEndpoints: readonlyPaths.length,
     authorizationBoundary: 403,
-    logoutRevocation: 401
+    logoutRevocation: 401,
+    acceptanceScopes
   })
 );
