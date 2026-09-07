@@ -43,5 +43,8 @@ describe('recharge stage presentation', () => {
   it('shows a specific Chinese reason for the observed old Plus failure', () => {
     expect(statusLabel('official_plus_option_not_found')).toBe('未找到官网 Plus 选项');
     expect(statusLabel('official_plan_tier_not_found')).toBe('未识别到所选 Pro 档位');
+    expect(statusLabel('official_pricing_plan_entry_not_found')).toBe(
+      '未找到唯一的官网套餐定价入口'
+    );
   });
 });

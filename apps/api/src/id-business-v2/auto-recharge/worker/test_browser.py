@@ -45,6 +45,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.duplicate_plus = False
         self.disabled_plus = False
         self.verification_menu = False
+        self.home_entry_missing = False
+        self.duplicate_pricing_card = False
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -90,16 +92,30 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 <script>fetch('/backend-api/payments/checkout/confirm', {{method:'POST'}}).catch(()=>{{}});</script>
                 <script>fetch('https://api.stripe.com/v1/payment_pages/oaics_synthetic/init', {{method:'POST'}}).catch(()=>{{}});</script>
                 </body></html>''')
+        elif path == "/pricing":
+            duplicate = '<a href="/?from=pricing">Get Plus</a>' if self.duplicate_pricing_card else ''
+            await route.fulfill(content_type="text/html; charset=utf-8", body=f'''<html><title>Pricing</title><body>
+                <main>
+                  <section><h2>Free</h2><a href="/">Get Free</a></section>
+                  <section><h2>Go</h2><a href="/explore/go">Get Go</a></section>
+                  <section><h2>Plus</h2><a href="/?from=pricing">Get Plus</a>{duplicate}</section>
+                  <section><h2>Pro</h2><a href="/?from=pricing&amp;plan=pro">Get Pro</a></section>
+                </main>
+                <footer><a href="/?from=footer">Get Plus</a></footer>
+                </body></html>''')
         elif path == "/":
+            from_pricing = "from=pricing" in urlsplit(r.url).query
             headers = json.dumps({"Content-Type": "application/json", "Authorization": "Bearer " + self.session["accessToken"],
                                   "chatgpt-account-id": self.target.account_id})
             body = json.dumps({"plan_name": "chatgptplusplan", "billing_details": {"country": "MY", "currency": self.quote_currency}})
+            upgrade_hidden = self.delayed_upgrade or self.home_entry_missing
+            plus_hidden = not from_pricing
             html = f'''<html><title>ChatGPT</title><body>
                 <div style="visibility:hidden"><button>Upgrade</button><button>Get Plus</button></div>
-                <button id="upgrade" {'hidden' if self.delayed_upgrade else ''} onclick="document.querySelector('#plus').hidden={str(self.business_pricing).lower()};document.querySelector('#personal').hidden={str(not self.business_pricing).lower()}">Upgrade</button>
+                <button id="upgrade" {'hidden' if upgrade_hidden else ''} onclick="document.querySelector('#plus').hidden={str(self.business_pricing).lower()};document.querySelector('#personal').hidden={str(not self.business_pricing).lower()}">Upgrade</button>
                 <button id="personal" hidden aria-label="切换以改为个人套餐" onclick="document.querySelector('#plus').hidden=false">个人</button>
-                <button id="plus" hidden {'disabled' if self.delayed_plus else ''} onclick="create()">Get Plus</button>
-                <script>setTimeout(()=>document.querySelector('#upgrade').hidden=false, 500);
+                <button id="plus" {'hidden' if plus_hidden else ''} {'disabled' if self.delayed_plus else ''} onclick="create()">Get Plus</button>
+                <script>if({str(not self.home_entry_missing).lower()})setTimeout(()=>document.querySelector('#upgrade').hidden=false, 500);
                 setTimeout(()=>document.querySelector('#plus').disabled=false, 1000);
                 if({str(self.delayed_hydration).lower()}){{
                     const node=document.querySelector('#upgrade');const handler=node.onclick;
@@ -204,6 +220,25 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'], 'checkout_quote_verified', result)
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.payments, 0)
+
+    async def test_pricing_card_fallback_ignores_page_level_duplicate(self):
+        self.home_entry_missing = True
+        with patch('plan_selection.HOME_ENTRY_SECONDS', .05):
+            result = await self.run_flow(True)
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
+
+    async def test_duplicate_link_inside_pricing_card_stops_before_checkout(self):
+        self.home_entry_missing = self.duplicate_pricing_card = True
+        with patch('plan_selection.HOME_ENTRY_SECONDS', .05), patch('plan_selection.STEP_SECONDS', .5):
+            result = await self.run_flow(True)
+        self.assertEqual(result['reason'], 'official_plan_option_ambiguous', result)
+        self.assertEqual(result['diagnostics']['step'], 'pricing_page')
+        self.assertEqual(result['diagnostics']['role'], 'link')
+        self.assertEqual(result['diagnostics']['matched_count'], 2)
+        self.assertFalse(self.creates)
+        self.assertEqual(result['payment_requests_sent'], 0)
 
     async def test_duplicate_target_controls_stop_with_safe_diagnostics(self):
         self.delayed_plus = self.duplicate_plus = True

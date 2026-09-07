@@ -11,7 +11,7 @@ from checkout_core import Stop
 
 class ServerTests(unittest.TestCase):
     def test_diagnostics_survive_callback_without_free_text_or_secrets(self):
-        safe = {'step': 'choose_tier', 'error_type': 'TimeoutError', 'role': 'radio',
+        safe = {'step': 'pricing_page', 'error_type': 'TimeoutError', 'role': 'link',
                 'matched_count': 0, 'enabled': False, 'available_plans': ['plus']}
         value = {**safe, 'message': 'sessionToken=private', 'html': '<input value="123">',
                  'available_plans': ['plus', 'private']}

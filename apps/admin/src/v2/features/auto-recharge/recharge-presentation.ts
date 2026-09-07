@@ -47,6 +47,7 @@ const labels: Record<string, string> = {
   missing_session_token: 'JSON 缺少官网会话凭据',
   browser_operation_failed: '官网浏览器步骤未完成',
   official_upgrade_entry_not_found: '未找到官网升级入口',
+  official_pricing_plan_entry_not_found: '未找到唯一的官网套餐定价入口',
   official_plus_option_not_found: '未找到官网 Plus 选项',
   official_plan_menu_timeout: '官网套餐菜单未在规定时间内加载',
   official_personal_option_not_found: '未找到可用的个人套餐切换控件',
@@ -75,6 +76,7 @@ const labels: Record<string, string> = {
 };
 export const selectionStepLabels = {
   open_menu: '打开套餐菜单',
+  pricing_page: '进入官网套餐定价页',
   personal_plans: '切换个人套餐',
   choose_tier: '选择 Pro 档位',
   choose_plan: '核对开通按钮',
