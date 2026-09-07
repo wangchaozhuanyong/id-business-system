@@ -135,6 +135,24 @@ test('streamed image import validates before Docker and preserves the immutable 
   });
 });
 
+test('production installer declares every referenced release parameter', () => {
+  const installer = readFileSync(
+    resolve(projectRoot, 'scripts/install-aws-production-artifact.sh'),
+    'utf8'
+  );
+  const parameters = installer.match(/for variable in ([\s\S]*?); do/u)?.[1];
+  assert.ok(parameters);
+  const required = new Set(parameters.match(/\bRELEASE_[A-Z0-9_]+\b/gu));
+  for (const [, name] of installer.matchAll(/\$\{?(RELEASE_[A-Z0-9_]+)/gu)) {
+    assert.ok(required.has(name), `安装器仍引用未声明的发布参数：${name}`);
+  }
+  assert.match(
+    installer,
+    /"\$RELEASE_ARTIFACT_ARCHIVE" "\$RELEASE_ARTIFACT_SHA256" "\$RELEASE_IMAGE_ARCHIVE_SHA256"/u,
+    '导入器必须同时取得正式包和镜像归档的校验值'
+  );
+});
+
 for (const failure of ['artifact-hash', 'image-hash', 'archive-content', 'symlink', 'space']) {
   test(`streamed image import rejects ${failure} before starting Docker`, () => {
     withImageLoaderFixture(({ artifact, runLoader, input, payload, directory }) => {
