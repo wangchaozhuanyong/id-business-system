@@ -176,6 +176,10 @@ jobs:
   production-images:
     needs: change-scope
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
     steps:
       - name: Skip unchanged production image boundary
         if: ${{ needs.change-scope.outputs.production_images != 'true' }}
@@ -192,6 +196,22 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
+
+      - name: Set up Docker Buildx
+        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Configure AWS credentials for release images
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_BUILD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       - name: Validate immutable production tag and prior quality result
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
@@ -224,20 +244,73 @@ jobs:
         if: ${{ needs.change-scope.outputs.production_images == 'true' }}
         run: docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml config
 
-      - name: Build AWS MySQL production images
-        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
+      - name: Detect reusable immutable ECR images
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
+        id: ecr-state
         env:
-          COMPOSE_BAKE: 'false'
-          DOCKER_BUILDKIT: '0'
+          ECR_REPOSITORY_PREFIX: ${{ vars.AWS_ECR_REPOSITORY_PREFIX }}
         run: |
-          docker compose --env-file .env.aws.production.example -f docker-compose.aws-mysql.yml build migrate media-resolver auto-recharge api admin
-          docker tag id-business-v2-prod-api:latest "id-business-v2-release-api:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-admin:latest "id-business-v2-release-admin:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-migrate:latest "id-business-v2-release-migration:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-media-resolver:latest "id-business-v2-release-media-resolver:${GITHUB_SHA}"
-          docker tag id-business-v2-prod-auto-recharge:latest "id-business-v2-release-recharge:${GITHUB_SHA}"
-          docker run --rm --init --entrypoint xvfb-run id-business-v2-prod-auto-recharge:latest -a python -B -m unittest -q test_subscribe.py test_browser.py test_payment.py test_pro.py test_server.py
-          docker build --target build --tag "id-business-v2-release-gate:${GITHUB_SHA}" --file apps/api/Dockerfile.mysql .
+          set -Eeuo pipefail
+          existing=0
+          for image in api admin migration media-resolver recharge gate; do
+            if aws ecr describe-images --repository-name "${ECR_REPOSITORY_PREFIX}-${image}" \
+              --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
+              existing=$((existing + 1))
+            fi
+          done
+          if [[ "$existing" == 0 ]]; then
+            echo 'reuse=false' >>"$GITHUB_OUTPUT"
+          elif [[ "$existing" == 6 ]]; then
+            echo 'reuse=true' >>"$GITHUB_OUTPUT"
+          else
+            echo '发现不完整的 ECR 发布镜像集，拒绝混用制品' >&2
+            exit 1
+          fi
+
+      - name: Build AWS MySQL production images with Buildx cache
+        if: ${{ needs.change-scope.outputs.production_images == 'true' && (github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v2-production-') || steps.ecr-state.outputs.reuse != 'true') }}
+        run: |
+          set -Eeuo pipefail
+          build_image() {
+            local scope="$1" dockerfile="$2" target="$3"
+            shift 3
+            target_args=()
+            [[ "$target" == - ]] || target_args=(--target "$target")
+            cache_to=()
+            if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+              cache_to=(--cache-to "type=gha,scope=${scope},mode=max")
+            fi
+            docker buildx build --load --platform linux/amd64 --provenance=false --sbom=false \
+              --cache-from "type=gha,scope=${scope}" "${cache_to[@]}" \
+              --file "$dockerfile" "${target_args[@]}" "$@" .
+          }
+          build_image api-runtime apps/api/Dockerfile.mysql runtime --tag id-business-v2-prod-api:latest --tag "id-business-v2-release-api:${GITHUB_SHA}"
+          build_image api-migration apps/api/Dockerfile.mysql migration --tag id-business-v2-prod-migrate:latest --tag "id-business-v2-release-migration:${GITHUB_SHA}"
+          build_image admin apps/admin/Dockerfile - --build-arg AUTH_PROVIDER=local --build-arg VITE_API_BASE_URL=/api --build-arg 'VITE_APP_TITLE=ID 业务管理系统' --tag id-business-v2-prod-admin:latest --tag "id-business-v2-release-admin:${GITHUB_SHA}"
+          build_image media-resolver apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile - --tag id-business-v2-prod-media-resolver:latest --tag "id-business-v2-release-media-resolver:${GITHUB_SHA}"
+          build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile - --tag id-business-v2-prod-auto-recharge:latest --tag "id-business-v2-release-recharge:${GITHUB_SHA}"
+          build_image release-gate apps/api/Dockerfile.mysql build --tag "id-business-v2-release-gate:${GITHUB_SHA}"
+
+      - name: Pull reusable immutable ECR images
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') && steps.ecr-state.outputs.reuse == 'true' }}
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPOSITORY_PREFIX: ${{ vars.AWS_ECR_REPOSITORY_PREFIX }}
+        run: |
+          set -Eeuo pipefail
+          for image in api admin migration media-resolver recharge gate; do
+            docker pull --platform linux/amd64 "${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-${image}:${GITHUB_SHA}"
+            docker tag "${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-${image}:${GITHUB_SHA}" "id-business-v2-release-${image}:${GITHUB_SHA}"
+          done
+          docker tag "id-business-v2-release-api:${GITHUB_SHA}" id-business-v2-prod-api:latest
+          docker tag "id-business-v2-release-admin:${GITHUB_SHA}" id-business-v2-prod-admin:latest
+          docker tag "id-business-v2-release-migration:${GITHUB_SHA}" id-business-v2-prod-migrate:latest
+          docker tag "id-business-v2-release-media-resolver:${GITHUB_SHA}" id-business-v2-prod-media-resolver:latest
+          docker tag "id-business-v2-release-recharge:${GITHUB_SHA}" id-business-v2-prod-auto-recharge:latest
+
+      - name: Test auto-recharge production image
+        if: ${{ needs.change-scope.outputs.production_images == 'true' }}
+        run: docker run --rm --init --entrypoint xvfb-run id-business-v2-prod-auto-recharge:latest -a python -B -m unittest -q test_subscribe.py test_browser.py test_payment.py test_pro.py test_server.py
 
       - name: Verify built production image boundaries
         if: ${{ needs.change-scope.outputs.production_images == 'true' }}
@@ -246,6 +319,30 @@ jobs:
           V2_MIGRATION_IMAGE: id-business-v2-prod-migrate:latest
           V2_MEDIA_RESOLVER_IMAGE: id-business-v2-prod-media-resolver:latest
         run: node scripts/acceptance-v2-container-hardening.mjs
+
+      - name: Publish immutable production images to ECR
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
+        id: release-images
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPOSITORY_PREFIX: ${{ vars.AWS_ECR_REPOSITORY_PREFIX }}
+          REUSE_IMAGES: ${{ steps.ecr-state.outputs.reuse }}
+        run: |
+          set -Eeuo pipefail
+          for image in api admin migration media-resolver recharge gate; do
+            local_reference="id-business-v2-release-${image}:${GITHUB_SHA}"
+            ecr_reference="${ECR_REGISTRY}/${ECR_REPOSITORY_PREFIX}-${image}:${GITHUB_SHA}"
+            if [[ "$REUSE_IMAGES" != true ]]; then
+              docker tag "$local_reference" "$ecr_reference"
+              docker push "$ecr_reference"
+            fi
+            digest="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY_PREFIX}-${image}" \
+              --image-ids "imageTag=${GITHUB_SHA}" --query 'imageDetails[0].imageDigest' --output text)"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            output_name="${image//-/_}"
+            echo "${output_name}_reference=${ecr_reference}" >>"$GITHUB_OUTPUT"
+            echo "${output_name}_digest=${digest}" >>"$GITHUB_OUTPUT"
+          done
 
       - name: Package immutable production artifact
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2-production-') }}
@@ -258,12 +355,20 @@ jobs:
           RELEASE_CI_RUN_NUMBER: ${{ github.run_number }}
           RELEASE_OPERATOR: github-actions
           RELEASE_OUTPUT_DIR: release-artifacts
-          RELEASE_API_IMAGE: id-business-v2-release-api:${{ github.sha }}
-          RELEASE_ADMIN_IMAGE: id-business-v2-release-admin:${{ github.sha }}
-          RELEASE_MIGRATION_IMAGE: id-business-v2-release-migration:${{ github.sha }}
-          RELEASE_MEDIA_RESOLVER_IMAGE: id-business-v2-release-media-resolver:${{ github.sha }}
-          RELEASE_RECHARGE_IMAGE: id-business-v2-release-recharge:${{ github.sha }}
-          RELEASE_GATE_IMAGE: id-business-v2-release-gate:${{ github.sha }}
+          RELEASE_AWS_REGION: ${{ vars.AWS_REGION }}
+          RELEASE_ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          RELEASE_API_IMAGE: ${{ steps.release-images.outputs.api_reference }}
+          RELEASE_API_DIGEST: ${{ steps.release-images.outputs.api_digest }}
+          RELEASE_ADMIN_IMAGE: ${{ steps.release-images.outputs.admin_reference }}
+          RELEASE_ADMIN_DIGEST: ${{ steps.release-images.outputs.admin_digest }}
+          RELEASE_MIGRATION_IMAGE: ${{ steps.release-images.outputs.migration_reference }}
+          RELEASE_MIGRATION_DIGEST: ${{ steps.release-images.outputs.migration_digest }}
+          RELEASE_MEDIA_RESOLVER_IMAGE: ${{ steps.release-images.outputs.media_resolver_reference }}
+          RELEASE_MEDIA_RESOLVER_DIGEST: ${{ steps.release-images.outputs.media_resolver_digest }}
+          RELEASE_RECHARGE_IMAGE: ${{ steps.release-images.outputs.recharge_reference }}
+          RELEASE_RECHARGE_DIGEST: ${{ steps.release-images.outputs.recharge_digest }}
+          RELEASE_GATE_IMAGE: ${{ steps.release-images.outputs.gate_reference }}
+          RELEASE_GATE_DIGEST: ${{ steps.release-images.outputs.gate_digest }}
         run: bash scripts/package-production-release.sh
 
       - name: Verify immutable production artifact

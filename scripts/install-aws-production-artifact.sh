@@ -14,9 +14,10 @@ require_variable() {
 for variable in \
   RELEASE_DIRECTORY \
   PREVIOUS_RELEASE_DIRECTORY \
-  RELEASE_ARTIFACT_ARCHIVE \
-  RELEASE_IMAGE_ARCHIVE_SHA256 \
-  RELEASE_ARTIFACT_SHA256 \
+  RELEASE_SOURCE_ARCHIVE \
+  RELEASE_SOURCE_ARCHIVE_SHA256 \
+  RELEASE_AWS_REGION \
+  RELEASE_ECR_REGISTRY \
   RELEASE_COMMIT \
   RELEASE_TAG \
   RELEASE_DEPLOYMENT_RUN \
@@ -61,8 +62,8 @@ if [[ ! "$RELEASE_TAG" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]; then
   echo '正式发布标签格式无效' >&2
   exit 1
 fi
-if [[ ! "$RELEASE_ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
-  echo '发布制品 SHA-256 无效' >&2
+if [[ ! "$RELEASE_SOURCE_ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+  echo '发布源码制品 SHA-256 无效' >&2
   exit 1
 fi
 for digest in \
@@ -81,12 +82,12 @@ if [[ ! -d "$RELEASE_DIRECTORY" || ! -d "$PREVIOUS_RELEASE_DIRECTORY" ]]; then
   echo '发布目录不存在' >&2
   exit 1
 fi
-if [[ "$RELEASE_ARTIFACT_ARCHIVE" != "${deployment_root}/artifacts/${RELEASE_TAG}-${RELEASE_COMMIT}/id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz" ]]; then
-  echo '正式制品不在当前标签对应的受控 artifacts 路径中' >&2
+if [[ "$RELEASE_SOURCE_ARCHIVE" != "${deployment_root}/artifacts/${RELEASE_TAG}-${RELEASE_COMMIT}/id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz" ]]; then
+  echo '正式源码制品不在当前标签对应的受控 artifacts 路径中' >&2
   exit 1
 fi
-if [[ ! -f "$RELEASE_ARTIFACT_ARCHIVE" || ! -f "$compose_file" ]]; then
-  echo '发布制品或 Compose 文件不存在' >&2
+if [[ ! -f "$RELEASE_SOURCE_ARCHIVE" || ! -f "$compose_file" ]]; then
+  echo '发布源码制品或 Compose 文件不存在' >&2
   exit 1
 fi
 if [[ ! -f "$previous_environment_file" || ! -f "$previous_compose_file" ]]; then
@@ -94,7 +95,7 @@ if [[ ! -f "$previous_environment_file" || ! -f "$previous_compose_file" ]]; the
   exit 1
 fi
 
-for command in docker flock openssl sha256sum systemctl; do
+for command in aws docker flock openssl sha256sum systemctl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "生产安装依赖命令不存在：${command}" >&2
     exit 1
@@ -182,16 +183,26 @@ old_media_resolver_image="$(
   docker image inspect "${compose_project}-media-resolver:latest" --format '{{.Id}}' 2>/dev/null || true
 )"
 
-echo '加载 CI 不可变生产镜像制品'
-bash "${RELEASE_DIRECTORY}/scripts/load-production-release-images.sh" \
-  "$RELEASE_ARTIFACT_ARCHIVE" "$RELEASE_ARTIFACT_SHA256" "$RELEASE_IMAGE_ARCHIVE_SHA256" >/dev/null
+echo '从 ECR 拉取 CI 不可变生产镜像'
+bash "${RELEASE_DIRECTORY}/scripts/pull-production-release-images.sh" \
+  "$RELEASE_AWS_REGION" \
+  "$RELEASE_ECR_REGISTRY" \
+  "$RELEASE_API_IMAGE" \
+  "$RELEASE_ADMIN_IMAGE" \
+  "$RELEASE_MIGRATION_IMAGE" \
+  "$RELEASE_MEDIA_RESOLVER_IMAGE" \
+  "$RELEASE_RECHARGE_IMAGE" \
+  "$RELEASE_GATE_IMAGE" >/dev/null
 
 verify_image_digest() {
   local reference="$1"
   local expected="$2"
-  local actual
-  actual="$(docker image inspect "$reference" --format '{{.Id}}')"
-  if [[ "$actual" != "$expected" ]]; then
+  local platform
+  local repo_digests
+  platform="$(docker image inspect "$reference" --format '{{.Os}}/{{.Architecture}}')"
+  repo_digests="$(docker image inspect "$reference" --format '{{json .RepoDigests}}')"
+  if [[ "$reference" != *@"$expected" || "$platform" != linux/amd64 ||
+        "$repo_digests" != *"\"${reference}\""* ]]; then
     echo "镜像 digest 与发布清单不一致：${reference}" >&2
     exit 1
   fi
@@ -203,6 +214,14 @@ verify_image_digest "$RELEASE_MIGRATION_IMAGE" "$RELEASE_MIGRATION_DIGEST"
 verify_image_digest "$RELEASE_MEDIA_RESOLVER_IMAGE" "$RELEASE_MEDIA_RESOLVER_DIGEST"
 verify_image_digest "$RELEASE_RECHARGE_IMAGE" "$RELEASE_RECHARGE_DIGEST"
 verify_image_digest "$RELEASE_GATE_IMAGE" "$RELEASE_GATE_DIGEST"
+
+# 保留按 commit 命名的本地引用，供定时保留策略精确保护 current/上一版并回收旧层。
+docker tag "$RELEASE_API_IMAGE" "id-business-v2-release-api:${RELEASE_COMMIT}"
+docker tag "$RELEASE_ADMIN_IMAGE" "id-business-v2-release-admin:${RELEASE_COMMIT}"
+docker tag "$RELEASE_MIGRATION_IMAGE" "id-business-v2-release-migration:${RELEASE_COMMIT}"
+docker tag "$RELEASE_MEDIA_RESOLVER_IMAGE" "id-business-v2-release-media-resolver:${RELEASE_COMMIT}"
+docker tag "$RELEASE_RECHARGE_IMAGE" "id-business-v2-release-recharge:${RELEASE_COMMIT}"
+docker tag "$RELEASE_GATE_IMAGE" "id-business-v2-release-gate:${RELEASE_COMMIT}"
 
 timers_stopped=0
 application_updated=0

@@ -61,18 +61,19 @@ npm run git:readiness
 6. 确认该 SHA 的 `main` Quality Gate 已成功，且尚无成功生产制品，再创建不可移动的带说明正式标签
    `v2-production-<UTC>` 并推送。标签必须指向当前 `origin/main` 完整 SHA，且不得重用、强制移动，
    同一个 SHA 也不得通过第二个正式标签重复构建制品。
-7. 标签 CI 复用同 SHA 已成功的 `main` 质量结论，只在构建前执行一次生产依赖审计，然后构建一次 API、
-   管理端、migration、媒体解析、自动充值执行器和发布门禁镜像，导出单一不可变制品，上传
-   `release-manifest.json` 和 `SHA256SUMS`。清单必须包含完整 commit、CI 运行号、制品 SHA-256
-   及六个镜像 digest；标签阶段不再重复执行整套 lint、unit test、浏览器验收和本地数据库验收。
-8. 只使用成功标签 CI 中的该制品执行生产部署；禁止从本地文件、历史目录或生产服务器重新构建。
+7. 标签 CI 复用同 SHA 已成功的 `main` 质量结论，只在构建前执行一次生产依赖审计，然后用
+   Buildx 跨发布缓存构建 API、管理端、migration、媒体解析、自动充值执行器和发布门禁镜像。
+   六个镜像通过 GitHub OIDC 获得的短期 AWS 身份推送到不可变 ECR commit 标签；GitHub 制品只保存
+   当前 commit 的源码小包、`release-manifest.json` 和 `SHA256SUMS`，不再嵌入镜像 tar。
+8. 只使用成功标签 CI 的源码制品和 ECR digest 执行生产部署；禁止从本地文件、历史目录或
+   生产服务器重新构建。首次配置见 [`AWS_ECR_RELEASE.md`](./AWS_ECR_RELEASE.md)。
 
 正式顺序固定为：
 
 ```text
 origin/main → 发布分支 → 本地完整检查 → commit → push → PR/CI → 合并 main
-→ 锁定正式标签与完整 SHA → CI 单次构建不可变制品 → 备份/迁移/门禁
-→ 加载同一制品 → 原子切换 → 发布后复核 → 删除已合并远程分支
+→ 锁定正式标签与完整 SHA → CI 构建并推送 ECR 不可变镜像 → SSM 启动备份/迁移/门禁
+→ EC2 按 digest 拉取同一镜像 → 原子切换 → 发布后复核 → 删除已合并远程分支
 ```
 
 紧急修复不得绕过该流程。生产部署过程必须持有 `/opt/id-business-v2/.deploy.lock`，发现其他部署、
@@ -80,20 +81,21 @@ Compose、迁移或同步进程时立即停止，避免两个版本同时操作�
 
 ## 4. 服务器发布流程
 
-1. 本机读取 Git 忽略且权限为 `0600` 的 `.deploy/aws-production.local.env`，执行：
+1. 在 GitHub Actions 的 `Deploy Production` 工作流中手动输入已成功构建的正式标签。工作流通过
+   GitHub `production` Environment 审批后使用 OIDC 短期身份，不保存 AWS 长期 Key 或 SSH 私钥。本地只读演练可执行：
 
 ```bash
 bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
 ```
 
-入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于 `origin/main` 的 SHA、
-失败的 CI 或缺少 digest 的制品。检查 GitHub 制品和下载大文件前会先读取生产 `current` 的完整清单；
-若同一 commit 已经上线，则只执行公共页面、静态资源 MIME 和 live/ready 语义健康检查，返回
-`deployment_status=already_deployed`，不重复下载、上传、备份、migration、容器重启或回切。
+入口脚本会拒绝脏工作区、非 `main` 分支、移动标签、不属于 `origin/main` 的 SHA、失败的 CI、
+缺少 digest 的制品或部分 ECR 镜像集。它先通过只读 SSM 文档获取生产 `current`；若同一 commit
+已经上线，返回 `deployment_status=already_deployed`，不重复上传、备份、migration 或容器重启。
 
-2. 制品在本机与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
+2. 源码制品在 GitHub runner 与 EC2 各校验一次 SHA-256；源码归档禁止包含 `.git`、`.deploy` 和真实环境文件。
+   runner 将小制品和校验值写入私有、加密、开启版本控制的 S3 release bucket；EC2 只能读取该前缀。
 
-3. 上传制品前先在 EC2 使用同一个部署锁执行生产保留预检：发布目录保留最近 5 份，不可变制品
+3. 安装前在 EC2 使用同一个部署锁执行生产保留预检：发布目录保留最近 5 份，不可变制品
    保留最近 3 份，并始终额外保护 `current` 和发布清单中的上一生产 commit。Docker 只移除
    `id-business-v2-*` 受控旧标签及没有容器引用的悬空层，禁止运行 `docker image prune -a`、
    `docker volume prune` 或 `docker system prune`。预检后少于 8 GiB 可用空间时禁止上传和安装。
@@ -102,12 +104,10 @@ bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
    Compose、migration 或同步进程。新源码进入 `/opt/id-business-v2/releases/<UTC>-<short-sha>`，
    CI 制品与清单进入 `/opt/id-business-v2/artifacts/<tag>-<full-sha>`。
 
-5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
-   `docker load` 加载 CI 镜像。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
-   上传归档校验后移入正式制品目录，不保留第二份上传副本；源码单独解压，镜像先流式校验
-   SHA-256，再直接从正式压缩包输送给 Docker，不落盘 `images.tar`。导入前另按两倍镜像归档大小
-   加 1 GiB 余量检查可用空间；原有 8 GiB 门禁与当前／上一版本保留规则不变。解压或 Docker
-   任一失败都阻断安装；正式压缩包继续保留用于核验和回滚。
+5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置，用 EC2 instance role 登录 ECR，
+   按清单中的 `repository@sha256:...` 拉取六个 `linux/amd64` 镜像并再校验 RepoDigest。生产脚本
+   不包含 `docker build`、`docker compose build`、`--build`、`docker load`、SSH 或 SCP。引镜登录使用临时
+   `DOCKER_CONFIG`，完成后删除；原有 8 GiB 门禁与 current/上一版保留规则不变。
 
 6. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
 

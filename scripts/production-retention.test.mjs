@@ -140,6 +140,10 @@ test('deployment installs and verifies the daily retention timer', () => {
     resolve(projectRoot, 'scripts/deploy-aws-production-artifact.sh'),
     'utf8'
   );
+  const bootstrap = readFileSync(
+    resolve(projectRoot, 'scripts/bootstrap-aws-production-ecr-release.sh'),
+    'utf8'
+  );
   const service = readFileSync(
     resolve(projectRoot, 'deploy/systemd/id-business-v2-production-retention.service'),
     'utf8'
@@ -149,9 +153,10 @@ test('deployment installs and verifies the daily retention timer', () => {
     'utf8'
   );
 
-  assert.match(deployer, /cleanup-aws-production-retention\.sh/u);
-  assert.match(deployer, /--preflight/u);
-  assert.match(deployer, /available_kib < 8388608/u);
+  assert.match(deployer, /aws ssm send-command/u);
+  assert.match(bootstrap, /cleanup-aws-production-retention\.sh/u);
+  assert.match(bootstrap, /--preflight/u);
+  assert.match(readFileSync(retentionScript, 'utf8'), /minimum_free_bytes=8589934592/u);
   assert.match(installer, /install_retention_timer/u);
   assert.match(installer, /--post-deploy/u);
   assert.match(installer, /systemctl enable --now id-business-v2-production-retention\.timer/u);

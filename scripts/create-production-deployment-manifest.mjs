@@ -14,7 +14,12 @@ for (const name of [
   'githubArtifactId',
   'githubArtifactName',
   'githubArtifactDigest',
-  'githubRunUrl'
+  'githubRunUrl',
+  'awsRegion',
+  'releaseBucket',
+  'releasePrefix',
+  'productionBaseUrl',
+  'productionComposeProject'
 ]) {
   assert.ok(options[name], `缺少发布清单参数 --${toKebabCase(name)}`);
 }
@@ -24,11 +29,27 @@ const outputPath = resolve(options.output);
 const manifest = JSON.parse(readFileSync(inputPath, 'utf8'));
 const commitPattern = /^[a-f0-9]{40}$/u;
 const sha256Pattern = /^(?:sha256:)?[a-f0-9]{64}$/u;
+const regionPattern = /^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]$/u;
+const bucketPattern = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u;
+const prefixPattern =
+  /^releases\/v2-production-[0-9]{8}T[0-9]{6}Z\/[a-f0-9]{40}\/deployments\/[A-Za-z0-9._-]{3,128}$/u;
 
-assert.equal(manifest.schemaVersion, 1, '不支持的 CI 发布清单版本');
+assert.equal(manifest.schemaVersion, 2, '不支持的 CI 发布清单版本');
+assert.equal(manifest.delivery, 'aws-ecr', 'CI 发布清单不是 ECR 交付');
 assert.match(manifest.commit, commitPattern, 'CI 发布清单 commit 无效');
 assert.match(options.previousCommit, commitPattern, '上一生产 commit 无效');
 assert.match(options.githubArtifactDigest, sha256Pattern, 'GitHub 制品 digest 无效');
+assert.match(options.awsRegion, regionPattern, 'AWS 区域无效');
+assert.equal(options.awsRegion, manifest.aws.region, '部署区域与 CI 清单不一致');
+assert.match(options.releaseBucket, bucketPattern, '发布 S3 bucket 无效');
+assert.match(options.releasePrefix, prefixPattern, '发布 S3 prefix 无效');
+assert.equal(
+  options.releasePrefix,
+  `releases/${manifest.releaseTag}/${manifest.commit}/deployments/${options.deploymentRun}`,
+  '发布 S3 prefix 与标签、commit 或部署运行不一致'
+);
+assert.doesNotThrow(() => new URL(options.productionBaseUrl), '生产公开地址无效');
+assert.match(options.productionComposeProject, /^[a-z0-9][a-z0-9_-]{1,62}$/u, 'Compose 项目名无效');
 assert.equal(
   options.githubArtifactName,
   basename(options.githubArtifactName),
@@ -45,6 +66,16 @@ const deploymentManifest = {
   deployedAt: options.deployedAt,
   operator: options.operator,
   previousCommit: options.previousCommit,
+  production: {
+    baseUrl: options.productionBaseUrl,
+    composeProject: options.productionComposeProject
+  },
+  transport: {
+    type: 'aws-ssm-s3',
+    region: options.awsRegion,
+    bucket: options.releaseBucket,
+    prefix: options.releasePrefix
+  },
   githubArtifact: {
     id: options.githubArtifactId,
     name: options.githubArtifactName,
@@ -65,7 +96,8 @@ console.log(
     commit: deploymentManifest.commit,
     releaseTag: deploymentManifest.releaseTag,
     deploymentRun: deploymentManifest.deploymentRun,
-    artifactSha256: deploymentManifest.artifact.sha256
+    artifactSha256: deploymentManifest.artifact.sha256,
+    transport: deploymentManifest.transport.type
   })
 );
 

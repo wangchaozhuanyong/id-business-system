@@ -17,12 +17,20 @@ for variable in \
   RELEASE_CI_RUN_NUMBER \
   RELEASE_OPERATOR \
   RELEASE_OUTPUT_DIR \
+  RELEASE_AWS_REGION \
+  RELEASE_ECR_REGISTRY \
   RELEASE_API_IMAGE \
+  RELEASE_API_DIGEST \
   RELEASE_ADMIN_IMAGE \
+  RELEASE_ADMIN_DIGEST \
   RELEASE_MIGRATION_IMAGE \
+  RELEASE_MIGRATION_DIGEST \
   RELEASE_MEDIA_RESOLVER_IMAGE \
+  RELEASE_MEDIA_RESOLVER_DIGEST \
   RELEASE_RECHARGE_IMAGE \
-  RELEASE_GATE_IMAGE; do
+  RELEASE_RECHARGE_DIGEST \
+  RELEASE_GATE_IMAGE \
+  RELEASE_GATE_DIGEST; do
   require_variable "$variable"
 done
 
@@ -34,59 +42,48 @@ if [[ ! "$RELEASE_TAG" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]; then
   echo '正式标签格式无效' >&2
   exit 1
 fi
+if [[ ! "$RELEASE_AWS_REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]$ ]]; then
+  echo 'AWS 区域格式无效' >&2
+  exit 1
+fi
+if [[ ! "$RELEASE_ECR_REGISTRY" =~ ^[0-9]{12}\.dkr\.ecr\.${RELEASE_AWS_REGION}\.amazonaws\.com(\.cn)?$ ]]; then
+  echo 'ECR registry 与 AWS 区域不匹配' >&2
+  exit 1
+fi
 if [[ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" ]]; then
   echo '当前检出与发布 commit 不一致' >&2
   exit 1
 fi
 
+for name in API ADMIN MIGRATION MEDIA_RESOLVER RECHARGE GATE; do
+  image_variable="RELEASE_${name}_IMAGE"
+  digest_variable="RELEASE_${name}_DIGEST"
+  image_reference="${!image_variable}"
+  image_digest="${!digest_variable}"
+  if [[ "$image_reference" != "${RELEASE_ECR_REGISTRY}/"*":${RELEASE_COMMIT}" ]]; then
+    echo "${name} 镜像不是当前 commit 的 ECR 标签" >&2
+    exit 1
+  fi
+  if [[ ! "$image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    echo "${name} ECR manifest digest 无效" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "$RELEASE_OUTPUT_DIR"
 output_directory="$(cd "$RELEASE_OUTPUT_DIR" && pwd)"
-staging_directory="$(mktemp -d "${RUNNER_TEMP:-/tmp}/idv2-production-artifact.XXXXXX")"
-case "$staging_directory" in
-  */idv2-production-artifact.*) ;;
-  *) echo '无法创建安全的制品临时目录' >&2; exit 1 ;;
-esac
-
-cleanup() {
-  case "$staging_directory" in
-    */idv2-production-artifact.*) rm -rf -- "$staging_directory" ;;
-  esac
-}
-trap cleanup EXIT INT TERM
-
-image_archive="$staging_directory/images.tar"
-source_archive="$staging_directory/source.tar.gz"
 artifact_file="id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz"
 artifact_path="$output_directory/$artifact_file"
-manifest_file="release-manifest.json"
+manifest_file='release-manifest.json'
 manifest_path="$output_directory/$manifest_file"
 checksum_path="$output_directory/SHA256SUMS"
 github_artifact_name="id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}"
 
-docker save \
-  --output "$image_archive" \
-  "$RELEASE_API_IMAGE" \
-  "$RELEASE_ADMIN_IMAGE" \
-  "$RELEASE_MIGRATION_IMAGE" \
-  "$RELEASE_MEDIA_RESOLVER_IMAGE" \
-  "$RELEASE_RECHARGE_IMAGE" \
-  "$RELEASE_GATE_IMAGE"
-git archive --format=tar.gz --output="$source_archive" "$RELEASE_COMMIT"
-
-image_archive_sha256="$(sha256sum "$image_archive" | awk '{print $1}')"
-source_archive_sha256="$(sha256sum "$source_archive" | awk '{print $1}')"
-tar -czf "$artifact_path" -C "$staging_directory" images.tar source.tar.gz
+# 正式制品只保存该 commit 的源码和部署脚本；运行镜像由 ECR 按 digest 提供。
+git archive --format=tar.gz --output="$artifact_path" "$RELEASE_COMMIT"
 artifact_sha256="$(sha256sum "$artifact_path" | awk '{print $1}')"
 
-api_digest="$(docker image inspect "$RELEASE_API_IMAGE" --format '{{.Id}}')"
-admin_digest="$(docker image inspect "$RELEASE_ADMIN_IMAGE" --format '{{.Id}}')"
-migration_digest="$(docker image inspect "$RELEASE_MIGRATION_IMAGE" --format '{{.Id}}')"
-media_resolver_digest="$(docker image inspect "$RELEASE_MEDIA_RESOLVER_IMAGE" --format '{{.Id}}')"
-recharge_digest="$(docker image inspect "$RELEASE_RECHARGE_IMAGE" --format '{{.Id}}')"
-gate_digest="$(docker image inspect "$RELEASE_GATE_IMAGE" --format '{{.Id}}')"
-
-export artifact_file artifact_sha256 image_archive_sha256 source_archive_sha256
-export api_digest admin_digest migration_digest media_resolver_digest recharge_digest gate_digest
+export artifact_file artifact_sha256 github_artifact_name
 node --input-type=module >"$manifest_path" <<'NODE'
 const required = [
   'RELEASE_SOURCE_BRANCH',
@@ -95,32 +92,45 @@ const required = [
   'RELEASE_CI_RUN_ID',
   'RELEASE_CI_RUN_NUMBER',
   'RELEASE_OPERATOR',
+  'RELEASE_AWS_REGION',
+  'RELEASE_ECR_REGISTRY',
   'RELEASE_API_IMAGE',
+  'RELEASE_API_DIGEST',
   'RELEASE_ADMIN_IMAGE',
+  'RELEASE_ADMIN_DIGEST',
   'RELEASE_MIGRATION_IMAGE',
+  'RELEASE_MIGRATION_DIGEST',
   'RELEASE_MEDIA_RESOLVER_IMAGE',
+  'RELEASE_MEDIA_RESOLVER_DIGEST',
   'RELEASE_RECHARGE_IMAGE',
+  'RELEASE_RECHARGE_DIGEST',
   'RELEASE_GATE_IMAGE',
+  'RELEASE_GATE_DIGEST',
   'artifact_file',
   'artifact_sha256',
-  'image_archive_sha256',
-  'source_archive_sha256',
-  'api_digest',
-  'admin_digest',
-  'migration_digest',
-  'media_resolver_digest',
-  'recharge_digest',
-  'gate_digest'
+  'github_artifact_name'
 ];
 for (const name of required) {
   if (!process.env[name]) throw new Error(`Missing release manifest value: ${name}`);
 }
 
-const image = (reference, digest) => ({ reference, digest });
+const commit = process.env.RELEASE_COMMIT;
+const image = (taggedReference, digest) => {
+  const tagSuffix = `:${commit}`;
+  if (!taggedReference.endsWith(tagSuffix)) throw new Error('ECR image tag does not match commit');
+  const repository = taggedReference.slice(0, -tagSuffix.length);
+  return {
+    taggedReference,
+    reference: `${repository}@${digest}`,
+    digest,
+    platform: 'linux/amd64'
+  };
+};
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  delivery: 'aws-ecr',
   sourceBranch: process.env.RELEASE_SOURCE_BRANCH,
-  commit: process.env.RELEASE_COMMIT,
+  commit,
   releaseTag: process.env.RELEASE_TAG,
   ciWorkflow: 'Quality Gate',
   ciWorkflowRunId: process.env.RELEASE_CI_RUN_ID,
@@ -129,19 +139,22 @@ const manifest = {
   artifact: {
     file: process.env.artifact_file,
     sha256: process.env.artifact_sha256,
-    imageArchiveSha256: process.env.image_archive_sha256,
-    sourceArchiveSha256: process.env.source_archive_sha256
+    githubArtifactName: process.env.github_artifact_name
+  },
+  aws: {
+    region: process.env.RELEASE_AWS_REGION,
+    ecrRegistry: process.env.RELEASE_ECR_REGISTRY
   },
   images: {
-    api: image(process.env.RELEASE_API_IMAGE, process.env.api_digest),
-    admin: image(process.env.RELEASE_ADMIN_IMAGE, process.env.admin_digest),
-    migration: image(process.env.RELEASE_MIGRATION_IMAGE, process.env.migration_digest),
+    api: image(process.env.RELEASE_API_IMAGE, process.env.RELEASE_API_DIGEST),
+    admin: image(process.env.RELEASE_ADMIN_IMAGE, process.env.RELEASE_ADMIN_DIGEST),
+    migration: image(process.env.RELEASE_MIGRATION_IMAGE, process.env.RELEASE_MIGRATION_DIGEST),
     mediaResolver: image(
       process.env.RELEASE_MEDIA_RESOLVER_IMAGE,
-      process.env.media_resolver_digest
+      process.env.RELEASE_MEDIA_RESOLVER_DIGEST
     ),
-    recharge: image(process.env.RELEASE_RECHARGE_IMAGE, process.env.recharge_digest),
-    gate: image(process.env.RELEASE_GATE_IMAGE, process.env.gate_digest)
+    recharge: image(process.env.RELEASE_RECHARGE_IMAGE, process.env.RELEASE_RECHARGE_DIGEST),
+    gate: image(process.env.RELEASE_GATE_IMAGE, process.env.RELEASE_GATE_DIGEST)
   },
   environment: 'production',
   builtAt: new Date().toISOString(),

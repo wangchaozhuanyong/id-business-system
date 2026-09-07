@@ -1,0 +1,82 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable production tag, for example v2-production-20260907T120000Z
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validate release tag input
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: '[[ "$RELEASE_TAG" =~ ^v2-production-[0-9]{8}T[0-9]{6}Z$ ]]'
+
+      - name: Checkout production main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_PRODUCTION_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Create the ignored local production connection file
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_PRODUCTION_INSTANCE_ID: ${{ vars.AWS_PRODUCTION_INSTANCE_ID }}
+          AWS_PRODUCTION_RELEASE_BUCKET: ${{ vars.AWS_PRODUCTION_RELEASE_BUCKET }}
+          AWS_PRODUCTION_READ_DOCUMENT: ${{ vars.AWS_PRODUCTION_READ_DOCUMENT }}
+          AWS_PRODUCTION_DEPLOY_DOCUMENT: ${{ vars.AWS_PRODUCTION_DEPLOY_DOCUMENT }}
+          PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
+          PRODUCTION_COMPOSE_PROJECT: ${{ vars.PRODUCTION_COMPOSE_PROJECT }}
+        run: |
+          mkdir -p .deploy
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          const patterns = {
+            AWS_REGION: /^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]$/u,
+            AWS_PRODUCTION_INSTANCE_ID: /^i-[a-f0-9]{8,17}$/u,
+            AWS_PRODUCTION_RELEASE_BUCKET: /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u,
+            AWS_PRODUCTION_READ_DOCUMENT: /^[A-Za-z0-9_.-]{3,128}$/u,
+            AWS_PRODUCTION_DEPLOY_DOCUMENT: /^[A-Za-z0-9_.-]{3,128}$/u,
+            PRODUCTION_BASE_URL: /^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/u,
+            PRODUCTION_COMPOSE_PROJECT: /^[a-z0-9][a-z0-9_-]{1,62}$/u
+          };
+          const lines = Object.entries(patterns).map(([name, pattern]) => {
+            const value = process.env[name] ?? '';
+            if (!pattern.test(value)) throw new Error(`Invalid production connection value: ${name}`);
+            return `${name}='${value}'`;
+          });
+          writeFileSync('.deploy/aws-production.local.env', `${lines.join('\n')}\n`, { mode: 0o600 });
+          NODE
+
+      - name: Deploy the CI artifact through SSM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/deploy-aws-production-artifact.sh "$RELEASE_TAG"

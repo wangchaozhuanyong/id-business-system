@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECR, S3, GitHub OIDC and restricted SSM release channel for ID Business V2.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  GitHubOidcProviderArn:
+    Type: String
+    AllowedPattern: '^arn:[^:]+:iam::[0-9]{12}:oidc-provider/token.actions.githubusercontent.com$'
+  ProductionInstanceId:
+    Type: String
+    AllowedPattern: '^i-[a-f0-9]{8,17}$'
+  ExistingEc2RoleName:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]{1,64}$'
+  RepositoryPrefix:
+    Type: String
+    Default: id-business-v2
+    AllowedPattern: '^[a-z0-9]+(?:[._/-][a-z0-9]+)*$'
+
+Resources:
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-api'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+  AdminRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-admin'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+  MigrationRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-migration'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+  MediaResolverRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-media-resolver'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+  RechargeRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-recharge'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+  GateRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${RepositoryPrefix}-gate'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+
+  ReleaseBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'id-business-v2-releases-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: RetainReleaseMetadata
+            Status: Enabled
+            Prefix: releases/
+            ExpirationInDays: 180
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+
+  ReleaseBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReleaseBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ReleaseBucket.Arn
+              - !Sub '${ReleaseBucket.Arn}/*'
+            Condition: { Bool: { 'aws:SecureTransport': false } }
+          - Sid: DenyIncorrectEncryptionHeader
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource: !Sub '${ReleaseBucket.Arn}/*'
+            Condition: { StringNotEquals: { 's3:x-amz-server-side-encryption': AES256 } }
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidcProviderArn }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals: { 'token.actions.githubusercontent.com:aud': sts.amazonaws.com }
+              StringLike:
+                {
+                  'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubRepository}:ref:refs/tags/v2-production-*'
+                }
+      Policies:
+        - PolicyName: PublishImmutableReleaseImages
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !GetAtt ApiRepository.Arn
+                  - !GetAtt AdminRepository.Arn
+                  - !GetAtt MigrationRepository.Arn
+                  - !GetAtt MediaResolverRepository.Arn
+                  - !GetAtt RechargeRepository.Arn
+                  - !GetAtt GateRepository.Arn
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidcProviderArn }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub 'repo:${GitHubRepository}:environment:production'
+      Policies:
+        - PolicyName: UploadAndInvokeProductionRelease
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${ReleaseBucket.Arn}/releases/*'
+              - Effect: Allow
+                Action: [ssm:SendCommand]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProductionInstanceId}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${ReadReleaseDocument}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${DeployReleaseDocument}'
+              - Effect: Allow
+                Action: ssm:GetCommandInvocation
+                Resource: '*'
+
+  Ec2ReleaseAccess:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: IdBusinessV2ReleasePull
+      Roles:
+        - !Ref ExistingEc2RoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Effect: Allow
+            Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Resource:
+              - !GetAtt ApiRepository.Arn
+              - !GetAtt AdminRepository.Arn
+              - !GetAtt MigrationRepository.Arn
+              - !GetAtt MediaResolverRepository.Arn
+              - !GetAtt RechargeRepository.Arn
+              - !GetAtt GateRepository.Arn
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub '${ReleaseBucket.Arn}/releases/*'
+
+  ReadReleaseDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Read the current immutable ID Business V2 release only.
+        mainSteps:
+          - action: aws:runShellScript
+            name: readCurrentRelease
+            inputs:
+              timeoutSeconds: '30'
+              runCommand:
+                - set -Eeuo pipefail
+                - bash /opt/id-business-v2/current/scripts/read-current-production-release.sh /opt/id-business-v2
+
+  DeployReleaseDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      DocumentFormat: YAML
+      Content:
+        schemaVersion: '2.2'
+        description: Run one checksum-pinned ID Business V2 release from the private release bucket.
+        parameters:
+          Bucket: { type: String, allowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$' }
+          Prefix:
+            {
+              type: String,
+              allowedPattern: '^releases/v2-production-[0-9]{8}T[0-9]{6}Z/[a-f0-9]{40}/deployments/[A-Za-z0-9._-]{3,128}$'
+            }
+          BootstrapSha256: { type: String, allowedPattern: '^[a-f0-9]{64}$' }
+          InputsSha256: { type: String, allowedPattern: '^[a-f0-9]{64}$' }
+          AwsRegion: { type: String, allowedPattern: '^[a-z]{2}(-gov)?-[a-z]+-[0-9]$' }
+        mainSteps:
+          - action: aws:runShellScript
+            name: deployRelease
+            inputs:
+              timeoutSeconds: '7200'
+              runCommand:
+                - set -Eeuo pipefail
+                - umask 077
+                - bootstrap="$(mktemp /tmp/idv2-release-bootstrap.XXXXXX)"
+                - trap 'rm -f -- "$bootstrap"' EXIT INT TERM
+                - aws s3 cp --only-show-errors --region '{{ AwsRegion }}' 's3://{{ Bucket }}/{{ Prefix }}/bootstrap-aws-production-ecr-release.sh' "$bootstrap"
+                - test "$(sha256sum "$bootstrap" | awk '{print $1}')" = '{{ BootstrapSha256 }}'
+                - chmod 700 "$bootstrap"
+                - bash "$bootstrap" '{{ Bucket }}' '{{ Prefix }}' '{{ InputsSha256 }}' '{{ AwsRegion }}'
+
+Outputs:
+  AwsRegion:
+    Value: !Ref AWS::Region
+  EcrRegistry:
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}'
+  EcrRepositoryPrefix:
+    Value: !Ref RepositoryPrefix
+  ReleaseBucketName:
+    Value: !Ref ReleaseBucket
+  ReleaseBuildRoleArn:
+    Value: !GetAtt BuildRole.Arn
+  ProductionDeployRoleArn:
+    Value: !GetAtt DeployRole.Arn
+  ProductionReadDocument:
+    Value: !Ref ReadReleaseDocument
+  ProductionDeployDocument:
+    Value: !Ref DeployReleaseDocument

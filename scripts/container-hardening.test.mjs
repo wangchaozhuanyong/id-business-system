@@ -16,6 +16,9 @@ test('production base images and GitHub Actions are immutable', () => {
   const mediaResolverDockerfile = readProjectFile(
     'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile'
   );
+  const rechargeDockerfile = readProjectFile(
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
+  );
   const adminDockerfile = readProjectFile('apps/admin/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
   const workflow = readProjectFile('.github/workflows/quality.yml');
@@ -30,6 +33,13 @@ test('production base images and GitHub Actions are immutable', () => {
     mediaResolverDockerfile,
     new RegExp(`^FROM python:3\\.11-slim-bookworm@${sha256DigestPattern}`, 'mu')
   );
+  assert.match(
+    rechargeDockerfile,
+    new RegExp(`^FROM python:3\\.12-slim-bookworm@${sha256DigestPattern}`, 'mu')
+  );
+  assert.match(rechargeDockerfile, /playwright install --with-deps chromium/u);
+  assert.match(rechargeDockerfile, /^USER recharge$/mu);
+  assert.doesNotMatch(rechargeDockerfile, /mcr\.microsoft\.com\/playwright/u);
   assert.match(adminDockerfile, new RegExp(`^FROM node:24-alpine@${sha256DigestPattern}`, 'mu'));
   assert.match(
     adminDockerfile,
@@ -38,10 +48,16 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.match(compose, new RegExp(`image: mysql:8\\.4@${sha256DigestPattern}`, 'u'));
   assert.match(compose, new RegExp(`image: caddy:2\\.10-alpine@${sha256DigestPattern}`, 'u'));
   assert.match(restoreScript, new RegExp(`mysql_image="mysql:8\\.4@${sha256DigestPattern}"`, 'u'));
-  assert.doesNotMatch(workflow, /uses:\s+actions\/(?:checkout|setup-node|upload-artifact)@v\d+/u);
+  assert.doesNotMatch(
+    workflow,
+    /uses:\s+(?:actions\/(?:checkout|setup-node|upload-artifact)|aws-actions\/(?:configure-aws-credentials|amazon-ecr-login)|docker\/setup-buildx-action)@v\d+/u
+  );
   assert.match(workflow, /uses:\s+actions\/checkout@[a-f0-9]{40}\s+# v5/u);
   assert.match(workflow, /uses:\s+actions\/setup-node@[a-f0-9]{40}\s+# v5/u);
   assert.match(workflow, /uses:\s+actions\/upload-artifact@[a-f0-9]{40}\s+# v4/u);
+  assert.match(workflow, /uses:\s+aws-actions\/configure-aws-credentials@[a-f0-9]{40}\s+# v5/u);
+  assert.match(workflow, /uses:\s+aws-actions\/amazon-ecr-login@[a-f0-9]{40}\s+# v2/u);
+  assert.match(workflow, /uses:\s+docker\/setup-buildx-action@[a-f0-9]{40}\s+# v4/u);
 });
 
 test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {
