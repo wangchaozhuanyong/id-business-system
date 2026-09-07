@@ -18,6 +18,20 @@ export interface V2RechargeResult {
   status?: string;
   reason?: string;
   stage?: string;
+  diagnostics?: {
+    step?: 'open_menu' | 'personal_plans' | 'choose_tier' | 'choose_plan' | 'verify_plan';
+    error_type?:
+      | 'TimeoutError'
+      | 'AssertionError'
+      | 'Error'
+      | 'TargetClosedError'
+      | 'UnexpectedError';
+    role?: 'button' | 'radio' | 'tab' | 'region';
+    matched_count?: number;
+    enabled?: boolean;
+    selected?: boolean;
+    available_plans?: V2RechargePlan[];
+  };
   current_plan?: string;
   account_matched?: boolean;
   quote?: V2RechargeQuote;

@@ -56,6 +56,7 @@ try {
     let starts = 0;
     let confirms = 0;
     let failNext = false;
+    let blockQuoteOnce = true;
     const success = (route, data) =>
       route.fulfill({
         contentType: 'application/json',
@@ -120,6 +121,16 @@ try {
             ...(body.action === 'prepare' ? { nonce: 'a'.repeat(64), card_last4: '4242' } : {})
           }
         });
+        if (body.action === 'quote' && blockQuoteOnce) {
+          blockQuoteOnce = false;
+          items[0].result = {
+            status: 'blocked',
+            stage: 'plan_selection',
+            account_matched: true,
+            reason: 'official_plan_option_not_found',
+            diagnostics: { step: 'choose_plan', matched_count: 0, available_plans: ['pro-5x'] }
+          };
+        }
         return success(route, { id: body.id });
       }
       if (path.endsWith('/confirm')) {
@@ -151,7 +162,14 @@ try {
     await page.getByRole('button', { name: '开始检查', exact: true }).click();
     await page.locator('.recharge-status').filter({ hasText: '账户核对通过' }).waitFor();
     assert.equal(starts, 1);
+    assert.equal(await page.getByText('待获取报价', { exact: true }).count(), 3);
+    await page.getByText('尚未执行开通', { exact: true }).waitFor();
     assert.equal(await page.getByPlaceholder('粘贴完整 JSON，载入后清空输入框').inputValue(), '');
+    await page.getByRole('button', { name: '获取官方报价', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: '未找到所选套餐的开通入口' }).waitFor();
+    assert.equal(await page.getByText('获取失败', { exact: true }).count(), 3);
+    await page.getByText(/套餐步骤：核对开通按钮/).waitFor();
+    assert.equal(confirms, 0);
     await page.getByRole('button', { name: '获取官方报价', exact: true }).click();
     await page.locator('.recharge-summary dd').filter({ hasText: 'MYR 92.50' }).first().waitFor();
     assert.equal(confirms, 0);
@@ -204,6 +222,7 @@ try {
       flow: [
         'empty',
         'account-check',
+        'selection-failed',
         'quote',
         'prepare',
         'amount-confirmation',

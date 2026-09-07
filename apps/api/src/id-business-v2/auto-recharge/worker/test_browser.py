@@ -41,6 +41,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.delayed_plus = False
         self.delayed_hydration = False
         self.business_pricing = False
+        self.english_personal_radio = False
+        self.duplicate_plus = False
+        self.disabled_plus = False
+        self.verification_menu = False
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -90,7 +94,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             headers = json.dumps({"Content-Type": "application/json", "Authorization": "Bearer " + self.session["accessToken"],
                                   "chatgpt-account-id": self.target.account_id})
             body = json.dumps({"plan_name": "chatgptplusplan", "billing_details": {"country": "MY", "currency": self.quote_currency}})
-            await route.fulfill(content_type="text/html; charset=utf-8", body=f'''<html><title>ChatGPT</title><body>
+            html = f'''<html><title>ChatGPT</title><body>
                 <div style="visibility:hidden"><button>Upgrade</button><button>Get Plus</button></div>
                 <button id="upgrade" {'hidden' if self.delayed_upgrade else ''} onclick="document.querySelector('#plus').hidden={str(self.business_pricing).lower()};document.querySelector('#personal').hidden={str(not self.business_pricing).lower()}">Upgrade</button>
                 <button id="personal" hidden aria-label="切换以改为个人套餐" onclick="document.querySelector('#plus').hidden=false">个人</button>
@@ -107,7 +111,18 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                   if({str(self.duplicate).lower()})fetch('{CHECKOUT_PATH}',options).catch(()=>{{}});
                   const r=await first; const data=await r.json();
                   if(r.ok)location.href='/checkout/openai_ie/'+data.checkout_session_id;
-                }}</script></body></html>''')
+                }}</script></body></html>'''
+            if self.english_personal_radio:
+                html = html.replace('aria-label="切换以改为个人套餐"', 'role="radio" aria-checked="false" aria-label="Toggle for switching to Personal plans"')
+                html = html.replace("document.querySelector('#plus').hidden=false", "document.querySelector('#plus').hidden=false;document.querySelector('#personal').setAttribute('aria-checked','true')")
+                html = html.replace('>Get Plus</button>', '>Upgrade to Plus</button>')
+            if self.duplicate_plus:
+                html = html.replace("async function create()", "setTimeout(()=>{const copy=document.querySelector('#plus').cloneNode(true);copy.id='copy';copy.hidden=false;document.body.append(copy)},100);async function create()")
+            if self.disabled_plus:
+                html = html.replace("setTimeout(()=>document.querySelector('#plus').disabled=false, 1000);", "document.querySelector('#plus').disabled=true;")
+            if self.verification_menu:
+                html = html.replace("async function create()", "setTimeout(()=>{document.title='Verify you are human';document.querySelector('#plus').remove()},50);async function create()")
+            await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             # 任何未列入夹具的请求都在本机终止，不访问公网。
             await route.abort()
@@ -182,6 +197,57 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "checkout_quote_verified", result)
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.creates[0]["plan_name"], "chatgptplusplan")
+
+    async def test_observed_english_personal_radio_and_upgrade_to_plus(self):
+        self.business_pricing = self.english_personal_radio = True
+        result = await self.run_flow(True)
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
+
+    async def test_duplicate_target_controls_stop_with_safe_diagnostics(self):
+        self.delayed_plus = self.duplicate_plus = True
+        with patch('plan_selection.STEP_SECONDS', .5), patch('plan_selection.SELECTION_SECONDS', 2):
+            result = await self.run_flow(True)
+        self.assertEqual(result['reason'], 'official_plan_option_ambiguous', result)
+        self.assertEqual(result['diagnostics']['matched_count'], 2)
+        self.assertEqual(result['diagnostics']['step'], 'choose_plan')
+        self.assertFalse(self.creates)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    async def test_disabled_plan_stops_without_checkout(self):
+        self.disabled_plus = True
+        with patch('plan_selection.STEP_SECONDS', .5), patch('plan_selection.SELECTION_SECONDS', 2):
+            result = await self.run_flow(True)
+        self.assertEqual(result['reason'], 'official_plan_option_disabled', result)
+        self.assertFalse(result['diagnostics']['enabled'])
+        self.assertFalse(self.creates)
+
+    async def test_selection_and_quote_progress_is_reported(self):
+        events = []
+        with patch('browser_checkout.progress', side_effect=lambda stage, **data: events.append((stage, data))):
+            result = await self.run_flow(True)
+        stages = [stage for stage, _ in events]
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        for stage in ('plan_selection', 'checkout_create', 'checkout_wait', 'quote_read'):
+            self.assertIn(stage, stages)
+        self.assertIn('choose_plan', [data.get('diagnostics', {}).get('step') for _, data in events])
+
+    async def test_challenge_during_menu_selection_stops_without_order(self):
+        self.verification_menu = self.disabled_plus = True
+        with patch('plan_selection.STEP_SECONDS', .5), patch('plan_selection.SELECTION_SECONDS', 2):
+            result = await self.run_flow(True)
+        self.assertEqual(result['reason'], 'verification_required', result)
+        self.assertFalse(self.creates)
+
+    async def test_overall_selection_deadline_is_bounded(self):
+        self.disabled_plus = True
+        start = asyncio.get_running_loop().time()
+        with patch('plan_selection.STEP_SECONDS', 2), patch('plan_selection.SELECTION_SECONDS', .5):
+            result = await self.run_flow(True)
+        self.assertLess(asyncio.get_running_loop().time() - start, 3)
+        self.assertEqual(result['status'], 'blocked', result)
+        self.assertFalse(self.creates)
 
     async def test_inspect_existing_quote_never_creates_new_checkout(self):
         existing = {"checkout_identifier": "oaics_synthetic", "processor_entity": "openai_ie", "returned_currency": "MYR"}

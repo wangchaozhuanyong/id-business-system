@@ -113,6 +113,38 @@ export function safeDocument(value: unknown): Record<string, unknown> {
       renewal_interval: quote.renewal_interval === 'monthly' ? 'monthly' : null
     };
   }
+  if (input.diagnostics !== undefined) {
+    const diagnostic = object(input.diagnostics);
+    const clean: Record<string, unknown> = {};
+    const enums: Record<string, string[]> = {
+      step: ['open_menu', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'],
+      error_type: [
+        'TimeoutError',
+        'AssertionError',
+        'Error',
+        'TargetClosedError',
+        'UnexpectedError'
+      ],
+      role: ['button', 'radio', 'tab', 'region']
+    };
+    for (const [key, values] of Object.entries(enums)) {
+      if (typeof diagnostic[key] === 'string' && values.includes(diagnostic[key]))
+        clean[key] = diagnostic[key];
+    }
+    if (
+      Number.isSafeInteger(diagnostic.matched_count) &&
+      Number(diagnostic.matched_count) >= 0 &&
+      Number(diagnostic.matched_count) <= 100
+    )
+      clean.matched_count = diagnostic.matched_count;
+    for (const key of ['enabled', 'selected']) {
+      if (typeof diagnostic[key] === 'boolean') clean[key] = diagnostic[key];
+    }
+    const availablePlans = diagnostic.available_plans;
+    if (Array.isArray(availablePlans))
+      clean.available_plans = V2_RECHARGE_PLANS.filter((plan) => availablePlans.includes(plan));
+    result.diagnostics = clean;
+  }
   for (const key of ['account_key', 'quote_digest']) {
     if (typeof input[key] === 'string' && /^[a-f0-9]{64}$/.test(input[key]))
       result[key] = input[key];

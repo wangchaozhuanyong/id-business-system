@@ -111,30 +111,28 @@
                 {{ selected.result.network?.country || '地区未知' }}
               </dd>
               <dt>今日应付</dt>
-              <dd>{{ price(selected.result.quote?.today) }}</dd>
+              <dd>{{ price(selected.result.quote?.today, quotePlaceholder(selected)) }}</dd>
               <dt>税费</dt>
               <dd>
-                {{ price(selected.result.quote?.tax)
+                {{ price(selected.result.quote?.tax, quotePlaceholder(selected))
                 }}{{ selected.result.quote?.tax_status === 'estimated' ? '（预估）' : '' }}
               </dd>
               <dt>续费</dt>
               <dd>
-                {{ price(selected.result.quote?.renewal)
+                {{ price(selected.result.quote?.renewal, quotePlaceholder(selected))
                 }}{{
                   selected.result.quote?.renewal_interval === 'monthly'
                     ? ' / 月，直至取消'
-                    : '，周期未知'
+                    : selected.result.quote
+                      ? '，周期未知'
+                      : ''
                 }}
               </dd>
               <dt>付款状态</dt>
               <dd>{{ statusLabel(selected.result.payment_status || 'not_attempted') }}</dd>
               <dt>订阅结果</dt>
               <dd>
-                {{
-                  statusLabel(
-                    selected.result.payment_outcome || selected.result.subscription_status
-                  )
-                }}
+                {{ subscriptionLabel(selected) }}
               </dd>
               <dt>执行阶段</dt>
               <dd>{{ statusLabel(selected.result.stage) }}</dd>
@@ -143,6 +141,22 @@
             </dl>
             <p v-if="selected.result.reason" role="alert">
               {{ statusLabel(selected.result.reason) }} <code>{{ selected.result.reason }}</code>
+            </p>
+            <p v-if="selected.result.diagnostics?.step">
+              套餐步骤：{{ selectionStepLabels[selected.result.diagnostics.step] }}。
+              <template v-if="selected.result.diagnostics.matched_count !== undefined">
+                匹配控件：{{ selected.result.diagnostics.matched_count }} 个。
+              </template>
+              <template v-if="selected.result.diagnostics.enabled !== undefined">
+                {{ selected.result.diagnostics.enabled ? '控件可操作。' : '控件暂不可操作。' }}
+              </template>
+              <template v-if="selected.result.diagnostics.available_plans?.length">
+                已识别选项：{{
+                  selected.result.diagnostics.available_plans
+                    .map((plan) => planLabels[plan])
+                    .join('、')
+                }}。
+              </template>
             </p>
             <div v-if="selected.state === 'awaiting_confirmation'" class="recharge-confirm">
               <p>
@@ -197,7 +211,13 @@ import { getApiErrorMessage } from '@/api/client';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useAutoRecharge } from './useAutoRecharge';
-import { planLabels, statusLabel } from './recharge-presentation';
+import {
+  planLabels,
+  statusLabel,
+  quotePlaceholder,
+  subscriptionLabel,
+  selectionStepLabels
+} from './recharge-presentation';
 import type { V2RechargeDetails } from './contracts';
 const {
   query,
@@ -218,8 +238,8 @@ const {
   importJson,
   clearSession
 } = useAutoRecharge();
-function price(value: { currency: string; amount: string } | null | undefined) {
-  return value ? `${value.currency} ${value.amount}` : '未知';
+function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
+  return value ? `${value.currency} ${value.amount}` : fallback;
 }
 const fields: {
   key: keyof V2RechargeDetails;
