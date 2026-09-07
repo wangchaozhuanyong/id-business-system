@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   realpathSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -95,6 +98,7 @@ test('release scripts pass shell syntax and production installation never builds
     'scripts/deploy-aws-production-artifact.sh',
     'scripts/read-current-production-release.sh',
     'scripts/install-aws-production-artifact.sh',
+    'scripts/load-production-release-images.sh',
     'scripts/cleanup-aws-production-retention.sh'
   ]) {
     const result = spawnSync('bash', ['-n', resolve(projectRoot, script)], { encoding: 'utf8' });
@@ -106,20 +110,135 @@ test('release scripts pass shell syntax and production installation never builds
   );
   assert.doesNotMatch(installer, /docker(?:\s+compose)?\s+build/u);
   assert.doesNotMatch(installer, /--build(?:\s|$)/u);
-  assert.match(installer, /docker load/u);
+  assert.match(installer, /load-production-release-images\.sh/u);
   assert.match(installer, /flock -n/u);
-  assert.match(
-    installer,
-    /"\$\{deployment_root\}\/incoming\/"\*\/extracted\/images\.tar/u,
-    '临时镜像归档只能从受控 incoming 路径删除'
+  assert.doesNotMatch(installer, /rm -f -- "\$RELEASE_ARTIFACT_ARCHIVE"/u);
+  const deployer = readFileSync(
+    resolve(projectRoot, 'scripts/deploy-aws-production-artifact.sh'),
+    'utf8'
   );
-  const discardArchiveIndex = installer.indexOf('rm -f -- "$RELEASE_IMAGE_ARCHIVE"');
-  const postDeployRetentionIndex = installer.indexOf(
-    'cleanup-aws-production-retention.sh" --post-deploy'
-  );
-  assert.ok(discardArchiveIndex > installer.indexOf('docker load'));
-  assert.ok(discardArchiveIndex < postDeployRetentionIndex);
+  assert.match(deployer, /mv -- "\$artifact_path" "\$artifact_directory\/\$artifact_file"/u);
+  assert.match(deployer, /tar -xzf "\$artifact_path" -C "\$extraction_directory" source\.tar\.gz/u);
+  assert.doesNotMatch(deployer, /extraction_directory\}\/images\.tar/u);
+  assert.match(installer, /artifacts\/\$\{RELEASE_TAG\}-\$\{RELEASE_COMMIT\}/u);
 });
+
+test('streamed image import validates before Docker and preserves the immutable bundle', () => {
+  withImageLoaderFixture(({ directory, artifact, imageBytes, runLoader, input, runtime }) => {
+    const originalHash = sha256File(artifact);
+    const result = runLoader();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readFileSync(input), imageBytes);
+    assert.equal(sha256File(artifact), originalHash);
+    assert.deepEqual(readdirSync(runtime), [], '导入不能留下解压归档或临时文件');
+    assert.ok(existsSync(directory));
+  });
+});
+
+for (const failure of ['artifact-hash', 'image-hash', 'archive-content', 'symlink', 'space']) {
+  test(`streamed image import rejects ${failure} before starting Docker`, () => {
+    withImageLoaderFixture(({ artifact, runLoader, input, payload, directory }) => {
+      const options = {};
+      if (failure === 'artifact-hash') options.artifactHash = '0'.repeat(64);
+      if (failure === 'image-hash') options.imageHash = '0'.repeat(64);
+      if (failure === 'archive-content') {
+        writeFileSync(join(payload, 'extra'), 'unexpected');
+        run('tar', ['-czf', artifact, '-C', payload, 'images.tar', 'source.tar.gz', 'extra']);
+      }
+      if (failure === 'symlink') {
+        options.artifact = join(directory, 'linked.tar.gz');
+        symlinkSync(artifact, options.artifact);
+      }
+      if (failure === 'space') options.env = { AVAILABLE_KIB: '1024' };
+      const result = runLoader(options);
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(input), false, '校验或空间不足时不得启动 Docker');
+    });
+  });
+}
+
+test('streamed import propagates both Docker and late decompression failures', () => {
+  for (const env of [{ DOCKER_STATUS: '23' }, { FAIL_TAR_INVOCATION: '4' }]) {
+    withImageLoaderFixture(({ artifact, runLoader, input }) => {
+      const result = runLoader({ env });
+      assert.notEqual(result.status, 0, '管道任一端失败均必须阻断安装');
+      assert.equal(existsSync(input), true, '该用例验证已启动导入之后的失败');
+      assert.equal(existsSync(artifact), true, '失败后仍保留正式制品');
+    });
+  }
+});
+
+function withImageLoaderFixture(callback) {
+  const directory = mkdtempSync(join(tmpdir(), 'idv2-stream-load-'));
+  const payload = join(directory, 'payload');
+  const bin = join(directory, 'bin');
+  const runtime = join(directory, 'runtime');
+  for (const path of [payload, bin, runtime]) mkdirSync(path);
+  const imageBytes = Buffer.alloc(65536, 'immutable-layer');
+  const artifact = join(directory, 'release.tar.gz');
+  const input = join(directory, 'docker-input');
+  writeFileSync(join(payload, 'images.tar'), imageBytes);
+  writeFileSync(join(payload, 'source.tar.gz'), 'source-fixture');
+  run('tar', ['-czf', artifact, '-C', payload, 'images.tar', 'source.tar.gz']);
+  const realTar = spawnSync('which', ['tar'], { encoding: 'utf8' }).stdout.trim();
+  const scripts = {
+    docker: `#!/usr/bin/env bash
+set -eu
+[[ "$*" == load ]] || exit 91
+cat >"$IMAGE_INPUT"
+exit "\u0024{DOCKER_STATUS:-0}"
+`,
+    df: `#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n'
+printf 'fixture 99999999 0 %s 0%% /\\n' "\u0024{AVAILABLE_KIB:-99999999}"
+`,
+    tar: `#!/usr/bin/env bash
+set -eu
+count=0
+if [[ -f "$TAR_COUNTER" ]]; then read -r count <"$TAR_COUNTER"; fi
+count=$((count + 1))
+printf '%s\\n' "$count" >"$TAR_COUNTER"
+if [[ "$count" == "\u0024{FAIL_TAR_INVOCATION:-0}" ]]; then
+  printf 'partial-image-stream'
+  exit 17
+fi
+exec "$REAL_TAR" "$@"
+`
+  };
+  for (const [name, script] of Object.entries(scripts)) {
+    writeFileSync(join(bin, name), script);
+    chmodSync(join(bin, name), 0o700);
+  }
+  const runLoader = (options = {}) =>
+    spawnSync(
+      'bash',
+      [
+        resolve(projectRoot, 'scripts/load-production-release-images.sh'),
+        options.artifact ?? artifact,
+        options.artifactHash ?? sha256File(artifact),
+        options.imageHash ?? sha256File(join(payload, 'images.tar'))
+      ],
+      {
+        cwd: runtime,
+        encoding: 'utf8',
+        timeout: 10000,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          TMPDIR: runtime,
+          IMAGE_INPUT: input,
+          REAL_TAR: realTar,
+          TAR_COUNTER: join(directory, 'tar-count'),
+          ...options.env
+        }
+      }
+    );
+  try {
+    callback({ directory, artifact, imageBytes, runLoader, input, runtime, payload });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 test('current production release reader validates and returns the immutable target', () => {
   const directory = mkdtempSync(join(tmpdir(), 'idv2-current-release-test.'));

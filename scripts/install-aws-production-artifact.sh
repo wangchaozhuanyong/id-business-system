@@ -14,7 +14,8 @@ require_variable() {
 for variable in \
   RELEASE_DIRECTORY \
   PREVIOUS_RELEASE_DIRECTORY \
-  RELEASE_IMAGE_ARCHIVE \
+  RELEASE_ARTIFACT_ARCHIVE \
+  RELEASE_IMAGE_ARCHIVE_SHA256 \
   RELEASE_ARTIFACT_SHA256 \
   RELEASE_COMMIT \
   RELEASE_TAG \
@@ -80,7 +81,11 @@ if [[ ! -d "$RELEASE_DIRECTORY" || ! -d "$PREVIOUS_RELEASE_DIRECTORY" ]]; then
   echo '发布目录不存在' >&2
   exit 1
 fi
-if [[ ! -f "$RELEASE_IMAGE_ARCHIVE" || ! -f "$compose_file" ]]; then
+if [[ "$RELEASE_ARTIFACT_ARCHIVE" != "${deployment_root}/artifacts/${RELEASE_TAG}-${RELEASE_COMMIT}/id-business-v2-${RELEASE_TAG}-${RELEASE_COMMIT}.tar.gz" ]]; then
+  echo '正式制品不在当前标签对应的受控 artifacts 路径中' >&2
+  exit 1
+fi
+if [[ ! -f "$RELEASE_ARTIFACT_ARCHIVE" || ! -f "$compose_file" ]]; then
   echo '发布制品或 Compose 文件不存在' >&2
   exit 1
 fi
@@ -185,7 +190,8 @@ old_media_resolver_image="$(
 )"
 
 echo '加载 CI 不可变生产镜像制品'
-docker load --input "$RELEASE_IMAGE_ARCHIVE" >/dev/null
+bash "${RELEASE_DIRECTORY}/scripts/load-production-release-images.sh" \
+  "$RELEASE_ARTIFACT_ARCHIVE" "$RELEASE_ARTIFACT_SHA256" "$RELEASE_IMAGE_ARCHIVE_SHA256" >/dev/null
 
 verify_image_digest() {
   local reference="$1"
@@ -481,16 +487,6 @@ fi
 for service in mysql media-resolver auto-recharge api admin caddy; do
   wait_for_service "$service"
 done
-
-case "$RELEASE_IMAGE_ARCHIVE" in
-  "${deployment_root}/incoming/"*/extracted/images.tar) ;;
-  *)
-    echo '临时镜像归档不在受控 incoming 路径中' >&2
-    exit 1
-    ;;
-esac
-echo '清理已加载并校验的临时镜像归档副本'
-rm -f -- "$RELEASE_IMAGE_ARCHIVE"
 
 echo '执行发布后制品与镜像保留策略'
 DEPLOY_LOCK_HELD=1 \
