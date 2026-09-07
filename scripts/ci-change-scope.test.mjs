@@ -3,82 +3,44 @@ import test from 'node:test';
 
 import { classifyChangedPaths, decideCiScope } from './ci-change-scope.mjs';
 
-test('ordinary application changes do not rebuild production images or repeat dependency audit', () => {
+test('ordinary application changes do not repeat dependency audit', () => {
   assert.deepEqual(
     classifyChangedPaths([
       'apps/admin/src/v2/components/orders/V2OrderPanel.vue',
       'apps/api/src/id-business-v2/orders/id-business-v2-orders.service.ts'
     ]),
-    { dependencyAudit: false, productionImages: false }
+    { dependencyAudit: false }
   );
 });
 
-test('container and dependency boundary changes select the required expensive checks', () => {
-  assert.deepEqual(
-    classifyChangedPaths(['apps/api/src/id-business-v2/auto-recharge/worker/pay.py']),
-    {
-      dependencyAudit: false,
-      productionImages: true
-    }
-  );
+test('only dependency manifests select dependency audit', () => {
   assert.deepEqual(classifyChangedPaths(['apps/api/Dockerfile.mysql']), {
-    dependencyAudit: false,
-    productionImages: true
+    dependencyAudit: false
   });
   assert.deepEqual(classifyChangedPaths(['package-lock.json']), {
-    dependencyAudit: true,
-    productionImages: true
+    dependencyAudit: true
   });
   assert.deepEqual(classifyChangedPaths(['scripts/npm-audit-high.mjs']), {
-    dependencyAudit: true,
-    productionImages: true
+    dependencyAudit: true
   });
 });
 
-test('production tags always run audit and build the one immutable artifact', () => {
+test('changed paths determine dependency audit', () => {
   assert.deepEqual(
     decideCiScope({
       eventName: 'push',
-      ref: 'refs/tags/v2-production-20260904T120000Z',
-      changedPaths: []
-    }),
-    {
-      dependencyAudit: true,
-      productionImages: true,
-      reason: 'production_tag'
-    }
-  );
-});
-
-test('main validates dependency changes without rebuilding disposable production images', () => {
-  assert.deepEqual(
-    decideCiScope({
-      eventName: 'push',
-      ref: 'refs/heads/main',
       changedPaths: ['package-lock.json', 'apps/api/Dockerfile.mysql']
     }),
     {
       dependencyAudit: true,
-      productionImages: false,
-      reason: 'main_quality_only'
+      reason: 'changed_paths'
     }
   );
 });
 
-test('manual quality runs build production images only when explicitly requested', () => {
-  assert.equal(
-    decideCiScope({
-      eventName: 'workflow_dispatch',
-      ref: 'refs/heads/main'
-    }).productionImages,
-    false
-  );
-  assert.equal(
-    decideCiScope({
-      eventName: 'workflow_dispatch',
-      ref: 'refs/heads/main',
-      manualBuildProductionImages: true
-    }).productionImages,
-    true
-  );
+test('manual quality runs dependency audit', () => {
+  assert.deepEqual(decideCiScope({ eventName: 'workflow_dispatch' }), {
+    dependencyAudit: true,
+    reason: 'manual'
+  });
 });

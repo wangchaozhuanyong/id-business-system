@@ -120,7 +120,7 @@ for (const check of checks) {
 
 if (failed > 0) {
   console.error(`\nEnvironment doctor found ${failed} issue(s).`);
-  console.error('See README.md and docs/DEPLOYMENT.md for setup notes.');
+  console.error('See README.md for setup notes.');
   process.exit(1);
 }
 

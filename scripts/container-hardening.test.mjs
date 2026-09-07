@@ -38,10 +38,9 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.match(compose, new RegExp(`image: mysql:8\\.4@${sha256DigestPattern}`, 'u'));
   assert.match(compose, new RegExp(`image: caddy:2\\.10-alpine@${sha256DigestPattern}`, 'u'));
   assert.match(restoreScript, new RegExp(`mysql_image="mysql:8\\.4@${sha256DigestPattern}"`, 'u'));
-  assert.doesNotMatch(workflow, /uses:\s+actions\/(?:checkout|setup-node|upload-artifact)@v\d+/u);
+  assert.doesNotMatch(workflow, /uses:\s+actions\/(?:checkout|setup-node)@v\d+/u);
   assert.match(workflow, /uses:\s+actions\/checkout@[a-f0-9]{40}\s+# v5/u);
   assert.match(workflow, /uses:\s+actions\/setup-node@[a-f0-9]{40}\s+# v5/u);
-  assert.match(workflow, /uses:\s+actions\/upload-artifact@[a-f0-9]{40}\s+# v4/u);
 });
 
 test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {
