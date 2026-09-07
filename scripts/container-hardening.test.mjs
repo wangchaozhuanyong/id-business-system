@@ -16,6 +16,9 @@ test('production base images and GitHub Actions are immutable', () => {
   const mediaResolverDockerfile = readProjectFile(
     'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile'
   );
+  const rechargeDockerfile = readProjectFile(
+    'apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile'
+  );
   const adminDockerfile = readProjectFile('apps/admin/Dockerfile');
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
   const workflow = readProjectFile('.github/workflows/quality.yml');
@@ -30,6 +33,10 @@ test('production base images and GitHub Actions are immutable', () => {
     mediaResolverDockerfile,
     new RegExp(`^FROM python:3\\.11-slim-bookworm@${sha256DigestPattern}`, 'mu')
   );
+  assert.match(
+    rechargeDockerfile,
+    new RegExp(`^FROM python:3\\.12-slim-bookworm@${sha256DigestPattern}`, 'mu')
+  );
   assert.match(adminDockerfile, new RegExp(`^FROM node:24-alpine@${sha256DigestPattern}`, 'mu'));
   assert.match(
     adminDockerfile,
@@ -41,6 +48,14 @@ test('production base images and GitHub Actions are immutable', () => {
   assert.doesNotMatch(workflow, /uses:\s+actions\/(?:checkout|setup-node)@v\d+/u);
   assert.match(workflow, /uses:\s+actions\/checkout@[a-f0-9]{40}\s+# v5/u);
   assert.match(workflow, /uses:\s+actions\/setup-node@[a-f0-9]{40}\s+# v5/u);
+});
+
+test('auto-recharge worker installs only the required Chromium runtime', () => {
+  const dockerfile = readProjectFile('apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile');
+
+  assert.doesNotMatch(dockerfile, /mcr\\.microsoft\\.com\/playwright/u);
+  assert.match(dockerfile, /playwright install --with-deps chromium/u);
+  assert.match(dockerfile, /^USER recharge$/mu);
 });
 
 test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {
