@@ -104,6 +104,10 @@ bash scripts/deploy-aws-production-artifact.sh v2-production-YYYYMMDDTHHMMSSZ
 
 5. 安装器复制上一版 `.env.aws.production`，校验 Compose 配置与镜像 digest，只通过
    `docker load` 加载 CI 镜像。生产脚本不包含 `docker build`、`docker compose build` 或 `--build`。
+   上传归档校验后移入正式制品目录，不保留第二份上传副本；源码单独解压，镜像先流式校验
+   SHA-256，再直接从正式压缩包输送给 Docker，不落盘 `images.tar`。导入前另按两倍镜像归档大小
+   加 1 GiB 余量检查可用空间；原有 8 GiB 门禁与当前／上一版本保留规则不变。解压或 Docker
+   任一失败都阻断安装；正式压缩包继续保留用于核验和回滚。
 
 6. 更新容器前先触发一次生产备份，确认 S3 大小和 SHA-256 校验成功：
 

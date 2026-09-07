@@ -383,25 +383,25 @@ if [[ -e "$artifact_directory" ]]; then
     echo '已存在的正式标签制品与本次发布不一致' >&2
     exit 1
   fi
+  rm -f -- "$artifact_path"
 else
   install -d -m 700 -o root -g root "$artifact_directory"
-  install -m 600 -o root -g root "$artifact_path" "$artifact_directory/$artifact_file"
+  chown root:root "$artifact_path"
+  chmod 600 "$artifact_path"
+  mv -- "$artifact_path" "$artifact_directory/$artifact_file"
   install -m 600 -o root -g root "${incoming_directory}/ci-release-manifest.json" \
     "$artifact_directory/ci-release-manifest.json"
   install -m 600 -o root -g root "${incoming_directory}/SHA256SUMS" \
     "$artifact_directory/SHA256SUMS"
 fi
+artifact_path="$artifact_directory/$artifact_file"
 install -d -m 700 -o root -g root "$artifact_directory/deployments"
 install -m 600 -o root -g root "$uploaded_deployment_manifest" \
   "$artifact_directory/deployments/${deployment_run}.json"
 
 extraction_directory="${incoming_directory}/extracted"
 install -d -m 700 -o root -g root "$extraction_directory"
-tar -xzf "$artifact_path" -C "$extraction_directory"
-if [[ "$(sha256sum "${extraction_directory}/images.tar" | awk '{print $1}')" != "$image_archive_sha256" ]]; then
-  echo '远程镜像归档 SHA-256 校验失败' >&2
-  exit 1
-fi
+tar -xzf "$artifact_path" -C "$extraction_directory" source.tar.gz
 
 while IFS= read -r entry; do
   entry="${entry#./}"
@@ -427,7 +427,7 @@ install -m 600 -o root -g root "${incoming_directory}/ci-release-manifest.json" 
 DEPLOY_LOCK_HELD=1 \
 RELEASE_DIRECTORY="$release_directory" \
 PREVIOUS_RELEASE_DIRECTORY="$previous_release_directory" \
-RELEASE_IMAGE_ARCHIVE="${extraction_directory}/images.tar" \
+RELEASE_ARTIFACT_ARCHIVE="$artifact_path" \
 RELEASE_IMAGE_ARCHIVE_SHA256="$image_archive_sha256" \
 RELEASE_ARTIFACT_SHA256="$artifact_sha256" \
 RELEASE_COMMIT="$release_commit" \
