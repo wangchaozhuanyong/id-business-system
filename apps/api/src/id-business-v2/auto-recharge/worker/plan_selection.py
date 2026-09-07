@@ -9,11 +9,16 @@ from plans import plan_spec
 
 STEP_SECONDS = 30
 SELECTION_SECONDS = 90
+HOME_ENTRY_SECONDS = 2
+PRICING_URL = "https://chatgpt.com/pricing"
 UPGRADE = re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I)
 PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改为个人套餐|改为个人套餐|Personal|个人)$", re.I)
 PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I)
 PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro)\s*$", re.I)
-STEPS = {'open_menu', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'}
+PLAN_HEADINGS = re.compile(r"^\s*(?:Free|Go|Plus|Pro)\s*$", re.I)
+PLUS_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Plus\s*$", re.I)
+PRO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Pro\s*$", re.I)
+STEPS = {'open_menu', 'pricing_page', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'}
 ERROR_TYPES = {'TimeoutError', 'AssertionError', 'Error', 'TargetClosedError', 'UnexpectedError'}
 
 
@@ -26,7 +31,7 @@ def safe_diagnostics(value):
         result['step'] = value['step']
     if isinstance(value.get('error_type'), str) and value['error_type'] in ERROR_TYPES:
         result['error_type'] = value['error_type']
-    if isinstance(value.get('role'), str) and value['role'] in {'button', 'radio', 'tab', 'region'}:
+    if isinstance(value.get('role'), str) and value['role'] in {'button', 'link', 'radio', 'tab', 'region'}:
         result['role'] = value['role']
     if type(value.get('matched_count')) is int and 0 <= value['matched_count'] <= 100:
         result['matched_count'] = value['matched_count']
@@ -108,14 +113,61 @@ class Selection:
             raise Stop(reason) from None
         self.diagnostics.update(matched_count=1, enabled=True)
 
-    async def open_menu(self):
+    async def open_pricing_card(self, target_plan):
+        """通过官网定价卡进入套餐弹窗；该链接本身不得作为建单按钮返回。"""
+        self.step('pricing_page', 'link')
+        await self.page.goto(PRICING_URL, wait_until='domcontentloaded', timeout=self.timeout())
+        tier = plan_spec(target_plan)['tier']
+        heading = self.page.get_by_role(
+            'heading', name=PRO_HEADING if tier else PLUS_HEADING
+        ).filter(visible=True)
+        try:
+            await expect(heading).to_have_count(1, timeout=self.timeout())
+        except Exception as exc:
+            self.diagnostics['error_type'] = type(exc).__name__ if type(exc).__name__ in ERROR_TYPES else 'UnexpectedError'
+            count = await heading.count()
+            self.diagnostics['matched_count'] = min(count, 100)
+            reason = 'official_plan_option_ambiguous' if count > 1 else 'official_pricing_plan_entry_not_found'
+            raise Stop(reason) from None
+
+        card = heading
+        action = None
+        for _ in range(8):
+            card = card.locator('..')
+            card_headings = card.get_by_role('heading', name=PLAN_HEADINGS).filter(visible=True)
+            candidate = card.get_by_role('link', name=PRO if tier else PLUS).filter(visible=True)
+            if await card_headings.count() == 1 and await candidate.count():
+                action = candidate
+                break
+        if action is None:
+            self.diagnostics['matched_count'] = 0
+            raise Stop('official_pricing_plan_entry_not_found')
+        await self.ready(action, 'official_pricing_plan_entry_not_found')
+        await action.click(timeout=self.timeout())
+
+        # 真实官网定价卡仅负责导航并打开弹窗，最终建单仍由弹窗按钮触发。
+        self.step('open_menu')
+        scope = await plan_scope(self.page)
+        cue = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        try:
+            await cue.first.wait_for(state='visible', timeout=self.timeout())
+        except Exception:
+            raise Stop('official_plan_menu_timeout') from None
+        return await plan_scope(self.page)
+
+    async def open_menu(self, target_plan):
         self.step('open_menu')
         scope = await plan_scope(self.page)
         visible_options = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
         if not await visible_options.count():
             upgrade = buttons(self.page, UPGRADE)
             # 官网首页同时存在顶部和侧栏 Upgrade；两者均只打开菜单。
-            await upgrade.first.wait_for(state='visible', timeout=self.timeout())
+            try:
+                await upgrade.first.wait_for(
+                    state='visible', timeout=min(HOME_ENTRY_SECONDS * 1000, self.timeout())
+                )
+            except Exception:
+                return await self.open_pricing_card(target_plan)
             for opening in range(2):
                 await upgrade.first.click(timeout=self.timeout())
                 scope = await plan_scope(self.page)
@@ -143,7 +195,7 @@ class Selection:
         return await plan_scope(self.page)
 
     async def run(self, target_plan):
-        scope = await self.open_menu()
+        scope = await self.open_menu(target_plan)
         await self.observe(scope)
         tier = plan_spec(target_plan)['tier']
         if tier:

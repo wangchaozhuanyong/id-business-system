@@ -19,14 +19,20 @@ export interface V2RechargeResult {
   reason?: string;
   stage?: string;
   diagnostics?: {
-    step?: 'open_menu' | 'personal_plans' | 'choose_tier' | 'choose_plan' | 'verify_plan';
+    step?:
+      | 'open_menu'
+      | 'pricing_page'
+      | 'personal_plans'
+      | 'choose_tier'
+      | 'choose_plan'
+      | 'verify_plan';
     error_type?:
       | 'TimeoutError'
       | 'AssertionError'
       | 'Error'
       | 'TargetClosedError'
       | 'UnexpectedError';
-    role?: 'button' | 'radio' | 'tab' | 'region';
+    role?: 'button' | 'link' | 'radio' | 'tab' | 'region';
     matched_count?: number;
     enabled?: boolean;
     selected?: boolean;

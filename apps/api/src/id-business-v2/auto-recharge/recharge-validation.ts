@@ -117,7 +117,14 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     const diagnostic = object(input.diagnostics);
     const clean: Record<string, unknown> = {};
     const enums: Record<string, string[]> = {
-      step: ['open_menu', 'personal_plans', 'choose_tier', 'choose_plan', 'verify_plan'],
+      step: [
+        'open_menu',
+        'pricing_page',
+        'personal_plans',
+        'choose_tier',
+        'choose_plan',
+        'verify_plan'
+      ],
       error_type: [
         'TimeoutError',
         'AssertionError',
@@ -125,7 +132,7 @@ export function safeDocument(value: unknown): Record<string, unknown> {
         'TargetClosedError',
         'UnexpectedError'
       ],
-      role: ['button', 'radio', 'tab', 'region']
+      role: ['button', 'link', 'radio', 'tab', 'region']
     };
     for (const [key, values] of Object.entries(enums)) {
       if (typeof diagnostic[key] === 'string' && values.includes(diagnostic[key]))

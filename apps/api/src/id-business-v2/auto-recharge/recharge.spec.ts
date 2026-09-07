@@ -31,9 +31,9 @@ const quote = {
 describe('recharge input and durable evidence', () => {
   it('preserves only bounded selection diagnostics across the API boundary', () => {
     const diagnostics = {
-      step: 'choose_tier',
+      step: 'pricing_page',
       error_type: 'TimeoutError',
-      role: 'radio',
+      role: 'link',
       matched_count: 0,
       enabled: false,
       available_plans: ['plus', 'pro-5x']
