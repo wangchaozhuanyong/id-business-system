@@ -129,6 +129,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.creates, self.payments = [], 0
         self.wrong_request = False
         self.generic_quote = False
+        self.omit_plus = False
+        self.localized_controls = False
+        self.nonmodal = False
+        self.missing_tier = False
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -173,7 +177,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 }</script></body></html>'''.replace("TITLE", title).replace("RADIOS", radios))
         elif path == "/":
             headers = json.dumps({"Authorization": "Bearer " + self.target.old_token, "Content-Type": "application/json"})
-            await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><title>ChatGPT</title><body>
+            html = '''<html><title>ChatGPT</title><body>
                 <button onclick="document.querySelector('[role=dialog]').hidden=false">Upgrade</button>
                 <section role="dialog" hidden><button>Get Plus</button>
                 <button id="five" role="radio" aria-checked="true" onclick="choose(5)">5x</button>
@@ -184,7 +188,16 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 async function create(){const r=await fetch('CHECKOUT',{method:'POST',headers:HEADERS,
                     body:JSON.stringify({plan_name:WRONG?'chatgptpro':tier===5?'chatgptprolite':'chatgptpro',billing_details:{country:'MY',currency:'MYR'}})});
                     if(r.ok)location.href='/checkout/openai_ie/'+(await r.json()).checkout_session_id;}
-                </script></body></html>'''.replace("CHECKOUT", CHECKOUT_PATH).replace("HEADERS", headers).replace("WRONG", str(self.wrong_request).lower()))
+                </script></body></html>'''.replace("CHECKOUT", CHECKOUT_PATH).replace("HEADERS", headers).replace("WRONG", str(self.wrong_request).lower())
+            if self.omit_plus:
+                html = html.replace('<button>Get Plus</button>', '')
+            if self.localized_controls:
+                html = html.replace('>Upgrade</button>', '>升级</button>').replace('>5x</button>', '>5 倍</button>').replace('>20x</button>', '>20×</button>')
+            if self.nonmodal:
+                html = html.replace('role="dialog"', 'role="main"').replace('[role=dialog]', '[role=main]')
+            if self.missing_tier:
+                html = html.replace('>20x</button>', '>不同档位</button>')
+            await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             await route.abort()
 
@@ -205,6 +218,29 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "checkout_quote_verified", result)
         self.assertEqual(result["quote"]["plan"], "pro-20x")
         self.assertEqual(self.creates[0]["plan_name"], "chatgptpro")
+        self.assertEqual(self.payments, 0)
+
+    async def test_pro_does_not_require_plus_button(self):
+        self.omit_plus = True
+        result = await self.create()
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(len(self.creates), 1)
+
+    async def test_localized_nonmodal_pro20_selection(self):
+        self.plan = 'pro-20x'
+        self.nonmodal = self.localized_controls = True
+        result = await self.create()
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(result['quote']['plan'], 'pro-20x')
+
+    async def test_missing_tier_is_not_replaced_by_another_plan(self):
+        self.plan, self.missing_tier = 'pro-20x', True
+        with patch('plan_selection.STEP_SECONDS', .5), patch('plan_selection.SELECTION_SECONDS', 2):
+            result = await self.create()
+        self.assertEqual(result['reason'], 'official_plan_tier_not_found', result)
+        self.assertEqual(result['diagnostics']['step'], 'choose_tier')
+        self.assertEqual(result['diagnostics']['matched_count'], 0)
+        self.assertFalse(self.creates)
         self.assertEqual(self.payments, 0)
 
     async def test_wrong_tier_request_never_leaves_browser(self):

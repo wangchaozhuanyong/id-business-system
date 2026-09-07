@@ -354,80 +354,14 @@ async def check_session(page, target, wait_seconds=0):
     raise Stop("verification_required")
 
 
-async def select_plus(page):
-    # 只按实际可见名称选择套餐。最终付款页不使用这些选择器。
-    # 已在官网 DOM 核对为原生 button；按可见按钮文字定位，排除隐藏副本。
-    upgrade = page.locator("button").filter(has_text=re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I), visible=True)
-    try:
-        # 会话接口可能先于首页交互组件完成；等待实际入口，不能立即把空 DOM 当作不存在。
-        await upgrade.first.wait_for(state="visible", timeout=30000)
-    except Exception as exc:
-        labels = await page.locator("button, [role=button]").evaluate_all("""nodes => nodes
-            .filter(n => n.getClientRects().length)
-            .map(n => (n.getAttribute('aria-label') || n.innerText || '').trim())
-            .filter(t => t.length < 100 && /upgrade|plus|pricing|升级|订阅|套餐/i.test(t)).slice(0, 12)""")
-        raise Stop("official_upgrade_entry_not_found", stage="plan_selection",
-                   locator_error_type=type(exc).__name__, locator_error=safe_text(str(exc)),
-                   visible_subscription_actions=[safe_text(label) for label in labels]) from None
-    # 首页可能同时有顶部和侧栏的升级入口；此处 guard 仍未授权建单。
-    plus = page.locator("button").filter(has_text=re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I), visible=True)
-    # 本次官网实际出现此个人/Business 切换按钮；Plus 属于个人套餐页。
-    personal = page.locator('button[aria-label*="改为个人套餐"], [role="button"][aria-label*="改为个人套餐"]').filter(visible=True)
-    for opening in range(2):
-        # 使用动态 Locator 的等待/重定位，不用 all() 的瞬时列表判断加载中的按钮。
-        await upgrade.first.click(timeout=30000)
-        try:
-            await plus.or_(personal).first.wait_for(state="visible", timeout=30000)
-            if await personal.is_visible():
-                await personal.click(timeout=30000)
-            await plus.first.wait_for(state="visible", timeout=30000)
-            break
-        except Exception:
-            # SSR 按钮可能在客户端事件绑定前出现。只重开未出现的套餐菜单一次；
-            # 此处 guard 尚未授权建单，绝不重试 Plus 建单或付款点击。
-            dialogs = [loc for loc in await page.get_by_role("dialog").all() if await loc.is_visible()]
-            if opening or not await upgrade.first.is_visible() or dialogs:
-                labels = await page.locator("button, [role=button]").evaluate_all("""nodes => nodes
-                    .filter(n => n.getClientRects().length)
-                    .map(n => (n.getAttribute('aria-label') || n.innerText || '').trim())
-                    .filter(t => t.length < 100 && /upgrade|plus|pricing|升级|订阅|套餐/i.test(t)).slice(0, 12)""")
-                raise Stop("official_plus_option_not_found", stage="plan_selection",
-                           visible_subscription_actions=[safe_text(label) for label in labels]) from None
-            progress("upgrade_menu_not_opened", retry_opening_once=True)
-    from playwright.async_api import expect
-    try:
-        await expect(plus).to_have_count(1, timeout=30000)
-        await expect(plus).to_be_enabled(timeout=30000)
-    except Exception:
-        raise Stop("official_plus_option_not_ready", stage="plan_selection") from None
-    return plus
-
-
 async def select_plan(page, target_plan):
-    spec = plan_spec(target_plan)
-    plus = await select_plus(page)  # 打开官网个人套餐菜单，未点击建单。
-    if target_plan == "plus":
-        return plus
-    from playwright.async_api import expect
-    dialog = page.get_by_role("dialog").filter(visible=True)
-    await expect(dialog).to_have_count(1, timeout=15000)
-    choice = dialog.get_by_role("radio", name=str(spec["tier"]) + "x", exact=True)
-    await expect(choice).to_have_count(1, timeout=15000)
-    if await choice.get_attribute("aria-checked") != "true":
-        await choice.click(timeout=15000)
-    await expect(choice).to_have_attribute("aria-checked", "true", timeout=15000)
-    button = dialog.get_by_role("button", name=re.compile(r"^(?:升级至 Pro|Upgrade to Pro|Get Pro)$"))
-    await expect(button).to_have_count(1, timeout=15000)
-    await expect(button).to_be_enabled(timeout=15000)
-    return button
+    from plan_selection import select_plan as select_official_plan
+    return await select_official_plan(page, target_plan, progress)
 
 
 async def verify_selected_plan(page, target_plan):
-    tier = plan_spec(target_plan)["tier"]
-    if tier:
-        choice = page.get_by_role("dialog").filter(visible=True).get_by_role("radio", name=str(tier) + "x", exact=True)
-        if await choice.count() != 1 or await choice.get_attribute("aria-checked") != "true":
-            raise Stop("selected_plan_changed")
+    from plan_selection import verify_selected_plan as verify_official_plan
+    return await verify_official_plan(page, target_plan)
 
 
 async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=0, review_seconds=0, quote_timeout=25,
@@ -486,6 +420,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             raise Stop("incompatible_existing_subscription", current_plan=identity["current_plan"])
         if existing is None:
             stage = "plan_selection"
+            progress(stage)
             button = await select_plan(page, target_plan)
             # 验证完成后/点击 Plus 前再次核对官网身份，防止切换账号。
             _, identity = await check_session(page, target, wait_seconds)
@@ -493,8 +428,10 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                 raise Stop("incompatible_existing_subscription")
             await verify_selected_plan(page, target_plan)
             stage = "checkout_create"
+            progress(stage)
             guard.armed = True
             await button.click()
+            progress("checkout_wait")
             try:
                 await asyncio.wait_for(guard.response_done.wait(), timeout=45)
             except asyncio.TimeoutError:
@@ -509,6 +446,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             await page.goto(ORIGIN + "/checkout/" + existing["processor_entity"] + "/" + guard.checkout_id,
                             wait_until="domcontentloaded", timeout=45000)
         stage = "quote_read"
+        progress(stage)
         # 等待官网自己的跳转，避免主动 goto 与网页导航竞争或伪装成入口已打通。
         try:
             await page.wait_for_url(re.compile(r"^https://(?:chatgpt\.com/checkout/|checkout\.stripe\.com/).+"),

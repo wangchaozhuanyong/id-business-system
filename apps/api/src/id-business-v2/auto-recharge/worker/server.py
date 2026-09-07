@@ -24,6 +24,7 @@ from checkout_core import Stop, parse_browser_credential, unique_object, write_j
 from payment_form import PaymentDetails, validate_details
 from payment_recovery import recheck_payment
 from plans import PLANS
+from plan_selection import safe_diagnostics
 
 MAX_BODY = 96000
 TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
@@ -34,7 +35,10 @@ PUBLIC_KEYS = set("status reason stage session_status account_matched current_pl
 
 
 def public_result(value):
-    return {k: v for k, v in value.items() if k in PUBLIC_KEYS}
+    result = {k: v for k, v in value.items() if k in PUBLIC_KEYS}
+    if isinstance(value.get("diagnostics"), dict):
+        result["diagnostics"] = safe_diagnostics(value["diagnostics"])
+    return result
 
 
 class NoRedirect(HTTPRedirectHandler):

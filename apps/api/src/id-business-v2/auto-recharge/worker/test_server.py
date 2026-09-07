@@ -10,6 +10,14 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_diagnostics_survive_callback_without_free_text_or_secrets(self):
+        safe = {'step': 'choose_tier', 'error_type': 'TimeoutError', 'role': 'radio',
+                'matched_count': 0, 'enabled': False, 'available_plans': ['plus']}
+        value = {**safe, 'message': 'sessionToken=private', 'html': '<input value="123">',
+                 'available_plans': ['plus', 'private']}
+        self.assertEqual(server.public_result({'diagnostics': value}), {'diagnostics': safe})
+        self.assertEqual(server.public_result({'diagnostics': {'step': [], 'role': {}, 'error_type': 'private'}}), {'diagnostics': {}})
+
     def test_no_credential_fields_in_public_result(self):
         result = server.public_result({'status': 'blocked', 'accessToken': 'private',
             'sessionToken': 'private', 'details': {'cvc': 'private'}, 'cookie': 'private'})

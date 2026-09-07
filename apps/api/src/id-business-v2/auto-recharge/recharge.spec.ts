@@ -29,6 +29,36 @@ const quote = {
 };
 
 describe('recharge input and durable evidence', () => {
+  it('preserves only bounded selection diagnostics across the API boundary', () => {
+    const diagnostics = {
+      step: 'choose_tier',
+      error_type: 'TimeoutError',
+      role: 'radio',
+      matched_count: 0,
+      enabled: false,
+      available_plans: ['plus', 'pro-5x']
+    };
+    expect(
+      safeDocument({
+        diagnostics: {
+          ...diagnostics,
+          html: 'private',
+          message: 'sessionToken=private',
+          cvc: '123'
+        }
+      })
+    ).toEqual({ diagnostics });
+    expect(
+      safeDocument({
+        diagnostics: {
+          step: 'sessionToken',
+          matched_count: -1,
+          enabled: 'true',
+          available_plans: ['private', 'plus', 'plus']
+        }
+      })
+    ).toEqual({ diagnostics: { available_plans: ['plus'] } });
+  });
   it('keeps a complete quote unchanged for the Python digest and removes credentials', () => {
     expect(
       safeDocument({ quote, sessionJson: 'secret', cvc: 'secret', accessToken: 'secret' })
