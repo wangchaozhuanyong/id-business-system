@@ -135,6 +135,122 @@ test('streamed image import validates before Docker and preserves the immutable 
   });
 });
 
+test('production installer declares every referenced release parameter', () => {
+  const installer = readFileSync(
+    resolve(projectRoot, 'scripts/install-aws-production-artifact.sh'),
+    'utf8'
+  );
+  const parameters = installer.match(/for variable in ([\s\S]*?); do/u)?.[1];
+  assert.ok(parameters);
+  const required = new Set(parameters.match(/\bRELEASE_[A-Z0-9_]+\b/gu));
+  for (const [, name] of installer.matchAll(/\$\{?(RELEASE_[A-Z0-9_]+)/gu)) {
+    assert.ok(required.has(name), `安装器仍引用未声明的发布参数：${name}`);
+  }
+  assert.match(
+    installer,
+    /"\$RELEASE_ARTIFACT_ARCHIVE" "\$RELEASE_ARTIFACT_SHA256" "\$RELEASE_IMAGE_ARCHIVE_SHA256"/u,
+    '导入器必须同时取得正式包和镜像归档的校验值'
+  );
+});
+
+test('installer preflight reaches all image checks using only the immutable bundle', () => {
+  withImageLoaderFixture(({ directory, artifact, imageBytes, input, bin, fixtureEnv }) => {
+    const root = join(directory, 'deployment');
+    const current = join(root, 'releases', 'current-fixture');
+    const previous = join(root, 'releases', 'previous-fixture');
+    const cache = join(root, 'artifacts', `${releaseTag}-${commit}`);
+    const bundle = join(cache, `id-business-v2-${releaseTag}-${commit}.tar.gz`);
+    for (const path of [join(current, 'scripts'), previous, cache])
+      mkdirSync(path, { recursive: true });
+    cpSync(artifact, bundle);
+    cpSync(
+      resolve(projectRoot, 'scripts/load-production-release-images.sh'),
+      join(current, 'scripts/load-production-release-images.sh')
+    );
+    for (const path of [current, previous])
+      writeFileSync(join(path, 'docker-compose.aws-mysql.yml'), 'services: {}\n');
+    writeFileSync(
+      join(previous, '.env.aws.production'),
+      'COMPOSE_PROJECT_NAME=fixture\nV2_RUNTIME_DATABASE_URL=mysql://id_business_app:fixture@127.0.0.1:3306/fixture\nAUTO_RECHARGE_WORKER_TOKEN=fixture-only\n'
+    );
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const commands = {
+      docker: `#!/usr/bin/env bash
+set -eu
+case "$1" in
+  compose|ps) exit 0 ;;
+  image) printf '%s\\n' "$3" >>"$INSPECTED_IMAGES"; printf '%s\\n' "$FIXTURE_DIGEST" ;;
+  load) cat >"$IMAGE_INPUT" ;;
+  *) exit 99 ;;
+esac
+`,
+      flock: '#!/usr/bin/env bash\nexit 0\n',
+      ps: '#!/usr/bin/env bash\nexit 0\n',
+      systemctl: '#!/usr/bin/env bash\nexit 3\n',
+      // 隔离测试不变更文件归属，但仍验证生产安装参数并复制相同输入。
+      install: `#!/usr/bin/env bash
+set -eu
+[[ "$#" == 8 && "$1 $2 $3 $4 $5 $6" == '-m 600 -o root -g root' ]] || exit 98
+cp "$7" "$8"
+chmod 600 "$8"
+`
+    };
+    for (const [name, script] of Object.entries(commands)) {
+      writeFileSync(join(bin, name), script);
+      chmodSync(join(bin, name), 0o700);
+    }
+    const installer = readFileSync(
+      resolve(projectRoot, 'scripts/install-aws-production-artifact.sh'),
+      'utf8'
+    );
+    const boundary = installer.indexOf('\ntimers_stopped=0');
+    assert.ok(boundary > 0);
+    // 只替换隔离根目录；实际执行安装器的入口到镜像校验，维护和数据库阶段不进入。
+    const preflight = installer
+      .slice(0, boundary)
+      .replace(
+        "deployment_root='/opt/id-business-v2'",
+        `deployment_root='${root.replaceAll("'", "'\\''")}'`
+      );
+    assert.ok(!preflight.includes("deployment_root='/opt/id-business-v2'"));
+    const env = {
+      ...fixtureEnv,
+      RELEASE_DIRECTORY: current,
+      PREVIOUS_RELEASE_DIRECTORY: previous,
+      RELEASE_ARTIFACT_ARCHIVE: bundle,
+      RELEASE_ARTIFACT_SHA256: sha256File(bundle),
+      RELEASE_IMAGE_ARCHIVE_SHA256: createHash('sha256').update(imageBytes).digest('hex'),
+      RELEASE_COMMIT: commit,
+      RELEASE_TAG: releaseTag,
+      RELEASE_DEPLOYMENT_RUN: 'fixture',
+      PRODUCTION_BASE_URL: 'https://example.invalid',
+      PRODUCTION_COMPOSE_PROJECT: 'fixture',
+      FIXTURE_DIGEST: digest,
+      INSPECTED_IMAGES: join(directory, 'inspected-images')
+    };
+    const images = ['API', 'ADMIN', 'MIGRATION', 'MEDIA_RESOLVER', 'RECHARGE', 'GATE'];
+    for (const name of images) {
+      env[`RELEASE_${name}_IMAGE`] = `fixture-${name.toLowerCase()}:${commit}`;
+      env[`RELEASE_${name}_DIGEST`] = digest;
+    }
+    delete env.RELEASE_IMAGE_ARCHIVE;
+    const result = spawnSync('bash', ['-s'], {
+      input: preflight,
+      encoding: 'utf8',
+      timeout: 10000,
+      env
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readFileSync(input), imageBytes);
+    const checked = readFileSync(env.INSPECTED_IMAGES, 'utf8').trim().split('\n');
+    assert.deepEqual(
+      checked.slice(-6),
+      images.map((name) => env[`RELEASE_${name}_IMAGE`])
+    );
+    assert.equal(existsSync(bundle), true);
+  });
+});
+
 for (const failure of ['artifact-hash', 'image-hash', 'archive-content', 'symlink', 'space']) {
   test(`streamed image import rejects ${failure} before starting Docker`, () => {
     withImageLoaderFixture(({ artifact, runLoader, input, payload, directory }) => {
@@ -209,6 +325,14 @@ exec "$REAL_TAR" "$@"
     writeFileSync(join(bin, name), script);
     chmodSync(join(bin, name), 0o700);
   }
+  const fixtureEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    TMPDIR: runtime,
+    IMAGE_INPUT: input,
+    REAL_TAR: realTar,
+    TAR_COUNTER: join(directory, 'tar-count')
+  };
   const runLoader = (options = {}) =>
     spawnSync(
       'bash',
@@ -223,18 +347,23 @@ exec "$REAL_TAR" "$@"
         encoding: 'utf8',
         timeout: 10000,
         env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
-          TMPDIR: runtime,
-          IMAGE_INPUT: input,
-          REAL_TAR: realTar,
-          TAR_COUNTER: join(directory, 'tar-count'),
+          ...fixtureEnv,
           ...options.env
         }
       }
     );
   try {
-    callback({ directory, artifact, imageBytes, runLoader, input, runtime, payload });
+    callback({
+      directory,
+      artifact,
+      imageBytes,
+      runLoader,
+      input,
+      runtime,
+      payload,
+      bin,
+      fixtureEnv
+    });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

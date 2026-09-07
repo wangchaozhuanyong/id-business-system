@@ -174,13 +174,6 @@ fi
 cd "$RELEASE_DIRECTORY"
 docker compose --env-file "$environment_file" -f "$compose_file" config >/dev/null
 
-expected_image_archive_sha256="${RELEASE_IMAGE_ARCHIVE_SHA256:-}"
-if [[ ! "$expected_image_archive_sha256" =~ ^[a-f0-9]{64}$ ]] ||
-   [[ "$(sha256sum "$RELEASE_IMAGE_ARCHIVE" | awk '{print $1}')" != "$expected_image_archive_sha256" ]]; then
-  echo '镜像归档 SHA-256 校验失败' >&2
-  exit 1
-fi
-
 old_recharge_image="$(docker image inspect "${compose_project}-auto-recharge:latest" --format '{{.Id}}' 2>/dev/null || true)"
 old_api_image="$(docker image inspect "${compose_project}-api:latest" --format '{{.Id}}')"
 old_admin_image="$(docker image inspect "${compose_project}-admin:latest" --format '{{.Id}}')"
