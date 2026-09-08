@@ -127,7 +127,7 @@ try {
             status: 'blocked',
             stage: 'plan_selection',
             account_matched: true,
-            reason: 'official_plan_option_not_found',
+            reason: 'browser_memory_exhausted',
             diagnostics: { step: 'choose_plan', matched_count: 0, available_plans: ['pro-5x'] }
           };
         }
@@ -166,7 +166,11 @@ try {
     await page.getByText('尚未执行开通', { exact: true }).waitFor();
     assert.equal(await page.getByPlaceholder('粘贴完整 JSON，载入后清空输入框').inputValue(), '');
     await page.getByRole('button', { name: '获取官方报价', exact: true }).click();
-    await page.getByRole('alert').filter({ hasText: '未找到所选套餐的开通入口' }).waitFor();
+    await page
+      .getByRole('alert')
+      .filter({ hasText: '官网浏览器内存不足，本次未创建订单或付款' })
+      .waitFor();
+    assert.equal(await page.getByText('browser_memory_exhausted', { exact: true }).count(), 0);
     assert.equal(await page.getByText('获取失败', { exact: true }).count(), 3);
     await page.getByText(/套餐步骤：核对开通按钮/).waitFor();
     assert.equal(confirms, 0);
@@ -222,7 +226,7 @@ try {
       flow: [
         'empty',
         'account-check',
-        'selection-failed',
+        'browser-memory-failed',
         'quote',
         'prepare',
         'amount-confirmation',

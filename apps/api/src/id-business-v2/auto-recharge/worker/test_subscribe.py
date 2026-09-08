@@ -157,11 +157,17 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn(token, str(report))
         self.assertNotIn("test@example.invalid", str(report))
 
-    def test_challenge_is_observed_not_assumed(self):
+    def test_403_always_stops_for_verification_and_preserves_observation(self):
         for headers, expected in (({}, False), ({"cf-mitigated": "challenge"}, True)):
             with self.assertRaises(c.Stop) as caught:
                 c.response_json(403, headers, b"<html>blocked</html>", "")
+            self.assertEqual(caught.exception.report["reason"], "verification_required")
             self.assertEqual(caught.exception.report["challenge_observed"], expected)
+
+    def test_non_403_without_challenge_remains_http_error(self):
+        with self.assertRaises(c.Stop) as caught:
+            c.response_json(400, {}, b'{"detail":"rejected"}', "")
+        self.assertEqual(caught.exception.report["reason"], "http_error")
 
     def test_currency_is_actual_and_unknown_stays_unknown(self):
         for label, cur, amount in (("MYR 99.00", "MYR", "99.00"), ("PHP 1,100.00", "PHP", "1100.00"), ("JPY 3000", "JPY", "3000")):

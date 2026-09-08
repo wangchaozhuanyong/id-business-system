@@ -98,8 +98,8 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
     shm_size: 256m
     pids_limit: 512
-    mem_limit: 640m
-    memswap_limit: 640m
+    mem_limit: 1g
+    memswap_limit: 1536m
     logging: *default-logging
     environment:
       AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}

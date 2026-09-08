@@ -3,13 +3,59 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import server
 from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_reads_cgroup_v2_oom_kill_counter(self):
+        with tempfile.TemporaryDirectory() as folder:
+            events = Path(folder) / 'memory.events'
+            events.write_text('low 0\nhigh 0\noom 3\noom_kill 2\n', encoding='utf-8')
+            self.assertEqual(server.read_cgroup_oom_kill(events), 2)
+            events.write_text('oom_kill invalid\n', encoding='utf-8')
+            self.assertIsNone(server.read_cgroup_oom_kill(events))
+            self.assertIsNone(server.read_cgroup_oom_kill(Path(folder) / 'missing'))
+
+    def test_oom_increment_overrides_browser_failure_and_preserves_stage(self):
+        original = {'status': 'blocked', 'reason': 'official_plan_browser_error',
+                    'stage': 'plan_selection', 'error_type': 'TargetClosedError'}
+        result = server.apply_browser_memory_result(original, 4, 5)
+        self.assertEqual(result['reason'], 'browser_memory_exhausted')
+        self.assertEqual(result['stage'], 'plan_selection')
+        self.assertEqual(result['error_type'], 'TargetClosedError')
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    def test_normal_browser_error_and_page_crash_are_not_mislabeled_as_oom(self):
+        for failure in (
+            {'status': 'blocked', 'reason': 'browser_operation_failed', 'error_type': 'Error'},
+            {'status': 'blocked', 'reason': 'official_plan_browser_error', 'error_type': 'TargetClosedError'},
+        ):
+            with self.subTest(failure=failure):
+                self.assertIs(server.apply_browser_memory_result(failure, 7, 7), failure)
+                self.assertIs(server.apply_browser_memory_result(failure, None, None), failure)
+
+    def test_job_reports_oom_once_without_retrying_or_sending_payment(self):
+        job = server.Job('test', {})
+        calls = []
+        execute = AsyncMock(return_value={
+            'status': 'blocked', 'reason': 'official_plan_browser_error',
+            'stage': 'plan_selection', 'checkout_requests_sent': 0,
+            'payment_requests_sent': 0,
+        })
+        with patch.object(server, 'read_cgroup_oom_kill', side_effect=[10, 11]), \
+             patch.object(server.Job, 'execute', execute), \
+             patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body)):
+            job.run()
+        execute.assert_awaited_once()
+        self.assertEqual(calls[-1]['type'], 'finished')
+        self.assertEqual(calls[-1]['result']['reason'], 'browser_memory_exhausted')
+        self.assertEqual(calls[-1]['result']['checkout_requests_sent'], 0)
+        self.assertEqual(calls[-1]['result']['payment_requests_sent'], 0)
+
     def test_diagnostics_survive_callback_without_free_text_or_secrets(self):
         safe = {'step': 'pricing_page', 'error_type': 'TimeoutError', 'role': 'link',
                 'matched_count': 0, 'enabled': False, 'available_plans': ['plus']}

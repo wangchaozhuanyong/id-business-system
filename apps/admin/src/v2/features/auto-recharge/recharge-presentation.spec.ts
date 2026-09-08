@@ -47,4 +47,11 @@ describe('recharge stage presentation', () => {
       '未找到唯一的官网套餐定价入口'
     );
   });
+  it('shows safe Chinese-only reasons for memory exhaustion and verification', () => {
+    expect(statusLabel('browser_memory_exhausted')).toBe(
+      '官网浏览器内存不足，本次未创建订单或付款'
+    );
+    expect(statusLabel('verification_required')).toBe('官网要求真人验证，本次已安全停止');
+    expect(statusLabel('internal_unknown_reason')).toBe('待核验');
+  });
 });
