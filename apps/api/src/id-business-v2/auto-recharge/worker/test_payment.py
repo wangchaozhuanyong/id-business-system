@@ -17,7 +17,8 @@ from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
 from pay import include_payment_record, run_payment
 from payment_recovery import recheck_in_context
-from payment_form import PaymentDetails, billing_frame, validate_details
+from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, fill_billing_node,
+                          one_billing_field, validate_details)
 from payment_network import PaymentGuard
 from payment_state import PaymentLedger, outcome, payment_evidence, quote_digest
 from test_subscribe import fixture, account
@@ -303,12 +304,16 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               </body></html>''')
         elif p.hostname == "js.stripe.com" and p.path == "/billing-current":
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
-              <select autocomplete="billing country"><option value="US" selected>US</option></select>
+              <select autocomplete="billing country" data-scope="current">
+                <option value="JP" selected>JP</option><option value="US">US</option>
+              </select>
               <input autocomplete="billing name" data-scope="current">
               </body></html>''')
         elif p.hostname == "js.stripe.com" and p.path == "/billing-stale":
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
-              <select autocomplete="billing country"><option value="JP" selected>JP</option></select>
+              <select autocomplete="billing country" data-scope="stale">
+                <option value="" selected></option><option value="JP">JP</option><option value="US">US</option>
+              </select>
               <input autocomplete="billing name" data-scope="stale">
               </body></html>''')
         elif p.hostname == "chatgpt.com" and p.path == "/billing-scope-fixture":
@@ -362,6 +367,10 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_billing_frame_uses_the_country_scoped_stripe_form(self):
         page = await self.context.new_page()
         await page.goto("https://chatgpt.com/billing-scope-fixture")
+        country = await one_billing_field(page, "country", ADDRESS_FIELDS["country"], "US",
+                                          wait_for_presence=True)
+        self.assertEqual(await country.get_attribute("data-scope"), "current")
+        await fill_billing_node(country, "US")
         scope = await billing_frame(page, "US")
         self.assertEqual(await scope.locator("input[autocomplete='billing name']").get_attribute("data-scope"),
                          "current")
