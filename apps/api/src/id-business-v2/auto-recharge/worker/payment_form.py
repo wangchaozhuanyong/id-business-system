@@ -112,12 +112,29 @@ async def one_field(page, selector, *, required=True, timeout=15):
         await asyncio.sleep(.2)
 
 
-async def one_billing_field(page, field_name, selector, value, settle_timeout=2, scope=None):
+async def one_billing_field(page, field_name, selector, value, settle_timeout=2, scope=None,
+                            wait_for_presence=False):
     end = time.monotonic() + settle_timeout
     while True:
         nodes = await visible_fields(page, selector, scope)
-        if len(nodes) <= 1:
-            return nodes[0] if nodes else None
+        if len(nodes) == 1:
+            return nodes[0]
+        if not nodes:
+            if wait_for_presence and time.monotonic() < end:
+                await asyncio.sleep(.2)
+                continue
+            return None
+        # 旧 iframe 的国家值为空；只能从唯一已有国家值的当前官方表单切换国家。
+        if field_name == "country":
+            current = []
+            try:
+                for node in nodes:
+                    if await node.evaluate("n=>n.tagName") == "SELECT" and (await node.input_value()).strip():
+                        current.append(node)
+            except Exception:
+                current = []
+            if len(current) == 1:
+                return current[0]
         # Stripe 切换国家后可能同时保留州文本框和州下拉框。只在官方选项精确匹配时选择下拉框。
         if field_name == "state" and value.strip():
             expected = value.strip().casefold()
@@ -194,7 +211,8 @@ async def fill_official_form(page, details):
 
     filled, scope = [], None
     country_selector = ADDRESS_FIELDS["country"]
-    country = await one_billing_field(page, "country", country_selector, details.country)
+    country = await one_billing_field(page, "country", country_selector, details.country,
+                                      settle_timeout=5, wait_for_presence=True)
     if country is not None:
         await fill_billing_node(country, details.country)
         filled.append("country")
