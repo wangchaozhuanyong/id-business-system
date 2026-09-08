@@ -53,6 +53,17 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(quote["renewal_interval"], "monthly")
         self.assertIsNone(quote_from_text("ChatGPT Plus\nMYR 92.50\n今日应付金额\n未知", "MYR")["today"])
 
+    def test_jpy_symbol_amounts_are_read_from_initial_official_quote(self):
+        quote = quote_from_text(
+            "ChatGPT Plus\nTotal due today\n¥3,000\nEstimated tax\n￥273\n"
+            "Renews\nJPY 2,727\nper month",
+            "JPY",
+        )
+        self.assertEqual(quote["today"], {"currency": "JPY", "amount": "3000", "amount_minor": 3000})
+        self.assertEqual(quote["tax"], {"currency": "JPY", "amount": "273", "amount_minor": 273})
+        self.assertEqual(quote["renewal"], {"currency": "JPY", "amount": "2727", "amount_minor": 2727})
+        self.assertEqual(quote["tax_status"], "estimated")
+
     def test_conflicting_renewal_terms_remain_unknown(self):
         quote = quote_from_text("ChatGPT Plus\nRenews\nMYR 90.00\n将按 MYR 92.50/月 收费。", "MYR")
         self.assertIsNone(quote["renewal"])

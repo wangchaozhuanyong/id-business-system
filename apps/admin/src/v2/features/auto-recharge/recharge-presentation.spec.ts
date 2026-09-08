@@ -52,6 +52,9 @@ describe('recharge stage presentation', () => {
       '官网浏览器内存不足，本次未创建订单或付款'
     );
     expect(statusLabel('verification_required')).toBe('官网要求真人验证，本次已安全停止');
+    expect(statusLabel('quote_needs_review_or_billing')).toBe(
+      '官网初始总额或预估税费未完整读取，本次未付款'
+    );
     expect(statusLabel('internal_unknown_reason')).toBe('待核验');
   });
 });

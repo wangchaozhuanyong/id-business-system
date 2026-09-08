@@ -68,6 +68,7 @@ const labels: Record<string, string> = {
   payment_confirmation_expired: '确认已过期，请重新核价',
   network_unconfirmed: '服务器出口未确认，暂不能提交付款',
   bank_verification_required: '需要本人完成银行验证',
+  quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
   no_original_payment_attempt: '没有已尝试付款的原单',
   worker_operation_failed: '服务器执行步骤未完成',
