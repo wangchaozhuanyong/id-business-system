@@ -17,7 +17,7 @@ from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
 from pay import include_payment_record, run_payment
 from payment_recovery import recheck_in_context
-from payment_form import PaymentDetails, validate_details
+from payment_form import PaymentDetails, billing_frame, validate_details
 from payment_network import PaymentGuard
 from payment_state import PaymentLedger, outcome, payment_evidence, quote_digest
 from test_subscribe import fixture, account
@@ -290,6 +290,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>卡号<input autocomplete="cc-number"></label>
               <label>有效期<input autocomplete="cc-exp"></label>
               <label>安全码<input autocomplete="cc-csc"></label>
+              <label>国家<select autocomplete="billing country"><option value="US">US</option></select></label>
               <label>持卡人<input autocomplete="billing name"></label>
               <label id="transition-name">持卡人<input autocomplete="billing name"></label>
               <label>州<input autocomplete="billing address-level1"></label>
@@ -299,6 +300,21 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>将支付详情保存<input type="checkbox" name="savePayment" checked></label>
               <script>document.querySelector('[autocomplete="cc-csc"]').addEventListener('input',()=>
                 setTimeout(()=>document.querySelector('#transition-name').remove(),300),{once:true});</script>
+              </body></html>''')
+        elif p.hostname == "js.stripe.com" and p.path == "/billing-current":
+            await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
+              <select autocomplete="billing country"><option value="US" selected>US</option></select>
+              <input autocomplete="billing name" data-scope="current">
+              </body></html>''')
+        elif p.hostname == "js.stripe.com" and p.path == "/billing-stale":
+            await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
+              <select autocomplete="billing country"><option value="JP" selected>JP</option></select>
+              <input autocomplete="billing name" data-scope="stale">
+              </body></html>''')
+        elif p.hostname == "chatgpt.com" and p.path == "/billing-scope-fixture":
+            await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
+              <iframe src="https://js.stripe.com/billing-stale"></iframe>
+              <iframe src="https://js.stripe.com/billing-current"></iframe>
               </body></html>''')
         elif p.path.startswith("/checkout/"):
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
@@ -342,6 +358,13 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await frame.locator("input[autocomplete='billing address-level1']").input_value(), "")
         self.assertEqual(self.confirmations + self.tokenizations + self.new_checkouts, 0)
         self.assertFalse(list((self.root / "payments").glob("*.json")))
+
+    async def test_billing_frame_uses_the_country_scoped_stripe_form(self):
+        page = await self.context.new_page()
+        await page.goto("https://chatgpt.com/billing-scope-fixture")
+        scope = await billing_frame(page, "US")
+        self.assertEqual(await scope.locator("input[autocomplete='billing name']").get_attribute("data-scope"),
+                         "current")
 
     async def test_one_payment_success_and_double_submit_blocked(self):
         result = await self.flow()
