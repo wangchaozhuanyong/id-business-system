@@ -55,6 +55,7 @@ describe('recharge stage presentation', () => {
     expect(statusLabel('quote_needs_review_or_billing')).toBe(
       '官网初始总额或预估税费未完整读取，本次未付款'
     );
+    expect(statusLabel('bank_card_number_invalid')).toBe('银行卡号格式无效');
     expect(statusLabel('internal_unknown_reason')).toBe('待核验');
   });
 });

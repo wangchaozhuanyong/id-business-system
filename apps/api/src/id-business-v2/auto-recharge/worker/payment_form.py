@@ -48,15 +48,16 @@ class PaymentDetails:
 
 def validate_details(details, now=None):
     number = re.sub(r"[ -]", "", details.number)
-    if not re.fullmatch(r"4\d{12}(?:\d{3})?(?:\d{3})?", number):
-        raise Stop("visa_number_invalid")
+    # 卡组织和信用卡／借记卡属性由官网支付页判断；本地只做通用 PAN 格式与 Luhn 校验。
+    if not re.fullmatch(r"\d{13,19}", number):
+        raise Stop("bank_card_number_invalid")
     digits = [int(x) for x in number]
     total = sum((n * 2 - 9 if n * 2 > 9 else n * 2) if i % 2 else n
                 for i, n in enumerate(reversed(digits)))
     if total % 10:
-        raise Stop("visa_number_invalid")
+        raise Stop("bank_card_number_invalid")
     exp = re.fullmatch(r"(0[1-9]|1[0-2])\s*/\s*(\d{2})", details.expiry)
-    if not exp or not re.fullmatch(r"\d{3}", details.cvc):
+    if not exp or not re.fullmatch(r"\d{3,4}", details.cvc):
         raise Stop("card_expiry_or_cvc_invalid")
     now = now or datetime.now(timezone.utc)
     if (2000 + int(exp[2]), int(exp[1])) < (now.year, now.month):

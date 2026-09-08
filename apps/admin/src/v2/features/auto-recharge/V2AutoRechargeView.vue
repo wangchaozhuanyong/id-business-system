@@ -59,7 +59,7 @@
             先取得所选套餐原结算，再准备付款。再次获取报价会读取原单，不自动换单。套餐是否可购由官网决定。
           </p>
           <fieldset :disabled="active || busy" class="recharge-billing">
-            <legend>本次 Visa 与真实账单</legend>
+            <legend>本次银行卡与真实账单</legend>
             <el-form-item
               v-for="field in fields"
               :key="field.key"
@@ -160,7 +160,7 @@
             </p>
             <div v-if="selected.state === 'awaiting_confirmation'" class="recharge-confirm">
               <p>
-                本次 {{ planLabels[selected.plan] }}，Visa 尾号 {{ selected.result.card_last4 }}。
+                本次 {{ planLabels[selected.plan] }}，银行卡尾号 {{ selected.result.card_last4 }}。
               </p>
               <el-checkbox v-model="confirmed"
                 >我已核对今日应付、账单资料及按月续费，授权本次付款。</el-checkbox
@@ -249,7 +249,7 @@ const fields: {
   max: number;
   placeholder?: string;
 }[] = [
-  { key: 'number', label: 'Visa 卡号', required: true, secret: true, max: 23 },
+  { key: 'number', label: '银行卡号', required: true, secret: true, max: 23 },
   { key: 'expiry', label: '有效期', required: true, max: 5, placeholder: 'MM/YY' },
   { key: 'cvc', label: '安全码', required: true, secret: true, max: 4 },
   { key: 'name', label: '持卡人姓名', required: true, max: 120 },

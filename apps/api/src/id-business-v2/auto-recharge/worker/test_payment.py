@@ -116,6 +116,21 @@ class StateTests(unittest.TestCase):
         card.clear()
         self.assertFalse(card.number or card.cvc)
 
+    def test_luhn_valid_non_visa_card_and_four_digit_cvc_are_accepted(self):
+        # 公共支付测试号，仅验证本地格式；不访问真实服务。
+        card = details()
+        card.number = "5555555555554444"
+        card.cvc = "1234"
+        validated = validate_details(card)
+        self.assertEqual(validated.last4, "4444")
+
+    def test_card_number_length_is_bounded(self):
+        card = details()
+        card.number = "00000000000000000000"
+        with self.assertRaises(Stop) as error:
+            validate_details(card)
+        self.assertEqual(error.exception.report["reason"], "bank_card_number_invalid")
+
     def test_recovery_guard_cannot_submit_even_with_approval_state(self):
         async def exercise():
             with PaymentLedger(self.root, self.target.account_id) as ledger:

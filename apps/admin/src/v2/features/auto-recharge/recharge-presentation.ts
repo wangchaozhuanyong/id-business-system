@@ -45,6 +45,7 @@ const labels: Record<string, string> = {
   official_account_mismatch: '官网账户与 JSON 不一致',
   invalid_json: 'JSON 格式无效',
   missing_session_token: 'JSON 缺少官网会话凭据',
+  bank_card_number_invalid: '银行卡号格式无效',
   browser_operation_failed: '官网浏览器步骤未完成',
   browser_memory_exhausted: '官网浏览器内存不足，本次未创建订单或付款',
   official_upgrade_entry_not_found: '未找到官网升级入口',
