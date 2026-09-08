@@ -255,6 +255,14 @@ async def verify_billing_fields(page, details, filled):
         await reject_external_billing_fields(page, scope)
     for name, selector in ADDRESS_FIELDS.items():
         node = await one_billing_field(page, name, selector, getattr(details, name), scope=scope)
+        if node is None and name == "line1" and name in filled and scope is not None:
+            # Stripe 的地址自动补全会在手工填入街道后把同一个官方控件改成
+            # autocomplete="disabled"；只在已选定的唯一 Stripe 账单 iframe 内
+            # 接受唯一控件，并继续严格核对其值，不把这个通用属性用于首次填写。
+            transformed = await visible_fields(page, "input[autocomplete='disabled']", scope)
+            if len(transformed) > 1:
+                raise Stop("ambiguous_official_payment_field")
+            node = transformed[0] if transformed else None
         if (node is not None) != (name in filled):
             raise Stop("billing_fields_changed", field=name)
         if node is None:
