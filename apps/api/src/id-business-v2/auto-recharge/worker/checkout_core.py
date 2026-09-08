@@ -105,7 +105,7 @@ def response_json(status: int, headers: dict, raw: bytes, token: str) -> dict:
     except (ValueError, RecursionError):
         data = None
     if not 200 <= status < 300:
-        # 只记录确实观察到的 challenge 标记，不把所有 403 都解释为风控。
+        # 保留是否观察到 challenge 的诊断；所有官网 403 都按需要真人验证安全停止。
         challenge = (headers.get("cf-mitigated") == "challenge"
                      or b"/cdn-cgi/challenge-platform/" in raw)
         error = data.get("error", data.get("detail", data)) if isinstance(data, dict) else None
@@ -122,7 +122,7 @@ def response_json(status: int, headers: dict, raw: bytes, token: str) -> dict:
                     details["server_" + key] = value
         elif isinstance(error, str):
             details["server_message"] = safe_text(error, token)
-        raise Stop("verification_required" if challenge else "http_error", **details)
+        raise Stop("verification_required" if status == 403 or challenge else "http_error", **details)
     if not isinstance(data, dict):
         raise Stop("unexpected_response", http_status=status)
     return data

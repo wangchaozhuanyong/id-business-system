@@ -52,10 +52,22 @@ test('production base images and GitHub Actions are immutable', () => {
 
 test('auto-recharge worker installs only the required Chromium runtime', () => {
   const dockerfile = readProjectFile('apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile');
+  const compose = readProjectFile('docker-compose.aws-mysql.yml');
+  const worker = compose.split(/\n {2}auto-recharge:\n/u)[1].split(/\n {2}api:\n/u)[0];
 
   assert.doesNotMatch(dockerfile, /mcr\\.microsoft\\.com\/playwright/u);
   assert.match(dockerfile, /playwright install --with-deps chromium/u);
   assert.match(dockerfile, /^USER recharge$/mu);
+  assert.match(worker, /read_only: true/u);
+  assert.match(worker, /no-new-privileges:true/u);
+  assert.match(worker, /cap_drop:\s+- ALL/u);
+  assert.match(worker, /\/tmp:rw,noexec,nosuid,nodev,size=512m/u);
+  assert.match(worker, /shm_size: 256m/u);
+  assert.match(worker, /pids_limit: 512/u);
+  assert.match(worker, /mem_limit: 1g/u);
+  assert.match(worker, /memswap_limit: 1536m/u);
+  assert.match(worker, /networks:\s+- recharge-control\s+- recharge-egress/u);
+  assert.doesNotMatch(worker, /ports:/u);
 });
 
 test('CI and production image installs defer vulnerability checks to the explicit audit gate', () => {

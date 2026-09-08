@@ -33,7 +33,9 @@
 
 新增环境配置：`AUTO_RECHARGE_WORKER_TOKEN`（至少 32 字符，API 与执行器共用独立密钥）、`AUTO_RECHARGE_WORKER_URL`、执行器内的 `AUTO_RECHARGE_CALLBACK_URL`。示例只含占位值。首次正式安装在新发布目录的既有生产环境文件中生成随机密钥，不输出，不更改旧发布目录。
 
-生产 Compose 的 `auto-recharge` 服务不开放宿主机端口，仅连接独立控制私网和执行器出口网络。非 root、只读文件系统、临时目录 tmpfs、`init`、无额外 capabilities，内存及交换合计限制 640 MB；不增购或调整云实例。私网 `GET /health` 返回 `ok` 和 `busy`，忙碌时发布安装器停止，不打断正在处理的付款。
+生产 Compose 的 `auto-recharge` 服务不开放宿主机端口，仅连接独立控制私网和执行器出口网络。非 root、只读文件系统、临时目录 512 MB tmpfs、256 MB shm、`init`、无额外 capabilities；物理内存限制 1 GB，额外 Swap 限制 512 MB，内存与 Swap 总上限 1.5 GB，不增购或调整云实例。私网 `GET /health` 返回 `ok` 和 `busy`，忙碌时发布安装器停止，不打断正在处理的付款。
+
+执行器在每个任务开始和结束时读取 cgroup v2 `memory.events` 的 `oom_kill`。本任务计数增加时统一返回 `browser_memory_exhausted`，保留已有阶段和请求计数，不自动重试、建单或付款。官网 403 或真人验证页统一安全停止，不绕过验证，不接代理、验证码服务或私有结算接口。
 
 两张新表保留以供查单，不自动删除或回滚数据。
 

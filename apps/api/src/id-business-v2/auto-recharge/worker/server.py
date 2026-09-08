@@ -31,6 +31,7 @@ TOKEN = os.environ.get("AUTO_RECHARGE_WORKER_TOKEN", "")
 API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-business-v2/auto-recharge/internal")
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$")
+CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 
 
@@ -39,6 +40,31 @@ def public_result(value):
     if isinstance(value.get("diagnostics"), dict):
         result["diagnostics"] = safe_diagnostics(value["diagnostics"])
     return result
+
+
+def read_cgroup_oom_kill(path=CGROUP_MEMORY_EVENTS):
+    """读取 cgroup v2 中容器累计 OOM 杀进程次数；不支持时不影响任务。"""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            name, value = line.split()
+            if name == "oom_kill":
+                return int(value)
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return None
+
+
+def apply_browser_memory_result(result, before, after):
+    """本任务 OOM 计数增加时优先回传可操作的受控失败。"""
+    if before is None or after is None or after <= before:
+        return result
+    return {
+        **result,
+        "status": "blocked",
+        "reason": "browser_memory_exhausted",
+        "checkout_requests_sent": result.get("checkout_requests_sent", 0),
+        "payment_requests_sent": result.get("payment_requests_sent", 0),
+    }
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -150,6 +176,7 @@ class Job:
 
     def run(self):
         # 硬超时终止本执行器，MySQL 的原单标记保留；不会重发任务。
+        oom_kills_before = read_cgroup_oom_kill()
         watchdog = threading.Timer(900, lambda: os._exit(70))
         watchdog.daemon = True
         watchdog.start()
@@ -178,6 +205,7 @@ class Job:
             self.nonce = None
             self.done = True
             watchdog.cancel()
+        result = apply_browser_memory_result(result, oom_kills_before, read_cgroup_oom_kill())
         try:
             callback(self.id, {"type": "finished", "result": public_result(result)})
         except Stop:

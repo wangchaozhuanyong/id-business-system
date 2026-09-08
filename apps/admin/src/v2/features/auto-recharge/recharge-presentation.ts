@@ -31,7 +31,7 @@ const labels: Record<string, string> = {
   paid_tier_pending_verification: '已付款，档位待核验',
   payment_failed: '付款失败',
   payment_result_unknown: '付款结果待核验',
-  verification_required: '需要本人网页或银行验证',
+  verification_required: '官网要求真人验证，本次已安全停止',
   payment_cancelled: '已取消本次确认',
   payment_submitted_or_pending: '等待原单付款结果',
   paid: '已确认付款',
@@ -46,6 +46,7 @@ const labels: Record<string, string> = {
   invalid_json: 'JSON 格式无效',
   missing_session_token: 'JSON 缺少官网会话凭据',
   browser_operation_failed: '官网浏览器步骤未完成',
+  browser_memory_exhausted: '官网浏览器内存不足，本次未创建订单或付款',
   official_upgrade_entry_not_found: '未找到官网升级入口',
   official_pricing_plan_entry_not_found: '未找到唯一的官网套餐定价入口',
   official_plus_option_not_found: '未找到官网 Plus 选项',
@@ -72,7 +73,7 @@ const labels: Record<string, string> = {
   worker_operation_failed: '服务器执行步骤未完成',
   durable_state_unavailable: '记录服务未确认，已阻止重复请求',
   operation_cancelled: '操作已取消',
-  http_error: '官网拒绝当前请求'
+  http_error: '官网拒绝当前请求，本次已安全停止'
 };
 export const selectionStepLabels = {
   open_menu: '打开套餐菜单',
@@ -104,5 +105,5 @@ export function subscriptionLabel(job: V2RechargeJob): string {
   return '尚未执行开通';
 }
 export function statusLabel(value: unknown) {
-  return typeof value === 'string' ? (labels[value] ?? '待核验（可查看诊断码）') : '未知';
+  return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
 }

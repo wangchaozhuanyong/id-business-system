@@ -140,7 +140,7 @@
               <dd>{{ selected.result.checkout_identifier || '尚未取得' }}</dd>
             </dl>
             <p v-if="selected.result.reason" role="alert">
-              {{ statusLabel(selected.result.reason) }} <code>{{ selected.result.reason }}</code>
+              {{ statusLabel(selected.result.reason) }}
             </p>
             <p v-if="selected.result.diagnostics?.step">
               套餐步骤：{{ selectionStepLabels[selected.result.diagnostics.step] }}。
