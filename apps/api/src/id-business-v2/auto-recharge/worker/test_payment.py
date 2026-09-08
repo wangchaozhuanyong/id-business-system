@@ -26,7 +26,7 @@ from test_subscribe import fixture, account
 def details():
     # Stripe 公布的测试 Visa 号，仅用于本地拦截夹具；绝不访问真实服务。
     return PaymentDetails("4242424242424242", "12/39", "123", "Synthetic User", "test@example.invalid",
-                          "MY", "Synthetic address", "", "Synthetic city", "", "00000")
+                          "US", "Synthetic address", "", "Synthetic city", "OR", "97204")
 
 
 def quote():
@@ -290,6 +290,10 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>卡号<input autocomplete="cc-number"></label>
               <label>有效期<input autocomplete="cc-exp"></label>
               <label>安全码<input autocomplete="cc-csc"></label>
+              <label>州<input autocomplete="billing address-level1"></label>
+              <label>州<select autocomplete="billing address-level1">
+                <option value="">请选择</option><option value="OR">Oregon</option>
+              </select></label>
               <label>将支付详情保存<input type="checkbox" name="savePayment" checked></label>
               </body></html>''')
         elif p.path.startswith("/checkout/"):
@@ -325,6 +329,11 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         result = await self.flow(False)
         self.assertEqual(result["status"], "payment_prepared", result)
         self.assertTrue(result["card_fields_filled"])
+        self.assertIn("state", result["billing_fields_filled"])
+        page = self.context.pages[-1]
+        frame = next(frame for frame in page.frames if urlsplit(frame.url).hostname == "js.stripe.com")
+        self.assertEqual(await frame.locator("select[autocomplete='billing address-level1']").input_value(), "OR")
+        self.assertEqual(await frame.locator("input[autocomplete='billing address-level1']").input_value(), "")
         self.assertEqual(self.confirmations + self.tokenizations + self.new_checkouts, 0)
         self.assertFalse(list((self.root / "payments").glob("*.json")))
 
