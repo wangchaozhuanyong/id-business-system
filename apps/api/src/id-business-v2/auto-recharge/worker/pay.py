@@ -1,4 +1,4 @@
-"""单账户 Visa 付款入口：默认准备，--pay 必须现场确认金额；不保存支付资料。"""
+"""单账户银行卡付款入口：默认准备，--pay 必须现场确认金额；不保存支付资料。"""
 from __future__ import annotations
 
 import argparse
@@ -36,7 +36,7 @@ def read_details():
     if not sys.stdin.isatty():
         raise Stop("local_secure_terminal_required")
     focus_input_terminal()
-    prompts = {"number": "Visa 卡号", "expiry": "有效期 MM/YY", "cvc": "本次安全码",
+    prompts = {"number": "银行卡号", "expiry": "有效期 MM/YY", "cvc": "本次安全码",
                "name": "持卡人真实姓名", "email": "账单邮箱", "country": "真实账单国家两位代码",
                "line1": "真实街道地址", "line2": "地址第二行（可留空）", "city": "城市",
                "state": "州/省（当地不需要可留空）", "postal_code": "邮编"}
@@ -67,7 +67,7 @@ def confirm_quote(quote, last4):
     focus_input_terminal()
     today, renewal = quote["today"], quote["renewal"]
     phrase = f"确认付款 {today['currency']} {today['amount']}"
-    print(f"\n目标账户已与 JSON 核对；{plan_spec(quote['plan'])['label']}；Visa 尾号 {last4}。", flush=True)
+    print(f"\n目标账户已与 JSON 核对；{plan_spec(quote['plan'])['label']}；银行卡尾号 {last4}。", flush=True)
     print(f"今日应付 {today['currency']} {today['amount']}；续费 {renewal['currency']} {renewal['amount']}/月，直至取消。", flush=True)
     print("仅对这张官方结算提交一次付款。需要本人银行验证时暂停；未知结果不再次扣款。", flush=True)
     entered = input(f"确认本次金额和续费后输入「{phrase}」，其他输入取消：").strip()
@@ -207,7 +207,7 @@ def include_payment_record(result, ledger):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="单笔 Visa 订阅：默认只准备；付款必须在终端核对金额")
+    parser = argparse.ArgumentParser(description="单笔银行卡订阅：默认只准备；付款必须在终端核对金额")
     parser.add_argument("--json-file", type=Path, required=True)
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--plan", choices=PLANS, default="plus", help="所选原结算套餐；默认 plus")
