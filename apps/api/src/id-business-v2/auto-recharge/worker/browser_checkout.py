@@ -25,6 +25,9 @@ CURRENCIES = {"USD": 2, "MYR": 2, "PHP": 2, "EUR": 2, "GBP": 2, "AUD": 2, "CAD":
               "JPY": 0, "KRW": 0, "SGD": 2, "INR": 2, "IDR": 2, "THB": 2, "VND": 0,
               "TWD": 2, "HKD": 2, "BRL": 2, "MXN": 2, "AED": 2, "SAR": 2, "ZAR": 2,
               "NZD": 2, "CHF": 2, "SEK": 2, "NOK": 2, "DKK": 2, "PLN": 2, "TRY": 2}
+VISIBLE_MONEY_LINE = re.compile(
+    r"(?:(?:[A-Z]{3}|RM|₱|\$|€|£|¥|￥)\s*)?[0-9,.]+(?:\s*[A-Z]{3})?"
+)
 
 
 def progress(stage, **details):
@@ -80,7 +83,7 @@ def quote_from_text(text: str, currency_hint=None):
                 if found is None and i + 1 < len(lines):
                     # 不跨越“未知/小计/税费”等下一字段，把别的金额误作今日应付。
                     value_line = lines[i + 1]
-                    if re.fullmatch(r"(?:[A-Z]{3}|RM|₱|\$|€|£)?\s*[0-9,.]+(?:\s*[A-Z]{3})?", value_line):
+                    if VISIBLE_MONEY_LINE.fullmatch(value_line):
                         found = money(value_line, currency_hint)
                 if found:
                     matches.append(found)
