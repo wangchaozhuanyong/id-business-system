@@ -18,7 +18,7 @@ from checkout_core import ROOT, Stop, parse_browser_credential
 from pay import include_payment_record, run_payment
 from payment_recovery import recheck_in_context
 from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, fill_billing_node,
-                          one_billing_field, validate_details)
+                          one_billing_field, validate_details, verify_billing_fields)
 from payment_network import PaymentGuard
 from payment_state import PaymentLedger, outcome, payment_evidence, quote_digest
 from test_subscribe import fixture, account
@@ -294,6 +294,8 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>国家<select autocomplete="billing country"><option value="US">US</option></select></label>
               <label>持卡人<input autocomplete="billing name"></label>
               <label id="transition-name">持卡人<input autocomplete="billing name"></label>
+              <label>街道地址<input autocomplete="billing address-line1"
+                oninput="this.autocomplete='disabled'"></label>
               <label>州<input autocomplete="billing address-level1"></label>
               <label>州<select autocomplete="billing address-level1">
                 <option value="">请选择</option><option value="OR">Oregon</option>
@@ -355,14 +357,20 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "payment_prepared", result)
         self.assertTrue(result["card_fields_filled"])
         self.assertIn("name", result["billing_fields_filled"])
+        self.assertIn("line1", result["billing_fields_filled"])
         self.assertIn("state", result["billing_fields_filled"])
         page = self.context.pages[-1]
         frame = next(frame for frame in page.frames if urlsplit(frame.url).hostname == "js.stripe.com")
         self.assertEqual(await frame.locator("input[autocomplete='billing name']").input_value(), "Synthetic User")
+        self.assertEqual(await frame.locator("input[autocomplete='disabled']").input_value(), "Synthetic address")
         self.assertEqual(await frame.locator("select[autocomplete='billing address-level1']").input_value(), "OR")
         self.assertEqual(await frame.locator("input[autocomplete='billing address-level1']").input_value(), "")
         self.assertEqual(self.confirmations + self.tokenizations + self.new_checkouts, 0)
         self.assertFalse(list((self.root / "payments").glob("*.json")))
+        await frame.locator("input[autocomplete='disabled']").fill("Changed address")
+        with self.assertRaises(Stop) as changed:
+            await verify_billing_fields(page, details(), result["billing_fields_filled"])
+        self.assertEqual(changed.exception.report["reason"], "billing_form_changed")
 
     async def test_billing_frame_uses_the_country_scoped_stripe_form(self):
         page = await self.context.new_page()
