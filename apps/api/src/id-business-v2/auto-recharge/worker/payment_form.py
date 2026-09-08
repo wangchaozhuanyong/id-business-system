@@ -85,9 +85,9 @@ def trusted_frames(page):
             and urlsplit(f.url).hostname in {"chatgpt.com", "js.stripe.com"}]
 
 
-async def visible_fields(page, selector):
+async def visible_fields(page, selector, scope=None):
     found = []
-    for frame in trusted_frames(page):
+    for frame in ([scope] if scope is not None else trusted_frames(page)):
         try:
             loc = frame.locator(selector).filter(visible=True)
             for index in range(await loc.count()):
@@ -112,10 +112,10 @@ async def one_field(page, selector, *, required=True, timeout=15):
         await asyncio.sleep(.2)
 
 
-async def one_billing_field(page, field_name, selector, value, settle_timeout=2):
+async def one_billing_field(page, field_name, selector, value, settle_timeout=2, scope=None):
     end = time.monotonic() + settle_timeout
     while True:
-        nodes = await visible_fields(page, selector)
+        nodes = await visible_fields(page, selector, scope)
         if len(nodes) <= 1:
             return nodes[0] if nodes else None
         # Stripe 切换国家后可能同时保留州文本框和州下拉框。只在官方选项精确匹配时选择下拉框。
@@ -141,6 +141,48 @@ async def one_billing_field(page, field_name, selector, value, settle_timeout=2)
         await asyncio.sleep(.2)
 
 
+async def billing_frame(page, country, timeout=5):
+    """选择国家后 Stripe 会短暂保留旧 iframe；后续账单字段只能在国家值一致的唯一 iframe 中操作。"""
+    expected = country.strip().upper()
+    end = time.monotonic() + timeout
+    while True:
+        matching = []
+        for frame in trusted_frames(page):
+            try:
+                countries = frame.locator(ADDRESS_FIELDS["country"]).filter(visible=True)
+                values = [await countries.nth(index).input_value() for index in range(await countries.count())]
+                if any(value.strip().upper() == expected for value in values):
+                    matching.append(frame)
+            except Exception:
+                continue
+        if len(matching) == 1:
+            return matching[0]
+        if time.monotonic() >= end:
+            raise Stop("ambiguous_official_payment_field")
+        await asyncio.sleep(.2)
+
+
+async def fill_billing_node(node, value):
+    if await node.evaluate("n=>n.tagName") == "SELECT":
+        values = await node.locator("option").evaluate_all("ns=>ns.map(n=>n.value)")
+        if value in values:
+            await node.select_option(value=value)
+        else:
+            await node.select_option(label=value)
+    else:
+        await node.fill(value)
+
+
+async def reject_external_billing_fields(page, scope):
+    """Stripe 无国家值的旧 iframe 可等待消失；主页新增账单字段仍属表单变更。"""
+    for frame in trusted_frames(page):
+        if frame == scope or urlsplit(frame.url).hostname != "chatgpt.com":
+            continue
+        for selector in ADDRESS_FIELDS.values():
+            if await frame.locator(selector).filter(visible=True).count():
+                raise Stop("billing_fields_changed")
+
+
 async def fill_official_form(page, details):
     validate_details(details)
     # 三个 autocomplete 已在当前官方 Stripe iframe 中实测；不依赖动态 iframe 名称。
@@ -150,20 +192,21 @@ async def fill_official_form(page, details):
         node = await one_field(page, selector)
         await node.fill(value)
 
-    filled = []
+    filled, scope = [], None
+    country_selector = ADDRESS_FIELDS["country"]
+    country = await one_billing_field(page, "country", country_selector, details.country)
+    if country is not None:
+        await fill_billing_node(country, details.country)
+        filled.append("country")
+        scope = await billing_frame(page, details.country)
     for field_name, selector in ADDRESS_FIELDS.items():
+        if field_name == "country":
+            continue
         value = getattr(details, field_name)
-        node = await one_billing_field(page, field_name, selector, value)
+        node = await one_billing_field(page, field_name, selector, value, scope=scope)
         if node is None:
             continue  # 官网没有要求该字段时，不伪造网页请求添加字段。
-        if await node.evaluate("n=>n.tagName") == "SELECT":
-            values = await node.locator("option").evaluate_all("ns=>ns.map(n=>n.value)")
-            if value in values:
-                await node.select_option(value=value)
-            else:
-                await node.select_option(label=value)
-        else:
-            await node.fill(value)
+        await fill_billing_node(node, value)
         filled.append(field_name)
     # 已观察的自愿跨次保存选项保持不选；订阅自身续费条款在最终确认中单独展示。
     save = await one_field(page, "input[name='savePayment']", required=False)
@@ -189,8 +232,11 @@ async def verify_card_fields(page, details):
 
 
 async def verify_billing_fields(page, details, filled):
+    scope = await billing_frame(page, details.country) if "country" in filled else None
+    if scope is not None:
+        await reject_external_billing_fields(page, scope)
     for name, selector in ADDRESS_FIELDS.items():
-        node = await one_billing_field(page, name, selector, getattr(details, name))
+        node = await one_billing_field(page, name, selector, getattr(details, name), scope=scope)
         if (node is not None) != (name in filled):
             raise Stop("billing_fields_changed", field=name)
         if node is None:
