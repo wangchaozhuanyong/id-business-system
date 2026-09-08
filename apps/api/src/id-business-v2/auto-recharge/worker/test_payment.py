@@ -290,11 +290,15 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>卡号<input autocomplete="cc-number"></label>
               <label>有效期<input autocomplete="cc-exp"></label>
               <label>安全码<input autocomplete="cc-csc"></label>
+              <label>持卡人<input autocomplete="billing name"></label>
+              <label id="transition-name">持卡人<input autocomplete="billing name"></label>
               <label>州<input autocomplete="billing address-level1"></label>
               <label>州<select autocomplete="billing address-level1">
                 <option value="">请选择</option><option value="OR">Oregon</option>
               </select></label>
               <label>将支付详情保存<input type="checkbox" name="savePayment" checked></label>
+              <script>document.querySelector('[autocomplete="cc-csc"]').addEventListener('input',()=>
+                setTimeout(()=>document.querySelector('#transition-name').remove(),300),{once:true});</script>
               </body></html>''')
         elif p.path.startswith("/checkout/"):
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
@@ -329,9 +333,11 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         result = await self.flow(False)
         self.assertEqual(result["status"], "payment_prepared", result)
         self.assertTrue(result["card_fields_filled"])
+        self.assertIn("name", result["billing_fields_filled"])
         self.assertIn("state", result["billing_fields_filled"])
         page = self.context.pages[-1]
         frame = next(frame for frame in page.frames if urlsplit(frame.url).hostname == "js.stripe.com")
+        self.assertEqual(await frame.locator("input[autocomplete='billing name']").input_value(), "Synthetic User")
         self.assertEqual(await frame.locator("select[autocomplete='billing address-level1']").input_value(), "OR")
         self.assertEqual(await frame.locator("input[autocomplete='billing address-level1']").input_value(), "")
         self.assertEqual(self.confirmations + self.tokenizations + self.new_checkouts, 0)

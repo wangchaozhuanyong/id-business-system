@@ -112,25 +112,33 @@ async def one_field(page, selector, *, required=True, timeout=15):
         await asyncio.sleep(.2)
 
 
-async def one_billing_field(page, field_name, selector, value):
-    nodes = await visible_fields(page, selector)
-    if len(nodes) <= 1:
-        return nodes[0] if nodes else None
-    # Stripe 切换国家后可能同时保留州文本框和州下拉框。只在官方选项精确匹配时选择下拉框。
-    if field_name == "state" and value.strip():
-        expected = value.strip().casefold()
-        matching = []
-        for node in nodes:
-            if await node.evaluate("n=>n.tagName") != "SELECT":
-                continue
-            options = await node.locator("option").evaluate_all(
-                "ns=>ns.map(n=>({value:n.value,label:n.textContent||''}))")
-            if any(expected in (option["value"].strip().casefold(), option["label"].strip().casefold())
-                   for option in options):
-                matching.append(node)
-        if len(matching) == 1:
-            return matching[0]
-    raise Stop("ambiguous_official_payment_field")
+async def one_billing_field(page, field_name, selector, value, settle_timeout=2):
+    end = time.monotonic() + settle_timeout
+    while True:
+        nodes = await visible_fields(page, selector)
+        if len(nodes) <= 1:
+            return nodes[0] if nodes else None
+        # Stripe 切换国家后可能同时保留州文本框和州下拉框。只在官方选项精确匹配时选择下拉框。
+        if field_name == "state" and value.strip():
+            expected = value.strip().casefold()
+            matching = []
+            try:
+                for node in nodes:
+                    if await node.evaluate("n=>n.tagName") != "SELECT":
+                        continue
+                    options = await node.locator("option").evaluate_all(
+                        "ns=>ns.map(n=>({value:n.value,label:n.textContent||''}))")
+                    if any(expected in (option["value"].strip().casefold(), option["label"].strip().casefold())
+                           for option in options):
+                        matching.append(node)
+            except Exception:
+                matching = []  # iframe 正在替换时等待下一次受控观察。
+            if len(matching) == 1:
+                return matching[0]
+        # 卡片校验后 Stripe 会短暂保留新旧账单 iframe；只等待其自行收敛，绝不在重复控件中猜选。
+        if time.monotonic() >= end:
+            raise Stop("ambiguous_official_payment_field")
+        await asyncio.sleep(.2)
 
 
 async def fill_official_form(page, details):
