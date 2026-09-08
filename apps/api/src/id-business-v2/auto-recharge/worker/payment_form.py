@@ -112,6 +112,27 @@ async def one_field(page, selector, *, required=True, timeout=15):
         await asyncio.sleep(.2)
 
 
+async def one_billing_field(page, field_name, selector, value):
+    nodes = await visible_fields(page, selector)
+    if len(nodes) <= 1:
+        return nodes[0] if nodes else None
+    # Stripe 切换国家后可能同时保留州文本框和州下拉框。只在官方选项精确匹配时选择下拉框。
+    if field_name == "state" and value.strip():
+        expected = value.strip().casefold()
+        matching = []
+        for node in nodes:
+            if await node.evaluate("n=>n.tagName") != "SELECT":
+                continue
+            options = await node.locator("option").evaluate_all(
+                "ns=>ns.map(n=>({value:n.value,label:n.textContent||''}))")
+            if any(expected in (option["value"].strip().casefold(), option["label"].strip().casefold())
+                   for option in options):
+                matching.append(node)
+        if len(matching) == 1:
+            return matching[0]
+    raise Stop("ambiguous_official_payment_field")
+
+
 async def fill_official_form(page, details):
     validate_details(details)
     # 三个 autocomplete 已在当前官方 Stripe iframe 中实测；不依赖动态 iframe 名称。
@@ -123,10 +144,10 @@ async def fill_official_form(page, details):
 
     filled = []
     for field_name, selector in ADDRESS_FIELDS.items():
-        node = await one_field(page, selector, required=False)
+        value = getattr(details, field_name)
+        node = await one_billing_field(page, field_name, selector, value)
         if node is None:
             continue  # 官网没有要求该字段时，不伪造网页请求添加字段。
-        value = getattr(details, field_name)
         if await node.evaluate("n=>n.tagName") == "SELECT":
             values = await node.locator("option").evaluate_all("ns=>ns.map(n=>n.value)")
             if value in values:
@@ -161,7 +182,7 @@ async def verify_card_fields(page, details):
 
 async def verify_billing_fields(page, details, filled):
     for name, selector in ADDRESS_FIELDS.items():
-        node = await one_field(page, selector, required=False)
+        node = await one_billing_field(page, name, selector, getattr(details, name))
         if (node is not None) != (name in filled):
             raise Stop("billing_fields_changed", field=name)
         if node is None:
