@@ -142,6 +142,9 @@ export function useAutoRecharge() {
       Boolean(selectedAddress.value) &&
       rechargeDetailsReady(details.value)
   );
+  const detailsSubmissionLocked = computed(
+    () => !awaitingDetails.value || busy.value || detailsSubmittedFor.value === selected.value?.id
+  );
 
   watch(
     [selectedAddressId, availableAddresses, () => addressQuery.phase.value],
@@ -488,6 +491,7 @@ export function useAutoRecharge() {
     details,
     accountLocked,
     billingInputLocked,
+    detailsSubmissionLocked,
     canStartFlow,
     canSubmitDetails,
     canConfirm,

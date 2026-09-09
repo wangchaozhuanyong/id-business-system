@@ -161,7 +161,7 @@
           <div class="recharge-form-footer">
             <el-button
               type="primary"
-              :disabled="!canSubmitDetails"
+              :disabled="detailsSubmissionLocked"
               :loading="busy"
               @click="submitPaymentDetails"
             >
@@ -285,8 +285,8 @@ const {
   details,
   accountLocked,
   billingInputLocked,
+  detailsSubmissionLocked,
   canStartFlow,
-  canSubmitDetails,
   confirmationBlockedReason,
   canRetry,
   canRecheck,
