@@ -22,6 +22,11 @@ export const rechargeFields: {
   { key: 'postal_code', label: '邮编', required: true, max: 20 }
 ];
 
+export function formatRechargeExpiry(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 4);
+  return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+}
+
 export function rechargeFieldError(key: keyof V2RechargeDetails, value: string): string {
   const field = rechargeFields.find((item) => item.key === key)!;
   if (!value.trim()) return field.required ? `请填写${field.label}` : '';

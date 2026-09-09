@@ -1,6 +1,6 @@
 export const V2_RECHARGE_PLANS = ['plus', 'pro-5x', 'pro-20x'] as const;
 export type V2RechargePlan = (typeof V2_RECHARGE_PLANS)[number];
-export type V2RechargeAction = 'check' | 'quote' | 'prepare' | 'recheck';
+export type V2RechargeAction = 'check' | 'quote' | 'prepare' | 'recheck' | 'flow';
 export interface V2RechargeMoney {
   amount: string;
   currency: string;
@@ -41,6 +41,8 @@ export interface V2RechargeResult {
   current_plan?: string;
   account_matched?: boolean;
   quote?: V2RechargeQuote;
+  initial_quote?: V2RechargeQuote;
+  quote_authority?: 'official_checkout_response';
   network?: { ip: string | null; country: string | null; observedAt: string };
   payment_status?: string;
   payment_outcome?: string;
@@ -54,7 +56,13 @@ export interface V2RechargeJob {
   id: string;
   plan: V2RechargePlan;
   action: V2RechargeAction;
-  state: 'running' | 'awaiting_confirmation' | 'confirming' | 'finished' | 'unknown';
+  state:
+    | 'running'
+    | 'awaiting_details'
+    | 'awaiting_confirmation'
+    | 'confirming'
+    | 'finished'
+    | 'unknown';
   result: V2RechargeResult;
   createdAt: string;
   updatedAt: string;
@@ -79,6 +87,11 @@ export interface V2RechargeStart {
   action: V2RechargeAction;
   addressId?: string;
   details?: V2RechargeDetails;
+}
+
+export interface V2RechargeDetailsSubmission {
+  addressId: string;
+  details: V2RechargeDetails;
 }
 
 export const V2_RECHARGE_ADDRESS_STATUSES = ['unused', 'used', 'disabled'] as const;

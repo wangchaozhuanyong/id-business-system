@@ -1,6 +1,6 @@
 <template>
   <section class="v2-records-page recharge-page">
-    <V2PageContext description="输入授权 JSON → 选择套餐 → 填写资料 → 确认充值 → 查看开通结果。">
+    <V2PageContext description="载入授权 JSON → 获取初始报价 → 填写官网并核价 → 确认一次充值。">
       <template #actions><el-button @click="historyOpen = true">最近执行记录</el-button></template>
     </V2PageContext>
     <V2AsyncRegion
@@ -36,8 +36,8 @@
                   :placeholder="
                     sessionJson ? '授权已载入，可粘贴新 JSON 替换' : '粘贴完整的授权 JSON'
                   "
-                  @change="acceptSession"
                 />
+                <el-button :disabled="accountLocked" @click="acceptSession">载入 JSON</el-button>
                 <label class="recharge-file-control" :class="{ 'is-disabled': accountLocked }"
                   >导入文件
                   <input
@@ -67,6 +67,21 @@
             </el-form-item>
           </el-form>
           <p v-if="sessionJson" class="recharge-note">授权已载入，仅在本页内存使用。</p>
+          <div class="recharge-step-action">
+            <el-button
+              type="primary"
+              :disabled="
+                accountLocked ||
+                query.phase.value !== 'ready' ||
+                query.data.value?.configured === false
+              "
+              :loading="busy"
+              @click="startFlow"
+            >
+              获取初始报价
+            </el-button>
+            <span>只有点击后才会访问官网，不会自动付款。</span>
+          </div>
           <el-form
             :model="details"
             :rules="rechargeRules"
@@ -76,12 +91,7 @@
             require-asterisk-position="right"
             @submit.prevent
           >
-            <fieldset
-              class="recharge-billing"
-              :disabled="billingLocked"
-              @focusin="editingDetails = true"
-              @focusout="editingDetails = false"
-            >
+            <fieldset class="recharge-billing" :disabled="billingLocked">
               <legend>付款资料</legend>
               <div class="recharge-fields">
                 <el-form-item
@@ -92,13 +102,15 @@
                   :required="field.required"
                 >
                   <el-input
-                    v-model="details[field.key]"
+                    :model-value="details[field.key]"
                     :type="field.secret ? 'password' : 'text'"
+                    :inputmode="field.key === 'expiry' ? 'numeric' : undefined"
                     autocomplete="off"
                     :maxlength="field.max"
                     :placeholder="field.placeholder"
                     :disabled="billingLocked"
                     :validate-event="!billingLocked"
+                    @update:model-value="updatePaymentField(field.key, $event)"
                   />
                 </el-form-item>
               </div>
@@ -146,9 +158,17 @@
             </fieldset>
           </el-form>
           <div class="recharge-form-footer">
-            <p class="recharge-note">资料填完并离开输入框后自动核价。确认充值前不会付款。</p>
+            <el-button
+              type="primary"
+              :disabled="billingLocked"
+              :loading="busy"
+              @click="submitPaymentDetails"
+            >
+              填写官网并计算最终金额
+            </el-button>
+            <p class="recharge-note">此步骤只填写官网并重新核价，确认充值前不会付款。</p>
             <p class="recharge-note">
-              卡号及安全码仅用于本次任务，提交准备后清除，不保存为卡片库。
+              核价失败时保留本页输入；取得完整最终报价、取消或确认后才清除敏感资料。
             </p>
           </div>
         </section>
@@ -162,7 +182,12 @@
           <RechargeResult :job="selected">
             <div v-if="selected?.state === 'awaiting_confirmation'" class="recharge-confirm">
               <p>点击确认即授权本次付款及上述续费；系统将执行充值并回传开通结果。</p>
-              <el-button type="primary" :loading="busy" @click="confirmPayment">
+              <el-button
+                type="primary"
+                :disabled="Boolean(confirmationBlockedReason)"
+                :loading="busy"
+                @click="confirmPayment"
+              >
                 确认充值 · {{ selected.result.quote?.today?.currency }}
                 {{ selected.result.quote?.today?.amount }}
               </el-button>
@@ -171,7 +196,10 @@
           </RechargeResult>
           <div class="recharge-actions">
             <el-button
-              v-if="selected && ['running', 'awaiting_confirmation'].includes(selected.state)"
+              v-if="
+                selected &&
+                ['running', 'awaiting_details', 'awaiting_confirmation'].includes(selected.state)
+              "
               :disabled="busy"
               @click="cancel"
               >停止本次任务</el-button
@@ -237,7 +265,7 @@ import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import RechargeResult from './RechargeResult.vue';
 import { useAutoRecharge } from './useAutoRecharge';
-import { rechargeFields, rechargeRules } from './recharge-form';
+import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
 import { planLabels, statusLabel } from './recharge-presentation';
 const {
   query,
@@ -254,7 +282,6 @@ const {
   busy,
   error,
   details,
-  editingDetails,
   accountLocked,
   billingLocked,
   confirmationBlockedReason,
@@ -263,6 +290,8 @@ const {
   recheckPayment,
   workflowMessage,
   acceptSession,
+  startFlow,
+  submitPaymentDetails,
   confirmPayment,
   cancel,
   importJson,
@@ -293,12 +322,16 @@ const paymentFields = computed(() =>
   rechargeFields.slice(0, 5).map((field) => ({
     ...field,
     placeholder:
-      selected.value?.action === 'prepare' &&
+      ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '') &&
       !details.value[field.key] &&
       ['number', 'expiry', 'cvc'].includes(field.key)
         ? '敏感资料已清除'
         : field.placeholder
   }))
 );
+
+function updatePaymentField(key: keyof typeof details.value, value: string) {
+  details.value[key] = key === 'expiry' ? formatRechargeExpiry(value) : value;
+}
 </script>
 <style scoped src="./auto-recharge.css"></style>

@@ -10,6 +10,7 @@ const labels: Record<string, string> = {
   plus: 'Plus',
   pro: 'Pro（档位待核验）',
   running: '正在执行',
+  awaiting_details: '等待填写付款资料',
   awaiting_confirmation: '等待确认金额',
   confirming: '正在提交本次付款',
   finished: '本次操作已结束',
@@ -23,8 +24,10 @@ const labels: Record<string, string> = {
   checkout_wait: '等待官方结算响应',
   quote_read: '读取官方报价',
   quote_ready: '已取得官方报价',
+  details_required: '等待填写官网资料',
   payment_ready: '已核价，等待确认',
   checkout_quote_verified: '官方报价已核对',
+  checkout_ready_for_billing: '等待账单地址确定总额',
   blocked: '当前步骤未完成',
   subscription_activated: '开通成功',
   paid_pending_activation: '已付款，待开通',
@@ -66,6 +69,7 @@ const labels: Record<string, string> = {
   previous_payment_attempt_exists: '该订单已尝试付款，只允许复查',
   account_has_other_payment_attempt: '该账户已有付款尝试，请选择原套餐复查',
   payment_quote_changed: '官网金额已变化，请重新核价',
+  payment_quote_not_ready: '官网最终金额尚未稳定，本次未付款',
   payment_confirmation_expired: '确认已过期，请重新核价',
   card_expiry_or_cvc_invalid: '银行卡有效期或安全码格式无效',
   billing_country_option_not_found: '官网未找到 United States 账单国家选项，已安全停止',
@@ -76,6 +80,11 @@ const labels: Record<string, string> = {
   existing_checkout_unavailable: '原结算已失效，本次未付款',
   no_original_payment_attempt: '没有已尝试付款的原单',
   worker_operation_failed: '服务器执行步骤未完成',
+  worker_acceptance_unknown: '执行器接收结果待核验，本次不会自动重发',
+  worker_not_received: '执行器未接收本次任务，请重新开始',
+  confirmation_acceptance_unknown: '付款确认接收结果待核验，只能复查原订单',
+  payment_details_expired: '填写付款资料已超时，本次未付款',
+  original_quote_mismatch: '原订单当前币种或金额与历史记录不一致，只展示官网实际结果',
   durable_state_unavailable: '记录服务未确认，已阻止重复请求',
   operation_cancelled: '操作已取消',
   http_error: '官网拒绝当前请求，本次已安全停止'
@@ -92,6 +101,8 @@ export function quotePlaceholder(job: V2RechargeJob): string {
   if (job.result.quote) return '未知';
   if (job.action === 'check') return '待获取报价';
   if (job.action === 'quote' && job.state === 'running') return '正在获取报价';
+  if (job.action === 'flow' && job.state === 'running') return '正在计算最终金额';
+  if (job.state === 'awaiting_details') return '等待填写账单资料';
   if (job.action === 'quote' && job.state === 'finished' && job.result.reason) return '获取失败';
   if (job.state === 'unknown') return '报价结果待核验';
   return '待获取报价';

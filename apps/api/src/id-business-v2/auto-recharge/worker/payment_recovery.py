@@ -7,14 +7,14 @@ import os
 from browser_checkout import ORIGIN, check_session, progress
 from checkout_core import ROOT, Stop, session_cookies
 from payment_network import PaymentGuard
-from payment_state import outcome
+from payment_state import outcome, quote_digest
 from plans import subscription_match
 
 
 async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=6, poll_interval=20):
     if not ledger.record:
         raise Stop("no_payment_attempt_to_recheck")
-    from pay import verify_identity_again
+    from pay import verified_quote_once, verify_identity_again
     guard = PaymentGuard(target, ledger)
     guard.read_only = True
     guard.checkout_id = ledger.checkout_id
@@ -46,6 +46,16 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
                 await asyncio.wait_for(guard.payment_done.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 pass
+        actual_quote = await verified_quote_once(page, guard)
+        if actual_quote:
+            failure["quote"] = actual_quote
+            failure["quote_authority"] = "official_checkout_response"
+            try:
+                quote_changed = quote_digest(actual_quote) != quote_digest(ledger.record["quote"])
+            except Stop:
+                quote_changed = True
+            if quote_changed:
+                failure["reason"] = "original_quote_mismatch"
         # 查单之后重新查询套餐，不能用查单前的 Free 或上一轮的 Plus 判定这次结果。
         for i in range(poll_count if guard.evidence else 1):
             identity = await verify_identity_again(page, target)

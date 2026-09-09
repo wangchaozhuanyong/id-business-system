@@ -54,6 +54,7 @@ try {
     page.on('pageerror', (error) => errors.push(error.message));
     const items = [];
     let starts = 0;
+    let detailSubmissions = 0;
     let confirms = 0;
     let addressUsed = false;
     const address = {
@@ -99,61 +100,82 @@ try {
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'POST') {
         starts += 1;
         const body = request.postDataJSON();
-        if (body.action === 'quote') {
-          assert.equal(body.addressId, undefined);
-          assert.equal(body.details, undefined);
-        } else if (body.action === 'prepare') {
-          assert.equal(body.addressId, address.id);
-          assert.deepEqual(
-            {
-              country: body.details.country,
-              line1: body.details.line1,
-              line2: body.details.line2,
-              city: body.details.city,
-              state: body.details.state,
-              postal_code: body.details.postal_code
-            },
-            {
-              country: 'US',
-              line1: address.line1,
-              line2: '',
-              city: 'Portland',
-              state: 'OR',
-              postal_code: '97204'
-            }
-          );
-        }
+        assert.equal(body.action, 'flow');
+        assert.equal(body.addressId, undefined);
+        assert.equal(body.details, undefined);
         const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
         items.unshift({
           id: body.id,
           plan: body.plan,
           action: body.action,
-          state: body.action === 'prepare' ? 'awaiting_confirmation' : 'finished',
+          state: 'awaiting_details',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           result: {
-            status: body.action === 'prepare' ? 'awaiting_confirmation' : 'checkout_quote_verified',
+            status: 'checkout_ready_for_billing',
             account_matched: true,
             current_plan: 'free',
             checkout_identifier: 'cs_fixture',
             network: { ip: '203.0.113.10', country: 'MY' },
-            quote: {
+            initial_quote: {
               plan: body.plan,
-              today: amount,
+              today: null,
               tax: null,
               renewal: amount,
               renewal_interval: 'monthly'
-            },
-            ...(body.action === 'prepare' ? { nonce: 'a'.repeat(64), card_last4: '4242' } : {})
+            }
           }
         });
         return success(route, { id: body.id });
+      }
+      if (path.endsWith('/details') && request.method() === 'POST') {
+        detailSubmissions += 1;
+        const body = request.postDataJSON();
+        assert.equal(body.addressId, address.id);
+        assert.deepEqual(
+          {
+            country: body.details.country,
+            line1: body.details.line1,
+            line2: body.details.line2,
+            city: body.details.city,
+            state: body.details.state,
+            postal_code: body.details.postal_code
+          },
+          {
+            country: 'US',
+            line1: address.line1,
+            line2: '',
+            city: 'Portland',
+            state: 'OR',
+            postal_code: '97204'
+          }
+        );
+        const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
+        const tax = { currency: 'MYR', amount: '0.00', amount_minor: 0 };
+        items[0].state = 'awaiting_confirmation';
+        items[0].result = {
+          ...items[0].result,
+          status: 'awaiting_confirmation',
+          stage: 'payment_ready',
+          quote: {
+            plan: items[0].plan,
+            today: amount,
+            tax,
+            renewal: amount,
+            renewal_interval: 'monthly'
+          },
+          quote_authority: 'official_checkout_response',
+          nonce: 'a'.repeat(64),
+          card_last4: '4444'
+        };
+        return success(route, { id: items[0].id });
       }
       if (path.endsWith('/confirm')) {
         confirms += 1;
         items[0].state = 'finished';
         items[0].result.status = 'subscription_activated';
         items[0].result.payment_status = 'paid';
+        items[0].result.payment_attempted = true;
         items[0].result.subscription_status = 'plus';
         addressUsed = true;
         return success(route, {});
@@ -174,10 +196,17 @@ try {
         );
       });
     await page.getByPlaceholder('粘贴完整的授权 JSON').fill('{"sessionToken":"synthetic-only"}');
+    assert.equal(starts, 0);
+    await page.getByRole('button', { name: '载入 JSON' }).click();
     await page.getByText('选择需要开通的套餐', { exact: true }).click();
     await page.getByRole('option', { name: 'ChatGPT Plus', exact: true }).click();
-    await page.locator('.recharge-summary dd').filter({ hasText: 'MYR 92.50' }).first().waitFor();
+    assert.equal(starts, 0);
+    await page.getByRole('button', { name: '获取初始报价' }).click();
+    await page
+      .getByText('官网需要账单地址才能确定税费和总额，请填写资料后继续。', { exact: true })
+      .waitFor();
     assert.equal(starts, 1);
+    assert.equal(detailSubmissions, 0);
     assert.equal(confirms, 0);
     const values = ['5555555555554444', 'Fixture Person', '12/30', '1234', 'fixture@example.test'];
     const fields = page.locator('fieldset input');
@@ -186,8 +215,10 @@ try {
     await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
     await page.getByRole('option', { name: address.line1, exact: true }).click();
     await page.getByText('国家：United States（US）', { exact: true }).waitFor();
-    await page.getByText('开通信息', { exact: true }).click();
+    assert.equal(detailSubmissions, 0);
+    await page.getByRole('button', { name: '填写官网并计算最终金额' }).click();
     await page.locator('.recharge-confirm').waitFor();
+    assert.equal(detailSubmissions, 1);
     assert.equal(await fields.nth(0).inputValue(), '');
     assert.equal(await fields.nth(2).inputValue(), '');
     assert.equal(confirms, 0);
@@ -213,10 +244,11 @@ try {
       ok: true,
       viewports: [1440, 768, 390],
       flow: [
-        'quote',
+        'local-json',
+        'explicit-initial-quote',
         'unused-address-selection',
         'fixed-us-location',
-        'prepare',
+        'explicit-details-and-final-quote',
         'amount-confirmation',
         'subscription-activated',
         'address-consumed'

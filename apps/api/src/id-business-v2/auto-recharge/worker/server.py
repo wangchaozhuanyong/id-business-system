@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import re
-import secrets
 import tempfile
 import threading
 import time
@@ -32,7 +31,7 @@ API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-busin
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
-PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 
 
 async def quote_checkout(target, plan, root):
@@ -110,6 +109,11 @@ class Job:
         self.nonce = None
         self.confirmed = False
         self.confirm_event = threading.Event()
+        self.details_event = threading.Event()
+        self.pending_details = None
+        self.waiting_details = False
+        self.waiting_confirmation = False
+        self.details_received = False
         self.cancelled = False
         self.done = False
 
@@ -128,16 +132,29 @@ class Job:
         callback(self.id, {"type": "progress", "result": public_result({"stage": stage, **details})})
 
     def confirm(self, quote, last4):
-        self.nonce = secrets.token_hex(32)
+        material = "|".join((
+            "auto-recharge-confirm-v1", self.id, quote["plan"],
+            self._money_material(quote.get("today")), self._money_material(quote.get("tax")),
+            self._money_material(quote.get("renewal")), quote.get("renewal_interval") or "-"))
+        self.nonce = hmac.new(TOKEN.encode(), material.encode(), hashlib.sha256).hexdigest()
+        self.waiting_confirmation = True
         callback(self.id, {"type": "confirmation", "result": {
             "status": "awaiting_confirmation", "stage": "payment_ready", "quote": quote,
+            "quote_authority": "official_checkout_response",
             "nonce": self.nonce, "card_last4": last4}})
         self.confirm_event.wait(300)
+        self.waiting_confirmation = False
         return self.confirmed and not self.cancelled
+
+    @staticmethod
+    def _money_material(value):
+        return (f"{value['currency']}:{value['amount_minor']}:{value['amount']}"
+                if isinstance(value, dict) else "-")
 
     def signal(self, nonce=None, cancel=False):
         if cancel:
             self.cancelled = True
+            self.details_event.set()
             self.confirm_event.set()
             return
         if self.nonce is None or not isinstance(nonce, str) or not hmac.compare_digest(self.nonce, nonce):
@@ -147,14 +164,36 @@ class Job:
         self.confirmed = True
         self.confirm_event.set()
 
-    def details(self):
-        value = self.payload.pop("details", {})
+    def submit_details(self, value):
+        if self.details_received or self.details_event.is_set() or not self.waiting_details:
+            raise Stop("payment_details_already_consumed")
+        self.pending_details = value
+        self.details_received = True
+        self.details_event.set()
+
+    def details(self, initial_quote):
+        self.waiting_details = True
+        callback(self.id, {"type": "details_required", "result": {
+            "status": "awaiting_details", "stage": "details_required",
+            "initial_quote": initial_quote, "payment_requests_sent": 0}})
+        self.details_event.wait(600)
+        self.waiting_details = False
+        if self.cancelled:
+            raise Stop("operation_cancelled")
+        if not self.details_received or not isinstance(self.pending_details, dict):
+            raise Stop("payment_details_expired")
+        value = self.pending_details.pop("details", {})
         try:
+            if not isinstance(value, dict):
+                raise Stop("invalid_payment_details")
             return validate_details(PaymentDetails(**value))
         except (TypeError, ValueError):
             raise Stop("invalid_payment_details") from None
         finally:
-            value.clear()
+            if isinstance(value, dict):
+                value.clear()
+            self.pending_details.clear()
+            self.pending_details = None
 
     async def execute(self):
         raw = self.payload.pop("sessionJson", "")
@@ -177,6 +216,9 @@ class Job:
             return await browser_checkout.run_browser(target, state_dir=self.root, target_plan=plan)
         if action == "quote":
             return await quote_checkout(target, plan, self.root)
+        if action == "flow":
+            return await pay.run_flow(target, self.root, plan, details_reader=self.details,
+                                      confirmer=self.confirm, wait_seconds=120)
         with payment_state.PaymentLedger(self.root, target.account_id, target_plan=plan) as ledger:
             if action == "recheck":
                 if not ledger.record:
@@ -215,6 +257,12 @@ class Job:
             attempt_ledger.atomic_json = payment_state.atomic_json = original_atomic
             browser_checkout.progress = pay.progress = payment_network.progress = original_progress
             self.payload.clear()
+            if self.pending_details:
+                details = self.pending_details.get("details")
+                if isinstance(details, dict):
+                    details.clear()
+                self.pending_details.clear()
+                self.pending_details = None
             self.nonce = None
             self.done = True
             watchdog.cancel()
@@ -246,10 +294,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path != "/health":
+        if self.path == "/health":
+            self.reply(200, {"ok": True, "busy": bool(self.job and not self.job.done)})
+            return
+        if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
+            self.reply(403, {"ok": False})
+            return
+        parts = self.path.strip("/").split("/")
+        if (len(parts) != 3 or parts[0] != "jobs" or parts[2] != "status"
+                or not JOB_ID.fullmatch(parts[1]) or not self.job or self.job.id != parts[1]):
             self.reply(404, {"ok": False})
             return
-        self.reply(200, {"ok": True, "busy": bool(self.job and not self.job.done)})
+        self.reply(200, {"ok": True, "accepted": True, "details_received": self.job.details_received,
+                         "confirmation_received": self.job.confirmed,
+                         "cancelled": self.job.cancelled, "done": self.job.done})
 
     def do_POST(self):
         if not TOKEN or not hmac.compare_digest(self.headers.get("X-Recharge-Worker", ""), TOKEN):
@@ -268,14 +326,17 @@ class Handler(BaseHTTPRequestHandler):
                     if self.job and not self.job.done:
                         self.reply(409, {"ok": False})
                         return
-                    if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck"}:
+                    if body.get("plan") not in PLANS or body.get("action") not in {"check", "quote", "prepare", "recheck", "flow"}:
                         raise ValueError()
                     Handler.job = Job(parts[1], body)
                     threading.Thread(target=Handler.job.run, daemon=True).start()
-                elif len(parts) == 3 and parts[2] in {"confirm", "cancel"}:
+                elif len(parts) == 3 and parts[2] in {"details", "confirm", "cancel"}:
                     if not self.job or self.job.id != parts[1] or self.job.done:
                         raise ValueError()
-                    self.job.signal(nonce=body.get("nonce"), cancel=parts[2] == "cancel")
+                    if parts[2] == "details":
+                        self.job.submit_details(body)
+                    else:
+                        self.job.signal(nonce=body.get("nonce"), cancel=parts[2] == "cancel")
                 else:
                     raise ValueError()
             self.reply(202, {"ok": True})

@@ -1,7 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { RechargeService } from './recharge.service';
 import { RechargeRepository } from './persistence/recharge.repository';
-import { hash, safeDocument, validateStart } from './recharge-validation';
+import {
+  confirmationNonce,
+  hash,
+  safeDocument,
+  validateDetailsSubmission,
+  validateStart
+} from './recharge-validation';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const operator = {
@@ -38,12 +44,13 @@ const prepareInput = () => ({
   details: { ...paymentDetails }
 });
 const amount = { amount: '92.50', amount_minor: 9250, currency: 'MYR' };
+const zero = { amount: '0.00', amount_minor: 0, currency: 'MYR' };
 const quote = {
-  plan: 'plus',
+  plan: 'plus' as const,
   today: amount,
-  tax: null,
+  tax: zero,
   renewal: amount,
-  renewal_interval: 'monthly',
+  renewal_interval: 'monthly' as const,
   tax_status: 'unknown',
   source: 'official_checkout_visible_text'
 };
@@ -79,10 +86,21 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({ diagnostics: { available_plans: ['plus'] } });
   });
-  it('keeps a complete quote unchanged for the Python digest and removes credentials', () => {
+  it('keeps controlled quote fields and removes credentials and legacy display metadata', () => {
     expect(
-      safeDocument({ quote, sessionJson: 'secret', cvc: 'secret', accessToken: 'secret' })
-    ).toEqual({ quote });
+      safeDocument({
+        quote: { ...quote, plan_source: 'official_checkout_selected_radio' },
+        initial_quote: { ...quote, today: null, tax: null },
+        quote_authority: 'official_checkout_response',
+        sessionJson: 'secret',
+        cvc: 'secret',
+        accessToken: 'secret'
+      })
+    ).toEqual({
+      quote,
+      initial_quote: { ...quote, today: null, tax: null },
+      quote_authority: 'official_checkout_response'
+    });
   });
   it('does not turn an unknown amount into zero', () => {
     expect(
@@ -96,10 +114,17 @@ describe('recharge input and durable evidence', () => {
     expect(() => validateStart({ ...input(), details: { cvc: '123' } })).toThrow();
     expect(() => validateStart({ ...input(), sessionJson: 'x'.repeat(65001) })).toThrow();
     expect(() => validateStart({ ...input(), plan: 'other' })).toThrow();
+    expect(() => validateStart({ ...input(), action: 'flow' })).not.toThrow();
     expect(() => validateStart({ ...prepareInput(), addressId: undefined })).toThrow(
       '请选择未使用'
     );
     expect(() => validateStart(prepareInput())).not.toThrow();
+    expect(() =>
+      validateDetailsSubmission({ addressId, details: { ...paymentDetails } })
+    ).not.toThrow();
+    expect(() =>
+      validateDetailsSubmission({ addressId, details: { ...paymentDetails, extra: 'private' } })
+    ).toThrow();
   });
   it('refuses stale durable record writes', async () => {
     const previous = { revision: 2, ownerId: 'admin-test' };
@@ -171,6 +196,7 @@ describe('single worker dispatch and confirmation', () => {
   const repository = new RechargeRepository({} as never);
   vi.spyOn(repository, 'lock');
   const active = vi.spyOn(repository, 'active');
+  const list = vi.spyOn(repository, 'list');
   const transaction = { execute: vi.fn() };
   const audit = { append: vi.fn() };
   const addressRepository = {
@@ -244,7 +270,11 @@ describe('single worker dispatch and confirmation', () => {
   it('does not retry unknown worker acceptance', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('timeout'));
     await expect(service.start(input(), operator)).rejects.toThrow('不会自动重发');
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fetch).mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(
+      1
+    );
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.method).toBeUndefined();
   });
   it('loads the selected unused address and sends only the fixed location to the worker', async () => {
     await service.start(prepareInput(), operator);
@@ -269,8 +299,37 @@ describe('single worker dispatch and confirmation', () => {
     await expect(service.start(prepareInput(), operator)).rejects.toThrow('address unavailable');
     expect(fetch).not.toHaveBeenCalled();
   });
+  it('accepts payment details only for the waiting flow and never persists secrets', async () => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      plan: 'plus',
+      action: 'flow',
+      state: 'awaiting_details',
+      result: { initial_quote: quote }
+    } as never);
+    const submitted = { addressId, details: { ...paymentDetails } };
+    await service.submitDetails(id, submitted, operator);
+    expect(addressRepository.requireUnused).toHaveBeenCalledWith(tx, operator.id, addressId);
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id } })
+    );
+    expect(JSON.stringify(tx.idBusinessV2RechargeJob.update.mock.calls)).not.toContain(
+      paymentDetails.number
+    );
+    const workerBody = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(workerBody.details).toMatchObject({
+      number: paymentDetails.number,
+      country: 'US',
+      line1: '1221 SW Fourth Avenue',
+      city: 'Portland',
+      state: 'OR',
+      postal_code: '97204'
+    });
+    expect(submitted.details.number).toBe('');
+  });
   it('reserves confirmation before dispatch and rejects repeated/stale confirmations', async () => {
-    const nonce = 'a'.repeat(64);
+    const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
     const job = {
       id,
       ownerId: operator.id,
@@ -286,16 +345,92 @@ describe('single worker dispatch and confirmation', () => {
     await expect(service.confirm(id, nonce, operator)).rejects.toThrow();
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it('reconstructs the same confirmation credential after an API restart', async () => {
+    const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
+    list.mockResolvedValue([
+      {
+        id,
+        ownerId: operator.id,
+        plan: 'plus',
+        action: 'flow',
+        state: 'awaiting_confirmation',
+        nonceHash: hash(nonce),
+        accountKey: 'a'.repeat(64),
+        result: { quote, quote_authority: 'official_checkout_response' },
+        leaseUntil: new Date(Date.now() + 60000),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ] as never);
+    service = new RechargeService(
+      repository as never,
+      addressRepository as never,
+      transaction as never,
+      audit as never
+    );
+    const result = await service.list(operator);
+    expect(result.items[0]?.result).toMatchObject({ nonce });
+  });
+  it('ends an unknown confirmation receipt immediately without resending', async () => {
+    const nonce = confirmationNonce(id, quote, 'x'.repeat(64));
+    const job = {
+      id,
+      ownerId: operator.id,
+      plan: 'plus',
+      action: 'flow',
+      state: 'awaiting_confirmation',
+      nonceHash: hash(nonce),
+      result: { quote, quote_authority: 'official_checkout_response' }
+    };
+    active.mockResolvedValue(job as never);
+    tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue(job);
+    tx.idBusinessV2RechargeJob.update.mockImplementation(async ({ data }) => {
+      Object.assign(job, data);
+      return job;
+    });
+    vi.mocked(fetch).mockRejectedValue(new Error('timeout'));
+    await expect(service.confirm(id, nonce, operator)).rejects.toThrow('只能刷新或复查');
+    expect(vi.mocked(fetch).mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(
+      1
+    );
+    expect(job.state).toBe('unknown');
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenLastCalledWith({
+      where: { id },
+      data: expect.objectContaining({ state: 'unknown', leaseUntil: expect.any(Date) })
+    });
+  });
+  it('refuses confirmation callbacks without explicit tax and official order authority', async () => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      plan: 'plus',
+      action: 'flow',
+      state: 'running',
+      nonceHash: null,
+      result: {}
+    } as never);
+    const incomplete = { ...quote, tax: null };
+    await expect(
+      service.callback(id, {
+        type: 'confirmation',
+        result: {
+          quote: incomplete,
+          quote_authority: 'official_checkout_response',
+          nonce: confirmationNonce(id, incomplete, 'x'.repeat(64))
+        }
+      })
+    ).rejects.toThrow('最终报价不完整');
+  });
   it('rejects worker calls without the independent secret', () => {
     expect(() => service.authorizeWorker('bad')).toThrow();
     expect(() => service.authorizeWorker('x'.repeat(64))).not.toThrow();
   });
-  it('marks the selected address used only after verified subscription activation', async () => {
+  it('marks the selected address used at the first real payment request and not after safe failure', async () => {
     const job = {
       id,
       ownerId: operator.id,
       accountKey: 'a'.repeat(64),
-      action: 'prepare',
+      action: 'flow',
       state: 'confirming',
       nonceHash: null,
       result: { addressId }
@@ -303,7 +438,13 @@ describe('single worker dispatch and confirmation', () => {
     active.mockResolvedValue(job as never);
     await service.callback(id, {
       type: 'finished',
-      result: { status: 'subscription_activated', payment_status: 'paid' }
+      result: {
+        status: 'payment_result_unknown',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_requests_sent: 1
+      }
     });
     expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId);
     expect(audit.append).toHaveBeenCalledWith(
@@ -319,7 +460,7 @@ describe('single worker dispatch and confirmation', () => {
     transaction.execute.mockImplementation(async (callback) => callback(tx));
     await service.callback(id, {
       type: 'finished',
-      result: { status: 'payment_failed', payment_status: 'declined' }
+      result: { status: 'blocked', payment_status: 'not_attempted', payment_requests_sent: 0 }
     });
     expect(addressRepository.markUsed).not.toHaveBeenCalled();
   });

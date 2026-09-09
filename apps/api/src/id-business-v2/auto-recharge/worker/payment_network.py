@@ -12,10 +12,11 @@ from payment_state import payment_evidence
 
 
 class PaymentGuard(NetworkGuard):
-    def __init__(self, target, payment_ledger):
-        super().__init__(target)
+    def __init__(self, target, payment_ledger=None, checkout_ledger=None, target_plan=None):
+        super().__init__(target, checkout_ledger)
         self.payment_ledger = payment_ledger
-        self.target_plan = payment_ledger.target_plan
+        self.target_plan = (payment_ledger.target_plan if payment_ledger else target_plan
+                            or getattr(checkout_ledger, "target_plan", "plus"))
         self.approved = False
         self.confirmation_sent = 0
         self.confirmation_reserved = False
@@ -32,10 +33,19 @@ class PaymentGuard(NetworkGuard):
         self.read_only = False
         self.persistence_error = False
         self.payment_http_status = None
+        self.official_quote_binding = None
+        self.official_binding_version = 0
+
+    def attach_payment_ledger(self, ledger):
+        if self.payment_ledger is not None or ledger.target_plan != self.target_plan:
+            raise Stop("payment_ledger_attachment_invalid")
+        self.payment_ledger = ledger
 
     def persist_observation(self, **updates):
         """磁盘故障不能抹掉刚收到的付款凭据，也不能重新开放付款。"""
         try:
+            if self.payment_ledger is None:
+                raise Stop("payment_record_required")
             self.payment_ledger.update(payment_status=self.payment_state, evidence=self.evidence,
                                        reason=self.payment_error, **updates)
         except OSError:
@@ -43,7 +53,8 @@ class PaymentGuard(NetworkGuard):
             progress("payment_record_write_failed", repeated_payment="blocked")
 
     def approve(self, quote):
-        if not self.account_verified or self.checkout_id != self.payment_ledger.checkout_id:
+        if (self.payment_ledger is None or not self.account_verified
+                or self.checkout_id != self.payment_ledger.checkout_id):
             raise Stop("payment_account_or_order_unverified")
         if not self.payment_ledger.record or not self.payment_ledger.record.get("payment_attempted"):
             raise Stop("payment_marker_required")
@@ -116,6 +127,14 @@ class PaymentGuard(NetworkGuard):
                     self.payment_error = "payment_order_binding_changed"
                     self.payment_done.set()
                 return
+            if initialization:
+                summary = data.get("total_summary")
+                due = (data.get("amount_total") if "amount_total" in data else
+                       summary.get("due") if isinstance(summary, dict) else None)
+                currency = str(data.get("currency", "")).upper()
+                if (type(due) is int and due > 0 and re.fullmatch(r"[A-Z]{3}", currency)):
+                    self.official_quote_binding = {"amount_minor": due, "currency": currency}
+                    self.official_binding_version += 1
             # 同一结算响应中确实返回的 PaymentIntent 才能作为证据关联。
             intent = data.get("payment_intent")
             intent_id = intent.get("id") if isinstance(intent, dict) else intent
@@ -173,4 +192,5 @@ class PaymentGuard(NetworkGuard):
                 "payment_evidence": self.evidence,
                 "payment_record_write_failed": self.persistence_error,
                 "payment_http_status": self.payment_http_status,
-                "payment_failure_reason": safe_text(self.payment_error)}
+                "payment_failure_reason": safe_text(self.payment_error),
+                "quote_authority": "official_checkout_response" if self.official_quote_binding else None}

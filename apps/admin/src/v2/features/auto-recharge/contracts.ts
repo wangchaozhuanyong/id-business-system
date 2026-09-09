@@ -4,6 +4,7 @@ export type {
   V2RechargePlan,
   V2RechargeAction,
   V2RechargeDetails,
+  V2RechargeDetailsSubmission,
   V2RechargeAddress,
   V2RechargeAddressList,
   V2RechargeAddressListQuery,
