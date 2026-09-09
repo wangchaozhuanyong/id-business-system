@@ -4,13 +4,68 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import browser_checkout
 import server
 from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_persistent_runtime_reuses_one_browser_process(self):
+        browsers = []
+
+        class FakeBrowser:
+            def __init__(self):
+                self.connected = True
+                self.closed = 0
+
+            def is_connected(self):
+                return self.connected
+
+            async def close(self):
+                self.closed += 1
+                self.connected = False
+
+        async def factory():
+            browser = FakeBrowser()
+            browsers.append(browser)
+            return browser
+
+        async def identity(browser):
+            return id(browser)
+
+        runtime = server.PersistentBrowserRuntime(browser_factory=factory)
+        runtime.start()
+        try:
+            first = runtime.run(identity)
+            second = runtime.run(identity)
+        finally:
+            runtime.stop()
+        self.assertEqual(first, second)
+        self.assertEqual(len(browsers), 1)
+        self.assertEqual(browsers[0].closed, 1)
+
+    def test_shared_browser_still_creates_and_closes_an_isolated_context_per_run(self):
+        async def exercise():
+            target = type('Target', (), {'account_id': 'account'})()
+            contexts = [MagicMock(), MagicMock()]
+            for context in contexts:
+                context.close = AsyncMock()
+            browser = MagicMock()
+            browser.new_context = AsyncMock(side_effect=contexts)
+            with patch.object(browser_checkout, 'workflow', new_callable=AsyncMock,
+                              return_value={'status': 'session_verified'}) as workflow:
+                first = await browser_checkout.run_browser(target, browser=browser)
+                second = await browser_checkout.run_browser(target, browser=browser)
+            self.assertEqual(first, second)
+            self.assertEqual(browser.new_context.await_count, 2)
+            self.assertEqual(workflow.await_count, 2)
+            for context in contexts:
+                context.close.assert_awaited_once()
+            browser.close.assert_not_called()
+        asyncio.run(exercise())
+
     def test_reads_cgroup_v2_oom_kill_counter(self):
         with tempfile.TemporaryDirectory() as folder:
             events = Path(folder) / 'memory.events'
@@ -56,6 +111,31 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(calls[-1]['result']['reason'], 'browser_memory_exhausted')
         self.assertEqual(calls[-1]['result']['checkout_requests_sent'], 0)
         self.assertEqual(calls[-1]['result']['payment_requests_sent'], 0)
+
+    def test_production_job_uses_the_preheated_browser_runtime(self):
+        browser = MagicMock()
+
+        class Runtime:
+            started = True
+
+            @staticmethod
+            def run(operation):
+                return asyncio.run(operation(browser))
+
+            @staticmethod
+            def discard():
+                raise AssertionError('healthy browser must not be discarded')
+
+        job = server.Job('test', {})
+        execute = AsyncMock(return_value={'status': 'session_verified'})
+        calls = []
+        with patch.object(server, 'BROWSER_RUNTIME', Runtime()), \
+             patch.object(server, 'read_cgroup_oom_kill', side_effect=[0, 0]), \
+             patch.object(server.Job, 'execute', execute), \
+             patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body)):
+            job.run()
+        execute.assert_awaited_once_with(browser=browser)
+        self.assertEqual(calls[-1]['result']['status'], 'session_verified')
 
     def test_diagnostics_survive_callback_without_free_text_or_secrets(self):
         safe = {'step': 'pricing_page', 'error_type': 'TimeoutError', 'role': 'link',
@@ -177,12 +257,15 @@ class ServerTests(unittest.TestCase):
                                        'checkout_requests_sent': 0, 'payment_requests_sent': 0},
                                       {'status': 'checkout_quote_verified'}
                                   ]) as run:
-                    result = await server.quote_checkout(target, 'plus', root)
+                    browser = MagicMock()
+                    result = await server.quote_checkout(target, 'plus', root, browser=browser)
                 self.assertEqual(result['status'], 'checkout_quote_verified')
                 self.assertEqual(run.await_count, 2)
                 self.assertTrue(run.await_args_list[0].kwargs['inspect_existing'])
                 self.assertTrue(run.await_args_list[1].kwargs['create'])
                 self.assertTrue(run.await_args_list[1].kwargs['replace_unpaid_checkout'])
+                self.assertIs(run.await_args_list[0].kwargs['browser'], browser)
+                self.assertIs(run.await_args_list[1].kwargs['browser'], browser)
         asyncio.run(exercise())
 
 

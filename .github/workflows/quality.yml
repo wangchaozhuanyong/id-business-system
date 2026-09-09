@@ -75,7 +75,7 @@ jobs:
         run: npm ci --no-audit
 
       - name: Install Chromium for layout acceptance
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Check formatting
         run: npm run format:check

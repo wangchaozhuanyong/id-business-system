@@ -83,18 +83,23 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
             "recheck_only": True}
 
 
-async def recheck_payment(target, ledger, *, timeout=25):
+async def recheck_payment(target, ledger, *, timeout=25, browser=None):
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     for key in ("DEBUG", "PWDEBUG", "PW_TRACE_DIR", "PLAYWRIGHT_TRACE_DIR"):
         os.environ.pop(key, None)
+    async def execute(active_browser):
+        context = await active_browser.new_context(service_workers="block", accept_downloads=False)
+        try:
+            return await recheck_in_context(context, target, ledger, timeout=timeout)
+        finally:
+            await context.close()
+
+    if browser is not None:
+        return await execute(browser)
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        owned_browser = await p.chromium.launch(headless=False)
         try:
-            context = await browser.new_context(service_workers="block", accept_downloads=False)
-            try:
-                return await recheck_in_context(context, target, ledger, timeout=timeout)
-            finally:
-                await context.close()
+            return await execute(owned_browser)
         finally:
-            await browser.close()
+            await owned_browser.close()

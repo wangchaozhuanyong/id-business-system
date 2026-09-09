@@ -1,8 +1,6 @@
 <template>
   <section class="v2-records-page recharge-address-page">
-    <V2PageContext
-      description="批量维护自动充值地址。地区信息由系统固定，导入文件每行只填写一个街道地址。"
-    >
+    <V2PageContext description="导入和管理自动充值使用的街道地址。">
       <template #meta
         ><span>自动充值</span><span aria-hidden="true">/</span><span>地址管理</span></template
       >
@@ -13,29 +11,24 @@
       </template>
     </V2PageContext>
 
-    <el-alert
-      title="固定地区：美国（官网选择 United States）· Portland · OR · 97204。充值页只提供未使用地址，开通成功后自动标记已使用。"
-      type="info"
-      :closable="false"
-      show-icon
-    />
-
     <section class="recharge-address-import" aria-labelledby="recharge-address-import-title">
-      <V2SectionHeading id="recharge-address-import-title" title="批量导入">
-        <template #actions><span>支持 TXT，每次最多 2000 行</span></template>
-      </V2SectionHeading>
+      <V2SectionHeading
+        title-id="recharge-address-import-title"
+        title="批量导入"
+        :help="[
+          '地区固定为美国（官网选择 United States）：Portland、OR、97204。',
+          '仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。',
+          '充值页只提供未使用地址；开通成功后，系统自动标记为已使用。'
+        ]"
+        placement="bottom"
+        :width="380"
+      />
       <el-form
         label-position="left"
         label-width="90px"
         require-asterisk-position="right"
         @submit.prevent
       >
-        <el-form-item label="固定地区">
-          <div class="recharge-address-location">
-            <span>国家 United States（代码 US）</span><span>城市 Portland</span><span>州 OR</span
-            ><span>邮编 97204</span>
-          </div>
-        </el-form-item>
         <el-form-item label="地址文件" required>
           <div class="recharge-address-file-row">
             <label class="recharge-address-file-picker" :class="{ 'is-disabled': importing }">

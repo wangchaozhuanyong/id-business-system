@@ -29,15 +29,18 @@
             <el-form-item label="授权 JSON" prop="jsonInput" required :error="jsonError">
               <div class="recharge-json-row">
                 <el-input
-                  v-model="jsonInput"
+                  :model-value="jsonInput"
                   type="password"
                   autocomplete="off"
                   :disabled="accountLocked"
                   :placeholder="
-                    sessionJson ? '授权已载入，可粘贴新 JSON 替换' : '粘贴完整的授权 JSON'
+                    sessionJson
+                      ? '授权已自动载入，可粘贴新 JSON 替换'
+                      : '粘贴完整授权 JSON，将自动载入'
                   "
+                  @update:model-value="updateJsonInput"
+                  @blur="acceptSession()"
                 />
-                <el-button :disabled="accountLocked" @click="acceptSession">载入 JSON</el-button>
                 <label class="recharge-file-control" :class="{ 'is-disabled': accountLocked }"
                   >导入文件
                   <input
@@ -51,37 +54,34 @@
               </div>
             </el-form-item>
             <el-form-item label="开通套餐" prop="plan" required>
-              <el-select
-                v-model="plan"
-                :disabled="accountLocked"
-                placeholder="选择需要开通的套餐"
-                aria-label="开通套餐"
-              >
-                <el-option
-                  v-for="(label, key) in planLabels"
-                  :key="key"
-                  :label="label"
-                  :value="key"
-                />
-              </el-select>
+              <div class="recharge-plan-row">
+                <el-select
+                  v-model="plan"
+                  :disabled="accountLocked"
+                  placeholder="选择需要开通的套餐"
+                  aria-label="开通套餐"
+                >
+                  <el-option
+                    v-for="(label, key) in planLabels"
+                    :key="key"
+                    :label="label"
+                    :value="key"
+                  />
+                </el-select>
+                <el-button
+                  type="primary"
+                  :disabled="!canStartFlow"
+                  :loading="busy"
+                  @click="startFlow"
+                >
+                  获取初始报价
+                </el-button>
+              </div>
             </el-form-item>
           </el-form>
-          <p v-if="sessionJson" class="recharge-note">授权已载入，仅在本页内存使用。</p>
-          <div class="recharge-step-action">
-            <el-button
-              type="primary"
-              :disabled="
-                accountLocked ||
-                query.phase.value !== 'ready' ||
-                query.data.value?.configured === false
-              "
-              :loading="busy"
-              @click="startFlow"
-            >
-              获取初始报价
-            </el-button>
-            <span>只有点击后才会访问官网，不会自动付款。</span>
-          </div>
+          <p v-if="sessionJson" class="recharge-note">
+            授权已自动载入，账单邮箱已使用 ChatGPT 注册邮箱；资料仅在本页内存使用。
+          </p>
           <el-form
             :model="details"
             :rules="rechargeRules"
@@ -91,7 +91,7 @@
             require-asterisk-position="right"
             @submit.prevent
           >
-            <fieldset class="recharge-billing" :disabled="billingLocked">
+            <fieldset class="recharge-billing">
               <legend>付款资料</legend>
               <div class="recharge-fields">
                 <el-form-item
@@ -108,8 +108,9 @@
                     autocomplete="off"
                     :maxlength="field.max"
                     :placeholder="field.placeholder"
-                    :disabled="billingLocked"
-                    :validate-event="!billingLocked"
+                    :disabled="billingInputLocked"
+                    :readonly="field.key === 'email'"
+                    :validate-event="!billingInputLocked"
                     @update:model-value="updatePaymentField(field.key, $event)"
                   />
                 </el-form-item>
@@ -124,7 +125,7 @@
                       addressQuery.phase.value === 'initial-loading' ||
                       addressQuery.phase.value === 'refreshing'
                     "
-                    :disabled="billingLocked"
+                    :disabled="billingInputLocked"
                     placeholder="选择一条未使用地址"
                     no-data-text="没有未使用地址"
                     aria-label="选择未使用账单地址"
@@ -160,7 +161,7 @@
           <div class="recharge-form-footer">
             <el-button
               type="primary"
-              :disabled="billingLocked"
+              :disabled="detailsSubmissionLocked"
               :loading="busy"
               @click="submitPaymentDetails"
             >
@@ -283,13 +284,16 @@ const {
   error,
   details,
   accountLocked,
-  billingLocked,
+  billingInputLocked,
+  detailsSubmissionLocked,
+  canStartFlow,
   confirmationBlockedReason,
   canRetry,
   canRecheck,
   recheckPayment,
   workflowMessage,
   acceptSession,
+  updateJsonInput,
   startFlow,
   submitPaymentDetails,
   confirmPayment,
@@ -322,11 +326,13 @@ const paymentFields = computed(() =>
   rechargeFields.slice(0, 5).map((field) => ({
     ...field,
     placeholder:
-      ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '') &&
-      !details.value[field.key] &&
-      ['number', 'expiry', 'cvc'].includes(field.key)
-        ? '敏感资料已清除'
-        : field.placeholder
+      field.key === 'email'
+        ? '从授权 JSON 自动读取'
+        : ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '') &&
+            !details.value[field.key] &&
+            ['number', 'expiry', 'cvc'].includes(field.key)
+          ? '敏感资料已清除'
+          : field.placeholder
   }))
 );
 

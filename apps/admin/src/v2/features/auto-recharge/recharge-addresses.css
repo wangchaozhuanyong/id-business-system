@@ -22,22 +22,12 @@
   margin-bottom: 12px;
 }
 
-.recharge-address-location,
 .recharge-address-file-row {
   display: flex;
   min-width: 0;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-}
-
-.recharge-address-location span {
-  padding: 5px 9px;
-  border: 1px solid var(--v2-border);
-  border-radius: 6px;
-  color: var(--v2-text-soft);
-  background: var(--v2-surface-soft);
-  font-size: 12px;
 }
 
 .recharge-address-file-picker {
