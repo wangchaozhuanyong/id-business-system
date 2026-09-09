@@ -1,0 +1,291 @@
+.recharge-page {
+  display: grid;
+  gap: 16px;
+}
+.recharge-note {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.recharge-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(340px, 1fr);
+  gap: 20px;
+  align-items: stretch;
+}
+.recharge-panel {
+  min-width: 0;
+  padding: 22px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 12px;
+}
+.recharge-panel h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+}
+.recharge-panel h3,
+.recharge-result h3 {
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+.recharge-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.recharge-section-heading > span {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 24px;
+}
+.recharge-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+.recharge-fields > * {
+  min-width: 0;
+}
+/* 标签随控件行高居中，清除全局标签的底部留白；错误提示仍位于控件下方。 */
+.recharge-panel :deep(.el-form-item) {
+  align-items: stretch;
+}
+.recharge-panel :deep(.el-form-item__label) {
+  align-items: center;
+  height: auto;
+  padding: 0 12px 0 0;
+  line-height: 20px;
+  /* 标签使用半粗体，按可见文字作 1px 向上的视觉校正，星号同步移动。 */
+  transform: translateY(-1px);
+}
+.recharge-fields :deep(.el-form-item) {
+  margin-bottom: 24px;
+}
+.recharge-billing {
+  border: 0;
+  min-width: 0;
+  padding: 20px 0 0;
+  margin: 24px 0 0;
+  border-top: 1px solid var(--el-border-color);
+}
+.recharge-billing legend {
+  padding-right: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.recharge-billing h3 {
+  margin-top: 4px;
+}
+.recharge-json-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.recharge-file-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 34px;
+  white-space: nowrap;
+}
+.recharge-file-control input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.recharge-file-control:focus-within {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+.recharge-file-control.is-disabled {
+  color: var(--el-text-color-regular);
+  background: var(--el-fill-color-light);
+}
+.recharge-form-footer {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--el-border-color);
+  padding-top: 16px;
+}
+.recharge-workflow {
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0 0 18px;
+}
+.recharge-empty {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 20px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+  color: var(--el-text-color-regular);
+}
+.recharge-empty p {
+  margin: 6px 0;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.recharge-summary {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.recharge-summary dt {
+  color: var(--el-text-color-regular);
+}
+.recharge-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.recharge-quote {
+  background: var(--el-fill-color-light);
+  padding: 16px;
+  border-radius: 8px;
+  align-items: baseline;
+}
+.recharge-summary .recharge-total {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.recharge-status {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+.recharge-confirm {
+  border-top: 1px solid var(--el-border-color);
+  padding-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+.recharge-confirm p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.recharge-confirm :deep(.el-button) {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  white-space: normal;
+}
+.recharge-confirm :deep(.el-button > span) {
+  white-space: normal;
+}
+.recharge-diagnostics {
+  border-top: 1px solid var(--el-border-color);
+  margin-top: 20px;
+  padding-top: 16px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.recharge-diagnostics summary {
+  cursor: pointer;
+  min-height: 36px;
+}
+.recharge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.recharge-actions :deep(.el-button) {
+  margin-left: 0;
+}
+.recharge-error {
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.recharge-history {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.recharge-history button {
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  background: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.recharge-history small {
+  display: block;
+  margin-top: 5px;
+  color: var(--el-text-color-regular);
+}
+.recharge-history button:hover {
+  background: var(--el-fill-color-light);
+}
+.recharge-history button.is-selected {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.recharge-history button:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+@media (max-width: 1150px) {
+  .recharge-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .recharge-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .recharge-panel {
+    padding: 14px;
+  }
+  .recharge-summary {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 12px;
+  }
+  .recharge-quote {
+    padding: 14px;
+  }
+  .recharge-panel :deep(.el-form-item__label) {
+    width: 88px !important;
+  }
+  .recharge-file-control {
+    padding: 0 8px;
+  }
+  .recharge-actions :deep(.el-button) {
+    min-height: 44px;
+  }
+}

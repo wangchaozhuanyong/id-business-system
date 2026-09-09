@@ -138,6 +138,8 @@ try {
         items[0].state = 'finished';
         items[0].result.status = 'payment_result_unknown';
         items[0].result.payment_status = 'unknown';
+        items[0].result.payment_attempted = true;
+        items[0].result.payment_outcome = 'unknown';
         return success(route, {});
       }
       if (path.endsWith('/change-versions'))
@@ -147,7 +149,7 @@ try {
     });
     await page.goto(origin + '/v2/auto-recharge');
     await page
-      .getByText('账户与付款资料', { exact: true })
+      .getByText('填写开通资料', { exact: true })
       .waitFor()
       .catch(async (error) => {
         throw new Error(
@@ -155,33 +157,29 @@ try {
           { cause: error }
         );
       });
-    await page.getByText('尚无执行记录。输入 JSON 后点击“开始检查”。').waitFor();
-    await page
-      .getByPlaceholder('粘贴完整 JSON，载入后清空输入框')
-      .fill('{"sessionToken":"synthetic-only"}');
-    await page.getByRole('button', { name: '开始检查', exact: true }).click();
-    await page.locator('.recharge-status').filter({ hasText: '账户核对通过' }).waitFor();
-    assert.equal(starts, 1);
-    assert.equal(await page.getByText('待获取报价', { exact: true }).count(), 3);
-    await page.getByText('尚未执行开通', { exact: true }).waitFor();
-    assert.equal(await page.getByPlaceholder('粘贴完整 JSON，载入后清空输入框').inputValue(), '');
-    await page.getByRole('button', { name: '获取官方报价', exact: true }).click();
+    await page.getByText('等待开通资料', { exact: true }).waitFor();
+    await page.getByPlaceholder('粘贴完整的授权 JSON').fill('{"sessionToken":"synthetic-only"}');
+    await page.getByText('选择需要开通的套餐', { exact: true }).click();
+    assert.equal(starts, 0, '选择套餐前不得自动创建任务');
+    await page.getByRole('option', { name: 'ChatGPT Plus', exact: true }).click();
     await page
       .getByRole('alert')
       .filter({ hasText: '官网浏览器内存不足，本次未创建订单或付款' })
       .waitFor();
     assert.equal(await page.getByText('browser_memory_exhausted', { exact: true }).count(), 0);
     assert.equal(await page.getByText('获取失败', { exact: true }).count(), 3);
+    await page.getByText('执行详情', { exact: true }).click();
     await page.getByText(/套餐步骤：核对开通按钮/).waitFor();
     assert.equal(confirms, 0);
-    await page.getByRole('button', { name: '获取官方报价', exact: true }).click();
+    assert.equal(starts, 1);
+    await page.getByRole('button', { name: '重试核价', exact: true }).click();
     await page.locator('.recharge-summary dd').filter({ hasText: 'MYR 92.50' }).first().waitFor();
     assert.equal(confirms, 0);
     const values = [
       '4242424242424242',
+      'Fixture Person',
       '12/30',
       '123',
-      'Fixture Person',
       'fixture@example.test',
       'MY',
       'Fixture Road',
@@ -193,22 +191,32 @@ try {
     const fields = page.locator('fieldset input');
     for (let index = 0; index < values.length; index += 1)
       await fields.nth(index).fill(values[index]);
-    await page.getByRole('button', { name: '填入官网并重新核价' }).click();
+    await page.getByRole('heading', { name: '开通信息', exact: true }).click();
     await page.locator('.recharge-confirm').waitFor();
     assert.equal(await fields.nth(0).inputValue(), '');
-    assert.equal(await fields.nth(2).inputValue(), '');
+    assert.equal(await fields.nth(3).inputValue(), '');
     assert.equal(confirms, 0);
-    const confirm = page.getByRole('button', { name: '确认开通 · MYR 92.50' });
-    assert.equal(await confirm.isEnabled(), false);
-    await page
-      .getByText('我已核对今日应付、账单资料及按月续费，授权本次付款。', { exact: true })
-      .click();
-    assert.equal(await page.getByRole('checkbox').isChecked(), true);
+    assert.equal(starts, 3, '失败报价、重试报价和准备各一次');
+    const confirm = page.getByRole('button', { name: '确认充值 · MYR 92.50' });
+    assert.equal(await confirm.isEnabled(), true);
+    await page.getByRole('button', { name: '最近执行记录', exact: true }).click();
+    const drawer = page.getByRole('dialog');
+    await drawer.getByText('仅查看历史记录，不会切换或重新执行当前充值任务。').waitFor();
+    await drawer.locator('.recharge-history button').last().click();
+    assert.equal(
+      await drawer.getByRole('button', { name: /确认充值|重试核价|复查原单/ }).count(),
+      0
+    );
+    assert.equal(starts, 3);
+    assert.equal(confirms, 0);
+    await page.keyboard.press('Escape');
+    await drawer.waitFor({ state: 'hidden' });
+    assert.equal(await confirm.isEnabled(), true);
     await confirm.click();
     await page.locator('.recharge-status').filter({ hasText: '付款结果待核验' }).waitFor();
     assert.equal(confirms, 1);
     failNext = true;
-    await page.getByRole('button', { name: '复查所选套餐原付款' }).click();
+    await page.getByRole('button', { name: '复查原单开通状态' }).click();
     await page.getByText('已有原单，请先复查', { exact: true }).waitFor();
     assert.equal(confirms, 1);
     const overflow = await page.evaluate(
@@ -225,10 +233,11 @@ try {
       viewports: [1440, 768, 390],
       flow: [
         'empty',
-        'account-check',
+        'explicit-plan-selection',
         'browser-memory-failed',
         'quote',
         'prepare',
+        'read-only-history',
         'amount-confirmation',
         'unknown-result',
         'error'

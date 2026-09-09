@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { quotePlaceholder, statusLabel, subscriptionLabel } from './recharge-presentation';
+import {
+  quotePlaceholder,
+  statusLabel,
+  subscriptionLabel,
+  paymentStatusLabel
+} from './recharge-presentation';
 import type { V2RechargeJob } from './contracts';
 
 const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
@@ -39,6 +44,13 @@ describe('recharge stage presentation', () => {
     expect(subscriptionLabel(job({ result: { payment_outcome: 'paid_pending_activation' } }))).toBe(
       '已付款，待开通'
     );
+  });
+  it('does not label a pending or completed payment outcome as unattempted', () => {
+    expect(paymentStatusLabel(job({ state: 'confirming' }))).toBe('正在提交本次付款');
+    expect(paymentStatusLabel(job({ result: { payment_outcome: 'subscription_activated' } }))).toBe(
+      '付款结果待核验'
+    );
+    expect(paymentStatusLabel(job({ result: { payment_status: 'paid' } }))).toBe('已确认付款');
   });
   it('shows a specific Chinese reason for the observed old Plus failure', () => {
     expect(statusLabel('official_plus_option_not_found')).toBe('未找到官网 Plus 选项');
