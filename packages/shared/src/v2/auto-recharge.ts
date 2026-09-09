@@ -77,5 +77,47 @@ export interface V2RechargeStart {
   sessionJson: string;
   plan: V2RechargePlan;
   action: V2RechargeAction;
+  addressId?: string;
   details?: V2RechargeDetails;
+}
+
+export const V2_RECHARGE_ADDRESS_STATUSES = ['unused', 'used', 'disabled'] as const;
+export type V2RechargeAddressStatus = (typeof V2_RECHARGE_ADDRESS_STATUSES)[number];
+
+export interface V2RechargeAddress {
+  id: string;
+  line1: string;
+  country: 'US';
+  city: 'Portland';
+  state: 'OR';
+  postalCode: '97204';
+  status: V2RechargeAddressStatus;
+  usedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface V2RechargeAddressListQuery {
+  page?: number;
+  pageSize?: number;
+  keyword?: string;
+  status?: V2RechargeAddressStatus | 'all';
+}
+
+export interface V2RechargeAddressList {
+  items: V2RechargeAddress[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totals: Record<V2RechargeAddressStatus, number>;
+}
+
+export interface ImportV2RechargeAddressesInput {
+  streets: string[];
+}
+
+export interface ImportV2RechargeAddressesResult {
+  imported: number;
+  duplicated: number;
+  rejected: number;
 }

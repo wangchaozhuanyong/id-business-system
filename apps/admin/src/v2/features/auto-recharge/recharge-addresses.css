@@ -1,0 +1,123 @@
+.recharge-address-page {
+  display: grid;
+  gap: 16px;
+}
+
+.recharge-address-import,
+.recharge-address-toolbar,
+.recharge-address-list {
+  min-width: 0;
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  background: var(--v2-surface);
+}
+
+.recharge-address-import {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.recharge-address-import .el-form-item {
+  margin-bottom: 12px;
+}
+
+.recharge-address-location,
+.recharge-address-file-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.recharge-address-location span {
+  padding: 5px 9px;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  color: var(--v2-text-soft);
+  background: var(--v2-surface-soft);
+  font-size: 12px;
+}
+
+.recharge-address-file-picker {
+  position: relative;
+  display: inline-flex;
+  max-width: 420px;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--v2-border);
+  border-radius: 6px;
+  color: var(--v2-text);
+  background: var(--v2-surface);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recharge-address-file-picker.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.recharge-address-file-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.recharge-address-message,
+.recharge-address-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.recharge-address-message {
+  color: var(--v2-success);
+}
+
+.recharge-address-error {
+  color: var(--v2-danger);
+}
+
+.recharge-address-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 180px auto;
+  gap: 10px;
+  padding: 14px;
+}
+
+.recharge-address-list {
+  overflow: hidden;
+}
+
+.recharge-address-list > header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--v2-border);
+}
+
+.recharge-address-locked {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .recharge-address-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .recharge-address-file-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recharge-address-file-picker {
+    width: 100%;
+    max-width: none;
+  }
+}

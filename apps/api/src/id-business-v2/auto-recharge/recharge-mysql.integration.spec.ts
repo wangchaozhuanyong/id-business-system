@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
+import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { RechargeService } from './recharge.service';
 
 const url = process.env.V2_RECHARGE_TEST_DATABASE_URL;
@@ -21,6 +22,7 @@ suite('recharge real MySQL restart and concurrency', () => {
   const createService = () =>
     new RechargeService(
       new RechargeRepository(prisma),
+      new RechargeAddressRepository(prisma),
       new V2CommandTransactionManager(prisma),
       new V2TransactionalAuditService()
     );

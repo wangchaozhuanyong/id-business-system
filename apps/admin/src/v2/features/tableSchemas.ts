@@ -3,6 +3,33 @@ import { defineV2TableSchema } from '@/v2/components/tableSystem';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
+  autoRechargeAddresses: {
+    main: table({
+      id: 'auto-recharge-addresses.main',
+      feature: 'auto-recharge-addresses',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'line1',
+          label: '街道地址',
+          kind: 'text',
+          widthPreset: 'longText',
+          pin: 'start',
+          hideable: false
+        },
+        { key: 'city', label: '城市', kind: 'text', widthPreset: 'standard' },
+        { key: 'state', label: '州', kind: 'text', widthPreset: 'compact' },
+        { key: 'postalCode', label: '邮编', kind: 'identifier', widthPreset: 'compact' },
+        { key: 'country', label: '国家', kind: 'text', widthPreset: 'compact' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'usedAt', label: '使用时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'createdAt', label: '导入时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
+  },
   accountLosses: {
     main: table({
       id: 'account-losses.main',
@@ -1090,6 +1117,7 @@ export const v2TableSchemas = {
 
 export const v2TablesByFeature = {
   'auto-recharge': [],
+  'auto-recharge-addresses': [v2TableSchemas.autoRechargeAddresses.main],
   'renewal-workbench': [v2TableSchemas.renewals.main],
   'order-entry': [],
   'topup-workbench': [v2TableSchemas.topups.available, v2TableSchemas.topups.sold],

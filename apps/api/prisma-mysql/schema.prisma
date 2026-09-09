@@ -2407,3 +2407,22 @@ model IdBusinessV2RechargeRecord {
   @@id([accountKey, fileKey])
   @@map("id_business_v2_recharge_records")
 }
+
+// 自动充值地址库；固定地区由服务端写入，不保存银行卡资料。
+model IdBusinessV2RechargeAddress {
+  id         String    @id @default(uuid()) @db.Char(36)
+  ownerId    String    @map("owner_id") @db.VarChar(191)
+  line1      String    @map("line1") @db.VarChar(180)
+  country    String    @default("US") @db.Char(2)
+  city       String    @default("Portland") @db.VarChar(120)
+  state      String    @default("OR") @db.VarChar(120)
+  postalCode String    @default("97204") @map("postal_code") @db.VarChar(20)
+  status     String    @default("unused") @db.VarChar(16)
+  usedAt     DateTime? @map("used_at") @db.DateTime(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@unique([ownerId, line1])
+  @@index([ownerId, status, createdAt])
+  @@map("id_business_v2_recharge_addresses")
+}

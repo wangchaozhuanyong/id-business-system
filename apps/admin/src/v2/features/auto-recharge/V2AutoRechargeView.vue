@@ -85,7 +85,7 @@
               <legend>付款资料</legend>
               <div class="recharge-fields">
                 <el-form-item
-                  v-for="field in cardFields"
+                  v-for="field in paymentFields"
                   :key="field.key"
                   :label="field.label"
                   :prop="field.key"
@@ -103,22 +103,44 @@
                 </el-form-item>
               </div>
               <h3>账单地址</h3>
-              <div class="recharge-fields">
-                <el-form-item
-                  v-for="field in billingFields"
-                  :key="field.key"
-                  :label="field.label"
-                  :prop="field.key"
-                  :required="field.required"
-                >
-                  <el-input
-                    v-model="details[field.key]"
-                    autocomplete="off"
-                    :maxlength="field.max"
-                    :placeholder="field.placeholder"
+              <div class="recharge-address-choice">
+                <el-form-item label="地址库" required>
+                  <el-select
+                    v-model="selectedAddressId"
+                    filterable
+                    :loading="
+                      addressQuery.phase.value === 'initial-loading' ||
+                      addressQuery.phase.value === 'refreshing'
+                    "
                     :disabled="billingLocked"
-                    :validate-event="!billingLocked"
-                  />
+                    placeholder="选择一条未使用地址"
+                    no-data-text="没有未使用地址"
+                    aria-label="选择未使用账单地址"
+                  >
+                    <el-option
+                      v-for="address in availableAddresses"
+                      :key="address.id"
+                      :label="address.line1"
+                      :value="address.id"
+                    />
+                  </el-select>
+                </el-form-item>
+                <p v-if="addressQuery.error.value" class="recharge-error" role="alert">
+                  {{ getApiErrorMessage(addressQuery.error.value) }}
+                  <el-button link type="primary" @click="addressQuery.refresh">重试</el-button>
+                </p>
+                <p v-else-if="!availableAddresses.length" class="recharge-note" role="status">
+                  暂无未使用地址，请先到“地址管理”导入或启用地址。
+                </p>
+                <div v-if="selectedAddress" class="recharge-fixed-address" aria-live="polite">
+                  <span>街道：{{ selectedAddress.line1 }}</span>
+                  <span>国家：United States（US）</span>
+                  <span>城市：{{ selectedAddress.city }}</span>
+                  <span>州：{{ selectedAddress.state }}</span>
+                  <span>邮编：{{ selectedAddress.postalCode }}</span>
+                </div>
+                <el-form-item v-if="selectedAddress" label="地址状态">
+                  <el-tag type="success" effect="plain">未使用</el-tag>
                 </el-form-item>
               </div>
             </fieldset>
@@ -140,12 +162,7 @@
           <RechargeResult :job="selected">
             <div v-if="selected?.state === 'awaiting_confirmation'" class="recharge-confirm">
               <p>点击确认即授权本次付款及上述续费；系统将执行充值并回传开通结果。</p>
-              <el-button
-                type="primary"
-                :disabled="Boolean(confirmationBlockedReason)"
-                :loading="busy"
-                @click="confirmPayment"
-              >
+              <el-button type="primary" :loading="busy" @click="confirmPayment">
                 确认充值 · {{ selected.result.quote?.today?.currency }}
                 {{ selected.result.quote?.today?.amount }}
               </el-button>
@@ -224,7 +241,11 @@ import { rechargeFields, rechargeRules } from './recharge-form';
 import { planLabels, statusLabel } from './recharge-presentation';
 const {
   query,
+  addressQuery,
   jobs,
+  availableAddresses,
+  selectedAddressId,
+  selectedAddress,
   selected,
   jsonInput,
   sessionJson,
@@ -268,8 +289,8 @@ const historyId = ref('');
 const historyJob = computed(
   () => jobs.value.find((job) => job.id === historyId.value) ?? jobs.value[0]
 );
-const cardFields = computed(() =>
-  rechargeFields.slice(0, 4).map((field) => ({
+const paymentFields = computed(() =>
+  rechargeFields.slice(0, 5).map((field) => ({
     ...field,
     placeholder:
       selected.value?.action === 'prepare' &&
@@ -279,6 +300,5 @@ const cardFields = computed(() =>
         : field.placeholder
   }))
 );
-const billingFields = rechargeFields.slice(4);
 </script>
 <style scoped src="./auto-recharge.css"></style>

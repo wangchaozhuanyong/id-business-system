@@ -8,7 +8,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(25);
+    expect(v2FeatureRegistry).toHaveLength(26);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {
@@ -20,7 +20,15 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(
+      v2FeatureRegistry.find((feature) => feature.key === 'auto-recharge-addresses')
+    ).toMatchObject({
+      route: '/v2/auto-recharge/addresses',
+      group: '自动充值',
+      kind: 'list',
+      requiredRoles: ['admin']
+    });
   });
 
   it('keeps routing, access and loading behavior in each feature manifest', () => {

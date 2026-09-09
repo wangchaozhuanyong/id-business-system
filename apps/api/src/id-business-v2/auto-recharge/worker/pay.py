@@ -77,7 +77,11 @@ def confirm_quote(quote, last4):
 async def current_quote(page, currency_hint):
     previous = None
     for _ in range(30):
-        quote = await quote_from_page(page, currency_hint)
+        # 先接受官网当前明确展示的币种，允许填写账单地址后从 Worker 初始币种切换。
+        # 只在官网仅显示无法独立判定的符号时，才使用已核对账单国家的币种提示。
+        quote = await quote_from_page(page)
+        if not quote.get("today") and currency_hint:
+            quote = await quote_from_page(page, currency_hint)
         try:
             digest = quote_digest(quote)
         except Stop:
@@ -111,7 +115,7 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
         details = await asyncio.to_thread(details_reader)
         try:
             prepared = await fill_official_form(page, details)
-            quote = await current_quote(page, original_quote["today"]["currency"])
+            quote = await current_quote(page, {"US": "USD"}.get(details.country))
             if quote["plan"] != selected_plan:
                 raise Stop("payment_quote_plan_mismatch")
             await verify_billing_fields(page, details, prepared["billing_fields_filled"])

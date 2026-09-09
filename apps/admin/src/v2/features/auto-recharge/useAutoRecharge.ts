@@ -5,6 +5,8 @@ import { rechargeApi } from './api';
 import { rechargeDetailsReady } from './recharge-form';
 import type {
   V2RechargeAction,
+  V2RechargeAddress,
+  V2RechargeAddressList,
   V2RechargeDetails,
   V2RechargeJob,
   V2RechargePlan
@@ -18,6 +20,7 @@ export function useAutoRecharge() {
   const sessionJson = ref('');
   const jsonError = ref('');
   const plan = ref<V2RechargePlan>();
+  const selectedAddressId = ref('');
   const currentId = ref('');
   const quoteId = ref('');
   const busy = ref(false);
@@ -52,7 +55,19 @@ export function useAutoRecharge() {
     getRevalidateAt: () => Date.now() + 2000,
     query: ({ signal }) => rechargeApi.list({ signal })
   });
+  const addressQuery = useV2ModuleQuery<V2RechargeAddressList>({
+    moduleKey: 'auto-recharge-addresses',
+    scope: 'auto-recharge',
+    key: () => 'auto-recharge-unused-addresses',
+    keepPreviousData: true,
+    query: ({ signal }) =>
+      rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'unused' }, { signal })
+  });
   const jobs = computed(() => query.data.value?.items ?? []);
+  const availableAddresses = computed(() => addressQuery.data.value?.items ?? []);
+  const selectedAddress = computed<V2RechargeAddress | undefined>(() =>
+    availableAddresses.value.find((address) => address.id === selectedAddressId.value)
+  );
   // 历史浏览不改变当前任务；刷新页面只恢复仍在执行的任务。
   const selected = computed(() =>
     currentId.value
@@ -85,6 +100,31 @@ export function useAutoRecharge() {
       !job.result.payment_attempted
     );
   });
+  watch(
+    [selectedAddressId, availableAddresses, () => addressQuery.phase.value],
+    () => {
+      const address = selectedAddress.value;
+      if (!address) {
+        if (selectedAddressId.value && addressQuery.phase.value === 'ready') {
+          selectedAddressId.value = '';
+        }
+        details.value.country = '';
+        details.value.line1 = '';
+        details.value.line2 = '';
+        details.value.city = '';
+        details.value.state = '';
+        details.value.postal_code = '';
+        return;
+      }
+      details.value.country = address.country;
+      details.value.line1 = address.line1;
+      details.value.line2 = '';
+      details.value.city = address.city;
+      details.value.state = address.state;
+      details.value.postal_code = address.postalCode;
+    },
+    { flush: 'sync' }
+  );
   const confirmationBlockedReason = computed(() => {
     if (busy.value) return '正在提交，请等待状态回传。';
     if (uncertain.value || confirmationSentFor.value === selected.value?.id)
@@ -135,6 +175,9 @@ export function useAutoRecharge() {
     if (!plan.value) return '请选择需要开通的套餐，系统将自动核对账户并获取报价。';
     if (!quoteReady.value) return '等待自动核对账户与套餐报价。';
     if (prepareAttempted.value) return '本次执行已结束，开通结果以官网回传为准。';
+    if (!availableAddresses.value.length)
+      return '没有可用的未使用地址，请先到地址管理导入或启用地址。';
+    if (!selectedAddress.value) return '请从地址库选择一条未使用地址。';
     return '补齐付款资料并离开输入框后，系统会自动填入官网、重新核价。';
   });
   const clearCard = () => {
@@ -160,7 +203,8 @@ export function useAutoRecharge() {
       !plan.value
     )
       return;
-    if (action === 'prepare' && !rechargeDetailsReady(details.value)) return;
+    if (action === 'prepare' && (!selectedAddress.value || !rechargeDetailsReady(details.value)))
+      return;
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
@@ -176,7 +220,9 @@ export function useAutoRecharge() {
         plan: plan.value,
         action,
         sessionJson: sessionJson.value,
-        ...(action === 'prepare' ? { details: { ...details.value } } : {})
+        ...(action === 'prepare'
+          ? { addressId: selectedAddress.value!.id, details: { ...details.value } }
+          : {})
       });
       if (!disposed && action === 'recheck') uncertain.value = false;
     } catch (cause) {
@@ -252,15 +298,35 @@ export function useAutoRecharge() {
         quoteReady.value &&
         !prepareAttempted.value &&
         !editingDetails.value &&
+        Boolean(selectedAddress.value) &&
         rechargeDetailsReady(details.value)
       )
         timer = setTimeout(() => void execute('prepare'), 500);
     },
     { flush: 'post' }
   );
+  const refreshedConsumedJobs = new Set<string>();
+  watch(
+    () => [selected.value?.id, selected.value?.result.status],
+    async () => {
+      const job = selected.value;
+      if (
+        !job ||
+        job.result.status !== 'subscription_activated' ||
+        refreshedConsumedJobs.has(job.id)
+      )
+        return;
+      refreshedConsumedJobs.add(job.id);
+      await addressQuery.refresh();
+    },
+    { flush: 'post' }
+  );
   async function confirmPayment() {
     const job = selected.value;
-    if (!canConfirm.value || !job?.result.nonce) return;
+    if (!canConfirm.value || !job?.result.nonce) {
+      error.value = confirmationBlockedReason.value || '当前官方报价尚不能确认。';
+      return;
+    }
     confirmationSentFor.value = job.id;
     busy.value = true;
     error.value = '';
@@ -301,7 +367,7 @@ export function useAutoRecharge() {
     error.value = '';
     if (quoteReady.value) {
       if (!rechargeDetailsReady(details.value)) {
-        error.value = '请重新填写银行卡资料，再重试核价。';
+        error.value = '请重新填写银行卡资料并选择未使用地址，再重试核价。';
         return;
       }
       await execute('prepare');
@@ -339,13 +405,18 @@ export function useAutoRecharge() {
     clearTimeout(timer);
     sessionJson.value = '';
     jsonInput.value = '';
+    selectedAddressId.value = '';
     Object.keys(details.value).forEach((key) => {
       details.value[key as keyof V2RechargeDetails] = '';
     });
   });
   return {
     query,
+    addressQuery,
     jobs,
+    availableAddresses,
+    selectedAddressId,
+    selectedAddress,
     selected,
     active,
     jsonInput,

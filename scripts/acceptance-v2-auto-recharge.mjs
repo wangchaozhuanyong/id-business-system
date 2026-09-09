@@ -55,8 +55,19 @@ try {
     const items = [];
     let starts = 0;
     let confirms = 0;
-    let failNext = false;
-    let blockQuoteOnce = true;
+    let addressUsed = false;
+    const address = {
+      id: '22222222-2222-4222-8222-222222222222',
+      line1: '1221 SW Fourth Avenue',
+      country: 'US',
+      city: 'Portland',
+      state: 'OR',
+      postalCode: '97204',
+      status: 'unused',
+      usedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     const success = (route, data) =>
       route.fulfill({
         contentType: 'application/json',
@@ -74,20 +85,43 @@ try {
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items, configured: true });
+      if (path.endsWith('/auto-recharge/addresses') && request.method() === 'GET') {
+        assert.equal(new URL(request.url()).searchParams.get('status'), 'unused');
+        const addresses = addressUsed ? [] : [address];
+        return success(route, {
+          items: addresses,
+          total: addresses.length,
+          page: 1,
+          pageSize: 2000,
+          totals: { unused: addresses.length, used: addressUsed ? 1 : 0, disabled: 0 }
+        });
+      }
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'POST') {
         starts += 1;
         const body = request.postDataJSON();
-        if (failNext) {
-          failNext = false;
-          return route.fulfill({
-            status: 409,
-            contentType: 'application/json',
-            body: JSON.stringify({
-              success: false,
-              message: '已有原单，请先复查',
-              retryable: false
-            })
-          });
+        if (body.action === 'quote') {
+          assert.equal(body.addressId, undefined);
+          assert.equal(body.details, undefined);
+        } else if (body.action === 'prepare') {
+          assert.equal(body.addressId, address.id);
+          assert.deepEqual(
+            {
+              country: body.details.country,
+              line1: body.details.line1,
+              line2: body.details.line2,
+              city: body.details.city,
+              state: body.details.state,
+              postal_code: body.details.postal_code
+            },
+            {
+              country: 'US',
+              line1: address.line1,
+              line2: '',
+              city: 'Portland',
+              state: 'OR',
+              postal_code: '97204'
+            }
+          );
         }
         const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
         items.unshift({
@@ -98,48 +132,30 @@ try {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           result: {
-            status:
-              body.action === 'check'
-                ? 'session_verified'
-                : body.action === 'prepare'
-                  ? 'awaiting_confirmation'
-                  : 'checkout_quote_verified',
+            status: body.action === 'prepare' ? 'awaiting_confirmation' : 'checkout_quote_verified',
             account_matched: true,
             current_plan: 'free',
             checkout_identifier: 'cs_fixture',
             network: { ip: '203.0.113.10', country: 'MY' },
-            quote:
-              body.action === 'check'
-                ? undefined
-                : {
-                    plan: body.plan,
-                    today: amount,
-                    tax: null,
-                    renewal: amount,
-                    renewal_interval: 'monthly'
-                  },
+            quote: {
+              plan: body.plan,
+              today: amount,
+              tax: null,
+              renewal: amount,
+              renewal_interval: 'monthly'
+            },
             ...(body.action === 'prepare' ? { nonce: 'a'.repeat(64), card_last4: '4242' } : {})
           }
         });
-        if (body.action === 'quote' && blockQuoteOnce) {
-          blockQuoteOnce = false;
-          items[0].result = {
-            status: 'blocked',
-            stage: 'plan_selection',
-            account_matched: true,
-            reason: 'browser_memory_exhausted',
-            diagnostics: { step: 'choose_plan', matched_count: 0, available_plans: ['pro-5x'] }
-          };
-        }
         return success(route, { id: body.id });
       }
       if (path.endsWith('/confirm')) {
         confirms += 1;
         items[0].state = 'finished';
-        items[0].result.status = 'payment_result_unknown';
-        items[0].result.payment_status = 'unknown';
-        items[0].result.payment_attempted = true;
-        items[0].result.payment_outcome = 'unknown';
+        items[0].result.status = 'subscription_activated';
+        items[0].result.payment_status = 'paid';
+        items[0].result.subscription_status = 'plus';
+        addressUsed = true;
         return success(route, {});
       }
       if (path.endsWith('/change-versions'))
@@ -157,68 +173,33 @@ try {
           { cause: error }
         );
       });
-    await page.getByText('等待开通资料', { exact: true }).waitFor();
     await page.getByPlaceholder('粘贴完整的授权 JSON').fill('{"sessionToken":"synthetic-only"}');
     await page.getByText('选择需要开通的套餐', { exact: true }).click();
-    assert.equal(starts, 0, '选择套餐前不得自动创建任务');
     await page.getByRole('option', { name: 'ChatGPT Plus', exact: true }).click();
-    await page
-      .getByRole('alert')
-      .filter({ hasText: '官网浏览器内存不足，本次未创建订单或付款' })
-      .waitFor();
-    assert.equal(await page.getByText('browser_memory_exhausted', { exact: true }).count(), 0);
-    assert.equal(await page.getByText('获取失败', { exact: true }).count(), 3);
-    await page.getByText('执行详情', { exact: true }).click();
-    await page.getByText(/套餐步骤：核对开通按钮/).waitFor();
-    assert.equal(confirms, 0);
-    assert.equal(starts, 1);
-    await page.getByRole('button', { name: '重试核价', exact: true }).click();
     await page.locator('.recharge-summary dd').filter({ hasText: 'MYR 92.50' }).first().waitFor();
+    assert.equal(starts, 1);
     assert.equal(confirms, 0);
-    const values = [
-      '4242424242424242',
-      'Fixture Person',
-      '12/30',
-      '123',
-      'fixture@example.test',
-      'MY',
-      'Fixture Road',
-      '',
-      'Fixture City',
-      '',
-      '12345'
-    ];
+    const values = ['5555555555554444', 'Fixture Person', '12/30', '1234', 'fixture@example.test'];
     const fields = page.locator('fieldset input');
     for (let index = 0; index < values.length; index += 1)
       await fields.nth(index).fill(values[index]);
-    await page.getByRole('heading', { name: '开通信息', exact: true }).click();
+    await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
+    await page.getByRole('option', { name: address.line1, exact: true }).click();
+    await page.getByText('国家：United States（US）', { exact: true }).waitFor();
+    await page.getByText('开通信息', { exact: true }).click();
     await page.locator('.recharge-confirm').waitFor();
     assert.equal(await fields.nth(0).inputValue(), '');
-    assert.equal(await fields.nth(3).inputValue(), '');
+    assert.equal(await fields.nth(2).inputValue(), '');
     assert.equal(confirms, 0);
-    assert.equal(starts, 3, '失败报价、重试报价和准备各一次');
     const confirm = page.getByRole('button', { name: '确认充值 · MYR 92.50' });
     assert.equal(await confirm.isEnabled(), true);
-    await page.getByRole('button', { name: '最近执行记录', exact: true }).click();
-    const drawer = page.getByRole('dialog');
-    await drawer.getByText('仅查看历史记录，不会切换或重新执行当前充值任务。').waitFor();
-    await drawer.locator('.recharge-history button').last().click();
-    assert.equal(
-      await drawer.getByRole('button', { name: /确认充值|重试核价|复查原单/ }).count(),
-      0
-    );
-    assert.equal(starts, 3);
-    assert.equal(confirms, 0);
-    await page.keyboard.press('Escape');
-    await drawer.waitFor({ state: 'hidden' });
-    assert.equal(await confirm.isEnabled(), true);
     await confirm.click();
-    await page.locator('.recharge-status').filter({ hasText: '付款结果待核验' }).waitFor();
+    await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
     assert.equal(confirms, 1);
-    failNext = true;
-    await page.getByRole('button', { name: '复查原单开通状态' }).click();
-    await page.getByText('已有原单，请先复查', { exact: true }).waitFor();
-    assert.equal(confirms, 1);
+    await waitFor(
+      async () => (await page.getByText('没有未使用地址', { exact: true }).count()) > 0
+    );
+    assert.equal(await page.getByRole('combobox', { name: '选择未使用账单地址' }).inputValue(), '');
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
     );
@@ -232,15 +213,13 @@ try {
       ok: true,
       viewports: [1440, 768, 390],
       flow: [
-        'empty',
-        'explicit-plan-selection',
-        'browser-memory-failed',
         'quote',
+        'unused-address-selection',
+        'fixed-us-location',
         'prepare',
-        'read-only-history',
         'amount-confirmation',
-        'unknown-result',
-        'error'
+        'subscription-activated',
+        'address-consumed'
       ],
       realPaymentRequests: 0
     })

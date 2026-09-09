@@ -5,31 +5,70 @@ import { useAutoRecharge } from './useAutoRecharge';
 
 const mock = vi.hoisted(() => ({
   query: {} as Record<string, unknown>,
+  addressQuery: {} as Record<string, unknown>,
+  addressOptions: undefined as undefined | { query: (input: { signal: AbortSignal }) => unknown },
   start: vi.fn(),
   confirm: vi.fn(),
-  cancel: vi.fn()
+  cancel: vi.fn(),
+  listAddresses: vi.fn()
 }));
-vi.mock('@/v2/composables/useV2Query', () => ({ useV2ModuleQuery: () => mock.query }));
+vi.mock('@/v2/composables/useV2Query', () => ({
+  useV2ModuleQuery: (options: {
+    moduleKey: string;
+    query: (input: { signal: AbortSignal }) => unknown;
+  }) => {
+    if (options.moduleKey === 'auto-recharge-addresses') {
+      mock.addressOptions = options;
+      return mock.addressQuery;
+    }
+    return mock.query;
+  }
+}));
 vi.mock('./api', () => ({
-  rechargeApi: { start: mock.start, confirm: mock.confirm, cancel: mock.cancel }
+  rechargeApi: {
+    start: mock.start,
+    confirm: mock.confirm,
+    cancel: mock.cancel,
+    listAddresses: mock.listAddresses
+  }
 }));
 vi.mock('@/api/client', () => ({ getApiErrorMessage: (cause: Error) => cause.message }));
 const data = ref<{ configured: boolean; items: V2RechargeJob[] }>({ configured: true, items: [] });
 const phase = ref('ready');
+const addressPhase = ref('ready');
 let scope = effectScope();
 let flow: ReturnType<typeof useAutoRecharge>;
+const address = {
+  id: '22222222-2222-4222-8222-222222222222',
+  line1: '1221 SW Fourth Avenue',
+  country: 'US' as const,
+  city: 'Portland' as const,
+  state: 'OR' as const,
+  postalCode: '97204' as const,
+  status: 'unused' as const,
+  usedAt: null,
+  createdAt: '',
+  updatedAt: ''
+};
+const addressData = ref({
+  items: [address],
+  total: 1,
+  page: 1,
+  pageSize: 2000,
+  totals: { unused: 1, used: 0, disabled: 0 }
+});
 const details: V2RechargeDetails = {
-  number: '4242424242424242',
+  number: '5555555555554444',
   name: 'Test User',
   expiry: '12/30',
   cvc: '123',
   email: 'test@example.com',
-  country: 'MY',
-  line1: 'Test street',
+  country: 'US',
+  line1: '1221 SW Fourth Avenue',
   line2: '',
-  city: 'Test city',
-  state: '',
-  postal_code: '50000'
+  city: 'Portland',
+  state: 'OR',
+  postal_code: '97204'
 };
 const money = { amount: '20.00', currency: 'USD', amount_minor: 2000 };
 const quote = {
@@ -48,6 +87,9 @@ function session() {
   flow.jsonInput.value = '{"account":"test-fixture"}';
   flow.acceptSession();
 }
+function selectAddress() {
+  flow.selectedAddressId.value = address.id;
+}
 function finishQuote(reason?: string) {
   data.value.items[0] = {
     ...data.value.items[0],
@@ -60,8 +102,23 @@ beforeEach(() => {
   vi.clearAllMocks();
   scope = effectScope();
   data.value = { configured: true, items: [] };
+  addressData.value = {
+    items: [address],
+    total: 1,
+    page: 1,
+    pageSize: 2000,
+    totals: { unused: 1, used: 0, disabled: 0 }
+  };
   phase.value = 'ready';
+  addressPhase.value = 'ready';
   mock.query = { data, phase, error: ref(null), refresh: vi.fn().mockResolvedValue(undefined) };
+  mock.addressQuery = {
+    data: addressData,
+    phase: addressPhase,
+    error: ref(null),
+    refresh: vi.fn().mockResolvedValue(undefined)
+  };
+  mock.listAddresses.mockResolvedValue(addressData.value);
   mock.start.mockImplementation(async (input: V2RechargeStart) => {
     data.value.items.unshift({
       id: input.id,
@@ -106,6 +163,7 @@ describe('automatic recharge orchestration', () => {
     await settle();
     expect(flow.billingLocked.value).toBe(false);
     flow.editingDetails.value = true;
+    selectAddress();
     flow.details.value = { ...details };
     finishQuote();
     await settle();
@@ -115,6 +173,14 @@ describe('automatic recharge orchestration', () => {
     await settle();
     expect(mock.start).toHaveBeenCalledTimes(2);
     expect(mock.start.mock.calls[1][0].action).toBe('prepare');
+    expect(mock.start.mock.calls[1][0].addressId).toBe(address.id);
+    expect(mock.start.mock.calls[1][0].details).toMatchObject({
+      country: 'US',
+      line1: address.line1,
+      city: 'Portland',
+      state: 'OR',
+      postal_code: '97204'
+    });
     expect(flow.details.value.number).toBe('');
     expect(flow.details.value.cvc).toBe('');
     expect(mock.confirm).not.toHaveBeenCalled();
@@ -126,6 +192,7 @@ describe('automatic recharge orchestration', () => {
     finishQuote();
     await settle();
     expect(mock.start).toHaveBeenCalledTimes(1);
+    selectAddress();
     flow.details.value = { ...details };
     finishQuote('official_account_mismatch');
     await settle();
@@ -220,6 +287,7 @@ describe('automatic recharge orchestration', () => {
     await settle();
     finishQuote();
     data.value.items[0].result.quote = { ...quote, plan: 'pro-5x' };
+    selectAddress();
     flow.details.value = { ...details };
     await settle();
     expect(mock.start).toHaveBeenCalledTimes(1);
@@ -229,6 +297,7 @@ describe('automatic recharge orchestration', () => {
     flow.plan.value = 'plus';
     await settle();
     finishQuote();
+    selectAddress();
     flow.details.value = { ...details };
     await settle();
     data.value.items[0].state = 'awaiting_confirmation';
@@ -248,12 +317,37 @@ describe('automatic recharge orchestration', () => {
   it('cancels queued work and clears sensitive fields when leaving', async () => {
     session();
     flow.plan.value = 'plus';
+    selectAddress();
     flow.details.value = { ...details };
     await nextTick();
     scope.stop();
     await settle();
     expect(mock.start).not.toHaveBeenCalled();
     expect(flow.sessionJson.value).toBe('');
+    expect(flow.selectedAddressId.value).toBe('');
     expect(Object.values(flow.details.value).every((value) => value === '')).toBe(true);
+  });
+
+  it('requests only unused addresses and fills the fixed location from the selected row', async () => {
+    const signal = new AbortController().signal;
+    await mock.addressOptions!.query({ signal });
+    expect(mock.listAddresses).toHaveBeenCalledWith(
+      { page: 1, pageSize: 2000, status: 'unused' },
+      { signal }
+    );
+    selectAddress();
+    expect(flow.selectedAddress.value).toEqual(address);
+    expect(flow.details.value).toMatchObject({
+      country: 'US',
+      line1: '1221 SW Fourth Avenue',
+      line2: '',
+      city: 'Portland',
+      state: 'OR',
+      postal_code: '97204'
+    });
+    addressData.value = { ...addressData.value, items: [], total: 0 };
+    await nextTick();
+    expect(flow.selectedAddressId.value).toBe('');
+    expect(flow.details.value.line1).toBe('');
   });
 });
