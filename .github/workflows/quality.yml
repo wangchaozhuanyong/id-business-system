@@ -75,7 +75,11 @@ jobs:
         run: npm ci --no-audit
 
       - name: Install Chromium for layout acceptance
-        run: npx playwright install --with-deps chromium
+        run: |
+          if [[ -f /etc/apt/sources.list.d/google-chrome.list ]]; then
+            sudo mv /etc/apt/sources.list.d/google-chrome.list /tmp/google-chrome.list
+          fi
+          npx playwright install --with-deps chromium
 
       - name: Check formatting
         run: npm run format:check
