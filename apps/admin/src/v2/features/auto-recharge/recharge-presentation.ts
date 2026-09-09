@@ -110,3 +110,11 @@ export function subscriptionLabel(job: V2RechargeJob): string {
 export function statusLabel(value: unknown) {
   return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
 }
+
+export function paymentStatusLabel(job: V2RechargeJob): string {
+  if (job.result.payment_status) return statusLabel(job.result.payment_status);
+  if (job.state === 'confirming') return '正在提交本次付款';
+  if (job.state === 'unknown' || job.result.payment_attempted || job.result.payment_outcome)
+    return '付款结果待核验';
+  return '未尝试付款';
+}
