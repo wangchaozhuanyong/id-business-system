@@ -92,6 +92,8 @@ describe('recharge input and durable evidence', () => {
         quote: { ...quote, plan_source: 'official_checkout_selected_radio' },
         initial_quote: { ...quote, today: null, tax: null },
         quote_authority: 'official_checkout_response',
+        recheck_plan: 'pro-20x',
+        checkout_identifier: 'cs_original_synthetic',
         sessionJson: 'secret',
         cvc: 'secret',
         accessToken: 'secret'
@@ -99,8 +101,11 @@ describe('recharge input and durable evidence', () => {
     ).toEqual({
       quote,
       initial_quote: { ...quote, today: null, tax: null },
-      quote_authority: 'official_checkout_response'
+      quote_authority: 'official_checkout_response',
+      recheck_plan: 'pro-20x',
+      checkout_identifier: 'cs_original_synthetic'
     });
+    expect(safeDocument({ recheck_plan: 'other' })).toEqual({});
   });
   it('does not turn an unknown amount into zero', () => {
     expect(

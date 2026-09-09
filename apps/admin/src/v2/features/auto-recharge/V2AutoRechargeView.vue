@@ -205,9 +205,9 @@
               @click="cancel"
               >停止本次任务</el-button
             >
-            <el-button v-if="canRecheck" :disabled="busy" @click="recheckPayment"
-              >复查原单开通状态</el-button
-            >
+            <el-button v-if="canRecheck" :disabled="busy" @click="recheckPayment">{{
+              recoveryPlan ? `只读复查 ${planLabels[recoveryPlan]} 原订单` : '复查原单开通状态'
+            }}</el-button>
             <el-button v-if="canRetry" :disabled="busy" @click="retryPreparation"
               >重试核价</el-button
             >
@@ -290,6 +290,7 @@ const {
   confirmationBlockedReason,
   canRetry,
   canRecheck,
+  recoveryPlan,
   recheckPayment,
   workflowMessage,
   acceptSession,

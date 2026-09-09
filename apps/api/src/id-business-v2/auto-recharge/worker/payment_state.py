@@ -181,7 +181,8 @@ class PaymentLedger:
     def assert_unattempted(self):
         if self.record is not None:
             raise Stop("previous_payment_attempt_exists", payment_status=self.record.get("payment_status", "unknown"),
-                       action="recheck_original_order_only")
+                       action="recheck_original_order_only", recheck_plan=self.target_plan,
+                       checkout_identifier=self.checkout_id)
 
     def begin(self, quote, *, confirmed_digest, card_last4):
         self.assert_unattempted()

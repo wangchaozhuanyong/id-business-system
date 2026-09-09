@@ -1,4 +1,5 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
+import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi } from './api';
@@ -114,9 +115,27 @@ export function useAutoRecharge() {
       : jobs.value.find(isActive)
   );
   const active = computed(() => jobs.value.some(isActive));
+  const recoveryPlan = computed<V2RechargePlan | undefined>(() => {
+    const job = selected.value;
+    if (
+      !['account_has_other_payment_attempt', 'previous_payment_attempt_exists'].includes(
+        job?.result.reason ?? ''
+      )
+    )
+      return undefined;
+    const value = job?.result.recheck_plan;
+    return V2_RECHARGE_PLANS.includes(value as V2RechargePlan)
+      ? (value as V2RechargePlan)
+      : undefined;
+  });
   const pendingReceipt = computed(() => Boolean(currentId.value && !selected.value));
   const accountLocked = computed(
-    () => busy.value || active.value || uncertain.value || pendingReceipt.value
+    () =>
+      busy.value ||
+      active.value ||
+      uncertain.value ||
+      pendingReceipt.value ||
+      Boolean(recoveryPlan.value)
   );
   const awaitingDetails = computed(
     () => selected.value?.action === 'flow' && selected.value.state === 'awaiting_details'
@@ -196,6 +215,7 @@ export function useAutoRecharge() {
       !accountLocked.value &&
       Boolean(sessionJson.value && plan.value) &&
       Boolean(error.value || selected.value?.result.reason) &&
+      !recoveryPlan.value &&
       selected.value?.state !== 'unknown' &&
       !selected.value?.result.payment_attempted &&
       !selected.value?.result.payment_outcome &&
@@ -205,11 +225,12 @@ export function useAutoRecharge() {
     Boolean(
       selected.value &&
       ['finished', 'unknown'].includes(selected.value.state) &&
-      (selected.value.state === 'unknown' ||
+      (recoveryPlan.value ||
+        selected.value.state === 'unknown' ||
         selected.value.result.payment_attempted ||
         selected.value.result.payment_outcome) &&
       sessionJson.value &&
-      plan.value === selected.value.plan &&
+      (recoveryPlan.value || plan.value === selected.value.plan) &&
       !busy.value &&
       !active.value
     )
@@ -443,6 +464,9 @@ export function useAutoRecharge() {
   }
   async function recheckPayment() {
     if (!canRecheck.value) return;
+    const targetPlan = recoveryPlan.value ?? selected.value?.plan;
+    if (!targetPlan) return;
+    plan.value = targetPlan;
     await execute('recheck');
   }
   async function importJson(event: Event) {
@@ -498,6 +522,7 @@ export function useAutoRecharge() {
     confirmationBlockedReason,
     canRetry,
     canRecheck,
+    recoveryPlan,
     recheckPayment,
     workflowMessage,
     acceptSession,

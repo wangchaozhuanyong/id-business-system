@@ -316,6 +316,30 @@ describe('explicit auto recharge flow', () => {
     expect(mock.confirm).not.toHaveBeenCalled();
   });
 
+  it('uses the original plan for a cross-plan payment recheck and never retries checkout', async () => {
+    session();
+    await flow.startFlow();
+    const job = data.value.items[0]!;
+    job.state = 'finished';
+    job.result = {
+      status: 'blocked',
+      reason: 'account_has_other_payment_attempt',
+      recheck_plan: 'pro-20x',
+      checkout_identifier: 'cs_original_synthetic'
+    };
+    await nextTick();
+    expect(flow.recoveryPlan.value).toBe('pro-20x');
+    expect(flow.accountLocked.value).toBe(true);
+    expect(flow.canStartFlow.value).toBe(false);
+    expect(flow.canRetry.value).toBe(false);
+    expect(flow.canRecheck.value).toBe(true);
+    await flow.recheckPayment();
+    expect(flow.plan.value).toBe('pro-20x');
+    expect(mock.start).toHaveBeenCalledTimes(2);
+    expect(mock.start.mock.calls[1][0]).toMatchObject({ action: 'recheck', plan: 'pro-20x' });
+    expect(mock.confirm).not.toHaveBeenCalled();
+  });
+
   it('clears secrets on successful cancel and on leaving the page', async () => {
     activeJob('awaiting_details', { initial_quote: quote });
     selectAddress();

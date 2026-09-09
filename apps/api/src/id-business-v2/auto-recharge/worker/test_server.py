@@ -150,6 +150,15 @@ class ServerTests(unittest.TestCase):
             'sessionToken': 'private', 'details': {'cvc': 'private'}, 'cookie': 'private'})
         self.assertEqual(result, {'status': 'blocked'})
 
+    def test_original_order_recovery_fields_survive_public_result(self):
+        result = server.public_result({
+            'status': 'blocked', 'reason': 'account_has_other_payment_attempt',
+            'recheck_plan': 'pro-20x', 'checkout_identifier': 'cs_original_synthetic',
+            'sessionToken': 'private'})
+        self.assertEqual(result, {
+            'status': 'blocked', 'reason': 'account_has_other_payment_attempt',
+            'recheck_plan': 'pro-20x', 'checkout_identifier': 'cs_original_synthetic'})
+
     def test_confirm_requires_current_nonce_and_only_once(self):
         job = server.Job('test', {})
         job.nonce = 'a' * 64

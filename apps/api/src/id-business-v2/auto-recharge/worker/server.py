@@ -31,7 +31,7 @@ API = os.environ.get("AUTO_RECHARGE_CALLBACK_URL", "http://api:3000/api/id-busin
 JOB_ID = re.compile(r"^[a-f0-9-]{36}$")
 RECORD_PATH = re.compile(r"^(?:payments/)?[a-f0-9]{64}(?:-pro-(?:5x|20x))?\.json$")
 CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
-PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
+PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier quote initial_quote quote_authority subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 
 
 class PersistentBrowserRuntime:
