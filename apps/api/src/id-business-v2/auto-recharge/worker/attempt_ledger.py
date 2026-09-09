@@ -33,8 +33,18 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None):
         if not isinstance(data, dict):
             raise Stop("invalid_payment_record")
         if data.get("account_key") == key and data.get("payment_attempted"):
+            recheck_plan = data.get("target_plan", "plus")
+            checkout_identifier = data.get("checkout_identifier")
+            try:
+                plan_spec(recheck_plan)
+            except (Stop, KeyError, TypeError, ValueError):
+                raise Stop("invalid_payment_record") from None
+            if (not isinstance(checkout_identifier, str)
+                    or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", checkout_identifier)):
+                raise Stop("invalid_payment_record")
             if checkout_id is None or data.get("checkout_identifier") != checkout_id:
-                raise Stop("account_has_other_payment_attempt", action="recheck_original_order_only")
+                raise Stop("account_has_other_payment_attempt", action="recheck_original_order_only",
+                           recheck_plan=recheck_plan, checkout_identifier=checkout_identifier)
 
 
 def existing_checkout(state_dir: Path, account_id: str, target_plan="plus") -> dict:

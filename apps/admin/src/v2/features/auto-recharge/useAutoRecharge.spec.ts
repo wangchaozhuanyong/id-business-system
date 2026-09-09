@@ -220,9 +220,11 @@ describe('explicit auto recharge flow', () => {
   it('polls only while server-side work can change without user input', () => {
     const getRevalidateAt = mock.jobOptions?.getRevalidateAt;
     expect(getRevalidateAt?.({ configured: true, items: [] })).toBeNull();
-    expect(getRevalidateAt?.({ configured: true, items: [activeJob('running')] })).toBe(
-      Date.now() + 2000
-    );
+    const before = Date.now();
+    const nextRefreshAt = getRevalidateAt?.({ configured: true, items: [activeJob('running')] });
+    const after = Date.now();
+    expect(nextRefreshAt).toBeGreaterThanOrEqual(before + 2000);
+    expect(nextRefreshAt).toBeLessThanOrEqual(after + 2000);
     expect(
       getRevalidateAt?.({ configured: true, items: [activeJob('awaiting_details')] })
     ).toBeNull();
@@ -313,6 +315,30 @@ describe('explicit auto recharge flow', () => {
     expect(flow.canRecheck.value).toBe(true);
     await flow.recheckPayment();
     expect(mock.start.mock.calls[1][0].action).toBe('recheck');
+    expect(mock.confirm).not.toHaveBeenCalled();
+  });
+
+  it('uses the original plan for a cross-plan payment recheck and never retries checkout', async () => {
+    session();
+    await flow.startFlow();
+    const job = data.value.items[0]!;
+    job.state = 'finished';
+    job.result = {
+      status: 'blocked',
+      reason: 'account_has_other_payment_attempt',
+      recheck_plan: 'pro-20x',
+      checkout_identifier: 'cs_original_synthetic'
+    };
+    await nextTick();
+    expect(flow.recoveryPlan.value).toBe('pro-20x');
+    expect(flow.accountLocked.value).toBe(true);
+    expect(flow.canStartFlow.value).toBe(false);
+    expect(flow.canRetry.value).toBe(false);
+    expect(flow.canRecheck.value).toBe(true);
+    await flow.recheckPayment();
+    expect(flow.plan.value).toBe('pro-20x');
+    expect(mock.start).toHaveBeenCalledTimes(2);
+    expect(mock.start.mock.calls[1][0]).toMatchObject({ action: 'recheck', plan: 'pro-20x' });
     expect(mock.confirm).not.toHaveBeenCalled();
   });
 

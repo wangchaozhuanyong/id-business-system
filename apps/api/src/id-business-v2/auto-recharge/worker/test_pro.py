@@ -74,16 +74,24 @@ class ProStateTests(unittest.TestCase):
         self.marker("pro-5x")
         with PaymentLedger(self.root, self.target.account_id, target_plan="pro-5x") as ledger:
             ledger.begin(pro_quote(), confirmed_digest=quote_digest(pro_quote()), card_last4="4242")
-        with self.assertRaises(Stop):
+        with self.assertRaises(Stop) as blocked:
             with PaymentLedger(self.root, self.target.account_id):
                 pass
-        with self.assertRaises(Stop):
+        self.assertEqual(blocked.exception.report["reason"], "account_has_other_payment_attempt")
+        self.assertEqual(blocked.exception.report["recheck_plan"], "pro-5x")
+        self.assertEqual(blocked.exception.report["checkout_identifier"], "cs_pro5x_synthetic")
+        with self.assertRaises(Stop) as blocked:
             with AttemptLedger(self.root, self.target.account_id, target_plan="pro-20x"):
                 pass
+        self.assertEqual(blocked.exception.report["recheck_plan"], "pro-5x")
         with PaymentLedger(self.root, self.target.account_id, target_plan="pro-5x") as ledger:
             self.assertEqual(ledger.record["target_plan"], "pro-5x")
-            with self.assertRaises(Stop):
+            with self.assertRaises(Stop) as same_plan:
                 ledger.assert_unattempted()
+            self.assertEqual(same_plan.exception.report["recheck_plan"], "pro-5x")
+            self.assertEqual(
+                same_plan.exception.report["checkout_identifier"], "cs_pro5x_synthetic"
+            )
 
     def test_quote_tier_is_required_and_never_inferred_from_price(self):
         self.assertEqual(checkout_text_plan("ChatGPT Pro 5×"), "pro-5x")

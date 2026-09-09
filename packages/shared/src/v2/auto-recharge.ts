@@ -47,6 +47,7 @@ export interface V2RechargeResult {
   payment_status?: string;
   payment_outcome?: string;
   subscription_status?: string;
+  recheck_plan?: V2RechargePlan;
   checkout_identifier?: string;
   nonce?: string;
   card_last4?: string;
