@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const imapFlowState = vi.hoisted(() => ({
   authUsers: [] as string[],
+  messages: [] as Array<{ source: Buffer; size: number }>,
   options: [] as Array<{
     auth: { accessToken?: string; pass?: string; user: string };
     host: string;
@@ -12,7 +13,7 @@ const imapFlowState = vi.hoisted(() => ({
 
 vi.mock('imapflow', () => ({
   ImapFlow: class {
-    mailbox = { exists: 0 };
+    mailbox = { exists: imapFlowState.messages.length };
     usable = true;
 
     constructor(
@@ -33,7 +34,9 @@ vi.mock('imapflow', () => ({
       return { release: vi.fn() };
     }
 
-    async *fetch() {}
+    async *fetch() {
+      yield* imapFlowState.messages;
+    }
 
     async logout() {
       this.usable = false;
@@ -55,6 +58,7 @@ describe('IdBusinessV2ImapMailProvider', () => {
 
   beforeEach(() => {
     imapFlowState.authUsers.length = 0;
+    imapFlowState.messages.length = 0;
     imapFlowState.options.length = 0;
     imapFlowState.connect = async (user) => {
       if (!user.includes('@')) return;
@@ -69,6 +73,41 @@ describe('IdBusinessV2ImapMailProvider', () => {
     provider = new IdBusinessV2ImapMailProvider({
       get: vi.fn().mockReturnValue(undefined)
     } as unknown as ConfigService);
+  });
+
+  it('parses MIME addresses, encoded Chinese subject and body through the real mail parser', async () => {
+    imapFlowState.connect = async () => undefined;
+    const source = Buffer.from(
+      [
+        'From: "Support, Team" <support@example.test>',
+        'To: Buyer <buyer@gmail.com>',
+        'Subject: =?UTF-8?B?' + Buffer.from('邮件解析验收').toString('base64') + '?=',
+        'Date: Wed, 09 Sep 2026 10:00:00 +0000',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from('中文邮件正文与 ASCII text').toString('base64')
+      ].join('\r\n')
+    );
+    imapFlowState.messages.push({ source, size: source.length });
+    const messages = await provider.query(
+      {
+        appPassword: 'test-only-password',
+        email: 'buyer@gmail.com',
+        provider: 'gmail'
+      },
+      10
+    );
+    expect(messages).toEqual([
+      expect.objectContaining({
+        subject: '邮件解析验收',
+        body: '中文邮件正文与 ASCII text',
+        savedAt: '2026-09-09T10:00:00.000Z'
+      })
+    ]);
+    expect(messages[0]?.from).toContain('support@example.test');
+    expect(messages[0]?.to).toContain('buyer@gmail.com');
   });
 
   it('uses the mailbox local part first for an iCloud login', async () => {
