@@ -154,6 +154,10 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(json={"checkout_session_id": "cs_pro_synthetic", "processor_entity": "openai_ie", "billing_details": {"currency": "MYR"}})
         elif path == "/v1/payment_methods":
             await route.fulfill(json={"id": "pm_synthetic"}, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
+        elif path == "/v1/payment_pages/cs_pro_synthetic/init":
+            await route.fulfill(json={"id": "cs_pro_synthetic", "status": "open", "currency": "myr",
+                                      "total_summary": {"due": 42000, "total": 42000}},
+                                headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
         elif path == "/v1/payment_pages/cs_pro_synthetic/confirm":
             self.payments += 1
             files = list((self.root / "payments").glob("*.json"))
@@ -169,9 +173,11 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
                 <h1>TITLE</h1>RADIOS<p>Total due today</p><p>MYR 420.00</p><p>Tax</p><p>MYR 0.00</p>
                 <p>Renews</p><p>MYR 420.00</p><p>per month</p>
-                <input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc">
+                <input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc"
+                  oninput="fetch('https://api.stripe.com/v1/payment_pages/cs_pro_synthetic/init',{method:'POST',body:'billing=changed'})">
                 <button type="submit" onclick="pay()">订阅</button>
-                <script>async function pay(){
+                <script>fetch('https://api.stripe.com/v1/payment_pages/cs_pro_synthetic/init',{method:'POST',body:'read=1'});
+                async function pay(){
                     await fetch('https://api.stripe.com/v1/payment_methods',{method:'POST',body:'type=card'});
                     await fetch('https://api.stripe.com/v1/payment_pages/cs_pro_synthetic/confirm',{method:'POST',body:'payment_method=pm_synthetic'});
                 }</script></body></html>'''.replace("TITLE", title).replace("RADIOS", radios))

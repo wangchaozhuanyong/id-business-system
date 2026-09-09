@@ -97,6 +97,32 @@ class ServerTests(unittest.TestCase):
             thread.join(2)
             self.assertEqual(result, [True])
             self.assertEqual(seen[0]['type'], 'confirmation')
+            self.assertEqual(seen[0]['result']['quote_authority'], 'official_checkout_response')
+
+    def test_details_waits_for_one_explicit_submission_and_clears_worker_copy(self):
+        job = server.Job('test', {})
+        seen = []
+        result = []
+        payload = {'details': {
+            'number': '5555555555554444', 'expiry': '12/39', 'cvc': '123',
+            'name': 'Synthetic User', 'email': 'test@example.invalid',
+            'country': 'US', 'line1': '1221 SW Fourth Avenue', 'line2': '',
+            'city': 'Portland', 'state': 'OR', 'postal_code': '97204'}}
+        with patch.object(server, 'callback', side_effect=lambda _, body: seen.append(body)):
+            thread = threading.Thread(target=lambda: result.append(job.details({'plan': 'plus'})))
+            thread.start()
+            for _ in range(1000):
+                if job.waiting_details:
+                    break
+                threading.Event().wait(.001)
+            job.submit_details(payload)
+            thread.join(2)
+        self.assertEqual(result[0].last4, '4444')
+        self.assertIsNone(job.pending_details)
+        self.assertEqual(payload, {})
+        self.assertEqual(seen[0]['type'], 'details_required')
+        with self.assertRaises(Stop):
+            job.submit_details({'details': {}})
 
     def test_cancel_does_not_authorize_payment(self):
         job = server.Job('test', {})

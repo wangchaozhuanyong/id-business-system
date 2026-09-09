@@ -6,6 +6,7 @@ import type {
   V2RechargeAddressListQuery,
   V2RechargeAddressStatus,
   V2RechargeStart,
+  V2RechargeDetailsSubmission,
   V2RechargeJob
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
@@ -17,6 +18,9 @@ export const rechargeApi = {
   },
   start(input: V2RechargeStart) {
     return request<{ id: string }>(http.post(base, input));
+  },
+  submitDetails(id: string, input: V2RechargeDetailsSubmission) {
+    return request<{ id: string }>(http.post(`${base}/${id}/details`, input));
   },
   confirm(id: string, nonce: string) {
     return request(http.post(`${base}/${id}/confirm`, { nonce }));

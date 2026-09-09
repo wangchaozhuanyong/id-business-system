@@ -17,8 +17,9 @@ from plans import PLANS, plan_spec, subscription_match
 _UNOBSERVED = object()
 
 
-def quote_digest(quote):
-    if not isinstance(quote, dict) or quote.get("plan") not in PLANS or not quote.get("today") or not quote.get("renewal"):
+def canonical_quote(quote):
+    if (not isinstance(quote, dict) or quote.get("plan") not in PLANS
+            or not quote.get("today") or quote.get("tax") is None or not quote.get("renewal")):
         raise Stop("complete_payment_quote_required")
     today, renewal = quote["today"], quote["renewal"]
     for item in (today, renewal, quote.get("tax")):
@@ -28,9 +29,22 @@ def quote_digest(quote):
                 or not isinstance(item.get("amount"), str) or not isinstance(item.get("currency"), str)
                 or money(item["currency"] + " " + item["amount"]) != item):
             raise Stop("invalid_payment_amount")
-    if (today.get("currency") != renewal.get("currency") or quote.get("renewal_interval") != "monthly"
+    if (today.get("currency") != quote["tax"].get("currency")
+            or today.get("currency") != renewal.get("currency")
+            or quote.get("renewal_interval") != "monthly"
             or type(today.get("amount_minor")) is not int or today["amount_minor"] <= 0):
         raise Stop("unsupported_payment_quote")
+    return {"plan": quote["plan"], "today": today, "tax": quote.get("tax"),
+            "renewal": renewal, "renewal_interval": quote["renewal_interval"]}
+
+
+def quote_digest(quote):
+    """v3 只绑定付款相关字段，展示来源等脱敏元数据不能破坏原单恢复。"""
+    return hashlib.sha256(json.dumps(canonical_quote(quote), sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def legacy_quote_digest(quote):
     return hashlib.sha256(json.dumps(quote, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -92,21 +106,30 @@ def outcome(payment_status, current_plan, evidence=None, *, target_plan="plus", 
 
 
 class PaymentLedger:
-    def __init__(self, root: Path, account_id: str, *, target_plan="plus"):
+    def __init__(self, root: Path, account_id: str, *, target_plan="plus", held_lock_fd=None):
         self.root, self.account_id = root, account_id
         plan_spec(target_plan)
         self.target_plan = target_plan
         self.account_key = hashlib.sha256(account_id.encode()).hexdigest()
         self.fd = None
+        self.held_lock_fd = held_lock_fd
+        self.owns_lock = False
         self.record = None
 
     def __enter__(self):
         if self.root.is_symlink():
             raise Stop("unsafe_state_directory")
         # 与建单共用账户锁，防止两个进程同时准备该账户的付款。
-        self.fd = os.open(self.root / (self.account_key + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        if self.held_lock_fd is not None:
+            if type(self.held_lock_fd) is not int or self.held_lock_fd < 0:
+                raise Stop("account_operation_lock_invalid")
+            self.fd = self.held_lock_fd
+        else:
+            self.fd = os.open(self.root / (self.account_key + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            self.owns_lock = True
         try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self.owns_lock:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.checkout = existing_checkout(self.root, self.account_id, self.target_plan)
             self.checkout_id = self.checkout["checkout_identifier"]
             assert_no_other_payment(self.root, self.account_id, self.checkout_id)
@@ -123,12 +146,20 @@ class PaymentLedger:
                 if len(raw) > 65536:
                     raise Stop("invalid_payment_record")
                 self.record = json.loads(raw, object_pairs_hook=unique_object)
+                schema = self.record.get("schema_version")
                 if (not isinstance(self.record, dict) or self.record.get("account_key") != self.account_key
                         or self.record.get("checkout_identifier") != self.checkout_id
-                        or self.record.get("schema_version") not in (1, 2) or self.record.get("payment_attempted") is not True
+                        or schema not in (1, 2, 3) or self.record.get("payment_attempted") is not True
                         or self.record.get("target_plan", "plus") != self.target_plan):
                     raise Stop("invalid_payment_record")
-                if (quote_digest(self.record.get("quote")) != self.record.get("quote_digest")
+                quote = self.record.get("quote")
+                fingerprint = self.record.get("quote_digest")
+                legacy_candidates = [quote]
+                if isinstance(quote, dict) and self.target_plan.startswith("pro-"):
+                    legacy_candidates.append({**quote, "plan_source": "official_checkout_selected_radio"})
+                digest_valid = (quote_digest(quote) == fingerprint if schema == 3 else any(
+                    legacy_quote_digest(candidate) == fingerprint for candidate in legacy_candidates))
+                if (not digest_valid
                         or self.record["quote"]["plan"] != self.target_plan
                         or self.record.get("payment_status") not in {"unknown", "paid", "declined", "requires_action"}
                         or type(self.record.get("confirmation_requests_sent")) is not int
@@ -161,7 +192,7 @@ class PaymentLedger:
             raise Stop("payment_quote_changed")
         if self.fd is None or not re.fullmatch(r"\d{4}", card_last4):
             raise Stop("invalid_payment_preparation")
-        record = {"schema_version": 2, "account_key": self.account_key, "target_plan": self.target_plan,
+        record = {"schema_version": 3, "account_key": self.account_key, "target_plan": self.target_plan,
                   "checkout_identifier": self.checkout_id, "quote": quote,
                   "quote_digest": fingerprint, "card_last4": card_last4,
                   "payment_attempted": True, "payment_status": "unknown",
@@ -211,6 +242,7 @@ class PaymentLedger:
         self.record = data
 
     def __exit__(self, *args):
-        if self.fd is not None:
+        if self.fd is not None and self.owns_lock:
             os.close(self.fd)
-            self.fd = None
+        self.fd = None
+        self.owns_lock = False

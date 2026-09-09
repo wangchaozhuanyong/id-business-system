@@ -4,6 +4,20 @@
       <p class="recharge-status" role="status">
         {{ statusLabel(job.state === 'confirming' ? job.state : job.result.status || job.state) }}
       </p>
+      <p v-if="job.result.initial_quote" class="recharge-quote-title">初始报价（填写账单地址前）</p>
+      <dl v-if="job.result.initial_quote" class="recharge-summary recharge-quote">
+        <dt>初始应付</dt>
+        <dd class="recharge-total">
+          {{ price(job.result.initial_quote.today, '需填写账单地址后确定') }}
+        </dd>
+        <dt>初始税费</dt>
+        <dd>{{ price(job.result.initial_quote.tax, '需填写账单地址后确定') }}</dd>
+        <dt>初始续费</dt>
+        <dd>{{ price(job.result.initial_quote.renewal, '需填写账单地址后确定') }}</dd>
+      </dl>
+      <p class="recharge-quote-title">
+        {{ job.result.initial_quote ? '账单地址后最终金额' : '官方报价' }}
+      </p>
       <dl class="recharge-summary recharge-quote">
         <dt>今日应付</dt>
         <dd class="recharge-total">{{ price(job.result.quote?.today, quotePlaceholder(job)) }}</dd>
@@ -69,7 +83,7 @@
     </template>
     <div v-else class="recharge-empty">
       <h3>等待开通资料</h3>
-      <p>填写左侧资料后，系统自动核对账户、套餐和官方金额。</p>
+      <p>载入授权 JSON 并选择套餐后，点击“获取初始报价”才会访问官网。</p>
       <p>核价完成后，在这里确认充值并查看开通结果。</p>
     </div>
   </div>

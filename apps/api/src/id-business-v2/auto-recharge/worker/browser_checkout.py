@@ -472,6 +472,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             # 已过期的官网结算会跳到 /checkout/verify；不能把该错误页当作原报价继续解析。
             raise Stop("existing_checkout_unavailable")
         deadline = time.monotonic() + quote_timeout
+        partial_quote_since = None
         while time.monotonic() < deadline:
             quote_text = await page.locator("body").inner_text()
             if existing and is_unavailable_existing_checkout(quote_text):
@@ -479,8 +480,14 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             quote = await quote_from_page(page, guard.result.get("returned_currency"))
             if quote["today"] and quote["plan"] in (target_plan, spec["family"]):
                 break
+            if quote_handler and quote["plan"] == target_plan:
+                partial_quote_since = partial_quote_since or time.monotonic()
+                if time.monotonic() - partial_quote_since >= 2:
+                    break
+            else:
+                partial_quote_since = None
             await asyncio.sleep(0.3)
-        if not quote or not quote["today"] or quote["plan"] not in (target_plan, spec["family"]):
+        if (not quote or not quote["today"] or quote["plan"] not in (target_plan, spec["family"])) and not quote_handler:
             if existing and guard.checkout_id not in page.url:
                 raise Stop("existing_checkout_unavailable")
             await wait_for_user("quote_needs_review_or_billing", wait_seconds)
@@ -491,21 +498,24 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             await check_page.close()
             quote_text = await page.locator("body").inner_text()
             quote = await quote_from_page(page, guard.result.get("returned_currency"))
-        if not quote["today"] or quote["plan"] not in (target_plan, spec["family"]):
+        if not quote or quote["plan"] not in (target_plan, spec["family"]):
             raise Stop("actual_quote_unknown", quote=quote)
         if quote["plan"] != target_plan:
             raise Stop("checkout_tier_not_verified", quote=quote)
         # 报价验收必须绑定本次编号；不能只凭页面出现 Plus/金额认定成功。
         if guard.checkout_id not in page.url:
             raise Stop("checkout_page_identifier_unverified", quote=quote)
-        result = {"status": "checkout_quote_verified", **identity, **guard.summary(),
+        initial_status = "checkout_quote_verified" if quote.get("today") else "checkout_ready_for_billing"
+        result = {"status": initial_status, **identity, **guard.summary(),
                   "checkout_status": "created", "checkout_identifier": guard.checkout_id,
-                  "quote": quote, "subscription_status": "not_verified", "stage": "quote_ready"}
+                  "quote": quote, "initial_quote": quote,
+                  "subscription_status": "not_verified",
+                  "stage": "quote_ready" if quote.get("today") else "details_required"}
         if existing:
             result["inspection_only"] = True
         if ledger:
             ledger.finish(result)
-        progress("quote_ready", quote=quote)
+        progress("quote_ready" if quote.get("today") else "details_required", initial_quote=quote)
         if quote_handler:
             stage = "payment_preparation"
             result.update(await quote_handler(page, guard, identity, quote))

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 from urllib.parse import urlsplit
@@ -15,13 +16,14 @@ from playwright.async_api import async_playwright
 from attempt_ledger import AttemptLedger
 from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
-from pay import current_quote, include_payment_record, run_payment
+from pay import current_quote, include_payment_record, run_flow, run_payment
 from payment_recovery import recheck_in_context
 from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, billing_value_matches,
                           fill_billing_node, one_billing_field, select_country_option,
                           validate_details, verify_billing_fields)
 from payment_network import PaymentGuard
-from payment_state import PaymentLedger, outcome, payment_evidence, quote_digest
+from payment_state import (PaymentLedger, legacy_quote_digest, outcome, payment_evidence,
+                           quote_digest)
 from test_subscribe import fixture, account
 
 
@@ -77,6 +79,98 @@ class StateTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 with PaymentLedger(self.root, self.target.account_id):
                     pass
+
+    def test_same_flow_reuses_checkout_lock_for_payment_ledger(self):
+        root = Path(self.temp.name) / "same-flow"
+        with AttemptLedger(root, self.target.account_id) as checkout:
+            checkout.begin()
+            checkout.finish({"checkout_identifier": "cs_same_flow", "processor_entity": "openai_ie",
+                             "returned_currency": "MYR", "checkout_outcome": "created"})
+            with PaymentLedger(root, self.target.account_id, held_lock_fd=checkout.fd) as payment:
+                self.assertEqual(payment.checkout_id, "cs_same_flow")
+
+    def test_flow_hands_the_same_checkout_lock_to_payment_stage(self):
+        async def exercise():
+            root = Path(self.temp.name) / "flow-handoff"
+            observed = {}
+
+            async def local_browser(target, **kwargs):
+                with AttemptLedger(root, target.account_id) as checkout:
+                    checkout.begin()
+                    checkout.finish({"checkout_identifier": "cs_flow_handoff",
+                                     "processor_entity": "openai_ie", "returned_currency": "MYR",
+                                     "checkout_outcome": "created"})
+                    guard = PaymentGuard(target, checkout_ledger=checkout, target_plan="plus")
+                    guard.checkout_id = "cs_flow_handoff"
+                    observed["checkout_fd"] = checkout.fd
+                    return await kwargs["quote_handler"](
+                        object(), guard, {"account_matched": True, "current_plan": "free"}, quote())
+
+            async def payment_stage(_page, guard, _identity, ledger, *_args, **_kwargs):
+                observed["payment_fd"] = ledger.fd
+                observed["attached"] = guard.payment_ledger is ledger
+                return {"status": "payment_cancelled"}
+
+            with patch("pay.run_browser", new=local_browser), patch("pay.payment_handler", new=payment_stage):
+                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                                        confirmer=lambda *_: False)
+            self.assertEqual(result["status"], "payment_cancelled")
+            self.assertEqual(observed["checkout_fd"], observed["payment_fd"])
+            self.assertTrue(observed["attached"])
+
+        asyncio.run(exercise())
+
+    def test_flow_reuses_existing_unpaid_checkout_in_same_browser_session(self):
+        async def exercise():
+            root = Path(self.temp.name) / "flow-existing"
+            create_marker(root, self.target)
+            observed = {}
+
+            async def local_browser(target, **kwargs):
+                observed.update(kwargs)
+                guard = PaymentGuard(target, checkout_ledger=None, target_plan="plus")
+                guard.checkout_id = "cs_synthetic"
+                return await kwargs["quote_handler"](
+                    object(), guard, {"account_matched": True, "current_plan": "free"}, quote())
+
+            async def payment_stage(_page, guard, _identity, ledger, *_args, **_kwargs):
+                observed["owns_lock"] = ledger.owns_lock
+                observed["attached"] = guard.payment_ledger is ledger
+                return {"status": "payment_cancelled"}
+
+            with patch("pay.run_browser", new=local_browser), patch("pay.payment_handler", new=payment_stage):
+                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                                        confirmer=lambda *_: False)
+            self.assertEqual(result["status"], "payment_cancelled")
+            self.assertTrue(observed["inspect_existing"])
+            self.assertNotIn("create", observed)
+            self.assertTrue(observed["owns_lock"])
+            self.assertTrue(observed["attached"])
+
+        asyncio.run(exercise())
+
+    def test_flow_replaces_only_unavailable_unattempted_checkout(self):
+        async def exercise():
+            root = Path(self.temp.name) / "flow-replace"
+            create_marker(root, self.target)
+            calls = []
+
+            async def local_browser(_target, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get("inspect_existing"):
+                    return {"status": "blocked", "reason": "existing_checkout_unavailable",
+                            "payment_attempted": False, "confirmation_requests_sent": 0}
+                return {"status": "payment_cancelled"}
+
+            with patch("pay.run_browser", new=local_browser):
+                result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
+                                        confirmer=lambda *_: False)
+            self.assertEqual(result["status"], "payment_cancelled")
+            self.assertTrue(calls[0]["inspect_existing"])
+            self.assertTrue(calls[1]["create"])
+            self.assertTrue(calls[1]["replace_unpaid_checkout"])
+
+        asyncio.run(exercise())
 
     def test_confirmation_before_send_and_duplicate(self):
         with PaymentLedger(self.root, self.target.account_id) as ledger:
@@ -138,8 +232,10 @@ class StateTests(unittest.TestCase):
             current = quote_from_text(
                 "ChatGPT Plus\nTotal due today\nJPY 3000\nTax\nJPY 0\nRenews JPY 3000 / month"
             )
+            guard = SimpleNamespace(official_quote_binding={"currency": "JPY", "amount_minor": 3000},
+                                    official_binding_version=1)
             with patch("pay.quote_from_page", new=AsyncMock(return_value=current)) as reader:
-                result = await current_quote(object(), "USD")
+                result = await current_quote(object(), guard)
             self.assertEqual(result["today"]["currency"], "JPY")
             self.assertTrue(all(call.args[1:] == () for call in reader.await_args_list))
 
@@ -154,14 +250,37 @@ class StateTests(unittest.TestCase):
                 "ChatGPT Plus\nTotal due today\n$20.00\nTax\n$0.00\nRenews $20.00 / month",
                 "USD",
             )
+            guard = SimpleNamespace(official_quote_binding={"currency": "USD", "amount_minor": 2000},
+                                    official_binding_version=1)
             with patch(
                 "pay.quote_from_page",
                 new=AsyncMock(side_effect=[missing, usd, missing, usd]),
             ):
-                result = await current_quote(object(), "USD")
+                result = await current_quote(object(), guard)
             self.assertEqual(result["today"]["currency"], "USD")
 
         asyncio.run(exercise())
+
+    def test_legacy_pro_digest_survives_removed_plan_source(self):
+        root = Path(self.temp.name) / "legacy-pro"
+        with AttemptLedger(root, self.target.account_id, target_plan="pro-20x") as checkout:
+            checkout.begin()
+            checkout.finish({"checkout_identifier": "cs_pro_legacy", "processor_entity": "openai_ie",
+                             "returned_currency": "JPY", "checkout_outcome": "created"})
+        value = quote_from_text(
+            "ChatGPT Pro 20x\nTotal due today\nJPY 27273\nTax\nJPY 0\nRenews JPY 27273 / month"
+        )
+        with PaymentLedger(root, self.target.account_id, target_plan="pro-20x") as ledger:
+            record = {"schema_version": 2, "account_key": ledger.account_key,
+                      "target_plan": "pro-20x", "checkout_identifier": ledger.checkout_id,
+                      "quote": value,
+                      "quote_digest": legacy_quote_digest({**value, "plan_source": "official_checkout_selected_radio"}),
+                      "card_last4": "4444", "payment_attempted": True,
+                      "payment_status": "unknown", "confirmation_requests_sent": 1}
+            path = ledger.path
+        path.write_text(json.dumps(record))
+        with PaymentLedger(root, self.target.account_id, target_plan="pro-20x") as restored:
+            self.assertEqual(restored.record["quote"]["today"]["currency"], "JPY")
 
     def test_recovery_guard_cannot_submit_even_with_approval_state(self):
         async def exercise():
@@ -295,7 +414,8 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
                 data = {"id": "cs_synthetic", "object": "checkout.session", "status": "complete", "payment_status": "paid",
                         "amount_total": 9250, "currency": "myr"}
             else:
-                data = {"id": "cs_synthetic", "status": "open"}
+                data = {"id": "cs_synthetic", "status": "open", "currency": "myr",
+                        "total_summary": {"due": 9250, "total": 9250}}
             await route.fulfill(json=data, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
         elif p.path == "/v1/payment_pages/cs_synthetic/confirm":
             self.confirmations += 1
@@ -326,7 +446,7 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
               <label>持卡人<input autocomplete="billing name"></label>
               <label id="transition-name">持卡人<input autocomplete="billing name"></label>
               <label>街道地址<input autocomplete="billing address-line1"
-                oninput="this.autocomplete='disabled'"></label>
+                oninput="this.autocomplete='disabled';fetch('https://api.stripe.com/v1/payment_pages/cs_synthetic/init',{method:'POST',body:'billing=changed'})"></label>
               <label>州<input autocomplete="billing address-level1"></label>
               <label>州<select autocomplete="billing address-level1">
                 <option value="">请选择</option><option value="OR">Oregon</option>
@@ -551,6 +671,23 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "payment_result_unknown", result)
         self.assertEqual(self.confirmations, 1)
         self.assertEqual(result["payment_requests_sent"], 0)
+
+    async def test_restart_reports_current_official_quote_when_legacy_currency_differs(self):
+        self.result_mode = "unknown"
+        await self.flow()
+        path = next((self.root / "payments").glob("*.json"))
+        record = json.loads(path.read_text())
+        historical = quote_from_text(
+            "ChatGPT Plus\nTotal due today\nUSD 92.50\nTax\nUSD 0.00\nRenews USD 92.50 / month"
+        )
+        record.update(quote=historical, quote_digest=quote_digest(historical))
+        path.write_text(json.dumps(record))
+        result = await self.recover()
+        self.assertEqual(result["reason"], "original_quote_mismatch", result)
+        self.assertEqual(result["quote"]["today"]["currency"], "MYR")
+        self.assertEqual(result["quote_authority"], "official_checkout_response")
+        self.assertEqual(result["payment_requests_sent"], 0)
+        self.assertEqual(self.confirmations, 1)
 
     async def test_restart_wrong_account_preserves_paid_but_invalidates_subscription(self):
         await self.flow()

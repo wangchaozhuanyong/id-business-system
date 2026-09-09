@@ -466,7 +466,7 @@ const navigationSectionIcons: Record<string, Component> = {
 const isRoutePending = computed(() => v2RouteNavigationState.state === 'pending');
 const isRouteError = computed(() => v2RouteNavigationState.state === 'error');
 const queryActivityLabel = computed(() => {
-  if (v2QueryActivity.refreshingCount > 0 || v2QueryActivity.lastErrorAt) return '';
+  if (v2QueryActivity.lastErrorAt) return '';
   if (!v2QueryActivity.refreshedAt) return '';
   return `更新于 ${new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',

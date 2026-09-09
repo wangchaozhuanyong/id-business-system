@@ -146,7 +146,13 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 html = html.replace("document.querySelector('#plus').hidden=false", "document.querySelector('#plus').hidden=false;document.querySelector('#personal').setAttribute('aria-checked','true')")
                 html = html.replace('>Get Plus</button>', '>Upgrade to Plus</button>')
             if self.duplicate_plus:
-                html = html.replace("async function create()", "setTimeout(()=>{const copy=document.querySelector('#plus').cloneNode(true);copy.id='copy';copy.hidden=false;document.body.append(copy)},100);async function create()")
+                html = html.replace(
+                    'onclick="document.querySelector(\'#plus\').hidden=',
+                    'onclick="const copy=document.querySelector(\'#plus\').cloneNode(true);'
+                    "copy.id='copy';copy.hidden=false;document.body.append(copy);"
+                    "document.querySelector('#plus').hidden=",
+                    1,
+                )
             if self.disabled_plus:
                 html = html.replace("setTimeout(()=>document.querySelector('#plus').disabled=false, 1000);", "document.querySelector('#plus').disabled=true;")
             if self.verification_menu:

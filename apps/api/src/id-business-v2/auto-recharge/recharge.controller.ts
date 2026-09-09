@@ -41,6 +41,14 @@ export class RechargeController {
   ) {
     return this.service.confirm(id, nonce, operator);
   }
+  @Post('jobs/:id/details')
+  submitDetails(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.submitDetails(id, input, operator);
+  }
   @Post('jobs/:id/cancel')
   cancel(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.cancel(id, operator);

@@ -14,6 +14,7 @@ import uuid
 import warnings
 
 from browser_checkout import (ORIGIN, check_session, progress, quote_from_page, run_browser)
+from attempt_ledger import checkout_record_path
 from checkout_core import MAX_BYTES, ROOT, Stop, parse_browser_credential, write_json
 from payment_form import (PaymentDetails, fill_official_form, subscribe_button, validate_details,
                           verify_billing_fields, verify_card_fields)
@@ -74,18 +75,33 @@ def confirm_quote(quote, last4):
     return entered == phrase
 
 
-async def current_quote(page, currency_hint):
+async def verified_quote_once(page, guard):
+    binding = guard.official_quote_binding
+    if not binding:
+        return None
+    quote = await quote_from_page(page)
+    if not quote.get("today"):
+        # 这里的币种来自绑定当前订单的官网初始化响应，不是按国家猜测。
+        quote = await quote_from_page(page, binding["currency"])
+    today = quote.get("today")
+    if (not today or quote.get("tax") is None or not quote.get("renewal")
+            or quote.get("renewal_interval") != "monthly"
+            or today.get("currency") != binding["currency"]
+            or today.get("amount_minor") != binding["amount_minor"]):
+        return None
+    try:
+        quote_digest(quote)
+    except Stop:
+        return None
+    return quote
+
+
+async def current_quote(page, guard, minimum_binding_version=0):
     previous = None
     for _ in range(30):
-        # 先接受官网当前明确展示的币种，允许填写账单地址后从 Worker 初始币种切换。
-        # 只在官网仅显示无法独立判定的符号时，才使用已核对账单国家的币种提示。
-        quote = await quote_from_page(page)
-        if not quote.get("today") and currency_hint:
-            quote = await quote_from_page(page, currency_hint)
-        try:
-            digest = quote_digest(quote)
-        except Stop:
-            digest = None
+        quote = (await verified_quote_once(page, guard)
+                 if guard.official_binding_version >= minimum_binding_version else None)
+        digest = quote_digest(quote) if quote else None
         if digest and digest == previous:
             return quote
         previous = digest
@@ -104,89 +120,147 @@ async def verify_identity_again(page, target):
         await page.bring_to_front()
 
 
+async def payment_handler(page, guard, identity, ledger, target, *, pay, details_reader, confirmer,
+                          wait_seconds, poll_count, poll_interval):
+    selected_plan = ledger.target_plan
+    if os.environ.get("AUTO_RECHARGE_CALLBACK_URL") and not identity.get("network", {}).get("country"):
+        raise Stop("network_unconfirmed")
+    details = await asyncio.to_thread(details_reader)
+    try:
+        binding_before = guard.official_binding_version
+        prepared = await fill_official_form(page, details)
+        # 若地址改变了金额，页面新值与旧初始化回执不同会自动阻断；
+        # 免税地址前后总额相同时，不强迫官网重复发送同一 init 请求。
+        quote = await current_quote(page, guard, max(1, binding_before))
+        if quote["plan"] != selected_plan:
+            raise Stop("payment_quote_plan_mismatch")
+        await verify_billing_fields(page, details, prepared["billing_fields_filled"])
+        if not pay:
+            progress("payment_prepared", quote=quote, payment="blocked")
+            return {"status": "payment_prepared", "stage": "payment_ready", "quote": quote,
+                    "quote_authority": "official_checkout_response", **prepared}
+        fingerprint = quote_digest(quote)
+        start = time.monotonic()
+        if not await asyncio.to_thread(confirmer, quote, details.last4):
+            return {"status": "payment_cancelled", "stage": "confirmation_cancelled", "quote": quote}
+        if time.monotonic() - start > 300:
+            raise Stop("payment_confirmation_expired")
+        identity = await verify_identity_again(page, target)
+        if identity["current_plan"] != "free":
+            raise Stop("incompatible_existing_subscription")
+        if ledger.checkout_id not in page.url:
+            raise Stop("checkout_page_identifier_unverified")
+        await verify_card_fields(page, details)
+        await verify_billing_fields(page, details, prepared["billing_fields_filled"])
+        try:
+            current = await current_quote(page, guard, guard.official_binding_version)
+        except Stop as exc:
+            if exc.report.get("reason") == "payment_quote_not_ready":
+                raise Stop("payment_quote_changed") from None
+            raise
+        if quote_digest(current) != fingerprint:
+            raise Stop("payment_quote_changed", quote=current)
+        button = await subscribe_button(page)
+
+        async def preflight():
+            current_quote_value = await verified_quote_once(page, guard)
+            if (ledger.checkout_id not in page.url or not current_quote_value
+                    or quote_digest(current_quote_value) != fingerprint):
+                raise Stop("payment_quote_changed")
+
+        guard.validate_before_confirm = preflight
+        ledger.begin(quote, confirmed_digest=fingerprint, card_last4=details.last4)
+        guard.approve(quote)
+        # 请求与 UI 重复点击均由单次 guard 和落盘标记保护。
+        await button.click()
+        progress("payment_submitted_or_pending", repeated_payment="blocked")
+        deadline = time.monotonic() + wait_seconds
+        verification_announced = False
+        while time.monotonic() < deadline:
+            if guard.payment_state in {"paid", "declined"}:
+                break
+            if guard.payment_state == "requires_action" and not verification_announced:
+                progress("bank_verification_required", instruction="请本人完成官网或银行验证，程序只等待原单结果。")
+                verification_announced = True
+            if guard.payment_error and guard.payment_state != "requires_action":
+                break
+            await asyncio.sleep(.5)
+        latest_plan = identity["current_plan"]
+        latest_tier = None
+        for i in range(poll_count if guard.payment_state == "paid" else 1):
+            try:
+                latest = await verify_identity_again(page, target)
+                latest_plan, latest_tier = latest["current_plan"], latest.get("current_tier")
+            except Exception:
+                latest_plan, latest_tier = None, None
+            if subscription_match(selected_plan, latest_plan, latest_tier) == "matched" or guard.payment_state != "paid":
+                break
+            if i + 1 < poll_count:
+                progress("paid_pending_activation", check=i + 1, next_check_seconds=poll_interval)
+                await asyncio.sleep(poll_interval)
+        guard.persist_observation(current_plan=latest_plan, current_tier=latest_tier)
+        matched = subscription_match(selected_plan, latest_plan, latest_tier)
+        return {"status": outcome(guard.payment_state, latest_plan, guard.evidence, target_plan=selected_plan, current_tier=latest_tier), "stage": "payment_result",
+                "quote": quote, "quote_authority": "official_checkout_response",
+                "current_plan": latest_plan, "current_tier": latest_tier,
+                "subscription_status": selected_plan if matched == "matched" else matched,
+                "inspection_only": False, **prepared}
+    finally:
+        details.clear()
+
+
 async def run_payment(target, ledger, *, pay=False, details_reader=read_details, confirmer=confirm_quote,
                       wait_seconds=300, poll_count=6, poll_interval=20):
     ledger.assert_unattempted()
     selected_plan = ledger.target_plan
 
     async def handler(page, guard, identity, original_quote):
-        if os.environ.get("AUTO_RECHARGE_CALLBACK_URL") and not identity.get("network", {}).get("country"):
-            raise Stop("network_unconfirmed")
-        details = await asyncio.to_thread(details_reader)
-        try:
-            prepared = await fill_official_form(page, details)
-            quote = await current_quote(page, {"US": "USD"}.get(details.country))
-            if quote["plan"] != selected_plan:
-                raise Stop("payment_quote_plan_mismatch")
-            await verify_billing_fields(page, details, prepared["billing_fields_filled"])
-            if not pay:
-                progress("payment_prepared", quote=quote, payment="blocked")
-                return {"status": "payment_prepared", "stage": "payment_ready", "quote": quote, **prepared}
-            fingerprint = quote_digest(quote)
-            start = time.monotonic()
-            if not await asyncio.to_thread(confirmer, quote, details.last4):
-                return {"status": "payment_cancelled", "stage": "confirmation_cancelled", "quote": quote}
-            if time.monotonic() - start > 300:
-                raise Stop("payment_confirmation_expired")
-            identity = await verify_identity_again(page, target)
-            if identity["current_plan"] != "free":
-                raise Stop("incompatible_existing_subscription")
-            if ledger.checkout_id not in page.url:
-                raise Stop("checkout_page_identifier_unverified")
-            await verify_card_fields(page, details)
-            await verify_billing_fields(page, details, prepared["billing_fields_filled"])
-            current = await current_quote(page, quote["today"]["currency"])
-            if quote_digest(current) != fingerprint:
-                raise Stop("payment_quote_changed", quote=current)
-            button = await subscribe_button(page)
-
-            async def preflight():
-                if ledger.checkout_id not in page.url or quote_digest(await quote_from_page(
-                        page, quote["today"]["currency"])) != fingerprint:
-                    raise Stop("payment_quote_changed")
-
-            guard.validate_before_confirm = preflight
-            ledger.begin(quote, confirmed_digest=fingerprint, card_last4=details.last4)
-            guard.approve(quote)
-            # 请求与 UI 重复点击均由单次 guard 和落盘标记保护。
-            await button.click()
-            progress("payment_submitted_or_pending", repeated_payment="blocked")
-            deadline = time.monotonic() + wait_seconds
-            verification_announced = False
-            while time.monotonic() < deadline:
-                if guard.payment_state in {"paid", "declined"}:
-                    break
-                if guard.payment_state == "requires_action" and not verification_announced:
-                    progress("bank_verification_required", instruction="请本人完成官网或银行验证，程序只等待原单结果。")
-                    verification_announced = True
-                if guard.payment_error and guard.payment_state != "requires_action":
-                    break
-                await asyncio.sleep(.5)
-            latest_plan = identity["current_plan"]
-            latest_tier = None
-            for i in range(poll_count if guard.payment_state == "paid" else 1):
-                try:
-                    latest = await verify_identity_again(page, target)
-                    latest_plan, latest_tier = latest["current_plan"], latest.get("current_tier")
-                except Exception:
-                    latest_plan, latest_tier = None, None
-                if subscription_match(selected_plan, latest_plan, latest_tier) == "matched" or guard.payment_state != "paid":
-                    break
-                if i + 1 < poll_count:
-                    progress("paid_pending_activation", check=i + 1, next_check_seconds=poll_interval)
-                    await asyncio.sleep(poll_interval)
-            guard.persist_observation(current_plan=latest_plan, current_tier=latest_tier)
-            matched = subscription_match(selected_plan, latest_plan, latest_tier)
-            return {"status": outcome(guard.payment_state, latest_plan, guard.evidence, target_plan=selected_plan, current_tier=latest_tier), "stage": "payment_result",
-                    "quote": quote, "current_plan": latest_plan,
-                    "current_tier": latest_tier, "subscription_status": selected_plan if matched == "matched" else matched,
-                    "inspection_only": False, **prepared}
-        finally:
-            details.clear()
+        return await payment_handler(page, guard, identity, ledger, target, pay=pay,
+                                     details_reader=details_reader, confirmer=confirmer,
+                                     wait_seconds=wait_seconds, poll_count=poll_count,
+                                     poll_interval=poll_interval)
 
     return await run_browser(target, inspect_existing=True, quote_handler=handler,
                              guard_factory=lambda target, _: PaymentGuard(target, ledger), target_plan=selected_plan,
                              state_dir=ledger.root)
+
+
+async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
+                   wait_seconds=120, poll_count=6, poll_interval=20):
+    ledger_holder = {}
+
+    async def handler(page, guard, identity, original_quote):
+        checkout_lock = getattr(guard.ledger, "fd", None)
+        # 新建结算时复用建单锁；读取现有结算时则正常申请账户锁。
+        # 两条路径都在当前浏览器会话内等待账单资料和确认。
+        with PaymentLedger(state_dir, target.account_id, target_plan=target_plan,
+                           held_lock_fd=checkout_lock) as ledger:
+            ledger.assert_unattempted()
+            guard.attach_payment_ledger(ledger)
+            ledger_holder["ledger"] = ledger
+            return await payment_handler(page, guard, identity, ledger, target, pay=True,
+                                         details_reader=lambda: details_reader(original_quote),
+                                         confirmer=confirmer,
+                                         wait_seconds=wait_seconds, poll_count=poll_count,
+                                         poll_interval=poll_interval)
+
+    browser_args = {
+        "quote_handler": handler,
+        "guard_factory": lambda target, checkout_ledger: PaymentGuard(
+            target, checkout_ledger=checkout_ledger, target_plan=target_plan),
+        "target_plan": target_plan,
+        "state_dir": state_dir,
+    }
+    record_path = checkout_record_path(state_dir, target.account_id, target_plan)
+    if record_path.exists():
+        result = await run_browser(target, inspect_existing=True, **browser_args)
+        if (result.get("reason") == "existing_checkout_unavailable"
+                and not result.get("payment_attempted")
+                and not result.get("confirmation_requests_sent")):
+            result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+    else:
+        result = await run_browser(target, create=True, **browser_args)
+    return include_payment_record(result, ledger_holder.get("ledger"))
 
 
 def include_payment_record(result, ledger):

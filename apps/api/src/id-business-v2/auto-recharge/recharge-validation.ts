@@ -1,6 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
-import { V2_RECHARGE_PLANS, type V2RechargeStart } from '@apple-business/shared';
-import { createHash } from 'node:crypto';
+import {
+  V2_RECHARGE_PLANS,
+  type V2RechargeDetailsSubmission,
+  type V2RechargeQuote,
+  type V2RechargeStart
+} from '@apple-business/shared';
+import { createHash, createHmac } from 'node:crypto';
 
 export const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -16,7 +21,7 @@ export function validateStart(value: unknown): V2RechargeStart {
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
     !V2_RECHARGE_PLANS.includes(input.plan as never) ||
-    !['check', 'quote', 'prepare', 'recheck'].includes(String(input.action)) ||
+    !['check', 'quote', 'prepare', 'recheck', 'flow'].includes(String(input.action)) ||
     typeof input.sessionJson !== 'string' ||
     input.sessionJson.length < 2 ||
     Buffer.byteLength(input.sessionJson) > 65000
@@ -53,6 +58,70 @@ export function validateStart(value: unknown): V2RechargeStart {
   return input as unknown as V2RechargeStart;
 }
 
+const detailFields = [
+  'number',
+  'expiry',
+  'cvc',
+  'name',
+  'email',
+  'country',
+  'line1',
+  'line2',
+  'city',
+  'state',
+  'postal_code'
+] as const;
+
+export function validateDetailsSubmission(value: unknown): V2RechargeDetailsSubmission {
+  const input = object(value);
+  if (typeof input.addressId !== 'string' || !uuidPattern.test(input.addressId)) {
+    throw new BadRequestException('请选择未使用的账单地址');
+  }
+  const details = object(input.details);
+  if (
+    Object.keys(details).some((key) => !detailFields.includes(key as never)) ||
+    detailFields.some(
+      (key) => typeof details[key] !== 'string' || String(details[key]).length > 250
+    )
+  ) {
+    throw new BadRequestException('请补齐本次银行卡与真实账单资料');
+  }
+  return input as unknown as V2RechargeDetailsSubmission;
+}
+
+function confirmationMaterial(id: string, quote: V2RechargeQuote) {
+  const money = (value: V2RechargeQuote['today']) =>
+    value ? `${value.currency}:${value.amount_minor}:${value.amount}` : '-';
+  return [
+    'auto-recharge-confirm-v1',
+    id,
+    quote.plan,
+    money(quote.today),
+    money(quote.tax),
+    money(quote.renewal),
+    quote.renewal_interval ?? '-'
+  ].join('|');
+}
+
+export function confirmationNonce(id: string, quote: V2RechargeQuote, secret: string) {
+  return createHmac('sha256', secret).update(confirmationMaterial(id, quote)).digest('hex');
+}
+
+export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority: unknown) {
+  if (
+    quote.plan !== plan ||
+    !quote.today ||
+    !quote.tax ||
+    !quote.renewal ||
+    quote.renewal_interval !== 'monthly' ||
+    quote.today.currency !== quote.tax.currency ||
+    quote.today.currency !== quote.renewal.currency ||
+    authority !== 'official_checkout_response'
+  ) {
+    throw new BadRequestException('官网最终报价不完整或未绑定当前订单');
+  }
+}
+
 // 不保存任意服务端正文；只有执行协议中的已脱敏字段能够进入数据库。
 const scalarKeys = new Set(
   'status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type'.split(
@@ -72,8 +141,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     )
       result[key] = item;
   }
-  if (input.quote !== undefined) {
-    const quote = object(input.quote);
+  const cleanQuote = (value: unknown) => {
+    const quote = object(value);
     const money = (value: unknown) => {
       if (value === null || value === undefined) return null;
       const item = object(value);
@@ -104,7 +173,7 @@ export function safeDocument(value: unknown): Record<string, unknown> {
       }
       return { amount: item.amount, currency: item.currency, amount_minor: item.amount_minor };
     };
-    result.quote = {
+    return {
       plan: V2_RECHARGE_PLANS.includes(quote.plan as never) ? quote.plan : null,
       today: money(quote.today),
       tax: money(quote.tax),
@@ -115,6 +184,11 @@ export function safeDocument(value: unknown): Record<string, unknown> {
         : null,
       renewal_interval: quote.renewal_interval === 'monthly' ? 'monthly' : null
     };
+  };
+  if (input.quote !== undefined) result.quote = cleanQuote(input.quote);
+  if (input.initial_quote !== undefined) result.initial_quote = cleanQuote(input.initial_quote);
+  if (input.quote_authority === 'official_checkout_response') {
+    result.quote_authority = input.quote_authority;
   }
   if (input.diagnostics !== undefined) {
     const diagnostic = object(input.diagnostics);
