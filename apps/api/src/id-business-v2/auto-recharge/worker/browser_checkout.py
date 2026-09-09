@@ -28,10 +28,20 @@ CURRENCIES = {"USD": 2, "MYR": 2, "PHP": 2, "EUR": 2, "GBP": 2, "AUD": 2, "CAD":
 VISIBLE_MONEY_LINE = re.compile(
     r"(?:(?:[A-Z]{3}|RM|₱|\$|€|£|¥|￥)\s*)?[0-9,.]+(?:\s*[A-Z]{3})?"
 )
+EXPIRED_CHECKOUT_ERROR = re.compile(
+    r"there was an error processing your payment|付款处理(?:发生|出现)?错误|处理付款时(?:发生|出现)?错误",
+    re.I,
+)
+RETURN_TO_CHATGPT = re.compile(r"return to chatgpt|返回\s*chatgpt", re.I)
 
 
 def progress(stage, **details):
     print(json.dumps({"event": stage, **details}, ensure_ascii=False), file=sys.stderr, flush=True)
+
+
+def is_unavailable_existing_checkout(text: str) -> bool:
+    """识别官网保留旧 URL、但正文已变为付款错误页的失效结算。"""
+    return bool(EXPIRED_CHECKOUT_ERROR.search(text) and RETURN_TO_CHATGPT.search(text))
 
 
 def money(text: str, currency_hint=None):
@@ -464,6 +474,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         deadline = time.monotonic() + quote_timeout
         while time.monotonic() < deadline:
             quote_text = await page.locator("body").inner_text()
+            if existing and is_unavailable_existing_checkout(quote_text):
+                raise Stop("existing_checkout_unavailable")
             quote = await quote_from_page(page, guard.result.get("returned_currency"))
             if quote["today"] and quote["plan"] in (target_plan, spec["family"]):
                 break
