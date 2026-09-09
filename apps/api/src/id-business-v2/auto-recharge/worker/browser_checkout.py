@@ -564,7 +564,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
-                      quote_handler=None, guard_factory=NetworkGuard, target_plan="plus"):
+                      quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -578,16 +578,23 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
                             replace_unpaid_checkout=replace_unpaid_checkout,
                             target_plan=target_plan) if create else nullcontext()
+
+    async def execute(active_browser):
+        context = await active_browser.new_context(service_workers="block", accept_downloads=False)
+        try:
+            return await workflow(context, target, ledger=ledger, existing=existing,
+                                  wait_seconds=wait_seconds, review_seconds=review_seconds,
+                                  quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan)
+        finally:
+            # 每个任务仍使用独立 BrowserContext；只复用无账号状态的 Chromium 进程。
+            await context.close()
+
     with manager as ledger:
+        if browser is not None:
+            return await execute(browser)
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)
+            owned_browser = await p.chromium.launch(headless=False)
             try:
-                context = await browser.new_context(service_workers="block", accept_downloads=False)
-                try:
-                    return await workflow(context, target, ledger=ledger, existing=existing,
-                                          wait_seconds=wait_seconds, review_seconds=review_seconds,
-                                          quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan)
-                finally:
-                    await context.close()
+                return await execute(owned_browser)
             finally:
-                await browser.close()
+                await owned_browser.close()

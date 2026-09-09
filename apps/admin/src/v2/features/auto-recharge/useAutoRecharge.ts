@@ -15,6 +15,41 @@ import type {
 const isActive = (job: V2RechargeJob) =>
   ['running', 'awaiting_details', 'awaiting_confirmation', 'confirming'].includes(job.state);
 const requiresStatusPolling = (job: V2RechargeJob) => ['running', 'confirming'].includes(job.state);
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function registrationEmail(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const document = value as Record<string, unknown>;
+  const candidates: string[] = [];
+  const user = document.user;
+  if (user && typeof user === 'object' && !Array.isArray(user)) {
+    const email = (user as Record<string, unknown>).email;
+    if (typeof email === 'string' && emailPattern.test(email.trim())) candidates.push(email.trim());
+  }
+  for (const key of ['accessToken', 'access_token'] as const) {
+    const token = document[key];
+    if (typeof token !== 'string' || typeof atob !== 'function') continue;
+    try {
+      const encoded = token.split('.')[1];
+      if (!encoded) continue;
+      const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      const binary = atob(normalized + '='.repeat((4 - (normalized.length % 4)) % 4));
+      const payload = JSON.parse(
+        new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)))
+      ) as Record<string, unknown>;
+      const profile = payload['https://api.openai.com/profile'];
+      if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
+        const email = (profile as Record<string, unknown>).email;
+        if (typeof email === 'string' && emailPattern.test(email.trim()))
+          candidates.push(email.trim());
+      }
+    } catch {
+      /* 完整凭据仍由 Worker 验证；本地只提取可用的注册邮箱。 */
+    }
+  }
+  const unique = [...new Set(candidates.map((email) => email.toLowerCase()))];
+  return unique.length === 1 ? candidates[0]! : '';
+}
 
 const emptyDetails = (): V2RechargeDetails => ({
   number: '',
@@ -34,7 +69,7 @@ export function useAutoRecharge() {
   const jsonInput = ref('');
   const sessionJson = ref('');
   const jsonError = ref('');
-  const plan = ref<V2RechargePlan>();
+  const plan = ref<V2RechargePlan>('plus');
   const selectedAddressId = ref('');
   const currentId = ref('');
   const busy = ref(false);
@@ -86,8 +121,11 @@ export function useAutoRecharge() {
   const awaitingDetails = computed(
     () => selected.value?.action === 'flow' && selected.value.state === 'awaiting_details'
   );
-  const billingLocked = computed(
-    () => busy.value || uncertain.value || pendingReceipt.value || !awaitingDetails.value
+  const billingInputLocked = computed(
+    () =>
+      !sessionJson.value ||
+      (awaitingDetails.value && detailsSubmittedFor.value === selected.value?.id) ||
+      ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '')
   );
   const canStartFlow = computed(
     () =>
@@ -275,25 +313,45 @@ export function useAutoRecharge() {
     }
   }
 
-  function acceptSession() {
+  function acceptSession(reportInvalid = true) {
     importGeneration++;
     if (accountLocked.value) return;
     if (!jsonInput.value.trim()) {
-      jsonError.value = '请粘贴完整的单账户授权 JSON';
+      if (sessionJson.value) jsonError.value = '';
+      else if (reportInvalid) jsonError.value = '请粘贴完整的单账户授权 JSON';
       return;
     }
-    jsonError.value = '';
     try {
       if (new TextEncoder().encode(jsonInput.value).length > 65000)
         throw new Error('JSON 不能超过 65 KB');
       const value = JSON.parse(jsonInput.value);
       if (!value || typeof value !== 'object' || Array.isArray(value))
         throw new Error('请输入完整的单账户 JSON');
+      const email = registrationEmail(value);
+      if (!email) {
+        jsonError.value = '授权 JSON 中未找到唯一有效的 ChatGPT 注册邮箱';
+        return;
+      }
       sessionJson.value = jsonInput.value;
+      details.value.email = email;
       jsonInput.value = '';
+      jsonError.value = '';
     } catch {
-      jsonError.value = '请提供有效的单账户 JSON（不超过 65 KB）';
+      if (reportInvalid) jsonError.value = '请提供有效的单账户 JSON（不超过 65 KB）';
     }
+  }
+  function updateJsonInput(value: string) {
+    if (accountLocked.value) return;
+    jsonInput.value = value;
+    if (sessionJson.value) {
+      sessionJson.value = '';
+      details.value.email = '';
+    }
+    if (!value.trim()) {
+      jsonError.value = '';
+      return;
+    }
+    acceptSession(false);
   }
   watch(
     [sessionJson, plan],
@@ -429,7 +487,7 @@ export function useAutoRecharge() {
     error,
     details,
     accountLocked,
-    billingLocked,
+    billingInputLocked,
     canStartFlow,
     canSubmitDetails,
     canConfirm,
@@ -439,6 +497,7 @@ export function useAutoRecharge() {
     recheckPayment,
     workflowMessage,
     acceptSession,
+    updateJsonInput,
     startFlow,
     submitPaymentDetails,
     confirmPayment,

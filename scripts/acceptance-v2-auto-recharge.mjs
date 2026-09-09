@@ -87,8 +87,20 @@ try {
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items, configured: true });
       if (path.endsWith('/auto-recharge/addresses') && request.method() === 'GET') {
-        assert.equal(new URL(request.url()).searchParams.get('status'), 'unused');
-        const addresses = addressUsed ? [] : [address];
+        const requestedStatus = new URL(request.url()).searchParams.get('status');
+        const usedAddress = {
+          ...address,
+          status: 'used',
+          usedAt: new Date().toISOString()
+        };
+        const addresses =
+          requestedStatus === 'unused'
+            ? addressUsed
+              ? []
+              : [address]
+            : addressUsed
+              ? [usedAddress]
+              : [address];
         return success(route, {
           items: addresses,
           total: addresses.length,
@@ -150,6 +162,7 @@ try {
             postal_code: '97204'
           }
         );
+        assert.equal(body.details.email, 'fixture@example.test');
         const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
         const tax = { currency: 'MYR', amount: '0.00', amount_minor: 0 };
         items[0].state = 'awaiting_confirmation';
@@ -195,27 +208,44 @@ try {
           { cause: error }
         );
       });
-    await page.getByPlaceholder('粘贴完整的授权 JSON').fill('{"sessionToken":"synthetic-only"}');
+    await page.locator('.recharge-plan-row').getByText('ChatGPT Plus', { exact: true }).waitFor();
+    await page
+      .getByPlaceholder('粘贴完整授权 JSON，将自动载入')
+      .fill('{"sessionToken":"synthetic-only","user":{"email":"fixture@example.test"}}');
+    await page.getByText('授权已自动载入', { exact: false }).waitFor();
+    await page.locator('.recharge-json-row input[type="password"]').blur();
+    assert.equal(await page.getByText('请粘贴完整的单账户授权 JSON', { exact: true }).count(), 0);
     assert.equal(starts, 0);
-    await page.getByRole('button', { name: '载入 JSON' }).click();
-    await page.getByText('选择需要开通的套餐', { exact: true }).click();
-    await page.getByRole('option', { name: 'ChatGPT Plus', exact: true }).click();
+    const fields = page.locator('fieldset input');
+    assert.equal(await fields.nth(0).isEnabled(), true);
+    const values = ['5555555555554444', 'Fixture Person', '1230', '1234'];
+    for (let index = 0; index < values.length; index += 1)
+      await fields.nth(index).fill(values[index]);
+    assert.equal(await fields.nth(2).inputValue(), '12/30');
+    assert.equal(await fields.nth(4).inputValue(), 'fixture@example.test');
+    assert.equal(await fields.nth(4).isEditable(), false);
+    await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
+    await page.getByRole('option', { name: address.line1, exact: true }).click();
+    await page.getByText('国家：United States（US）', { exact: true }).waitFor();
     assert.equal(starts, 0);
-    await page.getByRole('button', { name: '获取初始报价' }).click();
+    const quoteButton = page.getByRole('button', { name: '获取初始报价' });
+    if (width > 640) {
+      const alignment = await page.locator('.recharge-plan-row').evaluate((row) => {
+        const button = row.querySelector('button');
+        return {
+          rowRight: row.getBoundingClientRect().right,
+          buttonRight: button?.getBoundingClientRect().right ?? 0
+        };
+      });
+      assert.ok(Math.abs(alignment.rowRight - alignment.buttonRight) <= 1);
+    }
+    await quoteButton.click();
     await page
       .getByText('官网需要账单地址才能确定税费和总额，请填写资料后继续。', { exact: true })
       .waitFor();
     assert.equal(starts, 1);
     assert.equal(detailSubmissions, 0);
     assert.equal(confirms, 0);
-    const values = ['5555555555554444', 'Fixture Person', '12/30', '1234', 'fixture@example.test'];
-    const fields = page.locator('fieldset input');
-    for (let index = 0; index < values.length; index += 1)
-      await fields.nth(index).fill(values[index]);
-    await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
-    await page.getByRole('option', { name: address.line1, exact: true }).click();
-    await page.getByText('国家：United States（US）', { exact: true }).waitFor();
-    assert.equal(detailSubmissions, 0);
     await page.getByRole('button', { name: '填写官网并计算最终金额' }).click();
     await page.locator('.recharge-confirm').waitFor();
     assert.equal(detailSubmissions, 1);
@@ -237,6 +267,34 @@ try {
     assert.equal(overflow, false, `${width}px 页面横向溢出`);
     assert.deepEqual(errors, []);
     await page.screenshot({ path: resolve(evidence, `${width}.png`), fullPage: true });
+
+    await page.goto(origin + '/v2/auto-recharge/addresses');
+    await page
+      .locator('.recharge-address-import .v2-section-heading__text')
+      .getByText('批量导入', { exact: true })
+      .waitFor();
+    assert.equal(await page.locator('.recharge-address-import > *').count(), 2);
+    assert.equal(await page.locator('.recharge-address-import .el-alert').count(), 0);
+    assert.equal(
+      await page
+        .locator('.recharge-address-import .el-form-item__label')
+        .getByText('固定地区', { exact: true })
+        .count(),
+      0
+    );
+    const helpButton = page.locator('.recharge-address-import .feature-help');
+    await helpButton.click();
+    await page
+      .getByText('仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。', { exact: true })
+      .waitFor();
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+      ),
+      false,
+      `${width}px 地址管理页面横向溢出`
+    );
+    await page.screenshot({ path: resolve(evidence, `${width}-addresses.png`), fullPage: true });
     await context.close();
   }
   console.log(
@@ -244,14 +302,19 @@ try {
       ok: true,
       viewports: [1440, 768, 390],
       flow: [
-        'local-json',
+        'automatic-local-json',
+        'default-plus',
+        'early-payment-entry',
+        'registered-email',
         'explicit-initial-quote',
         'unused-address-selection',
         'fixed-us-location',
         'explicit-details-and-final-quote',
         'amount-confirmation',
         'subscription-activated',
-        'address-consumed'
+        'address-consumed',
+        'compact-address-import',
+        'address-import-help'
       ],
       realPaymentRequests: 0
     })

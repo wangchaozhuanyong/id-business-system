@@ -72,7 +72,7 @@ const completeDetails: V2RechargeDetails = {
   name: 'Test User',
   expiry: '12/30',
   cvc: '123',
-  email: 'test@example.com',
+  email: 'registered@example.com',
   country: 'US',
   line1: address.line1,
   line2: '',
@@ -91,7 +91,7 @@ const quote = {
 };
 
 function session() {
-  flow.jsonInput.value = '{"account":"test-fixture"}';
+  flow.jsonInput.value = '{"account":"test-fixture","user":{"email":"registered@example.com"}}';
   flow.acceptSession();
 }
 function selectAddress() {
@@ -153,16 +153,68 @@ beforeEach(() => {
 afterEach(() => scope.stop());
 
 describe('explicit auto recharge flow', () => {
-  it('loads JSON locally and starts no network flow until the explicit button is used', async () => {
-    session();
-    flow.plan.value = 'plus';
+  it('automatically loads JSON with the registered email and defaults to Plus', async () => {
+    const raw = '{"account":"test-fixture","user":{"email":"registered@example.com"}}';
+    expect(flow.plan.value).toBe('plus');
+    flow.updateJsonInput(raw);
     await nextTick();
+    expect(flow.sessionJson.value).toBe(raw);
+    expect(flow.jsonInput.value).toBe('');
+    expect(flow.details.value.email).toBe('registered@example.com');
     expect(mock.start).not.toHaveBeenCalled();
     expect(flow.canStartFlow.value).toBe(true);
     await flow.startFlow();
     expect(mock.start).toHaveBeenCalledTimes(1);
     expect(mock.start.mock.calls[0][0]).toMatchObject({ action: 'flow', plan: 'plus' });
     expect(mock.start.mock.calls[0][0].details).toBeUndefined();
+  });
+
+  it('does not load JSON when the ChatGPT registration email is missing', () => {
+    flow.updateJsonInput('{"account":"test-fixture"}');
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.jsonError.value).toContain('ChatGPT 注册邮箱');
+    expect(flow.details.value.email).toBe('');
+  });
+
+  it('reads the registration email from the access token profile when needed', () => {
+    const payload = btoa(
+      JSON.stringify({ 'https://api.openai.com/profile': { email: 'profile@example.com' } })
+    )
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    flow.updateJsonInput(JSON.stringify({ accessToken: `e30.${payload}.signature` }));
+    expect(flow.details.value.email).toBe('profile@example.com');
+    expect(flow.jsonError.value).toBe('');
+  });
+
+  it('rejects conflicting registration emails instead of guessing', () => {
+    const payload = btoa(
+      JSON.stringify({ 'https://api.openai.com/profile': { email: 'other@example.com' } })
+    )
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    flow.updateJsonInput(
+      JSON.stringify({
+        accessToken: `e30.${payload}.signature`,
+        user: { email: 'registered@example.com' }
+      })
+    );
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.jsonError.value).toContain('ChatGPT 注册邮箱');
+  });
+
+  it('allows local payment entry before the initial quote but submits only after it', async () => {
+    session();
+    expect(flow.billingInputLocked.value).toBe(false);
+    selectAddress();
+    expect(flow.canSubmitDetails.value).toBe(false);
+    await flow.submitPaymentDetails();
+    expect(mock.submitDetails).not.toHaveBeenCalled();
+    activeJob('awaiting_details', { initial_quote: quote });
+    await nextTick();
+    expect(flow.canSubmitDetails.value).toBe(true);
   });
 
   it('polls only while server-side work can change without user input', () => {
