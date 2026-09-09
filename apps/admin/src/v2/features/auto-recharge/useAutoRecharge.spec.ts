@@ -220,9 +220,11 @@ describe('explicit auto recharge flow', () => {
   it('polls only while server-side work can change without user input', () => {
     const getRevalidateAt = mock.jobOptions?.getRevalidateAt;
     expect(getRevalidateAt?.({ configured: true, items: [] })).toBeNull();
-    expect(getRevalidateAt?.({ configured: true, items: [activeJob('running')] })).toBe(
-      Date.now() + 2000
-    );
+    const before = Date.now();
+    const nextRefreshAt = getRevalidateAt?.({ configured: true, items: [activeJob('running')] });
+    const after = Date.now();
+    expect(nextRefreshAt).toBeGreaterThanOrEqual(before + 2000);
+    expect(nextRefreshAt).toBeLessThanOrEqual(after + 2000);
     expect(
       getRevalidateAt?.({ configured: true, items: [activeJob('awaiting_details')] })
     ).toBeNull();
