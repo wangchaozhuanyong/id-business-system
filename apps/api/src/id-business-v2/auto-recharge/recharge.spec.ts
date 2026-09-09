@@ -97,6 +97,42 @@ describe('recharge input and durable evidence', () => {
     ).rejects.toThrow('版本冲突');
     expect(tx.idBusinessV2RechargeRecord.upsert).not.toHaveBeenCalled();
   });
+  it('allows only an explicitly marked replacement of an unpaid checkout', async () => {
+    const previous = {
+      revision: 2,
+      ownerId: 'admin-test',
+      document: {
+        checkout_identifier: 'cs_expired',
+        payment_status: 'not_attempted',
+        checkout_outcome: 'created'
+      }
+    };
+    const tx = {
+      idBusinessV2RechargeRecord: {
+        findUnique: vi.fn().mockResolvedValue(previous),
+        upsert: vi.fn().mockResolvedValue({})
+      }
+    };
+    const repo = new RechargeRepository({} as never);
+    const replacement = {
+      status: 'checkout_attempted',
+      stage: 'checkout_create',
+      checkout_outcome: 'unknown',
+      payment_status: 'not_attempted',
+      retry_of: 'b'.repeat(64)
+    };
+    const input = {
+      accountKey: 'a'.repeat(64),
+      fileKey: 'a'.repeat(64) + '.json',
+      revision: 2,
+      document: replacement,
+      ownerId: 'admin-test'
+    };
+    await expect(repo.saveRecord(tx as never, input)).rejects.toThrow('不可更换');
+    await expect(
+      repo.saveRecord(tx as never, { ...input, allowCheckoutReplacement: true })
+    ).resolves.toEqual({ revision: 3 });
+  });
 });
 
 describe('single worker dispatch and confirmation', () => {

@@ -209,7 +209,8 @@ export class RechargeService {
             ownerId: job.ownerId,
             fileKey: input.fileKey,
             revision: Number(input.revision),
-            document
+            document,
+            allowCheckoutReplacement: job.action === 'quote'
           });
           await this.audit.append(tx, {
             userId: job.ownerId,

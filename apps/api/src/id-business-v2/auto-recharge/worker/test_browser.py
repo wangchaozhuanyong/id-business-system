@@ -47,6 +47,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.verification_menu = False
         self.home_entry_missing = False
         self.duplicate_pricing_card = False
+        self.expire_existing_checkout = False
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -84,6 +85,12 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         elif path == "/v1/payment_pages/oaics_synthetic/init":
             self.initializations += 1
             await route.fulfill(json={"synthetic_initialization": True}, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
+        elif path == "/checkout/verify":
+            await route.fulfill(content_type="text/html; charset=utf-8",
+                                body="<html><body>There was an error processing your payment</body></html>")
+        elif path.startswith("/checkout/") and self.expire_existing_checkout:
+            await route.fulfill(content_type="text/html; charset=utf-8",
+                                body="<html><script>location.replace('/checkout/verify')</script></html>")
         elif path.startswith("/checkout/"):
             await route.fulfill(content_type="text/html; charset=utf-8", body=f'''<html><body>
                 <h1>ChatGPT Plus</h1><div>Total due today</div><div>{self.quote_currency} 99.00</div>
@@ -295,6 +302,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.payments, 0)
         self.assertEqual(self.initializations, 1)
         self.assertEqual(result["checkout_initializations_allowed"], 1)
+
+    async def test_expired_existing_checkout_is_identified_without_creating_or_paying(self):
+        self.expire_existing_checkout = True
+        existing = {"checkout_identifier": "oaics_synthetic", "processor_entity": "openai_ie",
+                    "returned_currency": "MYR"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = await workflow(self.context, self.target, existing=existing, quote_timeout=1)
+        self.assertEqual(result["reason"], "existing_checkout_unavailable", result)
+        self.assertEqual(result["checkout_requests_sent"], 0)
+        self.assertEqual(result["payment_requests_sent"], 0)
+        self.assertFalse(self.creates)
 
     async def test_rejection_is_reported_at_checkout_with_no_payment(self):
         self.reject = True

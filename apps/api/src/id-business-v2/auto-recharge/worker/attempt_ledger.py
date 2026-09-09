@@ -73,6 +73,18 @@ def rejected_retry_allowed(record: dict) -> bool:
                 and record.get("challenge_observed") is False)
 
 
+def unpaid_checkout_replacement_allowed(record: dict) -> bool:
+    """官网已让原结算编号失效时，只允许替换从未确认或付款的原单。"""
+    return bool(record.get("payment_status") == "not_attempted"
+                and record.get("payment_attempted") is not True
+                and record.get("confirmation_requests_sent") in (None, 0)
+                and record.get("checkout_outcome") == "created"
+                and isinstance(record.get("checkout_identifier"), str)
+                and re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", record["checkout_identifier"])
+                and isinstance(record.get("processor_entity"), str)
+                and re.fullmatch(r"[a-z][a-z0-9_]{0,40}", record["processor_entity"]))
+
+
 def atomic_json(path: Path, data: dict):
     temp = path.with_name("." + path.name + "." + uuid.uuid4().hex)
     try:
@@ -88,13 +100,15 @@ def atomic_json(path: Path, data: dict):
 
 
 class AttemptLedger:
-    def __init__(self, state_dir: Path, account_id: str, *, retry_rejected=False, target_plan="plus"):
+    def __init__(self, state_dir: Path, account_id: str, *, retry_rejected=False,
+                 replace_unpaid_checkout=False, target_plan="plus"):
         self.root = state_dir
         self.account_id = account_id
         self.target_plan = target_plan
         self.key = hashlib.sha256(account_id.encode()).hexdigest()
         self.path = checkout_record_path(state_dir, account_id, target_plan)
         self.retry_rejected = retry_rejected
+        self.replace_unpaid_checkout = replace_unpaid_checkout
         self.fd = None
         self.previous = None
         self.previous_bytes = None
@@ -125,7 +139,10 @@ class AttemptLedger:
                 if (self.previous.get("plan") != plan_spec(self.target_plan)["official_name"]
                         or self.previous.get("target_plan", "plus") != self.target_plan):
                     raise Stop("checkout_record_plan_mismatch")
-                if not (self.retry_rejected and rejected_retry_allowed(self.previous)):
+                allowed_retry = self.retry_rejected and rejected_retry_allowed(self.previous)
+                allowed_replacement = (self.replace_unpaid_checkout
+                                       and unpaid_checkout_replacement_allowed(self.previous))
+                if not (allowed_retry or allowed_replacement):
                     raise Stop("previous_checkout_attempt_exists", retry_eligible=rejected_retry_allowed(self.previous))
             elif self.retry_rejected:
                 raise Stop("retry_requires_rejected_record")

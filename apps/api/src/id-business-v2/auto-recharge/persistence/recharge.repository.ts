@@ -68,6 +68,7 @@ export class RechargeRepository {
       revision: number;
       document: object;
       ownerId: string;
+      allowCheckoutReplacement?: boolean;
     }
   ) {
     const key = { accountKey: input.accountKey, fileKey: input.fileKey };
@@ -83,7 +84,24 @@ export class RechargeRepository {
     const document = toV2JsonDocument(input.document);
     const next = input.document as Record<string, unknown>;
     const before = previous?.document as Record<string, unknown> | undefined;
-    if (before?.checkout_identifier && before.checkout_identifier !== next.checkout_identifier) {
+    const replacingUnpaidCheckout =
+      input.allowCheckoutReplacement === true &&
+      input.fileKey.endsWith('.json') &&
+      !input.fileKey.startsWith('payments/') &&
+      before?.payment_status === 'not_attempted' &&
+      before.payment_attempted !== true &&
+      !before.confirmation_requests_sent &&
+      next.status === 'checkout_attempted' &&
+      next.stage === 'checkout_create' &&
+      next.checkout_outcome === 'unknown' &&
+      next.payment_status === 'not_attempted' &&
+      typeof next.retry_of === 'string' &&
+      /^[a-f0-9]{64}$/.test(next.retry_of);
+    if (
+      before?.checkout_identifier &&
+      before.checkout_identifier !== next.checkout_identifier &&
+      !replacingUnpaidCheckout
+    ) {
       throw new ConflictException('原订单编号不可更换');
     }
     if (input.fileKey.startsWith('payments/')) {
