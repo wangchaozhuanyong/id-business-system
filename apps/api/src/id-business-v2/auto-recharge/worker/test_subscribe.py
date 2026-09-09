@@ -12,7 +12,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import checkout_core as c
-from attempt_ledger import AttemptLedger, existing_checkout, rejected_retry_allowed
+from attempt_ledger import (AttemptLedger, existing_checkout, rejected_retry_allowed,
+                            unpaid_checkout_replacement_allowed)
 from browser_checkout import NetworkGuard, money, quote_from_text, check_session
 import subscribe
 
@@ -228,6 +229,28 @@ class LedgerGuardTests(unittest.TestCase):
                        {"checkout_identifier": "oaics_test"}, {"payment_status": "unknown"},
                        {"challenge_observed": True}, {"response_format": "non_json"}):
             self.assertFalse(rejected_retry_allowed({**rejected(), **change}))
+
+    def test_expired_unpaid_checkout_can_be_replaced_with_a_durable_marker(self):
+        record = {
+            "schema_version": 2, "plan": "chatgptplusplan", "target_plan": "plus",
+            "status": "checkout_quote_verified", "stage": "quote_ready",
+            "checkout_identifier": "cs_expired", "processor_entity": "openai_ie",
+            "checkout_outcome": "created", "payment_status": "not_attempted"
+        }
+        before = json.dumps(record).encode()
+        self.marker.write_bytes(before)
+        self.assertTrue(unpaid_checkout_replacement_allowed(record))
+        with AttemptLedger(self.state, self.target.account_id, replace_unpaid_checkout=True) as ledger:
+            ledger.begin()
+        replaced = json.loads(self.marker.read_text())
+        self.assertEqual(replaced["status"], "checkout_attempted")
+        self.assertEqual(replaced["payment_status"], "not_attempted")
+        self.assertNotIn("checkout_identifier", replaced)
+        self.assertEqual(replaced["retry_of"], hashlib.sha256(before).hexdigest())
+        self.assertEqual(next((self.state / "history").iterdir()).read_bytes(), before)
+        for change in ({"payment_status": "unknown"}, {"payment_attempted": True},
+                       {"confirmation_requests_sent": 1}, {"checkout_outcome": "unknown"}):
+            self.assertFalse(unpaid_checkout_replacement_allowed({**record, **change}))
 
     def test_crash_marker_prevents_new_order(self):
         with AttemptLedger(self.state, self.target.account_id) as ledger:

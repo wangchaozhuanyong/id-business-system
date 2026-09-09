@@ -35,6 +35,21 @@ CGROUP_MEMORY_EVENTS = Path("/sys/fs/cgroup/memory.events")
 PUBLIC_KEYS = set("status reason stage session_status account_matched current_plan current_tier target_plan checkout_status checkout_identifier quote subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status server_code server_param browser_error_code nonce card_last4 checkout_outcome payment_record_write_failed network".split())
 
 
+async def quote_checkout(target, plan, root):
+    """优先读取原单；仅当官网已丢失原编号时，为未付款原单创建一次新报价。"""
+    path = attempt_ledger.checkout_record_path(root, target.account_id, plan)
+    if not path.exists():
+        return await browser_checkout.run_browser(target, create=True, state_dir=root, target_plan=plan)
+    result = await browser_checkout.run_browser(
+        target, inspect_existing=True, state_dir=root, target_plan=plan)
+    if (result.get("reason") != "existing_checkout_unavailable"
+            or result.get("checkout_requests_sent", 0) != 0
+            or result.get("payment_requests_sent", 0) != 0):
+        return result
+    return await browser_checkout.run_browser(
+        target, create=True, replace_unpaid_checkout=True, state_dir=root, target_plan=plan)
+
+
 def public_result(value):
     result = {k: v for k, v in value.items() if k in PUBLIC_KEYS}
     if isinstance(value.get("diagnostics"), dict):
@@ -161,9 +176,7 @@ class Job:
         if action == "check":
             return await browser_checkout.run_browser(target, state_dir=self.root, target_plan=plan)
         if action == "quote":
-            path = attempt_ledger.checkout_record_path(self.root, target.account_id, plan)
-            return await browser_checkout.run_browser(target, create=not path.exists(),
-                inspect_existing=path.exists(), state_dir=self.root, target_plan=plan)
+            return await quote_checkout(target, plan, self.root)
         with payment_state.PaymentLedger(self.root, target.account_id, target_plan=plan) as ledger:
             if action == "recheck":
                 if not ledger.record:

@@ -71,6 +71,7 @@ const labels: Record<string, string> = {
   bank_verification_required: '需要本人完成银行验证',
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
+  existing_checkout_unavailable: '原结算已失效，本次未付款',
   no_original_payment_attempt: '没有已尝试付款的原单',
   worker_operation_failed: '服务器执行步骤未完成',
   durable_state_unavailable: '记录服务未确认，已阻止重复请求',

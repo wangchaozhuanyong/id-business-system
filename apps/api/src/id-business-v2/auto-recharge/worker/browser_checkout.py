@@ -458,6 +458,9 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             raise Stop("official_checkout_navigation_not_observed") from None
         if urlsplit(page.url).hostname not in ("chatgpt.com", "checkout.stripe.com"):
             raise Stop("unexpected_checkout_origin")
+        if existing and guard.checkout_id not in page.url:
+            # 已过期的官网结算会跳到 /checkout/verify；不能把该错误页当作原报价继续解析。
+            raise Stop("existing_checkout_unavailable")
         deadline = time.monotonic() + quote_timeout
         while time.monotonic() < deadline:
             quote_text = await page.locator("body").inner_text()
@@ -466,6 +469,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                 break
             await asyncio.sleep(0.3)
         if not quote or not quote["today"] or quote["plan"] not in (target_plan, spec["family"]):
+            if existing and guard.checkout_id not in page.url:
+                raise Stop("existing_checkout_unavailable")
             await wait_for_user("quote_needs_review_or_billing", wait_seconds)
             # 验证可能带来账户变化；另开同一上下文页面，只做官方身份核对。
             check_page = await context.new_page()
@@ -535,7 +540,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             await asyncio.gather(*list(tasks), return_exceptions=True)
 
 
-async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
+async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
+                      replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus"):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
@@ -543,11 +549,13 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
     for key in ("DEBUG", "PWDEBUG", "PW_TRACE_DIR", "PLAYWRIGHT_TRACE_DIR"):
         os.environ.pop(key, None)
     from playwright.async_api import async_playwright
-    if inspect_existing and (create or retry_rejected):
+    if inspect_existing and (create or retry_rejected or replace_unpaid_checkout):
         raise Stop("invalid_operation_combination")
     plan_spec(target_plan)
     existing = existing_checkout(state_dir, target.account_id, target_plan) if inspect_existing else None
-    manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected, target_plan=target_plan) if create else nullcontext()
+    manager = AttemptLedger(state_dir, target.account_id, retry_rejected=retry_rejected,
+                            replace_unpaid_checkout=replace_unpaid_checkout,
+                            target_plan=target_plan) if create else nullcontext()
     with manager as ledger:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=False)

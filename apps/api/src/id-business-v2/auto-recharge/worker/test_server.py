@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 import tempfile
 import threading
@@ -135,6 +136,28 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(job.payload, {})
         self.assertNotIn('not-json', json.dumps(calls))
         self.assertEqual(calls[-1]['type'], 'finished')
+
+    def test_quote_replaces_only_an_unavailable_existing_checkout_once(self):
+        async def exercise():
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / 'existing.json').write_text('{}')
+                target = type('Target', (), {'account_id': 'account'})()
+                with patch.object(server.attempt_ledger, 'checkout_record_path',
+                                  return_value=root / 'existing.json'), \
+                     patch.object(server.browser_checkout, 'run_browser', new_callable=AsyncMock,
+                                  side_effect=[
+                                      {'status': 'blocked', 'reason': 'existing_checkout_unavailable',
+                                       'checkout_requests_sent': 0, 'payment_requests_sent': 0},
+                                      {'status': 'checkout_quote_verified'}
+                                  ]) as run:
+                    result = await server.quote_checkout(target, 'plus', root)
+                self.assertEqual(result['status'], 'checkout_quote_verified')
+                self.assertEqual(run.await_count, 2)
+                self.assertTrue(run.await_args_list[0].kwargs['inspect_existing'])
+                self.assertTrue(run.await_args_list[1].kwargs['create'])
+                self.assertTrue(run.await_args_list[1].kwargs['replace_unpaid_checkout'])
+        asyncio.run(exercise())
 
 
 if __name__ == '__main__':
