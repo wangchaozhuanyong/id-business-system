@@ -93,6 +93,19 @@ class Selection:
                     plans.append(f'pro-{tier}x')
         self.diagnostics['available_plans'] = plans
 
+    async def wait_for_plan_scope(self):
+        """先在整页等待异步弹窗控件出现，再重新确定唯一套餐区域。"""
+        cue = personal_control(self.page).or_(buttons(self.page, PLUS)).or_(buttons(self.page, PRO))
+        try:
+            await cue.first.wait_for(state='visible', timeout=self.timeout())
+        except Exception:
+            raise Stop('official_plan_menu_timeout') from None
+        scope = await plan_scope(self.page)
+        scoped_cue = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
+        if not await scoped_cue.count():
+            raise Stop('official_plan_menu_timeout')
+        return scope
+
     async def ready(self, locator, reason):
         try:
             async def check():
@@ -147,13 +160,7 @@ class Selection:
 
         # 真实官网定价卡仅负责导航并打开弹窗，最终建单仍由弹窗按钮触发。
         self.step('open_menu')
-        scope = await plan_scope(self.page)
-        cue = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
-        try:
-            await cue.first.wait_for(state='visible', timeout=self.timeout())
-        except Exception:
-            raise Stop('official_plan_menu_timeout') from None
-        return await plan_scope(self.page)
+        return await self.wait_for_plan_scope()
 
     async def open_menu(self, target_plan):
         self.step('open_menu')
@@ -170,10 +177,8 @@ class Selection:
                 return await self.open_pricing_card(target_plan)
             for opening in range(2):
                 await upgrade.first.click(timeout=self.timeout())
-                scope = await plan_scope(self.page)
-                cue = personal_control(scope).or_(buttons(scope, PLUS)).or_(buttons(scope, PRO))
                 try:
-                    await cue.first.wait_for(state='visible', timeout=self.timeout())
+                    scope = await self.wait_for_plan_scope()
                     break
                 except Exception:
                     if opening or await self.page.get_by_role('dialog').filter(visible=True).count() or not await upgrade.first.is_visible():
