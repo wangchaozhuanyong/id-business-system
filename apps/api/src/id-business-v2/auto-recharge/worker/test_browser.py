@@ -46,6 +46,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.disabled_plus = False
         self.verification_menu = False
         self.home_entry_missing = False
+        self.delayed_pricing_modal = False
         self.duplicate_pricing_card = False
         self.expire_existing_checkout = False
         self.keep_existing_checkout_error_url = False
@@ -150,6 +151,13 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 html = html.replace("setTimeout(()=>document.querySelector('#plus').disabled=false, 1000);", "document.querySelector('#plus').disabled=true;")
             if self.verification_menu:
                 html = html.replace("async function create()", "setTimeout(()=>{document.title='Verify you are human';document.querySelector('#plus').remove()},50);async function create()")
+            if self.delayed_pricing_modal and from_pricing:
+                html = html.replace('<button id="plus" ', '<main></main><button id="plus" hidden ')
+                html = html.replace('</body>', '''<script>setTimeout(() => {
+                  const dialog=document.createElement('div');dialog.setAttribute('role','dialog');
+                  dialog.innerHTML='<button onclick="create()">Upgrade to Plus</button>';
+                  document.body.append(dialog);
+                }, 100);</script></body>''')
             await route.fulfill(content_type="text/html; charset=utf-8", body=html)
         else:
             # 任何未列入夹具的请求都在本机终止，不访问公网。
@@ -235,6 +243,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pricing_card_fallback_ignores_page_level_duplicate(self):
         self.home_entry_missing = True
+        with patch('plan_selection.HOME_ENTRY_SECONDS', .05):
+            result = await self.run_flow(True)
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
+
+    async def test_pricing_card_waits_for_async_plan_dialog_before_scoping(self):
+        self.home_entry_missing = self.delayed_pricing_modal = True
         with patch('plan_selection.HOME_ENTRY_SECONDS', .05):
             result = await self.run_flow(True)
         self.assertEqual(result['status'], 'checkout_quote_verified', result)
