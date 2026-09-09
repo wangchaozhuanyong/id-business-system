@@ -21,6 +21,11 @@ ADDRESS_FIELDS = {
     "postal_code": "input[autocomplete~='postal-code']",
 }
 
+# ISO 两位代码用于传输和审计；官网下拉框可能只暴露完整国家名称。
+COUNTRY_OPTION_LABELS = {
+    "US": ("United States", "United States of America", "美国"),
+}
+
 
 @dataclass
 class PaymentDetails:
@@ -112,6 +117,35 @@ async def one_field(page, selector, *, required=True, timeout=15):
         await asyncio.sleep(.2)
 
 
+def billing_value_matches(field_name, expected, actual_values):
+    values = {str(value).strip().casefold() for value in actual_values}
+    expected_value = expected.strip().casefold()
+    if expected_value in values:
+        return True
+    if field_name != "country":
+        return False
+    labels = COUNTRY_OPTION_LABELS.get(expected.strip().upper(), ())
+    return any(label.casefold() in values for label in labels)
+
+
+async def select_country_option(node, country_code):
+    code = country_code.strip().upper()
+    options = await node.locator("option").evaluate_all(
+        "ns=>ns.map(n=>({value:n.value,label:(n.textContent||'').trim()}))")
+    value_matches = [item for item in options
+                     if str(item.get("value", "")).strip().upper() == code]
+    if len(value_matches) == 1:
+        await node.select_option(value=value_matches[0]["value"])
+        return
+    labels = {label.casefold() for label in COUNTRY_OPTION_LABELS.get(code, ())}
+    label_matches = [item for item in options
+                     if str(item.get("label", "")).strip().casefold() in labels]
+    if len(label_matches) == 1:
+        await node.select_option(label=label_matches[0]["label"])
+        return
+    raise Stop("billing_country_option_not_found")
+
+
 async def one_billing_field(page, field_name, selector, value, settle_timeout=2, scope=None,
                             wait_for_presence=False):
     end = time.monotonic() + settle_timeout
@@ -167,8 +201,12 @@ async def billing_frame(page, country, timeout=5):
         for frame in trusted_frames(page):
             try:
                 countries = frame.locator(ADDRESS_FIELDS["country"]).filter(visible=True)
-                values = [await countries.nth(index).input_value() for index in range(await countries.count())]
-                if any(value.strip().upper() == expected for value in values):
+                values = []
+                for index in range(await countries.count()):
+                    node = countries.nth(index)
+                    values.append(await node.input_value())
+                    values += await node.locator("option:checked").all_text_contents()
+                if billing_value_matches("country", expected, values):
                     matching.append(frame)
             except Exception:
                 continue
@@ -214,7 +252,7 @@ async def fill_official_form(page, details):
     country = await one_billing_field(page, "country", country_selector, details.country,
                                       settle_timeout=5, wait_for_presence=True)
     if country is not None:
-        await fill_billing_node(country, details.country)
+        await select_country_option(country, details.country)
         filled.append("country")
         scope = await billing_frame(page, details.country)
     for field_name, selector in ADDRESS_FIELDS.items():
@@ -270,7 +308,7 @@ async def verify_billing_fields(page, details, filled):
         values = [await node.input_value()]
         if await node.evaluate("n=>n.tagName") == "SELECT":
             values += await node.locator("option:checked").all_text_contents()
-        if getattr(details, name).strip().casefold() not in [v.strip().casefold() for v in values]:
+        if not billing_value_matches(name, getattr(details, name), values):
             raise Stop("billing_form_changed", field=name)
     save = await one_field(page, "input[name='savePayment']", required=False)
     if save and await save.is_checked():

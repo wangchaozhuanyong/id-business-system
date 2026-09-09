@@ -17,6 +17,26 @@ const input = () => ({
   action: 'check',
   plan: 'plus'
 });
+const addressId = '22222222-2222-4222-8222-222222222222';
+const paymentDetails = {
+  number: '5555555555554444',
+  expiry: '12/39',
+  cvc: '123',
+  name: 'Test User',
+  email: 'test@example.invalid',
+  country: 'MY',
+  line1: 'Untrusted input',
+  line2: 'Untrusted input',
+  city: 'Untrusted city',
+  state: 'Untrusted state',
+  postal_code: '00000'
+};
+const prepareInput = () => ({
+  ...input(),
+  action: 'prepare' as const,
+  addressId,
+  details: { ...paymentDetails }
+});
 const amount = { amount: '92.50', amount_minor: 9250, currency: 'MYR' };
 const quote = {
   plan: 'plus',
@@ -76,6 +96,10 @@ describe('recharge input and durable evidence', () => {
     expect(() => validateStart({ ...input(), details: { cvc: '123' } })).toThrow();
     expect(() => validateStart({ ...input(), sessionJson: 'x'.repeat(65001) })).toThrow();
     expect(() => validateStart({ ...input(), plan: 'other' })).toThrow();
+    expect(() => validateStart({ ...prepareInput(), addressId: undefined })).toThrow(
+      '请选择未使用'
+    );
+    expect(() => validateStart(prepareInput())).not.toThrow();
   });
   it('refuses stale durable record writes', async () => {
     const previous = { revision: 2, ownerId: 'admin-test' };
@@ -149,6 +173,10 @@ describe('single worker dispatch and confirmation', () => {
   const active = vi.spyOn(repository, 'active');
   const transaction = { execute: vi.fn() };
   const audit = { append: vi.fn() };
+  const addressRepository = {
+    requireUnused: vi.fn(),
+    markUsed: vi.fn()
+  };
   let service: RechargeService;
   beforeEach(() => {
     vi.resetAllMocks();
@@ -159,7 +187,26 @@ describe('single worker dispatch and confirmation', () => {
     tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue(null);
     tx.idBusinessV2RechargeJob.findFirst.mockResolvedValue(null);
     tx.idBusinessV2RechargeJob.create.mockResolvedValue({ id });
-    service = new RechargeService(repository as never, transaction as never, audit as never);
+    addressRepository.requireUnused.mockResolvedValue({
+      id: addressId,
+      country: 'US',
+      line1: '1221 SW Fourth Avenue',
+      city: 'Portland',
+      state: 'OR',
+      postalCode: '97204',
+      status: 'unused'
+    });
+    addressRepository.markUsed.mockResolvedValue({
+      changed: true,
+      before: { status: 'unused' },
+      after: { status: 'used' }
+    });
+    service = new RechargeService(
+      repository as never,
+      addressRepository as never,
+      transaction as never,
+      audit as never
+    );
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -199,6 +246,29 @@ describe('single worker dispatch and confirmation', () => {
     await expect(service.start(input(), operator)).rejects.toThrow('不会自动重发');
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it('loads the selected unused address and sends only the fixed location to the worker', async () => {
+    await service.start(prepareInput(), operator);
+    expect(addressRepository.requireUnused).toHaveBeenCalledWith(tx, operator.id, addressId);
+    expect(tx.idBusinessV2RechargeJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ result: { addressId } })
+    });
+    const workerBody = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(workerBody.addressId).toBeUndefined();
+    expect(workerBody.details).toMatchObject({
+      country: 'US',
+      line1: '1221 SW Fourth Avenue',
+      line2: '',
+      city: 'Portland',
+      state: 'OR',
+      postal_code: '97204'
+    });
+    expect(JSON.stringify(workerBody.details)).not.toContain('Untrusted');
+  });
+  it('does not dispatch when the selected address is no longer unused', async () => {
+    addressRepository.requireUnused.mockRejectedValueOnce(new Error('address unavailable'));
+    await expect(service.start(prepareInput(), operator)).rejects.toThrow('address unavailable');
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it('reserves confirmation before dispatch and rejects repeated/stale confirmations', async () => {
     const nonce = 'a'.repeat(64);
     const job = {
@@ -219,5 +289,38 @@ describe('single worker dispatch and confirmation', () => {
   it('rejects worker calls without the independent secret', () => {
     expect(() => service.authorizeWorker('bad')).toThrow();
     expect(() => service.authorizeWorker('x'.repeat(64))).not.toThrow();
+  });
+  it('marks the selected address used only after verified subscription activation', async () => {
+    const job = {
+      id,
+      ownerId: operator.id,
+      accountKey: 'a'.repeat(64),
+      action: 'prepare',
+      state: 'confirming',
+      nonceHash: null,
+      result: { addressId }
+    };
+    active.mockResolvedValue(job as never);
+    await service.callback(id, {
+      type: 'finished',
+      result: { status: 'subscription_activated', payment_status: 'paid' }
+    });
+    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId);
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.addresses.consume',
+        objectId: addressId
+      })
+    );
+
+    vi.clearAllMocks();
+    active.mockResolvedValue({ ...job, result: { addressId } } as never);
+    transaction.execute.mockImplementation(async (callback) => callback(tx));
+    await service.callback(id, {
+      type: 'finished',
+      result: { status: 'payment_failed', payment_status: 'declined' }
+    });
+    expect(addressRepository.markUsed).not.toHaveBeenCalled();
   });
 });

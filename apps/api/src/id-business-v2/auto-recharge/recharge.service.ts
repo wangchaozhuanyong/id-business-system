@@ -5,7 +5,7 @@ import {
   Injectable,
   ServiceUnavailableException
 } from '@nestjs/common';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -13,15 +13,86 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
+import { RechargeAddressRepository } from './persistence/recharge-address.repository';
+import {
+  RECHARGE_ADDRESS_LOCATION,
+  validateRechargeAddressImport,
+  validateRechargeAddressListQuery,
+  validateRechargeAddressStatus
+} from './recharge-address-validation';
 import { hash, object, safeDocument, uuidPattern, validateStart } from './recharge-validation';
 
 @Injectable()
 export class RechargeService {
   constructor(
     private readonly repository: RechargeRepository,
+    private readonly addressRepository: RechargeAddressRepository,
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService
   ) {}
+
+  async listAddresses(value: unknown, operator: AuthenticatedUser) {
+    const query = validateRechargeAddressListQuery(value);
+    const result = await this.addressRepository.list(operator.id, query);
+    return { ...result, page: query.page, pageSize: query.pageSize };
+  }
+
+  async importAddresses(value: unknown, operator: AuthenticatedUser) {
+    const input = validateRechargeAddressImport(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const created = await this.addressRepository.createMany(tx, operator.id, input.streets);
+        const result = {
+          imported: created.count,
+          duplicated: input.duplicatedInFile + input.streets.length - created.count,
+          rejected: input.rejected
+        };
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.import',
+          objectType: 'recharge_address_batch',
+          objectId: randomUUID(),
+          afterData: { ...result, location: RECHARGE_ADDRESS_LOCATION },
+          remark: '批量导入自动充值地址'
+        });
+        return result;
+      },
+      {
+        changedScopes: ['auto-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
+  }
+
+  async updateAddressStatus(id: string, value: unknown, operator: AuthenticatedUser) {
+    if (!uuidPattern.test(id)) throw new BadRequestException('地址编号无效');
+    const status = validateRechargeAddressStatus(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const result = await this.addressRepository.updateStatus(tx, operator.id, id, status);
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.status',
+          objectType: 'recharge_address',
+          objectId: id,
+          beforeData: { status: result.before.status },
+          afterData: { status: result.after.status },
+          remark: status === 'used' ? '标记地址已使用' : '更新地址可用状态'
+        });
+        return result.after;
+      },
+      {
+        changedScopes: ['auto-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
+  }
 
   async list(operator: AuthenticatedUser) {
     const items = await this.repository.list(operator.id);
@@ -77,17 +148,24 @@ export class RechargeService {
           if (previous.plan !== input.plan || previous.action !== input.action) {
             throw new ConflictException('同一操作编号不能更换套餐或步骤');
           }
-          return { job: previous, created: false };
+          if (input.action === 'prepare' && object(previous.result).addressId !== input.addressId) {
+            throw new ConflictException('同一操作编号不能更换账单地址');
+          }
+          return { job: previous, created: false, address: null };
         }
         const active = await this.repository.findRunningJob(tx);
         if (active) throw new ConflictException('已有一笔任务执行中，请先查看执行记录');
+        const address =
+          input.action === 'prepare'
+            ? await this.addressRepository.requireUnused(tx, operator.id, input.addressId!)
+            : null;
         const job = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,
           plan: input.plan,
           action: input.action,
           state: 'running',
-          result: {},
+          result: toV2JsonDocument(address ? { addressId: address.id } : {}),
           leaseUntil: new Date(Date.now() + 16 * 60000)
         });
         await this.audit.append(tx, {
@@ -96,16 +174,33 @@ export class RechargeService {
           action: 'id_business_v2.auto_recharge.start',
           objectType: 'recharge_job',
           objectId: job.id,
-          afterData: { plan: input.plan, action: input.action },
+          afterData: {
+            plan: input.plan,
+            action: input.action,
+            ...(address ? { addressId: address.id } : {})
+          },
           remark: '启动单笔订阅操作'
         });
-        return { job, created: true };
+        return { job, created: true, address };
       },
       { changedScopes: ['auto-recharge'], requestId: input.id, operator, retryMode: 'none' }
     );
     if (result.created) {
       try {
-        await this.worker('/jobs/' + input.id, input);
+        const workerInput = { ...input };
+        delete workerInput.addressId;
+        if (input.action === 'prepare' && input.details && result.address) {
+          workerInput.details = {
+            ...input.details,
+            country: result.address.country,
+            line1: result.address.line1,
+            line2: '',
+            city: result.address.city,
+            state: result.address.state,
+            postal_code: result.address.postalCode
+          };
+        }
+        await this.worker('/jobs/' + input.id, workerInput);
       } finally {
         input.sessionJson = '';
         if (input.details)
@@ -173,6 +268,25 @@ export class RechargeService {
       async (tx) => {
         await this.repository.lock(tx);
         const job = await this.repository.active(tx, id);
+        const markAddressUsed = async (report: Record<string, unknown>) => {
+          if (job.action !== 'prepare' || report.status !== 'subscription_activated') return;
+          const addressId = object(job.result).addressId;
+          if (typeof addressId !== 'string' || !uuidPattern.test(addressId)) {
+            throw new ConflictException('本次充值地址记录不完整');
+          }
+          const changed = await this.addressRepository.markUsed(tx, job.ownerId, addressId);
+          if (!changed.changed) return;
+          await this.audit.append(tx, {
+            userId: job.ownerId,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_recharge.addresses.consume',
+            objectType: 'recharge_address',
+            objectId: addressId,
+            beforeData: { status: changed.before.status },
+            afterData: { status: changed.after.status, rechargeJobId: id },
+            remark: '订阅开通成功，自动标记账单地址已使用'
+          });
+        };
         const accountKey = input.accountKey;
         if (input.type === 'restore') {
           if (
@@ -212,6 +326,7 @@ export class RechargeService {
             document,
             allowCheckoutReplacement: job.action === 'quote'
           });
+          await markAddressUsed(document);
           await this.audit.append(tx, {
             userId: job.ownerId,
             module: 'id_business_v2',
@@ -247,6 +362,7 @@ export class RechargeService {
           state = 'awaiting_confirmation';
         }
         if (input.type === 'finished') {
+          await markAddressUsed(report);
           state = 'finished';
           nonceHash = null;
           this.confirmations.delete(id);

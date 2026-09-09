@@ -24,6 +24,9 @@ export function validateStart(value: unknown): V2RechargeStart {
     throw new BadRequestException('请提供完整授权 JSON、支持的套餐及有效操作');
   }
   if (input.action === 'prepare') {
+    if (typeof input.addressId !== 'string' || !uuidPattern.test(input.addressId)) {
+      throw new BadRequestException('请选择未使用的账单地址');
+    }
     const details = object(input.details);
     const fields = [
       'number',
@@ -44,8 +47,8 @@ export function validateStart(value: unknown): V2RechargeStart {
     ) {
       throw new BadRequestException('请补齐本次银行卡与真实账单资料');
     }
-  } else if (input.details !== undefined) {
-    throw new BadRequestException('当前步骤无需银行卡资料');
+  } else if (input.details !== undefined || input.addressId !== undefined) {
+    throw new BadRequestException('当前步骤无需银行卡或账单地址资料');
   }
   return input as unknown as V2RechargeStart;
 }

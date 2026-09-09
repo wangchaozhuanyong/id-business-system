@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Headers, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Header, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, Public, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { RechargeService } from './recharge.service';
@@ -11,6 +11,23 @@ export class RechargeController {
   @Header('Cache-Control', 'no-store')
   list(@CurrentUser() operator: AuthenticatedUser) {
     return this.service.list(operator);
+  }
+  @Get('addresses')
+  @Header('Cache-Control', 'no-store')
+  listAddresses(@Query() query: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.listAddresses(query, operator);
+  }
+  @Post('addresses/import')
+  importAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.importAddresses(input, operator);
+  }
+  @Patch('addresses/:id/status')
+  updateAddressStatus(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.updateAddressStatus(id, input, operator);
   }
   @Post('jobs')
   start(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {

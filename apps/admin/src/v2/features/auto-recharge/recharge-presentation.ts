@@ -67,6 +67,8 @@ const labels: Record<string, string> = {
   account_has_other_payment_attempt: '该账户已有付款尝试，请选择原套餐复查',
   payment_quote_changed: '官网金额已变化，请重新核价',
   payment_confirmation_expired: '确认已过期，请重新核价',
+  card_expiry_or_cvc_invalid: '银行卡有效期或安全码格式无效',
+  billing_country_option_not_found: '官网未找到 United States 账单国家选项，已安全停止',
   network_unconfirmed: '服务器出口未确认，暂不能提交付款',
   bank_verification_required: '需要本人完成银行验证',
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',

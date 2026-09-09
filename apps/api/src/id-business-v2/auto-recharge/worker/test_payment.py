@@ -15,10 +15,11 @@ from playwright.async_api import async_playwright
 from attempt_ledger import AttemptLedger
 from browser_checkout import quote_from_text, workflow
 from checkout_core import ROOT, Stop, parse_browser_credential
-from pay import include_payment_record, run_payment
+from pay import current_quote, include_payment_record, run_payment
 from payment_recovery import recheck_in_context
-from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, fill_billing_node,
-                          one_billing_field, validate_details, verify_billing_fields)
+from payment_form import (ADDRESS_FIELDS, PaymentDetails, billing_frame, billing_value_matches,
+                          fill_billing_node, one_billing_field, select_country_option,
+                          validate_details, verify_billing_fields)
 from payment_network import PaymentGuard
 from payment_state import PaymentLedger, outcome, payment_evidence, quote_digest
 from test_subscribe import fixture, account
@@ -131,6 +132,36 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(Stop) as error:
             validate_details(card)
         self.assertEqual(error.exception.report["reason"], "bank_card_number_invalid")
+
+    def test_repriced_quote_prefers_current_explicit_currency_over_old_hint(self):
+        async def exercise():
+            current = quote_from_text(
+                "ChatGPT Plus\nTotal due today\nJPY 3000\nTax\nJPY 0\nRenews JPY 3000 / month"
+            )
+            with patch("pay.quote_from_page", new=AsyncMock(return_value=current)) as reader:
+                result = await current_quote(object(), "USD")
+            self.assertEqual(result["today"]["currency"], "JPY")
+            self.assertTrue(all(call.args[1:] == () for call in reader.await_args_list))
+
+        asyncio.run(exercise())
+
+    def test_repriced_quote_uses_verified_billing_hint_for_ambiguous_symbol(self):
+        async def exercise():
+            missing = quote_from_text(
+                "ChatGPT Plus\nTotal due today\n$20.00\nTax\n$0.00\nRenews $20.00 / month"
+            )
+            usd = quote_from_text(
+                "ChatGPT Plus\nTotal due today\n$20.00\nTax\n$0.00\nRenews $20.00 / month",
+                "USD",
+            )
+            with patch(
+                "pay.quote_from_page",
+                new=AsyncMock(side_effect=[missing, usd, missing, usd]),
+            ):
+                result = await current_quote(object(), "USD")
+            self.assertEqual(result["today"]["currency"], "USD")
+
+        asyncio.run(exercise())
 
     def test_recovery_guard_cannot_submit_even_with_approval_state(self):
         async def exercise():
@@ -529,6 +560,41 @@ class PaymentBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["account_matched"])
         self.assertEqual(self.confirmations, 1)
         self.assertEqual(result["payment_requests_sent"], 0)
+
+
+class PaymentFormCountryTests(unittest.IsolatedAsyncioTestCase):
+    class OptionLocator:
+        def __init__(self, options):
+            self.options = options
+
+        async def evaluate_all(self, _script):
+            return self.options
+
+    class SelectNode:
+        def __init__(self, options):
+            self.options = options
+            self.select_option = AsyncMock()
+
+        def locator(self, selector):
+            assert selector == "option"
+            return PaymentFormCountryTests.OptionLocator(self.options)
+
+    async def test_iso_us_selects_value_when_available(self):
+        node = self.SelectNode([{"value": "US", "label": "United States"}])
+        await select_country_option(node, "US")
+        node.select_option.assert_awaited_once_with(value="US")
+
+    async def test_iso_us_selects_official_full_label_when_code_is_not_exposed(self):
+        node = self.SelectNode([{"value": "", "label": "United States"}])
+        await select_country_option(node, "US")
+        node.select_option.assert_awaited_once_with(label="United States")
+        self.assertTrue(billing_value_matches("country", "US", ["United States"]))
+
+    async def test_iso_us_never_guesses_another_country(self):
+        node = self.SelectNode([{"value": "CA", "label": "Canada"}])
+        with self.assertRaises(Stop):
+            await select_country_option(node, "US")
+        node.select_option.assert_not_awaited()
 
 
 if __name__ == "__main__":

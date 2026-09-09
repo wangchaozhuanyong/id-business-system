@@ -34,7 +34,7 @@ export function rechargeFieldError(key: keyof V2RechargeDetails, value: string):
     return `${field.label}格式无效`;
   if (key === 'number') {
     const digits = value.replace(/[ -]/g, '');
-    if (!/^\d{12,19}$/.test(digits)) return '请填写完整银行卡号';
+    if (!/^\d{13,19}$/.test(digits)) return '请填写 13 至 19 位银行卡号';
     const sum = [...digits].reverse().reduce((total, digit, index) => {
       const n = Number(digit) * (index % 2 ? 2 : 1);
       return total + (n > 9 ? n - 9 : n);
