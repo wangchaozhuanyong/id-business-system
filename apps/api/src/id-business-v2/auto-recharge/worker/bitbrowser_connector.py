@@ -19,6 +19,8 @@ import threading
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
+import bitbrowser_catalog
+import bitbrowser_options
 import attempt_ledger
 import browser_checkout
 import pay
@@ -120,25 +122,13 @@ class BitBrowserClient:
             raise Stop("bitbrowser_local_api_unavailable", stage=path.strip("/").replace("/", "_")) from None
         if result.get("success") is not True or not isinstance(result.get("data", {}), (dict, list)):
             raise Stop("bitbrowser_local_api_rejected", stage=path.strip("/").replace("/", "_"))
-        return result.get("data") or {}
-
-    def ensure_group(self, name):
-        data = self.post("/group/list", {"page": 0, "pageSize": 100, "all": True})
-        rows = data if isinstance(data, list) else data.get("list", [])
-        matches = [row for row in rows if isinstance(row, dict) and row.get("groupName") == name]
-        if len(matches) > 1:
-            raise Stop("bitbrowser_group_ambiguous")
-        if matches:
-            group_id = matches[0].get("id")
-        else:
-            created = self.post("/group/add", {"groupName": name, "sortNum": 0})
-            group_id = created.get("id") if isinstance(created, dict) else None
-        if not isinstance(group_id, str) or not PROFILE_ID.fullmatch(group_id):
-            raise Stop("bitbrowser_group_unverified")
-        return group_id
+        return result.get("data", {})
 
     def create_profile(self, settings, window_name):
-        group_id = self.ensure_group(settings["groupName"])
+        options = bitbrowser_options.profile_options(settings)
+        catalog = bitbrowser_catalog.read_catalog(self)
+        group_id = bitbrowser_catalog.selected_id(catalog["groups"], settings["groupName"], "group")
+        tag_id = bitbrowser_catalog.selected_id(catalog["tags"], settings["tagName"], "tag")
         data = self.post("/browser/update", {
             "groupId": group_id,
             "platform": "https://chatgpt.com",
@@ -149,31 +139,21 @@ class BitBrowserClient:
             "userName": "",
             "password": "",
             "cookie": "",
-            "proxyMethod": 3,
-            "proxyType": settings["proxyType"],
-            "dynamicIpUrl": settings["dynamicProxyUrl"],
-            "dynamicIpChannel": "common",
-            "isDynamicIpChangeIp": True,
-            "ipCheckService": "ip-api",
             "isValidUsername": False,
-            "syncTabs": True,
-            "syncCookies": True,
-            "syncLocalStorage": True,
             "credentialsEnableService": False,
-            "browserFingerPrint": {
-                "ostype": "PC",
-                "os": "MacIntel",
-                "isIpCreateTimeZone": True,
-                "isIpCreatePosition": True,
-                "isIpCreateLanguage": False,
-                "languages": "zh-CN",
-                "isIpCreateDisplayLanguage": False,
-                "displayLanguages": "zh-CN",
-            },
+            **options,
         })
         profile_id = data.get("id") if isinstance(data, dict) else None
         if not isinstance(profile_id, str) or not PROFILE_ID.fullmatch(profile_id):
             raise Stop("bitbrowser_profile_unverified")
+        if len(profile_id) != 32:
+            raise Stop("bitbrowser_profile_unverified")
+        try:
+            self.post("/browserTag/updateRelation", {
+                "browserId": profile_id, "addTagIds": [tag_id], "removeTagIds": []
+            })
+        except Stop:
+            raise Stop("bitbrowser_tag_binding_failed", browser_profile_id=profile_id) from None
         return profile_id
 
     def open_profile(self, profile_id):
@@ -211,15 +191,15 @@ def validate_payload(value):
     bit_browser = value.get("bitBrowser")
     if not isinstance(bit_browser, dict):
         raise Stop("invalid_connector_payload")
-    if set(bit_browser) != {
-            "localApiUrl", "localApiToken", "groupName", "tagName", "proxyType",
-            "dynamicProxyUrl"}:
+    required_bit = {"localApiUrl", "localApiToken", "groupName", "tagName", "proxyType"}
+    if (not required_bit.issubset(bit_browser) or
+            set(bit_browser) - required_bit - {"dynamicProxyUrl", "browserOptions", "staticProxyCredentials"}):
         raise Stop("invalid_bitbrowser_configuration")
-    required_bit = ("localApiUrl", "localApiToken", "groupName", "tagName", "proxyType", "dynamicProxyUrl")
     if any(not isinstance(bit_browser.get(key), str) or not bit_browser[key] for key in required_bit):
         raise Stop("invalid_bitbrowser_configuration")
     if bit_browser["proxyType"] not in {"http", "https", "socks5"}:
         raise Stop("invalid_bitbrowser_configuration")
+    bitbrowser_options.validate_browser_settings(bit_browser)
     if mode == "recheck":
         return value
 
@@ -478,6 +458,7 @@ class LocalJob:
             if isinstance(bit, dict):
                 bit.pop("localApiToken", None)
                 bit.pop("dynamicProxyUrl", None)
+                bit.pop("staticProxyCredentials", None)
             self.done = True
         result.setdefault("payment_attempted", self.payment_request_sent)
         result.setdefault("payment_requests_sent", 1 if self.payment_request_sent else 0)
@@ -485,7 +466,7 @@ class LocalJob:
             result.setdefault("payment_status", "unknown")
         result = {
             **result,
-            "browser_profile_id": self.profile_id,
+            "browser_profile_id": self.profile_id or result.get("browser_profile_id", ""),
             "locked_currency": self.payload.get("safety", {}).get("lockedCurrency"),
             "max_amount": self.payload.get("safety", {}).get("maxAmount"),
         }
@@ -569,7 +550,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            return self.reply(200, {"ok": True, "version": 1,
+            return self.reply(200, {"ok": True, "version": 2,
+                                    "service": "id-business-v2-auto-recharge-connector",
+                                    "capabilities": ["browser-catalog", "browser-options"],
+                                    "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
         if not match or not self.authorized():
@@ -582,13 +566,24 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def do_POST(self):
-        if not self.allowed_origin() or not self.authorized():
-            return self.reply(403, {"ok": False})
+        if not self.allowed_origin():
+            return self.reply(403, {"ok": False, "reason": "connector_origin_not_allowed"})
+        if not self.authorized():
+            return self.reply(403, {"ok": False, "reason": "connector_token_invalid"})
         length = self.headers.get("Content-Length", "")
         if not length.isdigit() or int(length) > MAX_BODY:
             return self.reply(413, {"ok": False})
         try:
             body = json.loads(self.rfile.read(int(length)), object_pairs_hook=unique_object)
+            if self.path == "/browser/catalog":
+                if not isinstance(body, dict) or set(body) != {"localApiUrl", "localApiToken"}:
+                    raise Stop("invalid_bitbrowser_configuration")
+                client = BitBrowserClient(body["localApiUrl"], body["localApiToken"])
+                try:
+                    return self.reply(200, {"ok": True, **bitbrowser_catalog.read_catalog(client)})
+                finally:
+                    client.token = ""
+                    body.clear()
             if self.path == "/jobs":
                 job = REGISTRY.start(body)
                 return self.reply(202, {"ok": True, "id": job.id, "accepted": True})
@@ -639,7 +634,7 @@ def main(argv=None):
     Handler.allowed_origins = origins
     Handler.connector_token = load_connector_token(Path(args.token_file).resolve())
     print("本机连接器已启动：http://127.0.0.1:%d" % args.port, flush=True)
-    print("本机连接密钥（仅在网站设置中保存）：" + Handler.connector_token, flush=True)
+    print("连接密钥已就绪；密钥保存在指定的本机私密文件中，日志不输出密钥。", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

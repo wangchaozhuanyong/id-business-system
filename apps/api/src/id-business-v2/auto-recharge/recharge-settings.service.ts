@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -9,6 +9,7 @@ import {
 } from '../runtime/public-api';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
+import { storedBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
 
 const defaults = {
   connectorUrl: 'http://127.0.0.1:55321',
@@ -37,11 +38,47 @@ export class RechargeSettingsService {
     return this.response(await this.repository.find(operator.id));
   }
 
+  async catalogAccess(operator: AuthenticatedUser) {
+    return this.transactions.execute(
+      async (tx) => {
+        const row = await this.repository.findInTransaction(tx, operator.id);
+        const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
+        const connectorToken = this.encryption.decrypt(row?.connectorTokenEncrypted);
+        if (!row || !localApiToken || !connectorToken) {
+          throw new ServiceUnavailableException(
+            '请先填写比特接口密钥和本机连接密钥，再刷新分组与标签'
+          );
+        }
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.bitbrowser_catalog.access',
+          objectType: 'recharge_browser_settings',
+          objectId: operator.id,
+          remark: '使用本机连接凭据读取比特浏览器分组与标签'
+        });
+        return {
+          connectorUrl: row.connectorUrl,
+          connectorToken,
+          localApiUrl: row.localApiUrl,
+          localApiToken
+        };
+      },
+      { changedScopes: ['audit-logs'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+  }
+
   async update(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserSettings(value);
     const row = await this.transactions.execute(
       async (tx) => {
         const before = await this.repository.findInTransaction(tx, operator.id);
+        const browserOptions = input.browserOptions ?? storedBrowserOptions(before?.browserOptions);
+        const staticProxyCredentialsEncrypted = input.clearStaticProxyCredentials
+          ? null
+          : input.staticProxyCredentials
+            ? this.encryption.encrypt(JSON.stringify(input.staticProxyCredentials))
+            : before?.staticProxyCredentialsEncrypted;
         const localApiTokenEncrypted = input.localApiToken
           ? this.encryption.encrypt(input.localApiToken)
           : before?.localApiTokenEncrypted;
@@ -51,6 +88,13 @@ export class RechargeSettingsService {
         const dynamicProxyUrlEncrypted = input.dynamicProxyUrl
           ? this.encryption.encrypt(input.dynamicProxyUrl)
           : before?.dynamicProxyUrlEncrypted;
+        if (
+          !localApiTokenEncrypted ||
+          !connectorTokenEncrypted ||
+          (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrlEncrypted)
+        ) {
+          throw new BadRequestException('请填写连接密钥及当前代理模式所需的配置');
+        }
         const updated = await this.repository.upsert(tx, operator.id, {
           connectorUrl: input.connectorUrl,
           localApiUrl: input.localApiUrl,
@@ -65,6 +109,8 @@ export class RechargeSettingsService {
           groupName: input.groupName,
           tagName: input.tagName,
           proxyType: input.proxyType,
+          browserOptions: toV2JsonDocument(browserOptions),
+          staticProxyCredentialsEncrypted,
           dynamicProxyUrlEncrypted,
           dynamicProxyUrlMask: input.dynamicProxyUrl
             ? maskUrl(input.dynamicProxyUrl)
@@ -96,11 +142,34 @@ export class RechargeSettingsService {
     const row = await this.repository.find(ownerId);
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
     const connectorToken = this.encryption.decrypt(row?.connectorTokenEncrypted);
-    const dynamicProxyUrl = this.encryption.decrypt(row?.dynamicProxyUrlEncrypted);
-    if (!row || !localApiToken || !connectorToken || !dynamicProxyUrl) {
+    const browserOptions = storedBrowserOptions(row?.browserOptions);
+    const dynamicProxyUrl =
+      browserOptions.proxyMode === 'dynamic'
+        ? this.encryption.decrypt(row?.dynamicProxyUrlEncrypted)
+        : '';
+    if (
+      !row ||
+      !localApiToken ||
+      !connectorToken ||
+      (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
+    ) {
       throw new ServiceUnavailableException('请先完成比特浏览器设置');
     }
-    return { ...row, localApiToken, connectorToken, dynamicProxyUrl };
+    const credentials =
+      browserOptions.proxyMode === 'static'
+        ? this.encryption.decrypt(row.staticProxyCredentialsEncrypted)
+        : '';
+    const staticProxyCredentials = credentials
+      ? validateStaticCredentials(JSON.parse(credentials))
+      : undefined;
+    return {
+      ...row,
+      browserOptions,
+      staticProxyCredentials,
+      localApiToken,
+      connectorToken,
+      dynamicProxyUrl: dynamicProxyUrl || ''
+    };
   }
 
   private response(row: Awaited<ReturnType<RechargeSettingsRepository['find']>>) {
@@ -116,6 +185,8 @@ export class RechargeSettingsService {
       proxyType: (row?.proxyType ?? defaults.proxyType) as 'http' | 'https' | 'socks5',
       dynamicProxyUrlConfigured: Boolean(row?.dynamicProxyUrlEncrypted),
       dynamicProxyUrlMask: row?.dynamicProxyUrlMask ?? null,
+      browserOptions: storedBrowserOptions(row?.browserOptions),
+      staticProxyCredentialsConfigured: Boolean(row?.staticProxyCredentialsEncrypted),
       updatedAt: row?.updatedAt.toISOString() ?? null
     };
   }
@@ -129,6 +200,8 @@ export class RechargeSettingsService {
     tagName: string;
     proxyType: string;
     dynamicProxyUrlMask: string | null;
+    browserOptions?: unknown;
+    staticProxyCredentialsEncrypted?: string | null;
   }) {
     return {
       connectorUrl: row.connectorUrl,
@@ -138,7 +211,9 @@ export class RechargeSettingsService {
       groupName: row.groupName,
       tagName: row.tagName,
       proxyType: row.proxyType,
-      dynamicProxyUrlMask: row.dynamicProxyUrlMask
+      dynamicProxyUrlMask: row.dynamicProxyUrlMask,
+      browserOptions: storedBrowserOptions(row.browserOptions),
+      staticProxyCredentialsConfigured: Boolean(row.staticProxyCredentialsEncrypted)
     };
   }
 }

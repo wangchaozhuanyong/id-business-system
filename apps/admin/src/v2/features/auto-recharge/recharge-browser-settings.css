@@ -1,0 +1,79 @@
+fieldset {
+  min-width: 0;
+  margin: 0 0 24px;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--el-border-color);
+}
+legend {
+  padding-right: 12px;
+  font-weight: 600;
+}
+.recharge-settings-form :deep(.el-select) {
+  width: 100%;
+}
+.recharge-settings-note,
+.recharge-settings-hint {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.recharge-settings-note {
+  margin: 0 0 16px;
+}
+.recharge-settings-hint {
+  width: 100%;
+  margin: 6px 0 0;
+}
+.recharge-settings-error {
+  color: var(--el-color-danger);
+}
+.recharge-settings-connection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.recharge-settings-list {
+  margin: 0;
+}
+.recharge-settings-catalog-actions {
+  margin-bottom: 12px;
+}
+.recharge-settings-list > div {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 0;
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 22px;
+}
+.recharge-settings-list dt {
+  color: var(--el-text-color-regular);
+}
+.recharge-settings-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .recharge-settings-form :deep(.el-form-item__label) {
+    width: 112px !important;
+  }
+  .recharge-settings-list > div {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+}
+
+.recharge-settings-form :deep(.el-input-number) {
+  max-width: 100%;
+}
+.recharge-settings-form :deep(.el-switch) {
+  height: auto;
+  min-height: 32px;
+  flex-wrap: wrap;
+}
+.recharge-settings-form :deep(.el-switch__label) {
+  height: auto;
+  white-space: normal;
+}

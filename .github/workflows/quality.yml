@@ -10,6 +10,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,6 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       dependency_audit: ${{ steps.scope.outputs.dependency_audit }}
+      mode: ${{ steps.recharge.outputs.mode }}
+      reuse_main: ${{ steps.recharge.outputs.reuse_main }}
+      reused_parts: ${{ steps.recharge.outputs.reused_parts }}
+      base: ${{ steps.recharge.outputs.base }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -52,7 +57,19 @@ jobs:
             git show --format= --name-only "$GITHUB_SHA" | node scripts/ci-change-scope.mjs
           fi
 
-  quality:
+      - name: Scope recharge checks and verify prior evidence
+        id: recharge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ ! "$BASE_SHA" =~ ^[a-f0-9]{40}$ || "$BASE_SHA" =~ ^0+$ ]]; then
+            export BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          node scripts/ci-recharge-scope.mjs
+
+  full-quality:
+    if: needs.change-scope.outputs.mode == 'full' && needs.change-scope.outputs.reuse_main != 'true'
     needs: change-scope
     runs-on: ubuntu-latest
     env:
@@ -161,3 +178,69 @@ jobs:
 
       - name: Check Git readiness
         run: npm run git:readiness
+
+  recharge:
+    if: needs.change-scope.outputs.mode == 'recharge' && needs.change-scope.outputs.reuse_main != 'true'
+    needs: change-scope
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [guards, admin, api, connector, migration]
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-jwt-secret
+      FIELD_ENCRYPTION_KEY: ci-field-encryption-key
+      HASH_SECRET: ci-hash-secret
+    steps:
+      - name: Report reused passing check
+        if: contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part)
+        run: echo "Source inputs unchanged; prior passing check is linked in the scope summary."
+      - name: Checkout
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Setup Node.js
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) }}
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install package dependencies
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON('["guards","admin","api"]'), matrix.part) }}
+        run: npm ci --no-audit
+      - name: Install browser for recharge acceptance
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'admin' }}
+        run: npx playwright install chromium
+      - name: Install existing connector dependencies
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'connector' }}
+        run: python3 -m pip install --disable-pip-version-check -r apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt
+      - name: Check affected recharge part
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) }}
+        env:
+          CHECK_PART: ${{ matrix.part }}
+          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+        run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"
+
+  quality:
+    if: always()
+    needs: [change-scope, full-quality, recharge]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require passing applicable checks or verified identical-tree evidence
+        env:
+          SCOPE_RESULT: ${{ needs.change-scope.result }}
+          REUSE_MAIN: ${{ needs.change-scope.outputs.reuse_main }}
+          MODE: ${{ needs.change-scope.outputs.mode }}
+          FULL_RESULT: ${{ needs.full-quality.result }}
+          RECHARGE_RESULT: ${{ needs.recharge.result }}
+        run: |
+          test "$SCOPE_RESULT" = success
+          if [[ "$REUSE_MAIN" = true ]]; then
+            echo "Merged source tree matches the successful PR; checks are not repeated."
+          elif [[ "$MODE" = recharge ]]; then
+            test "$RECHARGE_RESULT" = success
+          else
+            test "$FULL_RESULT" = success
+          fi

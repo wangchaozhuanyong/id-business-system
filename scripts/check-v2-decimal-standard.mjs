@@ -4,7 +4,10 @@ import path from 'node:path';
 
 const rootDir = process.cwd();
 const failures = [];
-const sourceRoots = ['apps/admin/src', 'apps/api/src/id-business-v2', 'packages/shared/src'];
+const sourceRoots =
+  process.argv.length > 2
+    ? process.argv.slice(2)
+    : ['apps/admin/src', 'apps/api/src/id-business-v2', 'packages/shared/src'];
 const maxExchangeRateDecimalPlaces = 8;
 const forbiddenPatterns = [
   {
@@ -39,6 +42,7 @@ for (const sourceRoot of sourceRoots) {
     const source = readFileSync(path.join(rootDir, relativePath), 'utf8');
     for (const rule of forbiddenPatterns) {
       for (const match of source.matchAll(rule.pattern)) {
+        if (isCoordinateInputPrecision(relativePath, source, match.index, match[0])) continue;
         if (isAllowedExchangeRatePrecision(source, match.index, match[0])) continue;
         const line = source.slice(0, match.index).split('\n').length;
         failures.push(`${relativePath}:${line} ${rule.message}：${match[0]}`);
@@ -79,4 +83,17 @@ function listSourceFiles(relativeRoot) {
     if (entry.isDirectory()) return listSourceFiles(relativePath);
     return /\.(?:ts|tsx|vue|mjs)$/.test(entry.name) ? [relativePath] : [];
   });
+}
+
+function isCoordinateInputPrecision(file, source, index, matchedText) {
+  if (
+    file !== 'apps/admin/src/v2/features/auto-recharge/RechargeWindowOptions.vue' ||
+    matchedText !== ':precision="6"'
+  )
+    return false;
+  const start = source.lastIndexOf('<el-input-number', index);
+  const end = source.indexOf('>', index);
+  if (start < 0 || end < 0 || source.slice(start, index).includes('>')) return false;
+  const control = source.slice(start, end);
+  return /v-model="options\.(?:latitude|longitude)"/.test(control);
 }
