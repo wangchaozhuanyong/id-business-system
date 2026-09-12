@@ -35,7 +35,7 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
       FROM "id_business_v2_topup_supplier_accounts" account
       INNER JOIN "id_business_v2_options" supplier
         ON supplier."id" = account."supplier_option_id"
-      WHERE account."id" = ${walletId}::uuid
+      WHERE account."id" = ${walletId}
       FOR UPDATE OF account
     `;
     const row = rows[0];

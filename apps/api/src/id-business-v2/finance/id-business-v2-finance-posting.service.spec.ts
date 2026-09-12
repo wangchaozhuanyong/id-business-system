@@ -263,6 +263,79 @@ describe('IdBusinessV2FinancePostingService', () => {
     expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['order_completed', 'order'],
+    ['order_refund', 'order'],
+    ['account_loss', 'account_loss'],
+    ['gift_card_purchase', 'gift_card'],
+    ['supplier_deposit', 'supplier_payment'],
+    ['opening_balance', 'opening_balance'],
+    ['historical_backfill', 'historical_backfill'],
+    ['reversal', 'expense'],
+    ['expense', 'order'],
+    ['manual_operating_income', 'order']
+  ] as const)(
+    'blocks the public reversal of %s from %s before any writes',
+    async (journalType, sourceType) => {
+      tx.idBusinessV2FinanceJournal.findUnique.mockResolvedValue({
+        ...replayFor(postingInput({ journalType, sourceType })),
+        status: 'posted',
+        reversedBy: null
+      });
+      await expect(
+        service.reverse(
+          tx as never,
+          'journal-existing',
+          '错误入口',
+          'manual-check-key',
+          undefined,
+          { manualOnly: true }
+        )
+      ).rejects.toThrow('请从原业务');
+      expect(tx.idBusinessV2FinanceJournal.updateMany).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2FinanceJournal.create).not.toHaveBeenCalled();
+      expect(tx.idBusinessV2FinanceAccount.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['expense', 'expense'],
+    ['manual_operating_income', 'inflow'],
+    ['capital_contribution', 'inflow'],
+    ['borrowed_funds_received', 'inflow']
+  ] as const)('preserves public reversal for %s from %s', async (journalType, sourceType) => {
+    const original = {
+      ...replayFor(postingInput({ journalType, sourceType })),
+      journalNo: 'JV-MANUAL',
+      status: 'posted',
+      reversedBy: null
+    };
+    tx.idBusinessV2FinanceJournal.findUnique.mockImplementation(async ({ where }) =>
+      where.id ? original : null
+    );
+    tx.$queryRaw.mockResolvedValue([
+      { id: financeAccountId, status: 'active', currentBalance: decimal('120') }
+    ]);
+    tx.idBusinessV2FinanceJournal.findUniqueOrThrow.mockResolvedValue({
+      ...original,
+      id: 'reversal-id'
+    });
+    await service.reverse(
+      tx as never,
+      original.id,
+      '手工记录更正',
+      'manual-allowed-key',
+      undefined,
+      { manualOnly: true }
+    );
+    expect(tx.idBusinessV2FinanceJournal.updateMany).toHaveBeenCalledOnce();
+    expect(tx.idBusinessV2FinanceAccount.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { currentBalance: { increment: '-100' }, currentBalanceCny: { increment: '-100' } }
+      })
+    );
+  });
+
   it('reserves order and platform references before order revenue is posted', async () => {
     await service.reserveOrderIncomeReferences(tx as never, {
       orderId: '11111111-1111-4111-8111-111111111111',

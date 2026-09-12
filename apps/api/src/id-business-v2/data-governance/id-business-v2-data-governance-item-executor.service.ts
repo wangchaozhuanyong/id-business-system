@@ -13,6 +13,8 @@ import {
   type GovernanceJobItem
 } from './persistence/id-business-v2-data-governance.repository';
 
+import { canRestoreServiceMasters } from './data-governance-restore-dependencies';
+
 interface ExecutionOutcome {
   status: 'succeeded' | 'skipped';
   code: string;
@@ -190,6 +192,18 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
         message: '原唯一键已被其他选项占用。'
       };
     }
+    if (!canRestoreServiceMasters(current, eligibility.originalStatus)) {
+      return {
+        status: 'skipped',
+        code: 'inactive_service_master',
+        message: '关联国家或业务分类已停用或删除，请重新预览。'
+      };
+    }
+    const restoringMaster = {
+      id: item.entityId,
+      type: current.type,
+      status: eligibility.originalStatus
+    };
     const dependentServices = eligibility.dependentServices ?? [];
     for (const dependent of dependentServices) {
       const dependentCurrent = await this.repository.findOptionRestoreState(tx, dependent.id);
@@ -205,6 +219,13 @@ export class IdBusinessV2DataGovernanceItemExecutorService {
           status: 'skipped',
           code: 'dependent_source_changed',
           message: '关联业务已变化，请重新预览。'
+        };
+      }
+      if (!canRestoreServiceMasters(dependentCurrent, dependent.originalStatus, restoringMaster)) {
+        return {
+          status: 'skipped',
+          code: 'inactive_service_master',
+          message: '关联国家或业务分类已停用或删除，请重新预览。'
         };
       }
       const dependentConflict = await this.repository.findOptionConflict(

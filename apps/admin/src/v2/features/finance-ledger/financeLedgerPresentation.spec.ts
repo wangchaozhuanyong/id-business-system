@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatCny,
+  journalReversalBlockReason,
   historyAssetOpeningAccountLabel,
   historyAssetOpeningDirectionLabel,
   isMeaningfulHistoryStatement
@@ -19,5 +20,46 @@ describe('financeLedgerPresentation history asset opening', () => {
     expect(isMeaningfulHistoryStatement('111111')).toBe(false);
     expect(isMeaningfulHistoryStatement('aaaaaa')).toBe(false);
     expect(isMeaningfulHistoryStatement('已核对资金、卡商余额和旧开支')).toBe(true);
+  });
+});
+
+describe('journal reversal availability', () => {
+  it('keeps source business journals on their lifecycle commands', () => {
+    for (const journalType of [
+      'order_completed',
+      'account_loss',
+      'gift_card_purchase',
+      'reversal'
+    ] as const) {
+      expect(
+        journalReversalBlockReason({ journalType, sourceType: 'order', status: 'posted' })
+      ).toContain('原业务');
+    }
+    expect(
+      journalReversalBlockReason({ journalType: 'expense', sourceType: 'order', status: 'posted' })
+    ).not.toBeNull();
+  });
+  it('allows posted manual expenses and inflows but blocks reversed records', () => {
+    expect(
+      journalReversalBlockReason({
+        journalType: 'expense',
+        sourceType: 'expense',
+        status: 'posted'
+      })
+    ).toBeNull();
+    expect(
+      journalReversalBlockReason({
+        journalType: 'capital_contribution',
+        sourceType: 'inflow',
+        status: 'posted'
+      })
+    ).toBeNull();
+    expect(
+      journalReversalBlockReason({
+        journalType: 'expense',
+        sourceType: 'expense',
+        status: 'reversed'
+      })
+    ).toContain('已经冲销');
   });
 });

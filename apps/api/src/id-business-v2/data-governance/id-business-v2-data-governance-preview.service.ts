@@ -26,6 +26,8 @@ import { IdBusinessV2DataGovernanceQueryService } from './id-business-v2-data-go
 import { IdBusinessV2DataGovernanceRepository } from './persistence/id-business-v2-data-governance.repository';
 import { IdBusinessV2DataGovernanceQueryRepository } from './persistence/id-business-v2-data-governance-query.repository';
 
+import { canRestoreServiceMasters } from './data-governance-restore-dependencies';
+
 const MAX_RESTORE_ITEMS = 100;
 const MAX_CLEANUP_ITEMS = 1_000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1_000;
@@ -221,6 +223,7 @@ export class IdBusinessV2DataGovernancePreviewService {
     ).flatMap((group) =>
       group.rows.map((service) => ({
         parentId: group.parentId,
+        source: service,
         id: service.id,
         currentUniqueKey: service.uniqueKey,
         originalUniqueKey: this.originalOptionKey(service.id, service.uniqueKey),
@@ -280,36 +283,52 @@ export class IdBusinessV2DataGovernancePreviewService {
         const conflictingDependent = dependent.find(
           (service) => service.originalUniqueKey && conflictKeys.has(service.originalUniqueKey)
         );
+        const restoringMaster = item
+          ? { id: item.id, type: item.type, status: item.statusBeforeDeletion ?? item.status }
+          : undefined;
+        const inactiveMaster =
+          item &&
+          (!canRestoreServiceMasters(item, item.statusBeforeDeletion ?? item.status) ||
+            dependent.some(
+              (service) =>
+                service.originalStatus &&
+                !canRestoreServiceMasters(service.source, service.originalStatus, restoringMaster)
+            ));
         const eligibility = !item
           ? this.ineligible('not_found', '选项记录不存在。')
           : !item.deletedAt
             ? this.ineligible('not_deleted', '选项已不在回收站。')
-            : !originalUniqueKey
-              ? this.ineligible('invalid_deleted_key', '删除唯一键格式无效，不能自动恢复。')
-              : invalidDependent
-                ? this.ineligible('invalid_dependent_snapshot', '关联业务的删除快照不完整。')
-                : conflictKeys.has(originalUniqueKey)
-                  ? this.ineligible('unique_key_conflict', '原唯一键已被其他选项占用。')
-                  : conflictingDependent
-                    ? this.ineligible(
-                        'dependent_unique_key_conflict',
-                        '关联业务的原唯一键已被其他选项占用。'
-                      )
-                    : this.eligible(
-                        dependent.length > 0
-                          ? `恢复原唯一键和软删除状态，并恢复 ${dependent.length} 个关联业务。`
-                          : '恢复原唯一键和软删除状态。',
-                        {
-                          originalUniqueKey,
-                          originalStatus: item.statusBeforeDeletion ?? item.status,
-                          dependentServices: dependent.map((service) => ({
-                            id: service.id,
-                            currentUniqueKey: service.currentUniqueKey,
-                            originalUniqueKey: service.originalUniqueKey!,
-                            originalStatus: service.originalStatus!
-                          }))
-                        }
-                      );
+            : inactiveMaster
+              ? this.ineligible(
+                  'inactive_service_master',
+                  '关联国家或业务分类已停用或删除，不能恢复启用业务。'
+                )
+              : !originalUniqueKey
+                ? this.ineligible('invalid_deleted_key', '删除唯一键格式无效，不能自动恢复。')
+                : invalidDependent
+                  ? this.ineligible('invalid_dependent_snapshot', '关联业务的删除快照不完整。')
+                  : conflictKeys.has(originalUniqueKey)
+                    ? this.ineligible('unique_key_conflict', '原唯一键已被其他选项占用。')
+                    : conflictingDependent
+                      ? this.ineligible(
+                          'dependent_unique_key_conflict',
+                          '关联业务的原唯一键已被其他选项占用。'
+                        )
+                      : this.eligible(
+                          dependent.length > 0
+                            ? `恢复原唯一键和软删除状态，并恢复 ${dependent.length} 个关联业务。`
+                            : '恢复原唯一键和软删除状态。',
+                          {
+                            originalUniqueKey,
+                            originalStatus: item.statusBeforeDeletion ?? item.status,
+                            dependentServices: dependent.map((service) => ({
+                              id: service.id,
+                              currentUniqueKey: service.currentUniqueKey,
+                              originalUniqueKey: service.originalUniqueKey!,
+                              originalStatus: service.originalStatus!
+                            }))
+                          }
+                        );
         return this.restoreItem(sequence, selectedItem, item?.name, item?.deletedAt, eligibility);
       }
       const item = orderMap.get(selectedItem.id);

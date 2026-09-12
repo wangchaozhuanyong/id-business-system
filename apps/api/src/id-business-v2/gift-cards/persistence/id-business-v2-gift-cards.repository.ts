@@ -370,7 +370,7 @@ export class IdBusinessV2GiftCardsRepository {
       INNER JOIN "id_business_v2_options" country_option
         ON country_option."id" = account."country_option_id"
       WHERE
-        account."id" = ${accountId}::uuid
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
         AND account."record_status" = 'active'
         AND account."loss_reported_at" IS NULL
@@ -576,7 +576,7 @@ export class IdBusinessV2GiftCardsRepository {
         account."record_status" AS "recordStatus",
         account."loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts" account
-      WHERE account."id" = ${accountId}::uuid AND account."deleted_at" IS NULL
+      WHERE account."id" = ${accountId} AND account."deleted_at" IS NULL
       FOR UPDATE
     `;
     const account = rows[0];
@@ -621,7 +621,7 @@ export class IdBusinessV2GiftCardsRepository {
         "status",
         "created_at" AS "createdAt"
       FROM "id_business_v2_gift_cards"
-      WHERE "id" = ${giftCardId}::uuid
+      WHERE "id" = ${giftCardId}
       FOR UPDATE
     `;
     const giftCard = rows[0];

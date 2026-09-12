@@ -506,7 +506,7 @@ export class IdBusinessV2RenewalsRepository {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id"
       FROM "id_business_v2_activations"
-      WHERE "id" = ${activationId}::uuid
+      WHERE "id" = ${activationId}
       FOR UPDATE
     `;
     return rows[0] ?? null;
@@ -530,7 +530,7 @@ export class IdBusinessV2RenewalsRepository {
         ON sold_order."id" = account."sold_by_order_id"
         AND sold_order."deleted_at" IS NULL
       WHERE
-        account."id" = ${accountId}::uuid
+        account."id" = ${accountId}
         AND account."record_status" = 'active'
         AND account."deleted_at" IS NULL
         AND account."loss_reported_at" IS NULL
