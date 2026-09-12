@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  currencyOptions,
   quotePlaceholder,
   statusLabel,
   subscriptionLabel,
@@ -18,6 +19,10 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('默认将菲律宾比索放在首项并显示中文币种名称', () => {
+    expect(currencyOptions[0]).toEqual({ value: 'PHP', label: '菲律宾比索（PHP）' });
+    expect(currencyOptions.find((currency) => currency.value === 'USD')?.label).toBe('美元（USD）');
+  });
   it('distinguishes unchecked, pending and failed quotes', () => {
     expect(quotePlaceholder(job())).toBe('待获取报价');
     expect(quotePlaceholder(job({ action: 'quote', state: 'running' }))).toBe('正在获取报价');

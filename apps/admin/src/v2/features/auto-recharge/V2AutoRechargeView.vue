@@ -90,10 +90,10 @@
               <el-form-item label="锁定币种" required>
                 <el-select v-model="lockedCurrency" aria-label="选择锁定币种" filterable>
                   <el-option
-                    v-for="currency in currencies"
-                    :key="currency"
-                    :label="currency"
-                    :value="currency"
+                    v-for="currency in currencyOptions"
+                    :key="currency.value"
+                    :label="currency.label"
+                    :value="currency.value"
                   />
                 </el-select>
               </el-form-item>
@@ -361,39 +361,8 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import RechargeResult from './RechargeResult.vue';
 import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
-import { planLabels, statusLabel } from './recharge-presentation';
+import { currencyOptions, planLabels, statusLabel } from './recharge-presentation';
 import { useAutoRecharge } from './useAutoRecharge';
-
-const currencies = [
-  'USD',
-  'MYR',
-  'PHP',
-  'EUR',
-  'GBP',
-  'AUD',
-  'CAD',
-  'JPY',
-  'KRW',
-  'SGD',
-  'INR',
-  'IDR',
-  'THB',
-  'VND',
-  'TWD',
-  'HKD',
-  'BRL',
-  'MXN',
-  'AED',
-  'SAR',
-  'ZAR',
-  'NZD',
-  'CHF',
-  'SEK',
-  'NOK',
-  'DKK',
-  'PLN',
-  'TRY'
-];
 const paymentFields = rechargeFields.filter((field) =>
   ['number', 'name', 'expiry', 'cvc', 'email'].includes(field.key)
 );
