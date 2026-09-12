@@ -203,6 +203,8 @@ export class IdBusinessV2DataGovernanceQueryRepository {
           deletedAt: true,
           parentId: true,
           countryOptionId: true,
+          parent: { select: { id: true, type: true, status: true, deletedAt: true } },
+          countryOption: { select: { id: true, type: true, status: true, deletedAt: true } },
           statusBeforeDeletion: true
         }
       }),
@@ -235,6 +237,9 @@ export class IdBusinessV2DataGovernanceQueryRepository {
       },
       select: {
         id: true,
+        type: true,
+        parent: { select: { id: true, type: true, status: true, deletedAt: true } },
+        countryOption: { select: { id: true, type: true, status: true, deletedAt: true } },
         uniqueKey: true,
         statusBeforeDeletion: true,
         deletedByParentOptionId: true

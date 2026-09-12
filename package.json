@@ -88,7 +88,8 @@
     "gate:v2-production-database-access": "node scripts/gate-v2-production-database-access.mjs",
     "gate:v2-production-database-access:production": "node --env-file=.env.aws.production scripts/gate-v2-production-database-access.mjs",
     "audit:v2-data-integrity:production": "node --env-file=.env.aws.production scripts/v2-data-integrity-audit.mjs",
-    "gate:v2-financial-integrity:production": "npm run check:cloud-independence && npm run gate:v2-production-database-access:production && npm run audit:v2-data-integrity:production"
+    "gate:v2-financial-integrity:production": "npm run check:cloud-independence && npm run gate:v2-production-database-access:production && npm run audit:v2-data-integrity:production",
+    "acceptance:v2-rollback-integrity": "node scripts/acceptance-v2-rollback-integrity.mjs"
   },
   "engines": {
     "node": ">=22.0.0",

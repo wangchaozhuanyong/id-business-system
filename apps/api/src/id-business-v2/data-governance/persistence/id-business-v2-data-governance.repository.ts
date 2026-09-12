@@ -331,7 +331,9 @@ export class IdBusinessV2DataGovernanceRepository {
         type: true,
         status: true,
         statusBeforeDeletion: true,
-        deletedByParentOptionId: true
+        deletedByParentOptionId: true,
+        parent: { select: { id: true, type: true, status: true, deletedAt: true } },
+        countryOption: { select: { id: true, type: true, status: true, deletedAt: true } }
       }
     });
   }

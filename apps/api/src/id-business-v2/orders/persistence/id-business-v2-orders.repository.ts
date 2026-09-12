@@ -1274,7 +1274,7 @@ export class IdBusinessV2OrdersRepository {
         "status"
       FROM "id_business_v2_orders"
       WHERE
-        "id" = ${orderId}::uuid
+        "id" = ${orderId}
         AND "deleted_at" IS NULL
       FOR UPDATE
     `;
@@ -1311,7 +1311,7 @@ export class IdBusinessV2OrdersRepository {
         ON sold_order."id" = account."sold_by_order_id"
         AND sold_order."deleted_at" IS NULL
       WHERE
-        account."id" = ${accountId}::uuid
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
         AND account."record_status" = 'active'
         AND account."loss_reported_at" IS NULL
@@ -1411,13 +1411,13 @@ export class IdBusinessV2OrdersRepository {
       ? await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id"
           FROM "id_business_v2_orders"
-          WHERE "id" = ${orderId}::uuid
+          WHERE "id" = ${orderId}
           FOR UPDATE
         `
       : await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id"
           FROM "id_business_v2_orders"
-          WHERE "id" = ${orderId}::uuid AND "deleted_at" IS NULL
+          WHERE "id" = ${orderId} AND "deleted_at" IS NULL
           FOR UPDATE
         `;
     return rows[0] ?? null;
@@ -1447,7 +1447,7 @@ export class IdBusinessV2OrdersRepository {
         "ownership_transferred_at" AS "ownershipTransferredAt",
         "loss_reported_at" AS "lossReportedAt"
       FROM "id_business_v2_accounts"
-      WHERE "id" = ${accountId}::uuid AND "deleted_at" IS NULL
+      WHERE "id" = ${accountId} AND "deleted_at" IS NULL
       FOR UPDATE
     `;
     const account = rows[0];
@@ -1500,7 +1500,7 @@ export async function lockAccountForSale(
         "balance_cost_amount" AS "balanceCostAmount"
       FROM "id_business_v2_accounts"
       WHERE
-        "id" = ${accountId}::uuid
+        "id" = ${accountId}
         AND "deleted_at" IS NULL
       FOR UPDATE
     `;

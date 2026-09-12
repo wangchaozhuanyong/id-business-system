@@ -367,13 +367,21 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
               reversal.direction AS reversal_direction,
               reversal.account_id AS reversal_account_id,
               reversal.order_id AS reversal_order_id,
+              reversal.gift_card_id AS reversal_gift_card_id,
               reversal.balance_amount AS reversal_balance_amount,
               reversal.cost_amount AS reversal_cost_amount,
+              reversal.balance_before AS reversal_balance_before,
+              reversal.balance_after AS reversal_balance_after,
+              reversal.cost_before AS reversal_cost_before,
+              reversal.cost_after AS reversal_cost_after,
               original.id AS original_id,
               original.entry_type AS original_entry_type,
               original.direction AS original_direction,
               original.account_id AS original_account_id,
               original.order_id AS original_order_id,
+              original.gift_card_id AS original_gift_card_id,
+              original.balance_amount AS original_balance_amount,
+              original.cost_amount AS original_cost_amount,
               original.balance_amount -
                 COALESCE(active_return.returned_balance_amount, 0) AS remaining_balance_amount,
               original.cost_amount -
@@ -384,33 +392,54 @@ export const V2_DATA_INTEGRITY_CHECKS = Object.freeze([
        LEFT JOIN active_balance_return active_return
          ON active_return.order_id = original.order_id
        WHERE reversal.reversal_of_entry_id IS NOT NULL
+          OR reversal.entry_type IN ('order_consumption_reversal', 'gift_card_withdrawal',
+               'gift_card_redeemed', 'order_upgrade_balance_return_reversal')
      )
      SELECT CAST(reversal_id AS CHAR) AS entity_id,
             JSON_OBJECT('originalId', original_id) AS detail
      FROM compared
      WHERE original_id IS NULL
-        OR reversal_entry_type <> 'order_consumption_reversal'
-        OR original_entry_type <> 'order_consumption'
-        OR reversal_direction <> 'credit'
-        OR original_direction <> 'debit'
         OR reversal_account_id <> original_account_id
         OR NOT (reversal_order_id <=> original_order_id)
-        OR remaining_balance_amount <= 0
-        OR remaining_cost_amount < 0
+        OR NOT (reversal_gift_card_id <=> original_gift_card_id)
         OR reversal_balance_amount <= 0
-        OR reversal_balance_amount > remaining_balance_amount
         OR reversal_cost_amount < 0
-        OR reversal_cost_amount > remaining_cost_amount
-        OR NOT (
-          reversal_cost_amount <=> CASE
-            WHEN reversal_balance_amount = remaining_balance_amount
-              THEN remaining_cost_amount
-            ELSE ROUND(
-              remaining_cost_amount / remaining_balance_amount * reversal_balance_amount,
-              4
-            )
-          END
-        )`
+        OR reversal_balance_after < 0 OR reversal_cost_after < 0
+        OR reversal_balance_after <> reversal_balance_before +
+             CASE WHEN reversal_direction = 'credit' THEN reversal_balance_amount ELSE -reversal_balance_amount END
+        OR reversal_cost_after <> reversal_cost_before +
+             CASE WHEN reversal_direction = 'credit' THEN reversal_cost_amount ELSE -reversal_cost_amount END
+        OR CASE
+          WHEN reversal_entry_type = 'order_consumption_reversal' THEN
+            original_entry_type <> 'order_consumption'
+            OR reversal_direction <> 'credit' OR original_direction <> 'debit'
+            OR original_order_id IS NULL
+            OR remaining_balance_amount <= 0 OR remaining_cost_amount < 0
+            OR reversal_balance_amount > remaining_balance_amount
+            OR reversal_cost_amount > remaining_cost_amount
+            OR NOT (reversal_cost_amount <=> CASE
+              WHEN reversal_balance_amount = remaining_balance_amount THEN remaining_cost_amount
+              ELSE ROUND(ROUND(remaining_cost_amount / NULLIF(remaining_balance_amount, 0), 8) * reversal_balance_amount, 4)
+            END)
+          WHEN reversal_entry_type IN ('gift_card_withdrawal', 'gift_card_redeemed') THEN
+            original_entry_type <> 'gift_card_credit'
+            OR reversal_direction <> 'debit' OR original_direction <> 'credit'
+            OR original_gift_card_id IS NULL
+            OR reversal_balance_amount <> original_balance_amount
+            OR reversal_balance_amount > reversal_balance_before
+            OR NOT (reversal_cost_amount <=> CASE
+              WHEN reversal_balance_amount = reversal_balance_before THEN reversal_cost_before
+              ELSE LEAST(reversal_cost_before,
+                ROUND(ROUND(reversal_cost_before / NULLIF(reversal_balance_before, 0), 8) * reversal_balance_amount, 4))
+            END)
+          WHEN reversal_entry_type = 'order_upgrade_balance_return_reversal' THEN
+            original_entry_type <> 'order_upgrade_balance_return'
+            OR reversal_direction <> 'debit' OR original_direction <> 'credit'
+            OR original_order_id IS NULL
+            OR reversal_balance_amount <> original_balance_amount
+            OR reversal_cost_amount <> original_cost_amount
+          ELSE TRUE
+        END`
   ),
   check(
     'gift_card_ledger_state_mismatch',

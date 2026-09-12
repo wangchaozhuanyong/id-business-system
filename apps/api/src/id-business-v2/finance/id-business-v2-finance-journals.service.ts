@@ -88,7 +88,8 @@ export class IdBusinessV2FinanceJournalsService {
           journalId,
           reason,
           idempotencyKey,
-          operator
+          operator,
+          { manualOnly: true }
         );
         await this.audit.append(tx, {
           userId: operator?.id,

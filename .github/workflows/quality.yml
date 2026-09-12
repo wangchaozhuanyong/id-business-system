@@ -137,6 +137,9 @@ jobs:
       - name: Verify financial integrity on disposable MySQL
         run: npm run acceptance:v2-financial-integrity
 
+      - name: Verify rollback, deletion and restore integrity on MySQL
+        run: npm run acceptance:v2-rollback-integrity
+
       - name: Typecheck
         run: npm run typecheck
 

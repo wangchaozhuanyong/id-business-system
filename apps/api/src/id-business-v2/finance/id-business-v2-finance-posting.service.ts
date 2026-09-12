@@ -171,8 +171,28 @@ export class IdBusinessV2FinancePostingService {
     journalId: string,
     reason: string,
     idempotencyKey: string,
-    operator?: AuthenticatedUser
+    operator?: AuthenticatedUser,
+    options: { manualOnly?: boolean } = {}
   ) {
+    // Public journal reversal must not bypass the source business lifecycle.
+    const manualOriginal = options.manualOnly
+      ? await this.repository.findJournalForReversal(tx, journalId)
+      : null;
+    if (options.manualOnly) {
+      if (!manualOriginal) throw new NotFoundException('财务日记不存在');
+      const manualExpense =
+        manualOriginal.sourceType === 'expense' && manualOriginal.journalType === 'expense';
+      const manualInflow =
+        manualOriginal.sourceType === 'inflow' &&
+        ['manual_operating_income', 'capital_contribution', 'borrowed_funds_received'].includes(
+          manualOriginal.journalType
+        );
+      if (!manualExpense && !manualInflow) {
+        throw new ConflictException(
+          '该流水不能直接冲销，请从原业务执行退款、撤销或恢复，保持业务记录与账务一致'
+        );
+      }
+    }
     const existingReplay = await this.repository.findJournalReplay(tx, idempotencyKey);
     if (existingReplay) {
       if (
@@ -186,7 +206,8 @@ export class IdBusinessV2FinancePostingService {
       return existingReplay;
     }
 
-    const original = await this.repository.findJournalForReversal(tx, journalId);
+    const original =
+      manualOriginal ?? (await this.repository.findJournalForReversal(tx, journalId));
     if (!original) throw new NotFoundException('财务日记不存在');
     if (original.status === 'reversed' || original.reversedBy) {
       throw new ConflictException('该财务日记已经冲销');

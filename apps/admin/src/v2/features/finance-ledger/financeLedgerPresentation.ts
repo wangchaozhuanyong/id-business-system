@@ -6,6 +6,7 @@ import type {
   V2FinanceCurrency,
   V2FinanceHistoryStatus,
   V2FinanceInflowNature,
+  V2FinanceJournal,
   V2FinanceJournalType,
   V2FinancePeriodStatus
 } from './contracts';
@@ -73,6 +74,21 @@ export function historyStatusLabel(value?: V2FinanceHistoryStatus) {
 export function isMeaningfulHistoryStatement(value: string) {
   const normalized = value.trim();
   return normalized.length >= 6 && /\p{L}/u.test(normalized) && !/^(.)\1+$/u.test(normalized);
+}
+
+export function journalReversalBlockReason(
+  journal: Pick<V2FinanceJournal, 'status' | 'journalType' | 'sourceType'>
+): string | null {
+  if (journal.status !== 'posted') return '该流水已经冲销';
+  const manualExpense = journal.sourceType === 'expense' && journal.journalType === 'expense';
+  const manualInflow =
+    journal.sourceType === 'inflow' &&
+    ['manual_operating_income', 'capital_contribution', 'borrowed_funds_received'].includes(
+      journal.journalType
+    );
+  return manualExpense || manualInflow
+    ? null
+    : '请从原业务执行退款、撤销或恢复，保持业务记录与账务一致';
 }
 
 export function journalTypeLabel(value: V2FinanceJournalType) {

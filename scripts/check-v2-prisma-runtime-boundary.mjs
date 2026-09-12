@@ -18,7 +18,7 @@ const inventories = {
   directTransaction: new Set(),
   directModelAccess: new Set(),
   rawSql: new Set(),
-  postgresUuidParameters: new Set(),
+  postgresUuidCasts: new Set(),
   joinedRowLocks: new Set(),
   mysqlOnlyNullSafeOperator: new Set(),
   legacyDecimal: new Set(),
@@ -170,7 +170,7 @@ for (const relativePath of listSourceFiles(v2Root)) {
     }
 
     if (persistencePath && ts.isTaggedTemplateExpression(node)) {
-      inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile });
+      inspectMysqlRawSqlTemplate({ node, relativePath, sourceFile });
     }
 
     if (
@@ -214,7 +214,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `V2 Prisma runtime 边界检查通过：业务层 Prisma Client 0，Prisma runtime import 0，Decimal runtime 0，SQL runtime 0，Prisma instanceof 0，直接事务 0，直接模型访问 0，raw SQL 0，未转型 UUID 参数 0，未限定 JOIN 行锁 0，MySQL 专用空值运算符 0，旧 Decimal helper 0，persistence 外 row mapper 0。`
+  `V2 Prisma runtime 边界检查通过：业务层 Prisma Client 0，Prisma runtime import 0，Decimal runtime 0，SQL runtime 0，Prisma instanceof 0，直接事务 0，直接模型访问 0，raw SQL 0，不兼容 UUID 转型 0，未限定 JOIN 行锁 0，MySQL 专用空值运算符 0，旧 Decimal helper 0，persistence 外 row mapper 0。`
 );
 
 if (showDetails) printInventories();
@@ -275,7 +275,17 @@ function inspectImport({
   }
 }
 
-function inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile }) {
+function inspectMysqlRawSqlTemplate({ node, relativePath, sourceFile }) {
+  // Only the explicit non-MySQL branch may retain its PostgreSQL parameter casts.
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+    if (
+      ts.isIfStatement(ancestor) &&
+      ancestor.expression.getText(sourceFile) === '!isV2MysqlDatabase()' &&
+      node.pos >= ancestor.thenStatement.pos &&
+      node.end <= ancestor.thenStatement.end
+    )
+      return;
+  }
   const tagText = node.tag.getText(sourceFile);
   if (tagText !== 'Prisma.sql' && !/\.\$(?:query|execute)Raw(?:Unsafe)?$/.test(tagText)) {
     return;
@@ -289,27 +299,14 @@ function inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile }) {
     ...template.templateSpans.map((span) => span.literal.text)
   ];
   const sqlText = fragments.join(' ? ');
-  const usesMysqlQuotedIdentifiers = sqlText.includes('`');
-
-  for (const [index, span] of template.templateSpans.entries()) {
-    const parameterName = getSqlParameterName(span.expression);
-    if (!parameterName || !/(?:^id$|Id$)/.test(parameterName)) continue;
-
-    const previousFragment = fragments[index] ?? '';
-    const nextFragment = fragments[index + 1] ?? '';
-    const usesUuidCast =
-      /^\s*::\s*uuid\b/i.test(nextFragment) ||
-      (/\bCAST\s*\(\s*$/i.test(previousFragment) && /^\s+AS\s+uuid\s*\)/i.test(nextFragment));
-
-    if (!usesMysqlQuotedIdentifiers && !usesUuidCast) {
-      inventories.postgresUuidParameters.add(relativePath);
-      fail(
-        relativePath,
-        sourceFile,
-        span.expression,
-        `PostgreSQL 原生 SQL 的 UUID 参数 ${parameterName} 必须显式转换为 ::uuid`
-      );
-    }
+  if (/::\s*uuid\b|\bAS\s+uuid\s*\)/i.test(sqlText)) {
+    inventories.postgresUuidCasts.add(relativePath);
+    fail(
+      relativePath,
+      sourceFile,
+      node,
+      '当前 MySQL 原生 SQL 禁止 PostgreSQL UUID 转型；使用绑定参数比较 CHAR(36)'
+    );
   }
 
   if (
@@ -322,25 +319,9 @@ function inspectPostgresRawSqlTemplate({ node, relativePath, sourceFile }) {
       relativePath,
       sourceFile,
       node,
-      '包含 JOIN 的 PostgreSQL FOR UPDATE 必须使用 OF <主表别名> 限定锁目标'
+      '包含 JOIN 的 MySQL FOR UPDATE 必须使用 OF <主表别名> 限定锁目标'
     );
   }
-}
-
-function getSqlParameterName(expression) {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isTypeAssertionExpression(current) ||
-    ts.isNonNullExpression(current)
-  ) {
-    current = current.expression;
-  }
-
-  if (ts.isIdentifier(current)) return current.text;
-  if (ts.isPropertyAccessExpression(current)) return current.name.text;
-  return null;
 }
 
 function valueImportBindings(importClause) {

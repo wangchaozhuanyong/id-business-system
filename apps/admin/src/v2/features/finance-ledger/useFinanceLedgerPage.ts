@@ -34,6 +34,7 @@ import {
   v2DateTimeInputToIso
 } from '@/v2/utils/dateTime';
 import { idBusinessV2FinanceApi } from './api';
+import { journalReversalBlockReason } from './financeLedgerPresentation';
 import { useFinanceHistory } from './useFinanceHistory';
 import { useFinanceLedgerInflows } from './useFinanceLedgerInflows';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
@@ -379,6 +380,8 @@ export function useFinanceLedgerPage(
   }
 
   function openReversal(journal: V2FinanceJournal) {
+    const blockedReason = journalReversalBlockReason(journal);
+    if (blockedReason) return showWarning(blockedReason);
     selectedJournal.value = journal;
     reversalReason.value = '';
     reversalDrawerVisible.value = true;
@@ -388,6 +391,8 @@ export function useFinanceLedgerPage(
     if (!selectedJournal.value || !reversalReason.value.trim()) {
       return showWarning('请填写冲销原因');
     }
+    const blockedReason = journalReversalBlockReason(selectedJournal.value);
+    if (blockedReason) return showWarning(blockedReason);
     reversalSubmitting.value = true;
     try {
       await idBusinessV2FinanceApi.reverseJournal(selectedJournal.value.id, {

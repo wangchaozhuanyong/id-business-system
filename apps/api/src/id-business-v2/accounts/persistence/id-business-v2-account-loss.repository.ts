@@ -218,7 +218,7 @@ export class IdBusinessV2AccountLossRepository {
       LEFT JOIN "id_business_v2_orders" sold_order
         ON sold_order."id" = account."sold_by_order_id"
       WHERE
-        account."id" = ${accountId}::uuid
+        account."id" = ${accountId}
         AND account."deleted_at" IS NULL
       FOR UPDATE OF account
     `;

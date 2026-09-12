@@ -75,7 +75,8 @@
           <AppButton
             size="small"
             variant="ghost"
-            :disabled="row.status !== 'posted' || row.journalType === 'reversal'"
+            :disabled="Boolean(journalReversalBlockReason(row))"
+            :title="journalReversalBlockReason(row) ?? undefined"
             @click="page.openReversal(row)"
           >
             冲销
@@ -115,7 +116,8 @@ import {
   formatCny,
   formatDate,
   formatOriginal,
-  journalTypeLabel
+  journalTypeLabel,
+  journalReversalBlockReason
 } from '../financeLedgerPresentation';
 import type { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 import FinanceEmpty from './FinanceEmpty';
@@ -131,6 +133,6 @@ const journalReversalHelp = [
   '已发布流水不能直接修改或删除，系统会保留原始记录，方便以后核对。',
   '冲销会新增一笔金额相反的流水，抵消原流水对余额和损益的影响；原流水随后显示“已冲销”。',
   '例如原流水是 +1000 元，冲销流水就是 -1000 元，两笔合计净影响为 0 元。',
-  '冲销不是删除，也不一定代表退款。如果原记录有误，请冲销后再按正确业务证据重新记账。'
+  '此处仅允许冲销手工收入和经营开支。订单、礼品卡、供应商资金和报损等流水，请从原业务执行退款、撤销或恢复。'
 ];
 </script>
