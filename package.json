@@ -9,6 +9,7 @@
     "apps/*"
   ],
   "scripts": {
+    "auto-recharge:connector": "sh scripts/start-auto-recharge-connector.sh",
     "setup:env": "node scripts/setup-env.mjs",
     "doctor": "node scripts/doctor.mjs",
     "dev:api": "npm run dev --workspace @apple-business/api",

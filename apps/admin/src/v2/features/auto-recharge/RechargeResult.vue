@@ -49,6 +49,12 @@
         <dd v-if="job.result.card_last4">{{ job.result.card_last4 }}</dd>
         <dt>执行阶段</dt>
         <dd>{{ statusLabel(job.result.stage) }}</dd>
+        <dt v-if="job.result.window_name">窗口名称</dt>
+        <dd v-if="job.result.window_name">{{ job.result.window_name }}</dd>
+        <dt v-if="job.result.locked_currency">付款保护</dt>
+        <dd v-if="job.result.locked_currency">
+          锁定 {{ job.result.locked_currency }}，最高 {{ job.result.max_amount }}
+        </dd>
         <dt>付款状态</dt>
         <dd>{{ paymentStatusLabel(job) }}</dd>
         <dt>开通状态</dt>
@@ -63,7 +69,7 @@
         <dl class="recharge-summary">
           <dt>记录时间</dt>
           <dd>{{ formatV2DateTime(job.createdAt) }}</dd>
-          <dt>服务器出口</dt>
+          <dt>{{ job.action === 'bitbrowser' ? '浏览器出口' : '服务器出口' }}</dt>
           <dd>
             {{ job.result.network?.ip || '出口未确认' }} ·
             {{ job.result.network?.country || '地区未知' }}
@@ -83,8 +89,8 @@
     </template>
     <div v-else class="recharge-empty">
       <h3>等待开通资料</h3>
-      <p>载入授权 JSON 并选择套餐后，点击“获取初始报价”才会访问官网。</p>
-      <p>核价完成后，在这里确认充值并查看开通结果。</p>
+      <p>补齐开通资料后，连接器会创建比特浏览器窗口并执行本次任务。</p>
+      <p>官网要求本人验证时，会保留原窗口等待处理。</p>
     </div>
   </div>
 </template>

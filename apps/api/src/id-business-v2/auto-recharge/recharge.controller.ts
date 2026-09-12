@@ -1,12 +1,38 @@
-import { Body, Controller, Get, Header, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query
+} from '@nestjs/common';
 import { CurrentUser, Public, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { RechargeService } from './recharge.service';
+import { RechargeLocalService } from './recharge-local.service';
+import { RechargeSettingsService } from './recharge-settings.service';
 
 @Controller('id-business-v2/auto-recharge')
 @RequireRoles('admin')
 export class RechargeController {
-  constructor(private readonly service: RechargeService) {}
+  constructor(
+    private readonly service: RechargeService,
+    private readonly local: RechargeLocalService,
+    private readonly settings: RechargeSettingsService
+  ) {}
+  @Get('bitbrowser-settings')
+  @Header('Cache-Control', 'no-store')
+  getBitBrowserSettings(@CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.get(operator);
+  }
+  @Put('bitbrowser-settings')
+  updateBitBrowserSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.update(input, operator);
+  }
   @Get('jobs')
   @Header('Cache-Control', 'no-store')
   list(@CurrentUser() operator: AuthenticatedUser) {
@@ -33,6 +59,26 @@ export class RechargeController {
   start(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.start(input, operator);
   }
+  @Post('jobs/bitbrowser')
+  startBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.start(input, operator);
+  }
+  @Post('jobs/bitbrowser-recheck')
+  recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.recheck(input, operator);
+  }
+  @Post('jobs/:id/bitbrowser-cancel')
+  cancelBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.cancel(id, operator);
+  }
+  @Post('jobs/:id/bitbrowser-unreceived')
+  abandonUnreceivedBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.abandonUnreceived(id, operator);
+  }
+  @Post('jobs/:id/bitbrowser-access')
+  bitBrowserAccess(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.access(id, operator);
+  }
   @Post('jobs/:id/confirm')
   confirm(
     @Param('id') id: string,
@@ -52,6 +98,15 @@ export class RechargeController {
   @Post('jobs/:id/cancel')
   cancel(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.service.cancel(id, operator);
+  }
+  @Public()
+  @Post('local/:id')
+  localCallback(
+    @Param('id') id: string,
+    @Headers('x-recharge-local') token: unknown,
+    @Body() input: unknown
+  ) {
+    return this.local.callback(id, token, input);
   }
   @Public()
   @Post('internal/:id')

@@ -469,4 +469,56 @@ describe('single worker dispatch and confirmation', () => {
     });
     expect(addressRepository.markUsed).not.toHaveBeenCalled();
   });
+  it('marks a BitBrowser address used from the durable marker before the payment request', async () => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey: 'a'.repeat(64),
+      action: 'bitbrowser',
+      state: 'running',
+      nonceHash: hash('local-agent-token'),
+      result: { addressId }
+    } as never);
+    vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 1 } as never);
+
+    await service.callback(id, {
+      type: 'ledger',
+      accountKey: 'a'.repeat(64),
+      fileKey: `payments/${'a'.repeat(64)}.json`,
+      revision: 0,
+      document: {
+        schema_version: 3,
+        stage: 'payment_request_sending',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown'
+      }
+    });
+
+    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId);
+  });
+
+  it('只读复查即使看到历史付款标记也不消耗新地址', async () => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey: 'a'.repeat(64),
+      action: 'bitbrowser',
+      state: 'running',
+      nonceHash: hash('local-agent-token'),
+      result: { recheck_only: true }
+    } as never);
+
+    await service.callback(id, {
+      type: 'finished',
+      result: {
+        status: 'payment_result_unknown',
+        recheck_only: true,
+        payment_attempted: true,
+        payment_requests_sent: 1
+      }
+    });
+
+    expect(addressRepository.markUsed).not.toHaveBeenCalled();
+  });
 });

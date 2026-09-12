@@ -564,7 +564,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
-                      quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None):
+                      quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
+                      browser_context=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -579,17 +580,21 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
                             replace_unpaid_checkout=replace_unpaid_checkout,
                             target_plan=target_plan) if create else nullcontext()
 
-    async def execute(active_browser):
-        context = await active_browser.new_context(service_workers="block", accept_downloads=False)
+    async def execute(active_browser=None, active_context=None):
+        context = active_context or await active_browser.new_context(
+            service_workers="block", accept_downloads=False)
         try:
             return await workflow(context, target, ledger=ledger, existing=existing,
                                   wait_seconds=wait_seconds, review_seconds=review_seconds,
                                   quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan)
         finally:
-            # 每个任务仍使用独立 BrowserContext；只复用无账号状态的 Chromium 进程。
-            await context.close()
+            # 服务器 Worker 关闭隔离 Context；本机比特浏览器保留原窗口与登录状态。
+            if active_context is None:
+                await context.close()
 
     with manager as ledger:
+        if browser_context is not None:
+            return await execute(active_context=browser_context)
         if browser is not None:
             return await execute(browser)
         async with async_playwright() as p:

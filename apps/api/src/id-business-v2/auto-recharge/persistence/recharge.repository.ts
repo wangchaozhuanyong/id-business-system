@@ -22,6 +22,12 @@ export class RechargeRepository {
     return job;
   }
 
+  async byId(id: string) {
+    const job = await this.prisma.idBusinessV2RechargeJob.findUnique({ where: { id } });
+    if (!job) throw new NotFoundException('找不到执行记录');
+    return job;
+  }
+
   async lock(tx: V2CommandTransaction) {
     await acquireMysqlTransactionLock(tx, 'auto-recharge-single-worker');
   }

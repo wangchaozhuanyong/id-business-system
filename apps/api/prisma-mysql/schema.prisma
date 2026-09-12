@@ -2426,3 +2426,23 @@ model IdBusinessV2RechargeAddress {
   @@index([ownerId, status, createdAt])
   @@map("id_business_v2_recharge_addresses")
 }
+
+// 本机比特浏览器默认值；密钥与动态提取链接加密保存。
+model IdBusinessV2RechargeBrowserSetting {
+  ownerId                  String   @id @map("owner_id") @db.VarChar(191)
+  connectorUrl             String   @default("http://127.0.0.1:55321") @map("connector_url") @db.VarChar(160)
+  localApiUrl              String   @default("http://127.0.0.1:54345") @map("local_api_url") @db.VarChar(160)
+  localApiTokenEncrypted   String?  @map("local_api_token_encrypted") @db.Text
+  localApiTokenMask        String?  @map("local_api_token_mask") @db.VarChar(32)
+  connectorTokenEncrypted  String?  @map("connector_token_encrypted") @db.Text
+  connectorTokenMask       String?  @map("connector_token_mask") @db.VarChar(32)
+  groupName                String   @default("gpt账号注册") @map("group_name") @db.VarChar(80)
+  tagName                  String   @default("申请gpt") @map("tag_name") @db.VarChar(80)
+  proxyType                String   @default("http") @map("proxy_type") @db.VarChar(12)
+  dynamicProxyUrlEncrypted String?  @map("dynamic_proxy_url_encrypted") @db.Text
+  dynamicProxyUrlMask      String?  @map("dynamic_proxy_url_mask") @db.VarChar(120)
+  createdAt                DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@map("id_business_v2_recharge_browser_settings")
+}

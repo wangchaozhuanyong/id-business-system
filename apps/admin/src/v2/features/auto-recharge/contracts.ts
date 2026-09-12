@@ -9,5 +9,11 @@ export type {
   V2RechargeAddressList,
   V2RechargeAddressListQuery,
   V2RechargeAddressStatus,
-  ImportV2RechargeAddressesResult
+  ImportV2RechargeAddressesResult,
+  V2RechargeBitBrowserSettings,
+  UpdateV2RechargeBitBrowserSettingsInput,
+  V2RechargeBitBrowserStart,
+  V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserRecheckStart,
+  V2RechargeBitBrowserRecheckLaunch
 } from '@apple-business/shared';
