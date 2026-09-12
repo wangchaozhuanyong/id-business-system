@@ -23,9 +23,12 @@ describe('admin security headers', () => {
     expect(headers).toContain('Strict-Transport-Security:');
   });
 
-  it('limits API connections to the same origin', () => {
-    expect(headers).toContain("connect-src 'self'");
-    expect(headers).not.toMatch(/connect-src[^;\n]*https?:\/\//);
+  it('limits API connections to the same origin and the fixed local connector', () => {
+    expect(headers).toContain(
+      "connect-src 'self' http://127.0.0.1:55321 http://localhost:55321;"
+    );
+    expect(headers).not.toMatch(/connect-src[^;\n]*https:\/\//);
+    expect(headers).not.toMatch(/connect-src[^;\n]*http:\/\/(?!127\.0\.0\.1:55321|localhost:55321)/);
     expect(headers).not.toMatch(/connect-src[^;\n]*wss?:\/\//);
   });
 });
