@@ -5,6 +5,38 @@ export const planLabels = {
   'pro-5x': 'ChatGPT Pro 5×',
   'pro-20x': 'ChatGPT Pro 20×'
 };
+
+export const currencyOptions = [
+  { value: 'PHP', label: '菲律宾比索（PHP）' },
+  { value: 'USD', label: '美元（USD）' },
+  { value: 'MYR', label: '马来西亚令吉（MYR）' },
+  { value: 'EUR', label: '欧元（EUR）' },
+  { value: 'GBP', label: '英镑（GBP）' },
+  { value: 'AUD', label: '澳大利亚元（AUD）' },
+  { value: 'CAD', label: '加拿大元（CAD）' },
+  { value: 'JPY', label: '日元（JPY）' },
+  { value: 'KRW', label: '韩元（KRW）' },
+  { value: 'SGD', label: '新加坡元（SGD）' },
+  { value: 'INR', label: '印度卢比（INR）' },
+  { value: 'IDR', label: '印度尼西亚卢比（IDR）' },
+  { value: 'THB', label: '泰铢（THB）' },
+  { value: 'VND', label: '越南盾（VND）' },
+  { value: 'TWD', label: '新台币（TWD）' },
+  { value: 'HKD', label: '港元（HKD）' },
+  { value: 'BRL', label: '巴西雷亚尔（BRL）' },
+  { value: 'MXN', label: '墨西哥比索（MXN）' },
+  { value: 'AED', label: '阿联酋迪拉姆（AED）' },
+  { value: 'SAR', label: '沙特里亚尔（SAR）' },
+  { value: 'ZAR', label: '南非兰特（ZAR）' },
+  { value: 'NZD', label: '新西兰元（NZD）' },
+  { value: 'CHF', label: '瑞士法郎（CHF）' },
+  { value: 'SEK', label: '瑞典克朗（SEK）' },
+  { value: 'NOK', label: '挪威克朗（NOK）' },
+  { value: 'DKK', label: '丹麦克朗（DKK）' },
+  { value: 'PLN', label: '波兰兹罗提（PLN）' },
+  { value: 'TRY', label: '土耳其里拉（TRY）' }
+] as const;
+
 const labels: Record<string, string> = {
   free: '免费版',
   plus: 'Plus',

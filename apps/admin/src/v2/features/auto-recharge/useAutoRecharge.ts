@@ -109,7 +109,7 @@ export function useAutoRecharge() {
   const plan = ref<V2RechargePlan>('plus');
   const selectedAddressId = ref('');
   const windowName = ref('');
-  const lockedCurrency = ref('USD');
+  const lockedCurrency = ref('PHP');
   const maxAmount = ref('30.00');
   const authorizeSinglePayment = ref(false);
   const details = ref<V2RechargeDetails>(emptyDetails());

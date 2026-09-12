@@ -200,6 +200,7 @@ describe('本机比特浏览器自动充值', () => {
   it('粘贴 JSON 后自动载入注册邮箱，默认 Plus 且不启动任务', () => {
     flow.updateJsonInput(sessionJson());
     expect(flow.plan.value).toBe('plus');
+    expect(flow.lockedCurrency.value).toBe('PHP');
     expect(flow.sessionJson.value).toBe(sessionJson());
     expect(flow.jsonInput.value).toBe('');
     expect(flow.details.value.email).toBe('registered@example.com');
@@ -217,7 +218,7 @@ describe('本机比特浏览器自动充值', () => {
       plan: 'plus',
       addressId: address.id,
       windowName: '申请gpt-001',
-      lockedCurrency: 'USD',
+      lockedCurrency: 'PHP',
       maxAmount: '30.00',
       authorizeSinglePayment: true
     });
