@@ -455,12 +455,13 @@ export class RechargeService {
         await this.repository.lock(tx);
         const job = await this.repository.active(tx, id);
         const markAddressUsed = async (report: Record<string, unknown>) => {
+          if (object(job.result).recheck_only === true) return;
           const addressConsumed =
             report.status === 'subscription_activated' ||
             (report.payment_attempted === true &&
               Number(report.confirmation_requests_sent) === 1) ||
             Number(report.payment_requests_sent) === 1;
-          if (!['prepare', 'flow'].includes(job.action) || !addressConsumed) return;
+          if (!['prepare', 'flow', 'bitbrowser'].includes(job.action) || !addressConsumed) return;
           const addressId = object(job.result).addressId;
           if (typeof addressId !== 'string' || !uuidPattern.test(addressId)) {
             throw new ConflictException('本次充值地址记录不完整');
@@ -507,6 +508,8 @@ export class RechargeService {
             input.fileKey.startsWith('payments/') &&
             !(
               (['prepare', 'flow'].includes(job.action) && job.state === 'confirming') ||
+              (job.action === 'bitbrowser' &&
+                ['running', 'awaiting_human_verification'].includes(job.state)) ||
               job.action === 'recheck'
             )
           ) {
@@ -543,6 +546,13 @@ export class RechargeService {
         const report = safeDocument(input.result);
         let state = job.state;
         let nonceHash = job.nonceHash;
+        if (input.type === 'progress' && job.action === 'bitbrowser') {
+          state = ['verification_required', 'bank_verification_required'].includes(
+            String(report.stage)
+          )
+            ? 'awaiting_human_verification'
+            : 'running';
+        }
         if (input.type === 'details_required') {
           if (job.action !== 'flow' || job.state !== 'running') {
             throw new ConflictException('当前任务不能等待付款资料');

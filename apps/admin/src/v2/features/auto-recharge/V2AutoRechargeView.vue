@@ -1,98 +1,111 @@
 <template>
-  <section class="v2-records-page recharge-page">
-    <V2PageContext description="载入授权 JSON → 获取初始报价 → 填写官网并核价 → 确认一次充值。">
-      <template #actions><el-button @click="historyOpen = true">最近执行记录</el-button></template>
+  <section class="recharge-page">
+    <V2PageContext
+      description="载入授权 JSON，连接本机比特浏览器并按金额上限自动执行；需要真人或银行验证时保留原窗口等待处理。"
+    >
+      <template #status>
+        <span class="recharge-connector-status" :data-status="connectorStatus">
+          {{ connectorMessage }}
+        </span>
+      </template>
+      <template #actions>
+        <el-button @click="settingsOpen = true">比特浏览器设置</el-button>
+        <el-button @click="historyOpen = true">最近执行记录</el-button>
+      </template>
     </V2PageContext>
+
     <V2AsyncRegion
-      skeleton="form"
       :phase="query.phase.value"
+      :previous-data="query.isParameterTransition.value"
       :error="query.error.value ? getApiErrorMessage(query.error.value) : ''"
-      loading-title="正在读取执行记录"
-      error-title="执行记录加载失败"
+      loading-title="正在读取自动充值资料"
+      skeleton="form"
       @retry="refresh"
     >
       <div class="recharge-grid">
-        <section class="recharge-panel" aria-labelledby="recharge-input-title">
+        <section class="recharge-panel" aria-labelledby="recharge-form-title">
           <div class="recharge-section-heading">
-            <h2 id="recharge-input-title">填写开通资料</h2>
-            <span>单账户 · 单笔执行</span>
+            <div>
+              <h2 id="recharge-form-title">一键开通资料</h2>
+              <p class="recharge-note">官网地址固定为 ChatGPT；不需要填写登录网址。</p>
+            </div>
+            <span>单账户 · 单窗口 · 单次付款</span>
           </div>
+
           <el-form
-            :model="{ jsonInput: jsonInput || sessionJson, plan }"
-            :rules="accountRules"
-            scroll-to-error
+            :model="details"
+            :rules="rechargeRules"
             label-position="left"
-            label-width="96px"
+            label-width="112px"
             require-asterisk-position="right"
-            @submit.prevent
+            :disabled="formLocked"
           >
-            <el-form-item label="授权 JSON" prop="jsonInput" required :error="jsonError">
+            <el-form-item label="授权 JSON" required :error="jsonError">
               <div class="recharge-json-row">
                 <el-input
-                  :model-value="jsonInput"
                   type="password"
+                  show-password
                   autocomplete="off"
-                  :disabled="accountLocked"
+                  :model-value="jsonInput"
                   :placeholder="
                     sessionJson
                       ? '授权已自动载入，可粘贴新 JSON 替换'
                       : '粘贴完整授权 JSON，将自动载入'
                   "
                   @update:model-value="updateJsonInput"
-                  @blur="acceptSession()"
                 />
-                <label class="recharge-file-control" :class="{ 'is-disabled': accountLocked }"
-                  >导入文件
+                <label class="recharge-file-control" :class="{ 'is-disabled': formLocked }">
+                  {{ importing ? '正在读取' : '导入文件' }}
                   <input
                     type="file"
-                    accept=".json,.txt"
-                    aria-label="导入授权 JSON 文件"
-                    :disabled="accountLocked"
+                    accept="application/json,text/plain,.json,.txt"
+                    :disabled="formLocked || importing"
                     @change="importJson"
                   />
                 </label>
               </div>
+              <p v-if="sessionJson" class="recharge-field-success">
+                授权已自动载入，账单邮箱已读取。
+              </p>
             </el-form-item>
-            <el-form-item label="开通套餐" prop="plan" required>
-              <div class="recharge-plan-row">
-                <el-select
-                  v-model="plan"
-                  :disabled="accountLocked"
-                  placeholder="选择需要开通的套餐"
-                  aria-label="开通套餐"
-                >
+
+            <div class="recharge-fields">
+              <el-form-item label="窗口名称" required>
+                <el-input
+                  v-model="windowName"
+                  maxlength="80"
+                  placeholder="输入本次比特浏览器窗口名称"
+                />
+              </el-form-item>
+              <el-form-item label="开通套餐" required>
+                <el-select v-model="plan" aria-label="选择开通套餐">
                   <el-option
-                    v-for="(label, key) in planLabels"
-                    :key="key"
-                    :label="label"
-                    :value="key"
+                    v-for="item in V2_RECHARGE_PLANS"
+                    :key="item"
+                    :label="planLabels[item]"
+                    :value="item"
                   />
                 </el-select>
-                <el-button
-                  type="primary"
-                  :disabled="!canStartFlow"
-                  :loading="busy"
-                  @click="startFlow"
-                >
-                  获取初始报价
-                </el-button>
-              </div>
-            </el-form-item>
-          </el-form>
-          <p v-if="sessionJson" class="recharge-note">
-            授权已自动载入，账单邮箱已使用 ChatGPT 注册邮箱；资料仅在本页内存使用。
-          </p>
-          <el-form
-            :model="details"
-            :rules="rechargeRules"
-            scroll-to-error
-            label-position="left"
-            label-width="96px"
-            require-asterisk-position="right"
-            @submit.prevent
-          >
+              </el-form-item>
+              <el-form-item label="锁定币种" required>
+                <el-select v-model="lockedCurrency" aria-label="选择锁定币种" filterable>
+                  <el-option
+                    v-for="currency in currencies"
+                    :key="currency"
+                    :label="currency"
+                    :value="currency"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="最高付款" required>
+                <el-input v-model="maxAmount" inputmode="decimal" maxlength="12">
+                  <template #append>{{ lockedCurrency }}</template>
+                </el-input>
+              </el-form-item>
+            </div>
+
             <fieldset class="recharge-billing">
-              <legend>付款资料</legend>
+              <legend>银行卡与账单</legend>
               <div class="recharge-fields">
                 <el-form-item
                   v-for="field in paymentFields"
@@ -102,125 +115,214 @@
                   :required="field.required"
                 >
                   <el-input
-                    :model-value="details[field.key]"
-                    :type="field.secret ? 'password' : 'text'"
-                    :inputmode="field.key === 'expiry' ? 'numeric' : undefined"
+                    v-if="field.key === 'expiry'"
+                    :model-value="details.expiry"
+                    :placeholder="field.placeholder"
+                    inputmode="numeric"
                     autocomplete="off"
+                    @update:model-value="details.expiry = formatRechargeExpiry(String($event))"
+                  />
+                  <el-input
+                    v-else
+                    v-model="details[field.key]"
+                    :type="field.secret ? 'password' : 'text'"
+                    :show-password="field.secret"
                     :maxlength="field.max"
                     :placeholder="field.placeholder"
-                    :disabled="billingInputLocked"
                     :readonly="field.key === 'email'"
-                    :validate-event="!billingInputLocked"
-                    @update:model-value="updatePaymentField(field.key, $event)"
+                    autocomplete="off"
                   />
                 </el-form-item>
               </div>
-              <h3>账单地址</h3>
-              <div class="recharge-address-choice">
-                <el-form-item label="地址库" required>
-                  <el-select
-                    v-model="selectedAddressId"
-                    filterable
-                    :loading="
-                      addressQuery.phase.value === 'initial-loading' ||
-                      addressQuery.phase.value === 'refreshing'
-                    "
-                    :disabled="billingInputLocked"
-                    placeholder="选择一条未使用地址"
-                    no-data-text="没有未使用地址"
-                    aria-label="选择未使用账单地址"
-                  >
-                    <el-option
-                      v-for="address in availableAddresses"
-                      :key="address.id"
-                      :label="address.line1"
-                      :value="address.id"
-                    />
-                  </el-select>
-                </el-form-item>
-                <p v-if="addressQuery.error.value" class="recharge-error" role="alert">
-                  {{ getApiErrorMessage(addressQuery.error.value) }}
-                  <el-button link type="primary" @click="addressQuery.refresh">重试</el-button>
-                </p>
-                <p v-else-if="!availableAddresses.length" class="recharge-note" role="status">
-                  暂无未使用地址，请先到“地址管理”导入或启用地址。
-                </p>
-                <div v-if="selectedAddress" class="recharge-fixed-address" aria-live="polite">
-                  <span>街道：{{ selectedAddress.line1 }}</span>
-                  <span>国家：United States（US）</span>
-                  <span>城市：{{ selectedAddress.city }}</span>
-                  <span>州：{{ selectedAddress.state }}</span>
-                  <span>邮编：{{ selectedAddress.postalCode }}</span>
+
+              <el-form-item label="地址库" required>
+                <el-select
+                  v-model="selectedAddressId"
+                  aria-label="选择未使用账单地址"
+                  filterable
+                  :loading="
+                    addressQuery.phase.value === 'initial-loading' ||
+                    addressQuery.phase.value === 'refreshing'
+                  "
+                  placeholder="选择一条未使用地址"
+                  no-data-text="没有未使用地址"
+                >
+                  <el-option
+                    v-for="address in availableAddresses"
+                    :key="address.id"
+                    :label="address.line1"
+                    :value="address.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <p v-if="addressQuery.error.value" class="recharge-error" role="alert">
+                {{ getApiErrorMessage(addressQuery.error.value) }}
+                <el-button link type="primary" @click="addressQuery.refresh">重试</el-button>
+              </p>
+              <p v-else-if="!availableAddresses.length" class="recharge-note" role="status">
+                暂无未使用地址，请先到“地址管理”导入或启用地址。
+              </p>
+              <dl v-if="selectedAddress" class="recharge-fixed-address">
+                <div>
+                  <dt>国家</dt>
+                  <dd>美国</dd>
                 </div>
-                <el-form-item v-if="selectedAddress" label="地址状态">
-                  <el-tag type="success" effect="plain">未使用</el-tag>
-                </el-form-item>
-              </div>
+                <div>
+                  <dt>街道</dt>
+                  <dd>{{ selectedAddress.line1 }}</dd>
+                </div>
+                <div>
+                  <dt>城市</dt>
+                  <dd>波特兰</dd>
+                </div>
+                <div>
+                  <dt>州与邮编</dt>
+                  <dd>俄勒冈州 97204</dd>
+                </div>
+              </dl>
             </fieldset>
+
+            <div class="recharge-authorization">
+              <el-checkbox v-model="authorizeSinglePayment">
+                我已核对锁定币种和最高付款金额，授权本任务最多提交一次官网付款
+              </el-checkbox>
+              <p class="recharge-note">
+                官网币种不一致、今日应付超过上限、税费或订单金额不明确时立即停止；不会换币种或重试付款。
+              </p>
+            </div>
+
+            <div class="recharge-form-footer">
+              <el-button type="primary" :disabled="!canStart" :loading="busy" @click="start">
+                连接比特浏览器并执行本次充值
+              </el-button>
+              <p class="recharge-note">
+                JSON、完整卡号和安全码只发送到本机连接器内存，不进入生产数据库或日志。
+              </p>
+            </div>
           </el-form>
-          <div class="recharge-form-footer">
-            <el-button
-              type="primary"
-              :disabled="detailsSubmissionLocked"
-              :loading="busy"
-              @click="submitPaymentDetails"
-            >
-              填写官网并计算最终金额
-            </el-button>
-            <p class="recharge-note">此步骤只填写官网并重新核价，确认充值前不会付款。</p>
-            <p class="recharge-note">
-              核价失败时保留本页输入；取得完整最终报价、取消或确认后才清除敏感资料。
-            </p>
-          </div>
         </section>
+
         <section class="recharge-panel" aria-labelledby="recharge-result-title">
           <div class="recharge-section-heading">
-            <h2 id="recharge-result-title">开通信息</h2>
-            <span>金额与状态由官网回传</span>
+            <h2 id="recharge-result-title">执行状态</h2>
+            <span>官网金额与结果实时回传</span>
           </div>
           <p class="recharge-workflow" role="status">{{ workflowMessage }}</p>
           <p v-if="error" class="recharge-error" role="alert">{{ error }}</p>
-          <RechargeResult :job="selected">
-            <div v-if="selected?.state === 'awaiting_confirmation'" class="recharge-confirm">
-              <p>点击确认即授权本次付款及上述续费；系统将执行充值并回传开通结果。</p>
-              <el-button
-                type="primary"
-                :disabled="Boolean(confirmationBlockedReason)"
-                :loading="busy"
-                @click="confirmPayment"
-              >
-                确认充值 · {{ selected.result.quote?.today?.currency }}
-                {{ selected.result.quote?.today?.amount }}
-              </el-button>
-              <p v-if="confirmationBlockedReason" role="status">{{ confirmationBlockedReason }}</p>
-            </div>
-          </RechargeResult>
+          <RechargeResult v-if="selected" :job="selected" />
+          <div v-else class="recharge-empty">
+            <p>等待开始本次充值。</p>
+            <p>连接器会新建并打开比特浏览器窗口，恢复 JSON 登录后完成核价与付款保护。</p>
+          </div>
           <div class="recharge-actions">
-            <el-button
-              v-if="
-                selected &&
-                ['running', 'awaiting_details', 'awaiting_confirmation'].includes(selected.state)
-              "
-              :disabled="busy"
-              @click="cancel"
-              >停止本次任务</el-button
-            >
-            <el-button v-if="canRecheck" :disabled="busy" @click="recheckPayment">{{
-              recoveryPlan ? `只读复查 ${planLabels[recoveryPlan]} 原订单` : '复查原单开通状态'
-            }}</el-button>
-            <el-button v-if="canRetry" :disabled="busy" @click="retryPreparation"
-              >重试核价</el-button
-            >
-            <el-button
-              v-if="error || selected?.state === 'unknown'"
-              :disabled="busy || query.phase.value === 'refreshing'"
-              @click="refresh"
-              >刷新原任务状态</el-button
-            >
+            <el-button v-if="needsHuman" type="primary" :loading="busy" @click="resume">
+              我已完成验证，继续原任务
+            </el-button>
+            <el-button v-if="canCancel" :disabled="busy" @click="cancel">停止本次任务</el-button>
+            <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
+              只读复查原订单
+            </el-button>
+            <el-button :disabled="busy || query.phase.value === 'refreshing'" @click="refresh">
+              刷新原任务状态
+            </el-button>
           </div>
         </section>
       </div>
     </V2AsyncRegion>
+
+    <el-drawer
+      v-model="settingsOpen"
+      title="比特浏览器设置"
+      size="min(720px, 96vw)"
+      direction="rtl"
+      :close-on-click-modal="!settingsSaving"
+      :close-on-press-escape="!settingsSaving"
+    >
+      <p v-if="settingsQuery.error.value" class="recharge-error" role="alert">
+        {{ getApiErrorMessage(settingsQuery.error.value) }}
+        <el-button link type="primary" @click="settingsQuery.refresh">重试</el-button>
+      </p>
+      <el-form
+        :model="settingsForm"
+        label-position="left"
+        label-width="168px"
+        require-asterisk-position="right"
+        :disabled="settingsSaving"
+      >
+        <el-form-item label="本机连接器地址" required>
+          <el-input v-model="settingsForm.connectorUrl" />
+        </el-form-item>
+        <el-form-item label="比特 Local API" required>
+          <el-input v-model="settingsForm.localApiUrl" />
+        </el-form-item>
+        <el-form-item label="比特接口密钥" required>
+          <el-input
+            v-model="settingsForm.localApiToken"
+            type="password"
+            show-password
+            autocomplete="off"
+            :placeholder="
+              settingsQuery.data.value?.localApiTokenMask || '填写比特浏览器系统设置中的密钥'
+            "
+          />
+        </el-form-item>
+        <el-form-item label="本机连接密钥" required>
+          <el-input
+            v-model="settingsForm.connectorToken"
+            type="password"
+            show-password
+            autocomplete="off"
+            :placeholder="
+              settingsQuery.data.value?.connectorTokenMask || '填写连接器启动时显示的密钥'
+            "
+          />
+        </el-form-item>
+        <el-form-item label="窗口分组" required>
+          <el-input v-model="settingsForm.groupName" maxlength="80" />
+        </el-form-item>
+        <el-form-item label="标签／窗口备注" required>
+          <el-input v-model="settingsForm.tagName" maxlength="80" />
+        </el-form-item>
+        <el-form-item label="动态代理协议" required>
+          <el-select v-model="settingsForm.proxyType">
+            <el-option label="HTTP" value="http" />
+            <el-option label="HTTPS" value="https" />
+            <el-option label="SOCKS5 代理" value="socks5" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="动态 IP 提取链接" required>
+          <el-input
+            v-model="settingsForm.dynamicProxyUrl"
+            type="password"
+            show-password
+            autocomplete="off"
+            :placeholder="settingsQuery.data.value?.dynamicProxyUrlMask || '粘贴动态 IP 提取链接'"
+          />
+        </el-form-item>
+      </el-form>
+
+      <div class="recharge-fixed-settings">
+        <div><span>登录网址</span><strong>系统固定 ChatGPT 官网</strong></div>
+        <div><span>提取方式</span><strong>每次新建窗口提取新 IP</strong></div>
+        <div><span>代理服务商</span><strong>通用</strong></div>
+        <div><span>浏览器语言</span><strong>简体中文，不跟随 IP</strong></div>
+        <div><span>界面语言</span><strong>简体中文，不跟随 IP</strong></div>
+      </div>
+      <p class="recharge-note">
+        启动命令：<code
+          >npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域名</code
+        >
+      </p>
+      <div class="recharge-drawer-actions">
+        <el-button :loading="connectorStatus === 'checking'" @click="testConnector"
+          >检测连接器</el-button
+        >
+        <el-button type="primary" :loading="settingsSaving" @click="saveSettings"
+          >保存设置</el-button
+        >
+      </div>
+    </el-drawer>
+
     <el-drawer
       v-model="historyOpen"
       title="最近执行记录"
@@ -228,25 +330,14 @@
       direction="rtl"
       destroy-on-close
     >
-      <p class="recharge-note">仅查看历史记录，不会切换或重新执行当前充值任务。</p>
-      <p v-if="query.error.value" class="recharge-error" role="alert">
-        {{ getApiErrorMessage(query.error.value) }}
-      </p>
-      <el-button
-        :disabled="query.phase.value === 'refreshing' || query.phase.value === 'initial-loading'"
-        @click="refresh"
-        >刷新记录</el-button
-      >
-      <p v-if="!jobs.length && query.phase.value === 'ready'" class="recharge-note">
-        暂无执行记录。
-      </p>
+      <p class="recharge-note">历史记录只读，不会重新连接、建单或付款。</p>
       <ul class="recharge-history">
         <li v-for="job in jobs" :key="job.id">
           <button
             type="button"
             :aria-pressed="historyJob?.id === job.id"
             :class="{ 'is-selected': historyJob?.id === job.id }"
-            @click="historyId = job.id"
+            @click="selectHistory(job.id)"
           >
             {{ planLabels[job.plan] }} · {{ statusLabel(job.result.status || job.state) }}
             <small>{{ formatV2DateTime(job.createdAt) }}</small>
@@ -254,91 +345,108 @@
         </li>
       </ul>
       <RechargeResult v-if="historyJob" :job="historyJob" />
+      <div v-if="canRecheck" class="recharge-actions">
+        <el-button type="primary" :loading="busy" @click="recheck">只读复查原订单</el-button>
+      </div>
     </el-drawer>
   </section>
 </template>
+
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { FormRules } from 'element-plus';
+import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
-import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2PageContext from '@/v2/components/V2PageContext.vue';
 import RechargeResult from './RechargeResult.vue';
-import { useAutoRecharge } from './useAutoRecharge';
 import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
 import { planLabels, statusLabel } from './recharge-presentation';
+import { useAutoRecharge } from './useAutoRecharge';
+
+const currencies = [
+  'USD',
+  'MYR',
+  'PHP',
+  'EUR',
+  'GBP',
+  'AUD',
+  'CAD',
+  'JPY',
+  'KRW',
+  'SGD',
+  'INR',
+  'IDR',
+  'THB',
+  'VND',
+  'TWD',
+  'HKD',
+  'BRL',
+  'MXN',
+  'AED',
+  'SAR',
+  'ZAR',
+  'NZD',
+  'CHF',
+  'SEK',
+  'NOK',
+  'DKK',
+  'PLN',
+  'TRY'
+];
+const paymentFields = rechargeFields.filter((field) =>
+  ['number', 'name', 'expiry', 'cvc', 'email'].includes(field.key)
+);
+const historyOpen = ref(false);
+const historyId = ref('');
 const {
   query,
   addressQuery,
+  settingsQuery,
   jobs,
   availableAddresses,
-  selectedAddressId,
   selectedAddress,
+  selectedAddressId,
   selected,
   jsonInput,
   sessionJson,
   jsonError,
   plan,
+  windowName,
+  lockedCurrency,
+  maxAmount,
+  authorizeSinglePayment,
+  details,
   busy,
   error,
-  details,
-  accountLocked,
-  billingInputLocked,
-  detailsSubmissionLocked,
-  canStartFlow,
-  confirmationBlockedReason,
-  canRetry,
+  importing,
+  formLocked,
+  canStart,
+  canCancel,
   canRecheck,
-  recoveryPlan,
-  recheckPayment,
+  needsHuman,
   workflowMessage,
-  acceptSession,
+  settingsOpen,
+  settingsSaving,
+  settingsForm,
+  connectorStatus,
+  connectorMessage,
   updateJsonInput,
-  startFlow,
-  submitPaymentDetails,
-  confirmPayment,
-  cancel,
   importJson,
+  start,
+  recheck,
+  selectJob,
+  resume,
+  cancel,
   refresh,
-  retryPreparation
+  testConnector,
+  saveSettings
 } = useAutoRecharge();
-const accountRules: FormRules = {
-  plan: [{ required: true, message: '请选择需要开通的套餐', trigger: 'change' }],
-  jsonInput: [
-    {
-      trigger: 'blur',
-      validator: (_rule, _value, callback) => {
-        callback(
-          jsonError.value || !sessionJson.value
-            ? new Error(jsonError.value || '请提供授权 JSON')
-            : undefined
-        );
-      }
-    }
-  ]
-};
-const historyOpen = ref(false);
-const historyId = ref('');
-const historyJob = computed(
-  () => jobs.value.find((job) => job.id === historyId.value) ?? jobs.value[0]
-);
-const paymentFields = computed(() =>
-  rechargeFields.slice(0, 5).map((field) => ({
-    ...field,
-    placeholder:
-      field.key === 'email'
-        ? '从授权 JSON 自动读取'
-        : ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '') &&
-            !details.value[field.key] &&
-            ['number', 'expiry', 'cvc'].includes(field.key)
-          ? '敏感资料已清除'
-          : field.placeholder
-  }))
-);
-
-function updatePaymentField(key: keyof typeof details.value, value: string) {
-  details.value[key] = key === 'expiry' ? formatRechargeExpiry(value) : value;
+const historyJob = computed(() => jobs.value.find((job) => job.id === historyId.value));
+function selectHistory(id: string) {
+  historyId.value = id;
+  selectJob(id);
 }
 </script>
+
 <style scoped src="./auto-recharge.css"></style>

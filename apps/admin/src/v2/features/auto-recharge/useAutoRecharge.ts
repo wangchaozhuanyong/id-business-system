@@ -1,22 +1,63 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
-import { V2_RECHARGE_PLANS } from '@apple-business/shared';
-import { getApiErrorMessage } from '@/api/client';
-import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import { rechargeApi } from './api';
-import { rechargeDetailsReady } from './recharge-form';
 import type {
-  V2RechargeAction,
+  UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeAddress,
   V2RechargeAddressList,
+  V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserRecheckLaunch,
+  V2RechargeBitBrowserSettings,
   V2RechargeDetails,
   V2RechargeJob,
   V2RechargePlan
 } from './contracts';
+import { getApiErrorMessage } from '@/api/client';
+import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
+import { rechargeDetailsReady } from './recharge-form';
 
-const isActive = (job: V2RechargeJob) =>
-  ['running', 'awaiting_details', 'awaiting_confirmation', 'confirming'].includes(job.state);
-const requiresStatusPolling = (job: V2RechargeJob) => ['running', 'confirming'].includes(job.state);
+const activeStates = new Set([
+  'running',
+  'awaiting_details',
+  'awaiting_confirmation',
+  'awaiting_human_verification',
+  'confirming'
+]);
+const requiresPolling = (job: V2RechargeJob) =>
+  ['running', 'awaiting_human_verification', 'confirming'].includes(job.state);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export type ConnectorStatus = 'unknown' | 'checking' | 'online' | 'offline';
+
+export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettingsInput {
+  localApiToken: string;
+  connectorToken: string;
+  dynamicProxyUrl: string;
+}
+
+const emptyDetails = (): V2RechargeDetails => ({
+  number: '',
+  expiry: '',
+  cvc: '',
+  name: '',
+  email: '',
+  country: '',
+  line1: '',
+  line2: '',
+  city: '',
+  state: '',
+  postal_code: ''
+});
+
+const emptySettings = (): BitBrowserSettingsForm => ({
+  connectorUrl: 'http://127.0.0.1:55321',
+  localApiUrl: 'http://127.0.0.1:54345',
+  localApiToken: '',
+  connectorToken: '',
+  groupName: 'gpt账号注册',
+  tagName: '申请gpt',
+  proxyType: 'http',
+  dynamicProxyUrl: ''
+});
 
 function registrationEmail(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
@@ -45,52 +86,53 @@ function registrationEmail(value: unknown): string {
           candidates.push(email.trim());
       }
     } catch {
-      /* 完整凭据仍由 Worker 验证；本地只提取可用的注册邮箱。 */
+      /* 官网会再次核对完整凭据；此处只读取注册邮箱。 */
     }
   }
   const unique = [...new Set(candidates.map((email) => email.toLowerCase()))];
   return unique.length === 1 ? candidates[0]! : '';
 }
 
-const emptyDetails = (): V2RechargeDetails => ({
-  number: '',
-  expiry: '',
-  cvc: '',
-  name: '',
-  email: '',
-  country: '',
-  line1: '',
-  line2: '',
-  city: '',
-  state: '',
-  postal_code: ''
-});
+function settingsReady(settings: V2RechargeBitBrowserSettings | undefined) {
+  return Boolean(
+    settings?.localApiTokenConfigured &&
+    settings.connectorTokenConfigured &&
+    settings.dynamicProxyUrlConfigured
+  );
+}
 
 export function useAutoRecharge() {
+  const currentId = ref('');
   const jsonInput = ref('');
   const sessionJson = ref('');
   const jsonError = ref('');
   const plan = ref<V2RechargePlan>('plus');
   const selectedAddressId = ref('');
-  const currentId = ref('');
+  const windowName = ref('');
+  const lockedCurrency = ref('USD');
+  const maxAmount = ref('30.00');
+  const authorizeSinglePayment = ref(false);
+  const details = ref<V2RechargeDetails>(emptyDetails());
   const busy = ref(false);
   const error = ref('');
-  const uncertain = ref(false);
   const importing = ref(false);
-  const detailsSubmittedFor = ref('');
-  const confirmationSentFor = ref('');
-  const cardClearedFor = new Set<string>();
-  const details = ref<V2RechargeDetails>(emptyDetails());
+  const connectorStatus = ref<ConnectorStatus>('unknown');
+  const connectorMessage = ref('尚未检测本机连接器');
+  const settingsOpen = ref(false);
+  const settingsSaving = ref(false);
+  const settingsForm = ref<BitBrowserSettingsForm>(emptySettings());
+  const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
+  const paymentJobId = ref('');
   let disposed = false;
   let importGeneration = 0;
 
   const query = useV2ModuleQuery<{ items: V2RechargeJob[]; configured: boolean }>({
     moduleKey: 'auto-recharge',
     scope: 'auto-recharge',
-    key: () => 'auto-recharge-jobs',
+    key: () => 'auto-recharge-bitbrowser-jobs',
     keepPreviousData: true,
     getRevalidateAt: (result) =>
-      result.items.some(requiresStatusPolling) ||
+      result.items.some(requiresPolling) ||
       Boolean(currentId.value && !result.items.some((job) => job.id === currentId.value))
         ? Date.now() + 2000
         : null,
@@ -104,6 +146,14 @@ export function useAutoRecharge() {
     query: ({ signal }) =>
       rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'unused' }, { signal })
   });
+  const settingsQuery = useV2ModuleQuery<V2RechargeBitBrowserSettings>({
+    moduleKey: 'auto-recharge',
+    scope: 'auto-recharge',
+    key: () => 'auto-recharge-bitbrowser-settings',
+    keepPreviousData: true,
+    query: ({ signal }) => rechargeApi.getBitBrowserSettings({ signal })
+  });
+
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() => addressQuery.data.value?.items ?? []);
   const selectedAddress = computed<V2RechargeAddress | undefined>(() =>
@@ -112,245 +162,134 @@ export function useAutoRecharge() {
   const selected = computed(() =>
     currentId.value
       ? jobs.value.find((job) => job.id === currentId.value)
-      : jobs.value.find(isActive)
+      : jobs.value.find((job) => activeStates.has(job.state))
   );
-  const active = computed(() => jobs.value.some(isActive));
-  const recoveryPlan = computed<V2RechargePlan | undefined>(() => {
+  const active = computed(() => jobs.value.some((job) => activeStates.has(job.state)));
+  const currentSettingsReady = computed(() => settingsReady(settingsQuery.data.value));
+  const formLocked = computed(() => busy.value || active.value);
+  const canStart = computed(
+    () =>
+      Boolean(
+        sessionJson.value &&
+        selectedAddress.value &&
+        windowName.value.trim() &&
+        /^[A-Z]{3}$/.test(lockedCurrency.value) &&
+        /^\d{1,9}(?:\.\d{1,2})?$/.test(maxAmount.value) &&
+        authorizeSinglePayment.value &&
+        rechargeDetailsReady(details.value) &&
+        currentSettingsReady.value
+      ) &&
+      !formLocked.value &&
+      query.phase.value === 'ready'
+  );
+  const canCancel = computed(
+    () =>
+      selected.value?.action === 'bitbrowser' &&
+      activeStates.has(selected.value.state) &&
+      selected.value.result.payment_attempted !== true &&
+      Number(selected.value.result.payment_requests_sent ?? 0) === 0
+  );
+  const canRecheck = computed(() => {
     const job = selected.value;
-    if (
-      !['account_has_other_payment_attempt', 'previous_payment_attempt_exists'].includes(
-        job?.result.reason ?? ''
-      )
-    )
-      return undefined;
-    const value = job?.result.recheck_plan;
-    return V2_RECHARGE_PLANS.includes(value as V2RechargePlan)
-      ? (value as V2RechargePlan)
-      : undefined;
-  });
-  const pendingReceipt = computed(() => Boolean(currentId.value && !selected.value));
-  const accountLocked = computed(
-    () =>
-      busy.value ||
-      active.value ||
-      uncertain.value ||
-      pendingReceipt.value ||
-      Boolean(recoveryPlan.value)
-  );
-  const awaitingDetails = computed(
-    () => selected.value?.action === 'flow' && selected.value.state === 'awaiting_details'
-  );
-  const billingInputLocked = computed(
-    () =>
-      !sessionJson.value ||
-      (awaitingDetails.value && detailsSubmittedFor.value === selected.value?.id) ||
-      ['awaiting_confirmation', 'confirming'].includes(selected.value?.state ?? '')
-  );
-  const canStartFlow = computed(
-    () =>
-      Boolean(sessionJson.value && plan.value) &&
-      !accountLocked.value &&
-      query.phase.value === 'ready' &&
-      query.data.value?.configured !== false
-  );
-  const canSubmitDetails = computed(
-    () =>
-      awaitingDetails.value &&
+    return Boolean(
+      job?.action === 'bitbrowser' &&
+      ['finished', 'unknown'].includes(job.state) &&
+      (job.result.payment_attempted === true ||
+        Number(job.result.payment_requests_sent ?? 0) === 1) &&
+      job.result.recheck_only !== true &&
+      job.result.payment_status !== 'declined' &&
+      job.result.status !== 'subscription_activated' &&
+      job.result.payment_outcome !== 'subscription_activated' &&
+      sessionJson.value &&
+      windowName.value.trim() &&
+      currentSettingsReady.value &&
       !busy.value &&
-      detailsSubmittedFor.value !== selected.value?.id &&
-      Boolean(selectedAddress.value) &&
-      rechargeDetailsReady(details.value)
-  );
-  const detailsSubmissionLocked = computed(
-    () => !awaitingDetails.value || busy.value || detailsSubmittedFor.value === selected.value?.id
-  );
+      !active.value &&
+      query.phase.value === 'ready'
+    );
+  });
+  const needsHuman = computed(() => selected.value?.state === 'awaiting_human_verification');
+  const workflowMessage = computed(() => {
+    const job = selected.value;
+    if (job?.state === 'awaiting_human_verification')
+      return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
+    if (job?.state === 'running') return '本机比特浏览器正在执行，系统不会重复提交付款。';
+    if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
+    if (job?.state === 'finished') return '本次流程已结束，请查看官网回传结果。';
+    if (!currentSettingsReady.value) return '请先完成比特浏览器设置和本机连接密钥。';
+    if (!sessionJson.value) return '粘贴授权 JSON 后会自动载入账号和注册邮箱。';
+    return '补齐窗口名称、卡资料、未使用地址和付款上限后，即可一键执行。';
+  });
 
   watch(
     [selectedAddressId, availableAddresses, () => addressQuery.phase.value],
     () => {
       const address = selectedAddress.value;
-      if (!address) {
-        if (selectedAddressId.value && addressQuery.phase.value === 'ready') {
-          selectedAddressId.value = '';
-        }
-        Object.assign(details.value, {
-          country: '',
-          line1: '',
-          line2: '',
-          city: '',
-          state: '',
-          postal_code: ''
-        });
-        return;
+      if (selectedAddressId.value && !address && addressQuery.phase.value === 'ready') {
+        selectedAddressId.value = '';
       }
       Object.assign(details.value, {
-        country: address.country,
-        line1: address.line1,
+        country: address?.country ?? '',
+        line1: address?.line1 ?? '',
         line2: '',
-        city: address.city,
-        state: address.state,
-        postal_code: address.postalCode
+        city: address?.city ?? '',
+        state: address?.state ?? '',
+        postal_code: address?.postalCode ?? ''
       });
     },
     { flush: 'sync' }
   );
 
-  const confirmationBlockedReason = computed(() => {
-    const job = selected.value;
-    if (busy.value) return '正在提交，请等待状态回传。';
-    if (uncertain.value || confirmationSentFor.value === job?.id)
-      return '本次确认已发送，请等待或复查原任务，不要重复付款。';
-    if (job?.state !== 'awaiting_confirmation') return '等待官网完成最终核价。';
-    if (!job.result.nonce) return '确认凭据无效，请停止当前任务后重新核价。';
-    const quote = job.result.quote;
-    if (!quote?.today || quote.tax === null || !quote.renewal)
-      return '官网尚未回传完整的应付、税费和续费金额。';
-    if (job.result.quote_authority !== 'official_checkout_response')
-      return '最终金额尚未与官网订单响应核对。';
-    return '';
-  });
-  const canConfirm = computed(() => !confirmationBlockedReason.value);
-  const canRetry = computed(
-    () =>
-      !accountLocked.value &&
-      Boolean(sessionJson.value && plan.value) &&
-      Boolean(error.value || selected.value?.result.reason) &&
-      !recoveryPlan.value &&
-      selected.value?.state !== 'unknown' &&
-      !selected.value?.result.payment_attempted &&
-      !selected.value?.result.payment_outcome &&
-      !confirmationSentFor.value
+  watch(
+    () => settingsQuery.data.value,
+    (settings) => {
+      if (!settings || settingsSaving.value) return;
+      settingsForm.value = {
+        connectorUrl: settings.connectorUrl,
+        localApiUrl: settings.localApiUrl,
+        localApiToken: '',
+        connectorToken: '',
+        groupName: settings.groupName,
+        tagName: settings.tagName,
+        proxyType: settings.proxyType,
+        dynamicProxyUrl: ''
+      };
+    },
+    { immediate: true }
   );
-  const canRecheck = computed(() =>
-    Boolean(
-      selected.value &&
-      ['finished', 'unknown'].includes(selected.value.state) &&
-      (recoveryPlan.value ||
-        selected.value.state === 'unknown' ||
-        selected.value.result.payment_attempted ||
-        selected.value.result.payment_outcome) &&
-      sessionJson.value &&
-      (recoveryPlan.value || plan.value === selected.value.plan) &&
-      !busy.value &&
-      !active.value
-    )
-  );
-  const workflowMessage = computed(() => {
-    const job = selected.value;
-    if (query.data.value?.configured === false) return '服务器执行器尚未配置。';
-    if (uncertain.value) return '请求结果尚未确认，请刷新原任务状态；系统不会自动重发。';
-    if (busy.value || pendingReceipt.value) return '正在提交当前步骤，等待服务器回传状态。';
-    if (job?.state === 'awaiting_details')
-      return job.result.initial_quote?.today
-        ? '已取得初始报价。请填写付款资料并点击“填写官网并计算最终金额”。'
-        : '官网需要账单地址才能确定税费和总额，请填写资料后继续。';
-    if (job?.state === 'awaiting_confirmation')
-      return '资料已填入官网，请核对最终金额、税费、套餐和续费后确认充值。';
-    if (job?.state === 'confirming') return '已确认本次付款，正在等待官网回传开通结果。';
-    if (job?.state === 'running')
-      return job.action === 'recheck'
-        ? '正在只读复查原订单，不会再次付款。'
-        : '正在核对账户、套餐和官网初始报价。';
-    if (error.value || job?.result.reason || job?.state === 'unknown')
-      return '本次流程已停止，请查看执行结果与处理说明。';
-    if (!sessionJson.value) return '载入授权 JSON 后，再选择需要开通的套餐。';
-    if (!plan.value) return '请选择需要开通的套餐。';
-    return '点击“获取初始报价”后，系统才会访问官网。';
-  });
 
-  const clearCard = () => {
+  watch(
+    () => [
+      paymentJobId.value,
+      jobs.value.find((job) => job.id === paymentJobId.value)?.result.payment_attempted
+    ],
+    async () => {
+      const paymentJob = jobs.value.find((job) => job.id === paymentJobId.value);
+      if (!paymentJob?.result.payment_attempted) return;
+      clearCard();
+      paymentJobId.value = '';
+      await addressQuery.refresh();
+    },
+    { flush: 'post' }
+  );
+
+  function clearCard() {
     details.value.number = '';
-    details.value.cvc = '';
     details.value.expiry = '';
-  };
-  async function refresh() {
-    if (disposed) return;
-    try {
-      await query.refresh();
-    } catch {
-      /* 读取失败由查询区域展示，不能重放写请求。 */
-    }
-  }
-  async function execute(action: V2RechargeAction) {
-    if (
-      disposed ||
-      busy.value ||
-      active.value ||
-      (uncertain.value && action !== 'recheck') ||
-      !sessionJson.value ||
-      !plan.value
-    )
-      return;
-    busy.value = true;
-    error.value = '';
-    const id = crypto.randomUUID();
-    currentId.value = id;
-    try {
-      await rechargeApi.start({ id, plan: plan.value, action, sessionJson: sessionJson.value });
-      if (!disposed && action === 'recheck') uncertain.value = false;
-    } catch (cause) {
-      if (!disposed) error.value = getApiErrorMessage(cause);
-    } finally {
-      if (!disposed) {
-        await refresh();
-        busy.value = false;
-      }
-    }
-  }
-  async function startFlow() {
-    if (!sessionJson.value) {
-      jsonError.value = '请先载入有效的单账户授权 JSON';
-      return;
-    }
-    if (!plan.value) {
-      error.value = '请选择需要开通的套餐。';
-      return;
-    }
-    if (!canStartFlow.value) return;
-    await execute('flow');
-  }
-
-  async function submitPaymentDetails() {
-    const job = selected.value;
-    if (!canSubmitDetails.value || !job || !selectedAddress.value) {
-      error.value = '请补齐有效付款资料并选择一条未使用地址。';
-      return;
-    }
-    detailsSubmittedFor.value = job.id;
-    busy.value = true;
-    error.value = '';
-    try {
-      await rechargeApi.submitDetails(job.id, {
-        addressId: selectedAddress.value.id,
-        details: { ...details.value }
-      });
-    } catch (cause) {
-      if (!disposed) {
-        detailsSubmittedFor.value = '';
-        error.value = getApiErrorMessage(cause);
-      }
-    } finally {
-      if (!disposed) {
-        await refresh();
-        busy.value = false;
-      }
-    }
+    details.value.cvc = '';
   }
 
   function acceptSession(reportInvalid = true) {
     importGeneration++;
-    if (accountLocked.value) return;
+    if (formLocked.value) return;
     if (!jsonInput.value.trim()) {
-      if (sessionJson.value) jsonError.value = '';
-      else if (reportInvalid) jsonError.value = '请粘贴完整的单账户授权 JSON';
+      if (reportInvalid) jsonError.value = '请粘贴完整的单账户授权 JSON';
       return;
     }
     try {
-      if (new TextEncoder().encode(jsonInput.value).length > 65000)
-        throw new Error('JSON 不能超过 65 KB');
+      if (new TextEncoder().encode(jsonInput.value).length > 65_000) throw new Error();
       const value = JSON.parse(jsonInput.value);
-      if (!value || typeof value !== 'object' || Array.isArray(value))
-        throw new Error('请输入完整的单账户 JSON');
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
       const email = registrationEmail(value);
       if (!email) {
         jsonError.value = '授权 JSON 中未找到唯一有效的 ChatGPT 注册邮箱';
@@ -364,175 +303,322 @@ export function useAutoRecharge() {
       if (reportInvalid) jsonError.value = '请提供有效的单账户 JSON（不超过 65 KB）';
     }
   }
+
   function updateJsonInput(value: string) {
-    if (accountLocked.value) return;
+    if (formLocked.value) return;
     jsonInput.value = value;
-    if (sessionJson.value) {
-      sessionJson.value = '';
-      details.value.email = '';
-    }
+    sessionJson.value = '';
+    details.value.email = '';
     if (!value.trim()) {
       jsonError.value = '';
       return;
     }
     acceptSession(false);
   }
-  watch(
-    [sessionJson, plan],
-    () => {
-      if (active.value) return;
-      currentId.value = '';
-      error.value = '';
-      uncertain.value = false;
-      detailsSubmittedFor.value = '';
-      confirmationSentFor.value = '';
-    },
-    { flush: 'sync' }
-  );
-  watch(
-    () => [selected.value?.id, selected.value?.state],
-    () => {
-      const job = selected.value;
-      if (job?.state === 'awaiting_confirmation' && !cardClearedFor.has(job.id)) {
-        cardClearedFor.add(job.id);
-        clearCard();
-      }
-    },
-    { flush: 'post' }
-  );
-  const refreshedConsumedJobs = new Set<string>();
-  watch(
-    () => [selected.value?.id, selected.value?.result.payment_attempted],
-    async () => {
-      const job = selected.value;
-      if (!job?.result.payment_attempted || refreshedConsumedJobs.has(job.id)) return;
-      refreshedConsumedJobs.add(job.id);
-      await addressQuery.refresh();
-    },
-    { flush: 'post' }
-  );
 
-  async function confirmPayment() {
-    const job = selected.value;
-    if (!canConfirm.value || !job?.result.nonce) {
-      error.value = confirmationBlockedReason.value || '当前官方报价尚不能确认。';
-      return;
-    }
-    confirmationSentFor.value = job.id;
-    busy.value = true;
-    error.value = '';
-    try {
-      await rechargeApi.confirm(job.id, job.result.nonce);
-      clearCard();
-    } catch (cause) {
-      if (!disposed) {
-        error.value = getApiErrorMessage(cause);
-        uncertain.value = true;
-      }
-    } finally {
-      if (!disposed) {
-        await refresh();
-        busy.value = false;
-      }
-    }
-  }
-  async function cancel() {
-    const job = selected.value;
-    if (
-      busy.value ||
-      !job ||
-      !['running', 'awaiting_details', 'awaiting_confirmation'].includes(job.state)
-    )
-      return;
-    busy.value = true;
-    try {
-      await rechargeApi.cancel(job.id);
-      clearCard();
-    } catch (cause) {
-      if (!disposed) error.value = getApiErrorMessage(cause);
-    } finally {
-      if (!disposed) {
-        await refresh();
-        busy.value = false;
-      }
-    }
-  }
-  async function retryPreparation() {
-    if (!canRetry.value) return;
-    error.value = '';
-    await startFlow();
-  }
-  async function recheckPayment() {
-    if (!canRecheck.value) return;
-    const targetPlan = recoveryPlan.value ?? selected.value?.plan;
-    if (!targetPlan) return;
-    plan.value = targetPlan;
-    await execute('recheck');
-  }
   async function importJson(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     const generation = ++importGeneration;
-    if (!file || accountLocked.value) return;
+    if (!file || formLocked.value) return;
     importing.value = true;
     try {
-      if (file.size > 65000) throw new Error('JSON 文件不能超过 65 KB');
+      if (file.size > 65_000) throw new Error();
       const value = await file.text();
-      if (!disposed && generation === importGeneration && !accountLocked.value) {
+      if (!disposed && generation === importGeneration) {
         jsonInput.value = value;
         acceptSession();
       }
     } catch {
       if (!disposed) jsonError.value = '文件读取失败，请选择不超过 65 KB 的 JSON 或文本文件';
     } finally {
-      if (!disposed) importing.value = false;
+      importing.value = false;
       input.value = '';
     }
   }
+
+  async function refresh() {
+    try {
+      await query.refresh();
+    } catch {
+      /* 读取失败由异步区域展示。 */
+    }
+  }
+
+  async function start() {
+    if (!canStart.value || !selectedAddress.value) return;
+    busy.value = true;
+    error.value = '';
+    const id = crypto.randomUUID();
+    currentId.value = id;
+    let launch: V2RechargeBitBrowserLaunch | null = null;
+    try {
+      launch = await rechargeApi.startBitBrowser({
+        id,
+        plan: plan.value,
+        addressId: selectedAddress.value.id,
+        windowName: windowName.value.trim(),
+        lockedCurrency: lockedCurrency.value,
+        maxAmount: maxAmount.value,
+        authorizeSinglePayment: true
+      });
+      paymentJobId.value = id;
+      localAccess.value = {
+        connectorUrl: launch.connectorUrl,
+        connectorToken: launch.connectorToken
+      };
+      const payment = {
+        number: details.value.number,
+        expiry: details.value.expiry,
+        cvc: details.value.cvc,
+        name: details.value.name,
+        email: details.value.email
+      };
+      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
+        id,
+        mode: launch.mode,
+        plan: plan.value,
+        windowName: windowName.value.trim(),
+        sessionJson: sessionJson.value,
+        details: payment,
+        address: launch.address,
+        bitBrowser: launch.bitBrowser,
+        safety: launch.safety,
+        callbackUrl: rechargeCallbackUrl(id),
+        agentToken: launch.agentToken,
+        authorizeSinglePayment: true
+      });
+      connectorStatus.value = 'online';
+      connectorMessage.value = '本机连接器已接收任务';
+    } catch (cause) {
+      if (launch) {
+        try {
+          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, id);
+          connectorStatus.value = 'online';
+          connectorMessage.value = '本机连接器已接收，本次不会重发';
+          error.value = '';
+        } catch {
+          try {
+            await rechargeApi.abandonUnreceivedBitBrowser(id);
+            connectorStatus.value = 'offline';
+            connectorMessage.value = '本机连接器未接收';
+            error.value = '本机连接器未接收任务，本次已安全结束；卡资料已保留。';
+          } catch {
+            connectorStatus.value = 'offline';
+            connectorMessage.value = '本机连接器接收结果待核验';
+            error.value = '本机连接器接收结果不明确，本次不会自动重发。请刷新原任务。';
+          }
+        }
+      } else {
+        error.value = getApiErrorMessage(cause);
+      }
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
+  function selectJob(id: string) {
+    currentId.value = id;
+    localAccess.value = null;
+  }
+
+  async function recheck() {
+    const source = selected.value;
+    if (!canRecheck.value || !source) return;
+    busy.value = true;
+    error.value = '';
+    const id = crypto.randomUUID();
+    let launch: V2RechargeBitBrowserRecheckLaunch | null = null;
+    try {
+      launch = await rechargeApi.recheckBitBrowser({
+        id,
+        sourceJobId: source.id,
+        plan: source.plan,
+        windowName: windowName.value.trim()
+      });
+      currentId.value = id;
+      localAccess.value = {
+        connectorUrl: launch.connectorUrl,
+        connectorToken: launch.connectorToken
+      };
+      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
+        id,
+        mode: launch.mode,
+        plan: source.plan,
+        windowName: windowName.value.trim(),
+        sessionJson: sessionJson.value,
+        bitBrowser: launch.bitBrowser,
+        callbackUrl: rechargeCallbackUrl(id),
+        agentToken: launch.agentToken
+      });
+      connectorStatus.value = 'online';
+      connectorMessage.value = '本机连接器已接收只读复查';
+    } catch (cause) {
+      error.value = launch
+        ? '本机连接器接收结果不明确，不会新建订单或重复付款。'
+        : getApiErrorMessage(cause);
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
+  async function access() {
+    const job = selected.value;
+    if (!job) throw new Error('当前没有可操作的本机任务');
+    if (!localAccess.value) localAccess.value = await rechargeApi.bitBrowserAccess(job.id);
+    return { job, ...localAccess.value };
+  }
+
+  async function resume() {
+    if (!needsHuman.value || busy.value) return;
+    busy.value = true;
+    error.value = '';
+    try {
+      const current = await access();
+      await rechargeConnectorApi.resume(
+        current.connectorUrl,
+        current.connectorToken,
+        current.job.id
+      );
+      connectorStatus.value = 'online';
+    } catch (cause) {
+      try {
+        const current = await access();
+        const status = await rechargeConnectorApi.status(
+          current.connectorUrl,
+          current.connectorToken,
+          current.job.id
+        );
+        error.value =
+          status.waitingForUser === false ? '' : '本机连接器尚未确认继续，本次不会自动重发。';
+      } catch {
+        error.value = cause instanceof Error ? cause.message : '本机连接器恢复失败';
+      }
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
+  async function cancel() {
+    if (!canCancel.value || busy.value || !selected.value) return;
+    busy.value = true;
+    error.value = '';
+    const id = selected.value.id;
+    try {
+      const current = await access();
+      await rechargeConnectorApi
+        .cancel(current.connectorUrl, current.connectorToken, id)
+        .catch(() => undefined);
+      await rechargeApi.cancelBitBrowser(id);
+      clearCard();
+      if (paymentJobId.value === id) paymentJobId.value = '';
+    } catch (cause) {
+      error.value = getApiErrorMessage(cause);
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
+  async function testConnector() {
+    connectorStatus.value = 'checking';
+    connectorMessage.value = '正在检测本机连接器';
+    try {
+      await rechargeConnectorApi.health(settingsForm.value.connectorUrl);
+      connectorStatus.value = 'online';
+      connectorMessage.value = '本机连接器已就绪';
+    } catch {
+      connectorStatus.value = 'offline';
+      connectorMessage.value = '本机连接器不可用，请先启动连接器并允许当前网站来源';
+    }
+  }
+
+  async function saveSettings() {
+    const stored = settingsQuery.data.value;
+    if (
+      (!stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
+      (!stored?.connectorTokenConfigured && !settingsForm.value.connectorToken) ||
+      (!stored?.dynamicProxyUrlConfigured && !settingsForm.value.dynamicProxyUrl)
+    ) {
+      error.value = '首次保存请填写 Local API Token、本机连接密钥和动态 IP 提取链接。';
+      return;
+    }
+    settingsSaving.value = true;
+    error.value = '';
+    try {
+      const updated = await rechargeApi.updateBitBrowserSettings({
+        ...settingsForm.value,
+        localApiToken: settingsForm.value.localApiToken || undefined,
+        connectorToken: settingsForm.value.connectorToken || undefined,
+        dynamicProxyUrl: settingsForm.value.dynamicProxyUrl || undefined
+      });
+      settingsQuery.data.value = updated;
+      settingsOpen.value = false;
+    } catch (cause) {
+      error.value = getApiErrorMessage(cause);
+    } finally {
+      settingsSaving.value = false;
+    }
+  }
+
   onScopeDispose(() => {
     disposed = true;
     importGeneration++;
     sessionJson.value = '';
     jsonInput.value = '';
-    selectedAddressId.value = '';
+    localAccess.value = null;
+    paymentJobId.value = '';
     Object.assign(details.value, emptyDetails());
+    Object.assign(settingsForm.value, emptySettings());
   });
+
   return {
     query,
     addressQuery,
+    settingsQuery,
     jobs,
     availableAddresses,
-    selectedAddressId,
     selectedAddress,
+    selectedAddressId,
     selected,
     active,
     jsonInput,
     sessionJson,
     jsonError,
     plan,
+    windowName,
+    lockedCurrency,
+    maxAmount,
+    authorizeSinglePayment,
+    details,
     busy,
     error,
-    details,
-    accountLocked,
-    billingInputLocked,
-    detailsSubmissionLocked,
-    canStartFlow,
-    canSubmitDetails,
-    canConfirm,
-    confirmationBlockedReason,
-    canRetry,
+    importing,
+    formLocked,
+    canStart,
+    canCancel,
     canRecheck,
-    recoveryPlan,
-    recheckPayment,
+    needsHuman,
     workflowMessage,
+    settingsOpen,
+    settingsSaving,
+    settingsForm,
+    currentSettingsReady,
+    connectorStatus,
+    connectorMessage,
     acceptSession,
     updateJsonInput,
-    startFlow,
-    submitPaymentDetails,
-    confirmPayment,
-    cancel,
     importJson,
+    start,
+    recheck,
+    selectJob,
+    resume,
+    cancel,
     refresh,
-    retryPreparation
+    testConnector,
+    saveSettings
   };
 }

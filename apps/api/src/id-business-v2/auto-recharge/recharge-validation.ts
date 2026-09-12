@@ -124,7 +124,7 @@ export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority
 
 // 不保存任意服务端正文；只有执行协议中的已脱敏字段能够进入数据库。
 const scalarKeys = new Set(
-  'status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type'.split(
+  'status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type browser_profile_id locked_currency max_amount user_action_required'.split(
     ' '
   )
 );

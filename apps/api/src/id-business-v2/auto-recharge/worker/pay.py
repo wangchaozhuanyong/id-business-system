@@ -210,7 +210,8 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
 
 
 async def run_payment(target, ledger, *, pay=False, details_reader=read_details, confirmer=confirm_quote,
-                      wait_seconds=300, poll_count=6, poll_interval=20, browser=None):
+                      wait_seconds=300, poll_count=6, poll_interval=20, browser=None,
+                      browser_context=None):
     ledger.assert_unattempted()
     selected_plan = ledger.target_plan
 
@@ -222,11 +223,12 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 
     return await run_browser(target, inspect_existing=True, quote_handler=handler,
                              guard_factory=lambda target, _: PaymentGuard(target, ledger), target_plan=selected_plan,
-                             state_dir=ledger.root, browser=browser)
+                             state_dir=ledger.root, browser=browser, browser_context=browser_context)
 
 
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
-                   wait_seconds=120, poll_count=6, poll_interval=20, browser=None):
+                   wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
+                   browser_context=None):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -251,6 +253,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
         "target_plan": target_plan,
         "state_dir": state_dir,
         "browser": browser,
+        "browser_context": browser_context,
     }
     record_path = checkout_record_path(state_dir, target.account_id, target_plan)
     if record_path.exists():

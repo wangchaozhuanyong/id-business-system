@@ -1,6 +1,6 @@
 export const V2_RECHARGE_PLANS = ['plus', 'pro-5x', 'pro-20x'] as const;
 export type V2RechargePlan = (typeof V2_RECHARGE_PLANS)[number];
-export type V2RechargeAction = 'check' | 'quote' | 'prepare' | 'recheck' | 'flow';
+export type V2RechargeAction = 'check' | 'quote' | 'prepare' | 'recheck' | 'flow' | 'bitbrowser';
 export interface V2RechargeMoney {
   amount: string;
   currency: string;
@@ -51,6 +51,11 @@ export interface V2RechargeResult {
   checkout_identifier?: string;
   nonce?: string;
   card_last4?: string;
+  browser_profile_id?: string;
+  window_name?: string;
+  locked_currency?: string;
+  max_amount?: string;
+  user_action_required?: boolean;
   [key: string]: unknown;
 }
 export interface V2RechargeJob {
@@ -61,6 +66,7 @@ export interface V2RechargeJob {
     | 'running'
     | 'awaiting_details'
     | 'awaiting_confirmation'
+    | 'awaiting_human_verification'
     | 'confirming'
     | 'finished'
     | 'unknown';
@@ -93,6 +99,81 @@ export interface V2RechargeStart {
 export interface V2RechargeDetailsSubmission {
   addressId: string;
   details: V2RechargeDetails;
+}
+
+export interface V2RechargeBitBrowserSettings {
+  connectorUrl: string;
+  localApiUrl: string;
+  localApiTokenConfigured: boolean;
+  localApiTokenMask: string | null;
+  connectorTokenConfigured: boolean;
+  connectorTokenMask: string | null;
+  groupName: string;
+  tagName: string;
+  proxyType: 'http' | 'https' | 'socks5';
+  dynamicProxyUrlConfigured: boolean;
+  dynamicProxyUrlMask: string | null;
+  updatedAt: string | null;
+}
+
+export interface UpdateV2RechargeBitBrowserSettingsInput {
+  connectorUrl: string;
+  localApiUrl: string;
+  localApiToken?: string;
+  connectorToken?: string;
+  groupName: string;
+  tagName: string;
+  proxyType: 'http' | 'https' | 'socks5';
+  dynamicProxyUrl?: string;
+}
+
+export interface V2RechargeBitBrowserStart {
+  id: string;
+  plan: V2RechargePlan;
+  addressId: string;
+  windowName: string;
+  lockedCurrency: string;
+  maxAmount: string;
+  authorizeSinglePayment: true;
+}
+
+export interface V2RechargeBitBrowserRecheckStart {
+  id: string;
+  sourceJobId: string;
+  plan: V2RechargePlan;
+  windowName: string;
+}
+
+export interface V2RechargeBitBrowserLaunch {
+  id: string;
+  mode: 'payment';
+  connectorUrl: string;
+  connectorToken: string;
+  agentToken: string;
+  bitBrowser: {
+    localApiUrl: string;
+    localApiToken: string;
+    groupName: string;
+    tagName: string;
+    proxyType: 'http' | 'https' | 'socks5';
+    dynamicProxyUrl: string;
+  };
+  address: Pick<V2RechargeAddress, 'id' | 'line1' | 'country' | 'city' | 'state' | 'postalCode'>;
+  safety: {
+    lockedCurrency: string;
+    maxAmount: string;
+    maxAmountMinor: number;
+    authorizeSinglePayment: true;
+  };
+}
+
+export interface V2RechargeBitBrowserRecheckLaunch {
+  id: string;
+  mode: 'recheck';
+  connectorUrl: string;
+  connectorToken: string;
+  agentToken: string;
+  bitBrowser: V2RechargeBitBrowserLaunch['bitBrowser'];
 }
 
 export const V2_RECHARGE_ADDRESS_STATUSES = ['unused', 'used', 'disabled'] as const;

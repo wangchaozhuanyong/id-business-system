@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 
 const origin = 'http://127.0.0.1:5397';
+const connectorOrigin = 'http://127.0.0.1:55321';
 const server = spawn(
   process.execPath,
   [
@@ -16,10 +17,7 @@ const server = spawn(
     '5397',
     '--strictPort'
   ],
-  {
-    cwd: resolve('apps/admin'),
-    stdio: 'ignore'
-  }
+  { cwd: resolve('apps/admin'), stdio: 'ignore' }
 );
 let browser;
 const evidence = resolve('.deploy/auto-recharge-browser');
@@ -40,38 +38,57 @@ const user = {
   permissions: [],
   mustResetPassword: false
 };
+const address = {
+  id: '22222222-2222-4222-8222-222222222222',
+  line1: '1221 SW Fourth Avenue',
+  country: 'US',
+  city: 'Portland',
+  state: 'OR',
+  postalCode: '97204',
+  status: 'unused',
+  usedAt: null,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString()
+};
+const settings = {
+  connectorUrl: connectorOrigin,
+  localApiUrl: 'http://127.0.0.1:54345',
+  localApiTokenConfigured: true,
+  localApiTokenMask: '已保存 ···1234',
+  connectorTokenConfigured: true,
+  connectorTokenMask: '已保存 ···5678',
+  groupName: 'gpt账号注册',
+  tagName: '申请gpt',
+  proxyType: 'http',
+  dynamicProxyUrlConfigured: true,
+  dynamicProxyUrlMask: 'https://proxy.example/…（已加密）',
+  updatedAt: null
+};
+
 try {
   await waitFor(async () => (await fetch(origin).catch(() => null))?.ok);
   browser = await chromium.launch({ headless: true });
   for (const width of [1440, 768, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 } });
-    await context.addInitScript((user) => {
+    await context.addInitScript((currentUser) => {
       localStorage.setItem('apple_business_access_token', 'browser-fixture');
-      localStorage.setItem('apple_business_current_user', JSON.stringify(user));
+      localStorage.setItem('apple_business_current_user', JSON.stringify(currentUser));
     }, user);
     const page = await context.newPage();
     const errors = [];
-    page.on('pageerror', (error) => errors.push(error.message));
-    const items = [];
-    let starts = 0;
-    let detailSubmissions = 0;
-    let confirms = 0;
+    const jobs = [];
+    let apiStarts = 0;
+    let connectorStarts = 0;
+    let connectorResumes = 0;
     let addressUsed = false;
-    const address = {
-      id: '22222222-2222-4222-8222-222222222222',
-      line1: '1221 SW Fourth Avenue',
-      country: 'US',
-      city: 'Portland',
-      state: 'OR',
-      postalCode: '97204',
-      status: 'unused',
-      usedAt: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    const success = (route, data) =>
+    let serverStartBody;
+    let connectorStartBody;
+    page.on('pageerror', (error) => errors.push(error.message));
+
+    const success = (route, data, headers = {}) =>
       route.fulfill({
         contentType: 'application/json',
+        headers,
         body: JSON.stringify({ success: true, data })
       });
     await page.route(origin + '/api/**', async (route) => {
@@ -85,216 +102,212 @@ try {
           body: JSON.stringify({ success: false, message: '请登录' })
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
-        return success(route, { items, configured: true });
+        return success(route, { items: jobs, configured: true });
+      if (path.endsWith('/auto-recharge/bitbrowser-settings') && request.method() === 'GET')
+        return success(route, settings);
       if (path.endsWith('/auto-recharge/addresses') && request.method() === 'GET') {
-        const requestedStatus = new URL(request.url()).searchParams.get('status');
-        const usedAddress = {
-          ...address,
-          status: 'used',
-          usedAt: new Date().toISOString()
-        };
-        const addresses =
-          requestedStatus === 'unused'
-            ? addressUsed
-              ? []
-              : [address]
-            : addressUsed
-              ? [usedAddress]
-              : [address];
+        const items = addressUsed ? [] : [address];
         return success(route, {
-          items: addresses,
-          total: addresses.length,
+          items,
+          total: items.length,
           page: 1,
           pageSize: 2000,
-          totals: { unused: addresses.length, used: addressUsed ? 1 : 0, disabled: 0 }
+          totals: { unused: items.length, used: addressUsed ? 1 : 0, disabled: 0 }
         });
       }
-      if (path.endsWith('/auto-recharge/jobs') && request.method() === 'POST') {
-        starts += 1;
-        const body = request.postDataJSON();
-        assert.equal(body.action, 'flow');
-        assert.equal(body.addressId, undefined);
-        assert.equal(body.details, undefined);
-        const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
-        items.unshift({
-          id: body.id,
-          plan: body.plan,
-          action: body.action,
-          state: 'awaiting_details',
+      if (path.endsWith('/auto-recharge/jobs/bitbrowser') && request.method() === 'POST') {
+        apiStarts += 1;
+        serverStartBody = request.postDataJSON();
+        assert.equal(serverStartBody.plan, 'plus');
+        assert.equal(serverStartBody.addressId, address.id);
+        assert.equal(serverStartBody.lockedCurrency, 'USD');
+        assert.equal(serverStartBody.maxAmount, '30.00');
+        assert.equal(serverStartBody.authorizeSinglePayment, true);
+        assert.equal(JSON.stringify(serverStartBody).includes('5555555555554444'), false);
+        assert.equal(JSON.stringify(serverStartBody).includes('fixture@example.test'), false);
+        jobs.unshift({
+          id: serverStartBody.id,
+          plan: serverStartBody.plan,
+          action: 'bitbrowser',
+          state: 'running',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           result: {
-            status: 'checkout_ready_for_billing',
-            account_matched: true,
-            current_plan: 'free',
-            checkout_identifier: 'cs_fixture',
-            network: { ip: '203.0.113.10', country: 'MY' },
-            initial_quote: {
-              plan: body.plan,
-              today: null,
-              tax: null,
-              renewal: amount,
-              renewal_interval: 'monthly'
-            }
+            status: 'waiting_local_connector',
+            stage: 'connector_dispatch',
+            addressId: address.id,
+            window_name: serverStartBody.windowName,
+            locked_currency: 'USD',
+            max_amount: '30.00',
+            payment_requests_sent: 0
           }
         });
-        return success(route, { id: body.id });
-      }
-      if (path.endsWith('/details') && request.method() === 'POST') {
-        detailSubmissions += 1;
-        const body = request.postDataJSON();
-        assert.equal(body.addressId, address.id);
-        assert.deepEqual(
-          {
-            country: body.details.country,
-            line1: body.details.line1,
-            line2: body.details.line2,
-            city: body.details.city,
-            state: body.details.state,
-            postal_code: body.details.postal_code
+        return success(route, {
+          id: serverStartBody.id,
+          mode: 'payment',
+          connectorUrl: connectorOrigin,
+          connectorToken: 'c'.repeat(64),
+          agentToken: 'a'.repeat(64),
+          bitBrowser: {
+            localApiUrl: settings.localApiUrl,
+            localApiToken: 'b'.repeat(32),
+            groupName: settings.groupName,
+            tagName: settings.tagName,
+            proxyType: 'http',
+            dynamicProxyUrl: 'https://proxy.example/secret'
           },
-          {
-            country: 'US',
-            line1: address.line1,
-            line2: '',
-            city: 'Portland',
-            state: 'OR',
-            postal_code: '97204'
+          address,
+          safety: {
+            lockedCurrency: 'USD',
+            maxAmount: '30.00',
+            maxAmountMinor: 3000,
+            authorizeSinglePayment: true
           }
-        );
-        assert.equal(body.details.email, 'fixture@example.test');
-        const amount = { currency: 'MYR', amount: '92.50', amount_minor: 9250 };
-        const tax = { currency: 'MYR', amount: '0.00', amount_minor: 0 };
-        items[0].state = 'awaiting_confirmation';
-        items[0].result = {
-          ...items[0].result,
-          status: 'awaiting_confirmation',
-          stage: 'payment_ready',
-          quote: {
-            plan: items[0].plan,
-            today: amount,
-            tax,
-            renewal: amount,
-            renewal_interval: 'monthly'
-          },
-          quote_authority: 'official_checkout_response',
-          nonce: 'a'.repeat(64),
-          card_last4: '4444'
-        };
-        return success(route, { id: items[0].id });
+        });
       }
-      if (path.endsWith('/confirm')) {
-        confirms += 1;
-        items[0].state = 'finished';
-        items[0].result.status = 'subscription_activated';
-        items[0].result.payment_status = 'paid';
-        items[0].result.payment_attempted = true;
-        items[0].result.subscription_status = 'plus';
-        addressUsed = true;
-        return success(route, {});
-      }
+      if (path.endsWith('/bitbrowser-access') && request.method() === 'POST')
+        return success(route, {
+          connectorUrl: connectorOrigin,
+          connectorToken: 'c'.repeat(64)
+        });
       if (path.endsWith('/change-versions'))
         return success(route, { generatedAt: new Date().toISOString(), versions: {} });
       if (path.endsWith('/change-events')) return route.abort();
       return success(route, {});
     });
-    await page.goto(origin + '/v2/auto-recharge');
-    await page
-      .getByText('填写开通资料', { exact: true })
-      .waitFor()
-      .catch(async (error) => {
-        throw new Error(
-          `页面未就绪: ${page.url()}; ${await page.locator('body').innerText()}; ${errors.join(';')}`,
-          { cause: error }
-        );
+
+    await page.route(connectorOrigin + '/**', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const headers = {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Private-Network': 'true'
+      };
+      if (request.method() === 'OPTIONS')
+        return route.fulfill({
+          status: 204,
+          headers: {
+            ...headers,
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, X-Auto-Recharge-Connector'
+          }
+        });
+      if (url.pathname === '/health')
+        return route.fulfill({
+          contentType: 'application/json',
+          headers,
+          body: JSON.stringify({ ok: true, version: 1, busy: false })
+        });
+      if (url.pathname === '/jobs') {
+        connectorStarts += 1;
+        connectorStartBody = request.postDataJSON();
+        assert.equal(request.headers()['x-auto-recharge-connector'], 'c'.repeat(64));
+        assert.equal(connectorStartBody.details.number, '5555555555554444');
+        assert.equal(connectorStartBody.details.expiry, '12/30');
+        assert.equal(connectorStartBody.details.cvc, '123');
+        assert.equal(connectorStartBody.details.email, 'fixture@example.test');
+        assert.equal(connectorStartBody.sessionJson.includes('fixture@example.test'), true);
+        assert.equal(connectorStartBody.address.city, 'Portland');
+        assert.equal(connectorStartBody.address.state, 'OR');
+        assert.equal(connectorStartBody.address.postalCode, '97204');
+        jobs[0].state = 'awaiting_human_verification';
+        jobs[0].result = {
+          ...jobs[0].result,
+          status: 'awaiting_human_verification',
+          stage: 'verification_required',
+          browser_profile_id: 'profile_fixture',
+          user_action_required: true,
+          payment_attempted: false,
+          payment_requests_sent: 0
+        };
+        return route.fulfill({
+          status: 202,
+          contentType: 'application/json',
+          headers,
+          body: JSON.stringify({ ok: true, id: jobs[0].id, accepted: true })
+        });
+      }
+      if (url.pathname.endsWith('/resume')) {
+        connectorResumes += 1;
+        const money = { currency: 'USD', amount: '20.00', amount_minor: 2000 };
+        jobs[0].state = 'finished';
+        jobs[0].result = {
+          ...jobs[0].result,
+          status: 'subscription_activated',
+          stage: 'subscription_activated',
+          account_matched: true,
+          current_plan: 'free',
+          quote: {
+            plan: 'plus',
+            today: money,
+            tax: { currency: 'USD', amount: '0.00', amount_minor: 0 },
+            renewal: money,
+            renewal_interval: 'monthly'
+          },
+          quote_authority: 'official_checkout_response',
+          checkout_identifier: 'cs_fixture',
+          network: { ip: '203.0.113.10', country: 'US', observedAt: new Date().toISOString() },
+          payment_status: 'paid',
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          subscription_status: 'plus'
+        };
+        addressUsed = true;
+        return route.fulfill({
+          contentType: 'application/json',
+          headers,
+          body: JSON.stringify({ ok: true })
+        });
+      }
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        headers,
+        body: JSON.stringify({ ok: false })
       });
-    await page.locator('.recharge-plan-row').getByText('ChatGPT Plus', { exact: true }).waitFor();
+    });
+
+    await page.goto(origin + '/v2/auto-recharge');
+    await page.getByText('一键开通资料', { exact: true }).waitFor();
     await page
       .getByPlaceholder('粘贴完整授权 JSON，将自动载入')
       .fill('{"sessionToken":"synthetic-only","user":{"email":"fixture@example.test"}}');
     await page.getByText('授权已自动载入', { exact: false }).waitFor();
-    await page.locator('.recharge-json-row input[type="password"]').blur();
-    assert.equal(await page.getByText('请粘贴完整的单账户授权 JSON', { exact: true }).count(), 0);
-    assert.equal(starts, 0);
-    const fields = page.locator('fieldset input');
-    assert.equal(await fields.nth(0).isEnabled(), true);
-    const values = ['5555555555554444', 'Fixture Person', '1230', '1234'];
-    for (let index = 0; index < values.length; index += 1)
-      await fields.nth(index).fill(values[index]);
-    assert.equal(await fields.nth(2).inputValue(), '12/30');
-    assert.equal(await fields.nth(4).inputValue(), 'fixture@example.test');
-    assert.equal(await fields.nth(4).isEditable(), false);
+    assert.equal(apiStarts, 0);
+    assert.equal(connectorStarts, 0);
+
+    await page.getByRole('textbox', { name: '窗口名称' }).fill('申请gpt-验收');
+    await page.getByLabel('银行卡号').fill('5555555555554444');
+    await page.getByLabel('持卡人姓名').fill('Fixture Person');
+    await page.getByLabel('有效期').fill('1230');
+    await page.getByLabel('安全码').fill('123');
+    assert.equal(await page.getByLabel('有效期').inputValue(), '12/30');
+    assert.equal(await page.getByLabel('账单邮箱').inputValue(), 'fixture@example.test');
+    assert.equal(await page.getByLabel('账单邮箱').isEditable(), false);
     await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
     await page.getByRole('option', { name: address.line1, exact: true }).click();
-    await page.getByText('国家：United States（US）', { exact: true }).waitFor();
-    assert.equal(starts, 0);
-    const quoteButton = page.getByRole('button', { name: '获取初始报价' });
-    if (width > 640) {
-      const alignment = await page.locator('.recharge-plan-row').evaluate((row) => {
-        const button = row.querySelector('button');
-        return {
-          rowRight: row.getBoundingClientRect().right,
-          buttonRight: button?.getBoundingClientRect().right ?? 0
-        };
-      });
-      assert.ok(Math.abs(alignment.rowRight - alignment.buttonRight) <= 1);
-    }
-    await quoteButton.click();
-    await page
-      .getByText('官网需要账单地址才能确定税费和总额，请填写资料后继续。', { exact: true })
-      .waitFor();
-    assert.equal(starts, 1);
-    assert.equal(detailSubmissions, 0);
-    assert.equal(confirms, 0);
-    await page.getByRole('button', { name: '填写官网并计算最终金额' }).click();
-    await page.locator('.recharge-confirm').waitFor();
-    assert.equal(detailSubmissions, 1);
-    assert.equal(await fields.nth(0).inputValue(), '');
-    assert.equal(await fields.nth(2).inputValue(), '');
-    assert.equal(confirms, 0);
-    const confirm = page.getByRole('button', { name: '确认充值 · MYR 92.50' });
-    assert.equal(await confirm.isEnabled(), true);
-    await confirm.click();
+    await page.getByText('我已核对锁定币种和最高付款金额', { exact: false }).click();
+    const startButton = page.getByRole('button', { name: '连接比特浏览器并执行本次充值' });
+    assert.equal(await startButton.isEnabled(), true);
+    await startButton.click();
+
+    await page.getByRole('button', { name: '我已完成验证，继续原任务' }).waitFor();
+    assert.equal(apiStarts, 1);
+    assert.equal(connectorStarts, 1);
+    assert.equal(await page.getByLabel('银行卡号').inputValue(), '5555555555554444');
+    await page.getByRole('button', { name: '我已完成验证，继续原任务' }).click();
     await page.locator('.recharge-status').filter({ hasText: '开通成功' }).waitFor();
-    assert.equal(confirms, 1);
-    await waitFor(
-      async () => (await page.getByText('没有未使用地址', { exact: true }).count()) > 0
-    );
-    assert.equal(await page.getByRole('combobox', { name: '选择未使用账单地址' }).inputValue(), '');
+    assert.equal(connectorResumes, 1);
+    assert.equal(await page.getByLabel('银行卡号').inputValue(), '');
+    assert.equal(serverStartBody.id, connectorStartBody.id);
+    assert.equal(connectorStartBody.authorizeSinglePayment, true);
+
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
     );
     assert.equal(overflow, false, `${width}px 页面横向溢出`);
     assert.deepEqual(errors, []);
     await page.screenshot({ path: resolve(evidence, `${width}.png`), fullPage: true });
-
-    await page.goto(origin + '/v2/auto-recharge/addresses');
-    await page
-      .locator('.recharge-address-import .v2-section-heading__text')
-      .getByText('批量导入', { exact: true })
-      .waitFor();
-    assert.equal(await page.locator('.recharge-address-import > *').count(), 2);
-    assert.equal(await page.locator('.recharge-address-import .el-alert').count(), 0);
-    assert.equal(
-      await page
-        .locator('.recharge-address-import .el-form-item__label')
-        .getByText('固定地区', { exact: true })
-        .count(),
-      0
-    );
-    const helpButton = page.locator('.recharge-address-import .feature-help');
-    await helpButton.click();
-    await page
-      .getByText('仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。', { exact: true })
-      .waitFor();
-    assert.equal(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
-      ),
-      false,
-      `${width}px 地址管理页面横向溢出`
-    );
-    await page.screenshot({ path: resolve(evidence, `${width}-addresses.png`), fullPage: true });
     await context.close();
   }
   console.log(
@@ -303,18 +316,15 @@ try {
       viewports: [1440, 768, 390],
       flow: [
         'automatic-local-json',
-        'default-plus',
-        'early-payment-entry',
         'registered-email',
-        'explicit-initial-quote',
-        'unused-address-selection',
-        'fixed-us-location',
-        'explicit-details-and-final-quote',
-        'amount-confirmation',
-        'subscription-activated',
-        'address-consumed',
-        'compact-address-import',
-        'address-import-help'
+        'default-plus',
+        'unused-fixed-address',
+        'currency-and-amount-lock',
+        'server-metadata-only',
+        'local-secrets-only',
+        'human-verification-resume',
+        'single-payment-attempt',
+        'clear-card-after-attempt'
       ],
       realPaymentRequests: 0
     })
