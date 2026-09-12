@@ -25,6 +25,7 @@ jobs:
       reuse_main: ${{ steps.recharge.outputs.reuse_main }}
       reused_parts: ${{ steps.recharge.outputs.reused_parts }}
       base: ${{ steps.recharge.outputs.base }}
+      check_parts: ${{ steps.recharge.outputs.check_parts }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -180,13 +181,13 @@ jobs:
         run: npm run git:readiness
 
   recharge:
-    if: needs.change-scope.outputs.mode == 'recharge' && needs.change-scope.outputs.reuse_main != 'true'
+    if: needs.change-scope.outputs.mode != 'full' && needs.change-scope.outputs.reuse_main != 'true'
     needs: change-scope
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        part: [guards, admin, api, connector, migration]
+        part: ${{ fromJSON(needs.change-scope.outputs.check_parts) }}
     env:
       NODE_ENV: test
       JWT_SECRET: ci-jwt-secret
@@ -239,8 +240,23 @@ jobs:
           test "$SCOPE_RESULT" = success
           if [[ "$REUSE_MAIN" = true ]]; then
             echo "Merged source tree matches the successful PR; checks are not repeated."
-          elif [[ "$MODE" = recharge ]]; then
+          elif [[ "$MODE" = recharge || "$MODE" = ci-only ]]; then
             test "$RECHARGE_RESULT" = success
           else
             test "$FULL_RESULT" = success
           fi
+      - name: Checkout the tested source tree for its evidence
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Record successful PR source evidence
+        if: github.event_name == 'pull_request'
+        run: node scripts/ci-recharge-evidence.mjs
+      - name: Preserve successful source evidence
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quality-source-evidence-${{ github.run_attempt }}
+          path: .deploy/ci-evidence/evidence.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

@@ -1,8 +1,19 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 export const parts = ['guards', 'admin', 'api', 'connector', 'migration'];
+export function isCiOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.every((p) =>
+      /^(?:\.github\/workflows\/quality\.yml|scripts\/ci-recharge-[\w.-]+|docs\/AUTO_RECHARGE_SETTINGS_PLAN\.md)$/.test(
+        p
+      )
+    )
+  );
+}
 const migration =
   'apps/api/prisma-mysql/migrations/20260913100000_auto_recharge_browser_options/migration.sql';
 const schema = 'apps/api/prisma-mysql/schema.prisma';
@@ -78,13 +89,11 @@ async function main() {
   const base = process.env.BASE_SHA;
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
-  const mode = isRechargeOnly(
-    paths,
-    git('show', `${base}:${schema}`),
-    git('show', `HEAD:${schema}`)
-  )
-    ? 'recharge'
-    : 'full';
+  const mode = isCiOnly(paths)
+    ? 'ci-only'
+    : isRechargeOnly(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`))
+      ? 'recharge'
+      : 'full';
   const currentTree = git('rev-parse', 'HEAD^{tree}');
   let reuseMain = false;
   const reused = new Set();
@@ -102,18 +111,48 @@ async function main() {
         `repos/${repo}/actions/workflows/quality.yml/runs?event=pull_request&head_sha=${pr.head.sha}&status=success&per_page=20`
       );
       for (const run of runs.filter(
-        (r) => matchingRun(r, pr.number, pr.head.sha) && r.conclusion === 'success'
+        (r) =>
+          r.event === 'pull_request' &&
+          r.path === '.github/workflows/quality.yml' &&
+          r.status === 'completed' &&
+          r.head_sha === pr.head.sha &&
+          r.conclusion === 'success'
       )) {
-        const tree = testedTree(run, pr.number);
-        if (tree !== currentTree) continue;
+        const { artifacts } = gh(`repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`);
+        const artifact = artifacts.find(
+          (a) => a.name === `quality-source-evidence-${run.run_attempt}` && !a.expired
+        );
+        if (!artifact) continue;
+        const directory = `.deploy/ci-source-evidence/${run.id}-${run.run_attempt}`;
+        execFileSync(
+          'gh',
+          [
+            'run',
+            'download',
+            String(run.id),
+            '--repo',
+            repo,
+            '--name',
+            artifact.name,
+            '--dir',
+            directory
+          ],
+          { stdio: 'pipe' }
+        );
+        const proof = JSON.parse(readFileSync(`${directory}/evidence.json`, 'utf8'));
+        if (!matchesSourceEvidence(proof, { repo, run, pr, tree: currentTree })) continue;
         const { jobs } = gh(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`);
-        if (!canReuseMain(tree, currentTree, jobs)) continue;
+        if (!canReuseMain(proof.testedTree, currentTree, jobs)) continue;
         reuseMain = true;
         evidence.push({ run: run.id, tree: currentTree, pr: pr.number });
         break;
       }
       if (reuseMain) break;
     }
+    if (!reuseMain)
+      throw new Error(
+        'No successful PR evidence matches the merged source tree; stop instead of repeating checks'
+      );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
     const pr = event.pull_request;
     const { workflow_runs: runs } = gh(
@@ -134,10 +173,11 @@ async function main() {
       if (reused.size === parts.length) break;
     }
   }
-  const result = { mode, reuseMain, reusedParts: [...reused], base, evidence };
+  const checkParts = mode === 'ci-only' ? ['guards'] : parts;
+  const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\nbase=${base}\n`
+    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\n`
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

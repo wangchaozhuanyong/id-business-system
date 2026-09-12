@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { affectsPart, isRechargeOnly, matchingRun, canReuseMain } from './ci-recharge-scope.mjs';
+import {
+  affectsPart,
+  isRechargeOnly,
+  matchingRun,
+  canReuseMain,
+  isCiOnly
+} from './ci-recharge-scope.mjs';
+import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
 const schema =
   'model Other { id String }\nmodel IdBusinessV2RechargeBrowserSetting { ownerId String }\n';
@@ -8,6 +15,39 @@ const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'
 ];
+test('CI-only repairs do not select application or migration suites', () => {
+  assert.equal(
+    isCiOnly(['.github/workflows/quality.yml', 'scripts/ci-recharge-evidence.mjs']),
+    true
+  );
+  assert.equal(isCiOnly(['.github/workflows/quality.yml', files[0]]), false);
+  assert.equal(isCiOnly([]), false);
+});
+test('immutable source evidence survives a cleared PR association and rejects mismatches', () => {
+  const run = { id: 42, run_attempt: 1, pull_requests: [] };
+  const pr = { number: 192, head: { sha: 'head' } };
+  const proof = {
+    repository: 'owner/repo',
+    runId: 42,
+    runAttempt: 1,
+    pullRequest: 192,
+    headSha: 'head',
+    baseSha: 'a'.repeat(40),
+    testedTree: 'tree'
+  };
+  const expected = { repo: 'owner/repo', run, pr, tree: 'tree' };
+  assert.equal(matchesSourceEvidence(proof, expected), true);
+  for (const change of [
+    { repository: 'other/repo' },
+    { runId: 43 },
+    { runAttempt: 2 },
+    { pullRequest: 191 },
+    { headSha: 'other' },
+    { testedTree: 'different' }
+  ]) {
+    assert.equal(matchesSourceEvidence({ ...proof, ...change }, expected), false);
+  }
+});
 test('main reuse rejects a different tree or an incomplete required gate', () => {
   assert.equal(canReuseMain('tree', 'tree', [{ name: 'quality', conclusion: 'success' }]), true);
   assert.equal(canReuseMain('old', 'new', [{ name: 'quality', conclusion: 'success' }]), false);
