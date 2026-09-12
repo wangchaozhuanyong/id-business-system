@@ -9,7 +9,7 @@
         </span>
       </template>
       <template #actions>
-        <el-button @click="settingsOpen = true">比特浏览器设置</el-button>
+        <el-button @click="setSettingsOpen(true)">代理 IP 与窗口设置</el-button>
         <el-button @click="historyOpen = true">最近执行记录</el-button>
       </template>
     </V2PageContext>
@@ -30,6 +30,20 @@
               <p class="recharge-note">官网地址固定为 ChatGPT；不需要填写登录网址。</p>
             </div>
             <span>单账户 · 单窗口 · 单次付款</span>
+          </div>
+
+          <div class="recharge-settings-summary">
+            <div>
+              <strong>当前代理 IP 与窗口配置</strong>
+              <p class="recharge-note">
+                {{ browserSettingsSummary(settingsQuery.data.value).proxy }}
+              </p>
+              <p class="recharge-note">
+                分组：{{ settingsQuery.data.value?.groupName || 'gpt账号注册' }} ·
+                {{ browserSettingsSummary(settingsQuery.data.value).languages }}
+              </p>
+            </div>
+            <el-button @click="setSettingsOpen(true)">修改代理 IP 与窗口设置</el-button>
           </div>
 
           <el-form
@@ -65,7 +79,7 @@
                 </label>
               </div>
               <p v-if="sessionJson" class="recharge-field-success">
-                授权已自动载入，账单邮箱已读取。
+                授权已自动载入，账单邮箱自动使用该账号邮箱。
               </p>
             </el-form-item>
 
@@ -129,11 +143,16 @@
                     :show-password="field.secret"
                     :maxlength="field.max"
                     :placeholder="field.placeholder"
-                    :readonly="field.key === 'email'"
                     autocomplete="off"
                   />
                 </el-form-item>
               </div>
+
+              <el-form-item label="账单邮箱">
+                <span class="recharge-account-email">
+                  {{ details.email || '载入授权 JSON 后自动使用账号邮箱' }}
+                </span>
+              </el-form-item>
 
               <el-form-item label="地址库" required>
                 <el-select
@@ -230,98 +249,7 @@
       </div>
     </V2AsyncRegion>
 
-    <el-drawer
-      v-model="settingsOpen"
-      title="比特浏览器设置"
-      size="min(720px, 96vw)"
-      direction="rtl"
-      :close-on-click-modal="!settingsSaving"
-      :close-on-press-escape="!settingsSaving"
-    >
-      <p v-if="settingsQuery.error.value" class="recharge-error" role="alert">
-        {{ getApiErrorMessage(settingsQuery.error.value) }}
-        <el-button link type="primary" @click="settingsQuery.refresh">重试</el-button>
-      </p>
-      <el-form
-        :model="settingsForm"
-        label-position="left"
-        label-width="168px"
-        require-asterisk-position="right"
-        :disabled="settingsSaving"
-      >
-        <el-form-item label="本机连接器地址" required>
-          <el-input v-model="settingsForm.connectorUrl" />
-        </el-form-item>
-        <el-form-item label="比特 Local API" required>
-          <el-input v-model="settingsForm.localApiUrl" />
-        </el-form-item>
-        <el-form-item label="比特接口密钥" required>
-          <el-input
-            v-model="settingsForm.localApiToken"
-            type="password"
-            show-password
-            autocomplete="off"
-            :placeholder="
-              settingsQuery.data.value?.localApiTokenMask || '填写比特浏览器系统设置中的密钥'
-            "
-          />
-        </el-form-item>
-        <el-form-item label="本机连接密钥" required>
-          <el-input
-            v-model="settingsForm.connectorToken"
-            type="password"
-            show-password
-            autocomplete="off"
-            :placeholder="
-              settingsQuery.data.value?.connectorTokenMask || '填写连接器启动时显示的密钥'
-            "
-          />
-        </el-form-item>
-        <el-form-item label="窗口分组" required>
-          <el-input v-model="settingsForm.groupName" maxlength="80" />
-        </el-form-item>
-        <el-form-item label="标签／窗口备注" required>
-          <el-input v-model="settingsForm.tagName" maxlength="80" />
-        </el-form-item>
-        <el-form-item label="动态代理协议" required>
-          <el-select v-model="settingsForm.proxyType">
-            <el-option label="HTTP" value="http" />
-            <el-option label="HTTPS" value="https" />
-            <el-option label="SOCKS5 代理" value="socks5" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="动态 IP 提取链接" required>
-          <el-input
-            v-model="settingsForm.dynamicProxyUrl"
-            type="password"
-            show-password
-            autocomplete="off"
-            :placeholder="settingsQuery.data.value?.dynamicProxyUrlMask || '粘贴动态 IP 提取链接'"
-          />
-        </el-form-item>
-      </el-form>
-
-      <div class="recharge-fixed-settings">
-        <div><span>登录网址</span><strong>系统固定 ChatGPT 官网</strong></div>
-        <div><span>提取方式</span><strong>每次新建窗口提取新 IP</strong></div>
-        <div><span>代理服务商</span><strong>通用</strong></div>
-        <div><span>浏览器语言</span><strong>简体中文，不跟随 IP</strong></div>
-        <div><span>界面语言</span><strong>简体中文，不跟随 IP</strong></div>
-      </div>
-      <p class="recharge-note">
-        启动命令：<code
-          >npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域名</code
-        >
-      </p>
-      <div class="recharge-drawer-actions">
-        <el-button :loading="connectorStatus === 'checking'" @click="testConnector"
-          >检测连接器</el-button
-        >
-        <el-button type="primary" :loading="settingsSaving" @click="saveSettings"
-          >保存设置</el-button
-        >
-      </div>
-    </el-drawer>
+    <RechargeBrowserSettings :settings="browserSettings" />
 
     <el-drawer
       v-model="historyOpen"
@@ -353,6 +281,7 @@
 </template>
 
 <script setup lang="ts">
+import { browserSettingsSummary } from './recharge-browser-presentation';
 import { computed, ref } from 'vue';
 import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
@@ -360,11 +289,12 @@ import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import RechargeResult from './RechargeResult.vue';
+import RechargeBrowserSettings from './RechargeBrowserSettings.vue';
 import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
 import { currencyOptions, planLabels, statusLabel } from './recharge-presentation';
 import { useAutoRecharge } from './useAutoRecharge';
 const paymentFields = rechargeFields.filter((field) =>
-  ['number', 'name', 'expiry', 'cvc', 'email'].includes(field.key)
+  ['number', 'name', 'expiry', 'cvc'].includes(field.key)
 );
 const historyOpen = ref(false);
 const historyId = ref('');
@@ -395,9 +325,8 @@ const {
   canRecheck,
   needsHuman,
   workflowMessage,
-  settingsOpen,
-  settingsSaving,
-  settingsForm,
+  browserSettings,
+  setSettingsOpen,
   connectorStatus,
   connectorMessage,
   updateJsonInput,
@@ -407,9 +336,7 @@ const {
   selectJob,
   resume,
   cancel,
-  refresh,
-  testConnector,
-  saveSettings
+  refresh
 } = useAutoRecharge();
 const historyJob = computed(() => jobs.value.find((job) => job.id === historyId.value));
 function selectHistory(id: string) {

@@ -101,6 +101,57 @@ export interface V2RechargeDetailsSubmission {
   details: V2RechargeDetails;
 }
 
+export interface V2RechargeBrowserOptions {
+  proxyMode: 'dynamic' | 'static';
+  staticHost: string;
+  staticPort: number;
+  dynamicProvider: 'common' | 'rola' | 'doveip' | 'cloudam';
+  refreshIp: boolean;
+  ipCheckService: 'ip-api' | 'ip123in' | 'luminati';
+  os: 'MacIntel' | 'Win32' | 'Linux x86_64';
+  languageFromIp: boolean;
+  language: string;
+  displayLanguageFromIp: boolean;
+  displayLanguage: string;
+  timezoneFromIp: boolean;
+  timezone: string;
+  positionFromIp: boolean;
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  syncTabs: boolean;
+  syncCookies: boolean;
+  syncLocalStorage: boolean;
+}
+
+export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = {
+  proxyMode: 'dynamic',
+  staticHost: '',
+  staticPort: 8080,
+  dynamicProvider: 'common',
+  refreshIp: true,
+  ipCheckService: 'ip-api',
+  os: 'MacIntel',
+  languageFromIp: false,
+  language: 'zh-CN',
+  displayLanguageFromIp: false,
+  displayLanguage: 'zh-CN',
+  timezoneFromIp: true,
+  timezone: 'Asia/Kuala_Lumpur',
+  positionFromIp: true,
+  latitude: 0,
+  longitude: 0,
+  accuracy: 100,
+  syncTabs: true,
+  syncCookies: true,
+  syncLocalStorage: true
+};
+
+export interface V2RechargeStaticProxyCredentials {
+  username: string;
+  password: string;
+}
+
 export interface V2RechargeBitBrowserSettings {
   connectorUrl: string;
   localApiUrl: string;
@@ -113,7 +164,21 @@ export interface V2RechargeBitBrowserSettings {
   proxyType: 'http' | 'https' | 'socks5';
   dynamicProxyUrlConfigured: boolean;
   dynamicProxyUrlMask: string | null;
+  browserOptions?: V2RechargeBrowserOptions;
+  staticProxyCredentialsConfigured?: boolean;
   updatedAt: string | null;
+}
+
+export interface V2RechargeBrowserCatalog {
+  groups: { id: string; name: string }[];
+  tags: { id: string; name: string }[];
+}
+
+export interface V2RechargeBrowserCatalogAccess {
+  connectorUrl: string;
+  connectorToken: string;
+  localApiUrl: string;
+  localApiToken: string;
 }
 
 export interface UpdateV2RechargeBitBrowserSettingsInput {
@@ -125,6 +190,9 @@ export interface UpdateV2RechargeBitBrowserSettingsInput {
   tagName: string;
   proxyType: 'http' | 'https' | 'socks5';
   dynamicProxyUrl?: string;
+  browserOptions?: V2RechargeBrowserOptions;
+  staticProxyCredentials?: V2RechargeStaticProxyCredentials;
+  clearStaticProxyCredentials?: boolean;
 }
 
 export interface V2RechargeBitBrowserStart {
@@ -157,6 +225,8 @@ export interface V2RechargeBitBrowserLaunch {
     tagName: string;
     proxyType: 'http' | 'https' | 'socks5';
     dynamicProxyUrl: string;
+    browserOptions?: V2RechargeBrowserOptions;
+    staticProxyCredentials?: V2RechargeStaticProxyCredentials;
   };
   address: Pick<V2RechargeAddress, 'id' | 'line1' | 'country' | 'city' | 'state' | 'postalCode'>;
   safety: {

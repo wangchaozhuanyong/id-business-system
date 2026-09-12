@@ -104,7 +104,9 @@ export class RechargeLocalService {
         groupName: runtime.groupName,
         tagName: runtime.tagName,
         proxyType: runtime.proxyType,
-        dynamicProxyUrl: runtime.dynamicProxyUrl
+        dynamicProxyUrl: runtime.dynamicProxyUrl,
+        browserOptions: runtime.browserOptions,
+        staticProxyCredentials: runtime.staticProxyCredentials
       },
       address: {
         id: result.address.id,
@@ -204,7 +206,9 @@ export class RechargeLocalService {
         groupName: runtime.groupName,
         tagName: runtime.tagName,
         proxyType: runtime.proxyType,
-        dynamicProxyUrl: runtime.dynamicProxyUrl
+        dynamicProxyUrl: runtime.dynamicProxyUrl,
+        browserOptions: runtime.browserOptions,
+        staticProxyCredentials: runtime.staticProxyCredentials
       }
     };
   }

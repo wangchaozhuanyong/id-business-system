@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { hash } from './recharge-validation';
 import {
   validateRechargeBitBrowserRecheckStart,
@@ -130,7 +131,9 @@ describe('本机任务持久化边界', () => {
         groupName: 'gpt账号注册',
         tagName: '申请gpt',
         proxyType: 'http',
-        dynamicProxyUrl: 'https://proxy.example/secret'
+        dynamicProxyUrl: 'https://proxy.example/secret',
+        browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, os: 'Win32' },
+        staticProxyCredentials: { username: 'fixture-user', password: 'fixture-password' }
       })
     };
     const transactions = { execute: vi.fn((callback) => callback(tx)) };
@@ -163,8 +166,15 @@ describe('本机任务持久化边界', () => {
     expect(JSON.stringify(repository.createJob.mock.calls)).not.toContain('proxy.example');
     expect(result).toMatchObject({
       connectorToken: 'c'.repeat(64),
-      bitBrowser: { localApiToken: 'b'.repeat(32), dynamicProxyUrl: 'https://proxy.example/secret' }
+      bitBrowser: {
+        localApiToken: 'b'.repeat(32),
+        dynamicProxyUrl: 'https://proxy.example/secret',
+        browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, os: 'Win32' },
+        staticProxyCredentials: { username: 'fixture-user', password: 'fixture-password' }
+      }
     });
+    expect(JSON.stringify(repository.createJob.mock.calls)).not.toContain('fixture-password');
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('fixture-password');
     expect(result.agentToken).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -270,7 +280,9 @@ describe('本机任务持久化边界', () => {
         groupName: 'gpt账号注册',
         tagName: '申请gpt',
         proxyType: 'http',
-        dynamicProxyUrl: 'https://proxy.example/secret'
+        dynamicProxyUrl: 'https://proxy.example/secret',
+        browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, os: 'Win32' },
+        staticProxyCredentials: { username: 'fixture-user', password: 'fixture-password' }
       })
     };
     const service = new RechargeLocalService(
@@ -297,7 +309,11 @@ describe('本机任务持久化边界', () => {
     );
     expect(result).toMatchObject({
       mode: 'recheck',
-      bitBrowser: { localApiToken: 'b'.repeat(32) }
+      bitBrowser: {
+        localApiToken: 'b'.repeat(32),
+        browserOptions: { ...V2_RECHARGE_BROWSER_DEFAULTS, os: 'Win32' },
+        staticProxyCredentials: { username: 'fixture-user', password: 'fixture-password' }
+      }
     });
 
     repository.findJob.mockImplementation((_tx, jobId) =>

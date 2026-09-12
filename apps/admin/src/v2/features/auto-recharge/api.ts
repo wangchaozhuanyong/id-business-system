@@ -1,4 +1,5 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
+import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
   ImportV2RechargeAddressesResult,
   V2RechargeAddress,
@@ -7,6 +8,8 @@ import type {
   V2RechargeAddressStatus,
   V2RechargeJob,
   V2RechargeBitBrowserSettings,
+  V2RechargeBrowserCatalog,
+  V2RechargeBrowserCatalogAccess,
   UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeBitBrowserStart,
   V2RechargeBitBrowserLaunch,
@@ -25,6 +28,15 @@ export const rechargeApi = {
       http.get('/id-business-v2/auto-recharge/bitbrowser-settings', {
         signal: options.signal
       })
+    );
+  },
+  browserCatalogAccess(options: ApiRequestOptions = {}) {
+    return request<V2RechargeBrowserCatalogAccess>(
+      http.post(
+        '/id-business-v2/auto-recharge/bitbrowser-catalog-access',
+        {},
+        { signal: options.signal }
+      )
     );
   },
   updateBitBrowserSettings(input: UpdateV2RechargeBitBrowserSettingsInput) {
@@ -80,32 +92,33 @@ export function rechargeCallbackUrl(id: string) {
   ).toString();
 }
 
-async function connectorRequest(
-  connectorUrl: string,
-  path: string,
-  options: { token?: string; body?: object; method?: 'GET' | 'POST' } = {}
-) {
-  const response = await fetch(connectorUrl.replace(/\/$/, '') + path, {
-    method: options.method ?? (options.body ? 'POST' : 'GET'),
-    mode: 'cors',
-    cache: 'no-store',
-    credentials: 'omit',
-    redirect: 'error',
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.token ? { 'X-Auto-Recharge-Connector': options.token } : {})
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: AbortSignal.timeout(15_000)
-  });
-  const result = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok || result.ok !== true) throw new Error('本机连接器未接受请求');
-  return result;
-}
-
 export const rechargeConnectorApi = {
-  health(connectorUrl: string) {
-    return connectorRequest(connectorUrl, '/health');
+  async browserCatalog(
+    access: V2RechargeBrowserCatalogAccess,
+    signal: AbortSignal
+  ): Promise<V2RechargeBrowserCatalog> {
+    const result = await connectorRequest(access.connectorUrl, '/browser/catalog', {
+      token: access.connectorToken,
+      body: { localApiUrl: access.localApiUrl, localApiToken: access.localApiToken },
+      signal,
+      timeout: 60_000
+    });
+    const validOptions = (value: unknown): value is V2RechargeBrowserCatalog['groups'] =>
+      Array.isArray(value) &&
+      value.length <= 2000 &&
+      value.every(
+        (item) =>
+          item &&
+          typeof item.id === 'string' &&
+          typeof item.name === 'string' &&
+          item.name.length <= 80
+      );
+    if (!validOptions(result.groups) || !validOptions(result.tags))
+      throw new Error('分组与标签列表格式无效，请刷新重试');
+    return { groups: result.groups, tags: result.tags };
+  },
+  async health(connectorUrl: string, signal?: AbortSignal) {
+    return requireConnectorHealth(await connectorRequest(connectorUrl, '/health', { signal }));
   },
   start(connectorUrl: string, connectorToken: string, body: object) {
     return connectorRequest(connectorUrl, '/jobs', { token: connectorToken, body });

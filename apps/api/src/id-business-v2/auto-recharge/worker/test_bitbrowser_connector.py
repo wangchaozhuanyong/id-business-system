@@ -93,13 +93,15 @@ class BitBrowserConnectorTests(unittest.TestCase):
             calls.append((path, body))
             if path == "/group/list":
                 return {"list": [{"id": "group_12345678", "groupName": "gpt账号注册"}]}
-            return {"id": "profile_12345678"}
+            if path == "/browserTag/list":
+                return {"data": [{"id": "a" * 32, "tagName": "申请gpt"}]}
+            return {"id": "b" * 32}
 
         client.post = post
         profile_id = client.create_profile(payload()["bitBrowser"], "申请gpt-001")
 
-        self.assertEqual(profile_id, "profile_12345678")
-        body = calls[1][1]
+        self.assertEqual(profile_id, "b" * 32)
+        body = calls[2][1]
         self.assertEqual(body["url"], "https://chatgpt.com")
         self.assertEqual(body["name"], "申请gpt-001")
         self.assertEqual(body["remark"], "申请gpt")
@@ -110,6 +112,9 @@ class BitBrowserConnectorTests(unittest.TestCase):
         self.assertFalse(body["browserFingerPrint"]["isIpCreateLanguage"])
         self.assertEqual(body["browserFingerPrint"]["languages"], "zh-CN")
         self.assertFalse(body["browserFingerPrint"]["isIpCreateDisplayLanguage"])
+        self.assertEqual(calls[3], ("/browserTag/updateRelation", {
+            "browserId": profile_id, "addTagIds": ["a" * 32], "removeTagIds": []
+        }))
 
     def test_currency_amount_and_tax_guards_run_before_payment(self):
         job = connector.LocalJob(payload())

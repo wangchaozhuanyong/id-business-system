@@ -84,6 +84,29 @@
 .recharge-billing h3 {
   margin-top: 4px;
 }
+.recharge-account-email {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.recharge-settings-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+  overflow-wrap: anywhere;
+}
+.recharge-settings-summary > div {
+  min-width: 0;
+}
+.recharge-settings-summary strong {
+  font-size: 13px;
+}
 .recharge-fixed-address {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -138,38 +161,6 @@
 .recharge-authorization :deep(.el-checkbox) {
   height: auto;
   white-space: normal;
-}
-.recharge-fixed-settings {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  margin: 4px 0 18px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-}
-.recharge-fixed-settings > div {
-  display: grid;
-  grid-template-columns: 118px minmax(0, 1fr);
-  gap: 12px;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.recharge-fixed-settings span {
-  color: var(--el-text-color-secondary);
-}
-.recharge-fixed-settings strong {
-  font-weight: 500;
-}
-.recharge-drawer-actions {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 0 4px;
-  margin-top: 16px;
-  background: var(--el-bg-color);
 }
 .recharge-json-row {
   display: grid;

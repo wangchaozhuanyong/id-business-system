@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import type { UpdateV2RechargeBitBrowserSettingsInput } from '@apple-business/shared';
 import { object } from './recharge-validation';
+import { validateBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
 
 const proxyTypes = ['http', 'https', 'socks5'] as const;
 const allowedKeys = new Set([
@@ -11,7 +12,10 @@ const allowedKeys = new Set([
   'groupName',
   'tagName',
   'proxyType',
-  'dynamicProxyUrl'
+  'dynamicProxyUrl',
+  'browserOptions',
+  'staticProxyCredentials',
+  'clearStaticProxyCredentials'
 ]);
 const hasControlCharacter = (value: string) =>
   [...value].some((character) => {
@@ -94,6 +98,15 @@ export function validateRechargeBitBrowserSettings(
   if (!proxyTypes.includes(input.proxyType as (typeof proxyTypes)[number])) {
     throw new BadRequestException('代理协议无效');
   }
+  if (
+    input.clearStaticProxyCredentials !== undefined &&
+    typeof input.clearStaticProxyCredentials !== 'boolean'
+  ) {
+    throw new BadRequestException('清除固定代理凭据选项无效');
+  }
+  if (input.clearStaticProxyCredentials && input.staticProxyCredentials !== undefined) {
+    throw new BadRequestException('不能同时替换和清除固定代理凭据');
+  }
   return {
     connectorUrl: localUrl(input.connectorUrl, '本机连接器地址'),
     localApiUrl: localUrl(input.localApiUrl, '比特浏览器 Local API 地址'),
@@ -102,6 +115,10 @@ export function validateRechargeBitBrowserSettings(
     groupName: plainText(input.groupName, '窗口分组', 80),
     tagName: plainText(input.tagName, '标签／窗口备注', 80),
     proxyType: input.proxyType as UpdateV2RechargeBitBrowserSettingsInput['proxyType'],
-    dynamicProxyUrl: dynamicProxyUrl(input.dynamicProxyUrl)
+    dynamicProxyUrl: dynamicProxyUrl(input.dynamicProxyUrl),
+    browserOptions:
+      input.browserOptions === undefined ? undefined : validateBrowserOptions(input.browserOptions),
+    staticProxyCredentials: validateStaticCredentials(input.staticProxyCredentials),
+    clearStaticProxyCredentials: input.clearStaticProxyCredentials as boolean | undefined
   };
 }

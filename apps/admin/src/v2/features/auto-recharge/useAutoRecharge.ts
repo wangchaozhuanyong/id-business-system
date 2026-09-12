@@ -1,6 +1,5 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import type {
-  UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeAddress,
   V2RechargeAddressList,
   V2RechargeBitBrowserLaunch,
@@ -14,6 +13,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { rechargeDetailsReady } from './recharge-form';
+import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 
 const activeStates = new Set([
   'running',
@@ -25,14 +25,6 @@ const activeStates = new Set([
 const requiresPolling = (job: V2RechargeJob) =>
   ['running', 'awaiting_human_verification', 'confirming'].includes(job.state);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export type ConnectorStatus = 'unknown' | 'checking' | 'online' | 'offline';
-
-export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettingsInput {
-  localApiToken: string;
-  connectorToken: string;
-  dynamicProxyUrl: string;
-}
 
 const emptyDetails = (): V2RechargeDetails => ({
   number: '',
@@ -46,17 +38,6 @@ const emptyDetails = (): V2RechargeDetails => ({
   city: '',
   state: '',
   postal_code: ''
-});
-
-const emptySettings = (): BitBrowserSettingsForm => ({
-  connectorUrl: 'http://127.0.0.1:55321',
-  localApiUrl: 'http://127.0.0.1:54345',
-  localApiToken: '',
-  connectorToken: '',
-  groupName: 'gpt账号注册',
-  tagName: '申请gpt',
-  proxyType: 'http',
-  dynamicProxyUrl: ''
 });
 
 function registrationEmail(value: unknown): string {
@@ -97,7 +78,9 @@ function settingsReady(settings: V2RechargeBitBrowserSettings | undefined) {
   return Boolean(
     settings?.localApiTokenConfigured &&
     settings.connectorTokenConfigured &&
-    settings.dynamicProxyUrlConfigured
+    (settings.browserOptions?.proxyMode === 'static'
+      ? Boolean(settings.browserOptions.staticHost && settings.browserOptions.staticPort)
+      : settings.dynamicProxyUrlConfigured)
   );
 }
 
@@ -118,9 +101,6 @@ export function useAutoRecharge() {
   const importing = ref(false);
   const connectorStatus = ref<ConnectorStatus>('unknown');
   const connectorMessage = ref('尚未检测本机连接器');
-  const settingsOpen = ref(false);
-  const settingsSaving = ref(false);
-  const settingsForm = ref<BitBrowserSettingsForm>(emptySettings());
   const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
   const paymentJobId = ref('');
   let disposed = false;
@@ -146,13 +126,8 @@ export function useAutoRecharge() {
     query: ({ signal }) =>
       rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'unused' }, { signal })
   });
-  const settingsQuery = useV2ModuleQuery<V2RechargeBitBrowserSettings>({
-    moduleKey: 'auto-recharge',
-    scope: 'auto-recharge',
-    key: () => 'auto-recharge-bitbrowser-settings',
-    keepPreviousData: true,
-    query: ({ signal }) => rechargeApi.getBitBrowserSettings({ signal })
-  });
+  const browserSettings = useRechargeBrowserSettings(connectorStatus, connectorMessage);
+  const { settingsQuery } = browserSettings;
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() => addressQuery.data.value?.items ?? []);
@@ -238,24 +213,6 @@ export function useAutoRecharge() {
       });
     },
     { flush: 'sync' }
-  );
-
-  watch(
-    () => settingsQuery.data.value,
-    (settings) => {
-      if (!settings || settingsSaving.value) return;
-      settingsForm.value = {
-        connectorUrl: settings.connectorUrl,
-        localApiUrl: settings.localApiUrl,
-        localApiToken: '',
-        connectorToken: '',
-        groupName: settings.groupName,
-        tagName: settings.tagName,
-        proxyType: settings.proxyType,
-        dynamicProxyUrl: ''
-      };
-    },
-    { immediate: true }
   );
 
   watch(
@@ -350,9 +307,10 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     const id = crypto.randomUUID();
-    currentId.value = id;
     let launch: V2RechargeBitBrowserLaunch | null = null;
     try {
+      await browserSettings.checkSavedConnection();
+      if (disposed) return;
       launch = await rechargeApi.startBitBrowser({
         id,
         plan: plan.value,
@@ -362,6 +320,7 @@ export function useAutoRecharge() {
         maxAmount: maxAmount.value,
         authorizeSinglePayment: true
       });
+      currentId.value = id;
       paymentJobId.value = id;
       localAccess.value = {
         connectorUrl: launch.connectorUrl,
@@ -431,6 +390,8 @@ export function useAutoRecharge() {
     const id = crypto.randomUUID();
     let launch: V2RechargeBitBrowserRecheckLaunch | null = null;
     try {
+      await browserSettings.checkSavedConnection();
+      if (disposed) return;
       launch = await rechargeApi.recheckBitBrowser({
         id,
         sourceJobId: source.id,
@@ -523,47 +484,6 @@ export function useAutoRecharge() {
     }
   }
 
-  async function testConnector() {
-    connectorStatus.value = 'checking';
-    connectorMessage.value = '正在检测本机连接器';
-    try {
-      await rechargeConnectorApi.health(settingsForm.value.connectorUrl);
-      connectorStatus.value = 'online';
-      connectorMessage.value = '本机连接器已就绪';
-    } catch {
-      connectorStatus.value = 'offline';
-      connectorMessage.value = '本机连接器不可用，请先启动连接器并允许当前网站来源';
-    }
-  }
-
-  async function saveSettings() {
-    const stored = settingsQuery.data.value;
-    if (
-      (!stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
-      (!stored?.connectorTokenConfigured && !settingsForm.value.connectorToken) ||
-      (!stored?.dynamicProxyUrlConfigured && !settingsForm.value.dynamicProxyUrl)
-    ) {
-      error.value = '首次保存请填写 Local API Token、本机连接密钥和动态 IP 提取链接。';
-      return;
-    }
-    settingsSaving.value = true;
-    error.value = '';
-    try {
-      const updated = await rechargeApi.updateBitBrowserSettings({
-        ...settingsForm.value,
-        localApiToken: settingsForm.value.localApiToken || undefined,
-        connectorToken: settingsForm.value.connectorToken || undefined,
-        dynamicProxyUrl: settingsForm.value.dynamicProxyUrl || undefined
-      });
-      settingsQuery.data.value = updated;
-      settingsOpen.value = false;
-    } catch (cause) {
-      error.value = getApiErrorMessage(cause);
-    } finally {
-      settingsSaving.value = false;
-    }
-  }
-
   onScopeDispose(() => {
     disposed = true;
     importGeneration++;
@@ -572,13 +492,11 @@ export function useAutoRecharge() {
     localAccess.value = null;
     paymentJobId.value = '';
     Object.assign(details.value, emptyDetails());
-    Object.assign(settingsForm.value, emptySettings());
   });
 
   return {
     query,
     addressQuery,
-    settingsQuery,
     jobs,
     availableAddresses,
     selectedAddress,
@@ -603,12 +521,9 @@ export function useAutoRecharge() {
     canRecheck,
     needsHuman,
     workflowMessage,
-    settingsOpen,
-    settingsSaving,
-    settingsForm,
+    browserSettings,
+    ...browserSettings,
     currentSettingsReady,
-    connectorStatus,
-    connectorMessage,
     acceptSession,
     updateJsonInput,
     importJson,
@@ -617,8 +532,6 @@ export function useAutoRecharge() {
     selectJob,
     resume,
     cancel,
-    refresh,
-    testConnector,
-    saveSettings
+    refresh
   };
 }

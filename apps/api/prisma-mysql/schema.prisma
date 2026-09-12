@@ -2441,6 +2441,8 @@ model IdBusinessV2RechargeBrowserSetting {
   proxyType                String   @default("http") @map("proxy_type") @db.VarChar(12)
   dynamicProxyUrlEncrypted String?  @map("dynamic_proxy_url_encrypted") @db.Text
   dynamicProxyUrlMask      String?  @map("dynamic_proxy_url_mask") @db.VarChar(120)
+  browserOptions           Json?    @map("browser_options")
+  staticProxyCredentialsEncrypted String? @map("static_proxy_credentials_encrypted") @db.Text
   createdAt                DateTime @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt                DateTime @updatedAt @map("updated_at") @db.DateTime(6)
 

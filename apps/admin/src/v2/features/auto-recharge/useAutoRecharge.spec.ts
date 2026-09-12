@@ -1,4 +1,5 @@
 import { effectScope, nextTick, ref } from 'vue';
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   V2RechargeAddress,
@@ -29,6 +30,7 @@ const mock = vi.hoisted(() => ({
   connectorResume: vi.fn(),
   connectorCancel: vi.fn(),
   connectorHealth: vi.fn(),
+  connectorCatalog: vi.fn(),
   callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`)
 }));
 
@@ -67,6 +69,10 @@ vi.mock('./api', () => ({
 }));
 
 vi.mock('@/api/client', () => ({ getApiErrorMessage: (cause: Error) => cause.message }));
+vi.mock('./useRechargeBrowserCatalog', () => ({
+  useRechargeBrowserCatalog: () => ({ selectionError: ref('') }),
+  readBrowserCatalog: mock.connectorCatalog
+}));
 
 const address: V2RechargeAddress = {
   id: '22222222-2222-4222-8222-222222222222',
@@ -183,6 +189,10 @@ beforeEach(() => {
   mock.connectorResume.mockResolvedValue({ ok: true });
   mock.connectorCancel.mockResolvedValue({ ok: true });
   mock.connectorHealth.mockResolvedValue({ ok: true });
+  mock.connectorCatalog.mockResolvedValue({
+    groups: [{ id: 'g', name: settings.groupName }],
+    tags: [{ id: 't', name: settings.tagName }]
+  });
   mock.cancelBitBrowser.mockResolvedValue({ id: launch.id });
   mock.abandonUnreceivedBitBrowser.mockResolvedValue({ id: launch.id });
   mock.bitBrowserAccess.mockResolvedValue({
@@ -271,6 +281,49 @@ describe('本机比特浏览器自动充值', () => {
     expect(flow.details.value.expiry).toBe('');
     expect(flow.details.value.cvc).toBe('');
     expect(flow.selectedAddressId.value).toBe('');
+  });
+
+  it('连接预检失败时保留资料并显示原因，不建记录也不发送充值', async () => {
+    fillForm();
+    mock.connectorCatalog.mockRejectedValueOnce(new Error('本机连接密钥不匹配'));
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.abandonUnreceivedBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('本机连接密钥不匹配');
+    expect(flow.connectorMessage.value).toBe('本机连接密钥不匹配');
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.sessionJson.value).toBe(sessionJson());
+  });
+
+  it('比特分组或标签不唯一时不创建任务，检测后重试只创建一次', async () => {
+    fillForm();
+    mock.connectorCatalog.mockResolvedValueOnce({ groups: [], tags: [] });
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('窗口分组不存在或重名');
+    await flow.start();
+    expect(mock.startBitBrowser).toHaveBeenCalledOnce();
+    expect(mock.connectorStart).toHaveBeenCalledOnce();
+  });
+
+  it('离开页面时中止未完成预检，不在后台创建任务', async () => {
+    fillForm();
+    let finish!: (value: unknown) => void;
+    mock.connectorCatalog.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = flow.start();
+    scope.stop();
+    finish({
+      groups: [{ id: 'g', name: settings.groupName }],
+      tags: [{ id: 't', name: settings.tagName }]
+    });
+    await pending;
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
   });
 
   it('本机回执丢失时先查接收状态，确认未接收才结束任务', async () => {
@@ -414,6 +467,89 @@ describe('本机比特浏览器自动充值', () => {
         dynamicProxyUrl: undefined
       })
     );
+  });
+
+  it('固定代理无需动态链接，保存窗口选项和凭据后清除输入', async () => {
+    const browserOptions = {
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      proxyMode: 'static' as const,
+      staticHost: 'proxy.example',
+      staticPort: 1080,
+      os: 'Win32' as const,
+      syncCookies: false
+    };
+    storedSettings.value = { ...settings, dynamicProxyUrlConfigured: false, browserOptions };
+    await nextTick();
+    fillForm();
+    expect(flow.canStart.value).toBe(true);
+    flow.setSettingsOpen(true);
+    flow.settingsForm.value.staticProxyUsername = 'fixture-user';
+    flow.settingsForm.value.staticProxyPassword = 'fixture-password';
+    mock.updateBitBrowserSettings.mockResolvedValueOnce({
+      ...storedSettings.value,
+      staticProxyCredentialsConfigured: true
+    });
+    await flow.saveSettings();
+    expect(mock.updateBitBrowserSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserOptions,
+        dynamicProxyUrl: undefined,
+        staticProxyCredentials: { username: 'fixture-user', password: 'fixture-password' }
+      })
+    );
+    expect(mock.updateBitBrowserSettings.mock.calls[0]![0]).not.toHaveProperty(
+      'staticProxyPassword'
+    );
+    expect(flow.settingsForm.value.staticProxyPassword).toBe('');
+    expect(flow.settingsForm.value.browserOptions).toEqual(browserOptions);
+  });
+
+  it('设置刷新不覆盖未保存的代理链接，放弃后恢复最新设置', async () => {
+    flow.setSettingsOpen(true);
+    flow.settingsForm.value.dynamicProxyUrl = 'https://new-proxy.example/extract';
+    storedSettings.value = { ...settings, groupName: '后台更新的分组' };
+    await nextTick();
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('https://new-proxy.example/extract');
+    expect(flow.settingsDirty.value).toBe(true);
+    flow.setSettingsOpen(false);
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('');
+    expect(flow.settingsForm.value.groupName).toBe('后台更新的分组');
+    expect(flow.settingsDirty.value).toBe(false);
+  });
+
+  it('设置保存失败留在抽屉并保留输入，重试成功后清除秘密输入', async () => {
+    flow.setSettingsOpen(true);
+    flow.settingsForm.value.dynamicProxyUrl = 'https://new-proxy.example/extract';
+    mock.updateBitBrowserSettings.mockRejectedValueOnce(new Error('设置保存失败'));
+    await flow.saveSettings();
+    expect(flow.settingsOpen.value).toBe(true);
+    expect(flow.settingsError.value).toBe('设置保存失败');
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('https://new-proxy.example/extract');
+    expect(flow.settingsDirty.value).toBe(true);
+    await flow.saveSettings();
+    expect(flow.settingsOpen.value).toBe(false);
+    expect(flow.settingsError.value).toBe('');
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('');
+    expect(flow.settingsDirty.value).toBe(false);
+  });
+
+  it('设置保存进行中不重复提交且不能关闭抽屉', async () => {
+    flow.setSettingsOpen(true);
+    let resolveSave!: (value: V2RechargeBitBrowserSettings) => void;
+    mock.updateBitBrowserSettings.mockImplementationOnce(
+      () =>
+        new Promise<V2RechargeBitBrowserSettings>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    const saving = flow.saveSettings();
+    await flow.saveSettings();
+    flow.setSettingsOpen(false);
+    expect(mock.updateBitBrowserSettings).toHaveBeenCalledTimes(1);
+    expect(flow.settingsOpen.value).toBe(true);
+    resolveSave(settings);
+    await saving;
+    expect(flow.settingsSaving.value).toBe(false);
   });
 
   it('离开页面时清除 JSON、卡资料和本机连接凭据', () => {

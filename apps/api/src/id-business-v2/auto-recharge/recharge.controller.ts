@@ -33,6 +33,11 @@ export class RechargeController {
   updateBitBrowserSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.settings.update(input, operator);
   }
+  @Post('bitbrowser-catalog-access')
+  @Header('Cache-Control', 'no-store')
+  bitBrowserCatalogAccess(@CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.catalogAccess(operator);
+  }
   @Get('jobs')
   @Header('Cache-Control', 'no-store')
   list(@CurrentUser() operator: AuthenticatedUser) {
