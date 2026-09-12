@@ -120,7 +120,7 @@ try {
         serverStartBody = request.postDataJSON();
         assert.equal(serverStartBody.plan, 'plus');
         assert.equal(serverStartBody.addressId, address.id);
-        assert.equal(serverStartBody.lockedCurrency, 'USD');
+        assert.equal(serverStartBody.lockedCurrency, 'PHP');
         assert.equal(serverStartBody.maxAmount, '30.00');
         assert.equal(serverStartBody.authorizeSinglePayment, true);
         assert.equal(JSON.stringify(serverStartBody).includes('5555555555554444'), false);
@@ -137,7 +137,7 @@ try {
             stage: 'connector_dispatch',
             addressId: address.id,
             window_name: serverStartBody.windowName,
-            locked_currency: 'USD',
+            locked_currency: 'PHP',
             max_amount: '30.00',
             payment_requests_sent: 0
           }
@@ -158,7 +158,7 @@ try {
           },
           address,
           safety: {
-            lockedCurrency: 'USD',
+            lockedCurrency: 'PHP',
             maxAmount: '30.00',
             maxAmountMinor: 3000,
             authorizeSinglePayment: true
@@ -229,7 +229,7 @@ try {
       }
       if (url.pathname.endsWith('/resume')) {
         connectorResumes += 1;
-        const money = { currency: 'USD', amount: '20.00', amount_minor: 2000 };
+        const money = { currency: 'PHP', amount: '20.00', amount_minor: 2000 };
         jobs[0].state = 'finished';
         jobs[0].result = {
           ...jobs[0].result,
@@ -240,7 +240,7 @@ try {
           quote: {
             plan: 'plus',
             today: money,
-            tax: { currency: 'USD', amount: '0.00', amount_minor: 0 },
+            tax: { currency: 'PHP', amount: '0.00', amount_minor: 0 },
             renewal: money,
             renewal_interval: 'monthly'
           },
