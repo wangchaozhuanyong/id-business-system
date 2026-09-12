@@ -19,7 +19,7 @@ const hasControlCharacter = (value: string) =>
   });
 
 export function amountMinor(value: unknown, currency: string) {
-  if (typeof value !== 'string' || !/^\d{1,9}(?:\.\d{1,2})?$/.test(value)) {
+  if (typeof value !== 'string' || !/^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(value)) {
     throw new BadRequestException('最高付款金额格式无效');
   }
   const places = zeroDecimalCurrencies.has(currency) ? 0 : 2;

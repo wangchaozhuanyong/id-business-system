@@ -174,7 +174,7 @@ export function useAutoRecharge() {
         selectedAddress.value &&
         windowName.value.trim() &&
         /^[A-Z]{3}$/.test(lockedCurrency.value) &&
-        /^\d{1,9}(?:\.\d{1,2})?$/.test(maxAmount.value) &&
+        /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value) &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
         currentSettingsReady.value
