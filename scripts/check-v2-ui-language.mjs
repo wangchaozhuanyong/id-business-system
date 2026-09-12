@@ -91,7 +91,11 @@ const approvedTokens = new Set(
 );
 const ignoredTemplateTags = new Set(['code', 'kbd', 'pre']);
 
-for (const file of walk(sourceRoot)) {
+const selectedRoots =
+  process.argv.length > 2
+    ? process.argv.slice(2).map((value) => path.resolve(rootDir, value))
+    : [sourceRoot];
+for (const file of selectedRoots.flatMap(walk)) {
   const projectPath = path.relative(rootDir, file);
   if (projectPath.includes('/testing/') || projectPath.endsWith('.spec.ts')) continue;
 
