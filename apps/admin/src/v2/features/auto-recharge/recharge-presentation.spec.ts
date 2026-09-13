@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  browserFailureLabel,
   currencyOptions,
   quotePlaceholder,
   statusLabel,
@@ -19,6 +20,14 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('加载重试与底层错误显示中文，不显示内部异常原文', () => {
+    expect(statusLabel('session_load_timeout')).toContain('等待时间');
+    expect(statusLabel('bitbrowser_profile_rebuilding')).toContain('重新创建');
+    expect(browserFailureLabel('TimeoutError')).toBe('等待超时');
+    expect(browserFailureLabel('Error', 'net::ERR_PROXY_CONNECTION_FAILED')).toBe('代理连接失败');
+    expect(browserFailureLabel('private=secret', 'private=secret')).toBe('浏览器操作异常');
+    expect(browserFailureLabel('constructor', 'constructor')).toBe('浏览器操作异常');
+  });
   it('默认将菲律宾比索放在首项并显示中文币种名称', () => {
     expect(currencyOptions[0]).toEqual({ value: 'PHP', label: '菲律宾比索（PHP）' });
     expect(currencyOptions.find((currency) => currency.value === 'USD')?.label).toBe('美元（USD）');

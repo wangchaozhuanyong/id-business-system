@@ -190,6 +190,17 @@ export function safeDocument(value: unknown): Record<string, unknown> {
       renewal_interval: quote.renewal_interval === 'monthly' ? 'monthly' : null
     };
   };
+  for (const [key, min, max] of [
+    ['session_attempt', 1, 3],
+    ['session_attempt_limit', 1, 3],
+    ['session_elapsed_seconds', 0, 600],
+    ['session_wait_seconds', 60, 600]
+  ] as const) {
+    if (Number.isSafeInteger(input[key]) && Number(input[key]) >= min && Number(input[key]) <= max)
+      result[key] = input[key];
+  }
+  if (['page_load', 'session_read', 'account_read'].includes(String(input.session_step)))
+    result.session_step = input.session_step;
   if (input.quote !== undefined) result.quote = cleanQuote(input.quote);
   if (input.initial_quote !== undefined) result.initial_quote = cleanQuote(input.initial_quote);
   if (input.quote_authority === 'official_checkout_response') {

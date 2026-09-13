@@ -3,8 +3,8 @@ import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCallback);
 const keyLength = 64;
-// Keep the iteration count stable so existing password hashes remain verifiable.
-const pbkdf2Iterations = 100_000;
+// Stored hashes carry their own work factor, so old passwords remain verifiable.
+const pbkdf2Iterations = 600_000;
 const pbkdf2Algorithm = 'pbkdf2-sha256';
 
 export async function hashPassword(password: string) {
@@ -15,6 +15,13 @@ export async function hashPassword(password: string) {
 }
 
 export async function verifyPassword(password: string, passwordHash: string) {
+  if (
+    !/^(?:pbkdf2-sha256\$[1-9][0-9]*\$[0-9a-f]{32}\$[0-9a-f]{128}|scrypt\$[0-9a-f]{32}\$[0-9a-f]{128})$/.test(
+      passwordHash
+    )
+  ) {
+    return false;
+  }
   const [algorithm, firstValue, secondValue, thirdValue] = passwordHash.split('$');
 
   if (algorithm === pbkdf2Algorithm && firstValue && secondValue && thirdValue) {
@@ -34,6 +41,14 @@ export async function verifyPassword(password: string, passwordHash: string) {
   }
 
   return false;
+}
+
+export function passwordNeedsRehash(passwordHash: string) {
+  const [algorithm, iterations] = passwordHash.split('$');
+  return (
+    algorithm === 'scrypt' ||
+    (algorithm === pbkdf2Algorithm && Number(iterations) < pbkdf2Iterations)
+  );
 }
 
 async function derivePbkdf2Key(

@@ -228,7 +228,7 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
-                   browser_context=None):
+                   browser_context=None, session_budget=None):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -254,6 +254,8 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
         "state_dir": state_dir,
         "browser": browser,
         "browser_context": browser_context,
+        "session_budget": session_budget,
+        "wait_seconds": wait_seconds,
     }
     record_path = checkout_record_path(state_dir, target.account_id, target_plan)
     if record_path.exists():
@@ -261,6 +263,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
         if (result.get("reason") == "existing_checkout_unavailable"
                 and not result.get("payment_attempted")
                 and not result.get("confirmation_requests_sent")):
+            browser_args["session_budget"] = None
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
     else:
         result = await run_browser(target, create=True, **browser_args)

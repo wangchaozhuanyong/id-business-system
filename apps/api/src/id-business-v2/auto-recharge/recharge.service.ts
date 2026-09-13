@@ -435,7 +435,6 @@ export class RechargeService {
     await this.worker('/jobs/' + id + '/cancel', {}, id, 'cancelled');
     return { id };
   }
-
   authorizeWorker(token: unknown) {
     const expected = process.env.AUTO_RECHARGE_WORKER_TOKEN ?? '';
     if (
@@ -446,7 +445,6 @@ export class RechargeService {
     )
       throw new ForbiddenException('执行器身份无效');
   }
-
   async callback(id: string, value: unknown) {
     if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
     const input = object(value);
@@ -588,6 +586,9 @@ export class RechargeService {
         await this.repository.updateJob(tx, id, {
           state,
           nonceHash,
+          ...(job.action === 'bitbrowser' && input.type === 'progress'
+            ? { leaseUntil: new Date(Date.now() + 45 * 60000) }
+            : {}),
           result: toV2JsonDocument({ ...object(job.result), ...report })
         });
         return { ok: true };

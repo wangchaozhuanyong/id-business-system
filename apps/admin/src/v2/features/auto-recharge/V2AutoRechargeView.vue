@@ -32,20 +32,6 @@
             <span>单账户 · 单窗口 · 单次付款</span>
           </div>
 
-          <div class="recharge-settings-summary">
-            <div>
-              <strong>当前代理 IP 与窗口配置</strong>
-              <p class="recharge-note">
-                {{ browserSettingsSummary(settingsQuery.data.value).proxy }}
-              </p>
-              <p class="recharge-note">
-                分组：{{ settingsQuery.data.value?.groupName || 'gpt账号注册' }} ·
-                {{ browserSettingsSummary(settingsQuery.data.value).languages }}
-              </p>
-            </div>
-            <el-button @click="setSettingsOpen(true)">修改代理 IP 与窗口设置</el-button>
-          </div>
-
           <el-form
             :model="details"
             :rules="rechargeRules"
@@ -281,7 +267,6 @@
 </template>
 
 <script setup lang="ts">
-import { browserSettingsSummary } from './recharge-browser-presentation';
 import { computed, ref } from 'vue';
 import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
@@ -301,7 +286,6 @@ const historyId = ref('');
 const {
   query,
   addressQuery,
-  settingsQuery,
   jobs,
   availableAddresses,
   selectedAddress,

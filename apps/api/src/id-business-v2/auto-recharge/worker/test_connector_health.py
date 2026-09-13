@@ -20,7 +20,7 @@ class ConnectorHealthTests(unittest.TestCase):
             handler.do_GET()
             handler.reply.assert_called_once_with(200, {
                 'ok': True, 'version': 2, 'service': 'id-business-v2-auto-recharge-connector',
-                'capabilities': ['browser-catalog', 'browser-options'], 'originAllowed': True, 'busy': False
+                'capabilities': ['browser-catalog', 'browser-options', 'session-load-retry'], 'originAllowed': True, 'busy': False
             })
             start.assert_not_called()
 

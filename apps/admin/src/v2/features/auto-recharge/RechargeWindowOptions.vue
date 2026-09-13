@@ -110,9 +110,13 @@
   </fieldset>
   <fieldset>
     <legend>同步选项</legend>
+    <p class="recharge-settings-note">
+      为保护账号登录态，标签页、Cookie、本地存储、数据库和授权信息同步固定关闭。
+    </p>
     <el-form-item label="标签页同步">
       <el-switch
-        v-model="options.syncTabs"
+        :model-value="false"
+        disabled
         aria-label="标签页同步"
         active-text="开启"
         inactive-text="关闭"
@@ -120,7 +124,8 @@
     </el-form-item>
     <el-form-item label="Cookie 同步">
       <el-switch
-        v-model="options.syncCookies"
+        :model-value="false"
+        disabled
         aria-label="Cookie 同步"
         active-text="开启"
         inactive-text="关闭"
@@ -128,7 +133,8 @@
     </el-form-item>
     <el-form-item label="本地存储同步">
       <el-switch
-        v-model="options.syncLocalStorage"
+        :model-value="false"
+        disabled
         aria-label="本地存储同步"
         active-text="开启"
         inactive-text="关闭"

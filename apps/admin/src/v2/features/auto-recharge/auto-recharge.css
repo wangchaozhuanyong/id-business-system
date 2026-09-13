@@ -88,25 +88,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.recharge-settings-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 24px;
-  padding: 12px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-  overflow-wrap: anywhere;
-}
-.recharge-settings-summary > div {
-  min-width: 0;
-}
-.recharge-settings-summary strong {
-  font-size: 13px;
-}
 .recharge-fixed-address {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

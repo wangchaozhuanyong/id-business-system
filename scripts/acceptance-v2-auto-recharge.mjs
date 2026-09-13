@@ -249,7 +249,7 @@ try {
             busy: false,
             originAllowed: true,
             service: 'id-business-v2-auto-recharge-connector',
-            capabilities: ['browser-catalog', 'browser-options']
+            capabilities: ['browser-catalog', 'browser-options', 'session-load-retry']
           })
         });
       if (url.pathname === '/browser/catalog') {
@@ -368,10 +368,16 @@ try {
 
     await page.goto(origin + '/v2/auto-recharge');
     await page.getByText('一键开通资料', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '修改代理 IP 与窗口设置', exact: true }).click();
+    assert.equal(
+      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).count(),
+      1
+    );
+    assert.equal(await page.locator('.recharge-panel .recharge-settings-summary').count(), 0);
+    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
     const settingsDrawer = page
       .locator('.v2-form-drawer')
       .filter({ has: page.locator('.recharge-settings-form') });
+    await settingsDrawer.getByText('当前代理 IP 与窗口配置', { exact: true }).waitFor();
     await settingsDrawer.getByText('本机连接器拒绝了请求', { exact: false }).waitFor();
     await settingsDrawer.getByRole('button', { name: '刷新分组与标签', exact: true }).click();
     await settingsDrawer.getByText('比特浏览器中暂无可选分组或标签，请添加后刷新。').waitFor();
@@ -412,21 +418,11 @@ try {
       .click();
     await settingsDrawer.getByRole('spinbutton', { name: '定位纬度', exact: true }).fill('3.1');
     await settingsDrawer.getByRole('spinbutton', { name: '定位经度', exact: true }).fill('101.7');
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '标签页同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: 'Cookie 同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '本地存储同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
+    for (const name of ['标签页同步', 'Cookie 同步', '本地存储同步']) {
+      const toggle = settingsDrawer.getByRole('switch', { name, exact: true });
+      assert.equal(await toggle.isDisabled(), true);
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+    }
     await settingsDrawer.screenshot({ path: resolve(evidence, `window-options-${width}.png`) });
     await settingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
     await page.getByRole('button', { name: '继续填写', exact: true }).click();
@@ -449,7 +445,7 @@ try {
     assert.equal(currentSettings.browserOptions.latitude, 3.1);
     assert.equal(currentSettings.browserOptions.longitude, 101.7);
     assert.equal(currentSettings.browserOptions.syncCookies, false);
-    await page.getByRole('button', { name: '修改代理 IP 与窗口设置', exact: true }).click();
+    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
     await settingsDrawer.getByText('测试代理分组', { exact: true }).waitFor();
     assert.equal(
       await settingsDrawer.getByLabel('动态 IP 提取链接', { exact: true }).inputValue(),
@@ -473,8 +469,10 @@ try {
       await settingsDrawer.getByLabel('代理密码', { exact: true }).fill('fixture-proxy-password');
       await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
       await settingsDrawer.waitFor({ state: 'hidden' });
-      await page.getByText('固定代理 · HTTP · 203.0.113.10:1080', { exact: true }).waitFor();
-      await page.getByRole('button', { name: '修改代理 IP 与窗口设置', exact: true }).click();
+      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
+      await settingsDrawer
+        .getByText('固定代理 · HTTP · 203.0.113.10:1080', { exact: true })
+        .waitFor();
       await settingsDrawer
         .getByRole('switch', { name: '清除代理凭据', exact: true })
         .waitFor({ state: 'attached' });
@@ -491,7 +489,7 @@ try {
       await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
       await settingsDrawer.waitFor({ state: 'hidden' });
       assert.equal(currentSettings.staticProxyCredentialsConfigured, false);
-      await page.getByRole('button', { name: '修改代理 IP 与窗口设置', exact: true }).click();
+      await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
       await settingsDrawer.getByLabel('固定代理主机', { exact: true }).waitFor();
     }
     await settingsDrawer

@@ -42,6 +42,7 @@ describe('audit log presentation', () => {
     expect(auditModuleLabel('auth')).toBe('认证与登录');
     expect(auditModuleLabel('unknown_internal_module')).toBe('其他业务模块');
     expect(auditActionLabel('change_password_failed')).toBe('修改密码失败');
+    expect(auditActionLabel('auth.password.rehash')).toBe('升级密码保护');
     expect(auditActionLabel('id_business_v2.order.update')).toBe('订单 · 更新');
     expect(auditActionLabel('unknown.action_value')).toBe('其他业务操作');
     expect(auditFieldLabel('password')).toBe('密码');
@@ -50,6 +51,12 @@ describe('audit log presentation', () => {
 
   it('translates known English notes and hides uncontrolled English-only values', () => {
     expect(auditRemarkLabel('User logged in', 'login')).toBe('用户登录成功');
+    expect(
+      auditRemarkLabel(
+        'Upgraded password hash work factor after authentication',
+        'auth.password.rehash'
+      )
+    ).toBe('登录验证通过，已升级密码保护');
     expect(auditRemarkLabel('Unknown internal message', 'employee.update')).toBe(
       '已记录“更新员工账户”'
     );

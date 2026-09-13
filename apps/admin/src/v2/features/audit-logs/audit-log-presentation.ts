@@ -45,6 +45,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   logout: '用户退出',
   change_password: '修改密码',
   change_password_failed: '修改密码失败',
+  'auth.password.rehash': '升级密码保护',
   'employee.create': '创建员工账户',
   'employee.update': '更新员工账户',
   'role.create': '创建角色',
@@ -94,6 +95,7 @@ const AUDIT_FIELD_LABELS: Record<string, string> = {
 const AUDIT_REMARK_LABELS: Record<string, string> = {
   'User logged in': '用户登录成功',
   'User logged out': '用户已退出登录',
+  'Upgraded password hash work factor after authentication': '登录验证通过，已升级密码保护',
   'User changed password and revoked active sessions': '用户已修改密码并撤销其他在线会话',
   'Password change failed without logging password material': '密码修改失败，未记录任何密码内容',
   'Sensitive action executed': '已执行敏感操作'

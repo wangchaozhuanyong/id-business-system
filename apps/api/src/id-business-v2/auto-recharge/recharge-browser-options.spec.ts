@@ -68,7 +68,22 @@ describe('窗口配置校验', () => {
     expect(storedBrowserOptions(null)).toEqual(V2_RECHARGE_BROWSER_DEFAULTS);
     expect(validateBrowserOptions(staticOptions)).toEqual(staticOptions);
   });
+  it('旧 JSON 设置补齐等待与重试默认值', () => {
+    const legacy = { ...staticOptions } as Record<string, unknown>;
+    delete legacy.sessionWaitMinutes;
+    delete legacy.sessionRetryLimit;
+    expect(storedBrowserOptions(legacy)).toEqual(staticOptions);
+    expect(
+      validateBrowserOptions({ ...legacy, sessionWaitMinutes: 10, sessionRetryLimit: 0 })
+    ).toMatchObject({ sessionWaitMinutes: 10, sessionRetryLimit: 0 });
+  });
   it.each([
+    { sessionWaitMinutes: 0 },
+    { sessionWaitMinutes: 11 },
+    { sessionWaitMinutes: 1.5 },
+    { sessionRetryLimit: -1 },
+    { sessionRetryLimit: 3 },
+    { sessionRetryLimit: true },
     { proxyMode: 'direct' },
     { os: 'Android' },
     { dynamicProvider: 'other' },
@@ -167,4 +182,15 @@ describe('窗口设置持久化与运行时', () => {
     expect(runtime.staticProxyCredentials).toBeUndefined();
     expect(f.encryption.decrypt).not.toHaveBeenCalledWith('encrypted:unused');
   });
+});
+
+it('normalizes legacy sync flags to protect session data', () => {
+  expect(
+    storedBrowserOptions({
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      syncTabs: true,
+      syncCookies: true,
+      syncLocalStorage: true
+    })
+  ).toMatchObject({ syncTabs: false, syncCookies: false, syncLocalStorage: false });
 });

@@ -9,13 +9,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from checkout_core import Stop
 
 DEFAULTS = {
+    "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
     "proxyMode": "dynamic", "staticHost": "", "staticPort": 8080,
     "dynamicProvider": "common", "refreshIp": True, "ipCheckService": "ip-api",
     "os": "MacIntel", "languageFromIp": False, "language": "zh-CN",
     "displayLanguageFromIp": False, "displayLanguage": "zh-CN",
     "timezoneFromIp": True, "timezone": "Asia/Kuala_Lumpur",
     "positionFromIp": True, "latitude": 0, "longitude": 0, "accuracy": 100,
-    "syncTabs": True, "syncCookies": True, "syncLocalStorage": True,
+    "syncTabs": False, "syncCookies": False, "syncLocalStorage": False,
 }
 ENUMS = {
     "proxyMode": {"dynamic", "static"},
@@ -30,9 +31,15 @@ def invalid():
 
 
 def validate_options(value):
-    options = dict(DEFAULTS) if value is None else value
+    if value is not None and not isinstance(value, dict):
+        invalid()
+    options = dict(DEFAULTS) if value is None else {
+        "sessionWaitMinutes": 2, "sessionRetryLimit": 2, **value}
     if not isinstance(options, dict) or set(options) != set(DEFAULTS):
         invalid()
+    for key, low, high in (("sessionWaitMinutes", 1, 10), ("sessionRetryLimit", 0, 2)):
+        if type(options[key]) is not int or not low <= options[key] <= high:
+            invalid()
     for key, choices in ENUMS.items():
         if not isinstance(options[key], str) or options[key] not in choices:
             invalid()
@@ -70,6 +77,8 @@ def validate_options(value):
         ZoneInfo(zone)
     except (ValueError, ZoneInfoNotFoundError):
         invalid()
+    # Old saved settings remain readable; login state is never synchronized.
+    options.update(syncTabs=False, syncCookies=False, syncLocalStorage=False)
     return dict(options)
 
 
@@ -115,7 +124,8 @@ def profile_options(settings):
         "proxyMethod": 3 if options["proxyMode"] == "dynamic" else 2,
         "proxyType": settings["proxyType"], "ipCheckService": options["ipCheckService"],
         "syncTabs": options["syncTabs"], "syncCookies": options["syncCookies"],
-        "syncLocalStorage": options["syncLocalStorage"], "browserFingerPrint": fingerprint,
+        "syncLocalStorage": options["syncLocalStorage"], "syncIndexedDb": False,
+        "syncAuthorization": False, "browserFingerPrint": fingerprint,
     }
     if options["proxyMode"] == "dynamic":
         result.update(dynamicIpUrl=settings["dynamicProxyUrl"],

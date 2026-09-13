@@ -21,6 +21,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 import bitbrowser_catalog
 import bitbrowser_options
+import bitbrowser_retry
 import attempt_ledger
 import browser_checkout
 import pay
@@ -47,7 +48,8 @@ SAFE_PUBLIC_KEYS = set(
     "payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code "
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
-    "recheck_only".split()
+    "recheck_only error_type last_reason session_attempt session_attempt_limit "
+    "session_elapsed_seconds session_wait_seconds session_step".split()
 )
 
 
@@ -157,6 +159,13 @@ class BitBrowserClient:
         return profile_id
 
     def open_profile(self, profile_id):
+        # Verify the saved settings before a browser can receive a login session.
+        detail = self.post("/browser/detail", {"id": profile_id})
+        if (not isinstance(detail, dict) or detail.get("id") != profile_id
+                or any(detail.get(key) is not False for key in (
+                    "syncTabs", "syncCookies", "syncLocalStorage",
+                    "syncIndexedDb", "syncAuthorization"))):
+            raise Stop("bitbrowser_profile_sync_unverified")
         data = self.post("/browser/open", {"id": profile_id, "queue": True})
         endpoint = (data.get("ws") or data.get("http")) if isinstance(data, dict) else None
         if not isinstance(endpoint, str) or not endpoint.startswith(("ws://", "http://")):
@@ -267,6 +276,12 @@ class LocalJob:
         self.profile_id = None
         self.payment_request_sent = False
         self.waiting_for_user = False
+        self.initial_session_verified = False
+        self.session_info = {}
+
+    def check_cancelled(self):
+        if self.cancelled:
+            raise Stop("operation_cancelled")
 
     def signal_resume(self):
         self.resume_event.set()
@@ -276,13 +291,18 @@ class LocalJob:
         self.resume_event.set()
 
     def progress(self, stage, **details):
-        if self.cancelled:
-            raise Stop("operation_cancelled")
+        self.check_cancelled()
+        if stage == "session_verified":
+            self.initial_session_verified = True
+        self.session_info.update({key: value for key, value in details.items() if key in self.session_info})
         if stage == "payment_request_sending":
             self.payment_request_sent = True
         self.callback.send({"type": "progress", "result": public_result({
             "status": "running",
             "stage": stage,
+            "reason": None,
+            "user_action_required": False,
+            **self.session_info,
             "browser_profile_id": self.profile_id,
             "payment_attempted": self.payment_request_sent,
             "payment_requests_sent": 1 if self.payment_request_sent else 0,
@@ -304,8 +324,15 @@ class LocalJob:
                 "payment_attempted": self.payment_request_sent,
                 "payment_requests_sent": 1 if self.payment_request_sent else 0,
             }})
-            completed = await asyncio.to_thread(
-                self.resume_event.wait, min(max(seconds, 1), 1800))
+            import time
+            deadline = time.monotonic() + min(max(seconds, 1), 1800)
+            completed = False
+            while time.monotonic() < deadline:
+                completed = await asyncio.to_thread(self.resume_event.wait, min(10, deadline - time.monotonic()))
+                self.check_cancelled()
+                if completed:
+                    break
+                self.progress(reason, reason=reason, user_action_required=True)
         finally:
             self.waiting_for_user = False
         if self.cancelled:
@@ -387,29 +414,9 @@ class LocalJob:
 
         bit = self.payload["bitBrowser"]
         client = BitBrowserClient(bit["localApiUrl"], bit["localApiToken"])
-        self.progress("bitbrowser_group")
-        self.profile_id = await asyncio.to_thread(
-            client.create_profile, bit, self.payload["windowName"].strip())
-        self.progress("bitbrowser_profile_created", browser_profile_id=self.profile_id)
-        endpoint = await asyncio.to_thread(client.open_profile, self.profile_id)
-        self.progress("bitbrowser_profile_opened", browser_profile_id=self.profile_id)
-
         from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.connect_over_cdp(endpoint)
-            if not browser.contexts:
-                raise Stop("bitbrowser_context_missing")
-            self.context = browser.contexts[0]
-            if self.payload["mode"] == "recheck":
-                with payment_state.PaymentLedger(
-                        self.root, target.account_id, target_plan=self.payload["plan"]) as ledger:
-                    result = await payment_recovery.recheck_in_context(
-                        self.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
-                    return pay.include_payment_record(result, ledger)
-            return await pay.run_flow(
-                target, self.root, self.payload["plan"], details_reader=self.details,
-                confirmer=self.confirm, wait_seconds=1800, poll_count=6, poll_interval=20,
-                browser_context=self.context)
+            return await bitbrowser_retry.execute_profiles(self, client, target, playwright)
 
     def run(self):
         original_atomic = attempt_ledger.atomic_json
@@ -552,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "version": 2,
                                     "service": "id-business-v2-auto-recharge-connector",
-                                    "capabilities": ["browser-catalog", "browser-options"],
+                                    "capabilities": ["browser-catalog", "browser-options", "session-load-retry"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)

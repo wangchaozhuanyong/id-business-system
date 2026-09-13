@@ -2,7 +2,10 @@ FROM python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright HOME=/tmp
 COPY apps/api/src/id-business-v2/auto-recharge/worker/requirements.lock.txt ./
-RUN pip install --no-cache-dir -r requirements.lock.txt \
+COPY scripts/audit-python-dependencies.py /opt/security/audit-python-dependencies.py
+RUN pip install --no-cache-dir pip==26.2.1 \
+  && pip install --no-cache-dir -r requirements.lock.txt \
+  && pip check \
   && python -m playwright install --with-deps chromium \
   && apt-get install -y --no-install-recommends xauth \
   && groupadd --gid 10001 recharge \
@@ -10,6 +13,8 @@ RUN pip install --no-cache-dir -r requirements.lock.txt \
   && chmod -R a+rX /ms-playwright \
   && rm -rf /var/lib/apt/lists/* /root/.cache
 COPY --chown=recharge:recharge apps/api/src/id-business-v2/auto-recharge/worker/ ./
+RUN python /opt/security/audit-python-dependencies.py --python /usr/local/bin/python \
+  --output /opt/security/python-dependencies.json
 USER recharge
 EXPOSE 8051
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8051/health',timeout=3)"
