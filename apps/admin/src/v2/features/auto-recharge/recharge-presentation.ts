@@ -48,7 +48,16 @@ const labels: Record<string, string> = {
   confirming: '正在提交本次付款',
   finished: '本次操作已结束',
   unknown: '结果待核验',
-  session_restore: '核对官网会话',
+  session_restore: '正在加载官网并核对账号',
+  page_load: '加载官网页面',
+  session_read: '读取官网会话',
+  account_read: '核对官网账号',
+  session_load_timeout: '代理加载超过本轮等待时间',
+  session_network_error: '官网会话网络请求失败',
+  session_retries_exhausted: '已达到窗口尝试上限，失败窗口已清理；请检查代理连接后再试',
+  bitbrowser_profile_cleanup: '正在关闭并清理本次失败窗口',
+  bitbrowser_profile_rebuilding: '正在重新创建窗口',
+  bitbrowser_cleanup_unverified: '未能确认失败窗口已安全清理，已停止重建，请在比特浏览器检查该窗口',
   session_verified: '账户核对通过',
   existing_checkout_read: '读取原结算',
   plan_selection: '选择官网套餐',
@@ -193,4 +202,30 @@ export function paymentStatusLabel(job: V2RechargeJob): string {
   if (job.state === 'unknown' || job.result.payment_attempted || job.result.payment_outcome)
     return '付款结果待核验';
   return '未尝试付款';
+}
+
+export function browserFailureLabel(type?: string, code?: string): string {
+  const types: Record<string, string> = {
+    TimeoutError: '等待超时',
+    TargetClosedError: '浏览器窗口或连接已关闭',
+    Error: '浏览器操作异常',
+    TypeError: '浏览器请求异常',
+    UnexpectedError: '未识别的浏览器异常'
+  };
+  const codes: Record<string, string> = {
+    'net::ERR_TIMED_OUT': '网络响应超时',
+    'net::ERR_CONNECTION_TIMED_OUT': '连接超时',
+    'net::ERR_CONNECTION_RESET': '连接被重置',
+    'net::ERR_CONNECTION_CLOSED': '连接已关闭',
+    'net::ERR_PROXY_CONNECTION_FAILED': '代理连接失败',
+    'net::ERR_TUNNEL_CONNECTION_FAILED': '代理通道连接失败',
+    'net::ERR_NAME_NOT_RESOLVED': '域名解析失败',
+    'net::ERR_NETWORK_CHANGED': '网络发生切换',
+    'net::ERR_EMPTY_RESPONSE': '网络未返回内容',
+    'net::ERR_CONNECTION_REFUSED': '连接被拒绝',
+    'net::ERR_INTERNET_DISCONNECTED': '网络已断开'
+  };
+  if (code && Object.hasOwn(codes, code)) return codes[code];
+  if (type && Object.hasOwn(types, type)) return types[type];
+  return '浏览器操作异常';
 }

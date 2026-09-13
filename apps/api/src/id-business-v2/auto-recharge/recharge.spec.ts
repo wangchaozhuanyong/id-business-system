@@ -56,6 +56,29 @@ const quote = {
 };
 
 describe('recharge input and durable evidence', () => {
+  it('只保留范围内的会话进度与脱敏错误', () => {
+    const progress = {
+      session_attempt: 2,
+      session_attempt_limit: 3,
+      session_elapsed_seconds: 115,
+      session_wait_seconds: 120,
+      session_step: 'account_read',
+      error_type: 'TimeoutError',
+      browser_error_code: 'net::ERR_TIMED_OUT'
+    };
+    expect(safeDocument({ ...progress, rawError: 'private', sessionJson: 'private' })).toEqual(
+      progress
+    );
+    expect(
+      safeDocument({
+        session_attempt: 4,
+        session_attempt_limit: 0,
+        session_elapsed_seconds: -1,
+        session_wait_seconds: 601,
+        session_step: 'private'
+      })
+    ).toEqual({});
+  });
   it('preserves only bounded selection diagnostics across the API boundary', () => {
     const diagnostics = {
       step: 'pricing_page',
@@ -244,6 +267,24 @@ describe('single worker dispatch and confirmation', () => {
     vi.unstubAllEnvs();
   });
 
+  it('会话等待进度续期，结束事件不续期', async () => {
+    const now = Date.now();
+    active.mockResolvedValue({ id, action: 'bitbrowser', state: 'running', result: {} } as never);
+    await service.callback(id, {
+      type: 'progress',
+      result: { stage: 'session_restore', session_elapsed_seconds: 110 }
+    });
+    const changed = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+    expect(changed.leaseUntil.getTime()).toBeGreaterThanOrEqual(now + 45 * 60000);
+    expect(changed.result.session_elapsed_seconds).toBe(110);
+    await service.callback(id, {
+      type: 'finished',
+      result: { status: 'blocked', reason: 'session_retries_exhausted' }
+    });
+    expect(tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data).not.toHaveProperty(
+      'leaseUntil'
+    );
+  });
   it('persists the job and audit before sending exactly one worker command', async () => {
     await service.start(input(), operator);
     expect(tx.idBusinessV2RechargeJob.create).toHaveBeenCalledOnce();

@@ -207,6 +207,26 @@ beforeEach(() => {
 afterEach(() => scope.stop());
 
 describe('本机比特浏览器自动充值', () => {
+  it('未收到本机取消确认时不把服务端任务伪装成已结束', async () => {
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'running',
+        result: { stage: 'session_restore', payment_requests_sent: 0 },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    await nextTick();
+    mock.connectorCancel.mockRejectedValueOnce(new Error('连接器暂时无响应'));
+    await flow.cancel();
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('连接器暂时无响应');
+    await flow.cancel();
+    expect(mock.cancelBitBrowser).toHaveBeenCalledWith(launch.id);
+  });
   it('粘贴 JSON 后自动载入注册邮箱，默认 Plus 且不启动任务', () => {
     flow.updateJsonInput(sessionJson());
     expect(flow.plan.value).toBe('plus');

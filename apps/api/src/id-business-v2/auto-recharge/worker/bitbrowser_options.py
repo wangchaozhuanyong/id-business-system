@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from checkout_core import Stop
 
 DEFAULTS = {
+    "sessionWaitMinutes": 2, "sessionRetryLimit": 2,
     "proxyMode": "dynamic", "staticHost": "", "staticPort": 8080,
     "dynamicProvider": "common", "refreshIp": True, "ipCheckService": "ip-api",
     "os": "MacIntel", "languageFromIp": False, "language": "zh-CN",
@@ -30,9 +31,15 @@ def invalid():
 
 
 def validate_options(value):
-    options = dict(DEFAULTS) if value is None else value
+    if value is not None and not isinstance(value, dict):
+        invalid()
+    options = dict(DEFAULTS) if value is None else {
+        "sessionWaitMinutes": 2, "sessionRetryLimit": 2, **value}
     if not isinstance(options, dict) or set(options) != set(DEFAULTS):
         invalid()
+    for key, low, high in (("sessionWaitMinutes", 1, 10), ("sessionRetryLimit", 0, 2)):
+        if type(options[key]) is not int or not low <= options[key] <= high:
+            invalid()
     for key, choices in ENUMS.items():
         if not isinstance(options[key], str) or options[key] not in choices:
             invalid()

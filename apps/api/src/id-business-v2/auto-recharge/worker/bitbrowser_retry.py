@@ -1,0 +1,97 @@
+"""Retry only the initial, read-only session of windows owned by this job."""
+import asyncio
+import re
+import time
+
+import bitbrowser_options
+import pay
+import payment_recovery
+import payment_state
+from browser_session import SessionBudget, retryable_session_result
+from checkout_core import Stop
+
+
+async def cleanup_profile(job, client, owned):
+    profile_id = job.profile_id
+    if profile_id not in owned or not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id or ""):
+        raise Stop("bitbrowser_cleanup_unverified")
+    job.progress("bitbrowser_profile_cleanup")
+    try:
+        await asyncio.to_thread(client.post, "/browser/close", {"id": profile_id})
+        deadline = time.monotonic() + 15
+        while True:
+            job.check_cancelled()
+            pids = await asyncio.to_thread(client.post, "/browser/pids/alive", {"ids": [profile_id]})
+            if not isinstance(pids, dict) or any(key != profile_id for key in pids):
+                raise Stop("bitbrowser_cleanup_unverified")
+            if profile_id not in pids or pids[profile_id] in (0, None):
+                break
+            if time.monotonic() >= deadline:
+                raise Stop("bitbrowser_cleanup_unverified")
+            await asyncio.sleep(0.25)
+        job.check_cancelled()
+        await asyncio.to_thread(client.post, "/browser/delete", {"id": profile_id})
+        owned.remove(profile_id)
+        job.profile_id = None
+        job.context = None
+    except Stop as exc:
+        if exc.report.get("reason") == "operation_cancelled":
+            raise
+        raise Stop("bitbrowser_cleanup_unverified", browser_profile_id=profile_id) from None
+
+
+async def execute_profiles(job, client, target, playwright):
+    bit = job.payload["bitBrowser"]
+    options = bitbrowser_options.validate_options(bit.get("browserOptions"))
+    attempts = options["sessionRetryLimit"] + 1 if job.payload["mode"] == "payment" else 1
+    owned = set()
+    for attempt in range(1, attempts + 1):
+        job.check_cancelled()
+        job.session_info = {"session_attempt": attempt, "session_attempt_limit": attempts,
+                            "session_elapsed_seconds": 0,
+                            "session_wait_seconds": options["sessionWaitMinutes"] * 60,
+                            "session_step": "page_load"}
+        job.initial_session_verified = False
+        job.progress("bitbrowser_group")
+        profile_id = await asyncio.to_thread(client.create_profile, bit, job.payload["windowName"].strip())
+        job.profile_id = profile_id
+        owned.add(profile_id)
+        job.progress("bitbrowser_profile_created")
+        endpoint = await asyncio.to_thread(client.open_profile, profile_id)
+        job.progress("bitbrowser_profile_opened")
+        browser = await playwright.chromium.connect_over_cdp(endpoint)
+        if not browser.contexts:
+            raise Stop("bitbrowser_context_missing")
+        job.context = browser.contexts[0]
+        job.check_cancelled()
+        if job.payload["mode"] == "recheck":
+            with payment_state.PaymentLedger(job.root, target.account_id,
+                                             target_plan=job.payload["plan"]) as ledger:
+                result = await payment_recovery.recheck_in_context(
+                    job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
+                return pay.include_payment_record(result, ledger)
+
+        budget = SessionBudget(options["sessionWaitMinutes"] * 60,
+                               cancelled=lambda: job.cancelled,
+                               report=lambda **details: job.progress("session_restore", **details))
+        result = await pay.run_flow(
+            target, job.root, job.payload["plan"], details_reader=job.details,
+            confirmer=job.confirm, wait_seconds=1800, poll_count=6, poll_interval=20,
+            browser_context=job.context, session_budget=budget)
+        result.update(job.session_info)
+        if job.initial_session_verified or not retryable_session_result(result):
+            return result
+        job.check_cancelled()
+        result.update(session_elapsed_seconds=min(int(budget.elapsed), budget.seconds),
+                      session_step=budget.step)
+        job.session_info.update({key: value for key, value in result.items() if key.startswith("session_")
+                                 and key in job.session_info})
+        try:
+            await cleanup_profile(job, client, owned)
+        except Stop as exc:
+            return {**result, **exc.report}
+        if attempt == attempts:
+            return {**result, "reason": "session_retries_exhausted",
+                    "last_reason": result.get("reason"), "browser_profile_id": ""}
+        job.progress("bitbrowser_profile_rebuilding")
+    raise Stop("session_retries_exhausted")

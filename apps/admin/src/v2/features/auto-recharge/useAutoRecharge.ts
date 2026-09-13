@@ -470,9 +470,7 @@ export function useAutoRecharge() {
     const id = selected.value.id;
     try {
       const current = await access();
-      await rechargeConnectorApi
-        .cancel(current.connectorUrl, current.connectorToken, id)
-        .catch(() => undefined);
+      await rechargeConnectorApi.cancel(current.connectorUrl, current.connectorToken, id);
       await rechargeApi.cancelBitBrowser(id);
       clearCard();
       if (paymentJobId.value === id) paymentJobId.value = '';

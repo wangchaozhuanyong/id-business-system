@@ -63,6 +63,14 @@
       <p v-if="job.result.reason" class="recharge-error" role="alert">
         {{ statusLabel(job.result.reason) }}
       </p>
+      <p v-if="job.result.session_attempt" class="recharge-note" role="status">
+        第 {{ job.result.session_attempt }} / {{ job.result.session_attempt_limit }} 次尝试，
+        本轮已等待 {{ job.result.session_elapsed_seconds ?? 0 }} 秒， 最多
+        {{ job.result.session_wait_seconds }} 秒。
+        <span v-if="job.result.session_step && job.result.stage === 'session_restore'"
+          >{{ statusLabel(job.result.session_step) }}。</span
+        >
+      </p>
       <slot />
       <details class="recharge-diagnostics">
         <summary>执行详情</summary>
@@ -74,6 +82,14 @@
             {{ job.result.network?.ip || '出口未确认' }} ·
             {{ job.result.network?.country || '地区未知' }}
           </dd>
+          <template v-if="job.result.error_type || job.result.browser_error_code">
+            <dt>浏览器异常</dt>
+            <dd>{{ browserFailureLabel(job.result.error_type, job.result.browser_error_code) }}</dd>
+          </template>
+          <template v-if="job.result.last_reason">
+            <dt>最后失败原因</dt>
+            <dd>{{ statusLabel(job.result.last_reason) }}</dd>
+          </template>
           <dt>订单编号</dt>
           <dd>{{ job.result.checkout_identifier || '尚未取得' }}</dd>
         </dl>
@@ -98,6 +114,7 @@
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import {
+  browserFailureLabel,
   planLabels,
   paymentStatusLabel,
   statusLabel,

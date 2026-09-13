@@ -7,7 +7,7 @@ const health = {
   version: 2,
   originAllowed: true,
   busy: false,
-  capabilities: ['browser-catalog', 'browser-options']
+  capabilities: ['browser-catalog', 'browser-options', 'session-load-retry']
 };
 afterEach(() => vi.unstubAllGlobals());
 
@@ -52,6 +52,9 @@ describe('本机连接错误识别', () => {
     expect(() => requireConnectorHealth({ ...health, originAllowed: false })).toThrow('网站来源');
     expect(() => requireConnectorHealth({ ...health, busy: true })).toThrow('任务未结束');
     expect(() => requireConnectorHealth({ ...health, capabilities: [] })).toThrow('版本过旧');
+    expect(() =>
+      requireConnectorHealth({ ...health, capabilities: ['browser-catalog', 'browser-options'] })
+    ).toThrow('版本过旧');
   });
   it('取消检测不会报成服务不可达', async () => {
     const control = new AbortController();

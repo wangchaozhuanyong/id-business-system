@@ -18,6 +18,14 @@ export interface V2RechargeResult {
   status?: string;
   reason?: string;
   stage?: string;
+  error_type?: string;
+  browser_error_code?: string;
+  last_reason?: string;
+  session_attempt?: number;
+  session_attempt_limit?: number;
+  session_elapsed_seconds?: number;
+  session_wait_seconds?: number;
+  session_step?: 'page_load' | 'session_read' | 'account_read';
   diagnostics?: {
     step?:
       | 'open_menu'
@@ -102,6 +110,8 @@ export interface V2RechargeDetailsSubmission {
 }
 
 export interface V2RechargeBrowserOptions {
+  sessionWaitMinutes: number;
+  sessionRetryLimit: number;
   proxyMode: 'dynamic' | 'static';
   staticHost: string;
   staticPort: number;
@@ -125,6 +135,8 @@ export interface V2RechargeBrowserOptions {
 }
 
 export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = {
+  sessionWaitMinutes: 2,
+  sessionRetryLimit: 2,
   proxyMode: 'dynamic',
   staticHost: '',
   staticPort: 8080,

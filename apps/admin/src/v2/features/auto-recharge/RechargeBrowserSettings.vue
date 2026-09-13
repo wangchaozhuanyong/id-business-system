@@ -25,6 +25,11 @@
       loading-title="正在读取代理与窗口设置"
       @retry="settingsQuery.refresh"
     >
+      <div v-if="stored" class="recharge-settings-summary">
+        <strong>当前代理 IP 与窗口配置</strong>
+        <p>{{ summary.proxy }}</p>
+        <p>分组：{{ stored.groupName }} · {{ summary.languages }}</p>
+      </div>
       <p v-if="settingsError" class="recharge-settings-error" role="alert">{{ settingsError }}</p>
       <el-form
         ref="formRef"
@@ -38,6 +43,32 @@
         :disabled="settingsSaving"
       >
         <RechargeProxyOptions v-model="settingsForm" :stored="stored" />
+        <fieldset>
+          <legend>慢加载与重试</legend>
+          <el-form-item label="每轮等待时间" prop="browserOptions.sessionWaitMinutes" required>
+            <el-input-number
+              v-model="settingsForm.browserOptions.sessionWaitMinutes"
+              aria-label="每轮等待时间"
+              :min="1"
+              :max="10"
+              :precision="0"
+            />
+            <span class="recharge-settings-hint">分钟；页面加载和账号核对共用这段时间。</span>
+          </el-form-item>
+          <el-form-item label="最多重建次数" prop="browserOptions.sessionRetryLimit" required>
+            <el-input-number
+              v-model="settingsForm.browserOptions.sessionRetryLimit"
+              aria-label="最多重建次数"
+              :min="0"
+              :max="2"
+              :precision="0"
+            />
+            <span class="recharge-settings-hint">次；0 表示不重建，2 表示最多尝试 3 个窗口。</span>
+          </el-form-item>
+          <p class="recharge-settings-note">
+            加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。
+          </p>
+        </fieldset>
         <fieldset>
           <legend>窗口资料</legend>
           <div class="recharge-settings-connection recharge-settings-catalog-actions">
@@ -170,6 +201,7 @@ import { computed, ref } from 'vue';
 import RechargeProxyOptions from './RechargeProxyOptions.vue';
 import RechargeWindowOptions from './RechargeWindowOptions.vue';
 import { browserOptionRules } from './recharge-browser-rules';
+import { browserSettingsSummary } from './recharge-browser-presentation';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { validateV2Form } from '@/v2/utils/formValidation';
@@ -196,6 +228,7 @@ const {
   refreshCatalog
 } = props.settings;
 const stored = computed(() => settingsQuery.data.value);
+const summary = computed(() => browserSettingsSummary(stored.value));
 const formRef = ref<FormInstance>();
 const rules = computed<FormRules>(() => ({
   ...browserOptionRules(settingsForm.value),

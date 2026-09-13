@@ -311,24 +311,30 @@ class NetworkGuard:
         return "unknown" if self.sent else "not_attempted"
 
 
-async def browser_read(page, path, credential=None):
+async def browser_read(page, path, credential=None, budget=None):
     if urlsplit(page.url).hostname != "chatgpt.com":
         raise Stop("json_session_not_restored", session_status="new_authorized_json_required")
     headers = {"Accept": "application/json"}
     if credential:
         headers.update({"Authorization": "Bearer " + credential.token, "chatgpt-account-id": credential.account_id})
     # 页面同源请求；不跳转到会显示 Token 的 session JSON 页面。
-    result = await page.evaluate("""async ({path, headers, limit}) => {
+    result = await page.evaluate("""async ({path, headers, limit, timeoutMs, boundedSession}) => {
         const control = new AbortController();
-        const timer = setTimeout(() => control.abort(), 25000);
+        const timer = setTimeout(() => control.abort(), timeoutMs);
         try {
             const r = await fetch(path, {headers, credentials: 'include', cache: 'no-store',
                                         redirect: 'error', signal: control.signal});
             const text = await r.text();
             return {status: r.status, headers: Object.fromEntries(r.headers.entries()),
                     raw: text.length > limit ? null : text};
+        } catch (error) {
+            if (!boundedSession) throw error;
+            return {read_error: error.name === "AbortError" ? "timeout" : "network"};
         } finally { clearTimeout(timer); }
-    }""", {"path": path, "headers": headers, "limit": MAX_BYTES})
+    }""", {"path": path, "headers": headers, "limit": MAX_BYTES,
+             "timeoutMs": budget.remaining_ms() if budget else 25000, "boundedSession": bool(budget)})
+    if result.get("read_error"):
+        raise Stop("session_load_timeout" if result["read_error"] == "timeout" else "session_network_error")
     if result["raw"] is None:
         raise Stop("response_too_large")
     return response_json(result["status"], result["headers"], result["raw"].encode(), credential.token if credential else "")
@@ -348,20 +354,26 @@ async def wait_for_user(reason, seconds):
     raise Stop(reason, user_action_required=True, wait_expired=True)
 
 
-async def check_session(page, target, wait_seconds=0):
+async def check_session(page, target, wait_seconds=0, budget=None):
+    async def read(operation, step):
+        return await budget.run(operation, step) if budget else await operation()
     for attempt in range(2):
         try:
-            title = await page.title()
+            title = await read(page.title, "page_load")
             if re.search(r"Just a moment|Verify.*human|安全验证|请稍候", title, re.I):
                 raise Stop("verification_required", challenge_observed=True)
-            session = await browser_read(page, "/api/auth/session")
+            session = await read(lambda: browser_read(page, "/api/auth/session", budget=budget), "session_read")
             refreshed = verify_official_session(session, target)
-            plan = account_plan(await browser_read(page, ACCOUNT_PATH, refreshed), target.account_id)
+            account = await read(lambda: browser_read(page, ACCOUNT_PATH, refreshed, budget), "account_read")
+            plan = account_plan(account, target.account_id)
             return refreshed, {"session_status": "restored", "account_matched": True, "current_plan": plan,
                                "credential_refreshed": refreshed.token != target.old_token}
         except Stop as exc:
             if exc.report["reason"] == "verification_required" and attempt == 0:
-                await wait_for_user("verification_required", wait_seconds)
+                if budget:
+                    await budget.human_wait(lambda: wait_for_user("verification_required", wait_seconds))
+                else:
+                    await wait_for_user("verification_required", wait_seconds)
                 continue
             raise
     raise Stop("verification_required")
@@ -378,7 +390,7 @@ async def verify_selected_plan(page, target_plan):
 
 
 async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=0, review_seconds=0, quote_timeout=25,
-                   quote_handler=None, guard_factory=NetworkGuard, target_plan="plus"):
+                   quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", session_budget=None):
     """同一临时 BrowserContext 贯穿校验、选套餐和报价。便于本地路由夹具验收。"""
     guard = guard_factory(target, ledger)
     spec = plan_spec(target_plan)
@@ -407,16 +419,25 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     try:
         await context.add_cookies(session_cookies(target))
         progress(stage)
-        await page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=45000)
-        _, identity = await check_session(page, target, wait_seconds)
+        if session_budget:
+            await session_budget.run(lambda: page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=0), "page_load")
+        else:
+            await page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=45000)
+        _, identity = await check_session(page, target, wait_seconds, session_budget)
         guard.account_verified = True
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
             try:
-                trace = await page.evaluate("""async () => {
-                    const r = await fetch('/cdn-cgi/trace', {cache:'no-store'});
-                    if (!r.ok) return '';
-                    return (await r.text()).slice(0,4096);
-                }""")
+                async def read_trace():
+                    return await page.evaluate("""async timeoutMs => {
+                        const control = new AbortController();
+                        const timer = setTimeout(() => control.abort(), timeoutMs);
+                        try {
+                            const r = await fetch('/cdn-cgi/trace', {cache:'no-store', signal:control.signal});
+                            if (!r.ok) return '';
+                            return (await r.text()).slice(0,4096);
+                        } finally { clearTimeout(timer); }
+                    }""", min(10000, session_budget.remaining_ms()) if session_budget else 10000)
+                trace = await session_budget.run(read_trace, "account_read") if session_budget else await read_trace()
                 import ipaddress
                 values = dict(line.split("=", 1) for line in trace.splitlines() if "=" in line)
                 ip = str(ipaddress.ip_address(values.get("ip", "")))
@@ -565,7 +586,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,
                       replace_unpaid_checkout=False, state_dir=ROOT / ".state", wait_seconds=0, review_seconds=0,
                       quote_handler=None, guard_factory=NetworkGuard, target_plan="plus", browser=None,
-                      browser_context=None):
+                      browser_context=None, session_budget=None):
     # 固定项目自己的浏览器，不依赖开源参考目录或全局浏览器缓存。
     os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".browsers"))
     # 不允许环境变量意外启动协议调试日志，避免凭据进入终端/文件。
@@ -586,7 +607,8 @@ async def run_browser(target, *, create=False, inspect_existing=False, retry_rej
         try:
             return await workflow(context, target, ledger=ledger, existing=existing,
                                   wait_seconds=wait_seconds, review_seconds=review_seconds,
-                                  quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan)
+                                  quote_handler=quote_handler, guard_factory=guard_factory, target_plan=target_plan,
+                                  session_budget=session_budget)
         finally:
             # 服务器 Worker 关闭隔离 Context；本机比特浏览器保留原窗口与登录状态。
             if active_context is None:

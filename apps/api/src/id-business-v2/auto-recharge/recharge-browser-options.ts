@@ -27,13 +27,25 @@ const booleans = [
   'syncLocalStorage'
 ];
 export function validateBrowserOptions(value: unknown): V2RechargeBrowserOptions {
-  const input = object(value);
+  const supplied = object(value);
   const defaults = V2_RECHARGE_BROWSER_DEFAULTS;
+  const input: Record<string, unknown> = {
+    sessionWaitMinutes: defaults.sessionWaitMinutes,
+    sessionRetryLimit: defaults.sessionRetryLimit,
+    ...supplied
+  };
   if (
     Object.keys(input).some((key) => !Object.hasOwn(defaults, key)) ||
     Object.keys(defaults).some((key) => !Object.hasOwn(input, key))
   )
     fail('窗口配置字段');
+  for (const [key, min, max] of [
+    ['sessionWaitMinutes', 1, 10],
+    ['sessionRetryLimit', 0, 2]
+  ] as const) {
+    if (!Number.isInteger(input[key]) || Number(input[key]) < min || Number(input[key]) > max)
+      fail('加载等待或重建次数');
+  }
   for (const [key, choices] of Object.entries(enums)) {
     if (!choices.includes(input[key] as string)) fail('窗口配置选项');
   }

@@ -1,0 +1,248 @@
+"""Virtual-clock and isolated client fixtures; no real profiles or payment requests."""
+import asyncio
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import browser_checkout
+import bitbrowser_retry
+import bitbrowser_connector as connector
+from browser_session import SessionBudget, retryable_session_result
+from checkout_core import Stop
+from test_bitbrowser_connector import payload
+
+
+class Clock:
+    now = 0
+
+    def __call__(self):
+        return self.now
+
+    async def advance(self, seconds, value=None):
+        self.now += seconds
+        return value
+
+
+class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_page_and_both_reads_share_120_seconds_not_45_or_25(self):
+        clock, report = Clock(), MagicMock()
+        budget = SessionBudget(120, clock=clock, report=report)
+        page = MagicMock()
+        page.goto = AsyncMock(side_effect=lambda *a, **kw: None)
+
+        async def goto(*args, **kwargs):
+            self.assertEqual(kwargs['timeout'], 0)
+            await clock.advance(50)
+
+        page.goto.side_effect = goto
+        context = MagicMock()
+        context.route = AsyncMock()
+        context.route_web_socket = AsyncMock()
+        context.new_page = AsyncMock(return_value=page)
+        context.add_cookies = AsyncMock()
+
+        async def check(_page, _target, _wait, current):
+            self.assertIs(current, budget)
+            await current.run(lambda: clock.advance(30), 'session_read')
+            await current.run(lambda: clock.advance(39), 'account_read')
+            return None, {'account_matched': True, 'current_plan': 'free', 'session_status': 'restored'}
+
+        with patch.object(browser_checkout, 'session_cookies', return_value=[]), \
+                patch.object(browser_checkout, 'check_session', side_effect=check), \
+                patch.object(browser_checkout, 'progress'), \
+                patch.dict('os.environ', {}, clear=True):
+            result = await browser_checkout.workflow(context, SimpleNamespace(), session_budget=budget)
+        self.assertEqual(result['status'], 'session_verified')
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertEqual(budget.elapsed, 119)
+        self.assertEqual(report.call_args.kwargs['session_elapsed_seconds'], 119)
+
+    async def test_deadline_is_shared_and_expires_at_120(self):
+        clock = Clock()
+        budget = SessionBudget(120, clock=clock)
+        await budget.run(lambda: clock.advance(90), 'page_load')
+        self.assertEqual(budget.remaining_ms(), 30000)
+        with self.assertRaises(Stop) as caught:
+            await budget.run(lambda: clock.advance(30), 'session_read')
+        self.assertEqual(caught.exception.report['reason'], 'session_load_timeout')
+
+    async def test_optional_network_observation_is_bounded_after_identity_success(self):
+        clock = Clock()
+        budget = SessionBudget(120, clock=clock)
+        page = MagicMock()
+        async def goto(*args, **kwargs):
+            await clock.advance(100)
+        async def trace(script, timeout):
+            self.assertEqual(timeout, 10000)
+            await clock.advance(20)
+            return 'ip=203.0.113.1\nloc=US'
+        page.goto = AsyncMock(side_effect=goto)
+        page.evaluate = AsyncMock(side_effect=trace)
+        context = MagicMock(route=AsyncMock(), route_web_socket=AsyncMock(),
+                            new_page=AsyncMock(return_value=page), add_cookies=AsyncMock())
+        identity = {'account_matched': True, 'current_plan': 'free', 'session_status': 'restored'}
+        with patch.object(browser_checkout, 'session_cookies', return_value=[]), \
+                patch.object(browser_checkout, 'check_session', new=AsyncMock(return_value=(None, identity))), \
+                patch.object(browser_checkout, 'progress'), \
+                patch.dict('os.environ', {'AUTO_RECHARGE_CALLBACK_URL': 'fixture'}):
+            result = await browser_checkout.workflow(context, SimpleNamespace(), session_budget=budget)
+        self.assertEqual(result['status'], 'session_verified')
+        self.assertTrue(result['account_matched'])
+        self.assertIsNone(result['network']['ip'])
+        self.assertEqual(result['checkout_requests_sent'], 0)
+
+    async def test_human_verification_time_is_excluded(self):
+        clock = Clock()
+        budget = SessionBudget(120, clock=clock)
+        page = SimpleNamespace(title=AsyncMock(side_effect=['Verify human', 'ChatGPT']))
+        async def human(*args):
+            await clock.advance(900)
+        with patch.object(browser_checkout, 'wait_for_user', side_effect=human) as wait, \
+                patch.object(browser_checkout, 'browser_read', new=AsyncMock(return_value={})), \
+                patch.object(browser_checkout, 'verify_official_session', return_value=SimpleNamespace(token='new')), \
+                patch.object(browser_checkout, 'account_plan', return_value='free'):
+            _, identity = await browser_checkout.check_session(
+                page, SimpleNamespace(account_id='fixture', old_token='old'), 1800, budget)
+        wait.assert_awaited_once_with('verification_required', 1800)
+        self.assertTrue(identity['account_matched'])
+        self.assertEqual(budget.remaining_ms(), 120000)
+
+    async def test_cancel_interrupts_pending_navigation(self):
+        flag = {'cancelled': False}
+        stopped = asyncio.Event()
+        async def pending():
+            flag['cancelled'] = True
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        with self.assertRaises(Stop) as caught:
+            await SessionBudget(120, cancelled=lambda: flag['cancelled']).run(pending, 'page_load')
+        self.assertEqual(caught.exception.report['reason'], 'operation_cancelled')
+        self.assertTrue(stopped.is_set())
+
+    def test_public_errors_and_progress_exclude_raw_credentials(self):
+        result = connector.public_result({'error_type': 'TimeoutError', 'session_attempt': 2,
+                                         'browser_error_code': 'net::ERR_TIMED_OUT',
+                                         'sessionJson': 'private', 'message': 'private', 'cvc': '123'})
+        self.assertEqual(result, {'error_type': 'TimeoutError', 'session_attempt': 2,
+                                  'browser_error_code': 'net::ERR_TIMED_OUT'})
+
+
+def failure(**patches):
+    return {'status': 'blocked', 'reason': 'session_load_timeout', 'stage': 'session_restore',
+            'account_matched': False, 'checkout_requests_sent': 0, 'payment_attempted': False,
+            'payment_requests_sent': 0, **patches}
+
+
+class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.job = connector.LocalJob(payload())
+        self.job.root = 'fixture-state'
+        self.job.callback = MagicMock()
+        self.client = MagicMock()
+        self.client.create_profile.side_effect = ['a' * 32, 'b' * 32, 'c' * 32]
+        self.client.open_profile.return_value = 'http://127.0.0.1:12345'
+        self.client.post.return_value = {}
+        self.playwright = SimpleNamespace(chromium=SimpleNamespace(
+            connect_over_cdp=AsyncMock(return_value=SimpleNamespace(contexts=[MagicMock()]))))
+
+    async def execute(self, results):
+        with patch.object(bitbrowser_retry.pay, 'run_flow', new=AsyncMock(side_effect=results)) as flow:
+            result = await bitbrowser_retry.execute_profiles(
+                self.job, self.client, SimpleNamespace(account_id='fixture'), self.playwright)
+        return result, flow
+
+    def deletions(self):
+        return [call.args[1]['id'] for call in self.client.post.call_args_list
+                if call.args[0] == '/browser/delete']
+
+    async def test_first_timeout_then_success_reuses_job_and_keeps_successful_window(self):
+        result, flow = await self.execute([failure(), {'status': 'session_verified'}])
+        self.assertEqual(result['session_attempt'], 2)
+        self.assertEqual(flow.await_count, 2)
+        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertEqual(self.job.profile_id, 'b' * 32)
+        self.assertEqual(self.job.id, payload()['id'])
+        self.assertEqual(self.client.create_profile.call_count, 2)
+        self.assertEqual([c.args[0] for c in self.client.post.call_args_list],
+                         ['/browser/close', '/browser/pids/alive', '/browser/delete'])
+
+    async def test_three_failures_clean_all_three_and_stop(self):
+        result, flow = await self.execute([failure(), failure(), failure()])
+        self.assertEqual(result['reason'], 'session_retries_exhausted')
+        self.assertEqual(flow.await_count, 3)
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertIsNone(self.job.profile_id)
+
+    async def test_cleanup_failure_stops_without_new_profile(self):
+        self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
+        result, _ = await self.execute([failure()])
+        self.assertEqual(result['reason'], 'bitbrowser_cleanup_unverified')
+        self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(self.deletions(), [])
+
+    async def test_no_deletion_if_pid_response_has_another_window(self):
+        self.client.post.side_effect = [{}, {'other-profile': 42}]
+        result, _ = await self.execute([failure()])
+        self.assertEqual(result['reason'], 'bitbrowser_cleanup_unverified')
+        self.assertEqual(self.deletions(), [])
+
+    async def test_manual_stop_prevents_next_profile(self):
+        async def cancelled(*args, **kwargs):
+            self.job.signal_cancel()
+            return failure(reason='operation_cancelled')
+        result, _ = await self.execute(cancelled)
+        self.assertEqual(result['reason'], 'operation_cancelled')
+        self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(self.deletions(), [])
+
+    async def test_stop_during_cleanup_prevents_deletion_and_next_window(self):
+        def close_then_cancel(path, body):
+            self.job.signal_cancel()
+            return {}
+        self.client.post.side_effect = close_then_cancel
+        result, _ = await self.execute([failure()])
+        self.assertEqual(result['reason'], 'operation_cancelled')
+        self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(self.deletions(), [])
+
+    async def test_zero_retries_cleans_only_the_first_failed_window(self):
+        from bitbrowser_options import DEFAULTS
+        self.job.payload['bitBrowser']['browserOptions'] = {**DEFAULTS, 'sessionRetryLimit': 0}
+        result, flow = await self.execute([failure()])
+        self.assertEqual(result['reason'], 'session_retries_exhausted')
+        self.assertEqual(flow.await_count, 1)
+        self.assertEqual(self.deletions(), ['a' * 32])
+
+    async def test_no_retry_after_first_session_was_verified_even_if_stage_repeats(self):
+        async def after_checkout(*args, **kwargs):
+            self.job.progress('session_verified')
+            return failure()
+        await self.execute(after_checkout)
+        self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(self.deletions(), [])
+
+    async def test_foreign_profile_is_never_closed_or_deleted(self):
+        self.job.profile_id = 'd' * 32
+        with self.assertRaises(Stop):
+            await bitbrowser_retry.cleanup_profile(self.job, self.client, {'a' * 32})
+        self.client.post.assert_not_called()
+
+    def test_auth_verification_and_side_effects_never_trigger_rebuild(self):
+        for patch_value in ({'reason': 'json_session_not_restored'}, {'reason': 'verification_required'},
+                            {'user_action_required': True}, {'checkout_requests_sent': 1},
+                            {'payment_requests_sent': 1}, {'payment_attempted': True},
+                            {'confirmation_requests_sent': 1}, {'stage': 'quote_read'},
+                            {'account_matched': True}, {'reason': 'browser_operation_failed',
+                                                        'error_type': 'TargetClosedError'}):
+            with self.subTest(patch=patch_value):
+                self.assertFalse(retryable_session_result(failure(**patch_value)))
+        self.assertTrue(retryable_session_result(failure(reason='browser_operation_failed',
+                                                         browser_error_code='net::ERR_PROXY_CONNECTION_FAILED')))
+
+
+if __name__ == '__main__':
+    unittest.main()

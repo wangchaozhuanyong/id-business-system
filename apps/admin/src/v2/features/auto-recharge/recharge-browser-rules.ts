@@ -15,6 +15,26 @@ export function browserOptionRules(form: BitBrowserSettingsForm): FormRules {
       )
   };
   return {
+    'browserOptions.sessionWaitMinutes': [
+      {
+        required: true,
+        type: 'integer',
+        min: 1,
+        max: 10,
+        message: '等待时间应为 1 至 10 分钟的整数',
+        trigger: 'change'
+      }
+    ],
+    'browserOptions.sessionRetryLimit': [
+      {
+        required: true,
+        type: 'integer',
+        min: 0,
+        max: 2,
+        message: '重建次数应为 0 至 2 的整数',
+        trigger: 'change'
+      }
+    ],
     'browserOptions.staticHost': [
       { required: options.proxyMode === 'static', message: '请填写固定代理主机', trigger: 'blur' }
     ],
