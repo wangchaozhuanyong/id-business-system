@@ -14,6 +14,7 @@ import type {
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
+import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 
@@ -27,6 +28,12 @@ const activeStates = new Set([
 const requiresPolling = (job: V2RechargeJob) =>
   ['running', 'awaiting_human_verification', 'confirming'].includes(job.state);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isAlreadyResolved(
+  value: V2RechargeBitBrowserResolutionLaunch | { id: string; alreadyResolved: true }
+): value is { id: string; alreadyResolved: true } {
+  return 'alreadyResolved' in value && value.alreadyResolved === true;
+}
 
 const emptyDetails = (): V2RechargeDetails => ({
   number: '',
@@ -476,7 +483,7 @@ export function useAutoRecharge() {
         confirmNoBankRequest: true,
         verificationJobId
       });
-      if ('alreadyResolved' in response) {
+      if (isAlreadyResolved(response)) {
         connectorMessage.value = '历史付款记录已经处理';
         return;
       }
@@ -568,7 +575,15 @@ export function useAutoRecharge() {
     const id = selected.value.id;
     try {
       const current = await access();
-      await rechargeConnectorApi.cancel(current.connectorUrl, current.connectorToken, id);
+      try {
+        await rechargeConnectorApi.cancel(current.connectorUrl, current.connectorToken, id);
+      } catch (cause) {
+        if (!(cause instanceof RechargeConnectorError) || cause.code !== 'missing') throw cause;
+        await rechargeApi.abandonUnreceivedBitBrowser(id);
+        clearCard();
+        if (paymentJobId.value === id) paymentJobId.value = '';
+        return;
+      }
       await rechargeApi.cancelBitBrowser(id);
       clearCard();
       if (paymentJobId.value === id) paymentJobId.value = '';

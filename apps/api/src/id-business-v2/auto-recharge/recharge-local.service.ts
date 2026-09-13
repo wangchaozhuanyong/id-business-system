@@ -300,7 +300,12 @@ export class RechargeLocalService {
     );
     if (prepared.alreadyResolved) return prepared;
     return {
-      ...prepared,
+      id: prepared.id,
+      plan: prepared.plan,
+      accountKey: prepared.accountKey,
+      checkoutIdentifier: prepared.checkoutIdentifier,
+      sourceJobId: prepared.sourceJobId,
+      verificationJobId: prepared.verificationJobId,
       mode: 'resolve_unknown_payment' as const,
       connectorUrl: runtime.connectorUrl,
       connectorToken: runtime.connectorToken,

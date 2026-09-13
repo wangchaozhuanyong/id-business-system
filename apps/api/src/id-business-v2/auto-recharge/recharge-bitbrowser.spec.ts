@@ -485,5 +485,6 @@ describe('本机任务持久化边界', () => {
     );
     expect(JSON.stringify(result)).not.toContain('bitBrowser');
     expect(JSON.stringify(result)).not.toContain('sessionJson');
+    expect(result).not.toHaveProperty('alreadyResolved');
   });
 });
