@@ -189,11 +189,15 @@ export function useAutoRecharge() {
   });
   const canResolveNoBankRequest = computed(() => {
     const job = selected.value;
+    const hasSingleHistoricalRequest =
+      Number(job?.result.confirmation_requests_sent ?? 0) === 1 ||
+      (Number(job?.result.confirmation_requests_sent ?? 0) === 0 &&
+        Number(job?.result.payment_requests_sent ?? 0) === 1);
     return Boolean(
       job &&
       ['finished', 'unknown'].includes(job.state) &&
       job.result.payment_attempted === true &&
-      Number(job.result.confirmation_requests_sent) === 1 &&
+      hasSingleHistoricalRequest &&
       job.result.payment_status === 'unknown' &&
       !job.result.payment_evidence &&
       job.result.operator_resolution !== 'confirmed_no_bank_request' &&
