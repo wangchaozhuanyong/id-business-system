@@ -43,10 +43,10 @@ jobs:
           SERVICE: ${{ matrix.service }}
         run: node scripts/ci-recharge-python-image.mjs
       - name: Test audit failure handling
-        if: steps.evidence.outputs.reused != 'true'
+        if: steps.evidence.outputs.reused != 'true' && steps.evidence.outputs.unchanged != 'true'
         run: python3 -B scripts/audit-python-dependencies.test.py
       - name: Build and audit installed runtime dependencies
-        if: steps.evidence.outputs.reused != 'true'
+        if: steps.evidence.outputs.reused != 'true' && steps.evidence.outputs.unchanged != 'true'
         env:
           SERVICE: ${{ matrix.service }}
           DIRECTORY: ${{ matrix.directory }}
@@ -59,7 +59,7 @@ jobs:
           docker image inspect "$reference" > ".deploy/python-images/${SERVICE}-image.json"
           docker save "$reference" | gzip -3 > ".deploy/python-images/${SERVICE}.tar.gz"
       - name: Preserve verified Python images for promotion
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.evidence.outputs.unchanged != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: python-image-${{ matrix.service }}-${{ github.run_attempt }}
