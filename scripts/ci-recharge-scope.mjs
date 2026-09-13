@@ -58,10 +58,10 @@ export function selectedParts(paths) {
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
   const common =
-    /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
+    /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {
     admin: /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-auto-recharge\.mjs$)/,
-    api: /^(?:apps\/api\/|packages\/shared\/)/,
+    api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
     migration: /^apps\/api\/prisma-mysql\//,
     security: securityPaths
