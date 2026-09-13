@@ -7,7 +7,12 @@ const health = {
   version: 2,
   originAllowed: true,
   busy: false,
-  capabilities: ['browser-catalog', 'browser-options', 'session-load-retry']
+  capabilities: [
+    'browser-catalog',
+    'browser-options',
+    'session-load-retry',
+    'payment-unknown-resolution'
+  ]
 };
 afterEach(() => vi.unstubAllGlobals());
 

@@ -107,6 +107,20 @@ export function confirmationNonce(id: string, quote: V2RechargeQuote, secret: st
   return createHmac('sha256', secret).update(confirmationMaterial(id, quote)).digest('hex');
 }
 
+export function resultWithConfirmation(
+  job: { id: string; state: string; nonceHash: string | null; result: unknown },
+  workerToken: string
+) {
+  const result = object(job.result);
+  if (job.state !== 'awaiting_confirmation' || !job.nonceHash || !result.quote) return result;
+  try {
+    const nonce = confirmationNonce(job.id, result.quote as V2RechargeQuote, workerToken);
+    return hash(nonce) === job.nonceHash ? { ...result, nonce } : result;
+  } catch {
+    return result;
+  }
+}
+
 export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority: unknown) {
   if (
     quote.plan !== plan ||
@@ -131,7 +145,13 @@ const scalarKeys = new Set(
 for (const key of [
   'cancellation_confirmed',
   'cancelled_before_confirmation',
-  'browser_cleanup_status'
+  'browser_cleanup_status',
+  'resolution_only',
+  'operator_resolution',
+  'resolved_at',
+  'resolution_job_id',
+  'source_job_id',
+  'verification_job_id'
 ]) {
   scalarKeys.add(key);
 }

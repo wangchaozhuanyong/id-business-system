@@ -98,9 +98,12 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
   if (result.busy !== false) throw new RechargeConnectorError('busy');
   if (
     !Array.isArray(result.capabilities) ||
-    !['browser-catalog', 'browser-options', 'session-load-retry'].every((key) =>
-      (result.capabilities as unknown[]).includes(key)
-    )
+    ![
+      'browser-catalog',
+      'browser-options',
+      'session-load-retry',
+      'payment-unknown-resolution'
+    ].every((key) => (result.capabilities as unknown[]).includes(key))
   ) {
     throw new RechargeConnectorError('version');
   }

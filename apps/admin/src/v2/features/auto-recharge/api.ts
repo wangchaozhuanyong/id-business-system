@@ -14,7 +14,9 @@ import type {
   V2RechargeBitBrowserStart,
   V2RechargeBitBrowserLaunch,
   V2RechargeBitBrowserRecheckStart,
-  V2RechargeBitBrowserRecheckLaunch
+  V2RechargeBitBrowserRecheckLaunch,
+  V2RechargeResolveNoBankRequest,
+  V2RechargeBitBrowserResolutionLaunch
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
 export const rechargeApi = {
@@ -50,6 +52,11 @@ export const rechargeApi = {
   recheckBitBrowser(input: V2RechargeBitBrowserRecheckStart) {
     return request<V2RechargeBitBrowserRecheckLaunch>(
       http.post(`${base}/bitbrowser-recheck`, input)
+    );
+  },
+  resolveNoBankRequest(id: string, input: V2RechargeResolveNoBankRequest) {
+    return request<V2RechargeBitBrowserResolutionLaunch | { id: string; alreadyResolved: true }>(
+      http.post(`${base}/${id}/resolve-no-bank-request`, input)
     );
   },
   cancelBitBrowser(id: string) {

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   V2RechargeAddress,
   V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserResolutionLaunch,
   V2RechargeBitBrowserSettings,
   V2RechargeJob
 } from './contracts';
@@ -21,6 +22,7 @@ const mock = vi.hoisted(() => ({
       },
   startBitBrowser: vi.fn(),
   recheckBitBrowser: vi.fn(),
+  resolveNoBankRequest: vi.fn(),
   cancelBitBrowser: vi.fn(),
   abandonUnreceivedBitBrowser: vi.fn(),
   bitBrowserAccess: vi.fn(),
@@ -31,7 +33,12 @@ const mock = vi.hoisted(() => ({
   connectorCancel: vi.fn(),
   connectorHealth: vi.fn(),
   connectorCatalog: vi.fn(),
-  callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`)
+  callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`),
+  confirmResolution: vi.fn()
+}));
+
+vi.mock('element-plus/es/components/message-box/index.mjs', () => ({
+  ElMessageBox: { confirm: mock.confirmResolution }
 }));
 
 vi.mock('@/v2/composables/useV2Query', () => ({
@@ -54,6 +61,7 @@ vi.mock('./api', () => ({
     getBitBrowserSettings: vi.fn(),
     startBitBrowser: mock.startBitBrowser,
     recheckBitBrowser: mock.recheckBitBrowser,
+    resolveNoBankRequest: mock.resolveNoBankRequest,
     cancelBitBrowser: mock.cancelBitBrowser,
     abandonUnreceivedBitBrowser: mock.abandonUnreceivedBitBrowser,
     bitBrowserAccess: mock.bitBrowserAccess,
@@ -129,6 +137,18 @@ const launch: V2RechargeBitBrowserLaunch = {
     authorizeSinglePayment: true
   }
 };
+const resolutionLaunch: V2RechargeBitBrowserResolutionLaunch = {
+  id: '55555555-5555-4555-8555-555555555555',
+  mode: 'resolve_unknown_payment',
+  connectorUrl: settings.connectorUrl,
+  connectorToken: 'c'.repeat(64),
+  agentToken: 'a'.repeat(64),
+  plan: 'pro-20x',
+  accountKey: 'd'.repeat(64),
+  checkoutIdentifier: 'oaics_historical',
+  sourceJobId: '66666666-6666-4666-8666-666666666666',
+  verificationJobId: '77777777-7777-4777-8777-777777777777'
+};
 
 const jobs = ref<{ configured: boolean; items: V2RechargeJob[] }>({ configured: true, items: [] });
 const addresses = ref({
@@ -184,6 +204,8 @@ beforeEach(() => {
     agentToken: launch.agentToken,
     bitBrowser: launch.bitBrowser
   });
+  mock.resolveNoBankRequest.mockResolvedValue(resolutionLaunch);
+  mock.confirmResolution.mockResolvedValue('confirm');
   mock.connectorStart.mockResolvedValue({ ok: true, accepted: true });
   mock.connectorStatus.mockResolvedValue({ ok: true, done: false, waitingForUser: false });
   mock.connectorResume.mockResolvedValue({ ok: true });
@@ -445,6 +467,48 @@ describe('本机比特浏览器自动充值', () => {
     expect(body.details).toBeUndefined();
     expect(body.address).toBeUndefined();
     expect(body.safety).toBeUndefined();
+    expect(body.authorizeSinglePayment).toBeUndefined();
+  });
+
+  it('确认银行卡未收到请求时只发送历史状态处理任务', async () => {
+    const source: V2RechargeJob = {
+      id: resolutionLaunch.sourceJobId,
+      plan: 'pro-20x',
+      action: 'bitbrowser',
+      state: 'finished',
+      result: {
+        status: 'payment_result_unknown',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown',
+        checkout_identifier: 'oaics_historical',
+        resolution_verification_job_id: resolutionLaunch.verificationJobId
+      },
+      createdAt: '2026-09-09T00:00:00Z',
+      updatedAt: '2026-09-09T00:00:00Z'
+    };
+    jobs.value.items = [source];
+    flow.selectJob(source.id);
+    await nextTick();
+    expect(flow.canResolveNoBankRequest.value).toBe(true);
+
+    await flow.resolveNoBankRequest();
+
+    expect(mock.confirmResolution).toHaveBeenCalledOnce();
+    expect(mock.resolveNoBankRequest).toHaveBeenCalledWith(source.id, {
+      confirmNoBankRequest: true,
+      verificationJobId: resolutionLaunch.verificationJobId
+    });
+    const body = mock.connectorStart.mock.calls[0]![2];
+    expect(body).toMatchObject({
+      mode: 'resolve_unknown_payment',
+      plan: 'pro-20x',
+      sourceJobId: source.id,
+      verificationJobId: resolutionLaunch.verificationJobId
+    });
+    expect(body.sessionJson).toBeUndefined();
+    expect(body.bitBrowser).toBeUndefined();
+    expect(body.details).toBeUndefined();
     expect(body.authorizeSinglePayment).toBeUndefined();
   });
 

@@ -2,7 +2,8 @@ import { BadRequestException } from '@nestjs/common';
 import {
   V2_RECHARGE_PLANS,
   type V2RechargeBitBrowserRecheckStart,
-  type V2RechargeBitBrowserStart
+  type V2RechargeBitBrowserStart,
+  type V2RechargeResolveNoBankRequest
 } from '@apple-business/shared';
 import { object, uuidPattern } from './recharge-validation';
 
@@ -107,4 +108,21 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
     plan: input.plan,
     windowName
   } as V2RechargeBitBrowserRecheckStart;
+}
+
+export function validateRechargeNoBankRequest(value: unknown) {
+  const input = object(value);
+  const allowedKeys = new Set(['confirmNoBankRequest', 'verificationJobId']);
+  if (
+    Object.keys(input).some((key) => !allowedKeys.has(key)) ||
+    input.confirmNoBankRequest !== true ||
+    typeof input.verificationJobId !== 'string' ||
+    !uuidPattern.test(input.verificationJobId)
+  ) {
+    throw new BadRequestException('请明确确认银行卡未收到付款请求');
+  }
+  return {
+    confirmNoBankRequest: true,
+    verificationJobId: input.verificationJobId
+  } as V2RechargeResolveNoBankRequest;
 }

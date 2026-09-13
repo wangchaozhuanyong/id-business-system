@@ -64,6 +64,11 @@ class SessionBudget:
         finally:
             self.paused += self.clock() - started
 
+    def restart(self):
+        """同一窗口需要重新载入官网时重新给足本轮配置的会话预算。"""
+        return SessionBudget(self.seconds, cancelled=self.cancelled, report=self.report,
+                             clock=self.clock)
+
 
 RETRYABLE_NETWORK_CODES = {
     "net::ERR_TIMED_OUT", "net::ERR_CONNECTION_TIMED_OUT", "net::ERR_CONNECTION_RESET",

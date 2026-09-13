@@ -3,7 +3,8 @@ import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { hash } from './recharge-validation';
 import {
   validateRechargeBitBrowserRecheckStart,
-  validateRechargeBitBrowserStart
+  validateRechargeBitBrowserStart,
+  validateRechargeNoBankRequest
 } from './recharge-local-validation';
 import { RechargeLocalService } from './recharge-local.service';
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
@@ -100,6 +101,17 @@ describe('比特浏览器充值输入边界', () => {
         cardNumber: '5555555555554444'
       })
     ).toThrow();
+  });
+  it('历史付款处理必须明确确认并绑定核验任务', () => {
+    expect(
+      validateRechargeNoBankRequest({
+        confirmNoBankRequest: true,
+        verificationJobId: id
+      })
+    ).toEqual({ confirmNoBankRequest: true, verificationJobId: id });
+    expect(() =>
+      validateRechargeNoBankRequest({ confirmNoBankRequest: false, verificationJobId: id })
+    ).toThrow('明确确认');
   });
 });
 
@@ -386,5 +398,91 @@ describe('本机任务持久化边界', () => {
     await expect(
       service.recheck({ id, sourceJobId, plan: 'plus', windowName: '已成功任务' }, operator)
     ).rejects.toThrow('该记录不能只读复查原订单');
+  });
+
+  it('未知付款处理只创建无浏览器、无卡资料的连接器控制任务', async () => {
+    const tx = {};
+    const accountKey = 'a'.repeat(64);
+    const verificationJobId = '44444444-4444-4444-8444-444444444444';
+    const source = {
+      id: sourceJobId,
+      ownerId: operator.id,
+      plan: 'pro-20x',
+      action: 'prepare',
+      state: 'finished',
+      accountKey,
+      createdAt: new Date('2026-09-09T00:00:00Z'),
+      result: {
+        status: 'payment_result_unknown',
+        checkout_identifier: 'oaics_historical',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown'
+      }
+    };
+    const verification = {
+      id: verificationJobId,
+      ownerId: operator.id,
+      plan: 'plus',
+      action: 'bitbrowser',
+      state: 'finished',
+      accountKey,
+      createdAt: new Date('2026-09-13T00:00:00Z'),
+      result: {
+        status: 'blocked',
+        account_matched: true,
+        current_plan: 'free',
+        payment_attempted: false,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 0
+      }
+    };
+    const repository = {
+      lock: vi.fn(),
+      findRunningJob: vi.fn().mockResolvedValue(null),
+      findJob: vi
+        .fn()
+        .mockImplementation((_tx, jobId) =>
+          jobId === sourceJobId ? source : jobId === verificationJobId ? verification : null
+        ),
+      createJob: vi.fn().mockImplementation((_tx, data) => ({ id: data.id }))
+    };
+    const settings = {
+      runtime: vi.fn().mockResolvedValue({
+        connectorUrl: 'http://127.0.0.1:55321',
+        connectorToken: 'c'.repeat(64)
+      })
+    };
+    const service = new RechargeLocalService(
+      repository as never,
+      {} as never,
+      settings as never,
+      {} as never,
+      { execute: vi.fn((callback) => callback(tx)) } as never,
+      { append: vi.fn() } as never
+    );
+    const result = await service.resolveNoBankRequest(
+      sourceJobId,
+      { confirmNoBankRequest: true, verificationJobId },
+      operator
+    );
+    expect(result).toMatchObject({
+      mode: 'resolve_unknown_payment',
+      plan: 'pro-20x',
+      accountKey,
+      checkoutIdentifier: 'oaics_historical',
+      sourceJobId,
+      verificationJobId
+    });
+    expect(repository.createJob).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'bitbrowser',
+        accountKey,
+        result: expect.objectContaining({ resolution_only: true, payment_requests_sent: 0 })
+      })
+    );
+    expect(JSON.stringify(result)).not.toContain('bitBrowser');
+    expect(JSON.stringify(result)).not.toContain('sessionJson');
   });
 });

@@ -32,16 +32,14 @@ EXPIRED_CHECKOUT_ERROR = re.compile(
     r"there was an error processing your payment|付款处理(?:发生|出现)?错误|处理(?:你的|您的)?付款时(?:(?:发生|出现)?错误|出错)",
     re.I,
 )
-RETURN_TO_CHATGPT = re.compile(r"return to chatgpt|返回\s*chatgpt", re.I)
-
-
 def progress(stage, **details):
     print(json.dumps({"event": stage, **details}, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
 def is_unavailable_existing_checkout(text: str) -> bool:
     """识别官网保留旧 URL、但正文已变为付款错误页的失效结算。"""
-    return bool(EXPIRED_CHECKOUT_ERROR.search(text) and RETURN_TO_CHATGPT.search(text))
+    # 官网按钮可能由独立前端根节点渲染，body.innerText 不一定能读取；错误标题本身已足够明确。
+    return bool(EXPIRED_CHECKOUT_ERROR.search(text))
 
 
 def checkout_page_matches(url, checkout_id):
@@ -501,14 +499,15 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             raise Stop("official_checkout_navigation_not_observed") from None
         if urlsplit(page.url).hostname not in ("chatgpt.com", "checkout.stripe.com"):
             raise Stop("unexpected_checkout_origin")
-        if existing and guard.checkout_id not in page.url:
+        if existing and not checkout_page_matches(page.url, guard.checkout_id):
             # 已过期的官网结算会跳到 /checkout/verify；不能把该错误页当作原报价继续解析。
             raise Stop("existing_checkout_unavailable")
         deadline = time.monotonic() + quote_timeout
         partial_quote_since = None
         while time.monotonic() < deadline:
             quote_text = await page.locator("body").inner_text()
-            if existing and is_unavailable_existing_checkout(quote_text):
+            if existing and (not checkout_page_matches(page.url, guard.checkout_id)
+                             or is_unavailable_existing_checkout(quote_text)):
                 raise Stop("existing_checkout_unavailable")
             quote = await quote_from_page(page, guard.result.get("returned_currency"))
             if quote["today"] and quote["plan"] in (target_plan, spec["family"]):
@@ -521,7 +520,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
                 partial_quote_since = None
             await asyncio.sleep(0.3)
         if (not quote or not quote["today"] or quote["plan"] not in (target_plan, spec["family"])) and not quote_handler:
-            if existing and guard.checkout_id not in page.url:
+            if existing and not checkout_page_matches(page.url, guard.checkout_id):
                 raise Stop("existing_checkout_unavailable")
             await wait_for_user("quote_needs_review_or_billing", wait_seconds)
             # 验证可能带来账户变化；另开同一上下文页面，只做官方身份核对。

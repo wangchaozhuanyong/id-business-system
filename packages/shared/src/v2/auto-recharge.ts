@@ -54,6 +54,13 @@ export interface V2RechargeResult {
   network?: { ip: string | null; country: string | null; observedAt: string };
   payment_status?: string;
   payment_outcome?: string;
+  operator_resolution?: 'confirmed_no_bank_request';
+  resolved_at?: string;
+  resolution_job_id?: string;
+  source_job_id?: string;
+  verification_job_id?: string;
+  resolution_verification_job_id?: string;
+  resolution_only?: boolean;
   subscription_status?: string;
   recheck_plan?: V2RechargePlan;
   checkout_identifier?: string;
@@ -256,6 +263,24 @@ export interface V2RechargeBitBrowserRecheckLaunch {
   connectorToken: string;
   agentToken: string;
   bitBrowser: V2RechargeBitBrowserLaunch['bitBrowser'];
+}
+
+export interface V2RechargeResolveNoBankRequest {
+  confirmNoBankRequest: true;
+  verificationJobId: string;
+}
+
+export interface V2RechargeBitBrowserResolutionLaunch {
+  id: string;
+  mode: 'resolve_unknown_payment';
+  connectorUrl: string;
+  connectorToken: string;
+  agentToken: string;
+  plan: V2RechargePlan;
+  accountKey: string;
+  checkoutIdentifier: string;
+  sourceJobId: string;
+  verificationJobId: string;
 }
 
 export const V2_RECHARGE_ADDRESS_STATUSES = ['unused', 'used', 'disabled'] as const;

@@ -14,6 +14,22 @@ from checkout_core import Stop, unique_object, write_json
 from plans import plan_spec
 
 
+RESOLUTION_UUID = re.compile(r"^[a-f0-9-]{36}$")
+RESOLUTION_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,6})?Z$")
+
+
+def confirmed_no_bank_request(data: dict) -> bool:
+    """只信任服务端持久化的完整人工处理标记，原付款证据仍保持不变。"""
+    return bool(
+        data.get("operator_resolution") == "confirmed_no_bank_request"
+        and isinstance(data.get("resolved_at"), str)
+        and RESOLUTION_TIME.fullmatch(data["resolved_at"])
+        and all(isinstance(data.get(key), str) and RESOLUTION_UUID.fullmatch(data[key])
+                for key in ("resolution_job_id", "source_job_id", "verification_job_id"))
+        and not data.get("payment_evidence")
+    )
+
+
 def checkout_record_path(state_dir, account_id, target_plan="plus"):
     plan_spec(target_plan)
     key = hashlib.sha256(account_id.encode()).hexdigest()
@@ -47,6 +63,12 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None):
                     and type(data.get("confirmation_requests_sent")) is int
                     and data["confirmation_requests_sent"] == 0
                     and not data.get("payment_evidence")):
+                continue
+            if (confirmed_no_bank_request(data)
+                    and data.get("payment_status") == "unknown"
+                    and data.get("payment_attempted") is True
+                    and type(data.get("confirmation_requests_sent")) is int
+                    and data["confirmation_requests_sent"] == 1):
                 continue
             if checkout_id is None or data.get("checkout_identifier") != checkout_id:
                 raise Stop("account_has_other_payment_attempt", action="recheck_original_order_only",
@@ -110,6 +132,14 @@ def unpaid_checkout_replacement_allowed(record: dict) -> bool:
                 and re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", record["checkout_identifier"])
                 and isinstance(record.get("processor_entity"), str)
                 and re.fullmatch(r"[a-z][a-z0-9_]{0,40}", record["processor_entity"]))
+
+
+def resolved_checkout_replacement_allowed(record: dict) -> bool:
+    return bool(confirmed_no_bank_request(record)
+                and record.get("payment_status") == "not_attempted"
+                and record.get("payment_attempted") is not True
+                and record.get("confirmation_requests_sent") in (None, 0)
+                and unpaid_checkout_replacement_allowed(record))
 
 
 def atomic_json(path: Path, data: dict):

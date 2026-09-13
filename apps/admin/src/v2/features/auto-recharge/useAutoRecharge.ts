@@ -1,9 +1,11 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
+import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import type {
   V2RechargeAddress,
   V2RechargeAddressList,
   V2RechargeBitBrowserLaunch,
   V2RechargeBitBrowserRecheckLaunch,
+  V2RechargeBitBrowserResolutionLaunch,
   V2RechargeBitBrowserSettings,
   V2RechargeDetails,
   V2RechargeJob,
@@ -174,6 +176,7 @@ export function useAutoRecharge() {
         Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
       job.result.payment_status !== 'declined' &&
+      job.result.operator_resolution !== 'confirmed_no_bank_request' &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       sessionJson.value &&
@@ -181,6 +184,23 @@ export function useAutoRecharge() {
       currentSettingsReady.value &&
       !busy.value &&
       !active.value &&
+      query.phase.value === 'ready'
+    );
+  });
+  const canResolveNoBankRequest = computed(() => {
+    const job = selected.value;
+    return Boolean(
+      job &&
+      ['finished', 'unknown'].includes(job.state) &&
+      job.result.payment_attempted === true &&
+      Number(job.result.confirmation_requests_sent) === 1 &&
+      job.result.payment_status === 'unknown' &&
+      !job.result.payment_evidence &&
+      job.result.operator_resolution !== 'confirmed_no_bank_request' &&
+      job.result.resolution_verification_job_id &&
+      !busy.value &&
+      !active.value &&
+      settingsQuery.data.value?.connectorTokenConfigured &&
       query.phase.value === 'ready'
     );
   });
@@ -427,6 +447,78 @@ export function useAutoRecharge() {
     }
   }
 
+  async function resolveNoBankRequest() {
+    const source = selected.value;
+    const verificationJobId = source?.result.resolution_verification_job_id;
+    if (!canResolveNoBankRequest.value || !source || !verificationJobId) return;
+    try {
+      await ElMessageBox.confirm(
+        '此操作只记录你已确认银行卡没有收到这笔付款请求，并解除该历史记录对后续充值的阻止。原付款尝试和确认次数会继续保留。',
+        '确认银行卡未收到付款请求',
+        { confirmButtonText: '确认并处理', cancelButtonText: '取消', type: 'warning' }
+      );
+    } catch {
+      return;
+    }
+    busy.value = true;
+    error.value = '';
+    let launch: V2RechargeBitBrowserResolutionLaunch | null = null;
+    try {
+      const saved = settingsQuery.data.value;
+      if (!saved?.connectorTokenConfigured) throw new Error('请先保存本机连接密钥。');
+      await rechargeConnectorApi.health(saved.connectorUrl);
+      if (disposed) return;
+      const response = await rechargeApi.resolveNoBankRequest(source.id, {
+        confirmNoBankRequest: true,
+        verificationJobId
+      });
+      if ('alreadyResolved' in response) {
+        connectorMessage.value = '历史付款记录已经处理';
+        return;
+      }
+      launch = response;
+      currentId.value = launch.id;
+      localAccess.value = {
+        connectorUrl: launch.connectorUrl,
+        connectorToken: launch.connectorToken
+      };
+      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
+        id: launch.id,
+        mode: launch.mode,
+        plan: launch.plan,
+        accountKey: launch.accountKey,
+        checkoutIdentifier: launch.checkoutIdentifier,
+        sourceJobId: launch.sourceJobId,
+        verificationJobId: launch.verificationJobId,
+        callbackUrl: rechargeCallbackUrl(launch.id),
+        agentToken: launch.agentToken
+      });
+      connectorStatus.value = 'online';
+      connectorMessage.value = '银行卡未收到付款请求的确认已处理';
+    } catch (cause) {
+      if (launch) {
+        try {
+          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, launch.id);
+          connectorStatus.value = 'online';
+          connectorMessage.value = '本机连接器已接收处理任务';
+          error.value = '';
+        } catch {
+          try {
+            await rechargeApi.abandonUnreceivedBitBrowser(launch.id);
+            error.value = '本机连接器未接收处理任务，请重新操作。';
+          } catch {
+            error.value = '本机连接器接收结果待核验，请刷新原任务。';
+          }
+        }
+      } else {
+        error.value = getApiErrorMessage(cause);
+      }
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
   async function access() {
     const job = selected.value;
     if (!job) throw new Error('当前没有可操作的本机任务');
@@ -519,6 +611,7 @@ export function useAutoRecharge() {
     canStart,
     canCancel,
     canRecheck,
+    canResolveNoBankRequest,
     needsHuman,
     workflowMessage,
     browserSettings,
@@ -529,6 +622,7 @@ export function useAutoRecharge() {
     importJson,
     start,
     recheck,
+    resolveNoBankRequest,
     selectJob,
     resume,
     cancel,

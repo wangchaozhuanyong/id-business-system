@@ -49,7 +49,8 @@ SAFE_PUBLIC_KEYS = set(
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
-    "session_elapsed_seconds session_wait_seconds session_step cancellation_confirmed browser_cleanup_status".split()
+    "session_elapsed_seconds session_wait_seconds session_step cancellation_confirmed browser_cleanup_status "
+    "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
 
 
@@ -183,6 +184,24 @@ def validate_payload(value):
     if not isinstance(value, dict):
         raise Stop("invalid_connector_payload")
     mode = value.get("mode")
+    if mode == "resolve_unknown_payment":
+        allowed = {"id", "mode", "plan", "accountKey", "checkoutIdentifier",
+                   "sourceJobId", "verificationJobId", "callbackUrl", "agentToken"}
+        if set(value) != allowed:
+            raise Stop("invalid_connector_payload")
+        if (not isinstance(value.get("id"), str) or not JOB_ID.fullmatch(value["id"])
+                or value.get("plan") not in PLANS
+                or not isinstance(value.get("accountKey"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", value["accountKey"])
+                or not isinstance(value.get("checkoutIdentifier"), str)
+                or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", value["checkoutIdentifier"])
+                or not all(isinstance(value.get(key), str) and JOB_ID.fullmatch(value[key])
+                           for key in ("sourceJobId", "verificationJobId"))
+                or value["id"] in {value["sourceJobId"], value["verificationJobId"]}
+                or not isinstance(value.get("callbackUrl"), str) or not value["callbackUrl"]
+                or not isinstance(value.get("agentToken"), str) or len(value["agentToken"]) != 64):
+            raise Stop("invalid_connector_payload")
+        return value
     common = {"id", "mode", "plan", "windowName", "sessionJson", "bitBrowser",
               "callbackUrl", "agentToken"}
     allowed = (common | {"details", "address", "safety", "authorizeSinglePayment"}
@@ -284,6 +303,7 @@ class LocalJob:
         self.waiting_for_user = False
         self.initial_session_verified = False
         self.session_info = {}
+        self.resolution_committed = False
 
     def check_cancelled(self):
         if self.cancelled:
@@ -407,6 +427,20 @@ class LocalJob:
         return True
 
     async def execute(self):
+        if self.payload["mode"] == "resolve_unknown_payment":
+            self.account_key = self.payload["accountKey"]
+            self.callback.send({
+                "type": "resolve_unknown_payment",
+                "plan": self.payload["plan"],
+                "accountKey": self.account_key,
+                "checkoutIdentifier": self.payload["checkoutIdentifier"],
+                "sourceJobId": self.payload["sourceJobId"],
+                "verificationJobId": self.payload["verificationJobId"],
+            })
+            self.resolution_committed = True
+            return {"status": "payment_unknown_resolved",
+                    "stage": "payment_unknown_resolution",
+                    "payment_attempted": False, "payment_requests_sent": 0}
         raw = self.payload.pop("sessionJson")
         try:
             target = parse_browser_credential(raw.encode())
@@ -486,12 +520,12 @@ class LocalJob:
             "locked_currency": self.payload.get("safety", {}).get("lockedCurrency"),
             "max_amount": self.payload.get("safety", {}).get("maxAmount"),
         }
-        try:
-            self.callback.send({"type": "finished", "result": public_result(result)})
-        except Stop:
-            pass
-        finally:
-            self.callback.token = ""
+        if not self.resolution_committed:
+            try:
+                self.callback.send({"type": "finished", "result": public_result(result)})
+            except Stop:
+                pass
+        self.callback.token = ""
 
 
 class Registry:
@@ -568,7 +602,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "version": 2,
                                     "service": "id-business-v2-auto-recharge-connector",
-                                    "capabilities": ["browser-catalog", "browser-options", "session-load-retry"],
+                                    "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
+                                                     "payment-unknown-resolution"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
