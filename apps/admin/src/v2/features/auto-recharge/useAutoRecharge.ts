@@ -166,14 +166,18 @@ export function useAutoRecharge() {
       !formLocked.value &&
       query.phase.value === 'ready'
   );
-  const canCancel = computed(
-    () =>
-      selected.value?.action === 'bitbrowser' &&
-      activeStates.has(selected.value.state) &&
-      selected.value.result.status !== 'cancelling' &&
-      selected.value.result.payment_attempted !== true &&
-      Number(selected.value.result.payment_requests_sent ?? 0) === 0
-  );
+  const canCancel = computed(() => {
+    const job = selected.value;
+    const connectorNeverReceived =
+      job?.state === 'unknown' && job.result.status === 'waiting_local_connector';
+    return Boolean(
+      job?.action === 'bitbrowser' &&
+      (activeStates.has(job.state) || connectorNeverReceived) &&
+      job.result.status !== 'cancelling' &&
+      job.result.payment_attempted !== true &&
+      Number(job.result.payment_requests_sent ?? 0) === 0
+    );
+  });
   const canRecheck = computed(() => {
     const job = selected.value;
     return Boolean(

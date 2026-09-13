@@ -275,7 +275,7 @@ describe('本机比特浏览器自动充值', () => {
         id: launch.id,
         plan: 'pro-20x',
         action: 'bitbrowser',
-        state: 'running',
+        state: 'unknown',
         result: {
           status: 'waiting_local_connector',
           stage: 'connector_dispatch',
@@ -287,7 +287,9 @@ describe('本机比特浏览器自动充值', () => {
         updatedAt: ''
       }
     ];
+    flow.selectJob(launch.id);
     await nextTick();
+    expect(flow.canCancel.value).toBe(true);
     mock.connectorCancel.mockRejectedValueOnce(new RechargeConnectorError('missing'));
 
     await flow.cancel();
