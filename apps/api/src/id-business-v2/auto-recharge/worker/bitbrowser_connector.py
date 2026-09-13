@@ -122,7 +122,13 @@ class BitBrowserClient:
                 result = json.loads(response.read(MAX_BODY), object_pairs_hook=unique_object)
         except Exception:
             raise Stop("bitbrowser_local_api_unavailable", stage=path.strip("/").replace("/", "_")) from None
-        if result.get("success") is not True or not isinstance(result.get("data", {}), (dict, list)):
+        if result.get("success") is not True:
+            raise Stop("bitbrowser_local_api_rejected", stage=path.strip("/").replace("/", "_"))
+        # Official close/delete acknowledgements may contain a string, not an object.
+        # The retry owner still confirms process exit separately before deletion.
+        if path in {"/browser/close", "/browser/delete"}:
+            return {}
+        if not isinstance(result.get("data", {}), (dict, list)):
             raise Stop("bitbrowser_local_api_rejected", stage=path.strip("/").replace("/", "_"))
         return result.get("data", {})
 

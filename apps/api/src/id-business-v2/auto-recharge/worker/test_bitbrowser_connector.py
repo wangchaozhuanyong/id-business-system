@@ -1,6 +1,7 @@
 import asyncio
+import json
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import bitbrowser_connector as connector
 from checkout_core import Stop
@@ -52,6 +53,22 @@ def payload():
 
 
 class BitBrowserConnectorTests(unittest.TestCase):
+    def test_official_cleanup_acknowledgements_allow_strings_but_reads_stay_strict(self):
+        client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
+        with patch.object(connector, "build_opener") as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            for path in ("/browser/close", "/browser/delete"):
+                for data in ("success", None, {}, True):
+                    response.read.return_value = json.dumps({"success": True, "data": data}).encode()
+                    self.assertEqual(client.post(path, {"id": "a" * 32}), {})
+                response.read.return_value = b'{"success":false,"data":"failure"}'
+                with self.assertRaises(Stop):
+                    client.post(path, {"id": "a" * 32})
+            response.read.return_value = b'{"success":true,"data":"unverified"}'
+            for path in ("/browser/detail", "/browser/pids/alive"):
+                with self.assertRaises(Stop):
+                    client.post(path, {"id": "a" * 32})
+
     def test_payload_is_complete_and_card_is_valid_before_browser_side_effects(self):
         value = payload()
         self.assertIs(connector.validate_payload(value), value)

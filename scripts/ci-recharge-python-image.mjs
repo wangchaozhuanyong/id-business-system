@@ -18,6 +18,18 @@ async function main() {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const repo = process.env.GITHUB_REPOSITORY;
   const service = process.env.SERVICE;
+  git('fetch', '--no-tags', 'origin', event.pull_request.base.sha);
+  const initialChanges = git('diff', '--name-only', event.pull_request.base.sha, 'HEAD')
+    .split('\n')
+    .filter(Boolean);
+  if (!imageInputsChanged(service, initialChanges)) {
+    appendFileSync(process.env.GITHUB_OUTPUT, 'unchanged=true\n');
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `${service} source inputs unchanged from main; no image rebuild.\n`
+    );
+    return;
+  }
   const gh = (endpoint) => JSON.parse(execFileSync('gh', ['api', endpoint], { encoding: 'utf8' }));
   const { workflow_runs: runs } = gh(
     `repos/${repo}/actions/workflows/python-dependency-audit.yml/runs?event=pull_request&branch=${encodeURIComponent(event.pull_request.head.ref)}&status=success&per_page=10`
