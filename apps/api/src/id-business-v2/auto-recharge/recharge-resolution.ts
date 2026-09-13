@@ -22,13 +22,17 @@ const checkoutPattern = /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/;
 
 export function unknownPaymentCanBeResolved(job: RechargeResolutionJob) {
   const result = object(job.result);
+  const hasSingleHistoricalRequest =
+    Number(result.confirmation_requests_sent ?? 0) === 1 ||
+    (Number(result.confirmation_requests_sent ?? 0) === 0 &&
+      Number(result.payment_requests_sent ?? 0) === 1);
   return Boolean(
     ['prepare', 'flow', 'bitbrowser'].includes(job.action) &&
     job.state === 'finished' &&
     typeof job.accountKey === 'string' &&
     /^[a-f0-9]{64}$/.test(job.accountKey) &&
     result.payment_attempted === true &&
-    Number(result.confirmation_requests_sent) === 1 &&
+    hasSingleHistoricalRequest &&
     result.payment_status === 'unknown' &&
     !result.payment_evidence &&
     result.status !== 'subscription_activated' &&

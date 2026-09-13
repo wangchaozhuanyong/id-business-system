@@ -416,7 +416,8 @@ describe('本机任务持久化边界', () => {
         status: 'payment_result_unknown',
         checkout_identifier: 'oaics_historical',
         payment_attempted: true,
-        confirmation_requests_sent: 1,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 1,
         payment_status: 'unknown'
       }
     };

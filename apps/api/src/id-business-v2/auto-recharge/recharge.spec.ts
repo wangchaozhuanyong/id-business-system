@@ -488,7 +488,8 @@ describe('single worker dispatch and confirmation', () => {
           status: 'payment_result_unknown',
           checkout_identifier: 'oaics_historical',
           payment_attempted: true,
-          confirmation_requests_sent: 1,
+          confirmation_requests_sent: 0,
+          payment_requests_sent: 1,
           payment_status: 'unknown'
         }
       }
@@ -765,7 +766,8 @@ describe('single worker dispatch and confirmation', () => {
         status: 'payment_result_unknown',
         checkout_identifier: 'oaics_historical',
         payment_attempted: true,
-        confirmation_requests_sent: 1,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 1,
         payment_status: 'unknown'
       }
     };
@@ -831,7 +833,8 @@ describe('single worker dispatch and confirmation', () => {
         data: expect.objectContaining({
           result: expect.objectContaining({
             payment_attempted: true,
-            confirmation_requests_sent: 1,
+            confirmation_requests_sent: 0,
+            payment_requests_sent: 1,
             operator_resolution: 'confirmed_no_bank_request'
           })
         })
