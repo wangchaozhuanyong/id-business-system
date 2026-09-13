@@ -479,7 +479,8 @@ describe('本机比特浏览器自动充值', () => {
       result: {
         status: 'payment_result_unknown',
         payment_attempted: true,
-        confirmation_requests_sent: 1,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 1,
         payment_status: 'unknown',
         checkout_identifier: 'oaics_historical',
         resolution_verification_job_id: resolutionLaunch.verificationJobId
