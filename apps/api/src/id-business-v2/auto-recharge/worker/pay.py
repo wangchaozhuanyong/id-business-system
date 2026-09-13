@@ -14,7 +14,7 @@ import uuid
 import warnings
 
 from browser_checkout import (ORIGIN, check_session, progress, quote_from_page, run_browser)
-from attempt_ledger import checkout_record_path
+from attempt_ledger import checkout_record_path, read_checkout_record
 from checkout_core import MAX_BYTES, ROOT, Stop, parse_browser_credential, write_json
 from payment_form import (PaymentDetails, fill_official_form, subscribe_button, validate_details,
                           verify_billing_fields, verify_card_fields)
@@ -259,6 +259,11 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
     }
     record_path = checkout_record_path(state_dir, target.account_id, target_plan)
     if record_path.exists():
+        # 取消记录由服务端确认停止后停用，历史仍保留，下次不再打开该旧结算。
+        record = read_checkout_record(state_dir, target.account_id, target_plan)
+        if (record.get("status") == "cancelled"
+                and record.get("cancelled_before_confirmation") is True):
+            return await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
         result = await run_browser(target, inspect_existing=True, **browser_args)
         if (result.get("reason") == "existing_checkout_unavailable"
                 and not result.get("payment_attempted")

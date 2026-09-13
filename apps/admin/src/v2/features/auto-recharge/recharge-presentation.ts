@@ -159,6 +159,9 @@ const labels: Record<string, string> = {
   original_quote_mismatch: '原订单当前币种或金额与历史记录不一致，只展示官网实际结果',
   durable_state_unavailable: '记录服务未确认，已阻止重复请求',
   operation_cancelled: '操作已取消',
+  cancelled: '本次任务已取消',
+  cancelling: '正在停止并清理本次窗口',
+  operation_cancel_requested: '已收到停止请求，正在清理',
   http_error: '官网拒绝当前请求，本次已安全停止'
 };
 export const selectionStepLabels = {

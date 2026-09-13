@@ -104,6 +104,43 @@ describe('比特浏览器充值输入边界', () => {
 });
 
 describe('本机任务持久化边界', () => {
+  it('取消请求保留回传凭据，待连接器完成清理；完成后的取消回执幂等', async () => {
+    const job = {
+      id,
+      ownerId: operator.id,
+      action: 'bitbrowser',
+      state: 'running',
+      nonceHash: 'existing',
+      result: { payment_requests_sent: 0 }
+    };
+    const repository = {
+      lock: vi.fn(),
+      findJob: vi.fn().mockResolvedValue(job),
+      updateJob: vi.fn()
+    };
+    const service = new RechargeLocalService(
+      repository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { execute: (fn: (tx: object) => unknown) => fn({}) } as never,
+      { append: vi.fn() } as never
+    );
+    await service.cancel(id, operator);
+    const update = repository.updateJob.mock.calls[0][2];
+    expect(update.result.status).toBe('cancelling');
+    expect(update).not.toHaveProperty('nonceHash');
+    expect(update).not.toHaveProperty('state');
+    repository.findJob.mockResolvedValue({
+      ...job,
+      state: 'finished',
+      result: { payment_requests_sent: 0, cancellation_confirmed: true }
+    });
+    await expect(service.cancel(id, operator)).resolves.toEqual({ id });
+    expect(repository.updateJob).toHaveBeenCalledTimes(1);
+    repository.findJob.mockResolvedValue({ ...job, result: { payment_requests_sent: 1 } });
+    await expect(service.cancel(id, operator)).rejects.toThrow('付款请求已发出');
+  });
   it('生产 API 只保存脱敏任务，完整密钥只返回给当前操作者', async () => {
     const tx = {};
     const repository = {

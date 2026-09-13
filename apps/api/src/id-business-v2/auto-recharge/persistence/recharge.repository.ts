@@ -58,6 +58,69 @@ export class RechargeRepository {
     return tx.idBusinessV2RechargeRecord.findMany({ where: { accountKey } });
   }
 
+  async retireCancelledCheckout(
+    tx: V2CommandTransaction,
+    accountKey: string,
+    plan: string,
+    ownerId: string
+  ) {
+    const fileKey = `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
+    const record = await tx.idBusinessV2RechargeRecord.findUnique({
+      where: { accountKey_fileKey: { accountKey, fileKey } }
+    });
+    if (!record) return 0;
+    if (record.ownerId !== ownerId) throw new ConflictException('原订单归属不一致');
+    const before = record.document as Record<string, unknown>;
+    if (
+      before.payment_status !== 'not_attempted' ||
+      before.payment_attempted === true ||
+      Number(before.confirmation_requests_sent ?? 0) !== 0
+    )
+      return 0;
+    const payments = (await this.records(tx, accountKey)).filter(
+      (item) =>
+        item.fileKey.startsWith('payments/') &&
+        (item.document as Record<string, unknown>).checkout_identifier ===
+          before.checkout_identifier
+    );
+    if (
+      payments.some((item) => {
+        const payment = item.document as Record<string, unknown>;
+        return (
+          item.ownerId !== ownerId ||
+          payment.confirmation_requests_sent !== 0 ||
+          payment.payment_evidence ||
+          !['unknown', 'cancelled'].includes(String(payment.payment_status))
+        );
+      })
+    )
+      return 0;
+    // 连接器已停止，且持久记录证明未发送确认；保留审计和原编号，只停用执行记录。
+    for (const item of [...payments, record]) {
+      await tx.idBusinessV2RechargeRecord.update({
+        where: { accountKey_fileKey: { accountKey, fileKey: item.fileKey } },
+        data: {
+          revision: { increment: 1 },
+          document: toV2JsonDocument({
+            ...(item.document as Record<string, unknown>),
+            status: 'cancelled',
+            reason: 'operation_cancelled',
+            cancelled_before_confirmation: true,
+            ...(item.fileKey.startsWith('payments/')
+              ? { payment_status: 'cancelled' }
+              : {
+                  checkout_outcome: 'cancelled',
+                  payment_status: 'not_attempted',
+                  payment_attempted: false,
+                  confirmation_requests_sent: 0
+                })
+          })
+        }
+      });
+    }
+    return payments.length + 1;
+  }
+
   async active(tx: V2CommandTransaction, id: string) {
     const job = await tx.idBusinessV2RechargeJob.findUnique({ where: { id } });
     if (!job || job.leaseUntil.getTime() < Date.now() || job.state === 'finished') {

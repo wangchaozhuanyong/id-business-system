@@ -161,6 +161,7 @@ export function useAutoRecharge() {
     () =>
       selected.value?.action === 'bitbrowser' &&
       activeStates.has(selected.value.state) &&
+      selected.value.result.status !== 'cancelling' &&
       selected.value.result.payment_attempted !== true &&
       Number(selected.value.result.payment_requests_sent ?? 0) === 0
   );
@@ -186,6 +187,7 @@ export function useAutoRecharge() {
   const needsHuman = computed(() => selected.value?.state === 'awaiting_human_verification');
   const workflowMessage = computed(() => {
     const job = selected.value;
+    if (job?.result.status === 'cancelling') return '正在停止执行并清理本次窗口，请稍候。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running') return '本机比特浏览器正在执行，系统不会重复提交付款。';

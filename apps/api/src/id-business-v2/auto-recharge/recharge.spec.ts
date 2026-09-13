@@ -56,6 +56,82 @@ const quote = {
 };
 
 describe('recharge input and durable evidence', () => {
+  it.each([null, 0, 1])('取消清理保留历史，只停用未发送确认的本套餐记录（%s）', async (sent) => {
+    const accountKey = 'a'.repeat(64);
+    const checkout = {
+      accountKey,
+      ownerId: operator.id,
+      fileKey: `${accountKey}.json`,
+      document: { checkout_identifier: 'cs_cancelled', payment_status: 'not_attempted' }
+    };
+    const payment = {
+      accountKey,
+      ownerId: operator.id,
+      fileKey: `payments/${'b'.repeat(64)}.json`,
+      document: {
+        checkout_identifier: 'cs_cancelled',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        confirmation_requests_sent: sent
+      }
+    };
+    const unrelated = {
+      ...payment,
+      fileKey: `payments/${'c'.repeat(64)}.json`,
+      document: {
+        ...payment.document,
+        checkout_identifier: 'cs_other',
+        confirmation_requests_sent: 1
+      }
+    };
+    const records = {
+      findUnique: vi.fn().mockResolvedValue(checkout),
+      findMany: vi.fn().mockResolvedValue([checkout, payment, unrelated]),
+      update: vi.fn()
+    };
+    const repository = new RechargeRepository({} as never);
+    const retired = await repository.retireCancelledCheckout(
+      { idBusinessV2RechargeRecord: records } as never,
+      accountKey,
+      'plus',
+      operator.id
+    );
+    expect(retired).toBe(sent === 0 ? 2 : 0);
+    expect(records.update).toHaveBeenCalledTimes(sent === 0 ? 2 : 0);
+    for (const [change] of records.update.mock.calls) {
+      expect(change.where.accountKey_fileKey.fileKey).not.toBe(unrelated.fileKey);
+      expect(change.data.document.cancelled_before_confirmation).toBe(true);
+      expect(change.data.revision).toEqual({ increment: 1 });
+    }
+  });
+
+  it('无付款标记的取消结算自动停用，原订单及账单历史保留', async () => {
+    const accountKey = 'a'.repeat(64);
+    const checkout = {
+      ownerId: operator.id,
+      fileKey: `${accountKey}.json`,
+      document: { checkout_identifier: 'cs_cancelled', payment_status: 'not_attempted' }
+    };
+    const records = {
+      findUnique: vi.fn().mockResolvedValue(checkout),
+      findMany: vi.fn().mockResolvedValue([checkout]),
+      update: vi.fn()
+    };
+    const repository = new RechargeRepository({} as never);
+    expect(
+      await repository.retireCancelledCheckout(
+        { idBusinessV2RechargeRecord: records } as never,
+        accountKey,
+        'plus',
+        operator.id
+      )
+    ).toBe(1);
+    expect(records.update.mock.calls[0][0].data.document).toMatchObject({
+      checkout_identifier: 'cs_cancelled',
+      checkout_outcome: 'cancelled',
+      payment_attempted: false
+    });
+  });
   it('只保留范围内的会话进度与脱敏错误', () => {
     const progress = {
       session_attempt: 2,
@@ -561,5 +637,69 @@ describe('single worker dispatch and confirmation', () => {
     });
 
     expect(addressRepository.markUsed).not.toHaveBeenCalled();
+  });
+
+  it('停止确认回调先停用取消结算，再结束任务并写审计', async () => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey: 'a'.repeat(64),
+      plan: 'plus',
+      action: 'bitbrowser',
+      state: 'running',
+      result: { status: 'cancelling' }
+    } as never);
+    const retire = vi.spyOn(repository, 'retireCancelledCheckout').mockResolvedValueOnce(1);
+    await service.callback(id, {
+      type: 'finished',
+      result: {
+        status: 'cancelled',
+        cancellation_confirmed: true,
+        payment_requests_sent: 0,
+        payment_attempted: false,
+        browser_cleanup_status: 'completed'
+      }
+    });
+    expect(retire).toHaveBeenCalledWith(tx, 'a'.repeat(64), 'plus', operator.id);
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: 'finished', nonceHash: null })
+      })
+    );
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.bitbrowser.cancel',
+        afterData: { retiredRecords: 1, browserCleanup: 'completed' }
+      })
+    );
+  });
+
+  it.each([
+    ['flow', false, true],
+    ['bitbrowser', false, true],
+    ['bitbrowser', true, false]
+  ])('旧结算替换仅开放给自动执行，复查保持只读（%s/%s）', async (action, recheckOnly, allowed) => {
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey: 'a'.repeat(64),
+      plan: 'plus',
+      action,
+      state: 'running',
+      result: { recheck_only: recheckOnly }
+    } as never);
+    const save = vi.spyOn(repository, 'saveRecord').mockResolvedValueOnce({ revision: 2 });
+    await service.callback(id, {
+      type: 'ledger',
+      accountKey: 'a'.repeat(64),
+      fileKey: `${'a'.repeat(64)}.json`,
+      revision: 1,
+      document: { status: 'checkout_attempted' }
+    });
+    expect(save).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ allowCheckoutReplacement: allowed })
+    );
   });
 });

@@ -11,16 +11,17 @@ from browser_session import SessionBudget, retryable_session_result
 from checkout_core import Stop
 
 
-async def cleanup_profile(job, client, owned):
+async def cleanup_profile(job, client, owned, *, cancelling=False):
     profile_id = job.profile_id
     if profile_id not in owned or not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id or ""):
         raise Stop("bitbrowser_cleanup_unverified")
-    job.progress("bitbrowser_profile_cleanup")
+    job.progress("bitbrowser_profile_cleanup", _during_cancel=cancelling)
     try:
         await asyncio.to_thread(client.post, "/browser/close", {"id": profile_id})
         deadline = time.monotonic() + 15
         while True:
-            job.check_cancelled()
+            if not cancelling:
+                job.check_cancelled()
             pids = await asyncio.to_thread(client.post, "/browser/pids/alive", {"ids": [profile_id]})
             if not isinstance(pids, dict) or any(key != profile_id for key in pids):
                 raise Stop("bitbrowser_cleanup_unverified")
@@ -29,7 +30,8 @@ async def cleanup_profile(job, client, owned):
             if time.monotonic() >= deadline:
                 raise Stop("bitbrowser_cleanup_unverified")
             await asyncio.sleep(0.25)
-        job.check_cancelled()
+        if not cancelling:
+            job.check_cancelled()
         await asyncio.to_thread(client.post, "/browser/delete", {"id": profile_id})
         owned.remove(profile_id)
         job.profile_id = None
@@ -41,10 +43,46 @@ async def cleanup_profile(job, client, owned):
 
 
 async def execute_profiles(job, client, target, playwright):
+    owned = set()
+    try:
+        result = await _execute_profiles(job, client, target, playwright, owned)
+    except Stop as exc:
+        if not job.cancelled:
+            raise
+        result = exc.report
+    if job.cancelled and job.payload["mode"] == "payment" and not job.payment_request_sent:
+        cleanup = "not_needed"
+        try:
+            if job.profile_id:
+                await cleanup_profile(job, client, owned, cancelling=True)
+                cleanup = "completed"
+        except Stop:
+            cleanup = "failed"
+        return {**result, "status": "cancelled", "cancellation_confirmed": True,
+                "reason": "bitbrowser_cleanup_unverified" if cleanup == "failed" else "operation_cancelled",
+                "browser_cleanup_status": cleanup, "payment_requests_sent": 0,
+                "payment_attempted": False, "browser_profile_id": job.profile_id or ""}
+    return result
+
+
+async def cancellable_flow(job, target, **kwargs):
+    task = asyncio.create_task(pay.run_flow(target, job.root, job.payload["plan"], **kwargs))
+    try:
+        while not task.done():
+            job.check_cancelled()
+            await asyncio.wait({task}, timeout=.2)
+        job.check_cancelled()
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _execute_profiles(job, client, target, playwright, owned):
     bit = job.payload["bitBrowser"]
     options = bitbrowser_options.validate_options(bit.get("browserOptions"))
     attempts = options["sessionRetryLimit"] + 1 if job.payload["mode"] == "payment" else 1
-    owned = set()
     for attempt in range(1, attempts + 1):
         job.check_cancelled()
         job.session_info = {"session_attempt": attempt, "session_attempt_limit": attempts,
@@ -74,8 +112,8 @@ async def execute_profiles(job, client, target, playwright):
         budget = SessionBudget(options["sessionWaitMinutes"] * 60,
                                cancelled=lambda: job.cancelled,
                                report=lambda **details: job.progress("session_restore", **details))
-        result = await pay.run_flow(
-            target, job.root, job.payload["plan"], details_reader=job.details,
+        result = await cancellable_flow(
+            job, target, details_reader=job.details,
             confirmer=job.confirm, wait_seconds=1800, poll_count=6, poll_interval=20,
             browser_context=job.context, session_budget=budget)
         result.update(job.session_info)

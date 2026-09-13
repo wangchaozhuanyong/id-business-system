@@ -14,6 +14,7 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
+import { completeCancellation, canReplaceCheckout } from './recharge-cancellation';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import {
   RECHARGE_ADDRESS_LOCATION,
@@ -428,7 +429,6 @@ export class RechargeService {
     }
     return { id };
   }
-
   async cancel(id: string, operator: AuthenticatedUser) {
     const job = await this.repository.owned(id, operator.id);
     if (job.state === 'confirming') throw new ConflictException('付款已确认，只能等待或复查原订单');
@@ -519,7 +519,7 @@ export class RechargeService {
             fileKey: input.fileKey,
             revision: Number(input.revision),
             document,
-            allowCheckoutReplacement: job.action === 'quote'
+            allowCheckoutReplacement: canReplaceCheckout(job)
           });
           await markAddressUsed(document);
           await this.audit.append(tx, {
@@ -580,6 +580,7 @@ export class RechargeService {
         }
         if (input.type === 'finished') {
           await markAddressUsed(report);
+          await completeCancellation(tx, job, report, this.repository, this.audit);
           state = 'finished';
           nonceHash = null;
         }

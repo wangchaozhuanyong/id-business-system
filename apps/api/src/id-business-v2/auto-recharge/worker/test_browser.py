@@ -50,6 +50,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.duplicate_pricing_card = False
         self.expire_existing_checkout = False
         self.keep_existing_checkout_error_url = False
+        self.chinese_verify_with_id = False
         await self.context.route("**/*", self.server)
 
     async def asyncTearDown(self):
@@ -89,10 +90,13 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(json={"synthetic_initialization": True}, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
         elif path == "/checkout/verify":
             await route.fulfill(content_type="text/html; charset=utf-8",
-                                body="<html><body>There was an error processing your payment</body></html>")
+                                body=("<html><body>处理你的付款时出错<a href='/'>返回 ChatGPT</a></body></html>"
+                                      if self.chinese_verify_with_id else
+                                      "<html><body>There was an error processing your payment</body></html>"))
         elif path.startswith("/checkout/") and self.expire_existing_checkout:
+            suffix = '?stripe_session_id=oaics_synthetic&processor_entity=openai_ie' if self.chinese_verify_with_id else ''
             await route.fulfill(content_type="text/html; charset=utf-8",
-                                body="<html><script>location.replace('/checkout/verify')</script></html>")
+                                body=f"<html><script>location.replace('/checkout/verify{suffix}')</script></html>")
         elif path.startswith("/checkout/") and self.keep_existing_checkout_error_url:
             await route.fulfill(content_type="text/html; charset=utf-8",
                                 body="<html><body>There was an error processing your payment"
@@ -360,6 +364,44 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.payments, 0)
         self.assertEqual(result["checkout_status"], "rejected")
+
+    async def test_real_chinese_error_and_verify_query_id_never_count_as_quote(self):
+        self.expire_existing_checkout = self.chinese_verify_with_id = True
+        existing = {"checkout_identifier": "oaics_synthetic", "processor_entity": "openai_ie",
+                    "returned_currency": "MYR"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = await workflow(self.context, self.target, existing=existing, quote_timeout=1)
+        self.assertEqual(result['reason'], 'existing_checkout_unavailable', result)
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertFalse(self.creates)
+
+    async def test_initial_home_is_reused_and_old_guard_does_not_block_next_flow(self):
+        home = await self.context.new_page()
+        await home.goto('https://chatgpt.com/')
+        with contextlib.redirect_stderr(io.StringIO()):
+            first = await workflow(self.context, self.target)
+            second = await self.run_flow(True)
+        self.assertEqual(first['status'], 'session_verified', first)
+        self.assertEqual(second['status'], 'checkout_quote_verified', second)
+        self.assertEqual(self.context.pages, [home])
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
+
+    async def test_initial_blank_and_failed_checkout_are_reused_for_single_replacement(self):
+        page = await self.context.new_page()
+        self.expire_existing_checkout = self.chinese_verify_with_id = True
+        existing = {"checkout_identifier": "oaics_synthetic", "processor_entity": "openai_ie",
+                    "returned_currency": "MYR"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            first = await workflow(self.context, self.target, existing=existing, quote_timeout=1)
+            self.expire_existing_checkout = False
+            second = await self.run_flow(True)
+        self.assertEqual(first['reason'], 'existing_checkout_unavailable', first)
+        self.assertEqual(second['status'], 'checkout_quote_verified', second)
+        self.assertEqual(self.context.pages, [page])
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
 
     async def test_review_window_reports_late_blocked_requests(self):
         async def late_request():
