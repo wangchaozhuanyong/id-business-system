@@ -159,6 +159,13 @@ class BitBrowserClient:
         return profile_id
 
     def open_profile(self, profile_id):
+        # Verify the saved settings before a browser can receive a login session.
+        detail = self.post("/browser/detail", {"id": profile_id})
+        if (not isinstance(detail, dict) or detail.get("id") != profile_id
+                or any(detail.get(key) is not False for key in (
+                    "syncTabs", "syncCookies", "syncLocalStorage",
+                    "syncIndexedDb", "syncAuthorization"))):
+            raise Stop("bitbrowser_profile_sync_unverified")
         data = self.post("/browser/open", {"id": profile_id, "queue": True})
         endpoint = (data.get("ws") or data.get("http")) if isinstance(data, dict) else None
         if not isinstance(endpoint, str) or not endpoint.startswith(("ws://", "http://")):

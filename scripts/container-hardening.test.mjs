@@ -130,7 +130,11 @@ test('media resolver is an isolated, bounded and non-root sidecar', () => {
   assert.match(dockerfile, /\nUSER resolver\n/u);
   assert.match(dockerfile, /YT_DLP_VERSION=2026\.08\.19/u);
   assert.match(dockerfile, /YT_DLP_COMMIT=[a-f0-9]{40}/u);
-  assert.match(dockerfile, /F2_COMMIT=[a-f0-9]{40}/u);
+  assert.match(dockerfile, /python \/opt\/security\/prepare_f2\.py/u);
+  assert.match(
+    readProjectFile('apps/api/src/id-business-v2/workspace/media-resolver/prepare_f2.py'),
+    /COMMIT = "[a-f0-9]{40}"/u
+  );
   assert.match(dockerfile, /curl-cffi,pin-curl-cffi/u);
   assert.match(dockerfile, /deno,pin-deno/u);
   const worker = readProjectFile('apps/api/src/id-business-v2/workspace/media-resolver/server.py');

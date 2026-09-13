@@ -154,9 +154,9 @@ export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = 
   latitude: 0,
   longitude: 0,
   accuracy: 100,
-  syncTabs: true,
-  syncCookies: true,
-  syncLocalStorage: true
+  syncTabs: false,
+  syncCookies: false,
+  syncLocalStorage: false
 };
 
 export interface V2RechargeStaticProxyCredentials {

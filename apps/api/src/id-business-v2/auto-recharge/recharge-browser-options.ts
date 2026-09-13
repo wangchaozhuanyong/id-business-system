@@ -99,7 +99,13 @@ export function validateBrowserOptions(value: unknown): V2RechargeBrowserOptions
   } catch {
     fail('时区');
   }
-  return { ...input, timezone } as unknown as V2RechargeBrowserOptions;
+  return {
+    ...input,
+    timezone,
+    syncTabs: false,
+    syncCookies: false,
+    syncLocalStorage: false
+  } as unknown as V2RechargeBrowserOptions;
 }
 
 export function storedBrowserOptions(value: unknown): V2RechargeBrowserOptions {

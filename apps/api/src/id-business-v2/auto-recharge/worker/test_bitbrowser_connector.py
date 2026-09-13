@@ -109,12 +109,28 @@ class BitBrowserConnectorTests(unittest.TestCase):
         self.assertTrue(body["isDynamicIpChangeIp"])
         self.assertEqual(body["dynamicIpUrl"], "https://proxy.example/secret")
         self.assertFalse(body["credentialsEnableService"])
+        for key in ("syncTabs", "syncCookies", "syncLocalStorage", "syncIndexedDb", "syncAuthorization"):
+            self.assertIs(body[key], False)
         self.assertFalse(body["browserFingerPrint"]["isIpCreateLanguage"])
         self.assertEqual(body["browserFingerPrint"]["languages"], "zh-CN")
         self.assertFalse(body["browserFingerPrint"]["isIpCreateDisplayLanguage"])
         self.assertEqual(calls[3], ("/browserTag/updateRelation", {
             "browserId": profile_id, "addTagIds": ["a" * 32], "removeTagIds": []
         }))
+
+    def test_profile_sync_must_be_verified_before_opening(self):
+        client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
+        safe = {"id": "profile_12345678", **dict.fromkeys((
+            "syncTabs", "syncCookies", "syncLocalStorage", "syncIndexedDb", "syncAuthorization"), False)}
+        for key in safe:
+            for value in (True, None, "false", 0):
+                client.post = MagicMock(return_value={**safe, key: value})
+                with self.subTest(key=key, value=value), self.assertRaises(Stop):
+                    client.open_profile(safe["id"])
+                client.post.assert_called_once_with("/browser/detail", {"id": safe["id"]})
+        client.post = MagicMock(side_effect=[safe, {"ws": "ws://127.0.0.1:9222/devtools/browser/test"}])
+        self.assertTrue(client.open_profile(safe["id"]).startswith("ws://127.0.0.1"))
+        self.assertEqual(client.post.call_args.args[0], "/browser/open")
 
     def test_currency_amount_and_tax_guards_run_before_payment(self):
         job = connector.LocalJob(payload())

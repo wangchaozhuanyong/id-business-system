@@ -1,0 +1,58 @@
+name: Python Dependency Security
+
+on:
+  pull_request:
+    paths:
+      - 'apps/api/src/id-business-v2/auto-recharge/worker/**'
+      - 'apps/api/src/id-business-v2/workspace/media-resolver/**'
+      - 'scripts/audit-python-dependencies*'
+      - '.github/workflows/python-dependency-audit.yml'
+  schedule:
+    - cron: '43 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: auto-recharge
+            directory: auto-recharge/worker
+          - service: media-resolver
+            directory: workspace/media-resolver
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Test audit failure handling
+        run: python3 -B scripts/audit-python-dependencies.test.py
+      - name: Build and audit installed runtime dependencies
+        env:
+          SERVICE: ${{ matrix.service }}
+          DIRECTORY: ${{ matrix.directory }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p .deploy/python-images
+          tree=$(git rev-parse HEAD^{tree})
+          reference="id-business-v2-${SERVICE}:${SOURCE_SHA}"
+          docker build --label "org.opencontainers.image.revision=$SOURCE_SHA" --label "org.opencontainers.image.source-tree=$tree" -t "$reference" -f "apps/api/src/id-business-v2/$DIRECTORY/Dockerfile" .
+          docker image inspect "$reference" > ".deploy/python-images/${SERVICE}-image.json"
+          docker save "$reference" | gzip -3 > ".deploy/python-images/${SERVICE}.tar.gz"
+      - name: Preserve verified Python images for promotion
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-image-${{ matrix.service }}-${{ github.run_attempt }}
+          path: .deploy/python-images/
+          include-hidden-files: true
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14

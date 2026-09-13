@@ -5,7 +5,9 @@ import {
   isRechargeOnly,
   matchingRun,
   canReuseMain,
-  isCiOnly
+  isCiOnly,
+  isTargetedOnly,
+  selectedParts
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -103,4 +105,25 @@ test('evidence is bound to the same PR, source SHA and workflow', () => {
   assert.equal(matchingRun({ ...run, event: 'push' }, 191, 'abc'), false);
   assert.equal(matchingRun({ ...run, path: 'other.yml' }, 191, 'abc'), false);
   assert.equal(matchingRun({ ...run, status: 'in_progress' }, 191, 'abc'), false);
+});
+
+test('combined security and retry release selects affected modules without a migration run', () => {
+  const changed = [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/worker/bitbrowser_retry.py',
+    'apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile',
+    'packages/shared/src/v2/auto-recharge.ts',
+    '.github/workflows/quality.yml'
+  ];
+  assert.equal(isTargetedOnly(changed, schema, schema), true);
+  assert.deepEqual(selectedParts(changed), ['guards', 'admin', 'api', 'connector', 'security']);
+  assert.equal(
+    isTargetedOnly([...changed, 'apps/api/src/auth/auth.controller.ts'], schema, schema),
+    false
+  );
+  assert.equal(
+    isTargetedOnly([...changed, 'apps/api/prisma-mysql/schema.prisma'], schema, schema),
+    false
+  );
+  assert.deepEqual(selectedParts([files[0]]), ['guards', 'admin']);
 });

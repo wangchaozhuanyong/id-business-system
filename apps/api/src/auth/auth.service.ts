@@ -17,7 +17,7 @@ import { acquireMysqlTransactionLock } from '../common/prisma/mysql-transaction-
 import { SecurityService } from '../security/security.service';
 import { V2IdentityService } from '../v2-auth/v2-identity.service';
 import type { ChangePasswordDto } from './dto/change-password.dto';
-import { hashPassword, verifyPassword } from './password-hasher';
+import { hashPassword, passwordNeedsRehash, verifyPassword } from './password-hasher';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 import type { LoginDto } from './dto/login.dto';
 
@@ -135,6 +135,34 @@ export class AuthService {
           });
           throw new UnauthorizedException('动态验证码或恢复码错误，请重新输入。');
         }
+      }
+
+      if (passwordNeedsRehash(user.passwordHash)) {
+        const passwordHash = await hashPassword(input.password);
+        await this.prisma.$transaction(async (transaction: Prisma.TransactionClient) => {
+          const updated = await transaction.user.updateMany({
+            where: {
+              id: user.id,
+              passwordHash: user.passwordHash,
+              status: 'active',
+              deletedAt: null
+            },
+            data: { passwordHash }
+          });
+          if (updated.count !== 1) {
+            throw new UnauthorizedException('账号凭据已更新，请重新登录。');
+          }
+          await transaction.auditLog.create({
+            data: {
+              userId: user.id,
+              module: 'auth',
+              action: 'auth.password.rehash',
+              objectType: 'user',
+              objectId: user.id,
+              remark: 'Upgraded password hash work factor after authentication'
+            }
+          });
+        });
       }
 
       const response = this.createAuthResponse(authenticatedUser, mfaRequirement.required);

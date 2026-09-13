@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
-export const parts = ['guards', 'admin', 'api', 'connector', 'migration'];
+export const parts = ['guards', 'admin', 'api', 'connector', 'migration', 'security'];
 export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
@@ -35,6 +35,26 @@ export function isRechargeOnly(paths, oldSchema, newSchema) {
   );
 }
 
+// These security modules have explicit targeted checks below; other code remains full scope.
+const securityPaths =
+  /^(?:apps\/api\/src\/auth\/(?:auth\.service|password-hasher)(?:\.spec)?\.ts$|apps\/admin\/src\/v2\/features\/audit-logs\/audit-log-presentation(?:\.spec)?\.ts$|apps\/api\/src\/id-business-v2\/workspace\/media-resolver\/|scripts\/(?:audit-python-dependencies(?:\.test)?\.py|container-hardening\.test\.mjs|start-auto-recharge-connector\.sh)$|\.github\/workflows\/python-dependency-audit\.yml$)/;
+export function isTargetedOnly(paths, oldSchema, newSchema) {
+  return (
+    isRechargeOnly(paths, oldSchema, newSchema) ||
+    (paths.some((p) => securityPaths.test(p)) &&
+      paths.every((p) => allowed.test(p) || securityPaths.test(p)))
+  );
+}
+export function selectedParts(paths) {
+  return parts.filter((part) =>
+    part === 'migration'
+      ? paths.some((p) => p.startsWith('apps/api/prisma-mysql/'))
+      : part === 'security'
+        ? paths.some((p) => securityPaths.test(p))
+        : affectsPart(part, paths)
+  );
+}
+
 export function affectsPart(part, paths) {
   if (part === 'guards') return paths.length > 0;
   const common =
@@ -43,7 +63,8 @@ export function affectsPart(part, paths) {
     admin: /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-auto-recharge\.mjs$)/,
     api: /^(?:apps\/api\/|packages\/shared\/)/,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
-    migration: /^apps\/api\/prisma-mysql\//
+    migration: /^apps\/api\/prisma-mysql\//,
+    security: securityPaths
   };
   if (!inputs[part]) throw new Error('Unknown check part');
   return paths.some((p) => common.test(p) || inputs[part].test(p));
@@ -91,7 +112,7 @@ async function main() {
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
   const mode = isCiOnly(paths)
     ? 'ci-only'
-    : isRechargeOnly(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`))
+    : isTargetedOnly(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`))
       ? 'recharge'
       : 'full';
   const currentTree = git('rev-parse', 'HEAD^{tree}');
@@ -173,7 +194,7 @@ async function main() {
       if (reused.size === parts.length) break;
     }
   }
-  const checkParts = mode === 'ci-only' ? ['guards'] : parts;
+  const checkParts = mode === 'ci-only' ? ['guards'] : selectedParts(paths);
   const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
   appendFileSync(
     process.env.GITHUB_OUTPUT,

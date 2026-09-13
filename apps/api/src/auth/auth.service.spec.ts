@@ -1,4 +1,5 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { pbkdf2Sync } from 'node:crypto';
 import type { JwtService } from '@nestjs/jwt';
 import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { PrismaService } from '../common/prisma/prisma.service';
@@ -25,8 +26,14 @@ describe('AuthService', () => {
     mfaRequired?: boolean;
     mfaBound?: boolean;
     transactionError?: Error;
+    legacyPassword?: boolean;
   }) {
     let storedPasswordHash = await hashPassword(password);
+    if (options?.legacyPassword) {
+      const salt = '0123456789abcdef0123456789abcdef';
+      const key = pbkdf2Sync(password, Buffer.from(salt, 'hex'), 100_000, 64, 'sha256');
+      storedPasswordHash = `pbkdf2-sha256$100000$${salt}$${key.toString('hex')}`;
+    }
     const user = {
       id: userId,
       username: 'admin',
@@ -39,6 +46,7 @@ describe('AuthService', () => {
       $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([{ locked: 1 }]),
       user: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findFirst: jest.fn().mockImplementation(() =>
           Promise.resolve({
             ...user,
@@ -120,6 +128,41 @@ describe('AuthService', () => {
       transaction
     };
   }
+
+  it('upgrades old hashes after MFA and audits without credential values', async () => {
+    const fixture = await createFixture({ legacyPassword: true, mfaRequired: true });
+    await fixture.service.login({ username: 'admin', password, mfaCode: '123456' });
+    expect(fixture.transaction.user.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: userId,
+        status: 'active',
+        deletedAt: null,
+        passwordHash: expect.stringMatching(/^pbkdf2-sha256\$100000\$/)
+      }),
+      data: { passwordHash: expect.stringMatching(/^pbkdf2-sha256\$600000\$/) }
+    });
+    expect(fixture.transaction.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'auth.password.rehash', objectId: userId })
+    });
+    expect(JSON.stringify(fixture.transaction.auditLog.create.mock.calls)).not.toContain(password);
+  });
+
+  it('does not rewrite hashes or create sessions before MFA succeeds', async () => {
+    const fixture = await createFixture({ legacyPassword: true, mfaRequired: true });
+    await expect(fixture.service.login({ username: 'admin', password })).rejects.toThrow();
+    expect(fixture.transaction.user.updateMany).not.toHaveBeenCalled();
+    expect(fixture.securityService.createActiveSession).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a concurrent password change or issue a stale session', async () => {
+    const fixture = await createFixture({ legacyPassword: true });
+    fixture.transaction.user.updateMany.mockResolvedValue({ count: 0 });
+    await expect(fixture.service.login({ username: 'admin', password })).rejects.toThrow(
+      '账号凭据已更新'
+    );
+    expect(fixture.transaction.auditLog.create).not.toHaveBeenCalled();
+    expect(fixture.securityService.createActiveSession).not.toHaveBeenCalled();
+  });
 
   it('logs in with the local password and registers an active session', async () => {
     const fixture = await createFixture();

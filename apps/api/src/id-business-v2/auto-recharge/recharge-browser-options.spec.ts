@@ -183,3 +183,14 @@ describe('窗口设置持久化与运行时', () => {
     expect(f.encryption.decrypt).not.toHaveBeenCalledWith('encrypted:unused');
   });
 });
+
+it('normalizes legacy sync flags to protect session data', () => {
+  expect(
+    storedBrowserOptions({
+      ...V2_RECHARGE_BROWSER_DEFAULTS,
+      syncTabs: true,
+      syncCookies: true,
+      syncLocalStorage: true
+    })
+  ).toMatchObject({ syncTabs: false, syncCookies: false, syncLocalStorage: false });
+});

@@ -67,6 +67,14 @@ class BrowserOptionsTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(Stop):
                 validate_options({**DEFAULTS, **changes})
 
+    def test_old_sync_settings_cannot_enable_login_state_upload(self):
+        value = payload()
+        value['bitBrowser']['browserOptions'] = {**DEFAULTS, 'syncTabs': True,
+                                                 'syncCookies': True, 'syncLocalStorage': True}
+        result = profile_options(value['bitBrowser'])
+        for key in ('syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'):
+            self.assertIs(result[key], False)
+
     def test_invalid_options_are_rejected_before_any_api_request(self):
         for changes in ({"staticPort": True}, {"staticPort": 65536}, {"latitude": float("nan")},
                         {"longitude": 181}, {"os": "Android"}, {"timezone": "Invalid/Zone"},

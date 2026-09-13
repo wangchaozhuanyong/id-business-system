@@ -418,21 +418,11 @@ try {
       .click();
     await settingsDrawer.getByRole('spinbutton', { name: '定位纬度', exact: true }).fill('3.1');
     await settingsDrawer.getByRole('spinbutton', { name: '定位经度', exact: true }).fill('101.7');
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '标签页同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: 'Cookie 同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
-    await settingsDrawer
-      .locator('.el-switch')
-      .filter({ has: page.getByRole('switch', { name: '本地存储同步', exact: true }) })
-      .locator('.el-switch__core')
-      .click();
+    for (const name of ['标签页同步', 'Cookie 同步', '本地存储同步']) {
+      const toggle = settingsDrawer.getByRole('switch', { name, exact: true });
+      assert.equal(await toggle.isDisabled(), true);
+      assert.equal(await toggle.getAttribute('aria-checked'), 'false');
+    }
     await settingsDrawer.screenshot({ path: resolve(evidence, `window-options-${width}.png`) });
     await settingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
     await page.getByRole('button', { name: '继续填写', exact: true }).click();
