@@ -8,6 +8,7 @@ import type {
   V2RechargeBitBrowserSettings,
   V2RechargeJob
 } from './contracts';
+import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
 
 const mock = vi.hoisted(() => ({
@@ -268,6 +269,32 @@ describe('本机比特浏览器自动充值', () => {
     await flow.cancel();
     expect(mock.cancelBitBrowser).toHaveBeenCalledWith(launch.id);
   });
+  it('本机连接器未收到任务时停止操作自动清理服务端等待记录', async () => {
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'pro-20x',
+        action: 'bitbrowser',
+        state: 'running',
+        result: {
+          status: 'waiting_local_connector',
+          stage: 'connector_dispatch',
+          resolution_only: true,
+          payment_attempted: false,
+          payment_requests_sent: 0
+        },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    await nextTick();
+    mock.connectorCancel.mockRejectedValueOnce(new RechargeConnectorError('missing'));
+
+    await flow.cancel();
+
+    expect(mock.abandonUnreceivedBitBrowser).toHaveBeenCalledWith(launch.id);
+    expect(mock.cancelBitBrowser).not.toHaveBeenCalled();
+  });
   it('粘贴 JSON 后自动载入注册邮箱，默认 Plus 且不启动任务', () => {
     flow.updateJsonInput(sessionJson());
     expect(flow.plan.value).toBe('plus');
@@ -471,6 +498,7 @@ describe('本机比特浏览器自动充值', () => {
   });
 
   it('确认银行卡未收到请求时只发送历史状态处理任务', async () => {
+    mock.resolveNoBankRequest.mockResolvedValue({ ...resolutionLaunch, alreadyResolved: false });
     const source: V2RechargeJob = {
       id: resolutionLaunch.sourceJobId,
       plan: 'pro-20x',
