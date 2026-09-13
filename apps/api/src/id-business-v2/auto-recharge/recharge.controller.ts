@@ -72,6 +72,14 @@ export class RechargeController {
   recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.recheck(input, operator);
   }
+  @Post('jobs/:id/resolve-no-bank-request')
+  resolveNoBankRequest(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.local.resolveNoBankRequest(id, input, operator);
+  }
   @Post('jobs/:id/bitbrowser-cancel')
   cancelBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.cancel(id, operator);

@@ -286,6 +286,66 @@ describe('recharge input and durable evidence', () => {
       repo.saveRecord(tx as never, { ...input, allowCheckoutReplacement: true })
     ).resolves.toEqual({ revision: 3 });
   });
+  it('原子处理准确的未知付款与结账记录，并保留原确认计数', async () => {
+    const accountKey = 'a'.repeat(64);
+    const checkoutIdentifier = 'oaics_historical';
+    const checkout = {
+      accountKey,
+      ownerId: operator.id,
+      fileKey: `${accountKey}-pro-20x.json`,
+      document: {
+        checkout_identifier: checkoutIdentifier,
+        target_plan: 'pro-20x',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        confirmation_requests_sent: 0
+      }
+    };
+    const payment = {
+      accountKey,
+      ownerId: operator.id,
+      fileKey: `payments/${'b'.repeat(64)}.json`,
+      document: {
+        account_key: accountKey,
+        checkout_identifier: checkoutIdentifier,
+        target_plan: 'pro-20x',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        confirmation_requests_sent: 1
+      }
+    };
+    const update = vi.fn();
+    const tx = {
+      idBusinessV2RechargeRecord: {
+        findMany: vi.fn().mockResolvedValue([checkout, payment]),
+        update
+      }
+    };
+    const repository = new RechargeRepository({} as never);
+    await expect(
+      repository.resolveUnknownPaymentRecords(tx as never, {
+        accountKey,
+        checkoutIdentifier,
+        plan: 'pro-20x',
+        ownerId: operator.id,
+        resolutionJobId: id,
+        sourceJobId: '33333333-3333-4333-8333-333333333333',
+        verificationJobId: '44444444-4444-4444-8444-444444444444',
+        resolvedAt: '2026-09-13T13:00:00.000Z'
+      })
+    ).resolves.toEqual({ updated: 2 });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0]![0].data.document).toMatchObject({
+      operator_resolution: 'confirmed_no_bank_request',
+      payment_status: 'not_attempted'
+    });
+    expect(update.mock.calls[1]![0].data.document).toMatchObject({
+      operator_resolution: 'confirmed_no_bank_request',
+      payment_attempted: true,
+      confirmation_requests_sent: 1,
+      payment_status: 'unknown'
+    });
+  });
 });
 
 describe('single worker dispatch and confirmation', () => {
@@ -388,6 +448,56 @@ describe('single worker dispatch and confirmation', () => {
     transaction.execute.mockRejectedValueOnce(new Error('database offline'));
     await expect(service.start(input(), operator)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it('任务列表只向符合条件的历史付款关联同账号 Free 核验记录', async () => {
+    const sourceJobId = '33333333-3333-4333-8333-333333333333';
+    const verificationJobId = '44444444-4444-4444-8444-444444444444';
+    const accountKey = 'a'.repeat(64);
+    const leaseUntil = new Date('2026-09-20T00:00:00Z');
+    list.mockResolvedValue([
+      {
+        id: verificationJobId,
+        ownerId: operator.id,
+        accountKey,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'finished',
+        nonceHash: null,
+        leaseUntil,
+        createdAt: new Date('2026-09-13T00:00:00Z'),
+        updatedAt: new Date('2026-09-13T00:00:00Z'),
+        result: {
+          account_matched: true,
+          current_plan: 'free',
+          payment_attempted: false,
+          payment_requests_sent: 0
+        }
+      },
+      {
+        id: sourceJobId,
+        ownerId: operator.id,
+        accountKey,
+        plan: 'pro-20x',
+        action: 'prepare',
+        state: 'finished',
+        nonceHash: null,
+        leaseUntil,
+        createdAt: new Date('2026-09-09T00:00:00Z'),
+        updatedAt: new Date('2026-09-09T00:00:00Z'),
+        result: {
+          status: 'payment_result_unknown',
+          checkout_identifier: 'oaics_historical',
+          payment_attempted: true,
+          confirmation_requests_sent: 1,
+          payment_status: 'unknown'
+        }
+      }
+    ] as never);
+    const response = await service.list(operator);
+    expect(response.items.find((job) => job.id === sourceJobId)?.result).toMatchObject({
+      resolution_verification_job_id: verificationJobId
+    });
+    expect(response.items.every((job) => job.accountKey === undefined)).toBe(true);
   });
   it('does not retry unknown worker acceptance', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('timeout'));
@@ -637,6 +747,105 @@ describe('single worker dispatch and confirmation', () => {
     });
 
     expect(addressRepository.markUsed).not.toHaveBeenCalled();
+  });
+
+  it('连接器处理未知付款时原子更新记录、原任务和审计，不消费地址', async () => {
+    const sourceJobId = '33333333-3333-4333-8333-333333333333';
+    const verificationJobId = '44444444-4444-4444-8444-444444444444';
+    const accountKey = 'a'.repeat(64);
+    const source = {
+      id: sourceJobId,
+      ownerId: operator.id,
+      accountKey,
+      plan: 'pro-20x',
+      action: 'prepare',
+      state: 'finished',
+      createdAt: new Date('2026-09-09T00:00:00Z'),
+      result: {
+        status: 'payment_result_unknown',
+        checkout_identifier: 'oaics_historical',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown'
+      }
+    };
+    const verification = {
+      id: verificationJobId,
+      ownerId: operator.id,
+      accountKey,
+      plan: 'plus',
+      action: 'bitbrowser',
+      state: 'finished',
+      createdAt: new Date('2026-09-13T00:00:00Z'),
+      result: {
+        account_matched: true,
+        current_plan: 'free',
+        payment_attempted: false,
+        confirmation_requests_sent: 0,
+        payment_requests_sent: 0
+      }
+    };
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      accountKey,
+      plan: 'pro-20x',
+      action: 'bitbrowser',
+      state: 'running',
+      nonceHash: hash('local-agent-token'),
+      result: {
+        resolution_only: true,
+        source_job_id: sourceJobId,
+        verification_job_id: verificationJobId,
+        checkout_identifier: 'oaics_historical'
+      }
+    } as never);
+    tx.idBusinessV2RechargeJob.findUnique.mockImplementation(({ where }) =>
+      where.id === sourceJobId ? source : where.id === verificationJobId ? verification : null
+    );
+    const resolveRecords = vi
+      .spyOn(repository, 'resolveUnknownPaymentRecords')
+      .mockResolvedValueOnce({ updated: 2 });
+
+    await service.callback(id, {
+      type: 'resolve_unknown_payment',
+      plan: 'pro-20x',
+      accountKey,
+      checkoutIdentifier: 'oaics_historical',
+      sourceJobId,
+      verificationJobId
+    });
+
+    expect(resolveRecords).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        accountKey,
+        checkoutIdentifier: 'oaics_historical',
+        sourceJobId,
+        verificationJobId
+      })
+    );
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: sourceJobId },
+        data: expect.objectContaining({
+          result: expect.objectContaining({
+            payment_attempted: true,
+            confirmation_requests_sent: 1,
+            operator_resolution: 'confirmed_no_bank_request'
+          })
+        })
+      })
+    );
+    expect(addressRepository.markUsed).not.toHaveBeenCalled();
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.payment_resolution.complete',
+        objectId: sourceJobId
+      })
+    );
+    resolveRecords.mockRestore();
   });
 
   it('停止确认回调先停用取消结算，再结束任务并写审计', async () => {

@@ -121,6 +121,82 @@ export class RechargeRepository {
     return payments.length + 1;
   }
 
+  async resolveUnknownPaymentRecords(
+    tx: V2CommandTransaction,
+    input: {
+      accountKey: string;
+      checkoutIdentifier: string;
+      plan: string;
+      ownerId: string;
+      resolutionJobId: string;
+      sourceJobId: string;
+      verificationJobId: string;
+      resolvedAt: string;
+    }
+  ) {
+    const records = await this.records(tx, input.accountKey);
+    const checkoutFileKey = `${input.accountKey}${
+      input.plan === 'plus' ? '' : `-${input.plan}`
+    }.json`;
+    const checkout = records.find((item) => item.fileKey === checkoutFileKey);
+    const payments = records.filter(
+      (item) =>
+        item.fileKey.startsWith('payments/') &&
+        (item.document as Record<string, unknown>).checkout_identifier === input.checkoutIdentifier
+    );
+    if (!checkout || payments.length !== 1) {
+      throw new ConflictException('找不到唯一的历史付款记录');
+    }
+    if ([checkout, payments[0]!].some((item) => item.ownerId !== input.ownerId)) {
+      throw new ConflictException('历史付款记录归属不一致');
+    }
+    const checkoutDocument = checkout.document as Record<string, unknown>;
+    const paymentDocument = payments[0]!.document as Record<string, unknown>;
+    if (
+      checkoutDocument.checkout_identifier !== input.checkoutIdentifier ||
+      String(checkoutDocument.target_plan ?? 'plus') !== input.plan ||
+      paymentDocument.account_key !== input.accountKey ||
+      String(paymentDocument.target_plan ?? 'plus') !== input.plan ||
+      paymentDocument.payment_attempted !== true ||
+      Number(paymentDocument.confirmation_requests_sent) !== 1 ||
+      paymentDocument.payment_status !== 'unknown' ||
+      paymentDocument.payment_evidence ||
+      checkoutDocument.payment_evidence
+    ) {
+      throw new ConflictException('历史付款证据不符合处理条件');
+    }
+    const resolution = {
+      operator_resolution: 'confirmed_no_bank_request',
+      resolved_at: input.resolvedAt,
+      resolution_job_id: input.resolutionJobId,
+      source_job_id: input.sourceJobId,
+      verification_job_id: input.verificationJobId
+    };
+    const resolutionMatches = (document: Record<string, unknown>) =>
+      Object.entries(resolution).every(([key, value]) => document[key] === value);
+    const hasDifferentResolution = (document: Record<string, unknown>) =>
+      document.operator_resolution !== undefined && !resolutionMatches(document);
+    if (hasDifferentResolution(checkoutDocument) || hasDifferentResolution(paymentDocument)) {
+      throw new ConflictException('历史付款记录已经由其他任务处理');
+    }
+    let updated = 0;
+    for (const item of [checkout, payments[0]!]) {
+      const before = item.document as Record<string, unknown>;
+      if (resolutionMatches(before)) continue;
+      await tx.idBusinessV2RechargeRecord.update({
+        where: {
+          accountKey_fileKey: { accountKey: input.accountKey, fileKey: item.fileKey }
+        },
+        data: {
+          revision: { increment: 1 },
+          document: toV2JsonDocument({ ...before, ...resolution })
+        }
+      });
+      updated += 1;
+    }
+    return { updated };
+  }
+
   async active(tx: V2CommandTransaction, id: string) {
     const job = await tx.idBusinessV2RechargeJob.findUnique({ where: { id } });
     if (!job || job.leaseUntil.getTime() < Date.now() || job.state === 'finished') {

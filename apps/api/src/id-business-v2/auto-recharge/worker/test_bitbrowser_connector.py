@@ -52,6 +52,20 @@ def payload():
     }
 
 
+def resolution_payload():
+    return {
+        "id": JOB_ID,
+        "mode": "resolve_unknown_payment",
+        "plan": "pro-20x",
+        "accountKey": "c" * 64,
+        "checkoutIdentifier": "oaics_historical",
+        "sourceJobId": "22222222-2222-4222-8222-222222222222",
+        "verificationJobId": "33333333-3333-4333-8333-333333333333",
+        "callbackUrl": "https://admin.example/api/id-business-v2/auto-recharge/local/" + JOB_ID,
+        "agentToken": "a" * 64,
+    }
+
+
 class BitBrowserConnectorTests(unittest.TestCase):
     def test_official_cleanup_acknowledgements_allow_strings_but_reads_stay_strict(self):
         client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
@@ -89,6 +103,26 @@ class BitBrowserConnectorTests(unittest.TestCase):
         self.assertIs(connector.validate_payload(recheck), recheck)
         with self.assertRaises(Stop):
             connector.validate_payload({**recheck, "details": value["details"]})
+
+    def test_unknown_payment_resolution_has_no_browser_session_or_payment_data(self):
+        value = resolution_payload()
+        self.assertIs(connector.validate_payload(value), value)
+        for key in ("sessionJson", "bitBrowser", "details", "authorizeSinglePayment"):
+            with self.subTest(key=key), self.assertRaises(Stop):
+                connector.validate_payload({**value, key: "forbidden"})
+        job = connector.LocalJob(value)
+        job.callback.send = MagicMock(return_value={"ok": True})
+        result = asyncio.run(job.execute())
+        self.assertTrue(job.resolution_committed)
+        self.assertEqual(result["payment_requests_sent"], 0)
+        job.callback.send.assert_called_once_with({
+            "type": "resolve_unknown_payment",
+            "plan": "pro-20x",
+            "accountKey": "c" * 64,
+            "checkoutIdentifier": "oaics_historical",
+            "sourceJobId": "22222222-2222-4222-8222-222222222222",
+            "verificationJobId": "33333333-3333-4333-8333-333333333333",
+        })
 
     def test_only_loopback_local_apis_and_job_bound_callbacks_are_allowed(self):
         self.assertEqual(

@@ -66,6 +66,21 @@ describe('recharge stage presentation', () => {
     );
     expect(paymentStatusLabel(job({ result: { payment_status: 'paid' } }))).toBe('已确认付款');
   });
+  it('历史未知付款处理后保留处理语义，不再显示金额未知', () => {
+    const resolved = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'payment_result_unknown',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        confirmation_requests_sent: 1,
+        operator_resolution: 'confirmed_no_bank_request'
+      }
+    });
+    expect(quotePlaceholder(resolved)).toBe('历史记录已处理');
+    expect(paymentStatusLabel(resolved)).toBe('已确认银行卡未收到付款请求');
+    expect(subscriptionLabel(resolved)).toBe('尚未开通');
+  });
   it('shows a specific Chinese reason for the observed old Plus failure', () => {
     expect(statusLabel('official_plus_option_not_found')).toBe('未找到官网 Plus 选项');
     expect(statusLabel('official_plan_tier_not_found')).toBe('未识别到所选 Pro 档位');

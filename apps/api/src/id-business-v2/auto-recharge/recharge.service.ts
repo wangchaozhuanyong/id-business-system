@@ -16,6 +16,7 @@ import {
 import { RechargeRepository } from './persistence/recharge.repository';
 import { completeCancellation, canReplaceCheckout } from './recharge-cancellation';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
+import { consumeRechargeAddress } from './recharge-address-consumption';
 import {
   RECHARGE_ADDRESS_LOCATION,
   validateRechargeAddressImport,
@@ -27,11 +28,16 @@ import {
   confirmationNonce,
   hash,
   object,
+  resultWithConfirmation,
   safeDocument,
   uuidPattern,
   validateDetailsSubmission,
   validateStart
 } from './recharge-validation';
+import {
+  completeUnknownPaymentResolution,
+  withResolutionVerification
+} from './recharge-resolution';
 
 @Injectable()
 export class RechargeService {
@@ -108,40 +114,25 @@ export class RechargeService {
   async list(operator: AuthenticatedUser) {
     const items = await this.repository.list(operator.id);
     return {
-      items: items.map((job) => ({
-        ...job,
-        nonceHash: undefined,
-        accountKey: undefined,
-        state:
-          job.state !== 'finished' && job.leaseUntil.getTime() < Date.now() ? 'unknown' : job.state,
-        result: this.resultWithConfirmation(job)
-      })),
+      items: items.map((job) => {
+        const result = resultWithConfirmation(job, process.env.AUTO_RECHARGE_WORKER_TOKEN ?? '');
+        return {
+          ...job,
+          nonceHash: undefined,
+          accountKey: undefined,
+          state:
+            job.state !== 'finished' && job.leaseUntil.getTime() < Date.now()
+              ? 'unknown'
+              : job.state,
+          result: withResolutionVerification(result, job, items)
+        };
+      }),
       configured: this.configured()
     };
   }
 
   private configured() {
     return (process.env.AUTO_RECHARGE_WORKER_TOKEN?.length ?? 0) >= 32;
-  }
-
-  private resultWithConfirmation(job: {
-    id: string;
-    state: string;
-    nonceHash: string | null;
-    result: unknown;
-  }) {
-    const result = object(job.result);
-    if (job.state !== 'awaiting_confirmation' || !job.nonceHash || !result.quote) return result;
-    try {
-      const nonce = confirmationNonce(
-        job.id,
-        result.quote as V2RechargeQuote,
-        process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
-      );
-      return hash(nonce) === job.nonceHash ? { ...result, nonce } : result;
-    } catch {
-      return result;
-    }
   }
 
   private async workerReceipt(
@@ -452,32 +443,16 @@ export class RechargeService {
       async (tx) => {
         await this.repository.lock(tx);
         const job = await this.repository.active(tx, id);
-        const markAddressUsed = async (report: Record<string, unknown>) => {
-          if (object(job.result).recheck_only === true) return;
-          const addressConsumed =
-            report.status === 'subscription_activated' ||
-            (report.payment_attempted === true &&
-              Number(report.confirmation_requests_sent) === 1) ||
-            Number(report.payment_requests_sent) === 1;
-          if (!['prepare', 'flow', 'bitbrowser'].includes(job.action) || !addressConsumed) return;
-          const addressId = object(job.result).addressId;
-          if (typeof addressId !== 'string' || !uuidPattern.test(addressId)) {
-            throw new ConflictException('本次充值地址记录不完整');
-          }
-          const changed = await this.addressRepository.markUsed(tx, job.ownerId, addressId);
-          if (!changed.changed) return;
-          await this.audit.append(tx, {
-            userId: job.ownerId,
-            module: 'id_business_v2',
-            action: 'id_business_v2.auto_recharge.addresses.consume',
-            objectType: 'recharge_address',
-            objectId: addressId,
-            beforeData: { status: changed.before.status },
-            afterData: { status: changed.after.status, rechargeJobId: id },
-            remark: '账单地址已用于本次官方付款请求，自动标记已使用'
-          });
-        };
         const accountKey = input.accountKey;
+        if (input.type === 'resolve_unknown_payment') {
+          return completeUnknownPaymentResolution({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
         if (input.type === 'restore') {
           if (
             typeof accountKey !== 'string' ||
@@ -521,7 +496,14 @@ export class RechargeService {
             document,
             allowCheckoutReplacement: canReplaceCheckout(job)
           });
-          await markAddressUsed(document);
+          await consumeRechargeAddress({
+            tx,
+            rechargeJobId: id,
+            job,
+            report: document,
+            addressRepository: this.addressRepository,
+            audit: this.audit
+          });
           await this.audit.append(tx, {
             userId: job.ownerId,
             module: 'id_business_v2',
@@ -579,7 +561,14 @@ export class RechargeService {
           state = 'awaiting_confirmation';
         }
         if (input.type === 'finished') {
-          await markAddressUsed(report);
+          await consumeRechargeAddress({
+            tx,
+            rechargeJobId: id,
+            job,
+            report,
+            addressRepository: this.addressRepository,
+            audit: this.audit
+          });
           await completeCancellation(tx, job, report, this.repository, this.audit);
           state = 'finished';
           nonceHash = null;

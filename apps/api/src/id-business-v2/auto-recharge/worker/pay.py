@@ -14,7 +14,8 @@ import uuid
 import warnings
 
 from browser_checkout import (ORIGIN, check_session, progress, quote_from_page, run_browser)
-from attempt_ledger import checkout_record_path, read_checkout_record
+from attempt_ledger import (checkout_record_path, read_checkout_record,
+                            resolved_checkout_replacement_allowed)
 from checkout_core import MAX_BYTES, ROOT, Stop, parse_browser_credential, write_json
 from payment_form import (PaymentDetails, fill_official_form, subscribe_button, validate_details,
                           verify_billing_fields, verify_card_fields)
@@ -263,12 +264,17 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
         record = read_checkout_record(state_dir, target.account_id, target_plan)
         if (record.get("status") == "cancelled"
                 and record.get("cancelled_before_confirmation") is True):
+            progress("existing_checkout_rebuilding", reason="operation_cancelled")
+            return await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+        if resolved_checkout_replacement_allowed(record):
+            progress("existing_checkout_rebuilding", reason="confirmed_no_bank_request")
             return await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
         result = await run_browser(target, inspect_existing=True, **browser_args)
         if (result.get("reason") == "existing_checkout_unavailable"
                 and not result.get("payment_attempted")
                 and not result.get("confirmation_requests_sent")):
-            browser_args["session_budget"] = None
+            progress("existing_checkout_rebuilding", reason="existing_checkout_unavailable")
+            browser_args["session_budget"] = session_budget.restart() if session_budget else None
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
     else:
         result = await run_browser(target, create=True, **browser_args)

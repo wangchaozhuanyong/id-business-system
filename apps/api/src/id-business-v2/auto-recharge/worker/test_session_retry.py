@@ -67,6 +67,15 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
             await budget.run(lambda: clock.advance(30), 'session_read')
         self.assertEqual(caught.exception.report['reason'], 'session_load_timeout')
 
+    async def test_same_window_checkout_rebuild_gets_a_fresh_session_load_budget(self):
+        clock, report = Clock(), MagicMock()
+        budget = SessionBudget(120, clock=clock, report=report)
+        await budget.run(lambda: clock.advance(80), 'page_load')
+        restarted = budget.restart()
+        self.assertEqual(restarted.elapsed, 0)
+        self.assertEqual(restarted.remaining_ms(), 120000)
+        self.assertIs(restarted.report, report)
+
     async def test_optional_network_observation_is_bounded_after_identity_success(self):
         clock = Clock()
         budget = SessionBudget(120, clock=clock)

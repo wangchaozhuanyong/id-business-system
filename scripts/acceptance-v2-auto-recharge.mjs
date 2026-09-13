@@ -249,7 +249,12 @@ try {
             busy: false,
             originAllowed: true,
             service: 'id-business-v2-auto-recharge-connector',
-            capabilities: ['browser-catalog', 'browser-options', 'session-load-retry']
+            capabilities: [
+              'browser-catalog',
+              'browser-options',
+              'session-load-retry',
+              'payment-unknown-resolution'
+            ]
           })
         });
       if (url.pathname === '/browser/catalog') {

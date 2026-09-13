@@ -63,6 +63,13 @@
       <p v-if="job.result.reason" class="recharge-error" role="alert">
         {{ statusLabel(job.result.reason) }}
       </p>
+      <p
+        v-if="job.result.operator_resolution === 'confirmed_no_bank_request'"
+        class="recharge-note"
+        role="status"
+      >
+        已确认银行卡未收到付款请求；原付款尝试记录和确认次数已保留，历史付款锁已解除。
+      </p>
       <p v-if="job.result.session_attempt" class="recharge-note" role="status">
         第 {{ job.result.session_attempt }} / {{ job.result.session_attempt_limit }} 次尝试，
         本轮已等待 {{ job.result.session_elapsed_seconds ?? 0 }} 秒， 最多

@@ -60,6 +60,7 @@ const labels: Record<string, string> = {
   bitbrowser_cleanup_unverified: '未能确认失败窗口已安全清理，已停止重建，请在比特浏览器检查该窗口',
   session_verified: '账户核对通过',
   existing_checkout_read: '读取原结算',
+  existing_checkout_rebuilding: '原结算已失效，正在创建新结算',
   plan_selection: '选择官网套餐',
   checkout_create: '准备创建官方结算',
   checkout_request_sending: '正在请求官方结算',
@@ -83,6 +84,8 @@ const labels: Record<string, string> = {
   paid_tier_pending_verification: '已付款，档位待核验',
   payment_failed: '付款失败',
   payment_result_unknown: '付款结果待核验',
+  payment_unknown_resolved: '历史付款锁已处理',
+  payment_unknown_resolution: '正在处理历史付款记录',
   verification_required: '官网要求真人验证，本次已安全停止',
   payment_cancelled: '已取消本次确认',
   payment_submitted_or_pending: '等待原单付款结果',
@@ -148,6 +151,7 @@ const labels: Record<string, string> = {
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
   existing_checkout_unavailable: '原结算已失效，本次未付款',
+  confirmed_no_bank_request: '已确认银行卡未收到付款请求',
   no_original_payment_attempt: '没有已尝试付款的原单',
   no_payment_attempt_to_recheck: '没有可只读复查的付款记录',
   original_payment_recheck_failed: '官网原订单复查未完成',
@@ -174,6 +178,13 @@ export const selectionStepLabels = {
 };
 export function quotePlaceholder(job: V2RechargeJob): string {
   if (job.result.quote) return '未知';
+  if (job.result.operator_resolution === 'confirmed_no_bank_request') return '历史记录已处理';
+  if (
+    job.result.reason === 'account_has_other_payment_attempt' ||
+    job.result.status === 'payment_result_unknown'
+  )
+    return '历史付款待处理';
+  if (job.result.reason === 'existing_checkout_unavailable') return '原结算已失效';
   if (job.action === 'check') return '待获取报价';
   if (job.action === 'quote' && job.state === 'running') return '正在获取报价';
   if (job.action === 'flow' && job.state === 'running') return '正在计算最终金额';
@@ -185,6 +196,7 @@ export function quotePlaceholder(job: V2RechargeJob): string {
 }
 export function subscriptionLabel(job: V2RechargeJob): string {
   const result = job.result;
+  if (result.operator_resolution === 'confirmed_no_bank_request') return '尚未开通';
   if (result.payment_outcome || result.subscription_status)
     return statusLabel(result.payment_outcome || result.subscription_status);
   if (
@@ -201,6 +213,8 @@ export function statusLabel(value: unknown) {
 }
 
 export function paymentStatusLabel(job: V2RechargeJob): string {
+  if (job.result.operator_resolution === 'confirmed_no_bank_request')
+    return '已确认银行卡未收到付款请求';
   if (job.result.payment_status) return statusLabel(job.result.payment_status);
   if (job.state === 'confirming') return '正在提交本次付款';
   if (job.state === 'unknown' || job.result.payment_attempted || job.result.payment_outcome)

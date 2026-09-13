@@ -219,6 +219,47 @@ class StateTests(unittest.TestCase):
         self.assertEqual(run.await_count, 1)
         self.assertEqual(result['payment_requests_sent'], 0)
 
+    def test_confirmed_no_bank_request_preserves_attempt_and_allows_one_fresh_checkout(self):
+        from attempt_ledger import assert_no_other_payment, atomic_json, checkout_record_path
+        resolution = {
+            'operator_resolution': 'confirmed_no_bank_request',
+            'resolved_at': '2026-09-13T13:00:00.000Z',
+            'resolution_job_id': '11111111-1111-4111-8111-111111111111',
+            'source_job_id': '22222222-2222-4222-8222-222222222222',
+            'verification_job_id': '33333333-3333-4333-8333-333333333333',
+        }
+        with PaymentLedger(self.root, self.target.account_id) as ledger:
+            ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4='4242')
+            ledger.mark_confirmation_sent()
+            payment_path = ledger.path
+            payment = {**ledger.record, **resolution}
+        checkout_path = checkout_record_path(self.root, self.target.account_id)
+        checkout = {**json.loads(checkout_path.read_text()), **resolution}
+        atomic_json(payment_path, payment)
+        atomic_json(checkout_path, checkout)
+        assert_no_other_payment(self.root, self.target.account_id)
+        self.assertTrue(json.loads(payment_path.read_text())['payment_attempted'])
+        self.assertEqual(json.loads(payment_path.read_text())['confirmation_requests_sent'], 1)
+
+        async def create_again(target, **kwargs):
+            self.assertTrue(kwargs['create'])
+            self.assertTrue(kwargs['replace_unpaid_checkout'])
+            with AttemptLedger(self.root, target.account_id, replace_unpaid_checkout=True) as fresh:
+                fresh.begin()
+            return {'status': 'session_verified', 'payment_requests_sent': 0}
+
+        with patch('pay.run_browser', new=AsyncMock(side_effect=create_again)) as run:
+            result = asyncio.run(run_flow(self.target, self.root, 'plus',
+                                         details_reader=lambda *_: details(), confirmer=lambda *_: False))
+        self.assertEqual(run.await_count, 1)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+        malformed = dict(payment)
+        malformed.pop('verification_job_id')
+        atomic_json(payment_path, malformed)
+        with self.assertRaises(Stop):
+            assert_no_other_payment(self.root, self.target.account_id)
+
     def test_payment_success_requires_order_amount_currency_and_subscription(self):
         paid = {"id": "cs_synthetic", "object": "checkout.session", "status": "complete", "payment_status": "paid",
                 "amount_total": 9250, "currency": "myr"}

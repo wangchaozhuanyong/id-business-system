@@ -49,6 +49,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.delayed_pricing_modal = False
         self.duplicate_pricing_card = False
         self.expire_existing_checkout = False
+        self.delayed_expire_existing_checkout = False
         self.keep_existing_checkout_error_url = False
         self.chinese_verify_with_id = False
         await self.context.route("**/*", self.server)
@@ -90,13 +91,16 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await route.fulfill(json={"synthetic_initialization": True}, headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
         elif path == "/checkout/verify":
             await route.fulfill(content_type="text/html; charset=utf-8",
-                                body=("<html><body>处理你的付款时出错<a href='/'>返回 ChatGPT</a></body></html>"
+                                body=("<html><body>处理你的付款时出错</body></html>"
                                       if self.chinese_verify_with_id else
                                       "<html><body>There was an error processing your payment</body></html>"))
         elif path.startswith("/checkout/") and self.expire_existing_checkout:
             suffix = '?stripe_session_id=oaics_synthetic&processor_entity=openai_ie' if self.chinese_verify_with_id else ''
             await route.fulfill(content_type="text/html; charset=utf-8",
-                                body=f"<html><script>location.replace('/checkout/verify{suffix}')</script></html>")
+                                body=("<html><script>setTimeout(() => location.replace("
+                                      f"'/checkout/verify{suffix}'), "
+                                      f"{200 if self.delayed_expire_existing_checkout else 0})"
+                                      "</script></html>"))
         elif path.startswith("/checkout/") and self.keep_existing_checkout_error_url:
             await route.fulfill(content_type="text/html; charset=utf-8",
                                 body="<html><body>There was an error processing your payment"
@@ -376,6 +380,18 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['payment_requests_sent'], 0)
         self.assertFalse(self.creates)
 
+    async def test_delayed_verify_redirect_is_detected_during_quote_polling(self):
+        self.expire_existing_checkout = True
+        self.delayed_expire_existing_checkout = True
+        self.chinese_verify_with_id = True
+        existing = {"checkout_identifier": "oaics_synthetic", "processor_entity": "openai_ie",
+                    "returned_currency": "MYR"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = await workflow(self.context, self.target, existing=existing, quote_timeout=1)
+        self.assertEqual(result['reason'], 'existing_checkout_unavailable', result)
+        self.assertEqual(result['checkout_requests_sent'], 0)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
     async def test_initial_home_is_reused_and_old_guard_does_not_block_next_flow(self):
         home = await self.context.new_page()
         await home.goto('https://chatgpt.com/')
@@ -385,6 +401,15 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first['status'], 'session_verified', first)
         self.assertEqual(second['status'], 'checkout_quote_verified', second)
         self.assertEqual(self.context.pages, [home])
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.payments, 0)
+
+    async def test_unrelated_failed_tab_does_not_replace_authenticated_working_page(self):
+        failed = await self.context.new_page()
+        with contextlib.suppress(Exception):
+            await failed.goto('https://unreachable.invalid/')
+        result = await self.run_flow(True)
+        self.assertEqual(result['status'], 'checkout_quote_verified', result)
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.payments, 0)
 

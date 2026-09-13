@@ -4,7 +4,7 @@ import {
   ForbiddenException,
   Injectable
 } from '@nestjs/common';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -18,8 +18,14 @@ import { RechargeSettingsService } from './recharge-settings.service';
 import { hash, object, uuidPattern } from './recharge-validation';
 import {
   validateRechargeBitBrowserRecheckStart,
-  validateRechargeBitBrowserStart
+  validateRechargeBitBrowserStart,
+  validateRechargeNoBankRequest
 } from './recharge-local-validation';
+import {
+  isFreeAccountVerification,
+  resolvedUnknownPayment,
+  unknownPaymentCanBeResolved
+} from './recharge-resolution';
 
 @Injectable()
 export class RechargeLocalService {
@@ -210,6 +216,95 @@ export class RechargeLocalService {
         browserOptions: runtime.browserOptions,
         staticProxyCredentials: runtime.staticProxyCredentials
       }
+    };
+  }
+
+  async resolveNoBankRequest(sourceId: string, value: unknown, operator: AuthenticatedUser) {
+    if (!uuidPattern.test(sourceId)) throw new BadRequestException('原任务编号无效');
+    const input = validateRechargeNoBankRequest(value);
+    const runtime = await this.settings.runtime(operator.id);
+    const id = randomUUID();
+    const agentToken = randomBytes(32).toString('hex');
+    const prepared = await this.transactions.execute(
+      async (tx) => {
+        await this.repository.lock(tx);
+        const source = await this.repository.findJob(tx, sourceId);
+        if (!source || source.ownerId !== operator.id) {
+          throw new ForbiddenException('无权处理此付款记录');
+        }
+        if (resolvedUnknownPayment(source)) {
+          return {
+            alreadyResolved: true as const,
+            id: String(object(source.result).resolution_job_id)
+          };
+        }
+        if (!unknownPaymentCanBeResolved(source)) {
+          throw new ConflictException('该记录不是可处理的付款结果未知记录');
+        }
+        if (await this.repository.findRunningJob(tx)) {
+          throw new ConflictException('已有一笔充值任务执行中');
+        }
+        const verification = await this.repository.findJob(tx, input.verificationJobId);
+        if (!verification || !isFreeAccountVerification(source, verification)) {
+          throw new ConflictException('找不到该账号付款后的 Free 状态核验记录');
+        }
+        const sourceResult = object(source.result);
+        const checkoutIdentifier = String(sourceResult.checkout_identifier);
+        const created = await this.repository.createJob(tx, {
+          id,
+          ownerId: operator.id,
+          plan: source.plan,
+          action: 'bitbrowser',
+          state: 'running',
+          accountKey: source.accountKey,
+          nonceHash: hash(agentToken),
+          leaseUntil: new Date(Date.now() + 5 * 60000),
+          result: toV2JsonDocument({
+            status: 'waiting_local_connector',
+            stage: 'connector_dispatch',
+            resolution_only: true,
+            source_job_id: source.id,
+            verification_job_id: verification.id,
+            checkout_identifier: checkoutIdentifier,
+            target_plan: source.plan,
+            payment_attempted: false,
+            confirmation_requests_sent: 0,
+            payment_requests_sent: 0
+          })
+        });
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.payment_resolution.start',
+          objectType: 'recharge_job',
+          objectId: source.id,
+          afterData: {
+            resolutionJobId: created.id,
+            verificationJobId: verification.id,
+            plan: source.plan,
+            confirmation: 'confirmed_no_bank_request'
+          },
+          remark: '创建银行卡未收到付款请求的历史记录处理任务'
+        });
+        return {
+          alreadyResolved: false as const,
+          id: created.id,
+          plan: source.plan,
+          accountKey: source.accountKey!,
+          checkoutIdentifier,
+          sourceJobId: source.id,
+          verificationJobId: verification.id
+        };
+      },
+      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
+    );
+    if (prepared.alreadyResolved) return prepared;
+    return {
+      ...prepared,
+      mode: 'resolve_unknown_payment' as const,
+      connectorUrl: runtime.connectorUrl,
+      connectorToken: runtime.connectorToken,
+      agentToken
     };
   }
 

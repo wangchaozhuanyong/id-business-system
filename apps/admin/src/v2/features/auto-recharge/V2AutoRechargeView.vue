@@ -227,6 +227,14 @@
             <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
               只读复查原订单
             </el-button>
+            <el-button
+              v-if="canResolveNoBankRequest"
+              type="warning"
+              :loading="busy"
+              @click="resolveNoBankRequest"
+            >
+              确认银行卡未收到付款请求
+            </el-button>
             <el-button :disabled="busy || query.phase.value === 'refreshing'" @click="refresh">
               刷新原任务状态
             </el-button>
@@ -244,7 +252,9 @@
       direction="rtl"
       destroy-on-close
     >
-      <p class="recharge-note">历史记录只读，不会重新连接、建单或付款。</p>
+      <p class="recharge-note">
+        查看历史记录不会重新连接、建单或付款；付款结果未知时可单独确认银行卡未收到请求。
+      </p>
       <ul class="recharge-history">
         <li v-for="job in jobs" :key="job.id">
           <button
@@ -259,8 +269,18 @@
         </li>
       </ul>
       <RechargeResult v-if="historyJob" :job="historyJob" />
-      <div v-if="canRecheck" class="recharge-actions">
-        <el-button type="primary" :loading="busy" @click="recheck">只读复查原订单</el-button>
+      <div v-if="canRecheck || canResolveNoBankRequest" class="recharge-actions">
+        <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
+          只读复查原订单
+        </el-button>
+        <el-button
+          v-if="canResolveNoBankRequest"
+          type="warning"
+          :loading="busy"
+          @click="resolveNoBankRequest"
+        >
+          确认银行卡未收到付款请求
+        </el-button>
       </div>
     </el-drawer>
   </section>
@@ -307,6 +327,7 @@ const {
   canStart,
   canCancel,
   canRecheck,
+  canResolveNoBankRequest,
   needsHuman,
   workflowMessage,
   browserSettings,
@@ -317,6 +338,7 @@ const {
   importJson,
   start,
   recheck,
+  resolveNoBankRequest,
   selectJob,
   resume,
   cancel,
