@@ -180,6 +180,45 @@ class StateTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 ledger.mark_confirmation_sent()
 
+    def test_cancelled_unsubmitted_marker_stops_blocking_new_checkout_but_sent_marker_still_blocks(self):
+        from attempt_ledger import assert_no_other_payment, atomic_json
+        with PaymentLedger(self.root, self.target.account_id) as ledger:
+            ledger.begin(quote(), confirmed_digest=quote_digest(quote()), card_last4='4242')
+            record = {**ledger.record, 'status': 'cancelled', 'payment_status': 'cancelled',
+                      'cancelled_before_confirmation': True}
+            path = ledger.path
+        atomic_json(path, record)
+        assert_no_other_payment(self.root, self.target.account_id)
+        for changes in ({'confirmation_requests_sent': 1}, {'cancelled_before_confirmation': False},
+                        {'confirmation_requests_sent': None}, {'payment_status': 'unknown'},
+                        {'payment_evidence': {'kind': 'checkout_session'}},
+                        {'checkout_identifier': 'invalid'}, {'target_plan': 'invalid'}):
+            with self.subTest(changes=changes):
+                atomic_json(path, {**record, **changes})
+                with self.assertRaises(Stop):
+                    assert_no_other_payment(self.root, self.target.account_id)
+
+    def test_cancelled_checkout_is_replaced_without_opening_old_checkout(self):
+        from attempt_ledger import atomic_json, checkout_record_path
+        path = checkout_record_path(self.root, self.target.account_id)
+        record = {**json.loads(path.read_text()), 'status': 'cancelled',
+                  'checkout_outcome': 'cancelled', 'cancelled_before_confirmation': True,
+                  'payment_attempted': False, 'confirmation_requests_sent': 0}
+        atomic_json(path, record)
+        async def create_again(target, **kwargs):
+            self.assertTrue(kwargs['create'])
+            self.assertTrue(kwargs['replace_unpaid_checkout'])
+            self.assertNotIn('inspect_existing', kwargs)
+            with AttemptLedger(self.root, target.account_id, replace_unpaid_checkout=True) as ledger:
+                ledger.begin()
+                self.assertIsNotNone(ledger.record['retry_of'])
+            return {'status': 'session_verified', 'payment_requests_sent': 0}
+        with patch('pay.run_browser', new=AsyncMock(side_effect=create_again)) as run:
+            result = asyncio.run(run_flow(self.target, self.root, 'plus',
+                                         details_reader=lambda *_: details(), confirmer=lambda *_: False))
+        self.assertEqual(run.await_count, 1)
+        self.assertEqual(result['payment_requests_sent'], 0)
+
     def test_payment_success_requires_order_amount_currency_and_subscription(self):
         paid = {"id": "cs_synthetic", "object": "checkout.session", "status": "complete", "payment_status": "paid",
                 "amount_total": 9250, "currency": "myr"}

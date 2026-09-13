@@ -289,22 +289,23 @@ export class RechargeLocalService {
     return this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
-        const job = await this.repository.active(tx, id);
-        if (job.ownerId !== operator.id || job.action !== 'bitbrowser') {
+        const job = await this.repository.findJob(tx, id);
+        if (!job || job.ownerId !== operator.id || job.action !== 'bitbrowser') {
           throw new ForbiddenException('无权操作此任务');
         }
         const current = object(job.result);
+        if (job.state === 'finished' && current.cancellation_confirmed === true) return { id };
+        if (job.state === 'finished') throw new ConflictException('本次任务已经结束');
         if (current.payment_attempted === true || Number(current.payment_requests_sent) > 0) {
           throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         }
         await this.repository.updateJob(tx, id, {
-          state: 'finished',
-          nonceHash: null,
-          leaseUntil: new Date(),
+          // 本机取消请求已接收，但必须等它结束执行、清理窗口后才能结束任务。
+          leaseUntil: new Date(Date.now() + 5 * 60000),
           result: toV2JsonDocument({
             ...current,
-            status: 'cancelled',
-            reason: 'operation_cancelled',
+            status: 'cancelling',
+            reason: 'operation_cancel_requested',
             payment_requests_sent: 0
           })
         });

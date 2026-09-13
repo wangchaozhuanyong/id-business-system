@@ -29,7 +29,7 @@ VISIBLE_MONEY_LINE = re.compile(
     r"(?:(?:[A-Z]{3}|RM|₱|\$|€|£|¥|￥)\s*)?[0-9,.]+(?:\s*[A-Z]{3})?"
 )
 EXPIRED_CHECKOUT_ERROR = re.compile(
-    r"there was an error processing your payment|付款处理(?:发生|出现)?错误|处理付款时(?:发生|出现)?错误",
+    r"there was an error processing your payment|付款处理(?:发生|出现)?错误|处理(?:你的|您的)?付款时(?:(?:发生|出现)?错误|出错)",
     re.I,
 )
 RETURN_TO_CHATGPT = re.compile(r"return to chatgpt|返回\s*chatgpt", re.I)
@@ -42,6 +42,13 @@ def progress(stage, **details):
 def is_unavailable_existing_checkout(text: str) -> bool:
     """识别官网保留旧 URL、但正文已变为付款错误页的失效结算。"""
     return bool(EXPIRED_CHECKOUT_ERROR.search(text) and RETURN_TO_CHATGPT.search(text))
+
+
+def checkout_page_matches(url, checkout_id):
+    parts = urlsplit(url)
+    # 返回页的查询参数也带订单编号，不能把它当成结算页面。
+    return (parts.hostname in {"chatgpt.com", "checkout.stripe.com"}
+            and parts.path.rstrip("/").split("/")[-1] == checkout_id)
 
 
 def money(text: str, currency_hint=None):
@@ -410,7 +417,12 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         tasks.add(task)
         task.add_done_callback(tasks.discard)
     context.on("response", response_callback)
-    page = await context.new_page()
+    # 本机比特已打开首页；复用并在注入 Cookie 后加载，避免留下游客标签页。
+    page = next((p for p in context.pages if p.url == "about:blank" or
+                 (urlsplit(p.url).hostname == "chatgpt.com"
+                  and (urlsplit(p.url).path in ("", "/")
+                       or urlsplit(p.url).path.startswith("/checkout/")))), None)
+    page = page or await context.new_page()
     page.set_default_timeout(20000)
     identity = {"session_status": "not_verified", "account_matched": False}
     stage = "session_restore"
@@ -524,7 +536,7 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         if quote["plan"] != target_plan:
             raise Stop("checkout_tier_not_verified", quote=quote)
         # 报价验收必须绑定本次编号；不能只凭页面出现 Plus/金额认定成功。
-        if guard.checkout_id not in page.url:
+        if not checkout_page_matches(page.url, guard.checkout_id):
             raise Stop("checkout_page_identifier_unverified", quote=quote)
         initial_status = "checkout_quote_verified" if quote.get("today") else "checkout_ready_for_billing"
         result = {"status": initial_status, **identity, **guard.summary(),
@@ -579,8 +591,14 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         return result
     finally:
         guard.armed = False
+        context.remove_listener("response", response_callback)
         if tasks:
+            if asyncio.current_task().cancelling():
+                for task in tasks:
+                    task.cancel()
             await asyncio.gather(*list(tasks), return_exceptions=True)
+        # 同一窗口更换失效旧结算时，不能叠加上一轮的建单/付款拦截器。
+        await context.unroute("**/*", guard.route)
 
 
 async def run_browser(target, *, create=False, inspect_existing=False, retry_rejected=False,

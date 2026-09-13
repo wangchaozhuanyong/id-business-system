@@ -37,6 +37,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         page.goto.side_effect = goto
         context = MagicMock()
         context.route = AsyncMock()
+        context.unroute = AsyncMock()
         context.route_web_socket = AsyncMock()
         context.new_page = AsyncMock(return_value=page)
         context.add_cookies = AsyncMock()
@@ -78,7 +79,7 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
             return 'ip=203.0.113.1\nloc=US'
         page.goto = AsyncMock(side_effect=goto)
         page.evaluate = AsyncMock(side_effect=trace)
-        context = MagicMock(route=AsyncMock(), route_web_socket=AsyncMock(),
+        context = MagicMock(route=AsyncMock(), unroute=AsyncMock(), route_web_socket=AsyncMock(),
                             new_page=AsyncMock(return_value=page), add_cookies=AsyncMock())
         identity = {'account_matched': True, 'current_plan': 'free', 'session_status': 'restored'}
         with patch.object(browser_checkout, 'session_cookies', return_value=[]), \
@@ -197,9 +198,10 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await self.execute(cancelled)
         self.assertEqual(result['reason'], 'operation_cancelled')
         self.assertEqual(self.client.create_profile.call_count, 1)
-        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertTrue(result['cancellation_confirmed'])
 
-    async def test_stop_during_cleanup_prevents_deletion_and_next_window(self):
+    async def test_stop_during_cleanup_finishes_owned_cleanup_without_next_window(self):
         def close_then_cancel(path, body):
             self.job.signal_cancel()
             return {}
@@ -207,7 +209,40 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await self.execute([failure()])
         self.assertEqual(result['reason'], 'operation_cancelled')
         self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(self.deletions(), ['a' * 32])
+
+    async def test_cancel_interrupts_quote_wait_and_cleans_only_owned_window(self):
+        stopped = asyncio.Event()
+        async def quote_wait(*args, **kwargs):
+            self.job.signal_cancel()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        result, flow = await asyncio.wait_for(self.execute(quote_wait), timeout=3)
+        self.assertTrue(stopped.is_set())
+        self.assertEqual(flow.await_count, 1)
+        self.assertEqual(result['browser_cleanup_status'], 'completed')
+        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertEqual(result['payment_requests_sent'], 0)
+
+    async def test_cancel_cleanup_failure_is_reported_without_rebuild(self):
+        async def cancelled(*args, **kwargs):
+            self.job.signal_cancel()
+            return failure(reason='operation_cancelled')
+        self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
+        result, _ = await self.execute(cancelled)
+        self.assertTrue(result['cancellation_confirmed'])
+        self.assertEqual(result['browser_cleanup_status'], 'failed')
+        self.assertEqual(result['reason'], 'bitbrowser_cleanup_unverified')
+        self.assertEqual(self.client.create_profile.call_count, 1)
         self.assertEqual(self.deletions(), [])
+
+    def test_sent_payment_cannot_be_cancelled_or_cleaned(self):
+        self.job.payment_request_sent = True
+        with self.assertRaises(Stop):
+            self.job.signal_cancel()
+        self.assertFalse(self.job.cancelled)
 
     async def test_zero_retries_cleans_only_the_first_failed_window(self):
         from bitbrowser_options import DEFAULTS

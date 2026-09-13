@@ -49,7 +49,7 @@ SAFE_PUBLIC_KEYS = set(
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
-    "session_elapsed_seconds session_wait_seconds session_step".split()
+    "session_elapsed_seconds session_wait_seconds session_step cancellation_confirmed browser_cleanup_status".split()
 )
 
 
@@ -293,18 +293,21 @@ class LocalJob:
         self.resume_event.set()
 
     def signal_cancel(self):
+        if self.payment_request_sent:
+            raise Stop("previous_payment_attempt_exists")
         self.cancelled = True
         self.resume_event.set()
 
-    def progress(self, stage, **details):
-        self.check_cancelled()
+    def progress(self, stage, *, _during_cancel=False, **details):
+        if not _during_cancel:
+            self.check_cancelled()
         if stage == "session_verified":
             self.initial_session_verified = True
         self.session_info.update({key: value for key, value in details.items() if key in self.session_info})
         if stage == "payment_request_sending":
             self.payment_request_sent = True
         self.callback.send({"type": "progress", "result": public_result({
-            "status": "running",
+            "status": "cancelling" if _during_cancel else "running",
             "stage": stage,
             "reason": None,
             "user_action_required": False,

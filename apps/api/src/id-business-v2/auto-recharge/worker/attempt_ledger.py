@@ -42,12 +42,18 @@ def assert_no_other_payment(state_dir, account_id, checkout_id=None):
             if (not isinstance(checkout_identifier, str)
                     or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", checkout_identifier)):
                 raise Stop("invalid_payment_record")
+            if (data.get("cancelled_before_confirmation") is True
+                    and data.get("payment_status") == "cancelled"
+                    and type(data.get("confirmation_requests_sent")) is int
+                    and data["confirmation_requests_sent"] == 0
+                    and not data.get("payment_evidence")):
+                continue
             if checkout_id is None or data.get("checkout_identifier") != checkout_id:
                 raise Stop("account_has_other_payment_attempt", action="recheck_original_order_only",
                            recheck_plan=recheck_plan, checkout_identifier=checkout_identifier)
 
 
-def existing_checkout(state_dir: Path, account_id: str, target_plan="plus") -> dict:
+def read_checkout_record(state_dir: Path, account_id: str, target_plan="plus") -> dict:
     path = checkout_record_path(state_dir, account_id, target_plan)
     if state_dir.is_symlink() or path.is_symlink():
         raise Stop("unsafe_state_file")
@@ -59,6 +65,11 @@ def existing_checkout(state_dir: Path, account_id: str, target_plan="plus") -> d
     if (not isinstance(record, dict) or record.get("plan") != plan_spec(target_plan)["official_name"]
             or record.get("target_plan", "plus") != target_plan):
         raise Stop("invalid_checkout_record")
+    return record
+
+
+def existing_checkout(state_dir: Path, account_id: str, target_plan="plus") -> dict:
+    record = read_checkout_record(state_dir, account_id, target_plan)
     sid, entity = record.get("checkout_identifier"), record.get("processor_entity")
     if not isinstance(sid, str) or not re.fullmatch(r"(?:cs|oaics)_[A-Za-z0-9_]{1,200}", sid):
         raise Stop("missing_checkout_identifier")
@@ -85,6 +96,12 @@ def rejected_retry_allowed(record: dict) -> bool:
 
 def unpaid_checkout_replacement_allowed(record: dict) -> bool:
     """官网已让原结算编号失效时，只允许替换从未确认或付款的原单。"""
+    if (record.get("status") == "cancelled" and record.get("checkout_outcome") == "cancelled"
+            and record.get("cancelled_before_confirmation") is True
+            and record.get("payment_status") == "not_attempted"
+            and record.get("payment_attempted") is False
+            and record.get("confirmation_requests_sent") == 0):
+        return True
     return bool(record.get("payment_status") == "not_attempted"
                 and record.get("payment_attempted") is not True
                 and record.get("confirmation_requests_sent") in (None, 0)

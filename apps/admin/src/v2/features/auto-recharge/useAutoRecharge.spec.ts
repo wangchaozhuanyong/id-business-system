@@ -207,6 +207,25 @@ beforeEach(() => {
 afterEach(() => scope.stop());
 
 describe('本机比特浏览器自动充值', () => {
+  it('停止后清理中保持任务锁并说明进度，不重复取消', async () => {
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'running',
+        result: { status: 'cancelling', payment_requests_sent: 0 },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    await nextTick();
+    expect(flow.canCancel.value).toBe(false);
+    expect(flow.formLocked.value).toBe(true);
+    expect(flow.workflowMessage.value).toContain('清理本次窗口');
+    await flow.cancel();
+    expect(mock.connectorCancel).not.toHaveBeenCalled();
+  });
   it('未收到本机取消确认时不把服务端任务伪装成已结束', async () => {
     jobs.value.items = [
       {

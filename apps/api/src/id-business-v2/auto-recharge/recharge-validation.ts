@@ -128,6 +128,13 @@ const scalarKeys = new Set(
     ' '
   )
 );
+for (const key of [
+  'cancellation_confirmed',
+  'cancelled_before_confirmation',
+  'browser_cleanup_status'
+]) {
+  scalarKeys.add(key);
+}
 export function safeDocument(value: unknown): Record<string, unknown> {
   const input = object(value);
   const result: Record<string, unknown> = {};
