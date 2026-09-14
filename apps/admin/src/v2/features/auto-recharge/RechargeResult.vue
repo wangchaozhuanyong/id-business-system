@@ -60,9 +60,11 @@
         <dt>开通状态</dt>
         <dd>{{ subscriptionLabel(job) }}</dd>
       </dl>
-      <p v-if="job.result.reason" class="recharge-error" role="alert">
-        {{ statusLabel(job.result.reason) }}
-      </p>
+      <section v-if="issue" class="recharge-issue" role="alert" aria-live="polite">
+        <strong>{{ issue.title }}</strong>
+        <p>{{ issue.message }}</p>
+        <p>{{ issue.action }}</p>
+      </section>
       <p
         v-if="job.result.operator_resolution === 'confirmed_no_bank_request'"
         class="recharge-note"
@@ -95,7 +97,11 @@
           </template>
           <template v-if="job.result.last_reason">
             <dt>最后失败原因</dt>
-            <dd>{{ statusLabel(job.result.last_reason) }}</dd>
+            <dd>{{ failureReasonLabel(job.result.last_reason) }}</dd>
+          </template>
+          <template v-if="job.result.payment_failure_reason">
+            <dt>付款失败原因</dt>
+            <dd>{{ paymentFailureLabel(job.result.payment_failure_reason) }}</dd>
           </template>
           <dt>订单编号</dt>
           <dd>{{ job.result.checkout_identifier || '尚未取得' }}</dd>
@@ -118,18 +124,23 @@
   </div>
 </template>
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import {
   browserFailureLabel,
+  failureReasonLabel,
   planLabels,
+  paymentFailureLabel,
   paymentStatusLabel,
+  rechargeIssueFeedback,
   statusLabel,
   quotePlaceholder,
   subscriptionLabel,
   selectionStepLabels
 } from './recharge-presentation';
-defineProps<{ job?: V2RechargeJob }>();
+const props = defineProps<{ job?: V2RechargeJob }>();
+const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
   return value ? `${value.currency} ${value.amount}` : fallback;
 }

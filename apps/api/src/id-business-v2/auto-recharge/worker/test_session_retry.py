@@ -134,9 +134,11 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
     def test_public_errors_and_progress_exclude_raw_credentials(self):
         result = connector.public_result({'error_type': 'TimeoutError', 'session_attempt': 2,
                                          'browser_error_code': 'net::ERR_TIMED_OUT',
+                                         'payment_failure_reason': 'incorrect_cvc',
                                          'sessionJson': 'private', 'message': 'private', 'cvc': '123'})
         self.assertEqual(result, {'error_type': 'TimeoutError', 'session_attempt': 2,
-                                  'browser_error_code': 'net::ERR_TIMED_OUT'})
+                                  'browser_error_code': 'net::ERR_TIMED_OUT',
+                                  'payment_failure_reason': 'incorrect_cvc'})
 
 
 def failure(**patches):

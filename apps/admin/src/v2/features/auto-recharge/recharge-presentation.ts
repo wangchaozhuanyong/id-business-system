@@ -166,7 +166,118 @@ const labels: Record<string, string> = {
   cancelled: '本次任务已取消',
   cancelling: '正在停止并清理本次窗口',
   operation_cancel_requested: '已收到停止请求，正在清理',
-  http_error: '官网拒绝当前请求，本次已安全停止'
+  http_error: '官网拒绝当前请求，本次已安全停止',
+  access_token_expired: '授权凭据已过期，请更新授权 JSON',
+  account_checked: '官网账号已核对',
+  account_operation_in_progress: '同一账号已有一笔操作正在执行',
+  account_operation_lock_invalid: '账号操作锁状态异常，已停止本次操作',
+  ambiguous_official_payment_field: '官网出现多个付款字段，无法安全确定填写位置',
+  another_local_job_is_running: '本机连接器正在执行另一笔任务',
+  before_payment_click: '已完成付款前检查',
+  billing_address_location_mismatch: '账单地址的国家或地区与当前设置不一致',
+  billing_country_invalid: '账单国家无效',
+  billing_email_invalid: '账单邮箱与授权账号邮箱不一致',
+  billing_field_required: '官网要求补充账单资料',
+  billing_fields_changed: '付款前账单字段发生变化，已停止付款',
+  billing_form_changed: '官网账单表单结构已变化，已停止付款',
+  bitbrowser_api_token_invalid: '比特浏览器 Local API 密钥无效',
+  browser_startup_failed: '官网浏览器启动失败',
+  card_expired: '银行卡已过期',
+  checkout_attempted: '已尝试创建官方结算',
+  checkout_created: '官方结算已创建',
+  checkout_ledger_plan_mismatch: '原结算记录的套餐与本次选择不一致',
+  checkout_marker_write_failed: '未能安全保存建单记录，已阻止继续',
+  checkout_page_identifier_unverified: '无法确认当前页面属于本次结算',
+  checkout_record_plan_mismatch: '历史结算记录的套餐不匹配',
+  checkout_response_unreadable: '官网结算响应无法安全读取',
+  checkout_tier_not_verified: '官网结算的 Pro 档位无法确认',
+  complete_payment_quote_required: '官网最终付款金额不完整',
+  confirmation_already_consumed: '本次付款确认已使用，已阻止重复提交',
+  confirmation_cancelled: '已取消付款确认',
+  confirmation_mismatch: '当前报价与已确认金额不一致',
+  connector_origin_not_allowed: '本机连接器未允许当前网站来源',
+  connector_token_invalid: '本机连接密钥不匹配',
+  consult_original_payment_record: '已存在付款尝试，请只读复查原订单',
+  duplicate_checkout_blocked: '已阻止重复创建结算',
+  duplicate_payment_blocked: '已阻止重复付款',
+  existing_subscription_conflict: '当前账号已有与本次不兼容的订阅',
+  history_conflict: '历史付款记录已发生变化，需要重新核对',
+  interrupted: '本次操作已中断',
+  invalid_bitbrowser_configuration: '比特浏览器配置不完整或无效',
+  invalid_browser_window_name: '浏览器窗口名称无效',
+  invalid_callback_url: '本机连接器的回传地址无效',
+  invalid_checkout_record: '原结算记录无法验证',
+  invalid_connector_job: '本机连接器任务无效或已失效',
+  invalid_connector_payload: '本机连接器接收的任务资料不完整',
+  invalid_json_or_access_token: '授权 JSON 无效或登录凭据已失效',
+  invalid_local_connector_configuration: '本机连接器地址或配置无效',
+  invalid_locked_currency: '锁定币种无效',
+  invalid_operation_combination: '本次操作模式与任务资料不匹配',
+  invalid_payment_amount: '最高付款金额无效',
+  invalid_payment_authorization: '本次单次付款授权无效',
+  invalid_payment_details: '银行卡或账单资料不完整',
+  invalid_payment_evidence: '官网付款凭据无法验证',
+  invalid_payment_field: '官网付款字段无法安全填写',
+  invalid_payment_limit: '最高付款上限无效',
+  invalid_payment_preparation: '付款前安全检查未完成',
+  invalid_payment_record: '历史付款记录无法验证',
+  invalid_payment_status: '官网返回了无法识别的付款状态',
+  invalid_session_json: '授权 JSON 格式无效',
+  json_account_mismatch: '授权 JSON 的账号与本次任务不一致',
+  json_email_mismatch: '授权 JSON 的邮箱信息不一致',
+  json_too_large: '授权 JSON 文件过大',
+  local_io_or_record_error: '本机安全记录读写失败，已停止操作',
+  local_payment_confirmation_required: '本次付款缺少明确确认',
+  local_plan_selection_required: '需要先确认本次套餐',
+  local_secure_terminal_required: '本机安全确认通道不可用',
+  missing_checkout_identifier: '原结算记录缺少订单编号',
+  missing_observed_checkout_entity: '原结算记录缺少处理方信息',
+  missing_target_account_id: '授权 JSON 缺少目标账号编号',
+  missing_target_user_id: '授权 JSON 缺少目标用户编号',
+  network_error: '连接官网时发生网络错误',
+  network_timeout: '连接官网时网络超时',
+  official_checkout_navigation_not_observed: '点击套餐后未进入官方结算页',
+  official_payment_field_not_ready: '官网付款字段尚未加载完成',
+  official_subscribe_button_not_ready: '官网付款按钮尚未可用',
+  payment_account_or_order_unverified: '付款前无法再次确认账号和订单',
+  payment_details_already_consumed: '本次银行卡资料已提交过，已阻止重复使用',
+  payment_evidence_mismatch: '付款凭据与本次订单或金额不一致',
+  payment_evidence_required: '官网未返回可验证的付款成功凭据',
+  payment_form_changed: '官网付款表单已变化，已停止付款',
+  payment_ledger_attachment_invalid: '付款记录与当前结算无法绑定',
+  payment_marker_required: '未能保存付款防重标记，已停止付款',
+  payment_operation_failed: '付款执行过程发生异常',
+  payment_prepared: '已填写付款资料并核对金额',
+  payment_quote_plan_mismatch: '官网最终报价的套餐与本次选择不一致',
+  payment_record_required: '未找到本次付款的安全记录',
+  payment_result: '正在确认原单付款结果',
+  payment_save_preference_changed: '官网保存付款方式的选项发生变化，已停止付款',
+  plan_selection_cancelled: '已取消套餐选择',
+  response_too_large: '官网响应超过安全读取上限',
+  retry_requires_rejected_record: '当前历史记录不符合安全重试条件',
+  unexpected_checkout_origin: '当前结算页不是官方允许的地址',
+  unexpected_request_target: '发现非官方付款请求，已阻止',
+  unexpected_response: '官网返回了无法识别的响应',
+  unknown_account_shape: '官网账号资料格式已变化',
+  unknown_current_plan: '无法确认当前账号套餐',
+  unsafe_state_directory: '本机安全记录目录无法验证',
+  unsafe_state_file: '本机安全记录文件无法验证',
+  unsupported_payment_quote: '官网返回了不支持的报价格式',
+  unsupported_state_record: '历史安全记录版本不受支持',
+  unsupported_target_plan: '本次选择的套餐不受支持'
+};
+
+const paymentFailureLabels: Record<string, string> = {
+  card_declined: '发卡行拒绝了这笔付款',
+  expired_card: '银行卡已过期',
+  incorrect_cvc: '银行卡安全码不正确',
+  incorrect_number: '银行卡号不正确',
+  invalid_number: '官网判定银行卡号无效',
+  insufficient_funds: '银行卡余额或可用额度不足',
+  authentication_required: '发卡行要求完成本人验证',
+  payment_intent_binding_changed: '付款订单标识在执行中发生变化',
+  official_payment_evidence_not_observed: '官网未返回可验证的付款结果',
+  payment_response_not_verified: '官网付款响应无法安全验证'
 };
 export const selectionStepLabels = {
   open_menu: '打开套餐菜单',
@@ -210,6 +321,133 @@ export function subscriptionLabel(job: V2RechargeJob): string {
 }
 export function statusLabel(value: unknown) {
   return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
+}
+
+export interface RechargeIssueFeedback {
+  title: string;
+  message: string;
+  action: string;
+}
+
+const credentialReasons = new Set([
+  'access_token_expired',
+  'invalid_json',
+  'invalid_json_or_access_token',
+  'invalid_session_json',
+  'json_session_not_restored',
+  'missing_session_token'
+]);
+const connectorReasons = new Set([
+  'another_local_job_is_running',
+  'bitbrowser_api_token_invalid',
+  'bitbrowser_local_api_rejected',
+  'bitbrowser_local_api_unavailable',
+  'connector_origin_not_allowed',
+  'connector_token_invalid',
+  'invalid_bitbrowser_configuration',
+  'invalid_local_connector_configuration',
+  'local_connector_not_received'
+]);
+const networkReasons = new Set([
+  'network_error',
+  'network_timeout',
+  'network_unconfirmed',
+  'session_load_timeout',
+  'session_network_error',
+  'session_retries_exhausted'
+]);
+const paymentUnknownReasons = new Set([
+  'account_has_other_payment_attempt',
+  'confirmation_acceptance_unknown',
+  'consult_original_payment_record',
+  'durable_state_unavailable',
+  'payment_evidence_required',
+  'payment_operation_failed',
+  'previous_payment_attempt_exists',
+  'worker_acceptance_unknown'
+]);
+
+export function failureReasonLabel(value: unknown): string {
+  if (typeof value !== 'string') return '系统未收到具体失败原因';
+  return labels[value] ?? '系统未识别到具体失败原因';
+}
+
+export function paymentFailureLabel(value: unknown): string {
+  if (typeof value !== 'string') return '官网或银行未返回可识别的拒付原因';
+  return paymentFailureLabels[value] ?? '官网或银行未返回可识别的拒付原因';
+}
+
+function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (
+    paymentFailure === 'authentication_required' ||
+    job.result.payment_status === 'requires_action'
+  )
+    return '请在当前官网窗口完成银行验证，然后只读复查原订单。';
+  if (paymentFailure || job.result.payment_status === 'declined')
+    return '请核对银行卡状态、余额、限额和银行限制；系统不会自动重复付款。';
+  if (reason && credentialReasons.has(reason)) return '请重新导出并载入当前账号的授权 JSON。';
+  if (reason && connectorReasons.has(reason))
+    return '请打开比特浏览器和本机连接器，再到右上角设置检查连接、密钥和窗口配置。';
+  if (reason && networkReasons.has(reason))
+    return '请在右上角设置检查代理 IP 和等待时间，确认代理可用后重新开始。';
+  if (reason === 'bitbrowser_cleanup_unverified')
+    return '请先在比特浏览器确认本任务的失败窗口已关闭，再重新开始。';
+  if (reason === 'verification_required' || job.result.user_action_required === true)
+    return '请在当前官网窗口完成真人验证，然后返回网站继续。';
+  if (
+    (reason && paymentUnknownReasons.has(reason)) ||
+    job.state === 'unknown' ||
+    job.result.payment_status === 'unknown'
+  )
+    return '请先使用“只读复查原订单”；确认账号仍为免费版且银行卡没有收到请求后，再处理历史付款锁。';
+  if (job.result.payment_attempted === true || Number(job.result.payment_requests_sent ?? 0) > 0)
+    return '本次可能已发出付款请求，请只读复查原订单，不要重新发起付款。';
+  return '请根据上述原因修正资料或设置后重新开始；本次未提交付款。';
+}
+
+export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback | null {
+  if (job.result.operator_resolution === 'confirmed_no_bank_request') return null;
+  const paymentFailure =
+    typeof job.result.payment_failure_reason === 'string'
+      ? job.result.payment_failure_reason
+      : undefined;
+  if (
+    paymentFailure ||
+    job.result.payment_status === 'declined' ||
+    job.result.status === 'payment_failed'
+  ) {
+    return {
+      title: '付款失败原因',
+      message: paymentFailureLabel(paymentFailure),
+      action: issueAction(job, undefined, paymentFailure)
+    };
+  }
+  const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
+  if (reason) {
+    return {
+      title: job.result.user_action_required === true ? '需要你处理' : '本次未完成原因',
+      message: failureReasonLabel(reason),
+      action: issueAction(job, reason)
+    };
+  }
+  if (job.state === 'unknown' || job.result.status === 'payment_result_unknown') {
+    return {
+      title: '结果待核验',
+      message: '官网或本机连接器没有返回可确认的最终结果',
+      action: issueAction(job)
+    };
+  }
+  if (
+    ['finished'].includes(job.state) &&
+    (typeof job.result.error_type === 'string' || typeof job.result.browser_error_code === 'string')
+  ) {
+    return {
+      title: '浏览器执行失败',
+      message: browserFailureLabel(job.result.error_type, job.result.browser_error_code),
+      action: issueAction(job, 'network_error')
+    };
+  }
+  return null;
 }
 
 export function paymentStatusLabel(job: V2RechargeJob): string {

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   browserFailureLabel,
   currencyOptions,
+  failureReasonLabel,
+  paymentFailureLabel,
   quotePlaceholder,
+  rechargeIssueFeedback,
   statusLabel,
   subscriptionLabel,
   paymentStatusLabel
@@ -99,5 +102,53 @@ describe('recharge stage presentation', () => {
     expect(statusLabel('existing_checkout_unavailable')).toBe('原结算已失效，本次未付款');
     expect(statusLabel('bank_card_number_invalid')).toBe('银行卡号格式无效');
     expect(statusLabel('internal_unknown_reason')).toBe('待核验');
+  });
+  it('显示具体的银行拒付原因和处理方式', () => {
+    const declined = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'payment_failed',
+        payment_status: 'declined',
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        payment_failure_reason: 'insufficient_funds'
+      }
+    });
+    expect(paymentFailureLabel('insufficient_funds')).toBe('银行卡余额或可用额度不足');
+    expect(rechargeIssueFeedback(declined)).toEqual({
+      title: '付款失败原因',
+      message: '银行卡余额或可用额度不足',
+      action: '请核对银行卡状态、余额、限额和银行限制；系统不会自动重复付款。'
+    });
+  });
+  it('不暴露未知内部错误码，仍给出可操作提示', () => {
+    const unknownFailure = job({
+      action: 'bitbrowser',
+      result: { reason: 'private_internal_error', payment_attempted: false }
+    });
+    expect(failureReasonLabel('private_internal_error')).toBe('系统未识别到具体失败原因');
+    expect(rechargeIssueFeedback(unknownFailure)).toMatchObject({
+      title: '本次未完成原因',
+      message: '系统未识别到具体失败原因'
+    });
+    expect(JSON.stringify(rechargeIssueFeedback(unknownFailure))).not.toContain(
+      'private_internal_error'
+    );
+  });
+  it('付款结果未知时明确提示只读复查', () => {
+    const pending = job({
+      action: 'bitbrowser',
+      state: 'unknown',
+      result: {
+        status: 'payment_result_unknown',
+        payment_status: 'unknown',
+        payment_attempted: true
+      }
+    });
+    expect(rechargeIssueFeedback(pending)).toMatchObject({
+      title: '结果待核验',
+      message: '官网或本机连接器没有返回可确认的最终结果'
+    });
+    expect(rechargeIssueFeedback(pending)?.action).toContain('只读复查原订单');
   });
 });

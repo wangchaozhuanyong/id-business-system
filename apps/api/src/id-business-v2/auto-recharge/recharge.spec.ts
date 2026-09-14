@@ -155,6 +155,12 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({});
   });
+  it('只保留受控的付款失败原因', () => {
+    expect(safeDocument({ payment_failure_reason: 'insufficient_funds' })).toEqual({
+      payment_failure_reason: 'insufficient_funds'
+    });
+    expect(safeDocument({ payment_failure_reason: 'card=private' })).toEqual({});
+  });
   it('preserves only bounded selection diagnostics across the API boundary', () => {
     const diagnostics = {
       step: 'pricing_page',

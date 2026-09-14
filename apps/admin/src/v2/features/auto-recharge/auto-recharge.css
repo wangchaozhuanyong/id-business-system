@@ -263,6 +263,25 @@
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
+.recharge-issue {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--el-color-danger-light-7);
+  border-radius: 8px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.recharge-issue strong {
+  display: block;
+  color: var(--el-color-danger);
+  font-size: 14px;
+}
+.recharge-issue p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
 .recharge-history {
   list-style: none;
   padding: 0;
