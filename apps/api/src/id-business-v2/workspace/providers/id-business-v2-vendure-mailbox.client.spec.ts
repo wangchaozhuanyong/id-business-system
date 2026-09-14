@@ -28,7 +28,7 @@ describe('IdBusinessV2VendureMailboxClient', () => {
     });
   });
 
-  it('forwards the trusted client IP to the public Shop API without the admin key', async () => {
+  it('authenticates the Shop API and forwards the trusted client IP in a dedicated header', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
         data: {
@@ -51,14 +51,15 @@ describe('IdBusinessV2VendureMailboxClient', () => {
     const client = new IdBusinessV2VendureMailboxClient(
       new ConfigService({
         VENDURE_MAILBOX_SHOP_API_URL: 'https://vendure.example/shop-api',
-        VENDURE_MAILBOX_API_KEY: 'must-not-be-forwarded'
+        VENDURE_MAILBOX_API_KEY: 'dedicated-mailbox-key'
       })
     );
 
     await client.publicQuery('BUY-TEST-CODE', '203.0.113.25');
     const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
-    expect(headers['x-forwarded-for']).toBe('203.0.113.25');
-    expect(headers['vendure-api-key']).toBeUndefined();
+    expect(headers['x-id-business-client-ip']).toBe('203.0.113.25');
+    expect(headers['x-forwarded-for']).toBeUndefined();
+    expect(headers['vendure-api-key']).toBe('dedicated-mailbox-key');
   });
 
   it('returns a sanitized service error when Vendure exposes GraphQL details', async () => {

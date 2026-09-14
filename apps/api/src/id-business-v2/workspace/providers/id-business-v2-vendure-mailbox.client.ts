@@ -240,8 +240,12 @@ export class IdBusinessV2VendureMailboxClient {
 
   private shop<T>(query: string, variables: Record<string, unknown>, clientIp?: string) {
     const url = this.validUrl(this.config.get<string>('VENDURE_MAILBOX_SHOP_API_URL'));
-    if (!url) throw new ServiceUnavailableException('Vendure 邮箱查询入口尚未配置');
-    return this.request<T>(url, query, variables, clientIp ? { 'x-forwarded-for': clientIp } : {});
+    const apiKey = this.apiKey();
+    if (!url || !apiKey) throw new ServiceUnavailableException('Vendure 邮箱查询入口尚未配置');
+    return this.request<T>(url, query, variables, {
+      'vendure-api-key': apiKey,
+      ...(clientIp ? { 'x-id-business-client-ip': clientIp } : {})
+    });
   }
 
   private async request<T>(
