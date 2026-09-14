@@ -62,7 +62,33 @@ async def execute_profiles(job, client, target, playwright):
                 "reason": "bitbrowser_cleanup_unverified" if cleanup == "failed" else "operation_cancelled",
                 "browser_cleanup_status": cleanup, "payment_requests_sent": 0,
                 "payment_attempted": False, "browser_profile_id": job.profile_id or ""}
+    if terminal_cleanup_allowed(job, result):
+        original_reason = result.get("reason")
+        try:
+            await cleanup_profile(job, client, owned)
+            result.update(browser_cleanup_status="completed", browser_profile_id="")
+        except Stop:
+            result.update(reason="bitbrowser_cleanup_unverified",
+                          last_reason=original_reason,
+                          browser_cleanup_status="failed",
+                          browser_profile_id=job.profile_id or "")
     return result
+
+
+def terminal_cleanup_allowed(job, result):
+    """A finished pre-payment failure must not leave a duplicate owned window."""
+    return bool(
+        job.payload["mode"] == "payment"
+        and job.profile_id
+        and result.get("reason")
+        and result.get("reason") != "bitbrowser_cleanup_unverified"
+        and result.get("browser_cleanup_status") != "failed"
+        and result.get("user_action_required") is not True
+        and not job.payment_request_sent
+        and result.get("payment_attempted") is not True
+        and int(result.get("payment_requests_sent", 0) or 0) == 0
+        and int(result.get("confirmation_requests_sent", 0) or 0) == 0
+    )
 
 
 async def cancellable_flow(job, target, **kwargs):
@@ -88,7 +114,7 @@ async def _execute_profiles(job, client, target, playwright, owned):
         job.session_info = {"session_attempt": attempt, "session_attempt_limit": attempts,
                             "session_elapsed_seconds": 0,
                             "session_wait_seconds": options["sessionWaitMinutes"] * 60,
-                            "session_step": "page_load"}
+                            "session_step": "page_load", "session_refresh_count": 0}
         job.initial_session_verified = False
         job.progress("bitbrowser_group")
         profile_id = await asyncio.to_thread(client.create_profile, bit, job.payload["windowName"].strip())

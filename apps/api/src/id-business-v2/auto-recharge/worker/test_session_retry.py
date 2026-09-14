@@ -58,6 +58,39 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.elapsed, 119)
         self.assertEqual(report.call_args.kwargs['session_elapsed_seconds'], 119)
 
+    async def test_network_failure_refreshes_same_page_before_window_rebuild(self):
+        budget = SessionBudget(120)
+        page = MagicMock(url='https://chatgpt.com/')
+        page.goto = AsyncMock(side_effect=RuntimeError('net::ERR_TUNNEL_CONNECTION_FAILED'))
+        page.reload = AsyncMock()
+        context = MagicMock(
+            route=AsyncMock(),
+            unroute=AsyncMock(),
+            route_web_socket=AsyncMock(),
+            new_page=AsyncMock(return_value=page),
+            add_cookies=AsyncMock(),
+        )
+        identity = {
+            'account_matched': True,
+            'current_plan': 'free',
+            'session_status': 'restored',
+        }
+        with patch.object(browser_checkout, 'session_cookies', return_value=[]), \
+                patch.object(browser_checkout, 'check_session', new=AsyncMock(return_value=(None, identity))), \
+                patch.object(browser_checkout, 'progress') as progress, \
+                patch.dict('os.environ', {}, clear=True):
+            result = await browser_checkout.workflow(
+                context, SimpleNamespace(), session_budget=budget
+            )
+        page.goto.assert_awaited_once()
+        page.reload.assert_awaited_once_with(wait_until='domcontentloaded', timeout=0)
+        self.assertEqual(result['status'], 'session_verified')
+        self.assertTrue(any(
+            call.args == ('session_page_refreshing',)
+            and call.kwargs.get('session_refresh_count') == 1
+            for call in progress.call_args_list
+        ))
+
     async def test_deadline_is_shared_and_expires_at_120(self):
         clock = Clock()
         budget = SessionBudget(120, clock=clock)
@@ -189,6 +222,34 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['checkout_requests_sent'], 0)
         self.assertIsNone(self.job.profile_id)
 
+    async def test_non_payment_terminal_failure_cleans_owned_window(self):
+        result, _ = await self.execute([
+            failure(reason='official_plan_menu_timeout', stage='plan_selection',
+                    account_matched=True)
+        ])
+        self.assertEqual(result['reason'], 'official_plan_menu_timeout')
+        self.assertEqual(result['browser_cleanup_status'], 'completed')
+        self.assertEqual(result['browser_profile_id'], '')
+        self.assertEqual(self.deletions(), ['a' * 32])
+
+    async def test_user_action_failure_keeps_current_window(self):
+        result, _ = await self.execute([
+            failure(reason='verification_required', user_action_required=True)
+        ])
+        self.assertEqual(result['reason'], 'verification_required')
+        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.job.profile_id, 'a' * 32)
+
+    async def test_payment_attempt_failure_keeps_current_window(self):
+        self.job.payment_request_sent = True
+        result, _ = await self.execute([
+            failure(reason='payment_operation_failed', stage='payment_result',
+                    payment_attempted=True, payment_requests_sent=1)
+        ])
+        self.assertEqual(result['reason'], 'payment_operation_failed')
+        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.job.profile_id, 'a' * 32)
+
     async def test_cleanup_failure_stops_without_new_profile(self):
         self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
         result, _ = await self.execute([failure()])
@@ -263,13 +324,13 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow.await_count, 1)
         self.assertEqual(self.deletions(), ['a' * 32])
 
-    async def test_no_retry_after_first_session_was_verified_even_if_stage_repeats(self):
+    async def test_verified_session_failure_is_cleaned_without_rebuilding(self):
         async def after_checkout(*args, **kwargs):
             self.job.progress('session_verified')
             return failure()
         await self.execute(after_checkout)
         self.assertEqual(self.client.create_profile.call_count, 1)
-        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.deletions(), ['a' * 32])
 
     async def test_foreign_profile_is_never_closed_or_deleted(self):
         self.job.profile_id = 'd' * 32

@@ -49,7 +49,7 @@ SAFE_PUBLIC_KEYS = set(
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
-    "session_elapsed_seconds session_wait_seconds session_step cancellation_confirmed browser_cleanup_status "
+    "session_elapsed_seconds session_wait_seconds session_step session_refresh_count cancellation_confirmed browser_cleanup_status "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
 
@@ -603,7 +603,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True, "version": 2,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
-                                                     "payment-unknown-resolution"],
+                                                     "same-window-page-refresh", "payment-unknown-resolution"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
