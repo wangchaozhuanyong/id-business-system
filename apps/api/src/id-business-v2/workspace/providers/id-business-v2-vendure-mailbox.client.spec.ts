@@ -28,7 +28,7 @@ describe('IdBusinessV2VendureMailboxClient', () => {
     });
   });
 
-  it('authenticates the Shop API and forwards the trusted client IP in a dedicated header', async () => {
+  it('authenticates the Shop API and forwards the trusted client IP in dedicated headers', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
         data: {
@@ -77,5 +77,27 @@ describe('IdBusinessV2VendureMailboxClient', () => {
     const error = await client.primaryAccounts().catch((value) => value);
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect(String(error.message)).not.toContain('secret upstream detail');
+  });
+
+  it('reports an actionable authorization error without exposing GraphQL details', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        Response.json({
+          errors: [{ message: 'private permission detail', extensions: { code: 'FORBIDDEN' } }]
+        })
+      )
+    );
+    const client = new IdBusinessV2VendureMailboxClient(
+      new ConfigService({
+        VENDURE_MAILBOX_ADMIN_API_URL: 'https://vendure.example/admin-api',
+        VENDURE_MAILBOX_API_KEY: 'dedicated-mailbox-key'
+      })
+    );
+
+    const error = await client.checkConnection().catch((value) => value);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect(String(error.message)).toContain('授权无效或权限不足');
+    expect(String(error.message)).not.toContain('private permission detail');
   });
 });

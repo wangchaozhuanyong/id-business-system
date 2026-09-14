@@ -1,6 +1,8 @@
 import type { FormItemRule, FormRules } from 'element-plus';
 import type { BitBrowserSettingsForm } from './useRechargeBrowserSettings';
 
+const supportedBrowserTimeZones = new Set(['UTC', ...Intl.supportedValuesOf('timeZone')]);
+
 export function browserOptionRules(form: BitBrowserSettingsForm): FormRules {
   const options = form.browserOptions;
   const credentials: FormItemRule = {
@@ -53,9 +55,12 @@ export function browserOptionRules(form: BitBrowserSettingsForm): FormRules {
         trigger: 'change',
         validator: (_rule, value, callback) => {
           try {
-            if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_+-]+)*$/.test(value))
+            if (
+              typeof value !== 'string' ||
+              !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_+-]+)*$/.test(value) ||
+              !supportedBrowserTimeZones.has(value)
+            )
               throw new Error();
-            new Intl.DateTimeFormat('en', { timeZone: value }).format();
             callback();
           } catch {
             callback(new Error('请输入有效的完整时区名称'));

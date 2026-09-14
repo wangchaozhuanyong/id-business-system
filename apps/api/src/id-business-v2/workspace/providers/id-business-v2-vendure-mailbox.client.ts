@@ -18,8 +18,10 @@ import type {
 
 interface GraphqlEnvelope<T> {
   data?: T;
-  errors?: Array<{ message?: unknown }>;
+  errors?: Array<{ message?: unknown; extensions?: { code?: unknown } }>;
 }
+
+class VendureMailboxAuthorizationError extends Error {}
 
 const PRIMARY_FIELDS = `
   id createdAt updatedAt email note status imapHost imapPort masterQueryCode codeExpiresAt
@@ -41,6 +43,11 @@ export class IdBusinessV2VendureMailboxClient {
 
   isConfigured() {
     return Boolean(this.adminUrl() && this.apiKey());
+  }
+
+  async checkConnection() {
+    await this.primaryAccounts();
+    return true;
   }
 
   async primaryAccounts() {
@@ -269,11 +276,31 @@ export class IdBusinessV2VendureMailboxClient {
         body: JSON.stringify({ query, variables }),
         signal: controller.signal
       });
+      if (response.status === 401 || response.status === 403) {
+        throw new VendureMailboxAuthorizationError();
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const envelope = (await response.json()) as GraphqlEnvelope<T>;
+      if (
+        envelope.errors?.some((error) =>
+          ['FORBIDDEN', 'UNAUTHENTICATED'].includes(
+            String(error.extensions?.code ?? '').toUpperCase()
+          )
+        )
+      ) {
+        throw new VendureMailboxAuthorizationError();
+      }
       if (envelope.errors?.length || !envelope.data) throw new Error('GraphQL request failed');
       return envelope.data;
-    } catch {
+    } catch (error) {
+      if (error instanceof VendureMailboxAuthorizationError) {
+        throw new ServiceUnavailableException(
+          'Vendure 邮箱授权无效或权限不足，请管理员检查专用 API Key'
+        );
+      }
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ServiceUnavailableException('Vendure 邮箱服务连接超时，请稍后重试');
+      }
       throw new ServiceUnavailableException('Vendure 邮箱服务暂时不可用，请稍后刷新重试');
     } finally {
       clearTimeout(timer);

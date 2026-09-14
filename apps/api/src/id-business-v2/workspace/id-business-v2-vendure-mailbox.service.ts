@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  ServiceUnavailableException
+} from '@nestjs/common';
 import type {
   BatchCreateV2VendureMailboxAliasesInput,
   CreateV2VendureMailboxAliasInput,
@@ -36,9 +41,21 @@ export class IdBusinessV2VendureMailboxService {
     private readonly audit: V2TransactionalAuditService
   ) {}
 
-  status(operator?: AuthenticatedUser) {
+  async status(operator?: AuthenticatedUser) {
     this.requireAdmin(operator);
-    return { configured: this.client.isConfigured() };
+    if (!this.client.isConfigured()) {
+      return { configured: false, connected: false, message: 'Vendure 邮箱互通尚未配置' };
+    }
+    try {
+      await this.client.checkConnection();
+      return { configured: true, connected: true, message: null };
+    } catch (error) {
+      return {
+        configured: true,
+        connected: false,
+        message: error instanceof Error ? error.message : 'Vendure 邮箱服务暂时不可用，请稍后重试'
+      };
+    }
   }
 
   async listPrimary(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {
@@ -67,17 +84,23 @@ export class IdBusinessV2VendureMailboxService {
   async listMails(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {
     this.requireAdmin(operator);
     const query = this.listQuery(dto);
+    const primaryAccountId = this.optionalId(dto.primaryAccountId);
+    const virtualEmailId = this.optionalId(dto.virtualEmailId);
+    const unassignedOnly = this.boolean(dto.unassignedOnly);
     const items = (
       await this.client.receivedMails({
-        primaryAccountId: this.optionalId(dto.primaryAccountId),
-        virtualEmailId: this.optionalId(dto.virtualEmailId),
-        unassignedOnly: this.boolean(dto.unassignedOnly),
+        primaryAccountId,
+        virtualEmailId,
+        unassignedOnly,
         limit: 500
       })
     ).filter(
       (item) =>
-        !query.q ||
-        this.includes(item, query.q, ['fromAddress', 'fromName', 'subject', 'extractedCode'])
+        (!primaryAccountId || item.primaryAccountId === primaryAccountId) &&
+        (!virtualEmailId || item.virtualEmailId === virtualEmailId) &&
+        (!unassignedOnly || item.virtualEmailId === null) &&
+        (!query.q ||
+          this.includes(item, query.q, ['fromAddress', 'fromName', 'subject', 'extractedCode']))
     );
     return this.page(items, query.page, query.pageSize);
   }
@@ -451,19 +474,25 @@ export class IdBusinessV2VendureMailboxService {
     objectType: string,
     objectId: string
   ) {
-    await this.transactionManager.execute(
-      async (tx) => {
-        await this.audit.append(tx, {
-          userId,
-          module: 'id_business_v2',
-          action: `id_business_v2.vendure_mailbox.${action}`,
-          objectType,
-          objectId,
-          afterData: toV2JsonDocument({ remoteSystem: 'vendure', action }),
-          remark: '已通过 ID 系统操作 Vendure 邮箱数据'
-        });
-      },
-      { changedScopes: ['auto-recharge'], requestId, operator, retryMode: 'none' }
-    );
+    try {
+      await this.transactionManager.execute(
+        async (tx) => {
+          await this.audit.append(tx, {
+            userId,
+            module: 'id_business_v2',
+            action: `id_business_v2.vendure_mailbox.${action}`,
+            objectType,
+            objectId,
+            afterData: toV2JsonDocument({ remoteSystem: 'vendure', action }),
+            remark: '已通过 ID 系统操作 Vendure 邮箱数据'
+          });
+        },
+        { changedScopes: ['auto-recharge'], requestId, operator, retryMode: 'none' }
+      );
+    } catch {
+      throw new ServiceUnavailableException(
+        'Vendure 操作已完成，但本地审计记录失败；请刷新核对结果，不要重复提交'
+      );
+    }
   }
 }

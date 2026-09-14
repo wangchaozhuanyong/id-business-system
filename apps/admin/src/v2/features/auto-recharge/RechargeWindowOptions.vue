@@ -72,9 +72,7 @@
           :value="item.value"
         />
       </el-select>
-      <p class="recharge-settings-hint">
-        可搜索常用时区，或输入完整时区名称，如 Asia/Kuala_Lumpur。
-      </p>
+      <p class="recharge-settings-hint">可搜索常用时区，或输入完整时区名称，如 Asia/Shanghai。</p>
     </el-form-item>
     <el-form-item label="定位来源">
       <el-switch
@@ -176,7 +174,6 @@ import type { V2RechargeBrowserOptions } from './contracts';
 import { rechargeLanguages as languages } from './recharge-browser-presentation';
 const options = defineModel<V2RechargeBrowserOptions>({ required: true });
 const timezones = [
-  { label: '马来西亚 · 吉隆坡', value: 'Asia/Kuala_Lumpur' },
   { label: '中国 · 上海', value: 'Asia/Shanghai' },
   { label: '新加坡', value: 'Asia/Singapore' },
   { label: '日本 · 东京', value: 'Asia/Tokyo' },

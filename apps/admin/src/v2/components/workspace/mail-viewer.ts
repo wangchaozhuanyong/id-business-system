@@ -1,4 +1,8 @@
-import { V2_MAIL_VIEWER_LIMITS } from '@apple-business/shared';
+import {
+  V2_MAIL_VIEWER_LIMITS,
+  V2_VENDURE_VIRTUAL_MAIL_LIMIT,
+  type V2MailViewerMessage
+} from '@apple-business/shared';
 
 const CREDENTIAL_SEPARATOR = '----';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -10,6 +14,8 @@ const BLOCK_ELEMENTS =
 export interface ParsedMailQueryCode {
   queryCode: string;
 }
+
+export type MailQueryKind = 'managed' | 'vendure-primary' | 'vendure-virtual';
 
 export interface MailQueryCodeLineError {
   lineNumber: number;
@@ -40,6 +46,28 @@ export function parseMailQueryCode(value: string): ParsedMailQueryCode {
     throw new Error('邮件查询码格式不正确');
   }
   return { queryCode };
+}
+
+export function classifyMailQueryCode(value: string): MailQueryKind {
+  let queryCode = value.trim();
+  try {
+    queryCode = parseMailQueryCode(value).queryCode;
+  } catch {
+    // Keep incomplete input in the managed state until it becomes a valid Vendure code.
+  }
+  if (/^BUY-/i.test(queryCode)) return 'vendure-virtual';
+  if (/^MSTR-/i.test(queryCode)) return 'vendure-primary';
+  return 'managed';
+}
+
+export function resolveMailViewerLimit(queryCode: string, requestedLimit: number) {
+  return classifyMailQueryCode(queryCode) === 'vendure-virtual'
+    ? V2_VENDURE_VIRTUAL_MAIL_LIMIT
+    : requestedLimit;
+}
+
+export function filterMailViewerMessages(items: V2MailViewerMessage[], virtualEmailId: string) {
+  return virtualEmailId ? items.filter((item) => item.virtualEmailId === virtualEmailId) : items;
 }
 
 export function parseMailQueryCodeLines(value: string) {

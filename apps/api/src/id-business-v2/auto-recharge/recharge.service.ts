@@ -38,36 +38,14 @@ import {
   completeUnknownPaymentResolution,
   withResolutionVerification
 } from './recharge-resolution';
-
-const browserProfilePattern = /^[a-f0-9]{32}$/i;
-type FinishedRechargeJob = {
-  id: string;
-  result: unknown;
-};
-
-function staleProfile(job: FinishedRechargeJob, includeCompleted = false) {
-  if (!job.result || typeof job.result !== 'object' || Array.isArray(job.result)) return null;
-  const result = job.result as Record<string, unknown>;
-  const profileId = result.browser_profile_id;
-  const zero = (value: unknown) => value === undefined || value === null || value === 0;
-  if (
-    typeof profileId !== 'string' ||
-    !browserProfilePattern.test(profileId) ||
-    typeof result.reason !== 'string' ||
-    result.payment_attempted === true ||
-    !zero(result.payment_requests_sent) ||
-    !zero(result.confirmation_requests_sent) ||
-    (result.payment_status !== undefined &&
-      result.payment_status !== null &&
-      result.payment_status !== 'not_attempted') ||
-    result.payment_outcome === 'succeeded' ||
-    result.subscription_status === 'active' ||
-    result.user_action_required === true ||
-    (!includeCompleted && result.browser_cleanup_status === 'completed')
-  )
-    return null;
-  return { sourceJobId: job.id, profileId };
-}
+import {
+  clearRechargeDetails,
+  clearRechargeStartSecrets,
+  isBrowserProfileId,
+  rechargeDetailsWithAddress,
+  staleProfile
+} from './recharge-job-helpers';
+import { isRechargeWorkerConfigured, sendRechargeWorkerRequest } from './recharge-worker-client';
 
 @Injectable()
 export class RechargeService {
@@ -157,59 +135,8 @@ export class RechargeService {
           result: withResolutionVerification(result, job, items)
         };
       }),
-      configured: this.configured()
+      configured: isRechargeWorkerConfigured()
     };
-  }
-
-  private configured() {
-    return (process.env.AUTO_RECHARGE_WORKER_TOKEN?.length ?? 0) >= 32;
-  }
-
-  private async workerReceipt(
-    id: string
-  ): Promise<Record<string, unknown> & { knownMissing: boolean }> {
-    const base = process.env.AUTO_RECHARGE_WORKER_URL ?? 'http://auto-recharge:8051';
-    try {
-      const response = await fetch(`${base}/jobs/${id}/status`, {
-        redirect: 'error',
-        headers: { 'X-Recharge-Worker': process.env.AUTO_RECHARGE_WORKER_TOKEN! },
-        signal: AbortSignal.timeout(3000)
-      });
-      if (response.status === 404) return { knownMissing: true };
-      if (!response.ok) return { knownMissing: false };
-      const value = (await response.json()) as Record<string, unknown>;
-      return { knownMissing: false, ...value };
-    } catch {
-      return { knownMissing: false };
-    }
-  }
-
-  private async worker(
-    path: string,
-    body: object,
-    id: string,
-    receipt: 'accepted' | 'details_received' | 'confirmation_received' | 'cancelled'
-  ): Promise<'accepted' | 'not_received' | 'unknown'> {
-    if (!this.configured()) throw new ServiceUnavailableException('服务器执行器尚未配置');
-    const base = process.env.AUTO_RECHARGE_WORKER_URL ?? 'http://auto-recharge:8051';
-    try {
-      const response = await fetch(base + path, {
-        method: 'POST',
-        redirect: 'error',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Recharge-Worker': process.env.AUTO_RECHARGE_WORKER_TOKEN!
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10000)
-      });
-      if (response.ok) return 'accepted';
-    } catch {
-      /* 只读查询本次编号，不重发写请求。 */
-    }
-    const status = await this.workerReceipt(id);
-    if (status[receipt] === true) return 'accepted';
-    return status.knownMissing ? 'not_received' : 'unknown';
   }
 
   private async finishUnreceivedJob(id: string, ownerId: string, unknown: boolean) {
@@ -234,7 +161,9 @@ export class RechargeService {
   }
 
   async start(value: unknown, operator: AuthenticatedUser) {
-    if (!this.configured()) throw new ServiceUnavailableException('服务器执行器尚未配置');
+    if (!isRechargeWorkerConfigured()) {
+      throw new ServiceUnavailableException('服务器执行器尚未配置');
+    }
     const input = validateStart(value);
     const result = await this.transactions.execute(
       async (tx) => {
@@ -287,17 +216,14 @@ export class RechargeService {
         const workerInput = { ...input };
         delete workerInput.addressId;
         if (input.action === 'prepare' && input.details && result.address) {
-          workerInput.details = {
-            ...input.details,
-            country: result.address.country,
-            line1: result.address.line1,
-            line2: '',
-            city: result.address.city,
-            state: result.address.state,
-            postal_code: result.address.postalCode
-          };
+          workerInput.details = rechargeDetailsWithAddress(input.details, result.address);
         }
-        const receipt = await this.worker('/jobs/' + input.id, workerInput, input.id, 'accepted');
+        const receipt = await sendRechargeWorkerRequest(
+          '/jobs/' + input.id,
+          workerInput,
+          input.id,
+          'accepted'
+        );
         if (receipt !== 'accepted') {
           await this.finishUnreceivedJob(input.id, operator.id, receipt === 'unknown');
           throw new ServiceUnavailableException(
@@ -307,11 +233,7 @@ export class RechargeService {
           );
         }
       } finally {
-        input.sessionJson = '';
-        if (input.details)
-          Object.keys(input.details).forEach((key) => {
-            input.details![key as keyof typeof input.details] = '';
-          });
+        clearRechargeStartSecrets(input);
       }
     }
     return { id: result.job.id };
@@ -351,18 +273,10 @@ export class RechargeService {
       { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
     );
     try {
-      const receipt = await this.worker(
+      const receipt = await sendRechargeWorkerRequest(
         `/jobs/${id}/details`,
         {
-          details: {
-            ...input.details,
-            country: selected.country,
-            line1: selected.line1,
-            line2: '',
-            city: selected.city,
-            state: selected.state,
-            postal_code: selected.postalCode
-          }
+          details: rechargeDetailsWithAddress(input.details, selected)
         },
         id,
         'details_received'
@@ -377,9 +291,7 @@ export class RechargeService {
       }
       return { id };
     } finally {
-      Object.keys(input.details).forEach((key) => {
-        input.details[key as keyof typeof input.details] = '';
-      });
+      clearRechargeDetails(input.details);
     }
   }
 
@@ -408,7 +320,7 @@ export class RechargeService {
       },
       { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
     );
-    const receipt = await this.worker(
+    const receipt = await sendRechargeWorkerRequest(
       '/jobs/' + id + '/confirm',
       { nonce },
       id,
@@ -453,7 +365,7 @@ export class RechargeService {
   async cancel(id: string, operator: AuthenticatedUser) {
     const job = await this.repository.owned(id, operator.id);
     if (job.state === 'confirming') throw new ConflictException('付款已确认，只能等待或复查原订单');
-    await this.worker('/jobs/' + id + '/cancel', {}, id, 'cancelled');
+    await sendRechargeWorkerRequest('/jobs/' + id + '/cancel', {}, id, 'cancelled');
     return { id };
   }
   authorizeWorker(token: unknown) {
@@ -520,8 +432,7 @@ export class RechargeService {
             if (
               typeof item.sourceJobId !== 'string' ||
               !uuidPattern.test(item.sourceJobId) ||
-              typeof item.profileId !== 'string' ||
-              !browserProfilePattern.test(item.profileId)
+              !isBrowserProfileId(item.profileId)
             )
               throw new BadRequestException('历史窗口清理回执无效');
             return { sourceJobId: item.sourceJobId, profileId: item.profileId };

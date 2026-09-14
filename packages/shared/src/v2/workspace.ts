@@ -28,6 +28,8 @@ export const V2_MAIL_VIEWER_LIMITS = {
   messages: 20
 } as const;
 
+export const V2_VENDURE_VIRTUAL_MAIL_LIMIT = 5;
+
 export const V2_WEBSITE_MONITOR_LIMITS = {
   redirects: 5,
   requestTimeoutMs: 10_000,
@@ -203,18 +205,33 @@ export interface V2MailViewerQueryInput {
 }
 
 export interface V2MailViewerMessage {
+  id?: string;
   body: string;
+  extractedCode?: string | null;
   from: string;
   savedAt: string;
   subject: string;
   to: string;
+  virtualEmailId?: string | null;
+}
+
+export interface V2MailViewerVirtualEmailOption {
+  id: string;
+  aliasEmail: string;
+  note: string | null;
 }
 
 export interface V2MailViewerQueryResult {
+  codeExpiresAt?: IsoDateTimeString | null;
   email: string;
   items: V2MailViewerMessage[];
+  maxVisibleMessages?: number | null;
   provider: V2MailProvider;
   queriedAt: IsoDateTimeString;
+  remainingDays?: number | null;
+  targetType?: 'PRIMARY' | 'VIRTUAL' | null;
+  totalEmails?: number;
+  virtualEmailsList?: V2MailViewerVirtualEmailOption[] | null;
 }
 
 export interface V2ManagedMailbox {
