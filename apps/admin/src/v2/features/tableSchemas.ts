@@ -690,10 +690,8 @@ export const v2TableSchemas = {
       defaultHiddenColumnKeys: [
         '操作人',
         '分类',
-        '使用 ID',
         'accountDisposition',
         'accountCostAmount',
-        '客户网站账号',
         '利润率',
         'openedAt',
         'dueAt'
@@ -711,7 +709,12 @@ export const v2TableSchemas = {
         { key: '客户', label: '客户', kind: 'text', widthPreset: 'wide' },
         { key: '分类', label: '分类', kind: 'text', widthPreset: 'standard' },
         { key: '业务', label: '业务', kind: 'text', widthPreset: 'wide' },
-        { key: '使用 ID', label: '使用 ID', kind: 'identifier', widthPreset: 'identifier' },
+        {
+          key: '充值苹果邮箱',
+          label: '充值苹果邮箱',
+          kind: 'identifier',
+          widthPreset: 'identifier'
+        },
         {
           key: 'accountDisposition',
           label: 'ID 处理状态',
@@ -724,7 +727,12 @@ export const v2TableSchemas = {
           kind: 'numeric',
           widthPreset: 'standard'
         },
-        { key: '客户网站账号', label: '客户网站账号', kind: 'identifier', widthPreset: 'wide' },
+        {
+          key: '客户业务账号',
+          label: '客户业务账号',
+          kind: 'identifier',
+          widthPreset: 'wide'
+        },
         { key: 'receivedAmount', label: '实收金额', kind: 'numeric', widthPreset: 'standard' },
         { key: 'profitAmount', label: '利润', kind: 'numeric', widthPreset: 'standard' },
         { key: '利润率', label: '利润率', kind: 'numeric', widthPreset: 'standard' },

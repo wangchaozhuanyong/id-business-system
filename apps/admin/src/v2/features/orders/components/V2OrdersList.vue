@@ -316,8 +316,8 @@
               <dt>业务分类</dt>
               <dd>{{ item.service.parent?.name || '—' }}</dd>
             </div>
-            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '使用 ID']">
-              <dt>使用 ID</dt>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '充值苹果邮箱']">
+              <dt>充值苹果邮箱</dt>
               <dd>
                 {{ item.account?.displayAppleId || '—' }}
                 <el-tag
@@ -328,6 +328,10 @@
                   客户已购
                 </el-tag>
               </dd>
+            </div>
+            <div v-v2-column-visibility="[v2TableSchemas.orders.main.id, '客户业务账号']">
+              <dt>客户业务账号</dt>
+              <dd>{{ item.displayWebsiteAccount || '未填写' }}</dd>
             </div>
             <div v-if="item.sourceSoldOrder">
               <dt>原销售订单</dt>
@@ -379,9 +383,6 @@
             </div>
           </dl>
           <footer>
-            <span v-v2-column-visibility="[v2TableSchemas.orders.main.id, '客户网站账号']">
-              {{ item.displayWebsiteAccount || '未填写网站账号' }}
-            </span>
             <div class="v2-order-row-actions">
               <AppButton size="small" variant="ghost" @click="page.openDetail(item)"
                 >查看详情</AppButton

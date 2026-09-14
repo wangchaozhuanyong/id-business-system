@@ -6,6 +6,28 @@ import tableColumn from '@/v2/components/V2TableColumn.vue?raw';
 import tableColumnSettings from '@/v2/components/V2TableColumnSettings.vue?raw';
 
 describe('order and gift-card table action UI contract', () => {
+  it('shows the recharge Apple email and customer business account by default', () => {
+    const ordersSchema = tableSchemas.slice(
+      tableSchemas.indexOf('  orders: {'),
+      tableSchemas.indexOf('  profile: {')
+    );
+    const defaultHiddenColumns = ordersSchema.slice(
+      ordersSchema.indexOf('defaultHiddenColumnKeys'),
+      ordersSchema.indexOf('columns:')
+    );
+
+    expect(ordersSchema).toContain("key: '充值苹果邮箱'");
+    expect(ordersSchema).toContain("label: '充值苹果邮箱'");
+    expect(ordersSchema).toContain("key: '客户业务账号'");
+    expect(ordersSchema).toContain("label: '客户业务账号'");
+    expect(defaultHiddenColumns).not.toContain("'充值苹果邮箱'");
+    expect(defaultHiddenColumns).not.toContain("'客户业务账号'");
+    expect(orderList).toContain("row.account?.displayAppleId || '—'");
+    expect(orderList).toContain("row.displayWebsiteAccount || '—'");
+    expect(orderList).toContain('<dt>充值苹果邮箱</dt>');
+    expect(orderList).toContain('<dt>客户业务账号</dt>');
+  });
+
   it('keeps order state transitions in the pinned status/next-step column', () => {
     const ordersSchema = tableSchemas.slice(
       tableSchemas.indexOf('  orders: {'),
