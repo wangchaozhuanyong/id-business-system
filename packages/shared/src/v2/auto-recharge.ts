@@ -20,6 +20,7 @@ export interface V2RechargeResult {
   stage?: string;
   error_type?: string;
   browser_error_code?: string;
+  payment_failure_reason?: string;
   last_reason?: string;
   session_attempt?: number;
   session_attempt_limit?: number;

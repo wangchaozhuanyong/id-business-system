@@ -150,6 +150,12 @@ class ServerTests(unittest.TestCase):
             'sessionToken': 'private', 'details': {'cvc': 'private'}, 'cookie': 'private'})
         self.assertEqual(result, {'status': 'blocked'})
 
+    def test_payment_failure_reason_survives_public_result(self):
+        result = server.public_result({'status': 'payment_failed',
+            'payment_failure_reason': 'insufficient_funds', 'message': 'private'})
+        self.assertEqual(result, {'status': 'payment_failed',
+            'payment_failure_reason': 'insufficient_funds'})
+
     def test_original_order_recovery_fields_survive_public_result(self):
         result = server.public_result({
             'status': 'blocked', 'reason': 'account_has_other_payment_attempt',

@@ -44,7 +44,7 @@ ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND"}
 SAFE_PUBLIC_KEYS = set(
     "status reason stage session_status account_matched current_plan current_tier target_plan "
     "checkout_status checkout_identifier subscription_status payment_status payment_outcome "
-    "payment_attempted payment_evidence confirmation_requests_sent checkout_requests_sent "
+    "payment_attempted payment_failure_reason payment_evidence confirmation_requests_sent checkout_requests_sent "
     "payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code "
     "card_last4 checkout_outcome payment_record_write_failed network quote initial_quote "
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
