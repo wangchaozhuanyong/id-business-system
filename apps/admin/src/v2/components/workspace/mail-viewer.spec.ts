@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { mailBodyToPlainText, parseMailQueryCode, parseMailQueryCodeLines } from './mail-viewer';
+import {
+  classifyMailQueryCode,
+  filterMailViewerMessages,
+  mailBodyToPlainText,
+  parseMailQueryCode,
+  parseMailQueryCodeLines,
+  resolveMailViewerLimit
+} from './mail-viewer';
 
 describe('mailBodyToPlainText', () => {
   it('keeps readable content while removing executable and tracking markup', () => {
@@ -38,5 +45,23 @@ describe('mailBodyToPlainText', () => {
       { lineNumber: 3, message: '邮件查询码重复' }
     ]);
     expect(JSON.stringify(result.errors)).not.toContain('private');
+  });
+
+  it('classifies Vendure query codes and fixes buyer results to five messages', () => {
+    expect(classifyMailQueryCode('buy-123')).toBe('vendure-virtual');
+    expect(classifyMailQueryCode('buyer@example.com----BUY-123')).toBe('vendure-virtual');
+    expect(classifyMailQueryCode('MSTR-123')).toBe('vendure-primary');
+    expect(classifyMailQueryCode('managed-code')).toBe('managed');
+    expect(resolveMailViewerLimit('BUY-123', 20)).toBe(5);
+    expect(resolveMailViewerLimit('MSTR-123', 20)).toBe(20);
+  });
+
+  it('filters primary-query messages by the selected virtual mailbox', () => {
+    const items = [
+      { body: '', from: '', savedAt: '', subject: '', to: '', virtualEmailId: 'alias-1' },
+      { body: '', from: '', savedAt: '', subject: '', to: '', virtualEmailId: 'alias-2' }
+    ];
+    expect(filterMailViewerMessages(items, 'alias-1')).toEqual([items[0]]);
+    expect(filterMailViewerMessages(items, '')).toEqual(items);
   });
 });

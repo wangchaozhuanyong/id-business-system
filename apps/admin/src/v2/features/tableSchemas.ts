@@ -8,7 +8,7 @@ export const v2TableSchemas = {
       id: 'vendure-mailbox.primary',
       feature: 'vendure-mailbox',
       role: 'primary',
-      mobileMode: 'scroll',
+      mobileMode: 'cards',
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         { key: 'email', label: '主邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
@@ -25,7 +25,7 @@ export const v2TableSchemas = {
       id: 'vendure-mailbox.aliases',
       feature: 'vendure-mailbox',
       role: 'secondary',
-      mobileMode: 'scroll',
+      mobileMode: 'cards',
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         {
@@ -54,7 +54,7 @@ export const v2TableSchemas = {
       id: 'vendure-mailbox.mails',
       feature: 'vendure-mailbox',
       role: 'secondary',
-      mobileMode: 'scroll',
+      mobileMode: 'cards',
       rowKey: { kind: 'path', value: 'id' },
       columns: [
         {

@@ -187,23 +187,34 @@ describe('IdBusinessV2MailViewerService', () => {
         success: true,
         message: null,
         targetType: 'VIRTUAL',
-        aliasEmail: 'masked@example.com',
+        aliasEmail: 'buyer@example.com',
         primaryEmail: null,
         codeExpiresAt: null,
         remainingDays: null,
-        totalEmails: 1,
+        totalEmails: 8,
         virtualEmailsList: null,
         items: [
-          {
-            id: 'mail-1',
+          ...Array.from({ length: 7 }, (_, index) => ({
+            id: `mail-${index + 1}`,
             virtualEmailId: 'alias-1',
             fromAddress: 'sender@example.com',
             fromName: '验证码服务',
-            subject: '登录验证码',
-            receivedAt: now.toISOString(),
-            extractedCode: '123456',
-            bodyText: '验证码：123456',
+            subject: `登录验证码 ${index + 1}`,
+            receivedAt: new Date(now.getTime() - index * 1_000).toISOString(),
+            extractedCode: `12345${index}`,
+            bodyText: `验证码：12345${index}`,
             targetEmail: 'buyer@example.com'
+          })),
+          {
+            id: 'mail-other',
+            virtualEmailId: 'alias-2',
+            fromAddress: 'other@example.com',
+            fromName: '其他服务',
+            subject: '不属于当前虚拟邮箱',
+            receivedAt: now.toISOString(),
+            extractedCode: '999999',
+            bodyText: '不应返回',
+            targetEmail: 'other-buyer@example.com'
           }
         ]
       })
@@ -218,17 +229,87 @@ describe('IdBusinessV2MailViewerService', () => {
     );
 
     const result = await sharedService.query(
-      { queryCode: 'BUY-8X2K-9P7Q', limit: 5 },
+      { queryCode: 'BUY-8X2K-9P7Q', limit: 20 },
       '203.0.113.20'
     );
 
-    expect(result).toMatchObject({ email: 'masked@example.com', provider: 'icloud' });
+    expect(result).toMatchObject({
+      email: 'buyer@example.com',
+      maxVisibleMessages: 5,
+      provider: 'icloud',
+      targetType: 'VIRTUAL',
+      totalEmails: 5
+    });
+    expect(result.items).toHaveLength(5);
     expect(result.items[0]).toMatchObject({
+      extractedCode: '123450',
       from: '验证码服务 <sender@example.com>',
-      to: 'buyer@example.com'
+      to: 'buyer@example.com',
+      virtualEmailId: 'alias-1'
     });
     expect(vendureMailbox.publicQuery).toHaveBeenCalledWith('BUY-8X2K-9P7Q', '203.0.113.20');
     expect(repository.findByQueryCodeHash).not.toHaveBeenCalled();
+  });
+
+  it('preserves the virtual-mailbox selector for a Vendure primary query', async () => {
+    const vendureMailbox = {
+      publicQuery: vi.fn().mockResolvedValue({
+        success: true,
+        message: null,
+        targetType: 'PRIMARY',
+        aliasEmail: null,
+        primaryEmail: 'owner@icloud.com',
+        codeExpiresAt: '2026-10-14T00:00:00.000Z',
+        remainingDays: 30,
+        totalEmails: 2,
+        virtualEmailsList: [{ id: 'alias-1', aliasEmail: 'buyer-1@icloud.com', note: '订单 1' }],
+        items: [
+          {
+            id: 'mail-1',
+            virtualEmailId: 'alias-1',
+            fromAddress: 'sender@example.com',
+            fromName: '',
+            subject: '验证码',
+            receivedAt: now.toISOString(),
+            extractedCode: '654321',
+            bodyText: '验证码：654321',
+            targetEmail: 'buyer-1@icloud.com'
+          },
+          {
+            id: 'mail-2',
+            virtualEmailId: null,
+            fromAddress: 'notice@example.com',
+            fromName: '',
+            subject: '通知',
+            receivedAt: now.toISOString(),
+            extractedCode: null,
+            bodyText: '通知正文',
+            targetEmail: 'owner@icloud.com'
+          }
+        ]
+      })
+    };
+    const sharedService = new IdBusinessV2MailViewerService(
+      repository as never,
+      transientState as never,
+      encryption as never,
+      provider as never,
+      microsoftOAuth as never,
+      vendureMailbox as never
+    );
+
+    const result = await sharedService.query(
+      { queryCode: 'MSTR-8X2K-9P7Q', limit: 20 },
+      '203.0.113.20'
+    );
+
+    expect(result).toMatchObject({
+      targetType: 'PRIMARY',
+      remainingDays: 30,
+      totalEmails: 2,
+      virtualEmailsList: [{ id: 'alias-1', aliasEmail: 'buyer-1@icloud.com', note: '订单 1' }]
+    });
+    expect(result.items).toHaveLength(2);
   });
 
   it('validates the query code and result limit before database access', async () => {

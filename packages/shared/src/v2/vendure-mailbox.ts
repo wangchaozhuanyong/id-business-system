@@ -61,6 +61,8 @@ export interface V2VendureMailboxMail {
 
 export interface V2VendureMailboxStatus {
   configured: boolean;
+  connected: boolean;
+  message: string | null;
 }
 
 export type V2VendureMailboxPage<T> = PaginatedResult<T>;

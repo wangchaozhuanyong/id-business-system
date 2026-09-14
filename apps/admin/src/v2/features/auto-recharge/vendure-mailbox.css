@@ -1,28 +1,88 @@
 .vendure-mailbox-page {
-  gap: 16px;
+  width: min(100%, 1680px);
+  margin-inline: auto;
+  gap: 18px;
 }
 
 .vendure-mailbox-tabs {
-  padding: 0 4px;
+  padding: 0 16px;
+  border: 1px solid var(--v2-border);
+  border-radius: 12px;
+  background: var(--v2-surface);
+}
+
+.vendure-mailbox-tabs .el-tabs__header {
+  margin: 0;
+}
+
+.vendure-mailbox-tabs .el-tabs__nav-wrap::after {
+  display: none;
+}
+
+.vendure-mailbox-tabs .el-tabs__item {
+  min-height: 48px;
 }
 
 .vendure-mailbox-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 12px;
+  border: 1px solid var(--v2-border);
+  border-radius: 12px;
+  background: var(--v2-surface);
+}
+
+.vendure-mailbox-toolbar__filters,
+.vendure-mailbox-toolbar__actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.vendure-mailbox-toolbar .el-input {
-  width: min(320px, 100%);
+.vendure-mailbox-toolbar__filters .el-input {
+  width: min(300px, 100%);
 }
 
-.vendure-mailbox-toolbar .el-select {
-  width: 190px;
+.vendure-mailbox-toolbar__filters .el-select {
+  width: min(210px, 100%);
 }
 
-.vendure-mailbox-toolbar__spacer {
-  flex: 1 1 24px;
+.vendure-mailbox-toolbar__actions {
+  justify-content: flex-end;
+}
+
+.vendure-mailbox-scope {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -6px;
+  padding: 10px 12px;
+  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  border-radius: 10px;
+  background: var(--v2-accent-soft, #eff6ff);
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.vendure-mailbox-scope span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vendure-mailbox-scope strong {
+  margin-right: 8px;
+  color: var(--v2-text);
+}
+
+.vendure-mailbox-page .v2-records-list {
+  box-shadow: var(--v3-shadow-sm);
 }
 
 .vendure-mailbox-message,
@@ -68,6 +128,50 @@
   outline-offset: 3px;
 }
 
+.vendure-mailbox-code--badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  border-radius: 7px;
+  background: var(--v2-accent-soft, #eff6ff);
+  font-weight: 700;
+}
+
+.vendure-mailbox-mobile-actions {
+  justify-content: flex-start !important;
+  flex-wrap: wrap;
+}
+
+.vendure-mailbox-row-actions {
+  display: grid;
+  gap: 4px;
+}
+
+.vendure-mailbox-row-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vendure-mailbox-row-actions small,
+.vendure-mailbox-mobile-feedback {
+  color: var(--v2-color-success-text, #166534);
+  font-size: 11px;
+}
+
+.vendure-mailbox-row-actions small.is-error,
+.vendure-mailbox-mobile-feedback.is-error {
+  color: var(--v2-color-danger-text, #991b1b);
+}
+
+.vendure-mailbox-mobile-feedback {
+  width: 100%;
+}
+
+.vendure-mailbox-mobile-wide {
+  grid-column: 1 / -1;
+}
+
 .vendure-mailbox-mail-detail {
   display: grid;
   grid-template-columns: 104px minmax(0, 1fr);
@@ -85,6 +189,18 @@
   overflow-wrap: anywhere;
 }
 
+.vendure-mailbox-detail-code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vendure-mailbox-detail-code strong {
+  color: var(--el-color-primary);
+  font-size: 18px;
+  letter-spacing: 0.06em;
+}
+
 .vendure-mailbox-mail-detail pre {
   margin: 0;
   border-radius: 10px;
@@ -95,13 +211,63 @@
   font: inherit;
 }
 
+@media (max-width: 1180px) {
+  .vendure-mailbox-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vendure-mailbox-toolbar__actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 760px) {
-  .vendure-mailbox-toolbar > * {
+  .vendure-mailbox-page {
+    gap: 12px;
+  }
+
+  .vendure-mailbox-tabs {
+    padding-inline: 10px;
+  }
+
+  .vendure-mailbox-tabs .el-tabs__nav {
+    width: 100%;
+  }
+
+  .vendure-mailbox-tabs .el-tabs__item {
+    flex: 1 1 0;
+    padding-inline: 6px;
+  }
+
+  .vendure-mailbox-toolbar__filters > *,
+  .vendure-mailbox-toolbar__filters .el-input,
+  .vendure-mailbox-toolbar__filters .el-select {
+    width: 100%;
     flex: 1 1 100%;
   }
 
-  .vendure-mailbox-toolbar .el-input,
-  .vendure-mailbox-toolbar .el-select {
+  .vendure-mailbox-toolbar__filters .el-checkbox {
+    width: auto;
+    min-height: 40px;
+    flex: 0 0 auto;
+  }
+
+  .vendure-mailbox-toolbar__actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vendure-mailbox-toolbar__actions .app-button:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .vendure-mailbox-scope {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vendure-mailbox-scope .app-button {
     width: 100%;
   }
 

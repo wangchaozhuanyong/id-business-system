@@ -302,6 +302,11 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxBatchDrawer).toContain('startMicrosoftMailboxAuthorization');
     expect(publicMailboxView).toContain('<V2MailQueryPanel');
     expect(mailMessageList).toContain('mailBodyToPlainText(item.body)');
+    expect(mailMessageList).toContain('一键复制');
+    expect(mailMessageList).toContain("result.targetType === 'PRIMARY'");
+    expect(mailQueryPanel).toContain('固定显示该邮箱最近 5 封邮件');
+    expect(mailQueryPanel).toContain('从剪贴板粘贴');
+    expect(mailQueryPanel).toContain('每 10 秒自动刷新');
     expect(
       [mailViewerDrawer, mailQueryPanel, managedMailboxPanel, mailMessageList].join('\n')
     ).not.toMatch(/v-html|localStorage|sessionStorage/);

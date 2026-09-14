@@ -32,6 +32,17 @@
         <span>请管理员在服务器完成邮件互通授权配置。</span>
       </section>
 
+      <section
+        v-else-if="statusQuery.data.value && !statusQuery.data.value.connected"
+        class="vendure-mailbox-unconfigured"
+      >
+        <strong>邮箱互通连接异常</strong>
+        <span>{{
+          statusQuery.data.value.message || '请管理员检查 Vendure 服务和专用 API Key。'
+        }}</span>
+        <AppButton size="small" variant="soft" @click="statusQuery.refresh">重新检查</AppButton>
+      </section>
+
       <template v-else>
         <el-tabs v-model="activeTab" class="vendure-mailbox-tabs">
           <el-tab-pane label="主邮箱管理" name="primary" />
@@ -40,50 +51,93 @@
         </el-tabs>
 
         <section class="vendure-mailbox-toolbar" aria-label="邮件验证码查询筛选">
-          <el-input
-            v-model="keywordInput"
-            clearable
-            aria-label="搜索邮箱或邮件"
-            :placeholder="activeTab === 'mails' ? '搜索发件人、主题或验证码' : '搜索邮箱或备注'"
-            @keyup.enter="applyFilters"
-            @clear="applyFilters"
-          />
-          <el-select v-if="activeTab !== 'mails'" v-model="statusInput" aria-label="邮箱状态">
-            <el-option label="全部状态" value="" />
-            <el-option label="正常" value="ACTIVE" />
-            <el-option label="已禁用" value="DISABLED" />
-            <el-option v-if="activeTab === 'primary'" label="授权错误" value="AUTH_ERROR" />
-            <el-option v-if="activeTab === 'primary'" label="同步中" value="SYNCING" />
-          </el-select>
-          <el-select
-            v-if="activeTab !== 'primary'"
-            v-model="primaryAccountId"
-            clearable
-            aria-label="所属主邮箱"
-            placeholder="全部主邮箱"
-            @change="resetPage"
-          >
-            <el-option
-              v-for="item in primaryItems"
-              :key="item.id"
-              :label="item.email"
-              :value="item.id"
+          <div class="vendure-mailbox-toolbar__filters">
+            <el-input
+              v-model="keywordInput"
+              clearable
+              aria-label="搜索邮箱或邮件"
+              :placeholder="activeTab === 'mails' ? '搜索发件人、主题或验证码' : '搜索邮箱或备注'"
+              @keyup.enter="applyFilters"
+              @clear="applyFilters"
             />
-          </el-select>
-          <el-checkbox v-if="activeTab === 'mails'" v-model="unassignedOnly" @change="resetPage"
-            >只看未分配</el-checkbox
-          >
-          <AppButton variant="soft" @click="applyFilters">查询</AppButton>
-          <span class="vendure-mailbox-toolbar__spacer" />
-          <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
-            >新增主邮箱</AppButton
-          >
-          <template v-else-if="activeTab === 'aliases'">
-            <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
-            <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
-          </template>
-          <AppButton v-else variant="soft" @click="mailQuery.refresh">刷新收件</AppButton>
+            <el-select
+              v-if="activeTab !== 'mails'"
+              v-model="statusInput"
+              aria-label="邮箱状态"
+              placeholder="全部状态"
+            >
+              <el-option label="全部状态" value="" />
+              <el-option label="正常" value="ACTIVE" />
+              <el-option label="已禁用" value="DISABLED" />
+              <el-option v-if="activeTab === 'primary'" label="授权错误" value="AUTH_ERROR" />
+              <el-option v-if="activeTab === 'primary'" label="同步中" value="SYNCING" />
+            </el-select>
+            <el-select
+              v-if="activeTab !== 'primary'"
+              v-model="primaryAccountId"
+              clearable
+              aria-label="所属主邮箱"
+              placeholder="全部主邮箱"
+              @change="handlePrimaryFilterChange"
+            >
+              <el-option
+                v-for="item in primaryItems"
+                :key="item.id"
+                :label="item.email"
+                :value="item.id"
+              />
+            </el-select>
+            <el-select
+              v-if="activeTab === 'mails'"
+              v-model="virtualEmailId"
+              clearable
+              filterable
+              aria-label="指定虚拟邮箱"
+              placeholder="全部虚拟邮箱"
+              @change="handleVirtualEmailFilterChange"
+            >
+              <el-option
+                v-for="item in allAliases"
+                :key="item.id"
+                :label="item.aliasEmail"
+                :value="item.id"
+              />
+            </el-select>
+            <el-checkbox
+              v-if="activeTab === 'mails'"
+              v-model="unassignedOnly"
+              @change="handleUnassignedFilterChange"
+              >只看未分配</el-checkbox
+            >
+            <AppButton variant="soft" @click="applyFilters">查询</AppButton>
+          </div>
+          <div class="vendure-mailbox-toolbar__actions">
+            <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
+              >新增主邮箱</AppButton
+            >
+            <template v-else-if="activeTab === 'aliases'">
+              <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
+              <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
+            </template>
+            <AppButton v-else variant="soft" @click="mailQuery.refresh">刷新收件</AppButton>
+          </div>
         </section>
+
+        <div
+          v-if="activeTab === 'mails' && (virtualEmailId || unassignedOnly)"
+          class="vendure-mailbox-scope"
+          role="status"
+        >
+          <span>
+            <strong>当前收件范围</strong>
+            {{
+              unassignedOnly
+                ? '仅显示尚未分配到虚拟邮箱的邮件'
+                : `仅显示 ${selectedAliasEmail} 的邮件`
+            }}
+          </span>
+          <AppButton size="small" variant="ghost" @click="clearMailScope">查看全部邮件</AppButton>
+        </div>
 
         <V2AsyncRegion
           skeleton="table"
@@ -166,30 +220,168 @@
               />
               <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.primary.columns[7]"
                 ><template #default="{ row }">
-                  <AppButton size="small" variant="ghost" @click="runPrimaryAction(row, 'test')"
-                    >测试</AppButton
-                  >
-                  <AppButton size="small" variant="ghost" @click="runPrimaryAction(row, 'sync')"
-                    >同步</AppButton
-                  >
-                  <el-dropdown trigger="click" @command="handlePrimaryCommand(row, $event)"
-                    ><AppButton size="small" variant="ghost">更多操作</AppButton
-                    ><template #dropdown
-                      ><el-dropdown-menu
-                        ><el-dropdown-item command="edit">编辑</el-dropdown-item
-                        ><el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item
-                        ><el-dropdown-item command="reconcile-apply"
-                          >修复历史邮件归属</el-dropdown-item
-                        ><el-dropdown-item command="reset">重置主查询码</el-dropdown-item
-                        ><el-dropdown-item command="delete" divided
-                          >删除</el-dropdown-item
-                        ></el-dropdown-menu
-                      ></template
-                    ></el-dropdown
-                  >
+                  <div class="vendure-mailbox-row-actions">
+                    <div>
+                      <AppButton
+                        size="small"
+                        variant="ghost"
+                        :loading="isPrimaryActionRunning(row.id, 'test')"
+                        :disabled="saving && !isPrimaryActionRunning(row.id, 'test')"
+                        @click="runPrimaryAction(row, 'test')"
+                        >测试</AppButton
+                      >
+                      <AppButton
+                        size="small"
+                        variant="ghost"
+                        :loading="isPrimaryActionRunning(row.id, 'sync')"
+                        :disabled="saving && !isPrimaryActionRunning(row.id, 'sync')"
+                        @click="runPrimaryAction(row, 'sync')"
+                        >同步</AppButton
+                      >
+                      <el-dropdown trigger="click" @command="handlePrimaryCommand(row, $event)"
+                        ><AppButton size="small" variant="ghost" :disabled="saving"
+                          >更多操作</AppButton
+                        ><template #dropdown
+                          ><el-dropdown-menu
+                            ><el-dropdown-item command="edit">编辑</el-dropdown-item
+                            ><el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item
+                            ><el-dropdown-item command="reconcile-apply"
+                              >修复历史邮件归属</el-dropdown-item
+                            ><el-dropdown-item command="reset">重置主查询码</el-dropdown-item
+                            ><el-dropdown-item command="delete" divided
+                              >删除</el-dropdown-item
+                            ></el-dropdown-menu
+                          ></template
+                        ></el-dropdown
+                      >
+                    </div>
+                    <small
+                      v-if="primaryActionFeedbackMessage(row.id)"
+                      :class="{ 'is-error': primaryActionFeedbackIsError(row.id) }"
+                      role="status"
+                      >{{ primaryActionFeedbackMessage(row.id) }}</small
+                    >
+                  </div>
                 </template></V2TableActionColumn
               >
             </V2Table>
+            <div
+              class="v2-records-mobile-list"
+              :data-mobile-for="v2TableSchemas.vendureMailbox.primary.id"
+            >
+              <article v-for="item in primaryItems" :key="item.id" class="v2-records-mobile-item">
+                <header>
+                  <div>
+                    <strong
+                      v-v2-column-visibility="[v2TableSchemas.vendureMailbox.primary.id, 'email']"
+                      >{{ item.email }}</strong
+                    >
+                    <span
+                      v-v2-column-visibility="[v2TableSchemas.vendureMailbox.primary.id, 'note']"
+                      >{{ item.note || '暂无备注' }}</span
+                    >
+                  </div>
+                  <el-tag
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.primary.id, 'status']"
+                    :type="statusTag(item.status)"
+                    effect="plain"
+                    >{{ statusLabel(item.status) }}</el-tag
+                  >
+                </header>
+                <dl>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.primary.id,
+                      'masterQueryCode'
+                    ]"
+                  >
+                    <dt>主查询码</dt>
+                    <dd>
+                      <button
+                        class="vendure-mailbox-code"
+                        type="button"
+                        :disabled="!item.masterQueryCode"
+                        @click="copyCode(item.masterQueryCode)"
+                      >
+                        {{ item.masterQueryCode || '—' }}
+                      </button>
+                    </dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.primary.id,
+                      'remainingDays'
+                    ]"
+                  >
+                    <dt>剩余天数</dt>
+                    <dd>{{ item.remainingDays ?? '—' }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.primary.id,
+                      'virtualEmailCount'
+                    ]"
+                  >
+                    <dt>虚拟邮箱</dt>
+                    <dd>{{ item.virtualEmailCount }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.primary.id,
+                      'lastSyncedAt'
+                    ]"
+                  >
+                    <dt>最近同步</dt>
+                    <dd>{{ showDate(item.lastSyncedAt) }}</dd>
+                  </div>
+                </dl>
+                <footer
+                  v-v2-column-visibility="[v2TableSchemas.vendureMailbox.primary.id, 'actions']"
+                  class="vendure-mailbox-mobile-actions"
+                >
+                  <AppButton
+                    size="small"
+                    variant="ghost"
+                    :loading="isPrimaryActionRunning(item.id, 'test')"
+                    :disabled="saving && !isPrimaryActionRunning(item.id, 'test')"
+                    @click="runPrimaryAction(item, 'test')"
+                    >测试</AppButton
+                  >
+                  <AppButton
+                    size="small"
+                    variant="ghost"
+                    :loading="isPrimaryActionRunning(item.id, 'sync')"
+                    :disabled="saving && !isPrimaryActionRunning(item.id, 'sync')"
+                    @click="runPrimaryAction(item, 'sync')"
+                    >同步</AppButton
+                  >
+                  <el-dropdown trigger="click" @command="handlePrimaryCommand(item, $event)">
+                    <AppButton size="small" variant="ghost">更多操作</AppButton>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                        <el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item>
+                        <el-dropdown-item command="reconcile-apply"
+                          >修复历史邮件归属</el-dropdown-item
+                        >
+                        <el-dropdown-item command="reset">重置主查询码</el-dropdown-item>
+                        <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                  <small
+                    v-if="primaryActionFeedbackMessage(item.id)"
+                    class="vendure-mailbox-mobile-feedback"
+                    :class="{ 'is-error': primaryActionFeedbackIsError(item.id) }"
+                    role="status"
+                    >{{ primaryActionFeedbackMessage(item.id) }}</small
+                  >
+                </footer>
+              </article>
+              <div v-if="!primaryItems.length" class="v2-records-empty">
+                <strong>暂无主邮箱</strong><span>新增苹果主邮箱后即可同步验证码邮件</span>
+              </div>
+            </div>
           </section>
 
           <section v-else-if="activeTab === 'aliases'" class="v2-records-list">
@@ -286,6 +478,110 @@
                 </template></V2TableActionColumn
               >
             </V2Table>
+            <div
+              class="v2-records-mobile-list"
+              :data-mobile-for="v2TableSchemas.vendureMailbox.aliases.id"
+            >
+              <article v-for="item in aliasItems" :key="item.id" class="v2-records-mobile-item">
+                <header>
+                  <div>
+                    <strong
+                      v-v2-column-visibility="[
+                        v2TableSchemas.vendureMailbox.aliases.id,
+                        'aliasEmail'
+                      ]"
+                      >{{ item.aliasEmail }}</strong
+                    >
+                    <span
+                      v-v2-column-visibility="[
+                        v2TableSchemas.vendureMailbox.aliases.id,
+                        'primaryAccountEmail'
+                      ]"
+                      >{{ item.primaryAccountEmail || '所属主邮箱未知' }}</span
+                    >
+                  </div>
+                  <el-tag
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.aliases.id, 'status']"
+                    :type="statusTag(item.status)"
+                    effect="plain"
+                    >{{ statusLabel(item.status) }}</el-tag
+                  >
+                </header>
+                <dl>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.aliases.id,
+                      'buyerQueryCode'
+                    ]"
+                  >
+                    <dt>买家查询码</dt>
+                    <dd>
+                      <button
+                        class="vendure-mailbox-code"
+                        type="button"
+                        @click="copyCode(item.buyerQueryCode)"
+                      >
+                        {{ item.buyerQueryCode }}
+                      </button>
+                    </dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.aliases.id,
+                      'remainingDays'
+                    ]"
+                  >
+                    <dt>剩余天数</dt>
+                    <dd>{{ item.remainingDays ?? '—' }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.aliases.id, 'mailCount']"
+                  >
+                    <dt>邮件数</dt>
+                    <dd>{{ item.mailCount }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.aliases.id,
+                      'lastMailReceivedAt'
+                    ]"
+                  >
+                    <dt>最近收件</dt>
+                    <dd>{{ showDate(item.lastMailReceivedAt) }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.aliases.id, 'note']"
+                    class="vendure-mailbox-mobile-wide"
+                  >
+                    <dt>备注</dt>
+                    <dd>{{ item.note || '—' }}</dd>
+                  </div>
+                </dl>
+                <footer
+                  v-v2-column-visibility="[v2TableSchemas.vendureMailbox.aliases.id, 'actions']"
+                  class="vendure-mailbox-mobile-actions"
+                >
+                  <AppButton size="small" variant="primary" @click="showAliasMails(item)"
+                    >查看邮件</AppButton
+                  >
+                  <AppButton size="small" variant="ghost" @click="openAliasEdit(item)"
+                    >编辑</AppButton
+                  >
+                  <el-dropdown trigger="click" @command="handleAliasCommand(item, $event)">
+                    <AppButton size="small" variant="ghost">更多操作</AppButton>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="reset">重置查询码</el-dropdown-item>
+                        <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </footer>
+              </article>
+              <div v-if="!aliasItems.length" class="v2-records-empty">
+                <strong>暂无虚拟邮箱</strong><span>选择主邮箱后新增或批量导入</span>
+              </div>
+            </div>
           </section>
 
           <section v-else class="v2-records-list">
@@ -362,6 +658,76 @@
                 ></V2TableActionColumn
               >
             </V2Table>
+            <div
+              class="v2-records-mobile-list"
+              :data-mobile-for="v2TableSchemas.vendureMailbox.mails.id"
+            >
+              <article v-for="item in mailItems" :key="item.id" class="v2-records-mobile-item">
+                <header>
+                  <div>
+                    <strong
+                      v-v2-column-visibility="[v2TableSchemas.vendureMailbox.mails.id, 'subject']"
+                      >{{ item.subject || '无主题邮件' }}</strong
+                    >
+                    <span
+                      v-v2-column-visibility="[
+                        v2TableSchemas.vendureMailbox.mails.id,
+                        'receivedAt'
+                      ]"
+                      >{{ showDate(item.receivedAt) }}</span
+                    >
+                  </div>
+                  <button
+                    v-if="item.extractedCode"
+                    v-v2-column-visibility="[
+                      v2TableSchemas.vendureMailbox.mails.id,
+                      'extractedCode'
+                    ]"
+                    class="vendure-mailbox-code vendure-mailbox-code--badge"
+                    type="button"
+                    @click="copyCode(item.extractedCode)"
+                  >
+                    {{ item.extractedCode }}
+                  </button>
+                </header>
+                <dl>
+                  <div
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.mails.id, 'targetEmail']"
+                    class="vendure-mailbox-mobile-wide"
+                  >
+                    <dt>收件邮箱</dt>
+                    <dd>{{ targetEmail(item) }}</dd>
+                  </div>
+                  <div
+                    v-v2-column-visibility="[v2TableSchemas.vendureMailbox.mails.id, 'fromAddress']"
+                    class="vendure-mailbox-mobile-wide"
+                  >
+                    <dt>发件人</dt>
+                    <dd>{{ item.fromName || item.fromAddress }}</dd>
+                  </div>
+                </dl>
+                <footer
+                  v-v2-column-visibility="[v2TableSchemas.vendureMailbox.mails.id, 'actions']"
+                  class="vendure-mailbox-mobile-actions"
+                >
+                  <AppButton size="small" variant="primary" @click="openMail(item)"
+                    >查看邮件</AppButton
+                  >
+                  <el-dropdown trigger="click" @command="handleMailCommand(item, $event)">
+                    <AppButton size="small" variant="ghost">更多操作</AppButton>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="reassign">重新分配</el-dropdown-item>
+                        <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </footer>
+              </article>
+              <div v-if="!mailItems.length" class="v2-records-empty">
+                <strong>暂无收件记录</strong><span>可先同步主邮箱，或调整当前筛选条件</span>
+              </div>
+            </div>
           </section>
 
           <footer class="v2-records-pagination">
@@ -389,6 +755,7 @@
       :dirty="primaryDirty"
       @confirm="savePrimary"
     >
+      <p v-if="operationError" class="vendure-mailbox-error" role="alert">{{ operationError }}</p>
       <el-form
         label-position="left"
         label-width="118px"
@@ -430,6 +797,7 @@
       :dirty="aliasDirty"
       @confirm="saveAlias"
     >
+      <p v-if="operationError" class="vendure-mailbox-error" role="alert">{{ operationError }}</p>
       <el-form
         label-position="left"
         label-width="118px"
@@ -470,6 +838,7 @@
       :dirty="Boolean(batchForm.rawInput)"
       @confirm="saveAliasBatch"
     >
+      <p v-if="operationError" class="vendure-mailbox-error" role="alert">{{ operationError }}</p>
       <el-form
         label-position="left"
         label-width="118px"
@@ -502,9 +871,10 @@
       title="重新分配邮件"
       confirm-text="保存分配"
       :confirm-loading="saving"
-      :dirty="Boolean(reassignAliasId)"
+      :dirty="reassignDirty"
       @confirm="saveReassignment"
     >
+      <p v-if="operationError" class="vendure-mailbox-error" role="alert">{{ operationError }}</p>
       <el-form
         label-position="left"
         label-width="118px"
@@ -514,7 +884,7 @@
         <el-form-item label="虚拟邮箱" required
           ><el-select v-model="reassignAliasId" filterable
             ><el-option
-              v-for="item in allAliases"
+              v-for="item in reassignAliases"
               :key="item.id"
               :label="item.aliasEmail"
               :value="item.id" /></el-select
@@ -537,7 +907,16 @@
         <dt>主题</dt>
         <dd>{{ selectedMail.subject }}</dd>
         <dt>验证码</dt>
-        <dd>{{ selectedMail.extractedCode || '未识别' }}</dd>
+        <dd class="vendure-mailbox-detail-code">
+          <strong>{{ selectedMail.extractedCode || '未识别' }}</strong>
+          <AppButton
+            v-if="selectedMail.extractedCode"
+            size="small"
+            variant="soft"
+            @click="copyCode(selectedMail.extractedCode)"
+            >一键复制</AppButton
+          >
+        </dd>
         <dt>正文</dt>
         <dd>
           <pre>{{ selectedMail.bodyText || '无纯文本正文' }}</pre>
@@ -564,7 +943,7 @@ import type {
   V2VendureMailboxPrimaryAccount,
   V2VendureMailboxStatus
 } from '@apple-business/shared';
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -596,9 +975,16 @@ const status = ref('');
 const primaryAccountId = ref('');
 const virtualEmailId = ref('');
 const unassignedOnly = ref(false);
-const saving = ref(false);
+const activeOperationKey = ref('');
+const saving = computed(() => Boolean(activeOperationKey.value));
 const operationMessage = ref('');
 const operationError = ref('');
+const primaryActionFeedback = ref<{
+  primaryId: string;
+  tone: 'success' | 'error';
+  message: string;
+}>();
+let preserveMailScopeOnNextTabChange = false;
 
 const statusQuery = useV2ModuleQuery<V2VendureMailboxStatus>({
   moduleKey: 'vendure-mailbox',
@@ -607,6 +993,8 @@ const statusQuery = useV2ModuleQuery<V2VendureMailboxStatus>({
   query: ({ signal }) => vendureMailboxApi.status({ signal })
 });
 const configured = computed(() => statusQuery.data.value?.configured === true);
+const connected = computed(() => statusQuery.data.value?.connected === true);
+const ready = computed(() => configured.value && connected.value);
 const primaryQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxPrimaryAccount>>({
   moduleKey: 'vendure-mailbox',
   scope: 'auto-recharge',
@@ -618,7 +1006,7 @@ const primaryQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxPrima
       q: activeTab.value === 'primary' ? keyword.value : '',
       status: activeTab.value === 'primary' ? status.value : ''
     }),
-  enabled: () => configured.value,
+  enabled: () => ready.value,
   trackRouteData: false,
   query: ({ signal }) =>
     vendureMailboxApi.primaryAccounts(
@@ -643,7 +1031,7 @@ const aliasQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxAlias>>
       status: activeTab.value === 'aliases' ? status.value : '',
       primaryAccountId: primaryAccountId.value
     }),
-  enabled: () => configured.value,
+  enabled: () => ready.value,
   trackRouteData: false,
   query: ({ signal }) =>
     vendureMailboxApi.aliases(
@@ -670,7 +1058,7 @@ const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
       virtualEmailId: virtualEmailId.value,
       unassignedOnly: unassignedOnly.value
     }),
-  enabled: () => configured.value && activeTab.value === 'mails',
+  enabled: () => ready.value && activeTab.value === 'mails',
   trackRouteData: false,
   query: ({ signal }) =>
     vendureMailboxApi.mails(
@@ -697,6 +1085,10 @@ const primaryItems = computed(() => primaryQuery.data.value?.items ?? []);
 const aliasItems = computed(() => aliasQuery.data.value?.items ?? []);
 const allAliases = computed(() => aliasQuery.data.value?.items ?? []);
 const mailItems = computed(() => mailQuery.data.value?.items ?? []);
+const selectedAliasEmail = computed(
+  () =>
+    allAliases.value.find((item) => item.id === virtualEmailId.value)?.aliasEmail ?? '所选虚拟邮箱'
+);
 const activeTotal = computed(() =>
   activeTab.value === 'primary'
     ? (primaryQuery.data.value?.total ?? 0)
@@ -705,21 +1097,36 @@ const activeTotal = computed(() =>
       : (mailQuery.data.value?.total ?? 0)
 );
 const connectionLabel = computed(() =>
-  statusQuery.data.value?.configured ? '互通服务已连接' : '互通服务未配置'
+  !configured.value ? '互通服务未配置' : connected.value ? '互通服务已连接' : '互通服务连接异常'
 );
 const viewKey = computed(
   () =>
     `${activeTab.value}:${page.value}:${pageSize.value}:${keyword.value}:${status.value}:${primaryAccountId.value}:${virtualEmailId.value}:${unassignedOnly.value}`
 );
 
-watch(activeTab, () => {
+watch(activeTab, (tab) => {
   page.value = 1;
   keywordInput.value = '';
   keyword.value = '';
   statusInput.value = '';
   status.value = '';
-  virtualEmailId.value = '';
+  if (tab !== 'mails' || !preserveMailScopeOnNextTabChange) virtualEmailId.value = '';
+  preserveMailScopeOnNextTabChange = false;
 });
+watch(
+  viewKey,
+  () => {
+    void activeQuery.value.ensureFresh();
+  },
+  { flush: 'post' }
+);
+watch(
+  [activeTab, primaryAccountId],
+  ([tab]) => {
+    if (tab === 'mails') void aliasQuery.ensureFresh();
+  },
+  { flush: 'post' }
+);
 function applyFilters() {
   page.value = 1;
   keyword.value = keywordInput.value.trim();
@@ -727,6 +1134,26 @@ function applyFilters() {
 }
 function resetPage() {
   page.value = 1;
+}
+function handlePrimaryFilterChange() {
+  if (activeTab.value === 'mails') {
+    virtualEmailId.value = '';
+    unassignedOnly.value = false;
+  }
+  resetPage();
+}
+function handleVirtualEmailFilterChange(value: string) {
+  if (value) unassignedOnly.value = false;
+  resetPage();
+}
+function handleUnassignedFilterChange(value: boolean) {
+  if (value) virtualEmailId.value = '';
+  resetPage();
+}
+function clearMailScope() {
+  virtualEmailId.value = '';
+  unassignedOnly.value = false;
+  resetPage();
 }
 function changePage(value: number) {
   page.value = value;
@@ -771,23 +1198,47 @@ function clearNotice() {
 }
 async function afterWrite(message: string) {
   operationMessage.value = message;
-  await Promise.allSettled([
-    primaryQuery.refresh(),
-    aliasQuery.refresh(),
-    ...(activeTab.value === 'mails' ? [mailQuery.refresh()] : [])
-  ]);
+  const queries = [primaryQuery, aliasQuery, ...(activeTab.value === 'mails' ? [mailQuery] : [])];
+  await Promise.allSettled(queries.map((query) => query.refresh()));
+  if (queries.some((query) => query.error.value)) {
+    operationError.value = '操作已完成，但列表刷新失败；请手动刷新核对，无需再次提交。';
+  }
 }
-async function run(task: () => Promise<void>) {
-  if (saving.value) return;
-  saving.value = true;
+async function run(
+  task: () => Promise<void>,
+  options: { key?: string; uncertainWrite?: boolean } = {}
+) {
+  if (saving.value) {
+    operationError.value = '已有操作正在处理中，请等待当前操作完成。';
+    return;
+  }
+  activeOperationKey.value = options.key ?? 'global';
   clearNotice();
   try {
     await task();
   } catch (error) {
-    operationError.value = `${getApiErrorMessage(error)} 若请求在返回前中断，请先刷新列表核对，避免重复提交。`;
+    const message = getApiErrorMessage(error);
+    operationError.value =
+      options.uncertainWrite !== false && !message.includes('操作已完成')
+        ? `${message} 若请求在返回前中断，请先刷新列表核对，避免重复提交。`
+        : message;
   } finally {
-    saving.value = false;
+    activeOperationKey.value = '';
   }
+}
+function isPrimaryActionRunning(primaryId: string, action: 'test' | 'sync') {
+  return activeOperationKey.value === `primary:${primaryId}:${action}`;
+}
+function primaryActionFeedbackMessage(primaryId: string) {
+  return primaryActionFeedback.value?.primaryId === primaryId
+    ? primaryActionFeedback.value.message
+    : '';
+}
+function primaryActionFeedbackIsError(primaryId: string) {
+  return (
+    primaryActionFeedback.value?.primaryId === primaryId &&
+    primaryActionFeedback.value.tone === 'error'
+  );
 }
 
 const primaryDrawerOpen = ref(false);
@@ -799,10 +1250,15 @@ const primaryForm = reactive({
   codeResetIntervalDays: 30,
   status: 'ACTIVE'
 });
-const primaryDirty = computed(() =>
-  Boolean(primaryForm.email || primaryForm.appPassword || primaryForm.note)
+const primaryInitialState = ref('');
+function primaryFormState() {
+  return JSON.stringify(primaryForm);
+}
+const primaryDirty = computed(
+  () => Boolean(primaryInitialState.value) && primaryFormState() !== primaryInitialState.value
 );
 function openPrimaryCreate() {
+  clearNotice();
   Object.assign(primaryForm, {
     id: '',
     email: '',
@@ -811,9 +1267,11 @@ function openPrimaryCreate() {
     codeResetIntervalDays: 30,
     status: 'ACTIVE'
   });
+  primaryInitialState.value = primaryFormState();
   primaryDrawerOpen.value = true;
 }
 function openPrimaryEdit(row: V2VendureMailboxPrimaryAccount) {
+  clearNotice();
   Object.assign(primaryForm, {
     id: row.id,
     email: row.email,
@@ -822,6 +1280,7 @@ function openPrimaryEdit(row: V2VendureMailboxPrimaryAccount) {
     codeResetIntervalDays: row.codeResetIntervalDays,
     status: row.status
   });
+  primaryInitialState.value = primaryFormState();
   primaryDrawerOpen.value = true;
 }
 function savePrimary() {
@@ -851,17 +1310,35 @@ function savePrimary() {
   });
 }
 function runPrimaryAction(row: V2VendureMailboxPrimaryAccount, action: 'test' | 'sync') {
-  void run(async () => {
-    if (action === 'test') {
-      const result = await vendureMailboxApi.testPrimary(row.id);
-      operationMessage.value = result.message;
-    } else {
-      const result = await vendureMailboxApi.syncPrimary(row.id);
-      await afterWrite(
-        result.success ? `同步完成，新增 ${result.syncedCount} 封邮件` : result.error || '同步失败'
-      );
-    }
-  });
+  primaryActionFeedback.value = undefined;
+  void run(
+    async () => {
+      try {
+        if (action === 'test') {
+          const result = await vendureMailboxApi.testPrimary(row.id);
+          if (!result.success) throw new Error(result.message || '邮箱连接测试失败');
+          operationMessage.value = result.message || '邮箱连接测试成功';
+        } else {
+          const result = await vendureMailboxApi.syncPrimary(row.id);
+          if (!result.success) throw new Error(result.error || '邮箱同步失败');
+          await afterWrite(`同步完成，新增 ${result.syncedCount} 封邮件`);
+        }
+        primaryActionFeedback.value = {
+          primaryId: row.id,
+          tone: 'success',
+          message: action === 'test' ? '连接正常' : '同步完成'
+        };
+      } catch (error) {
+        primaryActionFeedback.value = {
+          primaryId: row.id,
+          tone: 'error',
+          message: getApiErrorMessage(error)
+        };
+        throw error;
+      }
+    },
+    { key: `primary:${row.id}:${action}`, uncertainWrite: action === 'sync' }
+  );
 }
 function handlePrimaryCommand(row: V2VendureMailboxPrimaryAccount, command: string) {
   if (command === 'edit') return openPrimaryEdit(row);
@@ -916,8 +1393,15 @@ const aliasForm = reactive({
   codeResetIntervalDays: 30,
   status: 'ACTIVE'
 });
-const aliasDirty = computed(() => Boolean(aliasForm.aliasEmail || aliasForm.note));
+const aliasInitialState = ref('');
+function aliasFormState() {
+  return JSON.stringify(aliasForm);
+}
+const aliasDirty = computed(
+  () => Boolean(aliasInitialState.value) && aliasFormState() !== aliasInitialState.value
+);
 function openAliasCreate() {
+  clearNotice();
   Object.assign(aliasForm, {
     id: '',
     primaryAccountId: primaryAccountId.value || primaryItems.value[0]?.id || '',
@@ -926,9 +1410,11 @@ function openAliasCreate() {
     codeResetIntervalDays: 30,
     status: 'ACTIVE'
   });
+  aliasInitialState.value = aliasFormState();
   aliasDrawerOpen.value = true;
 }
 function openAliasEdit(row: V2VendureMailboxAlias) {
+  clearNotice();
   Object.assign(aliasForm, {
     id: row.id,
     primaryAccountId: row.primaryAccountId,
@@ -937,6 +1423,7 @@ function openAliasEdit(row: V2VendureMailboxAlias) {
     codeResetIntervalDays: row.codeResetIntervalDays,
     status: row.status
   });
+  aliasInitialState.value = aliasFormState();
   aliasDrawerOpen.value = true;
 }
 function saveAlias() {
@@ -965,11 +1452,11 @@ function saveAlias() {
   });
 }
 function showAliasMails(row: V2VendureMailboxAlias) {
-  activeTab.value = 'mails';
+  preserveMailScopeOnNextTabChange = true;
   primaryAccountId.value = row.primaryAccountId;
-  void nextTick(() => {
-    virtualEmailId.value = row.id;
-  });
+  virtualEmailId.value = row.id;
+  unassignedOnly.value = false;
+  activeTab.value = 'mails';
 }
 function handleAliasCommand(row: V2VendureMailboxAlias, command: string) {
   if (command === 'reset')
@@ -992,6 +1479,7 @@ function handleAliasCommand(row: V2VendureMailboxAlias, command: string) {
 const batchDrawerOpen = ref(false);
 const batchForm = reactive({ primaryAccountId: '', rawInput: '', codeResetIntervalDays: 30 });
 function openAliasBatch() {
+  clearNotice();
   Object.assign(batchForm, {
     primaryAccountId: primaryAccountId.value || primaryItems.value[0]?.id || '',
     rawInput: '',
@@ -1012,6 +1500,13 @@ function saveAliasBatch() {
 }
 
 const selectedMail = ref<V2VendureMailboxMail>();
+const reassignAliases = computed(() =>
+  selectedMail.value
+    ? allAliases.value.filter(
+        (item) => item.primaryAccountId === selectedMail.value?.primaryAccountId
+      )
+    : []
+);
 const mailDrawerOpen = ref(false);
 function openMail(row: V2VendureMailboxMail) {
   selectedMail.value = row;
@@ -1019,10 +1514,14 @@ function openMail(row: V2VendureMailboxMail) {
 }
 const reassignDrawerOpen = ref(false);
 const reassignAliasId = ref('');
+const reassignInitialAliasId = ref('');
+const reassignDirty = computed(() => reassignAliasId.value !== reassignInitialAliasId.value);
 function handleMailCommand(row: V2VendureMailboxMail, command: string) {
   selectedMail.value = row;
   if (command === 'reassign') {
     reassignAliasId.value = row.virtualEmailId ?? '';
+    reassignInitialAliasId.value = reassignAliasId.value;
+    clearNotice();
     reassignDrawerOpen.value = true;
     return;
   }

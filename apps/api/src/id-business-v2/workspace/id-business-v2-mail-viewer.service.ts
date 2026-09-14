@@ -6,7 +6,12 @@ import {
   Optional,
   ServiceUnavailableException
 } from '@nestjs/common';
-import { V2_MAIL_VIEWER_LIMITS, type V2MailViewerQueryResult } from '@apple-business/shared';
+import {
+  V2_MAIL_VIEWER_LIMITS,
+  V2_VENDURE_VIRTUAL_MAIL_LIMIT,
+  type V2MailViewerQueryResult,
+  type V2VendureMailboxPublicQueryResult
+} from '@apple-business/shared';
 import { timingSafeEqual } from 'node:crypto';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import type { QueryIdBusinessV2MailViewerDto } from './dto/id-business-v2-mail-viewer.dto';
@@ -130,19 +135,52 @@ export class IdBusinessV2MailViewerService {
       if (message.includes('频繁')) throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
       throw new BadRequestException(message);
     }
-    const items = result.items.slice(0, limit);
+    const targetType = this.vendureTargetType(queryCode, result);
+    const resultLimit = targetType === 'VIRTUAL' ? V2_VENDURE_VIRTUAL_MAIL_LIMIT : limit;
+    const items = this.scopeVendureQueryItems(queryCode, result)
+      .sort((left, right) => right.receivedAt.localeCompare(left.receivedAt))
+      .slice(0, resultLimit);
     return {
+      codeExpiresAt: result.codeExpiresAt,
       email: result.aliasEmail || result.primaryEmail || items[0]?.targetEmail || 'iCloud 邮箱',
       items: items.map((item) => ({
+        id: item.id,
         body: item.bodyText || (item.extractedCode ? `验证码：${item.extractedCode}` : ''),
+        extractedCode: item.extractedCode,
         from: item.fromName ? `${item.fromName} <${item.fromAddress}>` : item.fromAddress,
         savedAt: item.receivedAt,
         subject: item.subject,
-        to: item.targetEmail
+        to: item.targetEmail,
+        virtualEmailId: item.virtualEmailId
       })),
+      maxVisibleMessages: targetType === 'VIRTUAL' ? V2_VENDURE_VIRTUAL_MAIL_LIMIT : null,
       provider: 'icloud' as const,
-      queriedAt: new Date().toISOString()
+      queriedAt: new Date().toISOString(),
+      remainingDays: result.remainingDays,
+      targetType,
+      totalEmails: targetType === 'VIRTUAL' ? items.length : result.totalEmails,
+      virtualEmailsList: targetType === 'PRIMARY' ? result.virtualEmailsList : null
     };
+  }
+
+  private scopeVendureQueryItems(queryCode: string, result: V2VendureMailboxPublicQueryResult) {
+    if (this.vendureTargetType(queryCode, result) !== 'VIRTUAL') return [...result.items];
+
+    const aliasEmail = this.normalizeEmail(result.aliasEmail);
+    if (!aliasEmail) return [];
+    return result.items.filter((item) => this.normalizeEmail(item.targetEmail) === aliasEmail);
+  }
+
+  private vendureTargetType(queryCode: string, result: V2VendureMailboxPublicQueryResult) {
+    if (/^BUY-/i.test(queryCode)) return 'VIRTUAL' as const;
+    if (/^MSTR-/i.test(queryCode)) return 'PRIMARY' as const;
+    return String(result.targetType ?? '').toUpperCase() === 'VIRTUAL'
+      ? ('VIRTUAL' as const)
+      : ('PRIMARY' as const);
+  }
+
+  private normalizeEmail(value: unknown) {
+    return typeof value === 'string' ? value.trim().toLocaleLowerCase() : '';
   }
 
   private async resolveProviderInput(
