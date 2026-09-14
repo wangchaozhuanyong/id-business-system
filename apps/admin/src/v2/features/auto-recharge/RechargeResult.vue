@@ -72,7 +72,12 @@
       >
         已确认银行卡未收到付款请求；原付款尝试记录和确认次数已保留，历史付款锁已解除。
       </p>
-      <p v-if="job.result.session_attempt" class="recharge-note" role="status">
+      <p v-if="job.result.quote_wait_seconds" class="recharge-note" role="status">
+        第 {{ job.result.session_attempt ?? 1 }} / {{ job.result.session_attempt_limit ?? 1 }} 次窗口尝试，
+        报价页已等待 {{ job.result.quote_elapsed_seconds ?? 0 }} 秒，最多
+        {{ job.result.quote_wait_seconds }} 秒。
+      </p>
+      <p v-else-if="job.result.session_attempt" class="recharge-note" role="status">
         第 {{ job.result.session_attempt }} / {{ job.result.session_attempt_limit }} 次尝试，
         本轮已等待 {{ job.result.session_elapsed_seconds ?? 0 }} 秒， 最多
         {{ job.result.session_wait_seconds }} 秒。
@@ -83,6 +88,12 @@
       <p v-if="job.result.session_refresh_count" class="recharge-note" role="status">
         当前窗口加载失败后已自动刷新
         {{ job.result.session_refresh_count }} 次；刷新仍失败才会清理并重建窗口。
+      </p>
+      <p v-if="job.result.quote_refresh_count" class="recharge-note" role="status">
+        当前报价页没有有效内容，已自动刷新 {{ job.result.quote_refresh_count }} 次并继续等待。
+      </p>
+      <p v-if="job.result.stale_profiles_cleaned" class="recharge-note" role="status">
+        已关闭并清理 {{ job.result.stale_profiles_cleaned }} 个属于该账号的历史付款前失败窗口。
       </p>
       <slot />
       <details class="recharge-diagnostics">
@@ -102,6 +113,10 @@
           <template v-if="job.result.last_reason">
             <dt>最后失败原因</dt>
             <dd>{{ failureReasonLabel(job.result.last_reason) }}</dd>
+          </template>
+          <template v-if="job.result.page_state">
+            <dt>报价页状态</dt>
+            <dd>{{ statusLabel(job.result.page_state) }}</dd>
           </template>
           <template v-if="job.result.payment_failure_reason">
             <dt>付款失败原因</dt>

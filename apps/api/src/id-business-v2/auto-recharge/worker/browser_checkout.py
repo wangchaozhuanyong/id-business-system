@@ -32,6 +32,12 @@ EXPIRED_CHECKOUT_ERROR = re.compile(
     r"there was an error processing your payment|付款处理(?:发生|出现)?错误|处理(?:你的|您的)?付款时(?:(?:发生|出现)?错误|出错)",
     re.I,
 )
+PAGE_NETWORK_ERROR = re.compile(
+    r"(?:net::)?ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|"
+    r"PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|NAME_NOT_RESOLVED|NETWORK_CHANGED|"
+    r"EMPTY_RESPONSE|CONNECTION_REFUSED|INTERNET_DISCONNECTED)",
+    re.I,
+)
 def progress(stage, **details):
     print(json.dumps({"event": stage, **details}, ensure_ascii=False), file=sys.stderr, flush=True)
 
@@ -60,6 +66,147 @@ def retryable_page_load_error(error):
         r"EMPTY_RESPONSE|CONNECTION_REFUSED|INTERNET_DISCONNECTED)",
         str(error),
     ))
+
+
+def checkout_page_state(url, text, quote, checkout_id):
+    """只输出受控页面状态，不保存官网正文。"""
+    if PAGE_NETWORK_ERROR.search(text):
+        return "network_error"
+    if is_unavailable_existing_checkout(text):
+        return "official_error"
+    if quote and quote.get("plan"):
+        return "checkout" if quote.get("today") else "quote_incomplete"
+    if checkout_page_matches(url, checkout_id):
+        return "blank" if not text.strip() else "loading"
+    return "loading"
+
+
+async def quote_with_page_recovery(page, guard, target_plan, plan_family, quote_handler,
+                                   existing, session_budget, quote_timeout):
+    """报价阶段独立等待；过半仍无有效内容时在当前窗口刷新一次。"""
+    wait_seconds = session_budget.seconds if session_budget else quote_timeout
+    quote_budget = session_budget.restart(report=lambda **_: None) if session_budget else None
+    started = time.monotonic()
+    elapsed = lambda: quote_budget.elapsed if quote_budget else max(0, time.monotonic() - started)
+    cancelled = quote_budget.check_cancelled if quote_budget else lambda: None
+    refresh_at = wait_seconds / 2
+    refresh_count = 0
+    last_report = float("-inf")
+    quote = None
+    quote_text = ""
+    page_state = "loading"
+    partial_quote_since = None
+    expected_url = None
+    entity = guard.result.get("processor_entity")
+    if isinstance(entity, str) and guard.checkout_id:
+        expected_url = f"{ORIGIN}/checkout/{entity}/{guard.checkout_id}"
+
+    async def refresh_page(reason):
+        nonlocal refresh_count
+        progress("quote_page_refreshing", quote_elapsed_seconds=int(elapsed()),
+                 quote_wait_seconds=wait_seconds, quote_refresh_count=1,
+                 page_state=page_state, last_reason=reason)
+        refresh_count = 1
+        operation = (lambda: page.reload(wait_until="domcontentloaded", timeout=0))
+        if expected_url and not checkout_page_matches(page.url, guard.checkout_id):
+            operation = lambda: page.goto(expected_url, wait_until="domcontentloaded", timeout=0)
+        try:
+            if quote_budget:
+                await quote_budget.run(operation, "quote_refresh")
+            else:
+                await asyncio.wait_for(operation(), timeout=max(1, wait_seconds - elapsed()))
+        except Stop as exc:
+            if exc.report.get("reason") == "operation_cancelled":
+                raise
+            reason = ("checkout_page_load_timeout" if exc.report.get("reason") == "session_load_timeout"
+                      else "checkout_page_network_error")
+            raise Stop(reason, quote_elapsed_seconds=min(int(elapsed()), int(wait_seconds)),
+                       quote_wait_seconds=int(wait_seconds), quote_refresh_count=refresh_count,
+                       page_state="loading" if reason == "checkout_page_load_timeout"
+                       else "network_error") from None
+        except Exception as exc:
+            code = PAGE_NETWORK_ERROR.search(str(exc))
+            raise Stop("checkout_page_network_error", browser_error_code=(code.group(0).upper()
+                       if code else None), quote_elapsed_seconds=int(elapsed()),
+                       quote_wait_seconds=wait_seconds, quote_refresh_count=refresh_count,
+                       page_state="network_error") from None
+
+    if existing and expected_url and not checkout_page_matches(page.url, guard.checkout_id):
+        try:
+            operation = lambda: page.goto(expected_url, wait_until="domcontentloaded",
+                                          timeout=max(1, int(refresh_at * 1000)))
+            if quote_budget:
+                await quote_budget.run(operation, "quote_navigation")
+            else:
+                await asyncio.wait_for(operation(), timeout=max(1, refresh_at))
+        except (asyncio.TimeoutError, Stop) as exc:
+            if isinstance(exc, Stop) and exc.report.get("reason") == "operation_cancelled":
+                raise
+            page_state = "loading"
+            await refresh_page("official_checkout_navigation_not_observed")
+        except Exception as exc:
+            code = PAGE_NETWORK_ERROR.search(str(exc))
+            if code or retryable_page_load_error(exc):
+                page_state = "network_error"
+                await refresh_page("checkout_page_network_error")
+            else:
+                raise
+
+    while elapsed() < wait_seconds:
+        cancelled()
+        try:
+            quote_text = await page.locator("body").inner_text()
+            title = await page.title()
+        except Exception as exc:
+            code = PAGE_NETWORK_ERROR.search(str(exc))
+            if refresh_count == 0 and (code or retryable_page_load_error(exc)):
+                page_state = "network_error"
+                await refresh_page("checkout_page_network_error")
+                continue
+            if code:
+                raise Stop("checkout_page_network_error", browser_error_code=code.group(0).upper(),
+                           quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
+                           quote_refresh_count=refresh_count, page_state="network_error") from None
+            raise
+        observed_text = title + "\n" + quote_text
+        quote = await quote_from_page(page, guard.result.get("returned_currency"))
+        page_state = checkout_page_state(page.url, observed_text, quote, guard.checkout_id)
+        now = elapsed()
+        if now - last_report >= 10:
+            progress("quote_waiting", quote_elapsed_seconds=int(now),
+                     quote_wait_seconds=wait_seconds, quote_refresh_count=refresh_count,
+                     page_state=page_state)
+            last_report = now
+        if quote["today"] and quote["plan"] in (target_plan, plan_family):
+            break
+        if quote_handler and quote["plan"] == target_plan:
+            partial_quote_since = partial_quote_since or time.monotonic()
+            if time.monotonic() - partial_quote_since >= 2:
+                break
+        else:
+            partial_quote_since = None
+        if page_state in {"network_error", "official_error"}:
+            if refresh_count == 0:
+                await refresh_page("existing_checkout_unavailable" if page_state == "official_error"
+                                   else "checkout_page_network_error")
+                continue
+            if page_state == "official_error":
+                raise Stop("existing_checkout_unavailable", quote=quote,
+                           quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
+                           quote_refresh_count=refresh_count, page_state=page_state)
+            raise Stop("checkout_page_network_error", quote=quote,
+                       quote_elapsed_seconds=int(elapsed()), quote_wait_seconds=wait_seconds,
+                       quote_refresh_count=refresh_count, page_state=page_state)
+        if refresh_count == 0 and now >= refresh_at:
+            await refresh_page("checkout_page_incomplete")
+            continue
+        await asyncio.sleep(.3)
+    return quote, quote_text, {
+        "quote_elapsed_seconds": min(int(elapsed()), int(wait_seconds)),
+        "quote_wait_seconds": int(wait_seconds),
+        "quote_refresh_count": refresh_count,
+        "page_state": page_state,
+    }
 
 
 async def restore_session_with_refresh(page, target, wait_seconds, budget):
@@ -459,7 +606,10 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         raise Stop("checkout_record_plan_mismatch")
     if existing:
         guard.checkout_id = existing["checkout_identifier"]
-        guard.result = {"returned_currency": existing.get("returned_currency")}
+        guard.result = {
+            "returned_currency": existing.get("returned_currency"),
+            "processor_entity": existing.get("processor_entity"),
+        }
     await context.route("**/*", guard.route)
     await context.route_web_socket("**/*", lambda ws: ws.close())
     tasks = set()
@@ -542,41 +692,17 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         else:
             stage = "existing_checkout_read"
             progress("existing_checkout_read", new_checkout_allowed=False)
-            await page.goto(ORIGIN + "/checkout/" + existing["processor_entity"] + "/" + guard.checkout_id,
-                            wait_until="domcontentloaded", timeout=45000)
         stage = "quote_read"
         progress(stage)
-        # 等待官网自己的跳转，避免主动 goto 与网页导航竞争或伪装成入口已打通。
-        try:
-            await page.wait_for_url(re.compile(r"^https://(?:chatgpt\.com/checkout/|checkout\.stripe\.com/).+"),
-                                    wait_until="domcontentloaded", timeout=25000)
-        except Exception:
-            raise Stop("official_checkout_navigation_not_observed") from None
+        quote, quote_text, quote_meta = await quote_with_page_recovery(
+            page, guard, target_plan, spec["family"], quote_handler, existing,
+            session_budget, quote_timeout,
+        )
         if urlsplit(page.url).hostname not in ("chatgpt.com", "checkout.stripe.com"):
-            raise Stop("unexpected_checkout_origin")
-        if existing and not checkout_page_matches(page.url, guard.checkout_id):
-            # 已过期的官网结算会跳到 /checkout/verify；不能把该错误页当作原报价继续解析。
-            raise Stop("existing_checkout_unavailable")
-        deadline = time.monotonic() + quote_timeout
-        partial_quote_since = None
-        while time.monotonic() < deadline:
-            quote_text = await page.locator("body").inner_text()
-            if existing and (not checkout_page_matches(page.url, guard.checkout_id)
-                             or is_unavailable_existing_checkout(quote_text)):
-                raise Stop("existing_checkout_unavailable")
-            quote = await quote_from_page(page, guard.result.get("returned_currency"))
-            if quote["today"] and quote["plan"] in (target_plan, spec["family"]):
-                break
-            if quote_handler and quote["plan"] == target_plan:
-                partial_quote_since = partial_quote_since or time.monotonic()
-                if time.monotonic() - partial_quote_since >= 2:
-                    break
-            else:
-                partial_quote_since = None
-            await asyncio.sleep(0.3)
+            raise Stop("unexpected_checkout_origin", **quote_meta)
         if (not quote or not quote["today"] or quote["plan"] not in (target_plan, spec["family"])) and not quote_handler:
             if existing and not checkout_page_matches(page.url, guard.checkout_id):
-                raise Stop("existing_checkout_unavailable")
+                raise Stop("existing_checkout_unavailable", **quote_meta)
             await wait_for_user("quote_needs_review_or_billing", wait_seconds)
             # 验证可能带来账户变化；另开同一上下文页面，只做官方身份核对。
             check_page = await context.new_page()
@@ -586,18 +712,19 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
             quote_text = await page.locator("body").inner_text()
             quote = await quote_from_page(page, guard.result.get("returned_currency"))
         if not quote or quote["plan"] not in (target_plan, spec["family"]):
-            raise Stop("actual_quote_unknown", quote=quote)
+            raise Stop("actual_quote_unknown", quote=quote, **quote_meta)
         if quote["plan"] != target_plan:
-            raise Stop("checkout_tier_not_verified", quote=quote)
+            raise Stop("checkout_tier_not_verified", quote=quote, **quote_meta)
         # 报价验收必须绑定本次编号；不能只凭页面出现 Plus/金额认定成功。
         if not checkout_page_matches(page.url, guard.checkout_id):
-            raise Stop("checkout_page_identifier_unverified", quote=quote)
+            raise Stop("checkout_page_identifier_unverified", quote=quote, **quote_meta)
         initial_status = "checkout_quote_verified" if quote.get("today") else "checkout_ready_for_billing"
         result = {"status": initial_status, **identity, **guard.summary(),
                   "checkout_status": "created", "checkout_identifier": guard.checkout_id,
                   "quote": quote, "initial_quote": quote,
                   "subscription_status": "not_verified",
-                  "stage": "quote_ready" if quote.get("today") else "details_required"}
+                  "stage": "quote_ready" if quote.get("today") else "details_required",
+                  **quote_meta}
         if existing:
             result["inspection_only"] = True
         if ledger:

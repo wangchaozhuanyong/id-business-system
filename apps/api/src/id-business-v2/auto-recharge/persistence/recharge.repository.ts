@@ -36,6 +36,24 @@ export class RechargeRepository {
     return tx.idBusinessV2RechargeJob.findUnique({ where: { id } });
   }
 
+  finishedJobsForAccount(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    accountKey: string,
+    excludeId: string
+  ) {
+    return tx.idBusinessV2RechargeJob.findMany({
+      where: {
+        ownerId,
+        accountKey,
+        state: 'finished',
+        id: { not: excludeId }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 30
+    });
+  }
+
   findRunningJob(tx: V2CommandTransaction) {
     return tx.idBusinessV2RechargeJob.findFirst({
       where: { state: { not: 'finished' }, leaseUntil: { gt: new Date() } }

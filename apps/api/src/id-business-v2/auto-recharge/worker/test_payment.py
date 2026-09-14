@@ -109,14 +109,17 @@ class StateTests(unittest.TestCase):
             async def payment_stage(_page, guard, _identity, ledger, *_args, **_kwargs):
                 observed["payment_fd"] = ledger.fd
                 observed["attached"] = guard.payment_ledger is ledger
+                observed["quote_wait_seconds"] = _kwargs["quote_wait_seconds"]
                 return {"status": "payment_cancelled"}
 
             with patch("pay.run_browser", new=local_browser), patch("pay.payment_handler", new=payment_stage):
                 result = await run_flow(self.target, root, "plus", details_reader=lambda *_: details(),
-                                        confirmer=lambda *_: False)
+                                        confirmer=lambda *_: False,
+                                        session_budget=SimpleNamespace(seconds=120))
             self.assertEqual(result["status"], "payment_cancelled")
             self.assertEqual(observed["checkout_fd"], observed["payment_fd"])
             self.assertTrue(observed["attached"])
+            self.assertEqual(observed["quote_wait_seconds"], 120)
 
         asyncio.run(exercise())
 
@@ -169,6 +172,38 @@ class StateTests(unittest.TestCase):
             self.assertTrue(calls[0]["inspect_existing"])
             self.assertTrue(calls[1]["create"])
             self.assertTrue(calls[1]["replace_unpaid_checkout"])
+            self.assertTrue(result["checkout_replacement_performed"])
+
+        asyncio.run(exercise())
+
+    def test_blank_existing_quote_is_replaced_at_most_once_per_job(self):
+        async def exercise():
+            root = Path(self.temp.name) / "flow-blank-replace"
+            create_marker(root, self.target)
+            calls = []
+
+            async def local_browser(_target, **kwargs):
+                calls.append(kwargs)
+                return {"status": "blocked", "reason": "actual_quote_unknown",
+                        "stage": "quote_read", "page_state": "blank",
+                        "payment_attempted": False, "payment_requests_sent": 0,
+                        "confirmation_requests_sent": 0}
+
+            with patch("pay.run_browser", new=local_browser):
+                first = await run_flow(
+                    self.target, root, "plus", details_reader=lambda *_: details(),
+                    confirmer=lambda *_: False, allow_checkout_replacement=True,
+                )
+                first_count = len(calls)
+                calls.clear()
+                second = await run_flow(
+                    self.target, root, "plus", details_reader=lambda *_: details(),
+                    confirmer=lambda *_: False, allow_checkout_replacement=False,
+                )
+            self.assertTrue(first["checkout_replacement_performed"])
+            self.assertEqual(first_count, 2)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(second["reason"], "actual_quote_unknown")
 
         asyncio.run(exercise())
 

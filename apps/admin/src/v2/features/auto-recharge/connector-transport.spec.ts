@@ -12,7 +12,9 @@ const health = {
     'browser-options',
     'session-load-retry',
     'same-window-page-refresh',
-    'payment-unknown-resolution'
+    'payment-unknown-resolution',
+    'prepayment-page-recovery',
+    'stale-owned-profile-cleanup'
   ]
 };
 afterEach(() => vi.unstubAllGlobals());

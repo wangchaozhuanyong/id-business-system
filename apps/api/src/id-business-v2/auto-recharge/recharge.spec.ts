@@ -140,6 +140,11 @@ describe('recharge input and durable evidence', () => {
       session_wait_seconds: 120,
       session_step: 'page_refresh',
       session_refresh_count: 1,
+      quote_elapsed_seconds: 120,
+      quote_wait_seconds: 120,
+      quote_refresh_count: 1,
+      page_state: 'blank',
+      stale_profiles_cleaned: 2,
       error_type: 'TimeoutError',
       browser_error_code: 'net::ERR_TIMED_OUT'
     };
@@ -153,7 +158,12 @@ describe('recharge input and durable evidence', () => {
         session_elapsed_seconds: -1,
         session_wait_seconds: 601,
         session_step: 'private',
-        session_refresh_count: 2
+        session_refresh_count: 2,
+        quote_elapsed_seconds: 601,
+        quote_wait_seconds: 59,
+        quote_refresh_count: 2,
+        page_state: 'private',
+        stale_profiles_cleaned: 31
       })
     ).toEqual({});
   });
@@ -361,8 +371,12 @@ describe('single worker dispatch and confirmation', () => {
     idBusinessV2RechargeJob: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
+      findMany: vi.fn(),
       create: vi.fn(),
       update: vi.fn()
+    },
+    idBusinessV2RechargeRecord: {
+      findMany: vi.fn()
     }
   };
   const repository = new RechargeRepository({} as never);
@@ -384,6 +398,8 @@ describe('single worker dispatch and confirmation', () => {
     transaction.execute.mockImplementation(async (callback) => callback(tx));
     tx.idBusinessV2RechargeJob.findUnique.mockResolvedValue(null);
     tx.idBusinessV2RechargeJob.findFirst.mockResolvedValue(null);
+    tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([]);
+    tx.idBusinessV2RechargeRecord.findMany.mockResolvedValue([]);
     tx.idBusinessV2RechargeJob.create.mockResolvedValue({ id });
     addressRepository.requireUnused.mockResolvedValue({
       id: addressId,
@@ -428,6 +444,81 @@ describe('single worker dispatch and confirmation', () => {
     expect(tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data).not.toHaveProperty(
       'leaseUntil'
     );
+  });
+  it('恢复时只返回同操作人同账号且付款前失败的历史窗口，并幂等记录清理', async () => {
+    const accountKey = 'a'.repeat(64);
+    const sourceJobId = '33333333-3333-4333-8333-333333333333';
+    const profileId = 'b'.repeat(32);
+    const current = {
+      id,
+      ownerId: operator.id,
+      accountKey: null as string | null,
+      action: 'bitbrowser',
+      state: 'running',
+      result: {}
+    };
+    const stale = {
+      id: sourceJobId,
+      ownerId: operator.id,
+      accountKey,
+      state: 'finished',
+      result: {
+        reason: 'actual_quote_unknown',
+        browser_profile_id: profileId,
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      }
+    };
+    const unsafe = {
+      ...stale,
+      id: '44444444-4444-4444-8444-444444444444',
+      result: { ...stale.result, browser_profile_id: 'c'.repeat(32), payment_requests_sent: 1 }
+    };
+    active.mockResolvedValue(current as never);
+    tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([stale, unsafe]);
+    await expect(service.callback(id, { type: 'restore', accountKey })).resolves.toEqual({
+      records: [],
+      staleProfiles: [{ sourceJobId, profileId }]
+    });
+
+    current.accountKey = accountKey;
+    active.mockResolvedValue(current as never);
+    await expect(
+      service.callback(id, {
+        type: 'stale_profile_cleanup',
+        accountKey,
+        profiles: [{ sourceJobId, profileId }]
+      })
+    ).resolves.toEqual({ ok: true, updated: 1 });
+    expect(tx.idBusinessV2RechargeJob.update).toHaveBeenCalledWith({
+      where: { id: sourceJobId },
+      data: {
+        result: expect.objectContaining({
+          browser_cleanup_status: 'completed',
+          stale_cleanup_job_id: id
+        })
+      }
+    });
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.stale_browser_cleanup',
+        objectId: id
+      })
+    );
+
+    tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([
+      { ...stale, result: { ...stale.result, browser_cleanup_status: 'completed' } }
+    ]);
+    await expect(
+      service.callback(id, {
+        type: 'stale_profile_cleanup',
+        accountKey,
+        profiles: [{ sourceJobId, profileId }]
+      })
+    ).resolves.toEqual({ ok: true, updated: 0 });
   });
   it('persists the job and audit before sending exactly one worker command', async () => {
     await service.start(input(), operator);

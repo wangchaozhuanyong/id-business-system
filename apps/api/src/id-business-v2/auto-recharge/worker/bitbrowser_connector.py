@@ -50,6 +50,8 @@ SAFE_PUBLIC_KEYS = set(
     "quote_authority browser_profile_id locked_currency max_amount user_action_required "
     "recheck_only error_type last_reason session_attempt session_attempt_limit "
     "session_elapsed_seconds session_wait_seconds session_step session_refresh_count cancellation_confirmed browser_cleanup_status "
+    "quote_elapsed_seconds quote_wait_seconds quote_refresh_count page_state stale_profiles_cleaned "
+    "checkout_replacement_performed "
     "resolution_only operator_resolution resolved_at resolution_job_id source_job_id verification_job_id".split()
 )
 
@@ -164,6 +166,24 @@ class BitBrowserClient:
         except Stop:
             raise Stop("bitbrowser_tag_binding_failed", browser_profile_id=profile_id) from None
         return profile_id
+
+    def list_profile_ids(self):
+        result = set()
+        for page in range(21):
+            rows = bitbrowser_catalog.rows_from(
+                self.post("/browser/list", {"page": page, "pageSize": 100})
+            )
+            if len(rows) > 100:
+                raise Stop("bitbrowser_catalog_limit")
+            for row in rows:
+                profile_id = row.get("id") if isinstance(row, dict) else None
+                if not isinstance(profile_id, str) or not PROFILE_ID.fullmatch(profile_id) \
+                        or len(profile_id) != 32:
+                    raise Stop("bitbrowser_catalog_invalid")
+                result.add(profile_id)
+            if len(rows) < 100:
+                return result
+        raise Stop("bitbrowser_catalog_limit")
 
     def open_profile(self, profile_id):
         # Verify the saved settings before a browser can receive a login session.
@@ -304,6 +324,9 @@ class LocalJob:
         self.initial_session_verified = False
         self.session_info = {}
         self.resolution_committed = False
+        self.stale_profiles = []
+        self.stale_profiles_cleaned = 0
+        self.checkout_replacement_performed = False
 
     def check_cancelled(self):
         if self.cancelled:
@@ -449,7 +472,26 @@ class LocalJob:
         import hashlib
         self.account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
         initial = self.callback.send({"type": "restore", "accountKey": self.account_key})
-        for record in initial["records"]:
+        records = initial.get("records")
+        stale_profiles = initial.get("staleProfiles", [])
+        if not isinstance(records, list) or not isinstance(stale_profiles, list) \
+                or len(stale_profiles) > 30:
+            raise Stop("durable_state_unavailable")
+        seen_sources = set()
+        seen_profiles = set()
+        for value in stale_profiles:
+            if (not isinstance(value, dict) or set(value) != {"sourceJobId", "profileId"}
+                    or not isinstance(value.get("sourceJobId"), str)
+                    or not JOB_ID.fullmatch(value["sourceJobId"])
+                    or not isinstance(value.get("profileId"), str)
+                    or not re.fullmatch(r"[a-fA-F0-9]{32}", value["profileId"])
+                    or value["sourceJobId"] in seen_sources
+                    or value["profileId"] in seen_profiles):
+                raise Stop("durable_state_unavailable")
+            seen_sources.add(value["sourceJobId"])
+            seen_profiles.add(value["profileId"])
+            self.stale_profiles.append(value)
+        for record in records:
             path = self.root / record["fileKey"]
             path.parent.mkdir(parents=True, exist_ok=True)
             write_json(path, record["document"], exclusive=True)
@@ -512,6 +554,7 @@ class LocalJob:
             self.done = True
         result.setdefault("payment_attempted", self.payment_request_sent)
         result.setdefault("payment_requests_sent", 1 if self.payment_request_sent else 0)
+        result.setdefault("stale_profiles_cleaned", self.stale_profiles_cleaned)
         if self.payment_request_sent:
             result.setdefault("payment_status", "unknown")
         result = {
@@ -603,7 +646,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True, "version": 2,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
-                                                     "same-window-page-refresh", "payment-unknown-resolution"],
+                                                     "same-window-page-refresh", "payment-unknown-resolution",
+                                                     "prepayment-page-recovery", "stale-owned-profile-cleanup"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
