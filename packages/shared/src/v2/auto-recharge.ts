@@ -26,7 +26,8 @@ export interface V2RechargeResult {
   session_attempt_limit?: number;
   session_elapsed_seconds?: number;
   session_wait_seconds?: number;
-  session_step?: 'page_load' | 'session_read' | 'account_read';
+  session_refresh_count?: number;
+  session_step?: 'page_load' | 'page_refresh' | 'session_read' | 'account_read';
   diagnostics?: {
     step?:
       | 'open_menu'

@@ -49,6 +49,59 @@ def checkout_page_matches(url, checkout_id):
             and parts.path.rstrip("/").split("/")[-1] == checkout_id)
 
 
+def retryable_page_load_error(error):
+    """Only retry transport failures before any official write is armed."""
+    report = error.report if isinstance(error, Stop) else {}
+    if report.get("reason") in {"session_load_timeout", "session_network_error"}:
+        return True
+    return bool(re.search(
+        r"net::ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|"
+        r"PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|NAME_NOT_RESOLVED|NETWORK_CHANGED|"
+        r"EMPTY_RESPONSE|CONNECTION_REFUSED|INTERNET_DISCONNECTED)",
+        str(error),
+    ))
+
+
+async def restore_session_with_refresh(page, target, wait_seconds, budget):
+    """Load once, then refresh the same page once while the window budget remains."""
+    for load_attempt in range(2):
+        try:
+            if load_attempt == 0:
+                operation = lambda: page.goto(
+                    ORIGIN + "/", wait_until="domcontentloaded", timeout=0
+                )
+                step = "page_load"
+            elif page.url == "about:blank":
+                operation = lambda: page.goto(
+                    ORIGIN + "/", wait_until="domcontentloaded", timeout=0
+                )
+                step = "page_refresh"
+            else:
+                operation = lambda: page.reload(wait_until="domcontentloaded", timeout=0)
+                step = "page_refresh"
+            await budget.run(operation, step)
+            return await check_session(page, target, wait_seconds, budget)
+        except Exception as exc:
+            if load_attempt or not retryable_page_load_error(exc):
+                raise
+            try:
+                budget.remaining_ms()
+            except Stop:
+                raise exc
+            reason = (
+                exc.report.get("reason")
+                if isinstance(exc, Stop)
+                else "browser_operation_failed"
+            )
+            progress(
+                "session_page_refreshing",
+                session_step="page_refresh",
+                session_refresh_count=1,
+                last_reason=reason,
+            )
+    raise Stop("session_network_error")
+
+
 def money(text: str, currency_hint=None):
     """仅识别明确币种和无歧义小数格式；不把 $ 或参考价当实际报价。"""
     if re.search(r"[-−]\s*\d", text):
@@ -430,10 +483,12 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
         await context.add_cookies(session_cookies(target))
         progress(stage)
         if session_budget:
-            await session_budget.run(lambda: page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=0), "page_load")
+            _, identity = await restore_session_with_refresh(
+                page, target, wait_seconds, session_budget
+            )
         else:
             await page.goto(ORIGIN + "/", wait_until="domcontentloaded", timeout=45000)
-        _, identity = await check_session(page, target, wait_seconds, session_budget)
+            _, identity = await check_session(page, target, wait_seconds, session_budget)
         guard.account_verified = True
         if os.environ.get("AUTO_RECHARGE_CALLBACK_URL"):
             try:

@@ -80,6 +80,10 @@
           >{{ statusLabel(job.result.session_step) }}。</span
         >
       </p>
+      <p v-if="job.result.session_refresh_count" class="recharge-note" role="status">
+        当前窗口加载失败后已自动刷新
+        {{ job.result.session_refresh_count }} 次；刷新仍失败才会清理并重建窗口。
+      </p>
       <slot />
       <details class="recharge-diagnostics">
         <summary>执行详情</summary>

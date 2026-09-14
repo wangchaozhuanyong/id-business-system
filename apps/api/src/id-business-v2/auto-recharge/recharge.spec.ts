@@ -138,7 +138,8 @@ describe('recharge input and durable evidence', () => {
       session_attempt_limit: 3,
       session_elapsed_seconds: 115,
       session_wait_seconds: 120,
-      session_step: 'account_read',
+      session_step: 'page_refresh',
+      session_refresh_count: 1,
       error_type: 'TimeoutError',
       browser_error_code: 'net::ERR_TIMED_OUT'
     };
@@ -151,7 +152,8 @@ describe('recharge input and durable evidence', () => {
         session_attempt_limit: 0,
         session_elapsed_seconds: -1,
         session_wait_seconds: 601,
-        session_step: 'private'
+        session_step: 'private',
+        session_refresh_count: 2
       })
     ).toEqual({});
   });

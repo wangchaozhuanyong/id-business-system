@@ -11,6 +11,7 @@ const health = {
     'browser-catalog',
     'browser-options',
     'session-load-retry',
+    'same-window-page-refresh',
     'payment-unknown-resolution'
   ]
 };
