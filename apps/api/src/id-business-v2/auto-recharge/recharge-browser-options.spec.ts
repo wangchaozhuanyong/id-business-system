@@ -65,6 +65,7 @@ function fixture() {
 
 describe('窗口配置校验', () => {
   it('旧空设置回退原默认值，合法指定设置完整保留', () => {
+    expect(V2_RECHARGE_BROWSER_DEFAULTS.timezone).toBe('Asia/Shanghai');
     expect(storedBrowserOptions(null)).toEqual(V2_RECHARGE_BROWSER_DEFAULTS);
     expect(validateBrowserOptions(staticOptions)).toEqual(staticOptions);
   });

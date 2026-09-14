@@ -170,7 +170,7 @@ export const V2_RECHARGE_BROWSER_DEFAULTS: Readonly<V2RechargeBrowserOptions> = 
   displayLanguageFromIp: false,
   displayLanguage: 'zh-CN',
   timezoneFromIp: true,
-  timezone: 'Asia/Kuala_Lumpur',
+  timezone: 'Asia/Shanghai',
   positionFromIp: true,
   latitude: 0,
   longitude: 0,
