@@ -22,7 +22,7 @@ export function isAdminOnly(paths) {
 }
 
 const mailboxPaths =
-  /^(?:\.env\.example|apps\/admin\/src\/api\/requestPolicy(?:\.spec)?\.ts|apps\/admin\/src\/v2\/features\/(?:feature|registry(?:\.spec)?|runtimeRegistry|tableSchemas)\.ts|apps\/admin\/src\/v2\/features\/auto-recharge\/(?:V2VendureMailboxView\.vue|VendureMailboxManager\.vue|vendure-mailbox[^/]*)|apps\/api\/src\/id-business-v2\/workspace\/(?:dto\/id-business-v2-vendure-mailbox\.dto\.ts|id-business-v2-(?:mail-viewer\.service(?:\.spec)?|public-vendure-mailbox\.controller|vendure-mailbox\.(?:controller|service)(?:\.spec)?|workspace\.module)\.ts|providers\/id-business-v2-vendure-mailbox\.client(?:\.spec)?\.ts)|packages\/shared\/src\/(?:index\.ts|v2\/vendure-mailbox\.ts))$/;
+  /^(?:\.env\.(?:example|aws\.production\.example)|docker-compose\.aws-mysql\.yml|apps\/admin\/src\/api\/requestPolicy(?:\.spec)?\.ts|apps\/admin\/src\/v2\/features\/(?:feature|registry(?:\.spec)?|runtimeRegistry|tableSchemas)\.ts|apps\/admin\/src\/v2\/features\/auto-recharge\/(?:V2VendureMailboxView\.vue|VendureMailboxManager\.vue|vendure-mailbox[^/]*)|apps\/api\/src\/id-business-v2\/workspace\/(?:dto\/id-business-v2-vendure-mailbox\.dto\.ts|id-business-v2-(?:mail-viewer\.service(?:\.spec)?|public-vendure-mailbox\.controller|vendure-mailbox\.(?:controller|service)(?:\.spec)?|workspace\.module)\.ts|providers\/id-business-v2-vendure-mailbox\.client(?:\.spec)?\.ts)|packages\/shared\/src\/(?:index\.ts|v2\/vendure-mailbox\.ts))$/;
 export function isMailboxOnly(paths) {
   return (
     paths.some((path) => mailboxPaths.test(path)) &&
