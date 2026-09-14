@@ -256,6 +256,10 @@ describe('personal workspace UI contract', () => {
     expect(mailViewerDrawer).toContain('label="邮箱池管理"');
     expect(mailQueryPanel).toContain('placeholder="请输入邮件查询码"');
     expect(mailQueryPanel).toContain('label="邮件查询码"');
+    expect(mailQueryPanel).toContain("message: '请输入邮件查询码'");
+    expect(mailQueryPanel).toContain("message: '请输入返回封数'");
+    expect(mailQueryPanel).toContain('await nextTick();');
+    expect(mailQueryPanel).toContain('formRef.value?.clearValidate();');
     expect(mailQueryPanel).toContain('autocomplete="new-password"');
     expect(managedMailboxPanel).toContain('应用专用密码');
     expect(managedMailboxPanel).toContain('验证成功后，应用专用密码会加密存入服务器');
