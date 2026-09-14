@@ -55,6 +55,8 @@ test('ordinary admin modules use frontend checks instead of backend and financia
 test('Vendure mailbox integration runs only its shared, admin, API and guard checks', () => {
   const paths = [
     '.env.example',
+    '.env.aws.production.example',
+    'docker-compose.aws-mysql.yml',
     'apps/admin/src/api/requestPolicy.ts',
     'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
     'apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts',
