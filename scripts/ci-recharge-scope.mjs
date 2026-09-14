@@ -8,11 +8,50 @@ export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
     paths.every((p) =>
-      /^(?:\.github\/workflows\/quality\.yml|scripts\/ci-recharge-[\w.-]+|docs\/AUTO_RECHARGE_SETTINGS_PLAN\.md)$/.test(
+      /^(?:\.github\/workflows\/quality\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
         p
       )
     )
   );
+}
+export function isAdminOnly(paths) {
+  return (
+    paths.some((p) => p.startsWith('apps/admin/src/v2/')) &&
+    paths.every((p) => p.startsWith('apps/admin/src/v2/') || isCiOnly([p]))
+  );
+}
+
+export function checkMode(paths, oldSchema, newSchema) {
+  if (isCiOnly(paths)) return 'ci-only';
+  if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
+  if (isAdminOnly(paths)) return 'admin';
+  return 'full';
+}
+
+export function adminCheckCommands(mode, paths) {
+  const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
+  commands.push([
+    'run',
+    'test',
+    '--workspace',
+    '@apple-business/admin',
+    ...(mode === 'admin'
+      ? []
+      : [
+          '--',
+          'src/v2/features/auto-recharge',
+          ...(paths.some((p) => p.includes('/audit-logs/'))
+            ? ['src/v2/features/audit-logs/audit-log-presentation.spec.ts']
+            : [])
+        ])
+  ]);
+  commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
+  if (
+    mode !== 'admin' ||
+    paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
+  )
+    commands.push(['run', 'acceptance:v2-auto-recharge']);
+  return commands;
 }
 const migration =
   'apps/api/prisma-mysql/migrations/20260913100000_auto_recharge_browser_options/migration.sql';
@@ -110,11 +149,7 @@ async function main() {
   const base = process.env.BASE_SHA;
   ensureCommit(base);
   const paths = git('diff', '--name-only', base, 'HEAD').split('\n').filter(Boolean);
-  const mode = isCiOnly(paths)
-    ? 'ci-only'
-    : isTargetedOnly(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`))
-      ? 'recharge'
-      : 'full';
+  const mode = checkMode(paths, git('show', `${base}:${schema}`), git('show', `HEAD:${schema}`));
   const currentTree = git('rev-parse', 'HEAD^{tree}');
   let reuseMain = false;
   const reused = new Set();
@@ -194,11 +229,15 @@ async function main() {
       if (reused.size === parts.length) break;
     }
   }
-  const checkParts = mode === 'ci-only' ? ['guards'] : selectedParts(paths);
+  const checkParts =
+    mode === 'ci-only' ? ['guards'] : mode === 'admin' ? ['guards', 'admin'] : selectedParts(paths);
   const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
+  const adminAcceptance =
+    checkParts.includes('admin') &&
+    adminCheckCommands(mode, paths).some((args) => args.includes('acceptance:v2-auto-recharge'));
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\n`
+    `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\n`
   );
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,

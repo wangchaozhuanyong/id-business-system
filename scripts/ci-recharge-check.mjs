@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { adminCheckCommands } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
+const mode = process.env.CHECK_MODE || 'recharge';
 const run = (file, args) => execFileSync(file, args, { stdio: 'inherit' });
 const npm = (...args) => run('npm', args);
 const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { encoding: 'utf8' })
@@ -22,32 +24,33 @@ if (part === 'guards') {
   run('node', [
     '--test',
     'scripts/ci-recharge-scope.test.mjs',
-    'scripts/ci-recharge-precision.test.mjs'
+    'scripts/ci-recharge-precision.test.mjs',
+    'scripts/ci-change-scope.test.mjs'
   ]);
-  npm(
-    'run',
-    'check:v2-decimal-standard',
-    '--',
-    'apps/admin/src/v2/features/auto-recharge',
-    'apps/api/src/id-business-v2/auto-recharge',
-    'packages/shared/src/v2'
-  );
-  npm('run', 'check:v2-ui-language', '--', 'apps/admin/src/v2/features/auto-recharge');
+  if (mode === 'admin') {
+    for (const name of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-decimal-standard'
+    ])
+      npm('run', name);
+  } else if (mode !== 'ci-only') {
+    npm(
+      'run',
+      'check:v2-decimal-standard',
+      '--',
+      'apps/admin/src/v2/features/auto-recharge',
+      'apps/api/src/id-business-v2/auto-recharge',
+      'packages/shared/src/v2'
+    );
+    npm('run', 'check:v2-ui-language', '--', 'apps/admin/src/v2/features/auto-recharge');
+  }
 } else if (part === 'admin') {
-  shared();
-  npm(
-    'run',
-    'test',
-    '--workspace',
-    '@apple-business/admin',
-    '--',
-    'src/v2/features/auto-recharge',
-    ...(changed.some((p) => p.includes('/audit-logs/'))
-      ? ['src/v2/features/audit-logs/audit-log-presentation.spec.ts']
-      : [])
-  );
-  npm('run', 'build', '--workspace', '@apple-business/admin');
-  npm('run', 'acceptance:v2-auto-recharge');
+  for (const args of adminCheckCommands(mode, changed)) npm(...args);
 } else if (part === 'api') {
   npm('run', 'prisma:mysql:generate');
   npm('run', 'prisma:mysql:validate');

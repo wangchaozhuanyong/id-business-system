@@ -8,7 +8,9 @@ import {
   canReuseMain,
   isCiOnly,
   isTargetedOnly,
-  selectedParts
+  selectedParts,
+  checkMode,
+  adminCheckCommands
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -18,6 +20,37 @@ const files = [
   'apps/admin/src/v2/features/auto-recharge/example.vue',
   'apps/api/prisma-mysql/schema.prisma'
 ];
+test('documentation and CI selectors do not start business or database checks', () => {
+  for (const path of ['docs/V2_TASKS.md', 'AGENTS.md', 'README.md', 'scripts/ci-change-scope.mjs'])
+    assert.equal(checkMode([path], schema, schema), 'ci-only');
+  for (const path of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/auth.controller.ts'
+  ])
+    assert.equal(checkMode([path], schema, schema), 'full');
+});
+test('ordinary admin modules use frontend checks instead of backend and financial suites', () => {
+  const paths = ['apps/admin/src/v2/features/orders/Orders.vue', 'docs/V2_TASKS.md'];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  const commands = adminCheckCommands('admin', paths);
+  assert.deepEqual(commands, [
+    ['run', 'build', '--workspace', '@apple-business/shared'],
+    ['run', 'test', '--workspace', '@apple-business/admin'],
+    ['run', 'build', '--workspace', '@apple-business/admin']
+  ]);
+  assert.ok(
+    adminCheckCommands('admin', [...paths, files[0]]).some((args) =>
+      args.includes('acceptance:v2-auto-recharge')
+    )
+  );
+  assert.equal(
+    checkMode([...paths, 'apps/api/src/id-business-v2/orders/order.service.ts'], schema, schema),
+    'full'
+  );
+  assert.equal(checkMode(['apps/admin/src/auth/login.ts'], schema, schema), 'full');
+  assert.equal(checkMode([files[0]], schema, schema), 'recharge');
+});
 test('CI-only repairs do not select application or migration suites', () => {
   assert.equal(
     isCiOnly(['.github/workflows/quality.yml', 'scripts/ci-recharge-evidence.mjs']),
