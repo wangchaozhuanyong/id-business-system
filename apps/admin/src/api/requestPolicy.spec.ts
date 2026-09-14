@@ -92,6 +92,18 @@ describe('API request policy registry', () => {
     ).toBeNull();
   });
 
+  it('allows Vendure mailbox operations to finish without replaying writes', () => {
+    const url = '/id-business-v2/vendure-mailboxes/primary-accounts/1/sync';
+    expect(getApiRequestPolicy('POST', url)).toEqual({ retryDelaysMs: [], timeoutMs: 70_000 });
+    expect(
+      getApiRequestRetryDelay({ isNetworkError: true, method: 'POST', retryCount: 0, url })
+    ).toBeNull();
+    expect(getApiRequestPolicy('GET', '/id-business-v2/vendure-mailboxes/mails')).toEqual({
+      retryDelaysMs: [200, 800],
+      timeoutMs: 70_000
+    });
+  });
+
   it('declares auth lifecycle exceptions by exact endpoint policy', () => {
     expect(getApiEndpointPolicy('/auth/logout').key).toBe('auth-logout');
     expect(getApiEndpointPolicy('/auth/change-password').bypassSessionGate).toBe(true);

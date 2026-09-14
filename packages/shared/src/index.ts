@@ -29,6 +29,27 @@ export type {
   V2PageQuery,
   V2SortOrder
 } from './v2/common.js';
+export type {
+  BatchCreateV2VendureMailboxAliasesInput,
+  CreateV2VendureMailboxAliasInput,
+  CreateV2VendureMailboxPrimaryInput,
+  UpdateV2VendureMailboxAliasInput,
+  UpdateV2VendureMailboxPrimaryInput,
+  V2VendureMailboxAlias,
+  V2VendureMailboxAliasStatus,
+  V2VendureMailboxBatchResult,
+  V2VendureMailboxConnectionResult,
+  V2VendureMailboxHistoryResult,
+  V2VendureMailboxListQuery,
+  V2VendureMailboxMail,
+  V2VendureMailboxPage,
+  V2VendureMailboxPrimaryAccount,
+  V2VendureMailboxPrimaryStatus,
+  V2VendureMailboxPublicMail,
+  V2VendureMailboxPublicQueryResult,
+  V2VendureMailboxStatus,
+  V2VendureMailboxSyncResult
+} from './v2/vendure-mailbox.js';
 export {
   V2_DECIMAL_PLACES,
   V2_DECIMAL_STEP,
@@ -212,3 +233,4 @@ export type {
 } from './v2/website-visits.js';
 
 export * from './v2/auto-recharge.js';
+export * from './v2/vendure-mailbox.js';

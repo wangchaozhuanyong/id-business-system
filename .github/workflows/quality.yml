@@ -26,6 +26,7 @@ jobs:
       reused_parts: ${{ steps.recharge.outputs.reused_parts }}
       base: ${{ steps.recharge.outputs.base }}
       check_parts: ${{ steps.recharge.outputs.check_parts }}
+      admin_acceptance: ${{ steps.recharge.outputs.admin_acceptance }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -212,7 +213,7 @@ jobs:
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && contains(fromJSON('["guards","admin","api"]'), matrix.part) }}
         run: npm ci --no-audit
       - name: Install browser for recharge acceptance
-        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'admin' }}
+        if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'admin' && needs.change-scope.outputs.admin_acceptance == 'true' }}
         run: npx playwright install chromium
       - name: Install existing connector dependencies
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'connector' }}
@@ -222,6 +223,7 @@ jobs:
         env:
           CHECK_PART: ${{ matrix.part }}
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
+          CHECK_MODE: ${{ needs.change-scope.outputs.mode }}
         run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"
 
   quality:
@@ -240,7 +242,7 @@ jobs:
           test "$SCOPE_RESULT" = success
           if [[ "$REUSE_MAIN" = true ]]; then
             echo "Merged source tree matches the successful PR; checks are not repeated."
-          elif [[ "$MODE" = recharge || "$MODE" = ci-only ]]; then
+          elif [[ "$MODE" = recharge || "$MODE" = ci-only || "$MODE" = admin || "$MODE" = mailbox ]]; then
             test "$RECHARGE_RESULT" = success
           else
             test "$FULL_RESULT" = success

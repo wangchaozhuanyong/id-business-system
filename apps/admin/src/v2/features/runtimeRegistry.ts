@@ -17,6 +17,16 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     loadView: () => import('./auto-recharge/V2AutoRechargeView.vue')
   }),
   defineV2RuntimeFeature({
+    key: 'vendure-mailbox',
+    title: '邮件验证码查询',
+    group: '自动充值',
+    route: '/v2/auto-recharge/mailbox',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-recharge/V2VendureMailboxView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'auto-recharge-addresses',
     title: '地址管理',
     group: '自动充值',

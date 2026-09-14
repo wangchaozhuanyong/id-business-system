@@ -3,6 +3,75 @@ import { defineV2TableSchema } from '@/v2/components/tableSystem';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
+  vendureMailbox: {
+    primary: table({
+      id: 'vendure-mailbox.primary',
+      feature: 'vendure-mailbox',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'email', label: '主邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'masterQueryCode', label: '主查询码', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'remainingDays', label: '剩余天数', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'virtualEmailCount', label: '虚拟邮箱', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'lastSyncedAt', label: '最近同步', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'note', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    }),
+    aliases: table({
+      id: 'vendure-mailbox.aliases',
+      feature: 'vendure-mailbox',
+      role: 'secondary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'aliasEmail',
+          label: '虚拟邮箱',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        {
+          key: 'primaryAccountEmail',
+          label: '所属主邮箱',
+          kind: 'identifier',
+          widthPreset: 'wide'
+        },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'buyerQueryCode', label: '买家查询码', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'remainingDays', label: '剩余天数', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'mailCount', label: '邮件数', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'lastMailReceivedAt', label: '最近收件', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'note', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    }),
+    mails: table({
+      id: 'vendure-mailbox.mails',
+      feature: 'vendure-mailbox',
+      role: 'secondary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'receivedAt',
+          label: '收件时间',
+          kind: 'date',
+          widthPreset: 'dateTime',
+          pin: 'start'
+        },
+        { key: 'targetEmail', label: '收件邮箱', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'fromAddress', label: '发件人', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'subject', label: '主题', kind: 'text', widthPreset: 'longText' },
+        { key: 'extractedCode', label: '验证码', kind: 'identifier', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
+  },
   autoRechargeAddresses: {
     main: table({
       id: 'auto-recharge-addresses.main',
@@ -1117,6 +1186,11 @@ export const v2TableSchemas = {
 
 export const v2TablesByFeature = {
   'auto-recharge': [],
+  'vendure-mailbox': [
+    v2TableSchemas.vendureMailbox.primary,
+    v2TableSchemas.vendureMailbox.aliases,
+    v2TableSchemas.vendureMailbox.mails
+  ],
   'auto-recharge-addresses': [v2TableSchemas.autoRechargeAddresses.main],
   'renewal-workbench': [v2TableSchemas.renewals.main],
   'order-entry': [],

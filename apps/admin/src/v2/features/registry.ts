@@ -1,5 +1,6 @@
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
 import { autoRechargeAddressesFeature } from '@/v2/features/auto-recharge/address-manifest';
+import { vendureMailboxFeature } from '@/v2/features/auto-recharge/vendure-mailbox-manifest';
 import { accountsFeature } from '@/v2/features/accounts/manifest';
 import { accountLossesFeature } from '@/v2/features/account-losses/manifest';
 import { activationsFeature } from '@/v2/features/activations/manifest';
@@ -28,6 +29,7 @@ import { topupWorkbenchFeature } from '@/v2/features/topups/manifest';
 
 export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   autoRechargeFeature,
+  vendureMailboxFeature,
   autoRechargeAddressesFeature,
   renewalWorkbenchFeature,
   orderEntryFeature,
