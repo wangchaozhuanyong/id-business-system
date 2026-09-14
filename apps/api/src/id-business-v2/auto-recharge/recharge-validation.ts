@@ -255,9 +255,14 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   )
     result.session_step = input.session_step;
   if (
-    ['blank', 'loading', 'checkout', 'quote_incomplete', 'official_error', 'network_error'].includes(
-      String(input.page_state)
-    )
+    [
+      'blank',
+      'loading',
+      'checkout',
+      'quote_incomplete',
+      'official_error',
+      'network_error'
+    ].includes(String(input.page_state))
   )
     result.page_state = input.page_state;
   if (input.quote !== undefined) result.quote = cleanQuote(input.quote);

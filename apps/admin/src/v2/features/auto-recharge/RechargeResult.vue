@@ -73,8 +73,9 @@
         已确认银行卡未收到付款请求；原付款尝试记录和确认次数已保留，历史付款锁已解除。
       </p>
       <p v-if="job.result.quote_wait_seconds" class="recharge-note" role="status">
-        第 {{ job.result.session_attempt ?? 1 }} / {{ job.result.session_attempt_limit ?? 1 }} 次窗口尝试，
-        报价页已等待 {{ job.result.quote_elapsed_seconds ?? 0 }} 秒，最多
+        第 {{ job.result.session_attempt ?? 1 }} /
+        {{ job.result.session_attempt_limit ?? 1 }} 次窗口尝试， 报价页已等待
+        {{ job.result.quote_elapsed_seconds ?? 0 }} 秒，最多
         {{ job.result.quote_wait_seconds }} 秒。
       </p>
       <p v-else-if="job.result.session_attempt" class="recharge-note" role="status">
