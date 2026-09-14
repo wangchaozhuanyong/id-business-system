@@ -174,6 +174,74 @@ class SessionBudgetTests(unittest.IsolatedAsyncioTestCase):
                                   'payment_failure_reason': 'incorrect_cvc'})
 
 
+class QuoteRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setup_quote(self):
+        clock = Clock()
+        page = MagicMock(url='https://chatgpt.com/checkout/openai_ie/oaics_fixture')
+        page.locator.return_value.inner_text = AsyncMock(return_value='')
+        page.title = AsyncMock(return_value='')
+        page.reload = AsyncMock()
+        guard = SimpleNamespace(
+            result={'returned_currency': 'USD', 'processor_entity': 'openai_ie'},
+            checkout_id='oaics_fixture',
+        )
+        empty = {'plan': None, 'today': None, 'tax': None, 'renewal': None,
+                 'renewal_interval': None}
+        money = {'amount': '20.00', 'amount_minor': 2000, 'currency': 'USD'}
+        valid = {'plan': 'plus', 'today': money, 'tax': {**money, 'amount': '0.00',
+                 'amount_minor': 0}, 'renewal': money, 'renewal_interval': 'monthly'}
+        return clock, page, guard, empty, valid
+
+    async def run_quote(self, clock, page, guard, reader):
+        async def advance(seconds):
+            await clock.advance(seconds)
+        with patch.object(browser_checkout, 'quote_from_page', new=AsyncMock(side_effect=reader)), \
+                patch.object(browser_checkout.asyncio, 'sleep', side_effect=advance), \
+                patch.object(browser_checkout, 'progress'):
+            return await browser_checkout.quote_with_page_recovery(
+                page, guard, 'plus', 'plus', None, None,
+                SessionBudget(120, clock=clock), 9,
+            )
+
+    async def test_quote_loaded_at_55_seconds_does_not_refresh(self):
+        clock, page, guard, empty, valid = self.setup_quote()
+        quote, _, meta = await self.run_quote(
+            clock, page, guard, lambda *_: valid if clock.now >= 55 else empty,
+        )
+        self.assertEqual(quote['plan'], 'plus')
+        self.assertGreaterEqual(meta['quote_elapsed_seconds'], 55)
+        self.assertEqual(meta['quote_refresh_count'], 0)
+        page.reload.assert_not_awaited()
+
+    async def test_blank_page_refreshes_once_at_half_budget_then_succeeds(self):
+        clock, page, guard, empty, valid = self.setup_quote()
+        quote, _, meta = await self.run_quote(
+            clock, page, guard, lambda *_: valid if page.reload.await_count else empty,
+        )
+        self.assertEqual(quote['plan'], 'plus')
+        self.assertGreaterEqual(meta['quote_elapsed_seconds'], 60)
+        self.assertEqual(meta['quote_refresh_count'], 1)
+        page.reload.assert_awaited_once_with(wait_until='domcontentloaded', timeout=0)
+
+    async def test_blank_page_waits_full_120_seconds_after_one_refresh(self):
+        clock, page, guard, empty, _ = self.setup_quote()
+        quote, _, meta = await self.run_quote(clock, page, guard, lambda *_: empty)
+        self.assertIsNone(quote['today'])
+        self.assertEqual(meta['quote_elapsed_seconds'], 120)
+        self.assertEqual(meta['quote_refresh_count'], 1)
+        self.assertEqual(meta['page_state'], 'blank')
+
+    async def test_explicit_proxy_error_refreshes_immediately(self):
+        clock, page, guard, empty, valid = self.setup_quote()
+        page.locator.return_value.inner_text = AsyncMock(
+            side_effect=[RuntimeError('net::ERR_TUNNEL_CONNECTION_FAILED'), '']
+        )
+        quote, _, meta = await self.run_quote(clock, page, guard, lambda *_: valid)
+        self.assertEqual(quote['plan'], 'plus')
+        self.assertEqual(meta['quote_refresh_count'], 1)
+        self.assertEqual(meta['quote_elapsed_seconds'], 0)
+
+
 def failure(**patches):
     return {'status': 'blocked', 'reason': 'session_load_timeout', 'stage': 'session_restore',
             'account_matched': False, 'checkout_requests_sent': 0, 'payment_attempted': False,
@@ -218,9 +286,37 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['reason'], 'session_retries_exhausted')
         self.assertEqual(flow.await_count, 3)
         self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
-        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertEqual(result.get('payment_requests_sent', 0), 0)
         self.assertEqual(result['checkout_requests_sent'], 0)
         self.assertIsNone(self.job.profile_id)
+
+    async def test_blank_quote_failure_rebuilds_window_but_never_replays_payment(self):
+        quote_failure = failure(
+            reason='actual_quote_unknown', stage='quote_read', account_matched=True,
+            checkout_identifier='oaics_fixture', checkout_requests_sent=1,
+            page_state='blank', quote_elapsed_seconds=120, quote_wait_seconds=120,
+            quote_refresh_count=1,
+        )
+        result, flow = await self.execute([
+            quote_failure, {'status': 'payment_cancelled', 'payment_requests_sent': 0}
+        ])
+        self.assertEqual(flow.await_count, 2)
+        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertEqual(result['payment_requests_sent'], 0)
+        self.assertEqual(self.client.create_profile.call_count, 2)
+
+    async def test_three_quote_failures_stop_with_specific_prepayment_reason(self):
+        quote_failure = failure(
+            reason='actual_quote_unknown', stage='quote_read', account_matched=True,
+            checkout_identifier='oaics_fixture', checkout_requests_sent=1,
+            page_state='blank', quote_elapsed_seconds=120, quote_wait_seconds=120,
+            quote_refresh_count=1,
+        )
+        result, _ = await self.execute([quote_failure, quote_failure, quote_failure])
+        self.assertEqual(result['reason'], 'prepayment_retries_exhausted')
+        self.assertEqual(result['last_reason'], 'actual_quote_unknown')
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
+        self.assertEqual(result['payment_requests_sent'], 0)
 
     async def test_non_payment_terminal_failure_cleans_owned_window(self):
         result, _ = await self.execute([
@@ -324,19 +420,61 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow.await_count, 1)
         self.assertEqual(self.deletions(), ['a' * 32])
 
-    async def test_verified_session_failure_is_cleaned_without_rebuilding(self):
+    async def test_stale_progress_flag_does_not_disable_a_valid_session_retry(self):
         async def after_checkout(*args, **kwargs):
             self.job.progress('session_verified')
             return failure()
-        await self.execute(after_checkout)
-        self.assertEqual(self.client.create_profile.call_count, 1)
-        self.assertEqual(self.deletions(), ['a' * 32])
+        result, _ = await self.execute(after_checkout)
+        self.assertEqual(result['reason'], 'session_retries_exhausted')
+        self.assertEqual(self.client.create_profile.call_count, 3)
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
 
     async def test_foreign_profile_is_never_closed_or_deleted(self):
         self.job.profile_id = 'd' * 32
         with self.assertRaises(Stop):
             await bitbrowser_retry.cleanup_profile(self.job, self.client, {'a' * 32})
         self.client.post.assert_not_called()
+
+    async def test_authorized_stale_profile_is_cleaned_before_new_profile_only(self):
+        stale = 'd' * 32
+        foreign = 'e' * 32
+        self.job.stale_profiles = [{
+            'sourceJobId': '22222222-2222-4222-8222-222222222222',
+            'profileId': stale,
+        }]
+        self.client.list_profile_ids.return_value = {stale, foreign}
+        result, _ = await self.execute([{'status': 'payment_cancelled'}])
+        self.assertEqual(result['status'], 'payment_cancelled')
+        self.assertEqual(self.deletions(), [stale])
+        self.assertNotIn(foreign, self.deletions())
+        self.assertEqual(self.job.stale_profiles_cleaned, 1)
+        self.job.callback.send.assert_any_call({
+            'type': 'stale_profile_cleanup',
+            'accountKey': self.job.account_key,
+            'profiles': self.job.stale_profiles,
+        })
+
+    async def test_missing_stale_profile_is_idempotently_acknowledged(self):
+        self.job.stale_profiles = [{
+            'sourceJobId': '22222222-2222-4222-8222-222222222222',
+            'profileId': 'd' * 32,
+        }]
+        self.client.list_profile_ids.return_value = set()
+        await self.execute([{'status': 'payment_cancelled'}])
+        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.job.stale_profiles_cleaned, 1)
+
+    async def test_stale_cleanup_failure_stops_before_new_profile(self):
+        self.job.stale_profiles = [{
+            'sourceJobId': '22222222-2222-4222-8222-222222222222',
+            'profileId': 'd' * 32,
+        }]
+        self.client.list_profile_ids.return_value = {'d' * 32}
+        self.client.post.side_effect = Stop('bitbrowser_local_api_unavailable')
+        with self.assertRaises(Stop) as caught:
+            await self.execute([{'status': 'payment_cancelled'}])
+        self.assertEqual(caught.exception.report['reason'], 'bitbrowser_cleanup_unverified')
+        self.client.create_profile.assert_not_called()
 
     def test_auth_verification_and_side_effects_never_trigger_rebuild(self):
         for patch_value in ({'reason': 'json_session_not_restored'}, {'reason': 'verification_required'},

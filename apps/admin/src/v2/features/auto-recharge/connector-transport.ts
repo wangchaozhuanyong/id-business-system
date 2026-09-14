@@ -103,7 +103,9 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
       'browser-options',
       'session-load-retry',
       'same-window-page-refresh',
-      'payment-unknown-resolution'
+      'payment-unknown-resolution',
+      'prepayment-page-recovery',
+      'stale-owned-profile-cleanup'
     ].every((key) => (result.capabilities as unknown[]).includes(key))
   ) {
     throw new RechargeConnectorError('version');

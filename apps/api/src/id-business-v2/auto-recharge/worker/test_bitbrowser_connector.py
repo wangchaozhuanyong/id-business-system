@@ -183,6 +183,15 @@ class BitBrowserConnectorTests(unittest.TestCase):
         self.assertTrue(client.open_profile(safe["id"]).startswith("ws://127.0.0.1"))
         self.assertEqual(client.post.call_args.args[0], "/browser/open")
 
+    def test_profile_inventory_returns_only_verified_exact_ids(self):
+        client = connector.BitBrowserClient("http://127.0.0.1:54345", "b" * 32)
+        client.post = MagicMock(return_value={"list": [{"id": "a" * 32}, {"id": "b" * 32}]})
+        self.assertEqual(client.list_profile_ids(), {"a" * 32, "b" * 32})
+        client.post.assert_called_once_with("/browser/list", {"page": 0, "pageSize": 100})
+        client.post = MagicMock(return_value={"list": [{"id": "not-a-profile"}]})
+        with self.assertRaises(Stop):
+            client.list_profile_ids()
+
     def test_currency_amount_and_tax_guards_run_before_payment(self):
         job = connector.LocalJob(payload())
         job.progress = MagicMock()

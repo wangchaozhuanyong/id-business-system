@@ -22,7 +22,8 @@ class ConnectorHealthTests(unittest.TestCase):
                 'ok': True, 'version': 2, 'service': 'id-business-v2-auto-recharge-connector',
                 'capabilities': [
                     'browser-catalog', 'browser-options', 'session-load-retry',
-                    'same-window-page-refresh', 'payment-unknown-resolution'
+                    'same-window-page-refresh', 'payment-unknown-resolution',
+                    'prepayment-page-recovery', 'stale-owned-profile-cleanup'
                 ], 'originAllowed': True, 'busy': False
             })
             start.assert_not_called()

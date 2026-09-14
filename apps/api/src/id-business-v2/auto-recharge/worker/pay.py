@@ -97,17 +97,37 @@ async def verified_quote_once(page, guard):
     return quote
 
 
-async def current_quote(page, guard, minimum_binding_version=0):
+async def current_quote(page, guard, minimum_binding_version=0, *, wait_seconds=9,
+                        refresh_handler=None):
     previous = None
-    for _ in range(30):
+    started = time.monotonic()
+    refreshed = False
+    last_report = float("-inf")
+    while time.monotonic() - started < wait_seconds:
+        elapsed = time.monotonic() - started
+        if elapsed - last_report >= 10:
+            progress("quote_waiting", quote_elapsed_seconds=int(elapsed),
+                     quote_wait_seconds=wait_seconds,
+                     quote_refresh_count=1 if refreshed else 0,
+                     page_state="quote_incomplete")
+            last_report = elapsed
         quote = (await verified_quote_once(page, guard)
                  if guard.official_binding_version >= minimum_binding_version else None)
         digest = quote_digest(quote) if quote else None
         if digest and digest == previous:
             return quote
         previous = digest
+        if refresh_handler and not refreshed and elapsed >= wait_seconds / 2:
+            progress("quote_page_refreshing", quote_elapsed_seconds=int(elapsed),
+                     quote_wait_seconds=wait_seconds, quote_refresh_count=1,
+                     page_state="quote_incomplete", last_reason="payment_quote_not_ready")
+            await refresh_handler()
+            refreshed = True
+            previous = None
         await asyncio.sleep(.3)
-    raise Stop("payment_quote_not_ready")
+    raise Stop("payment_quote_not_ready", quote_elapsed_seconds=wait_seconds,
+               quote_wait_seconds=wait_seconds, quote_refresh_count=1 if refreshed else 0,
+               page_state="quote_incomplete")
 
 
 async def verify_identity_again(page, target):
@@ -122,7 +142,7 @@ async def verify_identity_again(page, target):
 
 
 async def payment_handler(page, guard, identity, ledger, target, *, pay, details_reader, confirmer,
-                          wait_seconds, poll_count, poll_interval):
+                          wait_seconds, poll_count, poll_interval, quote_wait_seconds=9):
     selected_plan = ledger.target_plan
     if os.environ.get("AUTO_RECHARGE_CALLBACK_URL") and not identity.get("network", {}).get("country"):
         raise Stop("network_unconfirmed")
@@ -130,9 +150,16 @@ async def payment_handler(page, guard, identity, ledger, target, *, pay, details
     try:
         binding_before = guard.official_binding_version
         prepared = await fill_official_form(page, details)
+
+        async def refresh_and_refill():
+            await page.reload(wait_until="domcontentloaded", timeout=0)
+            prepared.update(await fill_official_form(page, details))
+
         # 若地址改变了金额，页面新值与旧初始化回执不同会自动阻断；
         # 免税地址前后总额相同时，不强迫官网重复发送同一 init 请求。
-        quote = await current_quote(page, guard, max(1, binding_before))
+        quote = await current_quote(page, guard, max(1, binding_before),
+                                    wait_seconds=quote_wait_seconds,
+                                    refresh_handler=refresh_and_refill)
         if quote["plan"] != selected_plan:
             raise Stop("payment_quote_plan_mismatch")
         await verify_billing_fields(page, details, prepared["billing_fields_filled"])
@@ -220,7 +247,7 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
         return await payment_handler(page, guard, identity, ledger, target, pay=pay,
                                      details_reader=details_reader, confirmer=confirmer,
                                      wait_seconds=wait_seconds, poll_count=poll_count,
-                                     poll_interval=poll_interval)
+                                     poll_interval=poll_interval, quote_wait_seconds=9)
 
     return await run_browser(target, inspect_existing=True, quote_handler=handler,
                              guard_factory=lambda target, _: PaymentGuard(target, ledger), target_plan=selected_plan,
@@ -229,7 +256,7 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
-                   browser_context=None, session_budget=None):
+                   browser_context=None, session_budget=None, allow_checkout_replacement=True):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -245,7 +272,9 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                                          details_reader=lambda: details_reader(original_quote),
                                          confirmer=confirmer,
                                          wait_seconds=wait_seconds, poll_count=poll_count,
-                                         poll_interval=poll_interval)
+                                         poll_interval=poll_interval,
+                                         quote_wait_seconds=(session_budget.seconds
+                                                             if session_budget else 9))
 
     browser_args = {
         "quote_handler": handler,
@@ -264,18 +293,36 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
         record = read_checkout_record(state_dir, target.account_id, target_plan)
         if (record.get("status") == "cancelled"
                 and record.get("cancelled_before_confirmation") is True):
+            if not allow_checkout_replacement:
+                return {"status": "blocked", "reason": "existing_checkout_unavailable",
+                        "stage": "quote_read", "payment_attempted": False,
+                        "payment_requests_sent": 0, "confirmation_requests_sent": 0}
             progress("existing_checkout_rebuilding", reason="operation_cancelled")
-            return await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+            result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+            result["checkout_replacement_performed"] = True
+            return result
         if resolved_checkout_replacement_allowed(record):
+            if not allow_checkout_replacement:
+                return {"status": "blocked", "reason": "existing_checkout_unavailable",
+                        "stage": "quote_read", "payment_attempted": False,
+                        "payment_requests_sent": 0, "confirmation_requests_sent": 0}
             progress("existing_checkout_rebuilding", reason="confirmed_no_bank_request")
-            return await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+            result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+            result["checkout_replacement_performed"] = True
+            return result
         result = await run_browser(target, inspect_existing=True, **browser_args)
-        if (result.get("reason") == "existing_checkout_unavailable"
+        replaceable_reason = result.get("reason") == "existing_checkout_unavailable" or (
+            result.get("reason") in {"actual_quote_unknown", "checkout_page_load_timeout"}
+            and result.get("page_state") in {"blank", "loading", "official_error"}
+        )
+        if (allow_checkout_replacement and replaceable_reason
                 and not result.get("payment_attempted")
+                and not result.get("payment_requests_sent")
                 and not result.get("confirmation_requests_sent")):
-            progress("existing_checkout_rebuilding", reason="existing_checkout_unavailable")
+            progress("existing_checkout_rebuilding", reason=result.get("reason"))
             browser_args["session_budget"] = session_budget.restart() if session_budget else None
             result = await run_browser(target, create=True, replace_unpaid_checkout=True, **browser_args)
+            result["checkout_replacement_performed"] = True
     else:
         result = await run_browser(target, create=True, **browser_args)
     return include_payment_record(result, ledger_holder.get("ledger"))

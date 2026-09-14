@@ -28,6 +28,18 @@ export interface V2RechargeResult {
   session_wait_seconds?: number;
   session_refresh_count?: number;
   session_step?: 'page_load' | 'page_refresh' | 'session_read' | 'account_read';
+  quote_elapsed_seconds?: number;
+  quote_wait_seconds?: number;
+  quote_refresh_count?: number;
+  page_state?:
+    | 'blank'
+    | 'loading'
+    | 'checkout'
+    | 'quote_incomplete'
+    | 'official_error'
+    | 'network_error';
+  stale_profiles_cleaned?: number;
+  checkout_replacement_performed?: boolean;
   diagnostics?: {
     step?:
       | 'open_menu'

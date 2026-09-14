@@ -43,6 +43,29 @@ describe('recharge stage presentation', () => {
     ).toBe('获取失败');
     expect(quotePlaceholder(job({ action: 'quote', state: 'unknown' }))).toBe('报价结果待核验');
   });
+  it('报价空白与代理失败显示具体页面原因和处理方式', () => {
+    const blank = job({
+      action: 'bitbrowser',
+      result: {
+        reason: 'prepayment_retries_exhausted',
+        stage: 'quote_read',
+        page_state: 'blank',
+        quote: { plan: 'plus', today: null, tax: null, renewal: null, renewal_interval: null },
+        quote_elapsed_seconds: 120,
+        quote_wait_seconds: 120,
+        quote_refresh_count: 1,
+        payment_requests_sent: 0
+      }
+    });
+    expect(quotePlaceholder(blank)).toBe('报价页空白');
+    expect(rechargeIssueFeedback(blank)).toMatchObject({
+      title: '本次未完成原因',
+      message: '报价页等待满本轮时间并自动刷新后，仍没有返回有效内容'
+    });
+    expect(rechargeIssueFeedback(blank)?.action).toContain('代理 IP 和等待时间');
+    expect(statusLabel('quote_page_refreshing')).toBe('正在刷新当前报价页');
+    expect(statusLabel('stale_profile_cleanup')).toBe('正在清理历史失败窗口');
+  });
   it('keeps missing parts of an actual quote unknown', () => {
     expect(
       quotePlaceholder(

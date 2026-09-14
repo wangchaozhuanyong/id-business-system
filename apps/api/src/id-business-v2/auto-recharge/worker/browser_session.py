@@ -64,9 +64,9 @@ class SessionBudget:
         finally:
             self.paused += self.clock() - started
 
-    def restart(self):
-        """同一窗口需要重新载入官网时重新给足本轮配置的会话预算。"""
-        return SessionBudget(self.seconds, cancelled=self.cancelled, report=self.report,
+    def restart(self, *, report=None):
+        """同一窗口的新阶段使用独立预算，并沿用取消信号。"""
+        return SessionBudget(self.seconds, cancelled=self.cancelled, report=report or self.report,
                              clock=self.clock)
 
 
@@ -80,14 +80,30 @@ RETRYABLE_NETWORK_CODES = {
 
 
 def retryable_session_result(result):
-    if (result.get("stage") != "session_restore" or result.get("account_matched") is not False
-            or result.get("checkout_requests_sent") != 0
-            or result.get("payment_attempted") is True
+    """只重试付款前的页面加载失败，永不重放建单或付款写入。"""
+    if (result.get("payment_attempted") is True
             or result.get("payment_requests_sent", 0) != 0
             or result.get("confirmation_requests_sent", 0) != 0
             or result.get("user_action_required") is True):
         return False
-    return result.get("reason") in {"session_load_timeout", "session_network_error"} or (
+    stage = result.get("stage")
+    if stage == "session_restore":
+        if (result.get("account_matched") is not False
+                or result.get("checkout_requests_sent", 0) not in (None, 0)):
+            return False
+        return result.get("reason") in {"session_load_timeout", "session_network_error"} or (
+            result.get("reason") == "browser_operation_failed" and (
+                result.get("error_type") == "TimeoutError"
+                or result.get("browser_error_code") in RETRYABLE_NETWORK_CODES))
+    if (stage not in {"quote_read", "payment_preparation"}
+            or result.get("account_matched") is not True
+            or result.get("checkout_requests_sent", 0) not in (None, 0, 1)
+            or not isinstance(result.get("checkout_identifier"), str)):
+        return False
+    return result.get("reason") in {
+        "actual_quote_unknown", "payment_quote_not_ready", "checkout_page_load_timeout",
+        "official_checkout_navigation_not_observed", "checkout_page_network_error",
+    } or (
         result.get("reason") == "browser_operation_failed" and (
             result.get("error_type") == "TimeoutError"
             or result.get("browser_error_code") in RETRYABLE_NETWORK_CODES))

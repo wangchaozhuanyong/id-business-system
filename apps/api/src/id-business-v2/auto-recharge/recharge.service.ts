@@ -39,6 +39,36 @@ import {
   withResolutionVerification
 } from './recharge-resolution';
 
+const browserProfilePattern = /^[a-f0-9]{32}$/i;
+type FinishedRechargeJob = {
+  id: string;
+  result: unknown;
+};
+
+function staleProfile(job: FinishedRechargeJob, includeCompleted = false) {
+  if (!job.result || typeof job.result !== 'object' || Array.isArray(job.result)) return null;
+  const result = job.result as Record<string, unknown>;
+  const profileId = result.browser_profile_id;
+  const zero = (value: unknown) => value === undefined || value === null || value === 0;
+  if (
+    typeof profileId !== 'string' ||
+    !browserProfilePattern.test(profileId) ||
+    typeof result.reason !== 'string' ||
+    result.payment_attempted === true ||
+    !zero(result.payment_requests_sent) ||
+    !zero(result.confirmation_requests_sent) ||
+    (result.payment_status !== undefined &&
+      result.payment_status !== null &&
+      result.payment_status !== 'not_attempted') ||
+    result.payment_outcome === 'succeeded' ||
+    result.subscription_status === 'active' ||
+    result.user_action_required === true ||
+    (!includeCompleted && result.browser_cleanup_status === 'completed')
+  )
+    return null;
+  return { sourceJobId: job.id, profileId };
+}
+
 @Injectable()
 export class RechargeService {
   constructor(
@@ -463,8 +493,75 @@ export class RechargeService {
           const records = await this.repository.records(tx, accountKey);
           if (records.some((record) => record.ownerId !== job.ownerId))
             throw new ForbiddenException('该账户属于另一操作人的原任务');
+          const finished = await this.repository.finishedJobsForAccount(
+            tx,
+            job.ownerId,
+            accountKey,
+            job.id
+          );
+          const staleProfiles = finished
+            .map((item) => staleProfile(item))
+            .filter((item): item is { sourceJobId: string; profileId: string } => Boolean(item));
           await this.repository.updateJob(tx, id, { accountKey });
-          return { records };
+          return { records, staleProfiles };
+        }
+        if (input.type === 'stale_profile_cleanup') {
+          if (
+            typeof accountKey !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(accountKey) ||
+            job.accountKey !== accountKey ||
+            !Array.isArray(input.profiles) ||
+            input.profiles.length < 1 ||
+            input.profiles.length > 30
+          )
+            throw new BadRequestException('历史窗口清理回执无效');
+          const requested = input.profiles.map((value) => {
+            const item = object(value);
+            if (
+              typeof item.sourceJobId !== 'string' ||
+              !uuidPattern.test(item.sourceJobId) ||
+              typeof item.profileId !== 'string' ||
+              !browserProfilePattern.test(item.profileId)
+            )
+              throw new BadRequestException('历史窗口清理回执无效');
+            return { sourceJobId: item.sourceJobId, profileId: item.profileId };
+          });
+          if (new Set(requested.map((item) => item.sourceJobId)).size !== requested.length)
+            throw new BadRequestException('历史窗口清理回执重复');
+          const finished = await this.repository.finishedJobsForAccount(
+            tx,
+            job.ownerId,
+            accountKey,
+            job.id
+          );
+          const byId = new Map(finished.map((item) => [item.id, item]));
+          let updated = 0;
+          for (const item of requested) {
+            const source = byId.get(item.sourceJobId);
+            const eligible = source ? staleProfile(source, true) : null;
+            if (!source || !eligible || eligible.profileId !== item.profileId)
+              throw new ConflictException('历史失败窗口归属无法核验');
+            const before = object(source.result);
+            if (before.browser_cleanup_status === 'completed') continue;
+            await this.repository.updateJob(tx, source.id, {
+              result: toV2JsonDocument({
+                ...before,
+                browser_cleanup_status: 'completed',
+                stale_cleanup_job_id: job.id
+              })
+            });
+            updated += 1;
+          }
+          await this.audit.append(tx, {
+            userId: job.ownerId,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_recharge.stale_browser_cleanup',
+            objectType: 'recharge_job',
+            objectId: id,
+            afterData: { requested: requested.length, updated },
+            remark: '已核验并清理同账号历史付款前失败窗口'
+          });
+          return { ok: true, updated };
         }
         if (input.type === 'ledger') {
           if (

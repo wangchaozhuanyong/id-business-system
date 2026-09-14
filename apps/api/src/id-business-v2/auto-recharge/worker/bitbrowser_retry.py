@@ -1,4 +1,4 @@
-"""Retry only the initial, read-only session of windows owned by this job."""
+"""Retry read-only and pre-payment failures in windows explicitly owned by the job."""
 import asyncio
 import re
 import time
@@ -11,11 +11,9 @@ from browser_session import SessionBudget, retryable_session_result
 from checkout_core import Stop
 
 
-async def cleanup_profile(job, client, owned, *, cancelling=False):
-    profile_id = job.profile_id
-    if profile_id not in owned or not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id or ""):
+async def cleanup_profile_id(job, client, profile_id, *, cancelling=False):
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", profile_id or ""):
         raise Stop("bitbrowser_cleanup_unverified")
-    job.progress("bitbrowser_profile_cleanup", _during_cancel=cancelling)
     try:
         await asyncio.to_thread(client.post, "/browser/close", {"id": profile_id})
         deadline = time.monotonic() + 15
@@ -33,16 +31,49 @@ async def cleanup_profile(job, client, owned, *, cancelling=False):
         if not cancelling:
             job.check_cancelled()
         await asyncio.to_thread(client.post, "/browser/delete", {"id": profile_id})
-        owned.remove(profile_id)
-        job.profile_id = None
-        job.context = None
     except Stop as exc:
         if exc.report.get("reason") == "operation_cancelled":
             raise
         raise Stop("bitbrowser_cleanup_unverified", browser_profile_id=profile_id) from None
 
 
+async def cleanup_profile(job, client, owned, *, cancelling=False):
+    profile_id = job.profile_id
+    if profile_id not in owned:
+        raise Stop("bitbrowser_cleanup_unverified")
+    job.progress("bitbrowser_profile_cleanup", _during_cancel=cancelling)
+    await cleanup_profile_id(job, client, profile_id, cancelling=cancelling)
+    owned.remove(profile_id)
+    job.profile_id = None
+    job.context = None
+
+
+async def cleanup_stale_profiles(job, client):
+    """Delete only the exact pre-payment profile IDs authorized by the API."""
+    if not job.stale_profiles:
+        return
+    available = await asyncio.to_thread(client.list_profile_ids)
+    cleaned = []
+    total = len(job.stale_profiles)
+    for position, item in enumerate(job.stale_profiles, 1):
+        job.check_cancelled()
+        profile_id = item["profileId"]
+        job.progress("stale_profile_cleanup", stale_profiles_cleaned=len(cleaned),
+                     stale_profiles_total=total, stale_profile_position=position)
+        if profile_id in available:
+            await cleanup_profile_id(job, client, profile_id)
+            available.remove(profile_id)
+        cleaned.append(item)
+        job.stale_profiles_cleaned = len(cleaned)
+    job.callback.send({
+        "type": "stale_profile_cleanup",
+        "accountKey": job.account_key,
+        "profiles": cleaned,
+    })
+
+
 async def execute_profiles(job, client, target, playwright):
+    await cleanup_stale_profiles(job, client)
     owned = set()
     try:
         result = await _execute_profiles(job, client, target, playwright, owned)
@@ -92,13 +123,17 @@ def terminal_cleanup_allowed(job, result):
 
 
 async def cancellable_flow(job, target, **kwargs):
+    kwargs["allow_checkout_replacement"] = not job.checkout_replacement_performed
     task = asyncio.create_task(pay.run_flow(target, job.root, job.payload["plan"], **kwargs))
     try:
         while not task.done():
             job.check_cancelled()
             await asyncio.wait({task}, timeout=.2)
         job.check_cancelled()
-        return await task
+        result = await task
+        if result.get("checkout_replacement_performed") is True:
+            job.checkout_replacement_performed = True
+        return result
     finally:
         if not task.done():
             task.cancel()
@@ -143,7 +178,7 @@ async def _execute_profiles(job, client, target, playwright, owned):
             confirmer=job.confirm, wait_seconds=1800, poll_count=6, poll_interval=20,
             browser_context=job.context, session_budget=budget)
         result.update(job.session_info)
-        if job.initial_session_verified or not retryable_session_result(result):
+        if not retryable_session_result(result):
             return result
         job.check_cancelled()
         result.update(session_elapsed_seconds=min(int(budget.elapsed), budget.seconds),
@@ -155,7 +190,9 @@ async def _execute_profiles(job, client, target, playwright, owned):
         except Stop as exc:
             return {**result, **exc.report}
         if attempt == attempts:
-            return {**result, "reason": "session_retries_exhausted",
+            exhausted = ("session_retries_exhausted" if result.get("stage") == "session_restore"
+                         else "prepayment_retries_exhausted")
+            return {**result, "reason": exhausted,
                     "last_reason": result.get("reason"), "browser_profile_id": ""}
         job.progress("bitbrowser_profile_rebuilding")
     raise Stop("session_retries_exhausted")

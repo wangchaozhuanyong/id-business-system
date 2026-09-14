@@ -138,7 +138,7 @@ export function assertFinalQuote(quote: V2RechargeQuote, plan: string, authority
 
 // 不保存任意服务端正文；只有执行协议中的已脱敏字段能够进入数据库。
 const scalarKeys = new Set(
-  'status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_failure_reason confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type browser_profile_id locked_currency max_amount user_action_required'.split(
+  'status reason stage session_status account_matched current_plan current_tier target_plan recheck_plan checkout_status checkout_identifier subscription_status inspection_only recheck_only payment_status payment_outcome payment_attempted payment_failure_reason confirmation_requests_sent checkout_requests_sent payment_requests_sent payment_requests_blocked repeated_payment http_status browser_error_code card_last4 checkout_outcome payment_record_write_failed last_reason updated_at schema_version run_id created_at plan current_plan_before retry_of transport returned_currency processor_entity credential_refreshed checkout_link_available error_type browser_profile_id locked_currency max_amount user_action_required stale_cleanup_job_id checkout_replacement_performed'.split(
     ' '
   )
 );
@@ -239,7 +239,11 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     ['session_attempt_limit', 1, 3],
     ['session_elapsed_seconds', 0, 600],
     ['session_wait_seconds', 60, 600],
-    ['session_refresh_count', 0, 1]
+    ['session_refresh_count', 0, 1],
+    ['quote_elapsed_seconds', 0, 600],
+    ['quote_wait_seconds', 60, 600],
+    ['quote_refresh_count', 0, 1],
+    ['stale_profiles_cleaned', 0, 30]
   ] as const) {
     if (Number.isSafeInteger(input[key]) && Number(input[key]) >= min && Number(input[key]) <= max)
       result[key] = input[key];
@@ -250,6 +254,17 @@ export function safeDocument(value: unknown): Record<string, unknown> {
     )
   )
     result.session_step = input.session_step;
+  if (
+    [
+      'blank',
+      'loading',
+      'checkout',
+      'quote_incomplete',
+      'official_error',
+      'network_error'
+    ].includes(String(input.page_state))
+  )
+    result.page_state = input.page_state;
   if (input.quote !== undefined) result.quote = cleanQuote(input.quote);
   if (input.initial_quote !== undefined) result.initial_quote = cleanQuote(input.initial_quote);
   if (input.quote_authority === 'official_checkout_response') {

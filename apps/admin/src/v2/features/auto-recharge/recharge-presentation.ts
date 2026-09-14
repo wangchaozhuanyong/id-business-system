@@ -48,6 +48,11 @@ const labels: Record<string, string> = {
   confirming: '正在提交本次付款',
   finished: '本次操作已结束',
   unknown: '结果待核验',
+  blank: '报价页空白',
+  loading: '报价页仍在加载',
+  checkout: '已进入有效结算页',
+  quote_incomplete: '报价字段不完整',
+  official_error: '官网结算错误页',
   session_restore: '正在加载官网并核对账号',
   page_load: '加载官网页面',
   page_refresh: '刷新当前官网页面',
@@ -62,18 +67,21 @@ const labels: Record<string, string> = {
   bitbrowser_cleanup_unverified: '未能确认失败窗口已安全清理，已停止重建，请在比特浏览器检查该窗口',
   session_verified: '账户核对通过',
   existing_checkout_read: '读取原结算',
-  existing_checkout_rebuilding: '原结算已失效，正在创建新结算',
+  existing_checkout_rebuilding: '旧结算不可用，正在创建新结算',
   plan_selection: '选择官网套餐',
   checkout_create: '准备创建官方结算',
   checkout_request_sending: '正在请求官方结算',
   checkout_wait: '等待官方结算响应',
   quote_read: '读取官方报价',
+  quote_waiting: '报价页仍在加载',
+  quote_page_refreshing: '正在刷新当前报价页',
   quote_ready: '已取得官方报价',
   waiting_local_connector: '等待本机连接器接收',
   connector_dispatch: '正在连接本机执行器',
   bitbrowser_group: '正在核对比特浏览器分组',
   bitbrowser_profile_created: '已创建比特浏览器窗口',
   bitbrowser_profile_opened: '比特浏览器窗口已打开',
+  stale_profile_cleanup: '正在清理历史失败窗口',
   payment_guard_passed: '币种和付款上限已核对',
   payment_request_sending: '已发出本次唯一付款请求',
   details_required: '等待填写官网资料',
@@ -152,6 +160,10 @@ const labels: Record<string, string> = {
   bank_verification_required: '需要本人完成银行验证',
   quote_needs_review_or_billing: '官网初始总额或预估税费未完整读取，本次未付款',
   actual_quote_unknown: '无法明确读取今日应付',
+  checkout_page_load_timeout: '报价页等待满本轮时间后仍未加载',
+  checkout_page_network_error: '当前报价页的代理或网络连接失败',
+  checkout_page_incomplete: '报价页未返回完整内容',
+  prepayment_retries_exhausted: '报价页刷新及三次窗口尝试均失败，失败窗口已清理',
   existing_checkout_unavailable: '原结算已失效，本次未付款',
   confirmed_no_bank_request: '已确认银行卡未收到付款请求',
   no_original_payment_attempt: '没有已尝试付款的原单',
@@ -290,7 +302,6 @@ export const selectionStepLabels = {
   verify_plan: '再次核对套餐'
 };
 export function quotePlaceholder(job: V2RechargeJob): string {
-  if (job.result.quote) return '未知';
   if (job.result.operator_resolution === 'confirmed_no_bank_request') return '历史记录已处理';
   if (
     job.result.reason === 'account_has_other_payment_attempt' ||
@@ -298,6 +309,11 @@ export function quotePlaceholder(job: V2RechargeJob): string {
   )
     return '历史付款待处理';
   if (job.result.reason === 'existing_checkout_unavailable') return '原结算已失效';
+  if (job.result.page_state === 'blank') return '报价页空白';
+  if (job.result.page_state === 'official_error') return '官网错误页';
+  if (job.result.page_state === 'quote_incomplete') return '报价不完整';
+  if (job.result.page_state === 'network_error') return '代理连接失败';
+  if (job.result.quote) return '未知';
   if (job.action === 'check') return '待获取报价';
   if (job.action === 'quote' && job.state === 'running') return '正在获取报价';
   if (job.action === 'flow' && job.state === 'running') return '正在计算最终金额';
@@ -351,12 +367,15 @@ const connectorReasons = new Set([
   'local_connector_not_received'
 ]);
 const networkReasons = new Set([
+  'checkout_page_load_timeout',
+  'checkout_page_network_error',
   'network_error',
   'network_timeout',
   'network_unconfirmed',
   'session_load_timeout',
   'session_network_error',
-  'session_retries_exhausted'
+  'session_retries_exhausted',
+  'prepayment_retries_exhausted'
 ]);
 const paymentUnknownReasons = new Set([
   'account_has_other_payment_attempt',
@@ -426,9 +445,18 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
   }
   const reason = typeof job.result.reason === 'string' ? job.result.reason : undefined;
   if (reason) {
+    const pageMessages: Record<string, string> = {
+      blank: '报价页等待满本轮时间并自动刷新后，仍没有返回有效内容',
+      official_error: '官网返回了结算错误页，未取得可用报价',
+      quote_incomplete: '官网报价字段不完整，无法安全确认今日应付金额',
+      network_error: browserFailureLabel(job.result.error_type, job.result.browser_error_code)
+    };
     return {
       title: job.result.user_action_required === true ? '需要你处理' : '本次未完成原因',
-      message: failureReasonLabel(reason),
+      message:
+        typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
+          ? pageMessages[job.result.page_state]!
+          : failureReasonLabel(reason),
       action: issueAction(job, reason)
     };
   }
