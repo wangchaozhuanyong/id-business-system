@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import {
   V2_MAIL_VIEWER_LIMITS,
@@ -102,6 +102,11 @@ const isVendureVirtual = computed(() => queryKind.value === 'vendure-virtual');
 const rules: FormRules<V2MailViewerQueryInput> = {
   queryCode: [
     {
+      required: true,
+      message: '请输入邮件查询码',
+      trigger: 'blur'
+    },
+    {
       validator: (_rule, value, callback) => {
         try {
           parseMailQueryCode(String(value ?? ''));
@@ -114,6 +119,11 @@ const rules: FormRules<V2MailViewerQueryInput> = {
     }
   ],
   limit: [
+    {
+      required: true,
+      message: '请输入返回封数',
+      trigger: 'change'
+    },
     {
       validator: (_rule, value, callback) => {
         if (Number.isInteger(value) && value >= 1 && value <= V2_MAIL_VIEWER_LIMITS.messages) {
@@ -207,13 +217,14 @@ function abortActiveRequest() {
   refreshing.value = false;
 }
 
-function clearAll() {
+async function clearAll() {
   abortActiveRequest();
   form.queryCode = '';
   form.limit = 5;
   result.value = undefined;
   errorMessage.value = '';
   autoRefresh.value = false;
+  await nextTick();
   formRef.value?.clearValidate();
 }
 
