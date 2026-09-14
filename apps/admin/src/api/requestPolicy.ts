@@ -50,6 +50,16 @@ const RELAY_REMOTE_WRITE_POLICY: ApiRequestPolicy = {
   timeoutMs: 115_000
 };
 
+const VENDURE_MAILBOX_READ_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [200, 800],
+  timeoutMs: 70_000
+};
+
+const VENDURE_MAILBOX_WRITE_POLICY: ApiRequestPolicy = {
+  retryDelaysMs: [],
+  timeoutMs: 70_000
+};
+
 const ENDPOINT_POLICIES = new Map<string, ApiEndpointPolicy>([
   ['/auth/login', { bypassSessionGate: true, key: 'auth-login' }],
   ['/auth/logout', { bypassSessionGate: true, key: 'auth-logout' }],
@@ -78,6 +88,11 @@ export function getApiEndpointPolicy(url?: string): ApiEndpointPolicy {
 
 export function getApiRequestPolicy(method?: string, url?: string): ApiRequestPolicy | null {
   const pathname = normalizePathname(url);
+  if (pathname.startsWith('/id-business-v2/vendure-mailboxes/')) {
+    return method?.toLowerCase() === 'get'
+      ? VENDURE_MAILBOX_READ_POLICY
+      : VENDURE_MAILBOX_WRITE_POLICY;
+  }
   if (method?.toLowerCase() !== 'get' && pathname.startsWith('/id-business-v2/workspace-relay/')) {
     return RELAY_REMOTE_WRITE_POLICY;
   }

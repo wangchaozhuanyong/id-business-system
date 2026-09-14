@@ -43,6 +43,10 @@ import { IdBusinessV2GoogleSheetsSyncWorker } from './id-business-v2-google-shee
 import { IdBusinessV2GoogleSheetsSyncRepository } from './persistence/id-business-v2-google-sheets-sync.repository';
 import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
 import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
+import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
+import { IdBusinessV2VendureMailboxController } from './id-business-v2-vendure-mailbox.controller';
+import { IdBusinessV2PublicVendureMailboxController } from './id-business-v2-public-vendure-mailbox.controller';
+import { IdBusinessV2VendureMailboxService } from './id-business-v2-vendure-mailbox.service';
 
 import { IdBusinessV2WebsiteVisitController } from './id-business-v2-website-visit.controller';
 import { IdBusinessV2WebsiteVisitService } from './id-business-v2-website-visit.service';
@@ -64,7 +68,9 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2RelayScriptController,
     IdBusinessV2RelayScriptOAuthController,
     IdBusinessV2GoogleSheetsSyncController,
-    IdBusinessV2GoogleSheetsOAuthController
+    IdBusinessV2GoogleSheetsOAuthController,
+    IdBusinessV2VendureMailboxController,
+    IdBusinessV2PublicVendureMailboxController
   ],
   providers: [
     IdBusinessV2WebsiteVisitService,
@@ -102,7 +108,9 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2GoogleSheetsSyncWorker,
     IdBusinessV2GoogleSheetsSyncRepository,
     IdBusinessV2GoogleSheetsClient,
-    IdBusinessV2GoogleSheetsOAuthClient
+    IdBusinessV2GoogleSheetsOAuthClient,
+    IdBusinessV2VendureMailboxClient,
+    IdBusinessV2VendureMailboxService
   ]
 })
 export class IdBusinessV2WorkspaceModule {}

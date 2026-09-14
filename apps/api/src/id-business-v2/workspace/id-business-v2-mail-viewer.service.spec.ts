@@ -181,6 +181,56 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(repository.findByQueryCodeHash).toHaveBeenCalledWith('hash:buyer-code');
   });
 
+  it('routes Vendure-prefixed query codes to the shared relay data source', async () => {
+    const vendureMailbox = {
+      publicQuery: vi.fn().mockResolvedValue({
+        success: true,
+        message: null,
+        targetType: 'VIRTUAL',
+        aliasEmail: 'masked@example.com',
+        primaryEmail: null,
+        codeExpiresAt: null,
+        remainingDays: null,
+        totalEmails: 1,
+        virtualEmailsList: null,
+        items: [
+          {
+            id: 'mail-1',
+            virtualEmailId: 'alias-1',
+            fromAddress: 'sender@example.com',
+            fromName: '验证码服务',
+            subject: '登录验证码',
+            receivedAt: now.toISOString(),
+            extractedCode: '123456',
+            bodyText: '验证码：123456',
+            targetEmail: 'buyer@example.com'
+          }
+        ]
+      })
+    };
+    const sharedService = new IdBusinessV2MailViewerService(
+      repository as never,
+      transientState as never,
+      encryption as never,
+      provider as never,
+      microsoftOAuth as never,
+      vendureMailbox as never
+    );
+
+    const result = await sharedService.query(
+      { queryCode: 'BUY-8X2K-9P7Q', limit: 5 },
+      '203.0.113.20'
+    );
+
+    expect(result).toMatchObject({ email: 'masked@example.com', provider: 'icloud' });
+    expect(result.items[0]).toMatchObject({
+      from: '验证码服务 <sender@example.com>',
+      to: 'buyer@example.com'
+    });
+    expect(vendureMailbox.publicQuery).toHaveBeenCalledWith('BUY-8X2K-9P7Q', '203.0.113.20');
+    expect(repository.findByQueryCodeHash).not.toHaveBeenCalled();
+  });
+
   it('validates the query code and result limit before database access', async () => {
     await expect(service.query({ queryCode: '', limit: 5 })).rejects.toThrow('请输入邮件查询码');
     await expect(service.query({ queryCode: 'a'.repeat(65), limit: 5 })).rejects.toThrow(

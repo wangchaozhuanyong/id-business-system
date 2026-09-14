@@ -3,6 +3,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Optional,
   ServiceUnavailableException
 } from '@nestjs/common';
 import { V2_MAIL_VIEWER_LIMITS, type V2MailViewerQueryResult } from '@apple-business/shared';
@@ -16,6 +17,7 @@ import {
   MailProviderAuthenticationError,
   MailProviderUnavailableError
 } from './providers/id-business-v2-imap-mail.provider';
+import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
 import {
   IdBusinessV2MicrosoftMailOAuthClient,
   MicrosoftMailOAuthAuthenticationError,
@@ -36,7 +38,8 @@ export class IdBusinessV2MailViewerService {
     private readonly transientState: IdBusinessV2MailboxTransientStateService,
     private readonly encryption: FieldEncryptionService,
     private readonly mailProvider: IdBusinessV2ImapMailProvider,
-    private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient
+    private readonly microsoftOAuth: IdBusinessV2MicrosoftMailOAuthClient,
+    @Optional() private readonly vendureMailbox?: IdBusinessV2VendureMailboxClient
   ) {}
 
   async query(
@@ -45,6 +48,9 @@ export class IdBusinessV2MailViewerService {
   ): Promise<V2MailViewerQueryResult> {
     const queryCode = this.normalizeQueryCode(dto.queryCode ?? dto.credential);
     const limit = this.normalizeLimit(dto.limit);
+    if (/^(BUY|MSTR)-/i.test(queryCode) && this.vendureMailbox) {
+      return this.queryVendure(queryCode, limit, requestIp);
+    }
     const queryCodeHash = this.encryption.hash(queryCode);
     const ipHash = this.encryption.hash(this.normalizeIp(requestIp));
     if (!queryCodeHash) throw new ServiceUnavailableException('查询校验服务不可用');
@@ -112,6 +118,31 @@ export class IdBusinessV2MailViewerService {
       }
       throw new ServiceUnavailableException('暂时无法连接邮箱服务，请稍后重试');
     }
+  }
+
+  private async queryVendure(queryCode: string, limit: number, requestIp?: string | null) {
+    const result = await this.vendureMailbox!.publicQuery(
+      queryCode,
+      this.normalizeIp(requestIp) ?? undefined
+    );
+    if (!result.success) {
+      const message = result.message || '邮件查询码不正确';
+      if (message.includes('频繁')) throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
+      throw new BadRequestException(message);
+    }
+    const items = result.items.slice(0, limit);
+    return {
+      email: result.aliasEmail || result.primaryEmail || items[0]?.targetEmail || 'iCloud 邮箱',
+      items: items.map((item) => ({
+        body: item.bodyText || (item.extractedCode ? `验证码：${item.extractedCode}` : ''),
+        from: item.fromName ? `${item.fromName} <${item.fromAddress}>` : item.fromAddress,
+        savedAt: item.receivedAt,
+        subject: item.subject,
+        to: item.targetEmail
+      })),
+      provider: 'icloud' as const,
+      queriedAt: new Date().toISOString()
+    };
   }
 
   private async resolveProviderInput(
