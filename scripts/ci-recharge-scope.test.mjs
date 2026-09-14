@@ -7,6 +7,7 @@ import {
   matchingRun,
   canReuseMain,
   isCiOnly,
+  isMailboxOnly,
   isTargetedOnly,
   selectedParts,
   checkMode,
@@ -50,6 +51,40 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   );
   assert.equal(checkMode(['apps/admin/src/auth/login.ts'], schema, schema), 'full');
   assert.equal(checkMode([files[0]], schema, schema), 'recharge');
+});
+test('Vendure mailbox integration runs only its shared, admin, API and guard checks', () => {
+  const paths = [
+    '.env.example',
+    'apps/admin/src/api/requestPolicy.ts',
+    'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
+    'apps/api/src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.ts',
+    'apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.ts',
+    'packages/shared/src/v2/vendure-mailbox.ts',
+    'docs/V2_VENDURE_MAILBOX_INTEGRATION.md',
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isMailboxOnly(paths), true);
+  assert.equal(checkMode(paths, schema, schema), 'mailbox');
+  assert.deepEqual(adminCheckCommands('mailbox', paths), [
+    ['run', 'build', '--workspace', '@apple-business/shared'],
+    [
+      'run',
+      'test',
+      '--workspace',
+      '@apple-business/admin',
+      '--',
+      'src/api/requestPolicy.spec.ts',
+      'src/v2/features/registry.spec.ts',
+      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts'
+    ],
+    ['run', 'build', '--workspace', '@apple-business/admin']
+  ]);
+  assert.equal(
+    isMailboxOnly([...paths, 'apps/api/src/id-business-v2/orders/order.service.ts']),
+    false
+  );
 });
 test('CI-only repairs do not select application or migration suites', () => {
   assert.equal(

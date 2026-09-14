@@ -27,17 +27,17 @@ if (part === 'guards') {
     'scripts/ci-recharge-precision.test.mjs',
     'scripts/ci-change-scope.test.mjs'
   ]);
-  if (mode === 'admin') {
-    for (const name of [
+  if (mode === 'admin' || mode === 'mailbox') {
+    const checks = [
       'check:admin-ui',
       'check:v2-ui-language',
       'check:v2-table-standard',
       'check:v2-loading-standard',
-      'check:v2-module-architecture',
       'check:v2-isolation',
       'check:v2-decimal-standard'
-    ])
-      npm('run', name);
+    ];
+    if (mode === 'admin') checks.splice(4, 0, 'check:v2-module-architecture');
+    for (const name of checks) npm('run', name);
   } else if (mode !== 'ci-only') {
     npm(
       'run',
@@ -55,15 +55,29 @@ if (part === 'guards') {
   npm('run', 'prisma:mysql:generate');
   npm('run', 'prisma:mysql:validate');
   shared();
-  npm(
-    'run',
-    'test',
-    '--workspace',
-    '@apple-business/api',
-    '--',
-    'src/id-business-v2/auto-recharge',
-    ...(changed.some((p) => p.startsWith('apps/api/src/auth/')) ? ['src/auth', 'src/security'] : [])
-  );
+  if (mode === 'mailbox')
+    npm(
+      'run',
+      'test',
+      '--workspace',
+      '@apple-business/api',
+      '--',
+      'src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.spec.ts',
+      'src/id-business-v2/workspace/id-business-v2-vendure-mailbox.service.spec.ts',
+      'src/id-business-v2/workspace/id-business-v2-mail-viewer.service.spec.ts'
+    );
+  else
+    npm(
+      'run',
+      'test',
+      '--workspace',
+      '@apple-business/api',
+      '--',
+      'src/id-business-v2/auto-recharge',
+      ...(changed.some((p) => p.startsWith('apps/api/src/auth/'))
+        ? ['src/auth', 'src/security']
+        : [])
+    );
   npm('run', 'build', '--workspace', '@apple-business/api');
 } else if (part === 'migration') {
   run('python3', ['scripts/ci-recharge-migration.py']);

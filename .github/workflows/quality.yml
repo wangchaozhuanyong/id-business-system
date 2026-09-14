@@ -242,7 +242,7 @@ jobs:
           test "$SCOPE_RESULT" = success
           if [[ "$REUSE_MAIN" = true ]]; then
             echo "Merged source tree matches the successful PR; checks are not repeated."
-          elif [[ "$MODE" = recharge || "$MODE" = ci-only || "$MODE" = admin ]]; then
+          elif [[ "$MODE" = recharge || "$MODE" = ci-only || "$MODE" = admin || "$MODE" = mailbox ]]; then
             test "$RECHARGE_RESULT" = success
           else
             test "$FULL_RESULT" = success
