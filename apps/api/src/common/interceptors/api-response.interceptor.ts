@@ -18,8 +18,29 @@ interface ApiSuccessResponse<TData> {
   timestamp: string;
 }
 
-function isApiResponse(value: unknown): value is { success: boolean } {
-  return Boolean(value && typeof value === 'object' && 'success' in value);
+interface ApiErrorResponse {
+  success: false;
+  errorCode: string;
+  message: string;
+  requestId: string;
+  retryable: boolean;
+  timestamp: string;
+}
+
+function isApiResponse(value: unknown): value is ApiSuccessResponse<unknown> | ApiErrorResponse {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as Record<string, unknown>;
+  const hasEnvelopeMetadata =
+    typeof response.message === 'string' &&
+    typeof response.requestId === 'string' &&
+    typeof response.timestamp === 'string';
+  if (!hasEnvelopeMetadata) return false;
+  return (
+    (response.success === true && 'data' in response) ||
+    (response.success === false &&
+      typeof response.errorCode === 'string' &&
+      typeof response.retryable === 'boolean')
+  );
 }
 
 @Injectable()
