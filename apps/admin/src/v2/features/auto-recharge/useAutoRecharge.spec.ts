@@ -22,6 +22,7 @@ const mock = vi.hoisted(() => ({
         getRevalidateAt?: (data: { configured: boolean; items: V2RechargeJob[] }) => number | null;
       },
   startBitBrowser: vi.fn(),
+  startBitBrowserOpen: vi.fn(),
   recheckBitBrowser: vi.fn(),
   resolveNoBankRequest: vi.fn(),
   cancelBitBrowser: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock('./api', () => ({
     listAddresses: vi.fn(),
     getBitBrowserSettings: vi.fn(),
     startBitBrowser: mock.startBitBrowser,
+    startBitBrowserOpen: mock.startBitBrowserOpen,
     recheckBitBrowser: mock.recheckBitBrowser,
     resolveNoBankRequest: mock.resolveNoBankRequest,
     cancelBitBrowser: mock.cancelBitBrowser,
@@ -197,6 +199,16 @@ beforeEach(() => {
   mock.addressesQuery = queryResult(addresses);
   mock.settingsQuery = queryResult(storedSettings);
   mock.startBitBrowser.mockImplementation(async (input) => ({ ...launch, id: input.id }));
+  mock.startBitBrowserOpen.mockImplementation(
+    async (input: { id: string; windowName: string }) => ({
+      id: input.id,
+      mode: 'open_browser' as const,
+      connectorUrl: settings.connectorUrl,
+      connectorToken: launch.connectorToken,
+      agentToken: launch.agentToken,
+      bitBrowser: launch.bitBrowser
+    })
+  );
   mock.recheckBitBrowser.mockResolvedValue({
     id: '33333333-3333-4333-8333-333333333333',
     mode: 'recheck',
@@ -340,6 +352,62 @@ describe('本机比特浏览器自动充值', () => {
       authorizeSinglePayment: true
     });
     expect(flow.details.value.number).toBe('5555555555554444');
+  });
+
+  it('切换为仅登录窗口模式后，只需授权 JSON 即可打开比特浏览器且不提交付款资料', async () => {
+    flow.operationMode.value = 'open_browser';
+    expect(flow.canStartOpen.value).toBe(false);
+
+    flow.updateJsonInput(sessionJson('user123@example.com'));
+    expect(flow.sessionJson.value).toBeTruthy();
+    expect(flow.windowName.value).toBe('ChatGPT-user123');
+    expect(flow.canStartOpen.value).toBe(true);
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.workflowMessage.value).toBe('核对窗口名称后，点击即可打开比特浏览器并自动登录。');
+
+    await flow.startOpen();
+
+    expect(mock.startBitBrowserOpen).toHaveBeenCalledTimes(1);
+    const serverInput = mock.startBitBrowserOpen.mock.calls[0]![0];
+    expect(serverInput).toMatchObject({
+      windowName: 'ChatGPT-user123'
+    });
+    expect(serverInput).not.toHaveProperty('plan');
+    expect(serverInput).not.toHaveProperty('addressId');
+    expect(serverInput).not.toHaveProperty('maxAmount');
+
+    expect(mock.connectorStart).toHaveBeenCalledTimes(1);
+    const connectorInput = mock.connectorStart.mock.calls[0]![2];
+    expect(connectorInput).toMatchObject({
+      mode: 'open_browser',
+      windowName: 'ChatGPT-user123',
+      sessionJson: sessionJson('user123@example.com')
+    });
+    expect(connectorInput).not.toHaveProperty('details');
+    expect(connectorInput).not.toHaveProperty('address');
+    expect(connectorInput).not.toHaveProperty('safety');
+    expect(connectorInput).not.toHaveProperty('authorizeSinglePayment');
+  });
+
+  it('仅登录窗口模式执行完成后 workflowMessage 提示窗口已就绪可手动操作', () => {
+    jobs.value.items = [
+      {
+        id: '99999999-9999-4999-8999-999999999999',
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'finished',
+        result: {
+          mode: 'open_browser',
+          status: 'session_ready',
+          stage: 'session_ready',
+          window_name: 'ChatGPT-user123'
+        },
+        createdAt: '2026-03-16T12:00:00Z',
+        updatedAt: '2026-03-16T12:00:00Z'
+      }
+    ];
+    flow.selectJob('99999999-9999-4999-8999-999999999999');
+    expect(flow.workflowMessage.value).toBe('账号登录成功，比特浏览器窗口已打开，可进行手动操作。');
   });
 
   it('核价失败保留卡资料，观察到付款请求后才清除', async () => {

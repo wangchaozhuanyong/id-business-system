@@ -222,10 +222,12 @@ def validate_payload(value):
                 or not isinstance(value.get("agentToken"), str) or len(value["agentToken"]) != 64):
             raise Stop("invalid_connector_payload")
         return value
+    if mode == "open_browser" and "plan" not in value:
+        value["plan"] = "plus"
     common = {"id", "mode", "plan", "windowName", "sessionJson", "bitBrowser",
               "callbackUrl", "agentToken"}
     allowed = (common | {"details", "address", "safety", "authorizeSinglePayment"}
-               if mode == "payment" else common if mode == "recheck" else set())
+               if mode == "payment" else common if mode in ("recheck", "open_browser") else set())
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -254,7 +256,7 @@ def validate_payload(value):
     if bit_browser["proxyType"] not in {"http", "https", "socks5"}:
         raise Stop("invalid_bitbrowser_configuration")
     bitbrowser_options.validate_browser_settings(bit_browser)
-    if mode == "recheck":
+    if mode in ("recheck", "open_browser"):
         return value
 
     if value.get("authorizeSinglePayment") is not True:

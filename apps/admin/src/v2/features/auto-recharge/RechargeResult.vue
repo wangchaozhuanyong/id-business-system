@@ -4,47 +4,57 @@
       <p class="recharge-status" role="status">
         {{ statusLabel(job.state === 'confirming' ? job.state : job.result.status || job.state) }}
       </p>
-      <p v-if="job.result.initial_quote" class="recharge-quote-title">初始报价（填写账单地址前）</p>
-      <dl v-if="job.result.initial_quote" class="recharge-summary recharge-quote">
-        <dt>初始应付</dt>
-        <dd class="recharge-total">
-          {{ price(job.result.initial_quote.today, '需填写账单地址后确定') }}
-        </dd>
-        <dt>初始税费</dt>
-        <dd>{{ price(job.result.initial_quote.tax, '需填写账单地址后确定') }}</dd>
-        <dt>初始续费</dt>
-        <dd>{{ price(job.result.initial_quote.renewal, '需填写账单地址后确定') }}</dd>
-      </dl>
-      <p class="recharge-quote-title">
-        {{ job.result.initial_quote ? '账单地址后最终金额' : '官方报价' }}
-      </p>
-      <dl class="recharge-summary recharge-quote">
-        <dt>今日应付</dt>
-        <dd class="recharge-total">{{ price(job.result.quote?.today, quotePlaceholder(job)) }}</dd>
-        <dt>税费</dt>
-        <dd>
-          {{ price(job.result.quote?.tax, quotePlaceholder(job))
-          }}{{ job.result.quote?.tax_status === 'estimated' ? '（预估）' : '' }}
-        </dd>
-        <dt>续费</dt>
-        <dd>
-          {{ price(job.result.quote?.renewal, quotePlaceholder(job))
-          }}{{
-            job.result.quote?.renewal_interval === 'monthly'
-              ? ' / 月，直至取消'
-              : job.result.quote
-                ? '，周期未知'
-                : ''
-          }}
-        </dd>
-      </dl>
+      <template v-if="job.result.mode !== 'open_browser'">
+        <p v-if="job.result.initial_quote" class="recharge-quote-title">
+          初始报价（填写账单地址前）
+        </p>
+        <dl v-if="job.result.initial_quote" class="recharge-summary recharge-quote">
+          <dt>初始应付</dt>
+          <dd class="recharge-total">
+            {{ price(job.result.initial_quote.today, '需填写账单地址后确定') }}
+          </dd>
+          <dt>初始税费</dt>
+          <dd>{{ price(job.result.initial_quote.tax, '需填写账单地址后确定') }}</dd>
+          <dt>初始续费</dt>
+          <dd>{{ price(job.result.initial_quote.renewal, '需填写账单地址后确定') }}</dd>
+        </dl>
+        <p class="recharge-quote-title">
+          {{ job.result.initial_quote ? '账单地址后最终金额' : '官方报价' }}
+        </p>
+        <dl class="recharge-summary recharge-quote">
+          <dt>今日应付</dt>
+          <dd class="recharge-total">
+            {{ price(job.result.quote?.today, quotePlaceholder(job)) }}
+          </dd>
+          <dt>税费</dt>
+          <dd>
+            {{ price(job.result.quote?.tax, quotePlaceholder(job))
+            }}{{ job.result.quote?.tax_status === 'estimated' ? '（预估）' : '' }}
+          </dd>
+          <dt>续费</dt>
+          <dd>
+            {{ price(job.result.quote?.renewal, quotePlaceholder(job))
+            }}{{
+              job.result.quote?.renewal_interval === 'monthly'
+                ? ' / 月，直至取消'
+                : job.result.quote
+                  ? '，周期未知'
+                  : ''
+            }}
+          </dd>
+        </dl>
+      </template>
       <dl class="recharge-summary">
-        <dt>开通套餐</dt>
-        <dd>{{ planLabels[job.plan] }}</dd>
+        <dt>执行模式</dt>
+        <dd>{{ job.result.mode === 'open_browser' ? '仅登录窗口' : '自动充值' }}</dd>
+        <template v-if="job.result.mode !== 'open_browser'">
+          <dt>开通套餐</dt>
+          <dd>{{ planLabels[job.plan] }}</dd>
+        </template>
         <dt>账户核对</dt>
         <dd>{{ job.result.account_matched ? '与 JSON 对应账户一致' : '尚未核实' }}</dd>
-        <dt>当前套餐</dt>
-        <dd>{{ statusLabel(job.result.current_plan) }}</dd>
+        <dt v-if="job.result.current_plan">当前套餐</dt>
+        <dd v-if="job.result.current_plan">{{ statusLabel(job.result.current_plan) }}</dd>
         <dt v-if="job.result.card_last4">银行卡尾号</dt>
         <dd v-if="job.result.card_last4">{{ job.result.card_last4 }}</dd>
         <dt>执行阶段</dt>

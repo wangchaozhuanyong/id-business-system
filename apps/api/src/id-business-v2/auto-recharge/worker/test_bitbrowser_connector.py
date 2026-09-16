@@ -104,6 +104,18 @@ class BitBrowserConnectorTests(unittest.TestCase):
         with self.assertRaises(Stop):
             connector.validate_payload({**recheck, "details": value["details"]})
 
+    def test_open_browser_payload_contains_no_card_address_or_payment_authorization(self):
+        value = payload()
+        open_payload = {key: value[key] for key in (
+            "id", "windowName", "sessionJson", "bitBrowser", "callbackUrl", "agentToken")}
+        open_payload["mode"] = "open_browser"
+        validated = connector.validate_payload(open_payload)
+        self.assertEqual(validated["mode"], "open_browser")
+        self.assertEqual(validated["plan"], "plus")
+        for forbidden in ("details", "address", "safety", "authorizeSinglePayment"):
+            with self.subTest(forbidden=forbidden), self.assertRaises(Stop):
+                connector.validate_payload({**open_payload, forbidden: value.get(forbidden, True)})
+
     def test_unknown_payment_resolution_has_no_browser_session_or_payment_data(self):
         value = resolution_payload()
         self.assertIs(connector.validate_payload(value), value)

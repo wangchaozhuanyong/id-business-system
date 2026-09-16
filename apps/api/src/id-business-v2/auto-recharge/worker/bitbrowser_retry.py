@@ -161,6 +161,35 @@ async def _execute_profiles(job, client, target, playwright, owned):
                     job.context, target, ledger, timeout=25, poll_count=6, poll_interval=20)
                 return pay.include_payment_record(result, ledger)
 
+        if job.payload["mode"] == "open_browser":
+            budget = SessionBudget(options["sessionWaitMinutes"] * 60,
+                                   cancelled=lambda: job.cancelled,
+                                   report=lambda **details: job.progress("session_restore", **details))
+            from browser_checkout import restore_session_with_refresh
+            from checkout_core import session_cookies
+            from urllib.parse import urlsplit
+            await job.context.add_cookies(session_cookies(target))
+            job.progress("session_restore")
+            page = next((p for p in job.context.pages if p.url == "about:blank" or
+                         (urlsplit(p.url).hostname == "chatgpt.com"
+                          and (urlsplit(p.url).path in ("", "/")
+                               or urlsplit(p.url).path.startswith("/checkout/")))), None)
+            page = page or await job.context.new_page()
+            page.set_default_timeout(20000)
+            _, identity = await restore_session_with_refresh(
+                page, target, wait_seconds=1800, budget=budget
+            )
+            job.progress("session_ready", account_matched=True, **identity)
+            return {
+                "status": "session_ready",
+                "stage": "session_ready",
+                "account_matched": True,
+                "browser_profile_id": profile_id,
+                "current_plan": identity.get("current_plan", "unknown"),
+                "payment_attempted": False,
+                "payment_requests_sent": 0,
+            }
+
         budget = SessionBudget(options["sessionWaitMinutes"] * 60,
                                cancelled=lambda: job.cancelled,
                                report=lambda **details: job.progress("session_restore", **details))

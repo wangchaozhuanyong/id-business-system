@@ -68,6 +68,10 @@ export class RechargeController {
   startBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.start(input, operator);
   }
+  @Post('jobs/bitbrowser-open')
+  startBitBrowserOpen(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.startOpen(input, operator);
+  }
   @Post('jobs/bitbrowser-recheck')
   recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.recheck(input, operator);
