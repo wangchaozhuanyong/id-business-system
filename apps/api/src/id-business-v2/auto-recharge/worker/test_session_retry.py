@@ -494,6 +494,23 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(retryable_session_result(failure(reason='browser_operation_failed',
                                                          browser_error_code='net::ERR_PROXY_CONNECTION_FAILED')))
 
+    async def test_open_browser_mode_restores_session_and_keeps_window_without_flow(self):
+        self.job.payload["mode"] = "open_browser"
+        context = self.playwright.chromium.connect_over_cdp.return_value.contexts[0]
+        context.add_cookies = AsyncMock()
+        context.pages = [MagicMock(url="about:blank")]
+        with patch("browser_checkout.restore_session_with_refresh", new=AsyncMock(return_value=(None, {"current_plan": "plus"}))) as restore:
+            result = await bitbrowser_retry.execute_profiles(
+                self.job, self.client, SimpleNamespace(account_id="fixture", token="tok", session_token="tok"), self.playwright)
+        self.assertEqual(result["status"], "session_ready")
+        self.assertEqual(result["stage"], "session_ready")
+        self.assertEqual(result["browser_profile_id"], "a" * 32)
+        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.client.create_profile.call_count, 1)
+        self.assertEqual(result["payment_requests_sent"], 0)
+        restore.assert_called_once()
+        context.add_cookies.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

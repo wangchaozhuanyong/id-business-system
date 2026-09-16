@@ -29,7 +29,11 @@
               <h2 id="recharge-form-title">一键开通资料</h2>
               <p class="recharge-note">官网地址固定为 ChatGPT；不需要填写登录网址。</p>
             </div>
-            <span>单账户 · 单窗口 · 单次付款</span>
+            <span>{{
+              operationMode === 'open_browser'
+                ? '单账户 · 单窗口 · 免付款'
+                : '单账户 · 单窗口 · 单次付款'
+            }}</span>
           </div>
 
           <el-form
@@ -40,6 +44,13 @@
             require-asterisk-position="right"
             :disabled="formLocked"
           >
+            <el-form-item label="操作模式" required>
+              <el-radio-group v-model="operationMode">
+                <el-radio-button value="payment">自动充值</el-radio-button>
+                <el-radio-button value="open_browser">仅登录窗口</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+
             <el-form-item label="授权 JSON" required :error="jsonError">
               <div class="recharge-json-row">
                 <el-input
@@ -65,11 +76,21 @@
                 </label>
               </div>
               <p v-if="sessionJson" class="recharge-field-success">
-                授权已自动载入，账单邮箱自动使用该账号邮箱。
+                授权已自动载入{{
+                  operationMode === 'payment' ? '，账单邮箱自动使用该账号邮箱' : ''
+                }}。
               </p>
             </el-form-item>
 
-            <div class="recharge-fields">
+            <el-form-item v-if="operationMode === 'open_browser'" label="窗口名称" required>
+              <el-input
+                v-model="windowName"
+                maxlength="80"
+                placeholder="输入本次比特浏览器窗口名称"
+              />
+            </el-form-item>
+
+            <div v-else class="recharge-fields">
               <el-form-item label="窗口名称" required>
                 <el-input
                   v-model="windowName"
@@ -104,7 +125,7 @@
               </el-form-item>
             </div>
 
-            <fieldset class="recharge-billing">
+            <fieldset v-if="operationMode === 'payment'" class="recharge-billing">
               <legend>银行卡与账单</legend>
               <div class="recharge-fields">
                 <el-form-item
@@ -187,7 +208,7 @@
               </dl>
             </fieldset>
 
-            <div class="recharge-authorization">
+            <div v-if="operationMode === 'payment'" class="recharge-authorization">
               <el-checkbox v-model="authorizeSinglePayment">
                 我已核对锁定币种和最高付款金额，授权本任务最多提交一次官网付款
               </el-checkbox>
@@ -197,11 +218,24 @@
             </div>
 
             <div class="recharge-form-footer">
-              <el-button type="primary" :disabled="!canStart" :loading="busy" @click="start">
+              <el-button
+                v-if="operationMode === 'open_browser'"
+                type="primary"
+                :disabled="!canStartOpen"
+                :loading="busy"
+                @click="startOpen"
+              >
+                打开比特浏览器并登录
+              </el-button>
+              <el-button v-else type="primary" :disabled="!canStart" :loading="busy" @click="start">
                 连接比特浏览器并执行本次充值
               </el-button>
               <p class="recharge-note">
-                JSON、完整卡号和安全码只发送到本机连接器内存，不进入生产数据库或日志。
+                {{
+                  operationMode === 'open_browser'
+                    ? 'JSON 只发送到本机连接器内存；连接器将打开比特浏览器窗口并登录 ChatGPT，完成后保留窗口供手动操作。'
+                    : 'JSON、完整卡号和安全码只发送到本机连接器内存，不进入生产数据库或日志。'
+                }}
               </p>
             </div>
           </el-form>
@@ -216,8 +250,18 @@
           <p v-if="error" class="recharge-error" role="alert">{{ error }}</p>
           <RechargeResult v-if="selected" :job="selected" />
           <div v-else class="recharge-empty">
-            <p>等待开始本次充值。</p>
-            <p>连接器会新建并打开比特浏览器窗口，恢复 JSON 登录后完成核价与付款保护。</p>
+            <p>
+              {{
+                operationMode === 'open_browser' ? '等待打开比特浏览器窗口。' : '等待开始本次充值。'
+              }}
+            </p>
+            <p>
+              {{
+                operationMode === 'open_browser'
+                  ? '连接器会新建并打开比特浏览器窗口，恢复 JSON 登录并跳转至官网，保留窗口供手动操作。'
+                  : '连接器会新建并打开比特浏览器窗口，恢复 JSON 登录后完成核价与付款保护。'
+              }}
+            </p>
           </div>
           <div class="recharge-actions">
             <el-button v-if="needsHuman" type="primary" :loading="busy" @click="resume">
@@ -324,7 +368,9 @@ const {
   error,
   importing,
   formLocked,
+  operationMode,
   canStart,
+  canStartOpen,
   canCancel,
   canRecheck,
   canResolveNoBankRequest,
@@ -337,6 +383,7 @@ const {
   updateJsonInput,
   importJson,
   start,
+  startOpen,
   recheck,
   resolveNoBankRequest,
   selectJob,

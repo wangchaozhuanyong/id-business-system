@@ -4,6 +4,7 @@ import type {
   V2RechargeAddress,
   V2RechargeAddressList,
   V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserOpenLaunch,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeBitBrowserResolutionLaunch,
   V2RechargeBitBrowserSettings,
@@ -95,6 +96,7 @@ function settingsReady(settings: V2RechargeBitBrowserSettings | undefined) {
 
 export function useAutoRecharge() {
   const currentId = ref('');
+  const operationMode = ref<'payment' | 'open_browser'>('payment');
   const jsonInput = ref('');
   const sessionJson = ref('');
   const jsonError = ref('');
@@ -166,6 +168,12 @@ export function useAutoRecharge() {
       !formLocked.value &&
       query.phase.value === 'ready'
   );
+  const canStartOpen = computed(
+    () =>
+      Boolean(sessionJson.value && windowName.value.trim() && currentSettingsReady.value) &&
+      !formLocked.value &&
+      query.phase.value === 'ready'
+  );
   const canCancel = computed(() => {
     const job = selected.value;
     const connectorNeverReceived =
@@ -227,9 +235,17 @@ export function useAutoRecharge() {
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running') return '本机比特浏览器正在执行，系统不会重复提交付款。';
     if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
-    if (job?.state === 'finished') return '本次流程已结束，请查看官网回传结果。';
+    if (job?.state === 'finished') {
+      if (job.result.mode === 'open_browser') {
+        return '账号登录成功，比特浏览器窗口已打开，可进行手动操作。';
+      }
+      return '本次流程已结束，请查看官网回传结果。';
+    }
     if (!currentSettingsReady.value) return '请先完成比特浏览器设置和本机连接密钥。';
     if (!sessionJson.value) return '粘贴授权 JSON 后会自动载入账号和注册邮箱。';
+    if (operationMode.value === 'open_browser') {
+      return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
+    }
     return '补齐窗口名称、卡资料、未使用地址和付款上限后，即可一键执行。';
   });
 
@@ -291,6 +307,10 @@ export function useAutoRecharge() {
       }
       sessionJson.value = jsonInput.value;
       details.value.email = email;
+      if (!windowName.value.trim()) {
+        const prefix = email.split('@')[0] || 'account';
+        windowName.value = `ChatGPT-${prefix}`;
+      }
       jsonInput.value = '';
       jsonError.value = '';
     } catch {
@@ -399,6 +419,63 @@ export function useAutoRecharge() {
             connectorStatus.value = 'offline';
             connectorMessage.value = '本机连接器未接收';
             error.value = '本机连接器未接收任务，本次已安全结束；卡资料已保留。';
+          } catch {
+            connectorStatus.value = 'offline';
+            connectorMessage.value = '本机连接器接收结果待核验';
+            error.value = '本机连接器接收结果不明确，本次不会自动重发。请刷新原任务。';
+          }
+        }
+      } else {
+        error.value = getApiErrorMessage(cause);
+      }
+    } finally {
+      await refresh();
+      busy.value = false;
+    }
+  }
+
+  async function startOpen() {
+    if (!canStartOpen.value) return;
+    busy.value = true;
+    error.value = '';
+    const id = crypto.randomUUID();
+    let launch: V2RechargeBitBrowserOpenLaunch | null = null;
+    try {
+      await browserSettings.checkSavedConnection();
+      if (disposed) return;
+      launch = await rechargeApi.startBitBrowserOpen({
+        id,
+        windowName: windowName.value.trim()
+      });
+      currentId.value = id;
+      localAccess.value = {
+        connectorUrl: launch.connectorUrl,
+        connectorToken: launch.connectorToken
+      };
+      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
+        id,
+        mode: 'open_browser',
+        windowName: windowName.value.trim(),
+        sessionJson: sessionJson.value,
+        bitBrowser: launch.bitBrowser,
+        callbackUrl: rechargeCallbackUrl(id),
+        agentToken: launch.agentToken
+      });
+      connectorStatus.value = 'online';
+      connectorMessage.value = '本机连接器已接收任务';
+    } catch (cause) {
+      if (launch) {
+        try {
+          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, id);
+          connectorStatus.value = 'online';
+          connectorMessage.value = '本机连接器已接收，本次不会重发';
+          error.value = '';
+        } catch {
+          try {
+            await rechargeApi.abandonUnreceivedBitBrowser(id);
+            connectorStatus.value = 'offline';
+            connectorMessage.value = '本机连接器未接收';
+            error.value = '本机连接器未接收任务，本次已安全结束。';
           } catch {
             connectorStatus.value = 'offline';
             connectorMessage.value = '本机连接器接收结果待核验';
@@ -631,7 +708,9 @@ export function useAutoRecharge() {
     error,
     importing,
     formLocked,
+    operationMode,
     canStart,
+    canStartOpen,
     canCancel,
     canRecheck,
     canResolveNoBankRequest,
@@ -644,6 +723,7 @@ export function useAutoRecharge() {
     updateJsonInput,
     importJson,
     start,
+    startOpen,
     recheck,
     resolveNoBankRequest,
     selectJob,

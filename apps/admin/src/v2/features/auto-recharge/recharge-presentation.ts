@@ -53,6 +53,8 @@ const labels: Record<string, string> = {
   checkout: '已进入有效结算页',
   quote_incomplete: '报价字段不完整',
   official_error: '官网结算错误页',
+  open_browser: '仅登录窗口',
+  session_ready: '账号已登录，窗口已就绪',
   session_restore: '正在加载官网并核对账号',
   page_load: '加载官网页面',
   page_refresh: '刷新当前官网页面',
@@ -325,6 +327,7 @@ export function quotePlaceholder(job: V2RechargeJob): string {
 }
 export function subscriptionLabel(job: V2RechargeJob): string {
   const result = job.result;
+  if (result.mode === 'open_browser') return '未执行开通（仅登录模式）';
   if (result.operator_resolution === 'confirmed_no_bank_request') return '尚未开通';
   if (result.payment_outcome || result.subscription_status)
     return statusLabel(result.payment_outcome || result.subscription_status);
@@ -481,6 +484,7 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
 }
 
 export function paymentStatusLabel(job: V2RechargeJob): string {
+  if (job.result.mode === 'open_browser') return '未发起付款（仅登录模式）';
   if (job.result.operator_resolution === 'confirmed_no_bank_request')
     return '已确认银行卡未收到付款请求';
   if (job.result.payment_status) return statusLabel(job.result.payment_status);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { hash } from './recharge-validation';
 import {
+  validateRechargeBitBrowserOpenStart,
   validateRechargeBitBrowserRecheckStart,
   validateRechargeBitBrowserStart,
   validateRechargeNoBankRequest
@@ -486,5 +487,72 @@ describe('本机任务持久化边界', () => {
     expect(JSON.stringify(result)).not.toContain('bitBrowser');
     expect(JSON.stringify(result)).not.toContain('sessionJson');
     expect(result).not.toHaveProperty('alreadyResolved');
+  });
+
+  it('验证仅登录窗口参数并创建无地址支付的轻量任务', async () => {
+    expect(validateRechargeBitBrowserOpenStart({ id, windowName: '  ChatGPT登录-01  ' })).toEqual({
+      id,
+      windowName: 'ChatGPT登录-01'
+    });
+
+    expect(() =>
+      validateRechargeBitBrowserOpenStart({ id, windowName: '', plan: 'plus' })
+    ).toThrow();
+    expect(() =>
+      validateRechargeBitBrowserOpenStart({ id, windowName: '测试', addressId })
+    ).toThrow();
+
+    const tx = Symbol('tx');
+    const repository = {
+      lock: vi.fn(),
+      findJob: vi.fn().mockResolvedValue(null),
+      findRunningJob: vi.fn().mockResolvedValue(null),
+      createJob: vi.fn().mockImplementation((_, data) => Promise.resolve({ ...data }))
+    };
+    const audit = { append: vi.fn() };
+    const runtime = {
+      connectorUrl: 'http://127.0.0.1:55321',
+      connectorToken: 'token-test',
+      localApiUrl: 'http://127.0.0.1:54345',
+      localApiToken: 'api-token',
+      groupName: 'gpt',
+      tagName: 'tag',
+      proxyType: 'http',
+      dynamicProxyUrl: 'http://proxy.example'
+    };
+    const settings = { runtime: vi.fn().mockResolvedValue(runtime) };
+    const service = new RechargeLocalService(
+      repository as never,
+      {} as never,
+      settings as never,
+      {} as never,
+      { execute: vi.fn((callback) => callback(tx)) } as never,
+      audit as never
+    );
+
+    const launch = await service.startOpen({ id, windowName: 'ChatGPT登录-01' }, operator);
+    expect(launch).toMatchObject({
+      id,
+      mode: 'open_browser',
+      connectorUrl: runtime.connectorUrl,
+      connectorToken: runtime.connectorToken,
+      bitBrowser: expect.objectContaining({ localApiUrl: runtime.localApiUrl })
+    });
+    expect(repository.createJob).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        id,
+        action: 'bitbrowser',
+        state: 'running',
+        result: expect.objectContaining({ mode: 'open_browser', window_name: 'ChatGPT登录-01' })
+      })
+    );
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.auto_recharge.bitbrowser.open_window',
+        objectId: id
+      })
+    );
   });
 });

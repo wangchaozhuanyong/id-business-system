@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   V2_RECHARGE_PLANS,
+  type V2RechargeBitBrowserOpenStart,
   type V2RechargeBitBrowserRecheckStart,
   type V2RechargeBitBrowserStart,
   type V2RechargeResolveNoBankRequest
@@ -108,6 +109,26 @@ export function validateRechargeBitBrowserRecheckStart(value: unknown) {
     plan: input.plan,
     windowName
   } as V2RechargeBitBrowserRecheckStart;
+}
+
+export function validateRechargeBitBrowserOpenStart(value: unknown): V2RechargeBitBrowserOpenStart {
+  const input = object(value);
+  const allowedKeys = new Set(['id', 'windowName']);
+  if (
+    Object.keys(input).some((key) => !allowedKeys.has(key)) ||
+    typeof input.id !== 'string' ||
+    !uuidPattern.test(input.id)
+  ) {
+    throw new BadRequestException('开启浏览器请求参数无效');
+  }
+  const windowName = String(input.windowName ?? '').trim();
+  if (!windowName || windowName.length > 80 || hasControlCharacter(windowName)) {
+    throw new BadRequestException('比特浏览器窗口名称格式无效');
+  }
+  return {
+    id: input.id,
+    windowName
+  };
 }
 
 export function validateRechargeNoBankRequest(value: unknown) {

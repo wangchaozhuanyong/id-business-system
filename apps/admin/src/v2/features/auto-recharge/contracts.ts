@@ -17,6 +17,8 @@ export type {
   UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeBitBrowserStart,
   V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserOpenStart,
+  V2RechargeBitBrowserOpenLaunch,
   V2RechargeBitBrowserRecheckStart,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeResolveNoBankRequest,

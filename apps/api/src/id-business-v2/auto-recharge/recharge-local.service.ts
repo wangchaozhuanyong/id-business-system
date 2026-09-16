@@ -17,6 +17,7 @@ import { RechargeService } from './recharge.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { hash, object, uuidPattern } from './recharge-validation';
 import {
+  validateRechargeBitBrowserOpenStart,
   validateRechargeBitBrowserRecheckStart,
   validateRechargeBitBrowserStart,
   validateRechargeNoBankRequest
@@ -127,6 +128,73 @@ export class RechargeLocalService {
         maxAmount: input.maxAmount,
         maxAmountMinor: input.maxAmountMinor,
         authorizeSinglePayment: true
+      }
+    };
+  }
+
+  async startOpen(value: unknown, operator: AuthenticatedUser) {
+    const input = validateRechargeBitBrowserOpenStart(value);
+    const runtime = await this.settings.runtime(operator.id);
+    const agentToken = randomBytes(32).toString('hex');
+    await this.transactions.execute(
+      async (tx) => {
+        await this.repository.lock(tx);
+        const previous = await this.repository.findJob(tx, input.id);
+        if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
+        const active = await this.repository.findRunningJob(tx);
+        if (active) throw new ConflictException('已有一笔充值任务执行中');
+        const job = await this.repository.createJob(tx, {
+          id: input.id,
+          ownerId: operator.id,
+          plan: 'plus',
+          action: 'bitbrowser',
+          state: 'running',
+          nonceHash: hash(agentToken),
+          leaseUntil: new Date(Date.now() + 45 * 60000),
+          result: toV2JsonDocument({
+            status: 'waiting_local_connector',
+            stage: 'connector_dispatch',
+            mode: 'open_browser',
+            window_name: input.windowName,
+            payment_requests_sent: 0
+          })
+        });
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.bitbrowser.open_window',
+          objectType: 'recharge_job',
+          objectId: job.id,
+          afterData: {
+            windowName: input.windowName,
+            mode: 'open_browser'
+          },
+          remark: '创建本机比特浏览器仅登录窗口任务'
+        });
+        return { job };
+      },
+      {
+        changedScopes: ['auto-recharge'],
+        requestId: input.id,
+        operator,
+        retryMode: 'none'
+      }
+    );
+    return {
+      id: input.id,
+      mode: 'open_browser' as const,
+      connectorUrl: runtime.connectorUrl,
+      connectorToken: runtime.connectorToken,
+      agentToken,
+      bitBrowser: {
+        localApiUrl: runtime.localApiUrl,
+        localApiToken: runtime.localApiToken,
+        groupName: runtime.groupName,
+        tagName: runtime.tagName,
+        proxyType: runtime.proxyType,
+        dynamicProxyUrl: runtime.dynamicProxyUrl,
+        browserOptions: runtime.browserOptions,
+        staticProxyCredentials: runtime.staticProxyCredentials
       }
     };
   }

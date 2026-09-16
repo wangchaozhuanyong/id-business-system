@@ -13,6 +13,8 @@ import type {
   UpdateV2RechargeBitBrowserSettingsInput,
   V2RechargeBitBrowserStart,
   V2RechargeBitBrowserLaunch,
+  V2RechargeBitBrowserOpenStart,
+  V2RechargeBitBrowserOpenLaunch,
   V2RechargeBitBrowserRecheckStart,
   V2RechargeBitBrowserRecheckLaunch,
   V2RechargeResolveNoBankRequest,
@@ -48,6 +50,9 @@ export const rechargeApi = {
   },
   startBitBrowser(input: V2RechargeBitBrowserStart) {
     return request<V2RechargeBitBrowserLaunch>(http.post(`${base}/bitbrowser`, input));
+  },
+  startBitBrowserOpen(input: V2RechargeBitBrowserOpenStart) {
+    return request<V2RechargeBitBrowserOpenLaunch>(http.post(`${base}/bitbrowser-open`, input));
   },
   recheckBitBrowser(input: V2RechargeBitBrowserRecheckStart) {
     return request<V2RechargeBitBrowserRecheckLaunch>(

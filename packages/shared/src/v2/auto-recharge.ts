@@ -270,6 +270,20 @@ export interface V2RechargeBitBrowserLaunch {
   };
 }
 
+export interface V2RechargeBitBrowserOpenStart {
+  id: string;
+  windowName: string;
+}
+
+export interface V2RechargeBitBrowserOpenLaunch {
+  id: string;
+  mode: 'open_browser';
+  connectorUrl: string;
+  connectorToken: string;
+  agentToken: string;
+  bitBrowser: V2RechargeBitBrowserLaunch['bitBrowser'];
+}
+
 export interface V2RechargeBitBrowserRecheckLaunch {
   id: string;
   mode: 'recheck';
