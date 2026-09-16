@@ -103,23 +103,14 @@ async def execute_profiles(job, client, target, playwright):
                           last_reason=original_reason,
                           browser_cleanup_status="failed",
                           browser_profile_id=job.profile_id or "")
+    if "browser_profile_id" not in result:
+        result["browser_profile_id"] = job.profile_id or ""
     return result
 
 
 def terminal_cleanup_allowed(job, result):
-    """A finished pre-payment failure must not leave a duplicate owned window."""
-    return bool(
-        job.payload["mode"] == "payment"
-        and job.profile_id
-        and result.get("reason")
-        and result.get("reason") != "bitbrowser_cleanup_unverified"
-        and result.get("browser_cleanup_status") != "failed"
-        and result.get("user_action_required") is not True
-        and not job.payment_request_sent
-        and result.get("payment_attempted") is not True
-        and int(result.get("payment_requests_sent", 0) or 0) == 0
-        and int(result.get("confirmation_requests_sent", 0) or 0) == 0
-    )
+    """充值不成功不自动关闭比特浏览器窗口，保留现场供操作人排查原因。"""
+    return False
 
 
 async def cancellable_flow(job, target, **kwargs):
@@ -185,14 +176,14 @@ async def _execute_profiles(job, client, target, playwright, owned):
                       session_step=budget.step)
         job.session_info.update({key: value for key, value in result.items() if key.startswith("session_")
                                  and key in job.session_info})
-        try:
-            await cleanup_profile(job, client, owned)
-        except Stop as exc:
-            return {**result, **exc.report}
         if attempt == attempts:
             exhausted = ("session_retries_exhausted" if result.get("stage") == "session_restore"
                          else "prepayment_retries_exhausted")
             return {**result, "reason": exhausted,
-                    "last_reason": result.get("reason"), "browser_profile_id": ""}
+                    "last_reason": result.get("reason"), "browser_profile_id": job.profile_id or ""}
+        try:
+            await cleanup_profile(job, client, owned)
+        except Stop as exc:
+            return {**result, **exc.report}
         job.progress("bitbrowser_profile_rebuilding")
     raise Stop("session_retries_exhausted")
