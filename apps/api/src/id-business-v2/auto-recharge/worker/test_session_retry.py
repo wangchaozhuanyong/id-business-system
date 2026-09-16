@@ -285,10 +285,11 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, flow = await self.execute([failure(), failure(), failure()])
         self.assertEqual(result['reason'], 'session_retries_exhausted')
         self.assertEqual(flow.await_count, 3)
-        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32])
         self.assertEqual(result.get('payment_requests_sent', 0), 0)
         self.assertEqual(result['checkout_requests_sent'], 0)
-        self.assertIsNone(self.job.profile_id)
+        self.assertEqual(self.job.profile_id, 'c' * 32)
+        self.assertEqual(result['browser_profile_id'], 'c' * 32)
 
     async def test_blank_quote_failure_rebuilds_window_but_never_replays_payment(self):
         quote_failure = failure(
@@ -315,7 +316,9 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await self.execute([quote_failure, quote_failure, quote_failure])
         self.assertEqual(result['reason'], 'prepayment_retries_exhausted')
         self.assertEqual(result['last_reason'], 'actual_quote_unknown')
-        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32])
+        self.assertEqual(self.job.profile_id, 'c' * 32)
+        self.assertEqual(result['browser_profile_id'], 'c' * 32)
         self.assertEqual(result['payment_requests_sent'], 0)
 
     async def test_non_payment_terminal_failure_cleans_owned_window(self):
@@ -324,9 +327,8 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
                     account_matched=True)
         ])
         self.assertEqual(result['reason'], 'official_plan_menu_timeout')
-        self.assertEqual(result['browser_cleanup_status'], 'completed')
-        self.assertEqual(result['browser_profile_id'], '')
-        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertEqual(result['browser_profile_id'], 'a' * 32)
+        self.assertEqual(self.deletions(), [])
 
     async def test_user_action_failure_keeps_current_window(self):
         result, _ = await self.execute([
@@ -418,7 +420,9 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, flow = await self.execute([failure()])
         self.assertEqual(result['reason'], 'session_retries_exhausted')
         self.assertEqual(flow.await_count, 1)
-        self.assertEqual(self.deletions(), ['a' * 32])
+        self.assertEqual(self.deletions(), [])
+        self.assertEqual(self.job.profile_id, 'a' * 32)
+        self.assertEqual(result['browser_profile_id'], 'a' * 32)
 
     async def test_stale_progress_flag_does_not_disable_a_valid_session_retry(self):
         async def after_checkout(*args, **kwargs):
@@ -427,7 +431,9 @@ class WindowRetryTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await self.execute(after_checkout)
         self.assertEqual(result['reason'], 'session_retries_exhausted')
         self.assertEqual(self.client.create_profile.call_count, 3)
-        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32, 'c' * 32])
+        self.assertEqual(self.deletions(), ['a' * 32, 'b' * 32])
+        self.assertEqual(self.job.profile_id, 'c' * 32)
+        self.assertEqual(result['browser_profile_id'], 'c' * 32)
 
     async def test_foreign_profile_is_never_closed_or_deleted(self):
         self.job.profile_id = 'd' * 32
