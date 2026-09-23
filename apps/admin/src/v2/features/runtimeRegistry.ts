@@ -17,6 +17,26 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     loadView: () => import('./auto-recharge/V2AutoRechargeView.vue')
   }),
   defineV2RuntimeFeature({
+    key: 'chatgpt-accounts',
+    title: 'ChatGPT 账号',
+    group: '自动充值',
+    route: '/v2/auto-recharge/chatgpt-accounts',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-recharge/V2ChatgptAccountsView.vue')
+  }),
+  defineV2RuntimeFeature({
+    key: 'bank-recharge-orders',
+    title: '银充订单',
+    group: '自动充值',
+    route: '/v2/auto-recharge/bank-orders',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-recharge/V2BankRechargeOrdersView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'vendure-mailbox',
     title: '邮件验证码查询',
     group: '自动充值',

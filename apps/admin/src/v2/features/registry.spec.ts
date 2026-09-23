@@ -8,7 +8,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(27);
+    expect(v2FeatureRegistry).toHaveLength(29);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {
@@ -20,12 +20,18 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(3);
+    ).toHaveLength(5);
     expect(
       v2NavigationSections
         .find((section) => section.key === 'auto-recharge')
         ?.items.map((item) => item.key)
-    ).toEqual(['auto-recharge', 'vendure-mailbox', 'auto-recharge-addresses']);
+    ).toEqual([
+      'auto-recharge',
+      'chatgpt-accounts',
+      'bank-recharge-orders',
+      'vendure-mailbox',
+      'auto-recharge-addresses'
+    ]);
     expect(v2FeatureRegistry.find((feature) => feature.key === 'vendure-mailbox')).toMatchObject({
       title: '邮件验证码查询',
       route: '/v2/auto-recharge/mailbox',

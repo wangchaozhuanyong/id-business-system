@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable
 } from '@nestjs/common';
+import { Optional } from '@nestjs/common';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -15,6 +16,9 @@ import { RechargeAddressRepository } from './persistence/recharge-address.reposi
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
 import { RechargeSettingsService } from './recharge-settings.service';
+import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
+import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
 import {
   validateRechargeBitBrowserOpenStart,
@@ -36,7 +40,9 @@ export class RechargeLocalService {
     private readonly settings: RechargeSettingsService,
     private readonly recharge: RechargeService,
     private readonly transactions: V2CommandTransactionManager,
-    private readonly audit: V2TransactionalAuditService
+    private readonly audit: V2TransactionalAuditService,
+    @Optional() private readonly bankAccounts?: BankRechargeAccountService,
+    @Optional() private readonly encryption?: FieldEncryptionService
   ) {}
 
   async start(value: unknown, operator: AuthenticatedUser) {
@@ -55,9 +61,40 @@ export class RechargeLocalService {
           operator.id,
           input.addressId
         );
+        const currency = await this.bankAccounts?.requireCurrency(tx, input.lockedCurrency);
+        if (
+          this.bankAccounts &&
+          currency &&
+          currency.minorUnits !==
+            (input.lockedCurrency === 'CLP' || ['JPY', 'KRW', 'VND'].includes(input.lockedCurrency)
+              ? 0
+              : 2)
+        ) {
+          throw new BadRequestException('锁定币种精度与自动充值设置不一致');
+        }
+        const account = input.chatgptAccountId
+          ? await this.bankAccounts?.requireActive(tx, input.chatgptAccountId)
+          : null;
+        if (input.chatgptAccountId && !account) {
+          throw new BadRequestException('所选 ChatGPT 账号不可用');
+        }
+        if (input.useSavedCredentials && !account?.passwordEncrypted) {
+          throw new ConflictException('所选 ChatGPT 账号尚未保存登录密码');
+        }
+        const expectedEmail = input.expectedEmail ? bankRechargeEmail(input.expectedEmail) : null;
+        if (
+          account &&
+          expectedEmail &&
+          this.encryption?.hash(expectedEmail) !== account.emailHash
+        ) {
+          throw new ConflictException('所选 ChatGPT 账号与本次登录邮箱不一致');
+        }
         const job = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,
+          chatgptAccountId: account?.id ?? null,
+          expectedEmailEncrypted:
+            expectedEmail && this.encryption ? this.encryption.encrypt(expectedEmail) : null,
           plan: input.plan,
           action: 'bitbrowser',
           state: 'running',
@@ -85,11 +122,13 @@ export class RechargeLocalService {
             windowName: input.windowName,
             lockedCurrency: input.lockedCurrency,
             maxAmount: input.maxAmount,
-            authorizeSinglePayment: true
+            authorizeSinglePayment: true,
+            chatgptAccountId: account?.id ?? null,
+            useSavedCredentials: input.useSavedCredentials
           },
           remark: '创建本机比特浏览器单次充值任务'
         });
-        return { job, address };
+        return { job, address, account };
       },
       {
         changedScopes: ['auto-recharge'],
@@ -105,6 +144,9 @@ export class RechargeLocalService {
       connectorUrl: runtime.connectorUrl,
       connectorToken: runtime.connectorToken,
       agentToken,
+      ...(input.useSavedCredentials && result.account
+        ? { savedLogin: this.bankAccounts!.savedLogin(result.account) }
+        : {}),
       bitBrowser: {
         localApiUrl: runtime.localApiUrl,
         localApiToken: runtime.localApiToken,

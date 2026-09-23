@@ -93,6 +93,7 @@ export function journalReversalBlockReason(
 
 export function journalTypeLabel(value: V2FinanceJournalType) {
   const labels: Partial<Record<V2FinanceJournalType, string>> = {
+    bank_recharge_completed: '银充订单完成',
     supplier_deposit: '供应商充值',
     supplier_refund: '供应商退款',
     supplier_adjustment: '供应商调整',
@@ -143,7 +144,11 @@ export function accountCodeLabel(value: V2FinanceAccountCode) {
     borrowed_funds_payable: '借入资金负债',
     realized_fx_gain_loss: '已实现汇兑损益',
     opening_equity: '期初权益',
-    manual_adjustment: '手工调整'
+    manual_adjustment: '手工调整',
+    bank_recharge_revenue: '银充代充收入',
+    bank_recharge_service_fee: '银充客户手续费收入',
+    bank_recharge_cost: '银充代付成本',
+    bank_recharge_bank_fee: '银充银行手续费'
   };
   return labels[value];
 }

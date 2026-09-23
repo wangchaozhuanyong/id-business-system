@@ -17,7 +17,7 @@ const CODE_MIN_REMAINING_MS = 8_000;
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
-export function useRechargeTotp(loginMethod: Ref<'json' | 'password'>) {
+export function useRechargeTotp(loginMethod: Ref<'json' | 'password' | 'saved'>) {
   const source = ref<TotpSource>('secret');
   const secretInput = ref('');
   const savedAccountId = ref('');

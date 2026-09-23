@@ -1,4 +1,6 @@
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
+import { chatgptAccountsFeature } from '@/v2/features/auto-recharge/chatgpt-accounts-manifest';
+import { bankRechargeOrdersFeature } from '@/v2/features/auto-recharge/bank-orders-manifest';
 import { autoRechargeAddressesFeature } from '@/v2/features/auto-recharge/address-manifest';
 import { vendureMailboxFeature } from '@/v2/features/auto-recharge/vendure-mailbox-manifest';
 import { accountsFeature } from '@/v2/features/accounts/manifest';
@@ -29,6 +31,8 @@ import { topupWorkbenchFeature } from '@/v2/features/topups/manifest';
 
 export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   autoRechargeFeature,
+  chatgptAccountsFeature,
+  bankRechargeOrdersFeature,
   vendureMailboxFeature,
   autoRechargeAddressesFeature,
   renewalWorkbenchFeature,

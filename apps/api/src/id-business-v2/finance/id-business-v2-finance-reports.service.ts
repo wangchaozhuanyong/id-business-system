@@ -31,7 +31,9 @@ const EXPENSE_CODES = [
   'gift_card_redemption_loss',
   'balance_loss',
   'id_purchase_loss',
-  'operating_expense'
+  'operating_expense',
+  'bank_recharge_cost',
+  'bank_recharge_bank_fee'
 ] as const;
 
 const RECONCILIATION_ISSUE_DETAIL_LIMIT = 200;
@@ -96,7 +98,12 @@ export class IdBusinessV2FinanceReportsService {
     };
     const salesRevenue = amount('sales_revenue', 'credit');
     const otherOperatingRevenue = amount('other_operating_revenue', 'credit');
-    const totalOperatingRevenue = salesRevenue.add(otherOperatingRevenue);
+    const bankRechargeRevenue = amount('bank_recharge_revenue', 'credit');
+    const bankRechargeServiceFee = amount('bank_recharge_service_fee', 'credit');
+    const totalOperatingRevenue = salesRevenue
+      .add(otherOperatingRevenue)
+      .add(bankRechargeRevenue)
+      .add(bankRechargeServiceFee);
     const values = new Map(EXPENSE_CODES.map((code) => [code, amount(code, 'debit')] as const));
     const realizedFx = amount('realized_fx_gain_loss', 'credit');
     const totalExpense = [...values.values()].reduce(
@@ -109,6 +116,8 @@ export class IdBusinessV2FinanceReportsService {
     return {
       salesRevenueCny: salesRevenue.toString(),
       otherOperatingRevenueCny: otherOperatingRevenue.toString(),
+      bankRechargeRevenueCny: bankRechargeRevenue.toString(),
+      bankRechargeServiceFeeCny: bankRechargeServiceFee.toString(),
       totalOperatingRevenueCny: totalOperatingRevenue.toString(),
       platformFeeCny: (values.get('platform_fee') ?? Amount4.zero()).toString(),
       giftCardCostCny: (values.get('gift_card_cost') ?? Amount4.zero()).toString(),
@@ -121,6 +130,8 @@ export class IdBusinessV2FinanceReportsService {
       balanceLossCny: (values.get('balance_loss') ?? Amount4.zero()).toString(),
       idPurchaseLossCny: (values.get('id_purchase_loss') ?? Amount4.zero()).toString(),
       operatingExpenseCny: (values.get('operating_expense') ?? Amount4.zero()).toString(),
+      bankRechargeCostCny: (values.get('bank_recharge_cost') ?? Amount4.zero()).toString(),
+      bankRechargeBankFeeCny: (values.get('bank_recharge_bank_fee') ?? Amount4.zero()).toString(),
       realizedFxGainLossCny: realizedFx.toString(),
       netProfitCny: totalOperatingRevenue.sub(totalExpense).add(realizedFx).toString(),
       estimatedProfitCny: estimated.toString()

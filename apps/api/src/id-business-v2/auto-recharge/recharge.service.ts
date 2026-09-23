@@ -3,10 +3,10 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Optional,
   ServiceUnavailableException
 } from '@nestjs/common';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import type { V2RechargeQuote } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -24,14 +24,13 @@ import {
   validateRechargeAddressStatus
 } from './recharge-address-validation';
 import {
-  assertFinalQuote,
-  confirmationNonce,
   hash,
   object,
   resultWithConfirmation,
   safeDocument,
   uuidPattern,
   validateDetailsSubmission,
+  validateWorkerConfirmation,
   validateStart
 } from './recharge-validation';
 import {
@@ -46,14 +45,18 @@ import {
   staleProfile
 } from './recharge-job-helpers';
 import { isRechargeWorkerConfigured, sendRechargeWorkerRequest } from './recharge-worker-client';
-
+import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeOrderService } from './bank-recharge-order.service';
+import { bindSavedChatgptAccount, recordVerifiedBankRecharge } from './recharge-bank-callback';
 @Injectable()
 export class RechargeService {
   constructor(
     private readonly repository: RechargeRepository,
     private readonly addressRepository: RechargeAddressRepository,
     private readonly transactions: V2CommandTransactionManager,
-    private readonly audit: V2TransactionalAuditService
+    private readonly audit: V2TransactionalAuditService,
+    @Optional() private readonly bankAccounts?: BankRechargeAccountService,
+    @Optional() private readonly bankOrders?: BankRechargeOrderService
   ) {}
 
   async listAddresses(value: unknown, operator: AuthenticatedUser) {
@@ -405,6 +408,9 @@ export class RechargeService {
           const records = await this.repository.records(tx, accountKey);
           if (records.some((record) => record.ownerId !== job.ownerId))
             throw new ForbiddenException('该账户属于另一操作人的原任务');
+          if (job.chatgptAccountId && this.bankAccounts) {
+            await this.bankAccounts.assertOfficialAccount(tx, job.chatgptAccountId, accountKey);
+          }
           const finished = await this.repository.finishedJobsForAccount(
             tx,
             job.ownerId,
@@ -531,7 +537,12 @@ export class RechargeService {
           !['progress', 'details_required', 'confirmation', 'finished'].includes(String(input.type))
         )
           throw new BadRequestException('执行事件无效');
+        if (job.state === 'finished') {
+          if (input.type === 'finished') return { ok: true };
+          throw new ConflictException('已结束任务不能再写入执行事件');
+        }
         const report = safeDocument(input.result);
+        await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
         let state = job.state;
         let nonceHash = job.nonceHash;
         if (input.type === 'progress' && job.action === 'bitbrowser') {
@@ -550,24 +561,13 @@ export class RechargeService {
           state = 'awaiting_details';
         }
         if (input.type === 'confirmation') {
-          const nonce = object(input.result).nonce;
-          const quote = object(report.quote) as unknown as V2RechargeQuote;
-          assertFinalQuote(quote, job.plan, report.quote_authority);
-          const expected = confirmationNonce(
+          nonceHash = validateWorkerConfirmation(
             id,
-            quote,
+            job,
+            report,
+            input.result,
             process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
           );
-          if (
-            !['prepare', 'flow'].includes(job.action) ||
-            job.state !== 'running' ||
-            typeof nonce !== 'string' ||
-            !/^[a-f0-9]{64}$/.test(nonce) ||
-            nonce.length !== expected.length ||
-            !timingSafeEqual(Buffer.from(nonce), Buffer.from(expected))
-          )
-            throw new ConflictException('不能确认当前报价');
-          nonceHash = hash(nonce);
           state = 'awaiting_confirmation';
         }
         if (input.type === 'finished') {
@@ -580,6 +580,7 @@ export class RechargeService {
             audit: this.audit
           });
           await completeCancellation(tx, job, report, this.repository, this.audit);
+          await recordVerifiedBankRecharge(tx, job, report, this.bankOrders);
           state = 'finished';
           nonceHash = null;
         }

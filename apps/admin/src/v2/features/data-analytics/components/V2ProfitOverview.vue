@@ -49,6 +49,18 @@
           </dd>
         </div>
         <div>
+          <dt>银充代充收入</dt>
+          <dd class="is-positive">
+            {{ formatCny(overview.profitLoss.bankRechargeRevenueCny ?? '0') }}
+          </dd>
+        </div>
+        <div>
+          <dt>银充客户手续费收入</dt>
+          <dd class="is-positive">
+            {{ formatCny(overview.profitLoss.bankRechargeServiceFeeCny ?? '0') }}
+          </dd>
+        </div>
+        <div>
           <dt>经营收入合计</dt>
           <dd class="is-positive">
             {{ formatCny(overview.profitLoss.totalOperatingRevenueCny) }}
@@ -80,6 +92,14 @@
               )
             }}
           </dd>
+        </div>
+        <div>
+          <dt>银充官网代付成本</dt>
+          <dd>{{ formatCny(overview.profitLoss.bankRechargeCostCny ?? '0') }}</dd>
+        </div>
+        <div>
+          <dt>银充银行手续费</dt>
+          <dd>{{ formatCny(overview.profitLoss.bankRechargeBankFeeCny ?? '0') }}</dd>
         </div>
         <div>
           <dt>退款、赎回与报损</dt>

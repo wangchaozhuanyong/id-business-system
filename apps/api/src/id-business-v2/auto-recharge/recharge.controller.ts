@@ -65,6 +65,7 @@ export class RechargeController {
     return this.service.start(input, operator);
   }
   @Post('jobs/bitbrowser')
+  @Header('Cache-Control', 'no-store')
   startBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.local.start(input, operator);
   }

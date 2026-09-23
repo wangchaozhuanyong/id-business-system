@@ -163,6 +163,7 @@ enum IdBusinessV2FinanceJournalType {
   gift_card_refund_write_off
   account_purchase
   order_completed
+  bank_recharge_completed
   order_refund
   order_cancel
   order_recovery
@@ -186,6 +187,7 @@ enum IdBusinessV2FinanceSourceType {
   account
   account_loss
   order
+  bank_recharge
   expense
   inflow
   opening_balance
@@ -210,6 +212,10 @@ enum IdBusinessV2FinanceAccountCode {
   gift_card_inventory
   id_inventory
   sales_revenue
+  bank_recharge_revenue
+  bank_recharge_service_fee
+  bank_recharge_cost
+  bank_recharge_bank_fee
   other_operating_revenue
   contributed_capital
   borrowed_funds_payable
@@ -765,6 +771,8 @@ model IdBusinessV2Customer {
   updatedBy    User?                         @relation("IdBusinessV2CustomerUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   orders       IdBusinessV2Order[]
   activations  IdBusinessV2Activation[]
+  bankRechargeOrders        IdBusinessV2BankRechargeOrder[]
+  bankRechargeSubscriptions IdBusinessV2BankRechargeSubscription[]
 
   @@index([name])
   @@index([phoneHash])
@@ -2382,6 +2390,8 @@ model IdBusinessV2RechargeJob {
   id          String   @id @db.VarChar(36)
   ownerId     String   @map("owner_id") @db.VarChar(191)
   accountKey  String?  @map("account_key") @db.Char(64)
+  chatgptAccountId String? @map("chatgpt_account_id") @db.Char(36)
+  expectedEmailEncrypted String? @map("expected_email_encrypted") @db.Text
   plan        String   @db.VarChar(16)
   action      String   @db.VarChar(16)
   state       String   @db.VarChar(32)
@@ -2391,9 +2401,183 @@ model IdBusinessV2RechargeJob {
   createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(6)
 
+  chatgptAccount IdBusinessV2ChatgptAccount? @relation(fields: [chatgptAccountId], references: [id], onDelete: Restrict)
+  bankRechargeOrder IdBusinessV2BankRechargeOrder?
+
   @@index([ownerId, createdAt])
   @@index([state, leaseUntil])
+  @@index([chatgptAccountId])
   @@map("id_business_v2_recharge_jobs")
+}
+
+enum IdBusinessV2ChatgptAccountStatus {
+  active
+  disabled
+}
+
+enum IdBusinessV2BankRechargeOrderSource {
+  automatic
+  manual
+}
+
+enum IdBusinessV2BankRechargeOrderStatus {
+  pending_details
+  pending_finance
+  pending_receipt
+  completed
+  refunded
+  cancelled
+}
+
+enum IdBusinessV2BankRechargeFinanceStatus {
+  unposted
+  partial
+  posted
+  reversed
+}
+
+enum IdBusinessV2BankRechargeSubscriptionStatus {
+  active
+  expired
+  cancelled
+}
+
+// 账号凭据仅用于管理员发起本机充值；执行任务和银充订单不保存密码或 2FA 密钥。
+model IdBusinessV2ChatgptAccount {
+  id                  String                           @id @default(uuid()) @db.Char(36)
+  emailEncrypted      String                           @map("email_encrypted") @db.Text
+  emailHash           String                           @unique @map("email_hash") @db.Char(64)
+  emailMasked         String                           @map("email_masked") @db.VarChar(255)
+  officialAccountKey  String?                          @unique @map("official_account_key") @db.Char(64)
+  passwordEncrypted   String?                          @map("password_encrypted") @db.Text
+  totpSecretEncrypted String?                          @map("totp_secret_encrypted") @db.Text
+  totpAlgorithm       IdBusinessV2TotpAlgorithm        @default(sha1) @map("totp_algorithm")
+  totpDigits          Int                              @default(6) @map("totp_digits")
+  totpPeriod          Int                              @default(30) @map("totp_period")
+  status              IdBusinessV2ChatgptAccountStatus @default(active)
+  remark              String?                          @db.VarChar(500)
+  createdByUserId     String?                          @map("created_by_user_id") @db.Char(36)
+  updatedByUserId     String?                          @map("updated_by_user_id") @db.Char(36)
+  createdAt           DateTime                         @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt           DateTime                         @updatedAt @map("updated_at") @db.DateTime(6)
+
+  jobs         IdBusinessV2RechargeJob[]
+  orders       IdBusinessV2BankRechargeOrder[]
+  subscription IdBusinessV2BankRechargeSubscription?
+
+  @@index([status, updatedAt])
+  @@map("id_business_v2_chatgpt_accounts")
+}
+
+// 银充独立币种目录；新增币种不改变苹果 ID 订单和现有总账的固定币种枚举。
+model IdBusinessV2BankRechargeCurrency {
+  code            String   @id @db.Char(3)
+  name            String   @db.VarChar(80)
+  minorUnits      Int      @map("minor_units")
+  active          Boolean  @default(true)
+  createdByUserId String?  @map("created_by_user_id") @db.Char(36)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  cards IdBusinessV2BankRechargeCard[]
+
+  @@index([active, code])
+  @@map("id_business_v2_bank_recharge_currencies")
+}
+
+// 只保存预存资金银行卡的识别信息，不保存完整卡号及验证资料。
+model IdBusinessV2BankRechargeCard {
+  id              String                          @id @default(uuid()) @db.Char(36)
+  label           String                          @db.VarChar(80)
+  last4           String                          @db.Char(4)
+  currencyCode    String                          @map("currency_code") @db.Char(3)
+  active          Boolean                         @default(true)
+  createdByUserId String?                         @map("created_by_user_id") @db.Char(36)
+  createdAt       DateTime                        @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime                        @updatedAt @map("updated_at") @db.DateTime(6)
+
+  currency IdBusinessV2BankRechargeCurrency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+  orders   IdBusinessV2BankRechargeOrder[]
+
+  @@index([active, label])
+  @@map("id_business_v2_bank_recharge_cards")
+}
+
+// 官网付款事实不可改；客户、收费、收款和到期资料在待补全阶段完善。
+model IdBusinessV2BankRechargeOrder {
+  id                     String                             @id @default(uuid()) @db.Char(36)
+  orderNo                String                             @unique @map("order_no") @db.VarChar(40)
+  source                 IdBusinessV2BankRechargeOrderSource
+  rechargeJobId          String?                            @unique @map("recharge_job_id") @db.VarChar(36)
+  checkoutIdentifier     String?                            @unique @map("checkout_identifier") @db.VarChar(220)
+  paymentEvidenceId      String?                            @unique @map("payment_evidence_id") @db.VarChar(220)
+  manualEvidenceRef      String?                            @unique @map("manual_evidence_ref") @db.VarChar(220)
+  accountId              String?                            @map("account_id") @db.Char(36)
+  customerId             String?                            @map("customer_id") @db.Char(36)
+  cardId                 String?                            @map("card_id") @db.Char(36)
+  cardLast4              String?                            @map("card_last4") @db.Char(4)
+  plan                   String                             @db.VarChar(16)
+  chargeAmount           Decimal                            @map("charge_amount") @db.Decimal(18, 4)
+  chargeCurrencyCode     String                             @map("charge_currency_code") @db.Char(3)
+  customerFeeRate        Decimal                            @default(0) @map("customer_fee_rate") @db.Decimal(9, 4)
+  customerFeeAmount      Decimal                            @default(0) @map("customer_fee_amount") @db.Decimal(18, 4)
+  customerFeeOverridden  Boolean                            @default(false) @map("customer_fee_overridden")
+  bankFeeAmount          Decimal?                           @map("bank_fee_amount") @db.Decimal(18, 4)
+  bankFeeCurrencyCode    String?                            @map("bank_fee_currency_code") @db.Char(3)
+  receivedAmount         Decimal?                           @map("received_amount") @db.Decimal(18, 4)
+  receivedCurrencyCode   String?                            @map("received_currency_code") @db.Char(3)
+  fundingFinanceAccountId String?                           @map("funding_finance_account_id") @db.Char(36)
+  receivedFinanceAccountId String?                          @map("received_finance_account_id") @db.Char(36)
+  chargeFxRateToCny      Decimal?                           @map("charge_fx_rate_to_cny") @db.Decimal(18, 8)
+  bankFeeFxRateToCny     Decimal?                           @map("bank_fee_fx_rate_to_cny") @db.Decimal(18, 8)
+  receivedFxRateToCny    Decimal?                           @map("received_fx_rate_to_cny") @db.Decimal(18, 8)
+  profitAmountCny        Decimal?                           @map("profit_amount_cny") @db.Decimal(18, 4)
+  status                 IdBusinessV2BankRechargeOrderStatus @default(pending_details)
+  financeStatus          IdBusinessV2BankRechargeFinanceStatus @default(unposted) @map("finance_status")
+  openedAt               DateTime?                          @map("opened_at") @db.DateTime(6)
+  dueAt                  DateTime?                          @map("due_at") @db.DateTime(6)
+  verifiedAt             DateTime?                          @map("verified_at") @db.DateTime(6)
+  renewedFromOrderId     String?                            @unique @map("renewed_from_order_id") @db.Char(36)
+  remark                 String?                            @db.Text
+  createdByUserId        String?                            @map("created_by_user_id") @db.Char(36)
+  updatedByUserId        String?                            @map("updated_by_user_id") @db.Char(36)
+  createdAt              DateTime                           @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt              DateTime                           @updatedAt @map("updated_at") @db.DateTime(6)
+
+  rechargeJob        IdBusinessV2RechargeJob? @relation(fields: [rechargeJobId], references: [id], onDelete: Restrict)
+  account            IdBusinessV2ChatgptAccount? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  customer           IdBusinessV2Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  card               IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  renewedFrom        IdBusinessV2BankRechargeOrder? @relation("BankRechargeRenewalChain", fields: [renewedFromOrderId], references: [id], onDelete: Restrict)
+  renewedBy          IdBusinessV2BankRechargeOrder? @relation("BankRechargeRenewalChain")
+  activeSubscription IdBusinessV2BankRechargeSubscription?
+
+  @@index([customerId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([status, dueAt])
+  @@index([cardId, createdAt])
+  @@map("id_business_v2_bank_recharge_orders")
+}
+
+model IdBusinessV2BankRechargeSubscription {
+  id             String                                      @id @default(uuid()) @db.Char(36)
+  accountId      String                                      @unique @map("account_id") @db.Char(36)
+  currentOrderId String                                      @unique @map("current_order_id") @db.Char(36)
+  customerId     String?                                     @map("customer_id") @db.Char(36)
+  plan           String                                      @db.VarChar(16)
+  status         IdBusinessV2BankRechargeSubscriptionStatus @default(active)
+  openedAt       DateTime                                    @map("opened_at") @db.DateTime(6)
+  dueAt          DateTime?                                   @map("due_at") @db.DateTime(6)
+  createdAt      DateTime                                    @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt      DateTime                                    @updatedAt @map("updated_at") @db.DateTime(6)
+
+  account      IdBusinessV2ChatgptAccount   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  currentOrder IdBusinessV2BankRechargeOrder @relation(fields: [currentOrderId], references: [id], onDelete: Restrict)
+  customer     IdBusinessV2Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([status, dueAt])
+  @@index([customerId, dueAt])
+  @@map("id_business_v2_bank_recharge_subscriptions")
 }
 
 model IdBusinessV2RechargeRecord {

@@ -22,6 +22,10 @@ export const rechargeFields: {
   { key: 'postal_code', label: '邮编', required: true, max: 20 }
 ];
 
+export const rechargePaymentFields = rechargeFields.filter((field) =>
+  ['number', 'name', 'expiry', 'cvc'].includes(field.key)
+);
+
 export function formatRechargeExpiry(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 4);
   return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;

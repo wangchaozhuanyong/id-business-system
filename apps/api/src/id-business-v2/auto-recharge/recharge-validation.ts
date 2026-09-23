@@ -1,11 +1,11 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   V2_RECHARGE_PLANS,
   type V2RechargeDetailsSubmission,
   type V2RechargeQuote,
   type V2RechargeStart
 } from '@apple-business/shared';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -105,6 +105,29 @@ function confirmationMaterial(id: string, quote: V2RechargeQuote) {
 
 export function confirmationNonce(id: string, quote: V2RechargeQuote, secret: string) {
   return createHmac('sha256', secret).update(confirmationMaterial(id, quote)).digest('hex');
+}
+
+export function validateWorkerConfirmation(
+  id: string,
+  job: { action: string; state: string; plan: string },
+  report: Record<string, unknown>,
+  result: unknown,
+  workerToken: string
+) {
+  const nonce = object(result).nonce;
+  const quote = object(report.quote) as unknown as V2RechargeQuote;
+  assertFinalQuote(quote, job.plan, report.quote_authority);
+  const expected = confirmationNonce(id, quote, workerToken);
+  if (
+    !['prepare', 'flow'].includes(job.action) ||
+    job.state !== 'running' ||
+    typeof nonce !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(nonce) ||
+    nonce.length !== expected.length ||
+    !timingSafeEqual(Buffer.from(nonce), Buffer.from(expected))
+  )
+    throw new ConflictException('不能确认当前报价');
+  return hash(nonce);
 }
 
 export function resultWithConfirmation(
@@ -207,10 +230,10 @@ export function safeDocument(value: unknown): Record<string, unknown> {
         throw new BadRequestException('官方报价格式不明确');
       }
       const supported =
-        'USD MYR PHP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY'.split(
+        'USD MYR PHP CLP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY'.split(
           ' '
         );
-      const places = ['JPY', 'KRW', 'VND'].includes(item.currency) ? 0 : 2;
+      const places = ['JPY', 'KRW', 'VND', 'CLP'].includes(item.currency) ? 0 : 2;
       const [whole, fraction = ''] = item.amount.split('.');
       if (
         !supported.includes(item.currency) ||

@@ -39,9 +39,9 @@ JOB_ID = re.compile(r"^" + JOB_ID_TEXT + r"$")
 PROFILE_ID = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 CALLBACK_PATH = re.compile(r"/api/id-business-v2/auto-recharge/local/" + JOB_ID_TEXT + r"$")
 SUPPORTED_CURRENCIES = set(
-    "USD MYR PHP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN "
+    "USD MYR PHP CLP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN "
     "AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY".split())
-ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND"}
+ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND", "CLP"}
 SAFE_PUBLIC_KEYS = set(
     "status reason stage session_status account_matched current_plan current_tier target_plan "
     "checkout_status checkout_identifier subscription_status payment_status payment_outcome "

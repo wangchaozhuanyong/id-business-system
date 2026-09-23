@@ -8,6 +8,8 @@ export const planLabels = {
 
 export const currencyOptions = [
   { value: 'PHP', label: '菲律宾比索（PHP）' },
+  { value: 'IDR', label: '印度尼西亚卢比（IDR）' },
+  { value: 'CLP', label: '智利比索（CLP）' },
   { value: 'USD', label: '美元（USD）' },
   { value: 'MYR', label: '马来西亚令吉（MYR）' },
   { value: 'EUR', label: '欧元（EUR）' },
@@ -18,7 +20,6 @@ export const currencyOptions = [
   { value: 'KRW', label: '韩元（KRW）' },
   { value: 'SGD', label: '新加坡元（SGD）' },
   { value: 'INR', label: '印度卢比（INR）' },
-  { value: 'IDR', label: '印度尼西亚卢比（IDR）' },
   { value: 'THB', label: '泰铢（THB）' },
   { value: 'VND', label: '越南盾（VND）' },
   { value: 'TWD', label: '新台币（TWD）' },
