@@ -116,6 +116,43 @@ class BitBrowserConnectorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden), self.assertRaises(Stop):
                 connector.validate_payload({**open_payload, forbidden: value.get(forbidden, True)})
 
+    def test_password_login_payload_stays_local_and_requires_matching_billing_email(self):
+        value = payload()
+        value.pop("sessionJson")
+        value["login"] = {"email": "test@example.invalid", "password": "local-only-password"}
+        self.assertIs(connector.validate_payload(value), value)
+        for changed in (
+                {**value, "sessionJson": "forbidden"},
+                {**value, "login": {"email": "test@example.invalid", "password": ""}},
+                {**value, "details": {**value["details"], "email": "other@example.invalid"}},
+                {**value, "login": {**value["login"], "code": "123456"}}):
+            with self.subTest(changed=changed), self.assertRaises(Stop):
+                connector.validate_payload(changed)
+        self.assertNotIn("login", connector.public_result(value))
+
+    def test_code_is_accepted_only_while_requested_and_never_sent_in_progress(self):
+        value = payload()
+        value.pop("sessionJson")
+        value["login"] = {"email": "test@example.invalid", "password": "local-only-password"}
+        job = connector.LocalJob(value)
+        job.callback.send = MagicMock(return_value={})
+        with self.assertRaises(Stop):
+            job.signal_code("123456")
+
+        async def scenario():
+            waiting = asyncio.create_task(job.wait_for_code(2))
+            for _ in range(50):
+                if job.waiting_for_code:
+                    break
+                await asyncio.sleep(.005)
+            job.signal_code("123456")
+            self.assertEqual(await waiting, "123456")
+            self.assertFalse(job.waiting_for_code)
+
+        asyncio.run(scenario())
+        self.assertNotIn("123456", str(job.callback.send.call_args_list))
+        self.assertIsNone(job.login_code)
+
     def test_unknown_payment_resolution_has_no_browser_session_or_payment_data(self):
         value = resolution_payload()
         self.assertIs(connector.validate_payload(value), value)

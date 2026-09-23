@@ -313,6 +313,7 @@ describe('本机任务持久化边界', () => {
         return {
           id: sourceJobId,
           ownerId: operator.id,
+          accountKey: 'a'.repeat(64),
           plan: 'plus',
           action: 'bitbrowser',
           result: { payment_attempted: true, payment_status: 'unknown' }
@@ -354,6 +355,7 @@ describe('本机任务持久化边界', () => {
       tx,
       expect.objectContaining({
         action: 'bitbrowser',
+        accountKey: 'a'.repeat(64),
         result: expect.objectContaining({ recheck_only: true, payment_requests_sent: 0 })
       })
     );

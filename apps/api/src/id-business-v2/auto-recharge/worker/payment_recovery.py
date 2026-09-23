@@ -32,7 +32,8 @@ async def recheck_in_context(context, target, ledger, *, timeout=25, poll_count=
     identity = {"session_status": "not_verified", "account_matched": False, "current_plan": None}
     failure = {}
     try:
-        await context.add_cookies(session_cookies(target))
+        if getattr(target, "session_token", None):
+            await context.add_cookies(session_cookies(target))
         page = await context.new_page()
         await page.goto(ORIGIN, wait_until="domcontentloaded", timeout=45000)
         _, identity = await check_session(page, target, 0)

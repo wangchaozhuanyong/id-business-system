@@ -630,7 +630,8 @@ async def workflow(context, target, *, ledger=None, existing=None, wait_seconds=
     quote = None
     quote_text = ""
     try:
-        await context.add_cookies(session_cookies(target))
+        if getattr(target, "session_token", None):
+            await context.add_cookies(session_cookies(target))
         progress(stage)
         if session_budget:
             _, identity = await restore_session_with_refresh(

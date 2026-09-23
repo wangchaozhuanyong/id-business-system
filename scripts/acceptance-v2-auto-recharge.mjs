@@ -81,6 +81,7 @@ try {
     let apiStarts = 0;
     let connectorStarts = 0;
     let connectorResumes = 0;
+    let loginCodeSubmissions = 0;
     let addressUsed = false;
     let serverStartBody;
     let connectorStartBody;
@@ -107,6 +108,23 @@ try {
           status: 401,
           contentType: 'application/json',
           body: JSON.stringify({ success: false, message: '请登录' })
+        });
+      if (path.endsWith('/workspace-totp-accounts') && request.method() === 'GET')
+        return success(route, {
+          items: [
+            {
+              id: '88888888-8888-4888-8888-888888888888',
+              name: 'ChatGPT 验收',
+              issuer: 'OpenAI',
+              algorithm: 'SHA1',
+              digits: 6,
+              period: 30,
+              token: '654321',
+              expiresAt: new Date(Date.now() + 20_000).toISOString(),
+              createdAt: '',
+              updatedAt: ''
+            }
+          ]
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items: jobs, configured: true });
@@ -211,6 +229,32 @@ try {
           }
         });
       }
+      if (path.endsWith('/auto-recharge/jobs/bitbrowser-open') && request.method() === 'POST') {
+        const input = request.postDataJSON();
+        assert.equal(JSON.stringify(input).includes('local-password'), false);
+        jobs.unshift({
+          id: input.id,
+          plan: 'plus',
+          action: 'bitbrowser',
+          state: 'running',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          result: {
+            status: 'waiting_local_connector',
+            stage: 'connector_dispatch',
+            mode: 'open_browser',
+            payment_requests_sent: 0
+          }
+        });
+        return success(route, {
+          id: input.id,
+          mode: 'open_browser',
+          connectorUrl: connectorOrigin,
+          connectorToken: 'c'.repeat(64),
+          agentToken: 'a'.repeat(64),
+          bitBrowser: { ...connectorStartBody.bitBrowser }
+        });
+      }
       if (path.endsWith('/bitbrowser-access') && request.method() === 'POST')
         return success(route, {
           connectorUrl: connectorOrigin,
@@ -245,7 +289,7 @@ try {
           headers,
           body: JSON.stringify({
             ok: true,
-            version: 2,
+            version: 3,
             busy: false,
             originAllowed: true,
             service: 'id-business-v2-auto-recharge-connector',
@@ -256,7 +300,9 @@ try {
               'same-window-page-refresh',
               'payment-unknown-resolution',
               'prepayment-page-recovery',
-              'stale-owned-profile-cleanup'
+              'stale-owned-profile-cleanup',
+              'password-login',
+              'login-code'
             ]
           })
         });
@@ -298,6 +344,29 @@ try {
         connectorStarts += 1;
         connectorStartBody = request.postDataJSON();
         assert.equal(request.headers()['x-auto-recharge-connector'], 'c'.repeat(64));
+        if (connectorStartBody.mode === 'open_browser') {
+          assert.deepEqual(connectorStartBody.login, {
+            email: 'fixture@example.test',
+            password: 'local-password'
+          });
+          assert.equal(connectorStartBody.sessionJson, undefined);
+          assert.equal(connectorStartBody.details, undefined);
+          assert.equal(JSON.stringify(connectorStartBody).includes('JBSWY3DPEHPK3PXP'), false);
+          jobs[0].state = 'awaiting_human_verification';
+          jobs[0].result = {
+            ...jobs[0].result,
+            status: 'awaiting_human_verification',
+            stage: 'login_code_required',
+            payment_attempted: false,
+            payment_requests_sent: 0
+          };
+          return route.fulfill({
+            status: 202,
+            contentType: 'application/json',
+            headers,
+            body: JSON.stringify({ ok: true, id: jobs[0].id, accepted: true })
+          });
+        }
         assert.equal(connectorStartBody.details.number, '5555555555554444');
         assert.equal(connectorStartBody.details.expiry, '12/30');
         assert.equal(connectorStartBody.details.cvc, '123');
@@ -332,6 +401,25 @@ try {
           contentType: 'application/json',
           headers,
           body: JSON.stringify({ ok: true, id: jobs[0].id, accepted: true })
+        });
+      }
+      if (url.pathname.endsWith('/code')) {
+        loginCodeSubmissions += 1;
+        assert.match(request.postDataJSON().code, /^[0-9]{6}$/);
+        if (loginCodeSubmissions === 2) assert.equal(request.postDataJSON().code, '654321');
+        jobs[0].state = 'finished';
+        jobs[0].result = {
+          ...jobs[0].result,
+          status: 'session_ready',
+          stage: 'session_ready',
+          account_matched: true,
+          payment_attempted: false,
+          payment_requests_sent: 0
+        };
+        return route.fulfill({
+          contentType: 'application/json',
+          headers,
+          body: JSON.stringify({ ok: true })
         });
       }
       if (url.pathname.endsWith('/resume')) {
@@ -561,12 +649,48 @@ try {
     assert.equal(serverStartBody.id, connectorStartBody.id);
     assert.equal(connectorStartBody.authorizeSinglePayment, true);
 
+    await page.getByText('仅登录窗口', { exact: true }).click();
+    await page.getByText('账号密码', { exact: true }).click();
+    assert.equal(await page.getByRole('radio', { name: '仅登录窗口' }).isChecked(), true);
+    assert.equal(await page.getByRole('radio', { name: '账号密码' }).isChecked(), true);
+    assert.equal(await page.getByRole('radio', { name: '自动充值' }).isChecked(), false);
+    assert.equal(await page.getByRole('radio', { name: '授权 JSON' }).isChecked(), false);
+    await page.getByLabel('ChatGPT 账号').fill('fixture@example.test');
+    await page.getByLabel('登录密码').fill('local-password');
+    await page.getByLabel('2FA 密钥').fill('JBSWY3DPEHPK3PXP');
+    await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
+    await page
+      .locator('.recharge-status')
+      .filter({ hasText: '账号已登录，窗口已就绪' })
+      .waitFor({ timeout: 20000 });
+    assert.equal(loginCodeSubmissions, 1);
+    assert.equal(await page.getByLabel('2FA 密钥').inputValue(), '');
+    assert.equal(await page.getByLabel('登录密码').inputValue(), '');
+    assert.equal(apiStarts, 1);
+
+    await page.getByText('已保存账号', { exact: true }).click();
+    await page.getByLabel('登录密码').fill('local-password');
+    await page.getByRole('combobox', { name: '选择已保存的 2FA 账号' }).click();
+    await page.getByRole('option', { name: 'ChatGPT 验收 · OpenAI' }).click();
+    const savedCodeResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/code') && response.request().postDataJSON().code === '654321'
+    );
+    await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
+    await savedCodeResponse;
+    await page
+      .locator('.recharge-status')
+      .filter({ hasText: '账号已登录，窗口已就绪' })
+      .waitFor({ timeout: 20000 });
+    assert.equal(loginCodeSubmissions, 2);
+    assert.equal(apiStarts, 1);
+
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
     );
     assert.equal(overflow, false, `${width}px 页面横向溢出`);
     assert.deepEqual(errors, []);
-    await billingEmail.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
     await page.screenshot({ path: resolve(evidence, `${width}.png`), fullPage: true });
     await context.close();
   }
@@ -592,7 +716,10 @@ try {
         'local-secrets-only',
         'human-verification-resume',
         'single-payment-attempt',
-        'clear-card-after-attempt'
+        'clear-card-after-attempt',
+        'password-login-local-only',
+        'automatic-totp-code-local-only',
+        'saved-totp-code-local-only'
       ],
       realPaymentRequests: 0
     })

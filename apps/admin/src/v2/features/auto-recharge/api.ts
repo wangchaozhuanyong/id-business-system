@@ -1,4 +1,5 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
+import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
   ImportV2RechargeAddressesResult,
@@ -21,6 +22,11 @@ import type {
   V2RechargeBitBrowserResolutionLaunch
 } from './contracts';
 const base = '/id-business-v2/auto-recharge/jobs';
+export const rechargeTotpApi = {
+  listSavedAccounts(options: ApiRequestOptions = {}) {
+    return idBusinessV2WorkspaceApi.listTotpAccounts(options);
+  }
+};
 export const rechargeApi = {
   list(options: ApiRequestOptions = {}) {
     return request<{ items: V2RechargeJob[]; configured: boolean }>(
@@ -145,6 +151,12 @@ export const rechargeConnectorApi = {
     return connectorRequest(connectorUrl, `/jobs/${id}/resume`, {
       token: connectorToken,
       body: {}
+    });
+  },
+  submitCode(connectorUrl: string, connectorToken: string, id: string, code: string) {
+    return connectorRequest(connectorUrl, `/jobs/${id}/code`, {
+      token: connectorToken,
+      body: { code }
     });
   },
   cancel(connectorUrl: string, connectorToken: string, id: string) {

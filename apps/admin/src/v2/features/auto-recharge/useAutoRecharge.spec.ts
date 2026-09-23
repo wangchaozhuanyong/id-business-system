@@ -15,6 +15,7 @@ const mock = vi.hoisted(() => ({
   jobsQuery: {} as Record<string, unknown>,
   addressesQuery: {} as Record<string, unknown>,
   settingsQuery: {} as Record<string, unknown>,
+  totpQuery: {} as Record<string, unknown>,
   queryIndex: 0,
   jobOptions: undefined as
     | undefined
@@ -32,6 +33,8 @@ const mock = vi.hoisted(() => ({
   connectorStart: vi.fn(),
   connectorStatus: vi.fn(),
   connectorResume: vi.fn(),
+  connectorSubmitCode: vi.fn(),
+  listTotpAccounts: vi.fn(),
   connectorCancel: vi.fn(),
   connectorHealth: vi.fn(),
   connectorCatalog: vi.fn(),
@@ -46,9 +49,11 @@ vi.mock('element-plus/es/components/message-box/index.mjs', () => ({
 vi.mock('@/v2/composables/useV2Query', () => ({
   useV2ModuleQuery: (options: {
     moduleKey: string;
+    key?: string;
     getRevalidateAt?: (data: { configured: boolean; items: V2RechargeJob[] }) => number | null;
   }) => {
     if (options.moduleKey === 'auto-recharge-addresses') return mock.addressesQuery;
+    if (options.key === 'auto-recharge-saved-totp-accounts') return mock.totpQuery;
     const result = mock.queryIndex++ === 0 ? mock.jobsQuery : mock.settingsQuery;
     if (options.getRevalidateAt) mock.jobOptions = options;
     return result;
@@ -56,6 +61,7 @@ vi.mock('@/v2/composables/useV2Query', () => ({
 }));
 
 vi.mock('./api', () => ({
+  rechargeTotpApi: { listSavedAccounts: mock.listTotpAccounts },
   rechargeCallbackUrl: mock.callbackUrl,
   rechargeApi: {
     list: vi.fn(),
@@ -74,6 +80,7 @@ vi.mock('./api', () => ({
     start: mock.connectorStart,
     status: mock.connectorStatus,
     resume: mock.connectorResume,
+    submitCode: mock.connectorSubmitCode,
     cancel: mock.connectorCancel,
     health: mock.connectorHealth
   }
@@ -163,6 +170,9 @@ const addresses = ref({
 });
 const storedSettings = ref<V2RechargeBitBrowserSettings | undefined>(settings);
 const phase = ref('ready');
+const savedTotp = ref({
+  items: [{ id: '88888888-8888-4888-8888-888888888888', name: 'ChatGPT', issuer: 'OpenAI' }]
+});
 let scope = effectScope();
 let flow: ReturnType<typeof useAutoRecharge>;
 
@@ -198,6 +208,23 @@ beforeEach(() => {
   mock.jobsQuery = queryResult(jobs);
   mock.addressesQuery = queryResult(addresses);
   mock.settingsQuery = queryResult(storedSettings);
+  mock.totpQuery = queryResult(savedTotp);
+  mock.listTotpAccounts.mockImplementation(async () => ({
+    items: [
+      {
+        id: savedTotp.value.items[0]!.id,
+        name: 'ChatGPT',
+        issuer: 'OpenAI',
+        algorithm: 'SHA1',
+        digits: 6,
+        period: 30,
+        token: '123456',
+        expiresAt: new Date(Date.now() + 20_000).toISOString(),
+        createdAt: '',
+        updatedAt: ''
+      }
+    ]
+  }));
   mock.startBitBrowser.mockImplementation(async (input) => ({ ...launch, id: input.id }));
   mock.startBitBrowserOpen.mockImplementation(
     async (input: { id: string; windowName: string }) => ({
@@ -222,6 +249,7 @@ beforeEach(() => {
   mock.connectorStart.mockResolvedValue({ ok: true, accepted: true });
   mock.connectorStatus.mockResolvedValue({ ok: true, done: false, waitingForUser: false });
   mock.connectorResume.mockResolvedValue({ ok: true });
+  mock.connectorSubmitCode.mockResolvedValue({ ok: true });
   mock.connectorCancel.mockResolvedValue({ ok: true });
   mock.connectorHealth.mockResolvedValue({ ok: true });
   mock.connectorCatalog.mockResolvedValue({
@@ -242,6 +270,123 @@ beforeEach(() => {
 afterEach(() => scope.stop());
 
 describe('本机比特浏览器自动充值', () => {
+  it('账号密码只发给本机连接器，服务端任务不含登录秘密', async () => {
+    flow.loginMethod.value = 'password';
+    flow.loginEmail.value = 'test@example.invalid';
+    flow.loginPassword.value = 'local-password';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    await nextTick();
+    flow.windowName.value = '申请gpt-001';
+    flow.selectedAddressId.value = address.id;
+    Object.assign(flow.details.value, {
+      number: '5555555555554444',
+      name: 'Test User',
+      expiry: '12/30',
+      cvc: '123'
+    });
+    flow.authorizeSinglePayment.value = true;
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    const serverBody = mock.startBitBrowser.mock.calls[0]![0];
+    const localBody = mock.connectorStart.mock.calls[0]![2];
+    expect(JSON.stringify(serverBody)).not.toContain('local-password');
+    expect(serverBody).not.toHaveProperty('login');
+    expect(localBody).toMatchObject({
+      mode: 'payment',
+      login: { email: 'test@example.invalid', password: 'local-password' }
+    });
+    expect(localBody).not.toHaveProperty('sessionJson');
+    expect(JSON.stringify(localBody)).not.toContain('JBSWY3DPEHPK3PXP');
+    expect(flow.loginPassword.value).toBe('');
+  });
+
+  it('选择已保存 2FA 账号后，官网索取验证码时自动获取并仅向本机提交一次', async () => {
+    flow.loginMethod.value = 'password';
+    flow.totp.source.value = 'saved';
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'awaiting_human_verification',
+        result: { status: 'awaiting_human_verification', stage: 'login_code_required' },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    flow.selectJob(launch.id);
+    await vi.waitFor(() => expect(mock.connectorSubmitCode).toHaveBeenCalledTimes(1));
+    expect(mock.listTotpAccounts).toHaveBeenCalledTimes(1);
+    expect(mock.connectorSubmitCode).toHaveBeenCalledWith(
+      settings.connectorUrl,
+      launch.connectorToken,
+      launch.id,
+      '123456'
+    );
+    expect(flow.needsManualCode.value).toBe(false);
+    expect(mock.connectorResume).not.toHaveBeenCalled();
+  });
+
+  it('已保存 2FA 取码失败时停止自动提交并显示手动兜底', async () => {
+    flow.loginMethod.value = 'password';
+    flow.totp.source.value = 'saved';
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    mock.listTotpAccounts.mockRejectedValue(new Error('2FA 服务暂不可用'));
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'awaiting_human_verification',
+        result: { status: 'awaiting_human_verification', stage: 'login_code_required' },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    flow.selectJob(launch.id);
+    await vi.waitFor(() => expect(flow.needsManualCode.value).toBe(true));
+    expect(flow.error.value).toBe('2FA 服务暂不可用');
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+  });
+
+  it('当次 6 位验证码不能当作可自动生成的 2FA 密钥', () => {
+    flow.loginMethod.value = 'password';
+    flow.loginEmail.value = 'test@example.invalid';
+    flow.loginPassword.value = 'local-password';
+    flow.totp.secretInput.value = '123456';
+    flow.windowName.value = '申请gpt-001';
+    expect(flow.totp.ready.value).toBe(false);
+    expect(flow.canStartOpen.value).toBe(false);
+  });
+
+  it('验证码只向正在等待的本机任务提交一次', async () => {
+    jobs.value.items = [
+      {
+        id: launch.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'awaiting_human_verification',
+        result: { status: 'awaiting_human_verification', stage: 'login_code_required' },
+        createdAt: '',
+        updatedAt: ''
+      }
+    ];
+    flow.selectJob(launch.id);
+    await nextTick();
+    expect(flow.needsCode.value).toBe(true);
+    expect(flow.needsHuman.value).toBe(false);
+    flow.loginCode.value = '123456';
+    await flow.submitLoginCode();
+    expect(mock.connectorSubmitCode).toHaveBeenCalledWith(
+      settings.connectorUrl,
+      launch.connectorToken,
+      launch.id,
+      '123456'
+    );
+    expect(mock.connectorResume).not.toHaveBeenCalled();
+    expect(flow.loginCode.value).toBe('');
+  });
   it('停止后清理中保持任务锁并说明进度，不重复取消', async () => {
     jobs.value.items = [
       {

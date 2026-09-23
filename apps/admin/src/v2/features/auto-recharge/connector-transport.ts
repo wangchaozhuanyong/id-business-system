@@ -89,9 +89,9 @@ export async function connectorRequest(
 }
 
 export function requireConnectorHealth(result: Record<string, unknown>) {
-  if (result.service !== 'id-business-v2-auto-recharge-connector' || result.version !== 2) {
+  if (result.service !== 'id-business-v2-auto-recharge-connector' || result.version !== 3) {
     throw new RechargeConnectorError(
-      typeof result.version === 'number' && result.version < 2 ? 'version' : 'protocol'
+      typeof result.version === 'number' && result.version < 3 ? 'version' : 'protocol'
     );
   }
   if (result.originAllowed !== true) throw new RechargeConnectorError('origin');
@@ -105,7 +105,9 @@ export function requireConnectorHealth(result: Record<string, unknown>) {
       'same-window-page-refresh',
       'payment-unknown-resolution',
       'prepayment-page-recovery',
-      'stale-owned-profile-cleanup'
+      'stale-owned-profile-cleanup',
+      'password-login',
+      'login-code'
     ].every((key) => (result.capabilities as unknown[]).includes(key))
   ) {
     throw new RechargeConnectorError('version');

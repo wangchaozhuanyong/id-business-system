@@ -535,9 +535,11 @@ export class RechargeService {
         let state = job.state;
         let nonceHash = job.nonceHash;
         if (input.type === 'progress' && job.action === 'bitbrowser') {
-          state = ['verification_required', 'bank_verification_required'].includes(
-            String(report.stage)
-          )
+          state = [
+            'verification_required',
+            'bank_verification_required',
+            'login_code_required'
+          ].includes(String(report.stage))
             ? 'awaiting_human_verification'
             : 'running';
         }

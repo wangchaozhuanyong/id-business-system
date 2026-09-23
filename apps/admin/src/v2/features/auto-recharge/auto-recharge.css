@@ -8,6 +8,13 @@
   font-size: 12px;
   line-height: 1.7;
 }
+.recharge-login-note {
+  margin: 0 0 18px 112px;
+}
+.recharge-code-form {
+  width: 100%;
+  max-width: 420px;
+}
 .recharge-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(340px, 1fr);
