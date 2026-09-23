@@ -16,6 +16,8 @@ const mock = vi.hoisted(() => ({
   addressesQuery: {} as Record<string, unknown>,
   settingsQuery: {} as Record<string, unknown>,
   totpQuery: {} as Record<string, unknown>,
+  bankAccountsQuery: {} as Record<string, unknown>,
+  bankCurrenciesQuery: {} as Record<string, unknown>,
   queryIndex: 0,
   jobOptions: undefined as
     | undefined
@@ -54,6 +56,8 @@ vi.mock('@/v2/composables/useV2Query', () => ({
   }) => {
     if (options.moduleKey === 'auto-recharge-addresses') return mock.addressesQuery;
     if (options.key === 'auto-recharge-saved-totp-accounts') return mock.totpQuery;
+    if (options.moduleKey === 'chatgpt-accounts') return mock.bankAccountsQuery;
+    if (options.moduleKey === 'bank-recharge-orders') return mock.bankCurrenciesQuery;
     const result = mock.queryIndex++ === 0 ? mock.jobsQuery : mock.settingsQuery;
     if (options.getRevalidateAt) mock.jobOptions = options;
     return result;
@@ -173,6 +177,13 @@ const phase = ref('ready');
 const savedTotp = ref({
   items: [{ id: '88888888-8888-4888-8888-888888888888', name: 'ChatGPT', issuer: 'OpenAI' }]
 });
+const bankAccounts = ref({ items: [] });
+const bankCurrencies = ref({
+  items: [
+    { code: 'USD', name: '美元', minorUnits: 2, active: true },
+    { code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }
+  ]
+});
 let scope = effectScope();
 let flow: ReturnType<typeof useAutoRecharge>;
 
@@ -209,6 +220,8 @@ beforeEach(() => {
   mock.addressesQuery = queryResult(addresses);
   mock.settingsQuery = queryResult(storedSettings);
   mock.totpQuery = queryResult(savedTotp);
+  mock.bankAccountsQuery = queryResult(bankAccounts);
+  mock.bankCurrenciesQuery = queryResult(bankCurrencies);
   mock.listTotpAccounts.mockImplementation(async () => ({
     items: [
       {
@@ -477,10 +490,11 @@ describe('本机比特浏览器自动充值', () => {
       windowName: '申请gpt-001',
       lockedCurrency: 'PHP',
       maxAmount: '30.00',
+      expectedEmail: 'registered@example.com',
       authorizeSinglePayment: true
     });
     expect(JSON.stringify(serverInput)).not.toContain('5555555555554444');
-    expect(JSON.stringify(serverInput)).not.toContain('registered@example.com');
+    expect(JSON.stringify(serverInput)).not.toContain(sessionJson());
 
     const connectorInput = mock.connectorStart.mock.calls[0]![2];
     expect(connectorInput).toMatchObject({

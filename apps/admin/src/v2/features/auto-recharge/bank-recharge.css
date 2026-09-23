@@ -1,0 +1,78 @@
+.bank-recharge-page .bank-recharge-nowrap .cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bank-recharge-error {
+  margin: 12px 0 0;
+  color: var(--el-color-danger);
+}
+
+.bank-recharge-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 14px 0;
+}
+
+.bank-recharge-toolbar .el-input {
+  max-width: 280px;
+}
+.bank-recharge-toolbar .el-select {
+  width: 180px;
+}
+.bank-recharge-form-note {
+  color: var(--v2-text-soft);
+  font-size: 12px;
+}
+
+.bank-recharge-renewal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bank-recharge-renewal-list li {
+  display: grid;
+  grid-template-columns:
+    minmax(100px, 1fr) minmax(160px, 1.3fr) minmax(180px, 1.3fr)
+    160px 90px 120px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.bank-recharge-renewal-list li > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .bank-recharge-renewal-list {
+    overflow-x: visible;
+  }
+  .bank-recharge-renewal-list li {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+  }
+  .bank-recharge-renewal-list li > :nth-child(3) {
+    grid-column: 1 / -1;
+  }
+  .bank-recharge-renewal-list li > :nth-child(5) {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    min-width: 76px;
+    overflow: visible;
+  }
+  .bank-recharge-renewal-list li > :nth-child(6) {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
+}

@@ -236,6 +236,9 @@ export interface V2RechargeBitBrowserStart {
   lockedCurrency: string;
   maxAmount: string;
   authorizeSinglePayment: true;
+  chatgptAccountId?: string;
+  useSavedCredentials?: boolean;
+  expectedEmail?: string;
 }
 
 export interface V2RechargeBitBrowserRecheckStart {
@@ -251,6 +254,7 @@ export interface V2RechargeBitBrowserLaunch {
   connectorUrl: string;
   connectorToken: string;
   agentToken: string;
+  savedLogin?: { email: string; password: string };
   bitBrowser: {
     localApiUrl: string;
     localApiToken: string;

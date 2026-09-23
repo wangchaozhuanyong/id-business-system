@@ -24,6 +24,7 @@ export type V2FinanceJournalType =
   | 'gift_card_refund_write_off'
   | 'account_purchase'
   | 'order_completed'
+  | 'bank_recharge_completed'
   | 'order_refund'
   | 'order_upgrade_balance_return'
   | 'order_cancel'
@@ -46,6 +47,10 @@ export type V2FinanceAccountCode =
   | 'gift_card_inventory'
   | 'id_inventory'
   | 'sales_revenue'
+  | 'bank_recharge_revenue'
+  | 'bank_recharge_service_fee'
+  | 'bank_recharge_cost'
+  | 'bank_recharge_bank_fee'
   | 'other_operating_revenue'
   | 'contributed_capital'
   | 'borrowed_funds_payable'
@@ -342,6 +347,8 @@ export interface V2FinanceCurrencyBreakdown {
 export interface V2FinanceProfitLoss {
   salesRevenueCny: DecimalString;
   otherOperatingRevenueCny: DecimalString;
+  bankRechargeRevenueCny?: DecimalString;
+  bankRechargeServiceFeeCny?: DecimalString;
   totalOperatingRevenueCny: DecimalString;
   platformFeeCny: DecimalString;
   giftCardCostCny: DecimalString;
@@ -352,6 +359,8 @@ export interface V2FinanceProfitLoss {
   balanceLossCny: DecimalString;
   idPurchaseLossCny: DecimalString;
   operatingExpenseCny: DecimalString;
+  bankRechargeCostCny?: DecimalString;
+  bankRechargeBankFeeCny?: DecimalString;
   realizedFxGainLossCny: DecimalString;
   netProfitCny: DecimalString;
   estimatedProfitCny: DecimalString;

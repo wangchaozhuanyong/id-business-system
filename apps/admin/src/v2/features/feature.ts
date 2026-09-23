@@ -3,6 +3,8 @@ import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 export type V2ModuleKey =
   | 'auto-recharge'
+  | 'chatgpt-accounts'
+  | 'bank-recharge-orders'
   | 'auto-recharge-addresses'
   | 'vendure-mailbox'
   | 'renewal-workbench'

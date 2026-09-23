@@ -40,7 +40,14 @@ export const V2_DATA_SCOPES = [
 export type V2DataScope = (typeof V2_DATA_SCOPES)[number];
 
 export const V2_SCOPE_DEPENDENCIES = {
-  'auto-recharge': ['auto-recharge'],
+  'auto-recharge': [
+    'auto-recharge',
+    'renewals',
+    'renewal-warning-summary',
+    'dashboard',
+    'finance-ledger',
+    'finance-reports'
+  ],
   'account-losses': [
     'account-losses',
     'dashboard',

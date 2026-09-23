@@ -128,6 +128,12 @@ try {
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items: jobs, configured: true });
+      if (path.endsWith('/bank-recharge/accounts') && request.method() === 'GET')
+        return success(route, { items: [] });
+      if (path.endsWith('/bank-recharge/currencies') && request.method() === 'GET')
+        return success(route, {
+          items: [{ code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }]
+        });
       if (path.endsWith('/auto-recharge/bitbrowser-settings') && request.method() === 'GET')
         return success(route, currentSettings);
       if (path.endsWith('/auto-recharge/bitbrowser-catalog-access'))
@@ -182,7 +188,7 @@ try {
         assert.equal(serverStartBody.maxAmount, '30.00');
         assert.equal(serverStartBody.authorizeSinglePayment, true);
         assert.equal(JSON.stringify(serverStartBody).includes('5555555555554444'), false);
-        assert.equal(JSON.stringify(serverStartBody).includes('fixture@example.test'), false);
+        assert.equal(serverStartBody.expectedEmail, 'fixture@example.test');
         jobs.unshift({
           id: serverStartBody.id,
           plan: serverStartBody.plan,
@@ -668,7 +674,7 @@ try {
     assert.equal(await page.getByLabel('登录密码').inputValue(), '');
     assert.equal(apiStarts, 1);
 
-    await page.getByText('已保存账号', { exact: true }).click();
+    await page.getByLabel('2FA 方式').getByText('已保存账号', { exact: true }).click();
     await page.getByLabel('登录密码').fill('local-password');
     await page.getByRole('combobox', { name: '选择已保存的 2FA 账号' }).click();
     await page.getByRole('option', { name: 'ChatGPT 验收 · OpenAI' }).click();

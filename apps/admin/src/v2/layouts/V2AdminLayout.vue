@@ -286,6 +286,44 @@
                   刷新失败，已保留上次成功结果。
                 </small>
               </section>
+              <section v-if="isAdmin" class="v2-notification__section">
+                <header>
+                  <strong>银充续费提醒</strong>
+                  <small v-if="bankRenewalSummary"
+                    >提前 {{ bankRenewalSummary.warningDays }} 天</small
+                  >
+                </header>
+                <p v-if="bankRenewalInitialLoading && !bankRenewalSummary">正在读取提醒…</p>
+                <template v-else-if="bankRenewalSummary">
+                  <div class="v2-notification__counts">
+                    <span
+                      ><small>即将到期</small
+                      ><strong>{{ bankRenewalSummary.upcomingCount }}</strong></span
+                    >
+                    <span
+                      ><small>已到期</small
+                      ><strong>{{ bankRenewalSummary.expiredCount }}</strong></span
+                    >
+                  </div>
+                  <ul v-if="bankRenewalSummary.items.length">
+                    <li v-for="item in bankRenewalSummary.items.slice(0, 5)" :key="item.id">
+                      <div>
+                        <strong>{{ item.customerName }}</strong
+                        ><span>{{ item.accountMasked }} · {{ item.orderNo }}</span>
+                      </div>
+                      <small :class="`is-${item.warningState}`"
+                        >{{ item.warningState === 'expired' ? '已到期' : '即将到期' }} ·
+                        {{ formatWarningDueAt(item.dueAt) }}</small
+                      >
+                    </li>
+                  </ul>
+                  <p v-else>当前没有银充续费提醒。</p>
+                  <AppButton variant="primary" size="small" @click="openRenewalWarnings"
+                    >打开续费操作台</AppButton
+                  >
+                </template>
+                <p v-else>银充提醒暂时无法加载。</p>
+              </section>
             </div>
           </div>
           <div class="v2-topbar__account">
@@ -400,6 +438,8 @@ import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
 import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
+import { bankRechargeApi } from '@/v2/features/auto-recharge/public-api';
+import type { BankRechargeRenewalWarnings } from '@/v2/features/auto-recharge/public-api';
 import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import V2WorkspaceLauncher from '@/v2/components/workspace/V2WorkspaceLauncher.vue';
@@ -529,6 +569,16 @@ const renewalWarningSummary = computed(() => renewalWarningQuery.data.value);
 const renewalWarningCount = computed(() => renewalWarningSummary.value?.totalCount ?? 0);
 const renewalWarningInitialLoading = computed(() => renewalWarningQuery.isInitialLoading.value);
 const renewalWarningError = computed(() => renewalWarningQuery.error.value);
+const bankRenewalQuery = useV2Query<BankRechargeRenewalWarnings>({
+  scope: 'renewal-warning-summary',
+  key: 'bank-recharge',
+  enabled: () => isAdmin.value,
+  freshnessPolicy: 'event-with-deadline',
+  getRevalidateAt: (result) => result.revalidateAt,
+  query: ({ signal }) => bankRechargeApi.renewalWarnings({ signal })
+});
+const bankRenewalSummary = computed(() => bankRenewalQuery.data.value);
+const bankRenewalInitialLoading = computed(() => bankRenewalQuery.isInitialLoading.value);
 const sensitiveApprovalQuery = useV2Query<V2SensitiveAccessApprovalSummary>({
   scope: 'security',
   key: 'sensitive-approval-summary',
@@ -542,7 +592,10 @@ const sensitiveApprovalInitialLoading = computed(
 );
 const sensitiveApprovalError = computed(() => sensitiveApprovalQuery.error.value);
 const notificationCount = computed(
-  () => renewalWarningCount.value + (sensitiveApprovalSummary.value?.pendingCount ?? 0)
+  () =>
+    renewalWarningCount.value +
+    (bankRenewalSummary.value?.totalCount ?? 0) +
+    (sensitiveApprovalSummary.value?.pendingCount ?? 0)
 );
 
 watch(
@@ -635,8 +688,12 @@ function setTheme(theme: V2Theme) {
 }
 
 function refreshRenewalWarnings(force = false) {
-  if (!canViewRenewalWarnings.value) return;
-  void (force ? renewalWarningQuery.refresh() : renewalWarningQuery.ensureFresh());
+  if (canViewRenewalWarnings.value) {
+    void (force ? renewalWarningQuery.refresh() : renewalWarningQuery.ensureFresh());
+  }
+  if (isAdmin.value) {
+    void (force ? bankRenewalQuery.refresh() : bankRenewalQuery.ensureFresh());
+  }
 }
 
 function refreshSensitiveApprovals(force = false) {

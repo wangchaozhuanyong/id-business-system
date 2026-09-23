@@ -8,12 +8,12 @@ import {
 } from '@apple-business/shared';
 import { object, uuidPattern } from './recharge-validation';
 
-const supportedCurrencies = new Set(
-  'USD MYR PHP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY'.split(
+export const supportedCurrencies = new Set(
+  'USD MYR PHP CLP EUR GBP AUD CAD JPY KRW SGD INR IDR THB VND TWD HKD BRL MXN AED SAR ZAR NZD CHF SEK NOK DKK PLN TRY'.split(
     ' '
   )
 );
-const zeroDecimalCurrencies = new Set(['JPY', 'KRW', 'VND']);
+export const zeroDecimalCurrencies = new Set(['JPY', 'KRW', 'VND', 'CLP']);
 const hasControlCharacter = (value: string) =>
   [...value].some((character) => {
     const code = character.charCodeAt(0);
@@ -49,7 +49,10 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     'windowName',
     'lockedCurrency',
     'maxAmount',
-    'authorizeSinglePayment'
+    'authorizeSinglePayment',
+    'chatgptAccountId',
+    'useSavedCredentials',
+    'expectedEmail'
   ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
@@ -73,6 +76,26 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     throw new BadRequestException('锁定币种不受支持');
   }
   const maximum = amountMinor(input.maxAmount, lockedCurrency);
+  if (
+    input.chatgptAccountId !== undefined &&
+    (typeof input.chatgptAccountId !== 'string' || !uuidPattern.test(input.chatgptAccountId))
+  ) {
+    throw new BadRequestException('所选 ChatGPT 账号无效');
+  }
+  if (input.useSavedCredentials !== undefined && typeof input.useSavedCredentials !== 'boolean') {
+    throw new BadRequestException('账号凭据选择无效');
+  }
+  if (input.useSavedCredentials && !input.chatgptAccountId) {
+    throw new BadRequestException('请先选择已保存的 ChatGPT 账号');
+  }
+  if (
+    input.expectedEmail !== undefined &&
+    (typeof input.expectedEmail !== 'string' ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.expectedEmail.trim()) ||
+      input.expectedEmail.length > 250)
+  ) {
+    throw new BadRequestException('ChatGPT 注册邮箱无效');
+  }
   return {
     id: input.id,
     plan: input.plan,
@@ -81,8 +104,16 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     lockedCurrency,
     maxAmount: maximum.amount,
     maxAmountMinor: maximum.amountMinor,
+    chatgptAccountId: input.chatgptAccountId as string | undefined,
+    useSavedCredentials: input.useSavedCredentials === true,
+    expectedEmail: input.expectedEmail as string | undefined,
     authorizeSinglePayment: true
-  } as V2RechargeBitBrowserStart & { maxAmountMinor: number };
+  } as V2RechargeBitBrowserStart & {
+    maxAmountMinor: number;
+    chatgptAccountId?: string;
+    useSavedCredentials: boolean;
+    expectedEmail?: string;
+  };
 }
 
 export function validateRechargeBitBrowserRecheckStart(value: unknown) {

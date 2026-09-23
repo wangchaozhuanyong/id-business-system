@@ -1,18 +1,11 @@
 <template>
   <section class="recharge-page">
-    <V2PageContext
-      description="使用授权 JSON 或账号密码登录本机比特浏览器；自动充值按金额上限执行，需要真人或银行验证时保留原窗口等待处理。"
-    >
-      <template #status>
-        <span class="recharge-connector-status" :data-status="connectorStatus">
-          {{ connectorMessage }}
-        </span>
-      </template>
-      <template #actions>
-        <el-button @click="setSettingsOpen(true)">代理 IP 与窗口设置</el-button>
-        <el-button @click="historyOpen = true">最近执行记录</el-button>
-      </template>
-    </V2PageContext>
+    <RechargePageContext
+      :connector-status="connectorStatus"
+      :connector-message="connectorMessage"
+      @settings="setSettingsOpen(true)"
+      @history="historyOpen = true"
+    />
     <V2AsyncRegion
       :phase="query.phase.value"
       :previous-data="query.isParameterTransition.value"
@@ -52,6 +45,7 @@
               <el-radio-group v-model="loginMethod">
                 <el-radio-button value="json">授权 JSON</el-radio-button>
                 <el-radio-button value="password">账号密码</el-radio-button>
+                <el-radio-button value="saved">已保存账号</el-radio-button>
               </el-radio-group>
             </el-form-item>
 
@@ -90,6 +84,33 @@
                 }}。
               </p>
             </el-form-item>
+
+            <template v-else-if="loginMethod === 'saved'">
+              <el-form-item label="ChatGPT 账号" required>
+                <el-select
+                  v-model="selectedBankAccountId"
+                  filterable
+                  aria-label="选择已保存的 ChatGPT 账号"
+                  placeholder="选择账号后自动读取登录资料"
+                  :loading="bankAccountsQuery.phase.value === 'initial-loading'"
+                >
+                  <el-option
+                    v-for="item in savedBankAccounts"
+                    :key="item.id"
+                    :value="item.id"
+                    :label="`${item.emailMasked}${item.hasPassword ? '' : ' · 未保存密码'}`"
+                    :disabled="!item.hasPassword"
+                  />
+                </el-select>
+              </el-form-item>
+              <p v-if="bankAccountsQuery.error.value" class="recharge-error" role="alert">
+                {{ getApiErrorMessage(bankAccountsQuery.error.value) }}
+                <el-button link type="primary" @click="bankAccountsQuery.refresh">重试</el-button>
+              </p>
+              <p class="recharge-note">
+                2FA 已保存时官网要求验证会自动取码；未保存时在当前窗口手动完成。
+              </p>
+            </template>
 
             <template v-else>
               <el-form-item label="ChatGPT 账号" required>
@@ -154,13 +175,17 @@
               <el-form-item label="锁定币种" required>
                 <el-select v-model="lockedCurrency" aria-label="选择锁定币种" filterable>
                   <el-option
-                    v-for="currency in currencyOptions"
+                    v-for="currency in availableCurrencyOptions"
                     :key="currency.value"
                     :label="currency.label"
                     :value="currency.value"
                   />
                 </el-select>
               </el-form-item>
+              <p v-if="bankCurrenciesQuery.error.value" class="recharge-error" role="alert">
+                {{ getApiErrorMessage(bankCurrenciesQuery.error.value) }}
+                <el-button link type="primary" @click="bankCurrenciesQuery.refresh">重试</el-button>
+              </p>
               <el-form-item label="最高付款" required>
                 <el-input v-model="maxAmount" inputmode="decimal" maxlength="12">
                   <template #append>{{ lockedCurrency }}</template>
@@ -172,7 +197,7 @@
               <legend>银行卡与账单</legend>
               <div class="recharge-fields">
                 <el-form-item
-                  v-for="field in paymentFields"
+                  v-for="field in rechargePaymentFields"
                   :key="field.key"
                   :label="field.label"
                   :prop="field.key"
@@ -367,67 +392,36 @@
       </div>
     </V2AsyncRegion>
 
-    <RechargeBrowserSettings :settings="browserSettings" />
+    <RechargeBrowserSettings v-if="settingsOpen" :settings="browserSettings" />
 
-    <el-drawer
+    <RechargeHistoryDrawer
+      v-if="historyOpen"
       v-model="historyOpen"
-      title="最近执行记录"
-      size="min(640px, 96vw)"
-      direction="rtl"
-      destroy-on-close
-    >
-      <p class="recharge-note">
-        查看历史记录不会重新连接、建单或付款；付款结果未知时可单独确认银行卡未收到请求。
-      </p>
-      <ul class="recharge-history">
-        <li v-for="job in jobs" :key="job.id">
-          <button
-            type="button"
-            :aria-pressed="historyJob?.id === job.id"
-            :class="{ 'is-selected': historyJob?.id === job.id }"
-            @click="selectHistory(job.id)"
-          >
-            {{ planLabels[job.plan] }} · {{ statusLabel(job.result.status || job.state) }}
-            <small>{{ formatV2DateTime(job.createdAt) }}</small>
-          </button>
-        </li>
-      </ul>
-      <RechargeResult v-if="historyJob" :job="historyJob" />
-      <div v-if="canRecheck || canResolveNoBankRequest" class="recharge-actions">
-        <el-button v-if="canRecheck" type="primary" :loading="busy" @click="recheck">
-          只读复查原订单
-        </el-button>
-        <el-button
-          v-if="canResolveNoBankRequest"
-          type="warning"
-          :loading="busy"
-          @click="resolveNoBankRequest"
-        >
-          确认银行卡未收到付款请求
-        </el-button>
-      </div>
-    </el-drawer>
+      :jobs="jobs"
+      :can-recheck="canRecheck"
+      :can-resolve-no-bank-request="canResolveNoBankRequest"
+      :busy="busy"
+      @select="selectJob"
+      @recheck="recheck"
+      @resolve-no-bank-request="resolveNoBankRequest"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { defineAsyncComponent, ref } from 'vue';
 import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
-import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
-import V2PageContext from '@/v2/components/V2PageContext.vue';
-import RechargeResult from './RechargeResult.vue';
-import RechargeBrowserSettings from './RechargeBrowserSettings.vue';
 import RechargeTotpFields from './RechargeTotpFields.vue';
-import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
-import { currencyOptions, planLabels, statusLabel } from './recharge-presentation';
+import { formatRechargeExpiry, rechargePaymentFields, rechargeRules } from './recharge-form';
+import { planLabels } from './recharge-presentation';
+import RechargePageContext from './RechargePageContext.vue';
 import { useAutoRecharge } from './useAutoRecharge';
-const paymentFields = rechargeFields.filter((field) =>
-  ['number', 'name', 'expiry', 'cvc'].includes(field.key)
-);
+const RechargeResult = defineAsyncComponent(() => import('./RechargeResult.vue'));
+const RechargeBrowserSettings = defineAsyncComponent(() => import('./RechargeBrowserSettings.vue'));
+const RechargeHistoryDrawer = defineAsyncComponent(() => import('./RechargeHistoryDrawer.vue'));
 const historyOpen = ref(false);
-const historyId = ref('');
 const {
   query,
   addressQuery,
@@ -440,6 +434,11 @@ const {
   sessionJson,
   jsonError,
   loginMethod,
+  selectedBankAccountId,
+  savedBankAccounts,
+  bankAccountsQuery,
+  bankCurrenciesQuery,
+  availableCurrencyOptions,
   loginEmail,
   loginPassword,
   loginCode,
@@ -474,6 +473,7 @@ const {
   autoCodeMessage,
   workflowMessage,
   browserSettings,
+  settingsOpen,
   setSettingsOpen,
   connectorStatus,
   connectorMessage,
@@ -490,11 +490,6 @@ const {
   cancel,
   refresh
 } = useAutoRecharge();
-const historyJob = computed(() => jobs.value.find((job) => job.id === historyId.value));
-function selectHistory(id: string) {
-  historyId.value = id;
-  selectJob(id);
-}
 </script>
 
 <style scoped src="./auto-recharge.css"></style>

@@ -15,6 +15,7 @@ import type {
 
 const currencies = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 const journalTypeOptions: Array<{ value: V2FinanceJournalType; label: string }> = [
+  { value: 'bank_recharge_completed', label: '银充订单完成' },
   { value: 'order_completed', label: '订单完成' },
   { value: 'order_refund', label: '订单退款' },
   { value: 'order_upgrade_balance_return', label: '订单升级退币' },
@@ -230,7 +231,11 @@ function accountCodeLabel(value: V2FinanceAccountCode) {
     borrowed_funds_payable: '借入资金负债',
     realized_fx_gain_loss: '已实现汇兑损益',
     opening_equity: '期初权益',
-    manual_adjustment: '手工调整'
+    manual_adjustment: '手工调整',
+    bank_recharge_revenue: '银充代充收入',
+    bank_recharge_service_fee: '银充客户手续费收入',
+    bank_recharge_cost: '银充代付成本',
+    bank_recharge_bank_fee: '银充银行手续费'
   };
   return labels[value];
 }

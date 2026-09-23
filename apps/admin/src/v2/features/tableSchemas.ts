@@ -3,6 +3,64 @@ import { defineV2TableSchema } from '@/v2/components/tableSystem';
 const table = defineV2TableSchema;
 
 export const v2TableSchemas = {
+  chatgptAccounts: {
+    main: table({
+      id: 'chatgpt-accounts.main',
+      feature: 'chatgpt-accounts',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'emailMasked',
+          label: 'ChatGPT 账号',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
+        { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },
+        { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
+    })
+  },
+  bankRechargeOrders: {
+    main: table({
+      id: 'bank-recharge-orders.main',
+      feature: 'bank-recharge-orders',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'orderNo',
+          label: '银充订单',
+          kind: 'identifier',
+          widthPreset: 'wide',
+          pin: 'start'
+        },
+        { key: 'createdAt', label: '创建时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'customer', label: '客户', kind: 'text', widthPreset: 'standard' },
+        { key: 'account', label: 'ChatGPT 账号', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
+        { key: 'card', label: '银行卡', kind: 'identifier', widthPreset: 'standard' },
+        { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'customerFeeRate', label: '手续费率', kind: 'numeric', widthPreset: 'compact' },
+        { key: 'customerFeeAmount', label: '客户手续费', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'bankFeeAmount', label: '银行手续费', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'receivedAmount', label: '客户实收', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'profitAmountCny', label: '利润(CNY)', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'paymentResult', label: '充值结果', kind: 'status', widthPreset: 'standard' },
+        { key: 'usageStatus', label: '使用状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'status', label: '订单状态', kind: 'status', widthPreset: 'standard' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ]
+    })
+  },
   vendureMailbox: {
     primary: table({
       id: 'vendure-mailbox.primary',
@@ -1194,6 +1252,8 @@ export const v2TableSchemas = {
 
 export const v2TablesByFeature = {
   'auto-recharge': [],
+  'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
+  'bank-recharge-orders': [v2TableSchemas.bankRechargeOrders.main],
   'vendure-mailbox': [
     v2TableSchemas.vendureMailbox.primary,
     v2TableSchemas.vendureMailbox.aliases,

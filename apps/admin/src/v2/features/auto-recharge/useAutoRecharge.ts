@@ -19,6 +19,8 @@ import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
 import { useRechargeTotp } from './useRechargeTotp';
+import { bankRechargeApi } from './bank-recharge-api';
+import { currencyOptions } from './recharge-presentation';
 
 const activeStates = new Set([
   'running',
@@ -98,7 +100,9 @@ function settingsReady(settings: V2RechargeBitBrowserSettings | undefined) {
 export function useAutoRecharge() {
   const currentId = ref('');
   const operationMode = ref<'payment' | 'open_browser'>('payment');
-  const loginMethod = ref<'json' | 'password'>('json');
+  const loginMethod = ref<'json' | 'password' | 'saved'>('json');
+  const selectedBankAccountId = ref('');
+  const selectedBankAccountEmail = ref('');
   const loginEmail = ref('');
   const loginPassword = ref('');
   const loginCode = ref('');
@@ -142,12 +146,40 @@ export function useAutoRecharge() {
     query: ({ signal }) =>
       rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'unused' }, { signal })
   });
+  const bankAccountsQuery = useV2ModuleQuery({
+    moduleKey: 'chatgpt-accounts',
+    scope: 'auto-recharge',
+    key: 'auto-recharge-bank-accounts',
+    query: ({ signal }) => bankRechargeApi.listAccounts({ signal })
+  });
+  const bankCurrenciesQuery = useV2ModuleQuery({
+    moduleKey: 'bank-recharge-orders',
+    scope: 'auto-recharge',
+    key: 'auto-recharge-bank-currencies',
+    query: ({ signal }) => bankRechargeApi.listCurrencies({ signal })
+  });
   const browserSettings = useRechargeBrowserSettings(connectorStatus, connectorMessage);
   const { settingsQuery } = browserSettings;
   const totp = useRechargeTotp(loginMethod);
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() => addressQuery.data.value?.items ?? []);
+  const savedBankAccounts = computed(() =>
+    (bankAccountsQuery.data.value?.items ?? []).filter((item) => item.status === 'active')
+  );
+  const selectedBankAccount = computed(() =>
+    savedBankAccounts.value.find((item) => item.id === selectedBankAccountId.value)
+  );
+  const availableCurrencyOptions = computed(() =>
+    (bankCurrenciesQuery.data.value?.items ?? [])
+      .filter((item) => item.active)
+      .map((item) => ({
+        value: item.code,
+        label:
+          currencyOptions.find((known) => known.value === item.code)?.label ??
+          `${item.name}（${item.code}）`
+      }))
+  );
   const selectedAddress = computed<V2RechargeAddress | undefined>(() =>
     availableAddresses.value.find((address) => address.id === selectedAddressId.value)
   );
@@ -162,9 +194,16 @@ export function useAutoRecharge() {
   const credentialReady = computed(() =>
     loginMethod.value === 'json'
       ? Boolean(sessionJson.value)
-      : emailPattern.test(loginEmail.value.trim()) &&
-        Boolean(loginPassword.value) &&
-        totp.ready.value
+      : loginMethod.value === 'saved'
+        ? Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
+        : emailPattern.test(loginEmail.value.trim()) &&
+          Boolean(loginPassword.value) &&
+          totp.ready.value
+  );
+  const automaticCodeReady = computed(() =>
+    loginMethod.value === 'saved'
+      ? Boolean(selectedBankAccount.value?.hasTotp)
+      : totp.ready.value && totp.source.value !== 'manual'
   );
   const canStart = computed(
     () =>
@@ -173,6 +212,7 @@ export function useAutoRecharge() {
         selectedAddress.value &&
         windowName.value.trim() &&
         /^[A-Z]{3}$/.test(lockedCurrency.value) &&
+        availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value) &&
         authorizeSinglePayment.value &&
         rechargeDetailsReady(details.value) &&
@@ -253,9 +293,7 @@ export function useAutoRecharge() {
     () =>
       needsCode.value &&
       autoCodeSubmittedJobId.value !== selected.value?.id &&
-      (totp.source.value === 'manual' ||
-        !totp.ready.value ||
-        autoCodeFailureJobId.value === selected.value?.id)
+      (!automaticCodeReady.value || autoCodeFailureJobId.value === selected.value?.id)
   );
   const autoCodeMessage = computed(() =>
     autoCodeSubmittedJobId.value === selected.value?.id
@@ -306,17 +344,33 @@ export function useAutoRecharge() {
 
   watch([loginEmail, loginMethod], () => {
     details.value.email =
-      loginMethod.value === 'password'
-        ? loginEmail.value.trim()
-        : sessionJson.value
-          ? registrationEmail(JSON.parse(sessionJson.value))
-          : '';
+      loginMethod.value === 'saved'
+        ? selectedBankAccountEmail.value
+        : loginMethod.value === 'password'
+          ? loginEmail.value.trim()
+          : sessionJson.value
+            ? registrationEmail(JSON.parse(sessionJson.value))
+            : '';
     if (
       loginMethod.value === 'password' &&
       !windowName.value.trim() &&
       loginEmail.value.includes('@')
     ) {
       windowName.value = `ChatGPT-${loginEmail.value.split('@')[0]}`;
+    }
+  });
+
+  watch(selectedBankAccountId, async (id) => {
+    selectedBankAccountEmail.value = '';
+    if (!id) return;
+    try {
+      const identity = await bankRechargeApi.accountIdentity(id);
+      if (selectedBankAccountId.value !== id || disposed) return;
+      selectedBankAccountEmail.value = identity.email;
+      if (loginMethod.value === 'saved') details.value.email = identity.email;
+      if (!windowName.value.trim()) windowName.value = `ChatGPT-${identity.email.split('@')[0]}`;
+    } catch (cause) {
+      if (selectedBankAccountId.value === id) error.value = getApiErrorMessage(cause);
     }
   });
 
@@ -364,7 +418,13 @@ export function useAutoRecharge() {
     details.value.cvc = '';
   }
 
-  function localCredential() {
+  async function localCredential(savedLogin?: { email: string; password: string }) {
+    if (loginMethod.value === 'saved') {
+      if (!selectedBankAccountId.value) throw new Error('请先选择已保存的 ChatGPT 账号');
+      return {
+        login: savedLogin ?? (await bankRechargeApi.loginCredential(selectedBankAccountId.value))
+      };
+    }
     return loginMethod.value === 'json'
       ? { sessionJson: sessionJson.value }
       : { login: { email: loginEmail.value.trim(), password: loginPassword.value } };
@@ -456,6 +516,13 @@ export function useAutoRecharge() {
         windowName: windowName.value.trim(),
         lockedCurrency: lockedCurrency.value,
         maxAmount: maxAmount.value,
+        expectedEmail: details.value.email,
+        ...(loginMethod.value === 'saved'
+          ? {
+              chatgptAccountId: selectedBankAccountId.value,
+              useSavedCredentials: true
+            }
+          : {}),
         authorizeSinglePayment: true
       });
       currentId.value = id;
@@ -476,7 +543,7 @@ export function useAutoRecharge() {
         mode: launch.mode,
         plan: plan.value,
         windowName: windowName.value.trim(),
-        ...localCredential(),
+        ...(await localCredential(launch.savedLogin)),
         details: payment,
         address: launch.address,
         bitBrowser: launch.bitBrowser,
@@ -538,7 +605,7 @@ export function useAutoRecharge() {
         id,
         mode: 'open_browser',
         windowName: windowName.value.trim(),
-        ...localCredential(),
+        ...(await localCredential()),
         bitBrowser: launch.bitBrowser,
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken
@@ -605,7 +672,7 @@ export function useAutoRecharge() {
         mode: launch.mode,
         plan: source.plan,
         windowName: windowName.value.trim(),
-        ...localCredential(),
+        ...(await localCredential()),
         bitBrowser: launch.bitBrowser,
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken
@@ -763,7 +830,10 @@ export function useAutoRecharge() {
     autoCodeBusy.value = true;
     error.value = '';
     try {
-      const code = await totp.freshCode();
+      const code =
+        loginMethod.value === 'saved'
+          ? (await bankRechargeApi.totpCode(selectedBankAccountId.value)).token
+          : await totp.freshCode();
       if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
       if (disposed || !needsCode.value || selected.value?.id !== jobId) return;
       const current = await access();
@@ -797,7 +867,7 @@ export function useAutoRecharge() {
     if (
       !jobId ||
       !needsCode.value ||
-      !totp.ready.value ||
+      !automaticCodeReady.value ||
       autoCodeBusy.value ||
       autoCodeSubmittedJobId.value === jobId
     )
@@ -810,14 +880,7 @@ export function useAutoRecharge() {
   watch(
     () => (needsCode.value ? selected.value?.id : undefined),
     (jobId) => {
-      if (
-        !jobId ||
-        disposed ||
-        totp.source.value === 'manual' ||
-        !totp.ready.value ||
-        autoCodeAttempted.has(jobId)
-      )
-        return;
+      if (!jobId || disposed || !automaticCodeReady.value || autoCodeAttempted.has(jobId)) return;
       autoCodeAttempted.add(jobId);
       void submitAutomaticCode(jobId);
     },
@@ -864,6 +927,7 @@ export function useAutoRecharge() {
     sessionJson.value = '';
     jsonInput.value = '';
     loginPassword.value = '';
+    selectedBankAccountEmail.value = '';
     loginCode.value = '';
     totp.clearSecret();
     localAccess.value = null;
@@ -884,6 +948,12 @@ export function useAutoRecharge() {
     sessionJson,
     jsonError,
     loginMethod,
+    selectedBankAccountId,
+    selectedBankAccountEmail,
+    savedBankAccounts,
+    bankAccountsQuery,
+    bankCurrenciesQuery,
+    availableCurrencyOptions,
     loginEmail,
     loginPassword,
     loginCode,

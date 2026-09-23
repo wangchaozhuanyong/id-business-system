@@ -8,11 +8,23 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
+import { BankRechargeController } from './bank-recharge.controller';
+import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeOrderService } from './bank-recharge-order.service';
+import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
+import { BankRechargeRepository } from './persistence/bank-recharge.repository';
+import { BankRechargeFinanceService } from './bank-recharge-finance.service';
+import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
-  imports: [IdBusinessV2RuntimeModule],
-  controllers: [RechargeController],
+  imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule],
+  controllers: [RechargeController, BankRechargeController],
   providers: [
     FieldEncryptionService,
+    BankRechargeAccountService,
+    BankRechargeOrderService,
+    BankRechargeQueryRepository,
+    BankRechargeRepository,
+    BankRechargeFinanceService,
     RechargeService,
     RechargeLocalService,
     RechargeSettingsService,

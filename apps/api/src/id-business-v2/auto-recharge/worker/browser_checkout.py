@@ -21,7 +21,7 @@ from plans import PLANS, checkout_text_plan, plan_spec, text_tiers
 
 ORIGIN = "https://chatgpt.com"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-CURRENCIES = {"USD": 2, "MYR": 2, "PHP": 2, "EUR": 2, "GBP": 2, "AUD": 2, "CAD": 2,
+CURRENCIES = {"USD": 2, "MYR": 2, "PHP": 2, "CLP": 0, "EUR": 2, "GBP": 2, "AUD": 2, "CAD": 2,
               "JPY": 0, "KRW": 0, "SGD": 2, "INR": 2, "IDR": 2, "THB": 2, "VND": 0,
               "TWD": 2, "HKD": 2, "BRL": 2, "MXN": 2, "AED": 2, "SAR": 2, "ZAR": 2,
               "NZD": 2, "CHF": 2, "SEK": 2, "NOK": 2, "DKK": 2, "PLN": 2, "TRY": 2}
