@@ -4,6 +4,7 @@ import re
 import time
 
 import bitbrowser_options
+import browser_password_login
 import pay
 import payment_recovery
 import payment_state
@@ -73,7 +74,8 @@ async def cleanup_stale_profiles(job, client):
 
 
 async def execute_profiles(job, client, target, playwright):
-    await cleanup_stale_profiles(job, client)
+    if target is not None:
+        await cleanup_stale_profiles(job, client)
     owned = set()
     try:
         result = await _execute_profiles(job, client, target, playwright, owned)
@@ -134,7 +136,8 @@ async def cancellable_flow(job, target, **kwargs):
 async def _execute_profiles(job, client, target, playwright, owned):
     bit = job.payload["bitBrowser"]
     options = bitbrowser_options.validate_options(bit.get("browserOptions"))
-    attempts = options["sessionRetryLimit"] + 1 if job.payload["mode"] == "payment" else 1
+    attempts = (options["sessionRetryLimit"] + 1 if job.payload["mode"] == "payment"
+                and target is not None else 1)
     for attempt in range(1, attempts + 1):
         job.check_cancelled()
         job.session_info = {"session_attempt": attempt, "session_attempt_limit": attempts,
@@ -154,6 +157,34 @@ async def _execute_profiles(job, client, target, playwright, owned):
             raise Stop("bitbrowser_context_missing")
         job.context = browser.contexts[0]
         job.check_cancelled()
+        if target is None:
+            async def login_guard(route):
+                request = route.request
+                if browser_password_login.login_payment_write(request.method, request.url):
+                    await route.abort("blockedbyclient")
+                else:
+                    await route.fallback()
+
+            await job.context.route("**/*", login_guard)
+            from urllib.parse import urlsplit
+            page = next((p for p in job.context.pages if p.url == "about:blank" or
+                         urlsplit(p.url).hostname == "chatgpt.com"), None)
+            page = page or await job.context.new_page()
+            page.set_default_timeout(20000)
+            login = job.payload.pop("login")
+            try:
+                target, identity = await browser_password_login.login_with_password(
+                    page, login["email"], login["password"], job.wait_for_code,
+                    job.wait_for_user, job.progress)
+            finally:
+                await browser_password_login.clear_visible_secrets(page)
+                login.clear()
+                await job.context.unroute("**/*", login_guard)
+            job.check_cancelled()
+            job.restore_account(target)
+            await cleanup_stale_profiles(job, client)
+            job.progress("login_verified", account_matched=True,
+                         current_plan=identity["current_plan"])
         if job.payload["mode"] == "recheck":
             with payment_state.PaymentLedger(job.root, target.account_id,
                                              target_plan=job.payload["plan"]) as ledger:
@@ -168,7 +199,8 @@ async def _execute_profiles(job, client, target, playwright, owned):
             from browser_checkout import restore_session_with_refresh
             from checkout_core import session_cookies
             from urllib.parse import urlsplit
-            await job.context.add_cookies(session_cookies(target))
+            if target.session_token:
+                await job.context.add_cookies(session_cookies(target))
             job.progress("session_restore")
             page = next((p for p in job.context.pages if p.url == "about:blank" or
                          (urlsplit(p.url).hostname == "chatgpt.com"

@@ -18,6 +18,7 @@ import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
+import { useRechargeTotp } from './useRechargeTotp';
 
 const activeStates = new Set([
   'running',
@@ -97,6 +98,10 @@ function settingsReady(settings: V2RechargeBitBrowserSettings | undefined) {
 export function useAutoRecharge() {
   const currentId = ref('');
   const operationMode = ref<'payment' | 'open_browser'>('payment');
+  const loginMethod = ref<'json' | 'password'>('json');
+  const loginEmail = ref('');
+  const loginPassword = ref('');
+  const loginCode = ref('');
   const jsonInput = ref('');
   const sessionJson = ref('');
   const jsonError = ref('');
@@ -139,6 +144,7 @@ export function useAutoRecharge() {
   });
   const browserSettings = useRechargeBrowserSettings(connectorStatus, connectorMessage);
   const { settingsQuery } = browserSettings;
+  const totp = useRechargeTotp(loginMethod);
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() => addressQuery.data.value?.items ?? []);
@@ -153,10 +159,17 @@ export function useAutoRecharge() {
   const active = computed(() => jobs.value.some((job) => activeStates.has(job.state)));
   const currentSettingsReady = computed(() => settingsReady(settingsQuery.data.value));
   const formLocked = computed(() => busy.value || active.value);
+  const credentialReady = computed(() =>
+    loginMethod.value === 'json'
+      ? Boolean(sessionJson.value)
+      : emailPattern.test(loginEmail.value.trim()) &&
+        Boolean(loginPassword.value) &&
+        totp.ready.value
+  );
   const canStart = computed(
     () =>
       Boolean(
-        sessionJson.value &&
+        credentialReady.value &&
         selectedAddress.value &&
         windowName.value.trim() &&
         /^[A-Z]{3}$/.test(lockedCurrency.value) &&
@@ -170,7 +183,7 @@ export function useAutoRecharge() {
   );
   const canStartOpen = computed(
     () =>
-      Boolean(sessionJson.value && windowName.value.trim() && currentSettingsReady.value) &&
+      Boolean(credentialReady.value && windowName.value.trim() && currentSettingsReady.value) &&
       !formLocked.value &&
       query.phase.value === 'ready'
   );
@@ -198,7 +211,7 @@ export function useAutoRecharge() {
       job.result.operator_resolution !== 'confirmed_no_bank_request' &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
-      sessionJson.value &&
+      credentialReady.value &&
       windowName.value.trim() &&
       currentSettingsReady.value &&
       !busy.value &&
@@ -227,10 +240,42 @@ export function useAutoRecharge() {
       query.phase.value === 'ready'
     );
   });
-  const needsHuman = computed(() => selected.value?.state === 'awaiting_human_verification');
+  const needsCode = computed(
+    () =>
+      selected.value?.state === 'awaiting_human_verification' &&
+      selected.value.result.stage === 'login_code_required'
+  );
+  const autoCodeBusy = ref(false);
+  const autoCodeFailureJobId = ref('');
+  const autoCodeSubmittedJobId = ref('');
+  const autoCodeAttempted = new Set<string>();
+  const needsManualCode = computed(
+    () =>
+      needsCode.value &&
+      autoCodeSubmittedJobId.value !== selected.value?.id &&
+      (totp.source.value === 'manual' ||
+        !totp.ready.value ||
+        autoCodeFailureJobId.value === selected.value?.id)
+  );
+  const autoCodeMessage = computed(() =>
+    autoCodeSubmittedJobId.value === selected.value?.id
+      ? '验证码已提交，等待官网确认…'
+      : autoCodeBusy.value
+        ? '正在自动生成并提交 2FA 验证码…'
+        : '正在等待自动取码…'
+  );
+  const needsHuman = computed(
+    () => selected.value?.state === 'awaiting_human_verification' && !needsCode.value
+  );
   const workflowMessage = computed(() => {
     const job = selected.value;
     if (job?.result.status === 'cancelling') return '正在停止执行并清理本次窗口，请稍候。';
+    if (needsCode.value && autoCodeSubmittedJobId.value === job?.id)
+      return '2FA 验证码已提交，正在等待官网确认。';
+    if (needsCode.value)
+      return needsManualCode.value
+        ? '自动取码不可用，请输入当次验证码，或重试自动取码。'
+        : '官网要求 TOTP 验证码，正在使用系统 2FA 功能自动取码并提交。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running') return '本机比特浏览器正在执行，系统不会重复提交付款。';
@@ -242,11 +287,41 @@ export function useAutoRecharge() {
       return '本次流程已结束，请查看官网回传结果。';
     }
     if (!currentSettingsReady.value) return '请先完成比特浏览器设置和本机连接密钥。';
-    if (!sessionJson.value) return '粘贴授权 JSON 后会自动载入账号和注册邮箱。';
+    if (
+      loginMethod.value === 'password' &&
+      emailPattern.test(loginEmail.value.trim()) &&
+      loginPassword.value &&
+      !totp.ready.value
+    )
+      return '请选择已保存的 2FA 账号或粘贴有效密钥；其他验证方式可选手动完成。';
+    if (!credentialReady.value)
+      return loginMethod.value === 'json'
+        ? '粘贴授权 JSON 后会自动载入账号和注册邮箱。'
+        : '填写账号和密码后可在比特浏览器登录。';
     if (operationMode.value === 'open_browser') {
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
     }
     return '补齐窗口名称、卡资料、未使用地址和付款上限后，即可一键执行。';
+  });
+
+  watch([loginEmail, loginMethod], () => {
+    details.value.email =
+      loginMethod.value === 'password'
+        ? loginEmail.value.trim()
+        : sessionJson.value
+          ? registrationEmail(JSON.parse(sessionJson.value))
+          : '';
+    if (
+      loginMethod.value === 'password' &&
+      !windowName.value.trim() &&
+      loginEmail.value.includes('@')
+    ) {
+      windowName.value = `ChatGPT-${loginEmail.value.split('@')[0]}`;
+    }
+  });
+
+  watch(loginMethod, (method) => {
+    if (method === 'json') totp.clearSecret();
   });
 
   watch(
@@ -287,6 +362,12 @@ export function useAutoRecharge() {
     details.value.number = '';
     details.value.expiry = '';
     details.value.cvc = '';
+  }
+
+  function localCredential() {
+    return loginMethod.value === 'json'
+      ? { sessionJson: sessionJson.value }
+      : { login: { email: loginEmail.value.trim(), password: loginPassword.value } };
   }
 
   function acceptSession(reportInvalid = true) {
@@ -395,7 +476,7 @@ export function useAutoRecharge() {
         mode: launch.mode,
         plan: plan.value,
         windowName: windowName.value.trim(),
-        sessionJson: sessionJson.value,
+        ...localCredential(),
         details: payment,
         address: launch.address,
         bitBrowser: launch.bitBrowser,
@@ -406,6 +487,7 @@ export function useAutoRecharge() {
       });
       connectorStatus.value = 'online';
       connectorMessage.value = '本机连接器已接收任务';
+      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       if (launch) {
         try {
@@ -456,13 +538,14 @@ export function useAutoRecharge() {
         id,
         mode: 'open_browser',
         windowName: windowName.value.trim(),
-        sessionJson: sessionJson.value,
+        ...localCredential(),
         bitBrowser: launch.bitBrowser,
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken
       });
       connectorStatus.value = 'online';
       connectorMessage.value = '本机连接器已接收任务';
+      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       if (launch) {
         try {
@@ -522,13 +605,14 @@ export function useAutoRecharge() {
         mode: launch.mode,
         plan: source.plan,
         windowName: windowName.value.trim(),
-        sessionJson: sessionJson.value,
+        ...localCredential(),
         bitBrowser: launch.bitBrowser,
         callbackUrl: rechargeCallbackUrl(id),
         agentToken: launch.agentToken
       });
       connectorStatus.value = 'online';
       connectorMessage.value = '本机连接器已接收只读复查';
+      if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
       error.value = launch
         ? '本机连接器接收结果不明确，不会新建订单或重复付款。'
@@ -649,6 +733,104 @@ export function useAutoRecharge() {
     }
   }
 
+  async function submitLoginCode() {
+    if (!needsManualCode.value || busy.value) return;
+    if (!/^[0-9]{6,8}$/.test(loginCode.value.trim())) {
+      error.value = '请输入当前有效的 6 至 8 位验证码';
+      return;
+    }
+    busy.value = true;
+    error.value = '';
+    try {
+      const current = await access();
+      await rechargeConnectorApi.submitCode(
+        current.connectorUrl,
+        current.connectorToken,
+        current.job.id,
+        loginCode.value.trim()
+      );
+      autoCodeSubmittedJobId.value = current.job.id;
+      loginCode.value = '';
+      await refresh();
+    } catch (cause) {
+      error.value = getApiErrorMessage(cause);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function submitAutomaticCode(jobId: string) {
+    autoCodeBusy.value = true;
+    error.value = '';
+    try {
+      const code = await totp.freshCode();
+      if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
+      if (disposed || !needsCode.value || selected.value?.id !== jobId) return;
+      const current = await access();
+      if (current.job.id !== jobId || disposed || !needsCode.value) return;
+      await rechargeConnectorApi.submitCode(
+        current.connectorUrl,
+        current.connectorToken,
+        jobId,
+        code
+      );
+      autoCodeSubmittedJobId.value = jobId;
+      totp.clearSecret();
+      await refresh();
+    } catch (cause) {
+      if (
+        !disposed &&
+        selected.value?.id === jobId &&
+        needsCode.value &&
+        autoCodeSubmittedJobId.value !== jobId
+      ) {
+        autoCodeFailureJobId.value = jobId;
+        error.value = getApiErrorMessage(cause);
+      }
+    } finally {
+      autoCodeBusy.value = false;
+    }
+  }
+
+  function retryAutomaticCode() {
+    const jobId = selected.value?.id;
+    if (
+      !jobId ||
+      !needsCode.value ||
+      !totp.ready.value ||
+      autoCodeBusy.value ||
+      autoCodeSubmittedJobId.value === jobId
+    )
+      return;
+    autoCodeFailureJobId.value = '';
+    autoCodeAttempted.add(jobId);
+    void submitAutomaticCode(jobId);
+  }
+
+  watch(
+    () => (needsCode.value ? selected.value?.id : undefined),
+    (jobId) => {
+      if (
+        !jobId ||
+        disposed ||
+        totp.source.value === 'manual' ||
+        !totp.ready.value ||
+        autoCodeAttempted.has(jobId)
+      )
+        return;
+      autoCodeAttempted.add(jobId);
+      void submitAutomaticCode(jobId);
+    },
+    { flush: 'post' }
+  );
+
+  watch(
+    () => selected.value?.state,
+    (state) => {
+      if (state && !activeStates.has(state)) totp.clearSecret();
+    }
+  );
+
   async function cancel() {
     if (!canCancel.value || busy.value || !selected.value) return;
     busy.value = true;
@@ -681,6 +863,9 @@ export function useAutoRecharge() {
     importGeneration++;
     sessionJson.value = '';
     jsonInput.value = '';
+    loginPassword.value = '';
+    loginCode.value = '';
+    totp.clearSecret();
     localAccess.value = null;
     paymentJobId.value = '';
     Object.assign(details.value, emptyDetails());
@@ -698,6 +883,18 @@ export function useAutoRecharge() {
     jsonInput,
     sessionJson,
     jsonError,
+    loginMethod,
+    loginEmail,
+    loginPassword,
+    loginCode,
+    totp,
+    totpSource: totp.source,
+    totpSecretInput: totp.secretInput,
+    savedTotpAccountId: totp.savedAccountId,
+    savedTotpAccounts: totp.savedAccounts,
+    savedTotpQuery: totp.savedAccountsQuery,
+    totpSecretError: totp.secretError,
+    totpReady: totp.ready,
     plan,
     windowName,
     lockedCurrency,
@@ -715,6 +912,12 @@ export function useAutoRecharge() {
     canRecheck,
     canResolveNoBankRequest,
     needsHuman,
+    needsCode,
+    needsManualCode,
+    autoCodeBusy,
+    autoCodeMessage,
+    autoCodeFailureJobId,
+    autoCodeSubmittedJobId,
     workflowMessage,
     browserSettings,
     ...browserSettings,
@@ -728,6 +931,8 @@ export function useAutoRecharge() {
     resolveNoBankRequest,
     selectJob,
     resume,
+    submitLoginCode,
+    retryAutomaticCode,
     cancel,
     refresh
   };

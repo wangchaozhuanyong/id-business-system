@@ -1,7 +1,7 @@
 <template>
   <section class="recharge-page">
     <V2PageContext
-      description="载入授权 JSON，连接本机比特浏览器并按金额上限自动执行；需要真人或银行验证时保留原窗口等待处理。"
+      description="使用授权 JSON 或账号密码登录本机比特浏览器；自动充值按金额上限执行，需要真人或银行验证时保留原窗口等待处理。"
     >
       <template #status>
         <span class="recharge-connector-status" :data-status="connectorStatus">
@@ -13,7 +13,6 @@
         <el-button @click="historyOpen = true">最近执行记录</el-button>
       </template>
     </V2PageContext>
-
     <V2AsyncRegion
       :phase="query.phase.value"
       :previous-data="query.isParameterTransition.value"
@@ -35,7 +34,6 @@
                 : '单账户 · 单窗口 · 单次付款'
             }}</span>
           </div>
-
           <el-form
             :model="details"
             :rules="rechargeRules"
@@ -50,8 +48,19 @@
                 <el-radio-button value="open_browser">仅登录窗口</el-radio-button>
               </el-radio-group>
             </el-form-item>
+            <el-form-item label="登录方式" required>
+              <el-radio-group v-model="loginMethod">
+                <el-radio-button value="json">授权 JSON</el-radio-button>
+                <el-radio-button value="password">账号密码</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
 
-            <el-form-item label="授权 JSON" required :error="jsonError">
+            <el-form-item
+              v-if="loginMethod === 'json'"
+              label="授权 JSON"
+              required
+              :error="jsonError"
+            >
               <div class="recharge-json-row">
                 <el-input
                   type="password"
@@ -81,6 +90,40 @@
                 }}。
               </p>
             </el-form-item>
+
+            <template v-else>
+              <el-form-item label="ChatGPT 账号" required>
+                <el-input
+                  v-model="loginEmail"
+                  type="email"
+                  autocomplete="off"
+                  maxlength="250"
+                  placeholder="输入账号邮箱"
+                />
+              </el-form-item>
+              <el-form-item label="登录密码" required>
+                <el-input
+                  v-model="loginPassword"
+                  type="password"
+                  show-password
+                  autocomplete="off"
+                  maxlength="1024"
+                  placeholder="仅用于本次官网登录"
+                />
+              </el-form-item>
+              <RechargeTotpFields
+                v-model:source="totpSource"
+                v-model:secret-input="totpSecretInput"
+                v-model:saved-account-id="savedTotpAccountId"
+                :saved-accounts="savedTotpAccounts"
+                :secret-error="totpSecretError"
+                :loading="savedTotpQuery.phase.value === 'initial-loading'"
+                :error="
+                  savedTotpQuery.error.value ? getApiErrorMessage(savedTotpQuery.error.value) : ''
+                "
+                @retry="savedTotpQuery.refresh"
+              />
+            </template>
 
             <el-form-item v-if="operationMode === 'open_browser'" label="窗口名称" required>
               <el-input
@@ -157,7 +200,12 @@
 
               <el-form-item label="账单邮箱">
                 <span class="recharge-account-email">
-                  {{ details.email || '载入授权 JSON 后自动使用账号邮箱' }}
+                  {{
+                    details.email ||
+                    (loginMethod === 'json'
+                      ? '载入授权 JSON 后自动使用账号邮箱'
+                      : '填写账号邮箱后自动使用')
+                  }}
                 </span>
               </el-form-item>
 
@@ -233,8 +281,8 @@
               <p class="recharge-note">
                 {{
                   operationMode === 'open_browser'
-                    ? 'JSON 只发送到本机连接器内存；连接器将打开比特浏览器窗口并登录 ChatGPT，完成后保留窗口供手动操作。'
-                    : 'JSON、完整卡号和安全码只发送到本机连接器内存，不进入生产数据库或日志。'
+                    ? '登录资料只发送到本机连接器内存；登录成功后保留比特浏览器窗口供手动操作。'
+                    : '登录资料、完整卡号和安全码只发送到本机连接器内存，不进入生产数据库或日志。'
                 }}
               </p>
             </div>
@@ -258,12 +306,44 @@
             <p>
               {{
                 operationMode === 'open_browser'
-                  ? '连接器会新建并打开比特浏览器窗口，恢复 JSON 登录并跳转至官网，保留窗口供手动操作。'
-                  : '连接器会新建并打开比特浏览器窗口，恢复 JSON 登录后完成核价与付款保护。'
+                  ? '连接器会新建比特浏览器窗口并登录官网，完成后保留窗口供手动操作。'
+                  : '连接器会新建比特浏览器窗口，官网登录核对后完成核价与付款保护。'
               }}
             </p>
           </div>
           <div class="recharge-actions">
+            <p v-if="needsCode && !needsManualCode" class="recharge-note" role="status">
+              {{ autoCodeMessage }}
+            </p>
+            <el-button
+              v-if="needsCode && autoCodeFailureJobId === selected?.id && totpReady"
+              :loading="autoCodeBusy"
+              @click="retryAutomaticCode"
+              >重试自动取码</el-button
+            >
+            <el-form
+              v-if="needsManualCode"
+              label-position="left"
+              label-width="112px"
+              require-asterisk-position="right"
+              class="recharge-code-form"
+              @submit.prevent="submitLoginCode"
+            >
+              <el-form-item label="一次性验证码" required>
+                <el-input
+                  v-model="loginCode"
+                  type="password"
+                  show-password
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  maxlength="8"
+                  placeholder="输入当前 6 至 8 位验证码"
+                />
+              </el-form-item>
+              <el-button type="primary" :loading="busy" @click="submitLoginCode"
+                >提交验证码</el-button
+              >
+            </el-form>
             <el-button v-if="needsHuman" type="primary" :loading="busy" @click="resume">
               我已完成验证，继续原任务
             </el-button>
@@ -339,6 +419,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import RechargeResult from './RechargeResult.vue';
 import RechargeBrowserSettings from './RechargeBrowserSettings.vue';
+import RechargeTotpFields from './RechargeTotpFields.vue';
 import { formatRechargeExpiry, rechargeFields, rechargeRules } from './recharge-form';
 import { currencyOptions, planLabels, statusLabel } from './recharge-presentation';
 import { useAutoRecharge } from './useAutoRecharge';
@@ -358,6 +439,17 @@ const {
   jsonInput,
   sessionJson,
   jsonError,
+  loginMethod,
+  loginEmail,
+  loginPassword,
+  loginCode,
+  totpSource,
+  totpSecretInput,
+  savedTotpAccountId,
+  savedTotpAccounts,
+  savedTotpQuery,
+  totpSecretError,
+  totpReady,
   plan,
   windowName,
   lockedCurrency,
@@ -375,6 +467,11 @@ const {
   canRecheck,
   canResolveNoBankRequest,
   needsHuman,
+  needsCode,
+  needsManualCode,
+  autoCodeBusy,
+  autoCodeFailureJobId,
+  autoCodeMessage,
   workflowMessage,
   browserSettings,
   setSettingsOpen,
@@ -388,6 +485,8 @@ const {
   resolveNoBankRequest,
   selectJob,
   resume,
+  submitLoginCode,
+  retryAutomaticCode,
   cancel,
   refresh
 } = useAutoRecharge();

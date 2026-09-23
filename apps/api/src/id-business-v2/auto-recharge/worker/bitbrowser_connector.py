@@ -1,6 +1,6 @@
 """本机比特浏览器连接器。
 
-只监听 127.0.0.1；JSON 登录凭据和银行卡资料只在当前进程内存中使用，不写文件、日志或 API 数据库。
+只监听 127.0.0.1；登录凭据和银行卡资料只在当前进程内存中使用，不写文件、日志或 API 数据库。
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 import bitbrowser_catalog
 import bitbrowser_options
 import bitbrowser_retry
+import browser_password_login
 import attempt_ledger
 import browser_checkout
 import pay
@@ -224,10 +225,12 @@ def validate_payload(value):
         return value
     if mode == "open_browser" and "plan" not in value:
         value["plan"] = "plus"
-    common = {"id", "mode", "plan", "windowName", "sessionJson", "bitBrowser",
-              "callbackUrl", "agentToken"}
-    allowed = (common | {"details", "address", "safety", "authorizeSinglePayment"}
-               if mode == "payment" else common if mode in ("recheck", "open_browser") else set())
+    common = {"id", "mode", "plan", "windowName", "bitBrowser", "callbackUrl", "agentToken"}
+    auth_keys = {"sessionJson", "login"} & set(value)
+    if len(auth_keys) != 1:
+        raise Stop("invalid_connector_payload")
+    allowed = (common | auth_keys | {"details", "address", "safety", "authorizeSinglePayment"}
+               if mode == "payment" else common | auth_keys if mode in ("recheck", "open_browser") else set())
     if set(value) != allowed:
         raise Stop("invalid_connector_payload")
     job_id = value.get("id")
@@ -239,11 +242,24 @@ def validate_payload(value):
     if (not isinstance(window_name, str) or not window_name.strip() or len(window_name.strip()) > 80
             or re.search(r"[\x00-\x1f\x7f]", window_name)):
         raise Stop("invalid_browser_window_name")
-    for key in ("sessionJson", "callbackUrl", "agentToken"):
+    for key in ("callbackUrl", "agentToken"):
         if not isinstance(value.get(key), str) or not value[key]:
             raise Stop("invalid_connector_payload")
-    if len(value["sessionJson"].encode()) > 65_000 or len(value["agentToken"]) != 64:
+    if len(value["agentToken"]) != 64:
         raise Stop("invalid_connector_payload")
+    if "sessionJson" in value:
+        if (not isinstance(value["sessionJson"], str) or not value["sessionJson"]
+                or len(value["sessionJson"].encode()) > 65_000):
+            raise Stop("invalid_connector_payload")
+    else:
+        login = value["login"]
+        if (not isinstance(login, dict) or set(login) != {"email", "password"}
+                or not isinstance(login.get("email"), str)
+                or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", login["email"])
+                or len(login["email"]) > 250
+                or not isinstance(login.get("password"), str)
+                or not 1 <= len(login["password"]) <= 1024):
+            raise Stop("invalid_login_credentials")
     bit_browser = value.get("bitBrowser")
     if not isinstance(bit_browser, dict):
         raise Stop("invalid_connector_payload")
@@ -266,6 +282,8 @@ def validate_payload(value):
         raise Stop("invalid_connector_payload")
     if set(details) != {"number", "expiry", "cvc", "name", "email"}:
         raise Stop("invalid_payment_details")
+    if "login" in value and details.get("email", "").casefold() != value["login"]["email"].casefold():
+        raise Stop("billing_email_invalid")
     if set(address) != {"id", "line1", "country", "city", "state", "postalCode"}:
         raise Stop("invalid_connector_payload")
     if set(safety) != {
@@ -314,6 +332,9 @@ class LocalJob:
         self.callback = CallbackClient(
             self.payload["callbackUrl"], self.payload["agentToken"], self.id)
         self.resume_event = threading.Event()
+        self.code_event = threading.Event()
+        self.login_code = None
+        self.waiting_for_code = False
         self.cancelled = False
         self.done = False
         self.account_key = None
@@ -342,6 +363,35 @@ class LocalJob:
             raise Stop("previous_payment_attempt_exists")
         self.cancelled = True
         self.resume_event.set()
+        self.code_event.set()
+
+    def signal_code(self, code):
+        if (not self.waiting_for_code or self.done or self.login_code is not None
+                or not isinstance(code, str) or not re.fullmatch(r"[0-9]{6,8}", code)):
+            raise Stop("login_code_not_requested")
+        self.login_code = code
+        self.code_event.set()
+
+    async def wait_for_code(self, seconds):
+        self.code_event.clear()
+        self.waiting_for_code = True
+        self.callback.send({"type": "progress", "result": {
+            "status": "awaiting_human_verification", "stage": "login_code_required",
+            "reason": "login_code_required", "user_action_required": True,
+            "browser_profile_id": self.profile_id,
+            "payment_attempted": False, "payment_requests_sent": 0,
+        }})
+        try:
+            received = await asyncio.to_thread(self.code_event.wait, min(max(seconds, 1), 1800))
+            self.check_cancelled()
+            if not received or self.login_code is None:
+                raise Stop("login_code_expired", user_action_required=True)
+            code = self.login_code
+            self.login_code = None
+            return code
+        finally:
+            self.waiting_for_code = False
+            self.login_code = None
 
     def progress(self, stage, *, _during_cancel=False, **details):
         if not _during_cancel:
@@ -451,6 +501,33 @@ class LocalJob:
         self.progress("payment_guard_passed", quote=quote, quote_authority="official_checkout_response")
         return True
 
+    def restore_account(self, target):
+        import hashlib
+        account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
+        initial = self.callback.send({"type": "restore", "accountKey": account_key})
+        self.account_key = account_key
+        records = initial.get("records")
+        stale_profiles = initial.get("staleProfiles", [])
+        if not isinstance(records, list) or not isinstance(stale_profiles, list) or len(stale_profiles) > 30:
+            raise Stop("durable_state_unavailable")
+        seen_sources, seen_profiles = set(), set()
+        for value in stale_profiles:
+            if (not isinstance(value, dict) or set(value) != {"sourceJobId", "profileId"}
+                    or not isinstance(value.get("sourceJobId"), str)
+                    or not JOB_ID.fullmatch(value["sourceJobId"])
+                    or not isinstance(value.get("profileId"), str)
+                    or not re.fullmatch(r"[a-fA-F0-9]{32}", value["profileId"])
+                    or value["sourceJobId"] in seen_sources or value["profileId"] in seen_profiles):
+                raise Stop("durable_state_unavailable")
+            seen_sources.add(value["sourceJobId"])
+            seen_profiles.add(value["profileId"])
+            self.stale_profiles.append(value)
+        for record in records:
+            path = self.root / record["fileKey"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, record["document"], exclusive=True)
+            self.revisions[record["fileKey"]] = record["revision"]
+
     async def execute(self):
         if self.payload["mode"] == "resolve_unknown_payment":
             self.account_key = self.payload["accountKey"]
@@ -466,38 +543,14 @@ class LocalJob:
             return {"status": "payment_unknown_resolved",
                     "stage": "payment_unknown_resolution",
                     "payment_attempted": False, "payment_requests_sent": 0}
-        raw = self.payload.pop("sessionJson")
-        try:
-            target = parse_browser_credential(raw.encode())
-        finally:
-            raw = None
-        import hashlib
-        self.account_key = hashlib.sha256(target.account_id.encode()).hexdigest()
-        initial = self.callback.send({"type": "restore", "accountKey": self.account_key})
-        records = initial.get("records")
-        stale_profiles = initial.get("staleProfiles", [])
-        if not isinstance(records, list) or not isinstance(stale_profiles, list) \
-                or len(stale_profiles) > 30:
-            raise Stop("durable_state_unavailable")
-        seen_sources = set()
-        seen_profiles = set()
-        for value in stale_profiles:
-            if (not isinstance(value, dict) or set(value) != {"sourceJobId", "profileId"}
-                    or not isinstance(value.get("sourceJobId"), str)
-                    or not JOB_ID.fullmatch(value["sourceJobId"])
-                    or not isinstance(value.get("profileId"), str)
-                    or not re.fullmatch(r"[a-fA-F0-9]{32}", value["profileId"])
-                    or value["sourceJobId"] in seen_sources
-                    or value["profileId"] in seen_profiles):
-                raise Stop("durable_state_unavailable")
-            seen_sources.add(value["sourceJobId"])
-            seen_profiles.add(value["profileId"])
-            self.stale_profiles.append(value)
-        for record in records:
-            path = self.root / record["fileKey"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            write_json(path, record["document"], exclusive=True)
-            self.revisions[record["fileKey"]] = record["revision"]
+        target = None
+        if "sessionJson" in self.payload:
+            raw = self.payload.pop("sessionJson")
+            try:
+                target = parse_browser_credential(raw.encode())
+            finally:
+                raw = None
+            self.restore_account(target)
 
         bit = self.payload["bitBrowser"]
         client = BitBrowserClient(bit["localApiUrl"], bit["localApiToken"])
@@ -546,6 +599,10 @@ class LocalJob:
             details = self.payload.get("details")
             if isinstance(details, dict):
                 details.clear()
+            login = self.payload.pop("login", None)
+            if isinstance(login, dict):
+                login.clear()
+            self.login_code = None
             for key in ("agentToken", "callbackUrl"):
                 self.payload.pop(key, None)
             bit = self.payload.get("bitBrowser")
@@ -645,11 +702,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            return self.reply(200, {"ok": True, "version": 2,
+            return self.reply(200, {"ok": True, "version": 3,
                                     "service": "id-business-v2-auto-recharge-connector",
                                     "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
                                                      "same-window-page-refresh", "payment-unknown-resolution",
-                                                     "prepayment-page-recovery", "stale-owned-profile-cleanup"],
+                                                     "prepayment-page-recovery", "stale-owned-profile-cleanup",
+                                                     "password-login", "login-code"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
@@ -684,13 +742,21 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/jobs":
                 job = REGISTRY.start(body)
                 return self.reply(202, {"ok": True, "id": job.id, "accepted": True})
-            match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel)", self.path)
+            match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel|code)", self.path)
             if not match:
                 return self.reply(404, {"ok": False})
             job = REGISTRY.get(match.group(1))
             if not job:
                 return self.reply(404, {"ok": False})
-            job.signal_resume() if match.group(2) == "resume" else job.signal_cancel()
+            if match.group(2) == "code":
+                if not isinstance(body, dict) or set(body) != {"code"}:
+                    raise Stop("invalid_login_code")
+                job.signal_code(body["code"])
+                body.clear()
+            elif match.group(2) == "resume":
+                job.signal_resume()
+            else:
+                job.signal_cancel()
             return self.reply(200, {"ok": True})
         except Stop as exc:
             return self.reply(409, {"ok": False, "reason": exc.report.get("reason")})

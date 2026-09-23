@@ -4,7 +4,7 @@ import { connectorRequest, requireConnectorHealth } from './connector-transport'
 const health = {
   ok: true,
   service: 'id-business-v2-auto-recharge-connector',
-  version: 2,
+  version: 3,
   originAllowed: true,
   busy: false,
   capabilities: [
@@ -14,7 +14,9 @@ const health = {
     'same-window-page-refresh',
     'payment-unknown-resolution',
     'prepayment-page-recovery',
-    'stale-owned-profile-cleanup'
+    'stale-owned-profile-cleanup',
+    'password-login',
+    'login-code'
   ]
 };
 afterEach(() => vi.unstubAllGlobals());

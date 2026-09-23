@@ -221,6 +221,7 @@ export class RechargeLocalService {
         if (
           !source ||
           source.ownerId !== operator.id ||
+          !source.accountKey ||
           source.plan !== input.plan ||
           !['prepare', 'flow', 'bitbrowser', 'recheck'].includes(source.action) ||
           !paymentAttempted ||
@@ -234,6 +235,7 @@ export class RechargeLocalService {
         const created = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,
+          accountKey: source.accountKey,
           plan: input.plan,
           action: 'bitbrowser',
           state: 'running',

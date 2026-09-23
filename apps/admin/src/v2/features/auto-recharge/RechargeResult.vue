@@ -52,7 +52,7 @@
           <dd>{{ planLabels[job.plan] }}</dd>
         </template>
         <dt>账户核对</dt>
-        <dd>{{ job.result.account_matched ? '与 JSON 对应账户一致' : '尚未核实' }}</dd>
+        <dd>{{ job.result.account_matched ? '官网账户核对通过' : '尚未核实' }}</dd>
         <dt v-if="job.result.current_plan">当前套餐</dt>
         <dd v-if="job.result.current_plan">{{ statusLabel(job.result.current_plan) }}</dd>
         <dt v-if="job.result.card_last4">银行卡尾号</dt>

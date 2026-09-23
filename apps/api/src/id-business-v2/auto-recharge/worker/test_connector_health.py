@@ -19,11 +19,12 @@ class ConnectorHealthTests(unittest.TestCase):
         with patch.object(connector.REGISTRY, 'jobs', {}), patch.object(connector.REGISTRY, 'start') as start:
             handler.do_GET()
             handler.reply.assert_called_once_with(200, {
-                'ok': True, 'version': 2, 'service': 'id-business-v2-auto-recharge-connector',
+                'ok': True, 'version': 3, 'service': 'id-business-v2-auto-recharge-connector',
                 'capabilities': [
                     'browser-catalog', 'browser-options', 'session-load-retry',
                     'same-window-page-refresh', 'payment-unknown-resolution',
-                    'prepayment-page-recovery', 'stale-owned-profile-cleanup'
+                    'prepayment-page-recovery', 'stale-owned-profile-cleanup',
+                    'password-login', 'login-code'
                 ], 'originAllowed': True, 'busy': False
             })
             start.assert_not_called()
