@@ -405,6 +405,21 @@ function validateSharedImplementation() {
   if (!/:where\(\.v2-records-list > header\)/.test(recordsStyleSource)) {
     issues.push(`${recordsStylePath}: 列表标题必须具备共享内边距与分隔线`);
   }
+  for (const selector of ['.v2-records-page', '.v2-records-page .v2-async-region__content']) {
+    const rule = recordsStyleSource.match(
+      new RegExp(`${selector.replaceAll('.', '\\.')}\\s*\\{([^}]*)\\}`)
+    );
+    if (!rule || !/grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(rule[1])) {
+      issues.push(`${recordsStylePath}: ${selector} 必须使用可收缩的单列网格`);
+    }
+  }
+  if (
+    !/\.v2-records-list > header \.v2-section-heading\s*\{\s*flex-wrap:\s*wrap/.test(
+      recordsStyleSource
+    )
+  ) {
+    issues.push(`${recordsStylePath}: 窄屏列表标题必须允许操作区换行`);
+  }
   if (/transition:\s*grid-template-columns/.test(styleSource)) {
     issues.push(`${tableStylePath}: 禁止侧栏宽度过渡连续触发表格重排`);
   }

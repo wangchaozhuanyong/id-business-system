@@ -21,6 +21,7 @@ export function isAdminOnly(paths) {
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
         p === 'scripts/acceptance-v2-table-layout.mjs' ||
+        p === 'scripts/check-v2-table-standard.mjs' ||
         isCiOnly([p])
     )
   );
