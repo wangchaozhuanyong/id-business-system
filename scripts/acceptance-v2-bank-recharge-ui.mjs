@@ -65,6 +65,31 @@ const order = {
   updatedAt: now
 };
 
+async function assertListHeaderLayout(page, label) {
+  const layout = await page
+    .locator('.v2-records-list')
+    .first()
+    .evaluate((list) => {
+      const header = list.querySelector(':scope > header');
+      const title = header?.querySelector('.v2-section-heading__title');
+      if (!header || !title) return null;
+      const listBox = list.getBoundingClientRect();
+      const headerBox = header.getBoundingClientRect();
+      const titleBox = title.getBoundingClientRect();
+      return {
+        leftInset: titleBox.left - listBox.left,
+        topInset: titleBox.top - listBox.top,
+        headerHeight: headerBox.height,
+        borderWidth: getComputedStyle(header).borderBottomWidth
+      };
+    });
+  assert.ok(layout, `${label} 缺少列表标题`);
+  assert.ok(layout.leftInset >= 12, `${label} 标题贴边：${JSON.stringify(layout)}`);
+  assert.ok(layout.topInset >= 10, `${label} 标题顶部间距不足：${JSON.stringify(layout)}`);
+  assert.ok(layout.headerHeight >= 50, `${label} 标题行高度不足：${JSON.stringify(layout)}`);
+  assert.notEqual(layout.borderWidth, '0px', `${label} 缺少标题分隔线`);
+}
+
 mkdirSync(outputDir, { recursive: true });
 const server = spawn(
   process.execPath,
@@ -113,6 +138,7 @@ try {
   const unexpected = [];
   const orderRequests = [];
   const runtimeErrors = [];
+  let showAccounts = true;
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
   await page.addInitScript(() => {
     const user = {
@@ -201,17 +227,19 @@ try {
       };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/accounts')) {
       data = {
-        items: [
-          {
-            ...account,
-            status: 'active',
-            hasPassword: true,
-            hasTotp: true,
-            remark: null,
-            createdAt: now,
-            updatedAt: now
-          }
-        ]
+        items: showAccounts
+          ? [
+              {
+                ...account,
+                status: 'active',
+                hasPassword: true,
+                hasTotp: true,
+                remark: null,
+                createdAt: now,
+                updatedAt: now
+              }
+            ]
+          : []
       };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/cards')) {
       data = { items: [card] };
@@ -328,11 +356,12 @@ try {
       { cause: error }
     );
   }
-  for (const width of [1440, 900, 390]) {
+  for (const width of [2307, 1440, 900, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const mobileOverlay = page.locator('.v2-mobile-overlay');
     if (await mobileOverlay.isVisible()) await mobileOverlay.click();
     await page.waitForTimeout(300);
+    await assertListHeaderLayout(page, `${width}px 银充订单`);
     await page.screenshot({
       path: path.join(outputDir, `bank-orders-${width}.png`),
       fullPage: true
@@ -418,6 +447,8 @@ try {
   await page.getByRole('textbox', { name: '搜索银充订单' }).fill('empty');
   await page.getByRole('button', { name: '查询' }).click();
   await page.getByText('暂无银充订单').waitFor({ state: 'visible' });
+  await assertListHeaderLayout(page, '390px 银充订单空状态');
+  await page.screenshot({ path: path.join(outputDir, 'bank-orders-empty-390.png') });
   await page.goto(`${baseUrl}/v2/workbench/renewals`, { waitUntil: 'domcontentloaded' });
   await page.getByText('银充续费提醒').waitFor({ state: 'visible' });
   await page.getByText(customer.name).waitFor({ state: 'visible' });
@@ -441,6 +472,21 @@ try {
     waitUntil: 'domcontentloaded'
   });
   await page.getByText(account.emailMasked).waitFor({ state: 'visible' });
+  for (const width of [2307, 1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await assertListHeaderLayout(page, `${width}px ChatGPT 账号`);
+    if (width === 2307 || width === 390) {
+      await page.screenshot({
+        path: path.join(outputDir, `bank-chatgpt-accounts-${width}.png`),
+        fullPage: true
+      });
+    }
+  }
+  showAccounts = false;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByText('暂无 ChatGPT 账号').waitFor({ state: 'visible' });
+  await assertListHeaderLayout(page, '390px ChatGPT 账号空状态');
+  await page.screenshot({ path: path.join(outputDir, 'bank-chatgpt-accounts-empty-390.png') });
   await page.getByRole('button', { name: '新增账号' }).click();
   await page.getByPlaceholder('输入 ChatGPT 登录邮箱').waitFor({ state: 'visible' });
   await page.getByPlaceholder('输入登录密码').waitFor({ state: 'visible' });
@@ -454,7 +500,7 @@ try {
   console.log(
     JSON.stringify({
       ok: true,
-      widths: [1440, 900, 390],
+      widths: [2307, 1440, 900, 390],
       states: ['first', 'last', 'empty'],
       outputDir
     })

@@ -13,7 +13,7 @@
       @retry="bankWarnings.refresh"
     >
       <section class="v2-records-list bank-recharge-renewals" aria-label="银充续费提醒">
-        <div>
+        <header>
           <V2SectionHeading title="银充续费提醒">
             <template #actions>
               <span>即将到期 {{ bankWarnings.data.value?.upcomingCount ?? 0 }}</span>
@@ -21,7 +21,7 @@
               <AppButton variant="ghost" size="small" @click="bankWarnings.refresh">刷新</AppButton>
             </template>
           </V2SectionHeading>
-        </div>
+        </header>
         <p v-if="!bankWarnings.data.value?.items.length" class="v2-records-empty">
           当前没有银充续费提醒
         </p>
