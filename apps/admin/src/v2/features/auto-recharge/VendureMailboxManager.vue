@@ -48,9 +48,14 @@
           <el-tab-pane label="主邮箱管理" name="primary" />
           <el-tab-pane label="虚拟邮箱管理" name="aliases" />
           <el-tab-pane label="收件记录" name="mails" />
+          <el-tab-pane label="邮箱中继查询" name="relay-query" />
         </el-tabs>
 
-        <section class="vendure-mailbox-toolbar" aria-label="邮件验证码查询筛选">
+        <section
+          v-if="activeTab !== 'relay-query'"
+          class="vendure-mailbox-toolbar"
+          aria-label="邮件验证码查询筛选"
+        >
           <div class="vendure-mailbox-toolbar__filters">
             <el-input
               v-model="keywordInput"
@@ -140,6 +145,7 @@
         </div>
 
         <V2AsyncRegion
+          v-if="activeTab !== 'relay-query'"
           skeleton="table"
           :phase="activeQuery.phase.value"
           :previous-data="activeQuery.isParameterTransition.value"
@@ -151,14 +157,17 @@
         >
           <section v-if="activeTab === 'primary'" class="v2-records-list">
             <header>
-              <V2SectionHeading title="主邮箱管理"
-                ><template #actions
-                  ><V2TableColumnSettings
-                    inline
-                    :schema="v2TableSchemas.vendureMailbox.primary"
-                  /><span>共 {{ primaryQuery.data.value?.total ?? 0 }} 条</span></template
-                ></V2SectionHeading
+              <V2SectionHeading
+                title="主邮箱管理"
+                help="与官网同步验证码邮件的来源邮箱，包含授权密钥与主查询码。"
               >
+                <template #actions>
+                  <V2TableColumnSettings inline :schema="v2TableSchemas.vendureMailbox.primary" />
+                  <span>本页 {{ primaryItems.length }} 条</span>
+                  <span aria-hidden="true">·</span>
+                  <strong>共 {{ primaryQuery.data.value?.total ?? 0 }} 条</strong>
+                </template>
+              </V2SectionHeading>
             </header>
             <V2Table
               :schema="v2TableSchemas.vendureMailbox.primary"
@@ -167,38 +176,54 @@
               :view-key="viewKey"
               class="v2-records-table"
             >
-              <template #empty
-                ><div class="v2-records-empty">
+              <template #empty>
+                <div class="v2-records-empty">
                   <strong>暂无主邮箱</strong><span>新增苹果主邮箱后即可同步验证码邮件</span>
-                </div></template
-              >
+                </div>
+              </template>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[0]"
                 prop="email"
-              />
+                show-overflow-tooltip
+              >
+                <template #default="{ row }">
+                  <strong class="v2-table-cell vendure-mailbox-email">{{ row.email }}</strong>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[1]"
                 prop="status"
-                ><template #default="{ row }"
-                  ><el-tag :type="statusTag(row.status)" effect="plain">{{
-                    statusLabel(row.status)
-                  }}</el-tag></template
-                ></V2TableColumn
               >
+                <template #default="{ row }">
+                  <el-tag :type="statusTag(row.status)" effect="plain">{{
+                    statusLabel(row.status)
+                  }}</el-tag>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[2]"
                 prop="masterQueryCode"
-                ><template #default="{ row }"
-                  ><button
-                    class="vendure-mailbox-code"
-                    type="button"
-                    :disabled="!row.masterQueryCode"
-                    @click="copyCode(row.masterQueryCode)"
-                  >
-                    {{ row.masterQueryCode || '—' }}
-                  </button></template
-                ></V2TableColumn
               >
+                <template #default="{ row }">
+                  <div v-if="row.masterQueryCode" class="vendure-code-cell">
+                    <span class="vendure-code-badge" :title="row.masterQueryCode">{{
+                      row.masterQueryCode
+                    }}</span>
+                    <button
+                      type="button"
+                      class="vendure-copy-btn"
+                      :class="{ 'is-copied': copiedCode === row.masterQueryCode }"
+                      title="点击一键复制主查询码"
+                      @click="copyCodeWithFeedback(row.masterQueryCode)"
+                    >
+                      <el-icon v-if="copiedCode !== row.masterQueryCode"><CopyDocument /></el-icon>
+                      <el-icon v-else><Check /></el-icon>
+                      <span>{{ copiedCode === row.masterQueryCode ? '已复制' : '复制' }}</span>
+                    </button>
+                  </div>
+                  <span v-else>—</span>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[3]"
                 prop="remainingDays"
@@ -210,18 +235,18 @@
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[5]"
                 prop="lastSyncedAt"
-                ><template #default="{ row }">{{
-                  showDate(row.lastSyncedAt)
-                }}</template></V2TableColumn
               >
+                <template #default="{ row }">{{ showDate(row.lastSyncedAt) }}</template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[6]"
                 prop="note"
+                show-overflow-tooltip
               />
-              <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.primary.columns[7]"
-                ><template #default="{ row }">
+              <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.primary.columns[7]">
+                <template #default="{ row }">
                   <div class="vendure-mailbox-row-actions">
-                    <div>
+                    <div class="vendure-mailbox-row-actions__buttons">
                       <AppButton
                         size="small"
                         variant="ghost"
@@ -238,32 +263,34 @@
                         @click="runPrimaryAction(row, 'sync')"
                         >同步</AppButton
                       >
-                      <el-dropdown trigger="click" @command="handlePrimaryCommand(row, $event)"
-                        ><AppButton size="small" variant="ghost" :disabled="saving"
+                      <el-dropdown trigger="click" @command="handlePrimaryCommand(row, $event)">
+                        <AppButton size="small" variant="ghost" :disabled="saving"
                           >更多操作</AppButton
-                        ><template #dropdown
-                          ><el-dropdown-menu
-                            ><el-dropdown-item command="edit">编辑</el-dropdown-item
-                            ><el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item
-                            ><el-dropdown-item command="reconcile-apply"
+                        >
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="quick-query">查验证码</el-dropdown-item>
+                            <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                            <el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item>
+                            <el-dropdown-item command="reconcile-apply"
                               >修复历史邮件归属</el-dropdown-item
-                            ><el-dropdown-item command="reset">重置主查询码</el-dropdown-item
-                            ><el-dropdown-item command="delete" divided
-                              >删除</el-dropdown-item
-                            ></el-dropdown-menu
-                          ></template
-                        ></el-dropdown
-                      >
+                            >
+                            <el-dropdown-item command="reset">重置主查询码</el-dropdown-item>
+                            <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
                     <small
                       v-if="primaryActionFeedbackMessage(row.id)"
+                      class="vendure-mailbox-row-feedback"
                       :class="{ 'is-error': primaryActionFeedbackIsError(row.id) }"
                       role="status"
                       >{{ primaryActionFeedbackMessage(row.id) }}</small
                     >
                   </div>
-                </template></V2TableActionColumn
-              >
+                </template>
+              </V2TableActionColumn>
             </V2Table>
             <div
               class="v2-records-mobile-list"
@@ -297,14 +324,26 @@
                   >
                     <dt>主查询码</dt>
                     <dd>
-                      <button
-                        class="vendure-mailbox-code"
-                        type="button"
-                        :disabled="!item.masterQueryCode"
-                        @click="copyCode(item.masterQueryCode)"
+                      <div
+                        v-if="item.masterQueryCode"
+                        class="vendure-code-cell vendure-code-cell--mobile"
                       >
-                        {{ item.masterQueryCode || '—' }}
-                      </button>
+                        <span class="vendure-code-badge">{{ item.masterQueryCode }}</span>
+                        <button
+                          type="button"
+                          class="vendure-copy-btn"
+                          :class="{ 'is-copied': copiedCode === item.masterQueryCode }"
+                          title="点击一键复制主查询码"
+                          @click="copyCodeWithFeedback(item.masterQueryCode)"
+                        >
+                          <el-icon v-if="copiedCode !== item.masterQueryCode"
+                            ><CopyDocument
+                          /></el-icon>
+                          <el-icon v-else><Check /></el-icon>
+                          <span>{{ copiedCode === item.masterQueryCode ? '已复制' : '复制' }}</span>
+                        </button>
+                      </div>
+                      <span v-else>—</span>
                     </dd>
                   </div>
                   <div
@@ -359,6 +398,7 @@
                     <AppButton size="small" variant="ghost">更多操作</AppButton>
                     <template #dropdown>
                       <el-dropdown-menu>
+                        <el-dropdown-item command="quick-query">查验证码</el-dropdown-item>
                         <el-dropdown-item command="edit">编辑</el-dropdown-item>
                         <el-dropdown-item command="reconcile">检查历史邮件</el-dropdown-item>
                         <el-dropdown-item command="reconcile-apply"
@@ -386,14 +426,17 @@
 
           <section v-else-if="activeTab === 'aliases'" class="v2-records-list">
             <header>
-              <V2SectionHeading title="虚拟邮箱管理"
-                ><template #actions
-                  ><V2TableColumnSettings
-                    inline
-                    :schema="v2TableSchemas.vendureMailbox.aliases"
-                  /><span>共 {{ aliasQuery.data.value?.total ?? 0 }} 条</span></template
-                ></V2SectionHeading
+              <V2SectionHeading
+                title="虚拟邮箱管理"
+                help="买家分配使用的独立邮箱别名，包含独立买家查询码。"
               >
+                <template #actions>
+                  <V2TableColumnSettings inline :schema="v2TableSchemas.vendureMailbox.aliases" />
+                  <span>本页 {{ aliasItems.length }} 条</span>
+                  <span aria-hidden="true">·</span>
+                  <strong>共 {{ aliasQuery.data.value?.total ?? 0 }} 条</strong>
+                </template>
+              </V2SectionHeading>
             </header>
             <V2Table
               :schema="v2TableSchemas.vendureMailbox.aliases"
@@ -402,41 +445,59 @@
               :view-key="viewKey"
               class="v2-records-table"
             >
-              <template #empty
-                ><div class="v2-records-empty">
+              <template #empty>
+                <div class="v2-records-empty">
                   <strong>暂无虚拟邮箱</strong><span>选择主邮箱后新增或批量导入</span>
-                </div></template
-              >
+                </div>
+              </template>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[0]"
                 prop="aliasEmail"
-              />
+                show-overflow-tooltip
+              >
+                <template #default="{ row }">
+                  <strong class="v2-table-cell vendure-mailbox-email">{{ row.aliasEmail }}</strong>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[1]"
                 prop="primaryAccountEmail"
+                show-overflow-tooltip
               />
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[2]"
                 prop="status"
-                ><template #default="{ row }"
-                  ><el-tag :type="statusTag(row.status)" effect="plain">{{
-                    statusLabel(row.status)
-                  }}</el-tag></template
-                ></V2TableColumn
               >
+                <template #default="{ row }">
+                  <el-tag :type="statusTag(row.status)" effect="plain">{{
+                    statusLabel(row.status)
+                  }}</el-tag>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[3]"
                 prop="buyerQueryCode"
-                ><template #default="{ row }"
-                  ><button
-                    class="vendure-mailbox-code"
-                    type="button"
-                    @click="copyCode(row.buyerQueryCode)"
-                  >
-                    {{ row.buyerQueryCode }}
-                  </button></template
-                ></V2TableColumn
               >
+                <template #default="{ row }">
+                  <div v-if="row.buyerQueryCode" class="vendure-code-cell">
+                    <span class="vendure-code-badge" :title="row.buyerQueryCode">{{
+                      row.buyerQueryCode
+                    }}</span>
+                    <button
+                      type="button"
+                      class="vendure-copy-btn"
+                      :class="{ 'is-copied': copiedCode === row.buyerQueryCode }"
+                      title="点击一键复制买家查询码"
+                      @click="copyCodeWithFeedback(row.buyerQueryCode)"
+                    >
+                      <el-icon v-if="copiedCode !== row.buyerQueryCode"><CopyDocument /></el-icon>
+                      <el-icon v-else><Check /></el-icon>
+                      <span>{{ copiedCode === row.buyerQueryCode ? '已复制' : '复制' }}</span>
+                    </button>
+                  </div>
+                  <span v-else>—</span>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[4]"
                 prop="remainingDays"
@@ -448,13 +509,13 @@
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[6]"
                 prop="lastMailReceivedAt"
-                ><template #default="{ row }">{{
-                  showDate(row.lastMailReceivedAt)
-                }}</template></V2TableColumn
               >
+                <template #default="{ row }">{{ showDate(row.lastMailReceivedAt) }}</template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[7]"
                 prop="note"
+                show-overflow-tooltip
               />
               <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.aliases.columns[8]"
                 ><template #default="{ row }">
@@ -468,6 +529,7 @@
                     ><AppButton size="small" variant="ghost">更多操作</AppButton
                     ><template #dropdown
                       ><el-dropdown-menu
+                        ><el-dropdown-item command="quick-query">查验证码</el-dropdown-item
                         ><el-dropdown-item command="reset">重置查询码</el-dropdown-item
                         ><el-dropdown-item command="delete" divided
                           >删除</el-dropdown-item
@@ -516,13 +578,26 @@
                   >
                     <dt>买家查询码</dt>
                     <dd>
-                      <button
-                        class="vendure-mailbox-code"
-                        type="button"
-                        @click="copyCode(item.buyerQueryCode)"
+                      <div
+                        v-if="item.buyerQueryCode"
+                        class="vendure-code-cell vendure-code-cell--mobile"
                       >
-                        {{ item.buyerQueryCode }}
-                      </button>
+                        <span class="vendure-code-badge">{{ item.buyerQueryCode }}</span>
+                        <button
+                          type="button"
+                          class="vendure-copy-btn"
+                          :class="{ 'is-copied': copiedCode === item.buyerQueryCode }"
+                          title="点击一键复制买家查询码"
+                          @click="copyCodeWithFeedback(item.buyerQueryCode)"
+                        >
+                          <el-icon v-if="copiedCode !== item.buyerQueryCode"
+                            ><CopyDocument
+                          /></el-icon>
+                          <el-icon v-else><Check /></el-icon>
+                          <span>{{ copiedCode === item.buyerQueryCode ? '已复制' : '复制' }}</span>
+                        </button>
+                      </div>
+                      <span v-else>—</span>
                     </dd>
                   </div>
                   <div
@@ -571,6 +646,7 @@
                     <AppButton size="small" variant="ghost">更多操作</AppButton>
                     <template #dropdown>
                       <el-dropdown-menu>
+                        <el-dropdown-item command="quick-query">查验证码</el-dropdown-item>
                         <el-dropdown-item command="reset">重置查询码</el-dropdown-item>
                         <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                       </el-dropdown-menu>
@@ -586,14 +662,17 @@
 
           <section v-else class="v2-records-list">
             <header>
-              <V2SectionHeading title="收件记录"
-                ><template #actions
-                  ><V2TableColumnSettings
-                    inline
-                    :schema="v2TableSchemas.vendureMailbox.mails"
-                  /><span>共 {{ mailQuery.data.value?.total ?? 0 }} 条</span></template
-                ></V2SectionHeading
+              <V2SectionHeading
+                title="收件记录"
+                help="由主邮箱拉取的验证码邮件历史记录与匹配状态。"
               >
+                <template #actions>
+                  <V2TableColumnSettings inline :schema="v2TableSchemas.vendureMailbox.mails" />
+                  <span>本页 {{ mailItems.length }} 条</span>
+                  <span aria-hidden="true">·</span>
+                  <strong>共 {{ mailQuery.data.value?.total ?? 0 }} 条</strong>
+                </template>
+              </V2SectionHeading>
             </header>
             <V2Table
               :schema="v2TableSchemas.vendureMailbox.mails"
@@ -602,45 +681,60 @@
               :view-key="viewKey"
               class="v2-records-table"
             >
-              <template #empty
-                ><div class="v2-records-empty">
+              <template #empty>
+                <div class="v2-records-empty">
                   <strong>暂无收件记录</strong><span>可先同步主邮箱，或调整当前筛选条件</span>
-                </div></template
-              >
+                </div>
+              </template>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.mails.columns[0]"
                 prop="receivedAt"
-                ><template #default="{ row }">{{
-                  showDate(row.receivedAt)
-                }}</template></V2TableColumn
               >
+                <template #default="{ row }">{{ showDate(row.receivedAt) }}</template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.mails.columns[1]"
                 prop="targetEmail"
-                ><template #default="{ row }">{{ targetEmail(row) }}</template></V2TableColumn
+                show-overflow-tooltip
               >
+                <template #default="{ row }">{{ targetEmail(row) }}</template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.mails.columns[2]"
                 prop="fromAddress"
+                show-overflow-tooltip
               />
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.mails.columns[3]"
                 prop="subject"
+                show-overflow-tooltip
               />
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.mails.columns[4]"
                 prop="extractedCode"
-                ><template #default="{ row }"
-                  ><button
-                    v-if="row.extractedCode"
-                    class="vendure-mailbox-code"
-                    type="button"
-                    @click="copyCode(row.extractedCode)"
-                  >
-                    {{ row.extractedCode }}</button
-                  ><span v-else>—</span></template
-                ></V2TableColumn
               >
+                <template #default="{ row }">
+                  <div v-if="row.extractedCode" class="vendure-code-cell">
+                    <span
+                      class="vendure-code-badge vendure-code-badge--otp"
+                      :title="row.extractedCode"
+                      >{{ row.extractedCode }}</span
+                    >
+                    <button
+                      type="button"
+                      class="vendure-copy-btn"
+                      :class="{ 'is-copied': copiedCode === row.extractedCode }"
+                      title="点击一键复制验证码"
+                      @click="copyCodeWithFeedback(row.extractedCode)"
+                    >
+                      <el-icon v-if="copiedCode !== row.extractedCode"><CopyDocument /></el-icon>
+                      <el-icon v-else><Check /></el-icon>
+                      <span>{{ copiedCode === row.extractedCode ? '已复制' : '复制' }}</span>
+                    </button>
+                  </div>
+                  <span v-else>—</span>
+                </template>
+              </V2TableColumn>
               <V2TableActionColumn :definition="v2TableSchemas.vendureMailbox.mails.columns[5]"
                 ><template #default="{ row }"
                   ><AppButton size="small" variant="ghost" @click="openMail(row)">查看</AppButton
@@ -745,6 +839,270 @@
             />
           </footer>
         </V2AsyncRegion>
+
+        <section
+          v-if="activeTab === 'relay-query'"
+          class="vendure-relay-workbench"
+          aria-label="邮箱中继查询工作台"
+        >
+          <!-- 查询输入卡片 -->
+          <div class="vendure-relay-card vendure-relay-query-card">
+            <div class="vendure-relay-query-header">
+              <div>
+                <h2 class="vendure-relay-title">邮箱中继查询</h2>
+                <p class="vendure-relay-subtitle">
+                  支持输入买家查询码、主查询码、虚拟邮箱或直接选取，快速获取最新验证码与中继收件记录。
+                </p>
+              </div>
+              <div class="vendure-relay-autorefresh-control">
+                <el-switch v-model="relayAutoRefresh" active-text="10秒自动刷新" />
+                <span v-if="relayAutoRefresh && relayCountdown > 0" class="vendure-relay-countdown">
+                  ({{ relayCountdown }}秒后刷新)
+                </span>
+              </div>
+            </div>
+
+            <div class="vendure-relay-form">
+              <div class="vendure-relay-quick-select">
+                <span id="vendure-relay-alias-label" class="vendure-relay-field-label"
+                  >快捷选取虚拟邮箱</span
+                >
+                <el-select
+                  v-model="quickSelectedAliasEmail"
+                  aria-labelledby="vendure-relay-alias-label"
+                  filterable
+                  clearable
+                  placeholder="从已有虚拟邮箱中快速选择..."
+                  class="vendure-relay-alias-select"
+                  @change="handleQuickSelectAlias"
+                >
+                  <el-option
+                    v-for="item in allAliases"
+                    :key="item.id"
+                    :label="item.aliasEmail + (item.note ? ` (${item.note})` : '')"
+                    :value="item.aliasEmail"
+                  >
+                    <span class="vendure-relay-opt-email">{{ item.aliasEmail }}</span>
+                    <span v-if="item.buyerQueryCode" class="vendure-relay-opt-code">{{
+                      item.buyerQueryCode
+                    }}</span>
+                  </el-option>
+                </el-select>
+              </div>
+
+              <div class="vendure-relay-input-group">
+                <span id="vendure-relay-input-label" class="vendure-relay-field-label"
+                  >查询邮箱或查询码</span
+                >
+                <div class="vendure-relay-input-wrapper">
+                  <el-input
+                    v-model="relayInput"
+                    aria-labelledby="vendure-relay-input-label"
+                    clearable
+                    size="large"
+                    placeholder="请输入虚拟邮箱、买家查询码或主查询码..."
+                    class="vendure-relay-input"
+                    @keyup.enter="handleRelayQuery"
+                  >
+                    <template #prefix>
+                      <el-icon><Search /></el-icon>
+                    </template>
+                    <template #suffix>
+                      <button
+                        v-if="!relayInput"
+                        type="button"
+                        class="vendure-relay-paste-btn"
+                        title="从剪贴板粘贴"
+                        @click="pasteRelayInput"
+                      >
+                        <el-icon><CopyDocument /></el-icon>
+                        <span>粘贴</span>
+                      </button>
+                    </template>
+                  </el-input>
+                  <AppButton
+                    variant="primary"
+                    size="large"
+                    class="vendure-relay-search-btn"
+                    :loading="relayLoading"
+                    @click="handleRelayQuery"
+                  >
+                    <el-icon><Search /></el-icon>
+                    <span>查询验证码</span>
+                  </AppButton>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 错误提示 -->
+          <div v-if="relayError" class="vendure-relay-error-banner" role="alert">
+            <strong>查询提示：</strong>
+            <span>{{ relayError }}</span>
+          </div>
+
+          <!-- 首次查询加载态 -->
+          <div v-if="relayLoading && !relayResult" class="vendure-relay-loading-box">
+            <el-icon class="is-loading"><RefreshRight /></el-icon>
+            <span>正在中继查询最新验证码...</span>
+          </div>
+
+          <!-- 查询结果区域 -->
+          <div v-else-if="relayResult" class="vendure-relay-results">
+            <!-- 结果概览栏 -->
+            <div class="vendure-relay-summary-card">
+              <div class="vendure-relay-summary-info">
+                <div class="vendure-relay-summary-target">
+                  <span class="vendure-relay-summary-email">{{ relayResult.email }}</span>
+                  <span
+                    class="vendure-relay-pill"
+                    :class="
+                      relayResult.targetType === 'BUYER'
+                        ? 'pill-buyer'
+                        : relayResult.targetType === 'MASTER'
+                          ? 'pill-master'
+                          : 'pill-email'
+                    "
+                  >
+                    {{
+                      relayResult.targetType === 'BUYER'
+                        ? '买家查询码'
+                        : relayResult.targetType === 'MASTER'
+                          ? '主查询码'
+                          : '邮箱查询'
+                    }}
+                  </span>
+                  <span
+                    v-if="
+                      relayResult.remainingDays !== null && relayResult.remainingDays !== undefined
+                    "
+                    class="vendure-relay-days"
+                  >
+                    剩余有效 {{ relayResult.remainingDays }} 天
+                  </span>
+                </div>
+                <div class="vendure-relay-summary-meta">
+                  <span>共找到 {{ relayResult.items.length }} 封收件记录</span>
+                  <span v-if="lastQueriedTime">· 最后刷新：{{ lastQueriedTime }}</span>
+                </div>
+              </div>
+              <div class="vendure-relay-summary-actions">
+                <AppButton
+                  size="small"
+                  variant="soft"
+                  :loading="relayLoading"
+                  @click="handleRelayQuery"
+                >
+                  <el-icon><RefreshRight /></el-icon>
+                  <span>立即刷新</span>
+                </AppButton>
+              </div>
+            </div>
+
+            <!-- 最新验证码超大横幅 Hero Banner -->
+            <div v-if="relayResult.latestOtp" class="vendure-relay-otp-banner">
+              <div class="vendure-relay-otp-info">
+                <div class="vendure-relay-otp-tag">最新收到验证码</div>
+                <div class="vendure-relay-otp-code">{{ relayResult.latestOtp.code }}</div>
+                <div class="vendure-relay-otp-meta">
+                  <span>发件人：{{ relayResult.latestOtp.from }}</span>
+                  <span>·</span>
+                  <span>主题：{{ relayResult.latestOtp.subject }}</span>
+                  <span>·</span>
+                  <span>时间：{{ showDate(relayResult.latestOtp.receivedAt) }}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="vendure-relay-big-copy-btn"
+                :class="{ 'is-copied': copiedCode === relayResult.latestOtp.code }"
+                title="一键复制最新验证码"
+                @click="copyCodeWithFeedback(relayResult.latestOtp.code)"
+              >
+                <el-icon v-if="copiedCode !== relayResult.latestOtp.code"><CopyDocument /></el-icon>
+                <el-icon v-else><Check /></el-icon>
+                <span>{{
+                  copiedCode === relayResult.latestOtp.code ? '已复制验证码' : '复制验证码'
+                }}</span>
+              </button>
+            </div>
+
+            <!-- 邮件列表卡片 -->
+            <div v-if="relayResult.items.length" class="vendure-relay-mail-list">
+              <h3 class="vendure-relay-list-title">
+                中继收件明细 ({{ relayResult.items.length }})
+              </h3>
+              <div v-for="mail in relayResult.items" :key="mail.id" class="vendure-relay-mail-card">
+                <div class="vendure-relay-mail-header">
+                  <div class="vendure-relay-mail-from">
+                    <strong>{{ mail.fromName || mail.fromAddress || '未知发件人' }}</strong>
+                    <span v-if="mail.targetEmail" class="vendure-relay-mail-target"
+                      >收件: {{ mail.targetEmail }}</span
+                    >
+                  </div>
+                  <span class="vendure-relay-mail-time">{{ showDate(mail.receivedAt) }}</span>
+                </div>
+
+                <div class="vendure-relay-mail-subject-row">
+                  <div class="vendure-relay-mail-subject">{{ mail.subject || '无主题邮件' }}</div>
+                  <div v-if="mail.extractedCode" class="vendure-relay-cell-otp">
+                    <span class="vendure-relay-otp-chip">{{ mail.extractedCode }}</span>
+                    <button
+                      type="button"
+                      class="vendure-copy-btn"
+                      :class="{ 'is-copied': copiedCode === mail.extractedCode }"
+                      title="点击一键复制验证码"
+                      @click="copyCodeWithFeedback(mail.extractedCode)"
+                    >
+                      <el-icon v-if="copiedCode !== mail.extractedCode"><CopyDocument /></el-icon>
+                      <el-icon v-else><Check /></el-icon>
+                      <span>{{ copiedCode === mail.extractedCode ? '已复制' : '复制' }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="mail.bodyText" class="vendure-relay-mail-body-wrapper">
+                  <button
+                    type="button"
+                    class="vendure-relay-toggle-body-btn"
+                    @click="toggleMailExpand(mail.id)"
+                  >
+                    <span>{{ expandedMailIds.has(mail.id) ? '收起正文' : '展开正文' }}</span>
+                  </button>
+                  <div v-if="expandedMailIds.has(mail.id)" class="vendure-relay-mail-body">
+                    <pre>{{ mail.bodyText }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 空收件卡片 -->
+            <div v-else class="vendure-relay-empty-card">
+              <strong>暂无中继收件记录</strong>
+              <p>
+                当前查询的邮箱或查询码尚未收到验证码邮件。如果刚在官网或应用触发发送，请开启自动刷新或稍候数秒后点击刷新。
+              </p>
+              <AppButton
+                size="small"
+                variant="soft"
+                :loading="relayLoading"
+                @click="handleRelayQuery"
+              >
+                <el-icon><RefreshRight /></el-icon>
+                <span>刷新重试</span>
+              </AppButton>
+            </div>
+          </div>
+
+          <!-- 初始待机状态提示 -->
+          <div v-else-if="!relayLoading && !relayError" class="vendure-relay-idle-card">
+            <div class="vendure-relay-idle-icon">
+              <el-icon :size="48"><Search /></el-icon>
+            </div>
+            <strong>请输入或选择要查询的中继邮箱</strong>
+            <p>输入买家查询码、主查询码或虚拟邮箱地址，一键检索最新验证码与历史邮件。</p>
+          </div>
+        </section>
       </template>
     </V2AsyncRegion>
 
@@ -941,9 +1299,11 @@ import type {
   V2VendureMailboxMail,
   V2VendureMailboxPage,
   V2VendureMailboxPrimaryAccount,
+  V2VendureMailboxPublicQueryResult,
   V2VendureMailboxStatus
 } from '@apple-business/shared';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { Check, CopyDocument, RefreshRight, Search } from '@element-plus/icons-vue';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -962,7 +1322,7 @@ import { vendureMailboxApi } from './vendure-mailbox-api';
 import '@/v2/styles/records.css';
 import './vendure-mailbox.css';
 
-type TabName = 'primary' | 'aliases' | 'mails';
+type TabName = 'primary' | 'aliases' | 'mails' | 'relay-query';
 type PendingAction = null | (() => Promise<void>);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const activeTab = ref<TabName>('primary');
@@ -1124,6 +1484,10 @@ watch(
   [activeTab, primaryAccountId],
   ([tab]) => {
     if (tab === 'mails') void aliasQuery.ensureFresh();
+    if (tab === 'relay-query') {
+      void primaryQuery.ensureFresh();
+      void aliasQuery.ensureFresh();
+    }
   },
   { flush: 'post' }
 );
@@ -1183,15 +1547,304 @@ function statusTag(value: string): 'success' | 'info' | 'danger' | 'warning' {
 function targetEmail(mail: V2VendureMailboxMail) {
   return allAliases.value.find((item) => item.id === mail.virtualEmailId)?.aliasEmail ?? '未分配';
 }
-async function copyCode(value: string | null) {
+const copiedCode = ref('');
+let copyTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function copyCodeWithFeedback(value: string | null | undefined) {
   if (!value) return;
   try {
     await navigator.clipboard.writeText(value);
+    copiedCode.value = value;
     operationMessage.value = '查询码已复制';
+    if (copyTimer) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      copiedCode.value = '';
+    }, 2000);
   } catch {
     operationError.value = '复制失败，请手动选择查询码';
   }
 }
+
+async function copyCode(value: string | null) {
+  await copyCodeWithFeedback(value);
+}
+
+interface RelayQueryResult {
+  email: string;
+  targetType: 'BUYER' | 'MASTER' | 'EMAIL';
+  remainingDays?: number | null;
+  totalEmails: number;
+  latestOtp?: {
+    code: string;
+    subject: string;
+    receivedAt: string;
+    from: string;
+  };
+  items: Array<{
+    id: string;
+    subject: string;
+    fromAddress: string;
+    fromName?: string;
+    receivedAt: string;
+    extractedCode?: string;
+    bodyText?: string;
+    targetEmail?: string;
+  }>;
+}
+
+const relayInput = ref('');
+const quickSelectedAliasEmail = ref('');
+const relayLoading = ref(false);
+const relayError = ref('');
+const relayResult = ref<RelayQueryResult | null>(null);
+const lastQueriedTime = ref('');
+const relayAutoRefresh = ref(false);
+const relayCountdown = ref(10);
+const expandedMailIds = ref<Set<string>>(new Set());
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let relayRequestId = 0;
+
+watch(
+  relayInput,
+  () => {
+    relayRequestId += 1;
+    if (quickSelectedAliasEmail.value !== relayInput.value) quickSelectedAliasEmail.value = '';
+    relayResult.value = null;
+    relayError.value = '';
+    relayLoading.value = false;
+    lastQueriedTime.value = '';
+    expandedMailIds.value = new Set();
+  },
+  { flush: 'sync' }
+);
+
+watch(activeTab, (tab) => {
+  if (tab === 'relay-query') return;
+  relayRequestId += 1;
+  relayResult.value = null;
+  relayError.value = '';
+  relayLoading.value = false;
+  lastQueriedTime.value = '';
+});
+
+function toggleMailExpand(mailId: string) {
+  const next = new Set(expandedMailIds.value);
+  if (next.has(mailId)) {
+    next.delete(mailId);
+  } else {
+    next.add(mailId);
+  }
+  expandedMailIds.value = next;
+}
+
+function handleQuickSelectAlias(value: string) {
+  if (value) {
+    relayInput.value = value;
+    void handleRelayQuery();
+  }
+}
+
+async function pasteRelayInput() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && text.trim()) {
+      relayInput.value = text.trim();
+      void handleRelayQuery();
+    }
+  } catch {
+    operationError.value = '无法直接读取剪贴板，请手动粘贴';
+  }
+}
+
+function formatPublicQueryResult(
+  res: V2VendureMailboxPublicQueryResult,
+  queryInput: string
+): RelayQueryResult {
+  const items = [...(res.items || [])].sort(
+    (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt)
+  );
+  const latestOtpItem = items.find((m) => Boolean(m.extractedCode));
+  return {
+    email: res.aliasEmail || res.primaryEmail || queryInput,
+    targetType: res.targetType === 'MASTER' ? 'MASTER' : 'BUYER',
+    remainingDays: res.remainingDays ?? null,
+    totalEmails: res.totalEmails ?? items.length,
+    latestOtp:
+      latestOtpItem && latestOtpItem.extractedCode
+        ? {
+            code: latestOtpItem.extractedCode,
+            subject: latestOtpItem.subject || '无主题邮件',
+            receivedAt: latestOtpItem.receivedAt,
+            from: latestOtpItem.fromName || latestOtpItem.fromAddress || '未知发件人'
+          }
+        : undefined,
+    items: items.map((m) => ({
+      id: m.id,
+      subject: m.subject || '无主题邮件',
+      fromAddress: m.fromAddress,
+      fromName: m.fromName,
+      receivedAt: m.receivedAt,
+      extractedCode: m.extractedCode ?? undefined,
+      bodyText: m.bodyText ?? undefined,
+      targetEmail: m.targetEmail || res.aliasEmail || undefined
+    }))
+  };
+}
+
+async function handleRelayQuery() {
+  const query = relayInput.value.trim();
+  if (!query) {
+    relayResult.value = null;
+    relayError.value = '请输入虚拟邮箱、买家查询码或主查询码';
+    return;
+  }
+  const requestId = ++relayRequestId;
+  relayError.value = '';
+  relayResult.value = null;
+  lastQueriedTime.value = '';
+  expandedMailIds.value = new Set();
+  relayLoading.value = true;
+  try {
+    let resultData: RelayQueryResult | null = null;
+    const isEmail = query.includes('@');
+
+    if (isEmail) {
+      let matchedAlias = allAliases.value.find(
+        (a) => a.aliasEmail.toLowerCase() === query.toLowerCase()
+      );
+      let matchedPrimary = primaryItems.value.find(
+        (p) => p.email.toLowerCase() === query.toLowerCase()
+      );
+      if (!matchedAlias && !matchedPrimary) {
+        const [aliasMatches, primaryMatches] = await Promise.all([
+          vendureMailboxApi.aliases({ q: query, pageSize: 20 }),
+          vendureMailboxApi.primaryAccounts({ q: query, pageSize: 20 })
+        ]);
+        if (requestId !== relayRequestId) return;
+        matchedAlias = aliasMatches.items.find(
+          (item) => item.aliasEmail.toLowerCase() === query.toLowerCase()
+        );
+        matchedPrimary = primaryMatches.items.find(
+          (item) => item.email.toLowerCase() === query.toLowerCase()
+        );
+      }
+      if (!matchedAlias && !matchedPrimary) {
+        throw new Error('未找到该邮箱，请从已有虚拟邮箱中选择或输入查询码');
+      }
+
+      if (matchedAlias && matchedAlias.buyerQueryCode) {
+        try {
+          const res = await vendureMailboxApi.publicQuery(matchedAlias.buyerQueryCode);
+          if (requestId !== relayRequestId) return;
+          if (res?.success) {
+            resultData = formatPublicQueryResult(res, query);
+          }
+        } catch {
+          // fallback
+        }
+      } else if (matchedPrimary && matchedPrimary.masterQueryCode) {
+        try {
+          const res = await vendureMailboxApi.publicQuery(matchedPrimary.masterQueryCode);
+          if (requestId !== relayRequestId) return;
+          if (res?.success) {
+            resultData = formatPublicQueryResult(res, query);
+          }
+        } catch {
+          // fallback
+        }
+      }
+
+      if (!resultData) {
+        if (requestId !== relayRequestId) return;
+        const mailRes = await vendureMailboxApi.mails({
+          virtualEmailId: matchedAlias?.id,
+          primaryAccountId: matchedPrimary?.id,
+          pageSize: 20
+        });
+        const items = [...(mailRes.items || [])].sort(
+          (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt)
+        );
+        const latestOtpItem = items.find((m) => m.extractedCode);
+        resultData = {
+          email: query,
+          targetType: matchedAlias ? 'BUYER' : matchedPrimary ? 'MASTER' : 'EMAIL',
+          remainingDays: matchedAlias?.remainingDays ?? matchedPrimary?.remainingDays ?? null,
+          totalEmails: mailRes.total || items.length,
+          latestOtp:
+            latestOtpItem && latestOtpItem.extractedCode
+              ? {
+                  code: latestOtpItem.extractedCode,
+                  subject: latestOtpItem.subject || '无主题邮件',
+                  receivedAt: latestOtpItem.receivedAt,
+                  from: latestOtpItem.fromName || latestOtpItem.fromAddress || '未知发件人'
+                }
+              : undefined,
+          items: items.map((m) => ({
+            id: m.id,
+            subject: m.subject || '无主题邮件',
+            fromAddress: m.fromAddress,
+            fromName: m.fromName ?? undefined,
+            receivedAt: m.receivedAt,
+            extractedCode: m.extractedCode ?? undefined,
+            bodyText: m.bodyText ?? undefined,
+            targetEmail: targetEmail(m)
+          }))
+        };
+      }
+    } else {
+      const res = await vendureMailboxApi.publicQuery(query);
+      if (!res?.success) {
+        throw new Error(res?.message || '未找到该查询码对应的邮箱记录，请核对查询码');
+      }
+      resultData = formatPublicQueryResult(res, query);
+    }
+
+    if (requestId === relayRequestId) {
+      relayResult.value = resultData;
+      lastQueriedTime.value = formatV2DateTime(new Date().toISOString());
+    }
+  } catch (err: unknown) {
+    if (requestId === relayRequestId) {
+      relayResult.value = null;
+      relayError.value = getApiErrorMessage(err) || '查询失败，请核对输入信息';
+    }
+  } finally {
+    if (requestId === relayRequestId) relayLoading.value = false;
+  }
+}
+
+function jumpToRelayQuery(identifier: string) {
+  activeTab.value = 'relay-query';
+  relayInput.value = identifier;
+  quickSelectedAliasEmail.value = identifier;
+  void handleRelayQuery();
+}
+
+watch([relayAutoRefresh, activeTab], ([enabled, tab]) => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+  if (enabled && tab === 'relay-query') {
+    relayCountdown.value = 10;
+    autoRefreshTimer = setInterval(() => {
+      if (!relayAutoRefresh.value || activeTab.value !== 'relay-query' || !ready.value) return;
+      if (relayCountdown.value > 1) {
+        relayCountdown.value -= 1;
+      } else {
+        relayCountdown.value = 10;
+        if (!relayLoading.value && relayInput.value.trim()) {
+          void handleRelayQuery();
+        }
+      }
+    }, 1000);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  if (copyTimer) clearTimeout(copyTimer);
+});
 function clearNotice() {
   operationMessage.value = '';
   operationError.value = '';
@@ -1341,6 +1994,10 @@ function runPrimaryAction(row: V2VendureMailboxPrimaryAccount, action: 'test' | 
   );
 }
 function handlePrimaryCommand(row: V2VendureMailboxPrimaryAccount, command: string) {
+  if (command === 'quick-query') {
+    jumpToRelayQuery(row.email);
+    return;
+  }
   if (command === 'edit') return openPrimaryEdit(row);
   if (command === 'reconcile')
     return askConfirm(
@@ -1459,6 +2116,10 @@ function showAliasMails(row: V2VendureMailboxAlias) {
   activeTab.value = 'mails';
 }
 function handleAliasCommand(row: V2VendureMailboxAlias, command: string) {
+  if (command === 'quick-query') {
+    jumpToRelayQuery(row.aliasEmail);
+    return;
+  }
   if (command === 'reset')
     return askConfirm(
       '重置买家查询码',

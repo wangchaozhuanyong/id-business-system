@@ -96,6 +96,7 @@ try {
   await warmCustomerPage(browser);
   await verifyLayoutFixture(browser);
   await verifyRecordsSectionSpacing(browser);
+  await verifyMailboxRelayWorkbench(browser);
   await verifyPublicPageScroll(browser);
   for (const scenario of permissionScenarios) {
     await verifyCustomerPage(browser, scenario);
@@ -333,7 +334,7 @@ async function verifyRecordsSectionSpacing(browserInstance) {
 }
 
 async function assertRecordsSectionSpacing(page, label) {
-  const sections = await page.evaluate(() => {
+  const { sections, pageBounds, titleBounds } = await page.evaluate(() => {
     const pageRoot = document.querySelector('.vendure-mailbox-page');
     const selectors = [
       '.v2-page-context',
@@ -343,14 +344,26 @@ async function assertRecordsSectionSpacing(page, label) {
       '.v2-records-list',
       '.v2-records-pagination'
     ];
-    return selectors.flatMap((selector) => {
+    const sections = selectors.flatMap((selector) => {
       const element = pageRoot?.querySelector(selector);
       if (!element || getComputedStyle(element).display === 'none') return [];
       const rect = element.getBoundingClientRect();
-      return rect.width && rect.height ? [{ selector, top: rect.top, bottom: rect.bottom }] : [];
+      return rect.width && rect.height
+        ? [{ selector, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right }]
+        : [];
     });
+    const pageRect = pageRoot?.getBoundingClientRect();
+    const titleRect = pageRoot
+      ?.querySelector('.v2-records-list .v2-section-heading__title')
+      ?.getBoundingClientRect();
+    return {
+      sections,
+      pageBounds: pageRect ? { left: pageRect.left, right: pageRect.right } : null,
+      titleBounds: titleRect ? { width: titleRect.width, height: titleRect.height } : null
+    };
   });
   assert.ok(sections.length >= 4, `${label} 缺少待验收的页面区块`);
+  assert.ok(pageBounds, `${label} 缺少页面外框`);
   for (let index = 1; index < sections.length; index += 1) {
     const gap = sections[index].top - sections[index - 1].bottom;
     assert.ok(
@@ -358,7 +371,97 @@ async function assertRecordsSectionSpacing(page, label) {
       `${label} ${sections[index - 1].selector} 与 ${sections[index].selector} 间距异常：${gap}px`
     );
   }
+  for (const section of sections) {
+    assert.ok(
+      Math.abs(section.left - pageBounds.left) <= 1 &&
+        Math.abs(section.right - pageBounds.right) <= 1,
+      `${label} ${section.selector} 未与页面外框对齐`
+    );
+  }
+  if (label.includes('390px')) {
+    assert.ok(
+      titleBounds && titleBounds.width > titleBounds.height * 1.5,
+      `${label} 列表标题被操作区挤成竖排：${JSON.stringify(titleBounds)}`
+    );
+  }
   assert.equal(await getDocumentOverflow(page), 0, `${label} 出现页面横向溢出`);
+}
+
+async function verifyMailboxRelayWorkbench(browserInstance) {
+  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const runtimeErrors = collectRuntimeErrors(page);
+  try {
+    await warmPage(page, '/vendure-mailbox-design-fixture.html', '.vendure-mailbox-tabs');
+    await page.getByRole('tab', { name: '邮箱中继查询' }).click();
+    const input = page.getByRole('textbox', { name: '查询邮箱或查询码' });
+    await input.fill('BUY-DEMO');
+    await page.getByRole('button', { name: '查询验证码' }).click();
+    await page.locator('.vendure-relay-otp-code').waitFor({ state: 'visible' });
+    for (const width of [1440, 1024, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const bounds = await page.evaluate(() => {
+        const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect();
+        const query = rect('.vendure-relay-query-card');
+        const summary = rect('.vendure-relay-summary-card');
+        const labels = [...document.querySelectorAll('.vendure-relay-field-label')].map((item) =>
+          item.getBoundingClientRect()
+        );
+        const controls = [
+          rect('.vendure-relay-quick-select .el-select'),
+          rect('.vendure-relay-input-wrapper')
+        ];
+        return {
+          query: query && { left: query.left, right: query.right, bottom: query.bottom },
+          summary: summary && { left: summary.left, right: summary.right, top: summary.top },
+          labels: labels.map((item) => ({ right: item.right })),
+          controls: controls.map((item) => item && { left: item.left })
+        };
+      });
+      assert.ok(bounds.query && bounds.summary, `${width}px 中继查询缺少卡片`);
+      assert.ok(
+        Math.abs(bounds.query.left - bounds.summary.left) <= 1 &&
+          Math.abs(bounds.query.right - bounds.summary.right) <= 1,
+        `${width}px 中继查询卡片未对齐`
+      );
+      assert.ok(
+        bounds.summary.top - bounds.query.bottom >= 10 &&
+          bounds.summary.top - bounds.query.bottom <= 24,
+        `${width}px 中继查询卡片间距异常`
+      );
+      assert.ok(
+        bounds.labels.every((label, index) => label.right < bounds.controls[index]?.left),
+        `${width}px 中继查询标签没有保持在控件左侧`
+      );
+      assert.equal(await getDocumentOverflow(page), 0, `${width}px 中继查询横向溢出`);
+    }
+    await input.fill('INVALID');
+    assert.equal(
+      await page.locator('.vendure-relay-otp-code').count(),
+      0,
+      '修改查询码后旧验证码仍显示'
+    );
+    await page.getByRole('button', { name: '查询验证码' }).click();
+    await page.getByRole('alert').filter({ hasText: '查询码无效' }).waitFor();
+    assert.equal(
+      await page.locator('.vendure-relay-otp-code').count(),
+      0,
+      '失败查询仍显示旧验证码'
+    );
+    await input.fill('SLOW-DEMO');
+    await page.getByRole('button', { name: '查询验证码' }).click();
+    await input.fill('BUY-DEMO');
+    await page.getByRole('button', { name: '查询验证码' }).click();
+    await page.waitForTimeout(700);
+    assert.equal(
+      await page.locator('.vendure-relay-summary-email').innerText(),
+      'customer-01@icloud.com',
+      '较早查询覆盖了当前查询结果'
+    );
+    assert.deepEqual(runtimeErrors, [], `中继查询出现浏览器错误：${runtimeErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
 }
 
 async function verifyPrimaryVerticalScroll(page, label) {
@@ -1338,6 +1441,14 @@ async function installApiMocks(page, user, unexpectedRequests, tablePreferences)
       await fulfillSuccess(route, {
         now: new Date().toISOString(),
         timezone: 'Asia/Shanghai'
+      });
+      return;
+    }
+    if (request.method() === 'GET' && url.pathname.endsWith('/api/realtime/events')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: ': layout fixture ready\n\n'
       });
       return;
     }

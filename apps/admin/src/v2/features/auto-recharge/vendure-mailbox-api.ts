@@ -12,6 +12,7 @@ import type {
   V2VendureMailboxMail,
   V2VendureMailboxPage,
   V2VendureMailboxPrimaryAccount,
+  V2VendureMailboxPublicQueryResult,
   V2VendureMailboxStatus,
   V2VendureMailboxSyncResult
 } from '@apple-business/shared';
@@ -89,5 +90,10 @@ export const vendureMailboxApi = {
   },
   deleteMail(id: string) {
     return request<{ deleted: boolean }>(http.delete(`${base}/mails/${id}`));
+  },
+  publicQuery(queryCode: string) {
+    return request<V2VendureMailboxPublicQueryResult>(
+      http.post('/id-business-v2/public/vendure-mailbox/query', { queryCode })
+    );
   }
 };

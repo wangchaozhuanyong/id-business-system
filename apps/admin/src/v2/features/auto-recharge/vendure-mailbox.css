@@ -7,7 +7,7 @@
 .vendure-mailbox-tabs {
   padding: 0 16px;
   border: 1px solid var(--v2-border);
-  border-radius: 12px;
+  border-radius: var(--v3-radius);
   background: var(--v2-surface);
 }
 
@@ -21,18 +21,20 @@
 
 .vendure-mailbox-tabs .el-tabs__item {
   min-height: 48px;
+  font-weight: 600;
 }
 
 .vendure-mailbox-toolbar {
-  display: grid;
+  display: flex;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  justify-content: space-between;
   gap: 12px 20px;
-  padding: 12px;
+  padding: 11px 12px;
   border: 1px solid var(--v2-border);
-  border-radius: 12px;
+  border-radius: var(--v3-radius);
   background: var(--v2-surface);
+  flex-wrap: wrap;
 }
 
 .vendure-mailbox-toolbar__filters,
@@ -64,7 +66,7 @@
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--v2-accent-border, #bfdbfe);
-  border-radius: 10px;
+  border-radius: var(--v3-radius);
   background: var(--v2-accent-soft, #eff6ff);
   color: var(--v2-text-soft);
   font-size: 12px;
@@ -81,14 +83,24 @@
 }
 
 .vendure-mailbox-page .v2-records-list {
-  box-shadow: var(--v3-shadow-sm);
+  border-radius: var(--v3-radius);
+  box-shadow: none;
+}
+
+.vendure-mailbox-email {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--v2-text);
 }
 
 .vendure-mailbox-message,
 .vendure-mailbox-error,
 .vendure-mailbox-unconfigured {
   margin: 0;
-  border-radius: 12px;
+  border-radius: var(--v3-radius);
   padding: 12px 16px;
 }
 
@@ -128,12 +140,24 @@
 }
 
 .vendure-mailbox-code--badge {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border: 1px solid var(--v2-accent-border, #bfdbfe);
-  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 6px;
+  background: var(--v2-surface-subtle, #f8fafc);
+  color: var(--el-color-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  transition: all 0.15s ease-in-out;
+}
+
+.vendure-mailbox-code--badge:hover {
   background: var(--v2-accent-soft, #eff6ff);
-  font-weight: 700;
+  border-color: var(--v2-accent-border, #bfdbfe);
+  color: var(--el-color-primary-dark-2, #1d4ed8);
 }
 
 .vendure-mailbox-mobile-actions {
@@ -142,14 +166,31 @@
 }
 
 .vendure-mailbox-row-actions {
-  display: grid;
-  gap: 4px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
+.vendure-mailbox-row-actions__buttons,
 .vendure-mailbox-row-actions > div {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.vendure-mailbox-row-feedback {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 3;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border-soft);
+  box-shadow: var(--v3-shadow-sm);
 }
 
 .vendure-mailbox-row-actions small,
@@ -208,6 +249,576 @@
   overflow-wrap: anywhere;
   background: var(--v2-color-surface-subtle, #f8fafc);
   font: inherit;
+}
+
+/* Large and prominent copy button components */
+.vendure-code-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.vendure-code-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--v2-surface-subtle, #f8fafc);
+  border: 1px solid var(--v2-border-soft, #e2e8f0);
+  border-radius: 6px;
+  color: var(--v2-text, #1e293b);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+
+.vendure-code-badge--otp {
+  color: var(--el-color-primary, #2563eb);
+  background: var(--v2-accent-soft, #eff6ff);
+  border-color: var(--v2-accent-border, #bfdbfe);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.vendure-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  min-width: 64px;
+  padding: 0 10px;
+  background: var(--v2-surface, #ffffff);
+  border: 1.5px solid var(--v2-border, #cbd5e1);
+  border-radius: 6px;
+  color: var(--v2-text, #334155);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease-in-out;
+  box-shadow: var(--v3-shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
+  flex-shrink: 0;
+}
+
+.vendure-copy-btn:hover {
+  background: var(--v2-accent-soft, #eff6ff);
+  border-color: var(--el-color-primary, #2563eb);
+  color: var(--el-color-primary, #2563eb);
+  transform: translateY(-1px);
+}
+
+.vendure-copy-btn:active {
+  transform: translateY(0);
+}
+
+.vendure-copy-btn.is-copied {
+  background: var(--v2-color-success-soft, #f0fdf4);
+  border-color: var(--v2-color-success-border, #86efac);
+  color: var(--v2-color-success-text, #166534);
+}
+
+.vendure-code-cell--mobile {
+  width: 100%;
+  justify-content: space-between;
+}
+
+/* Mailbox Relay Query Workbench */
+.vendure-relay-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v2-records-section-gap, 18px);
+  width: 100%;
+}
+
+.vendure-relay-card {
+  background: var(--v2-surface, #ffffff);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  padding: 24px;
+  box-shadow: var(--v3-shadow-sm);
+}
+
+.vendure-relay-query-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.vendure-relay-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--v2-text);
+}
+
+.vendure-relay-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--v2-text-soft);
+  line-height: 1.5;
+}
+
+.vendure-relay-autorefresh-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--v2-surface-soft);
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 8px;
+}
+
+.vendure-relay-countdown {
+  font-size: 12px;
+  color: var(--el-color-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.vendure-relay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.vendure-relay-quick-select,
+.vendure-relay-input-group {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.vendure-relay-field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--v2-text);
+  line-height: 1.4;
+}
+
+.vendure-relay-quick-select .el-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.vendure-relay-opt-email {
+  float: left;
+  font-weight: 600;
+}
+
+.vendure-relay-opt-code {
+  float: right;
+  color: var(--v2-text-soft);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.vendure-relay-input-wrapper {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.vendure-relay-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.vendure-relay-input .el-input__wrapper {
+  padding-right: 8px;
+}
+
+.vendure-relay-paste-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--v2-accent-soft, #eff6ff);
+  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  border-radius: 6px;
+  color: var(--el-color-primary, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.vendure-relay-paste-btn:hover {
+  background: var(--v2-surface-hover);
+}
+
+.vendure-relay-search-btn {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 20px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.vendure-relay-error-banner {
+  padding: 12px 16px;
+  border-radius: var(--v3-radius);
+  background: var(--v3-danger-soft);
+  border: 1px solid var(--v3-danger-border-soft);
+  color: var(--v3-danger);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vendure-relay-loading-box,
+.vendure-relay-idle-card {
+  padding: 48px 24px;
+  text-align: center;
+  background: var(--v2-surface);
+  border: 1px dashed var(--v2-border);
+  border-radius: var(--v3-radius);
+  color: var(--v2-text-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.vendure-relay-idle-icon {
+  color: var(--v2-border, #cbd5e1);
+}
+
+.vendure-relay-idle-card strong {
+  font-size: 16px;
+  color: var(--v2-text);
+}
+
+.vendure-relay-idle-card p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 480px;
+  line-height: 1.6;
+}
+
+.vendure-relay-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.vendure-relay-summary-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  box-shadow: var(--v3-shadow-sm);
+  flex-wrap: wrap;
+}
+
+.vendure-relay-summary-target {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.vendure-relay-summary-email {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--v2-text);
+}
+
+.vendure-relay-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+
+.pill-buyer {
+  background: var(--v3-primary-soft);
+  color: var(--v3-primary);
+}
+
+.pill-master {
+  background: var(--v3-warning-soft);
+  color: var(--v3-warning);
+}
+
+.pill-email {
+  background: var(--v2-surface-soft);
+  color: var(--v2-text-soft);
+}
+
+.vendure-relay-days {
+  font-size: 12px;
+  color: var(--v3-success);
+  background: var(--v3-success-soft);
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+.vendure-relay-summary-meta {
+  font-size: 12px;
+  color: var(--v2-text-soft);
+}
+
+/* OTP Hero Banner - directly inspired by Vendure portal */
+.vendure-relay-otp-banner {
+  background: var(--v3-primary-soft);
+  border: 2px dashed var(--v3-primary-border-soft);
+  border-radius: var(--v3-radius);
+  padding: 20px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  box-shadow: var(--v3-shadow-sm);
+  flex-wrap: wrap;
+}
+
+.vendure-relay-otp-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vendure-relay-otp-tag {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--el-color-primary, #2563eb);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vendure-relay-otp-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: var(--el-color-primary-dark-2, #1d4ed8);
+  line-height: 1.1;
+}
+
+.vendure-relay-otp-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--v2-text-soft);
+  flex-wrap: wrap;
+}
+
+.vendure-relay-big-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 24px;
+  background: var(--v2-accent-solid);
+  color: var(--v2-on-accent-solid);
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.vendure-relay-big-copy-btn:hover {
+  background: var(--v3-primary-solid-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+
+.vendure-relay-big-copy-btn:active {
+  transform: translateY(0);
+}
+
+.vendure-relay-big-copy-btn.is-copied {
+  background: var(--v2-success-solid);
+  color: var(--v2-on-success-solid);
+  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.25);
+}
+
+/* Mail List */
+.vendure-relay-mail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vendure-relay-list-title {
+  margin: 8px 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--v2-text);
+}
+
+.vendure-relay-mail-card {
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  padding: 16px 20px;
+  box-shadow: var(--v3-shadow-sm);
+  transition: border-color 0.15s ease;
+}
+
+.vendure-relay-mail-card:hover {
+  border-color: var(--v2-accent-border, #bfdbfe);
+}
+
+.vendure-relay-mail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.vendure-relay-mail-from {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.vendure-relay-mail-from strong {
+  font-size: 14px;
+  color: var(--v2-text);
+}
+
+.vendure-relay-mail-target {
+  font-size: 12px;
+  color: var(--v2-text-soft);
+  background: var(--v2-surface-subtle, #f8fafc);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.vendure-relay-mail-time {
+  font-size: 12px;
+  color: var(--v2-text-muted, #94a3b8);
+  white-space: nowrap;
+}
+
+.vendure-relay-mail-subject-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.vendure-relay-mail-subject {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--v2-text);
+  line-height: 1.4;
+  flex: 1;
+  min-width: 200px;
+}
+
+.vendure-relay-cell-otp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vendure-relay-otp-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--el-color-primary, #2563eb);
+  background: var(--v2-accent-soft, #eff6ff);
+  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+
+.vendure-relay-mail-body-wrapper {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--v2-border-soft);
+}
+
+.vendure-relay-toggle-body-btn {
+  background: none;
+  border: none;
+  color: var(--el-color-primary, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.vendure-relay-toggle-body-btn:hover {
+  text-decoration: underline;
+}
+
+.vendure-relay-mail-body {
+  margin-top: 10px;
+}
+
+.vendure-relay-mail-body pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--v2-surface-subtle, #f8fafc);
+  border: 1px solid var(--v2-border-soft);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--v2-text);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.vendure-relay-empty-card {
+  padding: 40px 24px;
+  text-align: center;
+  background: var(--v2-surface);
+  border: 1px solid var(--v2-border);
+  border-radius: var(--v3-radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.vendure-relay-empty-card strong {
+  font-size: 15px;
+  color: var(--v2-text);
+}
+
+.vendure-relay-empty-card p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--v2-text-soft);
+  max-width: 480px;
+  line-height: 1.5;
 }
 
 @media (max-width: 1180px) {
@@ -277,5 +888,39 @@
 
   .vendure-mailbox-mail-detail dd {
     margin-bottom: 12px;
+  }
+
+  .vendure-relay-input-wrapper {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .vendure-relay-quick-select,
+  .vendure-relay-input-group {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .vendure-relay-search-btn {
+    width: 100%;
+  }
+
+  .vendure-relay-otp-banner {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+
+  .vendure-relay-otp-info {
+    align-items: center;
+  }
+
+  .vendure-relay-big-copy-btn {
+    width: 100%;
+  }
+
+  .vendure-relay-mail-subject-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

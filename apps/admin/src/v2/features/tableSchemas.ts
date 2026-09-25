@@ -69,9 +69,15 @@ export const v2TableSchemas = {
       mobileMode: 'cards',
       rowKey: { kind: 'path', value: 'id' },
       columns: [
-        { key: 'email', label: '主邮箱', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
+        {
+          key: 'email',
+          label: '主邮箱',
+          kind: 'identifier',
+          widthPreset: 'inlineContent',
+          pin: 'start'
+        },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'masterQueryCode', label: '主查询码', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'masterQueryCode', label: '主查询码', kind: 'identifier', widthPreset: 'longText' },
         { key: 'remainingDays', label: '剩余天数', kind: 'numeric', widthPreset: 'compact' },
         { key: 'virtualEmailCount', label: '虚拟邮箱', kind: 'numeric', widthPreset: 'compact' },
         { key: 'lastSyncedAt', label: '最近同步', kind: 'date', widthPreset: 'dateTime' },
@@ -90,17 +96,17 @@ export const v2TableSchemas = {
           key: 'aliasEmail',
           label: '虚拟邮箱',
           kind: 'identifier',
-          widthPreset: 'wide',
+          widthPreset: 'inlineContent',
           pin: 'start'
         },
         {
           key: 'primaryAccountEmail',
           label: '所属主邮箱',
           kind: 'identifier',
-          widthPreset: 'wide'
+          widthPreset: 'longText'
         },
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
-        { key: 'buyerQueryCode', label: '买家查询码', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'buyerQueryCode', label: '买家查询码', kind: 'identifier', widthPreset: 'longText' },
         { key: 'remainingDays', label: '剩余天数', kind: 'numeric', widthPreset: 'compact' },
         { key: 'mailCount', label: '邮件数', kind: 'numeric', widthPreset: 'compact' },
         { key: 'lastMailReceivedAt', label: '最近收件', kind: 'date', widthPreset: 'dateTime' },
@@ -122,8 +128,8 @@ export const v2TableSchemas = {
           widthPreset: 'dateTime',
           pin: 'start'
         },
-        { key: 'targetEmail', label: '收件邮箱', kind: 'identifier', widthPreset: 'wide' },
-        { key: 'fromAddress', label: '发件人', kind: 'identifier', widthPreset: 'wide' },
+        { key: 'targetEmail', label: '收件邮箱', kind: 'identifier', widthPreset: 'longText' },
+        { key: 'fromAddress', label: '发件人', kind: 'identifier', widthPreset: 'longText' },
         { key: 'subject', label: '主题', kind: 'text', widthPreset: 'longText' },
         { key: 'extractedCode', label: '验证码', kind: 'identifier', widthPreset: 'standard' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }

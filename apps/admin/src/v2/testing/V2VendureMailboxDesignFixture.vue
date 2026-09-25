@@ -45,7 +45,8 @@ import type {
   V2VendureMailboxListQuery,
   V2VendureMailboxMail,
   V2VendureMailboxPage,
-  V2VendureMailboxPrimaryAccount
+  V2VendureMailboxPrimaryAccount,
+  V2VendureMailboxPublicQueryResult
 } from '@apple-business/shared';
 import { ArrowDown, CreditCard } from '@element-plus/icons-vue';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
@@ -53,6 +54,7 @@ import VendureMailboxManager from '@/v2/features/auto-recharge/VendureMailboxMan
 import { vendureMailboxApi } from '@/v2/features/auto-recharge/vendure-mailbox-api';
 
 const fixtureParams = new URLSearchParams(window.location.search);
+document.documentElement.dataset.v2Theme = fixtureParams.get('theme') === 'dark' ? 'dark' : 'light';
 const empty = fixtureParams.get('state') === 'empty';
 const primaryAccounts: V2VendureMailboxPrimaryAccount[] = empty
   ? []
@@ -168,7 +170,39 @@ Object.assign(vendureMailboxApi, {
       query
     ),
   testPrimary: async () => ({ success: true, message: 'iCloud 连接测试成功' }),
-  syncPrimary: async () => ({ success: true, syncedCount: 2, error: null })
+  syncPrimary: async () => ({ success: true, syncedCount: 2, error: null }),
+  publicQuery: async (queryCode: string): Promise<V2VendureMailboxPublicQueryResult> => {
+    if (queryCode === 'INVALID') throw new Error('查询码无效');
+    if (queryCode === 'SLOW-DEMO') await new Promise((resolve) => setTimeout(resolve, 600));
+    const isMaster = queryCode.startsWith('MSTR');
+    const scopedMails = isMaster
+      ? mails
+      : mails.filter((mail) => mail.virtualEmailId === 'alias-1');
+    return {
+      success: true,
+      message: null,
+      targetType: isMaster ? 'MASTER' : 'BUYER',
+      aliasEmail: queryCode === 'SLOW-DEMO' ? 'slow@icloud.com' : 'customer-01@icloud.com',
+      primaryEmail: 'mailbox-owner@icloud.com',
+      codeExpiresAt: '2026-10-12T08:00:00.000Z',
+      remainingDays: 28,
+      totalEmails: scopedMails.length,
+      items: scopedMails.slice(0, 5).map((mail) => ({
+        id: mail.id,
+        virtualEmailId: mail.virtualEmailId,
+        fromAddress: mail.fromAddress,
+        fromName: mail.fromName ?? '',
+        subject: mail.subject,
+        receivedAt: mail.receivedAt,
+        extractedCode: mail.extractedCode,
+        bodyText: mail.bodyText,
+        targetEmail:
+          aliases.find((alias) => alias.id === mail.virtualEmailId)?.aliasEmail ??
+          'mailbox-owner@icloud.com'
+      })),
+      virtualEmailsList: null
+    };
+  }
 });
 </script>
 

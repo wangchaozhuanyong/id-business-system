@@ -57,6 +57,7 @@ test('shared record spacing and its browser acceptance stay in the admin scope',
     'apps/admin/src/v2/styles/records.css',
     'apps/admin/src/v2/features/auto-recharge/vendure-mailbox.css',
     'scripts/acceptance-v2-table-layout.mjs',
+    'scripts/check-v2-table-standard.mjs',
     'docs/UI_DESIGN.md',
     'scripts/ci-recharge-scope.mjs'
   ];

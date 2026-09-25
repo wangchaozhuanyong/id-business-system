@@ -1,5 +1,6 @@
 .v2-records-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: var(--v2-records-section-gap, 14px);
 }
@@ -7,6 +8,7 @@
 /* AsyncRegion adds a content wrapper, so the page grid gap cannot reach its sections. */
 .v2-records-page .v2-async-region__content {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: var(--v2-records-section-gap, 14px);
 }
@@ -152,6 +154,21 @@
 :where(.v2-records-list > header) {
   padding: 15px 16px 13px;
   border-bottom: 1px solid var(--v2-border-soft);
+}
+
+@media (max-width: 600px) {
+  .v2-records-list > header .v2-section-heading {
+    flex-wrap: wrap;
+  }
+
+  .v2-records-list > header .v2-section-heading__heading,
+  .v2-records-list > header .v2-section-heading__actions {
+    flex: 0 0 100%;
+  }
+
+  .v2-records-list > header .v2-section-heading__actions {
+    flex-wrap: wrap;
+  }
 }
 
 .v2-records-list > .v2-unified-table-shell,
