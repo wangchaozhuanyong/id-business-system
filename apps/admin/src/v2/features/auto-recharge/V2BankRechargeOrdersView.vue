@@ -37,14 +37,14 @@
       @retry="ordersQuery.refresh"
     >
       <section class="v2-records-list">
-        <div>
-          <V2SectionHeading title="银充订单">
+        <header>
+          <V2SectionHeading title="订单清单">
             <template #actions>
               <V2TableColumnSettings inline :schema="v2TableSchemas.bankRechargeOrders.main" />
               <span>共 {{ data?.total ?? 0 }} 条</span>
             </template>
           </V2SectionHeading>
-        </div>
+        </header>
         <V2Table
           :schema="v2TableSchemas.bankRechargeOrders.main"
           :show-column-settings="false"
@@ -52,7 +52,16 @@
           :data="data?.items ?? []"
           class="v2-records-table bank-recharge-nowrap"
         >
-          <template #empty><div class="v2-records-empty">暂无银充订单</div></template>
+          <template #empty>
+            <div class="v2-records-empty">
+              <strong>暂无银充订单</strong>
+              <span>{{
+                keyword || status
+                  ? '当前筛选条件下没有数据'
+                  : '官网付款成功后会自动建立，或使用右上角手工录入'
+              }}</span>
+            </div>
+          </template>
           <V2TableColumn
             :definition="v2TableSchemas.bankRechargeOrders.main.columns[0]"
             prop="orderNo"

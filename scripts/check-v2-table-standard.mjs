@@ -59,6 +59,9 @@ for (const file of walk(v2Root).filter((target) => target.endsWith('.vue'))) {
 
   walkTemplate(ast, (node) => {
     if (node.type !== NodeTypes.ELEMENT) return;
+    if (hasStaticClass(node, 'v2-records-list')) {
+      validateRecordsListHeader(node, projectPath);
+    }
     if (node.tag === 'el-table') {
       issues.push(`${projectPath}: 禁止原始 <el-table>，必须显式使用 V2Table`);
       return;
@@ -399,6 +402,9 @@ function validateSharedImplementation() {
   if (!/data-mobile-mode='cards'/.test(recordsStyleSource)) {
     issues.push(`${recordsStylePath}: 900px 移动切换必须由 schema mobileMode 控制`);
   }
+  if (!/:where\(\.v2-records-list > header\)/.test(recordsStyleSource)) {
+    issues.push(`${recordsStylePath}: 列表标题必须具备共享内边距与分隔线`);
+  }
   if (/transition:\s*grid-template-columns/.test(styleSource)) {
     issues.push(`${tableStylePath}: 禁止侧栏宽度过渡连续触发表格重排`);
   }
@@ -486,6 +492,41 @@ function runSelfTests() {
   assert.equal(boundExpression(table, 'schema'), 'v2TableSchemas.demo.main');
   assert.equal(staticAttribute(table, 'row-key'), null);
   assert.equal(collectOwnedColumns(table).length, 1);
+  const validList = parseTemplate(
+    '<section class="v2-records-list"><header><V2SectionHeading title="清单" /></header><V2Table /></section>'
+  ).children[0];
+  const invalidList = parseTemplate(
+    '<section class="v2-records-list"><div><h2>清单</h2></div><V2Table /></section>'
+  ).children[0];
+  const emptyTable = parseTemplate(
+    '<section class="v2-records-list"><V2Table><template #empty><h2>暂无记录</h2></template></V2Table></section>'
+  ).children[0];
+  assert.equal(hasUnframedListHeading(validList), false);
+  assert.equal(hasUnframedListHeading(invalidList), true);
+  assert.equal(hasUnframedListHeading(emptyTable), false);
+}
+
+function validateRecordsListHeader(node, projectPath) {
+  if (hasUnframedListHeading(node)) {
+    issues.push(`${projectPath}: 列表标题必须使用直接 <header>，以复用共享标题间距`);
+  }
+}
+
+function hasUnframedListHeading(node) {
+  return (node.children ?? []).some(
+    (child) =>
+      child.type === NodeTypes.ELEMENT &&
+      child.tag !== 'header' &&
+      child.tag !== 'V2Table' &&
+      !hasStaticClass(child, 'v2-records-mobile-list') &&
+      containsListHeading(child)
+  );
+}
+
+function containsListHeading(node) {
+  if (node.type !== NodeTypes.ELEMENT) return false;
+  if (['V2SectionHeading', 'h2', 'h3'].includes(node.tag)) return true;
+  return (node.children ?? []).some(containsListHeading);
 }
 
 function collectMobileClaims(node, projectPath, claims) {

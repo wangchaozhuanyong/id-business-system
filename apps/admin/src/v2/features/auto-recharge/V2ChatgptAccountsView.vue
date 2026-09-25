@@ -17,21 +17,26 @@
       @retry="query.refresh"
     >
       <section class="v2-records-list">
-        <div>
+        <header>
           <V2SectionHeading title="账号清单">
             <template #actions>
               <V2TableColumnSettings inline :schema="v2TableSchemas.chatgptAccounts.main" />
               <span>共 {{ accounts.length }} 条</span>
             </template>
           </V2SectionHeading>
-        </div>
+        </header>
         <V2Table
           :schema="v2TableSchemas.chatgptAccounts.main"
           :show-column-settings="false"
           :data="accounts"
           class="v2-records-table bank-recharge-nowrap"
         >
-          <template #empty><div class="v2-records-empty">暂无 ChatGPT 账号</div></template>
+          <template #empty>
+            <div class="v2-records-empty">
+              <strong>暂无 ChatGPT 账号</strong>
+              <span>新增账号后可关联到银充订单</span>
+            </div>
+          </template>
           <V2TableColumn
             :definition="v2TableSchemas.chatgptAccounts.main.columns[0]"
             prop="emailMasked"
