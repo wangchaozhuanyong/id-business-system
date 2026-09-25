@@ -163,7 +163,7 @@
 
   .v2-records-list > header .v2-section-heading__heading,
   .v2-records-list > header .v2-section-heading__actions {
-    flex: 1 1 100%;
+    flex: 0 0 100%;
   }
 
   .v2-records-list > header .v2-section-heading__actions {

@@ -380,8 +380,8 @@ async function assertRecordsSectionSpacing(page, label) {
   }
   if (label.includes('390px')) {
     assert.ok(
-      titleBounds && titleBounds.width >= 58 && titleBounds.height <= 38,
-      `${label} 列表标题被操作区挤成竖排`
+      titleBounds && titleBounds.width > titleBounds.height * 1.5,
+      `${label} 列表标题被操作区挤成竖排：${JSON.stringify(titleBounds)}`
     );
   }
   assert.equal(await getDocumentOverflow(page), 0, `${label} 出现页面横向溢出`);
