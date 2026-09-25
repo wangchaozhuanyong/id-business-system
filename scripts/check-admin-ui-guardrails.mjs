@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
+import { parse as parseSfc } from '@vue/compiler-sfc';
 
 const rootDir = process.cwd();
 const sourceRoot = path.join(rootDir, 'apps/admin/src/v2');
@@ -14,7 +17,7 @@ for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
     if (/<h1(?=\s|>)/.test(source)) {
       failures.push(`${projectPath}: 页面级 h1 只能由 V2AdminLayout 渲染`);
     }
-    if (/<header(?=\s|>)/.test(source.slice(0, 2500))) {
+    if (hasPageLevelHeader(source, projectPath)) {
       failures.push(`${projectPath}: 页面首屏说明必须使用不带标题能力的 V2PageContext`);
     }
   }
@@ -73,6 +76,21 @@ for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
     }
   }
 }
+
+assert.equal(
+  hasPageLevelHeader(
+    '<template><section><header>重复的页面标题</header></section></template>',
+    'fixture.vue'
+  ),
+  true
+);
+assert.equal(
+  hasPageLevelHeader(
+    '<template><section><V2PageContext description="说明" /><section class="v2-records-list"><header>清单</header></section></section></template>',
+    'fixture.vue'
+  ),
+  false
+);
 
 requireSnippets('apps/admin/src/v2/features/order-entry/V2OrderEntryView.vue', [
   '<V2QuickCustomerDrawer',
@@ -136,6 +154,15 @@ if (failures.length) {
 }
 
 console.log('Admin UI guardrail check passed.');
+
+function hasPageLevelHeader(source, filename) {
+  const template = parseSfc(source, { filename }).descriptor.template;
+  if (!template) return false;
+  const root = parseTemplate(template.content, { comments: false });
+  const roots = root.children.filter((node) => node.type === NodeTypes.ELEMENT);
+  const children = roots.length === 1 ? roots[0].children : root.children;
+  return children.some((node) => node.type === NodeTypes.ELEMENT && node.tag === 'header');
+}
 
 function requireSnippets(projectPath, snippets) {
   const absolutePath = path.join(rootDir, projectPath);
