@@ -17,7 +17,12 @@ export function isCiOnly(paths) {
 export function isAdminOnly(paths) {
   return (
     paths.some((p) => p.startsWith('apps/admin/src/v2/')) &&
-    paths.every((p) => p.startsWith('apps/admin/src/v2/') || isCiOnly([p]))
+    paths.every(
+      (p) =>
+        p.startsWith('apps/admin/src/v2/') ||
+        p === 'scripts/acceptance-v2-table-layout.mjs' ||
+        isCiOnly([p])
+    )
   );
 }
 
@@ -71,6 +76,14 @@ export function adminCheckCommands(mode, paths) {
   ]);
   commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
   if (
+    paths.some((path) =>
+      /^(?:apps\/admin\/src\/v2\/styles\/records\.css|apps\/admin\/src\/v2\/features\/auto-recharge\/vendure-mailbox\.css|scripts\/acceptance-v2-table-layout\.mjs)$/.test(
+        path
+      )
+    )
+  )
+    commands.push(['run', 'acceptance:v2-table-layout']);
+  if (
     mode !== 'admin' ||
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
@@ -123,7 +136,8 @@ export function affectsPart(part, paths) {
   const common =
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {
-    admin: /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-auto-recharge\.mjs$)/,
+    admin:
+      /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout)\.mjs$)/,
     api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
     migration: /^apps\/api\/prisma-mysql\//,
@@ -264,7 +278,9 @@ async function main() {
   const result = { mode, reuseMain, reusedParts: [...reused], checkParts, base, evidence };
   const adminAcceptance =
     checkParts.includes('admin') &&
-    adminCheckCommands(mode, paths).some((args) => args.includes('acceptance:v2-auto-recharge'));
+    adminCheckCommands(mode, paths).some((args) =>
+      args.some((arg) => /^acceptance:v2-(?:auto-recharge|table-layout)$/.test(arg))
+    );
   appendFileSync(
     process.env.GITHUB_OUTPUT,
     `mode=${mode}\nreuse_main=${reuseMain}\nreused_parts=${JSON.stringify([...reused])}\ncheck_parts=${JSON.stringify(checkParts)}\nbase=${base}\nadmin_acceptance=${adminAcceptance}\n`

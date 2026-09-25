@@ -95,6 +95,7 @@ try {
   await warmLayoutFixture(browser);
   await warmCustomerPage(browser);
   await verifyLayoutFixture(browser);
+  await verifyRecordsSectionSpacing(browser);
   await verifyPublicPageScroll(browser);
   for (const scenario of permissionScenarios) {
     await verifyCustomerPage(browser, scenario);
@@ -279,6 +280,85 @@ async function verifyLayoutFixture(browserInstance) {
   } finally {
     await context.close();
   }
+}
+
+async function verifyRecordsSectionSpacing(browserInstance) {
+  const context = await browserInstance.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const runtimeErrors = collectRuntimeErrors(page);
+  try {
+    await warmPage(page, '/vendure-mailbox-design-fixture.html', '.vendure-mailbox-toolbar');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      for (const name of ['主邮箱管理', '虚拟邮箱管理', '收件记录']) {
+        await page.getByRole('tab', { name }).click();
+        await page.locator('.v2-records-list').waitFor({ state: 'visible' });
+        await assertRecordsSectionSpacing(page, `${name} ${width}px`);
+      }
+      await page.locator('.v2-records-pagination .el-pager li').last().click();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('.v2-records-pagination .el-pager .is-active')
+            ?.textContent?.trim() === '2'
+      );
+      await assertRecordsSectionSpacing(page, `收件记录末页 ${width}px`);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole('tab', { name: '虚拟邮箱管理' }).click();
+    await page
+      .locator('.v2-records-list')
+      .getByRole('button', { name: '查看邮件' })
+      .first()
+      .click();
+    await page.locator('.vendure-mailbox-scope').waitFor({ state: 'visible' });
+    await assertRecordsSectionSpacing(page, '指定虚拟邮箱 1440px');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertRecordsSectionSpacing(page, '指定虚拟邮箱 390px');
+
+    await warmPage(
+      page,
+      '/vendure-mailbox-design-fixture.html?state=empty',
+      '.vendure-mailbox-toolbar'
+    );
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await assertRecordsSectionSpacing(page, `空状态 ${width}px`);
+    }
+    assert.deepEqual(runtimeErrors, [], `邮箱列表出现浏览器错误：${runtimeErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+}
+
+async function assertRecordsSectionSpacing(page, label) {
+  const sections = await page.evaluate(() => {
+    const pageRoot = document.querySelector('.vendure-mailbox-page');
+    const selectors = [
+      '.v2-page-context',
+      '.vendure-mailbox-tabs',
+      '.vendure-mailbox-toolbar',
+      '.vendure-mailbox-scope',
+      '.v2-records-list',
+      '.v2-records-pagination'
+    ];
+    return selectors.flatMap((selector) => {
+      const element = pageRoot?.querySelector(selector);
+      if (!element || getComputedStyle(element).display === 'none') return [];
+      const rect = element.getBoundingClientRect();
+      return rect.width && rect.height ? [{ selector, top: rect.top, bottom: rect.bottom }] : [];
+    });
+  });
+  assert.ok(sections.length >= 4, `${label} 缺少待验收的页面区块`);
+  for (let index = 1; index < sections.length; index += 1) {
+    const gap = sections[index].top - sections[index - 1].bottom;
+    assert.ok(
+      gap >= 10 && gap <= 24,
+      `${label} ${sections[index - 1].selector} 与 ${sections[index].selector} 间距异常：${gap}px`
+    );
+  }
+  assert.equal(await getDocumentOverflow(page), 0, `${label} 出现页面横向溢出`);
 }
 
 async function verifyPrimaryVerticalScroll(page, label) {

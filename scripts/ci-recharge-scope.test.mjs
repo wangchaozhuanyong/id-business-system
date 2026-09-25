@@ -52,6 +52,20 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   assert.equal(checkMode(['apps/admin/src/auth/login.ts'], schema, schema), 'full');
   assert.equal(checkMode([files[0]], schema, schema), 'recharge');
 });
+test('shared record spacing and its browser acceptance stay in the admin scope', () => {
+  const paths = [
+    'apps/admin/src/v2/styles/records.css',
+    'apps/admin/src/v2/features/auto-recharge/vendure-mailbox.css',
+    'scripts/acceptance-v2-table-layout.mjs',
+    'docs/UI_DESIGN.md',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.ok(
+    adminCheckCommands('admin', paths).some((args) => args.includes('acceptance:v2-table-layout'))
+  );
+});
 test('Vendure mailbox integration runs only its shared, admin, API and guard checks', () => {
   const paths = [
     '.env.example',

@@ -1,7 +1,7 @@
 .vendure-mailbox-page {
   width: min(100%, 1680px);
   margin-inline: auto;
-  gap: 18px;
+  --v2-records-section-gap: 18px;
 }
 
 .vendure-mailbox-tabs {
@@ -62,7 +62,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: -6px;
   padding: 10px 12px;
   border: 1px solid var(--v2-accent-border, #bfdbfe);
   border-radius: 10px;
@@ -223,7 +222,7 @@
 
 @media (max-width: 760px) {
   .vendure-mailbox-page {
-    gap: 12px;
+    --v2-records-section-gap: 12px;
   }
 
   .vendure-mailbox-tabs {

@@ -1,7 +1,14 @@
 .v2-records-page {
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: var(--v2-records-section-gap, 14px);
+}
+
+/* AsyncRegion adds a content wrapper, so the page grid gap cannot reach its sections. */
+.v2-records-page .v2-async-region__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--v2-records-section-gap, 14px);
 }
 
 .v2-records-header-status {
