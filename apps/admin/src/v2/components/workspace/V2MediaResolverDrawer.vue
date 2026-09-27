@@ -67,19 +67,30 @@
         </div>
       </el-form>
 
-      <div v-if="errorMessage" class="v2-media-resolver-error" role="alert">
+      <div v-if="displayedError" class="v2-media-resolver-error" role="alert">
         <el-icon><WarningFilled /></el-icon>
-        <span>{{ errorMessage }}</span>
-        <AppButton size="small" variant="soft" :disabled="busy" @click="resolveMedia">
-          重新解析
-        </AppButton>
+        <span>{{ displayedError }}</span>
+        <div class="v2-media-resolver-error__actions">
+          <AppButton
+            v-if="failedDownloadOption && !ticketExpired"
+            size="small"
+            variant="soft"
+            :disabled="busy"
+            @click="downloadOption(failedDownloadOption)"
+          >
+            重试下载
+          </AppButton>
+          <AppButton size="small" variant="soft" :disabled="busy" @click="resolveMedia">
+            重新解析
+          </AppButton>
+        </div>
       </div>
 
       <section class="v2-media-resolver-result" aria-live="polite" :aria-busy="resolving">
         <div v-if="resolving" class="v2-media-resolver-state">
           <span class="v2-media-resolver-state__progress" aria-hidden="true" />
           <el-icon><VideoPlay /></el-icon>
-          <strong>正在识别作品与可下载画质</strong>
+          <strong>正在识别作品中的视频、音乐和图集</strong>
           <small>国内抖音会优先使用专用解析引擎。</small>
         </div>
 
@@ -87,6 +98,7 @@
           <header>
             <div>
               <span>{{ platformLabel(result.platform) }}</span>
+              <span>{{ mediaTypeLabels[result.mediaType] }}</span>
               <span>{{ engineLabel(result.engine) }}</span>
             </div>
             <small>下载凭证 {{ expiryLabel }}</small>
@@ -94,7 +106,7 @@
 
           <div class="v2-media-resolver-card__summary">
             <div class="v2-media-resolver-card__icon" aria-hidden="true">
-              <el-icon><VideoPlay /></el-icon>
+              <el-icon><component :is="mediaTypeIcons[result.mediaType]" /></el-icon>
             </div>
             <div>
               <h3>{{ result.title }}</h3>
@@ -108,22 +120,48 @@
           </div>
 
           <div class="v2-media-resolver-card__downloads">
-            <div v-for="option in result.options" :key="option.downloadToken">
-              <span>
-                <strong>{{ option.label }}</strong>
-                <small>{{ optionMeta(option) }}</small>
-              </span>
-              <AppButton
-                variant="success"
-                size="small"
-                :loading="downloadingToken === option.downloadToken"
-                :disabled="downloading && downloadingToken !== option.downloadToken"
-                @click="downloadOption(option)"
+            <section
+              v-for="group in downloadGroups"
+              :key="group.type"
+              class="v2-media-resolver-download-group"
+              :aria-label="group.label"
+            >
+              <header>
+                <h4>
+                  <el-icon><component :is="mediaTypeIcons[group.type]" /></el-icon>{{ group.label }}
+                </h4>
+                <small>{{ group.options.length }} {{ group.type === 'image' ? '张' : '项' }}</small>
+              </header>
+              <p v-if="!group.options.length" class="v2-media-resolver-download-group__empty">
+                {{ group.emptyText }}
+              </p>
+              <div
+                v-for="option in group.options"
+                :key="option.downloadToken"
+                class="v2-media-resolver-download-option"
               >
-                <el-icon v-if="downloadingToken !== option.downloadToken"><Download /></el-icon>
-                {{ downloadingToken === option.downloadToken ? downloadProgressLabel : '下载' }}
-              </AppButton>
-            </div>
+                <span>
+                  <strong>{{ option.label }}</strong>
+                  <small>{{ optionMeta(option) }}</small>
+                </span>
+                <AppButton
+                  variant="success"
+                  size="small"
+                  :loading="downloadingToken === option.downloadToken"
+                  :disabled="
+                    ticketExpired || (downloading && downloadingToken !== option.downloadToken)
+                  "
+                  @click="downloadOption(option)"
+                >
+                  <el-icon v-if="downloadingToken !== option.downloadToken"><Download /></el-icon>
+                  {{
+                    downloadingToken === option.downloadToken
+                      ? downloadProgressLabel
+                      : group.downloadLabel
+                  }}
+                </AppButton>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -142,12 +180,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {
   CopyDocument,
   Download,
   Link,
   Lock,
+  Headset,
+  Picture,
   Search,
   VideoPlay,
   WarningFilled
@@ -156,14 +196,16 @@ import {
   V2_MEDIA_RESOLVER_LIMITS,
   type V2MediaDownloadOption,
   type V2MediaPlatform,
+  type V2MediaType,
   type V2MediaResolveResult
 } from '@apple-business/shared';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
+import { isApiError } from '@/api/apiError';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 
-defineProps<{ modelValue: boolean }>();
+const props = defineProps<{ modelValue: boolean }>();
 defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 const mediaInput = ref('');
@@ -172,16 +214,82 @@ const errorMessage = ref('');
 const resolving = ref(false);
 const downloadingToken = ref('');
 const downloadProgress = ref<number | null>(null);
+const failedDownloadToken = ref('');
+const audioUnavailableMessage = ref('');
+const now = ref(Date.now());
+let expiryTimer: ReturnType<typeof setInterval> | undefined;
 let activeController: AbortController | null = null;
 
 const downloading = computed(() => Boolean(downloadingToken.value));
 const busy = computed(() => resolving.value || downloading.value);
+const mediaTypeLabels: Record<V2MediaType, string> = {
+  video: '视频',
+  audio: '音乐',
+  image: '图册图集'
+};
+const mediaTypeIcons = { video: VideoPlay, audio: Headset, image: Picture };
+const downloadGroups = computed(() =>
+  [
+    {
+      type: 'video' as const,
+      label: '视频',
+      downloadLabel: '下载视频',
+      emptyText: '此作品未提供可下载的视频'
+    },
+    {
+      type: 'audio' as const,
+      label: '音乐',
+      downloadLabel: '下载音乐',
+      emptyText: audioUnavailableMessage.value || '此作品未提供可下载的音乐'
+    },
+    {
+      type: 'image' as const,
+      label: '图册图集',
+      downloadLabel: '下载图片',
+      emptyText: '此作品未提供可下载的图集图片'
+    }
+  ].map((group) => ({
+    ...group,
+    options: result.value?.options.filter((option) => optionMediaType(option) === group.type) ?? []
+  }))
+);
+const remainingSeconds = computed(() => {
+  const expiresAt = Date.parse(result.value?.expiresAt ?? '');
+  return Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - now.value) / 1000)) : 0;
+});
+const ticketExpired = computed(() => Boolean(result.value) && remainingSeconds.value === 0);
 const expiryLabel = computed(() =>
-  result.value ? `有效期约 ${V2_MEDIA_RESOLVER_LIMITS.ticketMinutes} 分钟` : ''
+  ticketExpired.value
+    ? '已过期'
+    : `${Math.floor(remainingSeconds.value / 60)} 分 ${remainingSeconds.value % 60} 秒后过期`
+);
+const displayedError = computed(
+  () => errorMessage.value || (ticketExpired.value ? '下载凭证已过期，请重新解析作品' : '')
+);
+const failedDownloadOption = computed(() =>
+  result.value?.options.find((option) => option.downloadToken === failedDownloadToken.value)
 );
 const downloadProgressLabel = computed(() =>
   downloadProgress.value === null ? '准备文件' : `${downloadProgress.value}%`
 );
+
+watch(
+  () => props.modelValue && result.value?.expiresAt,
+  (expiresAt) => {
+    clearInterval(expiryTimer);
+    now.value = Date.now();
+    if (expiresAt)
+      expiryTimer = setInterval(() => {
+        now.value = Date.now();
+      }, 1000);
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => {
+  clearInterval(expiryTimer);
+  activeController?.abort();
+  activeController = null;
+});
 
 async function resolveMedia() {
   if (busy.value) return;
@@ -191,20 +299,26 @@ async function resolveMedia() {
     return;
   }
   errorMessage.value = '';
+  failedDownloadToken.value = '';
+  audioUnavailableMessage.value = '';
   result.value = null;
   resolving.value = true;
   const controller = new AbortController();
   activeController = controller;
   try {
-    result.value = await idBusinessV2WorkspaceApi.resolveMedia(
+    const resolved = await idBusinessV2WorkspaceApi.resolveMedia(
       { url: input },
       { signal: controller.signal }
     );
+    if (!controller.signal.aborted && activeController === controller) result.value = resolved;
   } catch (cause) {
-    if (!controller.signal.aborted) errorMessage.value = getApiErrorMessage(cause);
+    if (!controller.signal.aborted && activeController === controller)
+      errorMessage.value = getApiErrorMessage(cause);
   } finally {
-    resolving.value = false;
-    if (activeController === controller) activeController = null;
+    if (activeController === controller) {
+      resolving.value = false;
+      activeController = null;
+    }
   }
 }
 
@@ -218,7 +332,11 @@ async function pasteInput() {
 }
 
 async function downloadOption(option: V2MediaDownloadOption) {
+  now.value = Date.now();
+  if (ticketExpired.value) return;
   if (busy.value) return;
+  errorMessage.value = '';
+  failedDownloadToken.value = '';
   downloadingToken.value = option.downloadToken;
   downloadProgress.value = null;
   const controller = new AbortController();
@@ -227,24 +345,43 @@ async function downloadOption(option: V2MediaDownloadOption) {
     const blob = await idBusinessV2WorkspaceApi.downloadMedia(option.downloadToken, {
       signal: controller.signal,
       onDownloadProgress: (loaded, total) => {
+        if (controller.signal.aborted || activeController !== controller) return;
         downloadProgress.value = total ? Math.min(99, Math.round((loaded / total) * 100)) : null;
       }
     });
+    if (controller.signal.aborted || activeController !== controller) return;
     const blobUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = blobUrl;
-    link.download = buildFilename(result.value?.title ?? '媒体文件', option);
+    link.download = buildFilename(result.value?.title ?? '媒体文件', option, blob.type);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     ElMessage.success('文件已开始下载');
   } catch (cause) {
-    if (!controller.signal.aborted) ElMessage.error(getApiErrorMessage(cause));
+    if (!controller.signal.aborted && activeController === controller) {
+      errorMessage.value = getApiErrorMessage(cause);
+      failedDownloadToken.value = option.downloadToken;
+      if (isApiError(cause) && cause.code === 'MEDIA_AUDIO_MISSING' && result.value) {
+        audioUnavailableMessage.value = '此视频不含音轨，仍可下载视频';
+        result.value = {
+          ...result.value,
+          options: result.value.options.filter(
+            (item) => item.downloadToken !== option.downloadToken
+          )
+        };
+        failedDownloadToken.value = '';
+      } else if (isApiError(cause) && cause.code === 'MEDIA_TICKET_EXPIRED' && result.value) {
+        result.value = { ...result.value, expiresAt: new Date(0).toISOString() };
+      }
+    }
   } finally {
-    downloadingToken.value = '';
-    downloadProgress.value = null;
-    if (activeController === controller) activeController = null;
+    if (activeController === controller) {
+      downloadingToken.value = '';
+      downloadProgress.value = null;
+      activeController = null;
+    }
   }
 }
 
@@ -269,6 +406,8 @@ function resetState() {
   mediaInput.value = '';
   result.value = null;
   errorMessage.value = '';
+  failedDownloadToken.value = '';
+  audioUnavailableMessage.value = '';
   resolving.value = false;
   downloadingToken.value = '';
   downloadProgress.value = null;
@@ -316,7 +455,20 @@ function formatBytes(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-function buildFilename(title: string, option: V2MediaDownloadOption) {
+function optionMediaType(option: V2MediaDownloadOption): V2MediaType {
+  if (option.mediaType) return option.mediaType;
+  if (/^(mp3|m4a|aac|wav|ogg|opus|flac)$/iu.test(option.extension)) return 'audio';
+  if (/^(jpg|jpeg|png|webp|gif|avif)$/iu.test(option.extension)) return 'image';
+  return result.value?.mediaType ?? 'video';
+}
+
+function buildFilename(title: string, option: V2MediaDownloadOption, contentType: string) {
+  const type = optionMediaType(option);
+  const group = downloadGroups.value.find((item) => item.type === type);
+  const index =
+    group?.options.findIndex((item) => item.downloadToken === option.downloadToken) ?? 0;
+  const suffix =
+    type === 'image' ? `图片-${String(index + 1).padStart(2, '0')}` : mediaTypeLabels[type];
   const safeTitle = title
     .normalize('NFKC')
     .split('')
@@ -329,7 +481,22 @@ function buildFilename(title: string, option: V2MediaDownloadOption) {
     .replace(/[. ]+$/gu, '')
     .trim()
     .slice(0, 100);
-  return `${safeTitle || '媒体文件'}.${option.extension}`;
+  const extensions: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/avif': 'avif',
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'audio/ogg': 'ogg',
+    'audio/wav': 'wav',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm'
+  };
+  const extension =
+    extensions[contentType.split(';', 1)[0].trim().toLowerCase()] ?? option.extension;
+  return `${safeTitle || '媒体文件'}-${suffix}.${extension}`;
 }
 </script>
 
@@ -433,6 +600,16 @@ function buildFilename(title: string, option: V2MediaDownloadOption) {
   background: var(--v3-danger-soft);
   color: var(--v3-danger);
   font-size: 12px;
+}
+
+.v2-media-resolver-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.v2-media-resolver-error__actions > .app-button + .app-button {
+  margin-left: 0;
 }
 
 .v2-media-resolver-result {
@@ -562,10 +739,42 @@ function buildFilename(title: string, option: V2MediaDownloadOption) {
 
 .v2-media-resolver-card__downloads {
   display: grid;
+  gap: 14px;
   padding: 0 12px 12px;
 }
 
-.v2-media-resolver-card__downloads > div {
+.v2-media-resolver-download-group {
+  min-width: 0;
+}
+
+.v2-media-resolver-download-group > header,
+.v2-media-resolver-download-group h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.v2-media-resolver-download-group > header {
+  justify-content: space-between;
+  padding: 8px 4px;
+}
+
+.v2-media-resolver-download-group h4 {
+  margin: 0;
+  color: var(--v2-text);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.v2-media-resolver-download-group__empty {
+  margin: 0;
+  padding: 8px 4px;
+  color: var(--v2-text-soft);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.v2-media-resolver-download-option {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -575,13 +784,14 @@ function buildFilename(title: string, option: V2MediaDownloadOption) {
   border-top: 1px solid var(--v2-border-soft);
 }
 
-.v2-media-resolver-card__downloads > div > span {
+.v2-media-resolver-download-option > span {
   display: grid;
   min-width: 0;
   gap: 2px;
 }
 
 .v2-media-resolver-card__downloads strong {
+  overflow-wrap: anywhere;
   color: var(--v2-text);
   font-size: 13px;
   line-height: 20px;
@@ -631,7 +841,7 @@ function buildFilename(title: string, option: V2MediaDownloadOption) {
     grid-template-columns: 20px minmax(0, 1fr);
   }
 
-  .v2-media-resolver-error .app-button {
+  .v2-media-resolver-error__actions {
     grid-column: 2;
     justify-self: start;
   }

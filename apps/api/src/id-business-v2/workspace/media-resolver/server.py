@@ -60,12 +60,16 @@ YTDLP_FORMATS = {
 }
 
 DOUYIN_MEDIA_HOSTS = (
+    "aweme.snssdk.com",
+    "v5-dy-ov-experiment.zjcdn.com",
     "byteimg.com",
     "bytevcloud.com",
     "douyinpic.com",
     "douyinvod.com",
     "iesdouyin.com",
     "ibytedtos.com",
+    "pstatp.com",
+    "douyincdn.com",
 )
 
 
@@ -236,7 +240,7 @@ def resolve_douyin(url: str, platform: str) -> dict[str, Any]:
         "mediaType": media["mediaType"],
         "options": [
             {
-                **{key: value for key, value in option.items() if key != "remoteUrl"},
+                **{key: value for key, value in option.items() if key not in ("remoteUrl", "remoteUrls", "extractAudio")},
                 "workerToken": worker_token,
             }
             for option in media["options"]
@@ -265,7 +269,7 @@ def fetch_douyin_media(url: str) -> dict[str, Any]:
     if completed.returncode != 0 or not isinstance(result, dict) or not result.get("ok"):
         code = result.get("code") if isinstance(result, dict) else None
         status = 400 if code in ("private_or_missing", "unsupported") else 502
-        raise WorkerError(code if status == 400 else "upstream", status)
+        raise WorkerError(code if status == 400 or code == "platform_limited" else "upstream", status)
     media = result.get("media")
     if not isinstance(media, dict):
         raise WorkerError("upstream", 502)
@@ -316,10 +320,12 @@ def resolve_with_ytdlp(url: str, platform: str) -> dict[str, Any]:
             )
         media_type = "video"
     else:
-        options = [
-            download_option("audio", "最高音质", "mp3", info, None, None, worker_token)
-        ]
+        options = []
         media_type = "audio"
+    if has_audio:
+        options.append(
+            download_option("audio", "视频原声" if has_video else "最高音质", "mp3", {}, None, None, worker_token)
+        )
 
     return {
         "title": clean_text(info.get("title")) or "未命名作品",
@@ -341,6 +347,7 @@ def download_option(
 ) -> dict[str, Any]:
     return {
         "formatId": format_id,
+        "mediaType": "audio" if format_id == "audio" else "video",
         "label": label,
         "extension": extension,
         "estimatedBytes": positive_integer(info.get("filesize") or info.get("filesize_approx")),
@@ -376,7 +383,64 @@ def download_douyin(media: dict[str, Any], format_id: str, directory: Path) -> t
         raise WorkerError("unsupported")
     if not isinstance(default_extension, str) or not isinstance(headers, dict):
         raise WorkerError("upstream", 502)
-    return fetch_remote_file(remote_url, headers, directory, default_extension)
+    if option.get("extractAudio"):
+        source, _content_type = fetch_remote_file(remote_url, headers, directory, "mp4")
+        require_audio_stream(source)
+        target = directory / "audio.mp3"
+        try:
+            completed = subprocess.run(
+                ["ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe",
+                 "-i", str(source), "-map", "0:a:0", "-vn", "-codec:a", "libmp3lame",
+                 "-q:a", "2", "-fs", str(MAX_DOWNLOAD_BYTES + 1), str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=180,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise WorkerError("upstream", 502) from error
+        if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 0:
+            raise WorkerError("upstream", 502)
+        if target.stat().st_size > MAX_DOWNLOAD_BYTES:
+            raise WorkerError("too_large")
+        return target, "audio/mpeg"
+    alternatives = option.get("remoteUrls")
+    candidates = [remote_url]
+    if isinstance(alternatives, list):
+        candidates.extend(url for url in alternatives if isinstance(url, str))
+    for candidate in list(dict.fromkeys(candidates))[:4]:
+        try:
+            return fetch_remote_file(candidate, headers, directory, default_extension)
+        except WorkerError as error:
+            if error.code != "upstream":
+                raise
+        except OSError:
+            # The CDN can disconnect or time out while reading the response body.
+            pass
+    raise WorkerError("upstream", 502)
+
+
+def require_audio_stream(source: Path) -> None:
+    """Probe the bounded local download, never let ffprobe fetch a remote URL."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe",
+             "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "json", str(source)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if probe.returncode != 0:
+            raise WorkerError("upstream", 502)
+        streams = json.loads(probe.stdout).get("streams")
+        if not isinstance(streams, list):
+            raise WorkerError("upstream", 502)
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError) as error:
+        raise WorkerError("upstream", 502) from error
+    if not streams:
+        raise WorkerError("audio_missing")
 
 
 def assert_allowed_douyin_media_url(url: str) -> None:
@@ -421,7 +485,7 @@ def fetch_remote_file(
                 raise WorkerError("too_large")
             content_type = response.headers.get("content-type")
             normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
-            if not normalized_content_type.startswith(("video/", "image/")):
+            if not normalized_content_type.startswith(("video/", "audio/", "image/")):
                 raise WorkerError("upstream", 502)
             extension = extension_from_content_type(content_type, default_extension)
             target = directory / f"media.{extension}"
@@ -432,7 +496,7 @@ def fetch_remote_file(
                     if written > MAX_DOWNLOAD_BYTES:
                         raise WorkerError("too_large")
                     output.write(chunk)
-            if written <= 0:
+            if written <= 0 or (declared_size is not None and written != declared_size):
                 raise WorkerError("upstream", 502)
             return (
                 target,
@@ -594,6 +658,11 @@ def positive_integer(value: Any) -> int | None:
 def extension_from_content_type(content_type: str | None, fallback: str) -> str:
     normalized = (content_type or "").split(";", 1)[0].strip().lower()
     mapping = {
+        "audio/mpeg": "mp3",
+        "audio/mp4": "m4a",
+        "audio/aac": "aac",
+        "audio/ogg": "ogg",
+        "audio/wav": "wav",
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",

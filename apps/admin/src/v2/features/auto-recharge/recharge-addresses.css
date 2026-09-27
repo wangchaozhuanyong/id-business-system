@@ -14,25 +14,41 @@
 
 .recharge-address-import {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   gap: 14px;
   padding: 18px;
 }
 
+.recharge-address-import > .el-form {
+  min-width: 0;
+  max-width: 100%;
+  justify-self: end;
+}
+
 .recharge-address-import .el-form-item {
-  margin-bottom: 12px;
+  align-items: center;
+  margin-bottom: 0;
 }
 
 .recharge-address-file-row {
   display: flex;
   min-width: 0;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
+}
+
+.recharge-address-file-row > span,
+.recharge-address-file-row > .app-button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .recharge-address-file-picker {
   position: relative;
   display: inline-flex;
+  min-width: 0;
   max-width: 420px;
   min-height: 34px;
   align-items: center;
@@ -45,6 +61,11 @@
   cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recharge-address-file-picker > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recharge-address-file-picker.is-disabled {
@@ -62,6 +83,7 @@
 
 .recharge-address-message,
 .recharge-address-error {
+  grid-column: 1 / -1;
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
@@ -97,17 +119,29 @@
 }
 
 @media (max-width: 700px) {
+  .recharge-address-import {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recharge-address-import > .el-form {
+    width: 100%;
+  }
+
   .recharge-address-toolbar {
     grid-template-columns: 1fr;
   }
 
   .recharge-address-file-row {
-    align-items: stretch;
-    flex-direction: column;
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .recharge-address-file-picker {
-    width: 100%;
+    flex: 1 1 120px;
     max-width: none;
+  }
+
+  .recharge-address-file-row > .app-button {
+    margin-left: auto;
   }
 }

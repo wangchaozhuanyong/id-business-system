@@ -80,7 +80,7 @@ export interface V2WebsiteMonitorResult {
 export const V2_MEDIA_RESOLVER_LIMITS = {
   inputLength: 4096,
   downloadBytes: 256 * 1024 * 1024,
-  downloadOptions: 6,
+  downloadOptions: 100,
   ticketMinutes: 10
 } as const;
 
@@ -110,6 +110,7 @@ export interface ResolveV2MediaInput {
 
 export interface V2MediaDownloadOption {
   downloadToken: string;
+  mediaType?: V2MediaType;
   estimatedBytes: number | null;
   extension: string;
   height: number | null;

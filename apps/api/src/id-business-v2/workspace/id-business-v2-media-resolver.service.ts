@@ -5,7 +5,6 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
-  NotFoundException,
   ServiceUnavailableException
 } from '@nestjs/common';
 import {
@@ -16,6 +15,7 @@ import {
 import { randomBytes } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import type { AuthenticatedUser } from '../../auth/auth.types';
+import { ApiHttpException } from '../../common/errors/api-http.exception';
 import type { ResolveIdBusinessV2MediaDto } from './dto/id-business-v2-media-resolver.dto';
 import {
   normalizeV2MediaInput,
@@ -30,7 +30,7 @@ const RATE_WINDOW_MS = 60_000;
 const MAX_RESOLVES_PER_WINDOW = 10;
 const MAX_RATE_LIMIT_USERS = 5_000;
 const MAX_TICKETS = 1_000;
-const MAX_TICKETS_PER_USER = 20;
+const MAX_TICKETS_PER_USER = V2_MEDIA_RESOLVER_LIMITS.downloadOptions * 2;
 const MAX_ACTIVE_RESOLVES = 2;
 const MAX_ACTIVE_DOWNLOADS = 2;
 const WORKER_RESPONSE_LIMIT = 1024 * 1024;
@@ -40,6 +40,7 @@ const FORMAT_ID_PATTERN = /^[A-Za-z0-9:_-]{1,64}$/u;
 const EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/u;
 
 interface WorkerDownloadOption {
+  mediaType?: unknown;
   estimatedBytes?: unknown;
   extension?: unknown;
   formatId?: unknown;
@@ -134,14 +135,14 @@ export class IdBusinessV2MediaResolverService {
     } catch (error) {
       clearTimeout(timeout);
       this.releaseDownload(userId);
-      if (isAbortError(error)) throw new GatewayTimeoutException('视频下载准备超时，请稍后重试');
+      if (isAbortError(error)) throw new GatewayTimeoutException('文件下载准备超时，请稍后重试');
       throw new ServiceUnavailableException('解析下载服务暂时不可用，请稍后重试');
     }
 
     if (!response.ok || !response.body) {
       clearTimeout(timeout);
       this.releaseDownload(userId);
-      await this.throwWorkerError(response, '视频下载失败，请确认作品仍可公开访问');
+      await this.throwWorkerError(response, '文件下载失败，请确认作品仍可公开访问');
     }
 
     const contentLength = this.readContentLength(response.headers.get('content-length'));
@@ -234,6 +235,13 @@ export class IdBusinessV2MediaResolverService {
       throw new HttpException('解析任务较多，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
     }
     if (code === 'too_large') throw new BadRequestException('文件超过 256 MB，无法下载');
+    if (code === 'audio_missing') {
+      throw new ApiHttpException(
+        HttpStatus.BAD_REQUEST,
+        'MEDIA_AUDIO_MISSING',
+        '此视频不含音轨，无法下载原声；仍可下载视频'
+      );
+    }
     if (code === 'unsupported') throw new BadRequestException('该作品类型暂不支持下载');
     if (code === 'login_required') {
       throw new BadRequestException('该作品当前需要平台登录，系统不会读取你的登录信息');
@@ -248,7 +256,11 @@ export class IdBusinessV2MediaResolverService {
       throw new ServiceUnavailableException('来源平台暂时限制解析，请稍后重试');
     }
     if (code === 'ticket_expired') {
-      throw new BadRequestException('下载凭证关联的解析结果已失效，请重新解析');
+      throw new ApiHttpException(
+        HttpStatus.BAD_REQUEST,
+        'MEDIA_TICKET_EXPIRED',
+        '下载凭证关联的解析结果已失效，请重新解析'
+      );
     }
     if (response.status >= 500) throw new BadGatewayException(fallback);
     throw new BadRequestException(fallback);
@@ -266,13 +278,16 @@ export class IdBusinessV2MediaResolverService {
     if (!Array.isArray(payload.options) || payload.options.length === 0) {
       throw new BadGatewayException('解析服务没有返回可下载文件');
     }
+    if (payload.options.length > V2_MEDIA_RESOLVER_LIMITS.downloadOptions) {
+      throw new BadRequestException('作品包含的文件过多，单次解析最多支持 100 个文件');
+    }
 
     this.pruneTickets();
     const expiresAt = Date.now() + TICKET_TTL_MS;
-    const rawOptions = payload.options.slice(0, V2_MEDIA_RESOLVER_LIMITS.downloadOptions);
+    const rawOptions = payload.options;
     this.ensureTicketCapacity(userId, rawOptions.length);
     const options = rawOptions.map((rawOption, index) =>
-      this.createDownloadOption(userId, input, title, rawOption, expiresAt, index)
+      this.createDownloadOption(userId, input, title, rawOption, expiresAt, index, mediaType)
     );
 
     return {
@@ -293,7 +308,8 @@ export class IdBusinessV2MediaResolverService {
     title: string,
     rawOption: unknown,
     expiresAt: number,
-    index: number
+    index: number,
+    resultMediaType: V2MediaType
   ) {
     if (!rawOption || typeof rawOption !== 'object') {
       throw new BadGatewayException('解析服务返回的下载选项无效');
@@ -310,6 +326,10 @@ export class IdBusinessV2MediaResolverService {
       throw new BadGatewayException('解析服务返回的下载选项无效');
     }
     const label = normalizeDisplayText(option.label, 60, `下载选项 ${index + 1}`);
+    const mediaType = normalizeMediaType(
+      option.mediaType ??
+        (formatId === 'audio' ? 'audio' : formatId.startsWith('image:') ? 'image' : resultMediaType)
+    );
     const downloadToken = randomBytes(32).toString('base64url');
     const filename = buildDownloadFilename(title, label, extension, index > 0);
     this.tickets.set(downloadToken, {
@@ -325,6 +345,7 @@ export class IdBusinessV2MediaResolverService {
     });
     return {
       downloadToken,
+      mediaType,
       estimatedBytes: normalizeNullableNumber(
         option.estimatedBytes,
         1,
@@ -395,7 +416,11 @@ export class IdBusinessV2MediaResolverService {
     this.pruneTickets();
     const ticket = this.tickets.get(token);
     if (!ticket || ticket.userId !== userId) {
-      throw new NotFoundException('下载凭证不存在或已过期，请重新解析');
+      throw new ApiHttpException(
+        HttpStatus.NOT_FOUND,
+        'MEDIA_TICKET_EXPIRED',
+        '下载凭证不存在或已过期，请重新解析'
+      );
     }
     return ticket;
   }

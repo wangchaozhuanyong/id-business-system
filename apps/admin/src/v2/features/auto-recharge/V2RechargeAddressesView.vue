@@ -31,8 +31,12 @@
       >
         <el-form-item label="地址文件" required>
           <div class="recharge-address-file-row">
-            <label class="recharge-address-file-picker" :class="{ 'is-disabled': importing }">
-              {{ fileName || '选择 TXT 文件' }}
+            <label
+              class="recharge-address-file-picker"
+              :class="{ 'is-disabled': importing }"
+              :title="fileName || '选择 TXT 文件'"
+            >
+              <span>{{ fileName || '选择 TXT 文件' }}</span>
               <input
                 type="file"
                 accept=".txt,text/plain"

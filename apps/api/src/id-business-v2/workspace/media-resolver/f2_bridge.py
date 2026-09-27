@@ -43,15 +43,115 @@ def media_url_from_bit_rate(item: Any) -> str | None:
     return next((url for url in urls if isinstance(url, str) and url.startswith("http")), None)
 
 
+def audio_option(remote_url: str, extract_audio: bool = False) -> dict[str, Any]:
+    return {
+        "formatId": "audio",
+        "mediaType": "audio",
+        "label": "视频原声（下载时检测音轨）" if extract_audio else "作品配乐",
+        "extension": "mp3",
+        "estimatedBytes": None,
+        "width": None,
+        "height": None,
+        "remoteUrl": remote_url,
+        "extractAudio": extract_audio,
+    }
+
+
 async def fetch(url: str) -> dict[str, Any]:
     from f2.apps.douyin.utils import AwemeIdFetcher
 
     aweme_id = await AwemeIdFetcher.get_aweme_id(url)
     try:
+        # The public share page includes album images even when a short link
+        # redirects to /share/video/. Do not infer the media type from the URL.
+        return await fetch_public_share(aweme_id)
+    except Exception:
+        pass
+    if "/note/" in url:
+        return await fetch_with_f2(aweme_id)
+    try:
         return await fetch_jingxuan(aweme_id)
     except Exception:
         # The public official page does not expose every work type; F2 remains the compatibility path.
         return await fetch_with_f2(aweme_id)
+
+
+async def fetch_public_share(aweme_id: str) -> dict[str, Any]:
+    import httpx
+
+    page_url = f"https://www.iesdouyin.com/share/video/{aweme_id}"
+    headers = {"User-Agent": JINGXUAN_USER_AGENT}
+    async with httpx.AsyncClient(headers=headers, follow_redirects=False, timeout=8, trust_env=False) as client:
+        # The public page sometimes returns only its client-rendered shell.
+        # Allow one retry; never retry an explicit denied response.
+        for _attempt in range(2):
+            response = await client.get(page_url)
+            if response.status_code != 200 or len(response.content) > 2 * 1024 * 1024:
+                raise ValueError("upstream")
+            marker_index = response.text.find("window._ROUTER_DATA")
+            if marker_index < 0:
+                raise ValueError("upstream")
+            object_index = response.text.find("{", marker_index)
+            if object_index < 0:
+                raise ValueError("upstream")
+            data, _end = json.JSONDecoder().raw_decode(response.text[object_index:])
+            routes = data.get("loaderData") or {}
+            items = []
+            for route in routes.values():
+                if isinstance(route, dict):
+                    items.extend((route.get("videoInfoRes") or {}).get("item_list") or [])
+            item = next((item for item in items if isinstance(item, dict) and str(item.get("aweme_id")) == aweme_id), None)
+            if item:
+                return public_share_media(item, {**headers, "Referer": page_url})
+    raise ValueError("platform_limited")
+
+
+def public_share_media(item: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    def first_url(address: Any) -> str | None:
+        urls = (address.get("url_list") or []) if isinstance(address, dict) else []
+        return next((url for url in urls if isinstance(url, str) and url.startswith("https://")), None)
+
+    video = item.get("video") or {}
+    images = item.get("images") or []
+    options = []
+    for index, image in enumerate(images):
+        remote_url = first_url(image)
+        if not remote_url:
+            # Never silently return a partial album.
+            raise ValueError("unsupported")
+        options.append({
+            "formatId": f"image:{index}", "mediaType": "image", "label": f"图片 {index + 1}",
+            "extension": "jpg", "estimatedBytes": None,
+            "width": positive_integer(image.get("width")), "height": positive_integer(image.get("height")),
+            "remoteUrl": remote_url,
+            "remoteUrls": [url for url in image.get("url_list") or [] if isinstance(url, str) and url.startswith("https://")][:4],
+        })
+    if not images:
+        variants = sorted(
+            [entry for entry in video.get("bit_rate") or [] if media_url_from_bit_rate(entry)],
+            key=lambda entry: positive_integer(entry.get("bit_rate")) or 0, reverse=True,
+        )
+        remote_url = media_url_from_bit_rate(variants[0]) if variants else first_url(video.get("play_addr"))
+        if not remote_url:
+            raise ValueError("unsupported")
+        options.append({
+            "formatId": "original", "mediaType": "video", "label": "原始视频",
+            "extension": "mp4", "estimatedBytes": None,
+            "width": positive_integer(video.get("width")), "height": positive_integer(video.get("height")),
+            "remoteUrl": remote_url,
+        })
+    music_url = first_url((item.get("music") or {}).get("play_url"))
+    if music_url:
+        options.append(audio_option(music_url))
+    elif not images:
+        options.append(audio_option(options[0]["remoteUrl"], extract_audio=True))
+    duration = positive_integer(video.get("duration"))
+    return {
+        "title": clean_text(item.get("desc")) or f"抖音作品 {item['aweme_id']}",
+        "author": clean_text((item.get("author") or {}).get("nickname")) or None,
+        "durationSeconds": round(duration / 1000) if duration else None,
+        "mediaType": "image" if images else "video", "options": options, "headers": headers,
+    }
 
 
 async def fetch_jingxuan(aweme_id: str) -> dict[str, Any]:
@@ -112,13 +212,15 @@ async def fetch_jingxuan(aweme_id: str) -> dict[str, Any]:
         "options": [
             {
                 "formatId": "original",
+                "mediaType": "video",
                 "label": "原始视频",
                 "extension": "mp4",
                 "estimatedBytes": positive_integer(metadata.get("size")),
                 "width": positive_integer(metadata.get("vwidth")),
                 "height": positive_integer(metadata.get("vheight")),
                 "remoteUrl": best["main_url"],
-            }
+            },
+            audio_option(best["main_url"], extract_audio=True),
         ],
         "headers": {**headers, "Referer": page_url},
     }
@@ -144,7 +246,8 @@ async def fetch_with_f2(aweme_id: str) -> dict[str, Any]:
         response = await crawler.fetch_post_detail(PostDetail(aweme_id=aweme_id))
     media = PostDetailFilter(response)
     if media.nickname_raw is None:
-        raise ValueError("private_or_missing")
+        # Empty platform responses are not proof that a public work was deleted.
+        raise ValueError("platform_limited")
 
     raw = media._to_raw().get("aweme_detail") or {}
     video = raw.get("video") or {}
@@ -157,10 +260,27 @@ async def fetch_with_f2(aweme_id: str) -> dict[str, Any]:
         item for item in media.images or [] if isinstance(item, str) and item.startswith("http")
     ]
     options: list[dict[str, Any]] = []
-    if bit_rates:
+    # Albums may also expose a generated video; keep the original images first.
+    if images:
+        options = [
+            {
+                "formatId": f"image:{index}",
+                "mediaType": "image",
+                "label": f"图片 {index + 1}",
+                "extension": "jpg",
+                "estimatedBytes": None,
+                "width": None,
+                "height": None,
+                "remoteUrl": image,
+            }
+            for index, image in enumerate(images)
+        ]
+        media_type = "image"
+    elif bit_rates:
         options.append(
             {
                 "formatId": "original",
+                "mediaType": "video",
                 "label": "原始视频",
                 "extension": "mp4",
                 "estimatedBytes": None,
@@ -170,22 +290,18 @@ async def fetch_with_f2(aweme_id: str) -> dict[str, Any]:
             }
         )
         media_type = "video"
-    elif images:
-        options = [
-            {
-                "formatId": f"image:{index}",
-                "label": f"图片 {index + 1}",
-                "extension": "jpg",
-                "estimatedBytes": None,
-                "width": None,
-                "height": None,
-                "remoteUrl": image,
-            }
-            for index, image in enumerate(images[:6])
-        ]
-        media_type = "image"
     else:
         raise ValueError("unsupported")
+
+    music = raw.get("music") or {}
+    music_urls = (music.get("play_url") or {}).get("url_list") or []
+    music_url = next(
+        (url for url in music_urls if isinstance(url, str) and url.startswith("http")), None
+    )
+    if music_url:
+        options.append(audio_option(music_url))
+    elif media_type == "video":
+        options.append(audio_option(options[0]["remoteUrl"], extract_audio=True))
 
     headers["Cookie"] = synthetic_cookie
     duration = positive_integer(media.duration)
@@ -222,7 +338,7 @@ def main() -> None:
             )
         )
     except Exception as error:
-        code = str(error) if str(error) in ("private_or_missing", "unsupported") else "upstream"
+        code = str(error) if str(error) in ("private_or_missing", "unsupported", "platform_limited") else "upstream"
         print(json.dumps({"ok": False, "code": code}, separators=(",", ":")))
         raise SystemExit(1)
 

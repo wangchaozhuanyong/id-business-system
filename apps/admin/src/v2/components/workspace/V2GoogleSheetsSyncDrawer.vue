@@ -34,7 +34,7 @@
         error-title="同步状态加载失败"
         @retry="statusQuery.refresh"
       >
-        <template v-if="status">
+        <div v-if="status" class="v2-google-sheets-content">
           <section class="v2-google-sheets-summary">
             <div>
               <span>连接状态</span>
@@ -186,7 +186,7 @@
             </AppButton>
             <span>断开后不会删除 Google 网盘中已经生成的报表。</span>
           </div>
-        </template>
+        </div>
       </V2AsyncRegion>
     </div>
   </el-drawer>
@@ -401,9 +401,12 @@ async function copyText(value: string) {
   gap: 12px;
 }
 .v2-google-sheets-drawer__body {
-  display: grid;
-  gap: 14px;
   padding: 18px 20px 28px;
+}
+.v2-google-sheets-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
 }
 .v2-google-sheets-summary {
   display: grid;
@@ -480,6 +483,10 @@ async function copyText(value: string) {
   justify-content: flex-end;
   gap: 8px;
 }
+.v2-google-sheets-actions > .app-button + .app-button,
+.v2-google-sheets-card > footer > div > .app-button + .app-button {
+  margin-left: 0;
+}
 .v2-google-sheets-report-list {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -517,7 +524,7 @@ async function copyText(value: string) {
 }
 .v2-google-sheets-disconnect {
   justify-content: flex-start;
-  padding-top: 2px;
+  flex-wrap: wrap;
 }
 @media (max-width: 720px) {
   .v2-google-sheets-summary,

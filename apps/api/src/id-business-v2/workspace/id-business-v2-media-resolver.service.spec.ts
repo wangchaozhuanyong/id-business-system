@@ -94,6 +94,70 @@ describe('IdBusinessV2MediaResolverService', () => {
     });
   });
 
+  it('keeps every album image and its music as individually typed downloads', async () => {
+    const payload = {
+      ...workerResult,
+      mediaType: 'image',
+      options: [
+        ...Array.from({ length: 35 }, (_, index) => ({
+          ...workerResult.options[0],
+          formatId: `image:${index}`,
+          mediaType: 'image',
+          extension: 'jpg',
+          label: `图片 ${index + 1}`
+        })),
+        {
+          ...workerResult.options[0],
+          formatId: 'audio',
+          mediaType: 'audio',
+          extension: 'mp3',
+          label: '作品配乐'
+        }
+      ]
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/resolve')
+        ? new Response(JSON.stringify(payload))
+        : new Response(new Uint8Array([1, 2]), {
+            headers: { 'Content-Length': '2', 'Content-Type': 'audio/mpeg' }
+          })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const service = new IdBusinessV2MediaResolverService();
+    const result = await service.resolve(
+      { url: 'https://www.douyin.com/note/1234567890' },
+      user('album-user')
+    );
+    expect(result.options).toHaveLength(36);
+    expect(result.options.filter((option) => option.mediaType === 'image')).toHaveLength(35);
+    expect(result.options[35]).toMatchObject({ mediaType: 'audio', extension: 'mp3' });
+    const audio = await service.openDownload(result.options[35].downloadToken, user('album-user'));
+    for await (const chunk of audio.stream) expect(chunk).toBeTruthy();
+    expect(audio.mimeType).toBe('audio/mpeg');
+    const request = (fetchMock.mock.calls as unknown as Array<[unknown, RequestInit]>)[1][1];
+    expect(JSON.parse(String(request.body))).toMatchObject({ formatId: 'audio' });
+  });
+
+  it('rejects an oversized album instead of silently truncating it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...workerResult,
+            options: Array.from({ length: 101 }, () => workerResult.options[0])
+          })
+        )
+      )
+    );
+    await expect(
+      new IdBusinessV2MediaResolverService().resolve(
+        { url: 'https://www.youtube.com/watch?v=public' },
+        user('user-1')
+      )
+    ).rejects.toThrow('最多支持 100 个文件');
+  });
+
   it('requires a fresh resolve when the worker snapshot has expired', async () => {
     const fetchMock = vi
       .fn()
@@ -132,6 +196,36 @@ describe('IdBusinessV2MediaResolverService', () => {
     await expect(
       service.resolve({ url: 'https://www.youtube.com/watch?v=limited' }, user('user-1'))
     ).rejects.toThrow('解析过于频繁');
+  });
+
+  it.each([
+    ['audio_missing', 400, 'MEDIA_AUDIO_MISSING'],
+    ['ticket_expired', 410, 'MEDIA_TICKET_EXPIRED']
+  ])('returns an actionable download code for %s', async (code, status, errorCode) => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(workerResult)))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ code }), { status }))
+    );
+    const service = new IdBusinessV2MediaResolverService();
+    const result = await service.resolve(
+      { url: 'https://www.douyin.com/video/1234567890' },
+      user('user-1')
+    );
+    await expect(
+      service.openDownload(result.options[0].downloadToken, user('user-1'))
+    ).rejects.toMatchObject({ response: { errorCode, retryable: false } });
+  });
+
+  it('marks missing or expired tickets for re-parsing without requesting the worker', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      new IdBusinessV2MediaResolverService().openDownload('m'.repeat(43), user('user-1'))
+    ).rejects.toMatchObject({ response: { errorCode: 'MEDIA_TICKET_EXPIRED' } });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it.each([
