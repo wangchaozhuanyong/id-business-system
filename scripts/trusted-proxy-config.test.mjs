@@ -13,16 +13,27 @@ test('Caddy remains the first untrusted public edge for forwarding addresses', (
 });
 
 test('Nginx forwards the single Caddy address without extending the proxy chain', () => {
-  assert.equal(
-    nginxConfig.match(/proxy_set_header X-Forwarded-For \$http_x_forwarded_for;/g)?.length,
-    2
+  const proxyLocations = [...nginxConfig.matchAll(/location\s+([^{}]+)\{([^{}]*)\}/g)].filter(
+    (match) => /proxy_pass\s/.test(match[2])
   );
-  assert.equal(nginxConfig.match(/proxy_set_header X-Real-IP \$http_x_forwarded_for;/g)?.length, 2);
-  assert.equal(
-    nginxConfig.match(/proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto;/g)?.length,
-    2
-  );
+  assert.equal(proxyLocations.length, 3);
+  for (const [, location, block] of proxyLocations) {
+    assert.match(block, /proxy_set_header X-Forwarded-For \$http_x_forwarded_for;/, location);
+    assert.match(block, /proxy_set_header X-Real-IP \$http_x_forwarded_for;/, location);
+    assert.match(block, /proxy_set_header X-Forwarded-Proto \$http_x_forwarded_proto;/, location);
+  }
   assert.doesNotMatch(nginxConfig, /\$proxy_add_x_forwarded_for/);
+});
+
+test('media download uses its bounded timeout while ordinary API requests retain theirs', () => {
+  const mediaBlock = nginxConfig.match(
+    /location = \/api\/id-business-v2\/workspace-media\/download\s*\{([^{}]*)\}/
+  )?.[1];
+  const apiBlock = nginxConfig.match(/location \/api\/\s*\{([^{}]*)\}/)?.[1];
+  assert.ok(mediaBlock, 'missing media download location');
+  assert.ok(apiBlock, 'missing ordinary API location');
+  assert.match(mediaBlock, /proxy_read_timeout 370s;/);
+  assert.match(apiBlock, /proxy_read_timeout 120s;/);
 });
 
 test('API and admin remain internal services without host port mappings', () => {
