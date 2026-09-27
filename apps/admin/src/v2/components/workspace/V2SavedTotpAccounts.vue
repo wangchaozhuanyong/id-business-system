@@ -72,13 +72,20 @@
               class="v2-saved-totp-card__countdown"
               :class="{ 'is-expiring': timingFor(item).remainingSeconds <= 5 }"
             >
-              {{ timingFor(item).remainingSeconds }} 秒后刷新
+              {{
+                isCodeCurrent(item)
+                  ? `${timingFor(item).remainingSeconds} 秒后刷新`
+                  : '验证码已过期，等待刷新'
+              }}
             </span>
           </div>
 
           <div class="v2-saved-totp-card__details">
-            <output class="v2-saved-totp-card__token" :aria-label="`${item.name}，当前验证码`">
-              {{ formatToken(item.token) }}
+            <output
+              class="v2-saved-totp-card__token"
+              :aria-label="`${item.name}，${isCodeCurrent(item) ? '当前验证码' : '验证码已过期'}`"
+            >
+              {{ isCodeCurrent(item) ? formatToken(item.token) : '已过期' }}
             </output>
             <span class="v2-saved-totp-card__updated">
               更新于 {{ formatUpdatedAt(item.updatedAt) }}
@@ -89,6 +96,7 @@
                 size="small"
                 class="v2-saved-totp-card__copy"
                 :aria-label="`复制${item.name}的当前验证码`"
+                :disabled="!isCodeCurrent(item)"
                 @click="copyCode(item)"
               >
                 <el-icon><CopyDocument /></el-icon>
@@ -235,6 +243,7 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { isV2TotpCodeCurrent } from './totp';
 
 interface SavedTotpForm {
   name: string;
@@ -436,7 +445,7 @@ async function removeAccount(item: V2SavedTotpAccount) {
 }
 
 async function copyCode(item: V2SavedTotpAccount) {
-  if (!/^\d{6,8}$/.test(item.token)) return;
+  if (!isCodeCurrent(item, getV2BusinessNowMs() ?? Date.now())) return;
   try {
     await navigator.clipboard.writeText(item.token);
     copiedAccountId.value = item.id;
@@ -448,6 +457,10 @@ async function copyCode(item: V2SavedTotpAccount) {
   } catch {
     ElMessage.error('无法复制验证码，请手动选择复制');
   }
+}
+
+function isCodeCurrent(item: V2SavedTotpAccount, nowMs = clockTick.value) {
+  return isV2TotpCodeCurrent(item.token, item.expiresAt, nowMs);
 }
 
 function accountMeta(item: V2SavedTotpAccount) {

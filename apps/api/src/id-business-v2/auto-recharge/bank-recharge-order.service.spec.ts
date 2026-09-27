@@ -54,6 +54,7 @@ function fixture() {
     createOrder: vi.fn((_tx: unknown, input: unknown) =>
       tx.idBusinessV2BankRechargeOrder.create(input)
     ),
+    findRechargeJob: vi.fn(),
     findCardsByTail: vi.fn(() => tx.idBusinessV2BankRechargeCard.findMany())
   };
   const service = new BankRechargeOrderService(
@@ -70,7 +71,7 @@ function fixture() {
     ownerId: 'user-1',
     plan: 'plus'
   };
-  return { service, tx, accounts, audit, job, order };
+  return { service, tx, accounts, audit, job, order, repository };
 }
 
 describe('银充付款入单', () => {
@@ -99,6 +100,28 @@ describe('银充付款入单', () => {
       payment_evidence: { ...verified.payment_evidence, amount_minor: 99999 }
     };
     expect(await service.recordVerifiedSuccess(tx as never, job as never, mismatched)).toBeNull();
+    expect(tx.idBusinessV2BankRechargeOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('only backfills a verified read-only recheck through the trusted original job', async () => {
+    const { service, tx, job, repository } = fixture();
+    const source = {
+      ...job,
+      id: 'source-job',
+      result: { ...verified, status: 'subscription_pending' }
+    };
+    repository.findRechargeJob.mockResolvedValue(source);
+    const recheckJob = { ...job, result: { recheck_only: true, source_job_id: source.id } };
+    const report = { ...verified, recheck_only: true, payment_requests_sent: 0 };
+    await service.recordVerifiedSuccess(tx as never, recheckJob as never, report);
+    expect(tx.idBusinessV2BankRechargeOrder.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ rechargeJobId: source.id }) })
+    );
+    tx.idBusinessV2BankRechargeOrder.create.mockClear();
+    repository.findRechargeJob.mockResolvedValue({ ...source, ownerId: 'other-user' });
+    expect(
+      await service.recordVerifiedSuccess(tx as never, recheckJob as never, report)
+    ).toBeNull();
     expect(tx.idBusinessV2BankRechargeOrder.create).not.toHaveBeenCalled();
   });
 

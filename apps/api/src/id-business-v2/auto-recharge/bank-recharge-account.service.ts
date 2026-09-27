@@ -5,10 +5,14 @@ import {
   NotFoundException
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { getPagination } from '../../common/pagination';
 import type { IdBusinessV2ChatgptAccount, IdBusinessV2RechargeJob } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import { BankRechargeRepository } from './persistence/bank-recharge.repository';
+import {
+  BankRechargeRepository,
+  bankRechargeAccountFilter
+} from './persistence/bank-recharge.repository';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
@@ -35,9 +39,23 @@ export class BankRechargeAccountService {
     private readonly encryption: FieldEncryptionService
   ) {}
 
-  async listAccounts() {
-    const items = await this.repository.listAccounts();
+  async listAccounts(query: { page?: string; pageSize?: string; keyword?: string } = {}) {
+    const pagination =
+      query.page !== undefined || query.pageSize !== undefined ? getPagination(query) : null;
+    const keyword = bankRechargeText(query.keyword, '搜索内容', 250, false);
+    const where = bankRechargeAccountFilter(
+      keyword,
+      keyword.includes('@') ? this.encryption.hash(keyword.toLowerCase()) : null
+    );
+    const items = await this.repository.listAccounts({
+      where,
+      ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
+    });
+    const total = pagination ? await this.repository.countAccounts(where) : items.length;
     return {
+      total,
+      page: pagination?.page ?? 1,
+      pageSize: pagination?.pageSize ?? total,
       items: items.map((item) => ({
         id: item.id,
         emailMasked: item.emailMasked,

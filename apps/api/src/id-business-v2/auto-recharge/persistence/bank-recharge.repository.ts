@@ -3,15 +3,33 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 
+export function bankRechargeAccountFilter(
+  keyword: string,
+  emailHash: string | null
+): Prisma.IdBusinessV2ChatgptAccountWhereInput {
+  return keyword
+    ? {
+        OR: [
+          { emailMasked: { contains: keyword } },
+          { remark: { contains: keyword } },
+          ...(emailHash ? [{ emailHash }] : [])
+        ]
+      }
+    : {};
+}
+
 @Injectable()
 export class BankRechargeRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  listAccounts() {
+  listAccounts(args: Prisma.IdBusinessV2ChatgptAccountFindManyArgs = {}) {
     return this.prisma.idBusinessV2ChatgptAccount.findMany({
-      orderBy: { updatedAt: 'desc' },
-      take: 500
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      ...args
     });
+  }
+  countAccounts(where: Prisma.IdBusinessV2ChatgptAccountWhereInput) {
+    return this.prisma.idBusinessV2ChatgptAccount.count({ where });
   }
   findAccount(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { id } });
@@ -44,8 +62,7 @@ export class BankRechargeRepository {
   listCards() {
     return this.prisma.idBusinessV2BankRechargeCard.findMany({
       include: { currency: true },
-      orderBy: { updatedAt: 'desc' },
-      take: 500
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }]
     });
   }
   findCard(tx: V2CommandTransaction, id: string) {
@@ -59,6 +76,10 @@ export class BankRechargeRepository {
   }
   createCard(tx: V2CommandTransaction, args: Prisma.IdBusinessV2BankRechargeCardCreateArgs) {
     return tx.idBusinessV2BankRechargeCard.create(args);
+  }
+
+  findRechargeJob(tx: V2CommandTransaction, id: string) {
+    return tx.idBusinessV2RechargeJob.findUnique({ where: { id } });
   }
 
   findOrder(tx: V2CommandTransaction, id: string) {
@@ -132,6 +153,29 @@ export class BankRechargeRepository {
   }
   findFinanceAccount(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2FinanceAccount.findUnique({ where: { id } });
+  }
+  findCompletionJournal(tx: V2CommandTransaction, orderId: string) {
+    return tx.idBusinessV2FinanceJournal.findFirst({
+      where: {
+        sourceType: 'bank_recharge',
+        sourceId: orderId,
+        journalType: 'bank_recharge_completed',
+        status: 'posted'
+      },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      include: { lines: true }
+    });
+  }
+  listRefundJournals(tx: V2CommandTransaction, orderId: string) {
+    return tx.idBusinessV2FinanceJournal.findMany({
+      where: {
+        sourceType: 'bank_recharge',
+        sourceId: orderId,
+        journalType: 'order_refund',
+        status: 'posted'
+      },
+      include: { lines: true }
+    });
   }
   findPostedJournal(tx: V2CommandTransaction, idempotencyKey: string) {
     return tx.idBusinessV2FinanceJournal.findUnique({ where: { idempotencyKey } });

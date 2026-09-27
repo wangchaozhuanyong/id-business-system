@@ -50,7 +50,7 @@ function fixture() {
     audit as never,
     posting as never
   );
-  return { service, order, tx, posting, repository };
+  return { service, order, tx, posting, repository, audit, transactions };
 }
 
 describe('银充预存资金卡入账', () => {
@@ -90,5 +90,94 @@ describe('银充预存资金卡入账', () => {
       service.complete(id, { expectedUpdatedAt: updatedAt.toISOString() }, operator as never)
     ).rejects.toThrow('请为预存资金银行卡选择代付资金账户');
     expect(posting.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('银充实际退款入账', () => {
+  it('only posts customer refunds, preserves the loss, and requires evidence for upstream recovery', async () => {
+    const f = fixture();
+    const lines = [
+      {
+        accountCode: 'cash',
+        direction: 'debit',
+        currency: 'CNY',
+        amountOriginal: '120',
+        amountCny: '120',
+        fxRateToCny: '1',
+        financeAccountId: 'received'
+      },
+      {
+        accountCode: 'bank_recharge_revenue',
+        direction: 'credit',
+        currency: 'CNY',
+        amountOriginal: '120',
+        amountCny: '120',
+        fxRateToCny: '1'
+      },
+      {
+        accountCode: 'bank_recharge_cost',
+        direction: 'debit',
+        currency: 'CNY',
+        amountOriginal: '100',
+        amountCny: '100',
+        fxRateToCny: '1'
+      },
+      {
+        accountCode: 'cash',
+        direction: 'credit',
+        currency: 'CNY',
+        amountOriginal: '100',
+        amountCny: '100',
+        fxRateToCny: '1',
+        financeAccountId: 'funding'
+      },
+      {
+        accountCode: 'bank_recharge_bank_fee',
+        direction: 'debit',
+        currency: 'CNY',
+        amountOriginal: '2',
+        amountCny: '2',
+        fxRateToCny: '1'
+      }
+    ];
+    const repository = {
+      ...f.repository,
+      findOrder: vi.fn().mockResolvedValue({
+        ...f.order,
+        status: 'completed',
+        financeStatus: 'posted',
+        profitAmountCny: '18'
+      }),
+      findCompletionJournal: vi.fn().mockResolvedValue({ id: 'original', lines }),
+      listRefundJournals: vi.fn().mockResolvedValue([])
+    };
+    const service = new BankRechargeFinanceService(
+      repository as never,
+      f.transactions as never,
+      f.audit as never,
+      f.posting as never
+    );
+    const input = {
+      expectedUpdatedAt: updatedAt.toISOString(),
+      reason: '客户退款',
+      refundReference: 'receipt-1'
+    };
+    await service.refund(id, input, operator as never);
+    expect(repository.updateOrder).toHaveBeenCalledWith(
+      f.tx,
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'refunded', profitAmountCny: '-102' })
+      })
+    );
+    expect(
+      f.posting.post.mock.calls[0]![1].lines.every(
+        (line: { financeAccountId?: string }) => line.financeAccountId !== 'funding'
+      )
+    ).toBe(true);
+    f.posting.post.mockClear();
+    await expect(
+      service.refund(id, { ...input, chargeRecoveryAmountCny: '100' }, operator as never)
+    ).rejects.toThrow('上游回款凭据');
+    expect(f.posting.post).not.toHaveBeenCalled();
   });
 });

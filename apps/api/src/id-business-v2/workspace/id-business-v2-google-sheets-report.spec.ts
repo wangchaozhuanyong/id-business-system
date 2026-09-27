@@ -5,6 +5,36 @@ import { buildIdBusinessV2GoogleSheetsReports } from './id-business-v2-google-sh
 const decimal = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
 describe('Google Sheets business report mapping', () => {
+  it('exports bank-recharge finance accounts using Chinese labels and exact decimals', () => {
+    const accounts = [
+      'bank_recharge_revenue',
+      'bank_recharge_service_fee',
+      'bank_recharge_cost',
+      'bank_recharge_bank_fee'
+    ] as const;
+    const reports = buildIdBusinessV2GoogleSheetsReports({
+      orders: [],
+      giftCards: [],
+      renewals: [],
+      financeJournals: [
+        {
+          businessDate: new Date('2026-09-27T00:00:00Z'),
+          lines: accounts.map((accountCode) => ({
+            accountCode,
+            direction: 'credit' as const,
+            amountCny: decimal('0.1001')
+          }))
+        }
+      ]
+    });
+    expect(
+      reports[3]?.rows
+        .slice(1)
+        .map((row) => row[1])
+        .sort()
+    ).toEqual(['银充代付收入', '银充服务费收入', '银充代付成本', '银充银行手续费'].sort());
+    for (const row of reports[3]!.rows.slice(1)) expect(row[3]).toBe('0.1001');
+  });
   it('builds the four fixed reports without selecting sensitive account or card credentials', () => {
     const now = new Date('2026-09-05T08:00:00.000Z');
     const reports = buildIdBusinessV2GoogleSheetsReports({

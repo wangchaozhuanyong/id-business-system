@@ -121,6 +121,29 @@ describe('IdBusinessV2VendureMailboxService', () => {
     );
   });
 
+  it('searches and paginates older messages beyond the first 500', async () => {
+    const mails = Array.from({ length: 650 }, (_, index) => ({
+      id: `mail-${index}`,
+      subject: index === 649 ? 'older target' : 'recent',
+      receivedAt: '2026-09-14T05:00:00.000Z'
+    }));
+    const client = {
+      receivedMails: vi.fn(async ({ limit }: { limit: number }) => mails.slice(0, limit))
+    };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    const found = await service.listMails({ q: 'older target', page: 1, pageSize: 20 }, operator);
+    expect(found.total).toBe(1);
+    expect(found.items[0]?.id).toBe('mail-649');
+    expect(client.receivedMails).toHaveBeenCalledTimes(2);
+    const page = await service.listMails({ page: 33, pageSize: 20 }, operator);
+    expect(page.total).toBe(650);
+    expect(page.items).toHaveLength(10);
+  });
+
   it('writes a sanitized local audit entry after a remote mutation succeeds', async () => {
     const created = {
       id: 'primary-1',

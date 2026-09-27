@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import {
   divideDecimalStrings,
@@ -9,6 +9,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
+import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import {
   bankRechargeApi,
@@ -17,6 +18,20 @@ import {
 } from './bank-recharge-api';
 
 export function useBankRechargeOrdersPage() {
+  const businessNow = ref<number | null>(getV2BusinessNowMs());
+  let disposed = false;
+  let clockTimer: ReturnType<typeof setInterval> | undefined;
+  onMounted(async () => {
+    businessNow.value = await ensureV2BusinessNowMs();
+    if (disposed) return;
+    clockTimer = setInterval(() => {
+      businessNow.value = getV2BusinessNowMs();
+    }, 1000);
+  });
+  onUnmounted(() => {
+    disposed = true;
+    if (clockTimer) clearInterval(clockTimer);
+  });
   const financeCurrencies = ['CNY', 'MYR', 'USD', 'USDT'];
   const page = ref(1);
   const pageSize = ref(20);
@@ -30,8 +45,17 @@ export function useBankRechargeOrdersPage() {
   const currencyOpen = ref(false);
   const refundOpen = ref(false);
   const creating = ref(false);
+  const correcting = ref(false);
+  const correctionReason = ref('');
   const selected = ref<BankRechargeOrder | null>(null);
-  const refund = reactive({ reason: '', refundReference: '' });
+  const refund = reactive({
+    reason: '',
+    refundReference: '',
+    customerRefundAmount: '',
+    chargeRecoveryAmountCny: '0',
+    bankFeeRecoveryAmountCny: '0',
+    upstreamRefundReference: ''
+  });
   const cardForm = reactive({
     label: '',
     last4: '',
@@ -44,10 +68,16 @@ export function useBankRechargeOrdersPage() {
   const formRef = ref<FormInstance>();
   const form = reactive(emptyForm());
   const original = ref('');
-  const dirty = computed(() => JSON.stringify(form) !== original.value);
+  const dirty = computed(
+    () =>
+      JSON.stringify(form) !== original.value ||
+      (correcting.value && Boolean(correctionReason.value))
+  );
   const readonly = computed(() =>
     Boolean(
-      selected.value && ['completed', 'refunded', 'cancelled'].includes(selected.value.status)
+      !correcting.value &&
+      selected.value &&
+      ['completed', 'refunded', 'cancelled'].includes(selected.value.status)
     )
   );
   const rules: FormRules = {
@@ -125,9 +155,7 @@ export function useBankRechargeOrdersPage() {
   );
   const availableCards = computed(() =>
     (cardsQuery.data.value?.items ?? []).filter(
-      (item) =>
-        item.active &&
-        item.currencyCode === (selected.value?.chargeCurrencyCode ?? form.chargeCurrencyCode)
+      (item) => item.active && item.currencyCode === form.chargeCurrencyCode
     )
   );
   const fundingAccounts = computed(() =>
@@ -141,16 +169,12 @@ export function useBankRechargeOrdersPage() {
   const feePreview = computed(() => {
     try {
       const fee = divideDecimalStrings(
-        multiplyDecimalStrings(
-          selected.value?.chargeAmount ?? form.chargeAmount,
-          form.customerFeeRate
-        ),
+        multiplyDecimalStrings(form.chargeAmount, form.customerFeeRate),
         '100'
       );
       const precision =
-        activeCurrencies.value.find(
-          (item) => item.code === (selected.value?.chargeCurrencyCode ?? form.chargeCurrencyCode)
-        )?.minorUnits ?? 2;
+        activeCurrencies.value.find((item) => item.code === form.chargeCurrencyCode)?.minorUnits ??
+        2;
       return roundDecimalString(fee, precision);
     } catch {
       return '—';
@@ -183,7 +207,9 @@ export function useBankRechargeOrdersPage() {
       remark: ''
     };
   }
-  function statusLabel(value: BankRechargeOrderStatus) {
+  function statusLabel(value: BankRechargeOrderStatus, financeStatus?: string) {
+    if (value === 'completed' && financeStatus === 'partial') return '部分退款／回款';
+    if (value === 'refunded' && financeStatus === 'partial') return '已退款（保留成本）';
     return {
       pending_details: '待补全',
       pending_finance: '待入账',
@@ -204,7 +230,8 @@ export function useBankRechargeOrdersPage() {
     if (row.activeSubscription?.status !== 'active') {
       return row.accountId ? '非当前使用' : '待关联账号';
     }
-    return row.dueAt && Date.parse(row.dueAt) <= Date.now() ? '已到期' : '使用中';
+    if (businessNow.value === null) return '时间同步中';
+    return row.dueAt && Date.parse(row.dueAt) <= businessNow.value ? '已到期' : '使用中';
   }
   function usageTagType(row: BankRechargeOrder) {
     const label = usageLabel(row);
@@ -223,6 +250,8 @@ export function useBankRechargeOrdersPage() {
     page.value = 1;
   }
   function openCreate() {
+    correcting.value = false;
+    correctionReason.value = '';
     creating.value = true;
     selected.value = null;
     saveError.value = '';
@@ -232,6 +261,8 @@ export function useBankRechargeOrdersPage() {
     drawerOpen.value = true;
   }
   function openEdit(row: BankRechargeOrder) {
+    correcting.value = false;
+    correctionReason.value = '';
     creating.value = false;
     selected.value = row;
     saveError.value = '';
@@ -265,11 +296,19 @@ export function useBankRechargeOrdersPage() {
       customers.value.unshift(row.customer);
     drawerOpen.value = true;
   }
+  function openCorrection(row: BankRechargeOrder) {
+    openEdit(row);
+    correcting.value = true;
+  }
   function customerCreated(customer: { id: string; name: string }) {
     customers.value = [customer, ...customers.value.filter((item) => item.id !== customer.id)];
     form.customerId = customer.id;
   }
   async function save() {
+    if (correcting.value && !correctionReason.value.trim()) {
+      saveError.value = '请填写更正原因';
+      return;
+    }
     if (readonly.value) return;
     if (creating.value && !(await validateV2Form(formRef.value))) return;
     saving.value = true;
@@ -289,7 +328,14 @@ export function useBankRechargeOrdersPage() {
         openEdit(created);
         ElMessage.success('银充订单已建立，请继续补全手续费、收款和到期时间');
       } else if (selected.value) {
-        await bankRechargeApi.updateOrder(selected.value.id, {
+        const payload = {
+          ...(selected.value.source === 'manual'
+            ? {
+                chargeAmount: form.chargeAmount,
+                chargeCurrencyCode: form.chargeCurrencyCode,
+                plan: form.plan
+              }
+            : {}),
           expectedUpdatedAt: selected.value.updatedAt,
           accountId: form.accountId || null,
           customerId: form.customerId || null,
@@ -308,9 +354,15 @@ export function useBankRechargeOrdersPage() {
           openedAt: form.openedAt ? v2DateTimeInputToIso(form.openedAt) : null,
           dueAt: form.dueAt ? v2DateTimeInputToIso(form.dueAt) : null,
           remark: form.remark
-        });
+        };
+        if (correcting.value)
+          await bankRechargeApi.correctOrder(selected.value.id, {
+            ...payload,
+            reason: correctionReason.value.trim()
+          });
+        else await bankRechargeApi.updateOrder(selected.value.id, payload);
         drawerOpen.value = false;
-        ElMessage.success('银充订单已保存');
+        ElMessage.success(correcting.value ? '银充订单已更正并重新入账' : '银充订单已保存');
         await ordersQuery.refresh();
       }
     } catch (error) {
@@ -333,8 +385,14 @@ export function useBankRechargeOrdersPage() {
   }
   function openRefund(row: BankRechargeOrder) {
     selected.value = row;
-    refund.reason = '';
-    refund.refundReference = '';
+    Object.assign(refund, {
+      reason: '',
+      refundReference: '',
+      customerRefundAmount: '',
+      chargeRecoveryAmountCny: '0',
+      bankFeeRecoveryAmountCny: '0',
+      upstreamRefundReference: ''
+    });
     saveError.value = '';
     refundOpen.value = true;
   }
@@ -349,10 +407,14 @@ export function useBankRechargeOrdersPage() {
       await bankRechargeApi.refundOrder(selected.value.id, {
         expectedUpdatedAt: selected.value.updatedAt,
         reason: refund.reason.trim(),
-        refundReference: refund.refundReference.trim()
+        refundReference: refund.refundReference.trim(),
+        customerRefundAmount: refund.customerRefundAmount.trim(),
+        chargeRecoveryAmountCny: refund.chargeRecoveryAmountCny.trim() || '0',
+        bankFeeRecoveryAmountCny: refund.bankFeeRecoveryAmountCny.trim() || '0',
+        upstreamRefundReference: refund.upstreamRefundReference.trim()
       });
       refundOpen.value = false;
-      ElMessage.success('退款已登记，原财务日记已冲销');
+      ElMessage.success('已按实际退款与回款金额登记账务');
       await ordersQuery.refresh();
     } catch (error) {
       saveError.value = getApiErrorMessage(error);
@@ -425,6 +487,8 @@ export function useBankRechargeOrdersPage() {
     currencyOpen,
     refundOpen,
     creating,
+    correcting,
+    correctionReason,
     selected,
     refund,
     cardForm,
@@ -461,6 +525,7 @@ export function useBankRechargeOrdersPage() {
     changePageSize,
     openCreate,
     openEdit,
+    openCorrection,
     customerCreated,
     save,
     complete,

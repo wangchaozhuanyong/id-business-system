@@ -83,6 +83,7 @@ interface LockedManualRenewalAccountPersistenceRow {
   soldByOrderId: string | null;
   soldByCustomerId: string | null;
   lossReportedAt: Date | null;
+  ownershipTransferredAt: Date | null;
 }
 
 export interface LockedManualRenewalAccountRow extends Omit<
@@ -524,7 +525,8 @@ export class IdBusinessV2RenewalsRepository {
         account."purchase_cost" AS "purchaseCost",
         account."sold_by_order_id" AS "soldByOrderId",
         sold_order."customer_id" AS "soldByCustomerId",
-        account."loss_reported_at" AS "lossReportedAt"
+        account."loss_reported_at" AS "lossReportedAt",
+        account."ownership_transferred_at" AS "ownershipTransferredAt"
       FROM "id_business_v2_accounts" account
       LEFT JOIN "id_business_v2_orders" sold_order
         ON sold_order."id" = account."sold_by_order_id"

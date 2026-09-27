@@ -111,6 +111,8 @@ export class IdBusinessV2GoogleSheetsSyncService {
                   oauthStateHash: null,
                   oauthVerifierEncrypted: null,
                   refreshTokenEncrypted: null,
+                  runLeaseExpiresAt: null,
+                  runLeaseId: null,
                   spreadsheetIdEncrypted: null,
                   sourceVersions: {}
                 }
@@ -184,16 +186,22 @@ export class IdBusinessV2GoogleSheetsSyncService {
     }
     const verifier = this.decrypt(record.oauthVerifierEncrypted, 'Google 授权状态');
     const clientSecret = this.decrypt(record.clientSecretEncrypted, 'Google OAuth 客户端密钥');
-    await this.repository.updateConfiguration({
-      oauthStateExpiresAt: null,
-      oauthStateHash: null,
-      oauthVerifierEncrypted: null
-    });
-    if (typeof input.error === 'string' && input.error) return false;
-    if (typeof input.code !== 'string' || input.code.length < 10 || input.code.length > 4096) {
-      return false;
-    }
+    const authorizationGuard = {
+      googleOAuthClientId: record.googleOAuthClientId,
+      clientSecretEncrypted: record.clientSecretEncrypted,
+      oauthVerifierEncrypted: record.oauthVerifierEncrypted,
+      oauthStateExpiresAt: record.oauthStateExpiresAt
+    };
+    const claimed = await this.repository.updateConfigurationIfCurrent(
+      { ...authorizationGuard, oauthStateHash: stateHash },
+      { oauthStateHash: null }
+    );
+    if (!claimed) return false;
     try {
+      if (typeof input.error === 'string' && input.error) return false;
+      if (typeof input.code !== 'string' || input.code.length < 10 || input.code.length > 4096) {
+        return false;
+      }
       const token = await this.googleOAuth.exchangeCode({
         callbackUrl: this.callbackUrl(),
         clientId: record.googleOAuthClientId,
@@ -204,19 +212,29 @@ export class IdBusinessV2GoogleSheetsSyncService {
       if (!token.refreshToken) return false;
       const encryptedRefreshToken = this.encryption.encrypt(token.refreshToken);
       if (!encryptedRefreshToken) return false;
-      await this.transactionManager.execute(
+      const completed = await this.transactionManager.execute(
         async (tx) => {
-          await this.repository.updateConfiguration(
+          const completed = await this.repository.updateConfigurationIfCurrent(
+            {
+              ...authorizationGuard,
+              oauthStateHash: null,
+              oauthStateExpiresAt: { equals: record.oauthStateExpiresAt, gt: new Date() }
+            },
             {
               enabled: true,
               lastErrorCode: null,
               lastErrorMessage: null,
               refreshTokenEncrypted: encryptedRefreshToken,
+              oauthVerifierEncrypted: null,
+              oauthStateExpiresAt: null,
+              runLeaseExpiresAt: null,
+              runLeaseId: null,
               sourceVersions: {},
               spreadsheetIdEncrypted: null
             },
             tx
           );
+          if (!completed) return false;
           await this.audit.append(tx, {
             module: 'id_business_v2',
             action: 'id_business_v2.google_sheets_sync.authorize',
@@ -225,6 +243,7 @@ export class IdBusinessV2GoogleSheetsSyncService {
             afterData: toV2JsonDocument({ authorized: true, enabled: true }),
             remark: '已完成 Google 表格同步授权'
           });
+          return true;
         },
         {
           changedScopes: ['workspace'],
@@ -232,9 +251,16 @@ export class IdBusinessV2GoogleSheetsSyncService {
           retryMode: 'none'
         }
       );
-      return true;
+      return completed;
     } catch {
       return false;
+    } finally {
+      await this.repository
+        .updateConfigurationIfCurrent(
+          { ...authorizationGuard, oauthStateHash: null },
+          { oauthStateExpiresAt: null, oauthVerifierEncrypted: null }
+        )
+        .catch(() => undefined);
     }
   }
 
@@ -250,7 +276,10 @@ export class IdBusinessV2GoogleSheetsSyncService {
     if (!before?.refreshTokenEncrypted) throw new BadRequestException('请先完成 Google 授权');
     await this.transactionManager.execute(
       async (tx) => {
-        await this.repository.updateConfiguration({ enabled }, tx);
+        await this.repository.updateConfiguration(
+          { enabled, ...(!enabled ? { runLeaseId: null, runLeaseExpiresAt: null } : {}) },
+          tx
+        );
         await this.audit.append(tx, {
           userId,
           module: 'id_business_v2',

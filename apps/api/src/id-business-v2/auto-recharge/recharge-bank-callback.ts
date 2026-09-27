@@ -1,5 +1,5 @@
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
-import type { V2CommandTransaction } from '../runtime/public-api';
+import { toV2JsonDocument, type V2CommandTransaction } from '../runtime/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { object } from './recharge-validation';
@@ -30,4 +30,18 @@ export async function recordVerifiedBankRecharge(
   if (job.action === 'bitbrowser' && orders) {
     await orders.recordVerifiedSuccess(tx, job, { ...object(job.result), ...report });
   }
+}
+
+export function mergeRechargeCallbackResult(
+  job: IdBusinessV2RechargeJob,
+  report: Record<string, unknown>
+) {
+  const previous = object(job.result ?? {});
+  return toV2JsonDocument({
+    ...previous,
+    ...report,
+    ...(previous.recheck_only === true
+      ? { recheck_only: true, source_job_id: previous.source_job_id }
+      : {})
+  });
 }

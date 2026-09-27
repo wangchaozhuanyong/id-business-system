@@ -7,6 +7,13 @@ const REPORT_ROW_LIMIT = 10_000;
 
 type GoogleSheetsSyncPersistenceClient = Pick<V2CommandTransaction, 'idBusinessV2GoogleSheetsSync'>;
 
+export interface GoogleSheetsRunGuard {
+  leaseId: string;
+  clientId?: string;
+  clientSecretEncrypted?: string;
+  refreshTokenEncrypted?: string;
+}
+
 const ORDER_REPORT_SELECT = {
   id: true,
   orderNo: true,
@@ -120,6 +127,45 @@ export class IdBusinessV2GoogleSheetsSyncRepository {
     client: GoogleSheetsSyncPersistenceClient = this.prisma
   ) {
     return client.idBusinessV2GoogleSheetsSync.update({ where: { id: 1 }, data: input });
+  }
+
+  async updateConfigurationIfCurrent(
+    where: Prisma.IdBusinessV2GoogleSheetsSyncWhereInput,
+    input: Prisma.IdBusinessV2GoogleSheetsSyncUncheckedUpdateInput,
+    client: GoogleSheetsSyncPersistenceClient = this.prisma
+  ) {
+    const result = await client.idBusinessV2GoogleSheetsSync.updateMany({
+      where: { ...where, id: 1 },
+      data: input
+    });
+    return result.count === 1;
+  }
+
+  private currentRunWhere(guard: GoogleSheetsRunGuard) {
+    return {
+      id: 1,
+      enabled: true,
+      runLeaseId: guard.leaseId,
+      runLeaseExpiresAt: { gt: new Date() },
+      googleOAuthClientId: guard.clientId,
+      clientSecretEncrypted: guard.clientSecretEncrypted,
+      refreshTokenEncrypted: guard.refreshTokenEncrypted
+    } satisfies Prisma.IdBusinessV2GoogleSheetsSyncWhereInput;
+  }
+
+  updateRunIfCurrent(
+    guard: GoogleSheetsRunGuard,
+    input: Prisma.IdBusinessV2GoogleSheetsSyncUncheckedUpdateInput
+  ) {
+    return this.updateConfigurationIfCurrent(this.currentRunWhere(guard), input);
+  }
+
+  async hasCurrentLease(guard: GoogleSheetsRunGuard) {
+    return (
+      (await this.prisma.idBusinessV2GoogleSheetsSync.count({
+        where: this.currentRunWhere(guard)
+      })) === 1
+    );
   }
 
   async acquireLease(leaseId: string, now: Date, expiresAt: Date) {

@@ -87,14 +87,27 @@ export class IdBusinessV2VendureMailboxService {
     const primaryAccountId = this.optionalId(dto.primaryAccountId);
     const virtualEmailId = this.optionalId(dto.virtualEmailId);
     const unassignedOnly = this.boolean(dto.unassignedOnly);
-    const items = (
-      await this.client.receivedMails({
+    let limit = 500;
+    let mails = await this.client.receivedMails({
+      primaryAccountId,
+      virtualEmailId,
+      unassignedOnly,
+      limit
+    });
+    while (mails.length >= limit) {
+      if (limit >= 128_000)
+        throw new ServiceUnavailableException(
+          '邮件数量较多，暂时无法完整查询，请先选择主邮箱或虚拟邮箱缩小范围'
+        );
+      limit *= 2;
+      mails = await this.client.receivedMails({
         primaryAccountId,
         virtualEmailId,
         unassignedOnly,
-        limit: 500
-      })
-    ).filter(
+        limit
+      });
+    }
+    const items = mails.filter(
       (item) =>
         (!primaryAccountId || item.primaryAccountId === primaryAccountId) &&
         (!virtualEmailId || item.virtualEmailId === virtualEmailId) &&

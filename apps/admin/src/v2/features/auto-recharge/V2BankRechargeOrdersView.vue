@@ -156,7 +156,7 @@
                       : 'info'
                 "
                 effect="plain"
-                >{{ statusLabel(row.status) }}</el-tag
+                >{{ statusLabel(row.status, row.financeStatus) }}</el-tag
               ></template
             ></V2TableColumn
           >
@@ -173,14 +173,25 @@
                 @click="complete(row)"
                 >完成</AppButton
               >
-              <AppButton
-                v-else-if="row.status === 'completed'"
-                size="small"
-                variant="ghost"
-                :disabled="working"
-                @click="openRefund(row)"
-                >退款</AppButton
+              <el-dropdown
+                v-else-if="
+                  row.status === 'completed' ||
+                  (row.status === 'refunded' && row.financeStatus === 'partial')
+                "
+                trigger="click"
               >
+                <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
+                <template #dropdown
+                  ><el-dropdown-menu>
+                    <el-dropdown-item
+                      v-if="row.status === 'completed' && row.financeStatus === 'posted'"
+                      @click="openCorrection(row)"
+                      >更正订单</el-dropdown-item
+                    >
+                    <el-dropdown-item @click="openRefund(row)">退款与回款</el-dropdown-item>
+                  </el-dropdown-menu></template
+                >
+              </el-dropdown>
             </template>
           </V2TableActionColumn>
         </V2Table>
@@ -241,6 +252,7 @@ const {
   statusLabel,
   working,
   openEdit,
+  openCorrection,
   complete,
   openRefund,
   applyFilters,

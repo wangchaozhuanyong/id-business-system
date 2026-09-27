@@ -94,6 +94,7 @@ function createService() {
   };
   const securityService = {
     assertPasswordMeetsPolicy: jest.fn().mockResolvedValue(undefined),
+    getMfaLoginRequirementForUser: jest.fn().mockResolvedValue({ required: false, bound: false }),
     invalidateActiveSessionCache: jest.fn()
   };
   const identityService = {
@@ -164,6 +165,61 @@ describe('V2EmployeesService', () => {
       'security'
     ]);
   });
+
+  it('requires MFA binding before creating an administrator under the enforced policy', async () => {
+    const fixture = createService();
+    fixture.prisma.user.findFirst.mockResolvedValue(null);
+    fixture.prisma.role.findMany.mockResolvedValue([
+      { id: '33333333-3333-4333-8333-333333333333', code: 'admin', name: '管理员' }
+    ]);
+    fixture.securityService.getMfaLoginRequirementForUser.mockResolvedValue({
+      required: true,
+      bound: false
+    });
+    await expect(
+      fixture.service.create(
+        {
+          username: 'newadmin',
+          displayName: '新管理员',
+          initialPassword: 'StrongPass1',
+          roleIds: ['33333333-3333-4333-8333-333333333333']
+        },
+        operator
+      )
+    ).rejects.toThrow('先以普通员工身份登录');
+    expect(fixture.transaction.user.create).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'checks binding before promotion and permits the bound employee: %s',
+    async (bound) => {
+      const fixture = createService();
+      const employee = createEmployee();
+      fixture.prisma.user.findFirst.mockResolvedValue(employee);
+      fixture.prisma.role.findMany.mockResolvedValue([
+        { id: '44444444-4444-4444-8444-444444444444', code: 'admin', name: '管理员' }
+      ]);
+      fixture.securityService.getMfaLoginRequirementForUser.mockResolvedValue({
+        required: true,
+        bound
+      });
+      fixture.transaction.user.update.mockResolvedValue(employee);
+      const operation = fixture.service.update(
+        employee.id,
+        {
+          expectedUpdatedAt: employee.updatedAt.toISOString(),
+          roleIds: ['44444444-4444-4444-8444-444444444444']
+        },
+        operator
+      );
+      if (!bound) {
+        await expect(operation).rejects.toThrow('先以普通员工身份登录');
+        expect(fixture.transaction.user.updateMany).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).resolves.toMatchObject({ id: employee.id });
+      }
+    }
+  );
 
   it('rejects creating an employee without a role', async () => {
     const fixture = createService();

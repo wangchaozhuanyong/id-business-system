@@ -8,6 +8,12 @@ type MailboxPersistenceClient = Pick<
   'idBusinessV2ManagedMailbox' | 'idBusinessV2ManagedMailboxSetting'
 >;
 
+export interface MailboxQuerySnapshot {
+  providerCredentialEncrypted: string;
+  queryCodeHash: string;
+  queryCodeExpiresAt: Date;
+}
+
 @Injectable()
 export class IdBusinessV2ManagedMailboxRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -125,22 +131,35 @@ export class IdBusinessV2ManagedMailboxRepository {
     return tx.idBusinessV2ManagedMailbox.update({ where: { id }, data: input });
   }
 
-  updateProviderCredential(id: string, providerCredentialEncrypted: string) {
-    return this.prisma.idBusinessV2ManagedMailbox.update({
-      where: { id },
-      data: { providerCredentialEncrypted }
-    });
+  updateProviderCredentialIfCurrent(
+    id: string,
+    snapshot: MailboxQuerySnapshot,
+    providerCredentialEncrypted: string
+  ) {
+    return this.updateQueryStateIfCurrent(id, snapshot, { providerCredentialEncrypted });
   }
 
-  updateQueryState(
+  async updateQueryStateIfCurrent(
     id: string,
+    snapshot: MailboxQuerySnapshot,
     input: {
       lastErrorCode?: string | null;
       lastQueriedAt?: Date;
       lastVerifiedAt?: Date;
       status?: IdBusinessV2ManagedMailboxStatus;
+      providerCredentialEncrypted?: string;
     }
   ) {
-    return this.prisma.idBusinessV2ManagedMailbox.update({ where: { id }, data: input });
+    const result = await this.prisma.idBusinessV2ManagedMailbox.updateMany({
+      where: {
+        id,
+        status: 'active',
+        providerCredentialEncrypted: snapshot.providerCredentialEncrypted,
+        queryCodeHash: snapshot.queryCodeHash,
+        queryCodeExpiresAt: { equals: snapshot.queryCodeExpiresAt, gt: new Date() }
+      },
+      data: input
+    });
+    return result.count === 1;
   }
 }

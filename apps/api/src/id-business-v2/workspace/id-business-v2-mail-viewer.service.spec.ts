@@ -34,8 +34,8 @@ function mailbox(overrides: Record<string, unknown> = {}) {
 describe('IdBusinessV2MailViewerService', () => {
   const repository = {
     findByQueryCodeHash: vi.fn(),
-    updateQueryState: vi.fn(),
-    updateProviderCredential: vi.fn()
+    updateQueryStateIfCurrent: vi.fn(),
+    updateProviderCredentialIfCurrent: vi.fn()
   };
   const transientState = { reservePublicQuery: vi.fn() };
   const encryption = {
@@ -57,7 +57,8 @@ describe('IdBusinessV2MailViewerService', () => {
     vi.clearAllMocks();
     transientState.reservePublicQuery.mockReturnValue(true);
     repository.findByQueryCodeHash.mockResolvedValue(mailbox());
-    repository.updateQueryState.mockResolvedValue(mailbox());
+    repository.updateQueryStateIfCurrent.mockResolvedValue(true);
+    repository.updateProviderCredentialIfCurrent.mockResolvedValue(true);
     encryption.decrypt.mockReturnValue('provider-app-password');
     provider.query.mockResolvedValue([
       {
@@ -88,8 +89,12 @@ describe('IdBusinessV2MailViewerService', () => {
     expect(transientState.reservePublicQuery).toHaveBeenCalledWith(
       expect.objectContaining({ queryCodeHash: 'hash:buyer-code' })
     );
-    expect(repository.updateQueryState).toHaveBeenCalledWith(
+    expect(repository.updateQueryStateIfCurrent).toHaveBeenCalledWith(
       mailbox().id,
+      expect.objectContaining({
+        queryCodeHash: 'hash:buyer-code',
+        providerCredentialEncrypted: 'encrypted-app-password'
+      }),
       expect.objectContaining({ status: 'active' })
     );
   });
@@ -115,8 +120,9 @@ describe('IdBusinessV2MailViewerService', () => {
       5
     );
     expect(encryption.encrypt).toHaveBeenCalledWith('rotated-refresh-token');
-    expect(repository.updateProviderCredential).toHaveBeenCalledWith(
+    expect(repository.updateProviderCredentialIfCurrent).toHaveBeenCalledWith(
       mailbox().id,
+      expect.objectContaining({ queryCodeHash: 'hash:buyer-code' }),
       'encrypted-refresh-token'
     );
   });
@@ -163,10 +169,42 @@ describe('IdBusinessV2MailViewerService', () => {
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect(String((error as Error).message)).not.toContain('provider-app-password');
-    expect(repository.updateQueryState).toHaveBeenCalledWith(mailbox().id, {
-      lastErrorCode: 'provider_auth_failed',
-      status: 'auth_failed'
+    expect(repository.updateQueryStateIfCurrent).toHaveBeenCalledWith(
+      mailbox().id,
+      expect.objectContaining({ queryCodeHash: 'hash:buyer-code' }),
+      {
+        lastErrorCode: 'provider_auth_failed',
+        status: 'auth_failed'
+      }
+    );
+  });
+
+  it('does not return mail after an administrator disables the mailbox during the provider read', async () => {
+    let finish!: (value: never[]) => void;
+    provider.query.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = service.query({ queryCode: 'buyer-code', limit: 5 });
+    await vi.waitFor(() => expect(provider.query).toHaveBeenCalled());
+    repository.updateQueryStateIfCurrent.mockResolvedValueOnce(false);
+    finish([]);
+    await expect(pending).rejects.toThrow('邮件查询码不正确');
+  });
+
+  it('does not use an old Microsoft token when authorization changes during refresh', async () => {
+    repository.findByQueryCodeHash.mockResolvedValueOnce(mailbox({ provider: 'microsoft' }));
+    microsoftOAuth.refreshAccessToken.mockResolvedValueOnce({
+      accessToken: 'fixture-access',
+      refreshToken: 'fixture-rotated'
     });
+    repository.updateProviderCredentialIfCurrent.mockResolvedValueOnce(false);
+    await expect(service.query({ queryCode: 'buyer-code', limit: 5 })).rejects.toThrow(
+      '邮件查询码不正确'
+    );
+    expect(provider.query).not.toHaveBeenCalled();
   });
 
   it('reports an unconfigured Edge mail runtime clearly', async () => {

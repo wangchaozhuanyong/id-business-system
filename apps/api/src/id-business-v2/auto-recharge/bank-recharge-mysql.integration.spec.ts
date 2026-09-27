@@ -9,9 +9,11 @@ import { IdBusinessV2FinanceReportsService } from '../finance/id-business-v2-fin
 import {
   Amount4,
   V2CommandTransactionManager,
-  V2TransactionalAuditService
+  V2TransactionalAuditService,
+  toV2JsonDocument
 } from '../runtime/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
@@ -100,7 +102,7 @@ suite('bank recharge real MySQL lifecycle', () => {
     });
     const saved = await accounts.createAccount(
       {
-        email: 'bank-fixture@example.invalid',
+        email: `bank-fixture-${randomUUID()}@example.invalid`,
         password: ' synthetic bank password ',
         totpSecret: 'JBSWY3DPEHPK3PXP',
         remark: ''
@@ -174,7 +176,7 @@ suite('bank recharge real MySQL lifecycle', () => {
     );
     expect((await queries.renewalWarnings(openedAt)).totalCount).toBe(1);
 
-    const completed = await finance.complete(
+    let completed = await finance.complete(
       created.id,
       { expectedUpdatedAt: restored.updatedAt.toISOString() },
       operator
@@ -216,10 +218,93 @@ suite('bank recharge real MySQL lifecycle', () => {
     });
     expect(balanceAfterPayment.currentBalanceCny.toString()).toBe('1069.545');
 
-    const refunded = await finance.refund(
+    const correctionPosting = new IdBusinessV2FinancePostingService(
+      new IdBusinessV2FinanceCommandRepository()
+    );
+    const corrections = new BankRechargeCorrectionService(
+      new BankRechargeRepository(prisma),
+      new V2CommandTransactionManager(prisma),
+      new V2TransactionalAuditService(),
+      correctionPosting,
+      orders,
+      finance
+    );
+    const correctedDue = new Date(dueAt.getTime() + 86400000);
+    completed = await corrections.correct(
       created.id,
       {
         expectedUpdatedAt: completed.updatedAt.toISOString(),
+        reason: '修正到期日期',
+        dueAt: correctedDue.toISOString()
+      },
+      operator
+    );
+    expect(completed.status).toBe('completed');
+    expect(completed.dueAt?.toISOString()).toBe(correctedDue.toISOString());
+    expect(
+      (
+        await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id: cash.id } })
+      ).currentBalanceCny.toString()
+    ).toBe('1069.545');
+    const activeJournal = await new BankRechargeRepository(prisma).findCompletionJournal(
+      prisma,
+      created.id
+    );
+    expect(activeJournal?.id).not.toBe(journal.id);
+    await expect(
+      corrections.correct(
+        created.id,
+        {
+          expectedUpdatedAt: completed.updatedAt.toISOString(),
+          reason: '无效收款币种',
+          receivedCurrencyCode: 'PHP'
+        },
+        operator
+      )
+    ).rejects.toThrow();
+    expect(
+      (await prisma.idBusinessV2BankRechargeOrder.findUniqueOrThrow({ where: { id: created.id } }))
+        .status
+    ).toBe('completed');
+    expect(
+      (await new BankRechargeRepository(prisma).findCompletionJournal(prisma, created.id))?.id
+    ).toBe(activeJournal?.id);
+    expect(
+      (
+        await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id: cash.id } })
+      ).currentBalanceCny.toString()
+    ).toBe('1069.545');
+
+    const partialReference = `partial-refund-${randomUUID()}`;
+    const partial = await finance.refund(
+      created.id,
+      {
+        expectedUpdatedAt: completed.updatedAt.toISOString(),
+        reason: '客户部分退款',
+        refundReference: partialReference,
+        customerRefundAmount: '50'
+      },
+      operator
+    );
+    expect(partial.status).toBe('completed');
+    expect(partial.financeStatus).toBe('partial');
+    expect(partial.profitAmountCny?.toString()).toBe('19.545');
+    await expect(
+      finance.refund(
+        created.id,
+        {
+          expectedUpdatedAt: partial.updatedAt.toISOString(),
+          reason: '重复凭据',
+          refundReference: partialReference,
+          customerRefundAmount: '50'
+        },
+        operator
+      )
+    ).rejects.toThrow('凭据已登记');
+    const refunded = await finance.refund(
+      created.id,
+      {
+        expectedUpdatedAt: partial.updatedAt.toISOString(),
         reason: '隔离测试真实退款模拟',
         refundReference: `bank-refund-${randomUUID()}`
       },
@@ -230,10 +315,29 @@ suite('bank recharge real MySQL lifecycle', () => {
     const finalBalance = await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({
       where: { id: cash.id }
     });
-    expect(finalBalance.currentBalanceCny.toString()).toBe('1000');
+    expect(finalBalance.currentBalanceCny.toString()).toBe('869.545');
+    expect((await reports.profitLoss({})).netProfitCny).toBe('-130.455');
+    await finance.refund(
+      created.id,
+      {
+        expectedUpdatedAt: refunded.updatedAt.toISOString(),
+        reason: '上游实际回款',
+        refundReference: `upstream-${randomUUID()}`,
+        customerRefundAmount: '0',
+        chargeRecoveryAmountCny: '130',
+        bankFeeRecoveryAmountCny: '0.455',
+        upstreamRefundReference: `upstream-proof-${randomUUID()}`
+      },
+      operator
+    );
+    expect(
+      (
+        await prisma.idBusinessV2FinanceAccount.findUniqueOrThrow({ where: { id: cash.id } })
+      ).currentBalanceCny.toString()
+    ).toBe('1000');
     expect((await reports.profitLoss({})).netProfitCny).toBe('0');
 
-    const accountKey = 'a'.repeat(64);
+    const accountKey = `${randomUUID()}${randomUUID()}`.replace(/-/g, '');
     const job = await prisma.idBusinessV2RechargeJob.create({
       data: {
         id: randomUUID(),
@@ -286,6 +390,72 @@ suite('bank recharge real MySQL lifecycle', () => {
     });
     expect(active.currentOrderId).toBe(automatic.id);
     expect(active.status).toBe('active');
+
+    const sourceResult = {
+      ...sanitizedResult,
+      checkout_identifier: `cs_recheck_${randomUUID()}`,
+      status: 'subscription_pending',
+      payment_outcome: 'subscription_pending',
+      payment_evidence: null
+    };
+    const sourceJob = await prisma.idBusinessV2RechargeJob.create({
+      data: {
+        id: randomUUID(),
+        ownerId: operatorId,
+        accountKey,
+        chatgptAccountId: saved.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'finished',
+        leaseUntil: new Date(),
+        result: toV2JsonDocument(sourceResult)
+      }
+    });
+    const recheckJob = await prisma.idBusinessV2RechargeJob.create({
+      data: {
+        id: randomUUID(),
+        ownerId: operatorId,
+        accountKey,
+        chatgptAccountId: saved.id,
+        plan: 'plus',
+        action: 'bitbrowser',
+        state: 'finished',
+        leaseUntil: new Date(),
+        result: { recheck_only: true, source_job_id: sourceJob.id }
+      }
+    });
+    const recheckResult = safeDocument({
+      ...verifiedResult,
+      recheck_only: true,
+      payment_requests_sent: 0,
+      checkout_identifier: sourceResult.checkout_identifier,
+      payment_evidence: {
+        ...verifiedResult.payment_evidence,
+        identifier: `pi_recheck_${randomUUID().replace(/-/g, '')}`
+      }
+    });
+    for (let replay = 0; replay < 2; replay += 1) {
+      await prisma.$transaction(async (tx) =>
+        recordVerifiedBankRecharge(tx, recheckJob, recheckResult, orders)
+      );
+    }
+    expect(
+      await prisma.idBusinessV2BankRechargeOrder.count({ where: { rechargeJobId: sourceJob.id } })
+    ).toBe(1);
+    expect(
+      await prisma.idBusinessV2BankRechargeOrder.count({ where: { rechargeJobId: recheckJob.id } })
+    ).toBe(0);
+    const recoveredOrder = await prisma.idBusinessV2BankRechargeOrder.findUniqueOrThrow({
+      where: { rechargeJobId: sourceJob.id }
+    });
+    expect(recoveredOrder.accountId).toBe(saved.id);
+    expect(
+      (
+        await prisma.idBusinessV2BankRechargeSubscription.findUniqueOrThrow({
+          where: { accountId: saved.id }
+        })
+      ).currentOrderId
+    ).toBe(recoveredOrder.id);
 
     const audits = await prisma.auditLog.findMany({ where: { userId: operatorId } });
     expect(audits.length).toBeGreaterThanOrEqual(6);

@@ -58,6 +58,9 @@ export interface V2CustomerDeletePreview {
     activeOrderCount: number;
     activationCount: number;
     activeActivationCount: number;
+    bankOrderCount: number;
+    activeBankOrderCount: number;
+    activeBankSubscriptionCount: number;
   };
   fingerprint: string;
 }

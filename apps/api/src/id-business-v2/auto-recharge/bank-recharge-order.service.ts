@@ -17,6 +17,7 @@ import {
 } from '../runtime/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
+import { resolveBankRechargeSource } from './bank-recharge-recheck';
 import {
   bankRechargeCurrency,
   bankRechargeDate,
@@ -138,209 +139,212 @@ export class BankRechargeOrderService {
   }
 
   async update(id: string, value: unknown, operator: AuthenticatedUser) {
+    return this.transactions.execute((tx) => this.updateInTransaction(tx, id, value, operator), {
+      changedScopes: ['auto-recharge', 'renewals', 'renewal-warning-summary', 'dashboard'],
+      requestId: randomUUID(),
+      operator,
+      retryMode: 'none'
+    });
+  }
+
+  async updateInTransaction(
+    tx: V2CommandTransaction,
+    id: string,
+    value: unknown,
+    operator: AuthenticatedUser
+  ) {
     bankRechargeId(id, '银充订单');
     const input = bankRechargeObject(value);
     if (Object.keys(input).some((key) => !editable.has(key))) {
       throw new BadRequestException('银充订单包含不可修改字段');
     }
     const expectedUpdatedAt = normalizeV2ExpectedUpdatedAt(input.expectedUpdatedAt, '银充订单');
-    return this.transactions.execute(
-      async (tx) => {
-        const previous = await this.repository.findOrder(tx, id);
-        if (!previous) throw new NotFoundException('银充订单不存在');
-        if (['completed', 'refunded', 'cancelled'].includes(previous.status)) {
-          throw new ConflictException('已完成或已结束的银充订单不能直接改写，请走更正或退款流程');
-        }
-        assertV2ExpectedUpdatedAt(previous.updatedAt, expectedUpdatedAt, '银充订单');
-        if (
-          previous.source === 'automatic' &&
-          (input.chargeAmount !== undefined ||
-            input.chargeCurrencyCode !== undefined ||
-            input.plan !== undefined)
-        ) {
-          throw new ConflictException('官网代付事实不能修改');
-        }
-        const currencyCode =
-          input.chargeCurrencyCode === undefined
-            ? previous.chargeCurrencyCode
-            : bankRechargeCurrency(input.chargeCurrencyCode);
-        const currency = await this.accounts.requireCurrency(tx, currencyCode);
-        const charge =
-          input.chargeAmount === undefined
-            ? Amount4.from(previous.chargeAmount)
-            : bankRechargeMoney(input.chargeAmount, '代付金额', currency.minorUnits, true);
-        if (input.chargeAmount === undefined) {
-          bankRechargeMoney(charge.toString(), '代付金额', currency.minorUnits, true);
-        }
-        const accountId =
-          input.accountId === undefined
-            ? previous.accountId
-            : bankRechargeOptionalId(input.accountId, 'ChatGPT 账号');
-        if (previous.accountId && previous.openedAt && accountId !== previous.accountId) {
-          throw new ConflictException('已开通订单不能更换 ChatGPT 账号');
-        }
-        const customerId =
-          input.customerId === undefined
-            ? previous.customerId
-            : bankRechargeOptionalId(input.customerId, '客户');
-        const cardId =
-          input.cardId === undefined
-            ? previous.cardId
-            : bankRechargeOptionalId(input.cardId, '银行卡');
-        if (accountId) await this.accounts.requireActive(tx, accountId);
-        if (customerId) await this.requireCustomer(tx, customerId);
-        const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
-        if (
-          previous.source === 'automatic' &&
-          previous.cardLast4 &&
-          card &&
-          previous.cardLast4 !== card.last4
-        ) {
-          throw new ConflictException('所选银行卡尾号与官网付款凭据不一致');
-        }
-        const rate =
-          input.customerFeeRate === undefined
-            ? Amount4.from(previous.customerFeeRate)
-            : bankRechargeFeeRate(input.customerFeeRate);
-        const manualFee =
-          input.customerFeeAmount !== undefined && input.customerFeeAmount !== null
-            ? bankRechargeMoney(input.customerFeeAmount, '客户手续费', currency.minorUnits)
-            : null;
-        const feeOverridden =
-          manualFee !== null
-            ? true
-            : input.customerFeeAmount === null
-              ? false
-              : previous.customerFeeOverridden;
-        const fee =
-          manualFee ??
-          (feeOverridden
-            ? Amount4.from(previous.customerFeeAmount)
-            : bankRechargeFee(charge, rate, currency.minorUnits));
-        const openedAt =
-          input.openedAt === undefined
-            ? previous.openedAt
-            : input.openedAt === null
-              ? null
-              : bankRechargeDate(input.openedAt, '开通时间');
-        const dueAt =
-          input.dueAt === undefined
-            ? previous.dueAt
-            : input.dueAt === null
-              ? null
-              : bankRechargeDate(input.dueAt, '到期时间');
-        this.assertDates(openedAt, dueAt);
-        const bankFeeCurrencyCode =
-          input.bankFeeCurrencyCode === undefined
-            ? previous.bankFeeCurrencyCode
-            : input.bankFeeCurrencyCode === null
-              ? null
-              : bankRechargeCurrency(input.bankFeeCurrencyCode);
-        const bankFeeCurrency = bankFeeCurrencyCode
-          ? await this.accounts.requireCurrency(tx, bankFeeCurrencyCode)
-          : null;
-        const bankFee =
-          input.bankFeeAmount === undefined
-            ? (previous.bankFeeAmount?.toString() ?? null)
-            : input.bankFeeAmount === null
-              ? null
-              : bankRechargeMoney(
-                  input.bankFeeAmount,
-                  '银行手续费',
-                  bankFeeCurrency?.minorUnits ?? 4
-                ).toString();
-        if (bankFee && !bankFeeCurrency) throw new BadRequestException('请设置银行手续费币种');
-        const receivedCurrencyCode =
-          input.receivedCurrencyCode === undefined
-            ? previous.receivedCurrencyCode
-            : input.receivedCurrencyCode === null
-              ? null
-              : bankRechargeCurrency(input.receivedCurrencyCode);
-        const received =
-          input.receivedAmount === undefined
-            ? (previous.receivedAmount?.toString() ?? null)
-            : input.receivedAmount === null
-              ? null
-              : bankRechargeMoney(input.receivedAmount, '客户实收金额', 4).toString();
-        if (received && !receivedCurrencyCode) throw new BadRequestException('请设置客户实收币种');
-        const chargeFxRateToCny = bankRechargeFxRate(
-          input.chargeFxRateToCny,
-          previous.chargeFxRateToCny,
-          '代付汇率'
-        );
-        const bankFeeFxRateToCny = bankRechargeFxRate(
-          input.bankFeeFxRateToCny,
-          previous.bankFeeFxRateToCny,
-          '银行手续费汇率'
-        );
-        const receivedFxRateToCny = bankRechargeFxRate(
-          input.receivedFxRateToCny,
-          previous.receivedFxRateToCny,
-          '实收汇率'
-        );
-        const fundingFinanceAccountId =
-          input.fundingFinanceAccountId === undefined
-            ? previous.fundingFinanceAccountId
-            : bankRechargeOptionalId(input.fundingFinanceAccountId, '代付资金账户');
-        const receivedFinanceAccountId =
-          input.receivedFinanceAccountId === undefined
-            ? previous.receivedFinanceAccountId
-            : bankRechargeOptionalId(input.receivedFinanceAccountId, '客户收款账户');
-        const updated = await this.repository.updateOrder(tx, {
-          where: { id },
-          data: {
-            accountId,
-            customerId,
-            cardId,
-            cardLast4: card?.last4 ?? previous.cardLast4,
-            plan: input.plan === undefined ? previous.plan : this.plan(input.plan),
-            chargeAmount: charge.toString(),
-            chargeCurrencyCode: currencyCode,
-            customerFeeRate: rate.toString(),
-            customerFeeAmount: fee.toString(),
-            customerFeeOverridden: feeOverridden,
-            bankFeeAmount: bankFee,
-            bankFeeCurrencyCode,
-            receivedAmount: received,
-            receivedCurrencyCode,
-            chargeFxRateToCny,
-            bankFeeFxRateToCny,
-            receivedFxRateToCny,
-            fundingFinanceAccountId,
-            receivedFinanceAccountId,
-            openedAt,
-            dueAt,
-            remark:
-              input.remark === undefined
-                ? previous.remark
-                : bankRechargeText(input.remark, '备注', 2000, false) || null,
-            updatedByUserId: operator.id
-          }
-        });
-        if (accountId && openedAt) {
-          await this.activateSubscription(tx, updated);
-        } else if (previous.accountId) {
-          await this.repository.cancelSubscriptionForOrder(tx, previous.accountId, id);
-        }
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.bank_recharge.order.update',
-          objectType: 'bank_recharge_order',
-          objectId: id,
-          beforeData: this.auditSnapshot(previous),
-          afterData: this.auditSnapshot(updated),
-          remark: '补全或调整银充订单资料'
-        });
-        return updated;
-      },
-      {
-        changedScopes: ['auto-recharge', 'renewals', 'renewal-warning-summary', 'dashboard'],
-        requestId: randomUUID(),
-        operator,
-        retryMode: 'none'
-      }
+
+    const previous = await this.repository.findOrder(tx, id);
+    if (!previous) throw new NotFoundException('银充订单不存在');
+    if (['completed', 'refunded', 'cancelled'].includes(previous.status)) {
+      throw new ConflictException('已完成或已结束的银充订单不能直接改写，请走更正或退款流程');
+    }
+    assertV2ExpectedUpdatedAt(previous.updatedAt, expectedUpdatedAt, '银充订单');
+    if (
+      previous.source === 'automatic' &&
+      (input.chargeAmount !== undefined ||
+        input.chargeCurrencyCode !== undefined ||
+        input.plan !== undefined)
+    ) {
+      throw new ConflictException('官网代付事实不能修改');
+    }
+    const currencyCode =
+      input.chargeCurrencyCode === undefined
+        ? previous.chargeCurrencyCode
+        : bankRechargeCurrency(input.chargeCurrencyCode);
+    const currency = await this.accounts.requireCurrency(tx, currencyCode);
+    const charge =
+      input.chargeAmount === undefined
+        ? Amount4.from(previous.chargeAmount)
+        : bankRechargeMoney(input.chargeAmount, '代付金额', currency.minorUnits, true);
+    if (input.chargeAmount === undefined) {
+      bankRechargeMoney(charge.toString(), '代付金额', currency.minorUnits, true);
+    }
+    const accountId =
+      input.accountId === undefined
+        ? previous.accountId
+        : bankRechargeOptionalId(input.accountId, 'ChatGPT 账号');
+    if (previous.accountId && previous.openedAt && accountId !== previous.accountId) {
+      throw new ConflictException('已开通订单不能更换 ChatGPT 账号');
+    }
+    const customerId =
+      input.customerId === undefined
+        ? previous.customerId
+        : bankRechargeOptionalId(input.customerId, '客户');
+    const cardId =
+      input.cardId === undefined ? previous.cardId : bankRechargeOptionalId(input.cardId, '银行卡');
+    if (accountId) await this.accounts.requireActive(tx, accountId);
+    if (customerId) await this.requireCustomer(tx, customerId);
+    const card = cardId ? await this.requireCard(tx, cardId, currencyCode) : null;
+    if (
+      previous.source === 'automatic' &&
+      previous.cardLast4 &&
+      card &&
+      previous.cardLast4 !== card.last4
+    ) {
+      throw new ConflictException('所选银行卡尾号与官网付款凭据不一致');
+    }
+    const rate =
+      input.customerFeeRate === undefined
+        ? Amount4.from(previous.customerFeeRate)
+        : bankRechargeFeeRate(input.customerFeeRate);
+    const manualFee =
+      input.customerFeeAmount !== undefined && input.customerFeeAmount !== null
+        ? bankRechargeMoney(input.customerFeeAmount, '客户手续费', currency.minorUnits)
+        : null;
+    const feeOverridden =
+      manualFee !== null
+        ? true
+        : input.customerFeeAmount === null
+          ? false
+          : previous.customerFeeOverridden;
+    const fee =
+      manualFee ??
+      (feeOverridden
+        ? Amount4.from(previous.customerFeeAmount)
+        : bankRechargeFee(charge, rate, currency.minorUnits));
+    const openedAt =
+      input.openedAt === undefined
+        ? previous.openedAt
+        : input.openedAt === null
+          ? null
+          : bankRechargeDate(input.openedAt, '开通时间');
+    const dueAt =
+      input.dueAt === undefined
+        ? previous.dueAt
+        : input.dueAt === null
+          ? null
+          : bankRechargeDate(input.dueAt, '到期时间');
+    this.assertDates(openedAt, dueAt);
+    const bankFeeCurrencyCode =
+      input.bankFeeCurrencyCode === undefined
+        ? previous.bankFeeCurrencyCode
+        : input.bankFeeCurrencyCode === null
+          ? null
+          : bankRechargeCurrency(input.bankFeeCurrencyCode);
+    const bankFeeCurrency = bankFeeCurrencyCode
+      ? await this.accounts.requireCurrency(tx, bankFeeCurrencyCode)
+      : null;
+    const bankFee =
+      input.bankFeeAmount === undefined
+        ? (previous.bankFeeAmount?.toString() ?? null)
+        : input.bankFeeAmount === null
+          ? null
+          : bankRechargeMoney(
+              input.bankFeeAmount,
+              '银行手续费',
+              bankFeeCurrency?.minorUnits ?? 4
+            ).toString();
+    if (bankFee && !bankFeeCurrency) throw new BadRequestException('请设置银行手续费币种');
+    const receivedCurrencyCode =
+      input.receivedCurrencyCode === undefined
+        ? previous.receivedCurrencyCode
+        : input.receivedCurrencyCode === null
+          ? null
+          : bankRechargeCurrency(input.receivedCurrencyCode);
+    const received =
+      input.receivedAmount === undefined
+        ? (previous.receivedAmount?.toString() ?? null)
+        : input.receivedAmount === null
+          ? null
+          : bankRechargeMoney(input.receivedAmount, '客户实收金额', 4).toString();
+    if (received && !receivedCurrencyCode) throw new BadRequestException('请设置客户实收币种');
+    const chargeFxRateToCny = bankRechargeFxRate(
+      input.chargeFxRateToCny,
+      previous.chargeFxRateToCny,
+      '代付汇率'
     );
+    const bankFeeFxRateToCny = bankRechargeFxRate(
+      input.bankFeeFxRateToCny,
+      previous.bankFeeFxRateToCny,
+      '银行手续费汇率'
+    );
+    const receivedFxRateToCny = bankRechargeFxRate(
+      input.receivedFxRateToCny,
+      previous.receivedFxRateToCny,
+      '实收汇率'
+    );
+    const fundingFinanceAccountId =
+      input.fundingFinanceAccountId === undefined
+        ? previous.fundingFinanceAccountId
+        : bankRechargeOptionalId(input.fundingFinanceAccountId, '代付资金账户');
+    const receivedFinanceAccountId =
+      input.receivedFinanceAccountId === undefined
+        ? previous.receivedFinanceAccountId
+        : bankRechargeOptionalId(input.receivedFinanceAccountId, '客户收款账户');
+    const updated = await this.repository.updateOrder(tx, {
+      where: { id },
+      data: {
+        accountId,
+        customerId,
+        cardId,
+        cardLast4: card?.last4 ?? previous.cardLast4,
+        plan: input.plan === undefined ? previous.plan : this.plan(input.plan),
+        chargeAmount: charge.toString(),
+        chargeCurrencyCode: currencyCode,
+        customerFeeRate: rate.toString(),
+        customerFeeAmount: fee.toString(),
+        customerFeeOverridden: feeOverridden,
+        bankFeeAmount: bankFee,
+        bankFeeCurrencyCode,
+        receivedAmount: received,
+        receivedCurrencyCode,
+        chargeFxRateToCny,
+        bankFeeFxRateToCny,
+        receivedFxRateToCny,
+        fundingFinanceAccountId,
+        receivedFinanceAccountId,
+        openedAt,
+        dueAt,
+        remark:
+          input.remark === undefined
+            ? previous.remark
+            : bankRechargeText(input.remark, '备注', 2000, false) || null,
+        updatedByUserId: operator.id
+      }
+    });
+    if (accountId && openedAt) {
+      await this.activateSubscription(tx, updated);
+    } else if (previous.accountId) {
+      await this.repository.cancelSubscriptionForOrder(tx, previous.accountId, id);
+    }
+    await this.audit.append(tx, {
+      userId: operator.id,
+      module: 'id_business_v2',
+      action: 'id_business_v2.bank_recharge.order.update',
+      objectType: 'bank_recharge_order',
+      objectId: id,
+      beforeData: this.auditSnapshot(previous),
+      afterData: this.auditSnapshot(updated),
+      remark: '补全或调整银充订单资料'
+    });
+    return updated;
   }
 
   async recordVerifiedSuccess(
@@ -348,9 +352,11 @@ export class BankRechargeOrderService {
     job: IdBusinessV2RechargeJob,
     result: Record<string, unknown>
   ) {
+    const verifiedSource = await resolveBankRechargeSource(tx, this.repository, job, result);
+    if (!verifiedSource) return null;
+    ({ job, result } = verifiedSource);
     if (
       job.action !== 'bitbrowser' ||
-      result.recheck_only === true ||
       result.payment_status !== 'paid' ||
       result.payment_outcome !== 'subscription_activated' ||
       result.status !== 'subscription_activated' ||
