@@ -50,6 +50,7 @@ import type {
   V2WorkspaceShortcut,
   V2WorkspaceShortcutList
 } from '@apple-business/shared';
+import { isAxiosError } from 'axios';
 import { http, request, type ApiRequestOptions } from '@/api/client';
 
 export const idBusinessV2WorkspaceApi = {
@@ -120,14 +121,36 @@ export const idBusinessV2WorkspaceApi = {
       onDownloadProgress?: (loaded: number, total?: number) => void;
     } = {}
   ) {
-    const response = await http.get<Blob>('/id-business-v2/workspace-media/download', {
-      params: { token: downloadToken },
-      responseType: 'blob',
-      signal: options.signal,
-      onDownloadProgress: (event) => options.onDownloadProgress?.(event.loaded, event.total),
-      timeout: 390_000
-    });
-    return response.data;
+    try {
+      const response = await http.get<Blob>('/id-business-v2/workspace-media/download', {
+        params: { token: downloadToken },
+        responseType: 'blob',
+        signal: options.signal,
+        onDownloadProgress: (event) => options.onDownloadProgress?.(event.loaded, event.total),
+        timeout: 390_000
+      });
+      return response.data;
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.data instanceof Blob) {
+        const body = error.response.data;
+        if (body.size <= 64 * 1024) {
+          try {
+            const parsed: unknown = JSON.parse(await body.text());
+            if (
+              parsed &&
+              typeof parsed === 'object' &&
+              'message' in parsed &&
+              typeof parsed.message === 'string'
+            ) {
+              error.response.data = parsed;
+            }
+          } catch {
+            // Proxy HTML and malformed bodies use the standard status-based message.
+          }
+        }
+      }
+      return request<never>(Promise.reject(error));
+    }
   },
   listTotpAccounts(options: ApiRequestOptions = {}) {
     return request<V2SavedTotpAccountList>(
