@@ -9,7 +9,10 @@ import {
 } from '../runtime/public-api';
 import { buildIdBusinessV2GoogleSheetsReports } from './id-business-v2-google-sheets-report';
 import { IdBusinessV2GoogleSheetsSyncService } from './id-business-v2-google-sheets-sync.service';
-import { IdBusinessV2GoogleSheetsSyncRepository } from './persistence/id-business-v2-google-sheets-sync.repository';
+import {
+  IdBusinessV2GoogleSheetsSyncRepository,
+  type GoogleSheetsRunGuard
+} from './persistence/id-business-v2-google-sheets-sync.repository';
 import { IdBusinessV2GoogleApiError } from './providers/id-business-v2-google-api-http';
 import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
 import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
@@ -34,7 +37,11 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
   ) {}
 
   onModuleInit() {
-    this.timer = setInterval(() => void this.runNow(false), TICK_MS);
+    this.timer = setInterval(() => {
+      void this.runNow(false).catch(() => {
+        this.logger.warn('Google 表格定时检查失败，将在下次检查时重试');
+      });
+    }, TICK_MS);
     this.timer.unref?.();
   }
 
@@ -56,6 +63,7 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
     if (!acquired) return { skipped: true, status: await this.service.getSystemStatus() };
     this.localRunning = true;
     let succeeded = false;
+    let runGuard: GoogleSheetsRunGuard = { leaseId };
     try {
       const record = await this.repository.getConfiguration();
       if (
@@ -65,6 +73,12 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
       ) {
         return { skipped: true, status: await this.service.getSystemStatus() };
       }
+      runGuard = {
+        ...runGuard,
+        clientId: record.googleOAuthClientId,
+        clientSecretEncrypted: record.clientSecretEncrypted,
+        refreshTokenEncrypted: record.refreshTokenEncrypted
+      };
       const versions = await this.repository.listSourceVersions();
       if (
         !force &&
@@ -86,6 +100,9 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
         clientSecret,
         refreshToken
       });
+      if (!(await this.repository.hasCurrentLease(runGuard))) {
+        return { skipped: true, status: await this.service.getSystemStatus() };
+      }
       let spreadsheetId = record.spreadsheetIdEncrypted
         ? this.service.decryptSecret(record.spreadsheetIdEncrypted, 'Google 表格文件编号')
         : null;
@@ -98,24 +115,27 @@ export class IdBusinessV2GoogleSheetsSyncWorker implements OnModuleInit, OnModul
         ]);
         const encryptedSpreadsheetId = this.encryption.encrypt(spreadsheetId);
         if (!encryptedSpreadsheetId) throw new Error('Google 表格文件编号加密失败');
-        await this.repository.updateConfiguration({
+        const saved = await this.repository.updateRunIfCurrent(runGuard, {
           spreadsheetIdEncrypted: encryptedSpreadsheetId
         });
+        if (!saved) return { skipped: true, status: await this.service.getSystemStatus() };
       }
       const source = await this.repository.loadReportSource();
       const reports = buildIdBusinessV2GoogleSheetsReports(source);
+      if (!(await this.repository.hasCurrentLease(runGuard))) {
+        return { skipped: true, status: await this.service.getSystemStatus() };
+      }
       await this.googleSheets.replaceReports(token.accessToken, spreadsheetId, reports);
-      await this.repository.updateConfiguration({
+      succeeded = await this.repository.updateRunIfCurrent(runGuard, {
         lastErrorCode: null,
         lastErrorMessage: null,
         lastSucceededAt: new Date(),
         sourceVersions: versions
       });
-      succeeded = true;
-      if (operator?.id) await this.auditManualRun(operator, requestId);
+      if (succeeded && operator?.id) await this.auditManualRun(operator, requestId);
     } catch (error) {
       const normalized = this.normalizeError(error);
-      await this.repository.updateConfiguration({
+      await this.repository.updateRunIfCurrent(runGuard, {
         ...(normalized.status === 404 ? { spreadsheetIdEncrypted: null, sourceVersions: {} } : {}),
         lastErrorCode: normalized.code,
         lastErrorMessage: normalized.message

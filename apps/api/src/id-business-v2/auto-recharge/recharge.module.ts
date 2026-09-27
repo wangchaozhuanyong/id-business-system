@@ -13,6 +13,7 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
+import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
@@ -25,6 +26,7 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
     BankRechargeQueryRepository,
     BankRechargeRepository,
     BankRechargeFinanceService,
+    BankRechargeCorrectionService,
     RechargeService,
     RechargeLocalService,
     RechargeSettingsService,

@@ -278,6 +278,7 @@ export class RechargeLocalService {
           id: input.id,
           ownerId: operator.id,
           accountKey: source.accountKey,
+          chatgptAccountId: source.chatgptAccountId,
           plan: input.plan,
           action: 'bitbrowser',
           state: 'running',
@@ -288,6 +289,7 @@ export class RechargeLocalService {
             stage: 'connector_dispatch',
             window_name: input.windowName,
             recheck_only: true,
+            source_job_id: source.id,
             payment_attempted: true,
             payment_status: 'unknown',
             payment_requests_sent: 0

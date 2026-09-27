@@ -204,10 +204,14 @@ export class IdBusinessV2ManualRenewalService {
           },
           operator
         );
+        const appliedBalanceCostAmount =
+          account.soldByOrderId && account.ownershipTransferredAt
+            ? Amount4.zero()
+            : movement.costAmount;
         const refundCostAmount = Amount4.zero();
         const profitAmount = input.receivedAmount
           .sub(createdOrder.platformFeeAmount)
-          .sub(movement.costAmount)
+          .sub(appliedBalanceCostAmount)
           .sub(refundCostAmount);
         if (profitAmount.abs().gt(MAX_AMOUNT)) {
           throw new BadRequestException('续费订单利润数值超出数据库范围');
@@ -242,6 +246,7 @@ export class IdBusinessV2ManualRenewalService {
           accountCostAmount: '0',
           appliedAccountCostAmount: '0',
           balanceCostAmount: movement.costAmount.toString(),
+          appliedBalanceCostAmount: appliedBalanceCostAmount.toString(),
           refundCostAmount: refundCostAmount.toString(),
           profitAmount: profitAmount.toString(),
           status: 'completed',
@@ -271,6 +276,7 @@ export class IdBusinessV2ManualRenewalService {
             accountCostAmount: Amount4.zero(),
             appliedAccountCostAmount: Amount4.zero(),
             balanceCostAmount: movement.costAmount,
+            appliedBalanceCostAmount,
             refundCostAmount,
             profitAmount,
             status: 'completed'

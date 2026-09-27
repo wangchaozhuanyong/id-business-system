@@ -48,6 +48,7 @@ import { isRechargeWorkerConfigured, sendRechargeWorkerRequest } from './recharg
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { bindSavedChatgptAccount, recordVerifiedBankRecharge } from './recharge-bank-callback';
+import { mergeRechargeCallbackResult } from './recharge-bank-callback';
 @Injectable()
 export class RechargeService {
   constructor(
@@ -297,7 +298,6 @@ export class RechargeService {
       clearRechargeDetails(input.details);
     }
   }
-
   async confirm(id: string, nonce: unknown, operator: AuthenticatedUser) {
     if (typeof nonce !== 'string' || !/^[a-f0-9]{64}$/.test(nonce)) {
       throw new BadRequestException('报价确认已失效，请重新核价');
@@ -590,7 +590,7 @@ export class RechargeService {
           ...(job.action === 'bitbrowser' && input.type === 'progress'
             ? { leaseUntil: new Date(Date.now() + 45 * 60000) }
             : {}),
-          result: toV2JsonDocument({ ...object(job.result), ...report })
+          result: mergeRechargeCallbackResult(job, report)
         });
         return { ok: true };
       },

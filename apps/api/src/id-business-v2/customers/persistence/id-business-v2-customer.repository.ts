@@ -149,6 +149,9 @@ export interface CustomerDeleteImpact {
   activeOrderCount: number;
   activationCount: number;
   activeActivationCount: number;
+  bankOrderCount: number;
+  activeBankOrderCount: number;
+  activeBankSubscriptionCount: number;
 }
 
 const CUSTOMER_SORT_FIELDS: Record<
@@ -239,26 +242,51 @@ export class IdBusinessV2CustomerRepository {
 
   async getDeleteImpact(id: string, tx?: V2CommandTransaction): Promise<CustomerDeleteImpact> {
     const client = tx ?? this.prisma;
-    const [orderCount, activeOrderCount, activationCount, activeActivationCount] =
-      await Promise.all([
-        client.idBusinessV2Order.count({ where: { customerId: id, deletedAt: null } }),
-        client.idBusinessV2Order.count({
-          where: {
-            customerId: id,
-            deletedAt: null,
-            status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
-          }
-        }),
-        client.idBusinessV2Activation.count({ where: { customerId: id } }),
-        client.idBusinessV2Activation.count({
-          where: {
-            customerId: id,
-            status: 'active',
-            ...buildIdBusinessV2EffectiveActivationWhere()
-          }
-        })
-      ]);
-    return { orderCount, activeOrderCount, activationCount, activeActivationCount };
+    const [
+      orderCount,
+      activeOrderCount,
+      activationCount,
+      activeActivationCount,
+      bankOrderCount,
+      activeBankOrderCount,
+      activeBankSubscriptionCount
+    ] = await Promise.all([
+      client.idBusinessV2Order.count({ where: { customerId: id, deletedAt: null } }),
+      client.idBusinessV2Order.count({
+        where: {
+          customerId: id,
+          deletedAt: null,
+          status: { in: ['draft', 'pending', 'waiting_external', 'processing'] }
+        }
+      }),
+      client.idBusinessV2Activation.count({ where: { customerId: id } }),
+      client.idBusinessV2Activation.count({
+        where: {
+          customerId: id,
+          status: 'active',
+          ...buildIdBusinessV2EffectiveActivationWhere()
+        }
+      }),
+      client.idBusinessV2BankRechargeOrder.count({ where: { customerId: id } }),
+      client.idBusinessV2BankRechargeOrder.count({
+        where: {
+          customerId: id,
+          status: { in: ['pending_details', 'pending_finance', 'pending_receipt'] }
+        }
+      }),
+      client.idBusinessV2BankRechargeSubscription.count({
+        where: { customerId: id, status: 'active' }
+      })
+    ]);
+    return {
+      orderCount,
+      activeOrderCount,
+      activationCount,
+      activeActivationCount,
+      bankOrderCount,
+      activeBankOrderCount,
+      activeBankSubscriptionCount
+    };
   }
 
   create(tx: V2CommandTransaction, input: CreateCustomerPersistenceInput) {

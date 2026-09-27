@@ -1,9 +1,12 @@
+import { fileURLToPath, URL } from 'node:url';
 import js from '@eslint/js';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import vue from 'eslint-plugin-vue';
 import vueParser from 'vue-eslint-parser';
+
+const tsconfigRootDir = fileURLToPath(new URL('.', import.meta.url));
 
 export default [
   {
@@ -16,7 +19,12 @@ export default [
       'design-prototypes/**',
       'qa-artifacts/**',
       '.deploy/**',
-      '.secrets/**'
+      '.secrets/**',
+      '.codex-audit/**',
+      '.audit/**',
+      '.codex-worktrees/**',
+      '.worktrees/**',
+      '.runtime/**'
     ]
   },
   js.configs.recommended,
@@ -30,7 +38,8 @@ export default [
       },
       parser: tseslint.parser,
       parserOptions: {
-        sourceType: 'module'
+        sourceType: 'module',
+        tsconfigRootDir
       }
     }
   },
@@ -44,7 +53,8 @@ export default [
       parserOptions: {
         parser: tseslint.parser,
         extraFileExtensions: ['.vue'],
-        sourceType: 'module'
+        sourceType: 'module',
+        tsconfigRootDir
       }
     },
     rules: {

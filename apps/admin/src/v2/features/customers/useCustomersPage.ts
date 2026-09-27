@@ -425,7 +425,10 @@ export function useCustomersPage() {
       { label: '关联订单', value: impact.orderCount },
       { label: '进行中订单', value: impact.activeOrderCount },
       { label: '关联开通', value: impact.activationCount },
-      { label: '活动开通', value: impact.activeActivationCount }
+      { label: '活动开通', value: impact.activeActivationCount },
+      { label: '银充订单', value: impact.bankOrderCount },
+      { label: '进行中银充', value: impact.activeBankOrderCount },
+      { label: '活动银充订阅', value: impact.activeBankSubscriptionCount }
     ].filter((item) => item.value > 0);
   });
 

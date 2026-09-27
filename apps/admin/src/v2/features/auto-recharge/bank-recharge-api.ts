@@ -67,7 +67,7 @@ export interface BankRechargeOrder {
   receivedFinanceAccountId: string | null;
   profitAmountCny: string | null;
   status: BankRechargeOrderStatus;
-  financeStatus: string;
+  financeStatus: 'unposted' | 'partial' | 'posted' | 'reversed';
   openedAt: string | null;
   dueAt: string | null;
   verifiedAt: string | null;
@@ -102,9 +102,12 @@ export interface BankRechargeRenewalWarnings {
 }
 
 export const bankRechargeApi = {
-  listAccounts(options: ApiRequestOptions = {}) {
-    return request<{ items: BankChatgptAccount[] }>(
-      http.get(`${base}/accounts`, { signal: options.signal })
+  listAccounts(
+    options: ApiRequestOptions = {},
+    query: { page?: number; pageSize?: number; keyword?: string } = {}
+  ) {
+    return request<{ items: BankChatgptAccount[]; total: number; page: number; pageSize: number }>(
+      http.get(`${base}/accounts`, { params: query, signal: options.signal })
     );
   },
   createAccount(input: { email: string; password: string; totpSecret: string; remark: string }) {
@@ -173,6 +176,12 @@ export const bankRechargeApi = {
       ['auto-recharge', 'renewals', 'renewal-warning-summary']
     );
   },
+  correctOrder(id: string, input: Record<string, unknown>) {
+    return withV2QueryInvalidation(
+      request<BankRechargeOrder>(http.post(`${base}/orders/${id}/correct`, input)),
+      ['auto-recharge', 'renewals', 'renewal-warning-summary', 'finance-ledger', 'finance-reports']
+    );
+  },
   completeOrder(id: string, expectedUpdatedAt: string) {
     return withV2QueryInvalidation(
       request<BankRechargeOrder>(http.post(`${base}/orders/${id}/complete`, { expectedUpdatedAt })),
@@ -181,7 +190,15 @@ export const bankRechargeApi = {
   },
   refundOrder(
     id: string,
-    input: { expectedUpdatedAt: string; reason: string; refundReference: string }
+    input: {
+      expectedUpdatedAt: string;
+      reason: string;
+      refundReference: string;
+      customerRefundAmount?: string;
+      chargeRecoveryAmountCny?: string;
+      bankFeeRecoveryAmountCny?: string;
+      upstreamRefundReference?: string;
+    }
   ) {
     return withV2QueryInvalidation(
       request<BankRechargeOrder>(http.post(`${base}/orders/${id}/refund`, input)),

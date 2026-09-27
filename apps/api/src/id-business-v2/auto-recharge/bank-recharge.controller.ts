@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
+import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 
 @Controller('id-business-v2/bank-recharge')
@@ -13,13 +14,14 @@ export class BankRechargeController {
     private readonly accounts: BankRechargeAccountService,
     private readonly orders: BankRechargeOrderService,
     private readonly queries: BankRechargeQueryRepository,
-    private readonly finance: BankRechargeFinanceService
+    private readonly finance: BankRechargeFinanceService,
+    private readonly corrections: BankRechargeCorrectionService
   ) {}
 
   @Get('accounts')
   @Header('Cache-Control', 'no-store')
-  listAccounts() {
-    return this.accounts.listAccounts();
+  listAccounts(@Query() query: { page?: string; pageSize?: string; keyword?: string }) {
+    return this.accounts.listAccounts(query);
   }
 
   @Post('accounts')
@@ -111,6 +113,15 @@ export class BankRechargeController {
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.finance.complete(id, value, operator);
+  }
+
+  @Post('orders/:id/correct')
+  correctOrder(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.corrections.correct(id, value, operator);
   }
 
   @Post('orders/:id/refund')

@@ -62,7 +62,7 @@
 
     <div v-if="result" class="v2-mail-query-panel__refresh-actions">
       <span>结果刷新</span>
-      <el-switch v-model="autoRefresh" active-text="每 10 秒自动刷新" />
+      <el-switch v-model="autoRefresh" active-text="每 30 秒自动刷新" />
       <small v-if="autoRefresh">{{ countdown }} 秒后刷新</small>
       <AppButton size="small" variant="soft" :loading="refreshing" @click="refreshMail">
         立即刷新
@@ -96,7 +96,8 @@ const errorMessage = ref('');
 const loading = ref(false);
 const refreshing = ref(false);
 const autoRefresh = ref(false);
-const countdown = ref(10);
+const AUTO_REFRESH_SECONDS = 30;
+const countdown = ref(AUTO_REFRESH_SECONDS);
 const queryKind = computed(() => classifyMailQueryCode(form.queryCode));
 const isVendureVirtual = computed(() => queryKind.value === 'vendure-virtual');
 const rules: FormRules<V2MailViewerQueryInput> = {
@@ -177,10 +178,11 @@ async function executeQuery(preserveResult: boolean) {
     );
     if (activeRequest !== controller) return;
     result.value = response;
-    countdown.value = 10;
+    countdown.value = AUTO_REFRESH_SECONDS;
   } catch (error) {
     if (activeRequest !== controller || isRequestCanceled(error)) return;
     errorMessage.value = getApiErrorMessage(error);
+    autoRefresh.value = false;
   } finally {
     if (activeRequest === controller) {
       activeRequest = undefined;
@@ -231,13 +233,13 @@ async function clearAll() {
 watch(autoRefresh, (enabled) => {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = undefined;
-  countdown.value = 10;
+  countdown.value = AUTO_REFRESH_SECONDS;
   if (!enabled) return;
   refreshTimer = setInterval(() => {
     if (!result.value || activeRequest) return;
     countdown.value -= 1;
     if (countdown.value > 0) return;
-    countdown.value = 10;
+    countdown.value = AUTO_REFRESH_SECONDS;
     void refreshMail();
   }, 1_000);
 });

@@ -232,12 +232,20 @@ function responseTimeLabel(value: number | null) {
 }
 
 function certificateTitle(tls: V2WebsiteMonitorTls | null) {
-  if (!tls) return '当前地址未使用 HTTPS';
+  if (!tls) {
+    return /^https:\/\//i.test(result.value?.finalUrl ?? '')
+      ? 'HTTPS 证书未能检测'
+      : '当前地址未使用 HTTPS';
+  }
   return tls.authorized ? 'HTTPS 证书有效' : 'HTTPS 证书异常';
 }
 
 function certificateDescription(tls: V2WebsiteMonitorTls | null) {
-  if (!tls) return '建议启用 HTTPS 保护传输内容';
+  if (!tls) {
+    return /^https:\/\//i.test(result.value?.finalUrl ?? '')
+      ? '连接未完成，暂时无法判断证书状态，请重试检测'
+      : '建议启用 HTTPS 保护传输内容';
+  }
   if (!tls.authorized) return '证书已过期、不受信任或与域名不匹配';
   const expiry = tls.expiresAt
     ? formatV2DateTime(tls.expiresAt, { hour: undefined, minute: undefined })

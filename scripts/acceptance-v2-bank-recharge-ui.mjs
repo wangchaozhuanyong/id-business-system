@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 const root = process.cwd();
 const adminDir = path.join(root, 'apps/admin');
 const baseUrl = 'http://127.0.0.1:5385';
-const outputDir = path.join(root, '.runtime/bank-recharge');
+const outputDir = path.resolve(root, process.argv[2] ?? '.runtime/bank-recharge');
 const now = new Date('2026-09-23T12:00:00.000Z').toISOString();
 const orderId = '22222222-2222-4222-8222-222222222222';
 const accountId = '33333333-3333-4333-8333-333333333333';
@@ -25,6 +25,7 @@ const card = {
   currencyCode: 'PHP',
   active: true
 };
+const mutations = [];
 const order = {
   id: orderId,
   orderNo: 'BC20260923120000LONGORDER',
@@ -90,6 +91,30 @@ async function assertListHeaderLayout(page, label) {
   assert.notEqual(layout.borderWidth, '0px', `${label} 缺少标题分隔线`);
 }
 
+async function assertDrawerLayout(page, title) {
+  const drawer = page.getByLabel(title, { exact: true });
+  await page.waitForFunction((heading) => {
+    const element = [...document.querySelectorAll('.el-drawer')].find(
+      (item) => item.getAttribute('aria-label') === heading
+    );
+    const box = element?.getBoundingClientRect();
+    return box && box.left >= 0 && box.right <= window.innerWidth + 1;
+  }, title);
+  const layout = await drawer.evaluate((element) => ({
+    bodyFits:
+      element.querySelector('.el-drawer__body').scrollWidth <=
+      element.querySelector('.el-drawer__body').clientWidth + 1,
+    footerFits: [...element.querySelectorAll('.el-drawer__footer button')].every((button) => {
+      const box = button.getBoundingClientRect();
+      return box.left >= 0 && box.right <= window.innerWidth + 1;
+    })
+  }));
+  assert.ok(
+    layout.bodyFits && layout.footerFits,
+    `${title} 内容或按钮超出窄屏：${JSON.stringify(layout)}`
+  );
+}
+
 mkdirSync(outputDir, { recursive: true });
 const server = spawn(
   process.execPath,
@@ -135,6 +160,7 @@ try {
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
+  await page.clock.install();
   const unexpected = [];
   const orderRequests = [];
   const runtimeErrors = [];
@@ -184,6 +210,13 @@ try {
       data = { generatedAt: now, versions: {} };
     } else if (pathname.endsWith('/id-business-v2/table-preferences')) {
       data = { items: [] };
+    } else if (
+      /\/bank-recharge\/orders\/[^/]+\/(correct|refund)$/.test(pathname) &&
+      request.method() === 'POST'
+    ) {
+      const input = request.postDataJSON();
+      mutations.push({ pathname, input });
+      data = { ...order, ...input, updatedAt: new Date(Date.parse(now) + 1).toISOString() };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/orders')) {
       orderRequests.push(url.search);
       const pageNumber = Number(url.searchParams.get('page') || '1');
@@ -227,6 +260,9 @@ try {
       };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/accounts')) {
       data = {
+        total: showAccounts ? 1 : 0,
+        page: 1,
+        pageSize: 20,
         items: showAccounts
           ? [
               {
@@ -403,6 +439,42 @@ try {
     if (width === 390)
       assert.ok(layout.tableScrollWidth > layout.tableClientWidth, '窄屏表格未在容器内横向滚动');
   }
+  await page.getByText('使用中', { exact: true }).waitFor({ state: 'visible' });
+  await page.clock.fastForward(2 * 24 * 60 * 60 * 1000 + 2000);
+  await page.getByText('已到期', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '更正订单', exact: true }).click();
+  await page.getByText('更正银充订单', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByPlaceholder('说明资料或账务更正原因').fill('验收到期资料更正');
+  await assertDrawerLayout(page, '更正银充订单');
+  await page.screenshot({ path: path.join(outputDir, 'bank-correction-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '更正并重新入账', exact: true }).click();
+  await page.getByText('银充订单已更正并重新入账', { exact: true }).waitFor({ state: 'visible' });
+  assert.equal(mutations.at(-1).input.reason, '验收到期资料更正');
+  assert.equal(mutations.at(-1).input.chargeAmount, undefined, '自动付款事实不应随更正提交');
+  await page.getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '退款与回款', exact: true }).click();
+  await page.getByPlaceholder('留空退回剩余实收；仅补上游回款时填 0').fill('50');
+  const refundDrawer = page.getByLabel('登记银充退款');
+  await refundDrawer
+    .locator('.el-form-item')
+    .filter({ hasText: '退款原因' })
+    .locator('input')
+    .fill('仅退客户部分款');
+  await refundDrawer
+    .locator('.el-form-item')
+    .filter({ hasText: '退款凭据' })
+    .locator('input')
+    .fill('synthetic-refund-receipt');
+  await assertDrawerLayout(page, '登记银充退款');
+  await page.screenshot({ path: path.join(outputDir, 'bank-refund-390.png'), fullPage: true });
+  await refundDrawer.getByRole('button', { name: '保存', exact: true }).click();
+  await page
+    .getByText('已按实际退款与回款金额登记账务', { exact: true })
+    .waitFor({ state: 'visible' });
+  assert.equal(mutations.at(-1).input.customerRefundAmount, '50');
+  assert.equal(mutations.at(-1).input.chargeRecoveryAmountCny, '0');
+  assert.equal(mutations.at(-1).input.bankFeeRecoveryAmountCny, '0');
   await page.getByRole('button', { name: '下一页' }).click();
   try {
     await page.getByText('BC-LAST-PAGE').waitFor({ state: 'visible', timeout: 10000 });
@@ -501,7 +573,15 @@ try {
     JSON.stringify({
       ok: true,
       widths: [2307, 1440, 900, 390],
-      states: ['first', 'last', 'empty'],
+      states: [
+        'first',
+        'last',
+        'empty',
+        'correction',
+        'refund',
+        'server-clock',
+        'expiry-transition'
+      ],
       outputDir
     })
   );

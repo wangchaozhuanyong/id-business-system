@@ -89,12 +89,13 @@ export class IdBusinessV2MailViewerService {
       const providerInput = await this.resolveProviderInput(mailbox, providerCredential);
       const items = await this.mailProvider.query(providerInput, limit);
       const queriedAt = new Date();
-      await this.repository.updateQueryState(mailbox.id, {
+      const stillValid = await this.repository.updateQueryStateIfCurrent(mailbox.id, mailbox, {
         lastErrorCode: null,
         lastQueriedAt: queriedAt,
         lastVerifiedAt: queriedAt,
         status: 'active'
       });
+      if (!stillValid) throw new BadRequestException('邮件查询码不正确');
       return {
         email: mailbox.email,
         items,
@@ -102,11 +103,12 @@ export class IdBusinessV2MailViewerService {
         queriedAt: queriedAt.toISOString()
       };
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       if (
         error instanceof MailProviderAuthenticationError ||
         error instanceof MicrosoftMailOAuthAuthenticationError
       ) {
-        await this.repository.updateQueryState(mailbox.id, {
+        await this.repository.updateQueryStateIfCurrent(mailbox.id, mailbox, {
           lastErrorCode: 'provider_auth_failed',
           status: 'auth_failed'
         });
@@ -184,7 +186,14 @@ export class IdBusinessV2MailViewerService {
   }
 
   private async resolveProviderInput(
-    mailbox: { id: string; email: string; provider: 'gmail' | 'icloud' | 'microsoft' },
+    mailbox: {
+      id: string;
+      email: string;
+      provider: 'gmail' | 'icloud' | 'microsoft';
+      providerCredentialEncrypted: string;
+      queryCodeHash: string;
+      queryCodeExpiresAt: Date;
+    },
     providerCredential: string
   ) {
     if (mailbox.provider !== 'microsoft') {
@@ -197,7 +206,15 @@ export class IdBusinessV2MailViewerService {
     const tokens = await this.microsoftOAuth.refreshAccessToken(providerCredential);
     if (tokens.refreshToken !== providerCredential) {
       const encrypted = this.encryption.encrypt(tokens.refreshToken);
-      if (encrypted) await this.repository.updateProviderCredential(mailbox.id, encrypted);
+      if (encrypted) {
+        const stillValid = await this.repository.updateProviderCredentialIfCurrent(
+          mailbox.id,
+          mailbox,
+          encrypted
+        );
+        if (!stillValid) throw new BadRequestException('邮件查询码不正确');
+        mailbox.providerCredentialEncrypted = encrypted;
+      }
     }
     return {
       accessToken: tokens.accessToken,

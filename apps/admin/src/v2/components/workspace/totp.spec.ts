@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { V2_TOTP_INPUT_LIMITS, generateV2TotpCodes, parseV2TotpInput } from './totp';
+import {
+  V2_TOTP_INPUT_LIMITS,
+  generateV2TotpCodes,
+  isV2TotpCodeCurrent,
+  parseV2TotpInput
+} from './totp';
 
 const RFC_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
 describe('workspace TOTP parser', () => {
+  it('stops exposing cached codes at the server expiry boundary', () => {
+    const deadline = Date.parse('2026-09-27T04:00:30Z');
+    expect(isV2TotpCodeCurrent('123456', '2026-09-27T04:00:30Z', deadline - 1)).toBe(true);
+    expect(isV2TotpCodeCurrent('123456', '2026-09-27T04:00:30Z', deadline)).toBe(false);
+    expect(isV2TotpCodeCurrent('123456', '2026-09-27T04:00:30Z', deadline + 1)).toBe(false);
+    expect(isV2TotpCodeCurrent('123456', 'invalid', deadline)).toBe(false);
+    expect(isV2TotpCodeCurrent('invalid', '2026-09-27T04:00:30Z', deadline - 1)).toBe(false);
+  });
   it('matches the RFC 6238 SHA1 test vector', () => {
     const result = parseV2TotpInput(
       `otpauth://totp/RFC:test?secret=${RFC_SECRET}&algorithm=SHA1&digits=8&period=30`

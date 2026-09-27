@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { IdBusinessV2OrderCompletionService } from '../orders/public-api';
+import { Amount4, Rate8 } from '../runtime/public-api';
 import { IdBusinessV2BalanceCalculatorService } from '../balances/public-api';
 import { V2CommandTransactionManager } from '../runtime/public-api';
 import { IdBusinessV2ManualRenewalService } from './id-business-v2-manual-renewal.service';
@@ -150,6 +152,9 @@ describe('IdBusinessV2ManualRenewalService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    orderCompletionService.postCompletionJournalInTransaction
+      .mockReset()
+      .mockResolvedValue({ id: 'journal-1' });
     tx.$queryRaw.mockReset();
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -434,6 +439,47 @@ describe('IdBusinessV2ManualRenewalService', () => {
     expect(orderEntryService.createManualRenewalOrderInTransaction).not.toHaveBeenCalled();
   });
 
+  it('posts the actual consumed cost and agrees with the renewal profit across services', async () => {
+    const posting = { post: vi.fn().mockResolvedValue({ id: 'journal-1' }) };
+    const completion = new IdBusinessV2OrderCompletionService(
+      {} as never,
+      posting as never,
+      {} as never,
+      {} as never
+    );
+    orderCompletionService.postCompletionJournalInTransaction.mockImplementation(
+      (...args: unknown[]) =>
+        completion.postCompletionJournalInTransaction(
+          ...(args as unknown as Parameters<typeof completion.postCompletionJournalInTransaction>)
+        )
+    );
+    orderEntryService.createManualRenewalOrderInTransaction.mockResolvedValue({
+      order: {
+        id: targetOrderId,
+        orderNo: 'RENEW',
+        receivedAmount: Amount4.from('100'),
+        receivedOriginalAmount: Amount4.from('100'),
+        receivedCurrency: 'CNY',
+        receivedFxRateToCny: Rate8.one(),
+        platformFeeAmount: Amount4.from('3'),
+        transferredBalanceCostAmount: Amount4.zero(),
+        appliedBalanceCostAmount: Amount4.zero()
+      },
+      platformFeeAmount: Amount4.from('3')
+    });
+    const result = await service.create(activationId, makeDto(), operator);
+    expect(result.profitAmount).toBe('37');
+    expect(tx.idBusinessV2Order.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ appliedBalanceCostAmount: '60' }) })
+    );
+    const lines = posting.post.mock.calls[0]![1].lines;
+    expect(
+      lines
+        .find((line: { accountCode: string }) => line.accountCode === 'gift_card_cost')
+        .amountCny.toString()
+    ).toBe('60');
+  });
+
   it('rejects another active order lock', async () => {
     tx.idBusinessV2AccountLock.findFirst.mockResolvedValueOnce({ id: 'active-lock' });
     await expect(service.create(activationId, makeDto())).rejects.toThrow('该 ID 已被其他订单占用');
@@ -464,12 +510,13 @@ describe('IdBusinessV2ManualRenewalService', () => {
           purchaseCost: decimal('15'),
           soldByOrderId: targetOrderId,
           soldByCustomerId: customerId,
+          ownershipTransferredAt: now,
           lossReportedAt: null
         }
       ]);
 
     await expect(service.create(activationId, makeDto(), operator)).resolves.toMatchObject({
-      profitAmount: '37',
+      profitAmount: '97',
       idempotentReplay: false
     });
     expect(orderEntryService.createManualRenewalOrderInTransaction).toHaveBeenCalledWith(
@@ -477,7 +524,12 @@ describe('IdBusinessV2ManualRenewalService', () => {
       expect.objectContaining({ accountSource: 'customer_owned', customerId, accountId }),
       operator
     );
-    expect(orderCompletionService.postCompletionJournalInTransaction).toHaveBeenCalled();
+    expect(orderCompletionService.postCompletionJournalInTransaction).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ appliedBalanceCostAmount: Amount4.zero() }),
+      now,
+      operator
+    );
   });
 
   it('rejects the same renewal period even when a new idempotency key is used', async () => {

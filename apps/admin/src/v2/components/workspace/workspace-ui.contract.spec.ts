@@ -310,7 +310,7 @@ describe('personal workspace UI contract', () => {
     expect(mailMessageList).toContain("result.targetType === 'PRIMARY'");
     expect(mailQueryPanel).toContain('固定显示该邮箱最近 5 封邮件');
     expect(mailQueryPanel).toContain('从剪贴板粘贴');
-    expect(mailQueryPanel).toContain('每 10 秒自动刷新');
+    expect(mailQueryPanel).toContain('每 30 秒自动刷新');
     expect(
       [mailViewerDrawer, mailQueryPanel, managedMailboxPanel, mailMessageList].join('\n')
     ).not.toMatch(/v-html|localStorage|sessionStorage/);

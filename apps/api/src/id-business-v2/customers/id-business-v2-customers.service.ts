@@ -1,3 +1,4 @@
+import { customerDeleteBlockingReasons } from './customer-delete-blockers';
 import {
   BadRequestException,
   ConflictException,
@@ -326,13 +327,7 @@ export class IdBusinessV2CustomersService {
     customer: CustomerWithRelations,
     impact: Awaited<ReturnType<IdBusinessV2CustomerRepository['getDeleteImpact']>>
   ) {
-    const blockingReasons: string[] = [];
-    if (impact.activeOrderCount > 0) {
-      blockingReasons.push(`仍有 ${impact.activeOrderCount} 个进行中订单，不能删除客户`);
-    }
-    if (impact.activeActivationCount > 0) {
-      blockingReasons.push(`仍有 ${impact.activeActivationCount} 个活动开通记录，不能删除客户`);
-    }
+    const blockingReasons = customerDeleteBlockingReasons(impact);
     return {
       entityId: customer.id,
       entityName: customer.name,

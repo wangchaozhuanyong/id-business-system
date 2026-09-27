@@ -8,6 +8,17 @@
       >
     </V2PageContext>
 
+    <el-form
+      inline
+      label-position="left"
+      require-asterisk-position="right"
+      @submit.prevent="search"
+    >
+      <el-form-item label="账号搜索"
+        ><el-input v-model="keywordInput" placeholder="邮箱或备注" clearable @keyup.enter="search"
+      /></el-form-item>
+      <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
+    </el-form>
     <V2AsyncRegion
       skeleton="table"
       :phase="query.phase.value"
@@ -21,7 +32,7 @@
           <V2SectionHeading title="账号清单">
             <template #actions>
               <V2TableColumnSettings inline :schema="v2TableSchemas.chatgptAccounts.main" />
-              <span>共 {{ accounts.length }} 条</span>
+              <span>共 {{ query.data.value?.total ?? accounts.length }} 条</span>
             </template>
           </V2SectionHeading>
         </header>
@@ -71,6 +82,20 @@
             >
           </V2TableActionColumn>
         </V2Table>
+        <footer class="v2-records-pagination">
+          <span>共 {{ query.data.value?.total ?? accounts.length }} 条</span>
+          <el-pagination
+            v-pagination-label
+            :current-page="query.data.value?.page ?? page"
+            :page-size="query.data.value?.pageSize ?? pageSize"
+            :page-sizes="[20, 50, 100]"
+            :total="query.data.value?.total ?? accounts.length"
+            background
+            layout="sizes, prev, pager, next"
+            @current-change="changePage"
+            @size-change="changePageSize"
+          />
+        </footer>
       </section>
     </V2AsyncRegion>
 
@@ -137,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -149,7 +174,7 @@ import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
-import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
@@ -158,12 +183,36 @@ import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
+const page = ref(1);
+const pageSize = ref(20);
+const keyword = ref('');
+const keywordInput = ref('');
 const query = useV2ModuleQuery({
   moduleKey: 'chatgpt-accounts',
   scope: 'auto-recharge',
-  key: 'bank-chatgpt-accounts',
-  query: ({ signal }) => bankRechargeApi.listAccounts({ signal })
+  key: () =>
+    createV2QueryKey({ page: page.value, pageSize: pageSize.value, keyword: keyword.value }),
+  keepPreviousData: true,
+  query: ({ signal }) =>
+    bankRechargeApi.listAccounts(
+      { signal },
+      { page: page.value, pageSize: pageSize.value, keyword: keyword.value }
+    )
 });
+watch([page, pageSize, keyword], () => {
+  void query.ensureFresh();
+});
+function search() {
+  page.value = 1;
+  keyword.value = keywordInput.value.trim();
+}
+function changePage(value: number) {
+  page.value = value;
+}
+function changePageSize(value: number) {
+  pageSize.value = value;
+  page.value = 1;
+}
 const accounts = computed(() => query.data.value?.items ?? []);
 const drawerOpen = ref(false);
 const editing = ref<BankChatgptAccount | null>(null);

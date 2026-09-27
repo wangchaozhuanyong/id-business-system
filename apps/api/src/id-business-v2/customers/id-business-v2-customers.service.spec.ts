@@ -77,6 +77,8 @@ describe('IdBusinessV2CustomersService', () => {
     },
     idBusinessV2Order: { count: vi.fn() },
     idBusinessV2Activation: { count: vi.fn() },
+    idBusinessV2BankRechargeOrder: { count: vi.fn() },
+    idBusinessV2BankRechargeSubscription: { count: vi.fn() },
     sensitiveAccessLog: {
       create: vi.fn()
     },
@@ -120,6 +122,8 @@ describe('IdBusinessV2CustomersService', () => {
     );
     prisma.idBusinessV2Order.count.mockResolvedValue(0);
     prisma.idBusinessV2Activation.count.mockResolvedValue(0);
+    prisma.idBusinessV2BankRechargeOrder.count.mockResolvedValue(0);
+    prisma.idBusinessV2BankRechargeSubscription.count.mockResolvedValue(0);
     encryptionService.encrypt.mockImplementation((value: string | null) =>
       value ? `encrypted:${value}` : null
     );
@@ -374,7 +378,15 @@ describe('IdBusinessV2CustomersService', () => {
       'customer',
       customer.id,
       customer.updatedAt,
-      { orderCount: 0, activeOrderCount: 0, activationCount: 0, activeActivationCount: 0 }
+      {
+        orderCount: 0,
+        activeOrderCount: 0,
+        activationCount: 0,
+        activeActivationCount: 0,
+        bankOrderCount: 0,
+        activeBankOrderCount: 0,
+        activeBankSubscriptionCount: 0
+      }
     );
 
     await expect(service.remove('customer-1', fingerprint, operator)).resolves.toEqual({
@@ -419,6 +431,26 @@ describe('IdBusinessV2CustomersService', () => {
         order: { is: { balanceReturns: { none: { status: 'active' } } } }
       }
     });
+  });
+
+  it('blocks deletion when the customer only has bank-recharge dependencies and rechecks changes', async () => {
+    const customer = makeCustomer();
+    prisma.idBusinessV2Customer.findFirst.mockResolvedValue(customer);
+    const empty = await service.getDeletePreview(customer.id);
+    expect(empty.canDelete).toBe(true);
+    prisma.idBusinessV2BankRechargeOrder.count.mockResolvedValue(1);
+    prisma.idBusinessV2BankRechargeSubscription.count.mockResolvedValue(1);
+    const preview = await service.getDeletePreview(customer.id);
+    expect(preview.canDelete).toBe(false);
+    expect(preview.impact.activeBankOrderCount).toBe(1);
+    expect(preview.impact.activeBankSubscriptionCount).toBe(1);
+    await expect(service.remove(customer.id, empty.fingerprint, operator)).rejects.toThrow(
+      '删除依赖已经变化'
+    );
+    await expect(service.remove(customer.id, preview.fingerprint, operator)).rejects.toThrow(
+      '进行中银充订单'
+    );
+    expect(prisma.idBusinessV2Customer.update).not.toHaveBeenCalled();
   });
 
   it('rejects a customer delete when the preview fingerprint is stale', async () => {

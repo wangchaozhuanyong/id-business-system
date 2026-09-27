@@ -1254,9 +1254,12 @@ export class SecurityService {
     return this.resetUserMfa(normalizedUserId, operator);
   }
 
-  async getMfaLoginRequirementForUser(user: AuthenticatedUser): Promise<MfaLoginRequirement> {
+  async getMfaLoginRequirementForUser(
+    user: AuthenticatedUser,
+    client: Pick<Prisma.TransactionClient, 'securitySetting'> = this.prisma
+  ): Promise<MfaLoginRequirement> {
     const userMfaSettingKey = this.getUserMfaSettingKey(user.id);
-    const settings = await this.prisma.securitySetting.findMany({
+    const settings = await client.securitySetting.findMany({
       where: {
         key: {
           in: ['mfa_settings', userMfaSettingKey]

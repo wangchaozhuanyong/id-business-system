@@ -166,6 +166,7 @@ export class V2EmployeesService {
 
     try {
       const employee = await this.prisma.$transaction(async (transaction) => {
+        await this.assertAdminMfaReady(authUserId, roles, operator, transaction);
         const created = await transaction.user.create({
           data: {
             username,
@@ -245,6 +246,14 @@ export class V2EmployeesService {
     let employee: EmployeeRecord;
     try {
       employee = await this.prisma.$transaction(async (transaction) => {
+        if ((status ?? existing.status) === 'active') {
+          await this.assertAdminMfaReady(
+            existing.id,
+            roles ?? existing.userRoles.map((item) => item.role),
+            operator,
+            transaction
+          );
+        }
         const claimedAt = new Date();
         const claimed = await transaction.user.updateMany({
           where: {
@@ -368,6 +377,24 @@ export class V2EmployeesService {
     });
     if (existing) {
       throw new ConflictException('员工账号已存在。');
+    }
+  }
+
+  private async assertAdminMfaReady(
+    id: string,
+    roles: Array<{ code: string }>,
+    operator: AuthenticatedUser,
+    transaction: Prisma.TransactionClient
+  ) {
+    if (!roles.some((role) => role.code === 'admin')) return;
+    const requirement = await this.securityService.getMfaLoginRequirementForUser(
+      { ...operator, id, roles: roles.map((role) => role.code) },
+      transaction
+    );
+    if (requirement.required && !requirement.bound) {
+      throw new BadRequestException(
+        '强制 MFA 已启用，请先以普通员工身份登录并在“我的账户”绑定 MFA，再分配管理员角色。'
+      );
     }
   }
 

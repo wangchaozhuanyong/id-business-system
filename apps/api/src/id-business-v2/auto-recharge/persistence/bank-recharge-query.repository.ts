@@ -139,8 +139,7 @@ export class BankRechargeQueryRepository {
       this.prisma.idBusinessV2Customer.findMany({
         where: { deletedAt: null, recordStatus: 'active' },
         select: { id: true, name: true },
-        orderBy: { updatedAt: 'desc' },
-        take: 1000
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }]
       }),
       this.prisma.idBusinessV2FinanceAccount.findMany({
         where: { status: 'active' },

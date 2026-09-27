@@ -1,5 +1,10 @@
 import * as OTPAuth from 'otpauth';
 
+export function isV2TotpCodeCurrent(token: string, expiresAt: string, nowMs: number) {
+  const expiry = Date.parse(expiresAt);
+  return /^\d{6,8}$/.test(token) && Number.isFinite(expiry) && expiry > nowMs;
+}
+
 export const V2_TOTP_INPUT_LIMITS = {
   lines: 50,
   length: 20_000,

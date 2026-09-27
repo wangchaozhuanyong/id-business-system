@@ -2,7 +2,7 @@
   <div>
     <V2FormDrawer
       v-model="drawerOpen"
-      :title="creating ? '手工录入银充订单' : '银充订单资料'"
+      :title="correcting ? '更正银充订单' : creating ? '手工录入银充订单' : '银充订单资料'"
       :description="
         creating
           ? '先记录实际代付和付款凭据，再补客户、手续费、收款与到期时间。'
@@ -11,10 +11,8 @@
       size="min(760px, 96vw)"
       :confirm-loading="saving"
       :dirty="dirty"
-      :confirm-disabled="
-        Boolean(selected && ['completed', 'refunded', 'cancelled'].includes(selected.status))
-      "
-      confirm-text="保存"
+      :confirm-disabled="readonly"
+      :confirm-text="correcting ? '更正并重新入账' : '保存'"
       @confirm="save"
     >
       <el-alert
@@ -84,7 +82,32 @@
           >
         </template>
         <template v-else>
-          <el-form-item label="代付金额"
+          <el-form-item v-if="correcting" label="更正原因" required
+            ><el-input
+              v-model="correctionReason"
+              maxlength="300"
+              placeholder="说明资料或账务更正原因"
+          /></el-form-item>
+          <template v-if="selected?.source === 'manual' && !readonly">
+            <el-form-item label="ChatGPT 套餐" required
+              ><el-select v-model="form.plan" aria-label="ChatGPT 套餐"
+                ><el-option label="标准版（Plus）" value="plus" /><el-option
+                  label="专业版 5×"
+                  value="pro-5x" /><el-option label="专业版 20×" value="pro-20x" /></el-select
+            ></el-form-item>
+            <el-form-item label="代付币种" required
+              ><el-select v-model="form.chargeCurrencyCode" aria-label="代付币种"
+                ><el-option
+                  v-for="item in activeCurrencies"
+                  :key="item.code"
+                  :label="`${item.name}（${item.code}）`"
+                  :value="item.code" /></el-select
+            ></el-form-item>
+            <el-form-item label="代付金额" prop="chargeAmount" required
+              ><el-input v-model="form.chargeAmount" inputmode="decimal"
+            /></el-form-item>
+          </template>
+          <el-form-item v-else label="代付金额"
             ><span
               >{{ selected?.chargeAmount }} {{ selected?.chargeCurrencyCode }}</span
             ></el-form-item
@@ -334,12 +357,45 @@
     <V2FormDrawer
       v-model="refundOpen"
       title="登记银充退款"
-      description="仅在真实退款完成后填写。保存会冲销原财务日记。"
+      description="按实际已发生金额登记。官网本金和银行手续费未退回时保持为零，不会自动恢复代付资金。"
       :confirm-loading="working"
-      :dirty="Boolean(refund.reason || refund.refundReference)"
+      :dirty="
+        Boolean(
+          refund.reason ||
+          refund.refundReference ||
+          refund.customerRefundAmount ||
+          refund.upstreamRefundReference ||
+          refund.chargeRecoveryAmountCny !== '0' ||
+          refund.bankFeeRecoveryAmountCny !== '0'
+        )
+      "
       @confirm="confirmRefund"
     >
       <el-form label-position="left" label-width="104px" require-asterisk-position="right">
+        <el-form-item :label="`客户退款（${selected?.receivedCurrencyCode ?? '原币'}）`"
+          ><el-input
+            v-model="refund.customerRefundAmount"
+            inputmode="decimal"
+            placeholder="留空退回剩余实收；仅补上游回款时填 0"
+        /></el-form-item>
+        <el-form-item label="官网回款（元）"
+          ><el-input
+            v-model="refund.chargeRecoveryAmountCny"
+            inputmode="decimal"
+            placeholder="已实际收回的人民币金额；未回款填 0"
+        /></el-form-item>
+        <el-form-item label="银行退费（元）"
+          ><el-input
+            v-model="refund.bankFeeRecoveryAmountCny"
+            inputmode="decimal"
+            placeholder="已实际退回手续费；未退回填 0"
+        /></el-form-item>
+        <el-form-item label="上游回款凭据"
+          ><el-input
+            v-model="refund.upstreamRefundReference"
+            maxlength="160"
+            placeholder="登记官网回款或银行退费时必填"
+        /></el-form-item>
         <el-form-item label="退款原因" required
           ><el-input v-model="refund.reason" maxlength="300"
         /></el-form-item>
@@ -362,6 +418,8 @@ const props = defineProps<{ state: ReturnType<typeof useBankRechargeOrdersPage> 
 const {
   drawerOpen,
   creating,
+  correcting,
+  correctionReason,
   selected,
   saving,
   dirty,
