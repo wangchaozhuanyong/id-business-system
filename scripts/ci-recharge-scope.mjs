@@ -14,12 +14,14 @@ export function isCiOnly(paths) {
     )
   );
 }
+const adminPublicDocument = /^apps\/admin\/public\/[^/]+\.(?:html|css)$/;
 export function isAdminOnly(paths) {
   return (
-    paths.some((p) => p.startsWith('apps/admin/src/v2/')) &&
+    paths.some((p) => p.startsWith('apps/admin/src/v2/') || adminPublicDocument.test(p)) &&
     paths.every(
       (p) =>
         p.startsWith('apps/admin/src/v2/') ||
+        adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-table-layout.mjs' ||
         p === 'scripts/check-v2-table-standard.mjs' ||
         isCiOnly([p])

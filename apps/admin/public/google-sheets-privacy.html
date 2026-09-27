@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Google 表格同步隐私说明 · ID 业务管理系统</title>
+    <meta
+      name="description"
+      content="ID 业务管理系统 Google 表格同步的功能、授权范围与数据使用说明。"
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/google-sheets-info.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a href="/google-sheets.html">ID 业务管理系统</a>
+      <nav aria-label="说明页面导航">
+        <a href="/google-sheets.html">应用介绍</a><a href="/google-sheets-privacy.html">隐私说明</a>
+      </nav>
+    </header>
+    <main>
+      <p class="eyebrow">Google 表格同步 · 数据使用说明</p>
+      <h1>隐私说明</h1>
+      <p>
+        本说明适用于 ID 业务管理系统的 Google 表格同步功能，说明应用如何使用 Google
+        授权及报表数据。请仅使用您有权管理的 Google 账号和业务资料进行授权。
+      </p>
+      <section>
+        <h2>访问的 Google 数据与权限</h2>
+        <p>
+          应用请求 Google 云端硬盘的特定文件权限，用于创建和更新本应用使用的业务报表。此权限对应
+          Google 的 drive.file 授权范围。应用不会请求读取全部云端硬盘文件、Gmail 邮件或 Google
+          联系人。
+        </p>
+        <p>
+          系统保存加密的授权刷新令牌及报表文件编号，用于后续自动更新报表。管理员的 Google 登录密码由
+          Google 处理，本系统不收集该密码。
+        </p>
+      </section>
+      <section>
+        <h2>写入报表的业务数据</h2>
+        <ul>
+          <li>订单报表包含订单号、客户名称、业务与服务、金额、费用、成本、利润、状态及时间。</li>
+          <li>
+            加卡报表包含卡名称、国家或地区、币种、面值、采购成本、供应商名称、退款状态及时间。
+          </li>
+          <li>续费报表包含客户名称、订单号、服务、开通与到期时间、续费状态。</li>
+          <li>财务汇总包含业务日期、财务账户类别及汇总金额。</li>
+        </ul>
+        <p>
+          每类明细报表最多包含最近 10,000 条记录。ID 密码、密保、完整卡号、邮箱授权凭据、邮件正文及
+          2FA 密钥或验证码不写入这些报表。
+        </p>
+      </section>
+      <section>
+        <h2>数据用途与共享</h2>
+        <p>
+          Google 授权及报表数据仅用于管理员主动开启的业务报表同步，不用于广告投放、出售 Google
+          用户数据或训练通用人工智能模型。
+        </p>
+        <p>
+          报表存放在授权账号的 Google
+          云端硬盘中。应用不会自动向其他账号分享报表；文件是否共享及共享对象由文件拥有者在 Google
+          云端硬盘中管理。系统管理员可管理本系统的同步连接。
+        </p>
+      </section>
+      <section>
+        <h2>保存、安全与撤销</h2>
+        <p>
+          Google 客户端密钥、授权刷新令牌及报表文件编号在系统服务器中加密保存。服务器与 Google
+          的通信使用 HTTPS。业务访问按系统角色权限控制，授权和同步管理操作记录审计。
+        </p>
+        <p>
+          管理员可在“Google 表格同步”中暂停自动同步或断开 Google
+          授权。断开后系统停止自动同步，并清除保存的授权刷新令牌及报表文件编号；已保存的客户端配置与系统业务记录仍保留。
+        </p>
+        <p>
+          断开连接不会删除 Google 云端硬盘中已有的报表。若希望删除这些报表，请在 Google
+          云端硬盘中操作；您也可在 Google
+          账号的第三方连接管理中撤销本应用访问权限。业务数据库中的资料依照系统自身的数据治理流程处理，不会因
+          Google 连接断开而删除。
+        </p>
+      </section>
+      <section>
+        <h2>联系应用管理员</h2>
+        <p>
+          关于 Google 授权、报表数据使用或停止同步的问题，请联系应用支持：<a
+            href="mailto:ppfzj1314@gmail.com"
+            >ppfzj1314@gmail.com</a
+          >。请勿发送账号密码、验证码或授权令牌。
+        </p>
+      </section>
+    </main>
+    <footer class="site-footer">
+      应用支持：<a href="mailto:ppfzj1314@gmail.com">ppfzj1314@gmail.com</a> · 更新于 2026 年 9 月
+      27 日
+    </footer>
+  </body>
+</html>

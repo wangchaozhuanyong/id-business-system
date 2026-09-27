@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Google 表格同步 · ID 业务管理系统</title>
+    <meta
+      name="description"
+      content="ID 业务管理系统 Google 表格同步的功能、授权范围与数据使用说明。"
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/google-sheets-info.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a href="/google-sheets.html">ID 业务管理系统</a>
+      <nav aria-label="说明页面导航">
+        <a href="/google-sheets.html">应用介绍</a><a href="/google-sheets-privacy.html">隐私说明</a>
+      </nav>
+    </header>
+    <main>
+      <p class="eyebrow">Google 表格同步</p>
+      <h1>将业务报表同步到自己的 Google 表格</h1>
+      <p>
+        ID 业务管理系统是用于管理订单、加卡、续费和财务记录的内部业务应用。管理员可连接自己的 Google
+        账号，将系统中已有的业务记录生成单向报表。
+      </p>
+      <p class="note">
+        此公开页面介绍应用及数据使用方式。业务管理页面需要登录，Google
+        连接和同步设置仅向管理员开放。
+      </p>
+      <section>
+        <h2>提供四类报表</h2>
+        <ul>
+          <li>订单：客户、服务、状态、金额、成本和利润。</li>
+          <li>加卡：卡名称、国家或地区、币种、采购成本、供应商和退款状态。</li>
+          <li>续费：客户、业务开通和到期时间、服务与续费状态。</li>
+          <li>财务汇总：按业务日期和财务账户汇总收支金额。</li>
+        </ul>
+      </section>
+      <section>
+        <h2>同步如何工作</h2>
+        <p>
+          管理员在个人工作区的“Google 表格同步”中完成授权。自动同步开启后，有数据变化时约 30
+          秒内更新，也可手动立即同步。每类明细最多同步最近 10,000 条记录。
+        </p>
+        <p>
+          系统使用 Google 的特定文件权限，仅管理通过本应用使用的报表文件。Google
+          表格中的修改不会反向更新业务数据库。
+        </p>
+        <p>授权撤销和数据保存方式详见<a href="/google-sheets-privacy.html">隐私说明</a>。</p>
+      </section>
+      <div class="actions">
+        <a class="primary-link" href="/login">进入业务管理系统</a
+        ><a href="/google-sheets-privacy.html">了解数据使用方式</a>
+      </div>
+    </main>
+    <footer class="site-footer">
+      应用支持：<a href="mailto:ppfzj1314@gmail.com">ppfzj1314@gmail.com</a> · 更新于 2026 年 9 月
+      27 日
+    </footer>
+  </body>
+</html>

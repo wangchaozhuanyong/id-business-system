@@ -52,6 +52,21 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   assert.equal(checkMode(['apps/admin/src/auth/login.ts'], schema, schema), 'full');
   assert.equal(checkMode([files[0]], schema, schema), 'recharge');
 });
+test('public static information pages stay in admin checks without widening auth or API scope', () => {
+  const paths = [
+    'apps/admin/public/google-sheets.html',
+    'apps/admin/public/google-sheets-info.css',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(checkMode(paths, schema, schema), 'admin');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+  assert.equal(checkMode([...paths, 'apps/admin/public/v2-boot.js'], schema, schema), 'full');
+  assert.equal(checkMode([...paths, 'apps/admin/src/auth/login.ts'], schema, schema), 'full');
+  assert.equal(
+    checkMode([...paths, 'apps/api/src/id-business-v2/workspace/example.ts'], schema, schema),
+    'full'
+  );
+});
 test('shared record spacing and its browser acceptance stay in the admin scope', () => {
   const paths = [
     'apps/admin/src/v2/styles/records.css',
