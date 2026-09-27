@@ -62,6 +62,7 @@ YTDLP_FORMATS = {
 DOUYIN_MEDIA_HOSTS = (
     "aweme.snssdk.com",
     "v5-dy-ov-experiment.zjcdn.com",
+    "v5-hl-mly-ov.zjcdn.com",
     "byteimg.com",
     "bytevcloud.com",
     "douyinpic.com",

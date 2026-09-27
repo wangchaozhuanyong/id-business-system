@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from io import BytesIO
 from pathlib import Path
 import subprocess
 import sys
@@ -215,9 +216,27 @@ class MediaDownloadsTests(unittest.TestCase):
     def test_public_share_playback_host_is_allowed_without_allowing_arbitrary_hosts(self):
         server.assert_allowed_douyin_media_url("https://aweme.snssdk.com/aweme/v1/play/?fixture=1")
         server.assert_allowed_douyin_media_url("https://v5-dy-ov-experiment.zjcdn.com/media.mp4")
-        for url in ["https://snssdk.com.attacker.invalid/media", "https://other.snssdk.com/media"]:
+        server.assert_allowed_douyin_media_url("https://v5-hl-mly-ov.zjcdn.com/media.mp4")
+        for url in ["https://snssdk.com.attacker.invalid/media", "https://other.snssdk.com/media", "https://other.zjcdn.com/media", "https://v5-hl-mly-ov.zjcdn.com.attacker.invalid/media"]:
             with self.assertRaises(server.WorkerError):
                 server.assert_allowed_douyin_media_url(url)
+
+    def test_official_playback_redirect_to_regional_cdn_checks_both_public_addresses(self):
+        source = "https://aweme.snssdk.com/aweme/v1/play/?fixture=1"
+        target = "https://v5-hl-mly-ov.zjcdn.com/media.mp4"
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.headers = {"content-type": "video/mp4", "content-length": "5"}
+        response.read.side_effect = [b"video", b""]
+        opener = MagicMock()
+        opener.open.side_effect = [server.HTTPError(source, 302, "redirect", {"location": target}, BytesIO()), response]
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
+            with patch.object(server, "build_opener", return_value=opener), patch.object(server, "assert_public_remote_url") as public:
+                file, mime = server.fetch_remote_file(source, {}, Path(temporary), "mp4")
+                self.assertEqual(file.read_bytes(), b"video")
+                self.assertEqual(mime, "video/mp4")
+                self.assertEqual([item.args[0] for item in public.call_args_list], [source, target])
 
     def test_extracted_audio_returns_an_mp3_and_suppresses_ffmpeg_logs(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
