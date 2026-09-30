@@ -36,7 +36,8 @@ export async function readBrowserCatalog(form: BitBrowserSettingsForm, signal: A
 export function useRechargeBrowserCatalog(
   form: Ref<BitBrowserSettingsForm>,
   open: Ref<boolean>,
-  stored: Ref<V2RechargeBitBrowserSettings | undefined>
+  stored: Ref<V2RechargeBitBrowserSettings | undefined>,
+  localMode: Ref<boolean> = ref(true)
 ) {
   const sessionId = crypto.randomUUID();
   const revision = ref(0);
@@ -49,11 +50,11 @@ export function useRechargeBrowserCatalog(
     trackRouteData: false,
     keepPreviousData: true,
     key: () => `auto-recharge-browser-catalog-${sessionId}-${revision.value}`,
-    enabled: () => open.value && requested.value,
+    enabled: () => open.value && localMode.value && requested.value,
     query: ({ signal }) => readBrowserCatalog({ ...form.value }, signal)
   });
   async function refreshCatalog() {
-    if (disposed) return;
+    if (disposed || !localMode.value) return;
     clearTimeout(timer);
     const currentRevision = ++revision.value;
     requested.value = true;
@@ -64,6 +65,7 @@ export function useRechargeBrowserCatalog(
   watch(
     () => [
       open.value,
+      localMode.value,
       form.value.connectorUrl,
       form.value.localApiUrl,
       form.value.connectorToken,
@@ -73,7 +75,7 @@ export function useRechargeBrowserCatalog(
     () => {
       clearTimeout(timer);
       requested.value = false;
-      if (open.value) timer = setTimeout(refreshCatalog, 250);
+      if (open.value && localMode.value) timer = setTimeout(refreshCatalog, 250);
     },
     { flush: 'sync' }
   );

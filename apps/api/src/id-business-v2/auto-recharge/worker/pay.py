@@ -142,10 +142,13 @@ async def verify_identity_again(page, target):
 
 
 async def payment_handler(page, guard, identity, ledger, target, *, pay, details_reader, confirmer,
-                          wait_seconds, poll_count, poll_interval, quote_wait_seconds=9):
+                          wait_seconds, poll_count, poll_interval, quote_wait_seconds=9,
+                          expected_country=None):
     selected_plan = ledger.target_plan
     if os.environ.get("AUTO_RECHARGE_CALLBACK_URL") and not identity.get("network", {}).get("country"):
         raise Stop("network_unconfirmed")
+    if expected_country and identity.get("network", {}).get("country") != expected_country:
+        raise Stop("proxy_country_mismatch")
     details = await asyncio.to_thread(details_reader)
     try:
         binding_before = guard.official_binding_version
@@ -256,7 +259,8 @@ async def run_payment(target, ledger, *, pay=False, details_reader=read_details,
 
 async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                    wait_seconds=120, poll_count=6, poll_interval=20, browser=None,
-                   browser_context=None, session_budget=None, allow_checkout_replacement=True):
+                   browser_context=None, session_budget=None, allow_checkout_replacement=True,
+                   expected_country=None):
     ledger_holder = {}
 
     async def handler(page, guard, identity, original_quote):
@@ -273,6 +277,7 @@ async def run_flow(target, state_dir, target_plan, *, details_reader, confirmer,
                                          confirmer=confirmer,
                                          wait_seconds=wait_seconds, poll_count=poll_count,
                                          poll_interval=poll_interval,
+                                         expected_country=expected_country,
                                          quote_wait_seconds=(session_budget.seconds
                                                              if session_budget else 9))
 

@@ -7,6 +7,9 @@ export interface BankChatgptAccount {
   id: string;
   emailMasked: string;
   status: 'active' | 'disabled';
+  subscriptionState: 'never_subscribed' | 'active' | 'due_soon' | 'expired' | 'unknown';
+  dueAt: string | null;
+  currentPlan: string | null;
   hasPassword: boolean;
   hasTotp: boolean;
   remark: string | null;
@@ -27,6 +30,49 @@ export interface BankRechargeCard {
   last4: string;
   currencyCode: string;
   active: boolean;
+  hasNumber?: boolean;
+  expiry?: string | null;
+}
+
+export interface ManagedBankRechargeCard {
+  id: string;
+  label: string;
+  last4: string;
+  expiry: string | null;
+  currencyCode: string;
+  status: 'active' | 'disabled';
+  hasNumber: boolean;
+  remark1: string | null;
+  remark2: string | null;
+  accountCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedBankRechargeCardDetail {
+  id: string;
+  label: string;
+  number: string | null;
+  last4: string;
+  expiry: string | null;
+  billingName: string | null;
+  billingAddressId: string | null;
+  currencyCode: string;
+  status: 'active' | 'disabled';
+  remark1: string | null;
+  remark2: string | null;
+}
+
+export interface ManagedBankRechargeCardOrder {
+  id: string;
+  orderNo: string;
+  accountId: string;
+  account: { emailMasked: string } | null;
+  chargeAmount: string;
+  chargeCurrencyCode: string;
+  status: BankRechargeOrderStatus;
+  verifiedAt: string | null;
+  createdAt: string;
 }
 
 export type BankRechargeOrderStatus =
@@ -104,7 +150,7 @@ export interface BankRechargeRenewalWarnings {
 export const bankRechargeApi = {
   listAccounts(
     options: ApiRequestOptions = {},
-    query: { page?: number; pageSize?: number; keyword?: string } = {}
+    query: { page?: number; pageSize?: number; keyword?: string; subscriptionState?: string } = {}
   ) {
     return request<{ items: BankChatgptAccount[]; total: number; page: number; pageSize: number }>(
       http.get(`${base}/accounts`, { params: query, signal: options.signal })
@@ -113,8 +159,16 @@ export const bankRechargeApi = {
   createAccount(input: { email: string; password: string; totpSecret: string; remark: string }) {
     return request<{ id: string }>(http.post(`${base}/accounts`, input));
   },
+  importAccounts(
+    accounts: Array<{ email: string; password: string; totpSecret: string; remark: string }>
+  ) {
+    return request<{ imported: number }>(http.post(`${base}/accounts/import`, { accounts }));
+  },
   updateAccount(id: string, input: Record<string, unknown>) {
     return request<{ id: string }>(http.patch(`${base}/accounts/${id}`, input));
+  },
+  deleteAccount(id: string) {
+    return request<{ id: string }>(http.delete(`${base}/accounts/${id}`));
   },
   totpCode(id: string) {
     return request<{ token: string; expiresAt: string }>(
@@ -145,13 +199,86 @@ export const bankRechargeApi = {
   createCard(input: { label: string; last4: string; currencyCode: string }) {
     return request<BankRechargeCard>(http.post(`${base}/cards`, input));
   },
+  listManagedCards(
+    query: {
+      page: number;
+      pageSize: number;
+      keyword?: string;
+      status?: string;
+    },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<{
+      items: ManagedBankRechargeCard[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(http.get(`${base}/cards/management`, { params: query, signal: options.signal }));
+  },
+  managedCardDetail(id: string) {
+    return request<ManagedBankRechargeCardDetail>(http.get(`${base}/cards/management/${id}`));
+  },
+  managedCardOrders(
+    id: string,
+    query: { page: number; pageSize: number },
+    options: ApiRequestOptions = {}
+  ) {
+    return request<{
+      items: ManagedBankRechargeCardOrder[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>(
+      http.get(`${base}/cards/management/${id}/orders`, { params: query, signal: options.signal })
+    );
+  },
+  createManagedCard(input: Record<string, unknown>) {
+    return withV2QueryInvalidation(
+      request<{ id: string }>(http.post(`${base}/cards/management`, input)),
+      'auto-recharge'
+    );
+  },
+  importManagedCards(
+    currencyCode: string,
+    cards: Array<{ number: string; expiry: string; remark1: string; remark2: string }>
+  ) {
+    return withV2QueryInvalidation(
+      request<{ imported: number }>(
+        http.post(`${base}/cards/management/import`, { currencyCode, cards })
+      ),
+      'auto-recharge'
+    );
+  },
+  checkCardAvailability(number: string) {
+    return request<{ available: true }>(
+      http.post(`${base}/cards/management/availability`, { number })
+    );
+  },
+  updateManagedCard(id: string, input: Record<string, unknown>) {
+    return withV2QueryInvalidation(
+      request<{ id: string }>(http.patch(`${base}/cards/management/${id}`, input)),
+      'auto-recharge'
+    );
+  },
+  deleteManagedCard(id: string) {
+    return withV2QueryInvalidation(
+      request<{ id: string }>(http.delete(`${base}/cards/management/${id}`)),
+      'auto-recharge'
+    );
+  },
   renewalWarnings(options: ApiRequestOptions = {}) {
     return request<BankRechargeRenewalWarnings>(
       http.get(`${base}/renewal-warnings`, { signal: options.signal })
     );
   },
   listOrders(
-    query: { page: number; pageSize: number; keyword?: string; status?: string },
+    query: {
+      page: number;
+      pageSize: number;
+      keyword?: string;
+      status?: string;
+      accountId?: string;
+    },
     options: ApiRequestOptions = {}
   ) {
     return request<{ items: BankRechargeOrder[]; total: number; page: number; pageSize: number }>(

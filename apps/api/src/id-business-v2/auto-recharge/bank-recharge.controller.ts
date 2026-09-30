@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeCardService } from './bank-recharge-card.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
 import { BankRechargeCorrectionService } from './bank-recharge-correction.service';
@@ -12,6 +13,7 @@ import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 export class BankRechargeController {
   constructor(
     private readonly accounts: BankRechargeAccountService,
+    private readonly cards: BankRechargeCardService,
     private readonly orders: BankRechargeOrderService,
     private readonly queries: BankRechargeQueryRepository,
     private readonly finance: BankRechargeFinanceService,
@@ -20,13 +22,26 @@ export class BankRechargeController {
 
   @Get('accounts')
   @Header('Cache-Control', 'no-store')
-  listAccounts(@Query() query: { page?: string; pageSize?: string; keyword?: string }) {
+  listAccounts(
+    @Query()
+    query: {
+      page?: string;
+      pageSize?: string;
+      keyword?: string;
+      subscriptionState?: string;
+    }
+  ) {
     return this.accounts.listAccounts(query);
   }
 
   @Post('accounts')
   createAccount(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
     return this.accounts.createAccount(value, operator);
+  }
+
+  @Post('accounts/import')
+  importAccounts(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.accounts.importAccounts(value, operator);
   }
 
   @Patch('accounts/:id')
@@ -36,6 +51,11 @@ export class BankRechargeController {
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.accounts.updateAccount(id, value, operator);
+  }
+
+  @Delete('accounts/:id')
+  deleteAccount(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.accounts.deleteAccount(id, operator);
   }
 
   @Post('accounts/:id/totp-code')
@@ -69,6 +89,56 @@ export class BankRechargeController {
   @Get('cards')
   listCards() {
     return this.accounts.listCards();
+  }
+
+  @Get('cards/management')
+  @Header('Cache-Control', 'no-store')
+  listManagedCards(
+    @Query() query: { page?: string; pageSize?: string; keyword?: string; status?: string }
+  ) {
+    return this.cards.list(query);
+  }
+
+  @Get('cards/management/:id')
+  @Header('Cache-Control', 'no-store')
+  cardDetail(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.cards.detail(id, operator);
+  }
+
+  @Get('cards/management/:id/orders')
+  @Header('Cache-Control', 'no-store')
+  cardOrders(@Param('id') id: string, @Query() query: { page?: string; pageSize?: string }) {
+    return this.cards.orders(id, query);
+  }
+
+  @Post('cards/management')
+  createManagedCard(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.cards.create(value, operator);
+  }
+
+  @Post('cards/management/import')
+  importManagedCards(@Body() value: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.cards.importCards(value, operator);
+  }
+
+  @Post('cards/management/availability')
+  @Header('Cache-Control', 'no-store')
+  checkCardAvailability(@Body() value: unknown) {
+    return this.cards.checkAvailability(value);
+  }
+
+  @Patch('cards/management/:id')
+  updateManagedCard(
+    @Param('id') id: string,
+    @Body() value: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.cards.update(id, value, operator);
+  }
+
+  @Delete('cards/management/:id')
+  deleteManagedCard(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.cards.delete(id, operator);
   }
 
   @Post('cards')

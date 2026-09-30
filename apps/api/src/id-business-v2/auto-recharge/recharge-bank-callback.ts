@@ -11,7 +11,7 @@ export async function bindSavedChatgptAccount(
   accounts?: BankRechargeAccountService
 ) {
   if (
-    job.action === 'bitbrowser' &&
+    ['bitbrowser', 'server'].includes(job.action) &&
     job.chatgptAccountId &&
     job.accountKey &&
     report.account_matched === true &&
@@ -27,9 +27,10 @@ export async function recordVerifiedBankRecharge(
   report: Record<string, unknown>,
   orders?: BankRechargeOrderService
 ) {
-  if (job.action === 'bitbrowser' && orders) {
-    await orders.recordVerifiedSuccess(tx, job, { ...object(job.result), ...report });
+  if (['bitbrowser', 'server'].includes(job.action) && orders) {
+    return orders.recordVerifiedSuccess(tx, job, { ...object(job.result), ...report });
   }
+  return null;
 }
 
 export function mergeRechargeCallbackResult(

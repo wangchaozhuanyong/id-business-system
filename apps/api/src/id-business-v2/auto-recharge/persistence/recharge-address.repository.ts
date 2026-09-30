@@ -17,10 +17,74 @@ export class RechargeAddressRepository {
     return address;
   }
 
-  async markUsed(tx: V2CommandTransaction, ownerId: string, id: string) {
+  async requireAvailable(tx: V2CommandTransaction, ownerId: string, id: string) {
+    const address = await tx.idBusinessV2RechargeAddress.findFirst({
+      where: { id, ownerId, status: { in: ['unused', 'used'] } }
+    });
+    if (!address) throw new ConflictException('所选账单地址已停用或不存在');
+    return address;
+  }
+
+  async createOrReuseManual(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    details: {
+      country: string;
+      line1: string;
+      line2: string;
+      city: string;
+      state: string;
+      postal_code: string;
+    }
+  ) {
+    const existing = await tx.idBusinessV2RechargeAddress.findFirst({
+      where: { ownerId, line1: details.line1 }
+    });
+    if (existing) {
+      if (
+        existing.status === 'disabled' ||
+        existing.country !== details.country ||
+        (existing.line2 ?? '') !== details.line2 ||
+        existing.city !== details.city ||
+        existing.state !== details.state ||
+        existing.postalCode !== details.postal_code
+      ) {
+        throw new ConflictException('相同街道已保存不同账单资料，请核对地址库');
+      }
+      return { address: existing, created: false };
+    }
+    const address = await tx.idBusinessV2RechargeAddress.create({
+      data: {
+        ownerId,
+        line1: details.line1,
+        line2: details.line2 || null,
+        country: details.country,
+        city: details.city,
+        state: details.state,
+        postalCode: details.postal_code,
+        status: 'unused'
+      }
+    });
+    return { address, created: true };
+  }
+
+  async markUsed(tx: V2CommandTransaction, ownerId: string, id: string, jobId?: string) {
     const address = await tx.idBusinessV2RechargeAddress.findFirst({ where: { id, ownerId } });
     if (!address) throw new NotFoundException('找不到本次充值使用的地址');
-    if (address.status === 'used') return { before: address, after: address, changed: false };
+    if (address.status === 'disabled') throw new ConflictException('账单地址已停用');
+    if (jobId) {
+      const prior = await tx.idBusinessV2RechargeAddressUse.findUnique({ where: { jobId } });
+      if (prior) {
+        if (prior.addressId !== id || prior.ownerId !== ownerId)
+          throw new ConflictException('同一充值任务不能更换账单地址');
+        return { before: address, after: address, changed: false };
+      }
+      await tx.idBusinessV2RechargeAddressUse.create({
+        data: { jobId, addressId: id, ownerId }
+      });
+    } else if (address.status === 'used') {
+      return { before: address, after: address, changed: false };
+    }
     const after = await tx.idBusinessV2RechargeAddress.update({
       where: { id },
       data: { status: 'used', usedAt: new Date() }

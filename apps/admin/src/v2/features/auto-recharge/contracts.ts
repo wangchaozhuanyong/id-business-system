@@ -2,6 +2,7 @@ export type {
   V2RechargeStart,
   V2RechargeJob,
   V2RechargePlan,
+  V2RechargePaymentCap,
   V2RechargeAction,
   V2RechargeDetails,
   V2RechargeDetailsSubmission,

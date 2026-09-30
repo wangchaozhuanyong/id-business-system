@@ -16,6 +16,7 @@ import { RechargeAddressRepository } from './persistence/recharge-address.reposi
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
 import { RechargeSettingsService } from './recharge-settings.service';
+import { RechargeProxyService } from './recharge-proxy.service';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
@@ -42,12 +43,17 @@ export class RechargeLocalService {
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
     @Optional() private readonly bankAccounts?: BankRechargeAccountService,
-    @Optional() private readonly encryption?: FieldEncryptionService
+    @Optional() private readonly encryption?: FieldEncryptionService,
+    @Optional() private readonly proxies?: RechargeProxyService
   ) {}
 
   async start(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserStart(value);
-    const runtime = await this.settings.runtime(operator.id);
+    const selectedProxy = input.proxyId
+      ? await this.proxies?.forCharge(input.proxyId, operator, input.proxyCountryCode)
+      : null;
+    if (input.proxyId && !selectedProxy) throw new ConflictException('所选代理 IP 不可用');
+    const runtime = await this.settings.runtime(operator.id, Boolean(selectedProxy));
     const agentToken = randomBytes(32).toString('hex');
     const result = await this.transactions.execute(
       async (tx) => {
@@ -92,6 +98,7 @@ export class RechargeLocalService {
         const job = await this.repository.createJob(tx, {
           id: input.id,
           ownerId: operator.id,
+          proxyId: selectedProxy?.id ?? null,
           chatgptAccountId: account?.id ?? null,
           expectedEmailEncrypted:
             expectedEmail && this.encryption ? this.encryption.encrypt(expectedEmail) : null,
@@ -152,10 +159,29 @@ export class RechargeLocalService {
         localApiToken: runtime.localApiToken,
         groupName: runtime.groupName,
         tagName: runtime.tagName,
-        proxyType: runtime.proxyType,
-        dynamicProxyUrl: runtime.dynamicProxyUrl,
-        browserOptions: runtime.browserOptions,
-        staticProxyCredentials: runtime.staticProxyCredentials
+        proxyType: selectedProxy?.type ?? runtime.proxyType,
+        dynamicProxyUrl:
+          selectedProxy?.mode === 'dynamic'
+            ? selectedProxy.extractionUrl
+            : selectedProxy
+              ? ''
+              : runtime.dynamicProxyUrl,
+        browserOptions: selectedProxy
+          ? {
+              ...runtime.browserOptions,
+              proxyMode: selectedProxy.mode,
+              staticHost: selectedProxy.mode === 'static' ? selectedProxy.host : '',
+              staticPort: selectedProxy.mode === 'static' ? selectedProxy.port : 8080,
+              dynamicProvider: 'common' as const,
+              refreshIp: true
+            }
+          : runtime.browserOptions,
+        staticProxyCredentials:
+          selectedProxy?.mode === 'static' && selectedProxy.username && selectedProxy.password
+            ? { username: selectedProxy.username, password: selectedProxy.password }
+            : selectedProxy
+              ? undefined
+              : runtime.staticProxyCredentials
       },
       address: {
         id: result.address.id,

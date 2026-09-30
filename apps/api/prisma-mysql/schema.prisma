@@ -2391,6 +2391,9 @@ model IdBusinessV2RechargeJob {
   ownerId     String   @map("owner_id") @db.VarChar(191)
   accountKey  String?  @map("account_key") @db.Char(64)
   chatgptAccountId String? @map("chatgpt_account_id") @db.Char(36)
+  proxyId String? @map("proxy_id") @db.Char(36)
+  cardId String? @map("card_id") @db.Char(36)
+  billingNameEncrypted String? @map("billing_name_encrypted") @db.Text
   expectedEmailEncrypted String? @map("expected_email_encrypted") @db.Text
   plan        String   @db.VarChar(16)
   action      String   @db.VarChar(16)
@@ -2402,11 +2405,16 @@ model IdBusinessV2RechargeJob {
   updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(6)
 
   chatgptAccount IdBusinessV2ChatgptAccount? @relation(fields: [chatgptAccountId], references: [id], onDelete: Restrict)
+  proxy IdBusinessV2RechargeProxy? @relation(fields: [proxyId], references: [id], onDelete: Restrict)
+  card IdBusinessV2BankRechargeCard? @relation(fields: [cardId], references: [id], onDelete: Restrict)
   bankRechargeOrder IdBusinessV2BankRechargeOrder?
+  addressUse IdBusinessV2RechargeAddressUse?
 
   @@index([ownerId, createdAt])
   @@index([state, leaseUntil])
   @@index([chatgptAccountId])
+  @@index([proxyId])
+  @@index([cardId])
   @@map("id_business_v2_recharge_jobs")
 }
 
@@ -2480,16 +2488,37 @@ model IdBusinessV2BankRechargeCurrency {
   updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime(6)
 
   cards IdBusinessV2BankRechargeCard[]
+  rechargePaymentCaps IdBusinessV2RechargePaymentCap[]
 
   @@index([active, code])
   @@map("id_business_v2_bank_recharge_currencies")
 }
 
-// 只保存预存资金银行卡的识别信息，不保存完整卡号及验证资料。
+model IdBusinessV2RechargePaymentCap {
+  plan            String   @db.VarChar(16)
+  currencyCode    String   @map("currency_code") @db.Char(3)
+  maxAmount       Decimal  @map("max_amount") @db.Decimal(18, 4)
+  updatedByUserId String?  @map("updated_by_user_id") @db.Char(36)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  currency IdBusinessV2BankRechargeCurrency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@id([plan, currencyCode])
+  @@map("id_business_v2_recharge_payment_caps")
+}
+
+// 预存资金银行卡号加密保存；安全码仅在单笔付款时临时使用，不入库。
 model IdBusinessV2BankRechargeCard {
   id              String                          @id @default(uuid()) @db.Char(36)
   label           String                          @db.VarChar(80)
   last4           String                          @db.Char(4)
+  numberEncrypted String?                         @map("number_encrypted") @db.Text
+  numberHash      String?                         @unique @map("number_hash") @db.Char(64)
+  expiry          String?                         @db.Char(5)
+  billingNameEncrypted String?                    @map("billing_name_encrypted") @db.Text
+  billingAddressId String?                        @map("billing_address_id") @db.Char(36)
+  remark1         String?                         @db.VarChar(500)
+  remark2         String?                         @db.VarChar(500)
   currencyCode    String                          @map("currency_code") @db.Char(3)
   active          Boolean                         @default(true)
   createdByUserId String?                         @map("created_by_user_id") @db.Char(36)
@@ -2498,6 +2527,8 @@ model IdBusinessV2BankRechargeCard {
 
   currency IdBusinessV2BankRechargeCurrency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
   orders   IdBusinessV2BankRechargeOrder[]
+  rechargeJobs IdBusinessV2RechargeJob[]
+  billingAddress IdBusinessV2RechargeAddress? @relation(fields: [billingAddressId], references: [id], onDelete: Restrict)
 
   @@index([active, label])
   @@map("id_business_v2_bank_recharge_cards")
@@ -2597,6 +2628,7 @@ model IdBusinessV2RechargeAddress {
   id         String    @id @default(uuid()) @db.Char(36)
   ownerId    String    @map("owner_id") @db.VarChar(191)
   line1      String    @map("line1") @db.VarChar(180)
+  line2      String?   @map("line2") @db.VarChar(180)
   country    String    @default("US") @db.Char(2)
   city       String    @default("Portland") @db.VarChar(120)
   state      String    @default("OR") @db.VarChar(120)
@@ -2606,9 +2638,27 @@ model IdBusinessV2RechargeAddress {
   createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(6)
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.DateTime(6)
 
+  billingCards IdBusinessV2BankRechargeCard[]
+  uses IdBusinessV2RechargeAddressUse[]
+
   @@unique([ownerId, line1])
   @@index([ownerId, status, createdAt])
   @@map("id_business_v2_recharge_addresses")
+}
+
+// 同一任务对地址的占用只记录一次；已用地址可供其他真实匹配的卡复用。
+model IdBusinessV2RechargeAddressUse {
+  id String @id @default(uuid()) @db.Char(36)
+  jobId String @unique @map("job_id") @db.VarChar(36)
+  addressId String @map("address_id") @db.Char(36)
+  ownerId String @map("owner_id") @db.VarChar(191)
+  usedAt DateTime @default(now()) @map("used_at") @db.DateTime(6)
+
+  job IdBusinessV2RechargeJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  address IdBusinessV2RechargeAddress @relation(fields: [addressId], references: [id], onDelete: Restrict)
+
+  @@index([addressId, usedAt])
+  @@map("id_business_v2_recharge_address_uses")
 }
 
 // 本机比特浏览器默认值；密钥与动态提取链接加密保存。
@@ -2631,4 +2681,37 @@ model IdBusinessV2RechargeBrowserSetting {
   updatedAt                DateTime @updatedAt @map("updated_at") @db.DateTime(6)
 
   @@map("id_business_v2_recharge_browser_settings")
+}
+
+enum IdBusinessV2RechargeProxyKind {
+  dynamic_residential
+  static_residential
+  mobile
+}
+
+enum IdBusinessV2RechargeProxyConnectionMode {
+  extraction
+  direct
+}
+
+// 代理链接可能含提取令牌或代理凭据，仅加密保存；任务只记录所选代理 ID。
+model IdBusinessV2RechargeProxy {
+  id              String                                 @id @default(uuid()) @db.Char(36)
+  countryCode     String                                 @map("country_code") @db.Char(2)
+  kind            IdBusinessV2RechargeProxyKind
+  connectionMode  IdBusinessV2RechargeProxyConnectionMode @map("connection_mode")
+  protocol        String                                 @db.VarChar(8)
+  urlEncrypted    String                                 @map("url_encrypted") @db.Text
+  urlHash         String                                 @unique @map("url_hash") @db.Char(64)
+  active          Boolean                                @default(true)
+  remark1         String?                                @db.VarChar(500)
+  remark2         String?                                @db.VarChar(500)
+  createdByUserId String?                                @map("created_by_user_id") @db.Char(36)
+  createdAt       DateTime                               @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt       DateTime                               @updatedAt @map("updated_at") @db.DateTime(6)
+
+  jobs IdBusinessV2RechargeJob[]
+
+  @@index([countryCode, active, kind])
+  @@map("id_business_v2_recharge_proxies")
 }

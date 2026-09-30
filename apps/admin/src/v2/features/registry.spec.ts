@@ -8,7 +8,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(29);
+    expect(v2FeatureRegistry).toHaveLength(31);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {
@@ -20,7 +20,7 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(5);
+    ).toHaveLength(7);
     expect(
       v2NavigationSections
         .find((section) => section.key === 'auto-recharge')
@@ -28,6 +28,8 @@ describe('V2 feature registry', () => {
     ).toEqual([
       'auto-recharge',
       'chatgpt-accounts',
+      'bank-recharge-cards',
+      'recharge-proxies',
       'bank-recharge-orders',
       'vendure-mailbox',
       'auto-recharge-addresses'

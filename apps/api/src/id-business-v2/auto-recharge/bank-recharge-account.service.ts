@@ -7,6 +7,10 @@ import {
 import { randomUUID } from 'node:crypto';
 import { getPagination } from '../../common/pagination';
 import type { IdBusinessV2ChatgptAccount, IdBusinessV2RechargeJob } from '@prisma/client';
+import {
+  accountListItem,
+  parseAccountSubscriptionState
+} from './bank-recharge-account-subscription';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
@@ -29,6 +33,14 @@ import {
   bankRechargeText
 } from './bank-recharge-validation';
 import { supportedCurrencies, zeroDecimalCurrencies } from './recharge-local-validation';
+import { createLegacyCard } from './bank-recharge-card-legacy-create';
+
+type NewChatgptAccount = {
+  email: string;
+  password: string;
+  totp: ReturnType<typeof parseIdBusinessV2TotpSecret> | null;
+  remark: string;
+};
 
 @Injectable()
 export class BankRechargeAccountService {
@@ -39,37 +51,48 @@ export class BankRechargeAccountService {
     private readonly encryption: FieldEncryptionService
   ) {}
 
-  async listAccounts(query: { page?: string; pageSize?: string; keyword?: string } = {}) {
+  async listAccounts(
+    query: {
+      page?: string;
+      pageSize?: string;
+      keyword?: string;
+      subscriptionState?: string;
+    } = {}
+  ) {
     const pagination =
       query.page !== undefined || query.pageSize !== undefined ? getPagination(query) : null;
     const keyword = bankRechargeText(query.keyword, '搜索内容', 250, false);
+    const subscriptionState = parseAccountSubscriptionState(query.subscriptionState);
+    const now = Date.now();
+    const warningBoundary =
+      now + (await this.repository.renewalWarningDays()) * 24 * 60 * 60 * 1000;
     const where = bankRechargeAccountFilter(
       keyword,
-      keyword.includes('@') ? this.encryption.hash(keyword.toLowerCase()) : null
+      keyword.includes('@') ? this.encryption.hash(keyword.toLowerCase()) : null,
+      subscriptionState,
+      new Date(now),
+      new Date(warningBoundary)
     );
     const items = await this.repository.listAccounts({
       where,
       ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
     });
+    const subscriptions = await this.repository.subscriptionsForAccounts(
+      items.map((item) => item.id)
+    );
+    const subscriptionsByAccount = new Map(subscriptions.map((item) => [item.accountId, item]));
     const total = pagination ? await this.repository.countAccounts(where) : items.length;
     return {
       total,
       page: pagination?.page ?? 1,
       pageSize: pagination?.pageSize ?? total,
-      items: items.map((item) => ({
-        id: item.id,
-        emailMasked: item.emailMasked,
-        status: item.status,
-        hasPassword: Boolean(item.passwordEncrypted),
-        hasTotp: Boolean(item.totpSecretEncrypted),
-        remark: item.remark,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt
-      }))
+      items: items.map((item) =>
+        accountListItem(item, subscriptionsByAccount.get(item.id), now, warningBoundary)
+      )
     };
   }
 
-  async createAccount(value: unknown, operator: AuthenticatedUser) {
+  private parseNewAccount(value: unknown): NewChatgptAccount {
     const input = bankRechargeObject(value);
     const email = bankRechargeEmail(input.email);
     const password = bankRechargePassword(input.password);
@@ -83,44 +106,89 @@ export class BankRechargeAccountService {
       }
     }
     const remark = bankRechargeText(input.remark, '备注', 500, false);
+    return { email, password, totp, remark };
+  }
+
+  private async insertAccount(
+    tx: V2CommandTransaction,
+    account: NewChatgptAccount,
+    operator: AuthenticatedUser
+  ) {
+    const { email, password, totp, remark } = account;
+    const item = await this.repository.createAccount(tx, {
+      data: {
+        emailEncrypted: this.encryption.encrypt(email)!,
+        emailHash: this.encryption.hash(email)!,
+        emailMasked: bankRechargeMaskedEmail(email),
+        passwordEncrypted: this.encryption.encrypt(password),
+        totpSecretEncrypted: this.encryption.encrypt(totp?.secret),
+        totpAlgorithm: totp?.algorithm ?? 'sha1',
+        totpDigits: totp?.digits ?? 6,
+        totpPeriod: totp?.period ?? 30,
+        remark: remark || null,
+        createdByUserId: operator.id,
+        updatedByUserId: operator.id
+      }
+    });
+    await this.audit.append(tx, {
+      userId: operator.id,
+      module: 'id_business_v2',
+      action: 'id_business_v2.auto_recharge.chatgpt_account.create',
+      objectType: 'chatgpt_account',
+      objectId: item.id,
+      afterData: {
+        emailMasked: item.emailMasked,
+        hasPassword: Boolean(password),
+        hasTotp: Boolean(totp)
+      },
+      remark: '新增 ChatGPT 充值账号'
+    });
+    return { id: item.id, emailMasked: item.emailMasked };
+  }
+
+  async createAccount(value: unknown, operator: AuthenticatedUser) {
+    const account = this.parseNewAccount(value);
+    return this.transactions.execute((tx) => this.insertAccount(tx, account, operator), {
+      changedScopes: ['auto-recharge'],
+      requestId: randomUUID(),
+      operator,
+      retryMode: 'none',
+      uniqueConflictMessage: '该 ChatGPT 邮箱已保存'
+    });
+  }
+
+  async importAccounts(value: unknown, operator: AuthenticatedUser) {
+    const input = bankRechargeObject(value);
+    if (
+      !Array.isArray(input.accounts) ||
+      input.accounts.length < 1 ||
+      input.accounts.length > 200
+    ) {
+      throw new BadRequestException('每次只能导入 1 至 200 个 ChatGPT 账号');
+    }
+    const accounts = input.accounts.map((row: unknown, index: number) => {
+      try {
+        return this.parseNewAccount(row);
+      } catch {
+        throw new BadRequestException(
+          `第 ${index + 1} 行账号资料格式无效，请检查邮箱、密码、2FA 和备注`
+        );
+      }
+    });
+    const emails = new Set(accounts.map((account) => account.email));
+    if (emails.size !== accounts.length) throw new BadRequestException('导入内容包含重复邮箱');
     return this.transactions.execute(
       async (tx) => {
-        const item = await this.repository.createAccount(tx, {
-          data: {
-            emailEncrypted: this.encryption.encrypt(email)!,
-            emailHash: this.encryption.hash(email)!,
-            emailMasked: bankRechargeMaskedEmail(email),
-            passwordEncrypted: this.encryption.encrypt(password),
-            totpSecretEncrypted: this.encryption.encrypt(totp?.secret),
-            totpAlgorithm: totp?.algorithm ?? 'sha1',
-            totpDigits: totp?.digits ?? 6,
-            totpPeriod: totp?.period ?? 30,
-            remark: remark || null,
-            createdByUserId: operator.id,
-            updatedByUserId: operator.id
-          }
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.chatgpt_account.create',
-          objectType: 'chatgpt_account',
-          objectId: item.id,
-          afterData: {
-            emailMasked: item.emailMasked,
-            hasPassword: Boolean(password),
-            hasTotp: Boolean(totp)
-          },
-          remark: '新增 ChatGPT 充值账号'
-        });
-        return { id: item.id, emailMasked: item.emailMasked };
+        for (const account of accounts) await this.insertAccount(tx, account, operator);
+        return { imported: accounts.length };
       },
       {
         changedScopes: ['auto-recharge'],
         requestId: randomUUID(),
         operator,
         retryMode: 'none',
-        uniqueConflictMessage: '该 ChatGPT 邮箱已保存'
+        timeoutMs: 30_000,
+        uniqueConflictMessage: '部分 ChatGPT 邮箱已保存，整批未导入'
       }
     );
   }
@@ -220,6 +288,38 @@ export class BankRechargeAccountService {
     );
   }
 
+  async deleteAccount(id: string, operator: AuthenticatedUser) {
+    bankRechargeId(id, '账号编号');
+    try {
+      return await this.transactions.execute(
+        async (tx) => {
+          const account = await this.repository.findAccount(tx, id);
+          if (!account) throw new NotFoundException('ChatGPT 账号不存在');
+          if (account.officialAccountKey || (await this.repository.accountHasReferences(tx, id))) {
+            throw new ConflictException('账号已有充值或订单关联，请改为停用');
+          }
+          await this.repository.deleteAccount(tx, id);
+          await this.audit.append(tx, {
+            userId: operator.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_recharge.chatgpt_account.delete',
+            objectType: 'chatgpt_account',
+            objectId: id,
+            beforeData: { emailMasked: account.emailMasked, status: account.status },
+            remark: '删除未关联的 ChatGPT 充值账号'
+          });
+          return { id };
+        },
+        { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+      );
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'P2003') {
+        throw new ConflictException('账号已有充值或订单关联，请改为停用');
+      }
+      throw error;
+    }
+  }
+
   async requireActive(tx: V2CommandTransaction, id: string) {
     bankRechargeId(id, 'ChatGPT 账号');
     const account = await this.repository.findAccount(tx, id);
@@ -276,8 +376,38 @@ export class BankRechargeAccountService {
     if (!account.passwordEncrypted) throw new ConflictException('该账号尚未保存登录密码');
     return {
       email: this.encryption.decrypt(account.emailEncrypted)!,
-      password: this.encryption.decrypt(account.passwordEncrypted)!
+      password: this.encryption.decrypt(account.passwordEncrypted)!,
+      ...(account.totpSecretEncrypted
+        ? {
+            totp: {
+              secret: this.encryption.decrypt(account.totpSecretEncrypted)!,
+              algorithm: account.totpAlgorithm,
+              digits: account.totpDigits,
+              period: account.totpPeriod
+            }
+          }
+        : {})
     };
+  }
+
+  encryptExpectedEmail(email: string) {
+    return this.encryption.encrypt(bankRechargeEmail(email));
+  }
+
+  decryptExpectedEmail(ciphertext: string) {
+    return bankRechargeEmail(this.encryption.decrypt(ciphertext));
+  }
+
+  async assertRechargeEligible(tx: V2CommandTransaction, id: string) {
+    const account = await this.requireActive(tx, id);
+    const subscription = await this.repository.subscriptionForAccount(tx, id);
+    if (
+      subscription?.status === 'active' &&
+      (!subscription.dueAt || subscription.dueAt.getTime() > Date.now())
+    ) {
+      throw new ConflictException('该账号仍有有效订阅或到期时间待核实，不能自动再次付款');
+    }
+    return account;
   }
 
   async bindOfficialAccount(tx: V2CommandTransaction, id: string, accountKey: string) {
@@ -441,43 +571,28 @@ export class BankRechargeAccountService {
   }
 
   async listCards() {
+    const items = await this.repository.listCards();
     return {
-      items: await this.repository.listCards()
+      items: items.map(({ id, label, last4, currencyCode, active, numberEncrypted, expiry }) => ({
+        id,
+        label,
+        last4,
+        currencyCode,
+        active,
+        hasNumber: Boolean(numberEncrypted),
+        expiry
+      }))
     };
   }
 
   async createCard(value: unknown, operator: AuthenticatedUser) {
-    const input = bankRechargeObject(value);
-    const label = bankRechargeText(input.label, '银行卡名称', 80);
-    const last4 = bankRechargeText(input.last4, '银行卡尾号', 4);
-    if (!/^\d{4}$/.test(last4)) throw new BadRequestException('只允许保存银行卡后四位');
-    if (input.fundingType !== undefined && input.fundingType !== 'prepaid') {
-      throw new BadRequestException('银充只支持预存资金银行卡');
-    }
-    const currencyCode = bankRechargeCurrency(input.currencyCode);
-    return this.transactions.execute(
-      async (tx) => {
-        await this.requireCurrency(tx, currencyCode);
-        const item = await this.repository.createCard(tx, {
-          data: {
-            label,
-            last4,
-            currencyCode,
-            createdByUserId: operator.id
-          }
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.bank_recharge.card.create',
-          objectType: 'bank_recharge_card',
-          objectId: item.id,
-          afterData: { label, last4, currencyCode },
-          remark: '新增银充银行卡标识'
-        });
-        return item;
-      },
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    return createLegacyCard(
+      value,
+      operator,
+      this.repository,
+      this.transactions,
+      this.audit,
+      (tx, code) => this.requireCurrency(tx, code)
     );
   }
 }

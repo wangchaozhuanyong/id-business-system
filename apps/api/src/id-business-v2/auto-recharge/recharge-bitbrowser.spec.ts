@@ -61,6 +61,10 @@ describe('比特浏览器充值输入边界', () => {
     expect(() =>
       validateRechargeBitBrowserStart({ ...startInput(), cardNumber: '5555555555554444' })
     ).toThrow();
+    expect(() =>
+      validateRechargeBitBrowserStart({ ...startInput(), proxyId: id, proxyCountryCode: 'US' })
+    ).not.toThrow();
+    expect(() => validateRechargeBitBrowserStart({ ...startInput(), proxyId: id })).toThrow();
   });
 
   it('设置只允许本机接口且已存密钥可留空', () => {

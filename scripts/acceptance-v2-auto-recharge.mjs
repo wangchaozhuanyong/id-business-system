@@ -90,6 +90,7 @@ try {
     let catalogReads = 0;
     let blockHealth = false;
     let savedDynamicProxyUrl = 'https://proxy.example/secret';
+    let paymentCap = '1500.00';
     let savedStaticCredentials;
     page.on('pageerror', (error) => errors.push(error.message));
 
@@ -128,6 +129,36 @@ try {
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items: jobs, configured: true });
+      if (path.endsWith('/auto-recharge/payment-caps') && request.method() === 'GET')
+        return success(route, {
+          items: [{ plan: 'plus', currencyCode: 'PHP', maxAmount: paymentCap }]
+        });
+      if (path.endsWith('/auto-recharge/payment-caps/plus/PHP') && request.method() === 'PUT') {
+        paymentCap = request.postDataJSON().maxAmount;
+        return success(route, { plan: 'plus', currencyCode: 'PHP', maxAmount: paymentCap });
+      }
+      if (path.endsWith('/auto-recharge/proxies/countries') && request.method() === 'GET')
+        return success(route, { items: ['US', 'PH'] });
+      if (path.endsWith('/auto-recharge/proxies') && request.method() === 'GET') {
+        const country = new URL(request.url()).searchParams.get('countryCode');
+        const items = (country ? [country] : ['US', 'PH']).map((code) => ({
+          id:
+            code === 'US'
+              ? '99999999-9999-4999-8999-999999999999'
+              : '88888888-8888-4888-8888-888888888888',
+          countryCode: code,
+          kind: code === 'US' ? 'dynamic_residential' : 'mobile',
+          status: 'active',
+          linkMask: code === 'US' ? '已保存 ···000001' : '已保存 ···000002',
+          remark1: code === 'US' ? '美国验收代理' : '菲律宾验收代理',
+          remark2: '',
+          connectionMode: 'extraction',
+          protocol: 'http',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }));
+        return success(route, { items, total: items.length, page: 1, pageSize: 100 });
+      }
       if (path.endsWith('/bank-recharge/accounts') && request.method() === 'GET')
         return success(route, { items: [] });
       if (path.endsWith('/bank-recharge/currencies') && request.method() === 'GET')
@@ -470,6 +501,36 @@ try {
 
     await page.goto(origin + '/v2/auto-recharge');
     await page.getByText('一键开通资料', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('radio', { name: '服务器充值' }).isChecked(), true);
+    await page.getByRole('combobox', { name: '选择代理国家' }).click();
+    await page.getByRole('option', { name: '菲律宾', exact: true }).click();
+    await page.getByRole('combobox', { name: '选择代理 IP' }).click();
+    await page.getByRole('option', { name: /菲律宾验收代理/ }).waitFor();
+    assert.equal(await page.getByRole('option', { name: /美国验收代理/ }).count(), 0);
+    await page.keyboard.press('Escape');
+    await page.getByRole('combobox', { name: '选择代理国家' }).click();
+    await page.getByRole('option', { name: '美国', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '在服务器执行本次充值' }).count(), 1);
+    assert.equal(await page.getByRole('textbox', { name: '窗口名称' }).count(), 0);
+    await page.getByText('1500.00 PHP', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: '最高付款' }).count(), 0);
+    await page.getByRole('button', { name: '设置上限' }).click();
+    await page.getByRole('textbox', { name: '付款安全上限' }).fill('1600.00');
+    await page.getByRole('button', { name: '保存上限' }).click();
+    await page.getByText('1600.00 PHP', { exact: true }).waitFor();
+    await page.screenshot({ path: resolve(evidence, `server-mode-${width}.png`) });
+    await page.getByRole('button', { name: '服务器代理 IP 设置' }).click();
+    const serverSettingsDrawer = page.locator('.v2-form-drawer').filter({
+      has: page.locator('.recharge-settings-form')
+    });
+    await serverSettingsDrawer.getByText('当前服务器代理设置', { exact: true }).waitFor();
+    await serverSettingsDrawer
+      .getByText('服务器任务每次都会重新提取代理 IP', { exact: false })
+      .waitFor();
+    assert.equal(await serverSettingsDrawer.getByLabel('本机连接密钥').count(), 0);
+    await serverSettingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
+    await serverSettingsDrawer.waitFor({ state: 'hidden' });
+    await page.getByText('本机充值', { exact: true }).click();
     assert.equal(
       await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).count(),
       1
@@ -630,9 +691,9 @@ try {
       (await billingEmail.locator('.recharge-account-email').innerText()).trim(),
       'fixture@example.test'
     );
-    await page.getByRole('combobox', { name: '选择未使用账单地址' }).click();
+    await page.getByRole('combobox', { name: '选择真实账单地址' }).click();
     await page.getByRole('option', { name: address.line1, exact: true }).click();
-    await page.getByText('我已核对锁定币种和最高付款金额', { exact: false }).click();
+    await page.getByText('我已核对银行卡真实姓名、账单地址和币种', { exact: false }).click();
     const startButton = page.getByRole('button', { name: '连接比特浏览器并执行本次充值' });
     assert.equal(await startButton.isEnabled(), true);
     blockHealth = true;
@@ -659,7 +720,7 @@ try {
     await page.getByText('账号密码', { exact: true }).click();
     assert.equal(await page.getByRole('radio', { name: '仅登录窗口' }).isChecked(), true);
     assert.equal(await page.getByRole('radio', { name: '账号密码' }).isChecked(), true);
-    assert.equal(await page.getByRole('radio', { name: '自动充值' }).isChecked(), false);
+    assert.equal(await page.getByRole('radio', { name: '本机充值' }).isChecked(), false);
     assert.equal(await page.getByRole('radio', { name: '授权 JSON' }).isChecked(), false);
     await page.getByLabel('ChatGPT 账号').fill('fixture@example.test');
     await page.getByLabel('登录密码').fill('local-password');
@@ -677,7 +738,12 @@ try {
     await page.getByLabel('2FA 方式').getByText('已保存账号', { exact: true }).click();
     await page.getByLabel('登录密码').fill('local-password');
     await page.getByRole('combobox', { name: '选择已保存的 2FA 账号' }).click();
-    await page.getByRole('option', { name: 'ChatGPT 验收 · OpenAI' }).click();
+    await page
+      .locator('.el-select-dropdown:visible')
+      .getByRole('option', {
+        name: 'ChatGPT 验收 · OpenAI'
+      })
+      .click();
     const savedCodeResponse = page.waitForResponse(
       (response) =>
         response.url().endsWith('/code') && response.request().postDataJSON().code === '654321'
@@ -705,6 +771,7 @@ try {
       ok: true,
       viewports: [1440, 768, 390],
       flow: [
+        'server-default-and-proxy-settings',
         'automatic-local-json',
         'registered-email',
         'proxy-settings-save-retry',

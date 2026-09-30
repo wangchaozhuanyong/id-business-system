@@ -356,7 +356,7 @@ export class BankRechargeOrderService {
     if (!verifiedSource) return null;
     ({ job, result } = verifiedSource);
     if (
-      job.action !== 'bitbrowser' ||
+      !['bitbrowser', 'server'].includes(job.action) ||
       result.payment_status !== 'paid' ||
       result.payment_outcome !== 'subscription_activated' ||
       result.status !== 'subscription_activated' ||
@@ -416,7 +416,11 @@ export class BankRechargeOrderService {
     const matchingCards = cardLast4
       ? await this.repository.findCardsByTail(tx, cardLast4, currencyCode)
       : [];
-    const card = matchingCards.length === 1 ? matchingCards[0]! : null;
+    const card = job.cardId
+      ? (matchingCards.find((candidate) => candidate.id === job.cardId) ?? null)
+      : matchingCards.length === 1
+        ? matchingCards[0]!
+        : null;
     const openedAt = new Date();
     const accountId = await this.accounts.ensureAccountForVerifiedPayment(tx, job);
     const existingSubscription = accountId

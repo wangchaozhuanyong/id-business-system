@@ -27,6 +27,10 @@
       </el-select>
       <AppButton variant="soft" @click="applyFilters">查询</AppButton>
     </section>
+    <p v-if="accountIdFilter" class="bank-recharge-form-note">
+      正在查看所选 ChatGPT 账号的订单。
+      <AppButton size="small" variant="ghost" @click="clearAccountFilter">查看全部订单</AppButton>
+    </p>
 
     <V2AsyncRegion
       skeleton="table"
@@ -241,6 +245,8 @@ const {
   statusInput,
   keyword,
   status,
+  accountIdFilter,
+  clearAccountFilter,
   currencyOpen,
   cardOpen,
   openCreate,

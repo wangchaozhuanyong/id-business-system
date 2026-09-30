@@ -5,7 +5,8 @@ import { object } from './recharge-validation';
 
 export function canReplaceCheckout(job: Pick<IdBusinessV2RechargeJob, 'action' | 'result'>) {
   return (
-    ['quote', 'flow', 'bitbrowser'].includes(job.action) && object(job.result).recheck_only !== true
+    ['quote', 'flow', 'bitbrowser', 'server'].includes(job.action) &&
+    object(job.result).recheck_only !== true
   );
 }
 

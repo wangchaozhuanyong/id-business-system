@@ -26,4 +26,34 @@ export class RechargeSettingsRepository {
       update: data
     });
   }
+
+  listPaymentCaps() {
+    return this.prisma.idBusinessV2RechargePaymentCap.findMany({
+      orderBy: [{ plan: 'asc' }, { currencyCode: 'asc' }]
+    });
+  }
+
+  paymentCap(tx: V2CommandTransaction, plan: string, currencyCode: string) {
+    return tx.idBusinessV2RechargePaymentCap.findUnique({
+      where: { plan_currencyCode: { plan, currencyCode } }
+    });
+  }
+
+  currencyForCap(tx: V2CommandTransaction, code: string) {
+    return tx.idBusinessV2BankRechargeCurrency.findUnique({ where: { code } });
+  }
+
+  upsertPaymentCap(
+    tx: V2CommandTransaction,
+    plan: string,
+    currencyCode: string,
+    maxAmount: string,
+    operatorId: string
+  ) {
+    return tx.idBusinessV2RechargePaymentCap.upsert({
+      where: { plan_currencyCode: { plan, currencyCode } },
+      create: { plan, currencyCode, maxAmount, updatedByUserId: operatorId },
+      update: { maxAmount, updatedByUserId: operatorId }
+    });
+  }
 }

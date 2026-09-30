@@ -1,13 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import {
+  ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS,
+  ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
+} from '../../renewals/public-api';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
+import type { AccountSubscriptionState } from '../bank-recharge-account-subscription';
 
 export function bankRechargeAccountFilter(
   keyword: string,
-  emailHash: string | null
+  emailHash: string | null,
+  subscriptionState: AccountSubscriptionState = 'all',
+  now = new Date(),
+  warningBoundary = new Date()
 ): Prisma.IdBusinessV2ChatgptAccountWhereInput {
-  return keyword
+  const textFilter: Prisma.IdBusinessV2ChatgptAccountWhereInput = keyword
     ? {
         OR: [
           { emailMasked: { contains: keyword } },
@@ -16,6 +24,46 @@ export function bankRechargeAccountFilter(
         ]
       }
     : {};
+  const subscriptionFilter: Prisma.IdBusinessV2ChatgptAccountWhereInput =
+    subscriptionState === 'never_subscribed'
+      ? { subscription: { is: null } }
+      : subscriptionState === 'active'
+        ? {
+            subscription: {
+              is: {
+                status: 'active',
+                dueAt: { gt: warningBoundary }
+              }
+            }
+          }
+        : subscriptionState === 'due_soon'
+          ? {
+              subscription: {
+                is: {
+                  status: 'active',
+                  dueAt: { gt: now, lte: warningBoundary }
+                }
+              }
+            }
+          : subscriptionState === 'expired'
+            ? {
+                subscription: {
+                  is: {
+                    OR: [{ status: { not: 'active' } }, { dueAt: { lte: now } }]
+                  }
+                }
+              }
+            : subscriptionState === 'unknown'
+              ? {
+                  subscription: {
+                    is: {
+                      status: 'active',
+                      dueAt: null
+                    }
+                  }
+                }
+              : {};
+  return subscriptionState === 'all' ? textFilter : { AND: [textFilter, subscriptionFilter] };
 }
 
 @Injectable()
@@ -27,6 +75,26 @@ export class BankRechargeRepository {
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       ...args
     });
+  }
+
+  subscriptionsForAccounts(ids: string[]) {
+    return this.prisma.idBusinessV2BankRechargeSubscription.findMany({
+      where: { accountId: { in: ids } },
+      select: { accountId: true, status: true, dueAt: true, plan: true }
+    });
+  }
+
+  subscriptionForAccount(tx: V2CommandTransaction, accountId: string) {
+    return tx.idBusinessV2BankRechargeSubscription.findUnique({ where: { accountId } });
+  }
+
+  async renewalWarningDays() {
+    const setting = await this.prisma.idBusinessV2RenewalWarningSetting.findUnique({
+      where: { scope: ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE }
+    });
+    return setting && setting.warningDays >= 1 && setting.warningDays <= 365
+      ? setting.warningDays
+      : ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS;
   }
   countAccounts(where: Prisma.IdBusinessV2ChatgptAccountWhereInput) {
     return this.prisma.idBusinessV2ChatgptAccount.count({ where });
@@ -45,6 +113,26 @@ export class BankRechargeRepository {
   }
   updateAccount(tx: V2CommandTransaction, args: Prisma.IdBusinessV2ChatgptAccountUpdateArgs) {
     return tx.idBusinessV2ChatgptAccount.update(args);
+  }
+  async accountHasReferences(tx: V2CommandTransaction, id: string) {
+    const [job, order, subscription] = await Promise.all([
+      tx.idBusinessV2RechargeJob.findFirst({
+        where: { chatgptAccountId: id },
+        select: { id: true }
+      }),
+      tx.idBusinessV2BankRechargeOrder.findFirst({
+        where: { accountId: id },
+        select: { id: true }
+      }),
+      tx.idBusinessV2BankRechargeSubscription.findUnique({
+        where: { accountId: id },
+        select: { id: true }
+      })
+    ]);
+    return Boolean(job || order || subscription);
+  }
+  deleteAccount(tx: V2CommandTransaction, id: string) {
+    return tx.idBusinessV2ChatgptAccount.delete({ where: { id } });
   }
 
   listCurrencies() {

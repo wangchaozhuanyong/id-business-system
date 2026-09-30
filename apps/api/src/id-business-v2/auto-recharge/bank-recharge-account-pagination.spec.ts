@@ -14,7 +14,9 @@ describe('银充资料查询完整性', () => {
         async ({ skip = 0, take = items.length }: { skip?: number; take?: number }) =>
           items.slice(skip, skip + take)
       ),
-      countAccounts: vi.fn().mockResolvedValue(501)
+      countAccounts: vi.fn().mockResolvedValue(501),
+      subscriptionsForAccounts: vi.fn().mockResolvedValue([]),
+      renewalWarningDays: vi.fn().mockResolvedValue(3)
     };
     const service = new BankRechargeAccountService(
       repository as never,

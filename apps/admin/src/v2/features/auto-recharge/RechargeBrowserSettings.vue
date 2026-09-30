@@ -1,15 +1,19 @@
 <template>
   <V2FormDrawer
     :model-value="settingsOpen"
-    title="代理 IP 与窗口设置"
-    description="保存后用于后续新建窗口；正在执行的窗口保持原配置。"
+    :title="serverMode ? '服务器代理 IP 设置' : '代理 IP 与窗口设置'"
+    :description="
+      serverMode
+        ? '每次服务器任务使用已保存的代理配置。'
+        : '保存后用于后续新建窗口；正在执行的窗口保持原配置。'
+    "
     size="min(860px, 96vw)"
     confirm-text="保存设置"
     :confirm-loading="settingsSaving"
     :confirm-disabled-reason="
       !settingsQuery.data.value
         ? '请先完成设置读取'
-        : !catalogReady
+        : !serverMode && !catalogReady
           ? '请先读取比特浏览器分组与标签'
           : ''
     "
@@ -26,9 +30,9 @@
       @retry="settingsQuery.refresh"
     >
       <div v-if="stored" class="recharge-settings-summary">
-        <strong>当前代理 IP 与窗口配置</strong>
+        <strong>{{ serverMode ? '当前服务器代理设置' : '当前代理 IP 与窗口配置' }}</strong>
         <p>{{ summary.proxy }}</p>
-        <p>分组：{{ stored.groupName }} · {{ summary.languages }}</p>
+        <p v-if="!serverMode">分组：{{ stored.groupName }} · {{ summary.languages }}</p>
       </div>
       <p v-if="settingsError" class="recharge-settings-error" role="alert">{{ settingsError }}</p>
       <el-form
@@ -42,8 +46,8 @@
         scroll-to-error
         :disabled="settingsSaving"
       >
-        <RechargeProxyOptions v-model="settingsForm" :stored="stored" />
-        <fieldset>
+        <RechargeProxyOptions v-model="settingsForm" :stored="stored" :server-mode="serverMode" />
+        <fieldset v-if="!serverMode">
           <legend>慢加载与重试</legend>
           <el-form-item label="每轮等待时间" prop="browserOptions.sessionWaitMinutes" required>
             <el-input-number
@@ -69,7 +73,7 @@
             加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。
           </p>
         </fieldset>
-        <fieldset>
+        <fieldset v-if="!serverMode">
           <legend>窗口资料</legend>
           <div class="recharge-settings-connection recharge-settings-catalog-actions">
             <el-button
@@ -139,7 +143,7 @@
             窗口名称在充值页面逐笔填写；新窗口加入所选分组并绑定所选标签，备注同步使用标签名称。
           </p>
         </fieldset>
-        <fieldset>
+        <fieldset v-if="!serverMode">
           <legend>本机连接</legend>
           <el-form-item label="本机连接器地址" prop="connectorUrl" required>
             <el-input v-model="settingsForm.connectorUrl" />
@@ -190,7 +194,7 @@
             }}</span>
           </div>
         </fieldset>
-        <RechargeWindowOptions v-model="settingsForm.browserOptions" />
+        <RechargeWindowOptions v-if="!serverMode" v-model="settingsForm.browserOptions" />
       </el-form>
     </V2AsyncRegion>
   </V2FormDrawer>
@@ -208,7 +212,10 @@ import { validateV2Form } from '@/v2/utils/formValidation';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import type { useRechargeBrowserSettings } from './useRechargeBrowserSettings';
-const props = defineProps<{ settings: ReturnType<typeof useRechargeBrowserSettings> }>();
+const props = defineProps<{
+  settings: ReturnType<typeof useRechargeBrowserSettings>;
+  serverMode?: boolean;
+}>();
 const {
   settingsOpen,
   settingsSaving,
@@ -234,47 +241,55 @@ const rules = computed<FormRules>(() => ({
   ...browserOptionRules(settingsForm.value),
   connectorUrl: [{ required: true, message: '请填写本机连接器地址', trigger: 'blur' }],
   localApiUrl: [{ required: true, message: '请填写比特接口地址', trigger: 'blur' }],
-  groupName: [
-    {
-      trigger: 'change',
-      validator: (_rule, value, callback) =>
-        callback(
-          groupOptions.value.some((item) => !item.disabled && item.name === value)
-            ? undefined
-            : new Error('请选择有效且名称唯一的窗口分组')
-        )
-    }
-  ],
-  tagName: [
-    {
-      trigger: 'change',
-      validator: (_rule, value, callback) =>
-        callback(
-          tagOptions.value.some((item) => !item.disabled && item.name === value)
-            ? undefined
-            : new Error('请选择有效且名称唯一的窗口标签')
-        )
-    }
-  ],
+  groupName: props.serverMode
+    ? []
+    : [
+        {
+          trigger: 'change',
+          validator: (_rule, value, callback) =>
+            callback(
+              groupOptions.value.some((item) => !item.disabled && item.name === value)
+                ? undefined
+                : new Error('请选择有效且名称唯一的窗口分组')
+            )
+        }
+      ],
+  tagName: props.serverMode
+    ? []
+    : [
+        {
+          trigger: 'change',
+          validator: (_rule, value, callback) =>
+            callback(
+              tagOptions.value.some((item) => !item.disabled && item.name === value)
+                ? undefined
+                : new Error('请选择有效且名称唯一的窗口标签')
+            )
+        }
+      ],
   proxyType: [{ required: true, message: '请选择代理协议', trigger: 'change' }],
-  localApiToken: [
-    {
-      required: !stored.value?.localApiTokenConfigured,
-      min: 16,
-      max: 1000,
-      message: '请填写 16 至 1000 位比特接口密钥',
-      trigger: 'blur'
-    }
-  ],
-  connectorToken: [
-    {
-      required: !stored.value?.connectorTokenConfigured,
-      min: 16,
-      max: 1000,
-      message: '请填写 16 至 1000 位本机连接密钥',
-      trigger: 'blur'
-    }
-  ],
+  localApiToken: props.serverMode
+    ? []
+    : [
+        {
+          required: !stored.value?.localApiTokenConfigured,
+          min: 16,
+          max: 1000,
+          message: '请填写 16 至 1000 位比特接口密钥',
+          trigger: 'blur'
+        }
+      ],
+  connectorToken: props.serverMode
+    ? []
+    : [
+        {
+          required: !stored.value?.connectorTokenConfigured,
+          min: 16,
+          max: 1000,
+          message: '请填写 16 至 1000 位本机连接密钥',
+          trigger: 'blur'
+        }
+      ],
   dynamicProxyUrl: [
     {
       required:
@@ -288,7 +303,7 @@ const rules = computed<FormRules>(() => ({
   ]
 }));
 async function submit() {
-  if (await validateV2Form(formRef.value)) await saveSettings();
+  if (await validateV2Form(formRef.value)) await saveSettings(props.serverMode);
 }
 </script>
 
