@@ -5,7 +5,7 @@
 ## 资源边界
 
 - CloudFormation：`deploy/aws/id-business-v2-github-release-oidc.yaml`，栈名 `id-business-v2-github-release-access`。
-- 信任来源：仅 `wangchaozhuanyong/id-business-system` 的 `main` 分支工作流。
+- 信任来源：仅 `wangchaozhuanyong/id-business-system` 的 `main` 分支工作流；使用 GitHub OIDC 中不可变的所有者 ID 和仓库 ID 匹配 `sub`。
 - 权限：向专用 ECR 仓库推送不可变镜像、向指定 EC2 实例发送 SSM 命令、读取命令结果；实例角色只增加该仓库镜像的拉取权限。
 - 不授予工作流 IAM 管理、数据库直接访问或其他 EC2 实例权限。
 
