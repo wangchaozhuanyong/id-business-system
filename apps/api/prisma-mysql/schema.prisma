@@ -2477,6 +2477,25 @@ model IdBusinessV2ChatgptAccount {
   @@map("id_business_v2_chatgpt_accounts")
 }
 
+// 每个登录邮箱的首次及最近一次服务器代理出口；IP 加密保存，国家用于登录前校验。
+model IdBusinessV2RechargeLoginNetwork {
+  emailHash                 String   @id @map("email_hash") @db.Char(64)
+  officialAccountKey        String?  @unique @map("official_account_key") @db.Char(64)
+  firstIpEncrypted          String   @map("first_ip_encrypted") @db.Text
+  firstCountryCode          String   @map("first_country_code") @db.Char(2)
+  firstLoginAt              DateTime @map("first_login_at") @db.DateTime(6)
+  lastIpEncrypted           String   @map("last_ip_encrypted") @db.Text
+  lastCountryCode           String   @map("last_country_code") @db.Char(2)
+  lastLoginAt               DateTime @map("last_login_at") @db.DateTime(6)
+  lastJobId                 String   @unique @map("last_job_id") @db.VarChar(36)
+  loginCount                Int      @default(1) @map("login_count")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.DateTime(6)
+
+  @@index([firstCountryCode, lastLoginAt])
+  @@map("id_business_v2_recharge_login_networks")
+}
+
 // 银充独立币种目录；新增币种不改变苹果 ID 订单和现有总账的固定币种枚举。
 model IdBusinessV2BankRechargeCurrency {
   code            String   @id @db.Char(3)

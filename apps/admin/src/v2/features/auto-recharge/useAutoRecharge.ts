@@ -307,6 +307,16 @@ export function useAutoRecharge() {
   const selectedBankAccount = computed(() =>
     savedBankAccounts.value.find((item) => item.id === selectedBankAccountId.value)
   );
+  const loginCountryRestriction = computed(() => {
+    const firstCountry = selectedBankAccount.value?.firstLoginNetwork?.countryCode;
+    return operationMode.value === 'server_payment' &&
+      loginMethod.value === 'saved' &&
+      firstCountry &&
+      selectedProxyCountryCode.value &&
+      firstCountry !== selectedProxyCountryCode.value
+      ? firstCountry
+      : '';
+  });
   const availableCurrencyOptions = computed(() =>
     (bankCurrenciesQuery.data.value?.items ?? [])
       .filter((item) => item.active)
@@ -401,6 +411,7 @@ export function useAutoRecharge() {
         /^[A-Z]{3}$/.test(lockedCurrency.value) &&
         availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         proxySelectionReady.value &&
+        !loginCountryRestriction.value &&
         (operationMode.value === 'server_payment'
           ? Boolean(paymentCap.value)
           : /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value)) &&
@@ -1258,6 +1269,7 @@ export function useAutoRecharge() {
     selectedBankAccountId,
     selectedPaymentCardId,
     selectedBankAccountEmail,
+    loginCountryRestriction,
     savedBankAccounts,
     bankAccountsQuery,
     savedPaymentCards,

@@ -21,6 +21,13 @@ export const v2TableSchemas = {
         { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
         { key: 'hasPassword', label: '登录密码', kind: 'status', widthPreset: 'compact' },
         { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },
+        {
+          key: 'firstLoginNetwork',
+          label: '首次登录 IP / 国家',
+          kind: 'text',
+          widthPreset: 'wide'
+        },
+        { key: 'lastLoginNetwork', label: '最近登录 IP / 国家', kind: 'text', widthPreset: 'wide' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }

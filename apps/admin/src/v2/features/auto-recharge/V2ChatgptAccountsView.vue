@@ -82,13 +82,43 @@
           </V2TableColumn>
           <V2TableColumn
             :definition="v2TableSchemas.chatgptAccounts.main.columns[4]"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span
+                v-if="row.firstLoginNetwork"
+                :title="formatV2DateTime(row.firstLoginNetwork.observedAt)"
+              >
+                {{ row.firstLoginNetwork.ip }} ·
+                {{ proxyCountryLabel(row.firstLoginNetwork.countryCode) }}
+              </span>
+              <span v-else>未记录</span>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[5]"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span
+                v-if="row.lastLoginNetwork"
+                :title="formatV2DateTime(row.lastLoginNetwork.observedAt)"
+              >
+                {{ row.lastLoginNetwork.ip }} ·
+                {{ proxyCountryLabel(row.lastLoginNetwork.countryCode) }}
+              </span>
+              <span v-else>未记录</span>
+            </template>
+          </V2TableColumn>
+          <V2TableColumn
+            :definition="v2TableSchemas.chatgptAccounts.main.columns[6]"
             prop="remark"
             show-overflow-tooltip
           />
-          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[5]">
+          <V2TableColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[7]">
             <template #default="{ row }">{{ formatV2DateTime(row.updatedAt) }}</template>
           </V2TableColumn>
-          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[6]">
+          <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
               <el-dropdown trigger="click">
@@ -257,6 +287,7 @@ import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
 import { parseChatgptAccountImport } from './chatgpt-account-import';
+import { proxyCountryLabel } from './recharge-proxy-options';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 

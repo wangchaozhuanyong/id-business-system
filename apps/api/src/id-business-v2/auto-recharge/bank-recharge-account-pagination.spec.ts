@@ -6,6 +6,7 @@ describe('银充资料查询完整性', () => {
   it('keeps all account options and provides real pagination with total count', async () => {
     const items = Array.from({ length: 501 }, (_, id) => ({
       id: String(id),
+      emailHash: `hash-${id}`,
       emailMasked: `user-${id}`,
       status: 'active'
     }));
@@ -16,6 +17,7 @@ describe('银充资料查询完整性', () => {
       ),
       countAccounts: vi.fn().mockResolvedValue(501),
       subscriptionsForAccounts: vi.fn().mockResolvedValue([]),
+      loginNetworksByEmailHashes: vi.fn().mockResolvedValue([]),
       renewalWarningDays: vi.fn().mockResolvedValue(3)
     };
     const service = new BankRechargeAccountService(

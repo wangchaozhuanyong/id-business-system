@@ -45,6 +45,7 @@ class ServerTests(unittest.TestCase):
             job = server.Job('11111111-1111-4111-8111-111111111111', {
                 'action': 'server', 'plan': 'plus', 'recheckOnly': True,
                 'sessionJson': '{}', 'expectedEmail': 'test@example.invalid',
+                'expectedCountry': 'US',
                 'sourceAccountKey': server.hashlib.sha256(account_id.encode()).hexdigest(),
                 'proxy': {'mode': 'static'}
             })
@@ -55,9 +56,13 @@ class ServerTests(unittest.TestCase):
             ledger = MagicMock()
             ledger.record = {'payment_status': 'unknown'}
             ledger.__enter__.return_value = ledger
+            job.progress = MagicMock()
             with (patch.object(server.server_proxy, 'resolve_proxy', return_value={'server': 'http://proxy'}),
+                  patch.object(server.server_proxy, 'observe_exit',
+                               new=AsyncMock(return_value={'ip': '8.8.8.8', 'country': 'US'})),
                   patch.object(server, 'parse_browser_credential', return_value=target),
-                  patch.object(job, 'verify_json_target', new=AsyncMock()),
+                  patch.object(job, 'verify_json_target',
+                               new=AsyncMock(return_value={'current_plan': 'free'})),
                   patch.object(job, 'restore_target'),
                   patch.object(server.payment_state, 'PaymentLedger', return_value=ledger),
                   patch.object(server, 'recheck_in_context', new=AsyncMock(return_value={'recheck_only': True})),
@@ -96,7 +101,8 @@ class ServerTests(unittest.TestCase):
                   patch.object(server.browser_password_login, 'clear_visible_secrets',
                                new=AsyncMock())):
                 result = await job.login_target(context, login)
-            self.assertIs(result, target)
+            self.assertIs(result[0], target)
+            self.assertEqual(result[1]['current_plan'], 'free')
             self.assertEqual(login, {})
             context.route.assert_awaited_once()
             context.unroute.assert_awaited_once()

@@ -13,6 +13,8 @@ export interface BankChatgptAccount {
   hasPassword: boolean;
   hasTotp: boolean;
   remark: string | null;
+  firstLoginNetwork: { ip: string; countryCode: string; observedAt: string } | null;
+  lastLoginNetwork: { ip: string; countryCode: string; observedAt: string } | null;
   createdAt: string;
   updatedAt: string;
 }

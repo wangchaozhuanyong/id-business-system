@@ -108,6 +108,26 @@ export class BankRechargeRepository {
   findAccountByOfficialKey(tx: V2CommandTransaction, officialAccountKey: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { officialAccountKey } });
   }
+  loginNetworksByEmailHashes(emailHashes: string[]) {
+    return this.prisma.idBusinessV2RechargeLoginNetwork.findMany({
+      where: { emailHash: { in: emailHashes } }
+    });
+  }
+  loginNetwork(tx: V2CommandTransaction, emailHash: string) {
+    return tx.idBusinessV2RechargeLoginNetwork.findUnique({ where: { emailHash } });
+  }
+  createLoginNetwork(
+    tx: V2CommandTransaction,
+    args: Prisma.IdBusinessV2RechargeLoginNetworkCreateArgs
+  ) {
+    return tx.idBusinessV2RechargeLoginNetwork.create(args);
+  }
+  updateLoginNetwork(
+    tx: V2CommandTransaction,
+    args: Prisma.IdBusinessV2RechargeLoginNetworkUpdateArgs
+  ) {
+    return tx.idBusinessV2RechargeLoginNetwork.update(args);
+  }
   createAccount(tx: V2CommandTransaction, args: Prisma.IdBusinessV2ChatgptAccountCreateArgs) {
     return tx.idBusinessV2ChatgptAccount.create(args);
   }

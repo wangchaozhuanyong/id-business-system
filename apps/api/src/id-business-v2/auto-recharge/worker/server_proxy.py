@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import socket
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
@@ -98,3 +99,30 @@ def resolve_proxy(config):
         return parse_extracted(raw.decode("utf-8"), config["type"])
     except (TypeError, ValueError, OSError, UnicodeError):
         raise Stop("server_proxy_unavailable") from None
+
+
+async def observe_exit(context):
+    """Check the browser's real egress through its configured proxy before login."""
+    page = await context.new_page()
+    try:
+        response = await page.goto("https://chatgpt.com/cdn-cgi/trace",
+                                   wait_until="domcontentloaded", timeout=15000)
+        if (response is None or response.status != 200 or
+                urlsplit(response.url).hostname != "chatgpt.com" or
+                urlsplit(response.url).path != "/cdn-cgi/trace"):
+            raise Stop("proxy_network_unconfirmed")
+        raw = await response.text()
+        if len(raw) > 4096:
+            raise Stop("proxy_network_unconfirmed")
+        values = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
+        address = ipaddress.ip_address(values.get("ip", ""))
+        country = values.get("loc", "")
+        if not address.is_global or not re.fullmatch(r"[A-Z]{2}", country):
+            raise Stop("proxy_network_unconfirmed")
+        return {"ip": str(address), "country": country}
+    except Stop:
+        raise
+    except Exception:
+        raise Stop("proxy_network_unconfirmed") from None
+    finally:
+        await page.close()
