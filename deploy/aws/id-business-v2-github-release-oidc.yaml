@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Short-lived GitHub Actions access for the ID business production release.
+
+Parameters:
+  ProductionInstanceId:
+    Type: String
+    AllowedPattern: '^i-[0-9a-f]+$'
+  ProductionInstanceRoleName:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9+=,.@_-]+$'
+
+Resources:
+  ReleaseImages:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: id-business-v2-release
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  GitHubReleaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: id-business-v2-github-release
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: repo:wangchaozhuanyong/id-business-system:ref:refs/heads/main
+      Policies:
+        - PolicyName: id-business-v2-release-images-and-instance
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PushReleaseImages
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt ReleaseImages.Arn
+              - Sid: SendReleaseCommand
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProductionInstanceId}'
+              - Sid: ReadReleaseCommandResult
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ssm:DescribeInstanceInformation
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                  - ssm:ListCommands
+                Resource: '*'
+
+  InstanceReleaseImagePull:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: id-business-v2-release-image-pull
+      Roles:
+        - !Ref ProductionInstanceRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EcrLogin
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PullReleaseImages
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Resource: !GetAtt ReleaseImages.Arn
+
+Outputs:
+  ReleaseRoleArn:
+    Value: !GetAtt GitHubReleaseRole.Arn
+  ReleaseRepositoryUri:
+    Value: !GetAtt ReleaseImages.RepositoryUri
