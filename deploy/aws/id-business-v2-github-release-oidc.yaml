@@ -35,7 +35,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: repo:wangchaozhuanyong/id-business-system:ref:refs/heads/main
+                token.actions.githubusercontent.com:sub: repo:wangchaozhuanyong@276684684/id-business-system@1316048550:ref:refs/heads/main
       Policies:
         - PolicyName: id-business-v2-release-images-and-instance
           PolicyDocument:
