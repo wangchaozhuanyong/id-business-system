@@ -3,6 +3,7 @@ import '@/v2/styles/v2.css';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import { sessionCoordinator, transitionSessionState } from '@/auth/sessionCoordinator';
+import { v2TableColumnVisibility } from '@/v2/directives/tableColumnVisibility';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { applyV2Theme, type V2Theme } from '@/v2/theme';
 import V2WorkspaceDesignFixture from './V2WorkspaceDesignFixture.vue';
@@ -12,6 +13,39 @@ const theme: V2Theme = requestedTheme === 'dark' ? 'dark' : 'light';
 
 applyV2Theme(theme);
 idBusinessV2WorkspaceApi.list = async () => ({ items: [] });
+const quickActionsFixture = new URLSearchParams(window.location.search).get('quick-actions');
+let quickActions =
+  quickActionsFixture === 'empty'
+    ? []
+    : Array.from({ length: 13 }, (_, index) => ({
+        id: `quick-action-fixture-${index + 1}`,
+        title: `客户回复 ${index + 1}`,
+        content: index === 0 ? '第一行\n第二行，仅复制正文。' : `第 ${index + 1} 条回复内容`,
+        createdAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString(),
+        updatedAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString()
+      }));
+idBusinessV2WorkspaceApi.listQuickActions = async () => ({ items: [...quickActions] });
+idBusinessV2WorkspaceApi.createQuickAction = async (input) => {
+  const item = {
+    id: `quick-action-fixture-${quickActions.length + 1}`,
+    ...input,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  quickActions = [item, ...quickActions];
+  return item;
+};
+idBusinessV2WorkspaceApi.updateQuickAction = async (id, input) => {
+  const old = quickActions.find((item) => item.id === id);
+  if (!old) throw new Error('记录不存在');
+  const item = { ...old, ...input, updatedAt: new Date().toISOString() };
+  quickActions = quickActions.map((candidate) => (candidate.id === id ? item : candidate));
+  return item;
+};
+idBusinessV2WorkspaceApi.removeQuickAction = async (id) => {
+  quickActions = quickActions.filter((item) => item.id !== id);
+  return { id, deleted: true };
+};
 const analyticsFixture = new URLSearchParams(window.location.search).get('analytics');
 let analyticsFixtureReads = 0;
 idBusinessV2WorkspaceApi.getWebsiteAnalytics = async (days) => {
@@ -125,4 +159,7 @@ transitionSessionState({
   },
   verifiedAt: Date.now()
 });
-createApp(V2WorkspaceDesignFixture).use(createPinia()).mount('#app');
+const app = createApp(V2WorkspaceDesignFixture);
+app.use(createPinia());
+app.directive('v2-column-visibility', v2TableColumnVisibility);
+app.mount('#app');

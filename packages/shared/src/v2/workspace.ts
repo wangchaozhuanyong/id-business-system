@@ -6,6 +6,12 @@ export const V2_WORKSPACE_SHORTCUT_LIMITS = {
   url: 2048
 } as const;
 
+export const V2_QUICK_ACTION_LIMITS = {
+  count: 200,
+  title: 80,
+  content: 5000
+} as const;
+
 export const V2_SAVED_TOTP_ACCOUNT_LIMITS = {
   count: 100,
   issuer: 120,
@@ -153,6 +159,23 @@ export interface V2WorkspaceShortcut {
   sortOrder: number;
   createdAt: IsoDateTimeString;
   updatedAt: IsoDateTimeString;
+}
+
+export interface V2QuickActionItem {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: IsoDateTimeString;
+  updatedAt: IsoDateTimeString;
+}
+
+export interface V2QuickActionList {
+  items: V2QuickActionItem[];
+}
+
+export interface V2QuickActionInput {
+  title: string;
+  content: string;
 }
 
 export interface V2WorkspaceShortcutList {

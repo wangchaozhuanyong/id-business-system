@@ -1179,6 +1179,24 @@ export const v2TableSchemas = {
     })
   },
   workspace: {
+    quickActions: table({
+      id: 'workspace.quick-actions',
+      feature: 'profile',
+      role: 'embedded',
+      mobileMode: 'cards',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'title',
+          label: '标题',
+          kind: 'identifier',
+          widthPreset: 'standard',
+          hideable: false
+        },
+        { key: 'content', label: '内容', kind: 'text', widthPreset: 'wide', hideable: false },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'triple', pin: 'end' }
+      ] as const
+    }),
     websiteVisitDaily: table({
       id: 'workspace.website-visit-daily',
       feature: 'profile',
@@ -1372,6 +1390,7 @@ export const v2TablesByFeature = {
   ],
   profile: [
     v2TableSchemas.profile.sessions,
+    v2TableSchemas.workspace.quickActions,
     v2TableSchemas.workspace.managedMailboxes,
     v2TableSchemas.workspace.websiteAnalytics,
     v2TableSchemas.workspace.websiteVisitDaily,

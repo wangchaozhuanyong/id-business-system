@@ -48,12 +48,33 @@ import type {
   V2WebsiteVisitReport,
   V2WebsiteVisitSearch,
   V2WorkspaceShortcut,
-  V2WorkspaceShortcutList
+  V2WorkspaceShortcutList,
+  V2QuickActionInput,
+  V2QuickActionItem,
+  V2QuickActionList
 } from '@apple-business/shared';
 import { isAxiosError } from 'axios';
 import { http, request, type ApiRequestOptions } from '@/api/client';
 
 export const idBusinessV2WorkspaceApi = {
+  listQuickActions(options: ApiRequestOptions = {}) {
+    return request<V2QuickActionList>(
+      http.get('/id-business-v2/quick-actions', { signal: options.signal })
+    );
+  },
+  createQuickAction(input: V2QuickActionInput) {
+    return request<V2QuickActionItem>(http.post('/id-business-v2/quick-actions', input));
+  },
+  updateQuickAction(id: string, input: V2QuickActionInput) {
+    return request<V2QuickActionItem>(
+      http.put(`/id-business-v2/quick-actions/${encodeURIComponent(id)}`, input)
+    );
+  },
+  removeQuickAction(id: string) {
+    return request<{ id: string; deleted: true }>(
+      http.delete(`/id-business-v2/quick-actions/${encodeURIComponent(id)}`)
+    );
+  },
   list(options: ApiRequestOptions = {}) {
     return request<V2WorkspaceShortcutList>(
       http.get('/id-business-v2/workspace-shortcuts', { signal: options.signal })
