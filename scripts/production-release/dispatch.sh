@@ -18,6 +18,7 @@ sha = os.environ['RELEASE_COMMIT']
 repo = os.environ['RELEASE_REPOSITORY']
 previous = os.environ['EXPECTED_CURRENT']
 run_id = os.environ['GITHUB_RUN_ID']
+attempt = os.environ['GITHUB_RUN_ATTEMPT']
 tree = os.environ['SOURCE_TREE']
 quality_run = os.environ['QUALITY_RUN_ID']
 script_path = f'/opt/id-business-v2/.staging/oidc-{sha}/remote-deploy.py'
@@ -26,7 +27,7 @@ commands = [
     'set -eu',
     f'mkdir -p /opt/id-business-v2/.staging/oidc-{sha}',
     f'curl -fsSL --retry 3 --max-time 30 {url} -o {script_path}',
-    f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --ci-run-id {quality_run}',
+    f'python3 {script_path} --commit {sha} --source-tree {tree} --repository {repo} --expected-current {previous} --run-id {run_id} --run-attempt {attempt} --ci-run-id {quality_run}',
 ]
 with open(sys.argv[1], 'w', encoding='utf-8') as target:
     json.dump({'commands': commands, 'executionTimeout': ['3600']}, target)

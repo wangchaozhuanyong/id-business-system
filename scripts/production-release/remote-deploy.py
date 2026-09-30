@@ -170,6 +170,7 @@ def main():
     parser.add_argument('--repository', required=True)
     parser.add_argument('--expected-current', required=True)
     parser.add_argument('--run-id', required=True)
+    parser.add_argument('--run-attempt', required=True)
     parser.add_argument('--ci-run-id', required=True)
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
@@ -177,6 +178,7 @@ def main():
     require(re.fullmatch(r'[0-9a-f]{40}', args.expected_current), 'Invalid current commit')
     require(re.fullmatch(r'[0-9]{12}\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/id-business-v2-release', args.repository), 'Invalid image repository')
     require(re.fullmatch(r'[0-9]+', args.run_id), 'Invalid workflow run')
+    require(re.fullmatch(r'[1-9][0-9]*', args.run_attempt), 'Invalid workflow attempt')
     require(re.fullmatch(r'[1-9][0-9]*', args.ci_run_id), 'Invalid Quality Gate run')
     os.umask(0o077)
     lock = (BASE / '.deploy.lock').open('a')
@@ -226,9 +228,11 @@ def main():
                 'Production compose definition changed')
         additions = migration_plan(previous, release)
         override = json.loads((previous / 'compose.release.json').read_text())
+        image_tags = {service: f'{args.commit}-{args.run_id}-{args.run_attempt}-{service}'
+                      for service in (*SERVICES, 'migrate')}
         for service in (*SERVICES, 'migrate'):
             override['services'].setdefault(service, {})['image'] = (
-                f'{args.repository}:{args.commit}-{service}')
+                f'{args.repository}:{image_tags[service]}')
             override['services'][service]['pull_policy'] = 'never'
         (release / 'compose.release.json').write_text(json.dumps(override, indent=2) + '\n')
         require(json.loads(compose(release, 'config', '--format', 'json'))['name'] ==
@@ -244,14 +248,17 @@ def main():
         result = subprocess.run(['docker', 'login', '--username', 'AWS', '--password-stdin', registry],
                                 input=password, capture_output=True, text=True)
         require(result.returncode == 0, 'ECR login failed')
-        for service in (*SERVICES, 'migrate'):
-            run('docker', 'pull', f'{args.repository}:{args.commit}-{service}', timeout=900)
-            image = json.loads(run('docker', 'image', 'inspect',
-                                   f'{args.repository}:{args.commit}-{service}'))[0]
-            require(image['Architecture'] == 'amd64'
-                    and image['Config']['Labels'].get('org.opencontainers.image.revision') == args.commit,
-                    f'{service} image provenance mismatch')
-            pulled_images[service] = image['Id']
+        try:
+            for service in (*SERVICES, 'migrate'):
+                run('docker', 'pull', f'{args.repository}:{image_tags[service]}', timeout=900)
+                image = json.loads(run('docker', 'image', 'inspect',
+                                       f'{args.repository}:{image_tags[service]}'))[0]
+                require(image['Architecture'] == 'amd64'
+                        and image['Config']['Labels'].get('org.opencontainers.image.revision') == args.commit,
+                        f'{service} image provenance mismatch')
+                pulled_images[service] = image['Id']
+        finally:
+            subprocess.run(['docker', 'logout', registry], capture_output=True, text=True)
         require(shutil.disk_usage(BASE).free > 2 * 1024**3, 'Insufficient free disk after pull')
 
         step = 'backup'
@@ -288,11 +295,11 @@ def main():
             'releaseTag': f'v2-production-{stamp}',
             'ciWorkflow': 'Quality Gate', 'ciWorkflowRunId': int(args.ci_run_id),
             'deployedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'deploymentRun': f'github-actions-{args.run_id}',
+            'deploymentRun': f'github-actions-{args.run_id}-{args.run_attempt}',
             'previousCommit': args.expected_current, 'previousRelease': str(previous),
             'servicesUpdated': list(SERVICES), 'sourceArchiveSha256': source_digest,
             'images': {**old_manifest.get('images', {}), **{
-                service: {'reference': f'{args.repository}:{args.commit}-{service}',
+                service: {'reference': f'{args.repository}:{image_tags[service]}',
                           'digest': after[service]['image'] if service in SERVICES
                           else pulled_images[service], 'sourceCommit': args.commit}
                 for service in (*SERVICES, 'migrate')}},
