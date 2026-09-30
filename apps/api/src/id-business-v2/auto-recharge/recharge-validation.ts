@@ -18,18 +18,100 @@ export function object(value: unknown): Record<string, unknown> {
 export function validateStart(value: unknown): V2RechargeStart {
   const input = object(value);
   if (
+    input.action === 'server' &&
+    Object.keys(input).some(
+      (key) =>
+        ![
+          'id',
+          'action',
+          'sessionJson',
+          'login',
+          'chatgptAccountId',
+          'cardId',
+          'plan',
+          'addressId',
+          'manualAddress',
+          'details',
+          'lockedCurrency',
+          'maxAmount',
+          'authorizeSinglePayment',
+          'proxyId',
+          'proxyCountryCode'
+        ].includes(key)
+    )
+  )
+    throw new BadRequestException('服务器任务包含不支持的字段');
+  if (
     typeof input.id !== 'string' ||
     !uuidPattern.test(input.id) ||
     !V2_RECHARGE_PLANS.includes(input.plan as never) ||
-    !['check', 'quote', 'prepare', 'recheck', 'flow'].includes(String(input.action)) ||
-    typeof input.sessionJson !== 'string' ||
-    input.sessionJson.length < 2 ||
-    Buffer.byteLength(input.sessionJson) > 65000
+    !['check', 'quote', 'prepare', 'recheck', 'flow', 'server'].includes(String(input.action)) ||
+    (input.action !== 'server' &&
+      (typeof input.sessionJson !== 'string' ||
+        input.sessionJson.length < 2 ||
+        Buffer.byteLength(input.sessionJson) > 65000))
   ) {
     throw new BadRequestException('请提供完整授权 JSON、支持的套餐及有效操作');
   }
-  if (input.action === 'prepare') {
-    if (typeof input.addressId !== 'string' || !uuidPattern.test(input.addressId)) {
+  if (input.action === 'server') {
+    const sourceCount =
+      Number(typeof input.sessionJson === 'string') +
+      Number(input.login !== undefined) +
+      Number(input.chatgptAccountId !== undefined);
+    if (sourceCount !== 1) throw new BadRequestException('请选择一种 ChatGPT 登录方式');
+    if (
+      input.sessionJson !== undefined &&
+      (typeof input.sessionJson !== 'string' ||
+        input.sessionJson.length < 2 ||
+        Buffer.byteLength(input.sessionJson) > 65000)
+    )
+      throw new BadRequestException('授权 JSON 无效');
+    if (
+      input.chatgptAccountId !== undefined &&
+      (typeof input.chatgptAccountId !== 'string' || !uuidPattern.test(input.chatgptAccountId))
+    )
+      throw new BadRequestException('ChatGPT 账号编号无效');
+    if (
+      input.cardId !== undefined &&
+      (typeof input.cardId !== 'string' || !uuidPattern.test(input.cardId))
+    )
+      throw new BadRequestException('银行卡编号无效');
+    if (input.login !== undefined) {
+      const login = object(input.login);
+      if (
+        Object.keys(login).some((key) => !['email', 'password', 'totpSecret'].includes(key)) ||
+        typeof login.email !== 'string' ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login.email) ||
+        login.email.length > 250 ||
+        typeof login.password !== 'string' ||
+        login.password.length < 1 ||
+        login.password.length > 1024 ||
+        (login.totpSecret !== undefined &&
+          (typeof login.totpSecret !== 'string' || login.totpSecret.length > 2048))
+      )
+        throw new BadRequestException('本次登录资料格式无效');
+    }
+  } else if (
+    input.login !== undefined ||
+    input.chatgptAccountId !== undefined ||
+    input.cardId !== undefined
+  ) {
+    throw new BadRequestException('当前步骤无需账号密码或已保存银行卡');
+  }
+  if (input.action === 'prepare' || input.action === 'server') {
+    if (input.action === 'server') {
+      if (
+        (input.manualAddress !== undefined && input.manualAddress !== true) ||
+        Number(input.manualAddress === true) +
+          Number(typeof input.addressId === 'string' && uuidPattern.test(input.addressId)) !==
+          1
+      )
+        throw new BadRequestException('请选择地址库资料或手填真实账单地址');
+    } else if (
+      typeof input.addressId !== 'string' ||
+      !uuidPattern.test(input.addressId) ||
+      input.manualAddress !== undefined
+    ) {
       throw new BadRequestException('请选择未使用的账单地址');
     }
     const details = object(input.details);
@@ -52,7 +134,62 @@ export function validateStart(value: unknown): V2RechargeStart {
     ) {
       throw new BadRequestException('请补齐本次银行卡与真实账单资料');
     }
-  } else if (input.details !== undefined || input.addressId !== undefined) {
+    if (
+      input.action === 'server' &&
+      input.manualAddress === true &&
+      (!/^[A-Z]{2}$/.test(String(details.country)) ||
+        !String(details.line1).trim() ||
+        String(details.line1).length > 180 ||
+        String(details.line2).length > 180 ||
+        !String(details.city).trim() ||
+        String(details.city).length > 120 ||
+        String(details.state).length > 120 ||
+        !String(details.postal_code).trim() ||
+        String(details.postal_code).length > 20)
+    )
+      throw new BadRequestException('手填账单地址格式无效');
+    if (
+      input.action === 'server' &&
+      (input.authorizeSinglePayment !== true ||
+        typeof input.lockedCurrency !== 'string' ||
+        !/^[A-Z]{3}$/.test(input.lockedCurrency) ||
+        (input.maxAmount !== undefined &&
+          (typeof input.maxAmount !== 'string' ||
+            !/^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(input.maxAmount) ||
+            !/[1-9]/.test(input.maxAmount))))
+    )
+      throw new BadRequestException('请锁定币种并授权本任务一次付款');
+    if (
+      input.action === 'server' &&
+      (typeof input.proxyId !== 'string' ||
+        !uuidPattern.test(input.proxyId) ||
+        typeof input.proxyCountryCode !== 'string' ||
+        !/^[A-Z]{2}$/.test(input.proxyCountryCode))
+    ) {
+      throw new BadRequestException('请选择有效的代理国家和代理 IP');
+    }
+    if (
+      input.action === 'server' &&
+      input.login &&
+      String(details.email).toLowerCase() !== String(object(input.login).email).trim().toLowerCase()
+    )
+      throw new BadRequestException('账单邮箱与登录账号不一致');
+    if (
+      input.action !== 'server' &&
+      (input.proxyId !== undefined || input.proxyCountryCode !== undefined)
+    ) {
+      throw new BadRequestException('当前步骤无需选择代理 IP');
+    }
+  } else if (
+    input.details !== undefined ||
+    input.addressId !== undefined ||
+    input.manualAddress !== undefined ||
+    input.lockedCurrency !== undefined ||
+    input.maxAmount !== undefined ||
+    input.authorizeSinglePayment !== undefined ||
+    input.proxyId !== undefined ||
+    input.proxyCountryCode !== undefined
+  ) {
     throw new BadRequestException('当前步骤无需银行卡或账单地址资料');
   }
   return input as unknown as V2RechargeStart;
@@ -119,7 +256,7 @@ export function validateWorkerConfirmation(
   assertFinalQuote(quote, job.plan, report.quote_authority);
   const expected = confirmationNonce(id, quote, workerToken);
   if (
-    !['prepare', 'flow'].includes(job.action) ||
+    !['prepare', 'flow', 'server'].includes(job.action) ||
     job.state !== 'running' ||
     typeof nonce !== 'string' ||
     !/^[a-f0-9]{64}$/.test(nonce) ||

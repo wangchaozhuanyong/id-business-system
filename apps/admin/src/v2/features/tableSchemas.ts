@@ -23,7 +23,53 @@ export const v2TableSchemas = {
         { key: 'hasTotp', label: '双重验证', kind: 'status', widthPreset: 'compact' },
         { key: 'remark', label: '备注', kind: 'text', widthPreset: 'longText' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
+  },
+  bankRechargeCards: {
+    main: table({
+      id: 'bank-recharge-cards.main',
+      feature: 'bank-recharge-cards',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        { key: 'label', label: '银行卡', kind: 'identifier', widthPreset: 'wide', pin: 'start' },
+        { key: 'last4', label: '卡尾号', kind: 'identifier', widthPreset: 'compact' },
+        { key: 'expiry', label: '有效期', kind: 'text', widthPreset: 'compact' },
+        { key: 'currencyCode', label: '付款币种', kind: 'text', widthPreset: 'compact' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'accountCount', label: '已充值账号', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'remark1', label: '备注1', kind: 'text', widthPreset: 'longText' },
+        { key: 'remark2', label: '备注2', kind: 'text', widthPreset: 'longText' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
+      ]
+    })
+  },
+  rechargeProxies: {
+    main: table({
+      id: 'recharge-proxies.main',
+      feature: 'recharge-proxies',
+      role: 'primary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'countryCode',
+          label: '国家',
+          kind: 'identifier',
+          widthPreset: 'standard',
+          pin: 'start'
+        },
+        { key: 'kind', label: 'IP 属性', kind: 'text', widthPreset: 'standard' },
+        { key: 'linkMask', label: '代理链接', kind: 'text', widthPreset: 'standard' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'remark1', label: '备注1', kind: 'text', widthPreset: 'longText' },
+        { key: 'remark2', label: '备注2', kind: 'text', widthPreset: 'longText' },
+        { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })
   },
@@ -1259,6 +1305,8 @@ export const v2TableSchemas = {
 export const v2TablesByFeature = {
   'auto-recharge': [],
   'chatgpt-accounts': [v2TableSchemas.chatgptAccounts.main],
+  'bank-recharge-cards': [v2TableSchemas.bankRechargeCards.main],
+  'recharge-proxies': [v2TableSchemas.rechargeProxies.main],
   'bank-recharge-orders': [v2TableSchemas.bankRechargeOrders.main],
   'vendure-mailbox': [
     v2TableSchemas.vendureMailbox.primary,

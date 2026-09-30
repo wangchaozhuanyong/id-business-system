@@ -1,5 +1,6 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
+import { useRoute, useRouter } from 'vue-router';
 import {
   divideDecimalStrings,
   multiplyDecimalStrings,
@@ -18,6 +19,14 @@ import {
 } from './bank-recharge-api';
 
 export function useBankRechargeOrdersPage() {
+  const route = useRoute();
+  const router = useRouter();
+  const accountIdFilter = computed(() =>
+    typeof route.query.accountId === 'string' ? route.query.accountId : ''
+  );
+  const linkedOrderNo = computed(() =>
+    typeof route.query.orderNo === 'string' && accountIdFilter.value ? route.query.orderNo : ''
+  );
   const businessNow = ref<number | null>(getV2BusinessNowMs());
   let disposed = false;
   let clockTimer: ReturnType<typeof setInterval> | undefined;
@@ -35,9 +44,9 @@ export function useBankRechargeOrdersPage() {
   const financeCurrencies = ['CNY', 'MYR', 'USD', 'USDT'];
   const page = ref(1);
   const pageSize = ref(20);
-  const keywordInput = ref('');
+  const keywordInput = ref(linkedOrderNo.value);
   const statusInput = ref('');
-  const keyword = ref('');
+  const keyword = ref(linkedOrderNo.value);
   const status = ref('');
   const drawerOpen = ref(false);
   const quickCustomerOpen = ref(false);
@@ -93,7 +102,8 @@ export function useBankRechargeOrdersPage() {
         page: page.value,
         pageSize: pageSize.value,
         keyword: keyword.value,
-        status: status.value
+        status: status.value,
+        accountId: accountIdFilter.value
       }),
     keepPreviousData: true,
     query: ({ signal }) =>
@@ -102,14 +112,33 @@ export function useBankRechargeOrdersPage() {
           page: page.value,
           pageSize: pageSize.value,
           keyword: keyword.value,
-          status: status.value
+          status: status.value,
+          accountId: accountIdFilter.value
         },
         { signal }
       )
   });
-  watch([page, pageSize, keyword, status], () => {
+  watch([page, pageSize, keyword, status, accountIdFilter], () => {
     void ordersQuery.ensureFresh();
   });
+  watch([accountIdFilter, linkedOrderNo], () => {
+    keywordInput.value = linkedOrderNo.value;
+    keyword.value = linkedOrderNo.value;
+    page.value = 1;
+    selected.value = null;
+    drawerOpen.value = false;
+  });
+  watch(
+    () => ordersQuery.data.value?.items,
+    (items) => {
+      if (!linkedOrderNo.value || !items) return;
+      const order = items.find(
+        (item) => item.orderNo === linkedOrderNo.value && item.accountId === accountIdFilter.value
+      );
+      if (order && selected.value?.id !== order.id) openEdit(order);
+    },
+    { immediate: true }
+  );
   const optionsQuery = useV2ModuleQuery({
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
@@ -241,6 +270,9 @@ export function useBankRechargeOrdersPage() {
     keyword.value = keywordInput.value.trim();
     status.value = statusInput.value;
     page.value = 1;
+  }
+  function clearAccountFilter() {
+    void router.replace({ path: '/v2/auto-recharge/bank-orders' });
   }
   function changePage(value: number) {
     page.value = value;
@@ -481,6 +513,8 @@ export function useBankRechargeOrdersPage() {
     statusInput,
     keyword,
     status,
+    accountIdFilter,
+    clearAccountFilter,
     drawerOpen,
     quickCustomerOpen,
     cardOpen,

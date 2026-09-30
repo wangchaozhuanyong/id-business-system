@@ -37,7 +37,8 @@ const formFromSettings = (settings?: V2RechargeBitBrowserSettings): BitBrowserSe
 
 export function useRechargeBrowserSettings(
   connectorStatus: Ref<ConnectorStatus>,
-  connectorMessage: Ref<string>
+  connectorMessage: Ref<string>,
+  serverMode: Ref<boolean>
 ) {
   const settingsOpen = ref(false);
   const settingsSaving = ref(false);
@@ -52,7 +53,12 @@ export function useRechargeBrowserSettings(
     keepPreviousData: true,
     query: ({ signal }) => rechargeApi.getBitBrowserSettings({ signal })
   });
-  const browserCatalog = useRechargeBrowserCatalog(settingsForm, settingsOpen, settingsQuery.data);
+  const browserCatalog = useRechargeBrowserCatalog(
+    settingsForm,
+    settingsOpen,
+    settingsQuery.data,
+    computed(() => !serverMode.value)
+  );
   let connectionCheck: AbortController | undefined;
 
   function resetSettings() {
@@ -115,16 +121,16 @@ export function useRechargeBrowserSettings(
     await checkConnection(formFromSettings(settings));
   }
 
-  async function saveSettings() {
+  async function saveSettings(serverMode = false) {
     if (settingsSaving.value) return;
-    if (browserCatalog.selectionError.value) {
+    if (!serverMode && browserCatalog.selectionError.value) {
       settingsError.value = browserCatalog.selectionError.value;
       return;
     }
     const stored = settingsQuery.data.value;
     if (
-      (!stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
-      (!stored?.connectorTokenConfigured && !settingsForm.value.connectorToken) ||
+      (!serverMode && !stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
+      (!serverMode && !stored?.connectorTokenConfigured && !settingsForm.value.connectorToken) ||
       (settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
         !stored?.dynamicProxyUrlConfigured &&
         !settingsForm.value.dynamicProxyUrl)
@@ -138,6 +144,7 @@ export function useRechargeBrowserSettings(
       const { staticProxyUsername, staticProxyPassword, ...input } = settingsForm.value;
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
+        serverMode,
         localApiToken: settingsForm.value.localApiToken || undefined,
         connectorToken: settingsForm.value.connectorToken || undefined,
         dynamicProxyUrl: settingsForm.value.dynamicProxyUrl || undefined,

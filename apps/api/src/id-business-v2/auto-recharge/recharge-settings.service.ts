@@ -1,10 +1,13 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
+  Amount4,
+  type V2CommandTransaction,
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
@@ -36,6 +39,77 @@ export class RechargeSettingsService {
 
   async get(operator: AuthenticatedUser) {
     return this.response(await this.repository.find(operator.id));
+  }
+
+  async paymentCaps() {
+    const items = await this.repository.listPaymentCaps();
+    return {
+      items: items.map((item) => ({
+        plan: item.plan,
+        currencyCode: item.currencyCode,
+        maxAmount: item.maxAmount.toString()
+      }))
+    };
+  }
+
+  async requirePaymentCap(tx: V2CommandTransaction, plan: string, currencyCode: string) {
+    const cap = await this.repository.paymentCap(tx, plan, currencyCode);
+    if (!cap)
+      throw new ServiceUnavailableException('请先在服务器设置中配置该套餐和币种的付款安全上限');
+    return cap.maxAmount.toString();
+  }
+
+  async updatePaymentCap(
+    plan: string,
+    currencyCode: string,
+    value: unknown,
+    operator: AuthenticatedUser
+  ) {
+    if (!V2_RECHARGE_PLANS.includes(plan as never) || !/^[A-Z]{3}$/.test(currencyCode))
+      throw new BadRequestException('套餐或币种无效');
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new BadRequestException('付款安全上限格式无效');
+    const input = value as Record<string, unknown>;
+    if (
+      Object.keys(input).some((key) => key !== 'maxAmount') ||
+      typeof input.maxAmount !== 'string' ||
+      !/^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(input.maxAmount)
+    )
+      throw new BadRequestException('付款安全上限格式无效');
+    const amount = Amount4.from(input.maxAmount);
+    if (!amount.gt('0')) throw new BadRequestException('付款安全上限必须大于零');
+    return this.transactions.execute(
+      async (tx) => {
+        const currency = await this.repository.currencyForCap(tx, currencyCode);
+        if (
+          !currency ||
+          !currency.active ||
+          currency.minorUnits > 2 ||
+          ((input.maxAmount as string).split('.')[1]?.length ?? 0) > currency.minorUnits
+        )
+          throw new BadRequestException('币种不可用或金额精度不匹配');
+        const before = await this.repository.paymentCap(tx, plan, currencyCode);
+        const updated = await this.repository.upsertPaymentCap(
+          tx,
+          plan,
+          currencyCode,
+          amount.toString(),
+          operator.id
+        );
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.payment_cap.update',
+          objectType: 'recharge_payment_cap',
+          objectId: `${plan}:${currencyCode}`,
+          beforeData: before ? { maxAmount: before.maxAmount.toString() } : undefined,
+          afterData: { maxAmount: updated.maxAmount.toString() },
+          remark: '设置服务器充值按套餐和币种的付款安全上限'
+        });
+        return { plan, currencyCode, maxAmount: updated.maxAmount.toString() };
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
   }
 
   async catalogAccess(operator: AuthenticatedUser) {
@@ -89,11 +163,15 @@ export class RechargeSettingsService {
           ? this.encryption.encrypt(input.dynamicProxyUrl)
           : before?.dynamicProxyUrlEncrypted;
         if (
-          !localApiTokenEncrypted ||
-          !connectorTokenEncrypted ||
+          (!input.serverMode && (!localApiTokenEncrypted || !connectorTokenEncrypted)) ||
           (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrlEncrypted)
         ) {
           throw new BadRequestException('请填写连接密钥及当前代理模式所需的配置');
+        }
+        if (input.serverMode && browserOptions.proxyMode === 'dynamic') {
+          const extractionUrl = this.encryption.decrypt(dynamicProxyUrlEncrypted);
+          if (!extractionUrl || new URL(extractionUrl).protocol !== 'https:')
+            throw new BadRequestException('服务器动态 IP 提取链接必须使用 HTTPS');
         }
         const updated = await this.repository.upsert(tx, operator.id, {
           connectorUrl: input.connectorUrl,
@@ -124,7 +202,7 @@ export class RechargeSettingsService {
           objectId: operator.id,
           beforeData: before ? toV2JsonDocument(this.auditSnapshot(before)) : undefined,
           afterData: toV2JsonDocument(this.auditSnapshot(updated)),
-          remark: '更新本机比特浏览器自动充值设置'
+          remark: input.serverMode ? '更新服务器充值代理设置' : '更新本机比特浏览器自动充值设置'
         });
         return updated;
       },
@@ -138,7 +216,7 @@ export class RechargeSettingsService {
     return this.response(row);
   }
 
-  async runtime(ownerId: string) {
+  async runtime(ownerId: string, selectedProxy = false) {
     const row = await this.repository.find(ownerId);
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
     const connectorToken = this.encryption.decrypt(row?.connectorTokenEncrypted);
@@ -151,7 +229,7 @@ export class RechargeSettingsService {
       !row ||
       !localApiToken ||
       !connectorToken ||
-      (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
+      (!selectedProxy && browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
     ) {
       throw new ServiceUnavailableException('请先完成比特浏览器设置');
     }
@@ -169,6 +247,31 @@ export class RechargeSettingsService {
       localApiToken,
       connectorToken,
       dynamicProxyUrl: dynamicProxyUrl || ''
+    };
+  }
+
+  async serverProxy(ownerId: string) {
+    const row = await this.repository.find(ownerId);
+    const options = storedBrowserOptions(row?.browserOptions);
+    if (!row) throw new ServiceUnavailableException('请先保存服务器代理设置');
+    if (options.proxyMode === 'dynamic') {
+      const extractionUrl = this.encryption.decrypt(row.dynamicProxyUrlEncrypted);
+      if (!extractionUrl) throw new ServiceUnavailableException('请先保存动态 IP 提取链接');
+      if (new URL(extractionUrl).protocol !== 'https:')
+        throw new ServiceUnavailableException('服务器动态 IP 提取链接必须使用 HTTPS');
+      return { mode: 'dynamic' as const, type: row.proxyType, extractionUrl };
+    }
+    if (!options.staticHost || !options.staticPort)
+      throw new ServiceUnavailableException('请先保存固定代理地址');
+    const encrypted = this.encryption.decrypt(row.staticProxyCredentialsEncrypted);
+    const credentials = encrypted ? validateStaticCredentials(JSON.parse(encrypted)) : undefined;
+    return {
+      mode: 'static' as const,
+      type: row.proxyType,
+      host: options.staticHost,
+      port: options.staticPort,
+      username: credentials?.username ?? '',
+      password: credentials?.password ?? ''
     };
   }
 

@@ -18,6 +18,11 @@ const mock = vi.hoisted(() => ({
   totpQuery: {} as Record<string, unknown>,
   bankAccountsQuery: {} as Record<string, unknown>,
   bankCurrenciesQuery: {} as Record<string, unknown>,
+  paymentCapsQuery: {} as Record<string, unknown>,
+  paymentCardsQuery: {} as Record<string, unknown>,
+  proxyCountriesQuery: {} as Record<string, unknown>,
+  proxiesQuery: {} as Record<string, unknown>,
+  checkCardAvailability: vi.fn(),
   queryIndex: 0,
   jobOptions: undefined as
     | undefined
@@ -25,6 +30,9 @@ const mock = vi.hoisted(() => ({
         getRevalidateAt?: (data: { configured: boolean; items: V2RechargeJob[] }) => number | null;
       },
   startBitBrowser: vi.fn(),
+  startServer: vi.fn(),
+  recheckServer: vi.fn(),
+  cancelServer: vi.fn(),
   startBitBrowserOpen: vi.fn(),
   recheckBitBrowser: vi.fn(),
   resolveNoBankRequest: vi.fn(),
@@ -58,6 +66,12 @@ vi.mock('@/v2/composables/useV2Query', () => ({
     if (options.key === 'auto-recharge-saved-totp-accounts') return mock.totpQuery;
     if (options.moduleKey === 'chatgpt-accounts') return mock.bankAccountsQuery;
     if (options.moduleKey === 'bank-recharge-orders') return mock.bankCurrenciesQuery;
+    if (options.key === 'auto-recharge-payment-caps') return mock.paymentCapsQuery;
+    if (options.moduleKey === 'bank-recharge-cards') return mock.paymentCardsQuery;
+    if (options.moduleKey === 'recharge-proxies')
+      return options.key === 'auto-recharge-proxy-countries'
+        ? mock.proxyCountriesQuery
+        : mock.proxiesQuery;
     const result = mock.queryIndex++ === 0 ? mock.jobsQuery : mock.settingsQuery;
     if (options.getRevalidateAt) mock.jobOptions = options;
     return result;
@@ -72,6 +86,11 @@ vi.mock('./api', () => ({
     listAddresses: vi.fn(),
     getBitBrowserSettings: vi.fn(),
     startBitBrowser: mock.startBitBrowser,
+    startServer: mock.startServer,
+    listPaymentCaps: vi.fn(),
+    updatePaymentCap: vi.fn(),
+    recheckServer: mock.recheckServer,
+    cancelServer: mock.cancelServer,
     startBitBrowserOpen: mock.startBitBrowserOpen,
     recheckBitBrowser: mock.recheckBitBrowser,
     resolveNoBankRequest: mock.resolveNoBankRequest,
@@ -91,6 +110,19 @@ vi.mock('./api', () => ({
 }));
 
 vi.mock('@/api/client', () => ({ getApiErrorMessage: (cause: Error) => cause.message }));
+vi.mock('./bank-recharge-api', () => ({
+  bankRechargeApi: {
+    checkCardAvailability: mock.checkCardAvailability,
+    listCards: vi.fn(),
+    listAccounts: vi.fn(),
+    listCurrencies: vi.fn(),
+    managedCardDetail: vi.fn(),
+    accountIdentity: vi.fn()
+  }
+}));
+vi.mock('./recharge-proxy-api', () => ({
+  rechargeProxyApi: { countries: vi.fn(), list: vi.fn() }
+}));
 vi.mock('./useRechargeBrowserCatalog', () => ({
   useRechargeBrowserCatalog: () => ({ selectionError: ref('') }),
   readBrowserCatalog: mock.connectorCatalog
@@ -172,6 +204,7 @@ const addresses = ref({
   pageSize: 2000,
   totals: { unused: 1, used: 0, disabled: 0 }
 });
+
 const storedSettings = ref<V2RechargeBitBrowserSettings | undefined>(settings);
 const phase = ref('ready');
 const savedTotp = ref({
@@ -222,6 +255,16 @@ beforeEach(() => {
   mock.totpQuery = queryResult(savedTotp);
   mock.bankAccountsQuery = queryResult(bankAccounts);
   mock.bankCurrenciesQuery = queryResult(bankCurrencies);
+  mock.paymentCapsQuery = queryResult(
+    ref({ items: [{ plan: 'plus', currencyCode: 'PHP', maxAmount: '1500' }] })
+  );
+  mock.paymentCardsQuery = queryResult(ref({ items: [] }));
+  mock.proxyCountriesQuery = queryResult(ref({ items: [] }));
+  mock.proxiesQuery = {
+    ...queryResult(ref({ items: [], total: 0 })),
+    ensureFresh: vi.fn().mockResolvedValue(undefined)
+  };
+  mock.checkCardAvailability.mockResolvedValue({ available: true });
   mock.listTotpAccounts.mockImplementation(async () => ({
     items: [
       {
@@ -239,6 +282,9 @@ beforeEach(() => {
     ]
   }));
   mock.startBitBrowser.mockImplementation(async (input) => ({ ...launch, id: input.id }));
+  mock.startServer.mockImplementation(async (input) => ({ id: input.id }));
+  mock.recheckServer.mockImplementation(async (input) => ({ id: input.id }));
+  mock.cancelServer.mockImplementation(async (id) => ({ id }));
   mock.startBitBrowserOpen.mockImplementation(
     async (input: { id: string; windowName: string }) => ({
       id: input.id,
@@ -278,11 +324,41 @@ beforeEach(() => {
   mock.updateBitBrowserSettings.mockResolvedValue(settings);
   scope = effectScope();
   flow = scope.run(useAutoRecharge)!;
+  flow.operationMode.value = 'payment';
 });
 
 afterEach(() => scope.stop());
 
 describe('本机比特浏览器自动充值', () => {
+  it('先选国家再选择该国启用代理，并把代理编号传给充值任务', async () => {
+    fillForm();
+    const proxyId = '33333333-3333-4333-8333-333333333333';
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US'] };
+    expect(flow.canStart.value).toBe(false);
+    flow.selectedProxyCountryCode.value = 'US';
+    (mock.proxiesQuery.data as { value: unknown }).value = {
+      items: [{ id: proxyId, countryCode: 'US', status: 'active', kind: 'dynamic_residential' }]
+    };
+    await nextTick();
+    expect(flow.canStart.value).toBe(false);
+    flow.selectedProxyId.value = proxyId;
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startBitBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyId,
+        proxyCountryCode: 'US'
+      })
+    );
+  });
+  it('停用的已保存卡号在打开浏览器前被拦截', async () => {
+    fillForm();
+    mock.checkCardAvailability.mockRejectedValue(new Error('该银行卡已停用，不能用于充值'));
+    await flow.start();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('已停用');
+  });
+
   it('账号密码只发给本机连接器，服务端任务不含登录秘密', async () => {
     flow.loginMethod.value = 'password';
     flow.loginEmail.value = 'test@example.invalid';
@@ -634,6 +710,7 @@ describe('本机比特浏览器自动充值', () => {
         })
     );
     const pending = flow.start();
+    await vi.waitFor(() => expect(mock.connectorCatalog).toHaveBeenCalledOnce());
     scope.stop();
     finish({
       groups: [{ id: 'g', name: settings.groupName }],
@@ -918,5 +995,71 @@ describe('本机比特浏览器自动充值', () => {
     scope.stop();
     expect(flow.sessionJson.value).toBe('');
     expect(Object.values(flow.details.value).every((value) => value === '')).toBe(true);
+  });
+});
+
+describe('服务器自动充值', () => {
+  it('只需授权 JSON、卡资料和付款上限，提交后清除敏感输入', async () => {
+    flow.operationMode.value = 'server_payment';
+    fillForm();
+    const proxyId = '33333333-3333-4333-8333-333333333333';
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US'] };
+    (mock.proxiesQuery.data as { value: unknown }).value = {
+      items: [{ id: proxyId, countryCode: 'US', status: 'active', kind: 'dynamic_residential' }]
+    };
+    flow.selectedProxyCountryCode.value = 'US';
+    await nextTick();
+    flow.selectedProxyId.value = proxyId;
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'server',
+        plan: 'plus',
+        addressId: address.id,
+        authorizeSinglePayment: true,
+        sessionJson: sessionJson(),
+        proxyId,
+        proxyCountryCode: 'US'
+      })
+    );
+    expect(mock.startServer.mock.calls[0]![0]).not.toHaveProperty('maxAmount');
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(flow.sessionJson.value).toBe('');
+    expect(flow.details.value.number).toBe('');
+  });
+
+  it('结果不明时只向服务器提交原任务授权，不传卡资料或付款上限', async () => {
+    const sourceId = '99999999-9999-4999-8999-999999999999';
+    jobs.value.items = [
+      {
+        id: sourceId,
+        plan: 'plus',
+        action: 'server',
+        state: 'unknown',
+        createdAt: '',
+        updatedAt: '',
+        result: {
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          payment_status: 'unknown'
+        }
+      }
+    ];
+    flow.selectJob(sourceId);
+    flow.updateJsonInput(sessionJson());
+    expect(flow.canRecheck.value).toBe(true);
+    await flow.recheck();
+    expect(mock.recheckServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceJobId: sourceId,
+        sessionJson: sessionJson()
+      })
+    );
+    const input = mock.recheckServer.mock.calls[0]![0];
+    expect(input).not.toHaveProperty('details');
+    expect(input).not.toHaveProperty('maxAmount');
+    expect(mock.recheckBitBrowser).not.toHaveBeenCalled();
+    expect(flow.sessionJson.value).toBe('');
   });
 });

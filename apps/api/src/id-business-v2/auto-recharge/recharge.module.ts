@@ -8,8 +8,13 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
+import { RechargeProxyController } from './recharge-proxy.controller';
+import { RechargeProxyService } from './recharge-proxy.service';
+import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
 import { BankRechargeController } from './bank-recharge.controller';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeCardService } from './bank-recharge-card.service';
+import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeQueryRepository } from './persistence/bank-recharge-query.repository';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
@@ -18,10 +23,12 @@ import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule],
-  controllers: [RechargeController, BankRechargeController],
+  controllers: [RechargeController, BankRechargeController, RechargeProxyController],
   providers: [
     FieldEncryptionService,
     BankRechargeAccountService,
+    BankRechargeCardService,
+    BankRechargeCardRepository,
     BankRechargeOrderService,
     BankRechargeQueryRepository,
     BankRechargeRepository,
@@ -32,7 +39,9 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
     RechargeSettingsService,
     RechargeRepository,
     RechargeAddressRepository,
-    RechargeSettingsRepository
+    RechargeSettingsRepository,
+    RechargeProxyService,
+    RechargeProxyRepository
   ]
 })
 export class RechargeModule {}

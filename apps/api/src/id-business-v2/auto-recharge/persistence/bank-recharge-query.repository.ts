@@ -5,7 +5,7 @@ import {
   ID_BUSINESS_V2_RENEWAL_WARNING_DEFAULT_DAYS,
   ID_BUSINESS_V2_RENEWAL_WARNING_SCOPE
 } from '../../renewals/public-api';
-import { bankRechargeText } from '../bank-recharge-validation';
+import { bankRechargeId, bankRechargeText } from '../bank-recharge-validation';
 
 @Injectable()
 export class BankRechargeQueryRepository {
@@ -88,6 +88,7 @@ export class BankRechargeQueryRepository {
     const pageSize = this.pageNumber(query.pageSize, 20, 100);
     const keyword = bankRechargeText(query.keyword, '搜索词', 160, false);
     const status = bankRechargeText(query.status, '订单状态', 40, false);
+    const accountId = query.accountId ? bankRechargeId(query.accountId, 'ChatGPT 账号') : null;
     if (
       status &&
       ![
@@ -102,6 +103,7 @@ export class BankRechargeQueryRepository {
       throw new BadRequestException('订单状态无效');
     }
     const where: Prisma.IdBusinessV2BankRechargeOrderWhereInput = {
+      ...(accountId ? { accountId } : {}),
       ...(status
         ? { status: status as Prisma.EnumIdBusinessV2BankRechargeOrderStatusFilter['equals'] }
         : {}),

@@ -46,7 +46,15 @@
       </template>
       <dl class="recharge-summary">
         <dt>执行模式</dt>
-        <dd>{{ job.result.mode === 'open_browser' ? '仅登录窗口' : '自动充值' }}</dd>
+        <dd>
+          {{
+            job.action === 'server'
+              ? '服务器充值'
+              : job.result.mode === 'open_browser'
+                ? '仅登录窗口'
+                : '本机充值'
+          }}
+        </dd>
         <template v-if="job.result.mode !== 'open_browser'">
           <dt>开通套餐</dt>
           <dd>{{ planLabels[job.plan] }}</dd>
@@ -147,9 +155,14 @@
       </details>
     </template>
     <div v-else class="recharge-empty">
-      <h3>等待开通资料</h3>
-      <p>补齐开通资料后，连接器会创建比特浏览器窗口并执行本次任务。</p>
-      <p>官网要求本人验证时，会保留原窗口等待处理。</p>
+      <h3>{{ mode === 'open_browser' ? '等待打开比特浏览器窗口' : '等待开始本次充值' }}</h3>
+      <p v-if="mode === 'server_payment'">
+        服务器会创建独立浏览器环境，提取代理 IP 后核价并执行单次付款。
+      </p>
+      <p v-else-if="mode === 'open_browser'">
+        连接器会新建比特浏览器窗口并登录官网，完成后保留窗口供手动操作。
+      </p>
+      <p v-else>连接器会新建比特浏览器窗口，官网登录核对后完成核价与付款保护。</p>
     </div>
   </div>
 </template>
@@ -169,7 +182,10 @@ import {
   subscriptionLabel,
   selectionStepLabels
 } from './recharge-presentation';
-const props = defineProps<{ job?: V2RechargeJob }>();
+const props = defineProps<{
+  job?: V2RechargeJob;
+  mode?: 'server_payment' | 'payment' | 'open_browser';
+}>();
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
 function price(value: { currency: string; amount: string } | null | undefined, fallback = '未知') {
   return value ? `${value.currency} ${value.amount}` : fallback;

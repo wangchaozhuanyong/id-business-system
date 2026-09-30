@@ -21,7 +21,7 @@ const account = { id: accountId, emailMasked: 'te***@example.invalid' };
 const card = {
   id: cardId,
   label: '菲律宾银充 Visa 卡长名称',
-  last4: '1234',
+  last4: '4444',
   currencyCode: 'PHP',
   active: true
 };
@@ -38,7 +38,7 @@ const order = {
   cardId,
   card,
   activeSubscription: { status: 'active' },
-  cardLast4: '1234',
+  cardLast4: '4444',
   plan: 'plus',
   chargeAmount: '1000.0000',
   chargeCurrencyCode: 'PHP',
@@ -165,6 +165,21 @@ try {
   const orderRequests = [];
   const runtimeErrors = [];
   let showAccounts = true;
+  let accountStatus = 'active';
+  let managedCards = [
+    {
+      ...card,
+      status: 'active',
+      expiry: '12/39',
+      hasNumber: true,
+      remark1: '常用',
+      remark2: '测试',
+      accountCount: 1,
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+  const importedCardId = '99999999-9999-4999-8999-999999999999';
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
   await page.addInitScript(() => {
     const user = {
@@ -258,6 +273,36 @@ try {
           }
         ]
       };
+    } else if (
+      pathname.endsWith('/id-business-v2/bank-recharge/accounts/import') &&
+      request.method() === 'POST'
+    ) {
+      const input = request.postDataJSON();
+      assert.equal(input.accounts.length, 1);
+      assert.equal(input.accounts[0].email, 'new@example.invalid');
+      assert.equal(input.accounts[0].remark, '导入备注');
+      showAccounts = true;
+      account.emailMasked = 'ne***@example.invalid';
+      data = { imported: 1 };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/accounts/${accountId}`) &&
+      request.method() === 'PATCH'
+    ) {
+      const input = request.postDataJSON();
+      if (input.email) {
+        assert.equal(input.email, 'updated@example.invalid');
+        assert.equal(input.password, 'updated-pass');
+        assert.equal(input.totpSecret, 'JBSWY3DPEHPK3PXP');
+        account.emailMasked = 'up***@example.invalid';
+      }
+      if (input.status) accountStatus = input.status;
+      data = { id: accountId, emailMasked: account.emailMasked, status: accountStatus };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/accounts/${accountId}`) &&
+      request.method() === 'DELETE'
+    ) {
+      showAccounts = false;
+      data = { id: accountId };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/accounts')) {
       data = {
         total: showAccounts ? 1 : 0,
@@ -267,7 +312,7 @@ try {
           ? [
               {
                 ...account,
-                status: 'active',
+                status: accountStatus,
                 hasPassword: true,
                 hasTotp: true,
                 remark: null,
@@ -276,6 +321,87 @@ try {
               }
             ]
           : []
+      };
+    } else if (
+      pathname.endsWith('/id-business-v2/bank-recharge/cards/management/import') &&
+      request.method() === 'POST'
+    ) {
+      const input = request.postDataJSON();
+      assert.equal(input.currencyCode, 'PHP');
+      assert.equal(input.cards[0].number, '4111111111111111');
+      assert.equal(input.cards[0].remark1, '新卡');
+      assert.equal(input.cards[0].cvc, undefined);
+      managedCards.unshift({
+        ...managedCards[0],
+        id: importedCardId,
+        label: '银行卡 ····1111',
+        last4: '1111',
+        accountCount: 0,
+        remark1: '新卡',
+        remark2: '备用'
+      });
+      data = { imported: 1 };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/cards/management/${importedCardId}`) &&
+      request.method() === 'PATCH'
+    ) {
+      const input = request.postDataJSON();
+      managedCards[0] = {
+        ...managedCards[0],
+        label: input.label ?? managedCards[0].label,
+        status: input.status ?? managedCards[0].status,
+        remark1: input.remark1 ?? managedCards[0].remark1
+      };
+      data = { id: importedCardId };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/cards/management/${importedCardId}`) &&
+      request.method() === 'DELETE'
+    ) {
+      managedCards = managedCards.filter((item) => item.id !== importedCardId);
+      data = { id: importedCardId };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/cards/management/${cardId}/orders`)
+    ) {
+      data = {
+        items: [
+          {
+            id: orderId,
+            orderNo: order.orderNo,
+            accountId,
+            account,
+            chargeAmount: '1000.0000',
+            chargeCurrencyCode: 'PHP',
+            status: 'completed',
+            verifiedAt: now,
+            createdAt: now
+          }
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 20
+      };
+    } else if (
+      pathname.endsWith(`/id-business-v2/bank-recharge/cards/management/${cardId}`) &&
+      request.method() === 'GET'
+    ) {
+      data = {
+        ...managedCards.find((item) => item.id === cardId),
+        number: '5555555555554444'
+      };
+    } else if (pathname.endsWith('/id-business-v2/bank-recharge/cards/management')) {
+      const empty = url.searchParams.get('keyword') === 'empty';
+      const pageNumber = Number(url.searchParams.get('page') || '1');
+      const items = empty
+        ? []
+        : managedCards.filter(
+            (item) =>
+              !url.searchParams.get('status') || item.status === url.searchParams.get('status')
+          );
+      data = {
+        items: pageNumber === 1 ? items : [],
+        total: items.length,
+        page: pageNumber,
+        pageSize: 20
       };
     } else if (pathname.endsWith('/id-business-v2/bank-recharge/cards')) {
       data = { items: [card] };
@@ -547,6 +673,32 @@ try {
   for (const width of [2307, 1440, 900, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await assertListHeaderLayout(page, `${width}px ChatGPT 账号`);
+    const actionLayout = await page
+      .locator('.v2-records-table .v2-table-actions')
+      .first()
+      .evaluate((element) => {
+        const cell = element.closest('.v2-table-action-column');
+        const buttons = [...element.querySelectorAll('button')];
+        const bounds = cell?.getBoundingClientRect();
+        return {
+          buttons: buttons.length,
+          visible:
+            Boolean(bounds) &&
+            buttons.every((button) => {
+              const box = button.getBoundingClientRect();
+              return (
+                box.left >= bounds.left - 1 &&
+                box.right <= bounds.right + 1 &&
+                box.left >= 0 &&
+                box.right <= window.innerWidth + 1
+              );
+            }),
+          pageOverflow: document.documentElement.scrollWidth - window.innerWidth
+        };
+      });
+    assert.equal(actionLayout.buttons, 2, `${width}px ChatGPT 操作按钮数量不符`);
+    assert.ok(actionLayout.visible, `${width}px ChatGPT 操作按钮被裁切`);
+    assert.ok(actionLayout.pageOverflow <= 1, `${width}px ChatGPT 页面横向溢出`);
     if (width === 2307 || width === 390) {
       await page.screenshot({
         path: path.join(outputDir, `bank-chatgpt-accounts-${width}.png`),
@@ -559,6 +711,28 @@ try {
   await page.getByText('暂无 ChatGPT 账号').waitFor({ state: 'visible' });
   await assertListHeaderLayout(page, '390px ChatGPT 账号空状态');
   await page.screenshot({ path: path.join(outputDir, 'bank-chatgpt-accounts-empty-390.png') });
+  await page.getByRole('button', { name: '批量导入' }).click();
+  await page
+    .getByRole('textbox', { name: '粘贴 ChatGPT 账号资料' })
+    .fill('new@example.invalid test-pass - 导入备注');
+  await page.getByRole('button', { name: '导入账号' }).click();
+  await page.getByText('ne***@example.invalid').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: '编辑' }).click();
+  await page
+    .getByPlaceholder('当前 ne***@example.invalid；留空保留')
+    .fill('updated@example.invalid');
+  await page.getByPlaceholder('留空表示保留原密码').fill('updated-pass');
+  await page.getByPlaceholder('Base32 密钥或 otpauth 链接；可稍后补充').fill('JBSWY3DPEHPK3PXP');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByText('up***@example.invalid').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: '更多操作' }).click();
+  await page.getByText('停用', { exact: true }).click();
+  await page.getByText('停用', { exact: true }).first().waitFor({ state: 'visible' });
+  assert.equal(accountStatus, 'disabled');
+  await page.getByRole('button', { name: '更多操作' }).click();
+  await page.getByText('删除', { exact: true }).click();
+  await page.getByRole('button', { name: '删除账号' }).click();
+  await page.getByText('暂无 ChatGPT 账号').waitFor({ state: 'visible' });
   await page.getByRole('button', { name: '新增账号' }).click();
   await page.getByPlaceholder('输入 ChatGPT 登录邮箱').waitFor({ state: 'visible' });
   await page.getByPlaceholder('输入登录密码').waitFor({ state: 'visible' });
@@ -567,6 +741,97 @@ try {
   });
   await page.waitForTimeout(350);
   await page.screenshot({ path: path.join(outputDir, 'bank-chatgpt-accounts-390.png') });
+
+  await page.goto(`${baseUrl}/v2/auto-recharge/bank-cards`, { waitUntil: 'domcontentloaded' });
+  await page.getByText(card.label).waitFor({ state: 'visible' });
+  for (const width of [2307, 1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const mobileOverlay = page.locator('.v2-mobile-overlay');
+    if (await mobileOverlay.isVisible()) await mobileOverlay.click();
+    await page.waitForTimeout(300);
+    await assertListHeaderLayout(page, `${width}px 银行卡`);
+    const actions = await page
+      .locator('.v2-records-table .v2-table-actions')
+      .first()
+      .evaluate((element) => {
+        const cell = element.closest('.v2-table-action-column');
+        const buttons = [...element.querySelectorAll('button')];
+        const bounds = cell?.getBoundingClientRect();
+        return {
+          count: buttons.length,
+          visible:
+            Boolean(bounds) &&
+            buttons.every((button) => {
+              const box = button.getBoundingClientRect();
+              return box.left >= bounds.left - 1 && box.right <= bounds.right + 1;
+            }),
+          overflow: document.documentElement.scrollWidth - window.innerWidth
+        };
+      });
+    assert.equal(actions.count, 2, `${width}px 银行卡操作按钮数量不符`);
+    assert.ok(actions.visible, `${width}px 银行卡操作按钮被裁切`);
+    assert.ok(actions.overflow <= 1, `${width}px 银行卡页面横向溢出`);
+  }
+  await page.screenshot({ path: path.join(outputDir, 'bank-cards-first-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '详细', exact: true }).click();
+  await page.getByText('5555555555554444').waitFor({ state: 'visible' });
+  await page.getByText(order.orderNo).last().waitFor({ state: 'visible' });
+  await assertDrawerLayout(page, '银行卡详细');
+  await page.screenshot({
+    path: path.join(outputDir, 'bank-cards-detail-390.png'),
+    fullPage: true
+  });
+  await page.getByRole('button', { name: '前往订单' }).click();
+  await page.waitForURL(
+    (url) =>
+      url.pathname.endsWith('/bank-orders') &&
+      url.searchParams.get('accountId') === accountId &&
+      url.searchParams.get('orderNo') === order.orderNo
+  );
+  await page.getByLabel('银充订单资料', { exact: true }).waitFor({ state: 'visible' });
+  assert.ok(
+    orderRequests.some((search) => {
+      const params = new URLSearchParams(search);
+      return params.get('accountId') === accountId && params.get('keyword') === order.orderNo;
+    }),
+    '银行卡关联订单跳转后未按账号和订单号筛选'
+  );
+  await page.goto(`${baseUrl}/v2/auto-recharge/bank-cards`, { waitUntil: 'domcontentloaded' });
+  await page.getByText(card.label).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: '批量导入' }).click();
+  await page
+    .getByRole('textbox', { name: '粘贴银行卡资料' })
+    .fill('4111111111111111 12/39 新卡 备用');
+  await page.getByRole('button', { name: '导入银行卡' }).click();
+  await page.getByText('银行卡 ····1111').waitFor({ state: 'visible' });
+  const importedRow = page.locator('.el-table__body tr').filter({ hasText: '1111' });
+  await importedRow.getByRole('button', { name: '更多操作' }).click();
+  await page.getByRole('menuitem', { name: '编辑' }).click();
+  const editCardDrawer = page.getByLabel('编辑银行卡', { exact: true });
+  await editCardDrawer
+    .locator('.el-form-item')
+    .filter({ hasText: '银行卡名称' })
+    .locator('input')
+    .fill('新卡名称');
+  await assertDrawerLayout(page, '编辑银行卡');
+  await editCardDrawer.getByRole('button', { name: '保存', exact: true }).click();
+  await editCardDrawer.waitFor({ state: 'hidden' });
+  await page.getByText('新卡名称').waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await importedRow.getByRole('button', { name: '更多操作' }).click();
+  await page.getByRole('menuitem', { name: '停用' }).waitFor({ state: 'visible' });
+  await page.getByRole('menuitem', { name: '停用' }).click();
+  await importedRow.getByText('停用', { exact: true }).waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await importedRow.getByRole('button', { name: '更多操作' }).click();
+  await page.getByRole('menuitem', { name: '删除' }).click();
+  await page.getByRole('button', { name: '删除银行卡', exact: true }).click();
+  await page.getByText('新卡名称').waitFor({ state: 'detached' });
+  await page.getByPlaceholder('名称、卡尾号或备注').fill('empty');
+  await page.getByRole('button', { name: '搜索', exact: true }).click();
+  await page.getByText('暂无银行卡').waitFor({ state: 'visible' });
+  await assertListHeaderLayout(page, '390px 银行卡空状态');
+  await page.screenshot({ path: path.join(outputDir, 'bank-cards-empty-390.png'), fullPage: true });
   assert.deepEqual(unexpected, [], `存在未模拟请求：${unexpected.join(', ')}`);
   assert.deepEqual(runtimeErrors, [], `浏览器异常：${runtimeErrors.join(', ')}`);
   console.log(
@@ -580,7 +845,9 @@ try {
         'correction',
         'refund',
         'server-clock',
-        'expiry-transition'
+        'expiry-transition',
+        'account-import-edit-disable-delete',
+        'card-detail-import-edit-disable-delete-empty'
       ],
       outputDir
     })

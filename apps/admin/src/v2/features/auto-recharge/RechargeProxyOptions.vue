@@ -34,8 +34,11 @@
         <p class="recharge-settings-hint">
           当前来源：{{ stored?.dynamicProxyUrlMask || '尚未配置' }}
         </p>
+        <p v-if="serverMode" class="recharge-settings-hint">
+          服务器任务每次都会重新提取代理 IP；提取链接须为 HTTPS。
+        </p>
       </el-form-item>
-      <el-form-item label="动态代理服务商">
+      <el-form-item v-if="!serverMode" label="动态代理服务商">
         <el-select v-model="form.browserOptions.dynamicProvider">
           <el-option label="通用" value="common" />
           <el-option label="Rola 代理" value="rola" />
@@ -43,7 +46,7 @@
           <el-option label="Cloudam 代理" value="cloudam" />
         </el-select>
       </el-form-item>
-      <el-form-item label="重新提取 IP">
+      <el-form-item v-if="!serverMode" label="重新提取 IP">
         <el-switch
           v-model="form.browserOptions.refreshIp"
           aria-label="打开窗口重新提取 IP"
@@ -107,7 +110,7 @@
         />
       </el-form-item>
     </template>
-    <el-form-item label="IP 查询服务">
+    <el-form-item v-if="!serverMode" label="IP 查询服务">
       <el-select v-model="form.browserOptions.ipCheckService">
         <el-option label="默认查询服务（ip-api）" value="ip-api" />
         <el-option label="备用查询服务（IP123）" value="ip123in" />
@@ -119,7 +122,7 @@
 <script setup lang="ts">
 import type { V2RechargeBitBrowserSettings } from './contracts';
 import type { BitBrowserSettingsForm } from './useRechargeBrowserSettings';
-defineProps<{ stored?: V2RechargeBitBrowserSettings }>();
+defineProps<{ stored?: V2RechargeBitBrowserSettings; serverMode?: boolean }>();
 const form = defineModel<BitBrowserSettingsForm>({ required: true });
 </script>
 <style scoped src="./recharge-browser-settings.css"></style>

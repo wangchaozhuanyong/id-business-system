@@ -52,7 +52,9 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     'authorizeSinglePayment',
     'chatgptAccountId',
     'useSavedCredentials',
-    'expectedEmail'
+    'expectedEmail',
+    'proxyId',
+    'proxyCountryCode'
   ]);
   if (
     Object.keys(input).some((key) => !allowedKeys.has(key)) ||
@@ -96,6 +98,15 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   ) {
     throw new BadRequestException('ChatGPT 注册邮箱无效');
   }
+  if (
+    (input.proxyId !== undefined || input.proxyCountryCode !== undefined) &&
+    (typeof input.proxyId !== 'string' ||
+      !uuidPattern.test(input.proxyId) ||
+      typeof input.proxyCountryCode !== 'string' ||
+      !/^[A-Z]{2}$/.test(input.proxyCountryCode))
+  ) {
+    throw new BadRequestException('请选择有效的代理国家和代理 IP');
+  }
   return {
     id: input.id,
     plan: input.plan,
@@ -107,6 +118,8 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     chatgptAccountId: input.chatgptAccountId as string | undefined,
     useSavedCredentials: input.useSavedCredentials === true,
     expectedEmail: input.expectedEmail as string | undefined,
+    proxyId: input.proxyId as string | undefined,
+    proxyCountryCode: input.proxyCountryCode as string | undefined,
     authorizeSinglePayment: true
   } as V2RechargeBitBrowserStart & {
     maxAmountMinor: number;

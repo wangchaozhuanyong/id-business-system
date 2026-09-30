@@ -248,6 +248,39 @@ describe('recharge input and durable evidence', () => {
       validateDetailsSubmission({ addressId, details: { ...paymentDetails, extra: 'private' } })
     ).toThrow();
   });
+  it('服务器任务必须限定单次付款，拒绝外部覆盖代理与授权配置', () => {
+    const server = {
+      ...prepareInput(),
+      action: 'server',
+      lockedCurrency: 'MYR',
+      maxAmount: '100.00',
+      authorizeSinglePayment: true,
+      proxyId: id,
+      proxyCountryCode: 'MY'
+    };
+    expect(() => validateStart(server)).not.toThrow();
+    expect(() => validateStart({ ...server, maxAmount: undefined })).not.toThrow();
+    expect(() => validateStart({ ...server, authorizeSinglePayment: false })).toThrow();
+    expect(() => validateStart({ ...server, maxAmount: '0' })).toThrow();
+    expect(() => validateStart({ ...server, proxy: { host: '127.0.0.1' } })).toThrow();
+    expect(() => validateStart({ ...server, proxyCountryCode: 'US' })).not.toThrow();
+    expect(() => validateStart({ ...server, proxyCountryCode: undefined })).toThrow();
+    expect(() => validateStart({ ...server, proxyId: id, proxyCountryCode: 'usa' })).toThrow();
+    expect(() => validateStart({ ...server, safety: { maxAmountMinor: 999999 } })).toThrow();
+    const manual = {
+      ...server,
+      sessionJson: undefined,
+      addressId: undefined,
+      manualAddress: true,
+      login: { email: paymentDetails.email, password: 'synthetic-password' }
+    };
+    expect(() => validateStart(manual)).not.toThrow();
+    expect(() => validateStart({ ...manual, sessionJson: '{}' })).toThrow('请选择一种');
+    expect(() =>
+      validateStart({ ...manual, login: undefined, chatgptAccountId: id })
+    ).not.toThrow();
+    expect(() => validateStart({ ...manual, details: { ...paymentDetails, city: '' } })).toThrow();
+  });
   it('refuses stale durable record writes', async () => {
     const previous = { revision: 2, ownerId: 'admin-test' };
     const tx = {
@@ -778,7 +811,7 @@ describe('single worker dispatch and confirmation', () => {
         payment_requests_sent: 1
       }
     });
-    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId);
+    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId, id);
     expect(audit.append).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({
@@ -822,7 +855,7 @@ describe('single worker dispatch and confirmation', () => {
       }
     });
 
-    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId);
+    expect(addressRepository.markUsed).toHaveBeenCalledWith(tx, operator.id, addressId, id);
   });
 
   it('只读复查即使看到历史付款标记也不消耗新地址', async () => {

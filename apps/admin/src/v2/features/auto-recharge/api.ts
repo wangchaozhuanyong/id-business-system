@@ -8,6 +8,8 @@ import type {
   V2RechargeAddressListQuery,
   V2RechargeAddressStatus,
   V2RechargeJob,
+  V2RechargeStart,
+  V2RechargePaymentCap,
   V2RechargeBitBrowserSettings,
   V2RechargeBrowserCatalog,
   V2RechargeBrowserCatalogAccess,
@@ -28,6 +30,31 @@ export const rechargeTotpApi = {
   }
 };
 export const rechargeApi = {
+  startServer(input: V2RechargeStart) {
+    return request<{ id: string }>(http.post(base, input));
+  },
+  listPaymentCaps(options: ApiRequestOptions = {}) {
+    return request<{ items: V2RechargePaymentCap[] }>(
+      http.get('/id-business-v2/auto-recharge/payment-caps', { signal: options.signal })
+    );
+  },
+  updatePaymentCap(plan: V2RechargePaymentCap['plan'], currencyCode: string, maxAmount: string) {
+    return request<V2RechargePaymentCap>(
+      http.put(`/id-business-v2/auto-recharge/payment-caps/${plan}/${currencyCode}`, { maxAmount })
+    );
+  },
+  recheckServer(input: {
+    id: string;
+    sourceJobId: string;
+    sessionJson?: string;
+    login?: { email: string; password: string; totpSecret?: string };
+    chatgptAccountId?: string;
+  }) {
+    return request<{ id: string }>(http.post(`${base}/server-recheck`, input));
+  },
+  cancelServer(id: string) {
+    return request<{ id: string }>(http.post(`${base}/${id}/cancel`, {}));
+  },
   list(options: ApiRequestOptions = {}) {
     return request<{ items: V2RechargeJob[]; configured: boolean }>(
       http.get(base, { signal: options.signal })

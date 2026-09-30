@@ -20,7 +20,7 @@ export async function resolveBankRechargeSource(
       source.ownerId !== job.ownerId ||
       source.accountKey !== job.accountKey ||
       source.plan !== job.plan ||
-      source.action !== 'bitbrowser' ||
+      !['bitbrowser', 'server'].includes(source.action) ||
       original.recheck_only === true ||
       original.payment_requests_sent !== 1 ||
       original.quote_authority !== 'official_checkout_response' ||

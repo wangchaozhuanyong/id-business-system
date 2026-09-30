@@ -12,6 +12,97 @@ from checkout_core import Stop
 
 
 class ServerTests(unittest.TestCase):
+    def test_json_target_requires_matching_official_email_and_account(self):
+        async def exercise(observed):
+            job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
+            target = type('Target', (), {
+                'session_token': 'synthetic', 'account_id': 'account-1', 'user_id': 'user-1'
+            })()
+            context = MagicMock()
+            context.add_cookies = AsyncMock()
+            page = MagicMock()
+            page.goto = AsyncMock()
+            page.close = AsyncMock()
+            context.new_page = AsyncMock(return_value=page)
+            with patch.object(server.browser_password_login, 'official_identity',
+                              new=AsyncMock(return_value=observed)):
+                await job.verify_json_target(context, target, 'test@example.invalid')
+            context.add_cookies.assert_awaited_once()
+            page.close.assert_awaited_once()
+
+        matching = type('Official', (), {'account_id': 'account-1', 'user_id': 'user-1'})()
+        asyncio.run(exercise((matching, {'current_plan': 'free'})))
+        with self.assertRaises(Stop):
+            asyncio.run(exercise(None))
+        mismatched = type('Official', (), {'account_id': 'account-2', 'user_id': 'user-1'})()
+        with self.assertRaises(Stop):
+            asyncio.run(exercise((mismatched, {'current_plan': 'free'})))
+
+    def test_server_recheck_uses_read_only_original_payment_flow(self):
+        async def exercise():
+            account_id = 'account-1'
+            target = type('Target', (), {'account_id': account_id})()
+            job = server.Job('11111111-1111-4111-8111-111111111111', {
+                'action': 'server', 'plan': 'plus', 'recheckOnly': True,
+                'sessionJson': '{}', 'expectedEmail': 'test@example.invalid',
+                'sourceAccountKey': server.hashlib.sha256(account_id.encode()).hexdigest(),
+                'proxy': {'mode': 'static'}
+            })
+            context = MagicMock()
+            context.close = AsyncMock()
+            browser = MagicMock()
+            browser.new_context = AsyncMock(return_value=context)
+            ledger = MagicMock()
+            ledger.record = {'payment_status': 'unknown'}
+            ledger.__enter__.return_value = ledger
+            with (patch.object(server.server_proxy, 'resolve_proxy', return_value={'server': 'http://proxy'}),
+                  patch.object(server, 'parse_browser_credential', return_value=target),
+                  patch.object(job, 'verify_json_target', new=AsyncMock()),
+                  patch.object(job, 'restore_target'),
+                  patch.object(server.payment_state, 'PaymentLedger', return_value=ledger),
+                  patch.object(server, 'recheck_in_context', new=AsyncMock(return_value={'recheck_only': True})),
+                  patch.object(server.pay, 'include_payment_record', return_value={'recheck_only': True}),
+                  patch.object(server.pay, 'run_flow', new=AsyncMock()) as payment):
+                result = await job.execute(browser=browser)
+            self.assertEqual(result, {'recheck_only': True})
+            payment.assert_not_awaited()
+            context.close.assert_awaited_once()
+        asyncio.run(exercise())
+
+    def test_totp_is_generated_only_when_requested(self):
+        with patch.object(server.time, 'time', return_value=50):
+            code = asyncio.run(server.current_totp({
+                'secret': 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+                'algorithm': 'sha1', 'digits': 8, 'period': 30
+            }))
+        self.assertEqual(code, '94287082')
+        with self.assertRaises(Stop):
+            asyncio.run(server.current_totp(None))
+
+    def test_server_login_drops_password_and_blocks_payment_writes(self):
+        async def exercise():
+            job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
+            job.progress = MagicMock()
+            page = MagicMock(url='https://chatgpt.com/auth/login')
+            page.close = AsyncMock()
+            context = MagicMock()
+            context.new_page = AsyncMock(return_value=page)
+            context.route = AsyncMock()
+            context.unroute = AsyncMock()
+            login = {'email': 'test@example.invalid', 'password': 'synthetic'}
+            target = MagicMock()
+            with (patch.object(server.browser_password_login, 'login_with_password',
+                               new=AsyncMock(return_value=(target, {'current_plan': 'free'}))),
+                  patch.object(server.browser_password_login, 'clear_visible_secrets',
+                               new=AsyncMock())):
+                result = await job.login_target(context, login)
+            self.assertIs(result, target)
+            self.assertEqual(login, {})
+            context.route.assert_awaited_once()
+            context.unroute.assert_awaited_once()
+            page.close.assert_awaited_once()
+        asyncio.run(exercise())
+
     def test_persistent_runtime_reuses_one_browser_process(self):
         browsers = []
 
@@ -45,6 +136,48 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(browsers), 1)
         self.assertEqual(browsers[0].closed, 1)
+
+    def test_isolated_runtime_uses_and_closes_a_new_process_per_job(self):
+        browsers = []
+
+        class FakeBrowser:
+            def __init__(self):
+                self.closed = 0
+
+            def is_connected(self):
+                return self.closed == 0
+
+            async def close(self):
+                self.closed += 1
+
+        async def factory():
+            browser = FakeBrowser()
+            browsers.append(browser)
+            return browser
+
+        async def identity(browser):
+            return browser
+
+        async def failure(_browser):
+            raise RuntimeError('synthetic failure')
+
+        runtime = server.PersistentBrowserRuntime(browser_factory=factory)
+        runtime.start()
+        try:
+            first = runtime.run_isolated(identity)
+            second = runtime.run_isolated(identity)
+            with self.assertRaisesRegex(RuntimeError, 'synthetic failure'):
+                runtime.run_isolated(failure)
+            self.assertEqual(len(browsers), 4)  # 预热进程 + 三笔独立任务。
+            self.assertIsNot(first, second)
+            self.assertTrue(all(browser.closed == 1 for browser in browsers))
+            shared = runtime.run(identity)
+            self.assertIsNot(shared, first)
+            self.assertIsNot(shared, second)
+            self.assertEqual(shared.closed, 0)
+        finally:
+            runtime.stop()
+        self.assertEqual(shared.closed, 1)
 
     def test_shared_browser_still_creates_and_closes_an_isolated_context_per_run(self):
         async def exercise():
@@ -127,6 +260,31 @@ class ServerTests(unittest.TestCase):
                 raise AssertionError('healthy browser must not be discarded')
 
         job = server.Job('test', {})
+        execute = AsyncMock(return_value={'status': 'session_verified'})
+        calls = []
+        with patch.object(server, 'BROWSER_RUNTIME', Runtime()), \
+             patch.object(server, 'read_cgroup_oom_kill', side_effect=[0, 0]), \
+             patch.object(server.Job, 'execute', execute), \
+             patch.object(server, 'callback', side_effect=lambda _, body: calls.append(body)):
+            job.run()
+        execute.assert_awaited_once_with(browser=browser)
+        self.assertEqual(calls[-1]['result']['status'], 'session_verified')
+
+    def test_server_job_uses_an_isolated_browser_process(self):
+        browser = MagicMock()
+
+        class Runtime:
+            started = True
+
+            @staticmethod
+            def run(_operation):
+                raise AssertionError('server job must not use the shared browser')
+
+            @staticmethod
+            def run_isolated(operation):
+                return asyncio.run(operation(browser))
+
+        job = server.Job('test', {'action': 'server'})
         execute = AsyncMock(return_value={'status': 'session_verified'})
         calls = []
         with patch.object(server, 'BROWSER_RUNTIME', Runtime()), \

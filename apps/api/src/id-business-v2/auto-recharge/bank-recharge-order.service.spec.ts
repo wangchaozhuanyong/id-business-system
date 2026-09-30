@@ -103,6 +103,18 @@ describe('银充付款入单', () => {
     expect(tx.idBusinessV2BankRechargeOrder.create).not.toHaveBeenCalled();
   });
 
+  it('服务器任务只有官网付款与订阅证据一致才写入银充订单', async () => {
+    const { service, tx, job, order } = fixture();
+    expect(
+      await service.recordVerifiedSuccess(
+        tx as never,
+        { ...job, action: 'server' } as never,
+        verified
+      )
+    ).toEqual(order);
+    expect(tx.idBusinessV2BankRechargeOrder.create).toHaveBeenCalledTimes(1);
+  });
+
   it('only backfills a verified read-only recheck through the trusted original job', async () => {
     const { service, tx, job, repository } = fixture();
     const source = {

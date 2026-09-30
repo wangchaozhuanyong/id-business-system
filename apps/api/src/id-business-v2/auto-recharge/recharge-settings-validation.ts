@@ -5,6 +5,7 @@ import { validateBrowserOptions, validateStaticCredentials } from './recharge-br
 
 const proxyTypes = ['http', 'https', 'socks5'] as const;
 const allowedKeys = new Set([
+  'serverMode',
   'connectorUrl',
   'localApiUrl',
   'localApiToken',
@@ -95,6 +96,9 @@ export function validateRechargeBitBrowserSettings(
   if (Object.keys(input).some((key) => !allowedKeys.has(key))) {
     throw new BadRequestException('比特浏览器设置包含不支持的字段');
   }
+  if (input.serverMode !== undefined && typeof input.serverMode !== 'boolean') {
+    throw new BadRequestException('服务器代理设置模式无效');
+  }
   if (!proxyTypes.includes(input.proxyType as (typeof proxyTypes)[number])) {
     throw new BadRequestException('代理协议无效');
   }
@@ -108,6 +112,7 @@ export function validateRechargeBitBrowserSettings(
     throw new BadRequestException('不能同时替换和清除固定代理凭据');
   }
   return {
+    serverMode: input.serverMode as boolean | undefined,
     connectorUrl: localUrl(input.connectorUrl, '本机连接器地址'),
     localApiUrl: localUrl(input.localApiUrl, '比特浏览器 Local API 地址'),
     localApiToken: secret(input.localApiToken, 'Local API Token', 1000),

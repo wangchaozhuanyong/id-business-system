@@ -98,4 +98,36 @@ describe('auto recharge address service', () => {
     });
     expect(tx.idBusinessV2RechargeAddress.update).toHaveBeenCalledOnce();
   });
+
+  it('records one use per recharge job while allowing another job to reuse the address', async () => {
+    const repository = new RechargeAddressRepository({} as never);
+    const uses = new Map<string, { addressId: string; ownerId: string }>();
+    const tx = {
+      idBusinessV2RechargeAddress: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'address', status: 'used' }),
+        update: vi.fn().mockResolvedValue({ id: 'address', status: 'used', usedAt: new Date() })
+      },
+      idBusinessV2RechargeAddressUse: {
+        findUnique: vi.fn(
+          async ({ where }: { where: { jobId: string } }) => uses.get(where.jobId) ?? null
+        ),
+        create: vi.fn(
+          async ({ data }: { data: { jobId: string; addressId: string; ownerId: string } }) => {
+            uses.set(data.jobId, data);
+          }
+        )
+      }
+    };
+    await expect(
+      repository.markUsed(tx as never, operator.id, 'address', 'job-1')
+    ).resolves.toMatchObject({ changed: true });
+    await expect(
+      repository.markUsed(tx as never, operator.id, 'address', 'job-1')
+    ).resolves.toMatchObject({ changed: false });
+    await expect(
+      repository.markUsed(tx as never, operator.id, 'address', 'job-2')
+    ).resolves.toMatchObject({ changed: true });
+    expect(tx.idBusinessV2RechargeAddressUse.create).toHaveBeenCalledTimes(2);
+    expect(tx.idBusinessV2RechargeAddress.update).toHaveBeenCalledTimes(2);
+  });
 });

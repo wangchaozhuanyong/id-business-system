@@ -1,6 +1,18 @@
 export const V2_RECHARGE_PLANS = ['plus', 'pro-5x', 'pro-20x'] as const;
 export type V2RechargePlan = (typeof V2_RECHARGE_PLANS)[number];
-export type V2RechargeAction = 'check' | 'quote' | 'prepare' | 'recheck' | 'flow' | 'bitbrowser';
+export interface V2RechargePaymentCap {
+  plan: V2RechargePlan;
+  currencyCode: string;
+  maxAmount: string;
+}
+export type V2RechargeAction =
+  | 'check'
+  | 'quote'
+  | 'prepare'
+  | 'recheck'
+  | 'flow'
+  | 'bitbrowser'
+  | 'server';
 export interface V2RechargeMoney {
   amount: string;
   currency: string;
@@ -89,6 +101,7 @@ export interface V2RechargeResult {
 }
 export interface V2RechargeJob {
   id: string;
+  chatgptAccountId?: string | null;
   plan: V2RechargePlan;
   action: V2RechargeAction;
   state:
@@ -118,11 +131,20 @@ export interface V2RechargeDetails {
 }
 export interface V2RechargeStart {
   id: string;
-  sessionJson: string;
+  sessionJson?: string;
+  login?: { email: string; password: string; totpSecret?: string };
+  chatgptAccountId?: string;
+  cardId?: string;
   plan: V2RechargePlan;
   action: V2RechargeAction;
   addressId?: string;
+  manualAddress?: true;
   details?: V2RechargeDetails;
+  lockedCurrency?: string;
+  maxAmount?: string;
+  authorizeSinglePayment?: true;
+  proxyId?: string;
+  proxyCountryCode?: string;
 }
 
 export interface V2RechargeDetailsSubmission {
@@ -215,6 +237,7 @@ export interface V2RechargeBrowserCatalogAccess {
 }
 
 export interface UpdateV2RechargeBitBrowserSettingsInput {
+  serverMode?: boolean;
   connectorUrl: string;
   localApiUrl: string;
   localApiToken?: string;
@@ -236,6 +259,8 @@ export interface V2RechargeBitBrowserStart {
   lockedCurrency: string;
   maxAmount: string;
   authorizeSinglePayment: true;
+  proxyId?: string;
+  proxyCountryCode?: string;
   chatgptAccountId?: string;
   useSavedCredentials?: boolean;
   expectedEmail?: string;
@@ -321,10 +346,11 @@ export type V2RechargeAddressStatus = (typeof V2_RECHARGE_ADDRESS_STATUSES)[numb
 export interface V2RechargeAddress {
   id: string;
   line1: string;
-  country: 'US';
-  city: 'Portland';
-  state: 'OR';
-  postalCode: '97204';
+  country: string;
+  city: string;
+  state: string;
+  line2?: string | null;
+  postalCode: string;
   status: V2RechargeAddressStatus;
   usedAt: string | null;
   createdAt: string;

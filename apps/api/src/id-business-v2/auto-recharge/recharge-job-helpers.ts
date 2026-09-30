@@ -10,6 +10,7 @@ type FinishedRechargeJob = {
 type RechargeAddress = {
   country: string;
   line1: string;
+  line2?: string | null;
   city: string;
   state: string;
   postalCode: string;
@@ -50,7 +51,7 @@ export function rechargeDetailsWithAddress(
     ...details,
     country: address.country,
     line1: address.line1,
-    line2: '',
+    line2: address.line2 ?? '',
     city: address.city,
     state: address.state,
     postal_code: address.postalCode
@@ -66,5 +67,9 @@ export function clearRechargeDetails(details?: V2RechargeDetails) {
 
 export function clearRechargeStartSecrets(input: V2RechargeStart) {
   input.sessionJson = '';
+  if (input.login) {
+    input.login.password = '';
+    input.login.totpSecret = '';
+  }
   clearRechargeDetails(input.details);
 }

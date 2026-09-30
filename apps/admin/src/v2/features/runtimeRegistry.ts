@@ -27,6 +27,26 @@ export const v2RuntimeFeatureRegistry: readonly V2RuntimeFeatureManifest[] = [
     loadView: () => import('./auto-recharge/V2ChatgptAccountsView.vue')
   }),
   defineV2RuntimeFeature({
+    key: 'bank-recharge-cards',
+    title: '银行卡管理',
+    group: '自动充值',
+    route: '/v2/auto-recharge/bank-cards',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-recharge/V2BankRechargeCardsView.vue')
+  }),
+  defineV2RuntimeFeature({
+    key: 'recharge-proxies',
+    title: '代理 IP 管理',
+    group: '自动充值',
+    route: '/v2/auto-recharge/proxies',
+    requiredRoles: ['admin'],
+    kind: 'list',
+    freshnessPolicy: 'event-driven',
+    loadView: () => import('./auto-recharge/V2RechargeProxiesView.vue')
+  }),
+  defineV2RuntimeFeature({
     key: 'bank-recharge-orders',
     title: '银充订单',
     group: '自动充值',

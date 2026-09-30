@@ -18,12 +18,12 @@ export async function consumeRechargeAddress(input: {
     report.status === 'subscription_activated' ||
     (report.payment_attempted === true && Number(report.confirmation_requests_sent) === 1) ||
     Number(report.payment_requests_sent) === 1;
-  if (!['prepare', 'flow', 'bitbrowser'].includes(job.action) || !addressConsumed) return;
+  if (!['prepare', 'flow', 'bitbrowser', 'server'].includes(job.action) || !addressConsumed) return;
   const addressId = jobResult.addressId;
   if (typeof addressId !== 'string' || !uuidPattern.test(addressId)) {
     throw new ConflictException('本次充值地址记录不完整');
   }
-  const changed = await addressRepository.markUsed(tx, job.ownerId, addressId);
+  const changed = await addressRepository.markUsed(tx, job.ownerId, addressId, rechargeJobId);
   if (!changed.changed) return;
   await audit.append(tx, {
     userId: job.ownerId,

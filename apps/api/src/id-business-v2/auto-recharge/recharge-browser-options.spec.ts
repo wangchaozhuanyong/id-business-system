@@ -124,6 +124,25 @@ describe('窗口配置校验', () => {
 });
 
 describe('窗口设置持久化与运行时', () => {
+  it('服务器代理设置不依赖本机密钥，动态提取链接必须是 HTTPS', async () => {
+    const f = fixture();
+    f.changeRow({ localApiTokenEncrypted: null, connectorTokenEncrypted: null });
+    const input = { ...base, serverMode: true, browserOptions: V2_RECHARGE_BROWSER_DEFAULTS };
+    await expect(f.service.update(input, operator as never)).resolves.toBeDefined();
+    await expect(f.service.serverProxy(operator.id)).resolves.toMatchObject({
+      mode: 'dynamic',
+      extractionUrl: 'https://proxy.example/extract'
+    });
+    await expect(
+      f.service.update({ ...input, serverMode: false }, operator as never)
+    ).rejects.toThrow();
+    await expect(
+      f.service.update(
+        { ...input, dynamicProxyUrl: 'http://proxy.example/extract' },
+        operator as never
+      )
+    ).rejects.toThrow();
+  });
   it('固定模式无需动态链接，凭据只加密存储，读取与审计无明文', async () => {
     const f = fixture();
     f.changeRow({ dynamicProxyUrlEncrypted: null });
