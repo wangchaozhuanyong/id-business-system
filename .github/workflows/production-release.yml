@@ -1,0 +1,75 @@
+name: Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Verify access or publish the exact commit
+        required: true
+        default: verify_access
+        type: choice
+        options:
+          - verify_access
+          - release
+      commit:
+        description: Exact main commit to publish (40 lowercase hex characters)
+        required: true
+        type: string
+      expected_current:
+        description: Exact commit currently running in production
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ap-northeast-1
+      RELEASE_ROLE_ARN: arn:aws:iam::079740175286:role/id-business-v2-github-release
+      RELEASE_REPOSITORY: 079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release
+      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the requested main commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact source and passing Quality Gate
+        run: bash scripts/production-release/check-source.sh
+
+      - name: Obtain short-lived AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.RELEASE_ROLE_ARN }}
+          role-session-name: id-business-v2-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Check AWS identity and production target
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Arn --output text | cut -d/ -f2)" = id-business-v2-github-release
+          test "$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=${PRODUCTION_INSTANCE_ID}" --query 'InstanceInformationList[0].PingStatus' --output text)" = Online
+          aws ecr describe-repositories --repository-names id-business-v2-release --query 'repositories[0].repositoryUri' --output text | grep -Fx "$RELEASE_REPOSITORY"
+
+      - name: Build and push immutable images
+        if: inputs.operation == 'release'
+        run: bash scripts/production-release/build-images.sh
+
+      - name: Deploy through the production instance
+        if: inputs.operation == 'release'
+        run: bash scripts/production-release/dispatch.sh
