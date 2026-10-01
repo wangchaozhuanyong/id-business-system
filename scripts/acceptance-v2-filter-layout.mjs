@@ -122,13 +122,19 @@ try {
       };
     else if (/\/customers(\/bootstrap)?$/.test(url.pathname)) {
       const empty = url.searchParams.get('keyword') === 'empty';
+      const pageNumber = Number(url.searchParams.get('page') || 1);
+      const pageSize = Number(url.searchParams.get('pageSize') || 20);
+      const offset = (pageNumber - 1) * pageSize;
       const list = {
         items: empty
           ? []
-          : Array.from({ length: customerCount }, (_, index) => customer(index + 1)),
+          : Array.from(
+              { length: Math.max(0, Math.min(pageSize, customerCount - offset)) },
+              (_, index) => customer(offset + index + 1)
+            ),
         total: empty ? 0 : customerCount,
-        page: 1,
-        pageSize: 20
+        page: pageNumber,
+        pageSize
       };
       data = url.pathname.endsWith('/bootstrap')
         ? { list, options: { sources: [], tags: [], services: [] }, generatedAt: now }
@@ -332,6 +338,35 @@ try {
       }
     }
   }
+
+  // At the end of a long list, the fixed quick action must not intercept pagination.
+  customerCount = 21;
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(new URL('/v2/customers', baseUrl).href);
+    await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+    await settle(page);
+    await page.locator('#v2-main').evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const overlap = await page.evaluate(() => {
+      const next = document.querySelector('.v2-records-pagination .btn-next');
+      const fab = document.querySelector('.v2-quick-actions-fab');
+      const button = next.getBoundingClientRect();
+      const tool = fab.getBoundingClientRect();
+      return (
+        button.left < tool.right &&
+        button.right > tool.left &&
+        button.top < tool.bottom &&
+        button.bottom > tool.top
+      );
+    });
+    assert.equal(overlap, false, `${width}px：浮动工具挡住分页按钮`);
+    await page.locator('.v2-records-pagination .btn-next').click();
+    await page.getByText('本地布局客户 21', { exact: true }).filter({ visible: true }).waitFor();
+    checks.push({ label: `页尾浮动工具-${width}`, overlap, pageChanged: true });
+  }
+  customerCount = 2;
 
   // Shared styles are also exercised by existing fixtures across every business group.
   const fixtures = [

@@ -4,6 +4,13 @@
   --v2-layout-control-gap: 10px;
   --v2-layout-panel-padding: 12px 16px;
 }
+
+/* 固定工具入口占用底部 44px，页尾分页需要可滚动到入口上方。 */
+.v2-shell:has(.v2-quick-actions-fab) .v2-content {
+  padding-block-end: calc(80px + env(safe-area-inset-bottom, 0px));
+  scroll-padding-block-end: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
 .v2-page-layout,
 .v2-page-stack,
 .v2-records-page,
