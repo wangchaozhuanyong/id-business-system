@@ -6,11 +6,17 @@
       @update:model-value="$emit('update:plan', $event)"
     >
       <el-option
-        v-for="item in V2_RECHARGE_PLANS"
-        :key="item"
-        :label="planLabels[item]"
-        :value="item"
-      />
+        v-for="item in rechargePlanOptions"
+        :key="item.value"
+        class="recharge-plan-option"
+        :label="item.label"
+        :value="item.value"
+        :disabled="item.disabled"
+        :title="item.note ? `${item.label}：${item.note}` : item.label"
+      >
+        <span class="recharge-plan-option__label">{{ item.label }}</span>
+        <small v-if="item.note" class="recharge-plan-option__note">{{ item.note }}</small>
+      </el-option>
     </el-select>
   </el-form-item>
   <el-form-item label="锁定币种" required>
@@ -34,9 +40,8 @@
 </template>
 
 <script setup lang="ts">
-import { V2_RECHARGE_PLANS } from '@apple-business/shared';
 import type { V2RechargePlan } from './contracts';
-import { planLabels } from './recharge-presentation';
+import { rechargePlanOptions } from './recharge-plan-options';
 
 defineProps<{
   plan: V2RechargePlan;
@@ -50,3 +55,25 @@ defineEmits<{
   retry: [];
 }>();
 </script>
+
+<style scoped>
+.recharge-plan-option {
+  height: auto;
+  min-height: 34px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.recharge-plan-option__label,
+.recharge-plan-option__note {
+  display: block;
+}
+
+.recharge-plan-option__note {
+  font-size: 12px;
+  font-weight: normal;
+}
+</style>

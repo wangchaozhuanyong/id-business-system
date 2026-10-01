@@ -35,9 +35,14 @@
         <template v-if="creating">
           <el-form-item label="ChatGPT 套餐" required
             ><el-select v-model="form.plan" aria-label="ChatGPT 套餐"
-              ><el-option label="标准版（Plus）" value="plus" /><el-option
-                label="专业版 5×"
-                value="pro-5x" /><el-option label="专业版 20×" value="pro-20x" /></el-select
+              ><el-option
+                v-for="item in bankRechargePlanOptions"
+                :key="item.value"
+                :label="item.disabled ? `${item.label}（仅手工记录）` : item.label"
+                :value="item.value"
+                :title="
+                  item.disabled ? `${item.label}：暂未接入自动充值，仅记录已有付款` : item.label
+                " /></el-select
           ></el-form-item>
           <el-form-item label="代付币种" required
             ><el-select v-model="form.chargeCurrencyCode" aria-label="代付币种"
@@ -91,9 +96,14 @@
           <template v-if="selected?.source === 'manual' && !readonly">
             <el-form-item label="ChatGPT 套餐" required
               ><el-select v-model="form.plan" aria-label="ChatGPT 套餐"
-                ><el-option label="标准版（Plus）" value="plus" /><el-option
-                  label="专业版 5×"
-                  value="pro-5x" /><el-option label="专业版 20×" value="pro-20x" /></el-select
+                ><el-option
+                  v-for="item in bankRechargePlanOptions"
+                  :key="item.value"
+                  :label="item.disabled ? `${item.label}（仅手工记录）` : item.label"
+                  :value="item.value"
+                  :title="
+                    item.disabled ? `${item.label}：暂未接入自动充值，仅记录已有付款` : item.label
+                  " /></el-select
             ></el-form-item>
             <el-form-item label="代付币种" required
               ><el-select v-model="form.chargeCurrencyCode" aria-label="代付币种"
@@ -413,6 +423,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2QuickCustomerDrawer } from '@/v2/features/order-entry/public-api';
 import type { useBankRechargeOrdersPage } from './useBankRechargeOrdersPage';
+import { bankRechargePlanOptions } from './recharge-plan-options';
 
 const props = defineProps<{ state: ReturnType<typeof useBankRechargeOrdersPage> }>();
 const {
