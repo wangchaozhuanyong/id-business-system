@@ -22,6 +22,8 @@ gh workflow run production-release.yml --ref main \
 
 权限验证成功后，同一工作流的 `operation=release` 才会构建镜像并发布。工作流要求目标 SHA 恰好等于当时的 `main` HEAD、对应的 push Quality Gate 成功，并且生产基线等于 `expected_current`。发布会先验证只读财务巡检、运行中的自动充值任务、镜像来源和 S3 备份，再应用只包含非破坏性 SQL 的新增 migration，按服务切换并复核健康和财务数据。失败时尝试恢复原有服务镜像；已应用的向前 migration 不自动逆转。
 
+`operation=verify_access` 同时输出生产当前 SHA、磁盘余量、容器健康和镜像来源诊断。诊断仅读取发布清单及 Docker 的指定元数据，不读取环境变量、数据库内容或凭证，不清理镜像、不重启服务。发布基础设施及 CI 范围修复运行控制检查；若同批包含业务代码，仍按相应业务范围检查。
+
 ```bash
 gh workflow run production-release.yml --ref main \
   -f operation=release \
