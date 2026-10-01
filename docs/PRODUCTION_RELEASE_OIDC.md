@@ -24,6 +24,8 @@ gh workflow run production-release.yml --ref main \
 
 `operation=verify_access` 同时输出生产当前 SHA、磁盘余量、容器健康和镜像来源诊断。诊断仅读取发布清单及 Docker 的指定元数据，不读取环境变量、数据库内容或凭证，不清理镜像、不重启服务。发布基础设施及 CI 范围修复运行控制检查；若同批包含业务代码，仍按相应业务范围检查。
 
+`operation=cleanup_cache` 仅用于已单独授权的 `deploy/aws/cache-cleanup-20261001.json` 五个历史本机镜像缓存。脚本绑定清单摘要、生产与上一版本 SHA，保护所有容器、当前与上一版发布及回滚镜像，核验 ECR 可重新拉取相同镜像 ID 后才按引用删除；不使用 force 或 prune，不删除远端镜像、发布目录、容器、数据卷、数据库或备份。其他清理范围必须重新生成方案并单独授权。执行后先读取实际磁盘余量，再决定是否可以发布。
+
 ```bash
 gh workflow run production-release.yml --ref main \
   -f operation=release \

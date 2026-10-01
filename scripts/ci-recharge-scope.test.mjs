@@ -53,9 +53,16 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   assert.equal(checkMode([files[0]], schema, schema), 'recharge');
 });
 test('release workflow diagnostics retain control checks and do not hide application changes', () => {
-  const paths = ['.github/workflows/production-release.yml', 'docs/PRODUCTION_RELEASE_OIDC.md'];
+  const paths = [
+    '.github/workflows/production-release.yml',
+    'scripts/production-release/cleanup-reviewed-cache.py',
+    'scripts/production-release/cleanup-reviewed-cache.test.py',
+    'deploy/aws/cache-cleanup-20261001.json',
+    'docs/PRODUCTION_RELEASE_OIDC.md'
+  ];
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
   assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.notEqual(checkMode([...paths, 'docker-compose.aws-mysql.yml'], schema, schema), 'ci-only');
   assert.equal(
     checkMode([...paths, 'apps/api/src/auth/auth.controller.ts'], schema, schema),
     'full'
