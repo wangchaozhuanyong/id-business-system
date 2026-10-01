@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -16,8 +17,11 @@ spec.loader.exec_module(cleanup)
 
 
 class ReviewedCacheTests(unittest.TestCase):
+    plan_name = 'cache-cleanup-20261001.json'
+
     def setUp(self):
-        self.plan = json.loads((DIRECTORY.parent.parent / 'deploy/aws/cache-cleanup-20261001.json').read_text())
+        self.plan = json.loads((DIRECTORY.parent.parent / 'deploy/aws' / self.plan_name).read_text())
+        self.digest = hashlib.sha256(json.dumps(self.plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         self.manifest = {'commit': self.plan['expectedCurrent'],
                          'previousRelease': '/opt/id-business-v2/releases/previous',
                          'images': {'admin': {'digest': 'protected-current'}},
@@ -48,7 +52,7 @@ class ReviewedCacheTests(unittest.TestCase):
     def invoke(self, apply=False, plan=None):
         argv = ['cleanup', '--plan-json', json.dumps(plan or self.plan)]
         if apply:
-            argv.extend(['--apply', '--approved-plan-sha256', '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f'])
+            argv.extend(['--apply', '--approved-plan-sha256', self.digest])
         with patch.object(sys, 'argv', argv), \
                 patch.object(cleanup, 'current', return_value=self.manifest), \
                 patch.object(cleanup, 'active_images', side_effect=lambda: self.active), \
@@ -93,6 +97,26 @@ class ReviewedCacheTests(unittest.TestCase):
             self.invoke(True)
         self.assertEqual(self.removals(), [])
 
+    def test_approval_for_another_reviewed_plan_is_rejected(self):
+        other_digest = next(digest for digest in cleanup.REVIEWED_PLANS if digest != self.digest)
+        with patch.object(sys, 'argv', ['cleanup', '--plan-json', json.dumps(self.plan),
+                                       '--apply', '--approved-plan-sha256', other_digest]):
+            with self.assertRaisesRegex(RuntimeError, 'Explicit plan approval required'):
+                cleanup.main()
+        self.assertEqual(self.commands, [])
+
+    def test_current_release_is_protected(self):
+        self.manifest['images']['admin']['digest'] = self.plan['items'][0]['imageId']
+        with self.assertRaisesRegex(RuntimeError, 'protected release'):
+            self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
+    def test_current_rollback_image_is_protected(self):
+        self.manifest['rollback']['images']['admin'] = self.plan['items'][0]['imageId']
+        with self.assertRaisesRegex(RuntimeError, 'protected release'):
+            self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
     def test_container_reference_is_protected(self):
         self.active.add(self.plan['items'][0]['imageId'])
         with self.assertRaisesRegex(RuntimeError, 'protected release'):
@@ -128,6 +152,10 @@ class ReviewedCacheTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'reviewed ten-reference digest'):
             self.invoke(True, changed)
         self.assertEqual(self.removals(), [])
+
+
+class FxSubscriptionCacheTests(ReviewedCacheTests):
+    plan_name = 'cache-cleanup-fx-subscription-20261002.json'
 
 
 if __name__ == '__main__':

@@ -28,6 +28,8 @@ gh workflow run production-release.yml --ref main \
 
 只读核验通过后，`operation=cleanup_cache` 才应用这份清单。脚本绑定清单摘要及显式批准摘要、生产与上一版本 SHA，保护所有容器、当前与上一版发布及回滚镜像，核验 ECR 可重新拉取相同镜像 ID 后才按引用删除；不使用 force 或 prune，不删除远端镜像、发布目录、容器、数据卷、数据库或备份。其他清理范围必须重新生成方案并单独授权。执行后先读取实际磁盘余量，再决定是否可以发布。原五个缓存方案已完成，不得再次执行。
 
+`cleanup_plan` 默认选择原 `initial_20261001` 计划，已有记录和摘要保留。换汇发布容量恢复使用 `fx_subscription_20261002`，对应 `deploy/aws/cache-cleanup-fx-subscription-20261002.json` 中两个未上线候选版本的十个引用，具体保护和恢复边界见 `docs/FX_RELEASE_CACHE_RECOVERY_20261002.md`。这份新计划先运行 `verify_cache`；只有取得用户对其清单的单独批准后才能运行 `cleanup_cache`。业务发布授权本身不替代这份新清单的批准。
+
 ```bash
 gh workflow run production-release.yml --ref main \
   -f operation=release \

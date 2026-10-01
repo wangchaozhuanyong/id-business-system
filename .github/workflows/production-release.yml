@@ -21,6 +21,14 @@ on:
         description: Exact commit currently running in production
         required: true
         type: string
+      cleanup_plan:
+        description: Exact reviewed local image cache plan (cleanup operations only)
+        required: true
+        default: initial_20261001
+        type: choice
+        options:
+          - initial_20261001
+          - fx_subscription_20261002
 
 permissions:
   actions: read
@@ -91,6 +99,7 @@ jobs:
         if: inputs.operation == 'verify_cache' || inputs.operation == 'cleanup_cache'
         env:
           CLEANUP_OPERATION: ${{ inputs.operation }}
+          CLEANUP_PLAN: ${{ inputs.cleanup_plan }}
         run: |
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
@@ -101,7 +110,11 @@ jobs:
           from pathlib import Path
           import shlex
           program = Path('scripts/production-release/cleanup-reviewed-cache.py').read_text()
-          plan = Path('deploy/aws/cache-cleanup-20261001.json').read_text()
+          plans = {
+              'initial_20261001': 'deploy/aws/cache-cleanup-20261001.json',
+              'fx_subscription_20261002': 'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
+          }
+          plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)
           if parsed_plan['expectedCurrent'] != os.environ['EXPECTED_CURRENT']:
               raise SystemExit('Cleanup expected_current differs from the reviewed plan')
@@ -157,6 +170,13 @@ jobs:
                   'metadata': read('docker', 'image', 'inspect', '--format',
                       '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}', reference)})
           print(json.dumps({'currentCommit': manifest['commit'], 'releaseTag': manifest['releaseTag'],
+              'previousCommit': manifest.get('previousCommit'),
+              'sourceTree': manifest.get('sourceTree'),
+              'dataAuditBefore': manifest.get('dataAuditBefore'),
+              'dataAuditAfter': manifest.get('dataAuditAfter'),
+              'newMigrations': manifest.get('newMigrations'),
+              'backupBeforeRelease': manifest.get('backupBeforeRelease'),
+              'servicesUpdated': manifest.get('servicesUpdated'),
               'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
               'containers': containers, 'images': images,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
