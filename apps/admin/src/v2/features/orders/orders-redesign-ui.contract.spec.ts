@@ -31,8 +31,8 @@ describe('orders scheme 3 redesign contract', () => {
     expect(toolbar).toContain('@click="page.resetFilters"');
     expect(toolbar).toContain('page.activeFilterCount');
     expect(toolbar).toContain('title="订单筛选"');
-    expect(toolbar).toContain('v2-orders-toolbar__search-row');
-    expect(toolbar).toContain('v2-orders-toolbar__filter-row');
+    expect(toolbar).toContain('<V2ListToolbar');
+    expect(toolbar).toContain('<V2FilterDisclosure');
     expect(pageState).toContain('function resetFilters()');
   });
 

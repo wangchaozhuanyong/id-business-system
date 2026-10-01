@@ -15,12 +15,56 @@
   `V2PageContext`；不得用卡片标题、粗体标题或禁用按钮重复表达页面名称。
 - 主要操作放在首个工具栏或 `V2PageContext` 的操作区，不再创建第二套页面头。
 - 筛选区、数据区和分页区使用稳定的纵向顺序。
-- 列表业务页使用 `v2-records-page` 的共享纵向间距；`V2AsyncRegion` 内容内的相邻区块同样由共享间距控制，不在单页用负边距拼接卡片。
+- 筛选条件和操作在空间足够时保持同一行，只有实际空间不足时才换行。带标题的分组筛选复用 `V2ListToolbar`，已有简单分组可继续使用
+  `v2-filter-bar`、`v2-filter-bar__fields` 和 `v2-filter-bar__actions`；筛选组必须占用可用宽度，
+  不得用未定宽父级中的百分比控件宽度触发过早换行。普通列表内联表单复用 `records.css` 的共享规则。
+- 只有搜索、筛选和新增／导入操作的列表，统一将内联表单放入 `V2PageContext` 的 `filters` 插槽，
+  操作放入 `actions` 插槽；说明由公共帮助按钮保留，宽屏合为一行、窄屏自然换行。
+  页面直属表单与公共工具栏内表单共用标签、控件宽度和断点规则，不在页面内另写标签偏移。
+- 业务页使用 `v2-page-layout` 的共享纵向间距（兼容现有 `v2-records-page`）；`V2AsyncRegion` 内容内的相邻区块同样由共享间距控制，不在单页用负边距拼接卡片。
 - `v2-records-page` 与 `V2AsyncRegion` 内容网格均使用可收缩的 `minmax(0, 1fr)` 列，防止新列表被长邮箱、表格或操作区撑出页面；窄屏列表标题和操作统计在同一标题区内换行，不得把标题挤成竖排。
 - `v2-records-list` 的分区标题直接使用 `<header>`，复用共享内边距和分隔线；不得用无样式的 `<div>` 包裹标题。
 - 桌面表格在容器内滚动，关键状态与操作列可固定。
 - 移动端使用信息卡列表，不把宽表格强行压缩。
 - 页面不得出现互相覆盖的悬浮按钮、抽屉、固定底栏或双重滚动区。
+
+### 新页面的公共布局入口
+
+- 页面原生根容器统一添加 `v2-page-layout`；异步内容由 `V2AsyncRegion` 自动管理模块间距。
+  嵌套的纵向模块组使用 `v2-page-stack`，不要在新页面复制 `display/grid/gap` 或单页断点。
+- 模块间距、面板内部间距、控件间距分别使用 `layout.css` 中的
+  `--v2-layout-section-gap`（14px）、`--v2-layout-panel-gap`（16px）、
+  `--v2-layout-control-gap`（10px）；面板内边距使用 `--v2-layout-panel-padding`。
+  业务内部的表格、表单分栏仍可保留自己的布局，不用模块间距代替所有控件间距。
+- 页首指标总览使用 `V2PageOverview`，每个指标使用 `V2OverviewMetric`，操作放入 `actions`。
+  标题和数值统一字号、行高及居中对齐；长说明进入帮助入口，业务日期、当前身份等即时信息保留在 `meta`。
+  金额、状态、权限提示沿用现有展示规则，不得把缺失或无权限数据显示为 0。
+- 带标题的列表筛选使用 `V2ListToolbar`：默认插槽放筛选控件，`actions` 放查询／刷新，
+  `meta` 放总数和当前筛选状态。生命周期导航放 `navigation`，隐藏整个筛选区时绑定 `show-filters`。
+  简单列表继续使用 `V2PageContext.filters`。共同布局按实际容器宽度换行，禁止单页覆盖公共几何。
+- 列表标题使用 `v2-records-list > header` 和 `V2SectionHeading`，标题与总数共用公共字号、行高和垂直模型。
+- `npm run check:admin-ui` 会拒绝缺少公共根布局、复制旧总览／工具栏、硬编码模块间距、
+  覆盖公共布局几何或偏移业务表单标签的写法。标签宽度可以调整；独立登录页保留自身表单尺寸。
+- 公共布局验收入口：`apps/admin/layout-contract-fixture.html`，不含单页布局样式。
+  修改公共组件后运行 `node scripts/acceptance-v2-page-layout.mjs` 和现有筛选布局验收；
+  实际列表还要覆盖第一页、末页、空状态、刷新与失败重试。
+
+```vue
+<section class="v2-page-layout">
+  <V2PageOverview :columns="1" title="资料总览" help="资料的使用说明。">
+    <template #metrics>
+      <V2OverviewMetric label="筛选结果" :value="total" note="全部匹配资料" />
+    </template>
+  </V2PageOverview>
+  <V2ListToolbar title="资料筛选">
+    <el-input v-model="keyword" aria-label="搜索资料" />
+    <template #actions><AppButton @click="search">查询</AppButton></template>
+  </V2ListToolbar>
+  <V2AsyncRegion :phase="queryPhase" skeleton="table" loading-title="正在加载资料">
+    <!-- 当前模块的数据列表 -->
+  </V2AsyncRegion>
+</section>
+```
 
 ### 2.1 表格操作列
 
@@ -197,6 +241,24 @@
 - 检查所有权限组合下操作按钮不得被裁切，并覆盖 900px 桌面/移动断点两侧。
 - 检查长文本、错误提示、空数据、慢请求和权限不足状态。
 - 检查空表单可点击提交，全部字段错误同时出现，并能滚动、聚焦到第一处错误。
-- 运行 `npm run check:admin-ui`、`npm run check:v2-color-contrast`、
-  `npm run check:v2-ui-language`、`npm run acceptance:v2-color-contrast`、`npm run check:v2-loading-standard`、
-  `npm run check:v2-table-standard`、`npm run acceptance:v2-table-layout` 和管理端构建。
+- 按第 7.1 节执行全局规则检查和受影响的专项验收，记录实际运行的命令、结果及未执行的条件。
+
+## 7.1 新页面与共享布局验收
+
+新增页面复用本规范的公共页面根、总览、工具栏、表单标签和模块间距；禁止复制独立布局修补对齐。
+共享改动必须运行管理端测试、类型与构建、定向 lint／格式及以下检查：
+
+```bash
+npm run check:admin-ui
+npm run check:v2-ui-language
+npm run check:v2-color-contrast
+npm run check:v2-table-standard
+npm run check:v2-loading-standard
+npm run check:v2-module-architecture
+npm run check:v2-isolation
+node scripts/acceptance-v2-page-layout.mjs
+node scripts/acceptance-v2-filter-layout.mjs
+```
+
+页面验收覆盖深浅主题、宽屏单行、窄屏自然换行、真实文字节点对齐、模块间距、首末页、空状态、刷新及失败重试。
+新页面补充实际路由场景，共享夹具通过不能代替实际页面验收。

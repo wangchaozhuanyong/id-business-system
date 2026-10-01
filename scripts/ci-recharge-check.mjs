@@ -26,7 +26,8 @@ if (part === 'guards') {
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-precision.test.mjs',
     'scripts/ci-change-scope.test.mjs',
-    'scripts/ci-recharge-release.test.mjs'
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/admin-layout-rules.test.mjs'
   ]);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
@@ -42,6 +43,7 @@ if (part === 'guards') {
       'check:v2-ui-language',
       'check:v2-table-standard',
       'check:v2-loading-standard',
+      'check:v2-color-contrast',
       'check:v2-isolation',
       'check:v2-decimal-standard'
     ];

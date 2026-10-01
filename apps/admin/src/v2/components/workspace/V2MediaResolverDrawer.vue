@@ -821,7 +821,6 @@ function buildFilename(title: string, option: V2MediaDownloadOption, contentType
 
   .v2-media-resolver-form .el-form-item__label {
     width: 72px !important;
-    padding-right: 8px;
   }
 
   .v2-media-resolver-submit {

@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-business-monitoring-page">
+  <section class="v2-page-layout v2-records-page v2-business-monitoring-page">
     <V2BusinessMonitoringOverview :page="page" />
     <V2BusinessMonitoringSummary :page="page" />
     <V2BusinessMonitoringToolbar :page="page" />

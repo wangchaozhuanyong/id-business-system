@@ -1,48 +1,42 @@
 <template>
-  <div v-if="page.profile" class="v2-profile-overview">
-    <section class="v2-profile-hero" aria-label="当前账户总览">
-      <div class="v2-profile-hero__identity">
-        <span class="v2-profile-hero__avatar" aria-hidden="true">
+  <div v-if="page.profile" class="v2-page-stack v2-profile-overview">
+    <V2PageOverview
+      class="v2-profile-hero"
+      aria-label="当前账户总览"
+      :title="page.profile.displayName"
+      help="当前账户状态与安全资料，联系方式默认脱敏。"
+      metrics-label="当前账户安全指标"
+    >
+      <template #identity
+        ><span class="v2-profile-hero__avatar" aria-hidden="true">
           {{ page.profile.displayName.trim().slice(0, 1) || page.profile.username.slice(0, 1) }}
-        </span>
-        <div>
-          <span>我的账户</span>
-          <h2>{{ page.profile.displayName }}</h2>
-          <p>{{ page.profile.username }} · {{ page.profileRoleLabel(page.profile.roles) }}</p>
-        </div>
-      </div>
-
-      <div class="v2-profile-hero__metrics" aria-label="当前账户安全指标">
-        <article>
-          <span>账号状态</span>
-          <strong class="is-text">正常</strong>
-          <small>当前可登录</small>
-        </article>
-        <article>
-          <span>MFA</span>
-          <strong class="is-text">{{ page.mfaStatus?.enabled ? '已开启' : '未开启' }}</strong>
-          <small>{{ page.mfaStatus?.recoveryCodeCount ?? 0 }} 个恢复码</small>
-        </article>
-        <article>
-          <span>在线设备</span>
-          <strong>{{ activeSessionCount }}</strong>
-          <small>当前页有效会话</small>
-        </article>
-        <article>
-          <span>密码状态</span>
-          <strong class="is-text">{{ page.profile.mustResetPassword ? '待修改' : '正常' }}</strong>
-          <small>改密会退出会话</small>
-        </article>
-      </div>
-
-      <div class="v2-profile-hero__actions">
+        </span></template
+      >
+      <template #meta
+        >{{ page.profile.username }} · {{ page.profileRoleLabel(page.profile.roles) }}</template
+      >
+      <template #metrics>
+        <V2OverviewMetric label="账号状态" value="正常" note="当前可登录" />
+        <V2OverviewMetric
+          label="MFA"
+          :value="page.mfaStatus?.enabled ? '已开启' : '未开启'"
+          :note="(page.mfaStatus?.recoveryCodeCount ?? 0) + ' 个恢复码'"
+        />
+        <V2OverviewMetric label="在线设备" :value="activeSessionCount" note="当前页有效会话" />
+        <V2OverviewMetric
+          label="密码状态"
+          :value="page.profile.mustResetPassword ? '待修改' : '正常'"
+          note="改密会退出会话"
+        />
+      </template>
+      <template #actions>
         <AppButton variant="ghost" :disabled="page.loading" @click="page.refresh">
           <el-icon><Refresh /></el-icon>
           刷新
         </AppButton>
         <AppButton variant="primary" @click="page.openChangePassword">修改密码</AppButton>
-      </div>
-    </section>
+      </template>
+    </V2PageOverview>
 
     <div class="v2-profile-workspace">
       <section class="v2-profile-panel">
@@ -138,10 +132,12 @@
 </template>
 
 <script setup lang="ts">
+import V2PageOverview from '@/v2/components/V2PageOverview.vue';
+import V2OverviewMetric from '@/v2/components/V2OverviewMetric.vue';
+import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import { computed, type UnwrapNestedRefs } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
-import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import type { useProfilePage } from '../useProfilePage';
 
 type ProfilePage = UnwrapNestedRefs<ReturnType<typeof useProfilePage>>;

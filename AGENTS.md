@@ -34,6 +34,7 @@ Apple 官网执行器。Prisma 主 schema 只允许定义当前系统实际使�
 
 ## UI 强制规则
 
+- 搜索、筛选和操作区空间足够时必须同一行，空间不足时自然换行；普通列表复用 `V2PageContext` 的 `filters`／`actions` 插槽，带标题的分组筛选复用 `V2ListToolbar`，页首总览复用 `V2PageOverview`／`V2OverviewMetric`；根容器使用 `v2-page-layout`，模块间距由 `layout.css` 和 `V2AsyncRegion` 管理，不得用额外独立行或不确定的百分比宽度制造提前换行。
 - 中文界面的用户可见文案默认使用简体中文；中文界面不得直接展示内部字段 key、枚举值或数据库字段名，
   必须先映射为中文标签。新增或修改界面后必须运行 `npm run check:v2-ui-language`。
 - 表单标签必须在控件左侧；禁止顶部标签布局。

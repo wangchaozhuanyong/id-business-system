@@ -1,4 +1,5 @@
 @import 'element-plus/theme-chalk/dark/css-vars.css';
+@import './layout.css';
 
 * {
   box-sizing: border-box;
@@ -296,6 +297,9 @@ html[data-v2-theme] {
   --el-mask-color: var(--v3-overlay);
   --el-mask-color-extra-light: transparent;
   --el-border-radius-base: var(--v3-radius);
+  --el-component-size: 36px;
+  --el-component-size-small: 36px;
+  --el-component-size-large: 40px;
   --el-font-family: var(--v3-font-sans);
   --el-font-size-base: var(--v3-font-size-body);
   --el-svg-monochrome-grey: var(--v3-border);
@@ -479,7 +483,13 @@ select {
   font-family: var(--v3-font-sans);
 }
 
-.el-form-item__label {
+html[data-v2-theme] .el-form-item__label {
+  display: flex;
+  height: auto;
+  min-height: var(--el-component-size);
+  align-self: flex-start;
+  align-items: center;
+  padding-block: 0;
   color: var(--v3-text);
   font-size: var(--v3-font-size-label);
   font-weight: var(--v3-font-weight-semibold);
@@ -1275,5 +1285,35 @@ p {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
+  }
+}
+
+/* Shared sizing keeps labels and controls on the same visual row. */
+html[data-v2-theme]
+  :is(
+    .el-form--large,
+    .el-form-item--large,
+    .el-input--large,
+    .el-select--large,
+    .el-input-number--large,
+    .el-button--large
+  ) {
+  --el-component-size: var(--el-component-size-large);
+}
+html[data-v2-theme]
+  :is(
+    .el-input__wrapper,
+    .el-select__wrapper,
+    .el-date-editor.el-input__wrapper,
+    .el-textarea__inner,
+    .el-form-item__content
+  ) {
+  min-height: var(--el-component-size);
+}
+@media (max-width: 900px) {
+  html[data-v2-theme] {
+    --el-component-size: 44px;
+    --el-component-size-small: 44px;
+    --el-component-size-large: 44px;
   }
 }

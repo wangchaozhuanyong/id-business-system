@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-profile-page">
+  <section class="v2-page-layout v2-records-page v2-profile-page">
     <V2AsyncRegion
       skeleton="settings"
       :phase="page.queryPhase"
@@ -10,7 +10,7 @@
       error-title="我的账户加载失败"
       @retry="page.refresh"
     >
-      <div class="v2-profile-page__content">
+      <div class="v2-page-stack v2-profile-page__content">
         <V2ProfileOverview :page="page" />
         <V2ProfileSessionsPanel :page="page" />
       </div>

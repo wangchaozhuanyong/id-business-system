@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-order-entry-page">
+  <section class="v2-page-layout v2-order-entry-page">
     <V2AsyncRegion
       skeleton="form"
       :phase="optionsQueryPhase"

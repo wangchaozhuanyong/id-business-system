@@ -5,6 +5,7 @@ import path from 'node:path';
 import { parse as parseSfc } from '@vue/compiler-sfc';
 import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
 import ts from 'typescript';
+import postcss from 'postcss';
 
 const rootDir = process.cwd();
 const featuresRoot = path.join(rootDir, 'apps/admin/src/v2/features');
@@ -405,14 +406,29 @@ function validateSharedImplementation() {
   if (!/:where\(\.v2-records-list > header\)/.test(recordsStyleSource)) {
     issues.push(`${recordsStylePath}: 列表标题必须具备共享内边距与分隔线`);
   }
-  for (const selector of ['.v2-records-page', '.v2-records-page .v2-async-region__content']) {
-    const rule = recordsStyleSource.match(
-      new RegExp(`${selector.replaceAll('.', '\\.')}\\s*\\{([^}]*)\\}`)
-    );
-    if (!rule || !/grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(rule[1])) {
-      issues.push(`${recordsStylePath}: ${selector} 必须使用可收缩的单列网格`);
-    }
+  const layoutStylePath = 'apps/admin/src/v2/styles/layout.css';
+  const asyncRegionPath = 'apps/admin/src/v2/components/V2AsyncRegion.vue';
+  const asyncStyles = parseSfc(read(asyncRegionPath))
+    .descriptor.styles.map((style) => style.content)
+    .join('\n');
+  for (const [file, source, selector] of [
+    [layoutStylePath, read(layoutStylePath), '.v2-page-layout'],
+    [layoutStylePath, read(layoutStylePath), '.v2-records-page'],
+    [asyncRegionPath, asyncStyles, '.v2-async-region__content']
+  ]) {
+    let shrinkableGrid = false;
+    postcss.parse(source).walkRules((rule) => {
+      if (!rule.selectors.includes(selector)) return;
+      shrinkableGrid ||= rule.nodes.some(
+        (node) =>
+          node.type === 'decl' &&
+          node.prop === 'grid-template-columns' &&
+          node.value === 'minmax(0, 1fr)'
+      );
+    });
+    if (!shrinkableGrid) issues.push(`${file}: ${selector} 必须使用可收缩的单列网格`);
   }
+
   if (
     !/\.v2-records-list > header \.v2-section-heading\s*\{\s*flex-wrap:\s*wrap/.test(
       recordsStyleSource

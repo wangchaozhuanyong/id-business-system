@@ -53,12 +53,15 @@
         <div class="v2-content__inner">
           <p v-if="notice" class="v2-analytics-fixture-notice" role="status">{{ notice }}</p>
           <section class="v2-finance-page">
-            <div class="v2-analytics-page">
+            <div class="v2-page-stack v2-analytics-page">
               <V2AnalyticsOverview :page="page" />
               <V2AnalyticsToolbar :page="page" />
               <V2AnalyticsNavigation v-model:active-section="activeAnalysisSection" />
               <div class="v2-analytics-content">
-                <div v-show="activeAnalysisSection === 'profit'" class="v2-analytics-section-stack">
+                <div
+                  v-show="activeAnalysisSection === 'profit'"
+                  class="v2-page-stack v2-analytics-section-stack"
+                >
                   <V2ProfitOverview
                     :overview="page.overview!"
                     :analysis-range-label="page.analysisRangeLabel"

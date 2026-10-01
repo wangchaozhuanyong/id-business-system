@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page recharge-address-page">
+  <section class="v2-page-layout v2-records-page recharge-address-page">
     <V2PageContext description="导入和管理自动充值使用的街道地址。">
       <template #meta
         ><span>自动充值</span><span aria-hidden="true">/</span><span>地址管理</span></template
@@ -11,19 +11,18 @@
       </template>
     </V2PageContext>
 
-    <section class="recharge-address-import" aria-labelledby="recharge-address-import-title">
-      <V2SectionHeading
-        title-id="recharge-address-import-title"
-        title="批量导入"
-        :help="[
-          '地区固定为美国（官网选择 United States）：Portland、OR、97204。',
-          '仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。',
-          '充值页只提供未使用地址；开通成功后，系统自动标记为已使用。'
-        ]"
-        placement="bottom"
-        :width="380"
-      />
+    <V2ListToolbar
+      class="recharge-address-toolbar"
+      title="批量导入"
+      aria-label="地址导入与筛选"
+      :help="[
+        '地区固定为美国（官网选择 United States）：Portland、OR、97204。',
+        '仅支持 TXT 文件，每行填写一个街道地址，每次最多 2000 行。',
+        '充值页只提供未使用地址；开通成功后，系统自动标记为已使用。'
+      ]"
+    >
       <el-form
+        aria-label="地址文件导入"
         label-position="left"
         label-width="90px"
         require-asterisk-position="right"
@@ -51,21 +50,11 @@
               :loading="importing"
               :disabled="importing"
               @click="importAddresses"
+              >导入地址</AppButton
             >
-              导入地址
-            </AppButton>
           </div>
         </el-form-item>
       </el-form>
-      <p v-if="operationMessage" class="recharge-address-message" role="status">
-        {{ operationMessage }}
-      </p>
-      <p v-if="operationError" class="recharge-address-error" role="alert">
-        {{ operationError }}
-      </p>
-    </section>
-
-    <section class="recharge-address-toolbar" aria-label="地址筛选">
       <el-input
         v-model="keywordInput"
         clearable
@@ -81,7 +70,15 @@
         <el-option label="已停用" value="disabled" />
       </el-select>
       <AppButton variant="soft" @click="applyFilters">查询</AppButton>
-    </section>
+      <template v-if="operationMessage || operationError" #feedback>
+        <p v-if="operationMessage" class="recharge-address-message" role="status">
+          {{ operationMessage }}
+        </p>
+        <p v-if="operationError" class="recharge-address-error" role="alert">
+          {{ operationError }}
+        </p>
+      </template>
+    </V2ListToolbar>
 
     <V2AsyncRegion
       skeleton="table"
@@ -219,6 +216,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
+import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';

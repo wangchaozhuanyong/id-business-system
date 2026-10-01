@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-analytics-section-stack" aria-label="资产余额分析">
+  <section class="v2-page-stack v2-analytics-section-stack" aria-label="资产余额分析">
     <section class="v2-finance-asset-overview" aria-label="资产总览">
       <article class="is-primary">
         <span>资产账面合计</span>

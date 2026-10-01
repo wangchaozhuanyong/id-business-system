@@ -338,8 +338,7 @@ async function assertRecordsSectionSpacing(page, label) {
     const pageRoot = document.querySelector('.vendure-mailbox-page');
     const selectors = [
       '.v2-page-context',
-      '.vendure-mailbox-tabs',
-      '.vendure-mailbox-toolbar',
+      '.vendure-mailbox-controls',
       '.vendure-mailbox-scope',
       '.v2-records-list',
       '.v2-records-pagination'

@@ -1,7 +1,7 @@
 .v2-exchange-page {
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-exchange-drawer-footer {
@@ -13,9 +13,7 @@
 }
 
 .v2-exchange-overview-stack {
-  display: grid;
-  min-width: 0;
-  gap: 10px;
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-exchange-overview {
@@ -267,13 +265,6 @@
   margin-bottom: 12px;
 }
 
-.v2-exchange-list__header .v2-section-heading__actions {
-  color: var(--v2-text-soft);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  line-height: var(--v3-line-height-tight);
-}
-
 .v2-exchange-filterbar {
   display: grid;
   min-width: 0;
@@ -308,16 +299,6 @@
 
 .v2-exchange-list > .v2-async-region > .v2-async-region__content > .v2-unified-table-shell {
   min-height: var(--v2-records-list-body-min-height, 0);
-}
-
-.v2-exchange-list__header {
-  padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-exchange-list__header .v2-section-heading__actions strong {
-  color: var(--v2-text);
-  font-weight: var(--v3-font-weight-semibold);
 }
 
 .v2-exchange-table {

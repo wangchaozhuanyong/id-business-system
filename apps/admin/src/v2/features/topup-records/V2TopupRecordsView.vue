@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-topup-records">
+  <section class="v2-page-layout v2-records-page v2-topup-records">
     <V2TopupRecordsOverview
       v-if="activeTab === 'giftCards' || activeTab === 'ledger'"
       :active-tab="activeTab"

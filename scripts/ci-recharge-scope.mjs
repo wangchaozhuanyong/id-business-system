@@ -23,6 +23,10 @@ export function isAdminOnly(paths) {
         p.startsWith('apps/admin/src/v2/') ||
         adminPublicDocument.test(p) ||
         p === 'scripts/acceptance-v2-table-layout.mjs' ||
+        /^scripts\/(?:admin-layout-rules(?:\.test)?|check-admin-ui-guardrails|acceptance-v2-(?:filter|page)-layout)\.mjs$/.test(
+          p
+        ) ||
+        p === 'apps/admin/layout-contract-fixture.html' ||
         p === 'scripts/check-v2-table-standard.mjs' ||
         isCiOnly([p])
     )
@@ -91,6 +95,16 @@ export function adminCheckCommands(mode, paths) {
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
     commands.push(['run', 'acceptance:v2-auto-recharge']);
+  if (
+    paths.some((p) =>
+      /(?:layout\.css|V2(?:PageOverview|OverviewMetric|ListToolbar|PageContext)\.vue|admin-layout-rules|acceptance-v2-(?:filter|page)-layout)/.test(
+        p
+      )
+    )
+  ) {
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-filter-layout.mjs']);
+    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-page-layout.mjs']);
+  }
   return commands;
 }
 const migration =

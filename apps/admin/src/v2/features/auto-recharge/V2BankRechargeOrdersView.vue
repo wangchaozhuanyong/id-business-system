@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page bank-recharge-page">
+  <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
       description="记录银行卡代充、USDT 手续费、购物网手续费、实收与到期时间。官网成功付款自动建立待补全订单。"
     >

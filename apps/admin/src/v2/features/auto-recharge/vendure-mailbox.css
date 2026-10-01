@@ -1,14 +1,19 @@
-.vendure-mailbox-page {
-  width: min(100%, 1680px);
-  margin-inline: auto;
-  --v2-records-section-gap: 18px;
-}
-
-.vendure-mailbox-tabs {
-  padding: 0 16px;
+.vendure-mailbox-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
   background: var(--v2-surface);
+}
+
+.vendure-mailbox-tabs {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 auto;
 }
 
 .vendure-mailbox-tabs .el-tabs__header {
@@ -20,42 +25,33 @@
 }
 
 .vendure-mailbox-tabs .el-tabs__item {
-  min-height: 48px;
+  height: 36px;
+  min-height: 36px;
+  padding-inline: 10px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .vendure-mailbox-toolbar {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 20px;
-  padding: 11px 12px;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
-  flex-wrap: wrap;
-}
-
-.vendure-mailbox-toolbar__filters,
-.vendure-mailbox-toolbar__actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
+  flex: 1 1 680px;
   gap: 10px;
-  flex-wrap: wrap;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .vendure-mailbox-toolbar__filters .el-input {
-  width: min(300px, 100%);
+  min-width: 160px;
+  width: 180px;
+  max-width: 300px;
+  flex: 1 1 160px;
 }
 
 .vendure-mailbox-toolbar__filters .el-select {
-  width: min(210px, 100%);
-}
-
-.vendure-mailbox-toolbar__actions {
-  justify-content: flex-end;
+  width: 140px;
+  max-width: 100%;
+  flex: 0 1 140px;
 }
 
 .vendure-mailbox-scope {
@@ -65,9 +61,9 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  border: 1px solid var(--v2-accent-border);
   border-radius: var(--v3-radius);
-  background: var(--v2-accent-soft, #eff6ff);
+  background: var(--v2-accent-soft);
   color: var(--v2-text-soft);
   font-size: 12px;
 }
@@ -105,59 +101,27 @@
 }
 
 .vendure-mailbox-message {
-  color: var(--v2-color-success-text, #166534);
-  background: var(--v2-color-success-soft, #f0fdf4);
+  color: var(--v2-color-success-text);
+  background: var(--v2-color-success-soft);
 }
 
 .vendure-mailbox-error {
-  color: var(--v2-color-danger-text, #991b1b);
-  background: var(--v2-color-danger-soft, #fef2f2);
+  color: var(--v2-color-danger-text);
+  background: var(--v2-color-danger-soft);
 }
 
 .vendure-mailbox-unconfigured {
   display: grid;
   gap: 6px;
-  color: var(--v2-color-warning-text, #854d0e);
-  background: var(--v2-color-warning-soft, #fefce8);
+  color: var(--v2-color-warning-text);
+  background: var(--v2-color-warning-soft);
 }
 
 .vendure-mailbox-code {
   max-width: 100%;
-  border: 0;
-  padding: 0;
-  color: var(--el-color-primary);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.vendure-mailbox-code:focus-visible {
-  outline: 2px solid var(--el-color-primary);
-  outline-offset: 3px;
-}
-
-.vendure-mailbox-code--badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border: 1px solid var(--v2-border-soft);
-  border-radius: 6px;
-  background: var(--v2-surface-subtle, #f8fafc);
-  color: var(--el-color-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  transition: all 0.15s ease-in-out;
-}
-
-.vendure-mailbox-code--badge:hover {
-  background: var(--v2-accent-soft, #eff6ff);
-  border-color: var(--v2-accent-border, #bfdbfe);
-  color: var(--el-color-primary-dark-2, #1d4ed8);
 }
 
 .vendure-mailbox-mobile-actions {
@@ -195,13 +159,13 @@
 
 .vendure-mailbox-row-actions small,
 .vendure-mailbox-mobile-feedback {
-  color: var(--v2-color-success-text, #166534);
+  color: var(--v2-color-success-text);
   font-size: 11px;
 }
 
 .vendure-mailbox-row-actions small.is-error,
 .vendure-mailbox-mobile-feedback.is-error {
-  color: var(--v2-color-danger-text, #991b1b);
+  color: var(--v2-color-danger-text);
 }
 
 .vendure-mailbox-mobile-feedback {
@@ -220,7 +184,7 @@
 }
 
 .vendure-mailbox-mail-detail dt {
-  color: var(--v2-color-text-muted, #64748b);
+  color: var(--v2-color-text-muted);
 }
 
 .vendure-mailbox-mail-detail dd {
@@ -247,7 +211,7 @@
   padding: 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: var(--v2-color-surface-subtle, #f8fafc);
+  background: var(--v2-color-surface-subtle);
   font: inherit;
 }
 
@@ -263,10 +227,10 @@
   display: inline-flex;
   align-items: center;
   padding: 4px 8px;
-  background: var(--v2-surface-subtle, #f8fafc);
-  border: 1px solid var(--v2-border-soft, #e2e8f0);
+  background: var(--v2-surface-subtle);
+  border: 1px solid var(--v2-border-soft);
   border-radius: 6px;
-  color: var(--v2-text, #1e293b);
+  color: var(--v2-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   font-weight: 600;
@@ -278,49 +242,18 @@
 }
 
 .vendure-code-badge--otp {
-  color: var(--el-color-primary, #2563eb);
-  background: var(--v2-accent-soft, #eff6ff);
-  border-color: var(--v2-accent-border, #bfdbfe);
+  color: var(--el-color-primary);
+  background: var(--v2-accent-soft);
+  border-color: var(--v2-accent-border);
   font-size: 14px;
   letter-spacing: 0.06em;
 }
 
 .vendure-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: 4px;
-  height: 32px;
   min-width: 64px;
-  padding: 0 10px;
-  background: var(--v2-surface, #ffffff);
-  border: 1.5px solid var(--v2-border, #cbd5e1);
-  border-radius: 6px;
-  color: var(--v2-text, #334155);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s ease-in-out;
-  box-shadow: var(--v3-shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
   flex-shrink: 0;
-}
-
-.vendure-copy-btn:hover {
-  background: var(--v2-accent-soft, #eff6ff);
-  border-color: var(--el-color-primary, #2563eb);
-  color: var(--el-color-primary, #2563eb);
-  transform: translateY(-1px);
-}
-
-.vendure-copy-btn:active {
-  transform: translateY(0);
-}
-
-.vendure-copy-btn.is-copied {
-  background: var(--v2-color-success-soft, #f0fdf4);
-  border-color: var(--v2-color-success-border, #86efac);
-  color: var(--v2-color-success-text, #166534);
 }
 
 .vendure-code-cell--mobile {
@@ -332,12 +265,12 @@
 .vendure-relay-workbench {
   display: flex;
   flex-direction: column;
-  gap: var(--v2-records-section-gap, 18px);
+  gap: var(--v2-layout-section-gap);
   width: 100%;
 }
 
 .vendure-relay-card {
-  background: var(--v2-surface, #ffffff);
+  background: var(--v2-surface);
   border: 1px solid var(--v2-border);
   border-radius: var(--v3-radius);
   padding: 24px;
@@ -441,31 +374,11 @@
 }
 
 .vendure-relay-paste-btn {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
-  height: 28px;
-  padding: 0 10px;
-  background: var(--v2-accent-soft, #eff6ff);
-  border: 1px solid var(--v2-accent-border, #bfdbfe);
-  border-radius: 6px;
-  color: var(--el-color-primary, #2563eb);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.vendure-relay-paste-btn:hover {
-  background: var(--v2-surface-hover);
 }
 
 .vendure-relay-search-btn {
   flex-shrink: 0;
-  height: 40px;
-  padding: 0 20px;
-  font-weight: 600;
-  font-size: 14px;
 }
 
 .vendure-relay-error-banner {
@@ -495,7 +408,7 @@
 }
 
 .vendure-relay-idle-icon {
-  color: var(--v2-border, #cbd5e1);
+  color: var(--v2-border);
 }
 
 .vendure-relay-idle-card strong {
@@ -602,7 +515,7 @@
 .vendure-relay-otp-tag {
   font-size: 12px;
   font-weight: 700;
-  color: var(--el-color-primary, #2563eb);
+  color: var(--el-color-primary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -612,7 +525,7 @@
   font-size: 32px;
   font-weight: 800;
   letter-spacing: 4px;
-  color: var(--el-color-primary-dark-2, #1d4ed8);
+  color: var(--el-color-primary-dark-2);
   line-height: 1.1;
 }
 
@@ -626,38 +539,8 @@
 }
 
 .vendure-relay-big-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: 8px;
-  height: 48px;
-  padding: 0 24px;
-  background: var(--v2-accent-solid);
-  color: var(--v2-on-accent-solid);
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
-  transition: all 0.15s ease;
   white-space: nowrap;
-}
-
-.vendure-relay-big-copy-btn:hover {
-  background: var(--v3-primary-solid-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
-}
-
-.vendure-relay-big-copy-btn:active {
-  transform: translateY(0);
-}
-
-.vendure-relay-big-copy-btn.is-copied {
-  background: var(--v2-success-solid);
-  color: var(--v2-on-success-solid);
-  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.25);
 }
 
 /* Mail List */
@@ -684,7 +567,7 @@
 }
 
 .vendure-relay-mail-card:hover {
-  border-color: var(--v2-accent-border, #bfdbfe);
+  border-color: var(--v2-accent-border);
 }
 
 .vendure-relay-mail-header {
@@ -711,14 +594,14 @@
 .vendure-relay-mail-target {
   font-size: 12px;
   color: var(--v2-text-soft);
-  background: var(--v2-surface-subtle, #f8fafc);
+  background: var(--v2-surface-subtle);
   padding: 2px 6px;
   border-radius: 4px;
 }
 
 .vendure-relay-mail-time {
   font-size: 12px;
-  color: var(--v2-text-muted, #94a3b8);
+  color: var(--v2-text-muted);
   white-space: nowrap;
 }
 
@@ -750,9 +633,9 @@
   font-size: 16px;
   font-weight: 800;
   letter-spacing: 2px;
-  color: var(--el-color-primary, #2563eb);
-  background: var(--v2-accent-soft, #eff6ff);
-  border: 1px solid var(--v2-accent-border, #bfdbfe);
+  color: var(--el-color-primary);
+  background: var(--v2-accent-soft);
+  border: 1px solid var(--v2-accent-border);
   padding: 3px 10px;
   border-radius: 6px;
 }
@@ -763,20 +646,6 @@
   border-top: 1px dashed var(--v2-border-soft);
 }
 
-.vendure-relay-toggle-body-btn {
-  background: none;
-  border: none;
-  color: var(--el-color-primary, #2563eb);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0;
-}
-
-.vendure-relay-toggle-body-btn:hover {
-  text-decoration: underline;
-}
-
 .vendure-relay-mail-body {
   margin-top: 10px;
 }
@@ -784,7 +653,7 @@
 .vendure-relay-mail-body pre {
   margin: 0;
   padding: 12px 14px;
-  background: var(--v2-surface-subtle, #f8fafc);
+  background: var(--v2-surface-subtle);
   border: 1px solid var(--v2-border-soft);
   border-radius: 6px;
   font-size: 13px;
@@ -832,12 +701,8 @@
 }
 
 @media (max-width: 760px) {
-  .vendure-mailbox-page {
-    --v2-records-section-gap: 12px;
-  }
-
   .vendure-mailbox-tabs {
-    padding-inline: 10px;
+    width: 100%;
   }
 
   .vendure-mailbox-tabs .el-tabs__nav {
@@ -853,6 +718,7 @@
   .vendure-mailbox-toolbar__filters .el-input,
   .vendure-mailbox-toolbar__filters .el-select {
     width: 100%;
+    max-width: 100%;
     flex: 1 1 100%;
   }
 
@@ -899,10 +765,6 @@
   .vendure-relay-input-group {
     grid-template-columns: 88px minmax(0, 1fr);
     gap: 8px;
-  }
-
-  .vendure-relay-search-btn {
-    width: 100%;
   }
 
   .vendure-relay-otp-banner {

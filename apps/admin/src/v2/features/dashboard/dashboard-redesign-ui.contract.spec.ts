@@ -5,6 +5,8 @@ import activity from './components/V2DashboardActivity.vue?raw';
 import assets from './components/V2DashboardAssets.vue?raw';
 import metricGrid from './components/V2DashboardMetricGrid.vue?raw';
 import overview from './components/V2DashboardOverview.vue?raw';
+import sharedOverview from '@/v2/components/V2PageOverview.vue?raw';
+import sharedMetric from '@/v2/components/V2OverviewMetric.vue?raw';
 
 describe('dashboard scheme 3 redesign contract', () => {
   it('composes the operational overview, risk, business and activity sections', () => {
@@ -46,10 +48,10 @@ describe('dashboard scheme 3 redesign contract', () => {
 
   it('uses theme-aware overview tokens instead of the permanently dark sidebar palette', () => {
     expect(overview).toContain('data-theme-dashboard-overview');
-    expect(overview).toContain('background: var(--v2-overview-bg)');
-    expect(overview).toContain('background: var(--v2-overview-surface)');
-    expect(overview).toContain('color: var(--v2-overview-text)');
-    expect(overview).toContain('--el-button-text-color: var(--v2-overview-text)');
+    expect(sharedOverview).toContain('background: var(--v2-overview-bg)');
+    expect(sharedMetric).toContain('background: var(--v2-overview-surface)');
+    expect(sharedOverview).toContain('color: var(--v2-overview-text)');
+    expect(sharedOverview).toContain('--el-button-text-color: var(--v2-overview-text)');
     expect(overview).not.toContain('background: var(--v2-sidebar)');
     expect(overview).not.toContain('color: #f4f7fb');
   });

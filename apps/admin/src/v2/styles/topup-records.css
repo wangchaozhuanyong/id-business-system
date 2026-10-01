@@ -1,94 +1,3 @@
-.v2-topup-records-overview {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(190px, 0.75fr) minmax(420px, 1.45fr) max-content;
-  align-items: center;
-  gap: 20px;
-  padding: 18px 20px;
-  border: 1px solid var(--v2-overview-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-overview-bg);
-  color: var(--v2-overview-text);
-  box-shadow: var(--v2-overview-shadow);
-}
-
-.v2-topup-records-overview__intro {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.v2-topup-records-overview__eyebrow {
-  color: var(--v2-overview-accent);
-  font-size: 10px;
-  font-weight: var(--v3-font-weight-bold);
-  letter-spacing: 0.14em;
-}
-
-.v2-topup-records-overview__intro h2,
-.v2-topup-records-overview__intro p {
-  margin: 0;
-}
-
-.v2-topup-records-overview__intro h2 {
-  font-size: 17px;
-  font-weight: var(--v3-font-weight-bold);
-  letter-spacing: 0.01em;
-}
-
-.v2-topup-records-overview__intro p {
-  max-width: 40ch;
-  color: var(--v2-overview-text-soft);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.v2-topup-records-overview__metrics {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(100px, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--v2-overview-divider);
-  border-radius: var(--v3-radius-sm);
-}
-
-.v2-topup-records-overview__metrics article {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  padding: 11px 13px;
-  border-left: 1px solid var(--v2-overview-divider);
-  background: var(--v2-overview-surface);
-}
-
-.v2-topup-records-overview__metrics article:first-child {
-  border-left: 0;
-}
-
-.v2-topup-records-overview__metrics span,
-.v2-topup-records-overview__metrics small {
-  color: var(--v2-overview-text-soft);
-  font-size: 10px;
-}
-
-.v2-topup-records-overview__metrics strong {
-  color: var(--v2-overview-text);
-  font-size: 20px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.15;
-}
-
-.v2-topup-records-overview > .app-button--ghost.el-button {
-  --el-button-text-color: var(--v2-overview-text);
-  --el-button-border-color: var(--v2-overview-control-border);
-  --el-button-hover-text-color: var(--v2-overview-text);
-  --el-button-hover-bg-color: var(--v2-overview-control-hover);
-  --el-button-hover-border-color: var(--v2-overview-control-hover-border);
-  --el-button-active-text-color: var(--v2-overview-text);
-  --el-button-active-bg-color: var(--v2-overview-control-active);
-  --el-button-active-border-color: var(--v2-overview-control-active-border);
-}
-
 .v2-topup-records-command-panel {
   display: grid;
   min-width: 0;
@@ -202,23 +111,6 @@
   flex: 0 0 auto;
   color: var(--v2-text-soft);
   font-size: 11px;
-}
-
-.v2-topup-records-list__header {
-  padding: 15px 16px 13px;
-  border-bottom: 1px solid var(--v2-border-soft);
-}
-
-.v2-topup-records-list__header .v2-section-heading__actions {
-  color: var(--v2-text-soft);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  line-height: 19.5px;
-}
-
-.v2-topup-records-list__header .v2-section-heading__actions strong {
-  color: var(--v2-text);
-  font-weight: var(--v3-font-weight-semibold);
 }
 
 .v2-topup-records-toolbar .el-select,
@@ -441,11 +333,6 @@
 }
 
 @media (max-width: 1320px) {
-  .v2-topup-records-overview {
-    grid-template-columns: minmax(190px, 0.7fr) minmax(420px, 1.3fr) max-content;
-    gap: 14px;
-  }
-
   .v2-topup-records-toolbar {
     grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) auto auto;
   }
@@ -461,28 +348,6 @@
 }
 
 @media (max-width: 900px) {
-  .v2-topup-records-overview {
-    grid-template-columns: 1fr;
-    padding: 16px;
-  }
-
-  .v2-topup-records-overview__metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .v2-topup-records-overview__metrics article:nth-child(3) {
-    border-top: 1px solid var(--v2-overview-divider);
-    border-left: 0;
-  }
-
-  .v2-topup-records-overview__metrics article:nth-child(4) {
-    border-top: 1px solid var(--v2-overview-divider);
-  }
-
-  .v2-topup-records-overview > .app-button {
-    justify-self: start;
-  }
-
   .v2-topup-records .v2-module-header {
     align-items: flex-start;
     flex-direction: column;
@@ -566,21 +431,7 @@
 }
 
 @media (max-width: 560px) {
-  .v2-topup-records-overview__metrics {
-    grid-template-columns: 1fr;
-  }
-
-  .v2-topup-records-overview__metrics article {
-    border-top: 1px solid var(--v2-overview-divider);
-    border-left: 0;
-  }
-
-  .v2-topup-records-overview__metrics article:first-child {
-    border-top: 0;
-  }
-
-  .v2-topup-records-command-panel__heading,
-  .v2-topup-records-list__header .v2-section-heading {
+  .v2-topup-records-command-panel__heading {
     align-items: flex-start;
     flex-direction: column;
   }

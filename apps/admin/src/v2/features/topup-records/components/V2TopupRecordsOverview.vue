@@ -1,33 +1,37 @@
 <template>
-  <section class="v2-topup-records-overview" aria-label="加卡与余额记录概览">
-    <div class="v2-topup-records-overview__intro">
-      <span class="v2-topup-records-overview__eyebrow">余额记录</span>
-      <h2>{{ activeTab === 'giftCards' ? '加卡记录总览' : '余额流水总览' }}</h2>
-      <p>
-        {{
-          activeTab === 'giftCards'
-            ? '核对礼品卡入账、供应商归属和余额快照。'
-            : '追踪每次余额与成本变化，原始账务流水不可覆盖。'
-        }}
-      </p>
-    </div>
-
-    <div class="v2-topup-records-overview__metrics" aria-label="当前记录指标">
-      <article v-for="metric in metrics" :key="metric.label">
-        <span>{{ metric.label }}</span>
-        <strong>{{ metric.value }}</strong>
-        <small>{{ metric.note }}</small>
-      </article>
-    </div>
-
-    <AppButton variant="ghost" :disabled="loading" @click="emit('refresh')">
-      <el-icon><Refresh /></el-icon>
-      刷新
-    </AppButton>
-  </section>
+  <V2PageOverview
+    class="v2-topup-records-overview"
+    aria-label="加卡与余额记录概览"
+    :title="activeTab === 'giftCards' ? '加卡记录总览' : '余额流水总览'"
+    :help="
+      activeTab === 'giftCards'
+        ? '核对礼品卡入账、供应商归属和余额快照。'
+        : '追踪每次余额与成本变化，原始账务流水不可覆盖。'
+    "
+    metrics-label="当前记录指标"
+    :columns="metrics.length"
+  >
+    <template #metrics>
+      <V2OverviewMetric
+        v-for="metric in metrics"
+        :key="metric.label"
+        :label="metric.label"
+        :value="metric.value"
+        :note="metric.note"
+      />
+    </template>
+    <template #actions>
+      <AppButton variant="ghost" :disabled="loading" @click="emit('refresh')">
+        <el-icon><Refresh /></el-icon>
+        刷新
+      </AppButton>
+    </template>
+  </V2PageOverview>
 </template>
 
 <script setup lang="ts">
+import V2PageOverview from '@/v2/components/V2PageOverview.vue';
+import V2OverviewMetric from '@/v2/components/V2OverviewMetric.vue';
 import { computed } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

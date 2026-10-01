@@ -43,18 +43,28 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
   watch(options.items, rememberListBodyHeight, { flush: 'post' });
   watch(options.pageSize, resetStableListBodyHeight);
 
+  watch(
+    listRef,
+    (element) => {
+      listResizeObserver?.disconnect();
+      element
+        ?.querySelectorAll<HTMLElement>('.v2-unified-table-shell, .v2-records-mobile-list')
+        .forEach((body) => listResizeObserver?.observe(body));
+      if (element) void rememberListBodyHeight();
+    },
+    { flush: 'post' }
+  );
+
   onMounted(() => {
     mobileMediaQuery = window.matchMedia(`(max-width: ${options.mobileBreakpoint ?? 900}px)`);
     mobileMediaQuery.addEventListener('change', resetStableListBodyHeight);
     listResizeObserver = new ResizeObserver(() => {
       void rememberListBodyHeight();
     });
-    void nextTick().then(() => {
-      listRef.value
-        ?.querySelectorAll<HTMLElement>('.v2-unified-table-shell, .v2-records-mobile-list')
-        .forEach((element) => listResizeObserver?.observe(element));
-      void rememberListBodyHeight();
-    });
+    listRef.value
+      ?.querySelectorAll<HTMLElement>('.v2-unified-table-shell, .v2-records-mobile-list')
+      .forEach((body) => listResizeObserver?.observe(body));
+    void rememberListBodyHeight();
   });
 
   onBeforeUnmount(() => {

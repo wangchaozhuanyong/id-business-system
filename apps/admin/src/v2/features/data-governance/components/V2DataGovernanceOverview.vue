@@ -1,35 +1,34 @@
 <template>
-  <section class="v2-governance-overview-hero" aria-label="数据治理总览">
-    <div class="v2-governance-overview-hero__intro">
-      <span class="v2-governance-overview-hero__eyebrow">数据治理</span>
-      <h2>数据治理总览</h2>
-      <p>恢复和清理先冻结影响预览、核验备份证据，再由另一名管理员审批并分批执行。</p>
-    </div>
-
-    <div class="v2-governance-overview-hero__metrics" aria-label="当前治理指标">
-      <article>
-        <span>回收站记录</span>
-        <strong>{{ page.overview?.recycleBin.total ?? '—' }}</strong>
-        <small>仅统计软删除记录</small>
-      </article>
-      <article>
-        <span>当前页待审批</span>
-        <strong>{{ pendingApprovalCount }}</strong>
-        <small>必须由非申请人审批</small>
-      </article>
-      <article>
-        <span>可用审批人</span>
-        <strong>{{ page.overview?.approvalReadiness.eligibleApproverCount ?? '—' }}</strong>
-        <small>其他启用管理员</small>
-      </article>
-      <article>
-        <span>可用能力</span>
-        <strong>{{ availableCapabilityCount }}</strong>
-        <small>当前治理能力状态</small>
-      </article>
-    </div>
-
-    <div class="v2-governance-overview-hero__actions">
+  <V2PageOverview
+    class="v2-governance-overview-hero"
+    aria-label="数据治理总览"
+    title="数据治理总览"
+    help="恢复和清理先冻结影响预览、核验备份证据，再由另一名管理员审批并分批执行。"
+    metrics-label="当前治理指标"
+  >
+    <template #metrics>
+      <V2OverviewMetric
+        label="回收站记录"
+        :value="page.overview?.recycleBin.total ?? '—'"
+        note="仅统计软删除记录"
+      />
+      <V2OverviewMetric
+        label="当前页待审批"
+        :value="pendingApprovalCount"
+        note="必须由非申请人审批"
+      />
+      <V2OverviewMetric
+        label="可用审批人"
+        :value="page.overview?.approvalReadiness.eligibleApproverCount ?? '—'"
+        note="其他启用管理员"
+      />
+      <V2OverviewMetric
+        label="可用能力"
+        :value="availableCapabilityCount"
+        note="当前治理能力状态"
+      />
+    </template>
+    <template #actions>
       <span>中国标准时间</span>
       <el-tag :type="page.overview?.approvalReadiness.ready ? 'success' : 'warning'" effect="plain">
         {{ page.overview?.approvalReadiness.ready ? '审批条件就绪' : '审批条件待核验' }}
@@ -38,11 +37,13 @@
         <el-icon><Refresh /></el-icon>
         刷新
       </AppButton>
-    </div>
-  </section>
+    </template>
+  </V2PageOverview>
 </template>
 
 <script setup lang="ts">
+import V2PageOverview from '@/v2/components/V2PageOverview.vue';
+import V2OverviewMetric from '@/v2/components/V2OverviewMetric.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';

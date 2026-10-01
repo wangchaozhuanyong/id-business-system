@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-analytics-section-stack" aria-label="原币资金收支">
+  <section class="v2-page-stack v2-analytics-section-stack" aria-label="原币资金收支">
     <div class="v2-finance-currency-strip" aria-label="分币种净现金流摘要">
       <article v-for="row in overview.currencyBreakdown" :key="row.currency">
         <header>

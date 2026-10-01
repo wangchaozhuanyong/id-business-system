@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-security-page">
+  <section class="v2-page-layout v2-records-page v2-security-page">
     <V2SecurityOverview :page="page" />
     <V2SecurityNavigation :page="page" />
     <V2SecurityToolbar :page="page" />

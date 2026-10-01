@@ -945,12 +945,6 @@
   display: none;
 }
 
-.v2-module-page {
-  display: grid;
-  min-width: 0;
-  gap: 14px;
-}
-
 .v2-module-header {
   display: flex;
   min-width: 0;
@@ -1093,27 +1087,6 @@
 .v2-table-stack--tags {
   align-items: start;
   grid-auto-flow: column;
-}
-
-.v2-filter-bar {
-  display: flex;
-  min-width: 0;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--v2-border);
-  border-radius: 6px;
-  background: var(--v2-surface);
-}
-
-.v2-filter-bar__fields {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
 }
 
 .v2-filter-field {
@@ -1804,37 +1777,6 @@
   font-weight: var(--v3-font-weight-bold);
   letter-spacing: 0;
   line-height: var(--v3-line-height-tight);
-}
-
-/* V2 typography system: one family, predictable optical weights by content role. */
-.v2-shell button,
-.v2-shell input,
-.v2-shell textarea,
-.v2-shell select,
-.el-overlay button,
-.el-overlay input,
-.el-overlay textarea,
-.el-popper button,
-.el-popper input {
-  font-family: var(--v3-font-sans);
-}
-
-.v2-shell .el-form-item__label,
-.el-overlay .el-form-item__label {
-  height: auto;
-  padding-bottom: 6px;
-  color: var(--v2-text);
-  font-size: var(--v3-font-size-label);
-  font-weight: var(--v3-font-weight-semibold);
-  line-height: 20px;
-}
-
-.v2-horizontal-form .el-form-item__label {
-  justify-content: flex-start;
-  padding: 0 12px 0 0;
-  line-height: 32px;
-  text-align: left;
-  white-space: normal;
 }
 
 .v2-horizontal-form .el-form-item__content {

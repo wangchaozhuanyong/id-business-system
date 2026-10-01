@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-exchange-overview-stack">
+  <section class="v2-page-stack v2-exchange-overview-stack">
     <el-alert
       v-if="!page.runtime?.settings.emergencyNetworkEnabled"
       type="error"

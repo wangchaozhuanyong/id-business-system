@@ -1092,8 +1092,6 @@ defineExpose({
 }
 
 .v2-managed-mailbox-panel__form :deep(.el-form-item__label) {
-  min-height: 32px;
-  align-items: center;
   white-space: nowrap;
 }
 

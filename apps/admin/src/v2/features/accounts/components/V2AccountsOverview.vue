@@ -1,35 +1,18 @@
 <template>
-  <section class="v2-accounts-overview" aria-label="ID 资源概览">
-    <div class="v2-accounts-overview__intro">
-      <span class="v2-accounts-overview__eyebrow">ID 资源管理</span>
-      <h2>ID 资源总览</h2>
-      <p>当前分类为 {{ page.lifecycleLabel }}，敏感资料默认脱敏并保留访问审计。</p>
-    </div>
-
-    <div class="v2-accounts-overview__metrics" aria-label="当前页 ID 指标">
-      <article>
-        <span>筛选结果</span>
-        <strong>{{ page.total }}</strong>
-        <small>全部匹配 ID</small>
-      </article>
-      <article>
-        <span>当前页</span>
-        <strong>{{ page.items.length }}</strong>
-        <small>本页已加载</small>
-      </article>
-      <article>
-        <span>可直接使用</span>
-        <strong>{{ usableCount }}</strong>
-        <small>当前页正常可用</small>
-      </article>
-      <article>
-        <span>已保存敏感项</span>
-        <strong>{{ sensitiveCount }}</strong>
-        <small>当前页需受控查看</small>
-      </article>
-    </div>
-
-    <div class="v2-accounts-overview__actions">
+  <V2PageOverview
+    class="v2-accounts-overview"
+    aria-label="ID 资源概览"
+    title="ID 资源总览"
+    :help="'当前分类为 ' + page.lifecycleLabel + '，敏感资料默认脱敏并保留访问审计。'"
+    metrics-label="当前页 ID 指标"
+  >
+    <template #metrics>
+      <V2OverviewMetric label="筛选结果" :value="page.total" note="全部匹配 ID" />
+      <V2OverviewMetric label="当前页" :value="page.items.length" note="本页已加载" />
+      <V2OverviewMetric label="可直接使用" :value="usableCount" note="当前页正常可用" />
+      <V2OverviewMetric label="已保存敏感项" :value="sensitiveCount" note="当前页需受控查看" />
+    </template>
+    <template #actions>
       <AppButton variant="ghost" :disabled="page.loading" @click="page.loadAccounts">
         <el-icon><Refresh /></el-icon>
         刷新
@@ -51,11 +34,13 @@
         <el-icon><Plus /></el-icon>
         新增 ID
       </AppButton>
-    </div>
-  </section>
+    </template>
+  </V2PageOverview>
 </template>
 
 <script setup lang="ts">
+import V2PageOverview from '@/v2/components/V2PageOverview.vue';
+import V2OverviewMetric from '@/v2/components/V2OverviewMetric.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { MoreFilled, Plus, Refresh } from '@element-plus/icons-vue';

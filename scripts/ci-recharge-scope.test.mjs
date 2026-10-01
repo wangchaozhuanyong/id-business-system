@@ -7,6 +7,7 @@ import {
   matchingRun,
   canReuseMain,
   isCiOnly,
+  isAdminOnly,
   isMailboxOnly,
   isTargetedOnly,
   selectedParts,
@@ -285,4 +286,23 @@ test('image reuse requires unchanged complete inputs of that service', () => {
     assert.equal(imageInputsChanged(service, ['scripts/audit-python-dependencies.py']), true);
     assert.equal(imageInputsChanged(service, ['docs/V2_TASKS.md']), false);
   }
+});
+
+test('keeps shared layout changes in the admin release and runs both layout regressions', () => {
+  const paths = [
+    'apps/admin/src/v2/components/V2ListToolbar.vue',
+    'apps/admin/layout-contract-fixture.html',
+    'scripts/admin-layout-rules.mjs',
+    'scripts/admin-layout-rules.test.mjs',
+    'scripts/check-admin-ui-guardrails.mjs',
+    'scripts/acceptance-v2-filter-layout.mjs',
+    'scripts/acceptance-v2-page-layout.mjs'
+  ];
+  assert.equal(isAdminOnly(paths), true);
+  assert.equal(isAdminOnly([...paths, 'apps/api/src/id-business-v2/finance/example.ts']), false);
+  const commands = adminCheckCommands('admin', paths).map((args) => args.join(' '));
+  assert.ok(
+    commands.some((command) => command.includes('scripts/acceptance-v2-filter-layout.mjs'))
+  );
+  assert.ok(commands.some((command) => command.includes('scripts/acceptance-v2-page-layout.mjs')));
 });

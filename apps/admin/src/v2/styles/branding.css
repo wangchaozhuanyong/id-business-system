@@ -1,27 +1,6 @@
 .v2-branding-page {
   min-width: 0;
-  gap: 14px;
-}
-
-.v2-branding-overview {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(250px, 0.9fr) minmax(430px, 1.35fr) minmax(250px, max-content);
-  align-items: center;
-  gap: 20px;
-  padding: 18px 20px;
-  border: 1px solid var(--v2-overview-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-overview-bg);
-  color: var(--v2-overview-text);
-  box-shadow: var(--v2-overview-shadow);
-}
-
-.v2-branding-overview__identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 12px;
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-branding-overview__mark,
@@ -40,98 +19,6 @@
   width: 42px;
   height: 42px;
   font-size: 14px;
-}
-
-.v2-branding-overview__intro {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.v2-branding-overview__intro > span {
-  color: var(--v2-overview-accent);
-  font-size: 10px;
-  font-weight: var(--v3-font-weight-bold);
-  letter-spacing: 0;
-}
-
-.v2-branding-overview__intro h2,
-.v2-branding-overview__intro p {
-  overflow: hidden;
-  margin: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-branding-overview__intro h2 {
-  color: var(--v2-overview-text);
-  font-size: 17px;
-  line-height: 1.3;
-}
-
-.v2-branding-overview__intro p {
-  color: var(--v2-overview-text-soft);
-  font-size: 11px;
-}
-
-.v2-branding-overview__metrics {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--v2-overview-divider);
-  border-radius: var(--v3-radius-sm);
-}
-
-.v2-branding-overview__metrics article {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  padding: 11px 13px;
-  border-left: 1px solid var(--v2-overview-divider);
-  background: var(--v2-overview-surface);
-}
-
-.v2-branding-overview__metrics article:first-child {
-  border-left: 0;
-}
-
-.v2-branding-overview__metrics span,
-.v2-branding-overview__metrics small {
-  overflow: hidden;
-  color: var(--v2-overview-text-soft);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-branding-overview__metrics strong {
-  overflow: hidden;
-  color: var(--v2-overview-text);
-  font-size: 15px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-branding-overview__actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  white-space: nowrap;
-}
-
-.v2-branding-overview__actions .app-button--ghost.el-button {
-  --el-button-text-color: var(--v2-overview-text);
-  --el-button-border-color: var(--v2-overview-control-border);
-  --el-button-hover-text-color: var(--v2-overview-text);
-  --el-button-hover-bg-color: var(--v2-overview-control-hover);
-  --el-button-hover-border-color: var(--v2-overview-control-hover-border);
-  --el-button-active-text-color: var(--v2-overview-text);
-  --el-button-active-bg-color: var(--v2-overview-control-active);
-  --el-button-active-border-color: var(--v2-overview-control-active-border);
 }
 
 .v2-branding-workspace {
@@ -244,7 +131,6 @@
 
 .v2-branding-editor__fields .el-form-item__label {
   color: var(--v2-text-muted);
-  font-size: 12px;
   font-weight: var(--v3-font-weight-semibold);
 }
 
@@ -444,27 +330,7 @@
   line-height: 1.5;
 }
 
-@media (max-width: 1220px) {
-  .v2-branding-overview {
-    grid-template-columns: minmax(230px, 0.85fr) minmax(390px, 1.25fr);
-  }
-
-  .v2-branding-overview__actions {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-  }
-}
-
 @media (max-width: 980px) {
-  .v2-branding-overview {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .v2-branding-overview__actions {
-    grid-column: auto;
-    justify-content: flex-start;
-  }
-
   .v2-branding-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -480,23 +346,6 @@
 }
 
 @media (max-width: 620px) {
-  .v2-branding-overview {
-    gap: 14px;
-    padding: 16px;
-  }
-
-  .v2-branding-overview__metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .v2-branding-overview__metrics article {
-    padding: 9px;
-  }
-
-  .v2-branding-overview__actions {
-    flex-wrap: wrap;
-  }
-
   .v2-branding-editor__fields {
     padding-inline: 12px;
   }
@@ -516,26 +365,5 @@
 
   .v2-branding-preview__login-copy h3 {
     font-size: 23px;
-  }
-}
-
-@media (max-width: 420px) {
-  .v2-branding-overview__metrics {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .v2-branding-overview__metrics article,
-  .v2-branding-overview__metrics article:first-child {
-    border-top: 1px solid var(--v2-overview-divider);
-    border-left: 0;
-  }
-
-  .v2-branding-overview__metrics article:first-child {
-    border-top: 0;
-  }
-
-  .v2-branding-overview__actions .el-tag {
-    width: 100%;
-    justify-content: center;
   }
 }

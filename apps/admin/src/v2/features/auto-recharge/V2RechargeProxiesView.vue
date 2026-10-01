@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page bank-recharge-page">
+  <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
       description="按国家管理充值代理 IP；充值时先选择币种，再选择国家及该国启用的代理。"
     >
@@ -7,57 +7,17 @@
         <AppButton @click="openImport">批量导入</AppButton>
         <AppButton variant="primary" @click="openCreate">新增代理 IP</AppButton>
       </template>
+      <template #filters>
+        <RechargeProxyFilters
+          v-model:keyword="keywordInput"
+          v-model:country="countryInput"
+          v-model:kind="kindInput"
+          v-model:status="statusInput"
+          @search="search"
+        />
+      </template>
     </V2PageContext>
-    <el-form
-      class="recharge-proxy-filters"
-      inline
-      label-position="left"
-      require-asterisk-position="right"
-      @submit.prevent="search"
-    >
-      <el-form-item label="搜索"
-        ><el-input
-          v-model="keywordInput"
-          clearable
-          placeholder="国家代码或备注"
-          @keyup.enter="search"
-      /></el-form-item>
-      <el-form-item label="国家">
-        <el-select
-          v-model="countryInput"
-          filterable
-          clearable
-          aria-label="筛选代理国家"
-          placeholder="全部国家"
-        >
-          <el-option
-            v-for="[code, label] in proxyCountries"
-            :key="code"
-            :value="code"
-            :label="label"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="IP 属性">
-        <el-select v-model="kindInput" clearable aria-label="筛选代理属性" placeholder="全部属性">
-          <el-option
-            v-for="[value, label] in kindOptions"
-            :key="value"
-            :value="value"
-            :label="label"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="状态">
-        <el-select v-model="statusInput" aria-label="筛选代理状态" placeholder="全部状态">
-          <el-option label="全部状态" value="" /><el-option label="启用" value="active" /><el-option
-            label="停用"
-            value="disabled"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
-    </el-form>
+
     <p v-if="operationError" class="bank-recharge-error" role="alert">{{ operationError }}</p>
     <V2AsyncRegion
       skeleton="table"
@@ -293,6 +253,7 @@ import {
   type ProxyKind
 } from './recharge-proxy-options';
 import V2RechargeProxyDetailDrawer from './V2RechargeProxyDetailDrawer.vue';
+import RechargeProxyFilters from './RechargeProxyFilters.vue';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 const RechargeProxyImportDrawer = defineAsyncComponent(
@@ -304,8 +265,8 @@ const page = ref(1);
 const pageSize = ref(20);
 const keywordInput = ref('');
 const countryInput = ref('');
-const kindInput = ref('');
-const statusInput = ref('');
+const kindInput = ref<ProxyKind | ''>('');
+const statusInput = ref<RechargeProxyItem['status'] | ''>('');
 const keyword = ref('');
 const countryCode = ref('');
 const kind = ref('');

@@ -599,7 +599,6 @@ function certificateDescription(tls: V2WebsiteMonitorTls | null) {
 
   .v2-website-monitor-form .el-form-item__label {
     width: 72px !important;
-    padding-right: 8px;
   }
 
   .v2-website-monitor-submit {

@@ -468,10 +468,6 @@ function clearAll() {
 .v2-totp-form .el-form-item__label {
   grid-column: 1;
   width: 86px !important;
-  height: 40px;
-  align-items: center;
-  padding-right: 8px;
-  line-height: 20px;
 }
 
 .v2-totp-form .el-form-item__content {

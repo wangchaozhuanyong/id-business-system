@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-system-monitoring-page">
+  <section class="v2-page-layout v2-records-page v2-system-monitoring-page">
     <V2SystemMonitoringOverview :page="page" />
     <V2SystemMonitoringNavigation :page="page" />
 
