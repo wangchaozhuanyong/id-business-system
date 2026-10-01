@@ -23,6 +23,7 @@ const mock = vi.hoisted(() => ({
   proxyCountriesQuery: {} as Record<string, unknown>,
   proxiesQuery: {} as Record<string, unknown>,
   checkCardAvailability: vi.fn(),
+  accountIdentity: vi.fn(),
   queryIndex: 0,
   jobOptions: undefined as
     | undefined
@@ -117,7 +118,7 @@ vi.mock('./bank-recharge-api', () => ({
     listAccounts: vi.fn(),
     listCurrencies: vi.fn(),
     managedCardDetail: vi.fn(),
-    accountIdentity: vi.fn()
+    accountIdentity: mock.accountIdentity
   }
 }));
 vi.mock('./recharge-proxy-api', () => ({
@@ -999,6 +1000,33 @@ describe('本机比特浏览器自动充值', () => {
 });
 
 describe('服务器自动充值', () => {
+  it('已保存账号首次登录国家与当前代理国家不符时禁止启动', async () => {
+    flow.operationMode.value = 'server_payment';
+    fillForm();
+    mock.accountIdentity.mockResolvedValue({ email: 'registered@example.com' });
+    (mock.bankAccountsQuery.data as { value: unknown }).value = {
+      items: [
+        {
+          id: '44444444-4444-4444-8444-444444444444',
+          emailMasked: 're***@example.com',
+          status: 'active',
+          subscriptionState: 'never_subscribed',
+          hasPassword: true,
+          hasTotp: false,
+          firstLoginNetwork: { ip: '8.8.8.8', countryCode: 'US', observedAt: '' }
+        }
+      ]
+    };
+    flow.loginMethod.value = 'saved';
+    flow.selectedBankAccountId.value = '44444444-4444-4444-8444-444444444444';
+    flow.selectedProxyCountryCode.value = 'PH';
+    await nextTick();
+    expect(flow.loginCountryRestriction.value).toBe('US');
+    expect(flow.canStart.value).toBe(false);
+    flow.selectedProxyCountryCode.value = 'US';
+    expect(flow.loginCountryRestriction.value).toBe('');
+  });
+
   it('只需授权 JSON、卡资料和付款上限，提交后清除敏感输入', async () => {
     flow.operationMode.value = 'server_payment';
     fillForm();

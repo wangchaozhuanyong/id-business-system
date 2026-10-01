@@ -156,6 +156,7 @@ export async function startServerRecheck(
       const login = account ? deps.accounts!.savedLogin(account) : manualLogin;
       if (login && login.email.toLowerCase() !== expectedEmail.toLowerCase())
         throw new ConflictException('复查邮箱与原任务不一致');
+      await deps.accounts!.loginNetworkGuard(tx, expectedEmail, selectedProxy.countryCode);
       const job = await deps.repository.createJob(tx, {
         id: jobId,
         ownerId: operator.id,
@@ -173,6 +174,7 @@ export async function startServerRecheck(
           status: 'rechecking_original_payment',
           recheck_only: true,
           source_job_id: source.id,
+          expected_proxy_country: selectedProxy.countryCode,
           addressId: sourceResult.addressId,
           payment_attempted: true,
           payment_status: 'unknown',
@@ -201,6 +203,7 @@ export async function startServerRecheck(
         recheckOnly: true,
         sourceAccountKey: source.accountKey,
         expectedEmail,
+        expectedCountry: selectedProxy.countryCode,
         proxy,
         ...(result.login ? { login: result.login } : { sessionJson: input.sessionJson })
       },

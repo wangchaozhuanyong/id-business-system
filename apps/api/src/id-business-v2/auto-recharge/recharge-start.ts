@@ -112,7 +112,7 @@ export async function startRechargeJob(
         ) {
           throw new ConflictException('同一操作编号不能更换账单地址');
         }
-        return { job: previous, created: false, address: null, login: null };
+        return { job: previous, created: false, address: null, login: null, previousLoginIp: null };
       }
       const active = await deps.repository.findRunningJob(tx);
       if (active) throw new ConflictException('已有一笔任务执行中，请先查看执行记录');
@@ -149,6 +149,14 @@ export async function startRechargeJob(
       const login = account ? deps.bankAccounts!.savedLogin(account) : manualLogin;
       if (login && login.email.toLowerCase() !== input.details!.email.toLowerCase())
         throw new ConflictException('账单邮箱与登录账号不一致');
+      const previousLoginIp =
+        input.action === 'server'
+          ? await deps.bankAccounts?.loginNetworkGuard(
+              tx,
+              input.details!.email,
+              input.proxyCountryCode!
+            )
+          : null;
       if (input.action === 'server' && input.cardId) {
         if (!deps.bankCards) throw new ServiceUnavailableException('银行卡服务不可用');
         await deps.bankCards.assertRechargeCard(
@@ -219,6 +227,7 @@ export async function startRechargeJob(
                       locked_currency: input.lockedCurrency,
                       max_amount: effectiveMax,
                       max_amount_minor: amountMinor,
+                      expected_proxy_country: input.proxyCountryCode,
                       mode: 'server'
                     }
                   : {})
@@ -240,7 +249,7 @@ export async function startRechargeJob(
         },
         remark: '启动单笔订阅操作'
       });
-      return { job, created: true, address, login };
+      return { job, created: true, address, login, previousLoginIp };
     },
     { changedScopes: ['auto-recharge'], requestId: input.id, operator, retryMode: 'none' }
   );
@@ -269,6 +278,7 @@ export async function startRechargeJob(
             authorizeSinglePayment: true
           },
           expectedCountry: input.proxyCountryCode,
+          previousLoginIp: serverProxy.mode === 'dynamic' ? result.previousLoginIp : null,
           expectedEmail: input.details.email
         });
       }

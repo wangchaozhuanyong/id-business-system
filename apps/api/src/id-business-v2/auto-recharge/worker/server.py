@@ -279,6 +279,7 @@ class Job:
         self.details_received = False
         self.cancelled = False
         self.done = False
+        self.preflight_network = None
 
     def persist(self, path, document):
         name = str(path.relative_to(self.root))
@@ -292,6 +293,12 @@ class Job:
     def progress(self, stage, **details):
         if self.cancelled:
             raise Stop("operation_cancelled")
+        if self.payload.get("action") == "server" and stage in {"login_verified", "session_verified"}:
+            network = details.get("network")
+            if (not isinstance(network, dict) or self.preflight_network is None or
+                    network.get("ip") != self.preflight_network["ip"] or
+                    network.get("country") != self.preflight_network["country"]):
+                raise Stop("proxy_ip_changed_during_login")
         callback(self.id, {"type": "progress", "result": public_result({"stage": stage, **details})})
 
     def confirm(self, quote, last4):
@@ -424,9 +431,7 @@ class Job:
             target, identity = await browser_password_login.login_with_password(
                 page, login["email"], login["password"], wait_for_code,
                 wait_for_user, self.progress)
-            self.progress("login_verified", account_matched=True,
-                          current_plan=identity["current_plan"])
-            return target
+            return target, identity
         finally:
             await browser_password_login.clear_visible_secrets(page)
             login.clear()
@@ -443,10 +448,11 @@ class Job:
             observed = await browser_password_login.official_identity(page, expected_email)
             if not observed:
                 raise Stop("official_session_not_verified", account_matched=False)
-            official_target, _ = observed
+            official_target, identity = observed
             if (official_target.account_id != target.account_id or
                     official_target.user_id != target.user_id):
                 raise Stop("official_account_mismatch", account_matched=False)
+            return identity
         finally:
             await page.close()
 
@@ -461,12 +467,19 @@ class Job:
                 context = await browser.new_context(proxy=proxy, service_workers="block",
                                                     accept_downloads=False)
                 try:
+                    self.preflight_network = await server_proxy.observe_exit(context)
+                    expected_country = self.payload.get("expectedCountry")
+                    if self.preflight_network["country"] != expected_country:
+                        raise Stop("proxy_country_mismatch")
+                    previous_ip = self.payload.get("previousLoginIp")
+                    if previous_ip and self.preflight_network["ip"] == previous_ip and not self.payload.get("recheckOnly"):
+                        raise Stop("proxy_ip_not_rotated")
                     if login is not None:
-                        target = await self.login_target(context, login)
+                        target, identity = await self.login_target(context, login)
                     else:
                         target = parse_browser_credential(raw.encode())
-                        await self.verify_json_target(context, target,
-                                                      self.payload.get("expectedEmail"))
+                        identity = await self.verify_json_target(context, target,
+                                                                 self.payload.get("expectedEmail"))
                     raw = None
                     if self.payload.get("recheckOnly") is True:
                         expected_key = self.payload.get("sourceAccountKey")
@@ -475,6 +488,12 @@ class Job:
                                     target.account_id.encode()).hexdigest(), expected_key)):
                             raise Stop("original_account_mismatch", account_matched=False)
                     self.restore_target(target)
+                    observed_after_login = await server_proxy.observe_exit(context)
+                    if observed_after_login != self.preflight_network:
+                        raise Stop("proxy_ip_changed_during_login")
+                    self.progress("login_verified", account_matched=True,
+                                  current_plan=identity.get("current_plan"),
+                                  network=observed_after_login)
                     if self.payload.get("recheckOnly") is True:
                         with payment_state.PaymentLedger(self.root, target.account_id,
                                                          target_plan=plan) as ledger:

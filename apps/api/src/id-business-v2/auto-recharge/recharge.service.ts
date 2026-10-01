@@ -26,32 +26,33 @@ import {
 import {
   hash,
   object,
-  resultWithConfirmation,
   safeDocument,
   uuidPattern,
   validateDetailsSubmission,
   validateWorkerConfirmation
 } from './recharge-validation';
-import {
-  completeUnknownPaymentResolution,
-  withResolutionVerification
-} from './recharge-resolution';
+import { completeUnknownPaymentResolution } from './recharge-resolution';
 import {
   clearRechargeDetails,
   isBrowserProfileId,
   rechargeDetailsWithAddress,
   staleProfile
 } from './recharge-job-helpers';
-import { isRechargeWorkerConfigured, sendRechargeWorkerRequest } from './recharge-worker-client';
+import { sendRechargeWorkerRequest } from './recharge-worker-client';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
-import { bindSavedChatgptAccount, recordVerifiedBankRecharge } from './recharge-bank-callback';
+import {
+  bindSavedChatgptAccount,
+  recordServerLoginNetwork,
+  recordVerifiedBankRecharge
+} from './recharge-bank-callback';
 import { mergeRechargeCallbackResult } from './recharge-bank-callback';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
+import { listRechargeJobs } from './recharge-job-list';
 @Injectable()
 export class RechargeService {
   constructor(
@@ -130,25 +131,11 @@ export class RechargeService {
   }
 
   async list(operator: AuthenticatedUser) {
-    const items = await this.repository.list(operator.id);
-    return {
-      items: items.map((job) => {
-        const result = resultWithConfirmation(job, process.env.AUTO_RECHARGE_WORKER_TOKEN ?? '');
-        return {
-          ...job,
-          nonceHash: undefined,
-          accountKey: undefined,
-          expectedEmailEncrypted: undefined,
-          billingNameEncrypted: undefined,
-          state:
-            job.state !== 'finished' && job.leaseUntil.getTime() < Date.now()
-              ? 'unknown'
-              : job.state,
-          result: withResolutionVerification(result, job, items)
-        };
-      }),
-      configured: isRechargeWorkerConfigured()
-    };
+    return listRechargeJobs(
+      this.repository,
+      operator.id,
+      process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
+    );
   }
 
   private async finishUnreceivedJob(id: string, ownerId: string, unknown: boolean) {
@@ -498,6 +485,9 @@ export class RechargeService {
         }
         const report = safeDocument(input.result);
         await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
+        if (input.type === 'progress')
+          await recordServerLoginNetwork(tx, job, report, this.bankAccounts);
+        if (job.action === 'server') delete report.network;
         let state = job.state;
         let nonceHash = job.nonceHash;
         if (input.type === 'progress' && job.action === 'bitbrowser') {

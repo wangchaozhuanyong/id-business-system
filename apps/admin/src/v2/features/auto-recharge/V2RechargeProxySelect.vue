@@ -36,6 +36,10 @@
   <p v-if="error" class="recharge-error" role="alert">
     {{ error }} <el-button link type="primary" @click="$emit('retry')">重试</el-button>
   </p>
+  <p v-if="loginCountryRestriction" class="recharge-error" role="alert">
+    该账号首次登录国家是
+    {{ proxyCountryLabel(loginCountryRestriction) }}，当前代理国家不一致，已限制登录。
+  </p>
 </template>
 
 <script setup lang="ts">
@@ -46,6 +50,7 @@ defineProps<{
   countryCode: string;
   proxyId: string;
   countries: string[];
+  loginCountryRestriction: string;
   proxies: RechargeProxyItem[];
   loading: boolean;
   error: string;

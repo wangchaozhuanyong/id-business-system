@@ -51,10 +51,14 @@ function dependencies() {
       execute: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({}))
     },
     audit: { append: vi.fn() },
-    accounts: { decryptExpectedEmail: vi.fn().mockReturnValue('test@example.invalid') },
+    accounts: {
+      decryptExpectedEmail: vi.fn().mockReturnValue('test@example.invalid'),
+      loginNetworkGuard: vi.fn().mockResolvedValue(null)
+    },
     proxies: {
       forCharge: vi.fn().mockResolvedValue({
         mode: 'static',
+        countryCode: 'US',
         type: 'http',
         host: 'proxy.example.invalid',
         port: 8080,

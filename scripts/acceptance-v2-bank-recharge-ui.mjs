@@ -315,6 +315,8 @@ try {
                 status: accountStatus,
                 hasPassword: true,
                 hasTotp: true,
+                firstLoginNetwork: { ip: '8.8.8.8', countryCode: 'US', observedAt: now },
+                lastLoginNetwork: { ip: '1.1.1.1', countryCode: 'US', observedAt: now },
                 remark: null,
                 createdAt: now,
                 updatedAt: now
@@ -670,6 +672,8 @@ try {
     waitUntil: 'domcontentloaded'
   });
   await page.getByText(account.emailMasked).waitFor({ state: 'visible' });
+  await page.getByText('8.8.8.8 · 美国').waitFor({ state: 'visible' });
+  await page.getByText('1.1.1.1 · 美国').waitFor({ state: 'visible' });
   for (const width of [2307, 1440, 900, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await assertListHeaderLayout(page, `${width}px ChatGPT 账号`);
