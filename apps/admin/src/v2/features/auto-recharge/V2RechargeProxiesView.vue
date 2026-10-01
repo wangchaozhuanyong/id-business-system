@@ -122,7 +122,10 @@
               formatV2DateTime(row.updatedAt)
             }}</template></V2TableColumn
           >
-          <V2TableActionColumn :definition="v2TableSchemas.rechargeProxies.main.columns[7]">
+          <V2TableColumn :definition="v2TableSchemas.rechargeProxies.main.columns[7]">
+            <template #default="{ row }">{{ proxyProtocolLabel(row.protocol) }}</template>
+          </V2TableColumn>
+          <V2TableActionColumn :definition="v2TableSchemas.rechargeProxies.main.columns[8]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="detailId = row.id">详细</AppButton>
               <el-dropdown trigger="click"
@@ -159,7 +162,7 @@
     <V2FormDrawer
       v-model="formOpen"
       :title="editing ? '编辑代理 IP' : '新增代理 IP'"
-      description="支持 HTTPS IP 提取链接，或含主机和端口的 HTTP、HTTPS、SOCKS5 直连链接。已用于充值的代理不能更换国家、属性或链接。"
+      description="国家、协议和链接统一在这里维护，供服务器默认设置与充值选择使用。已用于充值的代理不能更换国家、属性、协议或链接。"
       size="min(700px, 96vw)"
       :confirm-loading="saving"
       :dirty="dirty"
@@ -188,6 +191,16 @@
               :value="code"
               :label="label" /></el-select
         ></el-form-item>
+        <el-form-item label="代理协议" prop="protocol" required>
+          <el-select v-model="form.protocol" aria-label="代理协议">
+            <el-option
+              v-for="[value, label] in Object.entries(proxyProtocolLabels)"
+              :key="value"
+              :value="value"
+              :label="label"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="IP 链接" prop="url" :required="!editing"
           ><el-input
             v-model="form.url"
@@ -197,6 +210,13 @@
               editing ? '留空保留当前链接' : 'HTTPS 提取链接或协议://账号:密码@主机:端口'
             "
         /></el-form-item>
+        <p class="bank-recharge-form-note">
+          HTTPS
+          提取链接负责获取代理；代理协议请选择供应商实际提供的协议。直连链接的协议须与选择一致。
+        </p>
+        <AppButton v-if="editing" size="small" variant="ghost" @click="detailId = editing.id"
+          >查看已保存链接</AppButton
+        >
         <el-form-item label="IP 属性" prop="kind"
           ><el-select v-model="form.kind" aria-label="代理属性"
             ><el-option
@@ -215,33 +235,11 @@
       <p v-if="formError" class="bank-recharge-error" role="alert">{{ formError }}</p>
     </V2FormDrawer>
 
-    <V2FormDrawer
-      v-model="importOpen"
-      title="批量导入代理 IP"
-      description="每行依次填写国家、IP 链接、IP 属性、备注1、备注2。"
-      confirm-text="导入代理 IP"
-      size="min(720px, 96vw)"
-      :confirm-loading="importing"
-      :dirty="Boolean(importText.trim())"
-      @confirm="importProxies"
-    >
-      <el-form label-position="left" label-width="110px" require-asterisk-position="right">
-        <el-form-item label="代理 IP 资料" required
-          ><el-input
-            v-model="importText"
-            type="textarea"
-            :rows="12"
-            :maxlength="210000"
-            autocomplete="off"
-            aria-label="粘贴代理 IP 资料"
-            placeholder="美国    https://proxy.example.net/get-ip    动态住宅    备注1    备注2"
-        /></el-form-item>
-      </el-form>
-      <p class="bank-recharge-form-note">
-        列之间可用 Tab 或空格；备注含空格时请用 Tab 分列。空备注可用 - 占位。每次最多 100 条。
-      </p>
-      <p v-if="importError" class="bank-recharge-error" role="alert">{{ importError }}</p>
-    </V2FormDrawer>
+    <RechargeProxyImportDrawer
+      v-if="importOpen"
+      @close="importOpen = false"
+      @imported="onImported"
+    />
 
     <V2ConfirmDialog
       v-model="deleteOpen"
@@ -263,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -282,18 +280,23 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
-import { parseRechargeProxyImport } from './recharge-proxy-import';
 import {
   parseProxyCountry,
   proxyCountries,
   proxyCountryLabel,
   proxyKindLabel,
   proxyKindLabels,
+  proxyProtocolLabel,
+  proxyProtocolLabels,
+  type ProxyProtocol,
   type ProxyKind
 } from './recharge-proxy-options';
 import V2RechargeProxyDetailDrawer from './V2RechargeProxyDetailDrawer.vue';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
+const RechargeProxyImportDrawer = defineAsyncComponent(
+  () => import('./RechargeProxyImportDrawer.vue')
+);
 
 const kindOptions = Object.entries(proxyKindLabels) as [ProxyKind, string][];
 const page = ref(1);
@@ -343,22 +346,21 @@ const form = reactive<{
   countryCode: string;
   url: string;
   kind: ProxyKind | '';
+  protocol: ProxyProtocol;
   remark1: string;
   remark2: string;
-}>({ countryCode: '', url: '', kind: '', remark1: '', remark2: '' });
+}>({ countryCode: '', url: '', kind: '', protocol: 'http', remark1: '', remark2: '' });
 const original = ref('');
 const dirty = computed(() => JSON.stringify(form) !== original.value);
 const rules: FormRules = {
   countryCode: [{ required: true, message: '请选择国家', trigger: 'change' }],
   url: [{ required: false, trigger: 'blur' }],
-  kind: [{ required: true, message: '请选择 IP 属性', trigger: 'change' }]
+  kind: [{ required: true, message: '请选择 IP 属性', trigger: 'change' }],
+  protocol: [{ required: true, message: '请选择代理协议', trigger: 'change' }]
 };
 const saving = ref(false);
 const formError = ref('');
 const importOpen = ref(false);
-const importText = ref('');
-const importing = ref(false);
-const importError = ref('');
 const operationError = ref('');
 const working = ref(false);
 const deleteOpen = ref(false);
@@ -378,7 +380,14 @@ function changePageSize(value: number) {
   page.value = 1;
 }
 function resetForm() {
-  Object.assign(form, { countryCode: '', url: '', kind: '', remark1: '', remark2: '' });
+  Object.assign(form, {
+    countryCode: '',
+    url: '',
+    kind: '',
+    protocol: 'http',
+    remark1: '',
+    remark2: ''
+  });
   formError.value = '';
   original.value = JSON.stringify(form);
 }
@@ -393,6 +402,7 @@ function openEdit(item: RechargeProxyItem) {
   Object.assign(form, {
     countryCode: item.countryCode,
     kind: item.kind,
+    protocol: item.protocol,
     remark1: item.remark1 ?? '',
     remark2: item.remark2 ?? ''
   });
@@ -410,6 +420,7 @@ async function save() {
     const input = {
       countryCode: country,
       kind: form.kind,
+      protocol: form.protocol,
       remark1: form.remark1,
       remark2: form.remark2
     };
@@ -430,35 +441,21 @@ async function save() {
   }
 }
 function openImport() {
-  importText.value = '';
-  importError.value = '';
   importOpen.value = true;
 }
-async function importProxies() {
-  if (importing.value) return;
-  try {
-    const rows = parseRechargeProxyImport(importText.value);
-    importing.value = true;
-    importError.value = '';
-    const result = await rechargeProxyApi.importMany(rows);
-    importText.value = '';
-    importOpen.value = false;
-    page.value = 1;
-    keyword.value = '';
-    keywordInput.value = '';
-    countryCode.value = '';
-    countryInput.value = '';
-    kind.value = '';
-    kindInput.value = '';
-    status.value = '';
-    statusInput.value = '';
-    ElMessage.success(`已导入 ${result.imported} 条代理 IP`);
-    await query.refresh();
-  } catch (cause) {
-    importError.value = getApiErrorMessage(cause);
-  } finally {
-    importing.value = false;
-  }
+async function onImported(count: number) {
+  importOpen.value = false;
+  page.value = 1;
+  keyword.value = '';
+  keywordInput.value = '';
+  countryCode.value = '';
+  countryInput.value = '';
+  kind.value = '';
+  kindInput.value = '';
+  status.value = '';
+  statusInput.value = '';
+  ElMessage.success(`已导入 ${count} 条代理 IP`);
+  await query.refresh();
 }
 async function changeStatus(item: RechargeProxyItem) {
   if (working.value) return;

@@ -5,6 +5,13 @@ export const proxyKindLabels = {
 } as const;
 
 export type ProxyKind = keyof typeof proxyKindLabels;
+export const proxyProtocolLabels = { http: 'HTTP', https: 'HTTPS', socks5: 'SOCKS5' } as const;
+export type ProxyProtocol = keyof typeof proxyProtocolLabels;
+export function proxyProtocolLabel(value: unknown) {
+  return typeof value === 'string' && Object.hasOwn(proxyProtocolLabels, value)
+    ? proxyProtocolLabels[value as ProxyProtocol]
+    : '未知协议';
+}
 
 export function proxyKindLabel(value: unknown) {
   return typeof value === 'string' && Object.hasOwn(proxyKindLabels, value)

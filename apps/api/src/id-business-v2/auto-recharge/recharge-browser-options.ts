@@ -109,7 +109,9 @@ export function validateBrowserOptions(value: unknown): V2RechargeBrowserOptions
 }
 
 export function storedBrowserOptions(value: unknown): V2RechargeBrowserOptions {
-  return validateBrowserOptions(value == null ? { ...V2_RECHARGE_BROWSER_DEFAULTS } : value);
+  const input = value == null ? { ...V2_RECHARGE_BROWSER_DEFAULTS } : { ...object(value) };
+  delete (input as Record<string, unknown>).serverDefaultProxyId;
+  return validateBrowserOptions(input);
 }
 
 export function validateStaticCredentials(

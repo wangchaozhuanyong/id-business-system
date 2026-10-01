@@ -19,6 +19,7 @@ import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
 import { useRechargeBrowserSettings, type ConnectorStatus } from './useRechargeBrowserSettings';
+import { useRechargeServerProxySettings } from './useRechargeServerProxySettings';
 import { useRechargeTotp } from './useRechargeTotp';
 import { bankRechargeApi } from './bank-recharge-api';
 import { currencyOptions } from './recharge-presentation';
@@ -203,10 +204,14 @@ export function useAutoRecharge() {
     keepPreviousData: true,
     query: ({ signal }) => loadCountryProxies(selectedProxyCountryCode.value, signal)
   });
-  watch(selectedProxyCountryCode, () => {
-    selectedProxyId.value = '';
-    void proxiesQuery.ensureFresh();
-  });
+  watch(
+    selectedProxyCountryCode,
+    () => {
+      selectedProxyId.value = '';
+      void proxiesQuery.ensureFresh();
+    },
+    { flush: 'sync' }
+  );
   watch(lockedCurrency, () => {
     selectedProxyCountryCode.value = '';
     selectedProxyId.value = '';
@@ -217,6 +222,11 @@ export function useAutoRecharge() {
     computed(() => operationMode.value === 'server_payment')
   );
   const { settingsQuery } = browserSettings;
+  const serverProxySettings = useRechargeServerProxySettings();
+  function openProxySettings() {
+    if (operationMode.value === 'server_payment') serverProxySettings.setOpen(true);
+    else browserSettings.setSettingsOpen(true);
+  }
   const totp = useRechargeTotp(loginMethod);
 
   const jobs = computed(() => query.data.value?.items ?? []);
@@ -246,6 +256,46 @@ export function useAutoRecharge() {
     )
   );
   const availableProxyCountries = computed(() => proxyCountriesQuery.data.value?.items ?? []);
+  let appliedDefaultProxyId = '';
+  function markProxySelectionManual() {
+    appliedDefaultProxyId = '';
+  }
+  function useServerDefaultProxy() {
+    const proxy = serverProxySettings.settingsQuery.data.value?.proxy;
+    if (
+      operationMode.value !== 'server_payment' ||
+      proxy?.status !== 'active' ||
+      !availableProxyCountries.value.includes(proxy.countryCode)
+    )
+      return;
+    selectedProxyCountryCode.value = proxy.countryCode;
+    selectedProxyId.value = proxy.id;
+    appliedDefaultProxyId = proxy.id;
+  }
+  watch(
+    [
+      operationMode,
+      () => serverProxySettings.settingsQuery.data.value,
+      availableProxyCountries,
+      lockedCurrency
+    ],
+    () => {
+      if (operationMode.value !== 'server_payment') return;
+      const proxy = serverProxySettings.settingsQuery.data.value?.proxy;
+      if (
+        (!selectedProxyId.value && !selectedProxyCountryCode.value) ||
+        (appliedDefaultProxyId && selectedProxyId.value === appliedDefaultProxyId)
+      ) {
+        if (proxy?.status === 'active') useServerDefaultProxy();
+        else if (appliedDefaultProxyId && selectedProxyId.value === appliedDefaultProxyId) {
+          selectedProxyCountryCode.value = '';
+          selectedProxyId.value = '';
+          appliedDefaultProxyId = '';
+        }
+      }
+    },
+    { immediate: true }
+  );
   const availableProxies = computed(() =>
     selectedProxyCountryCode.value
       ? (proxiesQuery.data.value?.items ?? []).filter(
@@ -257,7 +307,7 @@ export function useAutoRecharge() {
     () =>
       proxyCountriesQuery.phase.value === 'ready' &&
       !proxyCountriesQuery.error.value &&
-      (availableProxyCountries.value.length === 0 ||
+      ((operationMode.value !== 'server_payment' && availableProxyCountries.value.length === 0) ||
         Boolean(
           selectedProxyCountryCode.value &&
           selectedProxyId.value &&
@@ -338,15 +388,14 @@ export function useAutoRecharge() {
       : (availableAddresses.value.find((address) => address.id === selectedAddressId.value) ??
         (operationMode.value === 'server_payment' ? availableAddresses.value[0] : undefined))
   );
-  watch(
-    [selectedAddress, addressSource, availableProxyCountries],
-    ([address, source, countries]) => {
-      if (operationMode.value !== 'server_payment') return;
-      const country = source === 'manual' ? details.value.country.toUpperCase() : address?.country;
-      if (country && countries.includes(country) && selectedProxyCountryCode.value !== country)
-        selectedProxyCountryCode.value = country;
-    }
-  );
+  const billingCountryRestriction = computed(() => {
+    if (operationMode.value !== 'server_payment' || !selectedProxyCountryCode.value) return '';
+    const country =
+      addressSource.value === 'manual'
+        ? details.value.country.toUpperCase()
+        : selectedAddress.value?.country;
+    return country && country !== selectedProxyCountryCode.value ? country : '';
+  });
   watch(
     () => details.value.country,
     (country) => {
@@ -358,18 +407,8 @@ export function useAutoRecharge() {
         details.value.country = country.toUpperCase();
         return;
       }
-      if (
-        operationMode.value === 'server_payment' &&
-        addressSource.value === 'manual' &&
-        availableProxyCountries.value.includes(country)
-      )
-        selectedProxyCountryCode.value = country;
     }
   );
-  watch(availableProxies, (proxies) => {
-    if (operationMode.value === 'server_payment' && !selectedProxyId.value && proxies.length)
-      selectedProxyId.value = proxies[0]!.id;
-  });
   const selected = computed(() =>
     currentId.value
       ? jobs.value.find((job) => job.id === currentId.value)
@@ -412,6 +451,7 @@ export function useAutoRecharge() {
         availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
+        !billingCountryRestriction.value &&
         (operationMode.value === 'server_payment'
           ? Boolean(paymentCap.value)
           : /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value)) &&
@@ -1270,6 +1310,7 @@ export function useAutoRecharge() {
     selectedPaymentCardId,
     selectedBankAccountEmail,
     loginCountryRestriction,
+    billingCountryRestriction,
     savedBankAccounts,
     bankAccountsQuery,
     savedPaymentCards,
@@ -1321,6 +1362,10 @@ export function useAutoRecharge() {
     autoCodeSubmittedJobId,
     workflowMessage,
     browserSettings,
+    serverProxySettings,
+    openProxySettings,
+    useServerDefaultProxy,
+    markProxySelectionManual,
     ...browserSettings,
     currentSettingsReady,
     acceptSession,

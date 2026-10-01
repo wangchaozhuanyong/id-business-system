@@ -31,6 +31,66 @@ function setup() {
 }
 
 describe('充值代理 IP', () => {
+  it('提取链接可指定 SOCKS5，直连链接拒绝不一致的协议', async () => {
+    const f = setup();
+    await f.service.create(
+      { countryCode: 'US', kind: 'mobile', protocol: 'socks5', url: link },
+      operator
+    );
+    expect(f.repository.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ protocol: 'socks5', connectionMode: 'extraction' })
+    );
+    expect(() =>
+      parseRechargeProxy({
+        countryCode: 'US',
+        kind: 'mobile',
+        protocol: 'socks5',
+        url: 'http://proxy.example.test:8080'
+      })
+    ).toThrow('协议不一致');
+    expect(() =>
+      parseRechargeProxy({ countryCode: 'US', kind: 'mobile', protocol: 'invalid', url: link })
+    ).toThrow('代理协议无效');
+  });
+
+  it('更换提取协议不改密文链接，已使用代理拒绝更换协议', async () => {
+    const f = setup();
+    f.repository.findInTransaction.mockResolvedValue({
+      id,
+      countryCode: 'US',
+      kind: 'mobile',
+      active: true,
+      protocol: 'http',
+      connectionMode: 'extraction',
+      urlHash: `hash:${link}`,
+      urlEncrypted: `encrypted:${link}`
+    });
+    await f.service.update(id, { protocol: 'socks5' }, operator);
+    const updated = f.repository.update.mock.calls[0]?.[2];
+    expect(updated).toMatchObject({ protocol: 'socks5' });
+    expect(updated).not.toHaveProperty('urlEncrypted');
+    expect(JSON.stringify(f.audit.append.mock.calls)).not.toContain(link);
+    f.repository.findInTransaction.mockResolvedValue({
+      id,
+      countryCode: 'US',
+      kind: 'mobile',
+      active: true,
+      protocol: 'socks5',
+      connectionMode: 'extraction',
+      urlHash: `hash:${link}`,
+      urlEncrypted: `encrypted:${link}`
+    });
+    await expect(f.service.forCharge(id, operator, 'US')).resolves.toMatchObject({
+      mode: 'dynamic',
+      type: 'socks5',
+      extractionUrl: link
+    });
+    await f.service.update(id, { url: 'https://proxy.example.test/new-extract' }, operator);
+    expect(f.repository.update.mock.calls.at(-1)?.[2]).toMatchObject({ protocol: 'socks5' });
+    f.repository.hasJobs.mockResolvedValue({ id: 'job-id' });
+    await expect(f.service.update(id, { protocol: 'https' }, operator)).rejects.toThrow('不能更换');
+  });
   it('识别提取链接及 HTTP、HTTPS、SOCKS5 直连链接', () => {
     expect(proxyLink(link)).toMatchObject({ connectionMode: 'extraction', protocol: 'http' });
     expect(proxyLink('http://user:pass@proxy.example.test:8080')).toMatchObject({

@@ -4,7 +4,7 @@
       :model-value="value"
       clearable
       filterable
-      placeholder="选择银行卡，或在下方手动输入"
+      placeholder="选择银行卡（可选）"
       :loading="loading"
       @update:model-value="$emit('select', String($event ?? ''))"
     >

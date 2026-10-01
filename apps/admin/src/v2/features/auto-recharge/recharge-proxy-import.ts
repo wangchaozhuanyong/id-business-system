@@ -1,14 +1,23 @@
-import { parseProxyCountry, parseProxyKind, type ProxyKind } from './recharge-proxy-options';
+import {
+  parseProxyCountry,
+  parseProxyKind,
+  type ProxyKind,
+  type ProxyProtocol
+} from './recharge-proxy-options';
 
 export interface RechargeProxyImportRow {
   countryCode: string;
   url: string;
   kind: ProxyKind;
+  protocol?: ProxyProtocol;
   remark1: string;
   remark2: string;
 }
 
-export function parseRechargeProxyImport(text: string): RechargeProxyImportRow[] {
+export function parseRechargeProxyImport(
+  text: string,
+  extractionProtocol?: ProxyProtocol
+): RechargeProxyImportRow[] {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -26,6 +35,10 @@ export function parseRechargeProxyImport(text: string): RechargeProxyImportRow[]
         countryCode: parseProxyCountry(parts[0]),
         url: parts[1],
         kind: parseProxyKind(parts[2]),
+        ...(extractionProtocol &&
+        !/^[-a-z0-9+.]+:\/\/(?:[^@/]*@)?(?:\[[^\]]+\]|[^:/?#]+):\d+(?:[/?#]|$)/i.test(parts[1])
+          ? { protocol: extractionProtocol }
+          : {}),
         remark1: parts[3] === '-' ? '' : (parts[3] ?? ''),
         remark2: parts[4] === '-' ? '' : (parts[4] ?? '')
       };

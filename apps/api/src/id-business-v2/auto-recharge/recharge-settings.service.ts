@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { V2_RECHARGE_PLANS } from '@apple-business/shared';
+import { V2_RECHARGE_PLANS, type V2RechargeServerProxySettings } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -11,6 +11,8 @@ import {
   toV2JsonDocument
 } from '../runtime/public-api';
 import { RechargeSettingsRepository } from './persistence/recharge-settings.repository';
+import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
+import { bankRechargeId, bankRechargeObject, bankRechargeUuid } from './bank-recharge-validation';
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
 import { storedBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
 
@@ -28,17 +30,85 @@ const maskUrl = (value: string) => {
   return `${url.protocol}//${url.host}/…（已加密）`;
 };
 
+function serverDefaultProxyId(options: unknown): string | null {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return null;
+  const value = (options as Record<string, unknown>).serverDefaultProxyId;
+  return typeof value === 'string' && bankRechargeUuid.test(value) ? value : null;
+}
+
 @Injectable()
 export class RechargeSettingsService {
   constructor(
     private readonly repository: RechargeSettingsRepository,
     private readonly encryption: FieldEncryptionService,
     private readonly transactions: V2CommandTransactionManager,
-    private readonly audit: V2TransactionalAuditService
+    private readonly audit: V2TransactionalAuditService,
+    private readonly proxies: RechargeProxyRepository
   ) {}
 
   async get(operator: AuthenticatedUser) {
     return this.response(await this.repository.find(operator.id));
+  }
+
+  async getServerProxySettings(
+    operator: AuthenticatedUser
+  ): Promise<V2RechargeServerProxySettings> {
+    const row = await this.repository.find(operator.id);
+    const proxyId = serverDefaultProxyId(row?.browserOptions);
+    const proxy = proxyId ? await this.proxies.find(proxyId) : null;
+    return {
+      proxyId,
+      proxy: proxy
+        ? {
+            id: proxy.id,
+            countryCode: proxy.countryCode,
+            kind: proxy.kind,
+            connectionMode: proxy.connectionMode,
+            protocol: proxy.protocol as 'http' | 'https' | 'socks5',
+            status: proxy.active ? 'active' : 'disabled',
+            remark1: proxy.remark1
+          }
+        : null,
+      legacyConfigured: Boolean(
+        row?.dynamicProxyUrlEncrypted || row?.staticProxyCredentialsEncrypted
+      )
+    };
+  }
+
+  async updateServerProxySettings(value: unknown, operator: AuthenticatedUser) {
+    const input = bankRechargeObject(value);
+    if (Object.keys(input).some((key) => key !== 'proxyId') || !Object.hasOwn(input, 'proxyId')) {
+      throw new BadRequestException('默认代理设置格式无效');
+    }
+    const proxyId = input.proxyId === null ? null : bankRechargeId(input.proxyId, '默认代理编号');
+    await this.transactions.execute(
+      async (tx) => {
+        if (proxyId) {
+          const proxy = await this.proxies.findInTransaction(tx, proxyId);
+          if (!proxy || !proxy.active)
+            throw new BadRequestException('请选择代理 IP 管理中的启用代理');
+        }
+        const before = await this.repository.findInTransaction(tx, operator.id);
+        await this.repository.upsert(tx, operator.id, {
+          browserOptions: toV2JsonDocument({
+            ...storedBrowserOptions(before?.browserOptions),
+            serverDefaultProxyId: proxyId
+          })
+        });
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.server_proxy_settings.update',
+          objectType: 'recharge_browser_settings',
+          objectId: operator.id,
+          beforeData: { proxyId: serverDefaultProxyId(before?.browserOptions) },
+          afterData: { proxyId },
+          remark: '设置服务器默认代理，引用代理 IP 管理中的资料'
+        });
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+    return this.getServerProxySettings(operator);
   }
 
   async paymentCaps() {
@@ -187,7 +257,12 @@ export class RechargeSettingsService {
           groupName: input.groupName,
           tagName: input.tagName,
           proxyType: input.proxyType,
-          browserOptions: toV2JsonDocument(browserOptions),
+          browserOptions: toV2JsonDocument({
+            ...browserOptions,
+            ...(serverDefaultProxyId(before?.browserOptions)
+              ? { serverDefaultProxyId: serverDefaultProxyId(before?.browserOptions) }
+              : {})
+          }),
           staticProxyCredentialsEncrypted,
           dynamicProxyUrlEncrypted,
           dynamicProxyUrlMask: input.dynamicProxyUrl

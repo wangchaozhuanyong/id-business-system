@@ -30,7 +30,8 @@ function fixture(configured = true) {
       repository as never,
       encryption as never,
       transactions as never,
-      audit as never
+      audit as never,
+      {} as never
     )
   };
 }

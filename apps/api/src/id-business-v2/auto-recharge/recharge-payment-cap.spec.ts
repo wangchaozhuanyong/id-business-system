@@ -28,7 +28,8 @@ function fixture() {
     repository as never,
     {} as never,
     transactions as never,
-    audit as never
+    audit as never,
+    {} as never
   );
   return { service, repository, audit };
 }

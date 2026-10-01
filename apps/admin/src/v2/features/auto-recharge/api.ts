@@ -11,6 +11,7 @@ import type {
   V2RechargeStart,
   V2RechargePaymentCap,
   V2RechargeBitBrowserSettings,
+  V2RechargeServerProxySettings,
   V2RechargeBrowserCatalog,
   V2RechargeBrowserCatalogAccess,
   UpdateV2RechargeBitBrowserSettingsInput,
@@ -65,6 +66,16 @@ export const rechargeApi = {
       http.get('/id-business-v2/auto-recharge/bitbrowser-settings', {
         signal: options.signal
       })
+    );
+  },
+  getServerProxySettings(options: ApiRequestOptions = {}) {
+    return request<V2RechargeServerProxySettings>(
+      http.get('/id-business-v2/auto-recharge/server-proxy-settings', { signal: options.signal })
+    );
+  },
+  updateServerProxySettings(proxyId: string | null) {
+    return request<V2RechargeServerProxySettings>(
+      http.put('/id-business-v2/auto-recharge/server-proxy-settings', { proxyId })
     );
   },
   browserCatalogAccess(options: ApiRequestOptions = {}) {

@@ -18,7 +18,14 @@ export function proxyKind(value: unknown): RechargeProxyKind {
   return value as RechargeProxyKind;
 }
 
-export function proxyLink(value: unknown) {
+export function proxyProtocol(value: unknown) {
+  if (!['http', 'https', 'socks5'].includes(value as string)) {
+    throw new BadRequestException('代理协议无效');
+  }
+  return value as 'http' | 'https' | 'socks5';
+}
+
+export function proxyLink(value: unknown, protocol?: 'http' | 'https' | 'socks5') {
   if (
     typeof value !== 'string' ||
     !value.trim() ||
@@ -62,6 +69,9 @@ export function proxyLink(value: unknown) {
     ) {
       throw new BadRequestException('直连代理链接须为协议://账号:密码@主机:端口');
     }
+    if (protocol && protocol !== parsed.protocol.slice(0, -1)) {
+      throw new BadRequestException('代理协议与直连链接中的协议不一致');
+    }
     return {
       url: value.trim(),
       connectionMode: 'direct' as const,
@@ -71,14 +81,14 @@ export function proxyLink(value: unknown) {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
     throw new BadRequestException('IP 提取链接须为 HTTPS；直连代理须填写端口');
   }
-  return { url: parsed.href, connectionMode: 'extraction' as const, protocol: 'http' as const };
+  return { url: parsed.href, connectionMode: 'extraction' as const, protocol: protocol ?? 'http' };
 }
 
 export function parseRechargeProxy(value: unknown) {
   const input = bankRechargeObject(value);
   if (
     Object.keys(input).some(
-      (key) => !['countryCode', 'url', 'kind', 'remark1', 'remark2'].includes(key)
+      (key) => !['countryCode', 'url', 'kind', 'protocol', 'remark1', 'remark2'].includes(key)
     )
   ) {
     throw new BadRequestException('代理资料包含不支持的字段');
@@ -86,7 +96,10 @@ export function parseRechargeProxy(value: unknown) {
   return {
     countryCode: proxyCountry(input.countryCode),
     kind: proxyKind(input.kind),
-    ...proxyLink(input.url),
+    ...proxyLink(
+      input.url,
+      input.protocol === undefined ? undefined : proxyProtocol(input.protocol)
+    ),
     remark1: bankRechargeText(input.remark1, '备注1', 500, false),
     remark2: bankRechargeText(input.remark2, '备注2', 500, false)
   };

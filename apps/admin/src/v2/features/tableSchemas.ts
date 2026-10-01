@@ -76,6 +76,7 @@ export const v2TableSchemas = {
         { key: 'remark1', label: '备注1', kind: 'text', widthPreset: 'longText' },
         { key: 'remark2', label: '备注2', kind: 'text', widthPreset: 'longText' },
         { key: 'updatedAt', label: '更新时间', kind: 'date', widthPreset: 'dateTime' },
+        { key: 'protocol', label: '代理协议', kind: 'text', widthPreset: 'compact' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     })

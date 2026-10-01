@@ -1,15 +1,16 @@
 .recharge-page {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
-.recharge-note {
+.recharge-note,
+.recharge-entry-panel :deep(.recharge-note) {
   margin: 0;
   color: var(--el-text-color-regular);
   font-size: 12px;
   line-height: 1.7;
 }
 .recharge-login-note {
-  margin: 0 0 18px 112px;
+  margin: 0;
 }
 .recharge-code-form {
   width: 100%;
@@ -17,13 +18,13 @@
 }
 .recharge-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(340px, 1fr);
-  gap: 20px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
 }
 .recharge-panel {
   min-width: 0;
-  padding: 22px;
+  padding: 14px 16px;
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color);
   border-radius: 12px;
@@ -45,7 +46,7 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 8px;
 }
 .recharge-section-heading > span {
   color: var(--el-text-color-regular);
@@ -54,70 +55,123 @@
 }
 .recharge-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 16px;
 }
-.recharge-fields > * {
+.recharge-entry-panel {
+  container: recharge-entry / inline-size;
+}
+.recharge-mode-fields,
+.recharge-login-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.recharge-billing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+.recharge-billing-grid :deep(.recharge-payment-fields) {
+  display: contents;
+}
+.recharge-billing-grid :deep(.el-form-item) {
+  grid-column: auto;
+}
+.recharge-billing-grid :deep(.recharge-card-number),
+.recharge-billing-grid :deep(.recharge-address-country),
+.recharge-billing-grid :deep(.recharge-street-address),
+.recharge-billing-grid :deep(.recharge-address-select) {
+  grid-column: span 2;
+}
+.recharge-options-grid :deep(.recharge-proxy-field) {
+  grid-column: span 2;
+}
+.recharge-entry-panel :deep(.recharge-full-row),
+.recharge-entry-panel :deep(.recharge-fields > p),
+.recharge-entry-panel :deep(.recharge-login-fields > p),
+.recharge-entry-panel :deep(.recharge-billing-grid > p) {
+  grid-column: 1 / -1;
+}
+.recharge-entry-panel :deep(.el-form-item),
+.recharge-panel :deep(.el-form-item__content) {
   min-width: 0;
 }
-/* 标签随控件行高居中，清除全局标签的底部留白；错误提示仍位于控件下方。 */
+.recharge-entry-panel :deep(.el-form-item) {
+  margin-bottom: 0;
+}
+.recharge-entry-panel :deep(.el-form-item__content) {
+  align-content: flex-start;
+  min-height: 36px;
+}
+.recharge-entry-panel :deep(.el-form-item__error) {
+  position: static;
+  width: 100%;
+  line-height: 18px;
+}
+.recharge-entry-panel :deep(.el-radio-button__inner) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 10px;
+}
+.recharge-mode-fields :deep(.el-radio-group) {
+  display: flex;
+  width: 100%;
+}
+.recharge-mode-fields :deep(.el-radio-button) {
+  flex: 1 1 auto;
+}
+/* 标签固定对齐第一行控件，帮助或错误文字扩展时不将标签向下推移。 */
 .recharge-panel :deep(.el-form-item) {
-  align-items: stretch;
+  align-items: flex-start;
 }
 .recharge-panel :deep(.el-form-item__label) {
   align-items: center;
-  height: auto;
+  height: 36px;
   padding: 0 12px 0 0;
   line-height: 20px;
-  /* 标签使用半粗体，按可见文字作 1px 向上的视觉校正，星号同步移动。 */
-  transform: translateY(-1px);
-}
-.recharge-fields :deep(.el-form-item) {
-  margin-bottom: 24px;
 }
 .recharge-billing {
   border: 0;
   min-width: 0;
-  padding: 20px 0 0;
-  margin: 24px 0 0;
+  padding: 12px 0 0;
+  margin: 16px 0 0;
   border-top: 1px solid var(--el-border-color);
 }
-.recharge-billing legend {
-  padding-right: 14px;
+.recharge-billing-heading {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.recharge-billing-heading h3 {
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
   line-height: 22px;
 }
-.recharge-billing h3 {
-  margin-top: 4px;
+.recharge-billing-email {
+  grid-column: span 2;
+  max-width: 100%;
+}
+.recharge-billing-email :deep(.el-form-item__content) {
+  font-size: 13px;
+  line-height: 20px;
 }
 .recharge-account-email {
+  display: flex;
+  align-items: center;
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
-}
-.recharge-fixed-address {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 16px;
-  margin: 0 0 14px 96px;
-  padding: 12px 14px;
+  min-height: 36px;
+  padding: 7px 10px;
   border: 1px solid var(--el-border-color);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--el-fill-color-lighter);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.recharge-fixed-address > div {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 8px;
-}
-.recharge-fixed-address dt {
-  color: var(--el-text-color-secondary);
-}
-.recharge-fixed-address dd {
-  margin: 0;
   overflow-wrap: anywhere;
 }
 .recharge-field-success {
@@ -136,19 +190,6 @@
 }
 .recharge-connector-status[data-status='offline'] {
   color: var(--el-color-danger);
-}
-.recharge-authorization {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  margin: 16px 0;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-}
-.recharge-authorization :deep(.el-checkbox) {
-  height: auto;
-  white-space: normal;
 }
 .recharge-json-row {
   display: grid;
@@ -184,11 +225,11 @@
   color: var(--el-text-color-regular);
   background: var(--el-fill-color-light);
 }
-.recharge-form-footer {
-  display: grid;
-  gap: 6px;
-  border-top: 1px solid var(--el-border-color);
-  padding-top: 16px;
+.recharge-status-panel .recharge-section-heading {
+  align-items: baseline;
+}
+.recharge-status-panel .recharge-actions {
+  margin-top: 12px;
 }
 .recharge-workflow {
   background: var(--el-fill-color-light);
@@ -196,14 +237,14 @@
   padding: 12px 14px;
   font-size: 13px;
   line-height: 1.7;
-  margin: 0 0 18px;
+  margin: 0 0 12px;
 }
 .recharge-empty {
-  min-height: 320px;
+  min-height: 156px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 20px;
+  padding: 14px;
   border: 1px dashed var(--el-border-color);
   border-radius: 8px;
   color: var(--el-text-color-regular);
@@ -216,7 +257,7 @@
 .recharge-summary {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
-  gap: 14px;
+  gap: 10px;
   font-size: 14px;
   line-height: 1.6;
 }
@@ -264,7 +305,8 @@
 .recharge-actions :deep(.el-button) {
   margin-left: 0;
 }
-.recharge-error {
+.recharge-error,
+.recharge-entry-panel :deep(.recharge-error) {
   color: var(--el-color-danger);
   font-size: 13px;
   line-height: 1.7;
@@ -323,9 +365,65 @@
   outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
 }
-@media (max-width: 1150px) {
+@container recharge-entry (max-width: 740px) {
+  .recharge-mode-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .recharge-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .recharge-options-grid :deep(.recharge-proxy-field) {
+    grid-column: 1 / -1;
+  }
+  .recharge-billing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .recharge-billing-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .recharge-billing-email {
+    grid-column: auto;
+  }
+  .recharge-billing-grid :deep(.el-form-item) {
+    grid-column: auto;
+  }
+  .recharge-billing-grid :deep(.recharge-full-row),
+  .recharge-billing-grid :deep(.recharge-address-select),
+  .recharge-billing-grid :deep(.recharge-street-address) {
+    grid-column: 1 / -1;
+  }
+}
+@container recharge-entry (max-width: 540px) {
+  .recharge-billing-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .recharge-billing-email {
+    grid-column: auto;
+  }
+  .recharge-fields,
+  .recharge-login-fields,
+  .recharge-billing-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .recharge-mode-fields :deep(.el-radio-group),
+  .recharge-login-fields :deep(.el-radio-group) {
+    gap: 6px 0;
+  }
+}
+@media (max-width: 1279px) {
   .recharge-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .recharge-panel :deep(.el-form-item__label),
+  .recharge-entry-panel :deep(.el-form-item__content),
+  .recharge-entry-panel :deep(.el-radio-button__inner),
+  .recharge-account-email {
+    min-height: 44px;
+  }
+  .recharge-account-email {
+    padding-block: 11px;
   }
 }
 @media (max-width: 640px) {
@@ -334,13 +432,6 @@
   }
   .recharge-json-row > :first-child {
     grid-column: 1 / -1;
-  }
-  .recharge-fields {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .recharge-fixed-address {
-    grid-template-columns: minmax(0, 1fr);
-    margin-left: 0;
   }
 }
 @media (max-width: 480px) {

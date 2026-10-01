@@ -29,6 +29,15 @@ export class RechargeController {
   getBitBrowserSettings(@CurrentUser() operator: AuthenticatedUser) {
     return this.settings.get(operator);
   }
+  @Get('server-proxy-settings')
+  @Header('Cache-Control', 'no-store')
+  getServerProxySettings(@CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.getServerProxySettings(operator);
+  }
+  @Put('server-proxy-settings')
+  updateServerProxySettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.updateServerProxySettings(input, operator);
+  }
   @Get('payment-caps')
   @Header('Cache-Control', 'no-store')
   paymentCaps() {

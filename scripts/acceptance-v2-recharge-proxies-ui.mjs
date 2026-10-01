@@ -172,6 +172,7 @@ try {
           id: '66666666-6666-4666-8666-666666666666',
           countryCode: input.proxies[0].countryCode,
           kind: input.proxies[0].kind,
+          protocol: input.proxies[0].protocol ?? 'http',
           remark1: input.proxies[0].remark1
         });
         data = { imported: 1 };
@@ -183,6 +184,7 @@ try {
           id: '77777777-7777-4777-8777-777777777777',
           countryCode: input.countryCode,
           kind: input.kind,
+          protocol: input.protocol,
           remark1: input.remark1
         });
         data = { id: rows.at(-1).id };
@@ -276,7 +278,41 @@ try {
       .catch(async () => {
         await page.keyboard.press('Escape');
       });
+    await first.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '编辑', exact: true }).click();
+    const editor = page
+      .locator('.v2-form-drawer')
+      .filter({ has: page.getByRole('heading', { name: '编辑代理 IP', exact: true }) });
+    await editor
+      .locator('.el-select')
+      .filter({ has: page.getByRole('combobox', { name: '代理协议', exact: true }) })
+      .click();
+    await page.getByRole('option', { name: 'SOCKS5', exact: true }).click();
+    await editor.getByRole('button', { name: '查看已保存链接' }).click();
+    await page
+      .getByText('https://proxy.example.invalid/get?token=synthetic')
+      .waitFor({ state: 'visible' });
+    await page
+      .getByLabel('代理 IP 详细')
+      .getByRole('button', { name: /关闭|Close/ })
+      .click();
+    await page.getByLabel('代理 IP 详细').waitFor({ state: 'hidden' });
+    await page.screenshot({
+      path: path.join(outputDir, `${width}-protocol-editor.png`),
+      fullPage: true
+    });
+    await editor.getByRole('button', { name: '保存', exact: true }).click();
+    await editor.waitFor({ state: 'hidden' });
+    await first.getByText('SOCKS5', { exact: true }).waitFor();
+    assert.ok(
+      mutations.some((entry) => entry.method === 'PATCH' && entry.input.protocol === 'socks5')
+    );
     await page.getByRole('button', { name: '批量导入' }).click();
+    await page
+      .locator('.el-select')
+      .filter({ has: page.getByRole('combobox', { name: '批量提取代理协议' }) })
+      .click();
+    await page.getByRole('option', { name: 'HTTPS', exact: true }).click();
     await page
       .getByLabel('粘贴代理 IP 资料')
       .fill('菲律宾\thttps://proxy.example.invalid/another\t移动代理\t导入验收\t-');
@@ -308,11 +344,16 @@ try {
     await context.close();
   }
   assert.ok(mutations.some((entry) => entry.endpoint.endsWith('/import')));
+  assert.ok(
+    mutations.some(
+      (entry) => entry.endpoint.endsWith('/import') && entry.input.proxies[0].protocol === 'https'
+    )
+  );
   console.log(
     JSON.stringify({
       ok: true,
       widths: [1440, 390],
-      states: ['first', 'last', 'detail', 'import', 'empty'],
+      states: ['first', 'last', 'detail', 'protocol-edit', 'import-protocol', 'empty'],
       outputDir
     })
   );
