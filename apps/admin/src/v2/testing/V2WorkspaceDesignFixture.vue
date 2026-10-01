@@ -59,12 +59,14 @@
         </div>
       </main>
     </div>
+    <V2QuickActions />
   </div>
 </template>
 
 <script setup lang="ts">
 import { DataAnalysis, Monitor } from '@element-plus/icons-vue';
 import V2WorkspaceLauncher from '@/v2/components/workspace/V2WorkspaceLauncher.vue';
+import V2QuickActions from '@/v2/components/workspace/V2QuickActions.vue';
 </script>
 
 <style scoped>

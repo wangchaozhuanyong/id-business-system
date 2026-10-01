@@ -21,6 +21,9 @@ import { IdBusinessV2RelaySubscriptionAuthService } from './id-business-v2-relay
 import { IdBusinessV2TotpAccountController } from './id-business-v2-totp-account.controller';
 import { IdBusinessV2TotpAccountService } from './id-business-v2-totp-account.service';
 import { IdBusinessV2WorkspaceController } from './id-business-v2-workspace.controller';
+import { IdBusinessV2QuickActionController } from './id-business-v2-quick-action.controller';
+import { IdBusinessV2QuickActionService } from './id-business-v2-quick-action.service';
+import { IdBusinessV2QuickActionRepository } from './persistence/id-business-v2-quick-action.repository';
 import { IdBusinessV2WorkspaceService } from './id-business-v2-workspace.service';
 import { IdBusinessV2WebsiteMonitorController } from './id-business-v2-website-monitor.controller';
 import { IdBusinessV2WebsiteMonitorService } from './id-business-v2-website-monitor.service';
@@ -59,6 +62,7 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
   controllers: [
     IdBusinessV2WebsiteVisitController,
     IdBusinessV2WorkspaceController,
+    IdBusinessV2QuickActionController,
     IdBusinessV2WebsiteMonitorController,
     IdBusinessV2MediaResolverController,
     IdBusinessV2TotpAccountController,
@@ -78,6 +82,8 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2WebsiteVisitRetentionWorker,
     IdBusinessV2WebsiteVisitRepository,
     IdBusinessV2WorkspaceService,
+    IdBusinessV2QuickActionService,
+    IdBusinessV2QuickActionRepository,
     IdBusinessV2WebsiteMonitorService,
     IdBusinessV2WebsiteAnalyticsService,
     IdBusinessV2WebsiteAnalyticsClient,
