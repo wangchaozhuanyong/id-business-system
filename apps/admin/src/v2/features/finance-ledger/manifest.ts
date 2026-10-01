@@ -1,3 +1,4 @@
+import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { defineV2Feature } from '@/v2/features/feature';
 import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
@@ -13,7 +14,12 @@ export const financeLedgerFeature = defineV2Feature({
   freshnessPolicy: 'event-driven',
   summary: '管理资金账户、供应商钱包、不可变流水和月度关账。',
   filters: [
-    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USD', 'USDT'] },
+    {
+      key: 'currency',
+      label: '币种',
+      kind: 'select',
+      options: V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.label)
+    },
     { key: 'periodMonth', label: '月份', kind: 'select' },
     { key: 'journalType', label: '业务类型', kind: 'select' }
   ],

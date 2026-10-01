@@ -13,12 +13,10 @@ import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import {
-  bankRechargeApi,
-  type BankRechargeOrder,
-  type BankRechargeOrderStatus
-} from './bank-recharge-api';
+import { bankRechargeApi, type BankRechargeOrder } from './bank-recharge-api';
 import { bankRechargePlanLabel as planLabel } from './recharge-plan-options';
+import { emptyForm } from './bank-recharge-order-form';
+import { bankRechargeOrderStatusLabel as statusLabel } from './recharge-presentation';
 
 export function useBankRechargeOrdersPage() {
   const route = useRoute();
@@ -69,6 +67,8 @@ export function useBankRechargeOrdersPage() {
     customerRefundAmount: '',
     chargeRecoveryAmountCny: '0',
     bankFeeRecoveryAmountCny: '0',
+    usdtFeeRecoveryAmount: '0',
+    shoppingFeeRecoveryAmount: '0',
     upstreamRefundReference: ''
   }));
   const { cardForm, currencyForm } = useV2SessionDraft('bank-order-related-create', () => ({
@@ -210,6 +210,10 @@ export function useBankRechargeOrdersPage() {
       (item) => item.currency === form.receivedCurrencyCode
     )
   );
+  const feeAccounts = computed(() => optionsQuery.data.value?.financeAccounts ?? []);
+  const newFeeMode = computed(
+    () => selected.value?.accountingVersion === 'subscription_cost_v2' || form.confirmFeeConversion
+  );
   const feePreview = computed(() => {
     try {
       const fee = divideDecimalStrings(
@@ -225,44 +229,6 @@ export function useBankRechargeOrdersPage() {
     }
   });
 
-  function emptyForm() {
-    return {
-      plan: 'plus',
-      chargeCurrencyCode: 'PHP',
-      chargeAmount: '',
-      manualEvidenceRef: '',
-      accountId: '',
-      customerId: '',
-      cardId: '',
-      customerFeeRate: '0',
-      feeOverride: false,
-      customerFeeAmount: '',
-      bankFeeAmount: '0',
-      bankFeeCurrencyCode: 'PHP',
-      receivedAmount: '',
-      receivedCurrencyCode: 'CNY',
-      chargeFxRateToCny: '',
-      bankFeeFxRateToCny: '',
-      receivedFxRateToCny: '',
-      fundingFinanceAccountId: '',
-      receivedFinanceAccountId: '',
-      openedAt: '',
-      dueAt: '',
-      remark: ''
-    };
-  }
-  function statusLabel(value: BankRechargeOrderStatus, financeStatus?: string) {
-    if (value === 'completed' && financeStatus === 'partial') return '部分退款／回款';
-    if (value === 'refunded' && financeStatus === 'partial') return '已退款（保留成本）';
-    return {
-      pending_details: '待补全',
-      pending_finance: '待入账',
-      pending_receipt: '待收款',
-      completed: '已完成',
-      refunded: '已退款',
-      cancelled: '已取消'
-    }[value];
-  }
   function usageLabel(row: BankRechargeOrder) {
     if (row.activeSubscription?.status !== 'active') {
       return row.accountId ? '非当前使用' : '待关联账号';
@@ -313,6 +279,17 @@ export function useBankRechargeOrdersPage() {
       accountId: row.accountId ?? '',
       customerId: row.customerId ?? '',
       cardId: row.cardId ?? '',
+      confirmFeeConversion: false,
+      usdtFeeAmount: row.usdtFeeAmount ?? '',
+      usdtFeeCurrencyCode: row.usdtFeeCurrencyCode ?? 'USDT',
+      usdtFeeFinanceAccountId: row.usdtFeeFinanceAccountId ?? '',
+      usdtFeeFxRateToCny: row.usdtFeeFxRateToCny ?? '',
+      usdtFeeManualRateReason: '',
+      shoppingFeeAmount: row.shoppingFeeAmount ?? '',
+      shoppingFeeCurrencyCode: row.shoppingFeeCurrencyCode ?? 'CNY',
+      shoppingFeeFinanceAccountId: row.shoppingFeeFinanceAccountId ?? '',
+      shoppingFeeFxRateToCny: row.shoppingFeeFxRateToCny ?? '',
+      shoppingFeeManualRateReason: '',
       customerFeeRate: row.customerFeeRate,
       feeOverride: row.customerFeeOverridden,
       customerFeeAmount: row.customerFeeOverridden ? row.customerFeeAmount : '',
@@ -379,14 +356,30 @@ export function useBankRechargeOrdersPage() {
           accountId: form.accountId || null,
           customerId: form.customerId || null,
           cardId: form.cardId || null,
-          customerFeeRate: form.customerFeeRate,
-          customerFeeAmount: form.feeOverride ? form.customerFeeAmount : null,
-          bankFeeAmount: form.bankFeeAmount || null,
-          bankFeeCurrencyCode: form.bankFeeCurrencyCode || null,
+          ...(newFeeMode.value
+            ? {
+                confirmFeeConversion: form.confirmFeeConversion,
+                usdtFeeAmount: form.usdtFeeAmount || null,
+                usdtFeeCurrencyCode: form.usdtFeeCurrencyCode || null,
+                usdtFeeFinanceAccountId: form.usdtFeeFinanceAccountId || null,
+                usdtFeeFxRateToCny: form.usdtFeeFxRateToCny || null,
+                usdtFeeManualRateReason: form.usdtFeeManualRateReason || null,
+                shoppingFeeAmount: form.shoppingFeeAmount || null,
+                shoppingFeeCurrencyCode: form.shoppingFeeCurrencyCode || null,
+                shoppingFeeFinanceAccountId: form.shoppingFeeFinanceAccountId || null,
+                shoppingFeeFxRateToCny: form.shoppingFeeFxRateToCny || null,
+                shoppingFeeManualRateReason: form.shoppingFeeManualRateReason || null
+              }
+            : {
+                customerFeeRate: form.customerFeeRate,
+                customerFeeAmount: form.feeOverride ? form.customerFeeAmount : null,
+                bankFeeAmount: form.bankFeeAmount || null,
+                bankFeeCurrencyCode: form.bankFeeCurrencyCode || null,
+                bankFeeFxRateToCny: form.bankFeeFxRateToCny || null
+              }),
           receivedAmount: form.receivedAmount || null,
           receivedCurrencyCode: form.receivedCurrencyCode || null,
           chargeFxRateToCny: form.chargeFxRateToCny || null,
-          bankFeeFxRateToCny: form.bankFeeFxRateToCny || null,
           receivedFxRateToCny: form.receivedFxRateToCny || null,
           fundingFinanceAccountId: form.fundingFinanceAccountId || null,
           receivedFinanceAccountId: form.receivedFinanceAccountId || null,
@@ -432,6 +425,8 @@ export function useBankRechargeOrdersPage() {
       customerRefundAmount: '',
       chargeRecoveryAmountCny: '0',
       bankFeeRecoveryAmountCny: '0',
+      usdtFeeRecoveryAmount: '0',
+      shoppingFeeRecoveryAmount: '0',
       upstreamRefundReference: ''
     });
     saveError.value = '';
@@ -451,7 +446,12 @@ export function useBankRechargeOrdersPage() {
         refundReference: refund.refundReference.trim(),
         customerRefundAmount: refund.customerRefundAmount.trim(),
         chargeRecoveryAmountCny: refund.chargeRecoveryAmountCny.trim() || '0',
-        bankFeeRecoveryAmountCny: refund.bankFeeRecoveryAmountCny.trim() || '0',
+        ...(selected.value.accountingVersion === 'subscription_cost_v2'
+          ? {
+              usdtFeeRecoveryAmount: refund.usdtFeeRecoveryAmount.trim() || '0',
+              shoppingFeeRecoveryAmount: refund.shoppingFeeRecoveryAmount.trim() || '0'
+            }
+          : { bankFeeRecoveryAmountCny: refund.bankFeeRecoveryAmountCny.trim() || '0' }),
         upstreamRefundReference: refund.upstreamRefundReference.trim()
       });
       completeRefundDraft();
@@ -559,6 +559,8 @@ export function useBankRechargeOrdersPage() {
     fundingAccounts,
     receivedAccounts,
     feePreview,
+    feeAccounts,
+    newFeeMode,
     emptyForm,
     statusLabel,
     planLabel,

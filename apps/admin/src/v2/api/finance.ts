@@ -1,4 +1,8 @@
 import type {
+  V2FinanceExchange,
+  V2FinanceExchangePage,
+  V2FinanceExchangeQuery,
+  V2FinanceExchangeWrite,
   V2FinanceAccount,
   V2FinanceAccountStatus,
   V2FinanceAccountType,
@@ -135,6 +139,33 @@ const FINANCE_SCOPES = [
 ] as const;
 
 export const idBusinessV2FinanceApi = {
+  listExchanges(params: V2FinanceExchangeQuery, options: ApiRequestOptions = {}) {
+    return request<V2FinanceExchangePage>(
+      http.get('/id-business-v2/finance/exchanges', { params, signal: options.signal })
+    );
+  },
+  createExchange(payload: V2FinanceExchangeWrite) {
+    return withV2QueryInvalidation(
+      request<V2FinanceExchange>(http.post('/id-business-v2/finance/exchanges', payload)),
+      FINANCE_SCOPES
+    );
+  },
+  correctExchange(id: string, payload: V2FinanceExchangeWrite & { reason: string }) {
+    return withV2QueryInvalidation(
+      request<V2FinanceExchange>(
+        http.post(`/id-business-v2/finance/exchanges/${id}/corrections`, payload)
+      ),
+      FINANCE_SCOPES
+    );
+  },
+  reverseExchange(id: string, payload: { reason: string; idempotencyKey: string }) {
+    return withV2QueryInvalidation(
+      request<V2FinanceExchange>(
+        http.post(`/id-business-v2/finance/exchanges/${id}/reverse`, payload)
+      ),
+      FINANCE_SCOPES
+    );
+  },
   analyticsBootstrap(params: V2FinanceReportQuery, options: ApiRequestOptions = {}) {
     return request<V2DataAnalyticsBootstrap>(
       http.get('/id-business-v2/finance/analytics/bootstrap', {

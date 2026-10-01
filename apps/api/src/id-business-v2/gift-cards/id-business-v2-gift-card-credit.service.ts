@@ -1,3 +1,4 @@
+import { legacyFinanceCurrency } from '@apple-business/shared';
 import {
   BadRequestException,
   ConflictException,
@@ -380,7 +381,7 @@ export class IdBusinessV2GiftCardCreditService {
               supplierOptionId: supplier.id,
               supplierAccountId: purchaseSupplierAccountId ?? undefined,
               giftCardId: giftCard.id,
-              currency: purchaseCurrency,
+              currency: legacyFinanceCurrency(purchaseCurrency),
               amountOriginal: purchaseOriginalAmount,
               amountCny: snapshot.costAmount,
               operator

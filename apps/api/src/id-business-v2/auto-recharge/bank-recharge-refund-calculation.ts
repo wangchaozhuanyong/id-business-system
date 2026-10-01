@@ -1,3 +1,4 @@
+import { calculateSubscriptionCostRefund } from './subscription-cost-refund';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { FinancePostingLineInput } from '../finance/public-api';
 import { Amount4, Rate8 } from '../runtime/public-api';
@@ -11,6 +12,8 @@ export function calculateBankRechargeRefund(
   refunds: Journal[],
   input: Record<string, unknown>
 ) {
+  if (object(original.metadata ?? {}).accountingVersion === 'subscription_cost_v2')
+    return calculateSubscriptionCostRefund(original, refunds, input);
   const receipt = original.lines.find(
     (line) => line.accountCode === 'cash' && line.direction === 'debit'
   );
@@ -137,6 +140,10 @@ export function calculateBankRechargeRefund(
     );
   }
   return {
+    usdtFeeRecoveryAmount: Amount4.zero(),
+    shoppingFeeRecoveryAmount: Amount4.zero(),
+    usdtFeeRecoveryCny: Amount4.zero(),
+    shoppingFeeRecoveryCny: Amount4.zero(),
     lines,
     customerRefund,
     customerRefundCny,

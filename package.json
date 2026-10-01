@@ -112,7 +112,7 @@
   "overrides": {
     "deepmerge-ts": "8.0.1",
     "@nestjs/platform-express": {
-      "multer": "2.3.0"
+      "multer": "2.4.0"
     }
   }
 }

@@ -89,7 +89,7 @@
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[1]">
           <template #default="{ row }"
-            ><el-tag effect="plain">{{ row.currency }}</el-tag></template
+            ><el-tag effect="plain">{{ financeCurrencyLabel(row.currency) }}</el-tag></template
           >
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.supplierWallets.columns[2]">
@@ -118,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import { financeCurrencyLabel } from '@apple-business/shared';
 import type {
   V2FinanceCurrency,
   V2FinanceOverview,

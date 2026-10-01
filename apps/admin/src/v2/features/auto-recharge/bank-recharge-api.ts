@@ -86,6 +86,20 @@ export type BankRechargeOrderStatus =
   | 'cancelled';
 
 export interface BankRechargeOrder {
+  accountingVersion?: 'legacy' | 'subscription_cost_v2';
+  usdtFeeAmount?: string | null;
+  usdtFeeCurrencyCode?: string | null;
+  usdtFeeFinanceAccountId?: string | null;
+  usdtFeeFxRateToCny?: string | null;
+  usdtFeeFxSnapshotId?: string | null;
+  usdtFeeAmountCny?: string | null;
+  shoppingFeeAmount?: string | null;
+  shoppingFeeCurrencyCode?: string | null;
+  shoppingFeeFinanceAccountId?: string | null;
+  shoppingFeeFxRateToCny?: string | null;
+  shoppingFeeFxSnapshotId?: string | null;
+  shoppingFeeAmountCny?: string | null;
+
   id: string;
   orderNo: string;
   source: 'automatic' | 'manual';
@@ -346,6 +360,8 @@ export const bankRechargeApi = {
       customerRefundAmount?: string;
       chargeRecoveryAmountCny?: string;
       bankFeeRecoveryAmountCny?: string;
+      usdtFeeRecoveryAmount?: string;
+      shoppingFeeRecoveryAmount?: string;
       upstreamRefundReference?: string;
     }
   ) {

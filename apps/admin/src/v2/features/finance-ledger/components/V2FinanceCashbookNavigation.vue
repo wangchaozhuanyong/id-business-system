@@ -38,12 +38,26 @@
         <small>条</small>
       </span>
     </button>
+    <button
+      type="button"
+      :class="{ 'is-active': page.cashbookView === 'exchanges' }"
+      :aria-current="page.cashbookView === 'exchanges' ? 'page' : undefined"
+      :aria-pressed="page.cashbookView === 'exchanges'"
+      @click="page.cashbookView = 'exchanges'"
+    >
+      <span class="v2-finance-cashbook-navigation__icon" aria-hidden="true">
+        <el-icon><Switch /></el-icon>
+      </span>
+      <span class="v2-finance-cashbook-navigation__copy"
+        ><strong>换汇记录</strong><small>账户间换汇与实际手续费</small></span
+      >
+    </button>
   </nav>
 </template>
 
 <script setup lang="ts">
 import type { UnwrapNestedRefs } from 'vue';
-import { BottomLeft, TopRight } from '@element-plus/icons-vue';
+import { BottomLeft, Switch, TopRight } from '@element-plus/icons-vue';
 import type { useFinanceLedgerPage } from '../useFinanceLedgerPage';
 
 type FinanceLedgerPage = UnwrapNestedRefs<ReturnType<typeof useFinanceLedgerPage>>;

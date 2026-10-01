@@ -8,6 +8,7 @@ import {
   assertV2ExpectedUpdatedAt,
   normalizeV2ExpectedUpdatedAt
 } from '../runtime/public-api';
+import { bankRechargeOrderAuditSnapshot } from './bank-recharge-order-audit';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import { BankRechargeRepository } from './persistence/bank-recharge.repository';
@@ -76,19 +77,12 @@ export class BankRechargeCorrectionService {
           action: 'id_business_v2.bank_recharge.order.correct',
           objectType: 'bank_recharge_order',
           objectId: id,
-          beforeData: {
-            customerId: previous.customerId,
-            openedAt: previous.openedAt?.toISOString() ?? null,
-            dueAt: previous.dueAt?.toISOString() ?? null,
-            profitAmountCny: previous.profitAmountCny?.toString() ?? null
-          },
+          beforeData: bankRechargeOrderAuditSnapshot(previous),
           afterData: {
+            ...bankRechargeOrderAuditSnapshot(completed),
             reason,
             originalJournalId: original.id,
-            customerId: completed.customerId,
-            openedAt: completed.openedAt?.toISOString() ?? null,
-            dueAt: completed.dueAt?.toISOString() ?? null,
-            profitAmountCny: completed.profitAmountCny?.toString() ?? null
+            replacementJournalId: (await this.repository.findCompletionJournal(tx, id))?.id ?? null
           },
           remark: '银充订单更正：同一事务冲销原日记、更新资料并重新入账'
         });
@@ -100,7 +94,9 @@ export class BankRechargeCorrectionService {
           'renewals',
           'renewal-warning-summary',
           'dashboard',
-          'finance-ledger'
+          'finance-ledger',
+          'finance-accounts',
+          'finance-reports'
         ],
         requestId: randomUUID(),
         operator,

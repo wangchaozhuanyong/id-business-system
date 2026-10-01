@@ -145,6 +145,30 @@ export class IdBusinessV2FinanceReportRepository {
     }));
   }
 
+  async groupExchangeCashFlow(filter: FinanceReportPersistenceFilter) {
+    const base = buildLineWhere(filter);
+    const rows = await this.prisma.idBusinessV2FinanceJournalLine.groupBy({
+      by: ['currency', 'direction'],
+      where: {
+        AND: [
+          base,
+          { accountCode: 'cash' },
+          {
+            journal: {
+              OR: [{ journalType: 'fx_exchange' }, { reversalOf: { journalType: 'fx_exchange' } }]
+            }
+          }
+        ]
+      },
+      _sum: { amountOriginal: true }
+    });
+    return rows.map((row) => ({
+      currency: row.currency,
+      direction: row.direction,
+      amountOriginal: mapAmount4(row._sum.amountOriginal ?? 0, 'finance.exchange_cash_flow')
+    }));
+  }
+
   async groupManualInflows(filter: FinanceReportPersistenceFilter) {
     const manualJournalTypes = [
       'manual_operating_income',

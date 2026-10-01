@@ -1,3 +1,4 @@
+import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
@@ -16,7 +17,7 @@ import {
 export interface FinanceExpenseFilter {
   categoryOptionId?: string;
   financeAccountId?: string;
-  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
+  currency?: IdBusinessV2FinanceCurrency;
   occurredAt?: { gte?: Date; lte?: Date };
 }
 
@@ -24,7 +25,7 @@ export interface FinanceInflowFilter {
   nature?: 'operating_income' | 'capital_contribution' | 'borrowed_funds';
   categoryOptionId?: string;
   financeAccountId?: string;
-  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
+  currency?: IdBusinessV2FinanceCurrency;
   occurredAt?: { gte?: Date; lte?: Date };
 }
 
@@ -34,7 +35,7 @@ export interface FinanceJournalFilter {
   sourceId?: string;
   periodMonth?: string;
   businessDate?: { gte?: Date; lte?: Date };
-  currency?: 'CNY' | 'MYR' | 'USD' | 'USDT';
+  currency?: IdBusinessV2FinanceCurrency;
   financeAccountId?: string;
   supplierOptionId?: string;
 }
@@ -51,7 +52,7 @@ const inflowReceiptSummarySelect = {
 export class IdBusinessV2FinanceQueryRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  listFinanceAccounts(currency?: 'CNY' | 'MYR' | 'USD' | 'USDT', status?: 'active' | 'disabled') {
+  listFinanceAccounts(currency?: IdBusinessV2FinanceCurrency, status?: 'active' | 'disabled') {
     return this.prisma.idBusinessV2FinanceAccount
       .findMany({
         where: { currency, status },
@@ -243,7 +244,7 @@ export class IdBusinessV2FinanceQueryRepository {
       .then((row) => (row ? mapFxSnapshot(row) : null));
   }
 
-  findLatestFxSnapshot(currency: 'MYR' | 'USD' | 'USDT') {
+  findLatestFxSnapshot(currency: IdBusinessV2FinanceCurrency) {
     return this.prisma.idBusinessV2FinanceFxRateSnapshot
       .findFirst({ where: { currency }, orderBy: [{ capturedAt: 'desc' }, { id: 'desc' }] })
       .then((row) => (row ? mapFxSnapshot(row) : null))

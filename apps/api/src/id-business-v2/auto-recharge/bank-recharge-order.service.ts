@@ -1,3 +1,5 @@
+import { bankRechargeOrderAuditSnapshot } from './bank-recharge-order-audit';
+import { BankRechargeFeesService, BANK_RECHARGE_FEE_PREFIXES } from './bank-recharge-fees.service';
 import {
   BadRequestException,
   ConflictException,
@@ -34,6 +36,12 @@ import {
 
 const plans = new Set<string>(V2_BANK_RECHARGE_PLANS);
 const editable = new Set([
+  'confirmFeeConversion',
+  ...BANK_RECHARGE_FEE_PREFIXES.flatMap((prefix) =>
+    ['Amount', 'CurrencyCode', 'FinanceAccountId', 'FxRateToCny', 'ManualRateReason'].map(
+      (suffix) => `${prefix}${suffix}`
+    )
+  ),
   'expectedUpdatedAt',
   'customerId',
   'accountId',
@@ -65,7 +73,8 @@ export class BankRechargeOrderService {
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
     private readonly accounts: BankRechargeAccountService,
-    private readonly repository: BankRechargeRepository
+    private readonly repository: BankRechargeRepository,
+    private readonly fees: BankRechargeFeesService
   ) {}
 
   async createManual(value: unknown, operator: AuthenticatedUser) {
@@ -99,6 +108,7 @@ export class BankRechargeOrderService {
             plan,
             chargeAmount: charge.toString(),
             chargeCurrencyCode: currencyCode,
+            accountingVersion: 'subscription_cost_v2',
             customerFeeRate: '0',
             customerFeeAmount: '0',
             openedAt,
@@ -211,6 +221,37 @@ export class BankRechargeOrderService {
     ) {
       throw new ConflictException('所选银行卡尾号与官网付款凭据不一致');
     }
+    const newFees =
+      previous.accountingVersion === 'subscription_cost_v2' || input.confirmFeeConversion === true;
+    if (
+      newFees &&
+      [
+        'customerFeeRate',
+        'customerFeeAmount',
+        'bankFeeAmount',
+        'bankFeeCurrencyCode',
+        'bankFeeFxRateToCny'
+      ].some((key) => input[key] !== undefined)
+    )
+      throw new BadRequestException('新版订阅订单只接受 USDT 手续费和购物网手续费');
+    if (
+      input.confirmFeeConversion === true &&
+      (input.usdtFeeAmount === undefined ||
+        input.usdtFeeAmount === null ||
+        input.usdtFeeAmount === '' ||
+        input.shoppingFeeAmount === undefined ||
+        input.shoppingFeeAmount === null ||
+        input.shoppingFeeAmount === '')
+    )
+      throw new BadRequestException('转换旧口径前请重新核对两项手续费');
+    if (
+      !newFees &&
+      BANK_RECHARGE_FEE_PREFIXES.some((prefix) =>
+        Object.keys(input).some((key) => key.startsWith(prefix))
+      )
+    )
+      throw new BadRequestException('旧口径订单需明确确认转换后再填写新费用');
+    const feeData = newFees ? await this.fees.prepare(tx, previous, input, operator) : {};
     const rate =
       input.customerFeeRate === undefined
         ? Amount4.from(previous.customerFeeRate)
@@ -309,6 +350,7 @@ export class BankRechargeOrderService {
         plan: input.plan === undefined ? previous.plan : this.plan(input.plan),
         chargeAmount: charge.toString(),
         chargeCurrencyCode: currencyCode,
+        ...(newFees ? { accountingVersion: 'subscription_cost_v2' as const, ...feeData } : {}),
         customerFeeRate: rate.toString(),
         customerFeeAmount: fee.toString(),
         customerFeeOverridden: feeOverridden,
@@ -341,8 +383,8 @@ export class BankRechargeOrderService {
       action: 'id_business_v2.bank_recharge.order.update',
       objectType: 'bank_recharge_order',
       objectId: id,
-      beforeData: this.auditSnapshot(previous),
-      afterData: this.auditSnapshot(updated),
+      beforeData: bankRechargeOrderAuditSnapshot(previous),
+      afterData: bankRechargeOrderAuditSnapshot(updated),
       remark: '补全或调整银充订单资料'
     });
     return updated;
@@ -441,6 +483,7 @@ export class BankRechargeOrderService {
         plan: job.plan,
         chargeAmount: charge.toString(),
         chargeCurrencyCode: currencyCode,
+        accountingVersion: 'subscription_cost_v2',
         customerFeeRate: '0',
         customerFeeAmount: '0',
         openedAt,
@@ -533,33 +576,5 @@ export class BankRechargeOrderService {
       .replace(/[-:.TZ]/g, '')
       .slice(0, 14);
     return `BC${timestamp}${randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
-  }
-
-  private auditSnapshot(order: {
-    customerId: string | null;
-    accountId: string | null;
-    cardId: string | null;
-    chargeAmount: { toString(): string };
-    chargeCurrencyCode: string;
-    customerFeeRate: { toString(): string };
-    customerFeeAmount: { toString(): string };
-    bankFeeAmount: { toString(): string } | null;
-    receivedAmount: { toString(): string } | null;
-    openedAt: Date | null;
-    dueAt: Date | null;
-  }) {
-    return {
-      customerId: order.customerId,
-      accountId: order.accountId,
-      cardId: order.cardId,
-      chargeAmount: order.chargeAmount.toString(),
-      chargeCurrencyCode: order.chargeCurrencyCode,
-      customerFeeRate: order.customerFeeRate.toString(),
-      customerFeeAmount: order.customerFeeAmount.toString(),
-      bankFeeAmount: order.bankFeeAmount?.toString() ?? null,
-      receivedAmount: order.receivedAmount?.toString() ?? null,
-      openedAt: order.openedAt?.toISOString() ?? null,
-      dueAt: order.dueAt?.toISOString() ?? null
-    };
   }
 }

@@ -19,14 +19,12 @@
         end-placeholder="结束日期"
         aria-label="筛选业务日期"
       />
-      <el-select
+      <V2FinanceCurrencySelect
         v-model="page.filters.currency"
         clearable
         placeholder="全部币种"
         aria-label="筛选币种"
-      >
-        <el-option v-for="item in page.currencies" :key="item" :label="item" :value="item" />
-      </el-select>
+      />
       <el-select
         v-model="page.filters.supplierOptionId"
         clearable
@@ -107,6 +105,7 @@
 </template>
 
 <script setup lang="ts">
+import V2FinanceCurrencySelect from '@/v2/components/V2FinanceCurrencySelect.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { InfoFilled, Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

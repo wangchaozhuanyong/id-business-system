@@ -1,3 +1,4 @@
+import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { defineV2Feature } from '@/v2/features/feature';
 import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
@@ -11,7 +12,7 @@ export const financeExpensesFeature = defineV2Feature({
   status: 'ready',
   kind: 'list',
   freshnessPolicy: 'event-driven',
-  summary: '按资金性质、收付款账户和交易汇率快照记录经营收入与开支。',
+  summary: '按资金性质、收付款账户和交易汇率快照记录经营收入、开支与账户换汇。',
   filters: [
     {
       key: 'nature',
@@ -19,7 +20,12 @@ export const financeExpensesFeature = defineV2Feature({
       kind: 'select',
       options: ['经营收入', '股东投入', '借入资金']
     },
-    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USD', 'USDT'] }
+    {
+      key: 'currency',
+      label: '币种',
+      kind: 'select',
+      options: V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.label)
+    }
   ],
   tables: v2TablesByFeature['finance-expenses'],
   loadView: () => import('./V2FinanceExpensesView.vue')

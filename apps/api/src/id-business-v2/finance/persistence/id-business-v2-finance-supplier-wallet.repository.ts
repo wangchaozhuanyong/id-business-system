@@ -6,7 +6,7 @@ import { mapAmount4, mapRate8 } from '../../runtime/public-api';
 
 export interface LockedFinanceSupplierWallet {
   id: string;
-  currency: 'CNY' | 'MYR' | 'USD' | 'USDT';
+  currency: IdBusinessV2FinanceCurrency;
   currentBalance: ReturnType<typeof mapAmount4>;
   currentBalanceCny: ReturnType<typeof mapAmount4>;
   supplierName: string;
@@ -20,7 +20,7 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
     const rows = await tx.$queryRaw<
       Array<{
         id: string;
-        currency: 'CNY' | 'MYR' | 'USD' | 'USDT';
+        currency: IdBusinessV2FinanceCurrency;
         currentBalance: unknown;
         currentBalanceCny: unknown;
         supplierName: string;
@@ -47,7 +47,7 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
     };
   }
 
-  list(currency?: 'CNY' | 'MYR' | 'USD' | 'USDT', supplierOptionId?: string) {
+  list(currency?: IdBusinessV2FinanceCurrency, supplierOptionId?: string) {
     return this.prisma.idBusinessV2TopupSupplierAccount
       .findMany({
         where: {
@@ -87,7 +87,7 @@ export class IdBusinessV2FinanceSupplierWalletRepository {
   findWalletBySupplierCurrency(
     tx: V2CommandTransaction,
     supplierOptionId: string,
-    currency: 'CNY' | 'MYR' | 'USD' | 'USDT'
+    currency: IdBusinessV2FinanceCurrency
   ) {
     return tx.idBusinessV2TopupSupplierAccount
       .findUnique({

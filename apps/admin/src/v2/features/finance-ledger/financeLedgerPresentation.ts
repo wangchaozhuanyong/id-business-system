@@ -1,4 +1,5 @@
 import { formatV2Decimal } from '@/v2/utils/decimal';
+import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import type { V2FinanceHistoryBackfillPreview } from '@apple-business/shared';
 import type {
   V2FinanceAccountCode,
@@ -20,8 +21,16 @@ export function formatCny(value: string) {
 
 export function formatOriginal(value: string, currency: V2FinanceCurrency) {
   const prefix =
-    currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : currency === 'USD' ? '$' : '₮';
-  return `${prefix}${formatNumber(value)}`;
+    currency === 'CNY'
+      ? '¥'
+      : currency === 'MYR'
+        ? 'RM '
+        : currency === 'USD'
+          ? '$'
+          : currency === 'USDT'
+            ? '₮'
+            : `${currency} `;
+  return `${prefix}${formatV2Decimal(value, { minimumFractionDigits: V2_FINANCE_CURRENCY_OPTIONS.find((item) => item.code === currency)?.minorUnits ?? 2 })}`;
 }
 
 export function amountTone(value: string) {
@@ -115,6 +124,7 @@ export function journalTypeLabel(value: V2FinanceJournalType) {
     borrowed_funds_received: '借入资金',
     opening_balance: '期初余额',
     fx_gain_loss: '汇兑损益',
+    fx_exchange: '账户换汇',
     manual_adjustment: '手工调整',
     historical_backfill: '历史回填',
     reversal: '冲销'
@@ -124,6 +134,9 @@ export function journalTypeLabel(value: V2FinanceJournalType) {
 
 export function accountCodeLabel(value: V2FinanceAccountCode) {
   const labels: Record<V2FinanceAccountCode, string> = {
+    fx_exchange_fee: '换汇费用',
+    bank_recharge_usdt_fee: '订阅 USDT 手续费',
+    bank_recharge_shopping_fee: '订阅购物网手续费',
     cash: '自有资金',
     supplier_prepayment: '卡商预付款',
     supplier_refund_receivable: '待卡商退款',

@@ -1,6 +1,65 @@
 import type { DecimalString, IsoDateTimeString, PaginatedResult } from './common.js';
 
-export const V2_FINANCE_CURRENCIES = ['CNY', 'MYR', 'USD', 'USDT'] as const;
+export const V2_FINANCE_CURRENCIES = [
+  'CNY',
+  'MYR',
+  'USD',
+  'PHP',
+  'IDR',
+  'CLP',
+  'JPY',
+  'KRW',
+  'TWD',
+  'HKD',
+  'SGD',
+  'EUR',
+  'GBP',
+  'AUD',
+  'CAD',
+  'CHF',
+  'NZD',
+  'THB',
+  'VND',
+  'INR',
+  'AED',
+  'SAR',
+  'BRL',
+  'MXN',
+  'ZAR',
+  'USDT'
+] as const;
+export const V2_FINANCE_CURRENCY_OPTIONS = [
+  { code: 'CNY', name: '人民币', minorUnits: 2, label: '人民币（CNY）' },
+  { code: 'MYR', name: '马币', minorUnits: 2, label: '马币（MYR）' },
+  { code: 'USD', name: '美元', minorUnits: 2, label: '美元（USD）' },
+  { code: 'PHP', name: '菲律宾比索', minorUnits: 2, label: '菲律宾比索（PHP）' },
+  { code: 'IDR', name: '印尼盾', minorUnits: 2, label: '印尼盾（IDR）' },
+  { code: 'CLP', name: '智利比索', minorUnits: 0, label: '智利比索（CLP）' },
+  { code: 'JPY', name: '日元', minorUnits: 0, label: '日元（JPY）' },
+  { code: 'KRW', name: '韩元', minorUnits: 0, label: '韩元（KRW）' },
+  { code: 'TWD', name: '新台币', minorUnits: 2, label: '新台币（TWD）' },
+  { code: 'HKD', name: '港币', minorUnits: 2, label: '港币（HKD）' },
+  { code: 'SGD', name: '新加坡元', minorUnits: 2, label: '新加坡元（SGD）' },
+  { code: 'EUR', name: '欧元', minorUnits: 2, label: '欧元（EUR）' },
+  { code: 'GBP', name: '英镑', minorUnits: 2, label: '英镑（GBP）' },
+  { code: 'AUD', name: '澳元', minorUnits: 2, label: '澳元（AUD）' },
+  { code: 'CAD', name: '加拿大元', minorUnits: 2, label: '加拿大元（CAD）' },
+  { code: 'CHF', name: '瑞士法郎', minorUnits: 2, label: '瑞士法郎（CHF）' },
+  { code: 'NZD', name: '新西兰元', minorUnits: 2, label: '新西兰元（NZD）' },
+  { code: 'THB', name: '泰铢', minorUnits: 2, label: '泰铢（THB）' },
+  { code: 'VND', name: '越南盾', minorUnits: 0, label: '越南盾（VND）' },
+  { code: 'INR', name: '印度卢比', minorUnits: 2, label: '印度卢比（INR）' },
+  { code: 'AED', name: '阿联酋迪拉姆', minorUnits: 2, label: '阿联酋迪拉姆（AED）' },
+  { code: 'SAR', name: '沙特里亚尔', minorUnits: 2, label: '沙特里亚尔（SAR）' },
+  { code: 'BRL', name: '巴西雷亚尔', minorUnits: 2, label: '巴西雷亚尔（BRL）' },
+  { code: 'MXN', name: '墨西哥比索', minorUnits: 2, label: '墨西哥比索（MXN）' },
+  { code: 'ZAR', name: '南非兰特', minorUnits: 2, label: '南非兰特（ZAR）' },
+  { code: 'USDT', name: '泰达币', minorUnits: 4, label: '泰达币（USDT）' }
+] as const;
+export function financeCurrencyLabel(currency: string) {
+  return V2_FINANCE_CURRENCY_OPTIONS.find((item) => item.code === currency)?.label ?? currency;
+}
+
 export type V2FinanceCurrency = (typeof V2_FINANCE_CURRENCIES)[number];
 
 export const V2_FINANCE_ACCOUNT_TYPES = ['bank', 'cash', 'ewallet', 'usdt_wallet'] as const;
@@ -31,6 +90,7 @@ export type V2FinanceJournalType =
   | 'order_recovery'
   | 'account_loss'
   | 'expense'
+  | 'fx_exchange'
   | 'manual_operating_income'
   | 'capital_contribution'
   | 'borrowed_funds_received'
@@ -63,6 +123,9 @@ export type V2FinanceAccountCode =
   | 'balance_loss'
   | 'id_purchase_loss'
   | 'operating_expense'
+  | 'fx_exchange_fee'
+  | 'bank_recharge_usdt_fee'
+  | 'bank_recharge_shopping_fee'
   | 'realized_fx_gain_loss'
   | 'opening_equity'
   | 'manual_adjustment';
@@ -100,6 +163,7 @@ export interface V2FinanceFxRateSnapshot {
     | 'combined_p2p'
     | 'binance'
     | 'okx'
+    | 'exchange_rate_api'
     | 'ecb_cross'
     | 'manual'
     | 'legacy_assumed_cny'
@@ -340,6 +404,8 @@ export interface V2FinanceCurrencyBreakdown {
   borrowedFunds: DecimalString;
   expense: DecimalString;
   netCashFlow: DecimalString;
+  exchangeIn?: DecimalString;
+  exchangeOut?: DecimalString;
   latestRateToCny: DecimalString | null;
   netCashFlowCny: DecimalString | null;
 }
@@ -361,6 +427,9 @@ export interface V2FinanceProfitLoss {
   operatingExpenseCny: DecimalString;
   bankRechargeCostCny?: DecimalString;
   bankRechargeBankFeeCny?: DecimalString;
+  exchangeFeeCny?: DecimalString;
+  bankRechargeUsdtFeeCny?: DecimalString;
+  bankRechargeShoppingFeeCny?: DecimalString;
   realizedFxGainLossCny: DecimalString;
   netProfitCny: DecimalString;
   estimatedProfitCny: DecimalString;
@@ -466,3 +535,8 @@ export type V2FinanceInflowPage = PaginatedResult<V2FinanceInflow> & {
   summary: V2FinanceInflowSummary;
 };
 export type V2FinanceSupplierLedgerPage = PaginatedResult<V2FinanceSupplierLedgerEntry>;
+
+export function legacyFinanceCurrency(value: string): 'CNY' | 'MYR' | 'USD' | 'USDT' {
+  if (value === 'CNY' || value === 'MYR' || value === 'USD' || value === 'USDT') return value;
+  throw new Error('原业务不支持该币种');
+}

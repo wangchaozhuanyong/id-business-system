@@ -33,7 +33,7 @@
       </V2TableColumn>
       <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[2]">
         <template #default="{ row }"
-          ><el-tag effect="plain">{{ row.currency }}</el-tag></template
+          ><el-tag effect="plain">{{ financeCurrencyLabel(row.currency) }}</el-tag></template
         >
       </V2TableColumn>
       <V2TableColumn :definition="v2TableSchemas.financeLedger.accounts.columns[3]">
@@ -71,6 +71,7 @@
 </template>
 
 <script setup lang="ts">
+import { financeCurrencyLabel } from '@apple-business/shared';
 import type { UnwrapNestedRefs } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';

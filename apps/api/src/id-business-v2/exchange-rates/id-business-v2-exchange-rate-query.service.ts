@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
-import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
+const RECEIPT_CURRENCIES = ['CNY', 'MYR', 'USD', 'USDT'] as const;
 import { getPagination, type PaginationQuery } from '../../common/pagination';
 import { Rate8, parseIdBusinessV2DateBoundary } from '../runtime/public-api';
 import { IdBusinessV2ExchangeRateSettingsService } from './id-business-v2-exchange-rate-settings.service';
@@ -40,7 +40,7 @@ type FxRecordSnapshot = Awaited<
   ReturnType<IdBusinessV2ExchangeRateRepository['listAutomaticFxRateSnapshots']>
 >[0][number];
 
-const TRACKED_FX_CURRENCIES = V2_FINANCE_CURRENCIES.filter(
+const TRACKED_FX_CURRENCIES = RECEIPT_CURRENCIES.filter(
   (currency): currency is IdBusinessV2TrackedFxCurrency => currency !== 'CNY'
 );
 const AUTOMATIC_FX_RATE_SOURCES = new Set<IdBusinessV2AutomaticFxRateSource>([
@@ -214,7 +214,7 @@ export class IdBusinessV2ExchangeRateQueryService {
     const byCurrency = new Map<IdBusinessV2FinanceCurrency, ReceiptFxSnapshot>(
       snapshots.map((snapshot) => [snapshot.currency, snapshot])
     );
-    return V2_FINANCE_CURRENCIES.map((currency) => {
+    return RECEIPT_CURRENCIES.map((currency) => {
       if (currency === 'CNY') {
         return {
           currency,

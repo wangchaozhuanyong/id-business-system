@@ -1,3 +1,5 @@
+import type { V2FinanceExchangeWrite } from '@apple-business/shared';
+import { IdBusinessV2FinanceExchangesService } from './id-business-v2-finance-exchanges.service';
 import {
   Body,
   Controller,
@@ -60,6 +62,7 @@ import { IdBusinessV2FinanceSupplierWalletsService } from './id-business-v2-fina
 @RequirePermissions('finance.view')
 export class IdBusinessV2FinanceController {
   constructor(
+    private readonly exchangesService: IdBusinessV2FinanceExchangesService,
     private readonly accountsService: IdBusinessV2FinanceAccountsService,
     private readonly supplierWalletsService: IdBusinessV2FinanceSupplierWalletsService,
     private readonly expensesService: IdBusinessV2FinanceExpensesService,
@@ -74,6 +77,43 @@ export class IdBusinessV2FinanceController {
     private readonly historyConfirmationService: IdBusinessV2FinanceHistoryConfirmationService,
     private readonly optionsService: IdBusinessV2OptionsService
   ) {}
+
+  @Get('exchanges')
+  exchanges(@Query() query: Record<string, string | undefined>) {
+    return this.exchangesService.list(query);
+  }
+  @Get('exchanges/:id')
+  exchange(@Param('id') id: string) {
+    return this.exchangesService.detail(id);
+  }
+  @Post('exchanges/quote')
+  @RequirePermissions('finance.view', 'finance.post')
+  exchangeQuote(@Body() dto: V2FinanceExchangeWrite, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.exchangesService.quote(dto, operator);
+  }
+  @Post('exchanges')
+  @RequirePermissions('finance.view', 'finance.post')
+  createExchange(@Body() dto: V2FinanceExchangeWrite, @CurrentUser() operator?: AuthenticatedUser) {
+    return this.exchangesService.create(dto, operator);
+  }
+  @Post('exchanges/:id/corrections')
+  @RequirePermissions('finance.view', 'finance.post', 'finance.adjust')
+  correctExchange(
+    @Param('id') id: string,
+    @Body() dto: V2FinanceExchangeWrite & { reason: string },
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.exchangesService.correct(id, dto, operator);
+  }
+  @Post('exchanges/:id/reverse')
+  @RequirePermissions('finance.view', 'finance.adjust')
+  reverseExchange(
+    @Param('id') id: string,
+    @Body() dto: { reason: string; idempotencyKey: string },
+    @CurrentUser() operator?: AuthenticatedUser
+  ) {
+    return this.exchangesService.reverse(id, dto, operator);
+  }
 
   @Get('analytics/bootstrap')
   @RequirePermissions('data.analytics.view')

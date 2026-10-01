@@ -24,9 +24,13 @@
           />
 
           <V2FinanceCashbookNavigation :page="page" />
-          <V2FinanceExpensesToolbar :page="page" />
+          <V2FinanceExpensesToolbar v-if="page.cashbookView !== 'exchanges'" :page="page" />
           <V2FinanceInflowsTable v-if="page.cashbookView === 'inflows'" :page="page" />
-          <V2FinanceExpensesTable v-else :page="page" />
+          <V2FinanceExpensesTable v-else-if="page.cashbookView === 'expenses'" :page="page" />
+          <V2FinanceExchangesPanel
+            v-if="page.cashbookView === 'exchanges' || page.exchangeDrawerVisible"
+            :page="page"
+          />
         </div>
       </V2AsyncRegion>
     </template>
@@ -65,11 +69,14 @@
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue';
+import { defineAsyncComponent, reactive } from 'vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import type { V2ModuleKey } from '@/v2/features/feature';
 import V2FinanceExpensesOverview from './components/V2FinanceExpensesOverview.vue';
 import V2FinanceCashbookNavigation from './components/V2FinanceCashbookNavigation.vue';
+const V2FinanceExchangesPanel = defineAsyncComponent(
+  () => import('./components/V2FinanceExchangesPanel.vue')
+);
 import V2FinanceExpensesTable from './components/V2FinanceExpensesTable.vue';
 import V2FinanceExpensesToolbar from './components/V2FinanceExpensesToolbar.vue';
 import V2FinanceInflowsTable from './components/V2FinanceInflowsTable.vue';

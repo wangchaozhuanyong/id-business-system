@@ -1,3 +1,4 @@
+import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { defineV2Feature } from '@/v2/features/feature';
 import { v2TablesByFeature } from '@/v2/features/tableSchemas';
 
@@ -14,7 +15,12 @@ export const dataAnalyticsFeature = defineV2Feature({
   summary: '按经营利润、原币现金流和资产余额三套口径展示多币种盈亏闭环。',
   filters: [
     { key: 'businessDate', label: '业务日期', kind: 'date-range' },
-    { key: 'currency', label: '币种', kind: 'select', options: ['CNY', 'MYR', 'USD', 'USDT'] },
+    {
+      key: 'currency',
+      label: '币种',
+      kind: 'select',
+      options: V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.label)
+    },
     { key: 'supplier', label: '供应商', kind: 'select' },
     { key: 'journalType', label: '业务类型', kind: 'select' },
     { key: 'financeAccount', label: '资金账户', kind: 'select' }

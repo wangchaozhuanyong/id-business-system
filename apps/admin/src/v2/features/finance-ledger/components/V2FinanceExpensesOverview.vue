@@ -43,6 +43,15 @@
         <el-icon><Plus /></el-icon>
         收入记账
       </AppButton>
+      <AppButton
+        v-if="page.canPost"
+        variant="primary"
+        @click="
+          page.cashbookView = 'exchanges';
+          page.exchangeDrawerVisible = true;
+        "
+        >换汇录入</AppButton
+      >
     </div>
   </section>
 </template>
