@@ -1,3 +1,4 @@
+import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 
@@ -48,7 +49,8 @@ function fixture() {
     repository as never,
     transactions as never,
     audit as never,
-    posting as never
+    posting as never,
+    new BankRechargeFeesService({} as never, {} as never)
   );
   return { service, order, tx, posting, repository, audit, transactions };
 }
@@ -155,7 +157,8 @@ describe('银充实际退款入账', () => {
       repository as never,
       f.transactions as never,
       f.audit as never,
-      f.posting as never
+      f.posting as never,
+      new BankRechargeFeesService({} as never, {} as never)
     );
     const input = {
       expectedUpdatedAt: updatedAt.toISOString(),

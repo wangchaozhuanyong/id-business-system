@@ -40,7 +40,7 @@ import { useFinanceLedgerInflows } from './useFinanceLedgerInflows';
 import { useFinanceLedgerWallets } from './useFinanceLedgerWallets';
 
 export type FinanceLedgerTab = 'accounts' | 'wallets' | 'expenses' | 'journals' | 'periods';
-export type FinanceCashbookView = 'inflows' | 'expenses';
+export type FinanceCashbookView = 'inflows' | 'expenses' | 'exchanges';
 export type { WalletMutationMode } from './useFinanceLedgerWallets';
 export type PeriodMutationMode = 'close' | 'reopen';
 
@@ -165,6 +165,8 @@ export function useFinanceLedgerPage(
     ledgerQuery.error.value ? getApiErrorMessage(ledgerQuery.error.value) : ''
   );
 
+  const exchangeDrawerVisible = ref(false);
+  const lastCreatedAccount = ref<V2FinanceAccount | null>(null);
   const accountDrawerVisible = ref(false);
   const accountSubmitting = ref(false);
   const editingAccount = ref<V2FinanceAccount | null>(null);
@@ -288,7 +290,7 @@ export function useFinanceLedgerPage(
           remark: accountForm.remark.trim()
         });
       } else {
-        await idBusinessV2FinanceApi.createAccount({
+        lastCreatedAccount.value = await idBusinessV2FinanceApi.createAccount({
           name: accountForm.name.trim(),
           accountType: accountForm.accountType,
           currency: accountForm.currency,
@@ -493,6 +495,8 @@ export function useFinanceLedgerPage(
     loading,
     resolved,
     error,
+    exchangeDrawerVisible,
+    lastCreatedAccount,
     accountDrawerVisible,
     accountSubmitting,
     editingAccount,

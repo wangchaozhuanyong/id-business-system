@@ -30,12 +30,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="币种" required>
-          <el-select v-model="page.accountForm.currency" :disabled="Boolean(page.editingAccount)">
-            <el-option label="CNY" value="CNY" />
-            <el-option label="MYR" value="MYR" />
-            <el-option label="USD" value="USD" />
-            <el-option label="USDT" value="USDT" />
-          </el-select>
+          <V2FinanceCurrencySelect
+            v-model="page.accountForm.currency"
+            :disabled="Boolean(page.editingAccount)"
+          />
         </el-form-item>
         <el-form-item v-if="page.editingAccount" label="状态" required>
           <el-select v-model="page.accountForm.status">
@@ -491,6 +489,7 @@
 </template>
 
 <script setup lang="ts">
+import V2FinanceCurrencySelect from '@/v2/components/V2FinanceCurrencySelect.vue';
 import { computed, type UnwrapNestedRefs } from 'vue';
 import V2ConfirmDialog from '@/v2/components/V2ConfirmDialog.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';

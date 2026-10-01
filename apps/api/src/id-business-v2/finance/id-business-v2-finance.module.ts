@@ -1,3 +1,5 @@
+import { IdBusinessV2FinanceExchangesService } from './id-business-v2-finance-exchanges.service';
+import { IdBusinessV2FinanceExchangeRepository } from './persistence/id-business-v2-finance-exchange.repository';
 import { Module } from '@nestjs/common';
 import { AuditLogsModule } from '../../audit-logs/audit-logs.module';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -36,6 +38,8 @@ import { IdBusinessV2FinanceSupplierWalletRepository } from './persistence/id-bu
   ],
   controllers: [IdBusinessV2FinanceController],
   providers: [
+    IdBusinessV2FinanceExchangesService,
+    IdBusinessV2FinanceExchangeRepository,
     FieldEncryptionService,
     IdBusinessV2FinanceAccountsService,
     IdBusinessV2FinanceExpensesService,

@@ -189,6 +189,9 @@ export {
 export {
   V2_FINANCE_ACCOUNT_TYPES,
   V2_FINANCE_CURRENCIES,
+  V2_FINANCE_CURRENCY_OPTIONS,
+  financeCurrencyLabel,
+  legacyFinanceCurrency,
   type V2FinanceAccount,
   type V2FinanceAccountCode,
   type V2FinanceAccountStatus,
@@ -240,3 +243,5 @@ export type {
 
 export * from './v2/auto-recharge.js';
 export * from './v2/vendure-mailbox.js';
+
+export * from './v2/finance-exchange.js';

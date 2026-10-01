@@ -1,3 +1,4 @@
+import type { BankRechargeOrderStatus } from './bank-recharge-api';
 import type { V2RechargeJob } from './contracts';
 
 export const planLabels = {
@@ -543,4 +544,20 @@ export function browserFailureLabel(type?: string, code?: string): string {
   if (code && Object.hasOwn(codes, code)) return codes[code];
   if (type && Object.hasOwn(types, type)) return types[type];
   return '浏览器操作异常';
+}
+
+export function bankRechargeOrderStatusLabel(
+  value: BankRechargeOrderStatus,
+  financeStatus?: string
+) {
+  if (value === 'completed' && financeStatus === 'partial') return '部分退款／回款';
+  if (value === 'refunded' && financeStatus === 'partial') return '已退款（保留成本）';
+  return {
+    pending_details: '待补全',
+    pending_finance: '待入账',
+    pending_receipt: '待收款',
+    completed: '已完成',
+    refunded: '已退款',
+    cancelled: '已取消'
+  }[value];
 }

@@ -137,6 +137,28 @@ enum IdBusinessV2FinanceCurrency {
   CNY
   MYR
   USD
+  PHP
+  IDR
+  CLP
+  JPY
+  KRW
+  TWD
+  HKD
+  SGD
+  EUR
+  GBP
+  AUD
+  CAD
+  CHF
+  NZD
+  THB
+  VND
+  INR
+  AED
+  SAR
+  BRL
+  MXN
+  ZAR
   USDT
 }
 
@@ -178,6 +200,7 @@ enum IdBusinessV2FinanceJournalType {
   manual_adjustment
   historical_backfill
   reversal
+  fx_exchange
 }
 
 enum IdBusinessV2FinanceSourceType {
@@ -193,6 +216,7 @@ enum IdBusinessV2FinanceSourceType {
   opening_balance
   historical_backfill
   manual
+  fx_exchange
 }
 
 enum IdBusinessV2FinanceJournalStatus {
@@ -231,6 +255,9 @@ enum IdBusinessV2FinanceAccountCode {
   realized_fx_gain_loss
   opening_equity
   manual_adjustment
+  fx_exchange_fee
+  bank_recharge_usdt_fee
+  bank_recharge_shopping_fee
 }
 
 enum IdBusinessV2FinanceInflowNature {
@@ -245,6 +272,7 @@ enum IdBusinessV2FinanceIncomeReferenceSource {
 }
 
 enum IdBusinessV2FinanceFxRateSource {
+  exchange_rate_api
   cny_fixed
   combined_p2p
   binance
@@ -1117,6 +1145,8 @@ model IdBusinessV2FinanceAccount {
   createdBy         User?                              @relation("IdBusinessV2FinanceAccountCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   updatedBy         User?                              @relation("IdBusinessV2FinanceAccountUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   journalLines      IdBusinessV2FinanceJournalLine[]
+  exchangePayments  IdBusinessV2FinanceExchange[] @relation("FinanceExchangePayment")
+  exchangeReceipts  IdBusinessV2FinanceExchange[] @relation("FinanceExchangeReceipt")
   expenses          IdBusinessV2FinanceExpense[]
   inflows           IdBusinessV2FinanceInflow[]
   supplierPayments  IdBusinessV2TopupSupplierPayment[]
@@ -1184,6 +1214,7 @@ model IdBusinessV2FinanceJournal {
   reversedBy IdBusinessV2FinanceJournal?      @relation("IdBusinessV2FinanceJournalReversal")
   createdBy  User?                            @relation("IdBusinessV2FinanceJournalCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   lines      IdBusinessV2FinanceJournalLine[]
+  exchange   IdBusinessV2FinanceExchange?
   expense    IdBusinessV2FinanceExpense?
   inflow     IdBusinessV2FinanceInflow?
 
@@ -1223,6 +1254,59 @@ model IdBusinessV2FinanceJournalLine {
   @@index([supplierAccountId, createdAt], map: "id_business_v2_finance_journal_lines_supplier_account_id_create")
   @@index([fxRateSnapshotId])
   @@map("id_business_v2_finance_journal_lines")
+}
+
+enum IdBusinessV2FinanceExchangeFeeMode {
+  source_extra
+  target_deducted
+}
+
+model IdBusinessV2FinanceExchange {
+  id String @id @default(uuid()) @db.Char(36)
+  journalId String @unique @map("journal_id") @db.Char(36)
+  sourceAccountId String @map("source_account_id") @db.Char(36)
+  targetAccountId String @map("target_account_id") @db.Char(36)
+  sourceAccountName String @map("source_account_name") @db.VarChar(160)
+  targetAccountName String @map("target_account_name") @db.VarChar(160)
+  sourceCurrency IdBusinessV2FinanceCurrency @map("source_currency")
+  targetCurrency IdBusinessV2FinanceCurrency @map("target_currency")
+  sourceAmount Decimal @map("source_amount") @db.Decimal(18,4)
+  targetAmount Decimal @map("target_amount") @db.Decimal(18,4)
+  feeMode IdBusinessV2FinanceExchangeFeeMode @map("fee_mode")
+  feeAmount Decimal @map("fee_amount") @db.Decimal(18,4)
+  totalDebit Decimal @map("total_debit") @db.Decimal(18,4)
+  grossTargetAmount Decimal @map("gross_target_amount") @db.Decimal(18,4)
+  feePercent Decimal @map("fee_percent") @db.Decimal(28,8)
+  exchangeRate Decimal @map("exchange_rate") @db.Decimal(28,8)
+  effectiveRate Decimal @map("effective_rate") @db.Decimal(28,8)
+  sourceFxRateToCny Decimal @map("source_fx_rate_to_cny") @db.Decimal(18,8)
+  targetFxRateToCny Decimal @map("target_fx_rate_to_cny") @db.Decimal(18,8)
+  sourceFxSnapshotId String? @map("source_fx_snapshot_id") @db.Char(36)
+  targetFxSnapshotId String? @map("target_fx_snapshot_id") @db.Char(36)
+  feeAmountCny Decimal @map("fee_amount_cny") @db.Decimal(18,4)
+  fxGainLossCny Decimal @map("fx_gain_loss_cny") @db.Decimal(18,4)
+  occurredAt DateTime @map("occurred_at") @db.DateTime(6)
+  channel String? @db.VarChar(200)
+  remark String? @db.Text
+  correctionOfId String? @unique @map("correction_of_id") @db.Char(36)
+  idempotencyKey String @unique @map("idempotency_key") @db.VarChar(180)
+  requestFingerprint String @map("request_fingerprint") @db.Char(64)
+  createdByUserId String? @map("created_by_user_id") @db.Char(36)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  journal IdBusinessV2FinanceJournal @relation(fields:[journalId],references:[id],onDelete:Restrict)
+  sourceAccount IdBusinessV2FinanceAccount @relation("FinanceExchangePayment",fields:[sourceAccountId],references:[id],onDelete:Restrict)
+  targetAccount IdBusinessV2FinanceAccount @relation("FinanceExchangeReceipt",fields:[targetAccountId],references:[id],onDelete:Restrict)
+  correctionOf IdBusinessV2FinanceExchange? @relation("FinanceExchangeCorrection",fields:[correctionOfId],references:[id],onDelete:Restrict)
+  correctedBy IdBusinessV2FinanceExchange? @relation("FinanceExchangeCorrection")
+  @@index([occurredAt,id])
+  @@index([sourceCurrency,occurredAt])
+  @@index([targetCurrency,occurredAt])
+  @@map("id_business_v2_finance_exchanges")
+}
+
+enum IdBusinessV2BankRechargeAccountingVersion {
+  legacy
+  subscription_cost_v2
 }
 
 model IdBusinessV2FinanceExpense {
@@ -2585,6 +2669,19 @@ model IdBusinessV2BankRechargeOrder {
   plan                   String                             @db.VarChar(16)
   chargeAmount           Decimal                            @map("charge_amount") @db.Decimal(18, 4)
   chargeCurrencyCode     String                             @map("charge_currency_code") @db.Char(3)
+  accountingVersion IdBusinessV2BankRechargeAccountingVersion @default(legacy) @map("accounting_version")
+  usdtFeeAmount Decimal? @map("usdt_fee_amount") @db.Decimal(18,4)
+  usdtFeeCurrencyCode IdBusinessV2FinanceCurrency? @map("usdt_fee_currency_code")
+  usdtFeeFinanceAccountId String? @map("usdt_fee_finance_account_id") @db.Char(36)
+  usdtFeeFxSnapshotId String? @map("usdt_fee_fx_snapshot_id") @db.Char(36)
+  usdtFeeFxRateToCny Decimal? @map("usdt_fee_fx_rate_to_cny") @db.Decimal(18,8)
+  usdtFeeAmountCny Decimal? @map("usdt_fee_amount_cny") @db.Decimal(18,4)
+  shoppingFeeAmount Decimal? @map("shopping_fee_amount") @db.Decimal(18,4)
+  shoppingFeeCurrencyCode IdBusinessV2FinanceCurrency? @map("shopping_fee_currency_code")
+  shoppingFeeFinanceAccountId String? @map("shopping_fee_finance_account_id") @db.Char(36)
+  shoppingFeeFxSnapshotId String? @map("shopping_fee_fx_snapshot_id") @db.Char(36)
+  shoppingFeeFxRateToCny Decimal? @map("shopping_fee_fx_rate_to_cny") @db.Decimal(18,8)
+  shoppingFeeAmountCny Decimal? @map("shopping_fee_amount_cny") @db.Decimal(18,4)
   customerFeeRate        Decimal                            @default(0) @map("customer_fee_rate") @db.Decimal(9, 4)
   customerFeeAmount      Decimal                            @default(0) @map("customer_fee_amount") @db.Decimal(18, 4)
   customerFeeOverridden  Boolean                            @default(false) @map("customer_fee_overridden")

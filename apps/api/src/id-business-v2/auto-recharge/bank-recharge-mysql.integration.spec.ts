@@ -1,3 +1,4 @@
+import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
@@ -62,12 +63,19 @@ suite('bank recharge real MySQL lifecycle', () => {
         key === 'FIELD_ENCRYPTION_KEY' ? 'isolated-bank-recharge-test-key' : 'isolated-bank-hash'
     } as never);
     accounts = new BankRechargeAccountService(repository, transactions, audit, encryption);
-    orders = new BankRechargeOrderService(transactions, audit, accounts, repository);
+    orders = new BankRechargeOrderService(
+      transactions,
+      audit,
+      accounts,
+      repository,
+      new BankRechargeFeesService(repository, audit)
+    );
     finance = new BankRechargeFinanceService(
       repository,
       transactions,
       audit,
-      new IdBusinessV2FinancePostingService(new IdBusinessV2FinanceCommandRepository())
+      new IdBusinessV2FinancePostingService(new IdBusinessV2FinanceCommandRepository()),
+      new BankRechargeFeesService(repository, audit)
     );
     queries = new BankRechargeQueryRepository(prisma);
   });
@@ -131,10 +139,17 @@ suite('bank recharge real MySQL lifecycle', () => {
       },
       operator
     );
+    await prisma.idBusinessV2BankRechargeOrder.update({
+      where: { id: created.id },
+      data: { accountingVersion: 'legacy' }
+    });
+    const legacy = await prisma.idBusinessV2BankRechargeOrder.findUniqueOrThrow({
+      where: { id: created.id }
+    });
     const updated = await orders.update(
       created.id,
       {
-        expectedUpdatedAt: created.updatedAt.toISOString(),
+        expectedUpdatedAt: legacy.updatedAt.toISOString(),
         cardId: card.id,
         customerFeeRate: '2.5',
         bankFeeAmount: '3.50',

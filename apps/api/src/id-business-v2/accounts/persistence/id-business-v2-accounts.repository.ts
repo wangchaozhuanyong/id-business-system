@@ -1,3 +1,4 @@
+import { legacyFinanceCurrency } from '@apple-business/shared';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IdBusinessV2FinanceCurrency, Prisma } from '@prisma/client';
 import { getPagination } from '../../../common/pagination';
@@ -524,7 +525,7 @@ export class IdBusinessV2AccountsRepository {
         row.purchaseOriginalAmount ?? row.purchaseCost,
         'id_business_v2_accounts.purchase_original_amount'
       ),
-      purchaseCurrency: row.purchaseCurrency ?? 'CNY',
+      purchaseCurrency: legacyFinanceCurrency(row.purchaseCurrency ?? 'CNY'),
       purchaseFxRateToCny: mapRate8(
         row.purchaseFxRateToCny ?? '1',
         'id_business_v2_accounts.purchase_fx_rate_to_cny'

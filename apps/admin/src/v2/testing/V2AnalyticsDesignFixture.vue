@@ -488,6 +488,9 @@ function amountTone(value: string | null | undefined) {
 }
 
 const accountCodeLabels: Record<V2FinanceAccountCode, string> = {
+  fx_exchange_fee: '换汇费用',
+  bank_recharge_usdt_fee: '订阅 USDT 手续费',
+  bank_recharge_shopping_fee: '订阅购物网手续费',
   cash: '自有资金',
   supplier_prepayment: '卡商预付款',
   supplier_refund_receivable: '待卡商退款',

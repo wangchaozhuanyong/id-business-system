@@ -1,7 +1,7 @@
 <template>
   <section class="v2-records-page bank-recharge-page">
     <V2PageContext
-      description="记录银行卡代充、客户手续费、银行手续费、实收与到期时间。官网成功付款自动建立待补全订单。"
+      description="记录银行卡代充、USDT 手续费、购物网手续费、实收与到期时间。官网成功付款自动建立待补全订单。"
     >
       <template #actions>
         <AppButton variant="ghost" @click="currencyOpen = true">新增币种</AppButton>
@@ -68,9 +68,17 @@
           </template>
           <V2TableColumn
             :definition="v2TableSchemas.bankRechargeOrders.main.columns[0]"
-            prop="orderNo"
             show-overflow-tooltip
-          />
+            ><template #default="{ row }"
+              >{{ row.orderNo
+              }}<el-tag
+                v-if="row.accountingVersion !== 'subscription_cost_v2'"
+                type="info"
+                size="small"
+                >旧口径</el-tag
+              ></template
+            ></V2TableColumn
+          >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[1]"
             ><template #default="{ row }">{{
               formatV2DateTime(row.createdAt)
@@ -104,34 +112,29 @@
             ></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[7]"
-            ><template #default="{ row }">{{ row.customerFeeRate }}%</template></V2TableColumn
+            ><template #default="{ row }">{{ feeLabel(row, 'usdtFee') }}</template></V2TableColumn
           >
           <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[8]"
-            ><template #default="{ row }"
-              >{{ row.customerFeeAmount }} {{ row.chargeCurrencyCode }}</template
-            ></V2TableColumn
-          >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[9]"
             ><template #default="{ row }">{{
-              row.bankFeeAmount ? `${row.bankFeeAmount} ${row.bankFeeCurrencyCode}` : '—'
+              feeLabel(row, 'shoppingFee')
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[10]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[9]"
             ><template #default="{ row }">{{
               row.receivedAmount ? `${row.receivedAmount} ${row.receivedCurrencyCode}` : '待设'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[11]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[10]"
             ><template #default="{ row }">{{
               row.profitAmountCny ?? '待入账'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[12]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[11]"
             ><template #default="{ row }">{{
               row.dueAt ? formatV2DateTime(row.dueAt) : '待设'
             }}</template></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[13]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[12]"
             ><template #default="{ row }"
               ><el-tag :type="row.status === 'refunded' ? 'warning' : 'success'" effect="plain">{{
                 row.status === 'refunded'
@@ -142,14 +145,14 @@
               }}</el-tag></template
             ></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[14]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[13]"
             ><template #default="{ row }"
               ><el-tag :type="usageTagType(row)" effect="plain">{{
                 usageLabel(row)
               }}</el-tag></template
             ></V2TableColumn
           >
-          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[15]"
+          <V2TableColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[14]"
             ><template #default="{ row }"
               ><el-tag
                 :type="
@@ -164,7 +167,7 @@
               ></template
             ></V2TableColumn
           >
-          <V2TableActionColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[16]">
+          <V2TableActionColumn :definition="v2TableSchemas.bankRechargeOrders.main.columns[15]">
             <template #default="{ row }">
               <AppButton size="small" variant="ghost" @click="openEdit(row)">{{
                 row.status === 'completed' || row.status === 'refunded' ? '详情' : '修改'
@@ -233,10 +236,18 @@ import V2TableColumnSettings from '@/v2/components/V2TableColumnSettings.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2BankRechargeOrderDrawers from './V2BankRechargeOrderDrawers.vue';
+import type { BankRechargeOrder } from './bank-recharge-api';
 import { useBankRechargeOrdersPage } from './useBankRechargeOrdersPage';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
+function feeLabel(row: BankRechargeOrder, prefix: 'usdtFee' | 'shoppingFee') {
+  return row.accountingVersion !== 'subscription_cost_v2'
+    ? '旧口径 / 未核对'
+    : row[`${prefix}Amount`] == null
+      ? '未核对'
+      : `${row[`${prefix}Amount`]} ${row[`${prefix}CurrencyCode`] ?? ''}`;
+}
 const drawerState = useBankRechargeOrdersPage();
 const {
   page,

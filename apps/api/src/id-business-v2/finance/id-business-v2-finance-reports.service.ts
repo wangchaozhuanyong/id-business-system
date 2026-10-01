@@ -1,3 +1,4 @@
+import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import { Injectable } from '@nestjs/common';
 import type { IdBusinessV2FinanceAccountCode, IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -33,7 +34,10 @@ const EXPENSE_CODES = [
   'id_purchase_loss',
   'operating_expense',
   'bank_recharge_cost',
-  'bank_recharge_bank_fee'
+  'bank_recharge_bank_fee',
+  'fx_exchange_fee',
+  'bank_recharge_usdt_fee',
+  'bank_recharge_shopping_fee'
 ] as const;
 
 const RECONCILIATION_ISSUE_DETAIL_LIMIT = 200;
@@ -132,6 +136,11 @@ export class IdBusinessV2FinanceReportsService {
       operatingExpenseCny: (values.get('operating_expense') ?? Amount4.zero()).toString(),
       bankRechargeCostCny: (values.get('bank_recharge_cost') ?? Amount4.zero()).toString(),
       bankRechargeBankFeeCny: (values.get('bank_recharge_bank_fee') ?? Amount4.zero()).toString(),
+      exchangeFeeCny: (values.get('fx_exchange_fee') ?? Amount4.zero()).toString(),
+      bankRechargeUsdtFeeCny: (values.get('bank_recharge_usdt_fee') ?? Amount4.zero()).toString(),
+      bankRechargeShoppingFeeCny: (
+        values.get('bank_recharge_shopping_fee') ?? Amount4.zero()
+      ).toString(),
       realizedFxGainLossCny: realizedFx.toString(),
       netProfitCny: totalOperatingRevenue.sub(totalExpense).add(realizedFx).toString(),
       estimatedProfitCny: estimated.toString()
@@ -140,12 +149,13 @@ export class IdBusinessV2FinanceReportsService {
 
   async currencyBreakdown(query: FinanceReportQuery) {
     const where = this.buildLineWhere(query);
-    const [grouped, manualInflows, latestRates] = await Promise.all([
+    const [grouped, manualInflows, latestRates, exchanges] = await Promise.all([
       this.repository.groupCashFlow(where),
       this.repository.groupManualInflows(where),
-      this.loadLatestRates()
+      this.loadLatestRates(),
+      this.repository.groupExchangeCashFlow(where)
     ]);
-    return (['CNY', 'MYR', 'USD', 'USDT'] as const).map((currency) => {
+    return V2_FINANCE_CURRENCIES.map((currency) => {
       const income = grouped
         .filter((item) => item.currency === currency && item.direction === 'debit')
         .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero());
@@ -176,6 +186,14 @@ export class IdBusinessV2FinanceReportsService {
         capitalContribution: manualInflow('contributed_capital').toString(),
         borrowedFunds: manualInflow('borrowed_funds_payable').toString(),
         expense: expense.toString(),
+        exchangeIn: exchanges
+          .filter((item) => item.currency === currency && item.direction === 'debit')
+          .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero())
+          .toString(),
+        exchangeOut: exchanges
+          .filter((item) => item.currency === currency && item.direction === 'credit')
+          .reduce((sum, item) => sum.add(item.amountOriginal), Amount4.zero())
+          .toString(),
         netCashFlow: net.toString(),
         latestRateToCny: rate?.toString() ?? null,
         netCashFlowCny: rate ? rate.apply(net).toString() : null

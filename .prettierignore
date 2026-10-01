@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+backups/
 package-lock.json
 apps/*/dist/
 packages/*/dist/

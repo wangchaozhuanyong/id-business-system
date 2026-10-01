@@ -1,3 +1,4 @@
+import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeOrderService } from './bank-recharge-order.service';
 import {
@@ -61,7 +62,8 @@ function fixture() {
     {} as never,
     audit as never,
     accounts as never,
-    repository as never
+    repository as never,
+    new BankRechargeFeesService({} as never, {} as never)
   );
   const job = {
     id: 'job-1',

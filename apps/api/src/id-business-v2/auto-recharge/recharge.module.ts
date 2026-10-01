@@ -1,3 +1,4 @@
+import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { Module } from '@nestjs/common';
 import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
@@ -27,6 +28,7 @@ import { IdBusinessV2FinanceModule } from '../finance/public-api';
   imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
   controllers: [RechargeController, BankRechargeController, RechargeProxyController],
   providers: [
+    BankRechargeFeesService,
     FieldEncryptionService,
     BankRechargeAccountService,
     BankRechargeAccountDeliveryService,

@@ -3,7 +3,10 @@ import type { IdBusinessV2FinanceCurrency } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { V2_FINANCE_CURRENCIES } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { IdBusinessV2ExchangeRateOrderQuoteService } from '../exchange-rates/public-api';
+import {
+  IdBusinessV2ExchangeRateOrderQuoteService,
+  IdBusinessV2PurchaseRateProviderService
+} from '../exchange-rates/public-api';
 import {
   Rate8,
   V2CommandTransactionManager,
@@ -28,7 +31,7 @@ interface ResolveFinanceRateInput {
 @Injectable()
 export class IdBusinessV2FinanceFxService {
   private readonly automaticQuoteInFlight = new Map<
-    'MYR' | 'USD' | 'USDT',
+    IdBusinessV2FinanceCurrency,
     ReturnType<IdBusinessV2FinanceCommandRepository['createFxSnapshot']>
   >();
 
@@ -37,7 +40,8 @@ export class IdBusinessV2FinanceFxService {
     private readonly commandRepository: IdBusinessV2FinanceCommandRepository,
     private readonly queryRepository: IdBusinessV2FinanceQueryRepository,
     private readonly audit: V2TransactionalAuditService,
-    private readonly exchangeRateOrderQuoteService: IdBusinessV2ExchangeRateOrderQuoteService
+    private readonly exchangeRateOrderQuoteService: IdBusinessV2ExchangeRateOrderQuoteService,
+    private readonly fiatProvider?: IdBusinessV2PurchaseRateProviderService
   ) {}
 
   async resolve(input: ResolveFinanceRateInput) {
@@ -203,7 +207,9 @@ export class IdBusinessV2FinanceFxService {
     const quote =
       currency === 'USDT'
         ? this.snapshotEffectiveUsdtRate(input)
-        : this.findOrCollectCrossRate(input);
+        : input.currency === 'MYR' || input.currency === 'USD'
+          ? this.findOrCollectCrossRate(input)
+          : this.collectFiatRate(input);
     this.automaticQuoteInFlight.set(currency, quote);
     return quote.finally(() => {
       if (this.automaticQuoteInFlight.get(currency) === quote) {
@@ -241,6 +247,47 @@ export class IdBusinessV2FinanceFxService {
           businessDate: toIdBusinessV2BusinessDate(input.occurredAt).date,
           capturedAt: effective.averagedAt,
           expiresAt: effective.expiresAt,
+          createdByUserId: input.operator?.id
+        }),
+      {
+        changedScopes: ['exchange-rates', 'finance-reports'],
+        requestId: randomUUID(),
+        operator: input.operator
+      }
+    );
+  }
+
+  private async collectFiatRate(input: ResolveFinanceRateInput) {
+    const latest = await this.queryRepository.findLatestFxSnapshot(input.currency);
+    if (
+      latest?.source === 'exchange_rate_api' &&
+      latest.expiresAt &&
+      latest.expiresAt.getTime() > input.occurredAt.getTime()
+    )
+      return latest;
+    let quote;
+    try {
+      if (!this.fiatProvider) throw new Error('汇率供应商未配置');
+      quote = await this.fiatProvider.fetchLatest([input.currency]);
+    } catch {
+      throw new ServiceUnavailableException('该币种汇率采集失败，请填写人工汇率及原因');
+    }
+    const rate = Rate8.one().div(quote.quotePerCny[input.currency]!);
+    if (!rate.gt('0')) throw new BadRequestException('汇率低于可保存精度');
+    const expiresAt = new Date(quote.providerUpdatedAt.getTime() + 36 * 60 * 60 * 1000);
+    if (expiresAt.getTime() <= input.occurredAt.getTime())
+      throw new BadRequestException('市场汇率已过期，请填写人工汇率');
+    return this.commandTransactions.execute(
+      (tx) =>
+        this.commandRepository.createFxSnapshot(tx, {
+          id: randomUUID(),
+          currency: input.currency,
+          rateToCny: rate.toString(),
+          source: 'exchange_rate_api',
+          sourceReference: 'https://open.er-api.com/v6/latest/CNY',
+          businessDate: toIdBusinessV2BusinessDate(input.occurredAt).date,
+          capturedAt: quote.providerUpdatedAt,
+          expiresAt,
           createdByUserId: input.operator?.id
         }),
       {

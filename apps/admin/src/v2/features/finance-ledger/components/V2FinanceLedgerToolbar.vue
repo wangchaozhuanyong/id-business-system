@@ -10,18 +10,13 @@
     </V2SectionHeading>
 
     <div class="v2-finance-ledger-filter-grid">
-      <el-select
+      <V2FinanceCurrencySelect
         v-model="page.filters.currency"
         clearable
         placeholder="全部币种"
         aria-label="筛选币种"
         @change="page.applyFilters"
-      >
-        <el-option label="CNY" value="CNY" />
-        <el-option label="MYR" value="MYR" />
-        <el-option label="USD" value="USD" />
-        <el-option label="USDT" value="USDT" />
-      </el-select>
+      />
       <el-input
         v-if="page.activeTab === 'journals'"
         v-model="page.filters.periodMonth"
@@ -51,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import V2FinanceCurrencySelect from '@/v2/components/V2FinanceCurrencySelect.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { InfoFilled, RefreshLeft, Search } from '@element-plus/icons-vue';

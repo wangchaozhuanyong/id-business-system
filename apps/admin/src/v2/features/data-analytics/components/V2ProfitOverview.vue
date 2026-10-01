@@ -55,7 +55,7 @@
           </dd>
         </div>
         <div>
-          <dt>银充客户手续费收入</dt>
+          <dt>旧口径客户手续费收入</dt>
           <dd class="is-positive">
             {{ formatCny(overview.profitLoss.bankRechargeServiceFeeCny ?? '0') }}
           </dd>
@@ -98,8 +98,20 @@
           <dd>{{ formatCny(overview.profitLoss.bankRechargeCostCny ?? '0') }}</dd>
         </div>
         <div>
-          <dt>银充银行手续费</dt>
+          <dt>旧口径银行手续费</dt>
           <dd>{{ formatCny(overview.profitLoss.bankRechargeBankFeeCny ?? '0') }}</dd>
+        </div>
+        <div>
+          <dt>订阅 USDT 手续费</dt>
+          <dd>{{ formatCny(overview.profitLoss.bankRechargeUsdtFeeCny ?? '0') }}</dd>
+        </div>
+        <div>
+          <dt>订阅购物网手续费</dt>
+          <dd>{{ formatCny(overview.profitLoss.bankRechargeShoppingFeeCny ?? '0') }}</dd>
+        </div>
+        <div>
+          <dt>换汇费用</dt>
+          <dd>{{ formatCny(overview.profitLoss.exchangeFeeCny ?? '0') }}</dd>
         </div>
         <div>
           <dt>退款、赎回与报损</dt>

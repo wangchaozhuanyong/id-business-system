@@ -22,18 +22,13 @@
         <el-option label="股东投入" value="capital_contribution" />
         <el-option label="借入资金" value="borrowed_funds" />
       </el-select>
-      <el-select
+      <V2FinanceCurrencySelect
         v-model="page.filters.currency"
         clearable
         placeholder="全部币种"
         aria-label="筛选币种"
         @change="page.applyFilters"
-      >
-        <el-option label="CNY" value="CNY" />
-        <el-option label="MYR" value="MYR" />
-        <el-option label="USD" value="USD" />
-        <el-option label="USDT" value="USDT" />
-      </el-select>
+      />
       <AppButton
         variant="ghost"
         :disabled="!page.filters.currency && !page.filters.inflowNature"
@@ -58,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import V2FinanceCurrencySelect from '@/v2/components/V2FinanceCurrencySelect.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { InfoFilled, RefreshLeft } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';

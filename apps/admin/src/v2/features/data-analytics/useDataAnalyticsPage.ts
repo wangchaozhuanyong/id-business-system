@@ -1,4 +1,5 @@
 import { computed, reactive, ref } from 'vue';
+import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { addDecimalStrings, formatV2Decimal } from '@/v2/utils/decimal';
@@ -13,8 +14,9 @@ import type {
   V2FinanceSupplierWallet
 } from './contracts';
 
-const currencies = ['CNY', 'MYR', 'USD', 'USDT'] as const;
+const currencies = V2_FINANCE_CURRENCY_OPTIONS.map((item) => item.code);
 const journalTypeOptions: Array<{ value: V2FinanceJournalType; label: string }> = [
+  { value: 'fx_exchange', label: '账户换汇' },
   { value: 'bank_recharge_completed', label: '银充订单完成' },
   { value: 'order_completed', label: '订单完成' },
   { value: 'order_refund', label: '订单退款' },
@@ -169,7 +171,15 @@ function formatCny(value: string | null | undefined) {
 
 function formatOriginal(value: string, currency: V2FinanceCurrency) {
   const prefix =
-    currency === 'CNY' ? '¥' : currency === 'MYR' ? 'RM ' : currency === 'USD' ? '$' : '₮';
+    currency === 'CNY'
+      ? '¥'
+      : currency === 'MYR'
+        ? 'RM '
+        : currency === 'USD'
+          ? '$'
+          : currency === 'USDT'
+            ? '₮'
+            : `${currency} `;
   return `${prefix}${formatNumber(value)}`;
 }
 
@@ -211,6 +221,9 @@ function journalTypeLabel(value: V2FinanceJournalType) {
 
 function accountCodeLabel(value: V2FinanceAccountCode) {
   const labels: Record<V2FinanceAccountCode, string> = {
+    fx_exchange_fee: '换汇费用',
+    bank_recharge_usdt_fee: '订阅 USDT 手续费',
+    bank_recharge_shopping_fee: '订阅购物网手续费',
     cash: '自有资金',
     supplier_prepayment: '卡商预付款',
     supplier_refund_receivable: '待卡商退款',

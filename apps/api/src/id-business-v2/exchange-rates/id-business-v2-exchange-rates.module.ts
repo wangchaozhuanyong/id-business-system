@@ -48,6 +48,7 @@ import { IdBusinessV2PurchaseRateAutomationRepository } from './persistence/id-b
     IdBusinessV2ExchangeRateCronService
   ],
   exports: [
+    IdBusinessV2PurchaseRateProviderService,
     IdBusinessV2ExchangeRatesService,
     IdBusinessV2ExchangeRateQueryService,
     IdBusinessV2ExchangeRateSettingsService,

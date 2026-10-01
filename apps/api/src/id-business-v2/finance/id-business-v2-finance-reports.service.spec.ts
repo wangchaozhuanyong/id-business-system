@@ -440,6 +440,7 @@ describe('IdBusinessV2FinanceReportsService manual inflow reporting', () => {
 
   it('按币种拆分经营收入、股东投入和借入资金，同时保留总现金流', async () => {
     const repository = {
+      groupExchangeCashFlow: vi.fn().mockResolvedValue([]),
       groupCashFlow: vi.fn().mockResolvedValue([
         { currency: 'CNY', direction: 'debit', amountOriginal: Amount4.from('180') },
         { currency: 'CNY', direction: 'credit', amountOriginal: Amount4.from('30') }
@@ -481,6 +482,8 @@ describe('IdBusinessV2FinanceReportsService manual inflow reporting', () => {
       capitalContribution: '100',
       borrowedFunds: '30',
       expense: '30',
+      exchangeIn: '0',
+      exchangeOut: '0',
       netCashFlow: '150',
       latestRateToCny: '1',
       netCashFlowCny: '150'

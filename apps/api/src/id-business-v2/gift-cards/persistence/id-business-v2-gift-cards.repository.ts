@@ -1,3 +1,4 @@
+import { legacyFinanceCurrency } from '@apple-business/shared';
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
@@ -639,6 +640,7 @@ export class IdBusinessV2GiftCardsRepository {
 function mapGiftCardRecord(row: GiftCardPersistenceRow): GiftCardRecord {
   return {
     ...row,
+    purchaseCurrency: legacyFinanceCurrency(row.purchaseCurrency),
     faceValue: mapAmount4(row.faceValue, 'id_business_v2_gift_cards.face_value'),
     exchangeRate: mapRate8(row.exchangeRate, 'id_business_v2_gift_cards.exchange_rate'),
     exchangeRatePrefilledValue:
@@ -730,6 +732,7 @@ function mapCreditGiftCard(
 ): GiftCardCreditRecord {
   return {
     ...row,
+    purchaseCurrency: legacyFinanceCurrency(row.purchaseCurrency),
     faceValue: mapAmount4(row.faceValue, 'id_business_v2_gift_cards.face_value'),
     exchangeRate: mapRate8(row.exchangeRate, 'id_business_v2_gift_cards.exchange_rate'),
     exchangeRatePrefilledValue:

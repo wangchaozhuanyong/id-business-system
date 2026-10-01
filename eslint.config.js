@@ -14,6 +14,7 @@ export default [
       'node_modules/**',
       'dist/**',
       'coverage/**',
+      'backups/**',
       'apps/*/dist/**',
       'packages/*/dist/**',
       'design-prototypes/**',
@@ -30,6 +31,11 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
+  {
+    languageOptions: {
+      parserOptions: { tsconfigRootDir }
+    }
+  },
   {
     files: ['**/*.ts', 'scripts/**/*.mjs'],
     languageOptions: {

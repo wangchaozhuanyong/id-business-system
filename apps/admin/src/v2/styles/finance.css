@@ -1259,7 +1259,7 @@
 .v2-finance-cashbook-navigation {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   padding: 9px;
   overflow-x: auto;

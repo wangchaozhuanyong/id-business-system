@@ -57,6 +57,8 @@ export class IdBusinessV2FinanceSupplierWalletsService {
   async create(dto: CreateIdBusinessV2SupplierWalletDto, operator?: AuthenticatedUser) {
     const supplierOptionId = normalizeFinanceUuid(dto.supplierOptionId, '供应商');
     const currency = normalizeFinanceCurrency(dto.currency);
+    if (!['CNY', 'MYR', 'USD', 'USDT'].includes(currency))
+      throw new BadRequestException('供应商钱包仅支持原有业务币种');
     const openingBalance = normalizeFinanceMoney(dto.openingBalance ?? 0, '期初余额', true);
     const reason = normalizeFinanceText(dto.reason, '原因', 500, true)!;
     const manualRate =

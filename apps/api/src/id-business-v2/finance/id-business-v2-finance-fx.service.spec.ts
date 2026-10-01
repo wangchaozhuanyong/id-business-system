@@ -15,6 +15,78 @@ const operator = {
 const quotedAt = new Date('2026-07-30T12:00:00.000Z');
 const originalFetch = global.fetch;
 
+describe('新增法币的原始市场估值', () => {
+  function fixture() {
+    const query = { findLatestFxSnapshot: vi.fn().mockResolvedValue(null) };
+    const command = { createFxSnapshot: vi.fn(async (_tx, input) => input) };
+    const provider = {
+      fetchLatest: vi.fn().mockResolvedValue({
+        quotePerCny: { PHP: '8', IDR: '2000', JPY: '20' },
+        providerUpdatedAt: quotedAt
+      })
+    };
+    const transactions = { execute: vi.fn(async (work) => work({})) };
+    const service = new IdBusinessV2FinanceFxService(
+      transactions as never,
+      command as never,
+      query as never,
+      {} as never,
+      {} as never,
+      provider as never
+    );
+    return { service, query, command, provider };
+  }
+  it.each([
+    ['PHP', '0.125'],
+    ['IDR', '0.0005'],
+    ['JPY', '0.05']
+  ] as const)('%s 直接反算人民币市场汇率，不使用收购折扣', async (currency, rate) => {
+    const { service, command, provider } = fixture();
+    const result = await service.quoteOrderRate(currency, operator, quotedAt);
+    expect(result.rateToCny).toBe(rate);
+    expect(result.source).toBe('exchange_rate_api');
+    expect(provider.fetchLatest).toHaveBeenCalledWith([currency]);
+    expect(command.createFxSnapshot).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        rateToCny: rate,
+        capturedAt: quotedAt,
+        expiresAt: new Date(quotedAt.getTime() + 36 * 3600000)
+      })
+    );
+  });
+  it('复用已锁定的有效市场快照，拒绝过期市场数据', async () => {
+    const { service, query, command, provider } = fixture();
+    query.findLatestFxSnapshot.mockResolvedValue({
+      id: 'market-snapshot',
+      currency: 'PHP',
+      rateToCny: '0.125',
+      source: 'exchange_rate_api',
+      capturedAt: quotedAt,
+      expiresAt: new Date(quotedAt.getTime() + 3600000)
+    });
+    expect((await service.quoteOrderRate('PHP', operator, quotedAt)).snapshotId).toBe(
+      'market-snapshot'
+    );
+    expect(provider.fetchLatest).not.toHaveBeenCalled();
+    query.findLatestFxSnapshot.mockResolvedValue(null);
+    provider.fetchLatest.mockResolvedValue({
+      quotePerCny: { PHP: '8' },
+      providerUpdatedAt: new Date(quotedAt.getTime() - 37 * 3600000)
+    });
+    await expect(service.quoteOrderRate('PHP', operator, quotedAt)).rejects.toThrow(
+      '市场汇率已过期'
+    );
+    expect(command.createFxSnapshot).not.toHaveBeenCalled();
+  });
+  it('市场采集不可用时要求人工汇率', async () => {
+    const { service, provider, command } = fixture();
+    provider.fetchLatest.mockRejectedValue(new Error('provider unavailable'));
+    await expect(service.quoteOrderRate('PHP', operator, quotedAt)).rejects.toThrow('填写人工汇率');
+    expect(command.createFxSnapshot).not.toHaveBeenCalled();
+  });
+});
+
 function snapshot(input: {
   id: string;
   currency: 'MYR' | 'USDT';

@@ -10,6 +10,16 @@ function fixture() {
     status: 'completed',
     financeStatus: 'posted',
     updatedAt: date,
+    accountId: null,
+    cardId: null,
+    chargeAmount: '100',
+    chargeCurrencyCode: 'CNY',
+    customerFeeRate: '0',
+    customerFeeAmount: '0',
+    bankFeeAmount: null,
+    receivedAmount: '120',
+    openedAt: null,
+    dueAt: null,
     customerId: null
   };
   const repository = {

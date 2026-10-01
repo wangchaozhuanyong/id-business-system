@@ -102,9 +102,13 @@ export const v2TableSchemas = {
         { key: 'plan', label: '套餐', kind: 'text', widthPreset: 'standard' },
         { key: 'card', label: '银行卡', kind: 'identifier', widthPreset: 'standard' },
         { key: 'chargeAmount', label: '代付金额', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'customerFeeRate', label: '手续费率', kind: 'numeric', widthPreset: 'compact' },
-        { key: 'customerFeeAmount', label: '客户手续费', kind: 'numeric', widthPreset: 'standard' },
-        { key: 'bankFeeAmount', label: '银行手续费', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'usdtFeeAmount', label: 'USDT 手续费', kind: 'numeric', widthPreset: 'standard' },
+        {
+          key: 'shoppingFeeAmount',
+          label: '购物网手续费',
+          kind: 'numeric',
+          widthPreset: 'standard'
+        },
         { key: 'receivedAmount', label: '客户实收', kind: 'numeric', widthPreset: 'standard' },
         { key: 'profitAmountCny', label: '利润(CNY)', kind: 'numeric', widthPreset: 'standard' },
         { key: 'dueAt', label: '到期时间', kind: 'date', widthPreset: 'dateTime' },
@@ -732,6 +736,32 @@ export const v2TableSchemas = {
         { key: '备注', label: '备注', kind: 'text', widthPreset: 'longText' },
         { key: '状态', label: '状态', kind: 'status', widthPreset: 'compact' },
         { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+      ]
+    }),
+    exchanges: table({
+      id: 'finance-ledger.exchanges',
+      feature: 'finance-ledger',
+      role: 'secondary',
+      mobileMode: 'scroll',
+      rowKey: { kind: 'path', value: 'id' },
+      columns: [
+        {
+          key: 'occurredAt',
+          label: '换汇时间',
+          kind: 'date',
+          widthPreset: 'dateTime',
+          pin: 'start'
+        },
+        { key: 'direction', label: '换汇方向', kind: 'text', widthPreset: 'wide' },
+        { key: 'accounts', label: '付款 / 收款账户', kind: 'text', widthPreset: 'wide' },
+        { key: 'sourceAmount', label: '换汇本金', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'targetAmount', label: '实际到账', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'feeAmount', label: '手续费', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'feePercent', label: '手续费比例', kind: 'numeric', widthPreset: 'standard' },
+        { key: 'effectiveRate', label: '含费实际汇率', kind: 'numeric', widthPreset: 'wide' },
+        { key: 'channel', label: '渠道 / 备注', kind: 'text', widthPreset: 'longText' },
+        { key: 'status', label: '状态', kind: 'status', widthPreset: 'compact' },
+        { key: 'actions', label: '操作', kind: 'actions', layout: 'double', pin: 'end' }
       ]
     }),
     journals: table({
@@ -1377,7 +1407,11 @@ export const v2TablesByFeature = {
     v2TableSchemas.financeLedger.journals,
     v2TableSchemas.financeLedger.periods
   ],
-  'finance-expenses': [v2TableSchemas.financeLedger.inflows, v2TableSchemas.financeLedger.expenses],
+  'finance-expenses': [
+    v2TableSchemas.financeLedger.inflows,
+    v2TableSchemas.financeLedger.expenses,
+    v2TableSchemas.financeLedger.exchanges
+  ],
   'data-governance': [
     v2TableSchemas.dataGovernance.recycle,
     v2TableSchemas.dataGovernance.jobs,

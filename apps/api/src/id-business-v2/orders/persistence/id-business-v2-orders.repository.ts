@@ -1,3 +1,4 @@
+import { legacyFinanceCurrency } from '@apple-business/shared';
 import { Injectable } from '@nestjs/common';
 import type {
   IdBusinessV2BalanceLedger,
@@ -1592,6 +1593,7 @@ function mapOrderRow(row: IdBusinessV2Order): IdBusinessV2OrderRecord {
   );
   return {
     ...row,
+    receivedCurrency: legacyFinanceCurrency(row.receivedCurrency),
     websiteAccountSearchTokens: mapStringArray(
       row.websiteAccountSearchTokens,
       'id_business_v2_orders.website_account_search_tokens'

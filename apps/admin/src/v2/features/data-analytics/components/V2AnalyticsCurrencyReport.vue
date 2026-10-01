@@ -3,7 +3,7 @@
     <div class="v2-finance-currency-strip" aria-label="分币种净现金流摘要">
       <article v-for="row in overview.currencyBreakdown" :key="row.currency">
         <header>
-          <el-tag effect="plain">{{ row.currency }}</el-tag>
+          <el-tag effect="plain">{{ financeCurrencyLabel(row.currency) }}</el-tag>
           <small>最新汇率 {{ row.latestRateToCny ?? '缺失' }}</small>
         </header>
         <strong :class="amountTone(row.netCashFlow)">
@@ -18,6 +18,10 @@
           {{ formatOriginal(row.capitalContribution, row.currency) }} · 借入
           {{ formatOriginal(row.borrowedFunds, row.currency) }}
         </small>
+        <p>
+          换汇流入 {{ formatOriginal(row.exchangeIn ?? '0', row.currency) }} · 换汇流出
+          {{ formatOriginal(row.exchangeOut ?? '0', row.currency) }}
+        </p>
       </article>
     </div>
 
@@ -50,7 +54,7 @@
         </template>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[0]">
           <template #default="{ row }">
-            <el-tag effect="plain">{{ row.currency }}</el-tag>
+            <el-tag effect="plain">{{ financeCurrencyLabel(row.currency) }}</el-tag>
           </template>
         </V2TableColumn>
         <V2TableColumn :definition="v2TableSchemas.dataAnalytics.currencies.columns[1]">
@@ -95,6 +99,7 @@
 </template>
 
 <script setup lang="ts">
+import { financeCurrencyLabel } from '@apple-business/shared';
 import type { V2FinanceCurrency, V2FinanceOverview } from '@apple-business/shared';
 import V2SectionHeading from '@/v2/components/V2SectionHeading.vue';
 import V2Table from '@/v2/components/V2Table.vue';

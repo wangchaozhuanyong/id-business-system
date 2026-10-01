@@ -1,3 +1,4 @@
+import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import {
   BadRequestException,
   ConflictException,
@@ -31,7 +32,8 @@ export class BankRechargeFinanceService {
     private readonly repository: BankRechargeRepository,
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
-    private readonly posting: IdBusinessV2FinancePostingService
+    private readonly posting: IdBusinessV2FinancePostingService,
+    private readonly fees: BankRechargeFeesService
   ) {}
 
   async complete(id: string, value: unknown, operator: AuthenticatedUser) {
@@ -41,7 +43,9 @@ export class BankRechargeFinanceService {
         'renewals',
         'renewal-warning-summary',
         'dashboard',
-        'finance-ledger'
+        'finance-ledger',
+        'finance-accounts',
+        'finance-reports'
       ],
       requestId: randomUUID(),
       operator,
@@ -118,7 +122,13 @@ export class BankRechargeFinanceService {
     const charge = Amount4.from(order.chargeAmount);
     const chargeFx = Rate8.from(order.chargeFxRateToCny);
     const chargeCny = chargeFx.apply(charge);
-    const serviceFeeCny = chargeFx.apply(Amount4.from(order.customerFeeAmount));
+    const newFees = order.accountingVersion === 'subscription_cost_v2';
+    const extraFees = newFees
+      ? await this.fees.postingLines(tx, order)
+      : { lines: [], total: Amount4.zero() };
+    const serviceFeeCny = newFees
+      ? Amount4.zero()
+      : chargeFx.apply(Amount4.from(order.customerFeeAmount));
     const received = Amount4.from(order.receivedAmount);
     const receivedFx =
       order.receivedCurrencyCode === 'CNY'
@@ -131,7 +141,8 @@ export class BankRechargeFinanceService {
     if (serviceFeeCny.gt(receivedCny)) {
       throw new BadRequestException('客户手续费折算金额不能高于客户实收');
     }
-    const bankFee = order.bankFeeAmount ? Amount4.from(order.bankFeeAmount) : Amount4.zero();
+    const bankFee =
+      !newFees && order.bankFeeAmount ? Amount4.from(order.bankFeeAmount) : Amount4.zero();
     const bankFeeFx = bankFee.isZero()
       ? Rate8.one()
       : order.bankFeeCurrencyCode === order.chargeCurrencyCode
@@ -141,7 +152,7 @@ export class BankRechargeFinanceService {
           : null;
     if (!bankFeeFx || !bankFeeFx.gt('0')) throw new BadRequestException('请填写银行手续费汇率');
     const bankFeeCny = bankFeeFx.apply(bankFee);
-    const profit = receivedCny.sub(chargeCny).sub(bankFeeCny);
+    const profit = receivedCny.sub(chargeCny).sub(bankFeeCny).sub(extraFees.total);
     const journal = await this.posting.post(tx, {
       journalType: 'bank_recharge_completed',
       sourceType: 'bank_recharge',
@@ -152,6 +163,7 @@ export class BankRechargeFinanceService {
       idempotencyKey,
       operator,
       metadata: {
+        accountingVersion: order.accountingVersion ?? 'legacy',
         chargeAmount: charge.toString(),
         chargeCurrencyCode: order.chargeCurrencyCode,
         bankFeeAmount: bankFee.toString(),
@@ -232,7 +244,8 @@ export class BankRechargeFinanceService {
                 financeAccountId: fundingAccount.id,
                 memo: '银行卡通道手续费支出'
               }
-            ])
+            ]),
+        ...extraFees.lines
       ]
     });
     const updated = await this.repository.updateOrder(tx, {
@@ -256,6 +269,9 @@ export class BankRechargeFinanceService {
         receivedCny: receivedCny.toString(),
         chargeCny: chargeCny.toString(),
         bankFeeCny: bankFeeCny.toString(),
+        accountingVersion: order.accountingVersion,
+        usdtFeeCny: order.usdtFeeAmountCny?.toString() ?? null,
+        shoppingFeeCny: order.shoppingFeeAmountCny?.toString() ?? null,
         serviceFeeCny: serviceFeeCny.toString(),
         profitCny: profit.toString()
       },
@@ -288,7 +304,10 @@ export class BankRechargeFinanceService {
         const priorRefunds = await this.repository.listRefundJournals(tx, id);
         const refund = calculateBankRechargeRefund(journal, priorRefunds, input);
         const upstreamReference =
-          refund.chargeRecovery.isZero() && refund.feeRecovery.isZero()
+          refund.chargeRecovery.isZero() &&
+          refund.feeRecovery.isZero() &&
+          refund.usdtFeeRecoveryAmount.isZero() &&
+          refund.shoppingFeeRecoveryAmount.isZero()
             ? ''
             : bankRechargeText(input.upstreamRefundReference, '上游回款凭据', 160);
         for (const prior of priorRefunds) {
@@ -311,7 +330,14 @@ export class BankRechargeFinanceService {
           customerRefundAmount: refund.customerRefund.toString(),
           customerRefundCny: refund.customerRefundCny.toString(),
           chargeRecoveryAmountCny: refund.chargeRecovery.toString(),
-          bankFeeRecoveryAmountCny: refund.feeRecovery.toString(),
+          bankFeeRecoveryAmountCny:
+            order.accountingVersion === 'subscription_cost_v2'
+              ? '0'
+              : refund.feeRecovery.toString(),
+          usdtFeeRecoveryAmount: refund.usdtFeeRecoveryAmount.toString(),
+          shoppingFeeRecoveryAmount: refund.shoppingFeeRecoveryAmount.toString(),
+          usdtFeeRecoveryCny: refund.usdtFeeRecoveryCny.toString(),
+          shoppingFeeRecoveryCny: refund.shoppingFeeRecoveryCny.toString(),
           originalJournalId: journal.id
         };
         await this.posting.post(tx, {
@@ -359,7 +385,9 @@ export class BankRechargeFinanceService {
           'renewals',
           'renewal-warning-summary',
           'dashboard',
-          'finance-ledger'
+          'finance-ledger',
+          'finance-accounts',
+          'finance-reports'
         ],
         requestId: randomUUID(),
         operator,

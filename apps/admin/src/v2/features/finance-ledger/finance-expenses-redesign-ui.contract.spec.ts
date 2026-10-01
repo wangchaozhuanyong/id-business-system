@@ -14,9 +14,10 @@ describe('finance expenses scheme 3 redesign contract', () => {
   it('composes the income and expense overview, switch, filters, stable lists and drawers', () => {
     expect(view).toContain('<V2FinanceExpensesOverview :page="page" />');
     expect(view).toContain('<V2FinanceCashbookNavigation :page="page" />');
-    expect(view).toContain('<V2FinanceExpensesToolbar :page="page" />');
+    expect(view).toContain('<V2FinanceExpensesToolbar');
     expect(view).toContain('<V2FinanceInflowsTable v-if="page.cashbookView === \'inflows\'"');
-    expect(view).toContain('<V2FinanceExpensesTable v-else :page="page" />');
+    expect(view).toContain('<V2FinanceExpensesTable v-else-if');
+    expect(view).toContain('<V2FinanceExchangesPanel');
     expect(view).toContain('<V2FinanceLedgerDrawers :page="page" />');
     expect(view).toContain('loading-title="正在加载收支记录"');
   });

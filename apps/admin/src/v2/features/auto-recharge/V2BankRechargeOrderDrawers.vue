@@ -176,44 +176,14 @@
                 :label="`${item.label} ····${item.last4}`"
                 :value="item.id" /></el-select
           ></el-form-item>
-          <el-form-item label="客户手续费率"
-            ><el-input v-model="form.customerFeeRate" inputmode="decimal" :disabled="readonly"
-              ><template #append>%</template></el-input
-            ></el-form-item
-          >
-          <el-form-item label="客户手续费"
-            ><div class="bank-recharge-inline">
-              <el-switch
-                v-model="form.feeOverride"
-                active-text="手动金额"
-                inactive-text="按比例"
-                :disabled="readonly"
-              /><el-input
-                v-if="form.feeOverride"
-                v-model="form.customerFeeAmount"
-                inputmode="decimal"
-                :disabled="readonly"
-              /><span v-else>{{ feePreview }} {{ selected?.chargeCurrencyCode }}</span>
-            </div></el-form-item
-          >
-          <el-form-item label="银行手续费"
-            ><div class="bank-recharge-inline">
-              <el-input
-                v-model="form.bankFeeAmount"
-                inputmode="decimal"
-                placeholder="实际扣收；没有填 0"
-                :disabled="readonly"
-              /><el-select
-                v-model="form.bankFeeCurrencyCode"
-                aria-label="银行手续费币种"
-                :disabled="readonly"
-                ><el-option
-                  v-for="item in activeCurrencies"
-                  :key="item.code"
-                  :label="item.code"
-                  :value="item.code"
-              /></el-select></div
-          ></el-form-item>
+          <V2SubscriptionFeeFields
+            :form="form"
+            :selected="selected"
+            :readonly="readonly"
+            :accounts="feeAccounts"
+            :new-fee-mode="newFeeMode"
+            @change="Object.assign(form, $event)"
+          />
           <el-form-item label="客户实收"
             ><div class="bank-recharge-inline">
               <el-input
@@ -228,7 +198,7 @@
                 ><el-option
                   v-for="item in financeCurrencies"
                   :key="item"
-                  :label="item"
+                  :label="financeCurrencyLabel(item)"
                   :value="item"
               /></el-select></div
           ></el-form-item>
@@ -237,15 +207,6 @@
               v-model="form.chargeFxRateToCny"
               inputmode="decimal"
               placeholder="1 单位代付币种折合人民币"
-              :disabled="readonly"
-          /></el-form-item>
-          <el-form-item
-            v-if="form.bankFeeCurrencyCode !== selected?.chargeCurrencyCode"
-            label="银行费汇率"
-            ><el-input
-              v-model="form.bankFeeFxRateToCny"
-              inputmode="decimal"
-              placeholder="1 单位银行手续费币种折合人民币"
               :disabled="readonly"
           /></el-form-item>
           <el-form-item v-if="form.receivedCurrencyCode !== 'CNY'" label="实收汇率"
@@ -306,7 +267,8 @@
               :disabled="readonly"
           /></el-form-item>
           <p class="bank-recharge-form-note">
-            完成订单时核对收款账户、代付汇率与银行手续费，系统同时入财务日记并连接到期提醒。
+            完成订单时核对收款账户、代付汇率、USDT
+            手续费与购物网手续费，系统同时入财务日记并连接到期提醒。
           </p>
         </template>
       </el-form>
@@ -371,7 +333,7 @@
       v-model="refundOpen"
       retain-draft
       title="登记银充退款"
-      description="按实际已发生金额登记。官网本金和银行手续费未退回时保持为零，不会自动恢复代付资金。"
+      description="按实际已发生金额登记。订阅本金和两项手续费未退回时保持为零，不会自动恢复代付资金。"
       :confirm-loading="working"
       :dirty="
         Boolean(
@@ -380,7 +342,9 @@
           refund.customerRefundAmount ||
           refund.upstreamRefundReference ||
           refund.chargeRecoveryAmountCny !== '0' ||
-          refund.bankFeeRecoveryAmountCny !== '0'
+          refund.bankFeeRecoveryAmountCny !== '0' ||
+          refund.usdtFeeRecoveryAmount !== '0' ||
+          refund.shoppingFeeRecoveryAmount !== '0'
         )
       "
       @confirm="confirmRefund"
@@ -398,17 +362,33 @@
             inputmode="decimal"
             placeholder="已实际收回的人民币金额；未回款填 0"
         /></el-form-item>
-        <el-form-item label="银行退费（元）"
+        <el-form-item
+          v-if="selected?.accountingVersion !== 'subscription_cost_v2'"
+          label="旧银行退费（元）"
           ><el-input
             v-model="refund.bankFeeRecoveryAmountCny"
             inputmode="decimal"
             placeholder="已实际退回手续费；未退回填 0"
         /></el-form-item>
+        <template v-if="selected?.accountingVersion === 'subscription_cost_v2'">
+          <el-form-item :label="`USDT 退费（${selected.usdtFeeCurrencyCode ?? 'USDT'}）`"
+            ><el-input
+              v-model="refund.usdtFeeRecoveryAmount"
+              inputmode="decimal"
+              placeholder="实际退回的原币金额；未退回填 0"
+          /></el-form-item>
+          <el-form-item :label="`购物网退费（${selected.shoppingFeeCurrencyCode ?? 'CNY'}）`"
+            ><el-input
+              v-model="refund.shoppingFeeRecoveryAmount"
+              inputmode="decimal"
+              placeholder="实际退回的原币金额；未退回填 0"
+          /></el-form-item>
+        </template>
         <el-form-item label="上游回款凭据"
           ><el-input
             v-model="refund.upstreamRefundReference"
             maxlength="160"
-            placeholder="登记官网回款或银行退费时必填"
+            placeholder="登记本金回款或退费时必填"
         /></el-form-item>
         <el-form-item label="退款原因" required
           ><el-input v-model="refund.reason" maxlength="300"
@@ -423,6 +403,8 @@
 </template>
 
 <script setup lang="ts">
+import { financeCurrencyLabel } from '@apple-business/shared';
+import V2SubscriptionFeeFields from './V2SubscriptionFeeFields.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { V2QuickCustomerDrawer } from '@/v2/features/order-entry/public-api';
@@ -449,7 +431,8 @@ const {
   customers,
   quickCustomerOpen,
   availableCards,
-  feePreview,
+  feeAccounts,
+  newFeeMode,
   financeCurrencies,
   fundingAccounts,
   receivedAccounts,
