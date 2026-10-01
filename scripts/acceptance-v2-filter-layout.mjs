@@ -25,6 +25,33 @@ const user = {
   mustResetPassword: false
 };
 const now = '2026-10-01T12:00:00.000Z';
+let customerCount = 2;
+const customer = (index) => ({
+  id: `22222222-2222-4222-8222-${String(index).padStart(12, '0')}`,
+  name: `本地布局客户 ${index}`,
+  maskedPhone: null,
+  displayPhone: null,
+  hasPhone: false,
+  wechat: null,
+  hasWechat: false,
+  qq: null,
+  hasQq: false,
+  maskedWhatsapp: null,
+  displayWhatsapp: null,
+  hasWhatsapp: false,
+  contactDisplayModes: { phone: 'masked', wechat: 'masked', qq: 'masked', whatsapp: 'masked' },
+  sourceOptionId: null,
+  source: null,
+  tagOptionIds: [],
+  tags: [],
+  serviceOptionIds: [],
+  services: [],
+  recordStatus: 'active',
+  remark: null,
+  createdBy: user,
+  createdAt: now,
+  updatedAt: now
+});
 let server;
 let browser;
 try {
@@ -93,7 +120,26 @@ try {
         pageSize: 20,
         totals: { unused: 0, used: 0, disabled: 0 }
       };
-    else if (url.pathname.endsWith('/bootstrap')) {
+    else if (/\/customers(\/bootstrap)?$/.test(url.pathname)) {
+      const empty = url.searchParams.get('keyword') === 'empty';
+      const pageNumber = Number(url.searchParams.get('page') || 1);
+      const pageSize = Number(url.searchParams.get('pageSize') || 20);
+      const offset = (pageNumber - 1) * pageSize;
+      const list = {
+        items: empty
+          ? []
+          : Array.from(
+              { length: Math.max(0, Math.min(pageSize, customerCount - offset)) },
+              (_, index) => customer(offset + index + 1)
+            ),
+        total: empty ? 0 : customerCount,
+        page: pageNumber,
+        pageSize
+      };
+      data = url.pathname.endsWith('/bootstrap')
+        ? { list, options: { sources: [], tags: [], services: [] }, generatedAt: now }
+        : list;
+    } else if (url.pathname.endsWith('/bootstrap')) {
       data = {
         list: { items: [], total: 0, page: 1, pageSize: 20 },
         options: {
@@ -247,6 +293,81 @@ try {
     );
   }
 
+  // A short first page must already reserve the empty state's body height.
+  for (const dark of [false, true]) {
+    for (const count of [1, 2]) {
+      customerCount = count;
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(new URL('/v2/customers', baseUrl).href);
+        await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+        await page.evaluate((dark) => {
+          document.documentElement.dataset.v2Theme = dark ? 'dark' : 'light';
+          document.documentElement.classList.toggle('dark', dark);
+        }, dark);
+        await settle(page);
+        if (width === 390) {
+          const desktopHeight = await page
+            .locator('.v2-records-list > .v2-unified-table-shell')
+            .evaluate((element) => element.getBoundingClientRect().height);
+          assert.equal(desktopHeight, 0, '手机卡片模式不得保留隐藏桌面表格的占位');
+        }
+        const height = () =>
+          page
+            .locator('.v2-records-list')
+            .evaluate((element) => element.getBoundingClientRect().height);
+        const firstHeight = await height();
+        await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('empty');
+        await page.getByRole('button', { name: '查询客户', exact: true }).click();
+        await page.locator('.v2-records-empty:visible').waitFor();
+        await settle(page);
+        const emptyHeight = await height();
+        assert.equal(emptyHeight, firstHeight, `${count} 条客户 ${width}px：空状态改变列表高度`);
+        await page.getByRole('textbox', { name: '搜索客户', exact: true }).fill('');
+        await page.getByRole('button', { name: '查询客户', exact: true }).click();
+        await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+        await settle(page);
+        const restoredHeight = await height();
+        assert.equal(restoredHeight, firstHeight, `${count} 条客户 ${width}px：恢复列表改变高度`);
+        checks.push({
+          label: `客户短列表-${dark ? 'dark' : 'light'}-${count}-${width}`,
+          firstHeight,
+          emptyHeight,
+          restoredHeight
+        });
+      }
+    }
+  }
+
+  // At the end of a long list, the fixed quick action must not intercept pagination.
+  customerCount = 21;
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(new URL('/v2/customers', baseUrl).href);
+    await page.getByText('本地布局客户 1', { exact: true }).filter({ visible: true }).waitFor();
+    await settle(page);
+    await page.locator('#v2-main').evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const overlap = await page.evaluate(() => {
+      const next = document.querySelector('.v2-records-pagination .btn-next');
+      const fab = document.querySelector('.v2-quick-actions-fab');
+      const button = next.getBoundingClientRect();
+      const tool = fab.getBoundingClientRect();
+      return (
+        button.left < tool.right &&
+        button.right > tool.left &&
+        button.top < tool.bottom &&
+        button.bottom > tool.top
+      );
+    });
+    assert.equal(overlap, false, `${width}px：浮动工具挡住分页按钮`);
+    await page.locator('.v2-records-pagination .btn-next').click();
+    await page.getByText('本地布局客户 21', { exact: true }).filter({ visible: true }).waitFor();
+    checks.push({ label: `页尾浮动工具-${width}`, overlap, pageChanged: true });
+  }
+  customerCount = 2;
+
   // Shared styles are also exercised by existing fixtures across every business group.
   const fixtures = [
     'accounts',
@@ -304,7 +425,7 @@ try {
       checks: checks.length,
       widths,
       fixtureGroups: fixtures.length,
-      realRoutes: ['proxies', 'chatgpt-accounts', 'bank-cards', 'addresses'],
+      realRoutes: ['proxies', 'chatgpt-accounts', 'bank-cards', 'addresses', 'customers'],
       businessWrites: 0,
       outputDir
     })
