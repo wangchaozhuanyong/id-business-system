@@ -1,8 +1,9 @@
 <template>
-  <div class="recharge-fields">
+  <div class="recharge-payment-fields">
     <el-form-item
       v-for="field in rechargePaymentFields"
       :key="field.key"
+      :class="{ 'recharge-card-number': field.key === 'number' }"
       :label="field.label"
       :prop="field.key"
       :required="field.required"

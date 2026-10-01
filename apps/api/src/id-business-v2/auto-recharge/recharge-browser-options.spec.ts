@@ -48,17 +48,20 @@ function fixture() {
   };
   const audit = { append: vi.fn() };
   const transactions = { execute: vi.fn((work) => work({})) };
+  const proxies = { find: vi.fn(), findInTransaction: vi.fn() };
   const service = new RechargeSettingsService(
     repository as never,
     encryption as never,
     transactions as never,
-    audit as never
+    audit as never,
+    proxies as never
   );
   return {
     service,
     repository,
     encryption,
     audit,
+    proxies,
     changeRow: (data: Record<string, unknown>) => Object.assign(row, data)
   };
 }
@@ -124,6 +127,67 @@ describe('窗口配置校验', () => {
 });
 
 describe('窗口设置持久化与运行时', () => {
+  it('默认代理引用目录，保存保留本机设置及旧密文，读取不解密链接', async () => {
+    const f = fixture();
+    const proxyId = '123e4567-e89b-42d3-a456-426614174000';
+    const proxy = {
+      id: proxyId,
+      countryCode: 'PH',
+      kind: 'mobile',
+      protocol: 'socks5',
+      connectionMode: 'extraction',
+      active: true,
+      remark1: '菲律宾代理'
+    };
+    f.proxies.find.mockResolvedValue(proxy);
+    f.proxies.findInTransaction.mockResolvedValue(proxy);
+    f.changeRow({ browserOptions: staticOptions });
+    const result = await f.service.updateServerProxySettings({ proxyId }, operator as never);
+    expect(result).toMatchObject({
+      proxyId,
+      proxy: { protocol: 'socks5', status: 'active' },
+      legacyConfigured: true
+    });
+    expect(f.repository.upsert).toHaveBeenCalledWith(expect.anything(), operator.id, {
+      browserOptions: { ...staticOptions, serverDefaultProxyId: proxyId }
+    });
+    expect(f.encryption.decrypt).not.toHaveBeenCalled();
+    expect(f.audit.append).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ afterData: { proxyId } })
+    );
+    const options = f.repository.upsert.mock.calls[0]?.[2].browserOptions;
+    expect(storedBrowserOptions(options)).toEqual(staticOptions);
+    await f.service.update({ ...base, browserOptions: staticOptions }, operator as never);
+    expect(f.repository.upsert.mock.calls.at(-1)?.[2].browserOptions.serverDefaultProxyId).toBe(
+      proxyId
+    );
+    f.proxies.find.mockResolvedValue(null);
+    await expect(f.service.getServerProxySettings(operator as never)).resolves.toMatchObject({
+      proxyId,
+      proxy: null
+    });
+    await f.service.updateServerProxySettings({ proxyId: null }, operator as never);
+    expect(
+      f.repository.upsert.mock.calls.at(-1)?.[2].browserOptions.serverDefaultProxyId
+    ).toBeNull();
+  });
+  it('不存在、停用及格式错误的默认代理不会写入设置', async () => {
+    const f = fixture();
+    const proxyId = '123e4567-e89b-42d3-a456-426614174000';
+    f.proxies.findInTransaction.mockResolvedValue(null);
+    await expect(
+      f.service.updateServerProxySettings({ proxyId }, operator as never)
+    ).rejects.toThrow('启用代理');
+    f.proxies.findInTransaction.mockResolvedValue({ active: false });
+    await expect(
+      f.service.updateServerProxySettings({ proxyId }, operator as never)
+    ).rejects.toThrow('启用代理');
+    for (const body of [{}, { proxyId: '' }, { proxyId, url: 'secret' }])
+      await expect(f.service.updateServerProxySettings(body, operator as never)).rejects.toThrow();
+    expect(f.repository.upsert).not.toHaveBeenCalled();
+    expect(f.audit.append).not.toHaveBeenCalled();
+  });
   it('服务器代理设置不依赖本机密钥，动态提取链接必须是 HTTPS', async () => {
     const f = fixture();
     f.changeRow({ localApiTokenEncrypted: null, connectorTokenEncrypted: null });

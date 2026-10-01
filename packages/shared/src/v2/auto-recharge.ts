@@ -218,6 +218,20 @@ export interface V2RechargeStaticProxyCredentials {
   password: string;
 }
 
+export interface V2RechargeServerProxySettings {
+  proxyId: string | null;
+  proxy: {
+    id: string;
+    countryCode: string;
+    kind: 'dynamic_residential' | 'static_residential' | 'mobile';
+    connectionMode: 'extraction' | 'direct';
+    protocol: 'http' | 'https' | 'socks5';
+    status: 'active' | 'disabled';
+    remark1: string | null;
+  } | null;
+  legacyConfigured: boolean;
+}
+
 export interface V2RechargeBitBrowserSettings {
   connectorUrl: string;
   localApiUrl: string;

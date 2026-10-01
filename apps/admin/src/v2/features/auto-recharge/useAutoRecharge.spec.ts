@@ -15,6 +15,8 @@ const mock = vi.hoisted(() => ({
   jobsQuery: {} as Record<string, unknown>,
   addressesQuery: {} as Record<string, unknown>,
   settingsQuery: {} as Record<string, unknown>,
+  serverProxySettingsQuery: {} as Record<string, unknown>,
+  defaultProxyCatalogQuery: {} as Record<string, unknown>,
   totpQuery: {} as Record<string, unknown>,
   bankAccountsQuery: {} as Record<string, unknown>,
   bankCurrenciesQuery: {} as Record<string, unknown>,
@@ -41,6 +43,7 @@ const mock = vi.hoisted(() => ({
   abandonUnreceivedBitBrowser: vi.fn(),
   bitBrowserAccess: vi.fn(),
   updateBitBrowserSettings: vi.fn(),
+  updateServerProxySettings: vi.fn(),
   connectorStart: vi.fn(),
   connectorStatus: vi.fn(),
   connectorResume: vi.fn(),
@@ -64,6 +67,8 @@ vi.mock('@/v2/composables/useV2Query', () => ({
     getRevalidateAt?: (data: { configured: boolean; items: V2RechargeJob[] }) => number | null;
   }) => {
     if (options.moduleKey === 'auto-recharge-addresses') return mock.addressesQuery;
+    if (options.key === 'auto-recharge-server-proxy-settings') return mock.serverProxySettingsQuery;
+    if (options.key === 'auto-recharge-default-proxy-catalog') return mock.defaultProxyCatalogQuery;
     if (options.key === 'auto-recharge-saved-totp-accounts') return mock.totpQuery;
     if (options.moduleKey === 'chatgpt-accounts') return mock.bankAccountsQuery;
     if (options.moduleKey === 'bank-recharge-orders') return mock.bankCurrenciesQuery;
@@ -86,6 +91,8 @@ vi.mock('./api', () => ({
     list: vi.fn(),
     listAddresses: vi.fn(),
     getBitBrowserSettings: vi.fn(),
+    getServerProxySettings: vi.fn(),
+    updateServerProxySettings: mock.updateServerProxySettings,
     startBitBrowser: mock.startBitBrowser,
     startServer: mock.startServer,
     listPaymentCaps: vi.fn(),
@@ -253,6 +260,10 @@ beforeEach(() => {
   mock.jobsQuery = queryResult(jobs);
   mock.addressesQuery = queryResult(addresses);
   mock.settingsQuery = queryResult(storedSettings);
+  mock.serverProxySettingsQuery = queryResult(
+    ref({ proxyId: null, proxy: null, legacyConfigured: false })
+  );
+  mock.defaultProxyCatalogQuery = queryResult(ref({ items: [] }));
   mock.totpQuery = queryResult(savedTotp);
   mock.bankAccountsQuery = queryResult(bankAccounts);
   mock.bankCurrenciesQuery = queryResult(bankCurrencies);
@@ -329,6 +340,97 @@ beforeEach(() => {
 });
 
 afterEach(() => scope.stop());
+
+describe('服务器默认代理关联', () => {
+  const proxy = {
+    id: '33333333-3333-4333-8333-333333333333',
+    countryCode: 'PH',
+    status: 'active',
+    kind: 'dynamic_residential',
+    protocol: 'socks5'
+  };
+  function setDefault(value: unknown) {
+    (mock.serverProxySettingsQuery.data as { value: unknown }).value = value;
+  }
+  it('自动带入目录默认值，不被国家切换监听或账单国家覆盖', async () => {
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US', 'PH'] };
+    (mock.proxiesQuery.data as { value: unknown }).value = { items: [proxy], total: 1 };
+    setDefault({ proxyId: proxy.id, proxy, legacyConfigured: true });
+    flow.operationMode.value = 'server_payment';
+    await nextTick();
+    expect(flow.selectedProxyCountryCode.value).toBe('PH');
+    expect(flow.selectedProxyId.value).toBe(proxy.id);
+    addresses.value.items = [{ ...address }];
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe(proxy.id);
+    expect(flow.billingCountryRestriction.value).toBe('US');
+    expect(flow.canStart.value).toBe(false);
+  });
+  it('刷新默认值保留手动选择，点击使用默认代理才替换', async () => {
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US', 'PH'] };
+    flow.operationMode.value = 'server_payment';
+    flow.selectedProxyCountryCode.value = 'US';
+    flow.selectedProxyId.value = 'manual-proxy';
+    setDefault({ proxyId: proxy.id, proxy, legacyConfigured: false });
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe('manual-proxy');
+    flow.useServerDefaultProxy();
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe(proxy.id);
+  });
+  it('手动确认同一默认编号后，修改默认值也不会覆盖本次选择', async () => {
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['PH', 'US'] };
+    setDefault({ proxyId: proxy.id, proxy, legacyConfigured: false });
+    flow.operationMode.value = 'server_payment';
+    await nextTick();
+    flow.markProxySelectionManual();
+    setDefault({
+      proxyId: 'next-default',
+      proxy: { ...proxy, id: 'next-default', countryCode: 'US' },
+      legacyConfigured: false
+    });
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe(proxy.id);
+    expect(flow.selectedProxyCountryCode.value).toBe('PH');
+  });
+  it('默认代理被停用时清除旧自动选择，空目录不能启动服务器任务', async () => {
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['PH'] };
+    setDefault({ proxyId: proxy.id, proxy, legacyConfigured: false });
+    flow.operationMode.value = 'server_payment';
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe(proxy.id);
+    setDefault({
+      proxyId: proxy.id,
+      proxy: { ...proxy, status: 'disabled' },
+      legacyConfigured: false
+    });
+    await nextTick();
+    expect(flow.selectedProxyId.value).toBe('');
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: [] };
+    fillForm();
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startServer).not.toHaveBeenCalled();
+  });
+  it('默认保存失败保留选择，成功后更新默认资料', async () => {
+    (mock.defaultProxyCatalogQuery.data as { value: unknown }).value = { items: [proxy] };
+    flow.serverProxySettings.setOpen(true);
+    flow.serverProxySettings.proxyId.value = proxy.id;
+    mock.updateServerProxySettings.mockRejectedValueOnce(new Error('保存失败'));
+    await flow.serverProxySettings.save();
+    expect(flow.serverProxySettings.open.value).toBe(true);
+    expect(flow.serverProxySettings.proxyId.value).toBe(proxy.id);
+    expect(flow.serverProxySettings.error.value).toBe('保存失败');
+    mock.updateServerProxySettings.mockResolvedValueOnce({
+      proxyId: proxy.id,
+      proxy,
+      legacyConfigured: false
+    });
+    await flow.serverProxySettings.save();
+    expect(flow.serverProxySettings.open.value).toBe(false);
+    expect(mock.updateServerProxySettings).toHaveBeenCalledWith(proxy.id);
+  });
+});
 
 describe('本机比特浏览器自动充值', () => {
   it('先选国家再选择该国启用代理，并把代理编号传给充值任务', async () => {

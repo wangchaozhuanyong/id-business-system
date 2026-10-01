@@ -1,4 +1,4 @@
-/* global document */
+/* global document, window */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 
 const origin = 'http://127.0.0.1:5397';
+const proxySettingsOnly = process.argv.includes('--proxy-settings-only');
 const connectorOrigin = 'http://127.0.0.1:55321';
 const server = spawn(
   process.execPath,
@@ -20,7 +21,11 @@ const server = spawn(
   { cwd: resolve('apps/admin'), stdio: 'ignore' }
 );
 let browser;
-const evidence = resolve('.deploy/auto-recharge-browser');
+const evidence = resolve(
+  proxySettingsOnly
+    ? '.runtime/proxy-settings-unification-20261001'
+    : '.deploy/auto-recharge-browser'
+);
 mkdirSync(evidence, { recursive: true });
 const waitFor = async (predicate, ms = 20000) => {
   const end = Date.now() + ms;
@@ -92,6 +97,23 @@ try {
     let savedDynamicProxyUrl = 'https://proxy.example/secret';
     let paymentCap = '1500.00';
     let savedStaticCredentials;
+    let defaultProxyId = '99999999-9999-4999-8999-999999999999';
+    let defaultSaves = 0;
+    const serverProxySettings = () => ({
+      proxyId: defaultProxyId,
+      legacyConfigured: true,
+      proxy: defaultProxyId
+        ? {
+            id: defaultProxyId,
+            countryCode: defaultProxyId.startsWith('9999') ? 'US' : 'PH',
+            kind: 'dynamic_residential',
+            connectionMode: 'extraction',
+            protocol: 'http',
+            status: 'active',
+            remark1: defaultProxyId.startsWith('9999') ? '美国验收代理' : '菲律宾验收代理'
+          }
+        : null
+    });
     page.on('pageerror', (error) => errors.push(error.message));
 
     const success = (route, data, headers = {}) =>
@@ -129,6 +151,32 @@ try {
         });
       if (path.endsWith('/auto-recharge/jobs') && request.method() === 'GET')
         return success(route, { items: jobs, configured: true });
+      if (path.endsWith('/auto-recharge/server-proxy-settings')) {
+        if (request.method() === 'PUT') {
+          defaultSaves++;
+          if (defaultSaves === 1)
+            return route.fulfill({
+              status: 503,
+              contentType: 'application/json',
+              body: JSON.stringify({ success: false, message: '模拟默认代理保存失败，请重试' })
+            });
+          const input = request.postDataJSON();
+          assert.deepEqual(Object.keys(input), ['proxyId']);
+          defaultProxyId = input.proxyId;
+        }
+        return success(route, serverProxySettings());
+      }
+      if (
+        /\/auto-recharge\/proxies\/[^/]+$/.test(path) &&
+        !path.endsWith('/countries') &&
+        request.method() === 'GET'
+      )
+        return success(route, {
+          ...serverProxySettings().proxy,
+          id: path.split('/').at(-1),
+          url: 'https://proxy.example.invalid/extract?fixture=visible-link',
+          remark2: ''
+        });
       if (path.endsWith('/auto-recharge/payment-caps') && request.method() === 'GET')
         return success(route, {
           items: [{ plan: 'plus', currencyCode: 'PHP', maxAmount: paymentCap }]
@@ -502,6 +550,14 @@ try {
     await page.goto(origin + '/v2/auto-recharge');
     await page.getByText('一键开通资料', { exact: true }).waitFor();
     assert.equal(await page.getByRole('radio', { name: '服务器充值' }).isChecked(), true);
+    await waitFor(async () =>
+      (
+        await page
+          .locator('.el-select')
+          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
+          .innerText()
+      ).includes('美国验收代理')
+    );
     await page.getByRole('combobox', { name: '选择代理国家' }).click();
     await page.getByRole('option', { name: '菲律宾', exact: true }).click();
     await page.getByRole('combobox', { name: '选择代理 IP' }).click();
@@ -510,6 +566,8 @@ try {
     await page.keyboard.press('Escape');
     await page.getByRole('combobox', { name: '选择代理国家' }).click();
     await page.getByRole('option', { name: '美国', exact: true }).click();
+    await page.getByRole('combobox', { name: '选择代理 IP' }).click();
+    await page.getByRole('option', { name: /美国验收代理/ }).click();
     assert.equal(await page.getByRole('button', { name: '在服务器执行本次充值' }).count(), 1);
     assert.equal(await page.getByRole('textbox', { name: '窗口名称' }).count(), 0);
     await page.getByText('1500.00 PHP', { exact: true }).waitFor();
@@ -519,15 +577,102 @@ try {
     await page.getByRole('button', { name: '保存上限' }).click();
     await page.getByText('1600.00 PHP', { exact: true }).waitFor();
     await page.screenshot({ path: resolve(evidence, `server-mode-${width}.png`) });
-    await page.getByRole('button', { name: '服务器代理 IP 设置' }).click();
+    await page.getByRole('button', { name: '服务器默认代理' }).click();
     const serverSettingsDrawer = page.locator('.v2-form-drawer').filter({
-      has: page.locator('.recharge-settings-form')
+      has: page.getByRole('heading', { name: '服务器默认代理', exact: true })
     });
-    await serverSettingsDrawer.getByText('当前服务器代理设置', { exact: true }).waitFor();
-    await serverSettingsDrawer
-      .getByText('服务器任务每次都会重新提取代理 IP', { exact: false })
-      .waitFor();
+    await serverSettingsDrawer.getByText('所选代理资料', { exact: true }).waitFor();
     assert.equal(await serverSettingsDrawer.getByLabel('本机连接密钥').count(), 0);
+    await serverSettingsDrawer.getByRole('combobox', { name: '选择服务器默认代理' }).click();
+    await page.getByRole('option', { name: /菲律宾验收代理/ }).click();
+    await serverSettingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
+    await page
+      .locator('.el-message-box')
+      .getByRole('button', { name: '继续填写', exact: true })
+      .click();
+    assert.equal(await serverSettingsDrawer.isVisible(), true);
+    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
+    await serverSettingsDrawer.getByText('模拟默认代理保存失败，请重试').waitFor();
+    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
+    await serverSettingsDrawer.waitFor({ state: 'hidden' });
+    assert.ok(
+      (
+        await page
+          .locator('.el-select')
+          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
+          .innerText()
+      ).includes('美国验收代理'),
+      '保存默认值不覆盖本次手动选择'
+    );
+    await page.reload();
+    await waitFor(async () =>
+      (
+        await page
+          .locator('.el-select')
+          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
+          .innerText()
+      ).includes('菲律宾验收代理')
+    );
+    await page.getByText('当前账单国家是', { exact: false }).waitFor();
+    await page.getByRole('button', { name: '服务器默认代理' }).click();
+    await serverSettingsDrawer.getByRole('button', { name: '查看完整链接' }).click();
+    await page
+      .getByText('https://proxy.example.invalid/extract?fixture=visible-link', { exact: true })
+      .waitFor();
+    await waitFor(async () =>
+      page.getByLabel('代理 IP 详细').evaluate((drawer) => {
+        const rect = drawer.getBoundingClientRect();
+        return rect.left >= 0 && Math.abs(rect.right - window.innerWidth) <= 1;
+      })
+    );
+    await page.screenshot({
+      path: resolve(evidence, `server-default-link-${width}.png`),
+      fullPage: true
+    });
+    await page
+      .getByLabel('代理 IP 详细')
+      .getByRole('button', { name: /关闭|Close/ })
+      .click();
+    await serverSettingsDrawer.locator('.el-select').hover();
+    await serverSettingsDrawer.locator('.el-select__clear').click();
+    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
+    await serverSettingsDrawer.waitFor({ state: 'hidden' });
+    assert.equal(defaultProxyId, null);
+    await page.reload();
+    await page.getByRole('button', { name: '服务器默认代理' }).click();
+    await serverSettingsDrawer.getByText('未设置默认值时，需要在充值页手动选择代理。').waitFor();
+    await serverSettingsDrawer.getByRole('combobox', { name: '选择服务器默认代理' }).click();
+    await page.getByRole('option', { name: /美国验收代理/ }).click();
+    await page.locator('.el-select-dropdown:visible').waitFor({ state: 'hidden' });
+    await page.screenshot({
+      path: resolve(evidence, `server-default-selector-${width}.png`),
+      fullPage: true
+    });
+    await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
+    await serverSettingsDrawer.waitFor({ state: 'hidden' });
+    await waitFor(async () =>
+      (
+        await page
+          .locator('.el-select')
+          .filter({ has: page.getByRole('combobox', { name: '选择代理 IP' }) })
+          .innerText()
+      ).includes('美国验收代理')
+    );
+    if (proxySettingsOnly) {
+      assert.equal(apiStarts + connectorStarts, 0);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+      );
+      assert.equal(overflow, false, `${width}px 页面横向溢出`);
+      assert.deepEqual(errors, []);
+      await page.screenshot({
+        path: resolve(evidence, `server-default-page-${width}.png`),
+        fullPage: true
+      });
+      await context.close();
+      continue;
+    }
+    await page.getByRole('button', { name: '服务器默认代理' }).click();
     await serverSettingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
     await serverSettingsDrawer.waitFor({ state: 'hidden' });
     await page.getByText('本机充值', { exact: true }).click();
@@ -769,31 +914,46 @@ try {
   console.log(
     JSON.stringify({
       ok: true,
+      scope: proxySettingsOnly ? 'proxy-settings-only' : 'full',
+      evidence,
       viewports: [1440, 768, 390],
-      flow: [
-        'server-default-and-proxy-settings',
-        'automatic-local-json',
-        'registered-email',
-        'proxy-settings-save-retry',
-        'settings-unsaved-close-guard',
-        'saved-proxy-used-by-next-job',
-        'existing-group-and-tag-dropdowns',
-        'window-options-save-readback-and-launch',
-        'static-proxy-credential-validation-and-clear',
-        'catalog-failure-empty-retry',
-        'blocked-connection-does-not-create-job',
-        'default-plus',
-        'unused-fixed-address',
-        'currency-and-amount-lock',
-        'server-metadata-only',
-        'local-secrets-only',
-        'human-verification-resume',
-        'single-payment-attempt',
-        'clear-card-after-attempt',
-        'password-login-local-only',
-        'automatic-totp-code-local-only',
-        'saved-totp-code-local-only'
-      ],
+      flow: proxySettingsOnly
+        ? [
+            'default-autofill',
+            'catalog-selection',
+            'save-retry',
+            'unsaved-close-guard',
+            'manual-selection-preserved',
+            'reload-default',
+            'full-link-view',
+            'clear-default',
+            'billing-country-conflict',
+            'responsive-no-overflow'
+          ]
+        : [
+            'server-default-and-proxy-settings',
+            'automatic-local-json',
+            'registered-email',
+            'proxy-settings-save-retry',
+            'settings-unsaved-close-guard',
+            'saved-proxy-used-by-next-job',
+            'existing-group-and-tag-dropdowns',
+            'window-options-save-readback-and-launch',
+            'static-proxy-credential-validation-and-clear',
+            'catalog-failure-empty-retry',
+            'blocked-connection-does-not-create-job',
+            'default-plus',
+            'unused-fixed-address',
+            'currency-and-amount-lock',
+            'server-metadata-only',
+            'local-secrets-only',
+            'human-verification-resume',
+            'single-payment-attempt',
+            'clear-card-after-attempt',
+            'password-login-local-only',
+            'automatic-totp-code-local-only',
+            'saved-totp-code-local-only'
+          ],
       realPaymentRequests: 0
     })
   );

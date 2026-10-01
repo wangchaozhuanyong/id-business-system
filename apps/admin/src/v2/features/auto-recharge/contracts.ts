@@ -12,6 +12,7 @@ export type {
   V2RechargeAddressStatus,
   ImportV2RechargeAddressesResult,
   V2RechargeBitBrowserSettings,
+  V2RechargeServerProxySettings,
   V2RechargeBrowserOptions,
   V2RechargeBrowserCatalog,
   V2RechargeBrowserCatalogAccess,

@@ -20,6 +20,7 @@ import {
   proxyCountry,
   proxyKind,
   proxyLink,
+  proxyProtocol,
   type RechargeProxyKind
 } from './recharge-proxy-validation';
 
@@ -114,6 +115,8 @@ export class RechargeProxyService {
           id: item.id,
           countryCode: item.countryCode,
           kind: item.kind,
+          connectionMode: item.connectionMode,
+          protocol: item.protocol,
           url: this.encryption.decrypt(item.urlEncrypted),
           status: item.active ? 'active' : 'disabled',
           remark1: item.remark1,
@@ -200,7 +203,8 @@ export class RechargeProxyService {
     if (
       !Object.keys(input).length ||
       Object.keys(input).some(
-        (key) => !['countryCode', 'kind', 'url', 'status', 'remark1', 'remark2'].includes(key)
+        (key) =>
+          !['countryCode', 'kind', 'url', 'protocol', 'status', 'remark1', 'remark2'].includes(key)
       )
     ) {
       throw new BadRequestException('代理 IP 资料包含不支持的字段');
@@ -208,7 +212,9 @@ export class RechargeProxyService {
     const countryCode =
       input.countryCode === undefined ? undefined : proxyCountry(input.countryCode);
     const kind = input.kind === undefined ? undefined : proxyKind(input.kind);
-    const link = input.url === undefined || input.url === '' ? undefined : proxyLink(input.url);
+    const protocol = input.protocol === undefined ? undefined : proxyProtocol(input.protocol);
+    const link =
+      input.url === undefined || input.url === '' ? undefined : proxyLink(input.url, protocol);
     const remark1 =
       input.remark1 === undefined
         ? undefined
@@ -225,25 +231,38 @@ export class RechargeProxyService {
         const previous = await this.repository.findInTransaction(tx, id);
         if (!previous) throw new NotFoundException('代理 IP 不存在');
         const linkChanged = Boolean(link && this.encryption.hash(link.url) !== previous.urlHash);
+        const nextProtocol =
+          link?.connectionMode === 'direct' ? link.protocol : (protocol ?? previous.protocol);
+        if (
+          !link &&
+          protocol &&
+          previous.connectionMode === 'direct' &&
+          protocol !== previous.protocol
+        ) {
+          throw new BadRequestException('更换直连代理协议时请同时填写对应协议的链接');
+        }
+        const protocolChanged = nextProtocol !== previous.protocol;
         if (
           (linkChanged ||
+            protocolChanged ||
             (countryCode && countryCode !== previous.countryCode) ||
             (kind && kind !== previous.kind)) &&
           (await this.repository.hasJobs(tx, id))
         ) {
           throw new ConflictException(
-            '代理 IP 已用于充值任务，不能更换国家、属性或链接；请新增代理'
+            '代理 IP 已用于充值任务，不能更换国家、属性、协议或链接；请新增代理'
           );
         }
         await this.repository.update(tx, id, {
           ...(countryCode ? { countryCode } : {}),
           ...(kind ? { kind } : {}),
+          ...(protocolChanged ? { protocol: nextProtocol } : {}),
           ...(linkChanged && link
             ? {
                 urlEncrypted: this.encryption.encrypt(link.url)!,
                 urlHash: this.encryption.hash(link.url)!,
                 connectionMode: link.connectionMode,
-                protocol: link.protocol
+                protocol: nextProtocol
               }
             : {}),
           ...(remark1 !== undefined ? { remark1: remark1 || null } : {}),
@@ -259,11 +278,13 @@ export class RechargeProxyService {
           beforeData: {
             countryCode: previous.countryCode,
             kind: previous.kind,
+            protocol: previous.protocol,
             active: previous.active
           },
           afterData: {
             countryCode: countryCode ?? previous.countryCode,
             kind: kind ?? previous.kind,
+            protocol: nextProtocol,
             active: input.status ? input.status === 'active' : previous.active,
             linkChanged
           },

@@ -10,7 +10,7 @@
     <p v-if="error" class="bank-recharge-error" role="alert">
       {{ error }} <AppButton size="small" @click="load">重试</AppButton>
     </p>
-    <el-descriptions v-if="detail" :column="1" border>
+    <el-descriptions v-if="detail" :column="1" label-width="96px" border>
       <el-descriptions-item label="国家">{{
         proxyCountryLabel(detail.countryCode)
       }}</el-descriptions-item>
@@ -22,6 +22,9 @@
           detail.url || '已清除，请重新查看'
         }}</span></el-descriptions-item
       >
+      <el-descriptions-item label="代理协议">{{
+        proxyProtocolLabel(detail.protocol)
+      }}</el-descriptions-item>
       <el-descriptions-item label="状态">{{
         detail.status === 'active' ? '启用' : '停用'
       }}</el-descriptions-item>
@@ -39,7 +42,7 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { rechargeProxyApi, type RechargeProxyDetail } from './recharge-proxy-api';
-import { proxyCountryLabel, proxyKindLabels } from './recharge-proxy-options';
+import { proxyCountryLabel, proxyKindLabels, proxyProtocolLabel } from './recharge-proxy-options';
 
 const props = defineProps<{ id: string }>();
 defineEmits<{ close: [] }>();

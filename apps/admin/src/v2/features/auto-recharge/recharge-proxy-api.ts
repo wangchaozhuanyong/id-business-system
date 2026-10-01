@@ -20,7 +20,7 @@ export interface RechargeProxyItem {
 
 export interface RechargeProxyDetail extends Omit<
   RechargeProxyItem,
-  'linkMask' | 'connectionMode' | 'protocol' | 'createdAt' | 'updatedAt'
+  'linkMask' | 'createdAt' | 'updatedAt'
 > {
   url: string;
 }
@@ -29,6 +29,7 @@ export interface RechargeProxyWrite {
   countryCode: string;
   url: string;
   kind: ProxyKind;
+  protocol?: RechargeProxyItem['protocol'];
   remark1: string;
   remark2: string;
 }
