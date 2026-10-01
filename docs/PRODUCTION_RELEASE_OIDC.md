@@ -29,4 +29,6 @@ gh workflow run production-release.yml --ref main \
   -f expected_current=<当前生产-SHA>
 ```
 
+迁移后按现有数据库权限规则为新增表同步应用账号权限，并核验运行、迁移和备份账号权限。同步只覆盖本次新增 migration 创建的表，不重置账号或密码；权限验证失败时不切换业务服务。
+
 发布后仍要核对 GitHub Actions 运行结果、服务器 `release-manifest.json` 的 SHA、公开健康接口和实际登录后的页面操作。工作流的健康检查不能替代人工浏览器验收。
