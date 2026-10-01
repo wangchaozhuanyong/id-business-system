@@ -41,14 +41,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--plan-json', required=True)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--approved-plan-sha256')
     args = parser.parse_args()
     plan = json.loads(args.plan_json)
-    require(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '7050e4e35b5fa813cb75ae5e5dad1291fcf6c0dbcf222d37f0beccf339006287', 'Plan differs from the authorized five-reference digest')
-    require(plan['prefix'] == '39ef6de34debd35d18ccfc08bbb574d00f50a513-36807901316-1-',
-            'Plan prefix is outside the reviewed scope')
+    require(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f', 'Plan differs from the reviewed ten-reference digest')
+    if args.apply:
+        require(args.approved_plan_sha256 == '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f', 'Explicit plan approval required')
+    prefixes = ('6a674279575e9c1468ce570cc4d8fc6d7cc4c028-36845230653-1-',
+                'cef5c05d5039f98c24b4b6b17d979535e5ae55d1-36814755308-1-')
     require(plan['repository'] == '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
             'Unexpected repository')
-    require(len(plan['items']) == 5, 'Expected exactly five reviewed cache references')
+    require(len(plan['items']) == 10, 'Expected exactly ten reviewed cache references')
     lock = None
     if args.apply:
         lock = (BASE / '.deploy.lock').open('a')
@@ -61,13 +64,15 @@ def main():
     require(previous['commit'] == plan['expectedPrevious'], 'Previous rollback version changed')
     protected = active_images() | protected_images(manifest) | protected_images(previous, include_rollback=False)
     approved = []
-    services = {'admin', 'api', 'migrate', 'media-resolver', 'auto-recharge'}
+    services = {(prefix, service) for prefix in prefixes for service in
+                ('admin', 'api', 'migrate', 'media-resolver', 'auto-recharge')}
     for item in plan['items']:
         tag = item['tag']
-        require(tag.startswith(plan['prefix']), 'Tag outside reviewed prefix')
-        service = tag[len(plan['prefix']):]
-        require(service in services, 'Unexpected cache service')
-        services.remove(service)
+        prefix = next((prefix for prefix in prefixes if tag.startswith(prefix)), None)
+        require(prefix is not None, 'Tag outside reviewed prefix')
+        service = tag[len(prefix):]
+        require((prefix, service) in services, 'Unexpected cache service')
+        services.remove((prefix, service))
         reference = plan['repository'] + ':' + tag
         image_id = run('docker', 'image', 'inspect', '--format', '{{.Id}}', reference)
         require(image_id == item['imageId'], 'Image identity changed')
