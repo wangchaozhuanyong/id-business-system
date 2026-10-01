@@ -19,12 +19,13 @@
       :refresh="query.refresh"
       :save="save"
       :remove="remove"
+      :reorder="reorder"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { DocumentCopy } from '@element-plus/icons-vue';
 import type { V2QuickActionInput, V2QuickActionList } from '@apple-business/shared';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -33,9 +34,33 @@ import { useAuthStore } from '@/stores/auth';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import V2QuickActionsDrawer from './V2QuickActionsDrawer.vue';
+import {
+  quickActionOrderKey,
+  readQuickActionOrder,
+  sortQuickActions,
+  writeQuickActionOrder
+} from './quickActionOrder';
 
 const auth = useAuthStore();
 const drawerOpen = ref(false);
+const orderedIds = ref<string[]>([]);
+watch(
+  () => auth.user?.id ?? '',
+  (userId) => {
+    drawerOpen.value = false;
+    orderedIds.value = readQuickActionOrder(userId);
+  },
+  { immediate: true }
+);
+
+function syncOrder(event: StorageEvent) {
+  const userId = auth.user?.id;
+  if (userId && (event.key === null || event.key === quickActionOrderKey(userId))) {
+    orderedIds.value = readQuickActionOrder(userId);
+  }
+}
+onMounted(() => window.addEventListener('storage', syncOrder));
+onBeforeUnmount(() => window.removeEventListener('storage', syncOrder));
 const query = useV2ModuleQuery<V2QuickActionList>({
   moduleKey: 'profile',
   scope: 'workspace',
@@ -44,8 +69,14 @@ const query = useV2ModuleQuery<V2QuickActionList>({
   trackRouteData: false,
   query: ({ signal }) => idBusinessV2WorkspaceApi.listQuickActions({ signal })
 });
-const items = computed(() => query.data.value?.items ?? []);
+const items = computed(() => sortQuickActions(query.data.value?.items ?? [], orderedIds.value));
 const queryError = computed(() => (query.error.value ? getApiErrorMessage(query.error.value) : ''));
+
+async function reorder(ids: string[]) {
+  if (!auth.writesAllowed) throw new Error('当前连接处于只读状态，恢复后请重试');
+  writeQuickActionOrder(auth.user?.id ?? '', ids);
+  orderedIds.value = ids;
+}
 
 async function save(input: V2QuickActionInput, id?: string) {
   try {
