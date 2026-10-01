@@ -48,7 +48,7 @@ class ReviewedCacheTests(unittest.TestCase):
     def invoke(self, apply=False, plan=None):
         argv = ['cleanup', '--plan-json', json.dumps(plan or self.plan)]
         if apply:
-            argv.append('--apply')
+            argv.extend(['--apply', '--approved-plan-sha256', '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f'])
         with patch.object(sys, 'argv', argv), \
                 patch.object(cleanup, 'current', return_value=self.manifest), \
                 patch.object(cleanup, 'active_images', side_effect=lambda: self.active), \
@@ -68,7 +68,7 @@ class ReviewedCacheTests(unittest.TestCase):
         self.assertEqual(self.invoke()['mode'], 'PLAN_ONLY')
         self.assertEqual(self.removals(), [])
 
-    def test_apply_removes_only_the_exact_five_references_without_prune_or_force(self):
+    def test_apply_removes_only_the_exact_ten_references_without_prune_or_force(self):
         receipt = self.invoke(True)
         expected = [('docker', 'image', 'rm', '--no-prune', self.plan['repository'] + ':' + item['tag'])
                     for item in self.plan['items']]
@@ -78,6 +78,18 @@ class ReviewedCacheTests(unittest.TestCase):
     def test_changed_current_is_rejected_before_any_removal(self):
         self.manifest['commit'] = 'changed'
         with self.assertRaisesRegex(RuntimeError, 'Production baseline changed'):
+            self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
+    def test_apply_requires_the_explicit_approved_digest(self):
+        with patch.object(sys, 'argv', ['cleanup', '--plan-json', json.dumps(self.plan), '--apply']):
+            with self.assertRaisesRegex(RuntimeError, 'Explicit plan approval required'):
+                cleanup.main()
+        self.assertEqual(self.commands, [])
+
+    def test_changed_previous_is_rejected_before_any_removal(self):
+        self.previous['commit'] = 'changed'
+        with self.assertRaisesRegex(RuntimeError, 'Previous rollback version changed'):
             self.invoke(True)
         self.assertEqual(self.removals(), [])
 
@@ -102,7 +114,7 @@ class ReviewedCacheTests(unittest.TestCase):
     def test_approved_older_version_does_not_extend_the_previous_rollback_chain(self):
         self.previous['rollback'] = {'images': {'admin': self.plan['items'][0]['imageId']}}
         self.invoke(True)
-        self.assertEqual(len(self.removals()), 5)
+        self.assertEqual(len(self.removals()), 10)
 
     def test_local_identity_change_is_rejected(self):
         self.local_wrong = True
@@ -113,7 +125,7 @@ class ReviewedCacheTests(unittest.TestCase):
     def test_plan_change_requires_new_authorization(self):
         changed = copy.deepcopy(self.plan)
         changed['items'].pop()
-        with self.assertRaisesRegex(RuntimeError, 'authorized five-reference digest'):
+        with self.assertRaisesRegex(RuntimeError, 'reviewed ten-reference digest'):
             self.invoke(True, changed)
         self.assertEqual(self.removals(), [])
 

@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - verify_access
+          - verify_cache
           - cleanup_cache
           - release
       commit:
@@ -86,18 +87,28 @@ jobs:
         if: inputs.operation == 'release'
         run: bash scripts/production-release/push-images.sh
 
-      - name: Apply reviewed local image cache cleanup
-        if: inputs.operation == 'cleanup_cache'
+      - name: Verify or apply reviewed local image cache cleanup
+        if: inputs.operation == 'verify_cache' || inputs.operation == 'cleanup_cache'
+        env:
+          CLEANUP_OPERATION: ${{ inputs.operation }}
         run: |
           set -Eeuo pipefail
           mkdir -p .deploy/production-release
           python3 - <<'PY'
+          import hashlib
           import json
+          import os
           from pathlib import Path
           import shlex
           program = Path('scripts/production-release/cleanup-reviewed-cache.py').read_text()
           plan = Path('deploy/aws/cache-cleanup-20261001.json').read_text()
-          command = 'python3 -c ' + shlex.quote(program) + ' --plan-json ' + shlex.quote(plan) + ' --apply'
+          parsed_plan = json.loads(plan)
+          if parsed_plan['expectedCurrent'] != os.environ['EXPECTED_CURRENT']:
+              raise SystemExit('Cleanup expected_current differs from the reviewed plan')
+          digest = hashlib.sha256(json.dumps(parsed_plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          command = 'python3 -c ' + shlex.quote(program) + ' --plan-json ' + shlex.quote(plan)
+          if os.environ['CLEANUP_OPERATION'] == 'cleanup_cache':
+              command += ' --apply --approved-plan-sha256 ' + digest
           parameters = {'commands': [command], 'executionTimeout': ['600']}
           Path('.deploy/production-release/reviewed-cache-cleanup.json').write_text(json.dumps(parameters))
           PY
