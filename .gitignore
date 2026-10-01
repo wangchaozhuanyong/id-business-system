@@ -1,5 +1,10 @@
 # Dependencies
-node_modules/
+node_modules
+
+# Python worker dependencies and bytecode
+.venv/
+__pycache__/
+*.py[cod]
 
 # Build output
 dist/
