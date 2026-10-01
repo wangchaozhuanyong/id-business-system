@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-topup-workbench">
+  <section class="v2-page-layout v2-records-page v2-topup-workbench">
     <V2TopupWorkbenchOverview :page="page" />
     <V2TopupWorkbenchToolbar :page="page" />
     <V2TopupWorkbenchList :page="page" />

@@ -199,7 +199,10 @@ onBeforeUnmount(clearRefreshTimer);
 }
 
 .v2-async-region__content {
+  display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-async-region.is-previous-data .v2-async-region__content {

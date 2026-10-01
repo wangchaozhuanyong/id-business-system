@@ -1,7 +1,7 @@
 .v2-order-entry-page {
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-order-entry-header-status {
@@ -140,7 +140,7 @@
 }
 
 .v2-order-entry-period-columns .el-form-item {
-  min-height: 40px;
+  min-height: var(--el-component-size);
 }
 
 .v2-order-entry-groups .el-form-item {
@@ -148,29 +148,13 @@
   margin-bottom: 12px;
 }
 
-.v2-order-entry-form .el-form-item__label {
-  min-height: 40px;
-  align-items: center;
-  padding-right: 16px;
-  color: var(--v2-text);
-  font-size: 13px;
-  font-weight: var(--v3-font-weight-semibold);
-  line-height: 20px;
-  letter-spacing: 0.005em;
-}
-
 .v2-order-entry-form .el-form-item__content {
   min-width: 0;
-  min-height: 40px;
-}
-
-.v2-order-entry-remark-item .el-form-item__label {
-  align-items: flex-start;
-  padding-top: 10px;
+  min-height: var(--el-component-size);
 }
 
 .v2-order-entry-remark-item .el-textarea__inner {
-  min-height: 40px !important;
+  min-height: var(--el-component-size) !important;
 }
 
 .v2-order-entry-group-title {
@@ -201,7 +185,7 @@
 .v2-order-entry-groups .el-select__wrapper,
 .v2-order-entry-groups .el-date-editor,
 .v2-order-entry-groups .el-textarea__inner {
-  min-height: 40px;
+  min-height: var(--el-component-size);
   border-radius: var(--v3-radius-sm);
   transition:
     background-color 180ms var(--v3-ease),
@@ -228,7 +212,7 @@
 }
 
 .v2-order-entry-selection-mode {
-  min-height: 36px;
+  min-height: var(--el-component-size);
 }
 
 .v2-order-entry-account-source {
@@ -348,7 +332,7 @@
 .v2-order-entry-readonly {
   display: flex;
   width: 100%;
-  min-height: 40px;
+  min-height: var(--el-component-size);
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -401,7 +385,7 @@
 .v2-order-entry-disposition {
   display: grid;
   width: 100%;
-  min-height: 40px;
+  min-height: var(--el-component-size);
   align-content: center;
   gap: 2px;
 }
@@ -429,7 +413,7 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 40px;
+  min-height: var(--el-component-size);
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -577,7 +561,7 @@
 
 .v2-order-entry-actions .app-button {
   min-width: 168px;
-  min-height: 40px;
+  min-height: var(--el-component-size);
   font-weight: var(--v3-font-weight-semibold);
 }
 
@@ -674,7 +658,7 @@
 }
 
 .v2-order-entry-segmented-options .el-radio-button__inner {
-  min-height: 36px;
+  min-height: var(--el-component-size);
   padding-inline: 8px;
   font-size: 12px;
   font-weight: var(--v3-font-weight-semibold);
@@ -728,7 +712,7 @@
 
 .v2-order-entry-live-summary > div {
   display: flex;
-  min-height: 40px;
+  min-height: var(--el-component-size);
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -1086,9 +1070,6 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
 
   .v2-order-entry-form .el-form-item__label {
     width: 86px !important;
-    min-height: 36px;
-    flex: 0 0 86px;
-    padding-right: 8px;
   }
 
   .v2-order-entry-form .el-form-item__content,
@@ -1097,11 +1078,11 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
   .v2-order-entry-groups .el-date-editor,
   .v2-order-entry-readonly,
   .v2-order-entry-recommendation {
-    min-height: 36px;
+    min-height: var(--el-component-size);
   }
 
   .v2-order-entry-remark-item .el-textarea__inner {
-    min-height: 36px !important;
+    min-height: var(--el-component-size) !important;
   }
 
   .v2-order-entry-action-metrics {
@@ -1212,10 +1193,6 @@ html[data-v2-theme='dark'] .v2-order-entry-actions {
 
   .v2-order-entry-form .el-form-item__label {
     width: 88px !important;
-    min-height: 40px;
-    flex: 0 0 88px;
-    padding-right: 8px;
-    line-height: 18px;
   }
 
   .v2-order-entry-result {

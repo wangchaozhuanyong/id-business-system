@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-dashboard-page">
+  <section class="v2-page-layout v2-records-page v2-dashboard-page">
     <V2AsyncRegion
       skeleton="metrics"
       :phase="page.queryPhase"

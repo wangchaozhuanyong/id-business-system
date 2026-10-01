@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-exchange-page">
+  <section class="v2-page-layout v2-exchange-page">
     <V2AsyncRegion
       variant="section"
       skeleton="metrics"

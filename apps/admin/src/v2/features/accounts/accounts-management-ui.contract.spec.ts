@@ -29,11 +29,11 @@ describe('ID management page UI contract', () => {
     expect(view).toContain('<V2AccountsOverview v-if="!showingLossRecords"');
     expect(view).toContain('<V2AccountsToolbar');
     expect(view).toContain('<V2AccountsList v-if="!showingLossRecords"');
-    expect(overview).toContain('class="v2-accounts-overview__actions"');
+    expect(overview).toContain('<template #actions>');
     expect(overview).toContain('page.handleToolbarCommand');
     expect(overview).toContain('v-if="page.canCreate"');
     expect(toolbar).toContain('class="v2-account-command-panel"');
-    expect(toolbar).toContain('class="v2-account-filter-grid"');
+    expect(toolbar).toContain('<V2ListToolbar');
     expect(toolbar).toContain('更多筛选');
     expect(toolbar).toContain('page.activeFilterCount');
     expect(toolbar).toContain('page.resetFilters');

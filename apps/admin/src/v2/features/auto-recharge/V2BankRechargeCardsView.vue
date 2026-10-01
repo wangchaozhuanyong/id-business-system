@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page bank-recharge-page">
+  <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
       description="管理银充银行卡，查看关联的充值账号与订单。卡号加密保存，安全码只在单笔充值时临时输入。"
     >
@@ -7,31 +7,33 @@
         <AppButton @click="openImport">批量导入</AppButton>
         <AppButton variant="primary" @click="openCreate">新增银行卡</AppButton>
       </template>
+      <template #filters>
+        <el-form
+          inline
+          label-position="left"
+          require-asterisk-position="right"
+          @submit.prevent="search"
+        >
+          <el-form-item label="银行卡搜索">
+            <el-input
+              v-model="keywordInput"
+              placeholder="名称、卡尾号或备注"
+              clearable
+              @keyup.enter="search"
+            />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="statusInput" aria-label="银行卡状态" placeholder="全部状态">
+              <el-option label="全部状态" value="" />
+              <el-option label="启用" value="active" />
+              <el-option label="停用" value="disabled" />
+            </el-select>
+          </el-form-item>
+          <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
+        </el-form>
+      </template>
     </V2PageContext>
 
-    <el-form
-      inline
-      label-position="left"
-      require-asterisk-position="right"
-      @submit.prevent="search"
-    >
-      <el-form-item label="银行卡搜索">
-        <el-input
-          v-model="keywordInput"
-          placeholder="名称、卡尾号或备注"
-          clearable
-          @keyup.enter="search"
-        />
-      </el-form-item>
-      <el-form-item label="状态">
-        <el-select v-model="statusInput" aria-label="银行卡状态">
-          <el-option label="全部状态" value="" />
-          <el-option label="启用" value="active" />
-          <el-option label="停用" value="disabled" />
-        </el-select>
-      </el-form-item>
-      <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
-    </el-form>
     <p v-if="operationError" class="bank-recharge-error" role="alert">{{ operationError }}</p>
 
     <V2AsyncRegion

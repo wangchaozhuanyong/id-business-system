@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-finance-page">
+  <section class="v2-page-layout v2-finance-page">
     <V2AsyncRegion
       variant="section"
       skeleton="metrics"
@@ -12,7 +12,7 @@
       @retry="page.refresh"
     >
       <template v-if="page.overview">
-        <div class="v2-analytics-page">
+        <div class="v2-page-stack v2-analytics-page">
           <V2AnalyticsOverview :page="page" />
 
           <el-alert
@@ -31,7 +31,10 @@
           <V2AnalyticsNavigation v-model:active-section="activeAnalysisSection" />
 
           <div class="v2-analytics-content">
-            <div v-show="activeAnalysisSection === 'profit'" class="v2-analytics-section-stack">
+            <div
+              v-show="activeAnalysisSection === 'profit'"
+              class="v2-page-stack v2-analytics-section-stack"
+            >
               <V2ProfitOverview
                 :overview="page.overview"
                 :analysis-range-label="page.analysisRangeLabel"

@@ -1,35 +1,18 @@
 <template>
-  <section class="v2-renewals-overview" aria-label="续费工作台概览">
-    <div class="v2-renewals-overview__intro">
-      <span class="v2-renewals-overview__eyebrow">续费工作台</span>
-      <h2>续费管理总览</h2>
-      <p>集中处理临期与到期业务，续费动作继续受权限、时间窗口和余额校验控制。</p>
-    </div>
-
-    <div class="v2-renewals-overview__metrics" aria-label="当前页续费指标">
-      <article>
-        <span>筛选结果</span>
-        <strong>{{ page.total }}</strong>
-        <small>全部匹配记录</small>
-      </article>
-      <article>
-        <span>当前页</span>
-        <strong>{{ page.items.length }}</strong>
-        <small>本页已加载</small>
-      </article>
-      <article>
-        <span>续费预警</span>
-        <strong>{{ warningCount }}</strong>
-        <small>当前页临期记录</small>
-      </article>
-      <article>
-        <span>可执行续费</span>
-        <strong>{{ actionableCount }}</strong>
-        <small>当前页时间窗内</small>
-      </article>
-    </div>
-
-    <div class="v2-renewals-overview__actions">
+  <V2PageOverview
+    class="v2-renewals-overview"
+    aria-label="续费工作台概览"
+    title="续费管理总览"
+    help="集中处理临期与到期业务，续费动作继续受权限、时间窗口和余额校验控制。"
+    metrics-label="当前页续费指标"
+  >
+    <template #metrics>
+      <V2OverviewMetric label="筛选结果" :value="page.total" note="全部匹配记录" />
+      <V2OverviewMetric label="当前页" :value="page.items.length" note="本页已加载" />
+      <V2OverviewMetric label="续费预警" :value="warningCount" note="当前页临期记录" />
+      <V2OverviewMetric label="可执行续费" :value="actionableCount" note="当前页时间窗内" />
+    </template>
+    <template #actions>
       <AppButton
         v-if="page.canManageWarning"
         variant="ghost"
@@ -43,11 +26,13 @@
         <el-icon><Refresh /></el-icon>
         刷新
       </AppButton>
-    </div>
-  </section>
+    </template>
+  </V2PageOverview>
 </template>
 
 <script setup lang="ts">
+import V2PageOverview from '@/v2/components/V2PageOverview.vue';
+import V2OverviewMetric from '@/v2/components/V2OverviewMetric.vue';
 import { computed } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Refresh, Setting } from '@element-plus/icons-vue';

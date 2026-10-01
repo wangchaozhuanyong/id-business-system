@@ -78,6 +78,7 @@ import V2BusinessMonitoringWorkspace from '@/v2/features/business-monitoring/com
 import {
   businessMonitoringCategoryBreakdown,
   businessMonitoringCategoryLabel,
+  businessMonitoringRuleLabel,
   businessMonitoringSeverityMeta,
   formatBusinessMonitoringDate
 } from '@/v2/features/business-monitoring/business-monitoring-presentation';
@@ -220,6 +221,8 @@ const page = reactive({
   error: '',
   selectedFinding,
   hasData: true,
+  businessMonitoringRuleLabel: (ruleKey: string) =>
+    businessMonitoringRuleLabel(ruleKey, page.rules),
   refresh: () => {
     notice.value = '业务异常快照已刷新；设计验收数据未被修改。';
   },

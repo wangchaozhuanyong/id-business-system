@@ -1,110 +1,6 @@
 .v2-system-monitoring-page {
   min-width: 0;
-  gap: 14px;
-}
-
-.v2-system-monitoring-overview {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(230px, 0.84fr) minmax(470px, 1.5fr) minmax(240px, max-content);
-  align-items: center;
-  gap: 20px;
-  padding: 18px 20px;
-  border: 1px solid var(--v2-overview-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-overview-bg);
-  color: var(--v2-overview-text);
-  box-shadow: var(--v2-overview-shadow);
-}
-
-.v2-system-monitoring-overview__intro {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.v2-system-monitoring-overview__eyebrow {
-  color: var(--v2-overview-accent);
-  font-size: 10px;
-  font-weight: var(--v3-font-weight-bold);
-  letter-spacing: 0.14em;
-}
-
-.v2-system-monitoring-overview__intro h2,
-.v2-system-monitoring-overview__intro p {
-  margin: 0;
-}
-
-.v2-system-monitoring-overview__intro h2 {
-  font-size: 17px;
-  font-weight: var(--v3-font-weight-bold);
-  letter-spacing: 0.01em;
-}
-
-.v2-system-monitoring-overview__intro p {
-  max-width: 46ch;
-  color: var(--v2-overview-text-soft);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.v2-system-monitoring-overview__metrics {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(100px, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--v2-overview-divider);
-  border-radius: var(--v3-radius-sm);
-}
-
-.v2-system-monitoring-overview__metrics article {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  padding: 11px 13px;
-  border-left: 1px solid var(--v2-overview-divider);
-  background: var(--v2-overview-surface);
-}
-
-.v2-system-monitoring-overview__metrics article:first-child {
-  border-left: 0;
-}
-
-.v2-system-monitoring-overview__metrics span,
-.v2-system-monitoring-overview__metrics small,
-.v2-system-monitoring-overview__actions > span {
-  color: var(--v2-overview-text-soft);
-  font-size: 10px;
-}
-
-.v2-system-monitoring-overview__metrics strong {
-  overflow: hidden;
-  color: var(--v2-overview-text);
-  font-size: 19px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v2-system-monitoring-overview__actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  white-space: nowrap;
-}
-
-.v2-system-monitoring-overview__actions .app-button--ghost.el-button {
-  --el-button-text-color: var(--v2-overview-text);
-  --el-button-border-color: var(--v2-overview-control-border);
-  --el-button-hover-text-color: var(--v2-overview-text);
-  --el-button-hover-bg-color: var(--v2-overview-control-hover);
-  --el-button-hover-border-color: var(--v2-overview-control-hover-border);
-  --el-button-active-text-color: var(--v2-overview-text);
-  --el-button-active-bg-color: var(--v2-overview-control-active);
-  --el-button-active-border-color: var(--v2-overview-control-active-border);
+  gap: var(--v2-layout-section-gap);
 }
 
 .v2-system-monitoring-navigation {
@@ -638,31 +534,7 @@
   line-height: 1.65;
 }
 
-@media (max-width: 1180px) {
-  .v2-system-monitoring-overview {
-    grid-template-columns: minmax(230px, 0.8fr) minmax(460px, 1.4fr);
-  }
-
-  .v2-system-monitoring-overview__actions {
-    grid-column: 1 / -1;
-  }
-}
-
 @media (max-width: 900px) {
-  .v2-system-monitoring-overview {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .v2-system-monitoring-overview__metrics {
-    grid-template-columns: repeat(4, minmax(112px, 1fr));
-    overflow-x: auto;
-  }
-
-  .v2-system-monitoring-overview__actions {
-    grid-column: auto;
-    justify-content: flex-start;
-  }
-
   .v2-system-monitoring-navigation {
     grid-template-columns: repeat(3, minmax(220px, 1fr));
   }
@@ -693,30 +565,7 @@
 
 @media (max-width: 620px) {
   .v2-system-monitoring-page {
-    gap: 10px;
-  }
-
-  .v2-system-monitoring-overview {
-    gap: 14px;
-    padding: 16px;
-  }
-
-  .v2-system-monitoring-overview__metrics {
-    grid-template-columns: repeat(2, minmax(112px, 1fr));
-    overflow: hidden;
-  }
-
-  .v2-system-monitoring-overview__metrics article:nth-child(3) {
-    border-left: 0;
-    border-top: 1px solid var(--v2-overview-divider);
-  }
-
-  .v2-system-monitoring-overview__metrics article:nth-child(4) {
-    border-top: 1px solid var(--v2-overview-divider);
-  }
-
-  .v2-system-monitoring-overview__actions {
-    flex-wrap: wrap;
+    gap: var(--v2-layout-section-gap);
   }
 
   .v2-system-checks__heading {

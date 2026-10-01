@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-audit-logs-page">
+  <section class="v2-page-layout v2-records-page v2-audit-logs-page">
     <V2AuditLogsOverview :page="page" />
     <V2AuditLogsNavigation :page="page" />
     <V2AuditLogsToolbar :page="page" />

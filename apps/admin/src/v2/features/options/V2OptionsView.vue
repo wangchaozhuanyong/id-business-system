@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-options-page">
+  <section class="v2-page-layout v2-options-page">
     <V2AsyncRegion
       skeleton="settings"
       :phase="page.queryPhase"

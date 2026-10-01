@@ -1,42 +1,9 @@
-.recharge-address-page {
-  display: grid;
-  gap: 16px;
-}
-
-.recharge-address-import,
-.recharge-address-toolbar,
-.recharge-address-list {
-  min-width: 0;
-  border: 1px solid var(--v2-border);
-  border-radius: var(--v3-radius);
-  background: var(--v2-surface);
-}
-
-.recharge-address-import {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 18px;
-}
-
-.recharge-address-import > .el-form {
-  min-width: 0;
-  max-width: 100%;
-  justify-self: end;
-}
-
-.recharge-address-import .el-form-item {
-  align-items: center;
-  margin-bottom: 0;
-}
-
 .recharge-address-file-row {
   display: flex;
   min-width: 0;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: var(--v2-layout-control-gap);
 }
 
 .recharge-address-file-row > span,
@@ -49,8 +16,8 @@
   position: relative;
   display: inline-flex;
   min-width: 0;
-  max-width: 420px;
-  min-height: 34px;
+  max-width: 220px;
+  min-height: var(--el-component-size);
   align-items: center;
   padding: 0 12px;
   overflow: hidden;
@@ -83,7 +50,6 @@
 
 .recharge-address-message,
 .recharge-address-error {
-  grid-column: 1 / -1;
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
@@ -97,43 +63,14 @@
   color: var(--v2-danger);
 }
 
-.recharge-address-toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) 180px auto;
-  gap: 10px;
-  padding: 14px;
-}
-
-.recharge-address-list {
-  overflow: hidden;
-}
-
-.recharge-address-list > header {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--v2-border);
-}
-
 .recharge-address-locked {
   color: var(--v2-text-soft);
   font-size: 12px;
 }
 
 @media (max-width: 700px) {
-  .recharge-address-import {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .recharge-address-import > .el-form {
-    width: 100%;
-  }
-
-  .recharge-address-toolbar {
-    grid-template-columns: 1fr;
-  }
-
   .recharge-address-file-row {
     width: 100%;
-    flex-wrap: wrap;
   }
 
   .recharge-address-file-picker {

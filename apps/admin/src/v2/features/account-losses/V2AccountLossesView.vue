@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-account-losses">
+  <section class="v2-page-layout v2-records-page v2-account-losses">
     <section class="v2-account-loss-command-panel" aria-label="ID 报损记录筛选">
       <V2SectionHeading
         class="v2-account-loss-command-panel__heading"

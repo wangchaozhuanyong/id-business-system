@@ -45,7 +45,7 @@
         <div class="v2-content__inner">
           <p v-if="notice" class="v2-profile-fixture-notice" role="status">{{ notice }}</p>
           <section class="v2-records-page v2-profile-page">
-            <div class="v2-profile-page__content">
+            <div class="v2-page-stack v2-profile-page__content">
               <V2ProfileOverview :page="page" />
               <V2ProfileSessionsPanel :page="page" />
             </div>

@@ -1,6 +1,6 @@
 .recharge-page {
   display: grid;
-  gap: 12px;
+  gap: var(--v2-layout-section-gap);
 }
 .recharge-note,
 .recharge-entry-panel :deep(.recharge-note) {
@@ -127,12 +127,6 @@
 /* 标签固定对齐第一行控件，帮助或错误文字扩展时不将标签向下推移。 */
 .recharge-panel :deep(.el-form-item) {
   align-items: flex-start;
-}
-.recharge-panel :deep(.el-form-item__label) {
-  align-items: center;
-  height: 36px;
-  padding: 0 12px 0 0;
-  line-height: 20px;
 }
 .recharge-billing {
   border: 0;

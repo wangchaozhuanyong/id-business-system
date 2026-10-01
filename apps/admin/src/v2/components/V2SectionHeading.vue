@@ -67,7 +67,8 @@ const hasHelp = computed(() => {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: var(--v2-layout-control-gap);
 }
 
 .v2-section-heading__heading,
@@ -123,6 +124,9 @@ h3.v2-section-heading__title,
   min-width: 0;
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--v2-layout-control-gap);
+  font-size: 15px;
+  line-height: var(--v3-line-height-tight);
 }
 </style>

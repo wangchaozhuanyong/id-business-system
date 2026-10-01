@@ -55,7 +55,7 @@
             {{ notice }}
           </p>
           <section class="v2-finance-page">
-            <div class="v2-finance-expenses-page">
+            <div class="v2-page-stack v2-finance-expenses-page">
               <V2FinanceExpensesOverview :page="page" />
               <V2FinanceCashbookNavigation :page="page" />
               <V2FinanceExpensesToolbar :page="page" />

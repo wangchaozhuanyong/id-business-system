@@ -1,5 +1,5 @@
 <template>
-  <section class="recharge-page">
+  <section class="v2-page-layout recharge-page">
     <RechargePageContext
       :server-mode="operationMode === 'server_payment'"
       :connector-status="operationMode === 'server_payment' ? 'unknown' : connectorStatus"

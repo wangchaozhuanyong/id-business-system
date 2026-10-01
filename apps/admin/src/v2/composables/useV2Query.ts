@@ -603,6 +603,12 @@ export function useV2ModuleQuery<T>(
     if (mounted && query.enabled.value) void ensureModuleFresh();
   });
   onDeactivated(query.cancel);
+  watch(
+    () => resolveKeyValue(options.key),
+    () => {
+      if (mounted && query.enabled.value) void ensureModuleFresh();
+    }
+  );
   watch(query.enabled, (isEnabled) => {
     if (mounted && isEnabled) void ensureModuleFresh();
   });

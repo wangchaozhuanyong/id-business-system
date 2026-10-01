@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page v2-branding-page">
+  <section class="v2-page-layout v2-records-page v2-branding-page">
     <V2BrandingOverview
       :form="form"
       :hero-line-count="previewHeroLines.length"

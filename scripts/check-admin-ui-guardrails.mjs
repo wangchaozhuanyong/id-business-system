@@ -5,13 +5,19 @@ import path from 'node:path';
 import { NodeTypes, parse as parseTemplate } from '@vue/compiler-dom';
 import { parse as parseSfc } from '@vue/compiler-sfc';
 
+import { inspectLayoutComponent, inspectLayoutStyles } from './admin-layout-rules.mjs';
+
 const rootDir = process.cwd();
 const sourceRoot = path.join(rootDir, 'apps/admin/src/v2');
 const failures = [];
+const layoutRootClasses = new Set();
 
 for (const file of walk(sourceRoot).filter((item) => item.endsWith('.vue'))) {
   const source = readFileSync(file, 'utf8');
   const projectPath = path.relative(rootDir, file);
+  const layout = inspectLayoutComponent(source, projectPath);
+  for (const name of layout.rootClasses) layoutRootClasses.add(name);
+  for (const issue of layout.issues) failures.push(`${projectPath}: ${issue}`);
 
   if (/apps\/admin\/src\/v2\/features\/.*\/V2[^/]*View\.vue$/.test(projectPath)) {
     if (/<h1(?=\s|>)/.test(source)) {
@@ -145,6 +151,15 @@ for (const projectPath of [
   'apps/admin/src/v2/features/exchange-rates/components/V2ExchangeRateDrawers.vue'
 ]) {
   requireSnippets(projectPath, ['validateV2Form']);
+}
+
+for (const file of walk(sourceRoot).filter((item) => item.endsWith('.css'))) {
+  const projectPath = path.relative(rootDir, file);
+  for (const issue of inspectLayoutStyles(readFileSync(file, 'utf8'), projectPath, [
+    ...layoutRootClasses
+  ])) {
+    failures.push(`${projectPath}: ${issue}`);
+  }
 }
 
 if (failures.length) {

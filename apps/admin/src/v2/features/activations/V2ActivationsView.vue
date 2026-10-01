@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page">
+  <section class="v2-page-layout v2-records-page">
     <V2ActivationsOverview :page="page" />
     <V2ActivationsToolbar :page="page" />
     <V2ActivationsList :page="page" />

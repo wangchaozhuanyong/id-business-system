@@ -1,5 +1,8 @@
 <template>
-  <section class="v2-finance-page" :class="{ 'v2-finance-page--ledger': !page.expenseOnly }">
+  <section
+    class="v2-page-layout v2-finance-page"
+    :class="{ 'v2-finance-page--ledger': !page.expenseOnly }"
+  >
     <template v-if="page.expenseOnly">
       <V2AsyncRegion
         skeleton="table"
@@ -11,7 +14,7 @@
         error-title="收支记录加载失败"
         @retry="page.refresh"
       >
-        <div class="v2-finance-expenses-page">
+        <div class="v2-page-stack v2-finance-expenses-page">
           <V2FinanceExpensesOverview :page="page" />
 
           <el-alert
@@ -46,7 +49,7 @@
       error-title="钱包账户加载失败"
       @retry="page.refresh"
     >
-      <div class="v2-finance-ledger-page">
+      <div class="v2-page-stack v2-finance-ledger-page">
         <V2FinanceLedgerOverview :page="page" />
 
         <el-alert

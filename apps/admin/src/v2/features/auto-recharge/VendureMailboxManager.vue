@@ -1,5 +1,8 @@
 <template>
-  <section class="v2-records-page vendure-mailbox-page" aria-label="邮件验证码查询管理">
+  <section
+    class="v2-page-layout v2-records-page vendure-mailbox-page"
+    aria-label="邮件验证码查询管理"
+  >
     <V2PageContext description="与另一个管理站点共用同一套主邮箱、虚拟邮箱、查询码和收件记录。">
       <template #meta
         ><span>自动充值</span><span aria-hidden="true">/</span><span>邮件验证码查询</span></template
@@ -44,90 +47,92 @@
       </section>
 
       <template v-else>
-        <el-tabs v-model="activeTab" class="vendure-mailbox-tabs">
-          <el-tab-pane label="主邮箱管理" name="primary" />
-          <el-tab-pane label="虚拟邮箱管理" name="aliases" />
-          <el-tab-pane label="收件记录" name="mails" />
-          <el-tab-pane label="邮箱中继查询" name="relay-query" />
-        </el-tabs>
+        <div class="vendure-mailbox-controls">
+          <el-tabs v-model="activeTab" class="vendure-mailbox-tabs">
+            <el-tab-pane label="主邮箱管理" name="primary" />
+            <el-tab-pane label="虚拟邮箱管理" name="aliases" />
+            <el-tab-pane label="收件记录" name="mails" />
+            <el-tab-pane label="邮箱中继查询" name="relay-query" />
+          </el-tabs>
 
-        <section
-          v-if="activeTab !== 'relay-query'"
-          class="v2-filter-bar vendure-mailbox-toolbar"
-          aria-label="邮件验证码查询筛选"
-        >
-          <div class="v2-filter-bar__fields vendure-mailbox-toolbar__filters">
-            <el-input
-              v-model="keywordInput"
-              clearable
-              aria-label="搜索邮箱或邮件"
-              :placeholder="activeTab === 'mails' ? '搜索发件人、主题或验证码' : '搜索邮箱或备注'"
-              @keyup.enter="applyFilters"
-              @clear="applyFilters"
-            />
-            <el-select
-              v-if="activeTab !== 'mails'"
-              v-model="statusInput"
-              aria-label="邮箱状态"
-              placeholder="全部状态"
-            >
-              <el-option label="全部状态" value="" />
-              <el-option label="正常" value="ACTIVE" />
-              <el-option label="已禁用" value="DISABLED" />
-              <el-option v-if="activeTab === 'primary'" label="授权错误" value="AUTH_ERROR" />
-              <el-option v-if="activeTab === 'primary'" label="同步中" value="SYNCING" />
-            </el-select>
-            <el-select
-              v-if="activeTab !== 'primary'"
-              v-model="primaryAccountId"
-              clearable
-              aria-label="所属主邮箱"
-              placeholder="全部主邮箱"
-              @change="handlePrimaryFilterChange"
-            >
-              <el-option
-                v-for="item in primaryItems"
-                :key="item.id"
-                :label="item.email"
-                :value="item.id"
+          <section
+            v-if="activeTab !== 'relay-query'"
+            class="v2-filter-bar vendure-mailbox-toolbar"
+            aria-label="邮件验证码查询筛选"
+          >
+            <div class="v2-filter-bar__fields vendure-mailbox-toolbar__filters">
+              <el-input
+                v-model="keywordInput"
+                clearable
+                aria-label="搜索邮箱或邮件"
+                :placeholder="activeTab === 'mails' ? '搜索发件人、主题或验证码' : '搜索邮箱或备注'"
+                @keyup.enter="applyFilters"
+                @clear="applyFilters"
               />
-            </el-select>
-            <el-select
-              v-if="activeTab === 'mails'"
-              v-model="virtualEmailId"
-              clearable
-              filterable
-              aria-label="指定虚拟邮箱"
-              placeholder="全部虚拟邮箱"
-              @change="handleVirtualEmailFilterChange"
-            >
-              <el-option
-                v-for="item in allAliases"
-                :key="item.id"
-                :label="item.aliasEmail"
-                :value="item.id"
-              />
-            </el-select>
-            <el-checkbox
-              v-if="activeTab === 'mails'"
-              v-model="unassignedOnly"
-              @change="handleUnassignedFilterChange"
-              >只看未分配</el-checkbox
-            >
-            <AppButton variant="soft" @click="applyFilters">查询</AppButton>
-          </div>
-          <div class="v2-filter-bar__actions vendure-mailbox-toolbar__actions">
-            <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
-              >新增主邮箱</AppButton
-            >
-            <template v-else-if="activeTab === 'aliases'">
-              <ChatgptAccountCopySettings />
-              <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
-              <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
-            </template>
-            <AppButton v-else variant="soft" @click="mailQuery.refresh">刷新收件</AppButton>
-          </div>
-        </section>
+              <el-select
+                v-if="activeTab !== 'mails'"
+                v-model="statusInput"
+                aria-label="邮箱状态"
+                placeholder="全部状态"
+              >
+                <el-option label="全部状态" value="" />
+                <el-option label="正常" value="ACTIVE" />
+                <el-option label="已禁用" value="DISABLED" />
+                <el-option v-if="activeTab === 'primary'" label="授权错误" value="AUTH_ERROR" />
+                <el-option v-if="activeTab === 'primary'" label="同步中" value="SYNCING" />
+              </el-select>
+              <el-select
+                v-if="activeTab !== 'primary'"
+                v-model="primaryAccountId"
+                clearable
+                aria-label="所属主邮箱"
+                placeholder="全部主邮箱"
+                @change="handlePrimaryFilterChange"
+              >
+                <el-option
+                  v-for="item in primaryItems"
+                  :key="item.id"
+                  :label="item.email"
+                  :value="item.id"
+                />
+              </el-select>
+              <el-select
+                v-if="activeTab === 'mails'"
+                v-model="virtualEmailId"
+                clearable
+                filterable
+                aria-label="指定虚拟邮箱"
+                placeholder="全部虚拟邮箱"
+                @change="handleVirtualEmailFilterChange"
+              >
+                <el-option
+                  v-for="item in allAliases"
+                  :key="item.id"
+                  :label="item.aliasEmail"
+                  :value="item.id"
+                />
+              </el-select>
+              <el-checkbox
+                v-if="activeTab === 'mails'"
+                v-model="unassignedOnly"
+                @change="handleUnassignedFilterChange"
+                >只看未分配</el-checkbox
+              >
+              <AppButton variant="soft" @click="applyFilters">查询</AppButton>
+            </div>
+            <div class="v2-filter-bar__actions vendure-mailbox-toolbar__actions">
+              <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
+                >新增主邮箱</AppButton
+              >
+              <template v-else-if="activeTab === 'aliases'">
+                <ChatgptAccountCopySettings />
+                <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
+                <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
+              </template>
+              <AppButton v-else variant="soft" @click="mailQuery.refresh">刷新收件</AppButton>
+            </div>
+          </section>
+        </div>
 
         <div
           v-if="activeTab === 'mails' && (virtualEmailId || unassignedOnly)"
@@ -210,17 +215,16 @@
                     <span class="vendure-code-badge" :title="row.masterQueryCode">{{
                       row.masterQueryCode
                     }}</span>
-                    <button
-                      type="button"
+                    <AppButton
                       class="vendure-copy-btn"
-                      :class="{ 'is-copied': copiedCode === row.masterQueryCode }"
+                      :variant="copiedCode === row.masterQueryCode ? 'success' : 'default'"
                       title="点击一键复制主查询码"
                       @click="copyCodeWithFeedback(row.masterQueryCode)"
                     >
                       <el-icon v-if="copiedCode !== row.masterQueryCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === row.masterQueryCode ? '已复制' : '复制' }}</span>
-                    </button>
+                    </AppButton>
                   </div>
                   <span v-else>—</span>
                 </template>
@@ -330,10 +334,9 @@
                         class="vendure-code-cell vendure-code-cell--mobile"
                       >
                         <span class="vendure-code-badge">{{ item.masterQueryCode }}</span>
-                        <button
-                          type="button"
+                        <AppButton
                           class="vendure-copy-btn"
-                          :class="{ 'is-copied': copiedCode === item.masterQueryCode }"
+                          :variant="copiedCode === item.masterQueryCode ? 'success' : 'default'"
                           title="点击一键复制主查询码"
                           @click="copyCodeWithFeedback(item.masterQueryCode)"
                         >
@@ -342,7 +345,7 @@
                           /></el-icon>
                           <el-icon v-else><Check /></el-icon>
                           <span>{{ copiedCode === item.masterQueryCode ? '已复制' : '复制' }}</span>
-                        </button>
+                        </AppButton>
                       </div>
                       <span v-else>—</span>
                     </dd>
@@ -484,17 +487,16 @@
                     <span class="vendure-code-badge" :title="row.buyerQueryCode">{{
                       row.buyerQueryCode
                     }}</span>
-                    <button
-                      type="button"
+                    <AppButton
                       class="vendure-copy-btn"
-                      :class="{ 'is-copied': copiedCode === row.buyerQueryCode }"
+                      :variant="copiedCode === row.buyerQueryCode ? 'success' : 'default'"
                       title="点击一键复制买家查询码"
                       @click="copyCodeWithFeedback(row.buyerQueryCode)"
                     >
                       <el-icon v-if="copiedCode !== row.buyerQueryCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === row.buyerQueryCode ? '已复制' : '复制' }}</span>
-                    </button>
+                    </AppButton>
                   </div>
                   <span v-else>—</span>
                 </template>
@@ -584,10 +586,9 @@
                         class="vendure-code-cell vendure-code-cell--mobile"
                       >
                         <span class="vendure-code-badge">{{ item.buyerQueryCode }}</span>
-                        <button
-                          type="button"
+                        <AppButton
                           class="vendure-copy-btn"
-                          :class="{ 'is-copied': copiedCode === item.buyerQueryCode }"
+                          :variant="copiedCode === item.buyerQueryCode ? 'success' : 'default'"
                           title="点击一键复制买家查询码"
                           @click="copyCodeWithFeedback(item.buyerQueryCode)"
                         >
@@ -596,7 +597,7 @@
                           /></el-icon>
                           <el-icon v-else><Check /></el-icon>
                           <span>{{ copiedCode === item.buyerQueryCode ? '已复制' : '复制' }}</span>
-                        </button>
+                        </AppButton>
                       </div>
                       <span v-else>—</span>
                     </dd>
@@ -721,17 +722,16 @@
                       :title="row.extractedCode"
                       >{{ row.extractedCode }}</span
                     >
-                    <button
-                      type="button"
+                    <AppButton
                       class="vendure-copy-btn"
-                      :class="{ 'is-copied': copiedCode === row.extractedCode }"
+                      :variant="copiedCode === row.extractedCode ? 'success' : 'default'"
                       title="点击一键复制验证码"
                       @click="copyCodeWithFeedback(row.extractedCode)"
                     >
                       <el-icon v-if="copiedCode !== row.extractedCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === row.extractedCode ? '已复制' : '复制' }}</span>
-                    </button>
+                    </AppButton>
                   </div>
                   <span v-else>—</span>
                 </template>
@@ -772,18 +772,18 @@
                       >{{ showDate(item.receivedAt) }}</span
                     >
                   </div>
-                  <button
+                  <AppButton
                     v-if="item.extractedCode"
                     v-v2-column-visibility="[
                       v2TableSchemas.vendureMailbox.mails.id,
                       'extractedCode'
                     ]"
                     class="vendure-mailbox-code vendure-mailbox-code--badge"
-                    type="button"
+                    variant="ghost"
                     @click="copyCode(item.extractedCode)"
                   >
                     {{ item.extractedCode }}
-                  </button>
+                  </AppButton>
                 </header>
                 <dl>
                   <div
@@ -909,16 +909,16 @@
                       <el-icon><Search /></el-icon>
                     </template>
                     <template #suffix>
-                      <button
+                      <AppButton
                         v-if="!relayInput"
-                        type="button"
                         class="vendure-relay-paste-btn"
+                        variant="soft"
                         title="从剪贴板粘贴"
                         @click="pasteRelayInput"
                       >
                         <el-icon><CopyDocument /></el-icon>
                         <span>粘贴</span>
-                      </button>
+                      </AppButton>
                     </template>
                   </el-input>
                   <AppButton
@@ -1013,10 +1013,10 @@
                   <span>时间：{{ showDate(relayResult.latestOtp.receivedAt) }}</span>
                 </div>
               </div>
-              <button
-                type="button"
+              <AppButton
                 class="vendure-relay-big-copy-btn"
-                :class="{ 'is-copied': copiedCode === relayResult.latestOtp.code }"
+                :variant="copiedCode === relayResult.latestOtp.code ? 'success' : 'primary'"
+                size="large"
                 title="一键复制最新验证码"
                 @click="copyCodeWithFeedback(relayResult.latestOtp.code)"
               >
@@ -1025,7 +1025,7 @@
                 <span>{{
                   copiedCode === relayResult.latestOtp.code ? '已复制验证码' : '复制验证码'
                 }}</span>
-              </button>
+              </AppButton>
             </div>
 
             <!-- 邮件列表卡片 -->
@@ -1048,28 +1048,27 @@
                   <div class="vendure-relay-mail-subject">{{ mail.subject || '无主题邮件' }}</div>
                   <div v-if="mail.extractedCode" class="vendure-relay-cell-otp">
                     <span class="vendure-relay-otp-chip">{{ mail.extractedCode }}</span>
-                    <button
-                      type="button"
+                    <AppButton
                       class="vendure-copy-btn"
-                      :class="{ 'is-copied': copiedCode === mail.extractedCode }"
+                      :variant="copiedCode === mail.extractedCode ? 'success' : 'default'"
                       title="点击一键复制验证码"
                       @click="copyCodeWithFeedback(mail.extractedCode)"
                     >
                       <el-icon v-if="copiedCode !== mail.extractedCode"><CopyDocument /></el-icon>
                       <el-icon v-else><Check /></el-icon>
                       <span>{{ copiedCode === mail.extractedCode ? '已复制' : '复制' }}</span>
-                    </button>
+                    </AppButton>
                   </div>
                 </div>
 
                 <div v-if="mail.bodyText" class="vendure-relay-mail-body-wrapper">
-                  <button
-                    type="button"
+                  <AppButton
                     class="vendure-relay-toggle-body-btn"
+                    variant="ghost"
                     @click="toggleMailExpand(mail.id)"
                   >
                     <span>{{ expandedMailIds.has(mail.id) ? '收起正文' : '展开正文' }}</span>
-                  </button>
+                  </AppButton>
                   <div v-if="expandedMailIds.has(mail.id)" class="vendure-relay-mail-body">
                     <pre>{{ mail.bodyText }}</pre>
                   </div>

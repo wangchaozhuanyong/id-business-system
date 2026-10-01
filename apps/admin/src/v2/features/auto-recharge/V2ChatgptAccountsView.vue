@@ -1,5 +1,5 @@
 <template>
-  <section class="v2-records-page bank-recharge-page">
+  <section class="v2-page-layout v2-records-page bank-recharge-page">
     <V2PageContext
       description="保存自动充值使用的 ChatGPT 账号。密码与 2FA 加密存储，列表仅显示脱敏邮箱和配置状态。"
     >
@@ -7,29 +7,35 @@
         <AppButton @click="openImport">批量导入</AppButton>
         <AppButton variant="primary" @click="openCreate">新增账号</AppButton>
       </template>
+      <template #filters>
+        <el-form
+          inline
+          label-position="left"
+          require-asterisk-position="right"
+          @submit.prevent="search"
+        >
+          <el-form-item label="账号搜索"
+            ><el-input
+              v-model="keywordInput"
+              placeholder="邮箱或备注"
+              clearable
+              @keyup.enter="search"
+          /></el-form-item>
+          <el-form-item label="会员状态">
+            <el-select v-model="subscriptionState" aria-label="按会员状态筛选">
+              <el-option label="全部" value="all" />
+              <el-option label="未记录开通" value="never_subscribed" />
+              <el-option label="使用中" value="active" />
+              <el-option label="即将到期" value="due_soon" />
+              <el-option label="已到期" value="expired" />
+              <el-option label="到期待核实" value="unknown" />
+            </el-select>
+          </el-form-item>
+          <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
+        </el-form>
+      </template>
     </V2PageContext>
 
-    <el-form
-      inline
-      label-position="left"
-      require-asterisk-position="right"
-      @submit.prevent="search"
-    >
-      <el-form-item label="账号搜索"
-        ><el-input v-model="keywordInput" placeholder="邮箱或备注" clearable @keyup.enter="search"
-      /></el-form-item>
-      <el-form-item label="会员状态">
-        <el-select v-model="subscriptionState" aria-label="按会员状态筛选" style="min-width: 140px">
-          <el-option label="全部" value="all" />
-          <el-option label="未记录开通" value="never_subscribed" />
-          <el-option label="使用中" value="active" />
-          <el-option label="即将到期" value="due_soon" />
-          <el-option label="已到期" value="expired" />
-          <el-option label="到期待核实" value="unknown" />
-        </el-select>
-      </el-form-item>
-      <el-form-item><AppButton @click="search">搜索</AppButton></el-form-item>
-    </el-form>
     <p v-if="operationError" class="bank-recharge-error" role="alert">{{ operationError }}</p>
     <V2AsyncRegion
       skeleton="table"

@@ -55,7 +55,7 @@
             {{ notice }}
           </p>
           <section class="v2-finance-page v2-finance-page--ledger">
-            <div class="v2-finance-ledger-page">
+            <div class="v2-page-stack v2-finance-ledger-page">
               <V2FinanceLedgerOverview :page="page" />
               <V2FinanceLedgerNavigation :page="page" />
               <V2FinanceLedgerToolbar :page="page" />
