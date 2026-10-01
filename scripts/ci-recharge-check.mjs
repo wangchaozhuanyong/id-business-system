@@ -25,10 +25,13 @@ if (part === 'guards') {
     '--test',
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-precision.test.mjs',
-    'scripts/ci-change-scope.test.mjs'
+    'scripts/ci-change-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs'
   ]);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
+  if (changed.some((path) => path.startsWith('scripts/production-release/')))
+    run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
   if (mode === 'admin' || mode === 'mailbox') {
     const checks = [
       'check:admin-ui',

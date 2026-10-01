@@ -28,6 +28,12 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def release_services(admin_only, additions):
+    require(not (admin_only and additions), 'Admin-only release contains migrations')
+    services = ('admin',) if admin_only else SERVICES
+    return services, services if admin_only else (*services, 'migrate')
+
+
 def run(*args, env=None, timeout=300):
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
@@ -197,6 +203,7 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--run-attempt', required=True)
     parser.add_argument('--ci-run-id', required=True)
+    parser.add_argument('--admin-only', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
     require(re.fullmatch(r'[0-9a-f]{40}', args.source_tree), 'Invalid source tree')
@@ -252,10 +259,11 @@ def main():
                 (previous / 'docker-compose.aws-mysql.yml').read_bytes(),
                 'Production compose definition changed')
         additions = migration_plan(previous, release)
+        updated_services, image_services = release_services(args.admin_only, additions)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{args.commit}-{args.run_id}-{args.run_attempt}-{service}'
-                      for service in (*SERVICES, 'migrate')}
-        for service in (*SERVICES, 'migrate'):
+                      for service in image_services}
+        for service in image_services:
             override['services'].setdefault(service, {})['image'] = (
                 f'{args.repository}:{image_tags[service]}')
             override['services'][service]['pull_policy'] = 'never'
@@ -274,7 +282,7 @@ def main():
                                 input=password, capture_output=True, text=True)
         require(result.returncode == 0, 'ECR login failed')
         try:
-            for service in (*SERVICES, 'migrate'):
+            for service in image_services:
                 run('docker', 'pull', f'{args.repository}:{image_tags[service]}', timeout=900)
                 image = json.loads(run('docker', 'image', 'inspect',
                                        f'{args.repository}:{image_tags[service]}'))[0]
@@ -294,11 +302,12 @@ def main():
         assert_no_active_recharge(previous)
 
         step = 'migration'
-        compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+        if not args.admin_only:
+            compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
         step = 'database-grants'
         database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
-        for service in SERVICES:
+        for service in updated_services:
             compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
                     '--force-recreate', service, timeout=300)
             changed.append(service)
@@ -308,7 +317,7 @@ def main():
         step = 'audit-after'
         after_audit = audit(release, release / 'after-audit.json')
         after = {service: service_state(release, service) for service in ALL_SERVICES}
-        require(all(after[s] == before[s] for s in ('mysql', 'caddy')),
+        require(all(after[s] == before[s] for s in ALL_SERVICES if s not in updated_services),
                 'Unrelated service changed')
         public_url = environment_values(release / '.env.aws.production')['APP_PUBLIC_URL'].rstrip('/')
         with urllib.request.urlopen(public_url + '/api/health/ready', timeout=20) as response:
@@ -324,24 +333,25 @@ def main():
             'deployedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'deploymentRun': f'github-actions-{args.run_id}-{args.run_attempt}',
             'previousCommit': args.expected_current, 'previousRelease': str(previous),
-            'servicesUpdated': list(SERVICES), 'sourceArchiveSha256': source_digest,
+            'servicesUpdated': list(updated_services), 'sourceArchiveSha256': source_digest,
             'images': {**old_manifest.get('images', {}), **{
                 service: {'reference': f'{args.repository}:{image_tags[service]}',
                           'digest': after[service]['image'] if service in SERVICES
                           else pulled_images[service], 'sourceCommit': args.commit}
-                for service in (*SERVICES, 'migrate')}},
+                for service in image_services}},
             'backupBeforeRelease': backup['name'],
             'migrationApplied': bool(additions), 'newMigrations': additions,
             'dataAuditBefore': before_audit, 'dataAuditAfter': after_audit,
             'databaseGrants': database_grants,
             'rollback': {'release': str(previous),
-                         'images': {s: before[s]['image'] for s in SERVICES}},
+                         'images': {s: before[s]['image'] for s in updated_services}},
         })
         manifest.pop('prCiRunId', None)
         (release / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         point_current(release, f'{stamp}-publish')
         print(json.dumps({'status': 'DEPLOYED', 'commit': args.commit,
                           'releaseTag': manifest['releaseTag'],
+                          'servicesUpdated': list(updated_services),
                           'migrationApplied': bool(additions),
                           'backupVerified': True,
                           'auditViolations': after_audit['violationCount']}), flush=True)

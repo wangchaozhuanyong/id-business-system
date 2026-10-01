@@ -13,8 +13,19 @@ build_image() {
   echo "Built image: $service"
 }
 
-build_image media-resolver apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile ''
-build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile ''
-build_image api apps/api/Dockerfile.mysql runtime
-build_image migrate apps/api/Dockerfile.mysql migration
+admin_only="$(node --input-type=module - <<'JS'
+import { execFileSync } from 'node:child_process';
+import { isAdminOnly } from './scripts/ci-recharge-scope.mjs';
+const changed = execFileSync('git', ['diff', '--name-only', process.env.EXPECTED_CURRENT, process.env.RELEASE_COMMIT], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+console.log(isAdminOnly(changed));
+JS
+)"
+case "$admin_only" in true|false) ;; *) exit 1 ;; esac
+echo "RELEASE_ADMIN_ONLY=$admin_only" >> "$GITHUB_ENV"
+if [[ "$admin_only" != true ]]; then
+  build_image media-resolver apps/api/src/id-business-v2/workspace/media-resolver/Dockerfile ''
+  build_image auto-recharge apps/api/src/id-business-v2/auto-recharge/worker/Dockerfile ''
+  build_image api apps/api/Dockerfile.mysql runtime
+  build_image migrate apps/api/Dockerfile.mysql migration
+fi
 build_image admin apps/admin/Dockerfile runtime
