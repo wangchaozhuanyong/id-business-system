@@ -54,7 +54,6 @@
                 <el-radio-button value="saved">已保存账号</el-radio-button>
               </el-radio-group>
             </el-form-item>
-
             <el-form-item
               v-if="loginMethod === 'json'"
               label="授权 JSON"
@@ -154,7 +153,6 @@
                 @retry="savedTotpQuery.refresh"
               />
             </template>
-
             <el-form-item v-if="operationMode === 'open_browser'" label="窗口名称" required>
               <el-input
                 v-model="windowName"
@@ -187,6 +185,7 @@
                 v-model:country-code="selectedProxyCountryCode"
                 v-model:proxy-id="selectedProxyId"
                 :countries="availableProxyCountries"
+                :login-country-restriction="loginCountryRestriction"
                 :proxies="availableProxies"
                 :loading="proxiesQuery.phase.value === 'initial-loading'"
                 :error="
@@ -430,6 +429,7 @@ const {
   jsonError,
   loginMethod,
   selectedBankAccountId,
+  loginCountryRestriction,
   selectedPaymentCardId,
   savedBankAccounts,
   bankAccountsQuery,

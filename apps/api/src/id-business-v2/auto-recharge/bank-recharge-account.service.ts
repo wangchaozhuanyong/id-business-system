@@ -5,18 +5,11 @@ import {
   NotFoundException
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { getPagination } from '../../common/pagination';
 import type { IdBusinessV2ChatgptAccount, IdBusinessV2RechargeJob } from '@prisma/client';
-import {
-  accountListItem,
-  parseAccountSubscriptionState
-} from './bank-recharge-account-subscription';
+import { listChatgptAccounts, type ChatgptAccountListQuery } from './bank-recharge-account-list';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
-import {
-  BankRechargeRepository,
-  bankRechargeAccountFilter
-} from './persistence/bank-recharge.repository';
+import { BankRechargeRepository } from './persistence/bank-recharge.repository';
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
@@ -34,6 +27,11 @@ import {
 } from './bank-recharge-validation';
 import { supportedCurrencies, zeroDecimalCurrencies } from './recharge-local-validation';
 import { createLegacyCard } from './bank-recharge-card-legacy-create';
+import {
+  loginNetworkGuard,
+  recordVerifiedLoginNetwork,
+  type VerifiedLoginNetworkInput
+} from './recharge-login-network';
 
 type NewChatgptAccount = {
   email: string;
@@ -51,45 +49,8 @@ export class BankRechargeAccountService {
     private readonly encryption: FieldEncryptionService
   ) {}
 
-  async listAccounts(
-    query: {
-      page?: string;
-      pageSize?: string;
-      keyword?: string;
-      subscriptionState?: string;
-    } = {}
-  ) {
-    const pagination =
-      query.page !== undefined || query.pageSize !== undefined ? getPagination(query) : null;
-    const keyword = bankRechargeText(query.keyword, '搜索内容', 250, false);
-    const subscriptionState = parseAccountSubscriptionState(query.subscriptionState);
-    const now = Date.now();
-    const warningBoundary =
-      now + (await this.repository.renewalWarningDays()) * 24 * 60 * 60 * 1000;
-    const where = bankRechargeAccountFilter(
-      keyword,
-      keyword.includes('@') ? this.encryption.hash(keyword.toLowerCase()) : null,
-      subscriptionState,
-      new Date(now),
-      new Date(warningBoundary)
-    );
-    const items = await this.repository.listAccounts({
-      where,
-      ...(pagination ? { skip: pagination.skip, take: pagination.take } : {})
-    });
-    const subscriptions = await this.repository.subscriptionsForAccounts(
-      items.map((item) => item.id)
-    );
-    const subscriptionsByAccount = new Map(subscriptions.map((item) => [item.accountId, item]));
-    const total = pagination ? await this.repository.countAccounts(where) : items.length;
-    return {
-      total,
-      page: pagination?.page ?? 1,
-      pageSize: pagination?.pageSize ?? total,
-      items: items.map((item) =>
-        accountListItem(item, subscriptionsByAccount.get(item.id), now, warningBoundary)
-      )
-    };
+  async listAccounts(query: ChatgptAccountListQuery = {}) {
+    return listChatgptAccounts(query, this.repository, this.encryption);
   }
 
   private parseNewAccount(value: unknown): NewChatgptAccount {
@@ -396,6 +357,14 @@ export class BankRechargeAccountService {
 
   decryptExpectedEmail(ciphertext: string) {
     return bankRechargeEmail(this.encryption.decrypt(ciphertext));
+  }
+
+  async loginNetworkGuard(tx: V2CommandTransaction, email: string, countryCode: string) {
+    return loginNetworkGuard(tx, email, countryCode, this.repository, this.encryption);
+  }
+
+  async recordVerifiedLoginNetwork(tx: V2CommandTransaction, input: VerifiedLoginNetworkInput) {
+    return recordVerifiedLoginNetwork(tx, input, this.repository, this.encryption, this.audit);
   }
 
   async assertRechargeEligible(tx: V2CommandTransaction, id: string) {
