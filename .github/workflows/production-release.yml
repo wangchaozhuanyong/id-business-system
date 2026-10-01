@@ -144,12 +144,43 @@ jobs:
           import shlex
           program = r'''
           import json
+          import os
           from pathlib import Path
           import shutil
           import subprocess
           base = Path('/opt/id-business-v2')
           manifest = json.loads((base / 'current' / 'release-manifest.json').read_text())
+          previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
+          protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
+              for image in release.get('images', {}).values()}
+          protected_image_ids.update(manifest.get('rollback', {}).get('images', {}).values())
           usage = shutil.disk_usage(base)
+          backup_files = []
+          for path in sorted((base / 'backups/mysql').glob('id-business-v2-*.sql.gz')):
+              if path.is_symlink():
+                  continue
+              try:
+                  backup_files.append({'name': path.name, 'bytes': path.stat().st_size})
+              except FileNotFoundError:
+                  continue
+          backup_summary = {'count': len(backup_files),
+              'totalBytes': sum(item['bytes'] for item in backup_files), 'files': backup_files,
+              'partialCount': len(list((base / 'backups/mysql').glob('.id-business-v2-*.sql.gz.partial')))}
+          storage_directories = []
+          for name in ('backups', 'releases', '.staging', 'logs'):
+              directory = base / name
+              total = 0
+              if directory.is_dir() and not directory.is_symlink():
+                  for root, dirs, files in os.walk(directory, followlinks=False):
+                      dirs[:] = [entry for entry in dirs if not (Path(root) / entry).is_symlink()]
+                      for entry in files:
+                          path = Path(root) / entry
+                          if not path.is_symlink():
+                              try:
+                                  total += path.stat().st_size
+                              except FileNotFoundError:
+                                  continue
+              storage_directories.append({'name': name, 'fileBytes': total})
           def read(*args):
               result = subprocess.run(args, capture_output=True, text=True, timeout=30)
               if result.returncode:
@@ -177,6 +208,8 @@ jobs:
               'newMigrations': manifest.get('newMigrations'),
               'backupBeforeRelease': manifest.get('backupBeforeRelease'),
               'servicesUpdated': manifest.get('servicesUpdated'),
+              'backups': backup_summary, 'storageDirectories': storage_directories,
+              'protectedImageIds': sorted(protected_image_ids),
               'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
               'containers': containers, 'images': images,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
