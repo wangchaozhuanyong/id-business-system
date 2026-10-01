@@ -57,6 +57,8 @@ test('release workflow diagnostics retain control checks and do not hide applica
     '.github/workflows/production-release.yml',
     'scripts/production-release/cleanup-reviewed-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.test.py',
+    'scripts/production-release/cleanup-verified-backups.py',
+    'scripts/production-release/cleanup-verified-backups.test.py',
     'deploy/aws/cache-cleanup-20261001.json',
     'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
     'docs/PRODUCTION_RELEASE_OIDC.md'

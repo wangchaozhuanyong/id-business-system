@@ -30,6 +30,10 @@ if (part === 'guards') {
   ]);
   if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
     run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
+  if (
+    changed.some((path) => path.startsWith('scripts/production-release/cleanup-verified-backups'))
+  )
+    run('python3', ['-B', 'scripts/production-release/cleanup-verified-backups.test.py']);
   if (changed.some((path) => path.startsWith('scripts/production-release/')))
     run('python3', ['-B', 'scripts/production-release/remote-deploy.test.py']);
   if (mode === 'admin' || mode === 'mailbox') {
