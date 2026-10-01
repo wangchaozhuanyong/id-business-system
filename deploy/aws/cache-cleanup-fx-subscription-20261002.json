@@ -1,0 +1,64 @@
+{
+  "mode": "LOCAL_IMAGE_CACHE_ONLY",
+  "expectedCurrent": "7008a91537caa36a90cd8f5f616c9c6f37ce5f5d",
+  "expectedPrevious": "ddbcc8b5c117638e6f4fed668285ab4fadd1968a",
+  "repository": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release",
+  "items": [
+    {
+      "tag": "d3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-admin",
+      "imageId": "sha256:ed07de3b39de68f5a1a98bc144602f8e524a98c20d2d0d77d7b3b40e5d3150a1",
+      "size": "51.4MB"
+    },
+    {
+      "tag": "d3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-migrate",
+      "imageId": "sha256:830ec055f5fc1e4540aec6da0797a58ce548792c967bb1d1ab820d847578e85d",
+      "size": "758MB"
+    },
+    {
+      "tag": "d3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-api",
+      "imageId": "sha256:27d15a3bdda6252ad89ad4ed9c91281e59c2c147c91ac2ea358b5478c65faf41",
+      "size": "379MB"
+    },
+    {
+      "tag": "d3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-auto-recharge",
+      "imageId": "sha256:e143a2dcee2d20fae98f68ed6353cb9b50294423409ddb58e5ce20b0296af965",
+      "size": "1.27GB"
+    },
+    {
+      "tag": "d3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-media-resolver",
+      "imageId": "sha256:3021746f364346672d241776e0eecdace94838611e68723a37d6cb848f157705",
+      "size": "916MB"
+    },
+    {
+      "tag": "73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-admin",
+      "imageId": "sha256:b8eb7425eaa26d47395410abac86d998b75526069d75e55489c29ec33a136888",
+      "size": "51.4MB"
+    },
+    {
+      "tag": "73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-migrate",
+      "imageId": "sha256:d06b296a1a6e00f643dc77b45bf2135dcf73b313baec2725017b0f8d66232161",
+      "size": "760MB"
+    },
+    {
+      "tag": "73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-api",
+      "imageId": "sha256:4242fa01688c7d840f42990d41dfab1ea0b7db054ad04a6e39bd19d44906fef5",
+      "size": "380MB"
+    },
+    {
+      "tag": "73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-auto-recharge",
+      "imageId": "sha256:369d24ed08406b5cc183cafde94369905f6fbeec53d5cd24864824dbf06d347b",
+      "size": "1.27GB"
+    },
+    {
+      "tag": "73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-media-resolver",
+      "imageId": "sha256:f33f751822540f803731630d9cb81f9b1537fd2135fd54595f297e90f0b95a11",
+      "size": "916MB"
+    }
+  ],
+  "protectAllContainers": true,
+  "protectCurrentAndPreviousReleases": true,
+  "requireSameImageRecoverableFromEcr": true,
+  "estimatedReclaimedBytes": null,
+  "approval": "EXPLICIT_USER_APPROVAL_REQUIRED_BEFORE_APPLY",
+  "scopeReason": "两个未上线候选版本留下的本机镜像缓存；保护当前与上一版及回滚镜像，不删除远端镜像、容器、数据卷、发布目录、数据库和备份。"
+}

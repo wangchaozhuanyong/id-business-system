@@ -58,10 +58,12 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'scripts/production-release/cleanup-reviewed-cache.py',
     'scripts/production-release/cleanup-reviewed-cache.test.py',
     'deploy/aws/cache-cleanup-20261001.json',
+    'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
     'docs/PRODUCTION_RELEASE_OIDC.md'
   ];
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
   assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(isCiOnly(['deploy/aws/cache-cleanup-unreviewed.json']), false);
   assert.notEqual(checkMode([...paths, 'docker-compose.aws-mysql.yml'], schema, schema), 'ci-only');
   assert.equal(
     checkMode([...paths, 'apps/api/src/auth/auth.controller.ts'], schema, schema),

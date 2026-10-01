@@ -8,6 +8,16 @@ import shutil
 import subprocess
 
 BASE = Path('/opt/id-business-v2')
+REVIEWED_PLANS = {
+    '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f': (
+        '6a674279575e9c1468ce570cc4d8fc6d7cc4c028-36845230653-1-',
+        'cef5c05d5039f98c24b4b6b17d979535e5ae55d1-36814755308-1-',
+    ),
+    '52d0eaab7e2ae4526dbc5324a007df774e5d5a8decd0463b4d8c5a14aa1d1235': (
+        'd3f58759056ad0234b6ad49fd785a1f634c5b576-36877729414-1-',
+        '73c88ca2c4a4b3a0afee15ae9d8b7222bf205085-36888498228-1-',
+    ),
+}
 
 
 def require(condition, label):
@@ -44,11 +54,11 @@ def main():
     parser.add_argument('--approved-plan-sha256')
     args = parser.parse_args()
     plan = json.loads(args.plan_json)
-    require(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f', 'Plan differs from the reviewed ten-reference digest')
+    digest = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    require(digest in REVIEWED_PLANS, 'Plan differs from the reviewed ten-reference digest')
     if args.apply:
-        require(args.approved_plan_sha256 == '2b8ecd88497ec3cbe0fca40ab34844265adb36bce593515175afd42f9bebea4f', 'Explicit plan approval required')
-    prefixes = ('6a674279575e9c1468ce570cc4d8fc6d7cc4c028-36845230653-1-',
-                'cef5c05d5039f98c24b4b6b17d979535e5ae55d1-36814755308-1-')
+        require(args.approved_plan_sha256 == digest, 'Explicit plan approval required')
+    prefixes = REVIEWED_PLANS[digest]
     require(plan['repository'] == '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release',
             'Unexpected repository')
     require(len(plan['items']) == 10, 'Expected exactly ten reviewed cache references')
