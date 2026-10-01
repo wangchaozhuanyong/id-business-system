@@ -59,7 +59,7 @@ describe('personal workspace UI contract', () => {
     expect(websiteMonitorDrawer).toContain(
       "const DEFAULT_WEBSITE_MONITOR_URL = 'https://flashcast.com.my'"
     );
-    expect(websiteMonitorDrawer).toContain('websiteUrl.value = DEFAULT_WEBSITE_MONITOR_URL');
+    expect(websiteMonitorDrawer).toContain('const websiteUrl = ref(DEFAULT_WEBSITE_MONITOR_URL)');
     expect(workspaceApi).toContain("http.post('/id-business-v2/workspace-website-monitor/check'");
     expect(websiteMonitorDrawer).not.toMatch(/localStorage|sessionStorage/);
     expect(websiteMonitorDrawer).toContain('<V2WebsiteAnalyticsPanel :active="modelValue" />');

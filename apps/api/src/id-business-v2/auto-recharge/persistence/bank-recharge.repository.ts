@@ -102,6 +102,13 @@ export class BankRechargeRepository {
   findAccount(tx: V2CommandTransaction, id: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { id } });
   }
+  async hasAccountEmailHashes(emailHashes: string[]) {
+    return (
+      (await this.prisma.idBusinessV2ChatgptAccount.count({
+        where: { emailHash: { in: emailHashes } }
+      })) > 0
+    );
+  }
   findAccountByEmailHash(tx: V2CommandTransaction, emailHash: string) {
     return tx.idBusinessV2ChatgptAccount.findUnique({ where: { emailHash } });
   }

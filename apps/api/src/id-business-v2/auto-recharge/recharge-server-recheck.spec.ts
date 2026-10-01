@@ -72,6 +72,63 @@ function dependencies() {
 }
 
 describe('server original payment recheck', () => {
+  it('原单复查使用当前用户已保存的 2FA，不传付款资料或重新付款授权', async () => {
+    const { repository, deps } = dependencies();
+    const totpAccountId = '88888888-8888-4888-8888-888888888888';
+    const totp = {
+      secret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+      algorithm: 'sha1',
+      digits: 6,
+      period: 30
+    };
+    const totpAccounts = { forExecution: vi.fn().mockResolvedValue(totp) };
+    let dispatched: Record<string, unknown> = {};
+    vi.mocked(sendRechargeWorkerRequest).mockImplementationOnce(async (_path, body) => {
+      dispatched = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+      return 'accepted';
+    });
+    await startServerRecheck(
+      {
+        id,
+        sourceJobId: sourceId,
+        login: { email: 'test@example.invalid', password: 'synthetic-password', totpAccountId }
+      },
+      operator,
+      { ...deps, totpAccounts } as never
+    );
+    expect(totpAccounts.forExecution).toHaveBeenCalledWith({}, totpAccountId, operator);
+    expect(dispatched.login).toEqual({
+      email: 'test@example.invalid',
+      password: 'synthetic-password',
+      totp
+    });
+    expect(dispatched.recheckOnly).toBe(true);
+    expect(dispatched).not.toHaveProperty('details');
+    expect(dispatched).not.toHaveProperty('safety');
+    expect(dispatched.login).not.toHaveProperty('totpAccountId');
+    expect(JSON.stringify(repository.createJob.mock.calls)).not.toContain(totp.secret);
+    expect(JSON.stringify(deps.audit.append.mock.calls)).not.toContain(totp.secret);
+  });
+
+  it.each([
+    { totpAccountId: 'invalid' },
+    { totpAccountId: id, totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' }
+  ])('复查拒绝无效或多种 2FA 来源', async (selection) => {
+    const { repository, deps } = dependencies();
+    await expect(
+      startServerRecheck(
+        {
+          id,
+          sourceJobId: sourceId,
+          login: { email: 'test@example.invalid', password: 'synthetic-password', ...selection }
+        },
+        operator,
+        deps as never
+      )
+    ).rejects.toThrow('登录资料格式无效');
+    expect(repository.createJob).not.toHaveBeenCalled();
+  });
+
   it('creates a read-only task using the original account and never sends card details', async () => {
     const { repository, deps } = dependencies();
     await expect(

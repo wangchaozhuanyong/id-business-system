@@ -158,13 +158,33 @@ export const bankRechargeApi = {
       http.get(`${base}/accounts`, { params: query, signal: options.signal })
     );
   },
-  createAccount(input: { email: string; password: string; totpSecret: string; remark: string }) {
+  createAccount(input: { email: string; password?: string; totpSecret?: string; remark?: string }) {
     return request<{ id: string }>(http.post(`${base}/accounts`, input));
   },
   importAccounts(
-    accounts: Array<{ email: string; password: string; totpSecret: string; remark: string }>
+    accounts: Array<{ email: string; password?: string; totpSecret?: string; remark?: string }>,
+    primaryAccountId?: string
   ) {
-    return request<{ imported: number }>(http.post(`${base}/accounts/import`, { accounts }));
+    return withV2QueryInvalidation(
+      request<{ imported: number }>(
+        http.post(`${base}/accounts/import`, { accounts, primaryAccountId })
+      ),
+      'auto-recharge'
+    );
+  },
+  copyAccount(id: string) {
+    return request<{ text: string }>(http.post(`${base}/accounts/${id}/copy`, {}));
+  },
+  accountCopySettings(options: ApiRequestOptions = {}) {
+    return request<{ suffix: string }>(
+      http.get(`${base}/account-copy-settings`, { signal: options.signal })
+    );
+  },
+  updateAccountCopySettings(suffix: string) {
+    return withV2QueryInvalidation(
+      request<{ suffix: string }>(http.put(`${base}/account-copy-settings`, { suffix })),
+      'auto-recharge'
+    );
   },
   updateAccount(id: string, input: Record<string, unknown>) {
     return request<{ id: string }>(http.patch(`${base}/accounts/${id}`, input));

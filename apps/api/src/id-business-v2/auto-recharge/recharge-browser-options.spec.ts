@@ -67,6 +67,20 @@ function fixture() {
 }
 
 describe('窗口配置校验', () => {
+  it('内部复制后缀不进入执行器，修改窗口配置仍保留后缀', async () => {
+    const { service, changeRow, repository } = fixture();
+    const options = { ...V2_RECHARGE_BROWSER_DEFAULTS, accountCopySuffix: 'fixture suffix' };
+    expect(storedBrowserOptions(options)).toEqual(V2_RECHARGE_BROWSER_DEFAULTS);
+    changeRow({ browserOptions: options });
+    await service.update(
+      { ...base, browserOptions: staticOptions, staticProxyCredentials: credentials },
+      operator
+    );
+    expect(repository.upsert.mock.calls.at(-1)?.[2].browserOptions).toMatchObject({
+      accountCopySuffix: 'fixture suffix',
+      proxyMode: 'static'
+    });
+  });
   it('旧空设置回退原默认值，合法指定设置完整保留', () => {
     expect(V2_RECHARGE_BROWSER_DEFAULTS.timezone).toBe('Asia/Shanghai');
     expect(storedBrowserOptions(null)).toEqual(V2_RECHARGE_BROWSER_DEFAULTS);
@@ -141,7 +155,7 @@ describe('窗口设置持久化与运行时', () => {
     };
     f.proxies.find.mockResolvedValue(proxy);
     f.proxies.findInTransaction.mockResolvedValue(proxy);
-    f.changeRow({ browserOptions: staticOptions });
+    f.changeRow({ browserOptions: { ...staticOptions, accountCopySuffix: 'fixture suffix' } });
     const result = await f.service.updateServerProxySettings({ proxyId }, operator as never);
     expect(result).toMatchObject({
       proxyId,
@@ -149,7 +163,11 @@ describe('窗口设置持久化与运行时', () => {
       legacyConfigured: true
     });
     expect(f.repository.upsert).toHaveBeenCalledWith(expect.anything(), operator.id, {
-      browserOptions: { ...staticOptions, serverDefaultProxyId: proxyId }
+      browserOptions: {
+        ...staticOptions,
+        accountCopySuffix: 'fixture suffix',
+        serverDefaultProxyId: proxyId
+      }
     });
     expect(f.encryption.decrypt).not.toHaveBeenCalled();
     expect(f.audit.append).toHaveBeenCalledWith(
@@ -158,6 +176,7 @@ describe('窗口设置持久化与运行时', () => {
     );
     const options = f.repository.upsert.mock.calls[0]?.[2].browserOptions;
     expect(storedBrowserOptions(options)).toEqual(staticOptions);
+    expect(options.accountCopySuffix).toBe('fixture suffix');
     await f.service.update({ ...base, browserOptions: staticOptions }, operator as never);
     expect(f.repository.upsert.mock.calls.at(-1)?.[2].browserOptions.serverDefaultProxyId).toBe(
       proxyId
@@ -171,6 +190,9 @@ describe('窗口设置持久化与运行时', () => {
     expect(
       f.repository.upsert.mock.calls.at(-1)?.[2].browserOptions.serverDefaultProxyId
     ).toBeNull();
+    expect(f.repository.upsert.mock.calls.at(-1)?.[2].browserOptions.accountCopySuffix).toBe(
+      'fixture suffix'
+    );
   });
   it('不存在、停用及格式错误的默认代理不会写入设置', async () => {
     const f = fixture();

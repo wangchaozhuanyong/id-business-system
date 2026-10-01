@@ -2,6 +2,7 @@
   <div>
     <V2FormDrawer
       v-model="drawerOpen"
+      retain-draft
       :title="correcting ? '更正银充订单' : creating ? '手工录入银充订单' : '银充订单资料'"
       :description="
         creating
@@ -314,6 +315,7 @@
     <V2QuickCustomerDrawer v-model="quickCustomerOpen" @created="customerCreated" />
     <V2FormDrawer
       v-model="currencyOpen"
+      retain-draft
       title="新增银充币种"
       description="只添加自动充值执行器支持的币种；币种精度与官网付款一致。"
       :confirm-loading="working"
@@ -336,6 +338,7 @@
     </V2FormDrawer>
     <V2FormDrawer
       v-model="cardOpen"
+      retain-draft
       title="新增银充银行卡"
       description="只保存名称和卡尾四位，不保存完整卡号。"
       :confirm-loading="working"
@@ -366,6 +369,7 @@
     </V2FormDrawer>
     <V2FormDrawer
       v-model="refundOpen"
+      retain-draft
       title="登记银充退款"
       description="按实际已发生金额登记。官网本金和银行手续费未退回时保持为零，不会自动恢复代付资金。"
       :confirm-loading="working"

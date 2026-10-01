@@ -16,7 +16,8 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import {
   V2CommandTransactionManager,
   V2TransactionalAuditService,
-  toV2JsonDocument
+  toV2JsonDocument,
+  type V2CommandTransaction
 } from '../runtime/public-api';
 import type {
   CreateIdBusinessV2TotpAccountDto,
@@ -59,6 +60,28 @@ export class IdBusinessV2TotpAccountService {
     const rows = await this.repository.listByUser(userId);
     const timestamp = Date.now();
     return { items: rows.map((row) => this.toResponse(row, timestamp)) };
+  }
+
+  async forExecution(
+    tx: V2CommandTransaction,
+    accountIdInput: unknown,
+    operator: AuthenticatedUser
+  ) {
+    const userId = this.requireUserId(operator);
+    const accountId = this.normalizeId(accountIdInput);
+    const row = await this.repository.findByIdAndUser(accountId, userId, tx);
+    if (!row) throw new NotFoundException('2FA 账号不存在或不属于当前用户');
+    const configuration = this.toConfiguration(row);
+    await this.audit.append(tx, {
+      userId,
+      module: 'id_business_v2',
+      action: 'id_business_v2.workspace_totp_account.use',
+      objectType: 'id_business_v2_totp_account',
+      objectId: row.id,
+      afterData: { algorithm: row.algorithm, digits: row.digits, period: row.period },
+      remark: '服务器自动充值使用当前用户已保存的 2FA 账号'
+    });
+    return configuration;
   }
 
   async create(
@@ -269,7 +292,7 @@ export class IdBusinessV2TotpAccountService {
     };
   }
 
-  private toResponse(row: SavedTotpRow, timestamp: number): V2SavedTotpAccount {
+  private toConfiguration(row: SavedTotpRow) {
     let secret: string | null;
     try {
       secret = this.encryption.decrypt(row.secretEncrypted);
@@ -277,15 +300,11 @@ export class IdBusinessV2TotpAccountService {
       throw new ServiceUnavailableException('保存的 2FA 账号暂时无法解密');
     }
     if (!secret) throw new ServiceUnavailableException('保存的 2FA 账号缺少密钥');
-    const generated = generateIdBusinessV2TotpCode(
-      {
-        algorithm: row.algorithm,
-        digits: row.digits,
-        period: row.period,
-        secret
-      },
-      timestamp
-    );
+    return { algorithm: row.algorithm, digits: row.digits, period: row.period, secret };
+  }
+
+  private toResponse(row: SavedTotpRow, timestamp: number): V2SavedTotpAccount {
+    const generated = generateIdBusinessV2TotpCode(this.toConfiguration(row), timestamp);
     return {
       id: row.id,
       name: row.name,

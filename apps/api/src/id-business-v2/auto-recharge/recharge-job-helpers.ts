@@ -1,4 +1,15 @@
 import type { V2RechargeDetails, V2RechargeStart } from '@apple-business/shared';
+import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+
+export function parseRechargeTotpSecret(secret: string) {
+  const configuration = parseIdBusinessV2TotpSecret(secret);
+  return {
+    secret: configuration.secret,
+    algorithm: configuration.algorithm,
+    digits: configuration.digits,
+    period: configuration.period
+  };
+}
 
 const browserProfilePattern = /^[a-f0-9]{32}$/i;
 

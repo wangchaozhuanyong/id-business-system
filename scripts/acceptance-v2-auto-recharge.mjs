@@ -585,12 +585,13 @@ try {
     assert.equal(await serverSettingsDrawer.getByLabel('本机连接密钥').count(), 0);
     await serverSettingsDrawer.getByRole('combobox', { name: '选择服务器默认代理' }).click();
     await page.getByRole('option', { name: /菲律宾验收代理/ }).click();
-    await serverSettingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
-    await page
-      .locator('.el-message-box')
-      .getByRole('button', { name: '继续填写', exact: true })
-      .click();
-    assert.equal(await serverSettingsDrawer.isVisible(), true);
+    await serverSettingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
+    await serverSettingsDrawer.waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('.el-message-box').count(), 0);
+    await page.getByRole('button', { name: '服务器默认代理' }).click();
+    await waitFor(async () =>
+      (await serverSettingsDrawer.locator('.el-select').innerText()).includes('菲律宾验收代理')
+    );
     await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
     await serverSettingsDrawer.getByText('模拟默认代理保存失败，请重试').waitFor();
     await serverSettingsDrawer.getByRole('button', { name: '保存默认代理' }).click();
@@ -613,7 +614,7 @@ try {
           .innerText()
       ).includes('菲律宾验收代理')
     );
-    await page.getByText('当前账单国家是', { exact: false }).waitFor();
+    assert.equal(await page.getByText('当前账单国家是', { exact: false }).count(), 0);
     await page.getByRole('button', { name: '服务器默认代理' }).click();
     await serverSettingsDrawer.getByRole('button', { name: '查看完整链接' }).click();
     await page
@@ -673,7 +674,7 @@ try {
       continue;
     }
     await page.getByRole('button', { name: '服务器默认代理' }).click();
-    await serverSettingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
+    await serverSettingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     await serverSettingsDrawer.waitFor({ state: 'hidden' });
     await page.getByText('本机充值', { exact: true }).click();
     assert.equal(
@@ -732,10 +733,12 @@ try {
       assert.equal(await toggle.getAttribute('aria-checked'), 'false');
     }
     await settingsDrawer.screenshot({ path: resolve(evidence, `window-options-${width}.png`) });
-    await settingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
-    await page.getByRole('button', { name: '继续填写', exact: true }).click();
-    assert.equal(await settingsDrawer.getByText('测试代理分组', { exact: true }).isVisible(), true);
-    assert.equal(await settingsDrawer.getByText('续费账号', { exact: true }).isVisible(), true);
+    await settingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
+    await settingsDrawer.waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('.el-message-box').count(), 0);
+    await page.getByRole('button', { name: '代理 IP 与窗口设置', exact: true }).click();
+    await settingsDrawer.getByText('测试代理分组', { exact: true }).waitFor();
+    await settingsDrawer.getByText('续费账号', { exact: true }).waitFor();
     await settingsDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
     await settingsDrawer.getByRole('alert').filter({ hasText: '模拟设置保存失败' }).waitFor();
     assert.equal(
@@ -805,7 +808,7 @@ try {
       .scrollIntoViewIfNeeded();
     assert.equal(await settingsDrawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false);
     await settingsDrawer.screenshot({ path: resolve(evidence, `settings-${width}.png`) });
-    await settingsDrawer.getByRole('button', { name: '取消', exact: true }).click();
+    await settingsDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     await settingsDrawer.waitFor({ state: 'hidden' });
     const billingEmail = page.locator('.el-form-item').filter({
       has: page.locator('.el-form-item__label', { hasText: '账单邮箱' })
@@ -927,7 +930,7 @@ try {
             'reload-default',
             'full-link-view',
             'clear-default',
-            'billing-country-conflict',
+            'independent-proxy-and-billing-countries',
             'responsive-no-overflow'
           ]
         : [
@@ -935,7 +938,7 @@ try {
             'automatic-local-json',
             'registered-email',
             'proxy-settings-save-retry',
-            'settings-unsaved-close-guard',
+            'settings-close-and-reopen-retains-draft',
             'saved-proxy-used-by-next-job',
             'existing-group-and-tag-dropdowns',
             'window-options-save-readback-and-launch',

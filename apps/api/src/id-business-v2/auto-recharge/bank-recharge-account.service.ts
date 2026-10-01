@@ -2,7 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { IdBusinessV2ChatgptAccount, IdBusinessV2RechargeJob } from '@prisma/client';
@@ -16,6 +17,7 @@ import {
   type V2CommandTransaction
 } from '../runtime/public-api';
 import { generateIdBusinessV2TotpCode, parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+import { IdBusinessV2VendureMailboxService } from '../workspace/public-api';
 import {
   bankRechargeCurrency,
   bankRechargeEmail,
@@ -46,7 +48,8 @@ export class BankRechargeAccountService {
     private readonly repository: BankRechargeRepository,
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
-    private readonly encryption: FieldEncryptionService
+    private readonly encryption: FieldEncryptionService,
+    @Optional() private readonly mailboxes?: IdBusinessV2VendureMailboxService
   ) {}
 
   async listAccounts(query: ChatgptAccountListQuery = {}) {
@@ -56,7 +59,10 @@ export class BankRechargeAccountService {
   private parseNewAccount(value: unknown): NewChatgptAccount {
     const input = bankRechargeObject(value);
     const email = bankRechargeEmail(input.email);
-    const password = bankRechargePassword(input.password);
+    const password =
+      input.password === undefined || input.password === ''
+        ? ''
+        : bankRechargePassword(input.password);
     const totpInput = bankRechargeText(input.totpSecret, '2FA 密钥', 2048, false);
     let totp: ReturnType<typeof parseIdBusinessV2TotpSecret> | null = null;
     if (totpInput) {
@@ -138,6 +144,14 @@ export class BankRechargeAccountService {
     });
     const emails = new Set(accounts.map((account) => account.email));
     if (emails.size !== accounts.length) throw new BadRequestException('导入内容包含重复邮箱');
+    if (input.primaryAccountId !== undefined) {
+      const primaryAccountId = bankRechargeText(input.primaryAccountId, '所属主邮箱', 80);
+      if (!this.mailboxes) throw new ConflictException('邮箱验证码查询服务不可用，账号未导入');
+      const hashes = accounts.map((account) => this.encryption.hash(account.email)!);
+      if (await this.repository.hasAccountEmailHashes(hashes))
+        throw new ConflictException('部分 ChatGPT 邮箱已保存，整批未导入');
+      await this.mailboxes.ensureAccountAliases(primaryAccountId, [...emails], operator);
+    }
     return this.transactions.execute(
       async (tx) => {
         for (const account of accounts) await this.insertAccount(tx, account, operator);

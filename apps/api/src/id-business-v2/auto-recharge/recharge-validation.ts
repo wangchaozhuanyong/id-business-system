@@ -79,7 +79,9 @@ export function validateStart(value: unknown): V2RechargeStart {
     if (input.login !== undefined) {
       const login = object(input.login);
       if (
-        Object.keys(login).some((key) => !['email', 'password', 'totpSecret'].includes(key)) ||
+        Object.keys(login).some(
+          (key) => !['email', 'password', 'totpSecret', 'totpAccountId'].includes(key)
+        ) ||
         typeof login.email !== 'string' ||
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login.email) ||
         login.email.length > 250 ||
@@ -87,7 +89,10 @@ export function validateStart(value: unknown): V2RechargeStart {
         login.password.length < 1 ||
         login.password.length > 1024 ||
         (login.totpSecret !== undefined &&
-          (typeof login.totpSecret !== 'string' || login.totpSecret.length > 2048))
+          (typeof login.totpSecret !== 'string' || login.totpSecret.length > 2048)) ||
+        (login.totpAccountId !== undefined &&
+          (typeof login.totpAccountId !== 'string' || !uuidPattern.test(login.totpAccountId))) ||
+        (login.totpSecret !== undefined && login.totpAccountId !== undefined)
       )
         throw new BadRequestException('本次登录资料格式无效');
     }

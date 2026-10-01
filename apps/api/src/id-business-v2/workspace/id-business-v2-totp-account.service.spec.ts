@@ -92,6 +92,48 @@ describe('IdBusinessV2TotpAccountService', () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
+  it('为执行器读取当前用户账号，保留参数且审计不包含密钥或验证码', async () => {
+    repository.findByIdAndUser.mockResolvedValueOnce(
+      account({ algorithm: 'sha256', digits: 8, period: 60 })
+    );
+    const configuration = await service.forExecution(tx as never, accountId, operator);
+    expect(repository.findByIdAndUser).toHaveBeenCalledWith(accountId, operator.id, tx);
+    expect(configuration).toEqual({ algorithm: 'sha256', digits: 8, period: 60, secret });
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.workspace_totp_account.use',
+        objectId: accountId,
+        afterData: { algorithm: 'sha256', digits: 8, period: 60 }
+      })
+    );
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('token');
+  });
+
+  it('执行器不能读取不存在或属于其他用户的账号', async () => {
+    repository.findByIdAndUser.mockResolvedValueOnce(null);
+    await expect(service.forExecution(tx as never, accountId, operator)).rejects.toBeInstanceOf(
+      NotFoundException
+    );
+    expect(repository.findByIdAndUser).toHaveBeenCalledWith(accountId, operator.id, tx);
+    expect(encryption.decrypt).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+    await expect(service.forExecution(tx as never, 'invalid-id', operator)).rejects.toThrow(
+      '2FA 账号标识无效'
+    );
+  });
+
+  it('执行器解密失败时不暴露底层错误，不写使用成功审计', async () => {
+    encryption.decrypt.mockImplementationOnce(() => {
+      throw new Error('synthetic-secret-decryption-failure');
+    });
+    await expect(service.forExecution(tx as never, accountId, operator)).rejects.toThrow(
+      '保存的 2FA 账号暂时无法解密'
+    );
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
   it('encrypts a new secret and audits metadata without secret material', async () => {
     await service.create(
       {

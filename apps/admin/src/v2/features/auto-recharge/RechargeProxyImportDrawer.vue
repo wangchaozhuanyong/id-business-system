@@ -1,5 +1,6 @@
 <template>
   <V2FormDrawer
+    retain-draft
     :model-value="true"
     title="批量导入代理 IP"
     description="每行依次填写国家、IP 链接、IP 属性、备注1、备注2。"
@@ -42,14 +43,17 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { getApiErrorMessage } from '@/api/client';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { rechargeProxyApi } from './recharge-proxy-api';
 import { parseRechargeProxyImport } from './recharge-proxy-import';
 import { proxyProtocolLabels, type ProxyProtocol } from './recharge-proxy-options';
 const emit = defineEmits<{ close: []; imported: [count: number] }>();
-const importText = ref('');
-const importProtocol = ref<ProxyProtocol>('http');
+const { importText, importProtocol } = useV2SessionDraft('recharge-proxy-import', () => ({
+  importText: ref(''),
+  importProtocol: ref<ProxyProtocol>('http')
+}));
 const importing = ref(false);
 const importError = ref('');
 async function importProxies() {

@@ -203,27 +203,31 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({ diagnostics: { available_plans: ['plus'] } });
   });
-  it('keeps controlled quote fields and removes credentials and legacy display metadata', () => {
-    expect(
-      safeDocument({
-        quote: { ...quote, plan_source: 'official_checkout_selected_radio' },
-        initial_quote: { ...quote, today: null, tax: null },
+  it.each(['plus', 'pro-500'] as const)(
+    'keeps controlled %s quote and original-order fields',
+    (plan) => {
+      const tierQuote = { ...quote, plan };
+      expect(
+        safeDocument({
+          quote: { ...tierQuote, plan_source: 'official_checkout_selected_radio' },
+          initial_quote: { ...tierQuote, today: null, tax: null },
+          quote_authority: 'official_checkout_response',
+          recheck_plan: plan,
+          checkout_identifier: 'cs_original_synthetic',
+          sessionJson: 'secret',
+          cvc: 'secret',
+          accessToken: 'secret'
+        })
+      ).toEqual({
+        quote: tierQuote,
+        initial_quote: { ...tierQuote, today: null, tax: null },
         quote_authority: 'official_checkout_response',
-        recheck_plan: 'pro-20x',
-        checkout_identifier: 'cs_original_synthetic',
-        sessionJson: 'secret',
-        cvc: 'secret',
-        accessToken: 'secret'
-      })
-    ).toEqual({
-      quote,
-      initial_quote: { ...quote, today: null, tax: null },
-      quote_authority: 'official_checkout_response',
-      recheck_plan: 'pro-20x',
-      checkout_identifier: 'cs_original_synthetic'
-    });
-    expect(safeDocument({ recheck_plan: 'other' })).toEqual({});
-  });
+        recheck_plan: plan,
+        checkout_identifier: 'cs_original_synthetic'
+      });
+      expect(safeDocument({ recheck_plan: 'other' })).toEqual({});
+    }
+  );
   it('does not turn an unknown amount into zero', () => {
     expect(
       (safeDocument({ quote: { ...quote, today: null } }).quote as typeof quote).today
@@ -248,9 +252,10 @@ describe('recharge input and durable evidence', () => {
       validateDetailsSubmission({ addressId, details: { ...paymentDetails, extra: 'private' } })
     ).toThrow();
   });
-  it('服务器任务必须限定单次付款，拒绝外部覆盖代理与授权配置', () => {
+  it.each(['plus', 'pro-500'])('%s 服务器任务必须限定单次付款与上限', (plan) => {
     const server = {
       ...prepareInput(),
+      plan,
       action: 'server',
       lockedCurrency: 'MYR',
       maxAmount: '100.00',

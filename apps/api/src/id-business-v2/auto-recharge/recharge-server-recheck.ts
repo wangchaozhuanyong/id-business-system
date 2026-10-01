@@ -9,7 +9,8 @@ import {
   V2TransactionalAuditService,
   toV2JsonDocument
 } from '../runtime/public-api';
-import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+import type { IdBusinessV2TotpAccountService } from '../workspace/public-api';
+import { parseRechargeTotpSecret } from './recharge-job-helpers';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeRepository } from './persistence/recharge.repository';
@@ -25,6 +26,7 @@ export async function startServerRecheck(
     audit: V2TransactionalAuditService;
     accounts?: BankRechargeAccountService;
     proxies?: RechargeProxyService;
+    totpAccounts?: IdBusinessV2TotpAccountService;
     finishUnreceivedJob: (id: string, ownerId: string, unknown: boolean) => Promise<void>;
   }
 ) {
@@ -64,12 +66,14 @@ export async function startServerRecheck(
   let manualLogin: {
     email: string;
     password: string;
-    totp?: ReturnType<typeof parseIdBusinessV2TotpSecret>;
+    totp?: ReturnType<typeof parseRechargeTotpSecret>;
   } | null = null;
   if (input.login !== undefined) {
     const login = object(input.login);
     if (
-      Object.keys(login).some((key) => !['email', 'password', 'totpSecret'].includes(key)) ||
+      Object.keys(login).some(
+        (key) => !['email', 'password', 'totpSecret', 'totpAccountId'].includes(key)
+      ) ||
       typeof login.email !== 'string' ||
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login.email) ||
       login.email.length > 250 ||
@@ -77,7 +81,10 @@ export async function startServerRecheck(
       !login.password ||
       login.password.length > 1024 ||
       (login.totpSecret !== undefined &&
-        (typeof login.totpSecret !== 'string' || login.totpSecret.length > 2048))
+        (typeof login.totpSecret !== 'string' || login.totpSecret.length > 2048)) ||
+      (login.totpAccountId !== undefined &&
+        (typeof login.totpAccountId !== 'string' || !uuidPattern.test(login.totpAccountId))) ||
+      (login.totpSecret !== undefined && login.totpAccountId !== undefined)
     ) {
       throw new BadRequestException('本次登录资料格式无效');
     }
@@ -85,7 +92,7 @@ export async function startServerRecheck(
       manualLogin = {
         email: login.email.trim(),
         password: login.password,
-        ...(login.totpSecret ? { totp: parseIdBusinessV2TotpSecret(login.totpSecret) } : {})
+        ...(login.totpSecret ? { totp: parseRechargeTotpSecret(login.totpSecret) } : {})
       };
     } catch {
       throw new BadRequestException('2FA 密钥格式无效');
@@ -156,6 +163,12 @@ export async function startServerRecheck(
       const login = account ? deps.accounts!.savedLogin(account) : manualLogin;
       if (login && login.email.toLowerCase() !== expectedEmail.toLowerCase())
         throw new ConflictException('复查邮箱与原任务不一致');
+      const totpAccountId =
+        input.login === undefined ? undefined : object(input.login).totpAccountId;
+      if (login && totpAccountId) {
+        if (!deps.totpAccounts) throw new ServiceUnavailableException('系统 2FA 服务不可用');
+        login.totp = await deps.totpAccounts.forExecution(tx, totpAccountId, operator);
+      }
       await deps.accounts!.loginNetworkGuard(tx, expectedEmail, selectedProxy.countryCode);
       const job = await deps.repository.createJob(tx, {
         id: jobId,

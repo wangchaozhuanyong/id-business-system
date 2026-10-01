@@ -50,7 +50,7 @@
       <div class="v2-table-column-settings__footer">
         <AppButton variant="ghost" :disabled="saving" @click="resetToDefault"> 恢复默认 </AppButton>
         <div>
-          <AppButton variant="ghost" :disabled="saving" @click="requestClose">取消</AppButton>
+          <AppButton variant="ghost" :disabled="saving" @click="requestClose">关闭</AppButton>
           <AppButton variant="primary" :loading="saving" :disabled="saving" @click="saveSettings">
             保存设置
           </AppButton>
@@ -62,7 +62,9 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, ref } from 'vue';
+import { computed, ref, toRef } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { Setting } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';
@@ -85,8 +87,16 @@ const props = withDefaults(defineProps<{ schema: V2TableSchema; inline?: boolean
 const authStore = useAuthStore();
 const { loading: preferencesLoading } = useV2TablePreferences();
 const drawerVisible = ref(false);
-const keyword = ref('');
-const draftVisibleKeys = ref<string[]>([]);
+const {
+  form,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft('table-column-settings', () => ({ keyword: '', visibleKeys: [] as string[] }));
+const keyword = toRef(form, 'keyword');
+const draftVisibleKeys = toRef(form, 'visibleKeys');
+useV2DrawerNavigation(() => {
+  drawerVisible.value = false;
+});
 const saving = ref(false);
 const saveError = ref('');
 const userId = computed(() => authStore.user?.id ?? '');
@@ -127,8 +137,7 @@ async function openSettings() {
     ElMessage.error(getApiErrorMessage(error));
     return;
   }
-  draftVisibleKeys.value = [...currentVisibleKeys.value];
-  keyword.value = '';
+  openDraft(props.schema.id, { keyword: '', visibleKeys: [...currentVisibleKeys.value] });
   saveError.value = '';
   drawerVisible.value = true;
 }
@@ -156,6 +165,7 @@ async function saveSettings() {
   try {
     await saveV2TablePreference(userId.value, props.schema.id, hiddenColumnKeys);
     draftVisibleKeys.value = [...currentVisibleKeys.value];
+    completeDraft();
     drawerVisible.value = false;
     ElMessage.success('列显示设置已保存');
   } catch (error) {
@@ -188,6 +198,7 @@ async function resetToDefault() {
     draftVisibleKeys.value = dataColumns.value
       .filter((column) => !props.schema.defaultHiddenColumnKeys?.includes(column.key))
       .map((column) => column.key);
+    completeDraft();
     drawerVisible.value = false;
     ElMessage.success('已恢复默认列设置');
   } catch (error) {
@@ -203,22 +214,8 @@ function requestClose() {
   });
 }
 
-async function beforeClose(done: () => void) {
-  if (saving.value) return;
-  if (!isDirty.value) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm('当前列设置尚未保存，确定放弃修改吗？', '放弃未保存设置', {
-      confirmButtonText: '放弃修改',
-      cancelButtonText: '继续编辑',
-      type: 'warning'
-    });
-    done();
-  } catch {
-    // Keep the drawer open so the current draft is not lost.
-  }
+function beforeClose(done: () => void) {
+  if (!saving.value) done();
 }
 
 function normalizeKeySet(keys: readonly string[]) {

@@ -15,6 +15,7 @@ import type {
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import { rechargeDetailsReady } from './recharge-form';
@@ -115,28 +116,55 @@ async function loadCountryProxies(countryCode: string, signal?: AbortSignal) {
 }
 
 export function useAutoRecharge() {
-  const currentId = ref('');
-  const operationMode = ref<'server_payment' | 'payment' | 'open_browser'>('server_payment');
-  const loginMethod = ref<'json' | 'password' | 'saved'>('json');
-  const selectedBankAccountId = ref('');
-  const selectedPaymentCardId = ref('');
-  const selectedBankAccountEmail = ref('');
-  const loginEmail = ref('');
-  const loginPassword = ref('');
+  const {
+    currentId,
+    operationMode,
+    loginMethod,
+    selectedBankAccountId,
+    selectedPaymentCardId,
+    selectedCardBillingAddressId,
+    manualAddressSelectionRevision,
+    selectedBankAccountEmail,
+    loginEmail,
+    loginPassword,
+    jsonInput,
+    sessionJson,
+    jsonError,
+    plan,
+    selectedAddressId,
+    addressSource,
+    windowName,
+    lockedCurrency,
+    selectedProxyCountryCode,
+    selectedProxyId,
+    maxAmount,
+    details
+  } = useV2SessionDraft('auto-recharge-form', () => ({
+    currentId: ref(''),
+    operationMode: ref<'server_payment' | 'payment' | 'open_browser'>('server_payment'),
+    loginMethod: ref<'json' | 'password' | 'saved'>('json'),
+    selectedBankAccountId: ref(''),
+    selectedPaymentCardId: ref(''),
+    selectedCardBillingAddressId: ref(''),
+    manualAddressSelectionRevision: ref(0),
+    selectedBankAccountEmail: ref(''),
+    loginEmail: ref(''),
+    loginPassword: ref(''),
+    jsonInput: ref(''),
+    sessionJson: ref(''),
+    jsonError: ref(''),
+    plan: ref<V2RechargePlan>('plus'),
+    selectedAddressId: ref(''),
+    addressSource: ref<'library' | 'manual'>('library'),
+    windowName: ref(''),
+    lockedCurrency: ref('PHP'),
+    selectedProxyCountryCode: ref(''),
+    selectedProxyId: ref(''),
+    maxAmount: ref('30.00'),
+    details: ref<V2RechargeDetails>(emptyDetails())
+  }));
   const loginCode = ref('');
-  const jsonInput = ref('');
-  const sessionJson = ref('');
-  const jsonError = ref('');
-  const plan = ref<V2RechargePlan>('plus');
-  const selectedAddressId = ref('');
-  const addressSource = ref<'library' | 'manual'>('library');
-  const windowName = ref('');
-  const lockedCurrency = ref('PHP');
-  const selectedProxyCountryCode = ref('');
-  const selectedProxyId = ref('');
-  const maxAmount = ref('30.00');
   const authorizeSinglePayment = ref(false);
-  const details = ref<V2RechargeDetails>(emptyDetails());
   const busy = ref(false);
   const error = ref('');
   const importing = ref(false);
@@ -320,6 +348,7 @@ export function useAutoRecharge() {
   async function selectSavedCard(id: string) {
     selectedPaymentCardId.value = id;
     if (!id) return;
+    const addressRevision = manualAddressSelectionRevision.value;
     error.value = '';
     try {
       const card = await bankRechargeApi.managedCardDetail(id);
@@ -336,9 +365,14 @@ export function useAutoRecharge() {
       details.value.expiry = card.expiry;
       details.value.cvc = '';
       if (card.billingName) details.value.name = card.billingName;
-      if (card.billingAddressId) {
+      selectedCardBillingAddressId.value = card.billingAddressId ?? '';
+      if (card.billingAddressId && manualAddressSelectionRevision.value === addressRevision) {
         addressSource.value = 'library';
-        selectedAddressId.value = card.billingAddressId;
+        selectedAddressId.value = availableAddresses.value.some(
+          (item) => item.id === card.billingAddressId
+        )
+          ? card.billingAddressId
+          : '';
       }
     } catch (cause) {
       if (selectedPaymentCardId.value === id) {
@@ -346,6 +380,10 @@ export function useAutoRecharge() {
         error.value = getApiErrorMessage(cause);
       }
     }
+  }
+  watch(selectedPaymentCardId, () => (selectedCardBillingAddressId.value = ''), { flush: 'sync' });
+  function markAddressSelectionManual() {
+    manualAddressSelectionRevision.value++;
   }
   watch(lockedCurrency, () => {
     if (!selectedPaymentCardId.value) return;
@@ -385,17 +423,8 @@ export function useAutoRecharge() {
   const selectedAddress = computed<V2RechargeAddress | undefined>(() =>
     operationMode.value === 'server_payment' && addressSource.value === 'manual'
       ? undefined
-      : (availableAddresses.value.find((address) => address.id === selectedAddressId.value) ??
-        (operationMode.value === 'server_payment' ? availableAddresses.value[0] : undefined))
+      : availableAddresses.value.find((address) => address.id === selectedAddressId.value)
   );
-  const billingCountryRestriction = computed(() => {
-    if (operationMode.value !== 'server_payment' || !selectedProxyCountryCode.value) return '';
-    const country =
-      addressSource.value === 'manual'
-        ? details.value.country.toUpperCase()
-        : selectedAddress.value?.country;
-    return country && country !== selectedProxyCountryCode.value ? country : '';
-  });
   watch(
     () => details.value.country,
     (country) => {
@@ -431,7 +460,6 @@ export function useAutoRecharge() {
         ? Boolean(selectedBankAccount.value?.hasPassword && selectedBankAccountEmail.value)
         : emailPattern.test(loginEmail.value.trim()) &&
           Boolean(loginPassword.value) &&
-          (operationMode.value !== 'server_payment' || totp.source.value !== 'saved') &&
           totp.ready.value
   );
   const automaticCodeReady = computed(() =>
@@ -451,7 +479,6 @@ export function useAutoRecharge() {
         availableCurrencyOptions.value.some((item) => item.value === lockedCurrency.value) &&
         proxySelectionReady.value &&
         !loginCountryRestriction.value &&
-        !billingCountryRestriction.value &&
         (operationMode.value === 'server_payment'
           ? Boolean(paymentCap.value)
           : /^[0-9]{1,9}(?:\.[0-9]{1,2})?$/.test(maxAmount.value)) &&
@@ -638,16 +665,30 @@ export function useAutoRecharge() {
   watch(
     [
       selectedAddressId,
+      selectedCardBillingAddressId,
       availableAddresses,
       operationMode,
       addressSource,
-      () => addressQuery.phase.value
+      () => addressQuery.phase.value,
+      () => addressQuery.error.value
     ],
     () => {
-      if (operationMode.value === 'server_payment' && addressSource.value === 'manual') return;
-      const address = selectedAddress.value;
-      if (selectedAddressId.value && !address && addressQuery.phase.value === 'ready') {
-        selectedAddressId.value = '';
+      if (
+        operationMode.value === 'open_browser' ||
+        (operationMode.value === 'server_payment' && addressSource.value === 'manual')
+      )
+        return;
+      let address = selectedAddress.value;
+      if (!address) {
+        if (addressQuery.phase.value !== 'ready' || addressQuery.error.value) return;
+        address = selectedCardBillingAddressId.value
+          ? availableAddresses.value.find((item) => item.id === selectedCardBillingAddressId.value)
+          : availableAddresses.value[0];
+        const nextId = address?.id ?? '';
+        if (selectedAddressId.value !== nextId) {
+          selectedAddressId.value = nextId;
+          return;
+        }
       }
       Object.assign(details.value, {
         country: address?.country ?? '',
@@ -658,7 +699,7 @@ export function useAutoRecharge() {
         postal_code: address?.postalCode ?? ''
       });
     },
-    { flush: 'sync' }
+    { flush: 'sync', immediate: true }
   );
 
   watch(
@@ -876,7 +917,9 @@ export function useAutoRecharge() {
                   password: loginPassword.value,
                   ...(totp.source.value === 'secret'
                     ? { totpSecret: totp.secretInput.value.trim() }
-                    : {})
+                    : totp.source.value === 'saved'
+                      ? { totpAccountId: totp.savedAccountId.value }
+                      : {})
                 }
               }),
         plan: plan.value,
@@ -995,7 +1038,9 @@ export function useAutoRecharge() {
                     password: loginPassword.value,
                     ...(totp.source.value === 'secret'
                       ? { totpSecret: totp.secretInput.value.trim() }
-                      : {})
+                      : totp.source.value === 'saved'
+                        ? { totpAccountId: totp.savedAccountId.value }
+                        : {})
                   }
                 })
         });
@@ -1280,16 +1325,10 @@ export function useAutoRecharge() {
   onScopeDispose(() => {
     disposed = true;
     importGeneration++;
-    sessionJson.value = '';
-    jsonInput.value = '';
-    loginPassword.value = '';
-    selectedBankAccountEmail.value = '';
     loginCode.value = '';
-    totp.clearSecret();
+    authorizeSinglePayment.value = false;
+    details.value.cvc = '';
     localAccess.value = null;
-    paymentJobId.value = '';
-    selectedPaymentCardId.value = '';
-    Object.assign(details.value, emptyDetails());
   });
 
   return {
@@ -1300,6 +1339,7 @@ export function useAutoRecharge() {
     selectedAddress,
     selectedAddressId,
     addressSource,
+    markAddressSelectionManual,
     selected,
     active,
     jsonInput,
@@ -1310,7 +1350,6 @@ export function useAutoRecharge() {
     selectedPaymentCardId,
     selectedBankAccountEmail,
     loginCountryRestriction,
-    billingCountryRestriction,
     savedBankAccounts,
     bankAccountsQuery,
     savedPaymentCards,

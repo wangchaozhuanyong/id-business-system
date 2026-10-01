@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import server
 import server_proxy
@@ -64,6 +64,48 @@ class ServerProxyTests(unittest.TestCase):
 
 
 class ServerProxyExitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_philippines_exit_keeps_us_billing_address_independent(self):
+        context = type('Context', (), {'close': AsyncMock()})()
+        browser = type('Browser', (), {'new_context': AsyncMock(return_value=context)})()
+        target = type('Target', (), {'account_id': 'synthetic-account'})()
+        job = server.Job('11111111-1111-4111-8111-111111111111', {
+            'action': 'server', 'plan': 'plus', 'expectedCountry': 'PH',
+            'proxy': {'mode': 'static', 'type': 'http'},
+            'login': {'email': 'test@example.invalid', 'password': 'synthetic'},
+            'details': {
+                'number': '5555555555554444', 'expiry': '12/39', 'cvc': '123',
+                'name': 'Synthetic Test User', 'email': 'test@example.invalid',
+                'country': 'US', 'line1': '1221 SW Fourth Avenue', 'line2': '',
+                'city': 'Portland', 'state': 'OR', 'postal_code': '97204'
+            }
+        })
+        job.login_target = AsyncMock(return_value=(target, {'current_plan': 'free'}))
+        job.progress = MagicMock()
+
+        async def synthetic_flow(_target, _root, _plan, **options):
+            self.assertEqual(options['expected_country'], 'PH')
+            details = options['details_reader'](None)
+            try:
+                self.assertEqual(details.country, 'US')
+                self.assertEqual(details.line1, '1221 SW Fourth Avenue')
+            finally:
+                details.clear()
+            return {'status': 'synthetic_verified', 'payment_requests_sent': 0}
+
+        with (patch.object(server_proxy, 'resolve_proxy', return_value={
+                'server': 'http://proxy.example.invalid:8080'
+              }),
+              patch.object(server_proxy, 'observe_exit', AsyncMock(return_value={
+                'ip': '8.8.8.8', 'country': 'PH'
+              })),
+              patch.object(job, 'restore_target'),
+              patch.object(server.pay, 'run_flow', AsyncMock(side_effect=synthetic_flow)) as flow):
+            result = await job.execute(browser)
+        self.assertEqual(result['payment_requests_sent'], 0)
+        job.login_target.assert_awaited_once()
+        flow.assert_awaited_once()
+        context.close.assert_awaited_once()
+
     async def test_observes_real_exit_and_rejects_unconfirmed_country(self):
         response = type('Response', (), {
             'status': 200, 'url': 'https://chatgpt.com/cdn-cgi/trace',

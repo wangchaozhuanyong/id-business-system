@@ -42,6 +42,17 @@ const order = {
   plan: 'plus',
   chargeAmount: '1000.0000',
   chargeCurrencyCode: 'PHP',
+  accountingVersion: 'subscription_cost_v2',
+  usdtFeeAmount: '3',
+  usdtFeeCurrencyCode: 'CNY',
+  usdtFeeFinanceAccountId: '66666666-6666-4666-8666-666666666666',
+  usdtFeeFxRateToCny: '1',
+  usdtFeeAmountCny: '3',
+  shoppingFeeAmount: '2',
+  shoppingFeeCurrencyCode: 'CNY',
+  shoppingFeeFinanceAccountId: '66666666-6666-4666-8666-666666666666',
+  shoppingFeeFxRateToCny: '1',
+  shoppingFeeAmountCny: '2',
   customerFeeRate: '2.5000',
   customerFeeAmount: '25.0000',
   customerFeeOverridden: false,
@@ -54,7 +65,7 @@ const order = {
   receivedFxRateToCny: null,
   fundingFinanceAccountId: null,
   receivedFinanceAccountId: '66666666-6666-4666-8666-666666666666',
-  profitAmountCny: '1069.5450',
+  profitAmountCny: '1065.0000',
   status: 'completed',
   financeStatus: 'posted',
   openedAt: now,
@@ -223,6 +234,13 @@ try {
       data = { now, timezone: 'Asia/Shanghai' };
     } else if (pathname.endsWith('/id-business-v2/change-versions')) {
       data = { generatedAt: now, versions: {} };
+    } else if (pathname.endsWith('/id-business-v2/vendure-mailboxes/primary-accounts')) {
+      data = {
+        items: [{ id: 'fixture-primary', email: 'primary@example.invalid', status: 'ACTIVE' }],
+        total: 1,
+        page: 1,
+        pageSize: 1000
+      };
     } else if (pathname.endsWith('/id-business-v2/table-preferences')) {
       data = { items: [] };
     } else if (
@@ -280,6 +298,8 @@ try {
       const input = request.postDataJSON();
       assert.equal(input.accounts.length, 1);
       assert.equal(input.accounts[0].email, 'new@example.invalid');
+      assert.equal(input.accounts[0].password, '');
+      assert.equal(input.accounts[0].totpSecret, 'JBSWY3DPEHPK3PXP');
       assert.equal(input.accounts[0].remark, '导入备注');
       showAccounts = true;
       account.emailMasked = 'ne***@example.invalid';
@@ -602,7 +622,9 @@ try {
     .waitFor({ state: 'visible' });
   assert.equal(mutations.at(-1).input.customerRefundAmount, '50');
   assert.equal(mutations.at(-1).input.chargeRecoveryAmountCny, '0');
-  assert.equal(mutations.at(-1).input.bankFeeRecoveryAmountCny, '0');
+  assert.equal(mutations.at(-1).input.usdtFeeRecoveryAmount, '0');
+  assert.equal(mutations.at(-1).input.shoppingFeeRecoveryAmount, '0');
+  assert.equal(mutations.at(-1).input.bankFeeRecoveryAmountCny, undefined);
   await page.getByRole('button', { name: '下一页' }).click();
   try {
     await page.getByText('BC-LAST-PAGE').waitFor({ state: 'visible', timeout: 10000 });
@@ -618,13 +640,9 @@ try {
   }
   await page.getByRole('button', { name: '修改' }).click();
   await page.getByText('银充订单资料').waitFor({ state: 'visible' });
-  await page
-    .locator('.el-form-item')
-    .filter({ hasText: '客户手续费率' })
-    .locator('input')
-    .fill('2.5');
+  await page.locator('.el-form-item').filter({ hasText: 'USDT 手续费' }).locator('input').fill('3');
   try {
-    await page.getByText(/25(?:\.0+)? PHP/).waitFor({ state: 'visible', timeout: 3000 });
+    await page.getByText('2.3077%', { exact: true }).waitFor({ state: 'visible', timeout: 3000 });
   } catch (error) {
     await page.screenshot({
       path: path.join(outputDir, 'bank-orders-fee-debug.png'),
@@ -700,7 +718,7 @@ try {
           pageOverflow: document.documentElement.scrollWidth - window.innerWidth
         };
       });
-    assert.equal(actionLayout.buttons, 2, `${width}px ChatGPT 操作按钮数量不符`);
+    assert.equal(actionLayout.buttons, 3, `${width}px ChatGPT 操作按钮数量不符`);
     assert.ok(actionLayout.visible, `${width}px ChatGPT 操作按钮被裁切`);
     assert.ok(actionLayout.pageOverflow <= 1, `${width}px ChatGPT 页面横向溢出`);
     if (width === 2307 || width === 390) {
@@ -718,7 +736,7 @@ try {
   await page.getByRole('button', { name: '批量导入' }).click();
   await page
     .getByRole('textbox', { name: '粘贴 ChatGPT 账号资料' })
-    .fill('new@example.invalid test-pass - 导入备注');
+    .fill('new@example.invalid JBSWY3DPEHPK3PXP 导入备注');
   await page.getByRole('button', { name: '导入账号' }).click();
   await page.getByText('ne***@example.invalid').waitFor({ state: 'visible' });
   await page.getByRole('button', { name: '编辑' }).click();
@@ -739,7 +757,7 @@ try {
   await page.getByText('暂无 ChatGPT 账号').waitFor({ state: 'visible' });
   await page.getByRole('button', { name: '新增账号' }).click();
   await page.getByPlaceholder('输入 ChatGPT 登录邮箱').waitFor({ state: 'visible' });
-  await page.getByPlaceholder('输入登录密码').waitFor({ state: 'visible' });
+  await page.getByPlaceholder('选填；未设置密码可留空').waitFor({ state: 'visible' });
   await page.getByPlaceholder('Base32 密钥或 otpauth 链接；可稍后补充').waitFor({
     state: 'visible'
   });

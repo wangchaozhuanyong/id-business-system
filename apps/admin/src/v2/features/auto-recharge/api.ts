@@ -48,7 +48,7 @@ export const rechargeApi = {
     id: string;
     sourceJobId: string;
     sessionJson?: string;
-    login?: { email: string; password: string; totpSecret?: string };
+    login?: { email: string; password: string; totpSecret?: string; totpAccountId?: string };
     chatgptAccountId?: string;
   }) {
     return request<{ id: string }>(http.post(`${base}/server-recheck`, input));

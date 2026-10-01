@@ -1,4 +1,16 @@
-import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query
+} from '@nestjs/common';
+import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
@@ -17,8 +29,26 @@ export class BankRechargeController {
     private readonly orders: BankRechargeOrderService,
     private readonly queries: BankRechargeQueryRepository,
     private readonly finance: BankRechargeFinanceService,
+    private readonly delivery: BankRechargeAccountDeliveryService,
     private readonly corrections: BankRechargeCorrectionService
   ) {}
+
+  @Get('account-copy-settings')
+  @Header('Cache-Control', 'no-store')
+  copySettings(@CurrentUser() operator: AuthenticatedUser) {
+    return this.delivery.copySettings(operator);
+  }
+
+  @Put('account-copy-settings')
+  updateCopySettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.delivery.updateCopySettings(input, operator);
+  }
+
+  @Post('accounts/:id/copy')
+  @Header('Cache-Control', 'no-store')
+  copyAccount(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.delivery.copyAccount(id, operator);
+  }
 
   @Get('accounts')
   @Header('Cache-Control', 'no-store')

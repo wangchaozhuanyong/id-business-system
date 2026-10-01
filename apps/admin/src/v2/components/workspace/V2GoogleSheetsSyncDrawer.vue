@@ -260,7 +260,7 @@ watch(
 watch(
   () => status.value?.clientId,
   (clientId) => {
-    if (clientId) form.clientId = clientId;
+    if (clientId && !form.clientId) form.clientId = clientId;
   },
   { immediate: true }
 );
@@ -359,7 +359,6 @@ async function beforeClose(done: () => void) {
 
 function resetTransientState() {
   action.value = '';
-  form.clientSecret = '';
   document.removeEventListener('visibilitychange', refreshAfterAuthorization);
 }
 

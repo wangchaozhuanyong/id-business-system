@@ -163,7 +163,6 @@
       :close-on-press-escape="!saving"
       :show-close="!saving"
       :before-close="handleEditorBeforeClose"
-      @closed="resetEditor"
     >
       <el-form
         ref="formRef"
@@ -216,7 +215,7 @@
         {{ mutationError }}
       </p>
       <template #footer>
-        <AppButton variant="ghost" :disabled="saving" @click="requestCloseEditor">取消</AppButton>
+        <AppButton variant="ghost" :disabled="saving" @click="requestCloseEditor">关闭</AppButton>
         <AppButton variant="primary" :loading="saving" @click="submitEditor">
           {{ editorMode === 'create' ? '加密并保存' : '保存修改' }}
         </AppButton>
@@ -227,7 +226,7 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import type { V2SavedTotpAccount, V2SavedTotpAccountList } from '@apple-business/shared';
 import { V2_SAVED_TOTP_ACCOUNT_LIMITS } from '@apple-business/shared';
@@ -243,6 +242,8 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { isV2TotpCodeCurrent } from './totp';
 
 interface SavedTotpForm {
@@ -266,12 +267,19 @@ const copiedAccountId = ref('');
 const editorVisible = ref(false);
 const editorMode = ref<'create' | 'edit'>('create');
 const editingId = ref('');
-const editorSnapshot = ref('');
 const saving = ref(false);
 const removingId = ref('');
 const mutationError = ref('');
 const clockTick = ref(Date.now());
-const form = reactive<SavedTotpForm>({ name: '', secret: '' });
+const {
+  form,
+  original: editorSnapshot,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft<SavedTotpForm>('saved-totp-editor', () => ({ name: '', secret: '' }));
+useV2DrawerNavigation(() => {
+  editorVisible.value = false;
+});
 const rules: FormRules<SavedTotpForm> = {
   name: [
     { required: true, message: '请输入账号名称', trigger: 'blur' },
@@ -356,15 +364,13 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (tickTimer) clearInterval(tickTimer);
   if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
-  form.secret = '';
 });
 
 function startCreate() {
   if (!authStore.writesAllowed || accountLimitReached.value) return;
   editorMode.value = 'create';
   editingId.value = '';
-  Object.assign(form, { name: '', secret: '' });
-  editorSnapshot.value = JSON.stringify(form);
+  openDraft('create');
   mutationError.value = '';
   editorVisible.value = true;
 }
@@ -373,13 +379,13 @@ function startEdit(item: V2SavedTotpAccount) {
   if (!authStore.writesAllowed) return;
   editorMode.value = 'edit';
   editingId.value = item.id;
-  Object.assign(form, { name: item.name, secret: '' });
-  editorSnapshot.value = JSON.stringify(form);
+  openDraft(item.id, { name: item.name, secret: '' });
   mutationError.value = '';
   editorVisible.value = true;
 }
 
 function resetEditor() {
+  completeDraft();
   editorVisible.value = false;
   editorMode.value = 'create';
   editingId.value = '';
@@ -493,22 +499,8 @@ async function requestCloseEditor() {
   });
 }
 
-async function handleEditorBeforeClose(done: () => void) {
-  if (saving.value) return;
-  if (!editorDirty.value) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm('当前内容尚未保存，确认放弃吗？', '放弃未保存内容', {
-      confirmButtonText: '放弃',
-      cancelButtonText: '继续填写',
-      type: 'warning'
-    });
-    done();
-  } catch {
-    // 用户选择继续填写。
-  }
+function handleEditorBeforeClose(done: () => void) {
+  if (!saving.value) done();
 }
 
 function clearAll() {

@@ -2,15 +2,21 @@ import { computed, ref, watch } from 'vue';
 import type { V2RechargeServerProxySettings } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 
 export function useRechargeServerProxySettings() {
   const open = ref(false);
-  const saving = ref(false);
-  const error = ref('');
-  const proxyId = ref('');
-  const snapshot = ref('');
+  const { error, saving, proxyId, snapshot } = useV2SessionDraft(
+    'recharge-server-proxy-settings',
+    () => ({
+      error: ref(''),
+      saving: ref(false),
+      proxyId: ref(''),
+      snapshot: ref('')
+    })
+  );
   const dirty = computed(() => proxyId.value !== snapshot.value);
   const settingsQuery = useV2ModuleQuery<V2RechargeServerProxySettings>({
     moduleKey: 'auto-recharge',
@@ -57,7 +63,6 @@ export function useRechargeServerProxySettings() {
   );
   function setOpen(value: boolean) {
     if (saving.value) return;
-    reset();
     open.value = value;
   }
   async function save() {

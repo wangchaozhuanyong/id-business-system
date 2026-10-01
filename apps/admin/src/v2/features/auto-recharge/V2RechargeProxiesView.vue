@@ -161,11 +161,11 @@
     </V2AsyncRegion>
     <V2FormDrawer
       v-model="formOpen"
+      retain-draft
       :title="editing ? '编辑代理 IP' : '新增代理 IP'"
       description="国家、协议和链接统一在这里维护，供服务器默认设置与充值选择使用。已用于充值的代理不能更换国家、属性、协议或链接。"
       size="min(700px, 96vw)"
       :confirm-loading="saving"
-      :dirty="dirty"
       @confirm="save"
     >
       <el-form
@@ -261,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -279,6 +279,7 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import {
   parseProxyCountry,
@@ -342,16 +343,25 @@ const items = computed(() => query.data.value?.items ?? []);
 const formOpen = ref(false);
 const editing = ref<RechargeProxyItem | null>(null);
 const formRef = ref<FormInstance>();
-const form = reactive<{
+const {
+  form,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft<{
   countryCode: string;
   url: string;
   kind: ProxyKind | '';
   protocol: ProxyProtocol;
   remark1: string;
   remark2: string;
-}>({ countryCode: '', url: '', kind: '', protocol: 'http', remark1: '', remark2: '' });
-const original = ref('');
-const dirty = computed(() => JSON.stringify(form) !== original.value);
+}>('recharge-proxies-editor', () => ({
+  countryCode: '',
+  url: '',
+  kind: '',
+  protocol: 'http',
+  remark1: '',
+  remark2: ''
+}));
 const rules: FormRules = {
   countryCode: [{ required: true, message: '请选择国家', trigger: 'change' }],
   url: [{ required: false, trigger: 'blur' }],
@@ -379,34 +389,22 @@ function changePageSize(value: number) {
   pageSize.value = value;
   page.value = 1;
 }
-function resetForm() {
-  Object.assign(form, {
-    countryCode: '',
-    url: '',
-    kind: '',
-    protocol: 'http',
-    remark1: '',
-    remark2: ''
-  });
-  formError.value = '';
-  original.value = JSON.stringify(form);
-}
+
 function openCreate() {
   editing.value = null;
-  resetForm();
+  openDraft('create');
   formOpen.value = true;
 }
 function openEdit(item: RechargeProxyItem) {
   editing.value = item;
-  resetForm();
-  Object.assign(form, {
+  openDraft(item.id, {
     countryCode: item.countryCode,
+    url: '',
     kind: item.kind,
     protocol: item.protocol,
     remark1: item.remark1 ?? '',
     remark2: item.remark2 ?? ''
   });
-  original.value = JSON.stringify(form);
   formOpen.value = true;
 }
 async function save() {
@@ -430,6 +428,7 @@ async function save() {
         ...(form.url.trim() ? { url: form.url.trim() } : {})
       });
     else await rechargeProxyApi.create({ ...input, url: form.url.trim() });
+    completeDraft();
     form.url = '';
     formOpen.value = false;
     ElMessage.success('代理 IP 已保存');

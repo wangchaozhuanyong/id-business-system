@@ -5,7 +5,7 @@
     label="账单地址来源"
     required
   >
-    <el-radio-group v-model="source">
+    <el-radio-group v-model="source" @change="$emit('select')">
       <el-radio-button value="library">地址库</el-radio-button>
       <el-radio-button value="manual">临时手填</el-radio-button>
     </el-radio-group>
@@ -24,6 +24,7 @@
       :loading="loading"
       placeholder="选择与银行卡相符的账单地址"
       no-data-text="没有可用账单地址"
+      @change="$emit('select')"
     >
       <el-option
         v-for="address in addresses"
@@ -92,7 +93,7 @@ defineProps<{
   loading: boolean;
   error: string;
 }>();
-defineEmits<{ retry: [] }>();
+defineEmits<{ retry: []; select: [] }>();
 </script>
 
 <style scoped>

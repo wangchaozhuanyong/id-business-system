@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  ConflictException,
   Injectable,
   ServiceUnavailableException
 } from '@nestjs/common';
@@ -28,6 +29,7 @@ import type {
   UpdateIdBusinessV2VendureMailboxPrimaryDto
 } from './dto/id-business-v2-vendure-mailbox.dto';
 import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
+import { ensureVendureAccountAliases } from './id-business-v2-vendure-account-import';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIMARY_STATUSES = new Set(['ACTIVE', 'DISABLED', 'AUTH_ERROR', 'SYNCING']);
@@ -79,6 +81,42 @@ export class IdBusinessV2VendureMailboxService {
         (!query.q || this.includes(item, query.q, ['aliasEmail', 'primaryAccountEmail', 'note']))
     );
     return this.page(items, query.page, query.pageSize);
+  }
+
+  async accountBuyerCode(emailValue: string, operator: AuthenticatedUser) {
+    this.requireAdmin(operator);
+    const email = this.email(emailValue);
+    const matches = (await this.client.virtualEmails()).filter(
+      (item) => item.aliasEmail.trim().toLowerCase() === email
+    );
+    if (matches.length !== 1)
+      throw new ConflictException('该账号的虚拟邮箱关联缺失或不唯一，请先核对所属主邮箱');
+    const alias = matches[0]!;
+    if (
+      alias.status !== 'ACTIVE' ||
+      !alias.buyerQueryCode ||
+      (alias.codeExpiresAt &&
+        (!Number.isFinite(Date.parse(alias.codeExpiresAt)) ||
+          Date.parse(alias.codeExpiresAt) <= Date.now()))
+    )
+      throw new ConflictException('该邮箱买家查询码已失效，请在邮件验证码查询中核对');
+    return { aliasId: alias.id, buyerQueryCode: alias.buyerQueryCode };
+  }
+
+  async ensureAccountAliases(
+    primaryAccountId: string,
+    emails: string[],
+    operator: AuthenticatedUser
+  ) {
+    this.requireAdmin(operator);
+    const id = this.id(primaryAccountId);
+    await ensureVendureAccountAliases(this.client, id, emails, (rawInput) =>
+      this.batchCreateAliases(
+        { primaryAccountId: id, rawInput },
+        operator,
+        'chatgpt-accounts-mailbox-import'
+      )
+    );
   }
 
   async listMails(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {

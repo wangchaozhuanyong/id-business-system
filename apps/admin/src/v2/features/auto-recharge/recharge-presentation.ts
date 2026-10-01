@@ -3,7 +3,8 @@ import type { V2RechargeJob } from './contracts';
 export const planLabels = {
   plus: 'ChatGPT Plus',
   'pro-5x': 'ChatGPT Pro 5×',
-  'pro-20x': 'ChatGPT Pro 20×'
+  'pro-20x': 'ChatGPT Pro 20×',
+  'pro-500': 'ChatGPT Pro（500 美元／月档）'
 };
 
 export const currencyOptions = [
@@ -42,6 +43,8 @@ const labels: Record<string, string> = {
   free: '免费版',
   plus: 'Plus',
   pro: 'Pro（档位待核验）',
+  promax: 'Pro（500 美元／月档）',
+  'pro-500': 'Pro（500 美元／月档）',
   running: '正在执行',
   awaiting_human_verification: '等待本人验证',
   awaiting_details: '等待填写付款资料',
@@ -190,7 +193,7 @@ const labels: Record<string, string> = {
   server_proxy_invalid: '代理 IP 响应格式或出口地址无效，本次未付款',
   server_proxy_unavailable: '服务器未能提取或连接代理 IP，本次未付款',
   proxy_network_unconfirmed: '无法核实代理实际出口 IP 和国家，已限制登录',
-  proxy_country_mismatch: '代理实际出口国家与账号或账单国家不一致，已限制登录',
+  proxy_country_mismatch: '代理实际出口国家与所选代理国家不一致，已限制登录',
   proxy_ip_not_rotated: '代理仍是上次使用的出口 IP，请重新提取后再登录',
   proxy_ip_changed_during_login: '登录期间代理出口发生变化，已停止本次操作',
   payment_quote_outside_authorization: '官网报价超出本次币种或金额授权，本次未付款',

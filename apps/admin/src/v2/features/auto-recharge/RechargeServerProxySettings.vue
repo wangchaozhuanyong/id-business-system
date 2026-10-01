@@ -1,5 +1,6 @@
 <template>
   <V2FormDrawer
+    retain-draft
     :model-value="open"
     title="服务器默认代理"
     size="min(700px, 96vw)"
