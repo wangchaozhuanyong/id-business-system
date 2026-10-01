@@ -5,6 +5,7 @@ import {
   NotFoundException
 } from '@nestjs/common';
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
+import { V2_BANK_RECHARGE_PLANS } from '@apple-business/shared';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -31,7 +32,7 @@ import {
   bankRechargeText
 } from './bank-recharge-validation';
 
-const plans = new Set(['plus', 'pro-5x', 'pro-20x']);
+const plans = new Set<string>(V2_BANK_RECHARGE_PLANS);
 const editable = new Set([
   'expectedUpdatedAt',
   'customerId',

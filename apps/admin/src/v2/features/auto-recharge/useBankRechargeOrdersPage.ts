@@ -17,6 +17,7 @@ import {
   type BankRechargeOrder,
   type BankRechargeOrderStatus
 } from './bank-recharge-api';
+import { bankRechargePlanLabel as planLabel } from './recharge-plan-options';
 
 export function useBankRechargeOrdersPage() {
   const route = useRoute();
@@ -247,13 +248,6 @@ export function useBankRechargeOrdersPage() {
       refunded: '已退款',
       cancelled: '已取消'
     }[value];
-  }
-  function planLabel(value: string) {
-    return (
-      ({ plus: 'Plus', 'pro-5x': 'Pro 5×', 'pro-20x': 'Pro 20×' } as Record<string, string>)[
-        value
-      ] ?? value
-    );
   }
   function usageLabel(row: BankRechargeOrder) {
     if (row.activeSubscription?.status !== 'active') {
