@@ -57,7 +57,7 @@ def choose_plan():
     choices = {str(i): key for i, key in enumerate(PLANS, 1)}
     for number, key in choices.items():
         print(f"{number}. {PLANS[key]['label']}", flush=True)
-    choice = input("输入 1、2 或 3，其他输入取消：").strip()
+    choice = input("输入对应序号，其他输入取消：").strip()
     if choice not in choices:
         raise Stop("plan_selection_cancelled")
     return choices[choice]

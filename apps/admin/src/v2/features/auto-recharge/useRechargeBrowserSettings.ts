@@ -6,6 +6,7 @@ import type {
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
 import { readBrowserCatalog, useRechargeBrowserCatalog } from './useRechargeBrowserCatalog';
 
@@ -41,10 +42,18 @@ export function useRechargeBrowserSettings(
   serverMode: Ref<boolean>
 ) {
   const settingsOpen = ref(false);
-  const settingsSaving = ref(false);
-  const settingsError = ref('');
-  const settingsForm = ref(formFromSettings());
-  const savedSnapshot = ref(JSON.stringify(settingsForm.value));
+  const { settingsError, settingsSaving, settingsForm, savedSnapshot } = useV2SessionDraft(
+    'recharge-browser-settings',
+    () => {
+      const settingsForm = ref(formFromSettings());
+      return {
+        settingsForm,
+        settingsError: ref(''),
+        settingsSaving: ref(false),
+        savedSnapshot: ref(JSON.stringify(settingsForm.value))
+      };
+    }
+  );
   const settingsDirty = computed(() => JSON.stringify(settingsForm.value) !== savedSnapshot.value);
   const settingsQuery = useV2ModuleQuery<V2RechargeBitBrowserSettings>({
     moduleKey: 'auto-recharge',
@@ -77,7 +86,6 @@ export function useRechargeBrowserSettings(
 
   function setSettingsOpen(open: boolean) {
     if (settingsSaving.value) return;
-    resetSettings();
     settingsOpen.value = open;
   }
 
@@ -165,7 +173,6 @@ export function useRechargeBrowserSettings(
 
   onScopeDispose(() => {
     connectionCheck?.abort();
-    settingsForm.value = formFromSettings();
   });
 
   return {

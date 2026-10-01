@@ -8,7 +8,7 @@
     close-on-click-modal
     close-on-press-escape
     :before-close="handleBeforeClose"
-    @closed="resetState"
+    @closed="pauseTask"
     @close="$emit('update:modelValue', false)"
   >
     <div class="v2-website-monitor-drawer__body">
@@ -209,13 +209,8 @@ async function handleBeforeClose(done: () => void) {
   }
 }
 
-function resetState() {
+function pauseTask() {
   activeController?.abort();
-  activeController = null;
-  websiteUrl.value = DEFAULT_WEBSITE_MONITOR_URL;
-  checking.value = false;
-  errorMessage.value = '';
-  result.value = null;
 }
 
 function statusLabel(status: V2WebsiteMonitorStatus) {

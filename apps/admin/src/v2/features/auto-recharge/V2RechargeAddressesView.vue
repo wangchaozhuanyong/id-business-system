@@ -212,6 +212,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -236,8 +237,10 @@ const keywordInput = ref('');
 const statusInput = ref<V2RechargeAddressStatus | 'all'>('all');
 const keyword = ref('');
 const status = ref<V2RechargeAddressStatus | 'all'>('all');
-const pendingStreets = ref<string[]>([]);
-const fileName = ref('');
+const { pendingStreets, fileName } = useV2SessionDraft('recharge-address-import', () => ({
+  pendingStreets: ref<string[]>([]),
+  fileName: ref('')
+}));
 const importing = ref(false);
 const updating = ref(false);
 const operationMessage = ref('');

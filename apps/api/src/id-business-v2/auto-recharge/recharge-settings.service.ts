@@ -15,6 +15,7 @@ import { RechargeProxyRepository } from './persistence/recharge-proxy.repository
 import { bankRechargeId, bankRechargeObject, bankRechargeUuid } from './bank-recharge-validation';
 import { validateRechargeBitBrowserSettings } from './recharge-settings-validation';
 import { storedBrowserOptions, validateStaticCredentials } from './recharge-browser-options';
+import { accountCopyMetadata } from './account-copy-settings';
 
 const defaults = {
   connectorUrl: 'http://127.0.0.1:55321',
@@ -92,6 +93,7 @@ export class RechargeSettingsService {
         await this.repository.upsert(tx, operator.id, {
           browserOptions: toV2JsonDocument({
             ...storedBrowserOptions(before?.browserOptions),
+            ...accountCopyMetadata(before?.browserOptions),
             serverDefaultProxyId: proxyId
           })
         });
@@ -259,6 +261,7 @@ export class RechargeSettingsService {
           proxyType: input.proxyType,
           browserOptions: toV2JsonDocument({
             ...browserOptions,
+            ...accountCopyMetadata(before?.browserOptions),
             ...(serverDefaultProxyId(before?.browserOptions)
               ? { serverDefaultProxyId: serverDefaultProxyId(before?.browserOptions) }
               : {})

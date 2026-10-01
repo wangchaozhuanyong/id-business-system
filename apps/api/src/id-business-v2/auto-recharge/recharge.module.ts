@@ -12,6 +12,8 @@ import { RechargeProxyController } from './recharge-proxy.controller';
 import { RechargeProxyService } from './recharge-proxy.service';
 import { RechargeProxyRepository } from './persistence/recharge-proxy.repository';
 import { BankRechargeController } from './bank-recharge.controller';
+import { BankRechargeAccountDeliveryService } from './bank-recharge-account-delivery.service';
+import { IdBusinessV2WorkspaceModule } from '../workspace/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
@@ -22,11 +24,12 @@ import { BankRechargeCorrectionService } from './bank-recharge-correction.servic
 import { BankRechargeFinanceService } from './bank-recharge-finance.service';
 import { IdBusinessV2FinanceModule } from '../finance/public-api';
 @Module({
-  imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule],
+  imports: [IdBusinessV2RuntimeModule, IdBusinessV2FinanceModule, IdBusinessV2WorkspaceModule],
   controllers: [RechargeController, BankRechargeController, RechargeProxyController],
   providers: [
     FieldEncryptionService,
     BankRechargeAccountService,
+    BankRechargeAccountDeliveryService,
     BankRechargeCardService,
     BankRechargeCardRepository,
     BankRechargeOrderService,

@@ -7,17 +7,14 @@ import {
 } from './recharge-plan-options';
 
 describe('ChatGPT 套餐目录与付款支持范围', () => {
-  it('展示个人套餐、三档 Pro 和组织套餐', () => {
+  it('自动充值只展示个人套餐和三档 Pro，不展示组织套餐', () => {
     expect(rechargePlanOptions.map((item) => item.value)).toEqual([
       'free',
       'go',
       'plus',
       'pro-5x',
       'pro-20x',
-      'pro-500',
-      'business',
-      'enterprise',
-      'edu'
+      'pro-500'
     ]);
   });
 
@@ -35,7 +32,7 @@ describe('ChatGPT 套餐目录与付款支持范围', () => {
     const pro500 = rechargePlanOptions.find((item) => item.value === 'pro-500')!;
     expect(pro500.label).toContain('500 美元');
     expect(pro500.label).not.toMatch(/\d+\s*[×x]/);
-    expect(pro500.disabled).toBe(true);
+    expect(pro500.disabled).toBe(false);
   });
 
   it('手工记录包含全部付费套餐，免费版不产生银充付款记录', () => {

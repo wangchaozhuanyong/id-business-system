@@ -12,6 +12,7 @@ import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { toV2DateTimeInput, v2DateTimeInputToIso } from '@/v2/utils/dateTime';
 import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import {
   bankRechargeApi,
   type BankRechargeOrder,
@@ -58,26 +59,39 @@ export function useBankRechargeOrdersPage() {
   const correcting = ref(false);
   const correctionReason = ref('');
   const selected = ref<BankRechargeOrder | null>(null);
-  const refund = reactive({
+  const {
+    form: refund,
+    open: openRefundDraft,
+    complete: completeRefundDraft
+  } = useV2FormDraft('bank-orders-refund', () => ({
     reason: '',
     refundReference: '',
     customerRefundAmount: '',
     chargeRecoveryAmountCny: '0',
     bankFeeRecoveryAmountCny: '0',
     upstreamRefundReference: ''
-  });
-  const cardForm = reactive({
-    label: '',
-    last4: '',
-    currencyCode: 'PHP'
-  });
-  const currencyForm = reactive({ code: '', name: '', minorUnits: 2 });
+  }));
+  const { cardForm, currencyForm } = useV2SessionDraft('bank-order-related-create', () => ({
+    cardForm: reactive({ label: '', last4: '', currencyCode: 'PHP' }),
+    currencyForm: reactive({ code: '', name: '', minorUnits: 2 })
+  }));
   const saving = ref(false);
   const working = ref(false);
   const saveError = ref('');
   const formRef = ref<FormInstance>();
-  const form = reactive(emptyForm());
-  const original = ref('');
+  const {
+    form,
+    original,
+    open: openFormDraft,
+    complete: completeFormDraft
+  } = useV2FormDraft('bank-orders-editor', emptyForm);
+  const correctionReasons = useV2SessionDraft(
+    'bank-orders-correction-reasons',
+    () => new Map<string, string>()
+  );
+  watch(correctionReason, (reason) => {
+    if (correcting.value && selected.value) correctionReasons.set(selected.value.id, reason);
+  });
   const dirty = computed(
     () =>
       JSON.stringify(form) !== original.value ||
@@ -281,18 +295,17 @@ export function useBankRechargeOrdersPage() {
     creating.value = true;
     selected.value = null;
     saveError.value = '';
-    Object.assign(form, emptyForm());
-    original.value = JSON.stringify(form);
+    openFormDraft('create');
     customers.value = [...(optionsQuery.data.value?.customers ?? [])];
     drawerOpen.value = true;
   }
   function openEdit(row: BankRechargeOrder) {
     correcting.value = false;
-    correctionReason.value = '';
+    correctionReason.value = correctionReasons.get(row.id) ?? '';
     creating.value = false;
     selected.value = row;
     saveError.value = '';
-    Object.assign(form, {
+    openFormDraft(row.id, {
       plan: row.plan,
       chargeCurrencyCode: row.chargeCurrencyCode,
       chargeAmount: row.chargeAmount,
@@ -316,7 +329,6 @@ export function useBankRechargeOrdersPage() {
       dueAt: row.dueAt ? toV2DateTimeInput(row.dueAt) : '',
       remark: row.remark ?? ''
     });
-    original.value = JSON.stringify(form);
     customers.value = [...(optionsQuery.data.value?.customers ?? [])];
     if (row.customer && !customers.value.some((item) => item.id === row.customer!.id))
       customers.value.unshift(row.customer);
@@ -349,6 +361,7 @@ export function useBankRechargeOrdersPage() {
           accountId: form.accountId || null,
           customerId: form.customerId || null
         });
+        completeFormDraft();
         drawerOpen.value = false;
         await ordersQuery.refresh();
         openEdit(created);
@@ -387,6 +400,8 @@ export function useBankRechargeOrdersPage() {
             reason: correctionReason.value.trim()
           });
         else await bankRechargeApi.updateOrder(selected.value.id, payload);
+        completeFormDraft();
+        correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
         ElMessage.success(correcting.value ? '银充订单已更正并重新入账' : '银充订单已保存');
         await ordersQuery.refresh();
@@ -411,7 +426,7 @@ export function useBankRechargeOrdersPage() {
   }
   function openRefund(row: BankRechargeOrder) {
     selected.value = row;
-    Object.assign(refund, {
+    openRefundDraft(row.id, {
       reason: '',
       refundReference: '',
       customerRefundAmount: '',
@@ -439,6 +454,7 @@ export function useBankRechargeOrdersPage() {
         bankFeeRecoveryAmountCny: refund.bankFeeRecoveryAmountCny.trim() || '0',
         upstreamRefundReference: refund.upstreamRefundReference.trim()
       });
+      completeRefundDraft();
       refundOpen.value = false;
       ElMessage.success('已按实际退款与回款金额登记账务');
       await ordersQuery.refresh();

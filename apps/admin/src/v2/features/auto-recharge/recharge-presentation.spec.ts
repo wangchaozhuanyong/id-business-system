@@ -23,6 +23,17 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('代理出口国家错误只提示所选代理国家，不将账单国家视为冲突', () => {
+    expect(failureReasonLabel('proxy_country_mismatch')).toBe(
+      '代理实际出口国家与所选代理国家不一致，已限制登录'
+    );
+  });
+  it('500 美元档订阅类型与结果使用中文标签', () => {
+    expect(statusLabel('promax')).toBe('Pro（500 美元／月档）');
+    expect(
+      subscriptionLabel(job({ plan: 'pro-500', result: { subscription_status: 'pro-500' } }))
+    ).toBe('Pro（500 美元／月档）');
+  });
   it('加载重试与底层错误显示中文，不显示内部异常原文', () => {
     expect(statusLabel('session_load_timeout')).toContain('等待时间');
     expect(statusLabel('bitbrowser_profile_rebuilding')).toContain('重新创建');

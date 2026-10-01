@@ -11,6 +11,40 @@ const operator = {
 };
 
 describe('IdBusinessV2VendureMailboxService', () => {
+  it('账号复制只读取现有有效查询码，缺失、重复、停用或过期时拒绝', async () => {
+    const alias = {
+      id: 'alias-1',
+      aliasEmail: 'hidden@example.invalid',
+      status: 'ACTIVE',
+      buyerQueryCode: 'BUY-TEST',
+      codeExpiresAt: null
+    };
+    const client = { virtualEmails: vi.fn().mockResolvedValue([alias]) };
+    const service = new IdBusinessV2VendureMailboxService(
+      client as never,
+      {} as never,
+      {} as never
+    );
+    await expect(service.accountBuyerCode('HIDDEN@example.invalid', operator)).resolves.toEqual({
+      aliasId: 'alias-1',
+      buyerQueryCode: 'BUY-TEST'
+    });
+    for (const records of [
+      [],
+      [alias, alias],
+      [{ ...alias, status: 'DISABLED' }],
+      [{ ...alias, buyerQueryCode: '' }],
+      [{ ...alias, codeExpiresAt: '2000-01-01T00:00:00Z' }],
+      [{ ...alias, codeExpiresAt: 'invalid' }]
+    ]) {
+      client.virtualEmails.mockResolvedValueOnce(records);
+      await expect(service.accountBuyerCode('hidden@example.invalid', operator)).rejects.toThrow();
+    }
+    await expect(
+      service.accountBuyerCode('hidden@example.invalid', { ...operator, roles: ['staff'] })
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('distinguishes configuration from a verified Vendure connection', async () => {
     const disconnected = new IdBusinessV2VendureMailboxService(
       {

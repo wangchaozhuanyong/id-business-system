@@ -17,10 +17,11 @@ import { BankRechargeAccountService } from './bank-recharge-account.service';
 import { BankRechargeCardService } from './bank-recharge-card.service';
 import { RechargeSettingsService } from './recharge-settings.service';
 import { RechargeProxyService } from './recharge-proxy.service';
-import { parseIdBusinessV2TotpSecret } from '../workspace/public-api';
+import type { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 import {
   clearRechargeDetails,
   clearRechargeStartSecrets,
+  parseRechargeTotpSecret,
   rechargeDetailsWithAddress
 } from './recharge-job-helpers';
 import { object, validateStart } from './recharge-validation';
@@ -35,6 +36,7 @@ export interface RechargeStartDependencies {
   bankCards?: BankRechargeCardService;
   settings?: RechargeSettingsService;
   proxies?: RechargeProxyService;
+  totpAccounts?: IdBusinessV2TotpAccountService;
   finishUnreceivedJob: (id: string, ownerId: string, unknown: boolean) => Promise<void>;
 }
 
@@ -50,16 +52,14 @@ export async function startRechargeJob(
   let manualLogin: {
     email: string;
     password: string;
-    totp?: ReturnType<typeof parseIdBusinessV2TotpSecret>;
+    totp?: ReturnType<typeof parseRechargeTotpSecret>;
   } | null = null;
   if (input.login) {
     try {
       manualLogin = {
         email: input.login.email.trim(),
         password: input.login.password,
-        ...(input.login.totpSecret
-          ? { totp: parseIdBusinessV2TotpSecret(input.login.totpSecret) }
-          : {})
+        ...(input.login.totpSecret ? { totp: parseRechargeTotpSecret(input.login.totpSecret) } : {})
       };
     } catch {
       throw new BadRequestException('2FA 密钥格式无效');
@@ -138,8 +138,6 @@ export async function startRechargeJob(
           remark: '保存本次手填真实账单地址'
         });
       }
-      if (input.action === 'server' && address?.country !== input.proxyCountryCode)
-        throw new ConflictException('代理国家与所选账单国家不一致');
       const account =
         input.action === 'server' && input.chatgptAccountId
           ? await deps.bankAccounts?.assertRechargeEligible(tx, input.chatgptAccountId)
@@ -149,6 +147,10 @@ export async function startRechargeJob(
       const login = account ? deps.bankAccounts!.savedLogin(account) : manualLogin;
       if (login && login.email.toLowerCase() !== input.details!.email.toLowerCase())
         throw new ConflictException('账单邮箱与登录账号不一致');
+      if (login && input.login?.totpAccountId) {
+        if (!deps.totpAccounts) throw new ServiceUnavailableException('系统 2FA 服务不可用');
+        login.totp = await deps.totpAccounts.forExecution(tx, input.login.totpAccountId, operator);
+      }
       const previousLoginIp =
         input.action === 'server'
           ? await deps.bankAccounts?.loginNetworkGuard(
@@ -265,6 +267,7 @@ export async function startRechargeJob(
       delete workerInput.maxAmount;
       if (result.login) Object.assign(workerInput, { login: result.login });
       delete workerInput.login?.totpSecret;
+      delete workerInput.login?.totpAccountId;
       if (input.action === 'prepare' && input.details && result.address) {
         workerInput.details = rechargeDetailsWithAddress(input.details, result.address);
       }

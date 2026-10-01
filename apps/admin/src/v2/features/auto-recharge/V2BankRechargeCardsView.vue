@@ -138,11 +138,11 @@
 
     <V2FormDrawer
       v-model="formOpen"
+      retain-draft
       :title="editing ? '编辑银行卡' : '新增银行卡'"
       description="卡号加密保存；已有订单的银行卡不能更换卡号或付款币种。安全码不保存。"
       size="min(680px, 96vw)"
       :confirm-loading="saving"
-      :dirty="dirty"
       @confirm="save"
     >
       <el-form
@@ -196,6 +196,7 @@
 
     <V2FormDrawer
       v-model="importOpen"
+      retain-draft
       title="批量导入银行卡"
       size="min(700px, 96vw)"
       description="每行卡号、有效期、备注1、备注2；安全码不能批量导入或保存。"
@@ -251,7 +252,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -269,6 +270,7 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type ManagedBankRechargeCard } from './bank-recharge-api';
 import { parseBankCardImport } from './bank-card-import';
 import V2BankCardDetailDrawer from './V2BankCardDetailDrawer.vue';
@@ -315,7 +317,11 @@ const cards = computed(() => query.data.value?.items ?? []);
 const formOpen = ref(false);
 const editing = ref<ManagedBankRechargeCard | null>(null);
 const formRef = ref<FormInstance>();
-const form = reactive({
+const {
+  form,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft('bank-cards-editor', () => ({
   label: '',
   number: '',
   expiry: '',
@@ -323,9 +329,7 @@ const form = reactive({
   active: true,
   remark1: '',
   remark2: ''
-});
-const original = ref('');
-const dirty = computed(() => JSON.stringify(form) !== original.value);
+}));
 const rules = computed<FormRules>(() => ({
   number: [{ required: !editing.value, message: '请填写银行卡卡号', trigger: 'blur' }],
   expiry: [{ required: !editing.value, message: '请填写有效期', trigger: 'blur' }],
@@ -334,8 +338,10 @@ const rules = computed<FormRules>(() => ({
 const saving = ref(false);
 const formError = ref('');
 const importOpen = ref(false);
-const importText = ref('');
-const importCurrency = ref('');
+const { importText, importCurrency } = useV2SessionDraft('bank-cards-import', () => ({
+  importText: ref(''),
+  importCurrency: ref('')
+}));
 const importing = ref(false);
 const importError = ref('');
 const operationError = ref('');
@@ -358,8 +364,10 @@ function changePageSize(value: number) {
   pageSize.value = value;
   page.value = 1;
 }
-function resetForm() {
-  Object.assign(form, {
+
+function openCreate() {
+  editing.value = null;
+  openDraft('create', {
     label: '',
     number: '',
     expiry: '',
@@ -368,26 +376,19 @@ function resetForm() {
     remark1: '',
     remark2: ''
   });
-  formError.value = '';
-  original.value = JSON.stringify(form);
-}
-function openCreate() {
-  editing.value = null;
-  resetForm();
   formOpen.value = true;
 }
 function openEdit(card: ManagedBankRechargeCard) {
   editing.value = card;
-  resetForm();
-  Object.assign(form, {
+  openDraft(card.id, {
     label: card.label,
+    number: '',
     expiry: card.expiry ?? '',
     currencyCode: card.currencyCode,
     active: card.status === 'active',
     remark1: card.remark1 ?? '',
     remark2: card.remark2 ?? ''
   });
-  original.value = JSON.stringify(form);
   formOpen.value = true;
 }
 async function save() {
@@ -415,6 +416,7 @@ async function save() {
         remark2: form.remark2
       });
     }
+    completeDraft();
     form.number = '';
     formOpen.value = false;
     ElMessage.success('银行卡已保存');
@@ -426,8 +428,6 @@ async function save() {
   }
 }
 function openImport() {
-  importText.value = '';
-  importError.value = '';
   importOpen.value = true;
 }
 async function importCards() {

@@ -169,7 +169,7 @@ def account_plan(data: dict, account_id: str) -> str:
     if account.get("account_id") and account["account_id"] != account_id:
         raise Stop("official_account_mismatch")
     plan = account.get("plan_type") or node.get("plan_type")
-    if plan not in ("free", "plus", "pro", "team", "business", "enterprise", "edu", "go"):
+    if plan not in ("free", "plus", "pro", "promax", "team", "business", "enterprise", "edu", "go"):
         raise Stop("unknown_current_plan")
     entitlement = node.get("entitlement")
     if plan == "free" and isinstance(entitlement, dict) and entitlement.get("has_active_subscription") is True:

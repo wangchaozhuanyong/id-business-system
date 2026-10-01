@@ -1,5 +1,6 @@
 <template>
   <V2FormDrawer
+    retain-draft
     :model-value="settingsOpen"
     :title="serverMode ? '服务器代理 IP 设置' : '代理 IP 与窗口设置'"
     :description="

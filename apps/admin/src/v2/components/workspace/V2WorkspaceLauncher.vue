@@ -183,6 +183,7 @@ import {
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
+import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -209,6 +210,16 @@ const mediaResolverDrawerOpen = ref(false);
 const relayScriptDrawerOpen = ref(false);
 const googleSheetsSyncDrawerOpen = ref(false);
 const websiteMonitorOpen = ref(false);
+useV2DrawerNavigation(() => {
+  panelOpen.value = false;
+  settingsOpen.value = false;
+  totpToolOpen.value = false;
+  mailViewerDrawerOpen.value = false;
+  mediaResolverDrawerOpen.value = false;
+  relayScriptDrawerOpen.value = false;
+  googleSheetsSyncDrawerOpen.value = false;
+  websiteMonitorOpen.value = false;
+});
 const isAdmin = computed(() => authStore.user?.roles.includes('admin') === true);
 const shortcutsQuery = useV2ModuleQuery<V2WorkspaceShortcutList>({
   moduleKey: 'profile',

@@ -53,10 +53,10 @@
 
         <section
           v-if="activeTab !== 'relay-query'"
-          class="vendure-mailbox-toolbar"
+          class="v2-filter-bar vendure-mailbox-toolbar"
           aria-label="邮件验证码查询筛选"
         >
-          <div class="vendure-mailbox-toolbar__filters">
+          <div class="v2-filter-bar__fields vendure-mailbox-toolbar__filters">
             <el-input
               v-model="keywordInput"
               clearable
@@ -116,11 +116,12 @@
             >
             <AppButton variant="soft" @click="applyFilters">查询</AppButton>
           </div>
-          <div class="vendure-mailbox-toolbar__actions">
+          <div class="v2-filter-bar__actions vendure-mailbox-toolbar__actions">
             <AppButton v-if="activeTab === 'primary'" variant="primary" @click="openPrimaryCreate"
               >新增主邮箱</AppButton
             >
             <template v-else-if="activeTab === 'aliases'">
+              <ChatgptAccountCopySettings />
               <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
               <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
             </template>
@@ -1294,6 +1295,7 @@
 </template>
 
 <script setup lang="ts">
+import ChatgptAccountCopySettings from './ChatgptAccountCopySettings.vue';
 import type {
   V2VendureMailboxAlias,
   V2VendureMailboxMail,

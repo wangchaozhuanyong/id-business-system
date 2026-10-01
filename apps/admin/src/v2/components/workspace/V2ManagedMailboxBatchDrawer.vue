@@ -8,7 +8,7 @@
     destroy-on-close
     :before-close="handleBeforeClose"
     @close="$emit('update:modelValue', false)"
-    @closed="clearAll"
+    @closed="pauseAuthorization"
   >
     <template #header="{ titleId, titleClass }">
       <div class="v2-mailbox-batch-drawer__heading">
@@ -96,6 +96,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import { getApiErrorMessage } from '@/api/client';
+import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import {
@@ -108,6 +109,7 @@ const emit = defineEmits<{
   imported: [];
   'update:modelValue': [value: boolean];
 }>();
+useV2DrawerNavigation(() => emit('update:modelValue', false));
 
 const provider = ref<V2MailProvider>('gmail');
 const batchText = ref('');
@@ -325,27 +327,21 @@ function summarizeResults(items: V2ManagedMailboxBatchResultItem[], total: numbe
 }
 
 async function handleBeforeClose(done: () => void) {
-  if (!batchText.value.trim() && !submitting.value) {
-    done();
-    return;
-  }
+  if (!submitting.value) return done();
   try {
     await ElMessageBox.confirm(
-      submitting.value
-        ? '关闭后会终止当前 Microsoft 批量授权，并清空尚未导入的数据。'
-        : '关闭后会清空尚未导入的邮箱数据。',
-      '清空并关闭',
+      '关闭后会停止当前批量授权，尚未导入的数据会保留。',
+      '停止授权并关闭',
       {
-        confirmButtonText: submitting.value ? '终止并关闭' : '清空并关闭',
-        cancelButtonText: '继续录入',
+        confirmButtonText: '停止并关闭',
+        cancelButtonText: '继续授权',
         type: 'warning'
       }
     );
-    microsoftAuthorizationGeneration += 1;
-    microsoftAuthorizationPopup?.close();
+    pauseAuthorization();
     done();
   } catch {
-    // 用户选择继续录入。
+    // 用户选择继续授权。
   }
 }
 
@@ -353,11 +349,7 @@ function requestClose() {
   void handleBeforeClose(() => emit('update:modelValue', false));
 }
 
-function clearAll() {
-  provider.value = 'gmail';
-  batchText.value = '';
-  result.value = null;
-  activeMicrosoftIndex.value = 0;
+function pauseAuthorization() {
   microsoftAuthorizationGeneration += 1;
   microsoftAuthorizationPopup?.close();
   microsoftAuthorizationPopup = null;

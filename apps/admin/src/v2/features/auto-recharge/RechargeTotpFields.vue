@@ -2,7 +2,7 @@
   <el-form-item label="2FA 方式" required>
     <el-radio-group v-model="sourceModel">
       <el-radio-button value="secret">粘贴密钥</el-radio-button>
-      <el-radio-button v-if="!serverMode" value="saved">已保存账号</el-radio-button>
+      <el-radio-button value="saved">已保存账号</el-radio-button>
       <el-radio-button value="manual">其他验证</el-radio-button>
     </el-radio-group>
   </el-form-item>
@@ -47,7 +47,7 @@
   <p class="recharge-note recharge-login-note">
     {{
       serverMode
-        ? '服务器使用本次密钥生成验证码；邮箱验证码和真人验证会停止任务并提示人工处理。'
+        ? '选择已保存账号或粘贴密钥后，服务器在官网要求 2FA 时自动生成并填写验证码；其他验证会停止并提示人工处理。'
         : '官网要求 TOTP 时自动取码并提交；邮箱验证码和真人验证在本次比特窗口完成。'
     }}
   </p>

@@ -17,7 +17,7 @@ from attempt_ledger import AttemptLedger, existing_checkout
 from checkout_core import (ACCOUNT_PATH, CHECKOUT_PATH, MAX_BYTES, ROOT, BrowserCredential,
                            Stop, account_plan, checkout_result, parse_credential, response_json,
                            safe_text, session_cookies, verify_official_session)
-from plans import PLANS, checkout_text_plan, plan_spec, text_tiers
+from plans import PLANS, PRO_GROUP, checkout_option_plan, checkout_text_plan, plan_spec, text_tiers
 
 ORIGIN = "https://chatgpt.com"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -321,14 +321,28 @@ def quote_from_text(text: str, currency_hint=None):
 
 async def quote_from_page(page, currency_hint=None):
     quote = quote_from_text(await page.locator("body").inner_text(), currency_hint)
-    if quote["plan"] in ("pro", "pro-5x", "pro-20x"):
-        # 官网 Pro 结算页同时展示两档；必须读当前 radio 的 aria-checked，
-        # 不能从全文出现的 5/20 或金额猜测选中哪档。
-        radios = await page.locator('[role="radio"]').filter(visible=True).evaluate_all("""nodes => nodes.map(n => ({
+    if quote["plan"] in ("pro", "pro-5x", "pro-20x", "pro-500"):
+        # 官网同时展示多个 Pro 档位；只读取唯一选中控件，不按全文或金额推断。
+        groups = page.get_by_role('radiogroup', name=PRO_GROUP).or_(
+            page.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+        count = await groups.count()
+        if count > 1:
+            quote['plan'] = 'pro'
+            return quote
+        scope = groups if count == 1 else page
+        radios = await scope.locator('[role="radio"]').filter(visible=True).evaluate_all("""nodes => nodes.map(n => ({
             label:n.getAttribute('aria-label') || n.innerText || '',
             checked:n.getAttribute('aria-checked'), state:n.getAttribute('data-state')}))""")
-        tier_options = [(row, text_tiers(row["label"])) for row in radios if text_tiers(row["label"])]
-        if tier_options:
+        if count == 1 and radios:
+            selected = [row for row in radios if row['checked'] == 'true'
+                        and row['state'] in (None, 'checked')]
+            quote['plan'] = (checkout_option_plan(selected[0]['label'])
+                             if len(selected) == 1 else None) or 'pro'
+            quote['plan_source'] = 'official_checkout_selected_radio'
+        else:
+            tier_options = [(row, text_tiers(row["label"])) for row in radios if text_tiers(row["label"])]
+            if not tier_options:
+                return quote
             selected = [values for row, values in tier_options if row["checked"] == "true"
                         and row["state"] in (None, "checked")]
             quote["plan"] = ("pro-" + str(next(iter(selected[0]))) + "x"

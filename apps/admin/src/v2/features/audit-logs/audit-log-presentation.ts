@@ -124,6 +124,7 @@ const ACTION_SEGMENT_LABELS: Record<string, string> = {
   topup_supplier_payment: '充值供应商付款',
   workspace_shortcut: '工作区快捷网址',
   workspace_totp_account: '工作区动态口令账号',
+  use: '使用',
   create: '创建',
   create_pending: '创建待处理记录',
   update: '更新',

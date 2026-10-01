@@ -10,6 +10,7 @@ import type {
 } from './contracts';
 import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
+import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 
 const mock = vi.hoisted(() => ({
   jobsQuery: {} as Record<string, unknown>,
@@ -25,6 +26,7 @@ const mock = vi.hoisted(() => ({
   proxyCountriesQuery: {} as Record<string, unknown>,
   proxiesQuery: {} as Record<string, unknown>,
   checkCardAvailability: vi.fn(),
+  managedCardDetail: vi.fn(),
   accountIdentity: vi.fn(),
   queryIndex: 0,
   jobOptions: undefined as
@@ -124,7 +126,7 @@ vi.mock('./bank-recharge-api', () => ({
     listCards: vi.fn(),
     listAccounts: vi.fn(),
     listCurrencies: vi.fn(),
-    managedCardDetail: vi.fn(),
+    managedCardDetail: mock.managedCardDetail,
     accountIdentity: mock.accountIdentity
   }
 }));
@@ -251,10 +253,14 @@ function fillForm() {
 }
 
 beforeEach(() => {
+  clearV2SessionDrafts();
   vi.clearAllMocks();
   mock.queryIndex = 0;
   jobs.value = { configured: true, items: [] };
   addresses.value.items = [address];
+  savedTotp.value.items = [
+    { id: '88888888-8888-4888-8888-888888888888', name: 'ChatGPT', issuer: 'OpenAI' }
+  ];
   storedSettings.value = settings;
   phase.value = 'ready';
   mock.jobsQuery = queryResult(jobs);
@@ -277,6 +283,15 @@ beforeEach(() => {
     ensureFresh: vi.fn().mockResolvedValue(undefined)
   };
   mock.checkCardAvailability.mockResolvedValue({ available: true });
+  mock.managedCardDetail.mockReset().mockResolvedValue({
+    id: 'card-a',
+    status: 'active',
+    currencyCode: 'PHP',
+    number: '5555555555554444',
+    expiry: '12/30',
+    billingName: 'Test User',
+    billingAddressId: address.id
+  });
   mock.listTotpAccounts.mockImplementation(async () => ({
     items: [
       {
@@ -341,6 +356,184 @@ beforeEach(() => {
 
 afterEach(() => scope.stop());
 
+describe('充值地址自动选择', () => {
+  const secondAddress: V2RechargeAddress = {
+    ...address,
+    id: '99999999-9999-4999-8999-999999999999',
+    line1: '1054 SW Test Oak Avenue',
+    createdAt: '2026-10-01T08:00:00Z'
+  };
+
+  it.each(['server_payment', 'payment'] as const)(
+    '缓存地址就绪时立即在 %s 模式选中并回填',
+    (mode) => {
+      flow.operationMode.value = mode;
+      expect(flow.selectedAddressId.value).toBe(address.id);
+      expect(flow.selectedAddress.value).toEqual(address);
+      expect(flow.details.value).toMatchObject({
+        country: address.country,
+        line1: address.line1,
+        city: address.city,
+        state: address.state,
+        postal_code: address.postalCode
+      });
+    }
+  );
+
+  it('首次读取地址完成后自动选中，空目录保持空选择', () => {
+    scope.stop();
+    clearV2SessionDrafts();
+    mock.queryIndex = 0;
+    phase.value = 'initial-loading';
+    addresses.value.items = [];
+    scope = effectScope();
+    flow = scope.run(useAutoRecharge)!;
+    expect(flow.selectedAddressId.value).toBe('');
+    addresses.value.items = [secondAddress];
+    expect(flow.selectedAddressId.value).toBe('');
+    phase.value = 'ready';
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+    addresses.value.items = [];
+    expect(flow.selectedAddressId.value).toBe('');
+    expect(flow.details.value.line1).toBe('');
+  });
+
+  it('本机排除已用及停用地址，按现有创建时间和编号顺序选中', () => {
+    addresses.value.items = [
+      { ...address, id: 'disabled', status: 'disabled' },
+      { ...address, id: 'used', status: 'used', usedAt: '2026-09-30T08:00:00Z' },
+      secondAddress,
+      { ...secondAddress, id: 'a-earliest', createdAt: '2026-09-01T08:00:00Z' }
+    ];
+    expect(flow.selectedAddressId.value).toBe('a-earliest');
+    expect(flow.availableAddresses.value.map((item) => item.id)).toEqual([
+      'a-earliest',
+      secondAddress.id
+    ]);
+  });
+
+  it('服务器没有未使用地址时选择最久未用的一条，切回本机不使用已用地址', () => {
+    flow.operationMode.value = 'server_payment';
+    addresses.value.items = [
+      { ...secondAddress, status: 'used', usedAt: '2026-09-30T08:00:00Z' },
+      { ...address, status: 'used', usedAt: '2026-09-01T08:00:00Z' }
+    ];
+    expect(flow.selectedAddressId.value).toBe(address.id);
+    expect(flow.availableAddresses.value.map((item) => item.id)).toEqual([
+      address.id,
+      secondAddress.id
+    ]);
+    flow.operationMode.value = 'payment';
+    expect(flow.selectedAddressId.value).toBe('');
+    expect(flow.selectedAddress.value).toBeUndefined();
+  });
+
+  it('手动选择后刷新与导航往返保留选项，不被排序靠前的新地址覆盖', () => {
+    addresses.value.items = [address, secondAddress];
+    flow.selectedAddressId.value = secondAddress.id;
+    flow.markAddressSelectionManual();
+    addresses.value.items = [secondAddress, { ...address }, { ...address, id: 'new-earliest' }];
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    scope.stop();
+    mock.queryIndex = 0;
+    scope = effectScope();
+    flow = scope.run(useAutoRecharge)!;
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+  });
+
+  it('手动选项停用后自动补选可用地址', () => {
+    addresses.value.items = [address, secondAddress];
+    flow.selectedAddressId.value = secondAddress.id;
+    flow.markAddressSelectionManual();
+    addresses.value.items = [address, { ...secondAddress, status: 'disabled' }];
+    expect(flow.selectedAddressId.value).toBe(address.id);
+    expect(flow.details.value.line1).toBe(address.line1);
+  });
+
+  it('读取中或读取失败时保留原选择与内容，成功后再重新匹配', () => {
+    addresses.value.items = [address, secondAddress];
+    flow.selectedAddressId.value = secondAddress.id;
+    phase.value = 'refreshing';
+    addresses.value.items = [];
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+    (mock.addressesQuery.error as { value: string | null }).value = '读取失败';
+    phase.value = 'refresh-error';
+    addresses.value.items = [address];
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+    (mock.addressesQuery.error as { value: string | null }).value = null;
+    phase.value = 'ready';
+    expect(flow.selectedAddressId.value).toBe(address.id);
+  });
+
+  it('临时手填内容不被地址目录刷新覆盖', () => {
+    flow.operationMode.value = 'server_payment';
+    flow.addressSource.value = 'manual';
+    flow.markAddressSelectionManual();
+    flow.details.value.line1 = 'Manual billing address';
+    addresses.value.items = [secondAddress];
+    expect(flow.details.value.line1).toBe('Manual billing address');
+    flow.addressSource.value = 'library';
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+  });
+
+  it('选择已保存银行卡时优先选中它的核实地址', async () => {
+    addresses.value.items = [address, secondAddress];
+    mock.managedCardDetail.mockResolvedValueOnce({
+      id: 'card-a',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '5555555555554444',
+      expiry: '12/30',
+      billingName: 'Test User',
+      billingAddressId: secondAddress.id
+    });
+    await flow.selectSavedCard('card-a');
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+    expect(flow.details.value.name).toBe('Test User');
+  });
+
+  it('银行卡核实地址不可用时保持空选择，不能静默换成其他地址', async () => {
+    addresses.value.items = [{ ...address, status: 'disabled' }, secondAddress];
+    await flow.selectSavedCard('card-a');
+    expect(flow.selectedAddressId.value).toBe('');
+    expect(flow.selectedAddress.value).toBeUndefined();
+    expect(flow.details.value.line1).toBe('');
+    addresses.value.items = [address, secondAddress];
+    expect(flow.selectedAddressId.value).toBe(address.id);
+  });
+
+  it('选卡详情晚到时不覆盖其间手动修改的地址', async () => {
+    addresses.value.items = [address, secondAddress];
+    let finish!: (value: unknown) => void;
+    mock.managedCardDetail.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = flow.selectSavedCard('card-a');
+    flow.selectedAddressId.value = secondAddress.id;
+    flow.markAddressSelectionManual();
+    finish({
+      id: 'card-a',
+      status: 'active',
+      currencyCode: 'PHP',
+      number: '5555555555554444',
+      expiry: '12/30',
+      billingAddressId: address.id
+    });
+    await pending;
+    expect(flow.selectedAddressId.value).toBe(secondAddress.id);
+    expect(flow.details.value.line1).toBe(secondAddress.line1);
+  });
+});
+
 describe('服务器默认代理关联', () => {
   const proxy = {
     id: '33333333-3333-4333-8333-333333333333',
@@ -353,6 +546,7 @@ describe('服务器默认代理关联', () => {
     (mock.serverProxySettingsQuery.data as { value: unknown }).value = value;
   }
   it('自动带入目录默认值，不被国家切换监听或账单国家覆盖', async () => {
+    fillForm();
     (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US', 'PH'] };
     (mock.proxiesQuery.data as { value: unknown }).value = { items: [proxy], total: 1 };
     setDefault({ proxyId: proxy.id, proxy, legacyConfigured: true });
@@ -363,8 +557,8 @@ describe('服务器默认代理关联', () => {
     addresses.value.items = [{ ...address }];
     await nextTick();
     expect(flow.selectedProxyId.value).toBe(proxy.id);
-    expect(flow.billingCountryRestriction.value).toBe('US');
-    expect(flow.canStart.value).toBe(false);
+    expect(flow.selectedAddress.value?.country).toBe('US');
+    expect(flow.canStart.value).toBe(true);
   });
   it('刷新默认值保留手动选择，点击使用默认代理才替换', async () => {
     (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US', 'PH'] };
@@ -1045,7 +1239,7 @@ describe('本机比特浏览器自动充值', () => {
     expect(flow.settingsForm.value.browserOptions).toEqual(browserOptions);
   });
 
-  it('设置刷新不覆盖未保存的代理链接，放弃后恢复最新设置', async () => {
+  it('设置刷新及关闭重开均保留未保存的代理链接', async () => {
     flow.setSettingsOpen(true);
     flow.settingsForm.value.dynamicProxyUrl = 'https://new-proxy.example/extract';
     storedSettings.value = { ...settings, groupName: '后台更新的分组' };
@@ -1053,9 +1247,10 @@ describe('本机比特浏览器自动充值', () => {
     expect(flow.settingsForm.value.dynamicProxyUrl).toBe('https://new-proxy.example/extract');
     expect(flow.settingsDirty.value).toBe(true);
     flow.setSettingsOpen(false);
-    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('');
-    expect(flow.settingsForm.value.groupName).toBe('后台更新的分组');
-    expect(flow.settingsDirty.value).toBe(false);
+    flow.setSettingsOpen(true);
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('https://new-proxy.example/extract');
+    expect(flow.settingsForm.value.groupName).toBe(settings.groupName);
+    expect(flow.settingsDirty.value).toBe(true);
   });
 
   it('设置保存失败留在抽屉并保留输入，重试成功后清除秘密输入', async () => {
@@ -1093,15 +1288,177 @@ describe('本机比特浏览器自动充值', () => {
     expect(flow.settingsSaving.value).toBe(false);
   });
 
-  it('离开页面时清除 JSON、卡资料和本机连接凭据', () => {
+  it('离页后恢复资料草稿，安全码、临时验证码和单次付款授权需重新输入', () => {
     fillForm();
+    flow.loginCode.value = '123456';
+    flow.loginPassword.value = 'fixture-password';
+    flow.settingsForm.value.dynamicProxyUrl = 'https://proxy.example/draft';
     scope.stop();
-    expect(flow.sessionJson.value).toBe('');
-    expect(Object.values(flow.details.value).every((value) => value === '')).toBe(true);
+    mock.queryIndex = 0;
+    scope = effectScope();
+    flow = scope.run(useAutoRecharge)!;
+    expect(flow.sessionJson.value).toBe(sessionJson());
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(flow.details.value.name).toBe('Test User');
+    expect(flow.details.value.cvc).toBe('');
+    expect(flow.loginPassword.value).toBe('fixture-password');
+    expect(flow.loginCode.value).toBe('');
+    expect(flow.authorizeSinglePayment.value).toBe(false);
+    expect(flow.settingsForm.value.dynamicProxyUrl).toBe('https://proxy.example/draft');
+    expect(mock.startServer).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
   });
 });
 
 describe('服务器自动充值', () => {
+  async function serverPasswordForm() {
+    flow.operationMode.value = 'server_payment';
+    fillForm();
+    const proxyId = '33333333-3333-4333-8333-333333333333';
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: ['US'] };
+    (mock.proxiesQuery.data as { value: unknown }).value = {
+      items: [{ id: proxyId, countryCode: 'US', status: 'active', kind: 'dynamic_residential' }]
+    };
+    flow.selectedProxyCountryCode.value = 'US';
+    flow.loginMethod.value = 'password';
+    flow.loginEmail.value = 'registered@example.com';
+    flow.loginPassword.value = 'synthetic-password';
+    flow.totp.source.value = 'saved';
+    await nextTick();
+    flow.selectedProxyId.value = proxyId;
+  }
+
+  it.each([
+    ['PH', 'library'],
+    ['PH', 'manual'],
+    ['JP', 'library'],
+    ['GB', 'library']
+  ] as const)('代理国家 %s 可搭配美国 %s 账单地址启动', async (countryCode, addressSource) => {
+    await serverPasswordForm();
+    const proxyId = '33333333-3333-4333-8333-333333333333';
+    (mock.proxyCountriesQuery.data as { value: unknown }).value = { items: [countryCode] };
+    (mock.proxiesQuery.data as { value: unknown }).value = {
+      items: [{ id: proxyId, countryCode, status: 'active', kind: 'dynamic_residential' }]
+    };
+    flow.selectedProxyCountryCode.value = countryCode;
+    flow.addressSource.value = addressSource;
+    flow.totp.source.value = 'secret';
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    await nextTick();
+    flow.selectedProxyId.value = proxyId;
+    expect(flow.details.value.country).toBe('US');
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyCountryCode: countryCode,
+        lockedCurrency: 'PHP',
+        details: expect.objectContaining({ country: 'US' })
+      })
+    );
+  });
+
+  it('服务器模式可选择系统 2FA，只提交账号编号，不在浏览器取当次验证码', async () => {
+    await serverPasswordForm();
+    expect(flow.canStart.value).toBe(false);
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    flow.totp.secretInput.value = 'JBSWY3DPEHPK3PXP';
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    const submitted = mock.startServer.mock.calls[0]![0];
+    expect(submitted.login).toEqual({
+      email: 'registered@example.com',
+      password: 'synthetic-password',
+      totpAccountId: savedTotp.value.items[0]!.id
+    });
+    expect(submitted.login).not.toHaveProperty('totpSecret');
+    expect(submitted.login).not.toHaveProperty('token');
+    expect(mock.listTotpAccounts).not.toHaveBeenCalled();
+    expect(mock.connectorSubmitCode).not.toHaveBeenCalled();
+    expect(flow.loginPassword.value).toBe('');
+    expect(flow.totp.savedAccountId.value).toBe(savedTotp.value.items[0]!.id);
+  });
+
+  it('服务器只读复查同样提交系统 2FA 编号，不提交银行卡或新付款授权', async () => {
+    const sourceId = '99999999-9999-4999-8999-999999999999';
+    jobs.value.items = [
+      {
+        id: sourceId,
+        plan: 'plus',
+        action: 'server',
+        state: 'unknown',
+        createdAt: '',
+        updatedAt: '',
+        result: { payment_attempted: true, payment_requests_sent: 1, payment_status: 'unknown' }
+      }
+    ];
+    flow.selectJob(sourceId);
+    await serverPasswordForm();
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    expect(flow.canRecheck.value).toBe(true);
+    await flow.recheck();
+    const submitted = mock.recheckServer.mock.calls[0]![0];
+    expect(submitted.login).toEqual({
+      email: 'registered@example.com',
+      password: 'synthetic-password',
+      totpAccountId: savedTotp.value.items[0]!.id
+    });
+    expect(submitted).not.toHaveProperty('details');
+    expect(submitted).not.toHaveProperty('authorizeSinglePayment');
+  });
+
+  it('服务器启动失败保留 2FA 选择和输入，允许修正后重试', async () => {
+    await serverPasswordForm();
+    flow.totp.savedAccountId.value = savedTotp.value.items[0]!.id;
+    mock.startServer.mockRejectedValueOnce(new Error('系统 2FA 账号已删除，请重新选择'));
+    await flow.start();
+    expect(flow.error.value).toContain('重新选择');
+    expect(flow.loginPassword.value).toBe('synthetic-password');
+    expect(flow.totp.source.value).toBe('saved');
+    expect(flow.totp.savedAccountId.value).toBe(savedTotp.value.items[0]!.id);
+  });
+
+  it('2FA 列表读取失败不清理选择，成功确认账号已不存在时才清除', async () => {
+    await serverPasswordForm();
+    const accountId = savedTotp.value.items[0]!.id;
+    flow.totp.savedAccountId.value = accountId;
+    phase.value = 'refreshing';
+    savedTotp.value.items = [];
+    expect(flow.totp.savedAccountId.value).toBe(accountId);
+    (mock.totpQuery.error as { value: string | null }).value = '读取失败';
+    phase.value = 'ready';
+    expect(flow.totp.savedAccountId.value).toBe(accountId);
+    (mock.totpQuery.error as { value: string | null }).value = null;
+    expect(flow.totp.savedAccountId.value).toBe('');
+    expect(flow.canStart.value).toBe(false);
+  });
+
+  it('其他验证方式不附带系统 2FA 或密钥', async () => {
+    await serverPasswordForm();
+    flow.totp.source.value = 'manual';
+    expect(flow.canStart.value).toBe(true);
+    await flow.start();
+    expect(mock.startServer.mock.calls[0]![0].login).toEqual({
+      email: 'registered@example.com',
+      password: 'synthetic-password'
+    });
+  });
+
+  it('切换验证方式及模式时，查询临时清空数据不清理已保存的 2FA 选择', async () => {
+    await serverPasswordForm();
+    const previousData = savedTotp.value;
+    const accountId = previousData.items[0]!.id;
+    flow.totp.savedAccountId.value = accountId;
+    flow.totp.source.value = 'manual';
+    (mock.totpQuery.data as { value: unknown }).value = undefined;
+    flow.totp.source.value = 'saved';
+    expect(flow.totp.savedAccountId.value).toBe(accountId);
+    (mock.totpQuery.data as { value: unknown }).value = previousData;
+    flow.operationMode.value = 'payment';
+    expect(flow.totp.savedAccountId.value).toBe(accountId);
+    expect(flow.totp.ready.value).toBe(true);
+  });
+
   it('已保存账号首次登录国家与当前代理国家不符时禁止启动', async () => {
     flow.operationMode.value = 'server_payment';
     fillForm();

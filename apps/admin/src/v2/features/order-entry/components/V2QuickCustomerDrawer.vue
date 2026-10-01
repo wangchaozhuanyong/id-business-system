@@ -1,5 +1,6 @@
 <template>
   <V2FormDrawer
+    retain-draft
     :model-value="modelValue"
     title="新增客户"
     confirm-text="保存并选中"
@@ -139,6 +140,7 @@ import { getApiErrorMessage } from '@/api/client';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { idBusinessV2CustomersApi } from '../api';
 import type { V2OrderEntryCustomer } from '../contracts';
 import {
@@ -158,7 +160,9 @@ const emit = defineEmits<{
 }>();
 
 const formRef = ref<FormInstance>();
-const form = reactive(createEmptyQuickCustomerForm());
+const form = useV2SessionDraft('order-quick-customer-create', () =>
+  reactive(createEmptyQuickCustomerForm())
+);
 const saving = ref(false);
 const { sourceOptions, tagOptions, optionsLoading, optionsError, loadOptions, retryOptions } =
   useQuickCustomerOptions();
@@ -184,7 +188,6 @@ watch(
   () => props.modelValue,
   (visible) => {
     if (!visible) return;
-    Object.assign(form, createEmptyQuickCustomerForm());
     formRef.value?.clearValidate();
     void loadOptions();
   },
@@ -196,6 +199,7 @@ async function submit() {
   saving.value = true;
   try {
     const customer = await idBusinessV2CustomersApi.create(createQuickCustomerPayload(form));
+    Object.assign(form, createEmptyQuickCustomerForm());
     emit('created', toOrderEntryCustomer(customer));
     emit('update:modelValue', false);
     ElMessage.success('客户已创建并选中');

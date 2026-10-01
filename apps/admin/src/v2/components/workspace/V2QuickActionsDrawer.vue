@@ -11,7 +11,6 @@
     :show-close="!mutationPending"
     :before-close="handleBeforeClose"
     @close="emit('update:modelValue', false)"
-    @closed="resetEditor"
   >
     <div
       class="v2-quick-actions-drawer__body"
@@ -20,9 +19,12 @@
       @pointercancel="cancelDrag"
       @lostpointercapture="cancelDrag"
     >
-      <p class="v2-quick-actions-drawer__intro">保存常用回复，复制时只复制“内容”中的文字。</p>
+      <div v-if="!selectedReply && !editorMode" class="v2-quick-actions-drawer__intro">
+        <p>常用回复随手可用，点击摘要查看全文。</p>
+        <span>{{ items.length }} 条回复</span>
+      </div>
 
-      <div class="v2-quick-actions-drawer__toolbar">
+      <div v-if="!selectedReply && !editorMode" class="v2-quick-actions-drawer__toolbar">
         <el-input
           v-model="keyword"
           :disabled="mutationPending"
@@ -46,7 +48,7 @@
       </div>
 
       <p
-        v-if="sort === 'custom' && items.length > 1"
+        v-if="!selectedReply && !editorMode && sort === 'custom' && items.length > 1"
         class="v2-quick-actions-drawer__notice"
         role="status"
       >
@@ -104,7 +106,7 @@
           {{ mutationError }}
         </p>
         <footer>
-          <AppButton variant="ghost" :disabled="saving" @click="cancelEditor">取消</AppButton>
+          <AppButton variant="ghost" :disabled="saving" @click="cancelEditor">返回列表</AppButton>
           <AppButton variant="primary" :loading="saving" @click="submitEditor">
             {{ editorMode === 'create' ? '添加' : '保存修改' }}
           </AppButton>
@@ -112,6 +114,7 @@
       </section>
 
       <V2AsyncRegion
+        v-if="!editorMode"
         :phase="phase"
         :empty="items.length === 0"
         :error="error"
@@ -129,7 +132,36 @@
             新增第一条
           </AppButton>
         </template>
-        <p v-if="items.length && !filteredItems.length" class="v2-quick-actions-drawer__notice">
+        <section v-if="selectedReply" class="v2-quick-actions-reader" aria-label="回复全文">
+          <header>
+            <AppButton variant="ghost" size="small" @click="closeReader">返回回复列表</AppButton>
+            <span>{{ selectedReply.content.length }} 字 · 仅复制正文</span>
+          </header>
+          <div class="v2-quick-actions-reader__paper" tabindex="0" aria-label="回复正文">
+            <h3 ref="readerHeading" tabindex="-1">{{ selectedReply.title }}</h3>
+            <p>{{ selectedReply.content }}</p>
+          </div>
+          <footer>
+            <AppButton
+              variant="ghost"
+              :disabled="!writesAllowed || mutationPending"
+              @click="startEdit(selectedReply)"
+              >修改</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              :disabled="!writesAllowed || ordering || saving"
+              :loading="deletingId === selectedReply.id"
+              @click="deleteItem(selectedReply)"
+              >删除</AppButton
+            >
+            <AppButton variant="primary" @click="copyContent(selectedReply)">复制全文</AppButton>
+          </footer>
+        </section>
+        <p
+          v-else-if="items.length && !filteredItems.length"
+          class="v2-quick-actions-drawer__notice"
+        >
           没有匹配的便捷操作，请调整搜索词。
         </p>
         <template v-else>
@@ -141,7 +173,10 @@
                 :show-column-settings="false"
                 :row-class-name="rowClass"
               >
-                <V2TableColumn :definition="v2TableSchemas.workspace.quickActions.columns[0]">
+                <V2TableColumn
+                  :definition="v2TableSchemas.workspace.quickActions.columns[0]"
+                  :show-overflow-tooltip="false"
+                >
                   <template #default="{ row }">
                     <div class="v2-quick-actions-drawer__sortable-title">
                       <button
@@ -156,17 +191,26 @@
                       >
                         <el-icon aria-hidden="true"><Rank /></el-icon>
                       </button>
-                      <span class="v2-quick-actions-drawer__preview" :title="row.title">{{
-                        row.title
-                      }}</span>
+                      <span class="v2-quick-actions-drawer__title">{{ row.title }}</span>
                     </div>
                   </template>
                 </V2TableColumn>
-                <V2TableColumn :definition="v2TableSchemas.workspace.quickActions.columns[1]">
+                <V2TableColumn
+                  :definition="v2TableSchemas.workspace.quickActions.columns[1]"
+                  :show-overflow-tooltip="false"
+                >
                   <template #default="{ row }">
-                    <span class="v2-quick-actions-drawer__preview" :title="row.content">{{
-                      row.content
-                    }}</span>
+                    <button
+                      :ref="readerFocusRef(row)"
+                      class="v2-quick-actions-drawer__preview"
+                      type="button"
+                      :aria-label="`查看全文：${row.title}`"
+                      :data-reply-id="row.id"
+                      @click="openReader(row)"
+                    >
+                      <span>{{ row.content }}</span>
+                      <small>查看全文</small>
+                    </button>
                   </template>
                 </V2TableColumn>
                 <V2TableActionColumn :definition="v2TableSchemas.workspace.quickActions.columns[2]">
@@ -177,7 +221,7 @@
                     <AppButton
                       size="small"
                       variant="ghost"
-                      :disabled="!writesAllowed || ordering || saving"
+                      :disabled="!writesAllowed || mutationPending"
                       @click="startEdit(row)"
                       >修改</AppButton
                     >
@@ -223,22 +267,18 @@
                   >{{ item.title }}</strong
                 >
               </div>
-              <p
-                :ref="registerContentPreview"
-                v-v2-column-visibility="[v2TableSchemas.workspace.quickActions.id, 'content']"
-                :data-quick-action-id="item.id"
-                :class="{ 'is-expanded': expandedIds.has(item.id) }"
-              >
+              <p v-v2-column-visibility="[v2TableSchemas.workspace.quickActions.id, 'content']">
                 {{ item.content }}
               </p>
               <button
-                v-if="overflowingIds.has(item.id) || expandedIds.has(item.id)"
+                :ref="readerFocusRef(item)"
                 class="v2-quick-actions-drawer__expand"
                 type="button"
-                :aria-expanded="expandedIds.has(item.id)"
-                @click="toggleExpanded(item.id)"
+                :aria-label="`查看全文：${item.title}`"
+                :data-reply-id="item.id"
+                @click="openReader(item)"
               >
-                {{ expandedIds.has(item.id) ? '收起全文' : '展开全文' }}
+                查看全文
               </button>
               <footer>
                 <AppButton size="small" variant="primary" @click="copyContent(item)"
@@ -247,7 +287,7 @@
                 <AppButton
                   size="small"
                   variant="ghost"
-                  :disabled="!writesAllowed || ordering || saving"
+                  :disabled="!writesAllowed || mutationPending"
                   @click="startEdit(item)"
                   >修改</AppButton
                 >
@@ -280,7 +320,7 @@
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { Rank } from '@element-plus/icons-vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import {
@@ -297,6 +337,8 @@ import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { useV2QuickActionSorting } from './useV2QuickActionSorting';
 
 const props = defineProps<{
@@ -312,26 +354,37 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
+useV2DrawerNavigation(() => emit('update:modelValue', false));
 const formRef = ref<FormInstance>();
-const form = reactive<V2QuickActionInput>({ title: '', content: '' });
+const {
+  form,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft<V2QuickActionInput>('quick-actions-editor', () => ({ title: '', content: '' }));
 const rules: FormRules<V2QuickActionInput> = {
   title: [{ required: true, whitespace: true, message: '请输入标题', trigger: 'blur' }],
   content: [{ required: true, whitespace: true, message: '请输入内容', trigger: 'blur' }]
 };
-const editorMode = ref<'create' | 'edit' | null>(null);
-const editingId = ref('');
-const editorSnapshot = ref('');
-const mutationError = ref('');
+const { editorMode, editingId, mutationError, keyword, sort, page, selectedId } = useV2SessionDraft(
+  'quick-actions-view',
+  () => ({
+    editorMode: ref<'create' | 'edit' | null>(null),
+    editingId: ref(''),
+    mutationError: ref(''),
+    keyword: ref(''),
+    sort: ref<'custom' | 'updated' | 'title'>('custom'),
+    page: ref(1),
+    selectedId: ref('')
+  })
+);
+if (editorMode.value) openDraft(editingId.value || 'create');
 const saving = ref(false);
 const deletingId = ref('');
 const mutationPending = computed(() => saving.value || ordering.value || Boolean(deletingId.value));
-const keyword = ref('');
-const sort = ref<'custom' | 'updated' | 'title'>('custom');
 const canReorder = computed(
   () =>
     props.writesAllowed &&
     !mutationPending.value &&
-    !editorMode.value &&
     sort.value === 'custom' &&
     !keyword.value.trim()
 );
@@ -351,18 +404,12 @@ const {
   enabled: () => canReorder.value,
   reorder: (ids) => props.reorder(ids)
 });
-const page = ref(1);
-const expandedIds = ref(new Set<string>());
-const overflowingIds = ref(new Set<string>());
-const contentPreviews = new Map<string, HTMLElement>();
-const previewIds = new WeakMap<HTMLElement, string>();
-let measurePending = false;
+const selectedReply = computed(() => props.items.find((item) => item.id === selectedId.value));
+const readerHeading = ref<HTMLElement>();
+let returnFocusId = '';
 const pageSize = 8;
 const limitReached = computed(() => props.items.length >= V2_QUICK_ACTION_LIMITS.count);
 
-const dirty = computed(
-  () => Boolean(editorMode.value) && JSON.stringify(form) !== editorSnapshot.value
-);
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLocaleLowerCase();
   const rows = customItems.value.filter(
@@ -400,103 +447,60 @@ watch(
     page.value = Math.max(1, Math.min(page.value, Math.ceil(count / pageSize)));
   }
 );
-watch(pageItems, scheduleOverflowMeasure, { flush: 'post' });
-onMounted(() => window.addEventListener('resize', scheduleOverflowMeasure));
-onBeforeUnmount(() => window.removeEventListener('resize', scheduleOverflowMeasure));
-
-function registerContentPreview(element: unknown) {
-  if (!(element instanceof HTMLElement)) return;
-  const id = element.dataset.quickActionId;
-  if (!id) return;
-  const previousId = previewIds.get(element);
-  if (previousId && previousId !== id) contentPreviews.delete(previousId);
-  previewIds.set(element, id);
-  if (contentPreviews.get(id) === element) return;
-  contentPreviews.set(id, element);
-  scheduleOverflowMeasure();
+async function openReader(item: V2QuickActionItem) {
+  selectedId.value = item.id;
+  await nextTick();
+  readerHeading.value?.focus({ preventScroll: true });
 }
 
-function scheduleOverflowMeasure() {
-  if (measurePending) return;
-  measurePending = true;
+function closeReader() {
+  returnFocusId = selectedId.value;
+  selectedId.value = '';
+}
+
+function restoreReaderFocus(element: unknown, id: string) {
+  if (!(element instanceof HTMLElement) || returnFocusId !== id) return;
   void nextTick(() => {
-    measurePending = false;
-    const next = new Set<string>();
-    for (const [id, element] of contentPreviews) {
-      if (!element.isConnected) {
-        contentPreviews.delete(id);
-        continue;
-      }
-      if (expandedIds.value.has(id)) {
-        if (overflowingIds.value.has(id)) next.add(id);
-      } else if (
-        element.getBoundingClientRect().width &&
-        element.scrollHeight > element.clientHeight + 1
-      ) {
-        next.add(id);
-      }
-    }
-    if (
-      next.size !== overflowingIds.value.size ||
-      [...next].some((id) => !overflowingIds.value.has(id))
-    ) {
-      overflowingIds.value = next;
+    if (returnFocusId === id && element.isConnected && element.getClientRects().length) {
+      element.focus({ preventScroll: true });
+      returnFocusId = '';
     }
   });
 }
 
-function toggleExpanded(id: string) {
-  const next = new Set(expandedIds.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  expandedIds.value = next;
-  scheduleOverflowMeasure();
+function readerFocusRef(item: V2QuickActionItem) {
+  return (element: unknown) => restoreReaderFocus(element, item.id);
 }
 
 function setEditor(mode: 'create' | 'edit', item?: V2QuickActionItem) {
   editorMode.value = mode;
   editingId.value = item?.id ?? '';
-  form.title = item?.title ?? '';
-  form.content = item?.content ?? '';
-  editorSnapshot.value = JSON.stringify(form);
+  openDraft(item?.id ?? 'create', { title: item?.title ?? '', content: item?.content ?? '' });
   mutationError.value = '';
   formRef.value?.clearValidate();
 }
 
-async function confirmDiscard(): Promise<boolean> {
-  if (!dirty.value) return true;
-  try {
-    await ElMessageBox.confirm('当前内容尚未保存，确认放弃修改吗？', '放弃修改', {
-      confirmButtonText: '放弃修改',
-      cancelButtonText: '继续编辑',
-      type: 'warning'
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function startCreate() {
-  if (mutationPending.value || !(await confirmDiscard())) return;
+function startCreate() {
+  if (mutationPending.value) return;
   setEditor('create');
 }
 
-async function startEdit(item: V2QuickActionItem) {
-  if (mutationPending.value || !(await confirmDiscard())) return;
+function startEdit(item: V2QuickActionItem) {
+  if (mutationPending.value) return;
   setEditor('edit', item);
 }
 
-async function cancelEditor() {
-  if (await confirmDiscard()) resetEditor();
+function cancelEditor() {
+  editorMode.value = null;
+  editingId.value = '';
 }
 
 function resetEditor() {
+  completeDraft();
   editorMode.value = null;
   editingId.value = '';
   form.title = '';
   form.content = '';
-  editorSnapshot.value = '';
   mutationError.value = '';
 }
 
@@ -534,6 +538,7 @@ async function deleteItem(item: V2QuickActionItem) {
   try {
     await props.remove(item.id);
     if (editingId.value === item.id) resetEditor();
+    if (selectedId.value === item.id) selectedId.value = '';
     ElMessage.success('已删除便捷操作');
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '删除失败，请重试');
@@ -551,9 +556,9 @@ async function copyContent(item: V2QuickActionItem) {
   }
 }
 
-async function handleBeforeClose(done: () => void) {
+function handleBeforeClose(done: () => void) {
   if (mutationPending.value) return;
-  if (await confirmDiscard()) done();
+  done();
 }
 </script>
 
@@ -569,16 +574,6 @@ async function handleBeforeClose(done: () => void) {
   min-width: 0;
   height: 100%;
 }
-.v2-quick-actions-drawer__body > :deep(.v2-async-region) {
-  flex: 1;
-  min-height: 0;
-}
-.v2-quick-actions-drawer__body :deep(.v2-async-region__content) {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-}
 
 .v2-quick-actions-drawer__intro,
 .v2-quick-actions-drawer__notice {
@@ -586,162 +581,19 @@ async function handleBeforeClose(done: () => void) {
   color: var(--v3-text-soft);
 }
 
-.v2-quick-actions-drawer__toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 128px auto;
-  gap: 8px;
-}
-
-.v2-quick-actions-editor {
-  display: grid;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--v3-border);
-  border-radius: var(--v3-radius-lg);
-  background: var(--v3-surface-2);
-}
-
-.v2-quick-actions-editor header {
-  display: grid;
-  gap: 4px;
-}
-
-.v2-quick-actions-editor header strong {
-  font-size: 15px;
-}
-
-.v2-quick-actions-editor header span,
-.v2-quick-actions-editor__error {
-  color: var(--v3-text-soft);
-}
-
-.v2-quick-actions-editor__error {
-  margin: 0;
-  color: var(--v3-danger);
-}
-
-.v2-quick-actions-editor footer {
+.v2-quick-actions-drawer__intro {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.v2-quick-actions-drawer__preview {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.v2-quick-actions-drawer__intro p {
+  margin: 0;
 }
 
-.v2-quick-actions-drawer__table-scroll {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: auto;
-}
-
-.v2-quick-actions-drawer__table-inner {
-  min-width: 620px;
-}
-
-.v2-quick-actions-drawer__cards {
-  display: none;
-}
-
-.v2-quick-actions-drawer__expand {
-  justify-self: start;
-  min-height: 36px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: var(--v3-radius-sm);
-  background: transparent;
-  color: var(--v3-primary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.v2-quick-actions-drawer__expand:hover {
-  text-decoration: underline;
-}
-
-.v2-quick-actions-drawer__expand:focus-visible {
-  outline: 2px solid var(--v3-focus-color);
-  outline-offset: 2px;
-}
-
-.v2-quick-actions-drawer__body :deep(.el-pagination) {
-  justify-content: flex-end;
-  margin-top: 12px;
-}
-
-@media (max-width: 600px) {
-  .v2-quick-actions-drawer__toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .v2-quick-actions-drawer__toolbar .el-input {
-    grid-column: 1 / -1;
-  }
-
-  .v2-quick-actions-drawer__toolbar :deep(.el-input__wrapper),
-  .v2-quick-actions-drawer__toolbar :deep(.el-select__wrapper),
-  .v2-quick-actions-drawer__toolbar :deep(.el-button),
-  .v2-quick-actions-drawer__card footer :deep(.el-button),
-  .v2-quick-actions-drawer__expand {
-    min-height: 44px;
-  }
-}
-
-@media (max-width: 900px) {
-  .v2-quick-actions-drawer__table-scroll {
-    display: none;
-  }
-
-  .v2-quick-actions-drawer__cards {
-    display: grid;
-    flex: 1;
-    min-height: 0;
-    align-content: start;
-    overflow-y: auto;
-    gap: 10px;
-  }
-
-  .v2-quick-actions-drawer__card {
-    display: grid;
-    min-width: 0;
-    gap: 10px;
-    padding: 14px;
-    border: 1px solid var(--v3-border);
-    border-radius: var(--v3-radius);
-    background: var(--v3-surface);
-  }
-
-  .v2-quick-actions-drawer__card strong {
-    overflow-wrap: anywhere;
-  }
-
-  .v2-quick-actions-drawer__card p {
-    display: -webkit-box;
-    overflow: hidden;
-    margin: 0;
-    color: var(--v3-text-soft);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-  }
-
-  .v2-quick-actions-drawer__card p.is-expanded {
-    display: block;
-    overflow: visible;
-  }
-
-  .v2-quick-actions-drawer__card footer {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-}
 .v2-quick-actions-drawer__notice {
   font-size: 12px;
   line-height: 1.6;
@@ -811,8 +663,290 @@ async function handleBeforeClose(done: () => void) {
     height: 44px;
   }
 }
+.v2-quick-actions-drawer__intro span {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
 
-.v2-quick-actions-drawer__sortable-title > .v2-quick-actions-drawer__preview {
+.v2-quick-actions-drawer__body > :deep(.v2-async-region) {
   flex: 1;
+  min-height: 0;
+}
+
+.v2-quick-actions-drawer__body :deep(.v2-async-region__content) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.v2-quick-actions-drawer__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px auto;
+  gap: 8px;
+}
+
+.v2-quick-actions-editor {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--v3-border);
+  border-radius: var(--v3-radius-lg);
+  background: var(--v3-surface-2);
+}
+
+.v2-quick-actions-editor header {
+  display: grid;
+  gap: 4px;
+}
+
+.v2-quick-actions-editor header strong {
+  font-size: 15px;
+}
+
+.v2-quick-actions-editor header span,
+.v2-quick-actions-editor__error {
+  color: var(--v3-text-soft);
+}
+
+.v2-quick-actions-editor__error {
+  margin: 0;
+  color: var(--v3-danger);
+}
+
+.v2-quick-actions-editor footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.v2-quick-actions-drawer__preview {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 66px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: var(--v3-radius-sm);
+  background: transparent;
+  color: var(--v3-text-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2-quick-actions-drawer__preview span,
+.v2-quick-actions-drawer__title {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.6;
+}
+
+.v2-quick-actions-drawer__title {
+  font-weight: 600;
+  color: var(--v3-text);
+}
+.v2-quick-actions-drawer__preview small {
+  color: var(--v3-primary);
+  font-size: 12px;
+}
+.v2-quick-actions-drawer__preview:hover small {
+  text-decoration: underline;
+}
+.v2-quick-actions-drawer__preview:focus-visible {
+  outline: 2px solid var(--v3-focus-color);
+  outline-offset: 2px;
+}
+
+.v2-quick-actions-drawer__table-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--v3-border);
+  border-radius: var(--v3-radius);
+}
+
+.v2-quick-actions-drawer__table-inner {
+  min-width: 620px;
+}
+
+.v2-quick-actions-drawer__cards {
+  display: none;
+}
+
+.v2-quick-actions-drawer__expand {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--v3-radius-sm);
+  background: transparent;
+  color: var(--v3-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.v2-quick-actions-drawer__expand:hover {
+  text-decoration: underline;
+}
+
+.v2-quick-actions-drawer__expand:focus-visible {
+  outline: 2px solid var(--v3-focus-color);
+  outline-offset: 2px;
+}
+
+.v2-quick-actions-drawer__body :deep(.el-pagination) {
+  justify-content: flex-end;
+  flex-shrink: 0;
+  padding-top: 16px;
+}
+
+.v2-quick-actions-reader {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.v2-quick-actions-reader header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v2-quick-actions-reader header span {
+  color: var(--v3-text-soft);
+  font-size: 12px;
+}
+
+.v2-quick-actions-reader__paper {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+  border: 1px solid var(--v3-border);
+  border-radius: var(--v3-radius-lg);
+  background: var(--v3-surface-2);
+  overflow-wrap: anywhere;
+}
+
+.v2-quick-actions-reader__paper h3 {
+  margin: 0 0 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--v3-border);
+  color: var(--v3-text);
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.v2-quick-actions-reader__paper p {
+  margin: 0;
+  color: var(--v3-text);
+  font-size: 14px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
+
+.v2-quick-actions-reader footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--v3-border);
+}
+
+.v2-quick-actions-reader footer :deep(.el-button:last-child) {
+  margin-left: auto;
+}
+.v2-quick-actions-reader footer :deep(.el-button + .el-button:not(:last-child)),
+.v2-quick-actions-editor footer :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+.v2-quick-actions-reader :deep(.el-button) {
+  min-height: 36px;
+}
+
+@media (max-width: 600px) {
+  .v2-quick-actions-reader__paper {
+    padding: 18px;
+  }
+  .v2-quick-actions-reader :deep(.el-button) {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  .v2-quick-actions-drawer__toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .v2-quick-actions-drawer__toolbar .el-input {
+    grid-column: 1 / -1;
+  }
+
+  .v2-quick-actions-drawer__toolbar :deep(.el-input__wrapper),
+  .v2-quick-actions-drawer__toolbar :deep(.el-select__wrapper),
+  .v2-quick-actions-drawer__toolbar :deep(.el-button),
+  .v2-quick-actions-drawer__card footer :deep(.el-button),
+  .v2-quick-actions-drawer__expand {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 900px) {
+  .v2-quick-actions-drawer__table-scroll {
+    display: none;
+  }
+
+  .v2-quick-actions-drawer__cards {
+    display: grid;
+    align-content: start;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    gap: 10px;
+  }
+
+  .v2-quick-actions-drawer__card {
+    display: grid;
+    min-width: 0;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--v3-border);
+    border-radius: var(--v3-radius);
+    background: var(--v3-surface);
+  }
+
+  .v2-quick-actions-drawer__card strong {
+    overflow-wrap: anywhere;
+  }
+
+  .v2-quick-actions-drawer__card p {
+    display: -webkit-box;
+    overflow: hidden;
+    margin: 0;
+    color: var(--v3-text-soft);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .v2-quick-actions-drawer__card footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .v2-quick-actions-drawer__card footer :deep(.el-button + .el-button) {
+    margin-left: 0;
+  }
 }
 </style>

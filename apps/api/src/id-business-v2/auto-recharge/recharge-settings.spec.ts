@@ -73,3 +73,53 @@ describe('比特浏览器列表只读连接授权', () => {
     await expect(service.catalogAccess(operator)).rejects.toThrow('audit unavailable');
   });
 });
+
+describe('500 美元档付款安全上限', () => {
+  it('按套餐与币种独立保存 Decimal 上限并审计，缺少配置时停止', async () => {
+    const tx = {};
+    const repository = {
+      currencyForCap: vi.fn().mockResolvedValue({ active: true, minorUnits: 2 }),
+      paymentCap: vi.fn().mockResolvedValue(null),
+      upsertPaymentCap: vi.fn().mockResolvedValue({ maxAmount: { toString: () => '2200.01' } })
+    };
+    const audit = { append: vi.fn() };
+    const service = new RechargeSettingsService(
+      repository as never,
+      {} as never,
+      { execute: vi.fn((work) => work(tx)) } as never,
+      audit as never,
+      {} as never
+    );
+    await expect(service.requirePaymentCap(tx as never, 'pro-500', 'MYR')).rejects.toThrow(
+      '付款安全上限'
+    );
+    await expect(
+      service.updatePaymentCap('pro-500', 'MYR', { maxAmount: '2200.01' }, operator)
+    ).resolves.toEqual({
+      plan: 'pro-500',
+      currencyCode: 'MYR',
+      maxAmount: '2200.01'
+    });
+    expect(repository.upsertPaymentCap).toHaveBeenCalledWith(
+      tx,
+      'pro-500',
+      'MYR',
+      '2200.01',
+      operator.id
+    );
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        objectId: 'pro-500:MYR',
+        action: 'id_business_v2.auto_recharge.payment_cap.update'
+      })
+    );
+    await expect(
+      service.updatePaymentCap('pro-500', 'MYR', { maxAmount: '0' }, operator)
+    ).rejects.toThrow('大于零');
+    await expect(
+      service.updatePaymentCap('pro-500', 'MYR', { maxAmount: '2200.001' }, operator)
+    ).rejects.toThrow('格式无效');
+    expect(repository.upsertPaymentCap).toHaveBeenCalledTimes(1);
+  });
+});

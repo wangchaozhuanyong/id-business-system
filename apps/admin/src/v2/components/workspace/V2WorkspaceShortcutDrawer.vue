@@ -11,7 +11,6 @@
     :show-close="!mutationPending"
     :before-close="handleBeforeClose"
     @close="$emit('update:modelValue', false)"
-    @closed="resetEditor"
   >
     <div class="v2-workspace-shortcut-drawer__body">
       <div class="v2-workspace-shortcut-drawer__toolbar">
@@ -160,7 +159,7 @@
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import { computed, reactive, ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import type { V2WorkspaceShortcut } from '@apple-business/shared';
 import { V2_WORKSPACE_SHORTCUT_LIMITS } from '@apple-business/shared';
@@ -171,6 +170,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 
 interface ShortcutForm {
@@ -192,11 +192,14 @@ defineEmits<{ 'update:modelValue': [value: boolean] }>();
 const formRef = ref<FormInstance>();
 const editorMode = ref<'create' | 'edit' | null>(null);
 const editingId = ref('');
-const editorSnapshot = ref('');
 const saving = ref(false);
 const mutatingId = ref('');
 const mutationError = ref('');
-const form = reactive<ShortcutForm>({ name: '', url: '' });
+const {
+  form,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft<ShortcutForm>('workspace-shortcuts-editor', () => ({ name: '', url: '' }));
 const rules: FormRules<ShortcutForm> = {
   name: [
     { required: true, message: '请输入网址名称', trigger: 'blur' },
@@ -219,16 +222,12 @@ const mutationPending = computed(() => saving.value || Boolean(mutatingId.value)
 const shortcutLimitReached = computed(
   () => props.items.length >= V2_WORKSPACE_SHORTCUT_LIMITS.count
 );
-const editorDirty = computed(
-  () => Boolean(editorMode.value) && JSON.stringify(form) !== editorSnapshot.value
-);
 
 function startCreate() {
   if (shortcutLimitReached.value) return;
   editorMode.value = 'create';
   editingId.value = '';
-  Object.assign(form, { name: '', url: '' });
-  editorSnapshot.value = JSON.stringify(form);
+  openDraft('create');
   mutationError.value = '';
 }
 
@@ -243,33 +242,22 @@ function isLastShortcut(index: number) {
 function startEdit(item: V2WorkspaceShortcut) {
   editorMode.value = 'edit';
   editingId.value = item.id;
-  Object.assign(form, { name: item.name, url: item.url });
-  editorSnapshot.value = JSON.stringify(form);
+  openDraft(item.id, { name: item.name, url: item.url });
   mutationError.value = '';
 }
 
 function resetEditor() {
+  completeDraft();
   editorMode.value = null;
   editingId.value = '';
   Object.assign(form, { name: '', url: '' });
-  editorSnapshot.value = '';
   mutationError.value = '';
   formRef.value?.clearValidate();
 }
 
-async function cancelEditor() {
-  if (editorDirty.value) {
-    try {
-      await ElMessageBox.confirm('当前网址内容尚未保存，确认放弃吗？', '放弃未保存内容', {
-        confirmButtonText: '放弃',
-        cancelButtonText: '继续填写',
-        type: 'warning'
-      });
-    } catch {
-      return;
-    }
-  }
-  resetEditor();
+function cancelEditor() {
+  editorMode.value = null;
+  editingId.value = '';
 }
 
 async function submitEditor() {
@@ -342,22 +330,8 @@ function formatUrl(value: string) {
   }
 }
 
-async function handleBeforeClose(done: () => void) {
-  if (mutationPending.value) return;
-  if (!editorDirty.value) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm('当前网址内容尚未保存，确认关闭吗？', '关闭快捷网址设置', {
-      confirmButtonText: '放弃并关闭',
-      cancelButtonText: '继续填写',
-      type: 'warning'
-    });
-    done();
-  } catch {
-    // 用户选择继续填写。
-  }
+function handleBeforeClose(done: () => void) {
+  if (!mutationPending.value) done();
 }
 </script>
 

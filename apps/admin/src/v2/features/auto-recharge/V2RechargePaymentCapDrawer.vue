@@ -1,5 +1,6 @@
 <template>
   <V2FormDrawer
+    retain-draft
     :model-value="modelValue"
     title="服务器付款安全上限"
     description="每个套餐和币种配置一次；未配置时禁止自动付款。"
@@ -38,7 +39,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, toRef, watch } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import type { V2RechargePaymentCap, V2RechargePlan } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
@@ -60,23 +62,31 @@ const emit = defineEmits<{
   saved: [];
   retry: [];
 }>();
-const amount = ref('');
+const {
+  form,
+  original,
+  open: openDraft,
+  complete: completeDraft
+} = useV2FormDraft('recharge-payment-caps', () => ({ amount: '' }));
+const amount = toRef(form, 'amount');
 const saving = ref(false);
 const saveError = ref('');
 const existing = computed(() =>
   props.caps.find((item) => item.plan === props.plan && item.currencyCode === props.currencyCode)
 );
+function restoreDraft() {
+  openDraft(`${props.plan}:${props.currencyCode}`, { amount: existing.value?.maxAmount ?? '' });
+  saveError.value = '';
+}
 watch(
-  () => props.modelValue,
-  (open) => {
-    if (open) {
-      amount.value = existing.value?.maxAmount ?? '';
-      saveError.value = '';
-    }
-  }
+  () => [props.modelValue, props.plan, props.currencyCode],
+  () => {
+    if (props.modelValue) restoreDraft();
+  },
+  { immediate: true }
 );
-watch(existing, (value) => {
-  if (props.modelValue && !amount.value) amount.value = value?.maxAmount ?? '';
+watch(existing, () => {
+  if (props.modelValue && JSON.stringify(form) === original.value) restoreDraft();
 });
 const disabledReason = computed(() =>
   props.phase !== 'ready'
@@ -91,6 +101,7 @@ async function save() {
   saveError.value = '';
   try {
     await rechargeApi.updatePaymentCap(props.plan, props.currencyCode, amount.value);
+    completeDraft();
     emit('saved');
     emit('update:modelValue', false);
   } catch (cause) {

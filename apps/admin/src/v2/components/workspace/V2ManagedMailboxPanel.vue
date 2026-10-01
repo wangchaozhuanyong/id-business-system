@@ -376,7 +376,6 @@
       destroy-on-close
       :before-close="handleCredentialDrawerClose"
       @close="credentialDrawerOpen = false"
-      @closed="cancelCredentialUpdate"
     >
       <div v-if="credentialMailbox" class="v2-mailbox-credential-drawer__body">
         <div class="v2-mailbox-credential-drawer__identity">
@@ -432,7 +431,7 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from 'vue';
 import type { FormInstance, FormRules, TagProps } from 'element-plus';
 import type {
   CreateV2ManagedMailboxInput,
@@ -459,6 +458,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
 import FeatureHelp from '@/components/ui/FeatureHelp.vue';
 import { getApiErrorMessage } from '@/api/client';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2Table from '@/v2/components/V2Table.vue';
@@ -504,7 +504,12 @@ const queryCodeSettingsOpen = ref(false);
 const savingQueryCodeSettings = ref(false);
 const credentialDrawerOpen = ref(false);
 const credentialMailbox = ref<V2ManagedMailbox | null>(null);
-const replacementPassword = ref('');
+const {
+  form: credentialDraft,
+  open: openCredentialDraft,
+  complete: completeCredentialDraft
+} = useV2FormDraft('mailbox-credential-replacement', () => ({ password: '' }));
+const replacementPassword = toRef(credentialDraft, 'password');
 const clockTick = ref(getV2BusinessNowMs() ?? Date.now());
 const queryCodeSettingsForm = reactive({ applyToExisting: false, validityDays: 30 });
 const queryCodeSettingsSnapshot = ref('');
@@ -768,11 +773,12 @@ function startCredentialUpdate(item: V2ManagedMailbox) {
     return;
   }
   credentialMailbox.value = item;
-  replacementPassword.value = '';
+  openCredentialDraft(item.id);
   credentialDrawerOpen.value = true;
 }
 
 function cancelCredentialUpdate() {
+  completeCredentialDraft();
   credentialDrawerOpen.value = false;
   credentialMailbox.value = null;
   replacementPassword.value = '';
@@ -866,7 +872,7 @@ function handleBatchImported() {
 }
 
 function openQueryCodeSettings() {
-  resetQueryCodeSettingsForm(queryCodeSettings.value.validityDays);
+  if (!queryCodeSettingsDirty()) resetQueryCodeSettingsForm(queryCodeSettings.value.validityDays);
   queryCodeSettingsOpen.value = true;
   if (!queryCodeSettingsQuery.data.value) void queryCodeSettingsQuery.refresh();
 }
@@ -916,21 +922,8 @@ async function saveQueryCodeSettings() {
   }
 }
 
-async function handleQueryCodeSettingsClose(done: () => void) {
-  if (!queryCodeSettingsDirty()) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm('关闭后会放弃尚未保存的有效期设置。', '放弃修改', {
-      confirmButtonText: '放弃修改',
-      cancelButtonText: '继续设置',
-      type: 'warning'
-    });
-    done();
-  } catch {
-    // 用户选择继续设置。
-  }
+function handleQueryCodeSettingsClose(done: () => void) {
+  if (!savingQueryCodeSettings.value) done();
 }
 
 async function closeQueryCodeSettings() {
@@ -1011,21 +1004,8 @@ async function writeClipboardText(value: string) {
   }
 }
 
-async function handleCredentialDrawerClose(done: () => void) {
-  if (!replacementPassword.value) {
-    done();
-    return;
-  }
-  try {
-    await ElMessageBox.confirm('关闭后会清空尚未保存的应用专用密码。', '清空并关闭', {
-      confirmButtonText: '清空并关闭',
-      cancelButtonText: '继续填写',
-      type: 'warning'
-    });
-    done();
-  } catch {
-    // 用户选择继续填写。
-  }
+function handleCredentialDrawerClose(done: () => void) {
+  if (!updatingId.value) done();
 }
 
 function resetForm() {

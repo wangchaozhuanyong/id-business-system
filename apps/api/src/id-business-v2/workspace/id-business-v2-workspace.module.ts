@@ -117,6 +117,7 @@ import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2
     IdBusinessV2GoogleSheetsOAuthClient,
     IdBusinessV2VendureMailboxClient,
     IdBusinessV2VendureMailboxService
-  ]
+  ],
+  exports: [IdBusinessV2TotpAccountService, IdBusinessV2VendureMailboxService]
 })
 export class IdBusinessV2WorkspaceModule {}

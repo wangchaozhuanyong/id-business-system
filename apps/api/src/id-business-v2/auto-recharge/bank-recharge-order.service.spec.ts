@@ -103,16 +103,32 @@ describe('银充付款入单', () => {
     expect(tx.idBusinessV2BankRechargeOrder.create).not.toHaveBeenCalled();
   });
 
-  it('服务器任务只有官网付款与订阅证据一致才写入银充订单', async () => {
+  it.each(['plus', 'pro-500'])('%s 服务器任务仅在付款与订阅核验后入单', async (plan) => {
     const { service, tx, job, order } = fixture();
     expect(
       await service.recordVerifiedSuccess(
         tx as never,
-        { ...job, action: 'server' } as never,
+        { ...job, plan, action: 'server' } as never,
         verified
       )
     ).toEqual(order);
     expect(tx.idBusinessV2BankRechargeOrder.create).toHaveBeenCalledTimes(1);
+    expect(tx.idBusinessV2BankRechargeOrder.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ plan }) })
+    );
+    tx.idBusinessV2BankRechargeOrder.create.mockClear();
+    expect(
+      await service.recordVerifiedSuccess(
+        tx as never,
+        { ...job, plan, action: 'server' } as never,
+        {
+          ...verified,
+          status: 'paid_pending_activation',
+          payment_outcome: 'paid_pending_activation'
+        }
+      )
+    ).toBeNull();
+    expect(tx.idBusinessV2BankRechargeOrder.create).not.toHaveBeenCalled();
   });
 
   it('only backfills a verified read-only recheck through the trusted original job', async () => {

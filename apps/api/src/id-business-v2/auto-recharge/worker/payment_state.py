@@ -225,7 +225,7 @@ class PaymentLedger:
             data["payment_evidence"] = evidence
         if data["payment_status"] == "paid" and not data.get("payment_evidence"):
             raise Stop("payment_evidence_required")
-        if current_plan in {"free", "plus", "pro"}:
+        if current_plan in {"free", "plus", "pro", "promax"}:
             data["current_plan"] = current_plan
             data["current_tier"] = current_tier if current_tier in (5, 20) else None
             match = subscription_match(self.target_plan, current_plan, data["current_tier"])

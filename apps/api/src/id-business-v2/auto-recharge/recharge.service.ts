@@ -53,6 +53,7 @@ import { RechargeProxyService } from './recharge-proxy.service';
 import { startRechargeJob } from './recharge-start';
 import { startServerRecheck } from './recharge-server-recheck';
 import { listRechargeJobs } from './recharge-job-list';
+import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 @Injectable()
 export class RechargeService {
   constructor(
@@ -64,7 +65,8 @@ export class RechargeService {
     @Optional() private readonly bankOrders?: BankRechargeOrderService,
     @Optional() private readonly settings?: RechargeSettingsService,
     @Optional() private readonly bankCards?: BankRechargeCardService,
-    @Optional() private readonly proxies?: RechargeProxyService
+    @Optional() private readonly proxies?: RechargeProxyService,
+    @Optional() private readonly totpAccounts?: IdBusinessV2TotpAccountService
   ) {}
 
   async listAddresses(value: unknown, operator: AuthenticatedUser) {
@@ -167,6 +169,7 @@ export class RechargeService {
       audit: this.audit,
       bankAccounts: this.bankAccounts,
       bankCards: this.bankCards,
+      totpAccounts: this.totpAccounts,
       settings: this.settings,
       proxies: this.proxies,
       finishUnreceivedJob: (id, ownerId, unknown) => this.finishUnreceivedJob(id, ownerId, unknown)
@@ -179,6 +182,7 @@ export class RechargeService {
       transactions: this.transactions,
       audit: this.audit,
       accounts: this.bankAccounts,
+      totpAccounts: this.totpAccounts,
       proxies: this.proxies,
       finishUnreceivedJob: (id, ownerId, unknown) => this.finishUnreceivedJob(id, ownerId, unknown)
     });

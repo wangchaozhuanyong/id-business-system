@@ -8,7 +8,7 @@
     close-on-click-modal
     close-on-press-escape
     :before-close="handleBeforeClose"
-    @closed="resetState"
+    @closed="pauseTask"
     @close="$emit('update:modelValue', false)"
   >
     <div class="v2-media-resolver-drawer__body">
@@ -400,17 +400,8 @@ async function handleBeforeClose(done: () => void) {
   }
 }
 
-function resetState() {
+function pauseTask() {
   activeController?.abort();
-  activeController = null;
-  mediaInput.value = '';
-  result.value = null;
-  errorMessage.value = '';
-  failedDownloadToken.value = '';
-  audioUnavailableMessage.value = '';
-  resolving.value = false;
-  downloadingToken.value = '';
-  downloadProgress.value = null;
 }
 
 function platformLabel(platform: V2MediaPlatform) {

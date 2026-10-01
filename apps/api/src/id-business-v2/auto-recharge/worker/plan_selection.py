@@ -5,7 +5,7 @@ import time
 
 from playwright.async_api import expect
 from checkout_core import Stop
-from plans import plan_spec
+from plans import PRO_GROUP, PRO_PRICE_PLANS, selection_spec
 
 STEP_SECONDS = 30
 SELECTION_SECONDS = 90
@@ -14,7 +14,7 @@ PRICING_URL = "https://chatgpt.com/pricing"
 UPGRADE = re.compile(r"^\s*(?:Upgrade|Upgrade plan|升级|升级套餐)\s*$", re.I)
 PERSONAL = re.compile(r"^(?:Toggle for switching to Personal plans|切换以改为个人套餐|改为个人套餐|Personal|个人)$", re.I)
 PLUS = re.compile(r"^\s*(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)\s*$", re.I)
-PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro)\s*$", re.I)
+PRO = re.compile(r"^\s*(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)\s*$", re.I)
 PLAN_HEADINGS = re.compile(r"^\s*(?:Free|Go|Plus|Pro)\s*$", re.I)
 PLUS_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Plus\s*$", re.I)
 PRO_HEADING = re.compile(r"^\s*(?:ChatGPT\s*)?Pro\s*$", re.I)
@@ -40,12 +40,39 @@ def safe_diagnostics(value):
             result[key] = value[key]
     plans = value.get('available_plans')
     if isinstance(plans, list):
-        result['available_plans'] = [p for p in ('plus', 'pro-5x', 'pro-20x') if p in plans]
+        result['available_plans'] = [p for p in ('plus', *PRO_PRICE_PLANS.values()) if p in plans]
     return result
 
 
 def tier_pattern(tier):
     return re.compile(rf"^\s*(?:{tier}\s*[x×]|(?:相比\s*Plus\s*多\s*)?{tier}\s*倍(?:使用额度)?)\s*$", re.I)
+
+
+def price_pattern(price):
+    # 只匹配明确美元档位/Pro 名称；当地金额和使用倍数不能换算成 500 美元档。
+    return re.compile(rf"^\s*(?:Pro\s+{price}|(?:\$\s*{price}(?:\.00)?(?:\s*USD)?|"
+                      rf"USD\s*{price}(?:\.00)?|{price}\s*(?:USD|美元))"
+                      rf"(?:\s*(?:\/\s*(?:mo(?:nth)?|月)|per month|每月))?)\s*$", re.I)
+
+
+async def pro_control(scope, target_plan):
+    spec = selection_spec(target_plan)
+    groups = scope.get_by_role('radiogroup', name=PRO_GROUP).or_(
+        scope.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+    count = await groups.count()
+    if count > 1:
+        raise Stop('official_plan_region_ambiguous')
+    if count == 1:
+        # 官网当前控件的可访问名称是裸数字 100/200/500，必须限制在明确的 Pro 档位组内。
+        numeric = groups.get_by_role('radio', name=re.compile(r'^\s*(?:100|200|500)\s*$'))
+        if await numeric.filter(visible=True).count():
+            return groups.get_by_role('radio', name=re.compile(rf'^\s*{spec["price_usd"]}\s*$')).filter(visible=True)
+    prices = scope.get_by_role('radio', name=price_pattern(100))
+    for price in (200, 500):
+        prices = prices.or_(scope.get_by_role('radio', name=price_pattern(price)))
+    if await prices.filter(visible=True).count() or spec['tier'] is None:
+        return scope.get_by_role('radio', name=price_pattern(spec['price_usd'])).filter(visible=True)
+    return scope.get_by_role('radio', name=tier_pattern(spec['tier'])).filter(visible=True)
 
 
 def buttons(scope, name):
@@ -88,9 +115,9 @@ class Selection:
         if await buttons(scope, PLUS).count():
             plans.append('plus')
         if await buttons(scope, PRO).count():
-            for tier in (5, 20):
-                if await scope.get_by_role('radio', name=tier_pattern(tier)).filter(visible=True).count():
-                    plans.append(f'pro-{tier}x')
+            for plan in PRO_PRICE_PLANS.values():
+                if await (await pro_control(scope, plan)).count():
+                    plans.append(plan)
         self.diagnostics['available_plans'] = plans
 
     async def wait_for_plan_scope(self):
@@ -130,9 +157,9 @@ class Selection:
         """通过官网定价卡进入套餐弹窗；该链接本身不得作为建单按钮返回。"""
         self.step('pricing_page', 'link')
         await self.page.goto(PRICING_URL, wait_until='domcontentloaded', timeout=self.timeout())
-        tier = plan_spec(target_plan)['tier']
+        pro = selection_spec(target_plan)['price_usd'] is not None
         heading = self.page.get_by_role(
-            'heading', name=PRO_HEADING if tier else PLUS_HEADING
+            'heading', name=PRO_HEADING if pro else PLUS_HEADING
         ).filter(visible=True)
         try:
             await expect(heading).to_have_count(1, timeout=self.timeout())
@@ -148,7 +175,7 @@ class Selection:
         for _ in range(8):
             card = card.locator('..')
             card_headings = card.get_by_role('heading', name=PLAN_HEADINGS).filter(visible=True)
-            candidate = card.get_by_role('link', name=PRO if tier else PLUS).filter(visible=True)
+            candidate = card.get_by_role('link', name=PRO if pro else PLUS).filter(visible=True)
             if await card_headings.count() == 1 and await candidate.count():
                 action = candidate
                 break
@@ -202,17 +229,17 @@ class Selection:
     async def run(self, target_plan):
         scope = await self.open_menu(target_plan)
         await self.observe(scope)
-        tier = plan_spec(target_plan)['tier']
-        if tier:
+        pro = selection_spec(target_plan)['price_usd'] is not None
+        if pro:
             self.step('choose_tier', 'radio')
-            choice = scope.get_by_role('radio', name=tier_pattern(tier)).filter(visible=True)
+            choice = await pro_control(scope, target_plan)
             await self.ready(choice, 'official_plan_tier_not_found')
             if await choice.get_attribute('aria-checked') != 'true':
                 await choice.click(timeout=self.timeout())
             await expect(choice).to_have_attribute('aria-checked', 'true', timeout=self.timeout())
             self.diagnostics['selected'] = True
         self.step('choose_plan')
-        button = buttons(scope, PRO if tier else PLUS)
+        button = buttons(scope, PRO if pro else PLUS)
         await self.ready(button, 'official_plan_option_not_found')
         await self.observe(scope)
         self.report('plan_selection', diagnostics=safe_diagnostics(self.diagnostics))
@@ -220,7 +247,7 @@ class Selection:
 
 
 async def select_plan(page, target_plan, report):
-    plan_spec(target_plan)
+    selection_spec(target_plan)
     selection = Selection(page, report)
     try:
         return await asyncio.wait_for(selection.run(target_plan), SELECTION_SECONDS)
@@ -247,11 +274,15 @@ async def select_plan(page, target_plan, report):
 
 async def verify_selected_plan(page, target_plan):
     scope = await plan_scope(page)
-    tier = plan_spec(target_plan)['tier']
-    button = buttons(scope, PRO if tier else PLUS)
+    pro = selection_spec(target_plan)['price_usd'] is not None
+    button = buttons(scope, PRO if pro else PLUS)
     if await button.count() != 1 or not await button.is_enabled():
         raise Stop('selected_plan_changed', stage='plan_selection')
-    if tier:
-        choice = scope.get_by_role('radio', name=tier_pattern(tier)).filter(visible=True)
+    if pro:
+        choice = await pro_control(scope, target_plan)
         if await choice.count() != 1 or await choice.get_attribute('aria-checked') != 'true':
+            raise Stop('selected_plan_changed', stage='plan_selection')
+        groups = scope.get_by_role('radiogroup', name=PRO_GROUP).or_(
+            scope.get_by_role('group', name=PRO_GROUP)).filter(visible=True)
+        if await groups.count() == 1 and await groups.locator('[role="radio"][aria-checked="true"]').filter(visible=True).count() != 1:
             raise Stop('selected_plan_changed', stage='plan_selection')

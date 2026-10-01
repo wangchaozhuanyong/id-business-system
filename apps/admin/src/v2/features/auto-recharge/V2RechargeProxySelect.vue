@@ -54,10 +54,6 @@
     该账号首次登录国家是
     {{ proxyCountryLabel(loginCountryRestriction) }}，当前代理国家不一致，已限制登录。
   </p>
-  <p v-if="billingCountryRestriction" class="recharge-error" role="alert">
-    当前账单国家是
-    {{ proxyCountryLabel(billingCountryRestriction) }}，请选用同国代理或修改真实账单地址。
-  </p>
 </template>
 
 <script setup lang="ts">
@@ -72,7 +68,6 @@ defineProps<{
   defaultProxyId?: string;
   countries: string[];
   loginCountryRestriction: string;
-  billingCountryRestriction?: string;
   proxies: RechargeProxyItem[];
   loading: boolean;
   error: string;

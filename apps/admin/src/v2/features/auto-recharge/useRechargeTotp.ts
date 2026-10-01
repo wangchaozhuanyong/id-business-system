@@ -1,5 +1,6 @@
-import { computed, ref, type Ref } from 'vue';
+import { computed, ref, watch, type Ref } from 'vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { generateV2TotpCodes, parseV2TotpInput } from '@/v2/components/workspace/totp';
 import { rechargeTotpApi } from './api';
@@ -18,9 +19,14 @@ const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 export function useRechargeTotp(loginMethod: Ref<'json' | 'password' | 'saved'>) {
-  const source = ref<TotpSource>('secret');
-  const secretInput = ref('');
-  const savedAccountId = ref('');
+  const { source, secretInput, savedAccountId } = useV2SessionDraft(
+    'recharge-totp-selection',
+    () => ({
+      source: ref<TotpSource>('secret'),
+      secretInput: ref(''),
+      savedAccountId: ref('')
+    })
+  );
   const savedAccountsQuery = useV2ModuleQuery<{ items: SavedAccountOption[] }>({
     moduleKey: 'auto-recharge',
     scope: 'auto-recharge',
@@ -34,6 +40,28 @@ export function useRechargeTotp(loginMethod: Ref<'json' | 'password' | 'saved'>)
     }
   });
   const savedAccounts = computed(() => savedAccountsQuery.data.value?.items ?? []);
+  watch(
+    [
+      savedAccountId,
+      source,
+      savedAccounts,
+      () => savedAccountsQuery.phase.value,
+      () => savedAccountsQuery.error.value
+    ],
+    () => {
+      if (
+        source.value === 'saved' &&
+        savedAccountsQuery.phase.value === 'ready' &&
+        savedAccountsQuery.data.value !== undefined &&
+        !savedAccountsQuery.error.value &&
+        savedAccountId.value &&
+        !savedAccounts.value.some((item) => item.id === savedAccountId.value)
+      ) {
+        savedAccountId.value = '';
+      }
+    },
+    { flush: 'sync', immediate: true }
+  );
   const parsed = computed(() => parseV2TotpInput(secretInput.value.trim()));
   const secretError = computed(() => {
     if (source.value !== 'secret') return '';

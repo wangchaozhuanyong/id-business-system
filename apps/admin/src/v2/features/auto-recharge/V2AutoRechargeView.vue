@@ -209,7 +209,6 @@
                 v-model:proxy-id="selectedProxyId"
                 :countries="availableProxyCountries"
                 :login-country-restriction="loginCountryRestriction"
-                :billing-country-restriction="billingCountryRestriction"
                 :proxies="availableProxies"
                 :default-proxy-id="
                   operationMode === 'server_payment' &&
@@ -279,6 +278,7 @@
                     addressQuery.error.value ? getApiErrorMessage(addressQuery.error.value) : ''
                   "
                   @retry="addressQuery.refresh"
+                  @select="markAddressSelectionManual"
                 />
               </div>
             </section>
@@ -415,6 +415,7 @@ const {
   availableAddresses,
   selectedAddress,
   selectedAddressId,
+  markAddressSelectionManual,
   addressSource,
   selected,
   jsonInput,
@@ -423,7 +424,6 @@ const {
   loginMethod,
   selectedBankAccountId,
   loginCountryRestriction,
-  billingCountryRestriction,
   selectedPaymentCardId,
   savedBankAccounts,
   bankAccountsQuery,

@@ -35,6 +35,23 @@ function fixture() {
 }
 
 describe('手工套餐记录不扩大自动充值权限', () => {
+  it('500 美元档可进入本机执行器，仍要求单次授权、币种和真实上限', () => {
+    const input = {
+      id: accountId,
+      plan: 'pro-500',
+      addressId: accountId,
+      windowName: '500 档测试',
+      lockedCurrency: 'MYR',
+      maxAmount: '2200.00',
+      authorizeSinglePayment: true
+    };
+    expect(validateRechargeBitBrowserStart(input)).toMatchObject({ plan: 'pro-500' });
+    expect(() =>
+      validateRechargeBitBrowserStart({ ...input, authorizeSinglePayment: false })
+    ).toThrow();
+    expect(() => validateRechargeBitBrowserStart({ ...input, maxAmount: '0' })).toThrow();
+  });
+
   it.each(V2_BANK_RECHARGE_PLANS)('%s 可记录实际付款并沿用关联订阅和审计', async (plan) => {
     const { service, repository, audit } = fixture();
     await service.createManual(

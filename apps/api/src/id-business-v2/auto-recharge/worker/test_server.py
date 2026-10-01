@@ -84,6 +84,20 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(Stop):
             asyncio.run(server.current_totp(None))
 
+    def test_totp_waits_for_the_next_period_before_filling_a_nearly_expired_code(self):
+        configuration = {
+            'secret': 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+            'algorithm': 'sha1', 'digits': 8, 'period': 30
+        }
+        with (patch.object(server.time, 'time', side_effect=[59, 61]),
+              patch.object(server.asyncio, 'sleep', new=AsyncMock()) as wait):
+            code = asyncio.run(server.current_totp(configuration))
+        wait.assert_awaited_once_with(2)
+        with patch.object(server.time, 'time', return_value=61):
+            fresh = asyncio.run(server.current_totp(configuration))
+        self.assertEqual(code, fresh)
+        self.assertNotEqual(code, '94287082')
+
     def test_server_login_drops_password_and_blocks_payment_writes(self):
         async def exercise():
             job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
@@ -106,6 +120,40 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(login, {})
             context.route.assert_awaited_once()
             context.unroute.assert_awaited_once()
+            page.close.assert_awaited_once()
+        asyncio.run(exercise())
+
+    def test_saved_totp_is_generated_and_filled_at_the_login_challenge(self):
+        async def exercise():
+            job = server.Job('11111111-1111-4111-8111-111111111111', {'plan': 'plus'})
+            job.progress = MagicMock()
+            page = MagicMock(url='https://auth.openai.com/u/mfa-otp-challenge')
+            page.goto = AsyncMock()
+            page.close = AsyncMock()
+            context = MagicMock()
+            context.new_page = AsyncMock(return_value=page)
+            context.route = AsyncMock()
+            context.unroute = AsyncMock()
+            fields = [MagicMock(fill=AsyncMock(), press=AsyncMock()) for _ in range(3)]
+            target = MagicMock()
+            login = {'email': 'test@example.invalid', 'password': 'synthetic', 'totp': {
+                'secret': 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+                'algorithm': 'sha1', 'digits': 8, 'period': 30
+            }}
+            with (patch.object(server.time, 'time', return_value=50),
+                  patch.object(server.browser_password_login, 'official_identity',
+                               new=AsyncMock(side_effect=[None, None, (target, {'current_plan': 'free'})])),
+                  patch.object(server.browser_password_login, 'wait_for_input',
+                               new=AsyncMock(side_effect=fields[:2])),
+                  patch.object(server.browser_password_login, 'unique_visible',
+                               new=AsyncMock(return_value=fields[2])),
+                  patch.object(server.browser_password_login, 'clear_visible_secrets', new=AsyncMock()),
+                  patch.object(server.browser_password_login.asyncio, 'sleep', new=AsyncMock())):
+                result = await job.login_target(context, login)
+            self.assertIs(result[0], target)
+            fields[2].fill.assert_awaited_once_with('94287082')
+            fields[2].press.assert_awaited_once_with('Enter')
+            self.assertEqual(login, {})
             page.close.assert_awaited_once()
         asyncio.run(exercise())
 

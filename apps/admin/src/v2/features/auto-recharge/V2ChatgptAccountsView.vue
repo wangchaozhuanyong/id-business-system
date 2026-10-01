@@ -120,6 +120,11 @@
           </V2TableColumn>
           <V2TableActionColumn :definition="v2TableSchemas.chatgptAccounts.main.columns[8]">
             <template #default="{ row }">
+              <ChatgptAccountCopyButton
+                :id="row.id"
+                :disabled="working"
+                @error="operationError = $event"
+              />
               <AppButton size="small" variant="ghost" @click="openEdit(row)">编辑</AppButton>
               <el-dropdown trigger="click">
                 <AppButton size="small" variant="ghost" :disabled="working">更多操作</AppButton>
@@ -151,35 +156,7 @@
         </footer>
       </section>
     </V2AsyncRegion>
-    <V2FormDrawer
-      v-model="importOpen"
-      title="批量导入 ChatGPT 账号"
-      description="每行一个账号；依次填写邮箱、密码、2FA 密钥、备注。整批校验通过后才会保存。"
-      confirm-text="导入账号"
-      size="min(680px, 96vw)"
-      :confirm-loading="importing"
-      :dirty="Boolean(importText.trim())"
-      @confirm="importAccounts"
-    >
-      <el-form label-position="left" label-width="112px" require-asterisk-position="right">
-        <el-form-item label="账号资料" required>
-          <el-input
-            v-model="importText"
-            type="textarea"
-            :rows="12"
-            :maxlength="256000"
-            autocomplete="off"
-            aria-label="粘贴 ChatGPT 账号资料"
-            placeholder="user@example.com 密码 - 备注"
-          />
-        </el-form-item>
-      </el-form>
-      <p class="bank-recharge-form-note">
-        列之间可用 Tab 或空格；备注含空格时会合并为一列。没有 2FA 密钥时填写 -，备注可省略。每次最多
-        200 行。
-      </p>
-      <p v-if="importError" class="bank-recharge-error" role="alert">{{ importError }}</p>
-    </V2FormDrawer>
+    <ChatgptAccountImportDrawer v-model="importOpen" @imported="onAccountsImported" />
 
     <V2ConfirmDialog
       v-model="deleteOpen"
@@ -196,15 +173,15 @@
 
     <V2FormDrawer
       v-model="drawerOpen"
+      retain-draft
       :title="editing ? '修改 ChatGPT 账号' : '新增 ChatGPT 账号'"
       :description="
         editing
           ? '留空的邮箱、密码或 2FA 表示保留现有值；账号列表不会回显明文。'
-          : '密码和 2FA 存储后不会回显明文。'
+          : '邮箱必填，密码和 2FA 可稍后补充，存储后不会回显明文。'
       "
       size="min(620px, 96vw)"
       :confirm-loading="saving"
-      :dirty="dirty"
       @confirm="save"
     >
       <el-form
@@ -234,14 +211,14 @@
             :placeholder="`当前 ${editing.emailMasked}；留空保留`"
           />
         </el-form-item>
-        <el-form-item label="登录密码" :required="!editing">
+        <el-form-item label="登录密码">
           <el-input
             v-model="form.password"
             type="password"
             show-password
             maxlength="1024"
             autocomplete="new-password"
-            :placeholder="editing ? '留空表示保留原密码' : '输入登录密码'"
+            :placeholder="editing ? '留空表示保留原密码' : '选填；未设置密码可留空'"
           />
         </el-form-item>
         <el-form-item label="2FA 密钥">
@@ -267,7 +244,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -285,8 +262,10 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankChatgptAccount } from './bank-recharge-api';
-import { parseChatgptAccountImport } from './chatgpt-account-import';
+import ChatgptAccountImportDrawer from './ChatgptAccountImportDrawer.vue';
+import ChatgptAccountCopyButton from './ChatgptAccountCopyButton.vue';
 import { proxyCountryLabel } from './recharge-proxy-options';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
@@ -348,9 +327,6 @@ function changePageSize(value: number) {
 }
 const accounts = computed(() => query.data.value?.items ?? []);
 const importOpen = ref(false);
-const importText = ref('');
-const importing = ref(false);
-const importError = ref('');
 const operationError = ref('');
 const working = ref(false);
 const deleteOpen = ref(false);
@@ -361,9 +337,14 @@ const editing = ref<BankChatgptAccount | null>(null);
 const saving = ref(false);
 const saveError = ref('');
 const formRef = ref<FormInstance>();
-const form = reactive({ email: '', password: '', totpSecret: '', remark: '', active: true });
-const original = ref('');
-const dirty = computed(() => JSON.stringify(form) !== original.value);
+const editorDraft = useV2FormDraft('chatgpt-accounts-editor', () => ({
+  email: '',
+  password: '',
+  totpSecret: '',
+  remark: '',
+  active: true
+}));
+const { form } = editorDraft;
 const rules = computed<FormRules>(() => ({
   email: [
     {
@@ -375,55 +356,32 @@ const rules = computed<FormRules>(() => ({
   ]
 }));
 
-function reset() {
-  Object.assign(form, { email: '', password: '', totpSecret: '', remark: '', active: true });
-  saveError.value = '';
-  original.value = JSON.stringify(form);
-}
 function openCreate() {
   editing.value = null;
-  reset();
+  editorDraft.open('create');
   drawerOpen.value = true;
 }
 function openImport() {
-  importText.value = '';
-  importError.value = '';
   importOpen.value = true;
 }
-async function importAccounts() {
-  if (importing.value) return;
-  try {
-    const rows = parseChatgptAccountImport(importText.value);
-    importing.value = true;
-    importError.value = '';
-    const result = await bankRechargeApi.importAccounts(rows);
-    importText.value = '';
-    importOpen.value = false;
-    page.value = 1;
-    keyword.value = '';
-    keywordInput.value = '';
-    ElMessage.success(`已导入 ${result.imported} 个 ChatGPT 账号`);
-    await query.refresh();
-  } catch (error) {
-    importError.value = getApiErrorMessage(error);
-  } finally {
-    importing.value = false;
-  }
+function onAccountsImported() {
+  page.value = 1;
+  keyword.value = '';
+  keywordInput.value = '';
+  void query.refresh().catch((error) => {
+    operationError.value = getApiErrorMessage(error);
+  });
 }
 function openEdit(account: BankChatgptAccount) {
   editing.value = account;
-  reset();
-  form.remark = account.remark ?? '';
-  form.active = account.status === 'active';
-  original.value = JSON.stringify(form);
+  editorDraft.open(account.id, {
+    remark: account.remark ?? '',
+    active: account.status === 'active'
+  });
   drawerOpen.value = true;
 }
 async function save() {
   if (!(await validateV2Form(formRef.value))) return;
-  if (!editing.value && !form.password) {
-    saveError.value = '请填写登录密码';
-    return;
-  }
   saving.value = true;
   saveError.value = '';
   try {
@@ -444,6 +402,7 @@ async function save() {
         remark: form.remark
       });
     }
+    editorDraft.complete();
     drawerOpen.value = false;
     form.password = '';
     form.totpSecret = '';
