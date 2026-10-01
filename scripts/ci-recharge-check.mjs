@@ -27,6 +27,8 @@ if (part === 'guards') {
     'scripts/ci-recharge-precision.test.mjs',
     'scripts/ci-change-scope.test.mjs'
   ]);
+  if (changed.some((path) => path.startsWith('scripts/production-release/cleanup-reviewed-cache')))
+    run('python3', ['-B', 'scripts/production-release/cleanup-reviewed-cache.test.py']);
   if (mode === 'admin' || mode === 'mailbox') {
     const checks = [
       'check:admin-ui',

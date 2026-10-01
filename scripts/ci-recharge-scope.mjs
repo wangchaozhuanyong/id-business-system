@@ -8,7 +8,7 @@ export function isCiOnly(paths) {
   return (
     paths.length > 0 &&
     paths.every((p) =>
-      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
+      /^(?:\.github\/workflows\/(?:quality|production-release)\.yml|scripts\/ci-(?:recharge|change)-[\w.-]+|scripts\/production-release\/cleanup-reviewed-cache(?:\.test)?\.py|deploy\/aws\/cache-cleanup-20261001\.json|docs\/.*\.md|(?:README|AGENTS)\.md)$/.test(
         p
       )
     )
