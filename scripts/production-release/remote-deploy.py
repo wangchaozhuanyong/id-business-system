@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tarfile
 import time
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 import urllib.request
 
 
@@ -156,6 +156,31 @@ def fresh_backup(previous):
             's3Verified': True}
 
 
+def sync_new_table_grants(release, additions):
+    tables = []
+    for name in additions:
+        sql = (release / 'apps/api/prisma-mysql/migrations' / name).read_text()
+        tables.extend(re.findall(r'\bCREATE\s+TABLE\s+`([A-Za-z0-9_]+)`', sql, re.I))
+    values = environment_values(release / '.env.aws.production')
+    parts = urlsplit(values['MIGRATION_DATABASE_URL'])
+    require(parts.scheme == 'mysql' and parts.hostname == 'mysql',
+            'Unexpected migration database host')
+    root_url = urlunsplit(parts._replace(
+        netloc=f'root:{quote(values["MYSQL_ROOT_PASSWORD"], safe="")}@mysql'
+        + (f':{parts.port}' if parts.port else '')))
+    env = os.environ.copy()
+    env['DATABASE_URL'] = root_url
+    output = compose(
+        release, 'run', '--rm', '--no-deps',
+        '-v', f'{release / "scripts"}:/app/scripts:ro', '-e', 'DATABASE_URL',
+        'migrate', 'node', 'scripts/sync-v2-new-table-grants.mjs', *sorted(set(tables)),
+        env=env, timeout=240,
+    )
+    report = json.loads(output)
+    require(report.get('ok') is True, 'New table database grants failed')
+    return report
+
+
 def point_current(directory, suffix):
     link = BASE / f'.current-{suffix}'
     require(not link.exists() and not link.is_symlink(), 'Temporary current link exists')
@@ -270,6 +295,8 @@ def main():
 
         step = 'migration'
         compose(release, 'run', '--rm', '--no-deps', 'migrate', timeout=900)
+        step = 'database-grants'
+        database_grants = sync_new_table_grants(release, additions)
         step = 'switch'
         for service in SERVICES:
             compose(release, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never',
@@ -306,6 +333,7 @@ def main():
             'backupBeforeRelease': backup['name'],
             'migrationApplied': bool(additions), 'newMigrations': additions,
             'dataAuditBefore': before_audit, 'dataAuditAfter': after_audit,
+            'databaseGrants': database_grants,
             'rollback': {'release': str(previous),
                          'images': {s: before[s]['image'] for s in SERVICES}},
         })

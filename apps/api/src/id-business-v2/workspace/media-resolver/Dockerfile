@@ -22,6 +22,7 @@ RUN apt-get update -y \
   && /opt/yt-dlp/bin/pip install --no-cache-dir pip==26.2.1 setuptools==84.0.0 \
   && /opt/yt-dlp/bin/pip install --no-cache-dir \
     "yt-dlp[default,pin,curl-cffi,pin-curl-cffi,deno,pin-deno] @ https://github.com/yt-dlp/yt-dlp/archive/${YT_DLP_COMMIT}.tar.gz" \
+  && /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade urllib3==2.8.0 \
   && /opt/yt-dlp/bin/pip check \
   && python -m venv /opt/f2 \
   && /opt/f2/bin/pip install --no-cache-dir pip==26.2.1 setuptools==84.0.0 \
