@@ -52,6 +52,23 @@ test('ordinary admin modules use frontend checks instead of backend and financia
   assert.equal(checkMode(['apps/admin/src/auth/login.ts'], schema, schema), 'full');
   assert.equal(checkMode([files[0]], schema, schema), 'recharge');
 });
+test('release workflow diagnostics retain control checks and do not hide application changes', () => {
+  const paths = ['.github/workflows/production-release.yml', 'docs/PRODUCTION_RELEASE_OIDC.md'];
+  assert.equal(checkMode(paths, schema, schema), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(
+    checkMode([...paths, 'apps/api/src/auth/auth.controller.ts'], schema, schema),
+    'full'
+  );
+  assert.equal(
+    checkMode(
+      [...paths, 'apps/admin/src/v2/components/workspace/V2QuickActions.vue'],
+      schema,
+      schema
+    ),
+    'admin'
+  );
+});
 test('public static information pages stay in admin checks without widening auth or API scope', () => {
   const paths = [
     'apps/admin/public/google-sheets.html',

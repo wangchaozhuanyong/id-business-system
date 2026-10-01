@@ -85,6 +85,60 @@ jobs:
         if: inputs.operation == 'release'
         run: bash scripts/production-release/push-images.sh
 
+      - name: Read production release diagnostics
+        if: inputs.operation == 'verify_access'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .deploy/production-release
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import shlex
+          program = r'''
+          import json
+          from pathlib import Path
+          import shutil
+          import subprocess
+          base = Path('/opt/id-business-v2')
+          manifest = json.loads((base / 'current' / 'release-manifest.json').read_text())
+          usage = shutil.disk_usage(base)
+          def read(*args):
+              result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+              if result.returncode:
+                  raise RuntimeError('Read-only Docker diagnostic failed')
+              return result.stdout.strip()
+          containers = []
+          for container in read('docker', 'ps', '-a', '--format', '{{.ID}}').splitlines():
+              containers.append(read('docker', 'inspect', '--format',
+                  '{{.Name}} {{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container))
+          repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+          images = []
+          for line in read('docker', 'image', 'ls', '--format', '{{json .}}').splitlines():
+              image = json.loads(line)
+              if image['Repository'] != repository or len(images) >= 20:
+                  continue
+              reference = repository + ':' + image['Tag']
+              images.append({'tag': image['Tag'], 'size': image['Size'],
+                  'metadata': read('docker', 'image', 'inspect', '--format',
+                      '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}', reference)})
+          print(json.dumps({'currentCommit': manifest['commit'], 'releaseTag': manifest['releaseTag'],
+              'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
+              'containers': containers, 'images': images,
+              'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
+          '''
+          parameters = {'commands': ['python3 -c ' + shlex.quote(program)], 'executionTimeout': ['120']}
+          Path('.deploy/production-release/readonly-diagnostics.json').write_text(json.dumps(parameters))
+          PY
+          command_id="$(aws ssm send-command --instance-ids "$PRODUCTION_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters file://.deploy/production-release/readonly-diagnostics.json \
+            --query 'Command.CommandId' --output text)"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$PRODUCTION_INSTANCE_ID"
+          aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text \
+            > .deploy/production-release/readonly-diagnostics-result.json
+          python3 -m json.tool .deploy/production-release/readonly-diagnostics-result.json
+
       - name: Deploy through the production instance
         if: inputs.operation == 'release'
         run: bash scripts/production-release/dispatch.sh
