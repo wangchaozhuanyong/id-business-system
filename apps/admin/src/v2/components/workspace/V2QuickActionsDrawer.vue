@@ -13,29 +13,51 @@
     @close="emit('update:modelValue', false)"
     @closed="resetEditor"
   >
-    <div class="v2-quick-actions-drawer__body">
+    <div
+      class="v2-quick-actions-drawer__body"
+      @pointermove="moveDrag"
+      @pointerup="finishDrag"
+      @pointercancel="cancelDrag"
+      @lostpointercapture="cancelDrag"
+    >
       <p class="v2-quick-actions-drawer__intro">保存常用回复，复制时只复制“内容”中的文字。</p>
 
       <div class="v2-quick-actions-drawer__toolbar">
         <el-input
           v-model="keyword"
+          :disabled="mutationPending"
           clearable
           maxlength="100"
           placeholder="搜索标题或内容"
           aria-label="搜索便捷操作"
         />
-        <el-select v-model="sort" aria-label="便捷操作排序">
+        <el-select v-model="sort" aria-label="便捷操作排序" :disabled="mutationPending">
+          <el-option label="自定义排序" value="custom" />
           <el-option label="最近修改" value="updated" />
           <el-option label="标题排序" value="title" />
         </el-select>
         <AppButton
           variant="primary"
-          :disabled="!writesAllowed || saving || limitReached"
+          :disabled="!writesAllowed || mutationPending || limitReached"
           @click="startCreate"
         >
           新增
         </AppButton>
       </div>
+
+      <p
+        v-if="sort === 'custom' && items.length > 1"
+        class="v2-quick-actions-drawer__notice"
+        role="status"
+      >
+        {{
+          ordering
+            ? '正在保存顺序…'
+            : keyword.trim()
+              ? '清空搜索后可拖拽排序。'
+              : '拖动左侧手柄调整顺序，自动保存在当前浏览器；也可选中手柄，用上下方向键调整。'
+        }}
+      </p>
 
       <p v-if="!writesAllowed" class="v2-quick-actions-drawer__notice" role="status">
         当前连接处于只读状态，恢复后才能修改便捷操作。
@@ -111,18 +133,33 @@
           没有匹配的便捷操作，请调整搜索词。
         </p>
         <template v-else>
-          <div class="v2-quick-actions-drawer__table-scroll">
+          <div ref="tableScroll" class="v2-quick-actions-drawer__table-scroll">
             <div class="v2-quick-actions-drawer__table-inner">
               <V2Table
                 :data="pageItems"
                 :schema="v2TableSchemas.workspace.quickActions"
                 :show-column-settings="false"
+                :row-class-name="rowClass"
               >
                 <V2TableColumn :definition="v2TableSchemas.workspace.quickActions.columns[0]">
                   <template #default="{ row }">
-                    <span class="v2-quick-actions-drawer__preview" :title="row.title">{{
-                      row.title
-                    }}</span>
+                    <div class="v2-quick-actions-drawer__sortable-title">
+                      <button
+                        v-if="sort === 'custom'"
+                        class="v2-quick-actions-drawer__sort-handle"
+                        type="button"
+                        :disabled="!canReorder"
+                        :aria-label="`调整顺序：${row.title}`"
+                        :data-sort-id="row.id"
+                        @pointerdown="startDrag($event, row.id)"
+                        @keydown="moveWithKeyboard($event, row.id)"
+                      >
+                        <el-icon aria-hidden="true"><Rank /></el-icon>
+                      </button>
+                      <span class="v2-quick-actions-drawer__preview" :title="row.title">{{
+                        row.title
+                      }}</span>
+                    </div>
                   </template>
                 </V2TableColumn>
                 <V2TableColumn :definition="v2TableSchemas.workspace.quickActions.columns[1]">
@@ -140,14 +177,14 @@
                     <AppButton
                       size="small"
                       variant="ghost"
-                      :disabled="!writesAllowed || saving"
+                      :disabled="!writesAllowed || ordering || saving"
                       @click="startEdit(row)"
                       >修改</AppButton
                     >
                     <AppButton
                       size="small"
                       variant="ghost"
-                      :disabled="!writesAllowed || saving"
+                      :disabled="!writesAllowed || ordering || saving"
                       :loading="deletingId === row.id"
                       @click="deleteItem(row)"
                       >删除</AppButton
@@ -158,14 +195,34 @@
             </div>
           </div>
           <div
+            ref="cardsScroll"
             class="v2-records-mobile-list v2-quick-actions-drawer__cards"
             :data-mobile-for="v2TableSchemas.workspace.quickActions.id"
           >
-            <article v-for="item in pageItems" :key="item.id" class="v2-quick-actions-drawer__card">
-              <strong
-                v-v2-column-visibility="[v2TableSchemas.workspace.quickActions.id, 'title']"
-                >{{ item.title }}</strong
-              >
+            <article
+              v-for="item in pageItems"
+              :key="item.id"
+              class="v2-quick-actions-drawer__card"
+              :class="rowClass({ row: item })"
+            >
+              <div class="v2-quick-actions-drawer__sortable-title">
+                <button
+                  v-if="sort === 'custom'"
+                  class="v2-quick-actions-drawer__sort-handle"
+                  type="button"
+                  :disabled="!canReorder"
+                  :aria-label="`调整顺序：${item.title}`"
+                  :data-sort-id="item.id"
+                  @pointerdown="startDrag($event, item.id)"
+                  @keydown="moveWithKeyboard($event, item.id)"
+                >
+                  <el-icon aria-hidden="true"><Rank /></el-icon>
+                </button>
+                <strong
+                  v-v2-column-visibility="[v2TableSchemas.workspace.quickActions.id, 'title']"
+                  >{{ item.title }}</strong
+                >
+              </div>
               <p
                 :ref="registerContentPreview"
                 v-v2-column-visibility="[v2TableSchemas.workspace.quickActions.id, 'content']"
@@ -190,14 +247,14 @@
                 <AppButton
                   size="small"
                   variant="ghost"
-                  :disabled="!writesAllowed || saving"
+                  :disabled="!writesAllowed || ordering || saving"
                   @click="startEdit(item)"
                   >修改</AppButton
                 >
                 <AppButton
                   size="small"
                   variant="ghost"
-                  :disabled="!writesAllowed || saving"
+                  :disabled="!writesAllowed || ordering || saving"
                   :loading="deletingId === item.id"
                   @click="deleteItem(item)"
                   >删除</AppButton
@@ -206,7 +263,7 @@
             </article>
           </div>
           <el-pagination
-            v-if="filteredItems.length > pageSize"
+            v-if="sort !== 'custom' && filteredItems.length > pageSize"
             v-model:current-page="page"
             :page-size="pageSize"
             :total="filteredItems.length"
@@ -224,6 +281,7 @@
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { Rank } from '@element-plus/icons-vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import {
   V2_QUICK_ACTION_LIMITS,
@@ -239,6 +297,7 @@ import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { validateV2Form } from '@/v2/utils/formValidation';
+import { useV2QuickActionSorting } from './useV2QuickActionSorting';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -249,6 +308,7 @@ const props = defineProps<{
   refresh: () => Promise<unknown>;
   save: (input: V2QuickActionInput, id?: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  reorder: (ids: string[]) => Promise<void>;
 }>();
 
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
@@ -264,9 +324,33 @@ const editorSnapshot = ref('');
 const mutationError = ref('');
 const saving = ref(false);
 const deletingId = ref('');
-const mutationPending = computed(() => saving.value || Boolean(deletingId.value));
+const mutationPending = computed(() => saving.value || ordering.value || Boolean(deletingId.value));
 const keyword = ref('');
-const sort = ref<'updated' | 'title'>('updated');
+const sort = ref<'custom' | 'updated' | 'title'>('custom');
+const canReorder = computed(
+  () =>
+    props.writesAllowed &&
+    !mutationPending.value &&
+    !editorMode.value &&
+    sort.value === 'custom' &&
+    !keyword.value.trim()
+);
+const {
+  ordering,
+  customItems,
+  tableScroll,
+  cardsScroll,
+  rowClass,
+  startDrag,
+  moveDrag,
+  finishDrag,
+  cancelDrag,
+  moveWithKeyboard
+} = useV2QuickActionSorting({
+  items: () => props.items,
+  enabled: () => canReorder.value,
+  reorder: (ids) => props.reorder(ids)
+});
 const page = ref(1);
 const expandedIds = ref(new Set<string>());
 const overflowingIds = ref(new Set<string>());
@@ -281,12 +365,13 @@ const dirty = computed(
 );
 const filteredItems = computed(() => {
   const search = keyword.value.trim().toLocaleLowerCase();
-  const rows = props.items.filter(
+  const rows = customItems.value.filter(
     (item) =>
       !search ||
       item.title.toLocaleLowerCase().includes(search) ||
       item.content.toLocaleLowerCase().includes(search)
   );
+  if (sort.value === 'custom') return rows;
   return rows.sort((left, right) =>
     sort.value === 'title'
       ? left.title.localeCompare(right.title, 'zh-CN')
@@ -294,10 +379,21 @@ const filteredItems = computed(() => {
   );
 });
 const pageItems = computed(() =>
-  filteredItems.value.slice((page.value - 1) * pageSize, page.value * pageSize)
+  sort.value === 'custom'
+    ? filteredItems.value
+    : filteredItems.value.slice((page.value - 1) * pageSize, page.value * pageSize)
 );
 
-watch([keyword, sort], () => (page.value = 1));
+watch([keyword, sort], () => {
+  cancelDrag();
+  page.value = 1;
+});
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (!open) cancelDrag();
+  }
+);
 watch(
   () => filteredItems.value.length,
   (count) => {
@@ -382,12 +478,12 @@ async function confirmDiscard(): Promise<boolean> {
 }
 
 async function startCreate() {
-  if (saving.value || !(await confirmDiscard())) return;
+  if (mutationPending.value || !(await confirmDiscard())) return;
   setEditor('create');
 }
 
 async function startEdit(item: V2QuickActionItem) {
-  if (saving.value || !(await confirmDiscard())) return;
+  if (mutationPending.value || !(await confirmDiscard())) return;
   setEditor('edit', item);
 }
 
@@ -424,7 +520,7 @@ async function submitEditor() {
 }
 
 async function deleteItem(item: V2QuickActionItem) {
-  if (!props.writesAllowed || deletingId.value || saving.value) return;
+  if (!props.writesAllowed || mutationPending.value) return;
   try {
     await ElMessageBox.confirm(`确认删除“${item.title}”吗？`, '删除便捷操作', {
       confirmButtonText: '删除',
@@ -467,9 +563,21 @@ async function handleBeforeClose(done: () => void) {
 }
 
 .v2-quick-actions-drawer__body {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   min-width: 0;
+  height: 100%;
+}
+.v2-quick-actions-drawer__body > :deep(.v2-async-region) {
+  flex: 1;
+  min-height: 0;
+}
+.v2-quick-actions-drawer__body :deep(.v2-async-region__content) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }
 
 .v2-quick-actions-drawer__intro,
@@ -526,8 +634,10 @@ async function handleBeforeClose(done: () => void) {
 }
 
 .v2-quick-actions-drawer__table-scroll {
+  flex: 1;
+  min-height: 0;
   min-width: 0;
-  overflow-x: auto;
+  overflow: auto;
 }
 
 .v2-quick-actions-drawer__table-inner {
@@ -589,6 +699,10 @@ async function handleBeforeClose(done: () => void) {
 
   .v2-quick-actions-drawer__cards {
     display: grid;
+    flex: 1;
+    min-height: 0;
+    align-content: start;
+    overflow-y: auto;
     gap: 10px;
   }
 
@@ -627,5 +741,78 @@ async function handleBeforeClose(done: () => void) {
     flex-wrap: wrap;
     gap: 8px;
   }
+}
+.v2-quick-actions-drawer__notice {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.v2-quick-actions-drawer__sortable-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.v2-quick-actions-drawer__sortable-title > span,
+.v2-quick-actions-drawer__sortable-title > strong {
+  min-width: 0;
+}
+
+.v2-quick-actions-drawer__sort-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--v3-radius-sm);
+  background: transparent;
+  color: var(--v3-text-soft);
+  font-size: 18px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.v2-quick-actions-drawer__sort-handle:active {
+  cursor: grabbing;
+}
+
+.v2-quick-actions-drawer__sort-handle:disabled {
+  cursor: not-allowed;
+}
+
+.v2-quick-actions-drawer__sort-handle:focus-visible {
+  outline: 2px solid var(--v3-focus-color);
+  outline-offset: -2px;
+}
+
+.v2-quick-actions-drawer__body :deep(.is-sorting td),
+.v2-quick-actions-drawer__card.is-sorting {
+  background: var(--v3-surface-2);
+}
+
+.v2-quick-actions-drawer__body :deep(.sort-before td),
+.v2-quick-actions-drawer__card.sort-before {
+  box-shadow: inset 0 2px var(--v3-primary);
+}
+
+.v2-quick-actions-drawer__body :deep(.sort-after td),
+.v2-quick-actions-drawer__card.sort-after {
+  box-shadow: inset 0 -2px var(--v3-primary);
+}
+
+@media (max-width: 900px) {
+  .v2-quick-actions-drawer__sort-handle {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+.v2-quick-actions-drawer__sortable-title > .v2-quick-actions-drawer__preview {
+  flex: 1;
 }
 </style>
