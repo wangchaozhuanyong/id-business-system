@@ -25,6 +25,7 @@ ALL_SERVICES = (*SERVICES, 'mysql', 'caddy')
 REUSE_CONTROL_FILES = frozenset({
     '.github/workflows/production-release.yml',
     'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
     'scripts/ci-recharge-scope.test.mjs',
     'scripts/ci-recharge-release.test.mjs',
     'scripts/production-release/cleanup-reviewed-cache.py',
@@ -33,11 +34,15 @@ REUSE_CONTROL_FILES = frozenset({
     'scripts/production-release/remote-deploy.py',
     'scripts/production-release/remote-deploy.test.py',
     'scripts/production-release/reuse-images.py',
+    'scripts/production-release/storage-maintenance.py',
+    'scripts/production-release/storage-maintenance.test.py',
     'deploy/aws/cache-cleanup-recharge-names-20261002.json',
     'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
     'docs/PRODUCTION_RELEASE_OIDC.md',
     'docs/RECHARGE_NAMES_CACHE_RECOVERY_20261002.md',
     'docs/RECHARGE_EXECUTION_CACHE_RECOVERY_20261002.md',
+    'docs/STORAGE_CLEANUP_20261002.md',
+    'docs/V2_TASKS.md',
 })
 
 
