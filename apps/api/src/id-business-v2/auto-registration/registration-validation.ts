@@ -51,7 +51,7 @@ export function birthDate(value: unknown, now = new Date()): string {
   )
     throw new BadRequestException('出生日期无效');
   const today = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kuala_Lumpur',
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'

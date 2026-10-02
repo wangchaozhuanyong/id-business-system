@@ -15,7 +15,7 @@ from checkout_core import Stop
 def validate_birthdate(value):
     try:
         born = date.fromisoformat(value)
-        today = datetime.now(ZoneInfo('Asia/Kuala_Lumpur')).date()
+        today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
         age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
         if born.isoformat() != value or not 20 <= age <= 45:
             raise ValueError()
