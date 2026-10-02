@@ -141,8 +141,13 @@ export function directProfileOptions(settings: DirectBrowserSettings) {
     displayLanguages: o.displayLanguage
   };
   if (!o.timezoneFromIp) {
+    // Only the external browser fingerprint follows the selected window timezone.
+    const V2_BROWSER_FINGERPRINT_TIME_ZONE = o.timezone;
     const offset =
-      new Intl.DateTimeFormat('en-US', { timeZone: o.timezone, timeZoneName: 'longOffset' })
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: V2_BROWSER_FINGERPRINT_TIME_ZONE,
+        timeZoneName: 'longOffset'
+      })
         .formatToParts(new Date())
         .find((part) => part.type === 'timeZoneName')?.value ?? 'GMT';
     const parts = /^GMT([+-])(\d{2}):(\d{2})$/.exec(offset);

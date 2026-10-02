@@ -1,3 +1,4 @@
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   directBrowserApi,
@@ -90,6 +91,25 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
       syncIndexedDb: false,
       syncAuthorization: false,
       proxyMethod: 3
+    });
+  });
+  it('自定义窗口指纹时区按所选地区计算偏移，不使用业务显示时区', () => {
+    const result = directProfileOptions({
+      localApiUrl: 'http://localhost:54345',
+      localApiToken: 'fixture',
+      groupName: '组',
+      tagName: '标签',
+      proxyType: 'http',
+      dynamicProxyUrl: '',
+      browserOptions: {
+        ...V2_RECHARGE_BROWSER_DEFAULTS,
+        timezoneFromIp: false,
+        timezone: 'Asia/Tokyo'
+      }
+    });
+    expect(result.browserFingerPrint).toMatchObject({
+      timeZone: 'Asia/Tokyo',
+      timeZoneOffset: 32400
     });
   });
   it('授权 JSON 必须绑定目标用户与账号，冲突或缺失会话资料时拒绝', () => {
