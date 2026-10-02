@@ -275,6 +275,8 @@
 </template>
 
 <script setup lang="ts">
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+
 import { computed, reactive, ref, watch } from 'vue';
 import { Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import { getApiErrorMessage } from '@/api/client';
@@ -318,12 +320,14 @@ const summary = reactive<V2TopupSupplierFundSummary>({
   uninitializedCount: 0,
   negativeCount: 0
 });
-const query = reactive({
-  page: 1,
-  pageSize: 20,
-  keyword: '',
-  fundingStatus: '' as '' | 'initialized' | 'uninitialized' | 'negative'
-});
+const query = useV2SessionDraft('topup-records/components/V2TopupSupplierFundsPanel:query', () =>
+  reactive({
+    page: 1,
+    pageSize: 20,
+    keyword: '',
+    fundingStatus: '' as '' | 'initialized' | 'uninitialized' | 'negative'
+  })
+);
 
 function getListQuery(): V2TopupSupplierFundListQuery {
   return {
@@ -364,8 +368,13 @@ const mutationDrawerVisible = ref(false);
 const mutationMode = ref<MutationMode>('initialize');
 const selectedSupplier = ref<V2TopupSupplierFundItem | null>(null);
 const submitting = ref(false);
-const balanceForm = reactive({ targetBalanceCny: '', reason: '', idempotencyKey: '' });
-const paymentForm = reactive({
+const balanceFormDraft = useV2FormDraft('topup-supplier-balance', () => ({
+  targetBalanceCny: '',
+  reason: '',
+  idempotencyKey: ''
+}));
+const balanceForm = balanceFormDraft.form;
+const paymentFormDraft = useV2FormDraft('topup-supplier-payment', () => ({
   receivedUsdt: '',
   networkFeeUsdt: '',
   settlementRateCnyUsdt: '',
@@ -374,7 +383,8 @@ const paymentForm = reactive({
   paidAt: '',
   remark: '',
   idempotencyKey: ''
-});
+}));
+const paymentForm = paymentFormDraft.form;
 const mutationTitle = computed(() => {
   const label =
     mutationMode.value === 'initialize'
@@ -454,12 +464,12 @@ async function openMutation(item: V2TopupSupplierFundItem, mode: MutationMode) {
   }
   selectedSupplier.value = item;
   mutationMode.value = mode;
-  Object.assign(balanceForm, {
+  balanceFormDraft.open(`${item.supplier.id}:${mode}`, {
     targetBalanceCny: mode === 'adjust' ? (item.currentBalanceCny ?? '') : '',
     reason: '',
     idempotencyKey: createIdempotencyKey()
   });
-  Object.assign(paymentForm, {
+  paymentFormDraft.open(`${item.supplier.id}:${mode}`, {
     receivedUsdt: '',
     networkFeeUsdt: '',
     settlementRateCnyUsdt: '',
@@ -477,6 +487,9 @@ async function submitMutation() {
   if (!item || submitting.value) return;
   if (!validateMutation()) return;
   submitting.value = true;
+  const completeSave = (
+    mutationMode.value === 'payment' ? paymentFormDraft : balanceFormDraft
+  ).beginSave();
   try {
     if (mutationMode.value === 'initialize') {
       await idBusinessV2TopupSupplierFundsApi.initialize(item.supplier.id, {
@@ -509,6 +522,7 @@ async function submitMutation() {
       });
       ElMessage.success(`付款已入账，增加人民币 ¥${formatDecimal(paymentPreviewCny.value)}`);
     }
+    completeSave();
     mutationDrawerVisible.value = false;
     await refresh();
   } catch (mutationError) {

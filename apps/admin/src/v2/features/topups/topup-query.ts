@@ -1,3 +1,4 @@
+import type { V2TopupWorkbenchSortBy } from './contracts';
 import {
   createV2QueryKey,
   getV2QueryData,
@@ -58,4 +59,12 @@ export function useTopupListQuery(
       return { list: result.list, options: result.options };
     }
   });
+}
+
+export type AccountList = 'available' | 'sold';
+export interface TopupListState {
+  page: number;
+  pageSize: number;
+  sortBy: V2TopupWorkbenchSortBy;
+  sortOrder: 'asc' | 'desc';
 }

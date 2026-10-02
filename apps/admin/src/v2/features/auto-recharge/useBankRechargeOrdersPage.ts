@@ -14,8 +14,8 @@ import { ensureV2BusinessNowMs, getV2BusinessNowMs } from '@/v2/runtime/business
 import { validateV2Form } from '@/v2/utils/formValidation';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { bankRechargeApi, type BankRechargeOrder } from './bank-recharge-api';
+import { emptyForm, emptyRefundForm } from './bank-recharge-order-form';
 import { bankRechargePlanLabel as planLabel } from './recharge-plan-options';
-import { emptyForm } from './bank-recharge-order-form';
 import { bankRechargeOrderStatusLabel as statusLabel } from './recharge-presentation';
 
 export function useBankRechargeOrdersPage() {
@@ -42,12 +42,21 @@ export function useBankRechargeOrdersPage() {
     if (clockTimer) clearInterval(clockTimer);
   });
   const financeCurrencies = ['CNY', 'MYR', 'USD', 'USDT'];
-  const page = ref(1);
-  const pageSize = ref(20);
-  const keywordInput = ref(linkedOrderNo.value);
-  const statusInput = ref('');
-  const keyword = ref(linkedOrderNo.value);
-  const status = ref('');
+  const page = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:page', () => ref(1));
+  const pageSize = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:pageSize', () =>
+    ref(20)
+  );
+  const keywordInput = useV2SessionDraft(
+    'auto-recharge/useBankRechargeOrdersPage:keywordInput',
+    () => ref(linkedOrderNo.value)
+  );
+  const statusInput = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:statusInput', () =>
+    ref('')
+  );
+  const keyword = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:keyword', () =>
+    ref(linkedOrderNo.value)
+  );
+  const status = useV2SessionDraft('auto-recharge/useBankRechargeOrdersPage:status', () => ref(''));
   const drawerOpen = ref(false);
   const quickCustomerOpen = ref(false);
   const cardOpen = ref(false);
@@ -59,18 +68,10 @@ export function useBankRechargeOrdersPage() {
   const selected = ref<BankRechargeOrder | null>(null);
   const {
     form: refund,
+    version: refundVersion,
     open: openRefundDraft,
-    complete: completeRefundDraft
-  } = useV2FormDraft('bank-orders-refund', () => ({
-    reason: '',
-    refundReference: '',
-    customerRefundAmount: '',
-    chargeRecoveryAmountCny: '0',
-    bankFeeRecoveryAmountCny: '0',
-    usdtFeeRecoveryAmount: '0',
-    shoppingFeeRecoveryAmount: '0',
-    upstreamRefundReference: ''
-  }));
+    beginSave: beginRefundSave
+  } = useV2FormDraft('bank-orders-refund', emptyRefundForm);
   const { cardForm, currencyForm } = useV2SessionDraft('bank-order-related-create', () => ({
     cardForm: reactive({ label: '', last4: '', currencyCode: 'PHP' }),
     currencyForm: reactive({ code: '', name: '', minorUnits: 2 })
@@ -82,8 +83,9 @@ export function useBankRechargeOrdersPage() {
   const {
     form,
     original,
+    version: formVersion,
     open: openFormDraft,
-    complete: completeFormDraft
+    beginSave: beginFormSave
   } = useV2FormDraft('bank-orders-editor', emptyForm);
   const correctionReasons = useV2SessionDraft(
     'bank-orders-correction-reasons',
@@ -271,41 +273,45 @@ export function useBankRechargeOrdersPage() {
     creating.value = false;
     selected.value = row;
     saveError.value = '';
-    openFormDraft(row.id, {
-      plan: row.plan,
-      chargeCurrencyCode: row.chargeCurrencyCode,
-      chargeAmount: row.chargeAmount,
-      manualEvidenceRef: row.manualEvidenceRef ?? '',
-      accountId: row.accountId ?? '',
-      customerId: row.customerId ?? '',
-      cardId: row.cardId ?? '',
-      confirmFeeConversion: false,
-      usdtFeeAmount: row.usdtFeeAmount ?? '',
-      usdtFeeCurrencyCode: row.usdtFeeCurrencyCode ?? 'USDT',
-      usdtFeeFinanceAccountId: row.usdtFeeFinanceAccountId ?? '',
-      usdtFeeFxRateToCny: row.usdtFeeFxRateToCny ?? '',
-      usdtFeeManualRateReason: '',
-      shoppingFeeAmount: row.shoppingFeeAmount ?? '',
-      shoppingFeeCurrencyCode: row.shoppingFeeCurrencyCode ?? 'CNY',
-      shoppingFeeFinanceAccountId: row.shoppingFeeFinanceAccountId ?? '',
-      shoppingFeeFxRateToCny: row.shoppingFeeFxRateToCny ?? '',
-      shoppingFeeManualRateReason: '',
-      customerFeeRate: row.customerFeeRate,
-      feeOverride: row.customerFeeOverridden,
-      customerFeeAmount: row.customerFeeOverridden ? row.customerFeeAmount : '',
-      bankFeeAmount: row.bankFeeAmount ?? '0',
-      bankFeeCurrencyCode: row.bankFeeCurrencyCode ?? row.chargeCurrencyCode,
-      receivedAmount: row.receivedAmount ?? '',
-      receivedCurrencyCode: row.receivedCurrencyCode ?? 'CNY',
-      chargeFxRateToCny: row.chargeFxRateToCny ?? '',
-      bankFeeFxRateToCny: row.bankFeeFxRateToCny ?? '',
-      receivedFxRateToCny: row.receivedFxRateToCny ?? '',
-      fundingFinanceAccountId: row.fundingFinanceAccountId ?? '',
-      receivedFinanceAccountId: row.receivedFinanceAccountId ?? '',
-      openedAt: row.openedAt ? toV2DateTimeInput(row.openedAt) : '',
-      dueAt: row.dueAt ? toV2DateTimeInput(row.dueAt) : '',
-      remark: row.remark ?? ''
-    });
+    openFormDraft(
+      row.id,
+      {
+        plan: row.plan,
+        chargeCurrencyCode: row.chargeCurrencyCode,
+        chargeAmount: row.chargeAmount,
+        manualEvidenceRef: row.manualEvidenceRef ?? '',
+        accountId: row.accountId ?? '',
+        customerId: row.customerId ?? '',
+        cardId: row.cardId ?? '',
+        confirmFeeConversion: false,
+        usdtFeeAmount: row.usdtFeeAmount ?? '',
+        usdtFeeCurrencyCode: row.usdtFeeCurrencyCode ?? 'USDT',
+        usdtFeeFinanceAccountId: row.usdtFeeFinanceAccountId ?? '',
+        usdtFeeFxRateToCny: row.usdtFeeFxRateToCny ?? '',
+        usdtFeeManualRateReason: '',
+        shoppingFeeAmount: row.shoppingFeeAmount ?? '',
+        shoppingFeeCurrencyCode: row.shoppingFeeCurrencyCode ?? 'CNY',
+        shoppingFeeFinanceAccountId: row.shoppingFeeFinanceAccountId ?? '',
+        shoppingFeeFxRateToCny: row.shoppingFeeFxRateToCny ?? '',
+        shoppingFeeManualRateReason: '',
+        customerFeeRate: row.customerFeeRate,
+        feeOverride: row.customerFeeOverridden,
+        customerFeeAmount: row.customerFeeOverridden ? row.customerFeeAmount : '',
+        bankFeeAmount: row.bankFeeAmount ?? '0',
+        bankFeeCurrencyCode: row.bankFeeCurrencyCode ?? row.chargeCurrencyCode,
+        receivedAmount: row.receivedAmount ?? '',
+        receivedCurrencyCode: row.receivedCurrencyCode ?? 'CNY',
+        chargeFxRateToCny: row.chargeFxRateToCny ?? '',
+        bankFeeFxRateToCny: row.bankFeeFxRateToCny ?? '',
+        receivedFxRateToCny: row.receivedFxRateToCny ?? '',
+        fundingFinanceAccountId: row.fundingFinanceAccountId ?? '',
+        receivedFinanceAccountId: row.receivedFinanceAccountId ?? '',
+        openedAt: row.openedAt ? toV2DateTimeInput(row.openedAt) : '',
+        dueAt: row.dueAt ? toV2DateTimeInput(row.dueAt) : '',
+        remark: row.remark ?? ''
+      },
+      row.updatedAt
+    );
     customers.value = [...(optionsQuery.data.value?.customers ?? [])];
     if (row.customer && !customers.value.some((item) => item.id === row.customer!.id))
       customers.value.unshift(row.customer);
@@ -314,6 +320,7 @@ export function useBankRechargeOrdersPage() {
   function openCorrection(row: BankRechargeOrder) {
     openEdit(row);
     correcting.value = true;
+    correctionReason.value = correctionReasons.get(row.id) ?? '';
   }
   function customerCreated(customer: { id: string; name: string }) {
     customers.value = [customer, ...customers.value.filter((item) => item.id !== customer.id)];
@@ -327,6 +334,7 @@ export function useBankRechargeOrdersPage() {
     if (readonly.value) return;
     if (creating.value && !(await validateV2Form(formRef.value))) return;
     saving.value = true;
+    const completeFormDraft = beginFormSave();
     saveError.value = '';
     try {
       if (creating.value) {
@@ -339,6 +347,7 @@ export function useBankRechargeOrdersPage() {
           customerId: form.customerId || null
         });
         completeFormDraft();
+        if (selected.value) correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
         await ordersQuery.refresh();
         openEdit(created);
@@ -352,7 +361,7 @@ export function useBankRechargeOrdersPage() {
                 plan: form.plan
               }
             : {}),
-          expectedUpdatedAt: selected.value.updatedAt,
+          expectedUpdatedAt: formVersion.value ?? selected.value.updatedAt,
           accountId: form.accountId || null,
           customerId: form.customerId || null,
           cardId: form.cardId || null,
@@ -394,7 +403,7 @@ export function useBankRechargeOrdersPage() {
           });
         else await bankRechargeApi.updateOrder(selected.value.id, payload);
         completeFormDraft();
-        correctionReasons.delete(selected.value.id);
+        if (selected.value) correctionReasons.delete(selected.value.id);
         drawerOpen.value = false;
         ElMessage.success(correcting.value ? '银充订单已更正并重新入账' : '银充订单已保存');
         await ordersQuery.refresh();
@@ -419,16 +428,20 @@ export function useBankRechargeOrdersPage() {
   }
   function openRefund(row: BankRechargeOrder) {
     selected.value = row;
-    openRefundDraft(row.id, {
-      reason: '',
-      refundReference: '',
-      customerRefundAmount: '',
-      chargeRecoveryAmountCny: '0',
-      bankFeeRecoveryAmountCny: '0',
-      usdtFeeRecoveryAmount: '0',
-      shoppingFeeRecoveryAmount: '0',
-      upstreamRefundReference: ''
-    });
+    openRefundDraft(
+      row.id,
+      {
+        reason: '',
+        refundReference: '',
+        customerRefundAmount: '',
+        chargeRecoveryAmountCny: '0',
+        bankFeeRecoveryAmountCny: '0',
+        usdtFeeRecoveryAmount: '0',
+        shoppingFeeRecoveryAmount: '0',
+        upstreamRefundReference: ''
+      },
+      row.updatedAt
+    );
     saveError.value = '';
     refundOpen.value = true;
   }
@@ -438,10 +451,11 @@ export function useBankRechargeOrdersPage() {
       return;
     }
     working.value = true;
+    const completeRefundDraft = beginRefundSave();
     saveError.value = '';
     try {
       await bankRechargeApi.refundOrder(selected.value.id, {
-        expectedUpdatedAt: selected.value.updatedAt,
+        expectedUpdatedAt: refundVersion.value ?? selected.value.updatedAt,
         reason: refund.reason.trim(),
         refundReference: refund.refundReference.trim(),
         customerRefundAmount: refund.customerRefundAmount.trim(),

@@ -26,6 +26,122 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('V2 query cancellation and refresh consistency', () => {
+  it('does not enter the transport when cancellation wins before the request microtask', async () => {
+    const query = vi.fn(async () => 'unexpected-request');
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({ scope: 'orders', key: 'cancel-before-start', query })
+    );
+    if (!result) return;
+    const pending = result.refresh();
+    scope.stop();
+    await expect(pending).resolves.toBeUndefined();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('does not return a usable payload from a canceled execution after reactivation', async () => {
+    const deferred = createDeferred<string>();
+    const query = vi
+      .fn<() => Promise<string>>()
+      .mockImplementationOnce(() => deferred.promise)
+      .mockResolvedValue('current-result');
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({ scope: 'orders', key: 'cancel-reactivate', query })
+    );
+    if (!result) return;
+    const canceled = result.refresh();
+    await Promise.resolve();
+    result.cancel();
+    await result.ensureFresh();
+    deferred.resolve('canceled-result');
+    await expect(canceled).resolves.toBeUndefined();
+    expect(result.data.value).toBe('current-result');
+    scope.stop();
+  });
+  it('does not restart a disposed consumer after its pending cache entry is cleared', async () => {
+    const deferred = createDeferred<string>();
+    const query = vi
+      .fn<() => Promise<string>>()
+      .mockImplementationOnce(() => deferred.promise)
+      .mockResolvedValue('unexpected-restart');
+    const scope = effectScope();
+    const result = scope.run(() => useV2Query({ scope: 'orders', key: 'disposed-reset', query }));
+    if (!result) return;
+    const pending = result.ensureFresh();
+    await Promise.resolve();
+    scope.stop();
+    clearV2QueryCache();
+    deferred.resolve('late-result');
+    await pending;
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(getV2QueryData('orders', 'disposed-reset')).toBeUndefined();
+  });
+
+  it('does not allow a delayed callback to subscribe again after disposal', async () => {
+    const query = vi.fn(async () => 'unexpected-request');
+    const scope = effectScope();
+    const result = scope.run(() =>
+      useV2Query({ scope: 'orders', key: 'disposed-callback', query })
+    );
+    if (!result) return;
+    scope.stop();
+    await result.refresh();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('replaces an invalidated active request even when its transport ignores abort', async () => {
+    vi.useFakeTimers();
+    primeV2Query({ scope: 'orders', key: 'ignores-abort', data: 'last-success' });
+    const deferred = createDeferred<string>();
+    const query = vi
+      .fn<() => Promise<string>>()
+      .mockImplementationOnce(() => deferred.promise)
+      .mockResolvedValue('new-version');
+    const scope = effectScope();
+    const result = scope.run(() => useV2Query({ scope: 'orders', key: 'ignores-abort', query }));
+    if (!result) return;
+    const pending = result.refresh();
+    await Promise.resolve();
+    invalidateV2Queries('orders');
+    await vi.advanceTimersByTimeAsync(100);
+    const requestsAfterInvalidation = query.mock.calls.length;
+    const visibleData = result.data.value;
+    deferred.resolve('obsolete-version');
+    await pending;
+    scope.stop();
+    expect(requestsAfterInvalidation).toBe(2);
+    expect(visibleData).toBe('new-version');
+    expect(getV2QueryData('orders', 'ignores-abort')).toBe('new-version');
+  });
+
+  it('does not let an obsolete completion retry a newer failed refresh automatically', async () => {
+    vi.useFakeTimers();
+    primeV2Query({ scope: 'orders', key: 'obsolete-finally', data: 'last-success' });
+    const deferred = createDeferred<string>();
+    const query = vi
+      .fn<() => Promise<string>>()
+      .mockImplementationOnce(() => deferred.promise)
+      .mockRejectedValue(new Error('refresh failed'));
+    const scope = effectScope();
+    const result = scope.run(() => useV2Query({ scope: 'orders', key: 'obsolete-finally', query }));
+    if (!result) return;
+    const pending = result.refresh();
+    await Promise.resolve();
+    invalidateV2Queries('orders');
+    await vi.advanceTimersByTimeAsync(100);
+    const phaseAfterReplacement = result.phase.value;
+    deferred.resolve('obsolete-result');
+    await pending;
+    await vi.advanceTimersByTimeAsync(500);
+    const requestCount = query.mock.calls.length;
+    scope.stop();
+    expect(phaseAfterReplacement).toBe('refresh-error');
+    expect(requestCount).toBe(2);
+  });
+});
+
 describe('V2 query cache', () => {
   it('creates a stable key independent of object field order and undefined values', () => {
     expect(createV2QueryKey({ page: 1, keyword: undefined, filters: { b: 2, a: 1 } })).toBe(

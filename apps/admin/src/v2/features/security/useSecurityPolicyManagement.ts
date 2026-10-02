@@ -1,3 +1,4 @@
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, reactive, ref, watch } from 'vue';
@@ -35,8 +36,11 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   const policyDrawerVisible = ref(false);
   const policySaving = ref(false);
   const policyMutationError = ref('');
-  const policyForm = reactive<PolicyFormModel>({ ...EMPTY_POLICY_FORM });
-  const policyBaseline = ref(JSON.stringify(EMPTY_POLICY_FORM));
+  const policyFormDraft = useV2FormDraft<PolicyFormModel>('security-policy-settings', () => ({
+    ...EMPTY_POLICY_FORM
+  }));
+  const policyForm = policyFormDraft.form;
+  const policyBaseline = policyFormDraft.original;
 
   const mfaSetupVisible = ref(false);
   const mfaSetupLoading = ref(false);
@@ -52,8 +56,12 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   const editingWhitelist = ref<V2IpWhitelistRecord | null>(null);
   const whitelistSaving = ref(false);
   const whitelistMutationError = ref('');
-  const whitelistForm = reactive<WhitelistFormModel>({ ...EMPTY_WHITELIST_FORM });
-  const whitelistBaseline = ref(JSON.stringify(EMPTY_WHITELIST_FORM));
+  const whitelistFormDraft = useV2FormDraft<WhitelistFormModel>(
+    'security-whitelist-editor',
+    () => ({ ...EMPTY_WHITELIST_FORM })
+  );
+  const whitelistForm = whitelistFormDraft.form;
+  const whitelistBaseline = whitelistFormDraft.original;
   const removingWhitelistId = ref('');
 
   const policyDirty = computed(() => JSON.stringify(policyForm) !== policyBaseline.value);
@@ -95,8 +103,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   };
 
   function setPolicyForm(next: PolicyFormModel) {
-    Object.assign(policyForm, next);
-    policyBaseline.value = JSON.stringify(next);
+    policyFormDraft.open('current', next);
   }
 
   function openPolicySettings(settings: V2MfaSettings | null) {
@@ -133,6 +140,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
     }
 
     policySaving.value = true;
+    const completeSave = policyFormDraft.beginSave();
     policyMutationError.value = '';
     try {
       await v2SecurityApi.updateMfaSettings({
@@ -140,6 +148,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
         requiredForAdmins: policyForm.requiredForAdmins,
         issuer: policyForm.issuer.trim()
       });
+      completeSave();
       policyDrawerVisible.value = false;
       ElMessage.success('MFA 策略已更新，并写入操作审计。');
       await refresh();
@@ -277,8 +286,11 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
   }
 
   function setWhitelistForm(next: WhitelistFormModel) {
-    Object.assign(whitelistForm, next);
-    whitelistBaseline.value = JSON.stringify(next);
+    whitelistFormDraft.open(
+      editingWhitelist.value?.id ?? 'create',
+      next,
+      editingWhitelist.value?.updatedAt
+    );
   }
 
   function openCreateWhitelist() {
@@ -319,6 +331,7 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
     }
 
     whitelistSaving.value = true;
+    const completeSave = whitelistFormDraft.beginSave();
     whitelistMutationError.value = '';
     const input: V2SaveIpWhitelistInput = {
       ipOrCidr: whitelistForm.ipOrCidr.trim(),
@@ -330,11 +343,12 @@ export function useSecurityPolicyManagement(refresh: () => Promise<unknown>) {
       if (editingWhitelist.value) {
         await v2SecurityApi.updateIpWhitelist(editingWhitelist.value.id, {
           ...input,
-          expectedUpdatedAt: editingWhitelist.value.updatedAt
+          expectedUpdatedAt: whitelistFormDraft.version.value ?? editingWhitelist.value.updatedAt
         });
       } else {
         await v2SecurityApi.createIpWhitelist(input);
       }
+      completeSave();
       whitelistDrawerVisible.value = false;
       ElMessage.success('IP 白名单已保存，并写入操作审计。');
       await refresh();

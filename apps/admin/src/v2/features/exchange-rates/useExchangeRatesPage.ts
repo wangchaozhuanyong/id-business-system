@@ -1,4 +1,5 @@
-import { computed, reactive, ref, watch } from 'vue';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { computed, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
@@ -62,7 +63,9 @@ interface ExchangeRatePageSnapshot {
 
 export function useExchangeRatesPage() {
   const authStore = useAuthStore();
-  const activeTab = ref<'purchase' | 'automatic' | 'manual'>('purchase');
+  const activeTab = useV2SessionDraft('exchange-rates/useExchangeRatesPage:activeTab', () =>
+    ref<'purchase' | 'automatic' | 'manual'>('purchase')
+  );
   const overview = ref<V2ExchangeRateOverview | null>(null);
   const runtime = ref<V2ExchangeRateRuntime | null>(null);
   const collecting = ref(false);
@@ -104,20 +107,22 @@ export function useExchangeRatesPage() {
     ensureFresh: () => exchangeRateQuery.ensureFresh()
   });
   const { recordQuery, manualQuery, recordDateRange, manualDateRange } = filters;
-  const settingsForm = reactive({
+  const settingsFormDraft = useV2FormDraft('market-rate-settings', () => ({
     expectedUpdatedAt: '',
     autoEnabled: true,
     intervalMinutes: 15,
     targetAmountRmb: '5000',
     retentionDays: 30
-  });
-  const manualForm = reactive({
+  }));
+  const settingsForm = settingsFormDraft.form;
+  const manualFormDraft = useV2FormDraft('manual-rate-editor', () => ({
     currency: 'MYR' as V2TrackedExchangeRateCurrency,
     rateToCny: '',
     recordedAt: getV2BusinessNowInput(),
     reason: '',
     sourceReference: ''
-  });
+  }));
+  const manualForm = manualFormDraft.form;
 
   const latestFailureDescription = computed(() => {
     const run = overview.value?.latestRun;
@@ -346,7 +351,7 @@ export function useExchangeRatesPage() {
   function openSettings() {
     const current = runtime.value?.settings;
     if (current) {
-      Object.assign(settingsForm, {
+      settingsFormDraft.open('current', {
         expectedUpdatedAt: current.updatedAt,
         autoEnabled: current.autoEnabled,
         intervalMinutes: current.intervalMinutes,
@@ -371,6 +376,7 @@ export function useExchangeRatesPage() {
       return;
     }
     settingsSaving.value = true;
+    const completeSave = settingsFormDraft.beginSave();
     try {
       await idBusinessV2ExchangeRatesApi.updateSettings({
         expectedUpdatedAt: settingsForm.expectedUpdatedAt,
@@ -379,6 +385,7 @@ export function useExchangeRatesPage() {
         targetAmountRmb: settingsForm.targetAmountRmb.trim(),
         retentionDays: settingsForm.retentionDays
       });
+      completeSave();
       settingsVisible.value = false;
       ElMessage.success(settingsForm.autoEnabled ? '设置已保存，已安排立即采集' : '自动采集已关闭');
       await exchangeRateQuery.refresh();
@@ -426,7 +433,7 @@ export function useExchangeRatesPage() {
       ElMessage.error('无法读取服务器北京时间，请稍后重试');
       return;
     }
-    Object.assign(manualForm, {
+    manualFormDraft.open('create', {
       currency: 'MYR',
       rateToCny: '',
       recordedAt,
@@ -441,6 +448,7 @@ export function useExchangeRatesPage() {
       return;
     }
     manualCreating.value = true;
+    const completeSave = manualFormDraft.beginSave();
     try {
       await idBusinessV2ExchangeRatesApi.createManualRate({
         currency: manualForm.currency,
@@ -449,6 +457,7 @@ export function useExchangeRatesPage() {
         reason: manualForm.reason.trim(),
         sourceReference: manualForm.sourceReference.trim() || null
       });
+      completeSave();
       manualCreateVisible.value = false;
       activeTab.value = 'manual';
       ElMessage.success('人工汇率已保存，不会覆盖自动采集值');

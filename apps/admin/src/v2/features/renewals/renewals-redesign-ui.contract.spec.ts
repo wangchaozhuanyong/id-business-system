@@ -25,7 +25,7 @@ describe('renewals scheme 3 redesign contract', () => {
     expect(toolbar).toContain('class="v2-renewal-scope-control"');
     expect(toolbar).toContain('@click="page.selectWarningScope(item.key)"');
     expect(toolbar).toContain("props.page.selectWarningScope('warning')");
-    expect(pageState).toContain('const warningOnly = ref(true)');
+    expect(pageState).toMatch(/const warningOnly = useV2SessionDraft\([^;]*\(\) => ref\(true\)\)/);
     expect(list).toContain('v-if="page.canRenew"');
     expect(list).toContain(':disabled="!row.withinActionWindow"');
     expect(list).toContain('@click="page.openRenewalDrawer(row)"');

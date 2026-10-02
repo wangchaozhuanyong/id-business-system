@@ -1,4 +1,5 @@
-import { computed, reactive, ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { computed, ref } from 'vue';
 import {
   V2_RAW_EXCHANGE_RATE_DECIMAL_PLACES,
   calculateV2PurchaseRate,
@@ -16,7 +17,7 @@ import type { V2PurchaseQuote } from './contracts';
 export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown> }) {
   const purchaseDrawerVisible = ref(false);
   const purchaseSaving = ref(false);
-  const purchaseForm = reactive({
+  const purchaseFormDraft = useV2FormDraft('purchase-quote-editor', () => ({
     code: '',
     expectedUpdatedAt: '',
     nameCn: '',
@@ -31,7 +32,8 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
     marketRateCnyPerUnit: '',
     marketRateCapturedAt: '',
     marketRateSourceReference: ''
-  });
+  }));
+  const purchaseForm = purchaseFormDraft.form;
 
   const purchasePreview = computed(() => {
     const marketRate = parseRate(purchaseForm.marketRateCnyPerUnit);
@@ -68,7 +70,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
       ElMessage.error('无法读取服务器北京时间，请稍后重试');
       return;
     }
-    Object.assign(purchaseForm, {
+    purchaseFormDraft.open(entry.code, {
       code: entry.code,
       expectedUpdatedAt: entry.updatedAt,
       nameCn: entry.nameCn,
@@ -89,6 +91,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
 
   async function savePurchaseQuote() {
     purchaseSaving.value = true;
+    const completeSave = purchaseFormDraft.beginSave();
     try {
       await idBusinessV2ExchangeRatesApi.updatePurchaseQuote(purchaseForm.code, {
         expectedUpdatedAt: purchaseForm.expectedUpdatedAt,
@@ -111,6 +114,7 @@ export function usePurchaseQuoteEditor(options: { refresh: () => Promise<unknown
           ? purchaseForm.marketRateSourceReference.trim() || null
           : null
       });
+      completeSave();
       purchaseDrawerVisible.value = false;
       ElMessage.success(
         purchaseForm.overrideMarketRate

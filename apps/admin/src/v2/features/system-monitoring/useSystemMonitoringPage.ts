@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
@@ -14,7 +15,10 @@ import {
 import type { V2SystemMonitoringResponse } from './contracts';
 
 export function useSystemMonitoringPage() {
-  const activeSection = ref<'health' | 'operations' | 'gaps'>('health');
+  const activeSection = useV2SessionDraft(
+    'system-monitoring/useSystemMonitoringPage:activeSection',
+    () => ref<'health' | 'operations' | 'gaps'>('health')
+  );
   const systemQuery = useV2ModuleQuery<V2SystemMonitoringResponse>({
     moduleKey: 'system-monitoring',
     scope: 'dashboard',

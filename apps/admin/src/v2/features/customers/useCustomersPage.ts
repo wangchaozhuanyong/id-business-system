@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
@@ -78,19 +79,22 @@ export function useCustomersPage() {
   const revealing = ref(false);
   const formRef = ref<FormInstance>();
 
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    sourceOptionId: '',
-    tagOptionId: '',
-    serviceOptionId: '',
-    recordStatus: '' as V2RecordStatus | '',
-    sortBy: 'updatedAt' as 'name' | 'wechat' | 'recordStatus' | 'createdAt' | 'updatedAt',
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('customers-filters', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      sourceOptionId: '',
+      tagOptionId: '',
+      serviceOptionId: '',
+      recordStatus: '' as V2RecordStatus | '',
+      sortBy: 'updatedAt' as 'name' | 'wechat' | 'recordStatus' | 'createdAt' | 'updatedAt',
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
 
-  const form = reactive<CustomerFormState>(emptyForm());
+  const editorDraft = useV2FormDraft('customers-editor', emptyForm);
+  const { form } = editorDraft;
   const revealForm = reactive({
     reason: '',
     value: ''
@@ -274,28 +278,32 @@ export function useCustomersPage() {
 
   function openCreate() {
     editingItem.value = null;
-    Object.assign(form, emptyForm());
+    editorDraft.open('create');
     drawerVisible.value = true;
   }
 
   function openEdit(item: V2Customer) {
     if (customersQuery.isParameterTransition.value) return;
     editingItem.value = item;
-    Object.assign(form, {
-      name: item.name,
-      phone: '',
-      clearPhone: false,
-      wechat: '',
-      clearWechat: false,
-      qq: '',
-      clearQq: false,
-      whatsapp: '',
-      clearWhatsapp: false,
-      sourceOptionId: item.sourceOptionId ?? '',
-      tagOptionIds: [...item.tagOptionIds],
-      active: item.recordStatus === 'active',
-      remark: item.remark ?? ''
-    });
+    editorDraft.open(
+      item.id,
+      {
+        name: item.name,
+        phone: '',
+        clearPhone: false,
+        wechat: '',
+        clearWechat: false,
+        qq: '',
+        clearQq: false,
+        whatsapp: '',
+        clearWhatsapp: false,
+        sourceOptionId: item.sourceOptionId ?? '',
+        tagOptionIds: [...item.tagOptionIds],
+        active: item.recordStatus === 'active',
+        remark: item.remark ?? ''
+      },
+      item.updatedAt
+    );
     drawerVisible.value = true;
   }
 
@@ -305,17 +313,19 @@ export function useCustomersPage() {
     const payload = createCustomerPayload(form, editingItem.value);
 
     saving.value = true;
+    const completeSave = editorDraft.beginSave();
     try {
       if (editingItem.value) {
         await idBusinessV2CustomersApi.update(editingItem.value.id, {
           ...payload,
-          expectedUpdatedAt: editingItem.value.updatedAt
+          expectedUpdatedAt: editorDraft.version.value ?? editingItem.value.updatedAt
         });
         ElMessage.success('客户资料已更新');
       } else {
         await idBusinessV2CustomersApi.create(payload);
         ElMessage.success('客户资料已新增');
       }
+      completeSave();
       drawerVisible.value = false;
       await loadCustomers();
     } catch (error) {

@@ -2,8 +2,18 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
-
-const REPORT_ROW_LIMIT = 10_000;
+import {
+  GOOGLE_SHEETS_CHANGE_DELAY_MS,
+  GOOGLE_SHEETS_SOURCE_SCOPES
+} from '../id-business-v2-google-sheets-sync-policy';
+import type { GoogleSheetsReportRetention } from '../id-business-v2-google-sheets-retention';
+import { loadGoogleSheetsReportSource } from './id-business-v2-google-sheets-report-source';
+export type {
+  IdBusinessV2GoogleSheetsOrderRow,
+  IdBusinessV2GoogleSheetsGiftCardRow,
+  IdBusinessV2GoogleSheetsRenewalRow,
+  IdBusinessV2GoogleSheetsFinanceRow
+} from './id-business-v2-google-sheets-detail.select';
 
 type GoogleSheetsSyncPersistenceClient = Pick<V2CommandTransaction, 'idBusinessV2GoogleSheetsSync'>;
 
@@ -13,85 +23,6 @@ export interface GoogleSheetsRunGuard {
   clientSecretEncrypted?: string;
   refreshTokenEncrypted?: string;
 }
-
-const ORDER_REPORT_SELECT = {
-  id: true,
-  orderNo: true,
-  customer: { select: { name: true } },
-  serviceOption: { select: { name: true, parent: { select: { name: true } } } },
-  settlementPlatform: { select: { name: true } },
-  receivedAmount: true,
-  receivedOriginalAmount: true,
-  receivedCurrency: true,
-  platformFeeAmount: true,
-  appliedAccountCostAmount: true,
-  appliedBalanceCostAmount: true,
-  refundCostAmount: true,
-  profitAmount: true,
-  status: true,
-  accountSource: true,
-  accountDisposition: true,
-  openedAt: true,
-  dueAt: true,
-  createdAt: true,
-  updatedAt: true
-} satisfies Prisma.IdBusinessV2OrderSelect;
-
-const GIFT_CARD_REPORT_SELECT = {
-  id: true,
-  cardNameSnapshot: true,
-  countryNameSnapshot: true,
-  currencyCodeSnapshot: true,
-  supplierNameSnapshot: true,
-  faceValue: true,
-  exchangeRate: true,
-  costAmount: true,
-  purchaseOriginalAmount: true,
-  purchaseCurrency: true,
-  purchaseFxRateToCny: true,
-  supplierRefundStatus: true,
-  supplierRefundAmountCny: true,
-  status: true,
-  creditedAt: true,
-  updatedAt: true
-} satisfies Prisma.IdBusinessV2GiftCardSelect;
-
-const RENEWAL_REPORT_SELECT = {
-  id: true,
-  order: { select: { orderNo: true } },
-  customer: { select: { name: true } },
-  serviceOption: { select: { name: true, parent: { select: { name: true } } } },
-  openedAt: true,
-  dueAt: true,
-  status: true,
-  autoRenewalStatus: true,
-  renewedFromActivationId: true,
-  updatedAt: true
-} satisfies Prisma.IdBusinessV2ActivationSelect;
-
-const FINANCE_REPORT_SELECT = {
-  businessDate: true,
-  lines: {
-    select: {
-      accountCode: true,
-      amountCny: true,
-      direction: true
-    }
-  }
-} satisfies Prisma.IdBusinessV2FinanceJournalSelect;
-
-export type IdBusinessV2GoogleSheetsOrderRow = Prisma.IdBusinessV2OrderGetPayload<{
-  select: typeof ORDER_REPORT_SELECT;
-}>;
-export type IdBusinessV2GoogleSheetsGiftCardRow = Prisma.IdBusinessV2GiftCardGetPayload<{
-  select: typeof GIFT_CARD_REPORT_SELECT;
-}>;
-export type IdBusinessV2GoogleSheetsRenewalRow = Prisma.IdBusinessV2ActivationGetPayload<{
-  select: typeof RENEWAL_REPORT_SELECT;
-}>;
-export type IdBusinessV2GoogleSheetsFinanceRow = Prisma.IdBusinessV2FinanceJournalGetPayload<{
-  select: typeof FINANCE_REPORT_SELECT;
-}>;
 
 @Injectable()
 export class IdBusinessV2GoogleSheetsSyncRepository {
@@ -168,12 +99,28 @@ export class IdBusinessV2GoogleSheetsSyncRepository {
     );
   }
 
-  async acquireLease(leaseId: string, now: Date, expiresAt: Date) {
+  async acquireLease(leaseId: string, now: Date, expiresAt: Date, force = false) {
     const result = await this.prisma.idBusinessV2GoogleSheetsSync.updateMany({
       where: {
         id: 1,
         enabled: true,
         refreshTokenEncrypted: { not: null },
+        ...(!force
+          ? {
+              AND: [
+                {
+                  OR: [
+                    { lastAttemptAt: null },
+                    {
+                      lastAttemptAt: {
+                        lte: new Date(now.getTime() - GOOGLE_SHEETS_CHANGE_DELAY_MS)
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          : {}),
         OR: [{ runLeaseId: null }, { runLeaseExpiresAt: { lt: now } }]
       },
       data: { lastAttemptAt: now, runLeaseExpiresAt: expiresAt, runLeaseId: leaseId }
@@ -190,36 +137,17 @@ export class IdBusinessV2GoogleSheetsSyncRepository {
 
   async listSourceVersions() {
     const rows = await this.prisma.idBusinessV2ScopeVersion.findMany({
+      where: { scope: { in: [...GOOGLE_SHEETS_SOURCE_SCOPES] } },
       orderBy: { scope: 'asc' },
       select: { scope: true, version: true }
     });
     return Object.fromEntries(rows.map((row) => [row.scope, row.version.toString()]));
   }
 
-  async loadReportSource() {
-    const [orders, giftCards, renewals, financeJournals] = await Promise.all([
-      this.prisma.idBusinessV2Order.findMany({
-        where: { deletedAt: null },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: REPORT_ROW_LIMIT,
-        select: ORDER_REPORT_SELECT
-      }),
-      this.prisma.idBusinessV2GiftCard.findMany({
-        orderBy: [{ creditedAt: 'desc' }, { id: 'desc' }],
-        take: REPORT_ROW_LIMIT,
-        select: GIFT_CARD_REPORT_SELECT
-      }),
-      this.prisma.idBusinessV2Activation.findMany({
-        orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
-        take: REPORT_ROW_LIMIT,
-        select: RENEWAL_REPORT_SELECT
-      }),
-      this.prisma.idBusinessV2FinanceJournal.findMany({
-        orderBy: [{ businessDate: 'desc' }, { id: 'desc' }],
-        take: REPORT_ROW_LIMIT,
-        select: FINANCE_REPORT_SELECT
-      })
-    ]);
-    return { financeJournals, giftCards, orders, renewals };
+  loadReportSource(retention: GoogleSheetsReportRetention = { records: {} }) {
+    return this.prisma.$transaction((tx) => loadGoogleSheetsReportSource(tx, retention), {
+      isolationLevel: 'RepeatableRead',
+      timeout: 60_000
+    });
   }
 }

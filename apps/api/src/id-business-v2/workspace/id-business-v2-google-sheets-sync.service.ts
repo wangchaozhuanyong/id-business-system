@@ -25,15 +25,21 @@ import type {
 import { IdBusinessV2GoogleSheetsSyncRepository } from './persistence/id-business-v2-google-sheets-sync.repository';
 import { IdBusinessV2GoogleSheetsClient } from './providers/id-business-v2-google-sheets.client';
 import { IdBusinessV2GoogleSheetsOAuthClient } from './providers/id-business-v2-google-sheets-oauth.client';
+import {
+  GOOGLE_SHEETS_CHANGE_DELAY_MS,
+  GOOGLE_SHEETS_RECONCILE_MS
+} from './id-business-v2-google-sheets-sync-policy';
 
 const GOOGLE_CLIENT_ID_PATTERN = /^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/;
 const GOOGLE_STATE_TTL_MS = 15 * 60 * 1000;
-const SYNC_INTERVAL_SECONDS = 30;
 const EXCLUDED_DATA = [
   'ID 密码与密保',
-  '邮箱授权信息与应用专用密码',
+  'ChatGPT 密码与 2FA 密钥',
+  '邮箱凭据、应用专用密码、查询码和邮件验证码',
   '完整礼品卡号',
-  '手机号与其他联系方式',
+  '完整银行卡号、有效期和银行卡安全码',
+  '客户完整联系方式（仅同步脱敏值）',
+  '自由填写的备注与凭证附件',
   '访问令牌、刷新令牌和审计敏感内容'
 ];
 
@@ -59,8 +65,10 @@ export class IdBusinessV2GoogleSheetsSyncService {
     const spreadsheetId = record?.spreadsheetIdEncrypted
       ? this.decrypt(record.spreadsheetIdEncrypted, 'Google 表格文件编号')
       : null;
+    const folderId = this.destinationFolderId();
     return {
       authorized: Boolean(record?.refreshTokenEncrypted),
+      automaticTriggerDelaySeconds: GOOGLE_SHEETS_CHANGE_DELAY_MS / 1000,
       callbackUrl: this.callbackUrl(),
       clientId: record?.googleOAuthClientId ?? null,
       configured: Boolean(record?.googleOAuthClientId && record.clientSecretEncrypted),
@@ -71,7 +79,10 @@ export class IdBusinessV2GoogleSheetsSyncService {
       lastSucceededAt: record?.lastSucceededAt?.toISOString() ?? null,
       reportNames: [...V2_GOOGLE_SHEETS_REPORT_NAMES],
       spreadsheetUrl: spreadsheetId ? this.googleSheets.spreadsheetUrl(spreadsheetId) : null,
-      syncIntervalSeconds: SYNC_INTERVAL_SECONDS,
+      syncIntervalSeconds: GOOGLE_SHEETS_RECONCILE_MS / 1000,
+      targetFolderUrl: folderId
+        ? `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`
+        : null,
       syncing: Boolean(record?.runLeaseExpiresAt && record.runLeaseExpiresAt.getTime() > Date.now())
     };
   }
@@ -336,6 +347,15 @@ export class IdBusinessV2GoogleSheetsSyncService {
 
   decryptSecret(value: string, field: string) {
     return this.decrypt(value, field);
+  }
+
+  destinationFolderId() {
+    const value = this.config.get<string>('GOOGLE_DRIVE_SYNC_FOLDER_ID')?.trim();
+    if (!value) return null;
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(value)) {
+      throw new ServiceUnavailableException('Google 网盘目标文件夹编号配置不正确');
+    }
+    return value;
   }
 
   private callbackUrl() {

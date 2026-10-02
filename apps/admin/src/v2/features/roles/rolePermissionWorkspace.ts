@@ -47,3 +47,21 @@ export function getInitialExpandedPermissionModules(
   if (selectedModules[0]) return [selectedModules[0]];
   return groups[0] ? [groups[0].module] : [];
 }
+
+export const PERMISSION_MODULE_LABELS: Record<string, string> = {
+  'apple.account': 'ID 资料',
+  'apple.secret': 'ID 敏感资料',
+  'apple.balance': '余额与加卡',
+  'apple.topup_supplier_fund': '供应商资金',
+  'apple.gift_card': '礼品卡',
+  'apple.order': '订单',
+  'apple.activation': '开通记录',
+  'apple.renewal_task': '续费',
+  'apple.exchange_rate': '汇率',
+  customer: '客户',
+  'data.dictionary': '业务选项',
+  audit_log: '审计日志',
+  'id_business_v2.renewal_warning': '续费预警',
+  'data.analytics': '经营分析',
+  finance: '财务'
+};

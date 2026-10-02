@@ -1,6 +1,33 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 import type { V2OptionSelector } from './contracts';
-import { prepareAccountImport } from './account-import';
+import { prepareAccountImport, useAccountImportDraft } from './account-import';
+
+afterEach(clearV2SessionDrafts);
+
+describe('account CSV import session draft', () => {
+  it('restores the selected file metadata and review results when returning to the page', () => {
+    const draft = useAccountImportDraft();
+    draft.importFilename.value = 'review.csv';
+    draft.importSourceRowCount.value = 3;
+    draft.importFailures.value = [{ rowNumber: 3, reason: '国家未配置' }];
+    draft.importCompleted.value = true;
+    draft.importSuccessCount.value = 2;
+    const restored = useAccountImportDraft();
+    expect(restored.importFilename.value).toBe('review.csv');
+    expect(restored.importSourceRowCount.value).toBe(3);
+    expect(restored.importFailures.value).toEqual([{ rowNumber: 3, reason: '国家未配置' }]);
+    expect(restored.importCompleted.value).toBe(true);
+    expect(restored.importSuccessCount.value).toBe(2);
+  });
+
+  it('drops import metadata with the shared session boundary', () => {
+    useAccountImportDraft().importFilename.value = 'review.csv';
+    clearV2SessionDrafts();
+    expect(useAccountImportDraft().importFilename.value).toBe('');
+    expect(useAccountImportDraft().importRows.value).toEqual([]);
+  });
+});
 
 const country = {
   id: 'country-us',

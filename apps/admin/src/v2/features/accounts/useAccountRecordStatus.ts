@@ -1,4 +1,5 @@
-import { computed, ref, type Ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref, type Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { idBusinessV2AccountsApi } from './api';
@@ -14,7 +15,8 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
   const recordStatusTarget = ref<V2Account | null>(null);
   const recordStatusDialogVisible = ref(false);
   const recordStatusDialogMode = ref<'change' | 'view'>('change');
-  const recordStatusReason = ref('');
+  const recordStatusReasonDraft = useV2FormDraft('account-status-reason', () => ({ value: '' }));
+  const recordStatusReason = toRef(recordStatusReasonDraft.form, 'value');
   const recordStatusSubmitting = ref(false);
   const targetRecordStatus = computed(() =>
     recordStatusTarget.value?.recordStatus === 'active' ? 'disabled' : 'active'
@@ -30,7 +32,7 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
     }
     recordStatusTarget.value = item;
     recordStatusDialogMode.value = 'change';
-    recordStatusReason.value = '';
+    recordStatusReasonDraft.open(item.id, {}, item.updatedAt);
     recordStatusDialogVisible.value = true;
   }
 
@@ -38,7 +40,7 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
     if (item.recordStatus !== 'disabled') return;
     recordStatusTarget.value = item;
     recordStatusDialogMode.value = 'view';
-    recordStatusReason.value = '';
+    recordStatusReasonDraft.open(`view:${item.id}`);
     recordStatusDialogVisible.value = true;
   }
 
@@ -53,13 +55,15 @@ export function useAccountRecordStatus(options: AccountRecordStatusOptions) {
       return;
     }
     recordStatusSubmitting.value = true;
+    const completeRecordStatusReasonSave = recordStatusReasonDraft.beginSave();
     try {
       await idBusinessV2AccountsApi.changeRecordStatus(target.id, {
-        expectedUpdatedAt: target.updatedAt,
+        expectedUpdatedAt: recordStatusReasonDraft.version.value ?? target.updatedAt,
         recordStatus: targetRecordStatus.value,
         reason: recordStatusReason.value.trim()
       });
       ElMessage.success(targetRecordStatus.value === 'disabled' ? 'ID 已停用' : 'ID 已恢复启用');
+      completeRecordStatusReasonSave();
       recordStatusDialogVisible.value = false;
       recordStatusTarget.value = null;
       await options.refreshAccounts();

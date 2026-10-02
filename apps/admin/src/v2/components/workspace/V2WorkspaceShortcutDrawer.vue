@@ -198,7 +198,7 @@ const mutationError = ref('');
 const {
   form,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft<ShortcutForm>('workspace-shortcuts-editor', () => ({ name: '', url: '' }));
 const rules: FormRules<ShortcutForm> = {
   name: [
@@ -246,8 +246,8 @@ function startEdit(item: V2WorkspaceShortcut) {
   mutationError.value = '';
 }
 
-function resetEditor() {
-  completeDraft();
+function resetEditor(completeDraft = beginDraftSave()) {
+  if (!completeDraft()) return;
   editorMode.value = null;
   editingId.value = '';
   Object.assign(form, { name: '', url: '' });
@@ -263,6 +263,7 @@ function cancelEditor() {
 async function submitEditor() {
   if (!props.writesAllowed || saving.value || !(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   mutationError.value = '';
   try {
     const input = { name: form.name.trim(), url: form.url.trim() };
@@ -273,7 +274,7 @@ async function submitEditor() {
       await idBusinessV2WorkspaceApi.create(input);
       ElMessage.success('快捷网址已添加');
     }
-    resetEditor();
+    resetEditor(completeDraft);
     await props.refresh();
   } catch (error) {
     mutationError.value = getApiErrorMessage(error);

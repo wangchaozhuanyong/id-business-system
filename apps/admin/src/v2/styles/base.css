@@ -9,6 +9,7 @@
   --v3-font-sans:
     'PingFang SC', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei',
     -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --v3-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --v3-font-size-caption: 11px;
   --v3-font-size-small: 12px;
   --v3-font-size-body: 13px;
@@ -152,6 +153,70 @@
   --v2-danger-solid: var(--v3-danger-solid);
   --v2-on-danger-solid: var(--v3-on-danger-solid);
   --v2-focus: var(--v3-focus-ring);
+  --v2-sidebar: var(--v3-sidebar);
+  --v2-sidebar-surface: var(--v3-sidebar-surface);
+  --v2-sidebar-text: var(--v3-sidebar-text);
+  --v2-sidebar-muted: var(--v3-sidebar-muted);
+  --v2-sidebar-border: var(--v3-sidebar-border);
+  --v2-topbar-bg: var(--v3-topbar-bg);
+  --v2-topbar-text: var(--v3-topbar-text);
+  --v2-topbar-title: var(--v3-topbar-title);
+  --v2-topbar-link-text: var(--v3-topbar-link-text);
+  --v2-topbar-text-soft: var(--v3-topbar-text-soft);
+  --v2-topbar-border: var(--v3-topbar-border);
+  --v2-topbar-control-bg: var(--v3-topbar-control-bg);
+  --v2-topbar-control-active: var(--v3-topbar-control-active);
+  --v2-topbar-control-border: var(--v3-topbar-control-border);
+  --v2-topbar-control-border-active: var(--v3-topbar-control-border-active);
+  --v2-topbar-subtle-border: var(--v3-topbar-subtle-border);
+  --v2-topbar-kbd-border: var(--v3-topbar-kbd-border);
+  --v2-topbar-control-hover-border: var(--v3-topbar-control-hover-border);
+  --v2-topbar-segment-bg: var(--v3-topbar-segment-bg);
+  --v2-topbar-selected-bg: var(--v3-topbar-selected-bg);
+  --v2-topbar-hover-bg: var(--v3-topbar-hover-bg);
+  --v2-topbar-profile-hover-bg: var(--v3-topbar-profile-hover-bg);
+  --v2-topbar-icon: var(--v3-topbar-icon);
+  --v2-topbar-avatar-border: var(--v3-topbar-avatar-border);
+  --v2-topbar-danger: var(--v3-topbar-danger);
+  --v2-overview-bg: var(--v3-overview-bg);
+  --v2-overview-surface: var(--v3-overview-surface);
+  --v2-overview-text: var(--v3-overview-text);
+  --v2-overview-text-soft: var(--v3-overview-text-soft);
+  --v2-overview-accent: var(--v3-overview-accent);
+  --v2-overview-border: var(--v3-overview-border);
+  --v2-overview-divider: var(--v3-overview-divider);
+  --v2-overview-strong-border: var(--v3-overview-strong-border);
+  --v2-overview-avatar-border: var(--v3-overview-avatar-border);
+  --v2-overview-soft-bg: var(--v3-overview-soft-bg);
+  --v2-overview-control-border: var(--v3-overview-control-border);
+  --v2-overview-control-hover: var(--v3-overview-control-hover);
+  --v2-overview-control-hover-border: var(--v3-overview-control-hover-border);
+  --v2-overview-control-active: var(--v3-overview-control-active);
+  --v2-overview-control-active-border: var(--v3-overview-control-active-border);
+  --v2-overview-shadow: var(--v3-overview-shadow);
+  --v2-overview-emphasis-shadow: var(--v3-overview-emphasis-shadow);
+
+  /* Compatibility names share the canonical theme, including teleported content. */
+  --v2-canvas: var(--v3-bg);
+  --v2-accent-border: var(--v3-primary-border-soft);
+  --v2-surface-subtle: var(--v3-surface-2);
+  --v2-color-surface-subtle: var(--v3-surface-2);
+  --v2-primary: var(--v3-primary);
+  --v2-muted: var(--v3-muted);
+  --v2-text-primary: var(--v3-text);
+  --v2-text-strong: var(--v3-text);
+  --v2-text-secondary: var(--v3-text-soft);
+  --v2-text-muted: var(--v3-text-soft);
+  --v2-color-text-muted: var(--v3-text-soft);
+  --v2-color-success-text: var(--v3-success);
+  --v2-color-success-soft: var(--v3-success-soft);
+  --v2-color-success-border: var(--v3-success-border-soft);
+  --v2-color-danger-text: var(--v3-danger);
+  --v2-color-danger-soft: var(--v3-danger-soft);
+  --v2-color-warning-text: var(--v3-warning);
+  --v2-color-warning-soft: var(--v3-warning-soft);
+  --v3-radius-control: var(--v3-radius);
+  --v3-shadow-lg: var(--v3-shadow-md);
 }
 
 html[data-v2-theme='dark'] {
@@ -296,7 +361,7 @@ html[data-v2-theme] {
   --el-box-shadow-dark: var(--v3-shadow-md);
   --el-mask-color: var(--v3-overlay);
   --el-mask-color-extra-light: transparent;
-  --el-border-radius-base: var(--v3-radius);
+  --el-border-radius-base: var(--v3-radius-control);
   --el-component-size: 36px;
   --el-component-size-small: 36px;
   --el-component-size-large: 40px;
@@ -483,6 +548,63 @@ select {
   font-family: var(--v3-font-sans);
 }
 
+/* Shared component skin applies to pages, standalone forms and Teleport alike. */
+html[data-v2-theme]
+  :is(
+    .el-form--large,
+    .el-form-item--large,
+    .el-input--large,
+    .el-select--large,
+    .el-input-number--large,
+    .el-button--large
+  ) {
+  --el-component-size: var(--el-component-size-large);
+}
+
+html[data-v2-theme] .el-input__wrapper,
+html[data-v2-theme] .el-select__wrapper,
+html[data-v2-theme] .el-date-editor.el-input__wrapper,
+html[data-v2-theme] .el-textarea__inner {
+  min-height: var(--el-component-size);
+  border-radius: var(--v3-radius-control);
+  font-size: var(--v3-font-size-body);
+}
+
+/* An embedded shared button already fills the control height. */
+html[data-v2-theme] .el-input__wrapper:has(.app-button) {
+  padding-block: 0;
+}
+
+html[data-v2-theme] .el-form-item__content {
+  min-height: var(--el-component-size);
+}
+
+html[data-v2-theme] .el-textarea__inner:focus,
+html[data-v2-theme] .el-input__wrapper.is-focus,
+html[data-v2-theme] .el-select__wrapper.is-focused,
+html[data-v2-theme] .el-date-editor.el-input__wrapper.is-active {
+  box-shadow:
+    inset 0 0 0 1px var(--v2-accent),
+    var(--v2-focus);
+}
+
+html[data-v2-theme] .el-table th.el-table__cell {
+  height: 42px;
+  padding-block: 7px;
+  color: var(--v2-text-soft);
+  font-size: var(--v3-font-size-small);
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+html[data-v2-theme] .el-table td.el-table__cell {
+  height: 50px;
+  padding-block: 6px;
+  border-bottom-color: var(--v2-border-soft);
+  font-size: var(--v3-font-size-body);
+  font-weight: var(--v3-font-weight-regular);
+  vertical-align: middle;
+}
+
 html[data-v2-theme] .el-form-item__label {
   display: flex;
   height: auto;
@@ -490,28 +612,131 @@ html[data-v2-theme] .el-form-item__label {
   align-self: flex-start;
   align-items: center;
   padding-block: 0;
-  color: var(--v3-text);
+  color: var(--v2-text);
   font-size: var(--v3-font-size-label);
   font-weight: var(--v3-font-weight-semibold);
   line-height: 20px;
 }
 
-.el-input__inner,
-.el-textarea__inner,
-.el-select__selected-item,
-.el-input-number .el-input__inner {
-  font-family: var(--v3-font-sans);
+html[data-v2-theme] .el-input__inner,
+html[data-v2-theme] .el-textarea__inner,
+html[data-v2-theme] .el-select__selected-item,
+html[data-v2-theme] .el-input-number .el-input__inner,
+html[data-v2-theme] .el-popper {
   font-size: var(--v3-font-size-body);
   font-weight: var(--v3-font-weight-regular);
   letter-spacing: 0;
 }
 
-.el-button,
-.el-tag,
-.el-pagination {
+html[data-v2-theme] .el-button {
+  font-size: var(--v3-font-size-body);
+  font-weight: var(--v3-font-weight-semibold);
+  letter-spacing: 0;
+}
+
+html[data-v2-theme] .el-table {
+  --el-table-border-color: var(--v2-border-soft);
+  --el-table-header-bg-color: var(--v2-surface-muted);
+  --el-table-row-hover-bg-color: var(--v2-surface-hover);
+  font-family: var(--v3-font-sans);
+  font-size: var(--v3-font-size-body);
+  font-weight: var(--v3-font-weight-regular);
+}
+
+html[data-v2-theme] .el-tabs__item {
   font-size: var(--v3-font-size-body);
   font-weight: var(--v3-font-weight-medium);
-  letter-spacing: 0;
+}
+
+html[data-v2-theme] .el-tabs__item.is-active {
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+html[data-v2-theme] .el-tag {
+  border-radius: 4px;
+  font-size: var(--v3-font-size-small);
+  font-weight: var(--v3-font-weight-medium);
+}
+
+html[data-v2-theme] :is(.v2-table-column--status .el-tag, .el-tag.v2-status-tag) {
+  gap: 5px;
+  font-weight: var(--v3-font-weight-semibold);
+}
+
+html[data-v2-theme] :is(.v2-table-column--status .el-tag, .el-tag.v2-status-tag)::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+html[data-v2-theme]
+  :is(.v2-table-column--status .el-tag.el-tag--primary, .el-tag.v2-status-tag.el-tag--primary) {
+  --el-tag-bg-color: var(--v3-primary-soft);
+  --el-tag-border-color: var(--v3-primary-border-soft);
+  --el-tag-text-color: var(--v3-primary-2);
+}
+
+html[data-v2-theme]
+  :is(.v2-table-column--status .el-tag.el-tag--success, .el-tag.v2-status-tag.el-tag--success) {
+  --el-tag-bg-color: var(--v3-success-soft);
+  --el-tag-border-color: var(--v3-success-border-soft);
+  --el-tag-text-color: var(--v3-success);
+}
+
+html[data-v2-theme]
+  :is(.v2-table-column--status .el-tag.el-tag--warning, .el-tag.v2-status-tag.el-tag--warning) {
+  --el-tag-bg-color: var(--v3-warning-soft);
+  --el-tag-border-color: var(--v3-warning-border-soft);
+  --el-tag-text-color: var(--v3-warning);
+}
+
+html[data-v2-theme]
+  :is(.v2-table-column--status .el-tag.el-tag--danger, .el-tag.v2-status-tag.el-tag--danger) {
+  --el-tag-bg-color: var(--v3-danger-soft);
+  --el-tag-border-color: var(--v3-danger-border-soft);
+  --el-tag-text-color: var(--v3-danger);
+}
+
+html[data-v2-theme]
+  :is(.v2-table-column--status .el-tag.el-tag--info, .el-tag.v2-status-tag.el-tag--info) {
+  --el-tag-bg-color: var(--v3-info-soft);
+  --el-tag-border-color: var(--v3-info-border-soft);
+  --el-tag-text-color: var(--v3-info);
+}
+
+html[data-v2-theme] .el-pagination button,
+html[data-v2-theme] .el-pagination .el-pager li {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+html[data-v2-theme] .el-pagination.is-background .el-pager li.is-active {
+  background: var(--v2-accent-solid);
+}
+
+@media (max-width: 900px) {
+  html[data-v2-theme] {
+    --el-component-size: 44px;
+    --el-component-size-small: 44px;
+    --el-component-size-large: 44px;
+  }
+
+  html[data-v2-theme] .app-button.el-button,
+  html[data-v2-theme] .el-input-number,
+  html[data-v2-theme] .el-switch,
+  html[data-v2-theme] .el-tabs__item {
+    min-height: 44px;
+  }
+
+  html[data-v2-theme] .app-button--icon.el-button,
+  html[data-v2-theme] .el-pagination button,
+  html[data-v2-theme] .el-pagination .el-pager li {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 a {
@@ -1116,9 +1341,9 @@ p {
   --el-button-disabled-border-color: var(--v3-disabled-border);
   --el-button-outline-color: var(--v3-focus-color);
   --el-mask-color-extra-light: transparent;
-  min-height: 36px;
+  min-height: var(--el-component-size);
   padding: 0 12px;
-  border-radius: var(--v3-radius);
+  border-radius: var(--v3-radius-control);
   font-size: 13px;
   transition:
     border-color 180ms var(--v3-ease),

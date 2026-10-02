@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
+import { computed, inject, onBeforeUnmount, provide, ref, watch } from 'vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import V2PageState from '@/v2/components/V2PageState.vue';
 import {
@@ -145,12 +145,18 @@ const effectivePhase = computed<V2QueryPhase>(() =>
         error: props.error
       })
 );
+const parentPreviousData = inject(V2_ASYNC_REGION_PREVIOUS_DATA, undefined);
 const isPreviousData = computed(
-  () => props.previousData || effectivePhase.value === 'transitioning'
+  () =>
+    parentPreviousData?.value === true ||
+    props.previousData ||
+    effectivePhase.value === 'transitioning'
 );
 provide(V2_ASYNC_REGION_PREVIOUS_DATA, isPreviousData);
-const isBusy = computed(() =>
-  ['idle', 'initial-loading', 'refreshing', 'transitioning'].includes(effectivePhase.value)
+const isBusy = computed(
+  () =>
+    !props.forbidden &&
+    ['idle', 'initial-loading', 'refreshing', 'transitioning'].includes(effectivePhase.value)
 );
 const regionState = computed(() =>
   resolveV2AsyncRegionState({

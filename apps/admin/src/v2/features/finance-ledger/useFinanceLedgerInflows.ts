@@ -1,4 +1,5 @@
-import { computed, reactive, ref, shallowRef, type ComputedRef } from 'vue';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref, shallowRef, watch, type ComputedRef } from 'vue';
 import type {
   V2FinanceAccount,
   V2FinanceInflow,
@@ -19,12 +20,26 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
   const inflowDrawerVisible = ref(false);
   const inflowSubmitting = ref(false);
   const editingInflow = ref<V2FinanceInflow | null>(null);
-  const inflowCorrectionReason = ref('');
+  const inflowCorrectionReasonDraft = useV2FormDraft('finance-inflow-correction-reason', () => ({
+    value: ''
+  }));
+  const inflowCorrectionReason = toRef(inflowCorrectionReasonDraft.form, 'value');
   const inflowReceiptFile = shallowRef<File | null>(null);
+  const receiptDrafts = useV2SessionDraft('finance-inflow-receipts', () => new Map<string, File>());
+  let receiptKey: string | undefined;
+  watch(
+    inflowReceiptFile,
+    (file) => {
+      if (!receiptKey) return;
+      if (file) receiptDrafts.set(receiptKey, file);
+      else receiptDrafts.delete(receiptKey);
+    },
+    { flush: 'sync' }
+  );
   const inflowReceiptInputKey = ref(0);
   const inflowInitialSnapshot = ref('');
   const receiptDownloadingId = ref('');
-  const inflowForm = reactive({
+  const inflowFormDraft = useV2FormDraft('finance-inflow-editor', () => ({
     nature: 'operating_income' as V2FinanceInflowNature,
     categoryOptionId: '',
     financeAccountId: '',
@@ -36,7 +51,8 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
     externalReference: '',
     receiptAttachmentId: '',
     remark: ''
-  });
+  }));
+  const inflowForm = inflowFormDraft.form;
   const selectedInflowAccount = computed(() =>
     input.accounts.value.find((item) => item.id === inflowForm.financeAccountId)
   );
@@ -51,15 +67,16 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
       return;
     }
     editingInflow.value = inflow ?? null;
-    inflowCorrectionReason.value = '';
-    inflowReceiptFile.value = null;
+    inflowCorrectionReasonDraft.open(inflow?.id ?? 'create');
+    receiptKey = inflow?.id ?? 'create';
+    inflowReceiptFile.value = receiptDrafts.get(receiptKey) ?? null;
     inflowReceiptInputKey.value += 1;
-    Object.assign(inflowForm, {
+    inflowFormDraft.open(inflow?.id ?? 'create', {
       nature: inflow?.nature ?? 'operating_income',
       categoryOptionId: inflow?.categoryOptionId ?? '',
       financeAccountId: inflow?.financeAccountId ?? '',
       amount: inflow?.amountOriginal ?? '',
-      occurredAt: inflow?.occurredAt ? toV2DateTimeInput(inflow.occurredAt) : businessNow,
+      occurredAt: inflow?.occurredAt ? toV2DateTimeInput(inflow.occurredAt) : (businessNow ?? ''),
       fxRateToCny: '',
       manualRateReason: '',
       payer: inflow?.payer ?? '',
@@ -117,6 +134,10 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
       return showWarning('填写人工汇率时必须说明原因');
     }
     inflowSubmitting.value = true;
+    const completeInflowCorrectionReasonSave = inflowCorrectionReasonDraft.beginSave();
+    const completeSave = inflowFormDraft.beginSave();
+    const submittedReceiptKey = receiptKey;
+    const submittedReceipt = inflowReceiptFile.value;
     try {
       const payload = {
         nature: inflowForm.nature,
@@ -146,8 +167,16 @@ export function useFinanceLedgerInflows(input: FinanceLedgerInflowsInput) {
       } else {
         await idBusinessV2FinanceApi.createInflow(payload, inflowReceiptFile.value);
       }
+      completeSave();
+      completeInflowCorrectionReasonSave();
       inflowDrawerVisible.value = false;
-      inflowReceiptFile.value = null;
+      if (submittedReceiptKey && receiptDrafts.get(submittedReceiptKey) === submittedReceipt) {
+        receiptDrafts.delete(submittedReceiptKey);
+        if (receiptKey === submittedReceiptKey && inflowReceiptFile.value === submittedReceipt) {
+          receiptKey = undefined;
+          inflowReceiptFile.value = null;
+        }
+      }
       ElMessage.success(editingInflow.value ? '原流水已冲销，正确收入已重新入账' : '收入已入账');
     } catch (cause) {
       ElMessage.error(getApiErrorMessage(cause));

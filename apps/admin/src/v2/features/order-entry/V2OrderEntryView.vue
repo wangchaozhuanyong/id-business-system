@@ -26,6 +26,7 @@
         <el-form
           ref="formRef"
           class="v2-horizontal-form v2-order-entry-form"
+          size="large"
           :model="form"
           :rules="rules"
           label-position="left"
@@ -395,7 +396,6 @@
     </V2AsyncRegion>
   </section>
 </template>
-
 <script setup lang="ts">
 import { ref } from 'vue';
 import { Plus } from '@element-plus/icons-vue';

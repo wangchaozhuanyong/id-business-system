@@ -90,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { reactive, ref } from 'vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2AfterSalesReport from './components/V2AfterSalesReport.vue';
@@ -108,5 +109,7 @@ import '@/v2/styles/records.css';
 import '@/v2/styles/finance.css';
 
 const page = reactive(useDataAnalyticsPage());
-const activeAnalysisSection = ref<AnalyticsSectionKey>('profit');
+const activeAnalysisSection = useV2SessionDraft('analytics-section', () =>
+  ref<AnalyticsSectionKey>('profit')
+);
 </script>

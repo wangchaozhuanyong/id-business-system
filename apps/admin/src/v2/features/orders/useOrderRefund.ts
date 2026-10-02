@@ -30,7 +30,10 @@ export function useOrderRefund(input: UseOrderRefundInput) {
     visible.value = true;
   }
 
-  async function refund(payload: Omit<RefundV2OrderInput, 'idempotencyKey'>) {
+  async function refund(
+    payload: Omit<RefundV2OrderInput, 'idempotencyKey'>,
+    completeSave?: () => void
+  ) {
     const target = order.value;
     if (!target || !input.canUpdateOrders.value) return;
 
@@ -62,6 +65,7 @@ export function useOrderRefund(input: UseOrderRefundInput) {
         idempotencyKey: getOrCreateOrderActionKey(input.actionKeys, 'refund', target.id)
       });
       input.actionKeys.delete(keyName);
+      completeSave?.();
       visible.value = false;
       order.value = result.order;
       if (input.detail.value?.id === target.id) input.detail.value = result.order;

@@ -1,4 +1,5 @@
-import { computed, reactive, ref, watch } from 'vue';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -26,31 +27,38 @@ export function usePurchaseRateAutomation(options: {
   const refreshing = ref(false);
   const settingsVisible = ref(false);
   const settingsSaving = ref(false);
-  const settingsForm = reactive({
+  const settingsFormDraft = useV2FormDraft('purchase-automation-settings', () => ({
     autoEnabled: true,
     staleMinutes: 1800,
     abnormalChangePercent: '10',
     expectedUpdatedAt: ''
-  });
+  }));
+  const settingsForm = settingsFormDraft.form;
   const bulkVisible = ref(false);
   const bulkSaving = ref(false);
-  const bulkForm = reactive({
+  const bulkFormDraft = useV2FormDraft('purchase-automation-bulk', () => ({
     currencyCodes: [] as string[],
     purchaseRatioPercent: '',
     expectedUpdatedAtByCode: {} as Record<string, string>
-  });
+  }));
+  const bulkForm = bulkFormDraft.form;
   const historyVisible = ref(false);
-  const runPage = ref(1);
-  const runPageSize = ref(20);
-  const historyPage = ref(1);
-  const historyPageSize = ref(20);
-  const historyCurrencyCode = ref('');
+  const runPage = useV2SessionDraft('purchase-automation:runPage', () => ref(1));
+  const runPageSize = useV2SessionDraft('purchase-automation:runPageSize', () => ref(20));
+  const historyPage = useV2SessionDraft('purchase-automation:historyPage', () => ref(1));
+  const historyPageSize = useV2SessionDraft('purchase-automation:historyPageSize', () => ref(20));
+  const historyCurrencyCode = useV2SessionDraft('purchase-automation:historyCurrencyCode', () =>
+    ref('')
+  );
   const detailVisible = ref(false);
   const detailRunId = ref('');
   const reviewSubmitting = ref(false);
-  const reviewRemark = ref('');
+  const reviewRemarkDraft = useV2FormDraft('purchase-automation-review', () => ({ value: '' }));
+  const reviewRemark = toRef(reviewRemarkDraft.form, 'value');
   const textVisible = ref(false);
-  const textFormat = ref<'wechat' | 'monospace' | 'plain'>('wechat');
+  const textFormat = useV2SessionDraft('purchase-automation:textFormat', () =>
+    ref<'wechat' | 'monospace' | 'plain'>('wechat')
+  );
 
   const automationQuery = useV2ModuleQuery<PurchaseRateAutomationSnapshot>({
     moduleKey: 'exchange-rates',
@@ -136,7 +144,7 @@ export function usePurchaseRateAutomation(options: {
   function openSettings() {
     const settings = runtime.value?.settings;
     if (settings) {
-      Object.assign(settingsForm, {
+      settingsFormDraft.open('current', {
         autoEnabled: settings.autoEnabled,
         staleMinutes: settings.staleMinutes,
         abnormalChangePercent: settings.abnormalChangePercent,
@@ -161,6 +169,7 @@ export function usePurchaseRateAutomation(options: {
       return;
     }
     settingsSaving.value = true;
+    const completeSave = settingsFormDraft.beginSave();
     try {
       const expectedUpdatedAt = settingsForm.expectedUpdatedAt;
       if (!expectedUpdatedAt) {
@@ -173,6 +182,7 @@ export function usePurchaseRateAutomation(options: {
         staleMinutes: settingsForm.staleMinutes,
         abnormalChangePercent: settingsForm.abnormalChangePercent.trim()
       });
+      completeSave();
       settingsVisible.value = false;
       ElMessage.success(settingsForm.autoEnabled ? '自动采集设置已保存' : '自动采集已关闭');
       await refreshAll();
@@ -203,7 +213,7 @@ export function usePurchaseRateAutomation(options: {
 
   function openBulk() {
     const enabledQuotes = options.quotes().filter((quote) => quote.enabled);
-    Object.assign(bulkForm, {
+    bulkFormDraft.open('current', {
       currencyCodes: enabledQuotes.map((quote) => quote.code),
       purchaseRatioPercent: '',
       expectedUpdatedAtByCode: Object.fromEntries(
@@ -229,6 +239,7 @@ export function usePurchaseRateAutomation(options: {
       return;
     }
     bulkSaving.value = true;
+    const completeSave = bulkFormDraft.beginSave();
     try {
       await idBusinessV2ExchangeRatesApi.bulkUpdatePurchaseQuotes({
         currencyCodes: bulkForm.currencyCodes,
@@ -237,6 +248,7 @@ export function usePurchaseRateAutomation(options: {
         ),
         purchaseRatioPercent: bulkForm.purchaseRatioPercent.trim()
       });
+      completeSave();
       bulkVisible.value = false;
       ElMessage.success(`已批量更新 ${bulkForm.currencyCodes.length} 个币种的收购比例`);
       await refreshAll();
@@ -253,13 +265,14 @@ export function usePurchaseRateAutomation(options: {
 
   function openRun(run: V2PurchaseRateRun) {
     detailRunId.value = run.id;
-    reviewRemark.value = '';
+    reviewRemarkDraft.open(run.id);
     detailVisible.value = true;
   }
 
   async function review(confirm: boolean) {
     if (!detailRunId.value) return;
     reviewSubmitting.value = true;
+    const completeReview = reviewRemarkDraft.beginSave();
     try {
       if (confirm) {
         await idBusinessV2ExchangeRatesApi.confirmPurchaseRateRun(
@@ -274,6 +287,7 @@ export function usePurchaseRateAutomation(options: {
         );
         ElMessage.success('异常报价已驳回，原报价继续有效');
       }
+      completeReview();
       detailVisible.value = false;
       await refreshAll();
     } catch (error) {

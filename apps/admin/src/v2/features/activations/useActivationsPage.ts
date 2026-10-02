@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import type { TagProps } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
@@ -24,21 +25,25 @@ const dueStatusOptions: Array<{ value: V2ActivationDueStatus; label: string }> =
 ];
 
 export function useActivationsPage() {
-  const dueRange = ref<[string, string] | []>([]);
+  const dueRange = useV2SessionDraft('activations/useActivationsPage:dueRange', () =>
+    ref<[string, string] | []>([])
+  );
   const detailVisible = ref(false);
   const detailLoading = ref(false);
   const detailError = ref('');
   const detail = ref<V2Activation | null>(null);
   const detailTarget = ref<V2Activation | null>(null);
   const detailRequest = useV2LatestRequest();
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    dueStatus: '' as V2ActivationDueStatus | '',
-    sortBy: 'openedAt' as NonNullable<V2ActivationListQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('activations/useActivationsPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      dueStatus: '' as V2ActivationDueStatus | '',
+      sortBy: 'openedAt' as NonNullable<V2ActivationListQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
 
   function getActivationListQuery(): V2ActivationListQuery {
     return {

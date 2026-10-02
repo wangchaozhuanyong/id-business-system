@@ -1,4 +1,5 @@
-import { computed, reactive, ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, reactive, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserPermission } from '@/utils/permissions';
@@ -22,7 +23,8 @@ export function useRenewalWarningSettings(options: {
   const warningSettingsLoading = ref(false);
   const warningSettingsSaving = ref(false);
   const warningSettingsError = ref('');
-  const warningDaysInput = ref(3);
+  const warningDaysInputDraft = useV2FormDraft('renewal-warning-settings', () => ({ value: 3 }));
+  const warningDaysInput = toRef(warningDaysInputDraft.form, 'value');
   const warningSettings = reactive<V2RenewalWarningSettings>({
     warningDays: 3,
     defaultWarningDays: 3,
@@ -39,7 +41,7 @@ export function useRenewalWarningSettings(options: {
     try {
       const result = await idBusinessV2RenewalsApi.getWarningSettings();
       Object.assign(warningSettings, result);
-      warningDaysInput.value = result.warningDays;
+      warningDaysInputDraft.open('settings', { value: result.warningDays }, result.updatedAt);
     } catch (error) {
       warningSettingsError.value = getApiErrorMessage(error);
     } finally {
@@ -58,13 +60,17 @@ export function useRenewalWarningSettings(options: {
       return;
     }
     warningSettingsSaving.value = true;
+    const completeSave = warningDaysInputDraft.beginSave();
     warningSettingsError.value = '';
     try {
       const result = await idBusinessV2RenewalsApi.updateWarningSettings(
         warningDaysInput.value,
-        warningSettings.updatedAt
+        warningDaysInputDraft.version.value === undefined
+          ? warningSettings.updatedAt
+          : warningDaysInputDraft.version.value
       );
       Object.assign(warningSettings, result);
+      completeSave();
       await options.onSaved(result);
       window.dispatchEvent(new Event(RENEWAL_WARNING_REFRESH_EVENT));
       warningSettingsVisible.value = false;

@@ -491,10 +491,6 @@ function clearAll() {
   min-width: 0;
 }
 
-.v2-totp-paste-button.app-button.el-button {
-  min-height: 40px;
-}
-
 .v2-totp-batch-input {
   display: grid;
   gap: 6px;

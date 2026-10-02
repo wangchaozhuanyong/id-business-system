@@ -90,7 +90,7 @@ const drawerVisible = ref(false);
 const {
   form,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft('table-column-settings', () => ({ keyword: '', visibleKeys: [] as string[] }));
 const keyword = toRef(form, 'keyword');
 const draftVisibleKeys = toRef(form, 'visibleKeys');
@@ -157,6 +157,7 @@ async function saveSettings() {
     return;
   }
   saving.value = true;
+  const completeDraft = beginDraftSave();
   saveError.value = '';
   const visible = new Set(draftVisibleKeys.value);
   const hiddenColumnKeys = dataColumns.value
@@ -164,8 +165,7 @@ async function saveSettings() {
     .map((column) => column.key);
   try {
     await saveV2TablePreference(userId.value, props.schema.id, hiddenColumnKeys);
-    draftVisibleKeys.value = [...currentVisibleKeys.value];
-    completeDraft();
+    if (completeDraft()) draftVisibleKeys.value = [...currentVisibleKeys.value];
     drawerVisible.value = false;
     ElMessage.success('列显示设置已保存');
   } catch (error) {
@@ -192,13 +192,14 @@ async function resetToDefault() {
   }
 
   saving.value = true;
+  const completeDraft = beginDraftSave();
   saveError.value = '';
   try {
     await resetV2TablePreference(userId.value, props.schema.id);
-    draftVisibleKeys.value = dataColumns.value
-      .filter((column) => !props.schema.defaultHiddenColumnKeys?.includes(column.key))
-      .map((column) => column.key);
-    completeDraft();
+    if (completeDraft())
+      draftVisibleKeys.value = dataColumns.value
+        .filter((column) => !props.schema.defaultHiddenColumnKeys?.includes(column.key))
+        .map((column) => column.key);
     drawerVisible.value = false;
     ElMessage.success('已恢复默认列设置');
   } catch (error) {

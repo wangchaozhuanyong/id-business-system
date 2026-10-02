@@ -222,7 +222,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormInstance } from 'element-plus';
 import AppButton from '@/components/ui/AppButton.vue';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
@@ -239,9 +239,10 @@ import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { validateV2Form } from '@/v2/utils/formValidation';
-import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
 import {
+  createProxyFormRules,
   parseProxyCountry,
   proxyCountries,
   proxyCountryLabel,
@@ -261,16 +262,26 @@ const RechargeProxyImportDrawer = defineAsyncComponent(
 );
 
 const kindOptions = Object.entries(proxyKindLabels) as [ProxyKind, string][];
-const page = ref(1);
-const pageSize = ref(20);
-const keywordInput = ref('');
-const countryInput = ref('');
-const kindInput = ref<ProxyKind | ''>('');
-const statusInput = ref<RechargeProxyItem['status'] | ''>('');
-const keyword = ref('');
-const countryCode = ref('');
-const kind = ref('');
-const status = ref('');
+const page = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:page', () => ref(1));
+const pageSize = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:pageSize', () => ref(20));
+const keywordInput = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:keywordInput', () =>
+  ref('')
+);
+const countryInput = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:countryInput', () =>
+  ref('')
+);
+const kindInput = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:kindInput', () =>
+  ref<ProxyKind | ''>('')
+);
+const statusInput = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:statusInput', () =>
+  ref<RechargeProxyItem['status'] | ''>('')
+);
+const keyword = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:keyword', () => ref(''));
+const countryCode = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:countryCode', () =>
+  ref('')
+);
+const kind = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:kind', () => ref(''));
+const status = useV2SessionDraft('auto-recharge/V2RechargeProxiesView:status', () => ref(''));
 const query = useV2ModuleQuery({
   moduleKey: 'recharge-proxies',
   scope: 'auto-recharge',
@@ -307,7 +318,7 @@ const formRef = ref<FormInstance>();
 const {
   form,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft<{
   countryCode: string;
   url: string;
@@ -323,12 +334,7 @@ const {
   remark1: '',
   remark2: ''
 }));
-const rules: FormRules = {
-  countryCode: [{ required: true, message: '请选择国家', trigger: 'change' }],
-  url: [{ required: false, trigger: 'blur' }],
-  kind: [{ required: true, message: '请选择 IP 属性', trigger: 'change' }],
-  protocol: [{ required: true, message: '请选择代理协议', trigger: 'change' }]
-};
+const rules = createProxyFormRules();
 const saving = ref(false);
 const formError = ref('');
 const importOpen = ref(false);
@@ -371,6 +377,7 @@ function openEdit(item: RechargeProxyItem) {
 async function save() {
   if (saving.value || !(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   formError.value = '';
   try {
     const country = parseProxyCountry(form.countryCode);
@@ -389,8 +396,7 @@ async function save() {
         ...(form.url.trim() ? { url: form.url.trim() } : {})
       });
     else await rechargeProxyApi.create({ ...input, url: form.url.trim() });
-    completeDraft();
-    form.url = '';
+    if (completeDraft()) form.url = '';
     formOpen.value = false;
     ElMessage.success('代理 IP 已保存');
     await query.refresh();

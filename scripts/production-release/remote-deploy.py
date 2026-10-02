@@ -187,6 +187,36 @@ def sync_new_table_grants(release, additions):
     return report
 
 
+def configure_google_drive_sync(previous, release):
+    old_compose = (previous / 'docker-compose.aws-mysql.yml').read_bytes()
+    new_compose = (release / 'docker-compose.aws-mysql.yml').read_bytes()
+    config = release / 'deploy/aws/google-drive-sync-folder.json'
+    if not config.exists():
+        require(new_compose == old_compose, 'Production compose definition changed')
+        return None
+    destination = json.loads(config.read_text())
+    require(isinstance(destination, dict) and set(destination) == {'folderId'}
+            and isinstance(destination['folderId'], str)
+            and re.fullmatch(r'[A-Za-z0-9_-]{10,200}', destination['folderId']),
+            'Invalid reviewed Google Drive folder')
+    folder_line = b'      GOOGLE_DRIVE_SYNC_FOLDER_ID: ${GOOGLE_DRIVE_SYNC_FOLDER_ID:-}\n'
+    require(new_compose.count(folder_line) == 1, 'Google Drive compose binding changed')
+    require(new_compose == old_compose or new_compose.replace(folder_line, b'') == old_compose,
+            'Production compose definition changed beyond Google Drive folder binding')
+    environment = release / '.env.aws.production'
+    text = environment.read_text()
+    pattern = r'^GOOGLE_DRIVE_SYNC_FOLDER_ID=.*$'
+    require(len(re.findall(pattern, text, re.M)) <= 1, 'Duplicate Google Drive folder setting')
+    setting = 'GOOGLE_DRIVE_SYNC_FOLDER_ID=' + destination['folderId']
+    if re.search(pattern, text, re.M):
+        text = re.sub(pattern, setting, text, flags=re.M)
+    else:
+        text = text.rstrip('\n') + '\n' + setting + '\n'
+    environment.write_text(text)
+    environment.chmod(0o600)
+    return destination['folderId']
+
+
 def point_current(directory, suffix):
     link = BASE / f'.current-{suffix}'
     require(not link.exists() and not link.is_symlink(), 'Temporary current link exists')
@@ -255,9 +285,7 @@ def main():
         archive.unlink()
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
-        require((release / 'docker-compose.aws-mysql.yml').read_bytes() ==
-                (previous / 'docker-compose.aws-mysql.yml').read_bytes(),
-                'Production compose definition changed')
+        google_drive_folder = configure_google_drive_sync(previous, release)
         additions = migration_plan(previous, release)
         updated_services, image_services = release_services(args.admin_only, additions)
         override = json.loads((previous / 'compose.release.json').read_text())
@@ -333,6 +361,7 @@ def main():
             'deployedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'deploymentRun': f'github-actions-{args.run_id}-{args.run_attempt}',
             'previousCommit': args.expected_current, 'previousRelease': str(previous),
+            'googleDriveSyncFolderId': google_drive_folder,
             'servicesUpdated': list(updated_services), 'sourceArchiveSha256': source_digest,
             'images': {**old_manifest.get('images', {}), **{
                 service: {'reference': f'{args.repository}:{image_tags[service]}',

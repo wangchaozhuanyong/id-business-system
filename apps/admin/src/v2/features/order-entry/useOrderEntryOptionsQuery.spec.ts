@@ -1,3 +1,4 @@
+import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
 import { effectScope, type EffectScope } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearV2QueryCache, invalidateV2Queries } from '@/v2/composables/useV2Query';
@@ -64,6 +65,7 @@ function createDeferred<T>() {
 afterEach(() => {
   for (const scope of activeScopes.splice(0)) scope.stop();
   clearV2QueryCache();
+  clearV2SessionDrafts();
   vi.clearAllMocks();
   vi.useRealTimers();
 });

@@ -141,7 +141,8 @@ describe('personal workspace UI contract', () => {
     expect(googleSheetsSyncDrawer).toContain('require-asterisk-position="right"');
     expect(googleSheetsSyncDrawer).toContain('<V2AsyncRegion');
     expect(googleSheetsSyncDrawer).toContain('drive.file');
-    expect(googleSheetsSyncDrawer).toContain('最近 10,000 条记录');
+    expect(googleSheetsSyncDrawer).toContain('无变化不上传');
+    expect(googleSheetsSyncDrawer).toContain('10,000 条数据行时清理最旧 100 条');
     expect(googleSheetsSyncDrawer).toContain('不会删除 Google 网盘中已经生成的报表');
     expect(googleSheetsSyncDrawer).not.toMatch(/localStorage|sessionStorage|v-loading|el-skeleton/);
     expect(workspaceApi).toContain('/id-business-v2/google-sheets-sync');

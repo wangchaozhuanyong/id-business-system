@@ -1,22 +1,33 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { reactive, ref } from 'vue';
 import type { V2TrackedExchangeRateCurrency } from './contracts';
 
 export function useExchangeRateFilters(options: { ensureFresh: () => Promise<unknown> }) {
-  const recordDateRange = ref<[string, string] | []>([]);
-  const manualDateRange = ref<[string, string] | []>([]);
-  const recordQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    currency: '' as '' | V2TrackedExchangeRateCurrency,
-    source: '' as '' | 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross',
-    status: '' as '' | 'available' | 'expired'
-  });
-  const manualQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    currency: '' as '' | V2TrackedExchangeRateCurrency
-  });
+  const recordDateRange = useV2SessionDraft(
+    'exchange-rates/useExchangeRateFilters:recordDateRange',
+    () => ref<[string, string] | []>([])
+  );
+  const manualDateRange = useV2SessionDraft(
+    'exchange-rates/useExchangeRateFilters:manualDateRange',
+    () => ref<[string, string] | []>([])
+  );
+  const recordQuery = useV2SessionDraft('exchange-rates/useExchangeRateFilters:recordQuery', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      currency: '' as '' | V2TrackedExchangeRateCurrency,
+      source: '' as '' | 'combined_p2p' | 'binance' | 'okx' | 'ecb_cross',
+      status: '' as '' | 'available' | 'expired'
+    })
+  );
+  const manualQuery = useV2SessionDraft('exchange-rates/useExchangeRateFilters:manualQuery', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      currency: '' as '' | V2TrackedExchangeRateCurrency
+    })
+  );
 
   function getRecordRequest() {
     return {

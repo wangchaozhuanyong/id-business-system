@@ -1,4 +1,5 @@
-import { computed, ref, type Ref } from 'vue';
+import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
+import { toRef, computed, ref, type Ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { idBusinessV2AccountsApi } from './api';
@@ -12,7 +13,10 @@ interface AccountSaleRecoveryOptions {
 export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
   const saleRecoveryTarget = ref<V2Account | null>(null);
   const saleRecoveryDialogVisible = ref(false);
-  const saleRecoveryReason = ref('');
+  const saleRecoveryReasonDraft = useV2FormDraft('account-sale-recovery-reason', () => ({
+    value: ''
+  }));
+  const saleRecoveryReason = toRef(saleRecoveryReasonDraft.form, 'value');
   const saleRecoverySubmitting = ref(false);
   const saleRecoveryLoading = ref(false);
   const saleRecoveryError = ref('');
@@ -51,7 +55,7 @@ export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
       return;
     }
     saleRecoveryTarget.value = item;
-    saleRecoveryReason.value = '';
+    saleRecoveryReasonDraft.open(`${item.id}:${item.soldByOrder?.id ?? ''}`);
     saleRecoveryDialogVisible.value = true;
     await loadSaleRecoveryPreview();
   }
@@ -67,6 +71,7 @@ export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
       return;
     }
     saleRecoverySubmitting.value = true;
+    const completeSaleRecoveryReasonSave = saleRecoveryReasonDraft.beginSave();
     try {
       await idBusinessV2AccountsApi.recoverSoldAccount(
         target.id,
@@ -74,6 +79,7 @@ export function useAccountSaleRecovery(options: AccountSaleRecoveryOptions) {
         saleRecoveryReason.value.trim()
       );
       ElMessage.success('售出记录已纠正，ID 已恢复可用；订单款项未处理');
+      completeSaleRecoveryReasonSave();
       saleRecoveryDialogVisible.value = false;
       saleRecoveryTarget.value = null;
       await options.refreshAccounts();

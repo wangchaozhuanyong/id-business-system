@@ -35,4 +35,16 @@ describe('V2 async region state', () => {
       'refresh-error'
     );
   });
+
+  it.each([
+    [false, 'initial-loading'],
+    [true, 'refreshing']
+  ] as const)(
+    'shows an active retry before the previous error (resolved=%s)',
+    (resolved, phase) => {
+      expect(
+        resolveLegacyV2QueryPhase({ loading: true, resolved, error: 'previous failure' })
+      ).toBe(phase);
+    }
+  );
 });

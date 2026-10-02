@@ -1,6 +1,7 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
@@ -21,7 +22,10 @@ import {
   type DecisionFormModel,
   type RestoreFormModel
 } from './data-governance-forms';
-import { useDataGovernancePagination } from './data-governance-pagination';
+import {
+  useDataGovernanceFilters,
+  useDataGovernancePagination
+} from './data-governance-pagination';
 import { createDataGovernanceQueryKey } from './data-governance-query-key';
 import {
   buildAuditRestoreReason,
@@ -45,40 +49,33 @@ import {
   recycleEntityLabels,
   shortHash
 } from './data-governance-presentation';
-import type {
-  V2GovernanceJob,
-  V2GovernanceJobDetail,
-  V2GovernanceJobQuery,
-  V2GovernanceJobStatus,
-  V2GovernanceJobType,
-  V2GovernanceRecycleEntity,
-  V2GovernanceRecycleItem,
-  V2GovernanceRecycleQuery
-} from './contracts';
+import type { V2GovernanceJob, V2GovernanceJobDetail, V2GovernanceRecycleItem } from './contracts';
 
 export function useDataGovernancePage() {
   const route = useRoute();
   const authStore = useAuthStore();
-  const activeTab = ref<V2GovernanceTab>(readGovernanceTab(route.query.tab));
-  const recycleQueryModel = reactive({
-    page: 1,
-    pageSize: 20,
-    entity: '' as V2GovernanceRecycleEntity | ''
-  });
-  const jobQueryModel = reactive({
-    page: 1,
-    pageSize: 20,
-    type: '' as V2GovernanceJobType | '',
-    status: '' as V2GovernanceJobStatus | ''
-  });
+  const activeTab = useV2SessionDraft('data-governance/useDataGovernancePage:activeTab', () =>
+    ref<V2GovernanceTab>(readGovernanceTab(route.query.tab))
+  );
+  const { recycleQueryModel, jobQueryModel, recycleListQuery, jobListQuery } =
+    useDataGovernanceFilters();
   const selectedRecycleItems = ref<V2GovernanceRecycleItem[]>([]);
   const restoreDrawerVisible = ref(false);
   const cleanupDrawerVisible = ref(false);
   const decisionDrawerVisible = ref(false);
   const detailDrawerVisible = ref(false);
-  const restoreForm = reactive<RestoreFormModel>({ ...RESTORE_INITIAL });
-  const cleanupForm = reactive<CleanupFormModel>({ ...CLEANUP_INITIAL });
-  const decisionForm = reactive<DecisionFormModel>({ ...DECISION_INITIAL });
+  const restoreFormDraft = useV2FormDraft<RestoreFormModel>('governance-restore', () => ({
+    ...RESTORE_INITIAL
+  }));
+  const restoreForm = restoreFormDraft.form;
+  const cleanupFormDraft = useV2FormDraft<CleanupFormModel>('governance-cleanup', () => ({
+    ...CLEANUP_INITIAL
+  }));
+  const cleanupForm = cleanupFormDraft.form;
+  const decisionFormDraft = useV2FormDraft<DecisionFormModel>('governance-decision', () => ({
+    ...DECISION_INITIAL
+  }));
+  const decisionForm = decisionFormDraft.form;
   const restoreBaseline = ref(JSON.stringify(RESTORE_INITIAL));
   const cleanupBaseline = ref(JSON.stringify(CLEANUP_INITIAL));
   const decisionBaseline = ref(JSON.stringify(DECISION_INITIAL));
@@ -87,23 +84,6 @@ export function useDataGovernancePage() {
   const mutationBusy = ref('');
   const mutationError = ref('');
   const handledRouteRestoreKey = ref('');
-
-  function recycleListQuery(): V2GovernanceRecycleQuery {
-    return {
-      page: recycleQueryModel.page,
-      pageSize: recycleQueryModel.pageSize,
-      entity: recycleQueryModel.entity || undefined
-    };
-  }
-
-  function jobListQuery(): V2GovernanceJobQuery {
-    return {
-      page: jobQueryModel.page,
-      pageSize: jobQueryModel.pageSize,
-      type: jobQueryModel.type || undefined,
-      status: jobQueryModel.status || undefined
-    };
-  }
 
   const overviewQuery = useV2ModuleQuery({
     moduleKey: 'data-governance',
@@ -253,7 +233,10 @@ export function useDataGovernancePage() {
       ElMessage.warning('请先选择需要恢复的回收站记录');
       return;
     }
-    Object.assign(restoreForm, RESTORE_INITIAL);
+    restoreFormDraft.open(
+      JSON.stringify(selectedRecycleItems.value.map((item) => `${item.entity}:${item.id}`).sort()),
+      RESTORE_INITIAL
+    );
     restoreBaseline.value = JSON.stringify(restoreForm);
     mutationError.value = '';
     restoreDrawerVisible.value = true;
@@ -280,10 +263,13 @@ export function useDataGovernancePage() {
       recycleItems.value.find((item) => item.entity === request.entity && item.id === request.id) ??
       createRecycleItemFromAuditRestoreRequest(request);
     selectedRecycleItems.value = [matchingItem];
-    Object.assign(restoreForm, {
-      reason: buildAuditRestoreReason(request, matchingItem),
-      backupEvidence: ''
-    });
+    restoreFormDraft.open(
+      JSON.stringify(selectedRecycleItems.value.map((item) => `${item.entity}:${item.id}`).sort()),
+      {
+        reason: buildAuditRestoreReason(request, matchingItem),
+        backupEvidence: ''
+      }
+    );
     restoreBaseline.value = JSON.stringify(restoreForm);
     mutationError.value = '';
 
@@ -300,7 +286,7 @@ export function useDataGovernancePage() {
       ElMessage.warning(previewBlockedReason.value);
       return;
     }
-    Object.assign(cleanupForm, CLEANUP_INITIAL);
+    cleanupFormDraft.open('current', CLEANUP_INITIAL);
     cleanupBaseline.value = JSON.stringify(cleanupForm);
     mutationError.value = '';
     cleanupDrawerVisible.value = true;
@@ -309,6 +295,7 @@ export function useDataGovernancePage() {
   async function submitRestore(formInstance?: FormInstance) {
     if (!(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'restore';
+    const completeSave = restoreFormDraft.beginSave();
     mutationError.value = '';
     try {
       const job = await v2DataGovernanceApi.previewRestore({
@@ -317,6 +304,7 @@ export function useDataGovernancePage() {
         backupEvidence: restoreForm.backupEvidence.trim(),
         idempotencyKey: createGovernanceMutationKey('governance:restore')
       });
+      completeSave();
       restoreDrawerVisible.value = false;
       activeTab.value = 'jobs';
       await Promise.all([refreshJobs(), refreshOverview()]);
@@ -331,6 +319,7 @@ export function useDataGovernancePage() {
   async function submitCleanup(formInstance?: FormInstance) {
     if (!(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'cleanup';
+    const completeSave = cleanupFormDraft.beginSave();
     mutationError.value = '';
     try {
       const job = await v2DataGovernanceApi.previewCleanup({
@@ -339,6 +328,7 @@ export function useDataGovernancePage() {
         backupEvidence: cleanupForm.backupEvidence.trim(),
         idempotencyKey: createGovernanceMutationKey('governance:cleanup')
       });
+      completeSave();
       cleanupDrawerVisible.value = false;
       activeTab.value = 'jobs';
       await refreshJobs();
@@ -399,7 +389,7 @@ export function useDataGovernancePage() {
 
   function openDecisionDrawer(job: V2GovernanceJob) {
     decisionTarget.value = job;
-    Object.assign(decisionForm, DECISION_INITIAL);
+    decisionFormDraft.open(job.id, DECISION_INITIAL);
     decisionBaseline.value = JSON.stringify(decisionForm);
     mutationError.value = '';
     decisionDrawerVisible.value = true;
@@ -408,12 +398,14 @@ export function useDataGovernancePage() {
   async function submitDecision(formInstance?: FormInstance) {
     if (!decisionTarget.value || !(await validateV2Form(formInstance))) return;
     mutationBusy.value = 'decision';
+    const completeSave = decisionFormDraft.beginSave();
     mutationError.value = '';
     try {
       const job = await v2DataGovernanceApi.decide(decisionTarget.value.id, {
         decision: decisionForm.decision,
         reason: decisionForm.reason.trim()
       });
+      completeSave();
       decisionDrawerVisible.value = false;
       await refreshJobs();
       if (detailId.value === job.id) await detailQuery.refresh();

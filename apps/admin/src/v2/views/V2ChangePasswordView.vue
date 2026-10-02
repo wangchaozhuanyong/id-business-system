@@ -246,8 +246,8 @@ async function logout() {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 10px;
-  background: var(--v3-primary);
-  color: #fff;
+  background: var(--v3-primary-solid);
+  color: var(--v3-on-primary-solid);
   font-weight: 800;
 }
 

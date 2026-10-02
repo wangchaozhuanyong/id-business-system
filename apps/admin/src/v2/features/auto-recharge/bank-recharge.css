@@ -28,38 +28,6 @@
   font-size: 12px;
 }
 
-.recharge-proxy-filters .el-select {
-  min-width: 160px;
-}
-
-@media (max-width: 640px) {
-  .recharge-proxy-filters {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-  }
-  .recharge-proxy-filters .el-form-item {
-    display: flex;
-    width: 100%;
-    min-width: 0;
-    margin: 0;
-  }
-  .recharge-proxy-filters .el-form-item__label {
-    width: 76px;
-    flex: none;
-    justify-content: flex-start;
-  }
-  .recharge-proxy-filters .el-form-item__content {
-    flex: 1;
-    min-width: 0;
-  }
-  .recharge-proxy-filters .el-input,
-  .recharge-proxy-filters .el-select {
-    width: 100%;
-    min-width: 0;
-  }
-}
-
 .bank-recharge-renewal-list {
   list-style: none;
   margin: 0;

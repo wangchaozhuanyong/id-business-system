@@ -1,3 +1,14 @@
+import type { FormRules } from 'element-plus';
+
+export function createProxyFormRules(): FormRules {
+  return {
+    countryCode: [{ required: true, message: '请选择国家', trigger: 'change' }],
+    url: [{ required: false, trigger: 'blur' }],
+    kind: [{ required: true, message: '请选择 IP 属性', trigger: 'change' }],
+    protocol: [{ required: true, message: '请选择代理协议', trigger: 'change' }]
+  };
+}
+
 export const proxyKindLabels = {
   dynamic_residential: '动态住宅',
   static_residential: '静态住宅',

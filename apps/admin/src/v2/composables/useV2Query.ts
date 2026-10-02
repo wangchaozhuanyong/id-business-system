@@ -286,7 +286,12 @@ function startRequest<T>(
   notify(entry);
 
   const inFlight = Promise.resolve()
-    .then(() => query({ signal: controller.signal }))
+    .then(() => {
+      if (!isCurrentRequest(cacheKey, entry, requestRevision, controller)) {
+        throw new DOMException('查询已取消', 'AbortError');
+      }
+      return query({ signal: controller.signal });
+    })
     .then((result) => {
       if (isCurrentRequest(cacheKey, entry, requestRevision, controller)) {
         entry.data = result;
@@ -311,7 +316,8 @@ function startRequest<T>(
       throw error;
     })
     .finally(() => {
-      if (entry.controller === controller) {
+      const ownsRequest = entry.controller === controller;
+      if (ownsRequest) {
         entry.controller = undefined;
         entry.inFlight = undefined;
         entry.status = 'idle';
@@ -326,7 +332,12 @@ function startRequest<T>(
         );
       }
       notify(entry);
-      if (entry.invalidated && entry.revision !== requestRevision && entry.listeners.size) {
+      if (
+        ownsRequest &&
+        entry.invalidated &&
+        entry.revision !== requestRevision &&
+        entry.listeners.size
+      ) {
         scheduleActiveInvalidationRefresh();
       }
       trimInactiveQueryCache();
@@ -353,6 +364,8 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   const refreshedAt = ref<number | null>(null);
   let subscribedEntry: V2QueryEntry<T> | null = null;
   let subscribedKey = requestedKey.value;
+  let consumerRevision = 0;
+  let disposed = false;
 
   function syncFromEntry(
     entry: V2QueryEntry<T>,
@@ -383,7 +396,10 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   function syncCurrentEntry(reason?: 'clear' | 'invalidate') {
     if (!subscribedEntry) return;
     syncFromEntry(subscribedEntry, reason !== 'clear');
-    if (reason === 'invalidate' && subscribedEntry.status !== 'pending') {
+    if (
+      reason === 'invalidate' &&
+      (subscribedEntry.status !== 'pending' || subscribedEntry.controller?.signal.aborted)
+    ) {
       void execute(false);
     }
   }
@@ -410,6 +426,8 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   }
 
   async function execute(force: boolean, retryAfterCacheReset = true) {
+    if (disposed) return undefined;
+    const executionRevision = consumerRevision;
     const nextKey = resolveKeyValue(options.key);
     requestedKey.value = nextKey;
     if (!enabled.value) return data.value;
@@ -433,6 +451,9 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     } finally {
       if (subscribedEntry === entry) syncFromEntry(entry, true, nextKey);
     }
+    if (disposed || executionRevision !== consumerRevision || subscribedEntry !== entry) {
+      return undefined;
+    }
     if (retryAfterCacheReset && queryCache.get(cacheKey) !== entry) {
       return execute(force, false);
     }
@@ -440,6 +461,7 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
   }
 
   function cancel() {
+    consumerRevision += 1;
     if (subscribedEntry) {
       unsubscribe(subscribedEntry);
       subscribedEntry = null;
@@ -471,7 +493,10 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     clearDisplayedState();
   });
 
-  onScopeDispose(cancel);
+  onScopeDispose(() => {
+    disposed = true;
+    cancel();
+  });
 
   const phase = computed<V2QueryPhase>(() => {
     if (!enabled.value) return 'disabled';

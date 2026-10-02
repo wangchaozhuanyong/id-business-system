@@ -16,6 +16,9 @@ describe('Google Sheets sync contracts', () => {
   const repository = read(
     `${sourceRoot}/persistence/id-business-v2-google-sheets-sync.repository.ts`
   );
+  const detailSelect = read(
+    `${sourceRoot}/persistence/id-business-v2-google-sheets-detail.select.ts`
+  );
   const controller = read(`${sourceRoot}/id-business-v2-google-sheets-sync.controller.ts`);
   const callbackController = read(`${sourceRoot}/id-business-v2-google-sheets-oauth.controller.ts`);
   const oauthClient = read(`${sourceRoot}/providers/id-business-v2-google-sheets-oauth.client.ts`);
@@ -43,8 +46,11 @@ describe('Google Sheets sync contracts', () => {
   });
 
   it('selects only whitelisted business fields and sends cell values as RAW', () => {
-    expect(repository).not.toMatch(/passwordEncrypted|securityInfoEncrypted|phoneEncrypted/);
-    expect(repository).not.toMatch(/codeEncrypted|providerCredentialEncrypted/);
+    for (const selectors of [repository, detailSelect]) {
+      expect(selectors).not.toMatch(/passwordEncrypted|securityInfoEncrypted|phoneEncrypted/);
+      expect(selectors).not.toMatch(/codeEncrypted|providerCredentialEncrypted|queryCodeEncrypted/);
+      expect(selectors).not.toMatch(/totpSecretEncrypted|numberEncrypted|billingNameEncrypted/);
+    }
     expect(sheetsClient).toContain("valueInputOption: 'RAW'");
     expect(sheetsClient).toContain('/values:batchUpdate');
     expect(sheetsClient).toContain('/values:batchClear');

@@ -359,7 +359,7 @@ const formRef = ref<FormInstance>();
 const {
   form,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft<V2QuickActionInput>('quick-actions-editor', () => ({ title: '', content: '' }));
 const rules: FormRules<V2QuickActionInput> = {
   title: [{ required: true, whitespace: true, message: '请输入标题', trigger: 'blur' }],
@@ -495,8 +495,8 @@ function cancelEditor() {
   editingId.value = '';
 }
 
-function resetEditor() {
-  completeDraft();
+function resetEditor(completeDraft = beginDraftSave()) {
+  if (!completeDraft()) return;
   editorMode.value = null;
   editingId.value = '';
   form.title = '';
@@ -508,6 +508,7 @@ async function submitEditor() {
   if (!editorMode.value || saving.value || !props.writesAllowed) return;
   if (!(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   mutationError.value = '';
   try {
     await props.save(
@@ -515,7 +516,7 @@ async function submitEditor() {
       editorMode.value === 'edit' ? editingId.value : undefined
     );
     ElMessage.success(editorMode.value === 'create' ? '已添加便捷操作' : '已保存修改');
-    resetEditor();
+    resetEditor(completeDraft);
   } catch (error) {
     mutationError.value = error instanceof Error ? error.message : '保存失败，请重试';
   } finally {

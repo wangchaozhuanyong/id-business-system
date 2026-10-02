@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import './check-v2-input-retention.mjs';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -166,6 +167,7 @@ for (const [pattern, message] of [
   [/v-if="showRefreshFeedback"/, '异步区域缺少延迟刷新反馈'],
   [/class="v2-async-region__progress"/, '异步区域缺少非遮挡式顶部进度线'],
   [/provide\(V2_ASYNC_REGION_PREVIOUS_DATA, isPreviousData\)/, '旧参数快照没有下发只读状态'],
+  [/inject\(V2_ASYNC_REGION_PREVIOUS_DATA/, '嵌套异步区域没有继承上层旧快照只读状态'],
   [/:data-v2-query-phase="effectivePhase"/, '异步区域没有暴露可验收的查询阶段'],
   [/prefers-reduced-motion/, '异步区域缺少减少动态效果支持']
 ]) {

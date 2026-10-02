@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
@@ -75,8 +76,10 @@ export function useRenewalsPage() {
       hasUserPermission(authStore.user, 'apple.renewal_task.update') &&
       hasUserPermission(authStore.user, 'apple.order.create')
   );
-  const dueRange = ref<[string, string] | []>([]);
-  const warningOnly = ref(true);
+  const dueRange = useV2SessionDraft('renewals/useRenewalsPage:dueRange', () =>
+    ref<[string, string] | []>([])
+  );
+  const warningOnly = useV2SessionDraft('renewals/useRenewalsPage:warningOnly', () => ref(true));
   const refreshedManualOptions = ref<V2ManualRenewalOptions | null>(null);
   const optionsLoading = ref(false);
   const optionsError = ref('');
@@ -85,7 +88,7 @@ export function useRenewalsPage() {
   const submitting = ref(false);
   const selectedRenewal = ref<V2RenewalWorkbenchItem | null>(null);
   const idempotencyKey = ref('');
-  const form = reactive({
+  const formDraft = useV2FormDraft('renewal-order-editor', () => ({
     categoryOptionId: '',
     serviceOptionId: '',
     settlementPlatformOptionId: '',
@@ -96,18 +99,21 @@ export function useRenewalsPage() {
     openedAt: null as string | null,
     dueAt: null as string | null,
     remark: ''
-  });
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    customerId: '',
-    serviceOptionId: '',
-    accountId: '',
-    dueStatus: '' as V2RenewalDueStatus | '',
-    sortBy: 'openedAt' as NonNullable<V2RenewalWorkbenchQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  }));
+  const form = formDraft.form;
+  const query = useV2SessionDraft('renewals/useRenewalsPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      customerId: '',
+      serviceOptionId: '',
+      accountId: '',
+      dueStatus: '' as V2RenewalDueStatus | '',
+      sortBy: 'openedAt' as NonNullable<V2RenewalWorkbenchQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
 
   function getRenewalsListQuery(): V2RenewalWorkbenchQuery {
     return {
@@ -407,7 +413,7 @@ export function useRenewalsPage() {
 
     selectedRenewal.value = renewal;
     idempotencyKey.value = globalThis.crypto.randomUUID();
-    Object.assign(form, {
+    const restored = formDraft.open(renewal.id, {
       categoryOptionId: renewal.service.parent?.id ?? '',
       serviceOptionId: renewal.service.id,
       settlementPlatformOptionId: '',
@@ -419,7 +425,7 @@ export function useRenewalsPage() {
       dueAt: addOneInclusiveMonthToV2DateTimeInput(openedAt),
       remark: ''
     });
-    applySelectedServiceAmount();
+    if (!restored) applySelectedServiceAmount();
     resetRecommendation();
     drawerVisible.value = true;
     confirmationVisible.value = false;
@@ -467,6 +473,7 @@ export function useRenewalsPage() {
       return;
     }
     submitting.value = true;
+    const completeSave = formDraft.beginSave();
     try {
       const result = await idBusinessV2RenewalsApi.createManualRenewal(renewal.id, {
         serviceOptionId: form.serviceOptionId,
@@ -487,6 +494,7 @@ export function useRenewalsPage() {
             )}`
       );
       confirmationVisible.value = false;
+      completeSave();
       drawerVisible.value = false;
       await loadWorkbench();
       window.dispatchEvent(new Event(RENEWAL_WARNING_REFRESH_EVENT));
@@ -503,7 +511,9 @@ export function useRenewalsPage() {
 
   watch(
     () => form.serviceOptionId,
-    () => applySelectedServiceAmount()
+    () => {
+      if (!formDraft.restoring.value) applySelectedServiceAmount();
+    }
   );
 
   function formatDecimal(value: string | number | null | undefined) {

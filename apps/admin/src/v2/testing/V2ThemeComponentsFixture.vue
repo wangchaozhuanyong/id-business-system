@@ -104,6 +104,11 @@
       </el-tabs>
     </section>
 
+    <section class="v2-theme-components__band" data-skin-page>
+      <h2>页面与弹层共用皮肤</h2>
+      <V2ThemeSkinSample />
+    </section>
+
     <section class="v2-theme-components__band" data-theme-band="overlay">
       <h2>浮层与反馈</h2>
       <div class="v2-theme-components__actions">
@@ -127,6 +132,7 @@
 
     <el-dialog v-model="dialogVisible" title="业务确认" width="min(460px, 92vw)">
       <p data-theme-dialog-copy>确认后将按当前筛选条件继续处理。</p>
+      <V2ThemeSkinSample data-skin-dialog />
       <template #footer>
         <AppButton data-theme-dialog-close variant="ghost" @click="dialogVisible = false">
           取消
@@ -137,6 +143,7 @@
 
     <el-drawer v-model="drawerVisible" title="新增业务资料" size="min(420px, 94vw)">
       <p data-theme-drawer-copy>抽屉、表单和浮层必须继承当前主题。</p>
+      <V2ThemeSkinSample data-skin-drawer />
       <template #footer>
         <AppButton data-theme-drawer-close variant="ghost" @click="drawerVisible = false">
           关闭
@@ -152,6 +159,7 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
 import { defineV2TableSchema } from '@/v2/components/tableSystem';
+import V2ThemeSkinSample from './V2ThemeSkinSample.vue';
 
 const fixtureSchemas = {
   themeComponents: defineV2TableSchema({

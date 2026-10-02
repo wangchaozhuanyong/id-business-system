@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref } from 'vue';
 import { V2_FINANCE_CURRENCY_OPTIONS } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
@@ -44,15 +45,19 @@ interface AnalyticsSnapshot {
 }
 
 export function useDataAnalyticsPage() {
-  const filters = reactive({
-    dateRange: [] as string[],
-    currency: '' as V2FinanceCurrency | '',
-    supplierOptionId: '',
-    journalType: '' as V2FinanceJournalType | '',
-    financeAccountId: '',
-    settlementPlatformOptionId: ''
-  });
-  const applied = ref<V2FinanceReportQuery>({});
+  const filters = useV2SessionDraft('data-analytics/useDataAnalyticsPage:filters', () =>
+    reactive({
+      dateRange: [] as string[],
+      currency: '' as V2FinanceCurrency | '',
+      supplierOptionId: '',
+      journalType: '' as V2FinanceJournalType | '',
+      financeAccountId: '',
+      settlementPlatformOptionId: ''
+    })
+  );
+  const applied = useV2SessionDraft('data-analytics/useDataAnalyticsPage:applied', () =>
+    ref<V2FinanceReportQuery>({})
+  );
   const query = useV2ModuleQuery<AnalyticsSnapshot>({
     moduleKey: 'analytics',
     scope: 'finance-reports',

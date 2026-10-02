@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, ref } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery, useV2Query } from '@/v2/composables/useV2Query';
@@ -47,7 +48,10 @@ export function getVisibleOrderEntryCustomers(
 }
 
 export function useOrderEntryOptionsQuery(config: OrderEntryOptionsQueryConfig) {
-  const customerKeyword = ref('');
+  const customerKeyword = useV2SessionDraft(
+    `order-entry-options:${config.mode}:customerKeyword`,
+    () => ref('')
+  );
   const key = () => createV2QueryKey({ customerKeyword: customerKeyword.value });
   const fetchOptions = ({ signal }: { signal: AbortSignal }) =>
     idBusinessV2OrdersApi.getEntryOptions(customerKeyword.value || undefined, { signal });

@@ -30,8 +30,8 @@ export function resolveLegacyV2QueryPhase(input: {
   resolved: boolean;
   error: string;
 }): V2QueryPhase {
-  if (input.error) return input.resolved ? 'refresh-error' : 'initial-error';
   if (input.loading) return input.resolved ? 'refreshing' : 'initial-loading';
+  if (input.error) return input.resolved ? 'refresh-error' : 'initial-error';
   return input.resolved ? 'ready' : 'idle';
 }
 

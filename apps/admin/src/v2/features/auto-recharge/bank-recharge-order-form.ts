@@ -35,3 +35,16 @@ export function emptyForm() {
     remark: ''
   };
 }
+
+export function emptyRefundForm() {
+  return {
+    reason: '',
+    refundReference: '',
+    customerRefundAmount: '',
+    chargeRecoveryAmountCny: '0',
+    bankFeeRecoveryAmountCny: '0',
+    usdtFeeRecoveryAmount: '0',
+    shoppingFeeRecoveryAmount: '0',
+    upstreamRefundReference: ''
+  };
+}

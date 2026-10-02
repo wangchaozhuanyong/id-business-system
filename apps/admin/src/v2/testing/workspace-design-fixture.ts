@@ -2,6 +2,7 @@ import '@/v2/styles/base.css';
 import '@/v2/styles/v2.css';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+import { V2_GOOGLE_SHEETS_REPORT_NAMES } from '@apple-business/shared';
 import { sessionCoordinator, transitionSessionState } from '@/auth/sessionCoordinator';
 import { v2TableColumnVisibility } from '@/v2/directives/tableColumnVisibility';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
@@ -19,8 +20,36 @@ let quickActions =
     ? []
     : Array.from({ length: 13 }, (_, index) => ({
         id: `quick-action-fixture-${index + 1}`,
-        title: `客户回复 ${index + 1}`,
-        content: index === 0 ? '第一行\n第二行，仅复制正文。' : `第 ${index + 1} 条回复内容`,
+        title:
+          quickActionsFixture === 'long' && index === 12
+            ? '使用说明与售后服务'
+            : `客户回复 ${index + 1}`,
+        content:
+          quickActionsFixture === 'long' && index === 12
+            ? [
+                '使用说明与售后服务',
+                '',
+                '一、开始使用',
+                '请先核对账号资料与所选套餐。首次使用时，请按页面提示完成设置；如果遇到无法登录、页面异常或订阅状态未更新，请保留错误提示并联系我们。',
+                '',
+                '二、问题反馈',
+                '为了尽快定位问题，请提供发生时间、操作步骤和不含敏感信息的截图。请勿在聊天中发送密码、验证码或银行卡资料。',
+                '',
+                '三、服务说明',
+                '我们会根据订单记录核对服务内容，说明处理进度与下一步操作。处理期间请保留原始记录，避免重复提交相同申请。',
+                '',
+                '四、常见问题',
+                ...Array.from(
+                  { length: 8 },
+                  (_, i) =>
+                    `${i + 1}. 遇到问题时，请先记录页面提示，再联系客服确认处理方式。我们会逐项核对并回复。`
+                ),
+                '',
+                '谢谢你的理解与配合。'
+              ].join('\n')
+            : index === 0
+              ? '第一行\n第二行，仅复制正文。'
+              : `第 ${index + 1} 条回复内容`,
         createdAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString(),
         updatedAt: new Date(Date.UTC(2026, 8, 30, 10, index)).toISOString()
       }));
@@ -88,23 +117,28 @@ idBusinessV2WorkspaceApi.getWebsiteAnalytics = async (days) => {
 };
 idBusinessV2WorkspaceApi.getGoogleSheetsSyncStatus = async () => ({
   authorized: true,
+  automaticTriggerDelaySeconds: 5,
   callbackUrl: 'https://id.example.com/api/public/google-sheets-sync/oauth/callback',
   clientId: 'report-sync.apps.googleusercontent.com',
   configured: true,
   enabled: true,
   excludedData: [
     'ID 密码与密保',
-    '邮箱授权信息与应用专用密码',
+    'ChatGPT 密码与 2FA 密钥',
+    '邮箱凭据、应用专用密码、查询码和邮件验证码',
     '完整礼品卡号',
-    '手机号与其他联系方式',
+    '完整银行卡号、有效期和银行卡安全码',
+    '客户完整联系方式（仅同步脱敏值）',
+    '自由填写的备注与凭证附件',
     '访问令牌、刷新令牌和审计敏感内容'
   ],
   lastAttemptAt: '2026-09-05T01:20:00.000Z',
   lastErrorMessage: null,
   lastSucceededAt: '2026-09-05T01:20:00.000Z',
-  reportNames: ['订单', '加卡', '续费', '财务汇总'],
+  reportNames: [...V2_GOOGLE_SHEETS_REPORT_NAMES],
   spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/fixture/edit',
   syncIntervalSeconds: 30,
+  targetFolderUrl: 'https://drive.google.com/drive/folders/fixture-folder',
   syncing: false
 });
 const mailboxFixture = new URLSearchParams(window.location.search).get('mailbox');

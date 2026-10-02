@@ -507,7 +507,7 @@ const credentialMailbox = ref<V2ManagedMailbox | null>(null);
 const {
   form: credentialDraft,
   open: openCredentialDraft,
-  complete: completeCredentialDraft
+  beginSave: beginCredentialSave
 } = useV2FormDraft('mailbox-credential-replacement', () => ({ password: '' }));
 const replacementPassword = toRef(credentialDraft, 'password');
 const clockTick = ref(getV2BusinessNowMs() ?? Date.now());
@@ -777,8 +777,8 @@ function startCredentialUpdate(item: V2ManagedMailbox) {
   credentialDrawerOpen.value = true;
 }
 
-function cancelCredentialUpdate() {
-  completeCredentialDraft();
+function cancelCredentialUpdate(completeCredentialDraft = beginCredentialSave()) {
+  if (!completeCredentialDraft()) return;
   credentialDrawerOpen.value = false;
   credentialMailbox.value = null;
   replacementPassword.value = '';
@@ -792,11 +792,12 @@ async function updateCredential() {
     return;
   }
   updatingId.value = item.id;
+  const completeCredentialDraft = beginCredentialSave();
   try {
     await idBusinessV2WorkspaceApi.updateManagedMailboxCredential(item.id, {
       appPassword: replacementPassword.value
     });
-    cancelCredentialUpdate();
+    cancelCredentialUpdate(completeCredentialDraft);
     await mailboxesQuery.refresh();
     ElMessage.success('邮箱授权已更新');
   } catch (error) {

@@ -1,5 +1,12 @@
 import { V2_GOOGLE_SHEETS_REPORT_NAMES } from '@apple-business/shared';
 import { Amount4 } from '../runtime/public-api';
+import { buildGoogleSheetsDetailReports } from './id-business-v2-google-sheets-detail-report';
+import {
+  dateTime,
+  decimal,
+  financeAccountLabel
+} from './id-business-v2-google-sheets-report-values';
+import type { GoogleSheetsDetailSource } from './persistence/id-business-v2-google-sheets-detail.select';
 import type {
   IdBusinessV2GoogleSheetsFinanceRow,
   IdBusinessV2GoogleSheetsGiftCardRow,
@@ -7,18 +14,10 @@ import type {
   IdBusinessV2GoogleSheetsRenewalRow
 } from './persistence/id-business-v2-google-sheets-sync.repository';
 import type { IdBusinessV2GoogleSheetReport } from './providers/id-business-v2-google-sheets.client';
-
-const REPORT_ROW_LIMIT = 10_000;
-const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
-  timeZone: 'Asia/Shanghai',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false
-});
+import {
+  retainedGoogleSheetsRowCount,
+  type GoogleSheetsReportRetention
+} from './id-business-v2-google-sheets-retention';
 
 const ORDER_STATUS_LABELS = {
   draft: '草稿',
@@ -57,46 +56,35 @@ const AUTO_RENEWAL_LABELS = {
   disabled: '已关闭'
 } as const;
 
-const FINANCE_ACCOUNT_LABELS: Record<string, string> = {
-  cash: '自有资金',
-  supplier_prepayment: '卡商预付款',
-  supplier_refund_receivable: '卡商退款应收',
-  gift_card_inventory: '礼品卡库存',
-  id_inventory: 'ID 库存',
-  sales_revenue: '销售收入',
-  bank_recharge_revenue: '银充代付收入',
-  bank_recharge_service_fee: '银充服务费收入',
-  bank_recharge_cost: '银充代付成本',
-  bank_recharge_bank_fee: '银充银行手续费',
-  other_operating_revenue: '其他经营收入',
-  contributed_capital: '股东投入',
-  borrowed_funds_payable: '借入资金',
-  platform_fee: '平台手续费',
-  gift_card_cost: '礼品卡成本',
-  id_cost: 'ID 成本',
-  customer_owned_balance_cost: '客户自有余额成本',
-  refund_loss: '退款损失',
-  gift_card_redemption_loss: '礼品卡赎回损失',
-  balance_loss: '余额报损',
-  id_purchase_loss: 'ID 采购报损',
-  operating_expense: '经营开支',
-  realized_fx_gain_loss: '已实现汇兑损益',
-  opening_equity: '期初权益',
-  manual_adjustment: '手工调整'
-};
-
-export function buildIdBusinessV2GoogleSheetsReports(source: {
+type GoogleSheetsReportSource = GoogleSheetsDetailSource & {
   orders: IdBusinessV2GoogleSheetsOrderRow[];
   giftCards: IdBusinessV2GoogleSheetsGiftCardRow[];
   renewals: IdBusinessV2GoogleSheetsRenewalRow[];
   financeJournals: IdBusinessV2GoogleSheetsFinanceRow[];
-}): IdBusinessV2GoogleSheetReport[] {
-  return [
+};
+
+export function buildIdBusinessV2GoogleSheetsReports(
+  source: GoogleSheetsReportSource
+): IdBusinessV2GoogleSheetReport[] {
+  return prepareIdBusinessV2GoogleSheetsReports(source).reports;
+}
+
+export function prepareIdBusinessV2GoogleSheetsReports(
+  source: GoogleSheetsReportSource,
+  previous: GoogleSheetsReportRetention = { records: {} }
+) {
+  const finance = financeRows(source.financeJournals, previous.financeSummaryAfter);
+  const reports: IdBusinessV2GoogleSheetReport[] = [
     { name: V2_GOOGLE_SHEETS_REPORT_NAMES[0], rows: orderRows(source.orders) },
     { name: V2_GOOGLE_SHEETS_REPORT_NAMES[1], rows: giftCardRows(source.giftCards) },
     { name: V2_GOOGLE_SHEETS_REPORT_NAMES[2], rows: renewalRows(source.renewals) },
-    { name: V2_GOOGLE_SHEETS_REPORT_NAMES[3], rows: financeRows(source.financeJournals) }
+    { name: V2_GOOGLE_SHEETS_REPORT_NAMES[3], rows: finance.rows },
+    ...buildGoogleSheetsDetailReports(source)
   ];
+  return {
+    reports,
+    retention: { ...previous, ...(finance.after ? { financeSummaryAfter: finance.after } : {}) }
+  };
 }
 
 function orderRows(rows: IdBusinessV2GoogleSheetsOrderRow[]) {
@@ -154,6 +142,9 @@ function giftCardRows(rows: IdBusinessV2GoogleSheetsGiftCardRow[]) {
   return [
     [
       '记录编号',
+      '所属 ID（脱敏）',
+      '礼品卡号（脱敏）',
+      '付款钱包',
       '礼品卡名称',
       '国家或地区',
       '面值币种',
@@ -171,7 +162,10 @@ function giftCardRows(rows: IdBusinessV2GoogleSheetsGiftCardRow[]) {
       '最后更新'
     ],
     ...rows.map((row) => [
-      row.id.slice(0, 8),
+      row.id,
+      row.account.appleIdMasked,
+      row.codeMasked,
+      row.purchaseFinanceAccount?.name ?? '',
       row.cardNameSnapshot,
       row.countryNameSnapshot,
       row.currencyCodeSnapshot ?? '',
@@ -220,7 +214,7 @@ function renewalRows(rows: IdBusinessV2GoogleSheetsRenewalRow[]) {
   ];
 }
 
-function financeRows(rows: IdBusinessV2GoogleSheetsFinanceRow[]) {
+function financeRows(rows: IdBusinessV2GoogleSheetsFinanceRow[], previousAfter?: string) {
   const groups = new Map<
     string,
     { date: string; accountCode: string; debit: Amount4; credit: Amount4; entries: number }
@@ -243,28 +237,28 @@ function financeRows(rows: IdBusinessV2GoogleSheetsFinanceRow[]) {
     }
   }
   const values = [...groups.values()]
-    .sort(
-      (left, right) =>
-        right.date.localeCompare(left.date) || left.accountCode.localeCompare(right.accountCode)
-    )
-    .slice(0, REPORT_ROW_LIMIT);
-  return [
-    ['业务日期', '财务科目', '借方人民币', '贷方人民币', '净额人民币', '分录数'],
-    ...values.map((row) => [
-      row.date,
-      FINANCE_ACCOUNT_LABELS[row.accountCode] ?? row.accountCode,
-      row.debit.toFixed(4),
-      row.credit.toFixed(4),
-      row.debit.sub(row.credit).toFixed(4),
-      String(row.entries)
-    ])
-  ];
-}
-
-function decimal(value: { toString(): string } | null) {
-  return value?.toString() ?? '';
-}
-
-function dateTime(value: Date | null) {
-  return value ? dateTimeFormatter.format(value).replace(/\//g, '-') : '';
+    .filter((row) => !previousAfter || `${row.date}:${row.accountCode}` > previousAfter)
+    .sort((left, right) => {
+      const a = `${left.date}:${left.accountCode}`;
+      const b = `${right.date}:${right.accountCode}`;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  const removed = values.length - retainedGoogleSheetsRowCount(values.length);
+  const cutoff = removed ? values[removed - 1] : undefined;
+  return {
+    after: cutoff ? `${cutoff.date}:${cutoff.accountCode}` : previousAfter,
+    rows: [
+      ['业务日期', '财务科目', '借方人民币', '贷方人民币', '净额人民币', '分录数'],
+      ...values
+        .slice(removed)
+        .map((row) => [
+          row.date,
+          financeAccountLabel(row.accountCode),
+          row.debit.toFixed(4),
+          row.credit.toFixed(4),
+          row.debit.sub(row.credit).toFixed(4),
+          String(row.entries)
+        ])
+    ]
+  };
 }

@@ -126,7 +126,7 @@
             <el-icon><DataAnalysis /></el-icon>
             <span>
               <strong>Google 表格同步</strong>
-              <small>业务报表约 30 秒自动更新</small>
+              <small>业务保存后自动同步报表</small>
             </span>
             <el-icon><ArrowRight /></el-icon>
           </button>
@@ -335,7 +335,7 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 }
 
 .v2-workspace-launcher__trigger:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--v3-sidebar-text-strong) 10%, transparent);
   color: var(--v3-sidebar-text-strong);
 }
 

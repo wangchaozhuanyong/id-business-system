@@ -410,7 +410,6 @@
   }
 }
 @media (max-width: 900px) {
-  .recharge-panel :deep(.el-form-item__label),
   .recharge-entry-panel :deep(.el-form-item__content),
   .recharge-entry-panel :deep(.el-radio-button__inner),
   .recharge-account-email {

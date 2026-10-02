@@ -1,3 +1,4 @@
+import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getApiErrorMessage } from '@/api/client';
@@ -90,12 +91,16 @@ export function useTopupRecordsPage() {
     () => canAdjustBalance.value && hasUserPermission(authStore.user, 'apple.account.update')
   );
   const requestedTab = readRecordsTab(route.query.tab);
-  const activeTab = ref<RecordsTab>(
-    (requestedTab === 'suppliers' || requestedTab === 'payments') && !canViewSupplierFunds.value
-      ? 'giftCards'
-      : requestedTab
+  const activeTab = useV2SessionDraft('topup-records/useTopupRecordsPage:activeTab', () =>
+    ref<RecordsTab>(
+      (requestedTab === 'suppliers' || requestedTab === 'payments') && !canViewSupplierFunds.value
+        ? 'giftCards'
+        : requestedTab
+    )
   );
-  const recordsDataTab = ref<RecordsDataTab>(activeTab.value === 'ledger' ? 'ledger' : 'giftCards');
+  const recordsDataTab = useV2SessionDraft('topup-records/useTopupRecordsPage:recordsDataTab', () =>
+    ref<RecordsDataTab>(activeTab.value === 'ledger' ? 'ledger' : 'giftCards')
+  );
   const cardNameOptions = ref<V2OptionSelector[]>([]);
   const countryOptions = ref<V2OptionSelector[]>([]);
   const topupSupplierOptions = ref<V2OptionSelector[]>([]);
@@ -115,37 +120,45 @@ export function useTopupRecordsPage() {
   const supplierDrawerVisible = ref(false);
   const supplierSubmitting = ref(false);
 
-  const filters = reactive({
-    keyword: '',
-    accountId: readAccountId(route.query.accountId),
-    accountLabel: readQueryString(route.query.accountLabel, 255),
-    cardNameOptionId: '',
-    countryOptionId: '',
-    supplierOptionId: '',
-    dateRange: [] as string[]
-  });
-  const giftCardQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    status: '' as V2GiftCardRecordStatus | '',
-    sortBy: 'creditedAt' as V2GiftCardRecordSortBy,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
-  const ledgerQuery = reactive({
-    page: 1,
-    pageSize: 20,
-    entryType: '' as V2BalanceLedgerEntryType | '',
-    sortBy: 'createdAt' as V2BalanceLedgerSortBy,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
-  const metadataForm = reactive({
+  const filters = useV2SessionDraft('topup-records/useTopupRecordsPage:filters', () =>
+    reactive({
+      keyword: '',
+      accountId: readAccountId(route.query.accountId),
+      accountLabel: readQueryString(route.query.accountLabel, 255),
+      cardNameOptionId: '',
+      countryOptionId: '',
+      supplierOptionId: '',
+      dateRange: [] as string[]
+    })
+  );
+  const giftCardQuery = useV2SessionDraft('topup-records/useTopupRecordsPage:giftCardQuery', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      status: '' as V2GiftCardRecordStatus | '',
+      sortBy: 'creditedAt' as V2GiftCardRecordSortBy,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
+  const ledgerQuery = useV2SessionDraft('topup-records/useTopupRecordsPage:ledgerQuery', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      entryType: '' as V2BalanceLedgerEntryType | '',
+      sortBy: 'createdAt' as V2BalanceLedgerSortBy,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
+  const metadataFormDraft = useV2FormDraft('gift-card-metadata-editor', () => ({
     remark: ''
-  });
-  const supplierForm = reactive({
+  }));
+  const metadataForm = metadataFormDraft.form;
+  const supplierFormDraft = useV2FormDraft('gift-card-supplier-editor', () => ({
     supplierOptionId: '',
     reason: '',
     idempotencyKey: ''
-  });
+  }));
+  const supplierForm = supplierFormDraft.form;
   const metadataDisabledReason = computed(() =>
     selectedGiftCard.value ? '' : '未选择需要修改的礼品卡记录'
   );
@@ -407,7 +420,7 @@ export function useTopupRecordsPage() {
 
   function openMetadataDrawer(giftCard: V2GiftCardRecord) {
     selectedGiftCard.value = giftCard;
-    metadataForm.remark = giftCard.remark ?? '';
+    metadataFormDraft.open(giftCard.id, { remark: giftCard.remark ?? '' });
     metadataDrawerVisible.value = true;
   }
 
@@ -416,11 +429,13 @@ export function useTopupRecordsPage() {
     if (!giftCard || metadataSubmitting.value) return;
 
     metadataSubmitting.value = true;
+    const completeSave = metadataFormDraft.beginSave();
     try {
       await idBusinessV2BalancesApi.updateGiftCardMetadata(giftCard.id, {
         remark: metadataForm.remark.trim() || null
       });
       ElMessage.success('备注已更新，账务字段未变更');
+      completeSave();
       metadataDrawerVisible.value = false;
       selectedGiftCard.value = null;
       await loadGiftCards();
@@ -433,7 +448,7 @@ export function useTopupRecordsPage() {
 
   function openSupplierDrawer(giftCard: V2GiftCardRecord) {
     selectedGiftCard.value = giftCard;
-    Object.assign(supplierForm, {
+    supplierFormDraft.open(giftCard.id, {
       supplierOptionId: giftCard.supplierOptionId ?? '',
       reason: '',
       idempotencyKey: globalThis.crypto.randomUUID()
@@ -460,6 +475,7 @@ export function useTopupRecordsPage() {
     const giftCard = selectedGiftCard.value;
     if (!giftCard || supplierSubmitting.value || supplierDisabledReason.value) return;
     supplierSubmitting.value = true;
+    const completeSave = supplierFormDraft.beginSave();
     try {
       const result = await idBusinessV2BalancesApi.reassignGiftCardSupplier(giftCard.id, {
         supplierOptionId: supplierForm.supplierOptionId,
@@ -471,6 +487,7 @@ export function useTopupRecordsPage() {
           ? '切账前记录的供应商归属已更正，未生成资金流水'
           : '供应商已更正，原供应商返还与新供应商扣款已同时入账'
       );
+      completeSave();
       supplierDrawerVisible.value = false;
       selectedGiftCard.value = null;
       await loadGiftCards();

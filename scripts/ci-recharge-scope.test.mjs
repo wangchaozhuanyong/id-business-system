@@ -12,7 +12,8 @@ import {
   isTargetedOnly,
   selectedParts,
   checkMode,
-  adminCheckCommands
+  adminCheckCommands,
+  adminUiGuardChecks
 } from './ci-recharge-scope.mjs';
 import { matchesSourceEvidence } from './ci-recharge-evidence.mjs';
 
@@ -62,6 +63,7 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'scripts/production-release/cleanup-verified-backups.test.py',
     'deploy/aws/cache-cleanup-20261001.json',
     'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
+    'deploy/aws/cache-cleanup-unified-20261002.json',
     'docs/PRODUCTION_RELEASE_OIDC.md'
   ];
   assert.equal(checkMode(paths, schema, schema), 'ci-only');
@@ -80,6 +82,39 @@ test('release workflow diagnostics retain control checks and do not hide applica
     ),
     'admin'
   );
+});
+test('every scoped V2 frontend route runs the same UI, skin, loading and draft guards', () => {
+  const required = [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ];
+  for (const path of [
+    'apps/admin/src/v2/features/customers/NewCustomerView.vue',
+    'apps/admin/src/v2/features/auto-recharge/NewRechargeView.vue',
+    'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
+    'apps/admin/src/v2/styles/base.css'
+  ]) {
+    const mode = checkMode([path], schema, schema);
+    const checks = adminUiGuardChecks(mode, [path]);
+    for (const name of required) assert.ok(checks.includes(name), `${mode}: missing ${name}`);
+    assert.equal(new Set(checks).size, checks.length);
+    assert.deepEqual(selectedParts([path]), ['guards', 'admin']);
+  }
+});
+test('documentation and backend-only recharge changes do not start frontend UI guards', () => {
+  for (const path of [
+    'AGENTS.md',
+    'docs/UI_DESIGN.md',
+    'scripts/ci-recharge-check.mjs',
+    'apps/api/src/id-business-v2/auto-recharge/example.service.ts'
+  ]) {
+    assert.deepEqual(adminUiGuardChecks(checkMode([path], schema, schema), [path]), []);
+  }
 });
 test('public static information pages stay in admin checks without widening auth or API scope', () => {
   const paths = [

@@ -57,6 +57,7 @@ const props = withDefaults(
     confirmDisabledReason?: string;
     danger?: boolean;
     dirty?: boolean;
+    retainDraft?: boolean;
   }>(),
   {
     width: 'min(420px, 92vw)',
@@ -67,7 +68,8 @@ const props = withDefaults(
     confirmDisabled: false,
     confirmDisabledReason: '',
     danger: false,
-    dirty: false
+    dirty: false,
+    retainDraft: true
   }
 );
 
@@ -78,7 +80,7 @@ const emit = defineEmits<{
 
 async function handleBeforeClose(done: () => void) {
   if (props.confirmLoading) return;
-  if (!props.dirty) {
+  if (!props.dirty || props.retainDraft) {
     done();
     return;
   }

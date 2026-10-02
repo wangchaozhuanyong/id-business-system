@@ -280,12 +280,16 @@ import V2BankCardCurrencySelect from './V2BankCardCurrencySelect.vue';
 import '@/v2/styles/records.css';
 import './bank-recharge.css';
 
-const page = ref(1);
-const pageSize = ref(20);
-const keywordInput = ref('');
-const statusInput = ref('');
-const keyword = ref('');
-const status = ref('');
+const page = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:page', () => ref(1));
+const pageSize = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:pageSize', () => ref(20));
+const keywordInput = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:keywordInput', () =>
+  ref('')
+);
+const statusInput = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:statusInput', () =>
+  ref('')
+);
+const keyword = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:keyword', () => ref(''));
+const status = useV2SessionDraft('auto-recharge/V2BankRechargeCardsView:status', () => ref(''));
 const query = useV2ModuleQuery({
   moduleKey: 'bank-recharge-cards',
   scope: 'auto-recharge',
@@ -322,7 +326,7 @@ const formRef = ref<FormInstance>();
 const {
   form,
   open: openDraft,
-  complete: completeDraft
+  beginSave: beginDraftSave
 } = useV2FormDraft('bank-cards-editor', () => ({
   label: '',
   number: '',
@@ -396,6 +400,7 @@ function openEdit(card: ManagedBankRechargeCard) {
 async function save() {
   if (saving.value || !(await validateV2Form(formRef.value))) return;
   saving.value = true;
+  const completeDraft = beginDraftSave();
   formError.value = '';
   try {
     if (editing.value) {

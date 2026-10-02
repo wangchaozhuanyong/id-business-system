@@ -82,7 +82,7 @@ const employeeUiPath = 'apps/admin/src/v2/features/employees/useEmployeesPage.ts
 requireText(
   employeeUiPath,
   read(employeeUiPath),
-  'expectedUpdatedAt: current.updatedAt',
+  'expectedUpdatedAt: editorDraft.version.value ?? current.updatedAt',
   '员工编辑必须提交列表快照版本'
 );
 
@@ -129,7 +129,7 @@ const securityUi = read(securityUiPath);
 requireText(
   securityUiPath,
   securityUi,
-  'expectedUpdatedAt: editingWhitelist.value.updatedAt',
+  'expectedUpdatedAt: whitelistFormDraft.version.value ?? editingWhitelist.value.updatedAt',
   'IP 白名单编辑必须提交列表快照版本'
 );
 requireText(
@@ -210,15 +210,15 @@ const sharedEditUiContracts = [
   ['apps/admin/src/v2/features/accounts/useAccountsPage.ts', 'editingItem.value.updatedAt'],
   [
     'apps/admin/src/v2/features/accounts/useAccountRecordStatus.ts',
-    'expectedUpdatedAt: target.updatedAt'
+    'expectedUpdatedAt: recordStatusReasonDraft.version.value ?? target.updatedAt'
   ],
   [
     'apps/admin/src/v2/features/customers/useCustomersPage.ts',
-    'expectedUpdatedAt: editingItem.value.updatedAt'
+    'expectedUpdatedAt: editorDraft.version.value ?? editingItem.value.updatedAt'
   ],
   [
     'apps/admin/src/v2/features/options/useOptionsPage.ts',
-    'expectedUpdatedAt: editingItem.value.updatedAt'
+    'expectedUpdatedAt: editorDraft.version.value ?? editingItem.value.updatedAt'
   ],
   [
     'apps/admin/src/v2/features/branding/V2BrandingSettingsView.vue',
@@ -226,7 +226,7 @@ const sharedEditUiContracts = [
   ],
   [
     'apps/admin/src/v2/features/finance-ledger/useFinanceLedgerPage.ts',
-    'expectedUpdatedAt: editingAccount.value.updatedAt'
+    'expectedUpdatedAt: accountFormDraft.version.value ?? editingAccount.value.updatedAt'
   ],
   [
     'apps/admin/src/v2/features/exchange-rates/useExchangeRatesPage.ts',

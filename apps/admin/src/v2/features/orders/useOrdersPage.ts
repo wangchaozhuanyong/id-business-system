@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -57,7 +58,9 @@ const ORDERS_OPTIONS_KEY = 'selectors';
 export function useOrdersPage() {
   const router = useRouter();
   const authStore = useAuthStore();
-  const openedRange = ref<[string, string] | []>([]);
+  const openedRange = useV2SessionDraft('orders/useOrdersPage:openedRange', () =>
+    ref<[string, string] | []>([])
+  );
   const detailVisible = ref(false);
   const detailLoading = ref(false);
   const detailError = ref('');
@@ -104,18 +107,20 @@ export function useOrdersPage() {
     promptReason
   });
 
-  const query = reactive({
-    page: 1,
-    pageSize: 20,
-    keyword: '',
-    serviceOptionId: '',
-    settlementPlatformOptionId: '',
-    status: '' as V2OrderStatus | '',
-    accountDisposition: '' as V2OrderAccountDisposition | '',
-    accountSource: '' as V2OrderAccountSource | '',
-    sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
-    sortOrder: 'desc' as 'asc' | 'desc'
-  });
+  const query = useV2SessionDraft('orders/useOrdersPage:query', () =>
+    reactive({
+      page: 1,
+      pageSize: 20,
+      keyword: '',
+      serviceOptionId: '',
+      settlementPlatformOptionId: '',
+      status: '' as V2OrderStatus | '',
+      accountDisposition: '' as V2OrderAccountDisposition | '',
+      accountSource: '' as V2OrderAccountSource | '',
+      sortBy: 'openedAt' as NonNullable<V2OrderListQuery['sortBy']>,
+      sortOrder: 'desc' as 'asc' | 'desc'
+    })
+  );
   const activeFilterCount = computed(
     () =>
       [
@@ -306,13 +311,14 @@ export function useOrdersPage() {
     editVisible.value = true;
   }
 
-  async function updateOrder(payload: UpdateV2OrderInput) {
+  async function updateOrder(payload: UpdateV2OrderInput, completeSave?: () => void) {
     const order = editingOrder.value;
     if (!order || !canUpdateOrders.value) return;
 
     editSaving.value = true;
     try {
       const updated = await idBusinessV2OrdersApi.update(order.id, payload);
+      completeSave?.();
       editVisible.value = false;
       editingOrder.value = updated;
       if (detail.value?.id === updated.id) detail.value = updated;

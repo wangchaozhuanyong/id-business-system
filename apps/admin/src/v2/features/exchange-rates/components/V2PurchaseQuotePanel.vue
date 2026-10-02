@@ -1,3 +1,4 @@
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 <template>
   <section class="v2-purchase-quotes" aria-label="人民币收购报价">
     <el-alert
@@ -235,6 +236,7 @@
 </template>
 
 <script setup lang="ts">
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, ref, watch, type UnwrapNestedRefs } from 'vue';
 import { ArrowDown, Search } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -254,10 +256,10 @@ const props = defineProps<{
   page: ExchangeRatesPage;
 }>();
 
-const keyword = ref('');
+const keyword = useV2SessionDraft('purchase-quote-filters:keyword', () => ref(''));
 const exchangeRateAttribution = 'Rates By Exchange Rate API';
-const currentPage = ref(1);
-const pageSize = ref(10);
+const currentPage = useV2SessionDraft('purchase-quote-filters:currentPage', () => ref(1));
+const pageSize = useV2SessionDraft('purchase-quote-filters:pageSize', () => ref(10));
 const enabledQuoteCount = computed(
   () => props.page.purchaseQuotes.filter((quote) => quote.enabled).length
 );
