@@ -1,4 +1,5 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
+import type { V2AccountOffer } from '@apple-business/shared';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
 const base = '/id-business-v2/bank-recharge';
@@ -31,6 +32,9 @@ export interface BankChatgptAccount {
   hasPassword: boolean;
   hasTotp: boolean;
   remark: string | null;
+  offerStatus?: V2AccountOffer;
+  offerSource?: 'automatic' | 'manual' | null;
+  offerObservedAt?: string | null;
   firstLoginNetwork: { ip: string; countryCode: string; observedAt: string } | null;
   lastLoginNetwork: { ip: string; countryCode: string; observedAt: string } | null;
   createdAt: string;
@@ -185,7 +189,13 @@ export interface BankRechargeRenewalWarnings {
 export const bankRechargeApi = {
   listAccounts(
     options: ApiRequestOptions = {},
-    query: { page?: number; pageSize?: number; keyword?: string; subscriptionState?: string } = {}
+    query: {
+      page?: number;
+      pageSize?: number;
+      keyword?: string;
+      subscriptionState?: string;
+      offerStatus?: V2AccountOffer | 'all';
+    } = {}
   ) {
     return request<{ items: BankChatgptAccount[]; total: number; page: number; pageSize: number }>(
       http.get(`${base}/accounts`, { params: query, signal: options.signal })

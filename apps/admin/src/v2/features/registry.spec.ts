@@ -8,7 +8,19 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(32);
+    expect(v2FeatureRegistry).toHaveLength(34);
+  });
+
+  it('自动注册和名字数据表均为管理员入口', () => {
+    expect(
+      v2NavigationSections
+        .find((section) => section.key === 'auto-registration')
+        ?.items.map((item) => item.key)
+    ).toEqual(['auto-registration', 'registration-names']);
+    for (const key of ['auto-registration', 'registration-names'])
+      expect(v2FeatureRegistry.find((feature) => feature.key === key)?.requiredRoles).toEqual([
+        'admin'
+      ]);
   });
 
   it('registers recharge as an administrator-only form under its own navigation group', () => {

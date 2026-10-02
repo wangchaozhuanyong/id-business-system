@@ -54,6 +54,9 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
 };
 
 const AUDIT_OBJECT_LABELS: Record<string, string> = {
+  registration_job: '注册任务',
+  registration_name: '名字资料',
+  registration_connector: '本机注册连接器',
   user: '员工账户',
   role: '角色',
   order: '订单',
@@ -102,6 +105,13 @@ const AUDIT_REMARK_LABELS: Record<string, string> = {
 };
 
 const ACTION_SEGMENT_LABELS: Record<string, string> = {
+  auto_registration: '自动注册 GPT',
+  connector_access: '连接本机执行器',
+  resume_credentials: '同步补录安全资料',
+  launch: '启动本机任务',
+  progress: '更新执行进度',
+  code_read: '读取当前验证邮件',
+  name: '名字资料',
   account: 'ID 账号',
   account_lock: '账号占用锁',
   activation: '开通记录',

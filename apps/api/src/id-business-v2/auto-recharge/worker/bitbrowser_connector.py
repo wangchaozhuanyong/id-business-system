@@ -635,14 +635,27 @@ class Registry:
         self.lock = threading.Lock()
         self.jobs = {}
 
-    def start(self, payload):
+    def start(self, payload, origin=None):
         with self.lock:
             job_id = payload.get("id") if isinstance(payload, dict) else None
             if job_id in self.jobs:
-                return self.jobs[job_id]
+                previous = self.jobs[job_id]
+                if isinstance(payload, dict) and payload.get('mode') == 'registration':
+                    attempt = payload.get('attempt')
+                    previous_attempt = getattr(previous, 'attempt', None)
+                    if previous_attempt == attempt:
+                        return previous
+                    if not previous.done or type(attempt) is not int or previous_attempt is None or attempt <= previous_attempt:
+                        raise Stop('another_local_job_is_running')
+                else:
+                    return previous
             if any(not job.done for job in self.jobs.values()):
                 raise Stop("another_local_job_is_running")
-            job = LocalJob(payload)
+            if isinstance(payload, dict) and payload.get('mode') == 'registration':
+                from registration_job import RegistrationJob
+                job = RegistrationJob(payload, origin, BitBrowserClient)
+            else:
+                job = LocalJob(payload)
             self.jobs[job.id] = job
             threading.Thread(target=job.run, name=f"bitbrowser-{job.id[:8]}", daemon=True).start()
             return job
@@ -707,7 +720,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "capabilities": ["browser-catalog", "browser-options", "session-load-retry",
                                                      "same-window-page-refresh", "payment-unknown-resolution",
                                                      "prepayment-page-recovery", "stale-owned-profile-cleanup",
-                                                     "password-login", "login-code"],
+                                                     "password-login", "login-code", "account-registration"],
                                     "originAllowed": bool(self.allowed_origin()),
                                     "busy": any(not job.done for job in REGISTRY.jobs.values())})
         match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")", self.path)
@@ -740,7 +753,7 @@ class Handler(BaseHTTPRequestHandler):
                     client.token = ""
                     body.clear()
             if self.path == "/jobs":
-                job = REGISTRY.start(body)
+                job = REGISTRY.start(body, self.allowed_origin())
                 return self.reply(202, {"ok": True, "id": job.id, "accepted": True})
             match = re.fullmatch(r"/jobs/(" + JOB_ID_TEXT + r")/(resume|cancel|code)", self.path)
             if not match:
@@ -749,12 +762,22 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self.reply(404, {"ok": False})
             if match.group(2) == "code":
-                if not isinstance(body, dict) or set(body) != {"code"}:
+                from registration_job import RegistrationJob
+                if isinstance(job, RegistrationJob):
+                    if not isinstance(body, dict) or set(body) - {'code', 'attempt', 'step', 'mailId'} or 'code' not in body:
+                        raise Stop('invalid_login_code')
+                    job.signal_code(body['code'], body.get('attempt'), body.get('step'), body.get('mailId'))
+                elif not isinstance(body, dict) or set(body) != {"code"}:
                     raise Stop("invalid_login_code")
-                job.signal_code(body["code"])
+                else:
+                    job.signal_code(body["code"])
                 body.clear()
             elif match.group(2) == "resume":
-                job.signal_resume()
+                from registration_job import RegistrationJob
+                if isinstance(job, RegistrationJob):
+                    job.signal_resume(body)
+                else:
+                    job.signal_resume()
             else:
                 job.signal_cancel()
             return self.reply(200, {"ok": True})
