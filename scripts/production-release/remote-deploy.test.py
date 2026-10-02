@@ -3,10 +3,16 @@ from pathlib import Path
 import unittest
 import tempfile
 import json
+import io
+import tarfile
+import copy
 
 spec = importlib.util.spec_from_file_location('deployment', Path(__file__).with_name('remote-deploy.py'))
 deployment = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deployment)
+reuse_spec = importlib.util.spec_from_file_location('reuse', Path(__file__).with_name('reuse-images.py'))
+reuse = importlib.util.module_from_spec(reuse_spec)
+reuse_spec.loader.exec_module(reuse)
 
 
 class ReleaseScopeTests(unittest.TestCase):
@@ -23,6 +29,83 @@ class ReleaseScopeTests(unittest.TestCase):
         services, images = deployment.release_services(False, ['20261001_example'])
         self.assertEqual(services, deployment.SERVICES)
         self.assertEqual(images, (*deployment.SERVICES, 'migrate'))
+
+
+class ReusableImageTests(unittest.TestCase):
+    def setUp(self):
+        self.run = {'event': 'workflow_dispatch', 'path': '.github/workflows/production-release.yml',
+                    'head_branch': 'main', 'status': 'completed', 'head_sha': 'a' * 40,
+                    'run_attempt': 1}
+        self.jobs = {'jobs': [{'name': 'release', 'steps': [
+            {'name': name, 'conclusion': 'success'} for name in (
+                'Verify exact source and passing Quality Gate',
+                'Build images on the GitHub runner', 'Push immutable images')]}]}
+
+    def test_only_verified_successful_build_steps_are_reused(self):
+        self.assertEqual(reuse.build_source(self.run, self.jobs), ('a' * 40, '1'))
+        for index in range(3):
+            jobs = copy.deepcopy(self.jobs)
+            jobs['jobs'][0]['steps'][index]['conclusion'] = 'failure'
+            with self.assertRaisesRegex(RuntimeError, 'did not succeed'):
+                reuse.build_source(self.run, jobs)
+
+    def test_other_workflow_branch_and_incomplete_run_are_rejected(self):
+        for field, value in [('head_branch', 'other'), ('event', 'push'),
+                             ('status', 'in_progress'), ('path', '.github/workflows/quality.yml')]:
+            with self.assertRaisesRegex(RuntimeError, 'Unverified previous'):
+                reuse.build_source({**self.run, field: value}, self.jobs)
+
+    def test_application_dependency_migration_and_runtime_config_changes_reject_reuse(self):
+        deployment.require_reusable_paths(['scripts/production-release/remote-deploy.py'])
+        for path in ('apps/api/src/example.ts', 'apps/admin/src/v2/example.vue',
+                     'apps/api/prisma-mysql/schema.prisma', 'package-lock.json',
+                     'docker-compose.aws-mysql.yml', 'deploy/aws/google-drive-sync-folder.json'):
+            with self.assertRaisesRegex(RuntimeError, 'source changed'):
+                deployment.require_reusable_paths([path])
+
+    def archive(self, files):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
+            for path, contents, mode in files:
+                member = tarfile.TarInfo('id-business-system-' + 'a' * 40 + '/' + path)
+                data = contents.encode()
+                member.size = len(data)
+                member.mode = mode
+                archive.addfile(member, io.BytesIO(data))
+        buffer.seek(0)
+        return tarfile.open(fileobj=buffer, mode='r:gz')
+
+    def test_server_rechecks_all_non_control_contents_and_executable_modes(self):
+        with tempfile.TemporaryDirectory() as root:
+            release = Path(root)
+            (release / 'apps/api').mkdir(parents=True)
+            source = release / 'apps/api/app.ts'
+            source.write_text('same application')
+            (release / 'docs').mkdir()
+            (release / 'docs/PRODUCTION_RELEASE_OIDC.md').write_text('new procedure')
+            files = [('apps/api/app.ts', 'same application', 0o644),
+                     ('docs/PRODUCTION_RELEASE_OIDC.md', 'old procedure', 0o644)]
+            with self.archive(files) as archive:
+                deployment.verify_reusable_archive(release, archive, 'a' * 40)
+            source.write_text('different application')
+            with self.archive(files) as archive:
+                with self.assertRaisesRegex(RuntimeError, 'differs from release'):
+                    deployment.verify_reusable_archive(release, archive, 'a' * 40)
+            source.write_text('same application')
+            source.chmod(0o755)
+            with self.archive(files) as archive:
+                with self.assertRaisesRegex(RuntimeError, 'differs from release'):
+                    deployment.verify_reusable_archive(release, archive, 'a' * 40)
+
+    def test_missing_new_files_and_unsafe_archive_paths_fail_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            release = Path(root)
+            (release / 'package.json').write_text('new dependency')
+            for files, reason in [([], 'differs from release'),
+                                  ([('../escape', 'bad', 0o644)], 'Unsafe reusable')]:
+                with self.archive(files) as archive:
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        deployment.verify_reusable_archive(release, archive, 'a' * 40)
 
 
 class GoogleDriveReleaseConfigTests(unittest.TestCase):

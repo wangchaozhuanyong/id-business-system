@@ -33,6 +33,12 @@ on:
           - fx_subscription_20261002
           - unified_20261002
           - unified_recovery_20261002
+          - recharge_names_20261002
+      reuse_image_run:
+        description: Optional completed build run to reuse after a release-control-only repair
+        required: false
+        default: ''
+        type: string
 
 permissions:
   actions: read
@@ -66,8 +72,14 @@ jobs:
         run: bash scripts/production-release/check-source.sh
 
       - name: Build images on the GitHub runner
-        if: inputs.operation == 'release'
+        if: inputs.operation == 'release' && inputs.reuse_image_run == ''
         run: bash scripts/production-release/build-images.sh
+
+      - name: Verify reusable build and unchanged application source
+        if: inputs.operation == 'release' && inputs.reuse_image_run != ''
+        env:
+          REUSE_IMAGE_RUN: ${{ inputs.reuse_image_run }}
+        run: python3 scripts/production-release/reuse-images.py
 
       - name: Obtain short-lived AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -96,7 +108,7 @@ jobs:
             --instance-id "$PRODUCTION_INSTANCE_ID" --query StandardOutputContent --output text)" = release_access_ok
 
       - name: Push immutable images
-        if: inputs.operation == 'release'
+        if: inputs.operation == 'release' && inputs.reuse_image_run == ''
         run: bash scripts/production-release/push-images.sh
 
       - name: Verify or apply reviewed local image cache cleanup
@@ -119,6 +131,7 @@ jobs:
               'fx_subscription_20261002': 'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
               'unified_20261002': 'deploy/aws/cache-cleanup-unified-20261002.json',
               'unified_recovery_20261002': 'deploy/aws/cache-cleanup-unified-recovery-20261002.json',
+              'recharge_names_20261002': 'deploy/aws/cache-cleanup-recharge-names-20261002.json',
           }
           plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)

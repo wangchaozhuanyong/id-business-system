@@ -5,6 +5,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -21,11 +22,53 @@ import urllib.request
 BASE = Path('/opt/id-business-v2')
 SERVICES = ('media-resolver', 'auto-recharge', 'api', 'admin')
 ALL_SERVICES = (*SERVICES, 'mysql', 'caddy')
+REUSE_CONTROL_FILES = frozenset({
+    '.github/workflows/production-release.yml',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/cleanup-reviewed-cache.py',
+    'scripts/production-release/cleanup-reviewed-cache.test.py',
+    'scripts/production-release/dispatch.sh',
+    'scripts/production-release/remote-deploy.py',
+    'scripts/production-release/remote-deploy.test.py',
+    'scripts/production-release/reuse-images.py',
+    'deploy/aws/cache-cleanup-recharge-names-20261002.json',
+    'docs/PRODUCTION_RELEASE_OIDC.md',
+    'docs/RECHARGE_NAMES_CACHE_RECOVERY_20261002.md',
+})
 
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def require_reusable_paths(paths):
+    require(set(paths) <= REUSE_CONTROL_FILES, 'Application or build source changed since image build')
+
+
+def verify_reusable_archive(release, source, commit):
+    prefix = f'id-business-system-{commit}/'
+    hashes = {}
+    seen = set()
+    for member in source.getmembers():
+        require((member.name == prefix[:-1] or member.name.startswith(prefix))
+                and '..' not in Path(member.name).parts
+                and (member.isfile() or member.isdir()), 'Unsafe reusable source archive entry')
+        if not member.isfile():
+            continue
+        name = member.name[len(prefix):]
+        require(name not in seen, 'Duplicate reusable archive entry')
+        seen.add(name)
+        if name not in REUSE_CONTROL_FILES:
+            hashes[name] = (hashlib.sha256(source.extractfile(member).read()).hexdigest(),
+                            member.mode & 0o111)
+    actual = {str(p.relative_to(release)): (hashlib.sha256(p.read_bytes()).hexdigest(),
+                                         p.stat().st_mode & 0o111)
+              for p in release.rglob('*') if p.is_file()
+              and str(p.relative_to(release)) not in REUSE_CONTROL_FILES}
+    require(actual == hashes, 'Reusable image source differs from release application source')
 
 
 def release_services(admin_only, additions):
@@ -233,6 +276,9 @@ def main():
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--run-attempt', required=True)
     parser.add_argument('--ci-run-id', required=True)
+    parser.add_argument('--image-commit')
+    parser.add_argument('--image-run-id')
+    parser.add_argument('--image-run-attempt')
     parser.add_argument('--admin-only', action='store_true')
     args = parser.parse_args()
     require(re.fullmatch(r'[0-9a-f]{40}', args.commit), 'Invalid commit')
@@ -242,6 +288,12 @@ def main():
     require(re.fullmatch(r'[0-9]+', args.run_id), 'Invalid workflow run')
     require(re.fullmatch(r'[1-9][0-9]*', args.run_attempt), 'Invalid workflow attempt')
     require(re.fullmatch(r'[1-9][0-9]*', args.ci_run_id), 'Invalid Quality Gate run')
+    image_commit = args.image_commit or args.commit
+    image_run = args.image_run_id or args.run_id
+    image_attempt = args.image_run_attempt or args.run_attempt
+    require(re.fullmatch(r'[0-9a-f]{40}', image_commit), 'Invalid image commit')
+    require(re.fullmatch(r'[1-9][0-9]*', image_run), 'Invalid image workflow run')
+    require(re.fullmatch(r'[1-9][0-9]*', image_attempt), 'Invalid image workflow attempt')
     os.umask(0o077)
     lock = (BASE / '.deploy.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -283,13 +335,21 @@ def main():
             item.rename(release / item.name)
         extracted.rmdir()
         archive.unlink()
+        if image_commit != args.commit:
+            url = f'https://github.com/wangchaozhuanyong/id-business-system/archive/{image_commit}.tar.gz'
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read(64 * 1024 * 1024 + 1)
+            require(len(data) <= 64 * 1024 * 1024, 'Reusable source archive is too large')
+            reusable = io.BytesIO(data)
+            with tarfile.open(fileobj=reusable, mode='r:gz') as source:
+                verify_reusable_archive(release, source, image_commit)
         shutil.copy2(previous / '.env.aws.production', release / '.env.aws.production')
         (release / '.env.aws.production').chmod(0o600)
         google_drive_folder = configure_google_drive_sync(previous, release)
         additions = migration_plan(previous, release)
         updated_services, image_services = release_services(args.admin_only, additions)
         override = json.loads((previous / 'compose.release.json').read_text())
-        image_tags = {service: f'{args.commit}-{args.run_id}-{args.run_attempt}-{service}'
+        image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
         for service in image_services:
             override['services'].setdefault(service, {})['image'] = (
@@ -315,7 +375,7 @@ def main():
                 image = json.loads(run('docker', 'image', 'inspect',
                                        f'{args.repository}:{image_tags[service]}'))[0]
                 require(image['Architecture'] == 'amd64'
-                        and image['Config']['Labels'].get('org.opencontainers.image.revision') == args.commit,
+                        and image['Config']['Labels'].get('org.opencontainers.image.revision') == image_commit,
                         f'{service} image provenance mismatch')
                 pulled_images[service] = image['Id']
         finally:
@@ -360,13 +420,14 @@ def main():
             'ciWorkflow': 'Quality Gate', 'ciWorkflowRunId': int(args.ci_run_id),
             'deployedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'deploymentRun': f'github-actions-{args.run_id}-{args.run_attempt}',
+            'imageBuildRun': f'github-actions-{image_run}-{image_attempt}',
             'previousCommit': args.expected_current, 'previousRelease': str(previous),
             'googleDriveSyncFolderId': google_drive_folder,
             'servicesUpdated': list(updated_services), 'sourceArchiveSha256': source_digest,
             'images': {**old_manifest.get('images', {}), **{
                 service: {'reference': f'{args.repository}:{image_tags[service]}',
                           'digest': after[service]['image'] if service in SERVICES
-                          else pulled_images[service], 'sourceCommit': args.commit}
+                          else pulled_images[service], 'sourceCommit': image_commit}
                 for service in image_services}},
             'backupBeforeRelease': backup['name'],
             'migrationApplied': bool(additions), 'newMigrations': additions,
