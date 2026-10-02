@@ -1,5 +1,10 @@
 import importlib.util
+import hashlib
+import io
+import json
 from pathlib import Path
+import tarfile
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +16,35 @@ BACKUP = {'name': 'id-business-v2-20261002T120000Z.sql.gz', 's3Verified': True}
 
 
 class StorageSafetyTests(unittest.TestCase):
+    def test_archive_config_identity_is_verified_without_extracting_secrets(self):
+        payload = b'{"Env":["PRIVATE=never-output"]}'
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory:
+            path = Path(directory) / 'images.tar.gz'
+            with tarfile.open(path, 'w:gz') as archive:
+                for name, data in ((digest + '.json', payload), ('manifest.json', json.dumps([
+                        {'Config': digest + '.json', 'RepoTags': ['id-business-v2-api:test'],
+                         'Layers': []}]).encode())):
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    archive.addfile(member, io.BytesIO(data))
+            result = storage.archived_images(path)
+        self.assertEqual(result, [{'imageId': 'sha256:' + digest, 'configVerified': True,
+                                   'repoTags': ['id-business-v2-api:test']}])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_archive_fake_config_identity_and_path_traversal_do_not_prove_recovery(self):
+        with tempfile.TemporaryDirectory(dir='.deploy') as directory:
+            path = Path(directory) / 'images.tar'
+            with tarfile.open(path, 'w') as archive:
+                for name, data in (('a' * 64 + '.json', b'wrong config'), ('manifest.json',
+                        json.dumps([{'Config': 'a' * 64 + '.json'},
+                                    {'Config': '../../secret.json'}]).encode())):
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    archive.addfile(member, io.BytesIO(data))
+            self.assertEqual(storage.archived_images(path), [])
+
     def test_destructive_scope_requires_exact_approval(self):
         with self.assertRaisesRegex(RuntimeError, 'approval required'):
             storage.cleanup_audit(storage.EXPECTED, None)

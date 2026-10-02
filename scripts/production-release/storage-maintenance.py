@@ -1,4 +1,4 @@
-"""Production aggregate diagnostics. No deletion, secrets, or row payload output."""
+"""Fixed-scope production diagnostics and approved cleanup, without secret output."""
 import argparse
 import base64
 import fcntl
@@ -11,10 +11,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
 
 BASE = Path('/opt/id-business-v2')
 EXPECTED = '63e7c3b9fdb462517373b48f338626dafaf856ca'
 PREVIOUS = 'a9530728a1b15d3dbb49fe7c38aa3c87e385467f'
+REVIEWED_BASELINES = {
+    EXPECTED: PREVIOUS,
+    'cecc14b530fd32d595fe5ae14612fbde68ae9175': EXPECTED,
+}
 APPROVED_SCOPE = 'audit-routine-20261002T110000Z'
 CUTOFF = '2026-10-02 11:00:00'
 MAX_APPROVED_COUNT = 19848
@@ -34,9 +39,64 @@ def read(*args):
     return result.stdout.strip()
 
 
-def diagnose():
+def archived_images(path, deadline=None):
+    """Read Docker save metadata and hash small config members without extracting files."""
+    configs = {}
+    manifest = None
+    with tarfile.open(path, 'r|*') as archive:
+        for member in archive:
+            require(deadline is None or time.monotonic() < deadline,
+                    'Archive metadata time budget exceeded')
+            if not member.isfile() or member.size > 4 * 1024 * 1024:
+                continue
+            name = member.name.removeprefix('./')
+            config_match = re.fullmatch(r'(?:blobs/sha256/)?([a-f0-9]{64})(?:\.json)?', name)
+            if name != 'manifest.json' and not config_match:
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                continue
+            payload = source.read(4 * 1024 * 1024 + 1)
+            if config_match:
+                configs[config_match[1]] = hashlib.sha256(payload).hexdigest() == config_match[1]
+            else:
+                manifest = json.loads(payload)
+    if not isinstance(manifest, list):
+        return []
+    result = []
+    for item in manifest:
+        match = re.fullmatch(r'(?:blobs/sha256/)?([a-f0-9]{64})(?:\.json)?', item.get('Config', ''))
+        if match and configs.get(match[1]):
+            result.append({'imageId': 'sha256:' + match[1], 'configVerified': True,
+                           'repoTags': item.get('RepoTags') or []})
+    return result
+
+
+def archive_inventory():
+    root = BASE / 'artifacts'
+    if not root.is_dir() or root.is_symlink():
+        return []
+    result = []
+    deadline = time.monotonic() + 120
+    for path in sorted(root.rglob('*')):
+        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root):
+            continue
+        require(len(result) < 500, 'Artifact inventory exceeds reviewed bound')
+        stat = path.stat()
+        item = {'path': str(path.relative_to(BASE)), 'bytes': stat.st_size,
+                'mtimeNs': stat.st_mtime_ns}
+        if path.name.endswith(('.tar', '.tar.gz', '.tgz')):
+            try:
+                item['dockerImages'] = archived_images(path, deadline)
+            except (tarfile.TarError, ValueError, OSError):
+                item['archiveMetadataStatus'] = 'UNAVAILABLE'
+        result.append(item)
+    return result
+
+
+def diagnose(expected=EXPECTED):
     manifest = json.loads((BASE / 'current/release-manifest.json').read_text())
-    if manifest['commit'] != EXPECTED:
+    if manifest['commit'] != expected:
         raise RuntimeError('Production baseline changed')
     project = None
     for line in (BASE / 'current/.env.aws.production').read_text().splitlines():
@@ -93,7 +153,7 @@ def diagnose():
             memory[key + 'Bytes'] = int(value.split()[0]) * 1024
     disk = shutil.disk_usage(BASE)
     result = {
-        'mode': 'READ_ONLY', 'currentCommit': EXPECTED, 'memory': memory,
+        'mode': 'READ_ONLY', 'currentCommit': expected, 'memory': memory,
         'disk': {'totalBytes': disk.total, 'usedBytes': disk.used, 'freeBytes': disk.free},
         'allLocalImages': image_inventory, 'allContainerImageIds': container_image_ids,
         'containers': [json.loads(row) for row in read('docker', 'stats', '--no-stream',
@@ -102,8 +162,9 @@ def diagnose():
                             '/var/log', '/opt/id-business-v2').splitlines(),
         'database': [json.loads(row) for row in mysql_output.splitlines()],
         'candidateCutoffUtc': '2026-10-02T11:00:00Z',
+        'archiveInventory': archive_inventory(),
     }
-    if json.loads((BASE / 'current/release-manifest.json').read_text())['commit'] != EXPECTED:
+    if json.loads((BASE / 'current/release-manifest.json').read_text())['commit'] != expected:
         raise RuntimeError('Production baseline changed during diagnostics')
     return result
 
@@ -114,13 +175,13 @@ def require(condition, reason):
 
 
 def baseline(expected):
-    require(expected == EXPECTED, 'Scope production baseline differs')
+    require(expected in REVIEWED_BASELINES, 'Scope production baseline differs')
     require((BASE / 'current').resolve().parent == BASE / 'releases', 'Unexpected release path')
     manifest = json.loads((BASE / 'current/release-manifest.json').read_text())
     require(manifest['commit'] == expected, 'Production baseline changed')
     previous = Path(manifest['previousRelease']).resolve()
     require(previous.parent == BASE / 'releases', 'Unexpected rollback path')
-    require(json.loads((previous / 'release-manifest.json').read_text())['commit'] == PREVIOUS,
+    require(json.loads((previous / 'release-manifest.json').read_text())['commit'] == REVIEWED_BASELINES[expected],
             'Rollback baseline changed')
     return (BASE / 'current').resolve()
 
@@ -267,7 +328,7 @@ def main():
     parser.add_argument('--approved-scope')
     args = parser.parse_args()
     baseline(args.expected_current)
-    result = diagnose() if args.operation == 'diagnose' else cleanup_audit(
+    result = diagnose(args.expected_current) if args.operation == 'diagnose' else cleanup_audit(
         args.expected_current, args.approved_scope)
     encoded = base64.b64encode(gzip.compress(json.dumps(result).encode())).decode()
     print('STORAGE_MAINTENANCE ' + json.dumps({'encoding': 'gzip+base64', 'payload': encoded}))
