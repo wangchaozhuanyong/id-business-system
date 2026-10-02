@@ -315,7 +315,9 @@ jobs:
               raise RuntimeError('Read-only image inventory exceeds bound')
           image_format = ('{"id":{{json .Id}},"repoTags":{{json .RepoTags}},'
               '"repoDigests":{{json .RepoDigests}},"sizeBytes":{{json .Size}},'
-              '"sourceCommit":{{json (index .Config.Labels "org.opencontainers.image.revision")}}}')
+              '"sourceCommit":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
+              '"parent":{{json .Parent}},"created":{{json .Created}},'
+              '"composeProject":{{json (index .Config.Labels "com.docker.compose.project")}}}')
           for image_id in image_ids:
               if image_id in protected_image_ids:
                   continue
@@ -324,6 +326,15 @@ jobs:
               if len(revision) != 40 or any(char not in '0123456789abcdef' for char in revision):
                   metadata['sourceCommit'] = None
               unused_images.append(metadata)
+          release_image_evidence = []
+          for release in sorted((base / 'releases').glob('*/release-manifest.json')):
+              if release.is_symlink():
+                  continue
+              old = json.loads(release.read_text())
+              for service, image in old.get('images', {}).items():
+                  if image.get('digest') in {item['id'] for item in unused_images}:
+                      release_image_evidence.append({'imageId': image['digest'], 'service': service,
+                          'commit': old.get('commit'), 'releaseTag': old.get('releaseTag')})
           repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
           images = []
           for line in read('docker', 'image', 'ls', '--format', '{{json .}}').splitlines():
@@ -344,7 +355,7 @@ jobs:
               'servicesUpdated': manifest.get('servicesUpdated'),
               'backups': backup_summary, 'storageDirectories': storage_directories,
               'protectedImageIds': sorted(protected_image_ids),
-              'unusedLocalImages': unused_images,
+              'unusedLocalImages': unused_images, 'unusedImageReleaseEvidence': release_image_evidence,
               'disk': {'totalBytes': usage.total, 'usedBytes': usage.used, 'freeBytes': usage.free},
               'containers': containers, 'images': images,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}))
