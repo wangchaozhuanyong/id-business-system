@@ -74,7 +74,7 @@ class ReviewedCacheTests(unittest.TestCase):
         self.assertEqual(self.invoke()['mode'], 'PLAN_ONLY')
         self.assertEqual(self.removals(), [])
 
-    def test_apply_removes_only_the_exact_ten_references_without_prune_or_force(self):
+    def test_apply_removes_only_exact_reviewed_references_without_prune_or_force(self):
         receipt = self.invoke(True)
         expected = [('docker', 'image', 'rm', '--no-prune', self.plan['repository'] + ':' + item['tag'])
                     for item in self.plan['items']]
@@ -163,11 +163,48 @@ class FxSubscriptionCacheTests(ReviewedCacheTests):
 class UnifiedReleaseCacheTests(ReviewedCacheTests):
     plan_name = 'cache-cleanup-unified-20261002.json'
 
+    def setUp(self):
+        super().setUp()
+        self.manifest['commit'] = 'a' * 40
+
+    def invoke(self, apply=False, plan=None, expected_current=None):
+        return super().invoke(apply, plan, expected_current or 'a' * 40)
+
     def test_post_release_requires_the_exact_new_current_and_preserves_previous(self):
         self.manifest['commit'] = 'a' * 40
         self.assertEqual(self.invoke(expected_current='a' * 40)['mode'], 'PLAN_ONLY')
         with self.assertRaisesRegex(RuntimeError, 'Production baseline changed'):
             self.invoke(True, expected_current='b' * 40)
+        self.assertEqual(self.removals(), [])
+
+    def test_capacity_recovery_accepts_only_the_exact_current_previous_pair(self):
+        self.manifest['commit'] = self.plan['expectedCurrent']
+        self.previous['commit'] = 'd1ed460eff55df7167a806dd3e1f7abdef5ef24d'
+        self.assertEqual(self.invoke(True, expected_current=self.manifest['commit'])['approvedCount'], 12)
+
+    def test_pre_release_pair_cannot_be_used_after_another_current_is_running(self):
+        self.previous['commit'] = 'd1ed460eff55df7167a806dd3e1f7abdef5ef24d'
+        with self.assertRaisesRegex(RuntimeError, 'Previous rollback version changed'):
+            self.invoke(True)
+        self.assertEqual(self.removals(), [])
+
+    def test_capacity_recovery_still_protects_the_previous_admin_image(self):
+        self.manifest['commit'] = self.plan['expectedCurrent']
+        self.previous['commit'] = 'd1ed460eff55df7167a806dd3e1f7abdef5ef24d'
+        self.previous['images']['admin']['digest'] = self.plan['items'][0]['imageId']
+        with self.assertRaisesRegex(RuntimeError, 'protected release'):
+            self.invoke(True, expected_current=self.manifest['commit'])
+        self.assertEqual(self.removals(), [])
+
+
+class UnifiedRecoveryCacheTests(ReviewedCacheTests):
+    plan_name = 'cache-cleanup-unified-recovery-20261002.json'
+
+    def test_post_release_override_requires_the_exact_running_current(self):
+        self.manifest['commit'] = 'c' * 40
+        self.assertEqual(self.invoke(expected_current='c' * 40)['approvedCount'], 6)
+        with self.assertRaisesRegex(RuntimeError, 'Production baseline changed'):
+            self.invoke(True, expected_current='d' * 40)
         self.assertEqual(self.removals(), [])
 
 

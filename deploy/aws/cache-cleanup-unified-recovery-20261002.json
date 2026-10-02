@@ -1,0 +1,38 @@
+{
+  "mode": "LOCAL_IMAGE_CACHE_ONLY",
+  "expectedCurrent": "7c947bab59ead760ad0a480b37ae54cd5ab0501d",
+  "expectedPrevious": "3b7e40d2dcf6fff43d3fd4f23dfbbd9f8f1cb31e",
+  "repository": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release",
+  "items": [
+    {
+      "tag": "7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-admin",
+      "imageId": "sha256:0ee37f86e2bf26a44b74b14abd60b460d65a8420ba772e969062018144f34653",
+      "size": "51.3MB"
+    },
+    {
+      "tag": "7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-migrate",
+      "imageId": "sha256:1f1fa695199e3205bcf962564f7507674847d9f7ad77067f626f12692f363120",
+      "size": "760MB"
+    },
+    {
+      "tag": "7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-api",
+      "imageId": "sha256:2e69f7c4e4a30947a4622ae651c041d555d4583fd4dc100eed67831631d64e87",
+      "size": "380MB"
+    },
+    {
+      "tag": "7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-auto-recharge",
+      "imageId": "sha256:9061f6a1cc50c81efab52c15e2a1fa049d885fc0223d8848df336beb1270af35",
+      "size": "1.27GB"
+    },
+    {
+      "tag": "7c947bab59ead760ad0a480b37ae54cd5ab0501d-36963452599-1-media-resolver",
+      "imageId": "sha256:44b4d05869b6951a2d066bfd54191b908b87b50dfafb154454136ad4998d4c70",
+      "size": "916MB"
+    },
+    {
+      "tag": "d1ed460eff55df7167a806dd3e1f7abdef5ef24d-36907590117-1-admin",
+      "imageId": "sha256:691f388f9f0a3a6e3129f481e23da4db1f8569006f150f067293c5879d417209",
+      "size": "51.3MB"
+    }
+  ]
+}
