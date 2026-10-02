@@ -40,6 +40,7 @@ on:
           - recharge_names_20261002
           - recharge_execution_20261002
           - storage_20261002
+          - bitbrowser_direct_20261003
       reuse_image_run:
         description: Optional completed build run to reuse after a release-control-only repair
         required: false
@@ -146,6 +147,7 @@ jobs:
               'recharge_names_20261002': 'deploy/aws/cache-cleanup-recharge-names-20261002.json',
               'recharge_execution_20261002': 'deploy/aws/cache-cleanup-recharge-execution-20261002.json',
               'storage_20261002': 'deploy/aws/cache-cleanup-storage-20261002.json',
+              'bitbrowser_direct_20261003': 'deploy/aws/cache-cleanup-bitbrowser-direct-20261003.json',
           }
           plan = Path(plans[os.environ['CLEANUP_PLAN']]).read_text()
           parsed_plan = json.loads(plan)

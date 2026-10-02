@@ -81,6 +81,7 @@ test('release workflow diagnostics retain control checks and do not hide applica
     'scripts/production-release/storage-maintenance.py',
     'scripts/production-release/storage-maintenance.test.py',
     'deploy/aws/cache-cleanup-storage-20261002.json',
+    'deploy/aws/cache-cleanup-bitbrowser-direct-20261003.json',
     'deploy/aws/cache-cleanup-20261001.json',
     'deploy/aws/cache-cleanup-fx-subscription-20261002.json',
     'deploy/aws/cache-cleanup-unified-20261002.json',

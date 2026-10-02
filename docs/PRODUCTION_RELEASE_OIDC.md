@@ -56,3 +56,5 @@ gh workflow run production-release.yml --ref main \
 生产网关 `deploy/caddy/Caddyfile.aws` 变化时，完整发布先校验新配置，再切换 Caddy 并核对公网响应的安全策略；失败时和业务服务一起恢复旧配置。仅管理端发布禁止携带网关配置变更。比特网页直连仅放行本机 HTTP 与 WebSocket，仍禁止任意远程连接和不可信脚本。
 
 发布命令失败时回传受控错误类型、脚本行号及固定失败原因，不输出任意原始错误或业务内容。需要补查某次发布失败时，`verify_access` 可填写该次工作流已显示的 `diagnostic_command_id`；只读取指定实例和命令的执行结果，不重新发布。
+
+比特网页直连发布的容量恢复使用 `cleanup_plan=bitbrowser_direct_20261003`，清单见 `deploy/aws/cache-cleanup-bitbrowser-direct-20261003.json`。只针对已经被替代的 `3577c978...-37002199068-1` 五个本机缓存引用，绑定当前生产 `96926b11...`、上一版 `c7351793...`；保留这两版、所有容器、比特直连候选及全部 ECR 镜像。先执行只读 `verify_cache` 核验本机及 ECR 身份，取得用户对这份清单的单独批准后才能执行 `cleanup_cache`。发布授权不代替删除批准；实际释放容量在执行后测量。镜像构建仍复用 `37027148223`，不改应用源码、数据库或备份。
