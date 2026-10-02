@@ -24,6 +24,8 @@ class StorageSafetyTests(unittest.TestCase):
         predicate = storage.audit_predicate([REF, other])
         self.assertIn('`id_business_v2_governance_job_items`', predicate)
         self.assertIn('`another_reference`', predicate)
+        self.assertIn('a.user_id IS NULL', predicate)
+        self.assertIn("<> 'manual'", predicate)
         self.assertNotIn('settings.update', predicate)
         self.assertNotIn('collect.failed', predicate)
         self.assertIn("a.created_at < '2026-10-02 11:00:00'", predicate)

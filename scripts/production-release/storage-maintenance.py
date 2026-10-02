@@ -76,7 +76,7 @@ def diagnose():
         "AND REFERENCED_TABLE_NAME='audit_logs'",
         "SELECT JSON_OBJECT('kind','routineCandidates','action',a.action,'count',COUNT(*)) "
         "FROM audit_logs a WHERE a.module='id_business_v2' AND a.action IN (" + actions + ") "
-        "AND a.created_at < '2026-10-02 11:00:00' AND NOT EXISTS (SELECT 1 FROM "
+        "AND a.user_id IS NULL AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.after_data,'$.triggerType')),'') <> 'manual' AND a.created_at < '2026-10-02 11:00:00' AND NOT EXISTS (SELECT 1 FROM "
         "id_business_v2_governance_job_items g WHERE g.result_audit_log_id=a.id) "
         "GROUP BY a.action",
     ]
@@ -151,14 +151,14 @@ def mysql(container, query, read_only=True):
 def references(container):
     query = "SELECT JSON_OBJECT('table',TABLE_NAME,'column',COLUMN_NAME,'sameSchema'," \
             "TABLE_SCHEMA=DATABASE()) FROM information_schema.KEY_COLUMN_USAGE " \
-            "WHERE REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME='audit_logs'"
+            "WHERE REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME='audit_logs' ORDER BY TABLE_NAME,COLUMN_NAME"
     return [json.loads(line) for line in mysql(container, query).splitlines()]
 
 
 def audit_predicate(refs):
     actions = ','.join("'" + action + "'" for action in ROUTINE_ACTIONS)
     predicate = "a.module='id_business_v2' AND a.action IN (" + actions + ") " \
-                "AND a.created_at < '" + CUTOFF + "'"
+                "AND a.user_id IS NULL AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(a.after_data,'$.triggerType')),'') <> 'manual' AND a.created_at < '" + CUTOFF + "'"
     for ref in refs:
         require(ref.get('sameSchema') == 1, 'Cross-schema audit reference must be reviewed')
         require(all(re.fullmatch(r'[A-Za-z0-9_]+', ref[key]) for key in ('table', 'column')),
