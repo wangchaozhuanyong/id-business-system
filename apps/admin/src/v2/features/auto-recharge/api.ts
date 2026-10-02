@@ -78,11 +78,11 @@ export const rechargeApi = {
       http.put('/id-business-v2/auto-recharge/server-proxy-settings', { proxyId })
     );
   },
-  browserCatalogAccess(options: ApiRequestOptions = {}) {
+  browserCatalogAccess(options: ApiRequestOptions = {}, directMode = false) {
     return request<V2RechargeBrowserCatalogAccess>(
       http.post(
         '/id-business-v2/auto-recharge/bitbrowser-catalog-access',
-        {},
+        directMode ? { directMode: true } : {},
         { signal: options.signal }
       )
     );
@@ -97,6 +97,13 @@ export const rechargeApi = {
   },
   startBitBrowserOpen(input: V2RechargeBitBrowserOpenStart) {
     return request<V2RechargeBitBrowserOpenLaunch>(http.post(`${base}/bitbrowser-open`, input));
+  },
+  directBrowserCallback(id: string, agentToken: string, input: object) {
+    return request<{ ok: true }>(
+      http.post(`/id-business-v2/auto-recharge/local/${id}`, input, {
+        headers: { 'X-Recharge-Local': agentToken }
+      })
+    );
   },
   recheckBitBrowser(input: V2RechargeBitBrowserRecheckStart) {
     return request<V2RechargeBitBrowserRecheckLaunch>(

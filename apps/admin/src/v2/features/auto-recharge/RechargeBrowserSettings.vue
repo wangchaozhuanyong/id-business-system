@@ -2,7 +2,9 @@
   <V2FormDrawer
     retain-draft
     :model-value="settingsOpen"
-    :title="serverMode ? '服务器代理 IP 设置' : '代理 IP 与窗口设置'"
+    :title="
+      serverMode ? '服务器代理 IP 设置' : directMode ? '比特浏览器直连设置' : '代理 IP 与窗口设置'
+    "
     :description="
       serverMode
         ? '每次服务器任务使用已保存的代理配置。'
@@ -36,6 +38,10 @@
         <p v-if="!serverMode">分组：{{ stored.groupName }} · {{ summary.languages }}</p>
       </div>
       <p v-if="settingsError" class="recharge-settings-error" role="alert">{{ settingsError }}</p>
+      <div v-if="directMode" class="recharge-settings-connection">
+        <BitBrowserConnectionHelp />
+        <span>首次使用或更换电脑，请查看接口开启与密钥填写步骤。</span>
+      </div>
       <el-form
         ref="formRef"
         class="recharge-settings-form"
@@ -60,7 +66,12 @@
             />
             <span class="recharge-settings-hint">分钟；页面加载和账号核对共用这段时间。</span>
           </el-form-item>
-          <el-form-item label="最多重建次数" prop="browserOptions.sessionRetryLimit" required>
+          <el-form-item
+            v-if="!directMode"
+            label="最多重建次数"
+            prop="browserOptions.sessionRetryLimit"
+            required
+          >
             <el-input-number
               v-model="settingsForm.browserOptions.sessionRetryLimit"
               aria-label="最多重建次数"
@@ -71,7 +82,11 @@
             <span class="recharge-settings-hint">次；0 表示不重建，2 表示最多尝试 3 个窗口。</span>
           </el-form-item>
           <p class="recharge-settings-note">
-            加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。
+            {{
+              directMode
+                ? '自动步骤超过等待时间或遇到真人验证时保留当前窗口，请在官网手动处理；网页会继续核对登录结果，不自动重建窗口。'
+                : '加载超时会关闭并删除本次失败窗口后重试。验证码需要手动处理；进入建单或付款后不会自动重建。'
+            }}
           </p>
         </fieldset>
         <fieldset v-if="!serverMode">
@@ -145,8 +160,8 @@
           </p>
         </fieldset>
         <fieldset v-if="!serverMode">
-          <legend>本机连接</legend>
-          <el-form-item label="本机连接器地址" prop="connectorUrl" required>
+          <legend>{{ directMode ? '网页直连' : '本机连接' }}</legend>
+          <el-form-item v-if="!directMode" label="本机连接器地址" prop="connectorUrl" required>
             <el-input v-model="settingsForm.connectorUrl" />
           </el-form-item>
           <el-form-item label="比特接口地址" prop="localApiUrl" required>
@@ -170,6 +185,7 @@
             />
           </el-form-item>
           <el-form-item
+            v-if="!directMode"
             label="本机连接密钥"
             prop="connectorToken"
             :required="!stored?.connectorTokenConfigured"
@@ -205,6 +221,7 @@
 import { computed, ref } from 'vue';
 import RechargeProxyOptions from './RechargeProxyOptions.vue';
 import RechargeWindowOptions from './RechargeWindowOptions.vue';
+import BitBrowserConnectionHelp from './BitBrowserConnectionHelp.vue';
 import { browserOptionRules } from './recharge-browser-rules';
 import { browserSettingsSummary } from './recharge-browser-presentation';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -233,7 +250,8 @@ const {
   groupOptions,
   tagOptions,
   catalogReady,
-  refreshCatalog
+  refreshCatalog,
+  directMode
 } = props.settings;
 const stored = computed(() => settingsQuery.data.value);
 const summary = computed(() => browserSettingsSummary(stored.value));
@@ -280,17 +298,18 @@ const rules = computed<FormRules>(() => ({
           trigger: 'blur'
         }
       ],
-  connectorToken: props.serverMode
-    ? []
-    : [
-        {
-          required: !stored.value?.connectorTokenConfigured,
-          min: 16,
-          max: 1000,
-          message: '请填写 16 至 1000 位本机连接密钥',
-          trigger: 'blur'
-        }
-      ],
+  connectorToken:
+    props.serverMode || directMode.value
+      ? []
+      : [
+          {
+            required: !stored.value?.connectorTokenConfigured,
+            min: 16,
+            max: 1000,
+            message: '请填写 16 至 1000 位本机连接密钥',
+            trigger: 'blur'
+          }
+        ],
   dynamicProxyUrl: [
     {
       required:

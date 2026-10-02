@@ -39,7 +39,8 @@ const formFromSettings = (settings?: V2RechargeBitBrowserSettings): BitBrowserSe
 export function useRechargeBrowserSettings(
   connectorStatus: Ref<ConnectorStatus>,
   connectorMessage: Ref<string>,
-  serverMode: Ref<boolean>
+  serverMode: Ref<boolean>,
+  directMode: Ref<boolean> = ref(false)
 ) {
   const settingsOpen = ref(false);
   const { settingsError, settingsSaving, settingsForm, savedSnapshot } = useV2SessionDraft(
@@ -66,7 +67,8 @@ export function useRechargeBrowserSettings(
     settingsForm,
     settingsOpen,
     settingsQuery.data,
-    computed(() => !serverMode.value)
+    computed(() => !serverMode.value),
+    directMode
   );
   let connectionCheck: AbortController | undefined;
 
@@ -94,16 +96,20 @@ export function useRechargeBrowserSettings(
     const check = new AbortController();
     connectionCheck = check;
     connectorStatus.value = 'checking';
-    connectorMessage.value = '正在检测连接器、比特接口和窗口分组／标签';
+    connectorMessage.value = directMode.value
+      ? '正在检测比特接口和窗口分组／标签'
+      : '正在检测连接器、比特接口和窗口分组／标签';
     try {
-      const catalog = await readBrowserCatalog(form, check.signal);
+      const catalog = await readBrowserCatalog(form, check.signal, directMode.value);
       if (check.signal.aborted) throw new Error('本次连接检测已取消。');
       if (catalog.groups.filter((item) => item.name === form.groupName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口分组不存在或重名，请重新选择。');
       if (catalog.tags.filter((item) => item.name === form.tagName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口标签不存在或重名，请重新选择。');
       connectorStatus.value = 'online';
-      connectorMessage.value = '连接器、比特接口和分组／标签检测通过';
+      connectorMessage.value = directMode.value
+        ? '比特浏览器直连、分组／标签检测通过'
+        : '连接器、比特接口和分组／标签检测通过';
     } catch (cause) {
       if (connectionCheck === check) {
         connectorStatus.value = 'offline';
@@ -138,7 +144,10 @@ export function useRechargeBrowserSettings(
     const stored = settingsQuery.data.value;
     if (
       (!serverMode && !stored?.localApiTokenConfigured && !settingsForm.value.localApiToken) ||
-      (!serverMode && !stored?.connectorTokenConfigured && !settingsForm.value.connectorToken) ||
+      (!serverMode &&
+        !directMode.value &&
+        !stored?.connectorTokenConfigured &&
+        !settingsForm.value.connectorToken) ||
       (settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
         !stored?.dynamicProxyUrlConfigured &&
         !settingsForm.value.dynamicProxyUrl)
@@ -153,6 +162,7 @@ export function useRechargeBrowserSettings(
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
         serverMode,
+        ...(directMode.value && !serverMode ? { directMode: true } : {}),
         localApiToken: settingsForm.value.localApiToken || undefined,
         connectorToken: settingsForm.value.connectorToken || undefined,
         dynamicProxyUrl: settingsForm.value.dynamicProxyUrl || undefined,
@@ -188,6 +198,7 @@ export function useRechargeBrowserSettings(
     checkSavedConnection,
     saveSettings,
     connectorStatus,
-    connectorMessage
+    connectorMessage,
+    directMode
   };
 }

@@ -6,6 +6,7 @@ import json
 import io
 import tarfile
 import copy
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('deployment', Path(__file__).with_name('remote-deploy.py'))
 deployment = importlib.util.module_from_spec(spec)
@@ -29,6 +30,22 @@ class ReleaseScopeTests(unittest.TestCase):
         services, images = deployment.release_services(False, ['20261001_example'])
         self.assertEqual(services, deployment.SERVICES)
         self.assertEqual(images, (*deployment.SERVICES, 'migrate'))
+
+
+    def test_edge_changes_switch_caddy_without_building_an_edge_image(self):
+        services, images = deployment.release_services(False, [], True)
+        self.assertEqual(services, (*deployment.SERVICES, 'caddy'))
+        self.assertEqual(images, (*deployment.SERVICES, 'migrate'))
+        with self.assertRaisesRegex(RuntimeError, 'edge configuration'):
+            deployment.release_services(True, [], True)
+
+    def test_only_caddy_can_use_running_status_without_container_health(self):
+        state = {'status': 'running', 'health': None}
+        with patch.object(deployment, 'service_state', return_value=state), \
+                patch.object(deployment.time, 'sleep'):
+            self.assertEqual(deployment.wait_healthy(None, 'caddy'), state)
+            with self.assertRaisesRegex(RuntimeError, 'did not become healthy'):
+                deployment.wait_healthy(None, 'admin')
 
 
 class ReusableImageTests(unittest.TestCase):

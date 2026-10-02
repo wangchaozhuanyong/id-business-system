@@ -81,10 +81,12 @@ def verify_reusable_archive(release, source, commit):
     require(actual == hashes, 'Reusable image source differs from release application source')
 
 
-def release_services(admin_only, additions):
+def release_services(admin_only, additions, edge_changed=False):
     require(not (admin_only and additions), 'Admin-only release contains migrations')
     services = ('admin',) if admin_only else SERVICES
-    return services, services if admin_only else (*services, 'migrate')
+    require(not (admin_only and edge_changed), 'Admin-only release contains edge configuration changes')
+    images = services if admin_only else (*services, 'migrate')
+    return (*services, 'caddy') if edge_changed else services, images
 
 
 def run(*args, env=None, timeout=300):
@@ -127,7 +129,8 @@ def service_state(directory, service):
 def wait_healthy(directory, service):
     for _ in range(90):
         state = service_state(directory, service)
-        if state['status'] == 'running' and state['health'] == 'healthy':
+        if state['status'] == 'running' and (state['health'] == 'healthy'
+                                           or (service == 'caddy' and state['health'] is None)):
             return state
         if state['status'] not in ('running', 'created'):
             break
@@ -357,7 +360,9 @@ def main():
         (release / '.env.aws.production').chmod(0o600)
         google_drive_folder = configure_google_drive_sync(previous, release)
         additions = migration_plan(previous, release)
-        updated_services, image_services = release_services(args.admin_only, additions)
+        edge_changed = ((previous / 'deploy/caddy/Caddyfile.aws').read_bytes()
+                        != (release / 'deploy/caddy/Caddyfile.aws').read_bytes())
+        updated_services, image_services = release_services(args.admin_only, additions, edge_changed)
         override = json.loads((previous / 'compose.release.json').read_text())
         image_tags = {service: f'{image_commit}-{image_run}-{image_attempt}-{service}'
                       for service in image_services}
@@ -369,6 +374,12 @@ def main():
         require(json.loads(compose(release, 'config', '--format', 'json'))['name'] ==
                 json.loads(compose(previous, 'config', '--format', 'json'))['name'],
                 'Compose project changed')
+
+        if edge_changed:
+            step = 'edge-validation'
+            compose(release, 'run', '--rm', '--no-deps', '--pull', 'never',
+                    '--entrypoint', 'caddy', 'caddy', 'validate',
+                    '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
 
         step = 'audit-before'
         before_audit = audit(previous, release / 'before-audit.json')
@@ -422,6 +433,12 @@ def main():
             require(response.status == 200, 'Public API readiness failed')
         with urllib.request.urlopen(public_url + '/', timeout=20) as response:
             require(response.status == 200, 'Public admin readiness failed')
+            if edge_changed:
+                config = (release / 'deploy/caddy/Caddyfile.aws').read_text()
+                expected_policy = re.search(r'Content-Security-Policy \"([^\"]+)\"', config)
+                require(expected_policy is not None
+                        and response.headers.get('Content-Security-Policy') == expected_policy.group(1),
+                        'Public edge policy differs from release configuration')
 
         manifest = dict(old_manifest)
         manifest.update({

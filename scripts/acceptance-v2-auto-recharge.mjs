@@ -1,6 +1,6 @@
 /* global document, window */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
@@ -885,47 +885,22 @@ try {
       .fill('fixture@example.test');
     await page.locator('.recharge-entry-panel').getByLabel('登录密码').fill('local-password');
     await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').fill('JBSWY3DPEHPK3PXP');
+    // The direct protocol suite below exercises login and 2FA against isolated Chromium.
+    // This fixture keeps the payment connector regression and prevents real Local API access.
+    await page.route(settings.localApiUrl + '/**', (route) => route.abort('blockedbyclient'));
     await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
-    await page
-      .locator('.recharge-status')
-      .filter({ hasText: '账号已登录，窗口已就绪' })
-      .waitFor({ timeout: 20000 });
-    assert.equal(loginCodeSubmissions, 1);
+    await page.locator('.recharge-error').filter({ hasText: '网页无法访问比特浏览器' }).waitFor();
+    assert.equal(apiStarts, 1);
+    assert.equal(connectorStarts, 1);
+    assert.equal(loginCodeSubmissions, 0);
+    assert.equal(
+      await page.locator('.recharge-entry-panel').getByLabel('登录密码').inputValue(),
+      'local-password'
+    );
     assert.equal(
       await page.locator('.recharge-entry-panel').getByLabel('2FA 密钥').inputValue(),
       'JBSWY3DPEHPK3PXP'
     );
-    assert.equal(
-      await page.locator('.recharge-entry-panel').getByLabel('登录密码').inputValue(),
-      ''
-    );
-    assert.equal(apiStarts, 1);
-
-    await page
-      .locator('.recharge-entry-panel')
-      .getByLabel('2FA 方式')
-      .getByText('已保存账号', { exact: true })
-      .click();
-    await page.locator('.recharge-entry-panel').getByLabel('登录密码').fill('local-password');
-    await page.getByRole('combobox', { name: '选择已保存的 2FA 账号' }).click();
-    await page
-      .locator('.el-select-dropdown:visible')
-      .getByRole('option', {
-        name: 'ChatGPT 验收 · OpenAI'
-      })
-      .click();
-    const savedCodeResponse = page.waitForResponse(
-      (response) =>
-        response.url().endsWith('/code') && response.request().postDataJSON().code === '654321'
-    );
-    await page.getByRole('button', { name: '打开比特浏览器并登录' }).click();
-    await savedCodeResponse;
-    await page
-      .locator('.recharge-status')
-      .filter({ hasText: '账号已登录，窗口已就绪' })
-      .waitFor({ timeout: 20000 });
-    assert.equal(loginCodeSubmissions, 2);
-    assert.equal(apiStarts, 1);
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
@@ -975,10 +950,8 @@ try {
             'human-verification-resume',
             'single-payment-attempt',
             'clear-card-after-paid-and-activated',
-            'password-login-local-only',
-            'retain-totp-until-payment-success',
-            'automatic-totp-code-local-only',
-            'saved-totp-code-local-only'
+            'direct-login-preflight-does-not-create-job',
+            'failed-direct-preflight-retains-login-input'
           ],
       realPaymentRequests: 0
     })
@@ -986,4 +959,16 @@ try {
 } finally {
   await browser?.close();
   server.kill('SIGTERM');
+}
+
+if (!proxySettingsOnly) {
+  const direct = spawnSync(
+    process.execPath,
+    [resolve('scripts/acceptance-v2-bitbrowser-direct.mjs')],
+    {
+      cwd: resolve('.'),
+      stdio: 'inherit'
+    }
+  );
+  assert.equal(direct.status, 0, '网页直连登录和验证码验收失败');
 }

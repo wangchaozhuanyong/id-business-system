@@ -184,15 +184,25 @@ export class RechargeSettingsService {
     );
   }
 
-  async catalogAccess(operator: AuthenticatedUser) {
+  async catalogAccess(operator: AuthenticatedUser, value: unknown = {}) {
+    const input = bankRechargeObject(value);
+    if (
+      Object.keys(input).some((key) => key !== 'directMode') ||
+      (input.directMode !== undefined && typeof input.directMode !== 'boolean')
+    )
+      throw new BadRequestException('比特浏览器连接模式无效');
     return this.transactions.execute(
       async (tx) => {
         const row = await this.repository.findInTransaction(tx, operator.id);
         const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
-        const connectorToken = this.encryption.decrypt(row?.connectorTokenEncrypted);
-        if (!row || !localApiToken || !connectorToken) {
+        const connectorToken = input.directMode
+          ? ''
+          : this.encryption.decrypt(row?.connectorTokenEncrypted);
+        if (!row || !localApiToken || (!input.directMode && !connectorToken)) {
           throw new ServiceUnavailableException(
-            '请先填写比特接口密钥和本机连接密钥，再刷新分组与标签'
+            input.directMode
+              ? '请先填写比特接口密钥，再刷新分组与标签'
+              : '请先填写比特接口密钥和本机连接密钥，再刷新分组与标签'
           );
         }
         await this.audit.append(tx, {
@@ -201,11 +211,13 @@ export class RechargeSettingsService {
           action: 'id_business_v2.auto_recharge.bitbrowser_catalog.access',
           objectType: 'recharge_browser_settings',
           objectId: operator.id,
-          remark: '使用本机连接凭据读取比特浏览器分组与标签'
+          remark: input.directMode
+            ? '使用本机接口凭据直接读取比特浏览器分组与标签'
+            : '使用本机连接凭据读取比特浏览器分组与标签'
         });
         return {
           connectorUrl: row.connectorUrl,
-          connectorToken,
+          connectorToken: input.directMode ? '' : connectorToken!,
           localApiUrl: row.localApiUrl,
           localApiToken
         };
@@ -235,7 +247,8 @@ export class RechargeSettingsService {
           ? this.encryption.encrypt(input.dynamicProxyUrl)
           : before?.dynamicProxyUrlEncrypted;
         if (
-          (!input.serverMode && (!localApiTokenEncrypted || !connectorTokenEncrypted)) ||
+          (!input.serverMode &&
+            (!localApiTokenEncrypted || (!input.directMode && !connectorTokenEncrypted))) ||
           (browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrlEncrypted)
         ) {
           throw new BadRequestException('请填写连接密钥及当前代理模式所需的配置');
@@ -280,7 +293,11 @@ export class RechargeSettingsService {
           objectId: operator.id,
           beforeData: before ? toV2JsonDocument(this.auditSnapshot(before)) : undefined,
           afterData: toV2JsonDocument(this.auditSnapshot(updated)),
-          remark: input.serverMode ? '更新服务器充值代理设置' : '更新本机比特浏览器自动充值设置'
+          remark: input.serverMode
+            ? '更新服务器充值代理设置'
+            : input.directMode
+              ? '更新比特浏览器网页直连设置'
+              : '更新本机比特浏览器自动充值设置'
         });
         return updated;
       },
@@ -294,10 +311,10 @@ export class RechargeSettingsService {
     return this.response(row);
   }
 
-  async runtime(ownerId: string, selectedProxy = false) {
+  async runtime(ownerId: string, selectedProxy = false, directMode = false) {
     const row = await this.repository.find(ownerId);
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
-    const connectorToken = this.encryption.decrypt(row?.connectorTokenEncrypted);
+    const connectorToken = directMode ? '' : this.encryption.decrypt(row?.connectorTokenEncrypted);
     const browserOptions = storedBrowserOptions(row?.browserOptions);
     const dynamicProxyUrl =
       browserOptions.proxyMode === 'dynamic'
@@ -306,7 +323,7 @@ export class RechargeSettingsService {
     if (
       !row ||
       !localApiToken ||
-      !connectorToken ||
+      (!directMode && !connectorToken) ||
       (!selectedProxy && browserOptions.proxyMode === 'dynamic' && !dynamicProxyUrl)
     ) {
       throw new ServiceUnavailableException('请先完成比特浏览器设置');
@@ -323,7 +340,7 @@ export class RechargeSettingsService {
       browserOptions,
       staticProxyCredentials,
       localApiToken,
-      connectorToken,
+      connectorToken: directMode ? '' : connectorToken!,
       dynamicProxyUrl: dynamicProxyUrl || ''
     };
   }

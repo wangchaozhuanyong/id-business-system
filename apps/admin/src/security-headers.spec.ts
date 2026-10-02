@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const headers = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
+const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+
+const caddyConfig = readFileSync(
+  new URL('../../../deploy/caddy/Caddyfile.aws', import.meta.url),
+  'utf8'
+);
 
 describe('admin security headers', () => {
   it('loads the boot shell without inline script, style or event handlers', () => {
@@ -23,12 +29,16 @@ describe('admin security headers', () => {
     expect(headers).toContain('Strict-Transport-Security:');
   });
 
-  it('limits API connections to the same origin and the fixed local connector', () => {
-    expect(headers).toContain("connect-src 'self' http://127.0.0.1:55321 http://localhost:55321;");
-    expect(headers).not.toMatch(/connect-src[^;\n]*https:\/\//);
-    expect(headers).not.toMatch(
-      /connect-src[^;\n]*http:\/\/(?!127\.0\.0\.1:55321|localhost:55321)/
-    );
-    expect(headers).not.toMatch(/connect-src[^;\n]*wss?:\/\//);
+  it('limits API and window control connections to the same origin and loopback hosts', () => {
+    const sources = /connect-src ([^;]+);/.exec(headers)?.[1]?.split(' ');
+    expect(sources).toEqual([
+      "'self'",
+      'http://127.0.0.1:*',
+      'http://localhost:*',
+      'ws://127.0.0.1:*',
+      'ws://localhost:*'
+    ]);
+    expect(viteConfig).toContain(`connect-src ${sources?.join(' ')};`);
+    expect(caddyConfig).toContain(`connect-src ${sources?.join(' ')};`);
   });
 });

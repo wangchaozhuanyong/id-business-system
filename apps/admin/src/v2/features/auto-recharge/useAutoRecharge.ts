@@ -26,6 +26,8 @@ import { useRechargeTotp } from './useRechargeTotp';
 import { bankRechargeApi } from './bank-recharge-api';
 import { currencyOptions } from './recharge-presentation';
 import { rechargeProxyApi, type RechargeProxyItem } from './recharge-proxy-api';
+import { useBitBrowserDirectOpen } from './useBitBrowserDirectOpen';
+import { parseDirectCredential } from './bitbrowser-direct-login';
 
 const activeStates = new Set([
   'running',
@@ -91,10 +93,14 @@ function registrationEmail(value: unknown): string {
   return unique.length === 1 ? candidates[0]! : '';
 }
 
-function settingsReady(settings: V2RechargeBitBrowserSettings | undefined, selectedProxy = false) {
+function settingsReady(
+  settings: V2RechargeBitBrowserSettings | undefined,
+  selectedProxy = false,
+  directMode = false
+) {
   return Boolean(
     settings?.localApiTokenConfigured &&
-    settings.connectorTokenConfigured &&
+    (directMode || settings.connectorTokenConfigured) &&
     (selectedProxy ||
       (settings.browserOptions?.proxyMode === 'static'
         ? Boolean(settings.browserOptions.staticHost && settings.browserOptions.staticPort)
@@ -257,8 +263,12 @@ export function useAutoRecharge() {
   const browserSettings = useRechargeBrowserSettings(
     connectorStatus,
     connectorMessage,
-    computed(() => operationMode.value === 'server_payment')
+    computed(() => operationMode.value === 'server_payment'),
+    computed(() => operationMode.value === 'open_browser')
   );
+  const directOpen = useBitBrowserDirectOpen(refresh, (message) => {
+    error.value = message;
+  });
   const { settingsQuery } = browserSettings;
   const serverProxySettings = useRechargeServerProxySettings();
   function openProxySettings() {
@@ -464,7 +474,8 @@ export function useAutoRecharge() {
       ? Boolean(selectedProxyCountryCode.value && selectedProxyId.value)
       : settingsReady(
           settingsQuery.data.value,
-          operationMode.value === 'payment' && Boolean(selectedProxyId.value)
+          operationMode.value === 'payment' && Boolean(selectedProxyId.value),
+          operationMode.value === 'open_browser'
         )
   );
   const formLocked = computed(
@@ -626,6 +637,12 @@ export function useAutoRecharge() {
   );
   const workflowMessage = computed(() => {
     const job = selected.value;
+    if (
+      job?.result.transport === 'web_direct' &&
+      activeStates.has(job.state) &&
+      !directOpen.owns(job.id)
+    )
+      return '此登录任务由原网页直连执行，请回到启动任务的网页和比特窗口查看；本页不会重复启动。';
     if (job?.result.status === 'cancelling') return '正在停止执行并清理本次窗口，请稍候。';
     if (needsCode.value && autoCodeSubmittedJobId.value === job?.id)
       return '2FA 验证码已提交，正在等待官网确认。';
@@ -633,8 +650,12 @@ export function useAutoRecharge() {
       return needsManualCode.value
         ? '自动取码不可用，请输入当次验证码，或重试自动取码。'
         : '官网要求 TOTP 验证码，正在使用系统 2FA 功能自动取码并提交。';
+    if (job?.state === 'awaiting_human_verification' && job.result.transport === 'web_direct')
+      return '请在已打开的比特官网窗口完成验证；保留当前管理页面，网页会继续核对登录结果。';
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
+    if (job?.state === 'running' && job.result.transport === 'web_direct')
+      return '网页正在登录并核对官网账号，请保留当前管理页面。';
     if (job?.state === 'running')
       return job.action === 'server'
         ? '服务器正在执行，本任务最多提交一次付款。'
@@ -642,7 +663,9 @@ export function useAutoRecharge() {
     if (job?.state === 'unknown') return '原单结果待核验，禁止重新付款。';
     if (job?.state === 'finished') {
       if (job.result.mode === 'open_browser') {
-        return '账号登录成功，比特浏览器窗口已打开，可进行手动操作。';
+        return job.result.status === 'session_ready' && job.result.account_matched
+          ? '账号登录成功，比特浏览器窗口已打开，可进行手动操作。'
+          : '本次登录已停止，请查看具体原因并检查原窗口。';
       }
       if (job.result.status === 'subscription_activated') return '充值成功，订阅已开通。';
       return paymentRetryBlocked.value
@@ -1049,48 +1072,27 @@ export function useAutoRecharge() {
     try {
       await browserSettings.checkSavedConnection();
       if (disposed) return;
+      const credential = await localCredential();
+      parseDirectCredential(credential);
+      if (disposed) return;
       launch = await rechargeApi.startBitBrowserOpen({
         id,
-        windowName: windowName.value.trim()
+        windowName: windowName.value.trim(),
+        directMode: true
       });
       currentId.value = id;
-      localAccess.value = {
-        connectorUrl: launch.connectorUrl,
-        connectorToken: launch.connectorToken
-      };
-      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
-        id,
-        mode: 'open_browser',
-        windowName: windowName.value.trim(),
-        ...(await localCredential()),
-        bitBrowser: launch.bitBrowser,
-        callbackUrl: rechargeCallbackUrl(id),
-        agentToken: launch.agentToken
-      });
+      await directOpen.start(launch, credential, windowName.value.trim());
       connectorStatus.value = 'online';
-      connectorMessage.value = '本机连接器已接收任务';
+      connectorMessage.value = '网页已直连比特浏览器，正在核对登录';
       if (loginMethod.value === 'password') loginPassword.value = '';
     } catch (cause) {
-      if (launch) {
+      error.value = getApiErrorMessage(cause);
+      if (launch && !directOpen.owns(id)) {
         try {
-          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, id);
-          connectorStatus.value = 'online';
-          connectorMessage.value = '本机连接器已接收，本次不会重发';
-          error.value = '';
+          await rechargeApi.abandonUnreceivedBitBrowser(id);
         } catch {
-          try {
-            await rechargeApi.abandonUnreceivedBitBrowser(id);
-            connectorStatus.value = 'offline';
-            connectorMessage.value = '本机连接器未接收';
-            error.value = '本机连接器未接收任务，本次已安全结束。';
-          } catch {
-            connectorStatus.value = 'offline';
-            connectorMessage.value = '本机连接器接收结果待核验';
-            error.value = '本机连接器接收结果不明确，本次不会自动重发。请刷新原任务。';
-          }
+          error.value = '网页登录任务接收结果待核验，请刷新原任务；本次不会自动重发。';
         }
-      } else {
-        error.value = getApiErrorMessage(cause);
       }
     } finally {
       await refresh();
@@ -1253,6 +1255,10 @@ export function useAutoRecharge() {
   async function access() {
     const job = selected.value;
     if (!job) throw new Error('当前没有可操作的本机任务');
+    if (job.result.transport === 'web_direct')
+      throw new Error(
+        '此登录任务由原网页直连执行，请回到启动任务的网页查看；本页不会通过连接器重复操作。'
+      );
     if (!localAccess.value) localAccess.value = await rechargeApi.bitBrowserAccess(job.id);
     return { job, ...localAccess.value };
   }
@@ -1262,6 +1268,7 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     try {
+      if (selected.value && directOpen.owns(selected.value.id)) return;
       const current = await access();
       await rechargeConnectorApi.resume(
         current.connectorUrl,
@@ -1297,6 +1304,12 @@ export function useAutoRecharge() {
     busy.value = true;
     error.value = '';
     try {
+      if (selected.value && directOpen.owns(selected.value.id)) {
+        directOpen.submitCode(selected.value.id, loginCode.value.trim());
+        autoCodeSubmittedJobId.value = selected.value.id;
+        loginCode.value = '';
+        return;
+      }
       const current = await access();
       await rechargeConnectorApi.submitCode(
         current.connectorUrl,
@@ -1324,6 +1337,12 @@ export function useAutoRecharge() {
           : await totp.freshCode();
       if (!/^[0-9]{6,8}$/.test(code)) throw new Error('2FA 验证码格式无效');
       if (disposed || !needsCode.value || selected.value?.id !== jobId) return;
+      if (directOpen.owns(jobId)) {
+        directOpen.submitCode(jobId, code);
+        autoCodeSubmittedJobId.value = jobId;
+        await refresh();
+        return;
+      }
       const current = await access();
       if (current.job.id !== jobId || disposed || !needsCode.value) return;
       await rechargeConnectorApi.submitCode(
@@ -1380,6 +1399,10 @@ export function useAutoRecharge() {
     error.value = '';
     const id = selected.value.id;
     try {
+      if (directOpen.owns(id)) {
+        await directOpen.cancel(id);
+        return;
+      }
       if (selected.value.action === 'server') {
         await rechargeApi.cancelServer(id);
         return;

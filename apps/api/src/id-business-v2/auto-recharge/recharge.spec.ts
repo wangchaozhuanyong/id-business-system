@@ -546,6 +546,50 @@ describe('single worker dispatch and confirmation', () => {
       'leaseUntil'
     );
   });
+  it('网页直连登录回传复用任务权限协议并保留模式，不保存秘密或触发付款记录', async () => {
+    const result = { mode: 'open_browser', transport: 'web_direct', payment_requests_sent: 0 };
+    active.mockResolvedValue({
+      id,
+      ownerId: operator.id,
+      action: 'bitbrowser',
+      state: 'running',
+      result
+    } as never);
+    await service.callback(id, {
+      type: 'progress',
+      result: {
+        stage: 'login_code_required',
+        status: 'running',
+        payment_requests_sent: 0,
+        password: 'fixture-only-password',
+        token: 'fixture-only-code'
+      }
+    });
+    let changed = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+    expect(changed.state).toBe('awaiting_human_verification');
+    expect(changed.result).toMatchObject({ ...result, stage: 'login_code_required' });
+    expect(changed.result).not.toHaveProperty('password');
+    expect(changed.result).not.toHaveProperty('token');
+    await service.callback(id, {
+      type: 'finished',
+      result: {
+        status: 'session_ready',
+        stage: 'session_ready',
+        account_matched: true,
+        current_plan: 'free',
+        payment_attempted: false,
+        payment_requests_sent: 0
+      }
+    });
+    changed = tx.idBusinessV2RechargeJob.update.mock.calls.at(-1)![0].data;
+    expect(changed.state).toBe('finished');
+    expect(changed.nonceHash).toBeNull();
+    expect(changed.result).toMatchObject({
+      ...result,
+      account_matched: true,
+      status: 'session_ready'
+    });
+  });
   it('恢复时只返回同操作人同账号且付款前失败的历史窗口，并幂等记录清理', async () => {
     const accountKey = 'a'.repeat(64);
     const sourceJobId = '33333333-3333-4333-8333-333333333333';

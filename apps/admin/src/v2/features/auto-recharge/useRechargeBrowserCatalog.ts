@@ -3,8 +3,26 @@ import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi, rechargeConnectorApi } from './api';
 import type { V2RechargeBrowserCatalog, V2RechargeBitBrowserSettings } from './contracts';
 import type { BitBrowserSettingsForm } from './useRechargeBrowserSettings';
+import { directBrowserCatalog } from './bitbrowser-direct-api';
 
-export async function readBrowserCatalog(form: BitBrowserSettingsForm, signal: AbortSignal) {
+export async function readBrowserCatalog(
+  form: BitBrowserSettingsForm,
+  signal: AbortSignal,
+  directMode = false
+) {
+  if (directMode) {
+    const access = form.localApiToken
+      ? { localApiUrl: form.localApiUrl, localApiToken: form.localApiToken, connectorToken: '' }
+      : await rechargeApi.browserCatalogAccess({ signal }, true);
+    try {
+      if (!form.localApiToken && form.localApiUrl !== access.localApiUrl)
+        throw new Error('连接地址已更换，请填写该地址对应的密钥后刷新列表');
+      return await directBrowserCatalog(form.localApiUrl, access.localApiToken, signal);
+    } finally {
+      access.localApiToken = '';
+      access.connectorToken = '';
+    }
+  }
   await rechargeConnectorApi.health(form.connectorUrl, signal);
   const access =
     form.connectorToken && form.localApiToken
@@ -37,7 +55,8 @@ export function useRechargeBrowserCatalog(
   form: Ref<BitBrowserSettingsForm>,
   open: Ref<boolean>,
   stored: Ref<V2RechargeBitBrowserSettings | undefined>,
-  localMode: Ref<boolean> = ref(true)
+  localMode: Ref<boolean> = ref(true),
+  directMode: Ref<boolean> = ref(false)
 ) {
   const sessionId = crypto.randomUUID();
   const revision = ref(0);
@@ -51,7 +70,7 @@ export function useRechargeBrowserCatalog(
     keepPreviousData: true,
     key: () => `auto-recharge-browser-catalog-${sessionId}-${revision.value}`,
     enabled: () => open.value && localMode.value && requested.value,
-    query: ({ signal }) => readBrowserCatalog({ ...form.value }, signal)
+    query: ({ signal }) => readBrowserCatalog({ ...form.value }, signal, directMode.value)
   });
   async function refreshCatalog() {
     if (disposed || !localMode.value) return;
@@ -66,6 +85,7 @@ export function useRechargeBrowserCatalog(
     () => [
       open.value,
       localMode.value,
+      directMode.value,
       form.value.connectorUrl,
       form.value.localApiUrl,
       form.value.connectorToken,
